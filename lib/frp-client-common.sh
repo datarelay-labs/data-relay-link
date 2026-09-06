@@ -2267,8 +2267,21 @@ PY
   return 0
 }
 
+frp_client_apply_reconcile_runtime() {
+  local dropped="$1" toml token
+  [[ "$dropped" == 1 ]] || return 0
+  toml="$(frp_client_toml_path)"
+  [[ -f "$toml" ]] || return 0
+  token="$(frp_token_from_toml_file "$toml" || true)"
+  [[ -n "$token" ]] || return 0
+  frp_regenerate_toml_from_state "$token" || return 0
+  frp_regenerate_access_from_state || true
+  frp_client_restart || true
+}
+
 frp_client_reconcile_released_services() {
   local path allocator_url machine_id hostname_value request timestamp signature nonce response curl_err py key_path mac
+  local dropped_marker dropped=0
   path="$(frp_client_state_path)"
   [[ -f "$path" ]] || return 0
   if [[ "${FRP_SKIP_CONNECTIVITY_CHECK:-}" == "1" ]]; then
@@ -2279,7 +2292,7 @@ import json, sys
 from pathlib import Path
 state = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 services = state.get('services') or {}
-if not any(isinstance(rec, dict) and rec.get('enabled', True) is False for rec in services.values()):
+if not isinstance(services, dict) or not services:
     raise SystemExit(1)
 PY
   then
@@ -2287,19 +2300,27 @@ PY
   fi
 
   if [[ -n "${FRP_CLIENT_RECONCILE_REGISTRY_IDS:-}" ]]; then
-    REGISTRY_IDS="$FRP_CLIENT_RECONCILE_REGISTRY_IDS" STATE_PATH="$path" python3 - <<'PY'
-import json, os, sys
+    dropped_marker="$(
+      REGISTRY_IDS="$FRP_CLIENT_RECONCILE_REGISTRY_IDS" STATE_PATH="$path" python3 - <<'PY'
+import json, os
 from pathlib import Path
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
 ids = set(json.loads(os.environ['REGISTRY_IDS']))
 services = state.get('services') or {}
+dropped_enabled = False
 for sid in list(services.keys()):
     rec = services.get(sid) or {}
-    if rec.get('enabled', True) is False and sid not in ids:
+    if sid not in ids:
+        if rec.get('enabled', True) is not False:
+            dropped_enabled = True
         services.pop(sid, None)
 state['services'] = services
 Path(os.environ['STATE_PATH']).write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+print('DROPPED_ENABLED=1' if dropped_enabled else 'DROPPED_ENABLED=0')
 PY
+    )"
+    [[ "$dropped_marker" == *DROPPED_ENABLED=1* ]] && dropped=1
+    frp_client_apply_reconcile_runtime "$dropped"
     return 0
   fi
 
@@ -2358,7 +2379,8 @@ PY
   fi
   rm -f "$curl_err"
   mac="$(frp_identity_load_mac)" || return 0
-  if ! REGISTRY_IDS="$response" STATE_PATH="$path" MGMT_MAC_KEY="$mac" python3 - <<'PY'
+  dropped_marker="$(
+    REGISTRY_IDS="$response" STATE_PATH="$path" MGMT_MAC_KEY="$mac" python3 - <<'PY'
 import hashlib,hmac,json,os,sys
 from pathlib import Path
 secret=os.environ['MGMT_MAC_KEY']
@@ -2373,16 +2395,20 @@ if not received or not hmac.compare_digest(received,expected):
 ids=set(str(x) for x in (d.get('registry_service_ids') or []))
 state=json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
 services=state.get('services') or {}
+dropped_enabled=False
 for sid in list(services.keys()):
     rec=services.get(sid) or {}
-    if rec.get('enabled', True) is False and sid not in ids:
+    if sid not in ids:
+        if rec.get('enabled', True) is not False:
+            dropped_enabled=True
         services.pop(sid, None)
 state['services']=services
 Path(os.environ['STATE_PATH']).write_text(json.dumps(state, indent=2, sort_keys=True)+'\n', encoding='utf-8')
+print('DROPPED_ENABLED=1' if dropped_enabled else 'DROPPED_ENABLED=0')
 PY
-  then
-    return 0
-  fi
+  )" || return 0
+  [[ "$dropped_marker" == *DROPPED_ENABLED=1* ]] && dropped=1
+  frp_client_apply_reconcile_runtime "$dropped"
 }
 
 frp_enroll_services() {
