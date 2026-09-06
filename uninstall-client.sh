@@ -113,13 +113,36 @@ frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
 
 libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
+SERVER_PRESENT=0
+if [[ -f "$(frp_u_path /etc/frp-auto-deploy/config.json)" ]]; then
+  SERVER_PRESENT=1
+fi
+
+# Load canonical ownership (CLIENT_ONLY / SHARED).
+for _frp_own in \
+  "${libdir}/frp-role-ownership.sh" \
+  "${_frp_u_here}/lib/frp-role-ownership.sh" \
+  "${_frp_u_here}/../lib/frp-role-ownership.sh"; do
+  if [[ -f "$_frp_own" ]]; then
+    # shellcheck disable=SC1090
+    . "$_frp_own"
+    break
+  fi
+done
+unset _frp_own
+
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
-  frp_u_rm_file "${libdir}/frp-client-common.sh"
-  frp_u_rm_file "${libdir}/frp-macos.sh"
-  frp_u_rm_file "${libdir}/com.datarelay.frp-auto-deploy.frpc.plist"
-  if [[ ! -f "$(frp_u_path /etc/frp-auto-deploy/config.json)" ]]; then
-    frp_u_rm_file "${libdir}/frp_mgmt_auth.py"
-    frp_u_rm_file "${libdir}/frp-common.sh"
+  # CLIENT_ONLY: always remove on client uninstall.
+  for f in frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist; do
+    frp_u_rm_file "${libdir}/${f}"
+  done
+  # SHARED with server: remove only when server role is absent.
+  if [[ "$SERVER_PRESENT" != "1" ]]; then
+    for f in frp-common.sh frp_mgmt_auth.py \
+      frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py \
+      frp-role-ownership.sh; do
+      frp_u_rm_file "${libdir}/${f}"
+    done
   fi
   rmdir "$libdir" 2>/dev/null || true
 elif [[ -L "$libdir" ]]; then
