@@ -9,11 +9,13 @@ $vectorsPath = Join-Path $crossDir 'vectors.json'
 
 try {
     Assert-FrpTrue (Test-Path -LiteralPath $gen) 'generator exists'
+    $env:PYTHONUTF8 = '1'
+    $env:PYTHONIOENCODING = 'utf-8'
     & python3 $gen
     if ($LASTEXITCODE -ne 0) { throw 'generator failed' }
     Assert-FrpTrue (Test-Path -LiteralPath $vectorsPath) 'vectors.json written'
 
-    $v = Get-Content -LiteralPath $vectorsPath -Raw | ConvertFrom-Json
+    $v = Get-Content -LiteralPath $vectorsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
     # PowerShell decrypts Python ciphertext
     $pt = Unprotect-FrpTokenPbkdf2 -Ciphertext $v.token_ciphertext_python -Secret $v.secret
@@ -24,7 +26,8 @@ try {
     $env:FRP_ENROLL_SECRET = $v.secret
     $pyPt = $psCt | & python3 (Join-Path $script:RepoRoot 'lib/frp_mgmt_auth.py') decrypt-token
     Remove-Item Env:FRP_ENROLL_SECRET -ErrorAction SilentlyContinue
-    Assert-FrpEqual $v.token $pyPt.Trim() 'Python decrypts PS ciphertext'
+    Assert-FrpTrue ($null -ne $pyPt) 'Python decrypt produced output'
+    Assert-FrpEqual $v.token ([string]$pyPt).Trim() 'Python decrypts PS ciphertext'
 
     # MAC derivation matches
     $mac = Get-FrpDerivedMacKey -Secret $v.secret -MachineId $v.machine_id

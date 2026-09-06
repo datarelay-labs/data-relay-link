@@ -95,5 +95,7 @@ try {
     Write-FrpTestPass 'test-autostart (registration failure is non-fatal)'
 } finally {
     Remove-Item Env:FRP_WINDOWS_FAIL_AUTOSTART -ErrorAction SilentlyContinue
+    try { Uninstall-FrpAutostartTask | Out-Null } catch { }
+    Remove-Item Env:FRP_AUTOSTART_TASK_NAME -ErrorAction SilentlyContinue
     Remove-FrpWindowsTestRoot
 }
