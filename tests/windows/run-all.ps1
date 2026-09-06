@@ -37,7 +37,10 @@ $tests = @(
     'test-service-cli.ps1',
     'test-reconcile-release.ps1',
     'test-autostart.ps1',
-    'test-autostart-cli.ps1'
+    'test-autostart-cli.ps1',
+    'test-apply-transaction.ps1',
+    'test-client-lock.ps1',
+    'test-dpapi-localmachine.ps1'
 )
 
 function Get-FrpTestHostExe {

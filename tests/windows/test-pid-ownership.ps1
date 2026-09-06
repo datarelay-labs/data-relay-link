@@ -41,6 +41,15 @@ try {
         Assert-FrpTrue (-not (Test-FrpProcessOwned -ProcessId $PID -ExpectedExe $fakeOther)) 'different absolute path not owned'
     }
 
+    # Path unavailable: refuse ownership even for the same basename.
+    $env:FRP_WINDOWS_SIMULATE_PATH_UNAVAILABLE = '1'
+    Assert-FrpTrue (-not (Test-FrpProcessOwned -ProcessId $PID -ExpectedExe (Get-FrpFrpcPath))) 'path unavailable is not owned'
+    Write-FrpPidFile -ProcessId $PID -ExePath (Get-FrpFrpcPath)
+    $stoppedUnavailable = Stop-FrpClient
+    Assert-FrpTrue (-not $stoppedUnavailable) 'did not kill when path unavailable'
+    Assert-FrpTrue ($null -ne (Get-Process -Id $PID -ErrorAction SilentlyContinue)) 'current process still alive'
+    Remove-Item Env:FRP_WINDOWS_SIMULATE_PATH_UNAVAILABLE -ErrorAction SilentlyContinue
+
     Write-FrpTestPass 'test-pid-ownership'
 } finally {
     Remove-Item Env:FRP_WINDOWS_ALLOW_FAKE_PROCESS -ErrorAction SilentlyContinue

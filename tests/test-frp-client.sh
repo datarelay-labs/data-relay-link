@@ -674,6 +674,36 @@ if ! "$ROOT/tools/frp-client" apply >"$WORKDIR/stale-lock.out" 2>"$WORKDIR/stale
 fi
 pass "local management lock"
 
+# Draft mutation commands must take the same lock; read-only status must not.
+LOCKFILE="$TREE/etc/frp/client-manage.lock"
+python3 - "$WORKDIR/state.before" "$STATE" <<'PY'
+import pathlib,sys
+pathlib.Path(sys.argv[2]).write_bytes(pathlib.Path(sys.argv[1]).read_bytes())
+PY
+exec {LOCKFD}>>"$LOCKFILE"
+flock -n "$LOCKFD"
+if "$ROOT/tools/frp-client" add-service --preset custom --id web --name Web --target-host 127.0.0.1 --target-port 8080 \
+  >"$WORKDIR/add-lock.out" 2>"$WORKDIR/add-lock.err"; then
+  flock -u "$LOCKFD"
+  exec {LOCKFD}>&-
+  fail "lock should block add-service"
+fi
+grep -q 'another frp-client management operation is already running' "$WORKDIR/add-lock.err" || fail "add-service lock error"
+if "$ROOT/tools/frp-client" discard-pending >"$WORKDIR/disc-lock.out" 2>"$WORKDIR/disc-lock.err"; then
+  flock -u "$LOCKFD"
+  exec {LOCKFD}>&-
+  fail "lock should block discard-pending"
+fi
+grep -q 'another frp-client management operation is already running' "$WORKDIR/disc-lock.err" || fail "discard lock error"
+if ! "$ROOT/tools/frp-client" status >"$WORKDIR/status-lock.out" 2>"$WORKDIR/status-lock.err"; then
+  flock -u "$LOCKFD"
+  exec {LOCKFD}>&-
+  fail "status should remain usable while a management lock is held"
+fi
+flock -u "$LOCKFD"
+exec {LOCKFD}>&-
+pass "draft mutation lock; read-only status unlocked"
+
 # Existing install refuses re-enrollment via the installer
 fp_before="$(python3 "$ROOT/lib/frp_mgmt_auth.py" fingerprint "$TREE/etc/frp/client-identity.pub")"
 cp "$TREE/etc/frp/client-identity.key" "$WORKDIR/key.before"

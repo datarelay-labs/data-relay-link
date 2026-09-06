@@ -15,6 +15,7 @@ try {
     Assert-FrpTrue (-not (Test-FrpAutostartTaskExists -TaskName $taskName)) 'not registered initially'
     Install-FrpAutostartTask | Out-Null
     Assert-FrpTrue (Test-FrpAutostartTaskExists) 'registered after install'
+    Assert-FrpTrue (Test-FrpAutostartHealthy) 'healthy SYSTEM boot task after install'
     $runCmd = Get-FrpAutostartRunCommand
     $runArgs = Get-FrpAutostartRunArguments
     Assert-FrpTrue ($runCmd -match 'frp-autostart\.cmd$') 'run command targets frp-autostart.cmd'
@@ -80,7 +81,7 @@ try {
 
     Write-FrpTestPass 'test-autostart (management-only skips registration)'
 
-    # Registration failure must not abort enrollment (non-fatal warning).
+    # Registration failure with enabled public services must FAIL CLOSED.
     Save-FrpClientState -AllocatorUrl 'https://example.test/enroll' -FrpServer 'example.test' `
         -FrpServerPort 7000 -Hostname 'win' -MachineId $mid -HostId 'abcd' `
         -Services $services -Transport 'tcp' -InstallStatus 'enrolled_incomplete' | Out-Null
@@ -89,10 +90,10 @@ try {
     $env:FRP_WINDOWS_FAIL_AUTOSTART = '1'
     $rc = Complete-FrpZeroTouchPostEnroll -SkipDownload -SkipStart -Services $services
     Remove-Item Env:FRP_WINDOWS_FAIL_AUTOSTART -ErrorAction SilentlyContinue
-    Assert-FrpEqual 0 $rc 'enrollment still succeeds when autostart registration fails'
-    Assert-FrpEqual 'installed' (Get-FrpInstallStatus) 'install completes despite autostart failure'
+    Assert-FrpEqual 1 $rc 'enrollment fails closed when autostart registration fails'
+    Assert-FrpTrue ((Get-FrpInstallStatus) -ne 'installed') 'must not report fully installed without autostart'
 
-    Write-FrpTestPass 'test-autostart (registration failure is non-fatal)'
+    Write-FrpTestPass 'test-autostart (registration failure is fail-closed)'
 } finally {
     Remove-Item Env:FRP_WINDOWS_FAIL_AUTOSTART -ErrorAction SilentlyContinue
     try { Uninstall-FrpAutostartTask | Out-Null } catch { }

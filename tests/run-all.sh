@@ -54,6 +54,7 @@ python3 tests/test-core-correctness-p1.py
 ./tests/test-management-commands.sh
 ./tests/test-client-metadata.sh
 ./tests/test-client-tags.sh
+./tests/test-client-groups.sh
 python3 tests/test-client-registry.py
 python3 tests/test-restore-readiness.py
 ./tests/test-frp-client.sh
@@ -64,6 +65,7 @@ python3 tests/test-restore-readiness.py
 bash ./tests/test-installed-client-update.sh
 ./tests/test-legacy-client-secure-bridge.sh
 ./tests/test-install-lifecycle.sh
+./tests/test-uninstall-owned-frpc.sh
 ./tests/test-frpctl.sh
 ./tests/test-frpctl-completion.sh
 ./tests/test-create-zero-touch.sh
