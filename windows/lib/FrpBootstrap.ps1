@@ -294,11 +294,15 @@ function Complete-FrpZeroTouchPostEnroll {
         Initialize-FrpDirectories
         $srcClient = Join-Path $script:FrpWindowsSrcRoot 'tools/FrpClient.ps1'
         $srcCmd = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-client.cmd'
+        $srcAuto = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-autostart.cmd'
         if (Test-Path -LiteralPath $srcClient) {
             Copy-Item -LiteralPath $srcClient -Destination (Join-Path (Get-FrpToolsDir) 'FrpClient.ps1') -Force
         }
         if (Test-Path -LiteralPath $srcCmd) {
             Copy-Item -LiteralPath $srcCmd -Destination (Join-Path (Get-FrpToolsDir) 'frp-client.cmd') -Force
+        }
+        if (Test-Path -LiteralPath $srcAuto) {
+            Copy-Item -LiteralPath $srcAuto -Destination (Join-Path (Get-FrpToolsDir) 'frp-autostart.cmd') -Force
         }
         $srcLib = Join-Path $script:FrpWindowsSrcRoot 'lib'
         if (Test-Path -LiteralPath $srcLib) {

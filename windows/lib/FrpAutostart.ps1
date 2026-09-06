@@ -20,14 +20,14 @@ function Get-FrpAutostartTaskName {
 function Get-FrpAutostartRunCommand {
     <#
     .SYNOPSIS
-      Path of the persisted product CLI wrapper. Arguments are supplied
-      separately so schtasks does not mis-parse "cmd start".
+      Path of the product boot wrapper. Uses a redirected cmd entrypoint so
+      PowerShell Write-Host cannot hang when the SYSTEM task has no console.
     #>
-    return (Join-Path (Get-FrpToolsDir) 'frp-client.cmd')
+    return (Join-Path (Get-FrpToolsDir) 'frp-autostart.cmd')
 }
 
 function Get-FrpAutostartRunArguments {
-    return 'start'
+    return ''
 }
 
 function Get-FrpAutostartMarkerPath {
@@ -38,12 +38,17 @@ function Get-FrpAutostartMarkerPath {
 function New-FrpAutostartTaskXml {
     param(
         [Parameter(Mandatory = $true)][string]$Command,
-        [Parameter(Mandatory = $true)][string]$Arguments,
+        [AllowEmptyString()][string]$Arguments = '',
         [int]$DelaySeconds = 30
     )
     $delay = 'PT{0}S' -f [Math]::Max(0, [int]$DelaySeconds)
     $cmdEsc = [System.Security.SecurityElement]::Escape($Command)
-    $argEsc = [System.Security.SecurityElement]::Escape($Arguments)
+    $argEsc = [System.Security.SecurityElement]::Escape([string]$Arguments)
+    $argElement = if ([string]::IsNullOrWhiteSpace($Arguments)) {
+        ''
+    } else {
+        "      <Arguments>$argEsc</Arguments>`n"
+    }
     return @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -80,8 +85,7 @@ function New-FrpAutostartTaskXml {
   <Actions Context="Author">
     <Exec>
       <Command>$cmdEsc</Command>
-      <Arguments>$argEsc</Arguments>
-    </Exec>
+$argElement    </Exec>
   </Actions>
 </Task>
 "@

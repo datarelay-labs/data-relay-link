@@ -14,8 +14,8 @@ try {
     Assert-FrpTrue (Test-FrpAutostartTaskExists) 'registered after install'
     $runCmd = Get-FrpAutostartRunCommand
     $runArgs = Get-FrpAutostartRunArguments
-    Assert-FrpTrue ($runCmd -match 'frp-client\.cmd$') 'run command targets frp-client.cmd'
-    Assert-FrpEqual 'start' $runArgs 'run arguments are start'
+    Assert-FrpTrue ($runCmd -match 'frp-autostart\.cmd$') 'run command targets frp-autostart.cmd'
+    Assert-FrpEqual '' $runArgs 'run arguments empty (wrapper owns start)'
     Assert-FrpTrue ($runCmd -match [regex]::Escape((Get-FrpToolsDir))) 'run command uses the persisted tools dir, not the temp bootstrap tree'
     $xml = New-FrpAutostartTaskXml -Command $runCmd -Arguments $runArgs
     Assert-FrpTrue ($xml -match 'DisallowStartIfOnBatteries>false') 'battery disallow disabled'
