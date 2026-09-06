@@ -6,6 +6,8 @@ $crossDir = Join-Path $PSScriptRoot 'cross'
 $gen = Join-Path $crossDir 'generate_python_vectors.py'
 $verify = Join-Path $crossDir 'verify_ps_signature.py'
 $vectorsPath = Join-Path $crossDir 'vectors.json'
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+$tmpFiles = @()
 
 try {
     Assert-FrpTrue (Test-Path -LiteralPath $gen) 'generator exists'
@@ -14,6 +16,7 @@ try {
     & python3 $gen
     if ($LASTEXITCODE -ne 0) { throw 'generator failed' }
     Assert-FrpTrue (Test-Path -LiteralPath $vectorsPath) 'vectors.json written'
+    $tmpFiles += $vectorsPath
 
     $v = Get-Content -LiteralPath $vectorsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
@@ -25,9 +28,10 @@ try {
     # UTF-8 file — piping through PS5.1 can inject U+FEFF and break ascii codecs.
     $psCt = Protect-FrpTokenPbkdf2 -Token $v.token -Secret $v.secret
     $env:FRP_ENROLL_SECRET = $v.secret
-    $ctFile = Join-Path $crossDir 'ps-ciphertext.txt'
+    $ctFile = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-ps-ct-' + [guid]::NewGuid().ToString('N') + '.txt')
+    $tmpFiles += $ctFile
     $authPy = Join-Path $script:RepoRoot 'lib/frp_mgmt_auth.py'
-    [System.IO.File]::WriteAllText($ctFile, [string]$psCt, (New-Object System.Text.UTF8Encoding $false))
+    [System.IO.File]::WriteAllText($ctFile, [string]$psCt, $utf8NoBom)
     $pyCode = @"
 from pathlib import Path
 import importlib.util, os
@@ -56,13 +60,23 @@ print(mod.decrypt_token_pbkdf2(ct, os.environ['FRP_ENROLL_SECRET']))
         Test-FrpSignature -PublicPem $v.python_public_pem -Message $v.signed_message -SignatureBase64 $v.python_signature_b64
     ) 'PS verifies Python signature'
 
-    # PowerShell signs; Python verifies
+    # PowerShell signs; Python verifies via JSON file (avoids PS5.1 CLI quoting of JSON body).
     $id = New-FrpEcdsaIdentity
     $sig = Protect-FrpSignMessage -PrivatePem $id.PrivatePem -Message $msg
-    $pubFile = Join-Path $crossDir 'ps-pub.pem'
-    [System.IO.File]::WriteAllText($pubFile, $id.PublicPem)
-    & python3 $verify --pubkey-pem $pubFile --body $v.body --ts $v.ts --nonce $v.nonce `
-        --machine-id $v.machine_id --sig-b64 $sig
+    $verifyPayload = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-ps-verify-' + [guid]::NewGuid().ToString('N') + '.json')
+    $tmpFiles += $verifyPayload
+    $payloadObj = [ordered]@{
+        pubkey_pem = [string]$id.PublicPem
+        body       = [string]$v.body
+        ts         = [int64]$v.ts
+        nonce      = [string]$v.nonce
+        machine_id = [string]$v.machine_id
+        sig_b64    = [string]$sig
+        op         = 'enroll'
+    }
+    $payloadJson = ($payloadObj | ConvertTo-Json -Compress)
+    [System.IO.File]::WriteAllText($verifyPayload, $payloadJson, $utf8NoBom)
+    & python3 $verify --from-json $verifyPayload
     if ($LASTEXITCODE -ne 0) { throw 'Python verify of PS signature failed' }
 
     Write-FrpTestPass 'test-cross-language'
@@ -70,5 +84,10 @@ print(mod.decrypt_token_pbkdf2(ct, os.environ['FRP_ENROLL_SECRET']))
     Remove-Item Env:FRP_ENROLL_SECRET -ErrorAction SilentlyContinue
     Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue
     Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
+    foreach ($f in $tmpFiles) {
+        Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path $crossDir 'ps-ciphertext.txt') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $crossDir 'ps-pub.pem') -Force -ErrorAction SilentlyContinue
     Remove-FrpWindowsTestRoot
 }
