@@ -16,6 +16,8 @@
   <dict>
     <key>SuccessfulExit</key>
     <false/>
+    <key>NetworkState</key>
+    <true/>
   </dict>
   <key>ThrottleInterval</key>
   <integer>5</integer>

@@ -17,6 +17,8 @@ state=sys.argv[2]
 assert p["Label"] == "com.datarelay.frp-auto-deploy.frpc"
 assert p["ProgramArguments"] == [state+"/bin/frpc", "-c", state+"/frpc.toml"]
 assert p["RunAtLoad"] is True
+assert p["KeepAlive"]["SuccessfulExit"] is False
+assert p["KeepAlive"]["NetworkState"] is True
 assert p["StandardOutPath"] == state+"/logs/frpc.out.log"
 assert "@" not in repr(p)
 PY
