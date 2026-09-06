@@ -205,15 +205,15 @@ function ConvertTo-FrpServiceMap {
         return $map
     }
     # ConvertFrom-Json object map: { rdp = {...}; ssh = {...} }
-    # Empty JSON object {} becomes a PSCustomObject with no note properties;
-    # treat that as an empty map (do not fall through to list enumeration).
-    if ($Services -is [System.Management.Automation.PSCustomObject] -or ($Services.PSObject -and $Services.PSObject.Properties)) {
+    # Empty JSON object {} becomes a PSCustomObject with no note properties.
+    # Do NOT use this branch for arrays (they also expose .PSObject.Properties).
+    if ($Services -is [System.Management.Automation.PSCustomObject]) {
         $props = @($Services.PSObject.Properties | Where-Object { $_.MemberType -eq 'NoteProperty' })
         if ($props.Count -eq 0) {
             return $map
         }
-        $looksLikeMap = $false
         $first = $props[0].Value
+        $looksLikeMap = $false
         if ($null -ne $first -and -not ($first -is [string]) -and -not ($first -is [ValueType])) {
             $looksLikeMap = $true
         }

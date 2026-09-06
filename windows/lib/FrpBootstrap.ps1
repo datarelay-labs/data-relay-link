@@ -545,7 +545,11 @@ function Invoke-FrpClientApplyDraft {
 
         if ($enabledAny) {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
-            Start-FrpClient | Out-Null
+            # Start when leaving zero-service/management-only, but only if the
+            # binary is present (unit tests apply without downloading frpc.exe).
+            if (Test-Path -LiteralPath (Get-FrpFrpcPath)) {
+                Start-FrpClient | Out-Null
+            }
             try { Install-FrpAutostartTask | Out-Null } catch { }
         } else {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
@@ -676,8 +680,15 @@ function Invoke-FrpReconcileReleasedServices {
         if (-not $received -or -not (Test-FrpFixedTimeEquals -Left $received -Right $expected -IgnoreCase)) {
             return $false
         }
+        # Require an explicit reconcile payload. A missing key must not be
+        # treated as "zero services" (that would wipe local state / drafts when
+        # a mocked enroll response is accidentally reused).
+        $propNames = @($data.PSObject.Properties | ForEach-Object { $_.Name })
+        if ($propNames -notcontains 'registry_service_ids') {
+            return $false
+        }
         $registryIds = @()
-        if ($data.registry_service_ids) {
+        if ($null -ne $data.registry_service_ids) {
             $registryIds = @($data.registry_service_ids | ForEach-Object { [string]$_ })
         }
     }
