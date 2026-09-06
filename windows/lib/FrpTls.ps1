@@ -331,16 +331,20 @@ function Test-FrpCertificateHostname {
 }
 
 function New-FrpPinnedServerCertificateValidator {
-    param([Parameter(Mandatory = $true)][string]$CaPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$CaPath,
+        [string]$ExpectedHost
+    )
     $ca = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CaPath)
     $caHandle = $ca
+    $expectedHost = [string]$ExpectedHost
     $validator = {
         param($sender, $certificate, $chain, $sslPolicyErrors)
         try {
             if ($null -eq $certificate) { return $false }
             $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $certificate
             $build = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-            $build.ChainPolicy.Revision = [System.Security.Cryptography.X509Certificates.X509ChainPolicy]::Default.Revision
+            # X509ChainPolicy.Revision is not settable on .NET Framework / WinPS 5.1.
             $build.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
             $build.ChainPolicy.ExtraStore.Add($caHandle) | Out-Null
             $build.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
@@ -360,12 +364,13 @@ function New-FrpPinnedServerCertificateValidator {
             }
             if (-not $trusted) { return $false }
 
-            # Hostname required after CA trust; fail closed if hostname cannot be determined.
-            $hostName = $null
-            if ($sender -is [System.Net.HttpWebRequest]) {
+            # Prefer the caller-provided host. $sender is HttpWebRequest on GET
+            # but may be a connection/stream object on POST GetRequestStream.
+            $hostName = $expectedHost
+            if ([string]::IsNullOrWhiteSpace($hostName) -and $sender -is [System.Net.HttpWebRequest]) {
                 $uri = ([System.Net.HttpWebRequest]$sender).RequestUri
                 if ($null -ne $uri) { $hostName = $uri.Host }
-            } elseif ($null -ne $sender) {
+            } elseif ([string]::IsNullOrWhiteSpace($hostName) -and $null -ne $sender) {
                 try {
                     $uriProp = $sender.RequestUri
                     if ($null -ne $uriProp) { $hostName = $uriProp.Host }
@@ -444,7 +449,9 @@ function Invoke-FrpHttpsJson {
     }
 
     # .NET path with request-local validation callback (restored afterwards).
-    $pin = New-FrpPinnedServerCertificateValidator -CaPath $CaPath
+    $expectedHost = $null
+    try { $expectedHost = ([Uri]$Url).Host } catch { }
+    $pin = New-FrpPinnedServerCertificateValidator -CaPath $CaPath -ExpectedHost $expectedHost
     $previous = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
     try {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $pin.Callback
@@ -453,6 +460,11 @@ function Invoke-FrpHttpsJson {
         $req.ContentType = 'application/json'
         $req.Timeout = $TimeoutSec * 1000
         $req.ReadWriteTimeout = $TimeoutSec * 1000
+        $req.KeepAlive = $false
+        $req.AllowWriteStreamBuffering = $true
+        $req.ProtocolVersion = [System.Net.HttpVersion]::Version11
+        $req.ConnectionGroupName = ('frp-alloc-' + [guid]::NewGuid().ToString('N'))
+        try { $req.ServicePoint.Expect100Continue = $false } catch { }
         if ($Headers) {
             foreach ($k in $Headers.Keys) {
                 if ($k -match '^(Content-Type)$') { continue }
@@ -481,7 +493,7 @@ function Invoke-FrpHttpsJson {
                 if ($errBody) { return $errBody }
             } finally { $sr.Close() }
         }
-        throw 'ERROR: allocator request failed'
+        throw ('ERROR: allocator request failed: ' + $ex.Message)
     } finally {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
         if ($pin.Ca) { $pin.Ca.Dispose() }

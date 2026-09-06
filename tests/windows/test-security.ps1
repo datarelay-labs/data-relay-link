@@ -46,5 +46,6 @@ Assert-FrpTrue ($tls -match 'function\s+Test-FrpCertificateHostname') 'hostname 
 Assert-FrpTrue ($tls -match 'Test-FrpCertificateHostname') 'validator uses hostname helper'
 Assert-FrpTrue ($tls -match 'FRP_WINDOWS_FORCE_CURL') 'allocator JSON curl is opt-in, not default'
 Assert-FrpTrue ($tls -notmatch 'Start-Process -FilePath ''curl.exe'' -ArgumentList \$args') 'allocator JSON does not Start-Process curl ArgumentList'
+Assert-FrpTrue ($tls -notmatch '\$build\.ChainPolicy\.Revision\s*=') 'does not assign X509ChainPolicy.Revision'
 
 Write-FrpTestPass 'test-security'

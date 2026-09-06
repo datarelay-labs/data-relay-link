@@ -9,6 +9,7 @@ try {
     Assert-FrpTrue ($tlsSrc -match 'function\s+Test-FrpCertificateHostname') 'Test-FrpCertificateHostname defined'
     Assert-FrpTrue ($tlsSrc -match 'FRP_WINDOWS_FORCE_DOTNET_HTTP') 'force .NET HTTP env hook present'
     Assert-FrpTrue ($tlsSrc -match 'FRP_WINDOWS_FORCE_CURL') 'curl allocator JSON is opt-in'
+    Assert-FrpTrue ($tlsSrc -match 'ExpectedHost') 'POST pin validator uses explicit hostname'
     Write-FrpTestPass 'tls-source-no-or-true'
 
     $openssl = Get-Command openssl -ErrorAction SilentlyContinue
