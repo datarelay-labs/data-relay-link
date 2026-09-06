@@ -148,6 +148,9 @@ PY
 frp_client_status() {
   local path
   path="$(frp_client_state_path)"
+  # Drop local services the server already released, including a last
+  # enabled service after `frpctl release service --force`.
+  frp_client_reconcile_released_services || true
   frp_load_client_state "$path"
   python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" <<'PY'
 import json, sys
@@ -270,9 +273,9 @@ PY
 frp_client_list() {
   local path
   path="$(frp_client_state_path)"
-  # Reconcile disabled services against the server registry. After
+  # Reconcile local services against the server registry. After
   # `frpctl release service`, the reservation is removed server-side but
-  # the client local state can retain a stale disabled entry until we check.
+  # the client local state can retain a stale entry until we check.
   frp_client_reconcile_released_services || true
   frp_load_client_state "$path"
   frp_print_state_services "$path"
@@ -769,7 +772,10 @@ PY
   if ! frp_client_restart; then
     restore_needed=1
   else
-    mapfile -t PROXY_NAMES < <(SERVICES_FILE="$enabled_list" proxy_names_from_services "$host_id")
+    PROXY_NAMES=()
+    while IFS= read -r _frp_proxy_name; do
+      [[ -n "$_frp_proxy_name" ]] && PROXY_NAMES+=("$_frp_proxy_name")
+    done < <(SERVICES_FILE="$enabled_list" proxy_names_from_services "$host_id")
     if ! frp_client_wait_proxies "${PROXY_NAMES[@]}"; then
       restore_needed=1
     fi

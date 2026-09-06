@@ -178,14 +178,62 @@ def openssl_bin():
     return shutil.which('openssl')
 
 
+def _doctor_is_darwin():
+    forced = str(os.environ.get('FRP_TEST_UNAME_S') or '').strip()
+    if forced:
+        return forced == 'Darwin'
+    return sys.platform == 'darwin'
+
+
+def _doctor_macos_state_root():
+    return str(os.environ.get('FRP_MACOS_STATE_ROOT') or '/Library/Application Support/frp-auto-deploy').rstrip('/')
+
+
+def _doctor_macos_prefix():
+    return str(os.environ.get('FRP_MACOS_PREFIX') or '/usr/local').rstrip('/')
+
+
+def macos_map_path(abs_path):
+    """Mirror lib/frp-macos.sh frp_macos_map_path for doctor file probes."""
+    p = str(abs_path or '')
+    if not p:
+        return p
+    state = _doctor_macos_state_root()
+    prefix = _doctor_macos_prefix()
+    if p in ('/etc/frp', '/etc/frp-auto-deploy'):
+        return state
+    if p.startswith('/etc/frp/'):
+        return state + '/' + p[len('/etc/frp/'):]
+    if p.startswith('/etc/frp-auto-deploy/'):
+        return state + '/' + p[len('/etc/frp-auto-deploy/'):]
+    if p == '/var/lib/frp-auto-deploy':
+        return state + '/state'
+    if p.startswith('/var/lib/frp-auto-deploy/'):
+        return state + '/state/' + p[len('/var/lib/frp-auto-deploy/'):]
+    if p == '/etc/systemd/system/frpc.service':
+        return '/Library/LaunchDaemons/com.datarelay.frp-auto-deploy.frpc.plist'
+    if p == '/usr/local/lib/frp-auto-deploy':
+        return state + '/lib'
+    if p.startswith('/usr/local/lib/frp-auto-deploy/'):
+        return state + '/lib/' + p[len('/usr/local/lib/frp-auto-deploy/'):]
+    if p == '/usr/local/bin/frpc':
+        return state + '/bin/frpc'
+    if p.startswith('/usr/local/bin/'):
+        return prefix + '/bin/' + p[len('/usr/local/bin/'):]
+    if p.startswith('/usr/local/sbin/'):
+        return prefix + '/sbin/' + p[len('/usr/local/sbin/'):]
+    return p
+
+
 class Paths(object):
     def __init__(self, root):
         self.root = str(root or '')
 
     def p(self, abs_path):
+        mapped = macos_map_path(abs_path) if _doctor_is_darwin() else abs_path
         if self.root:
-            return Path(self.root + abs_path)
-        return Path(abs_path)
+            return Path(self.root + mapped)
+        return Path(mapped)
 
     def exists(self, abs_path):
         return self.p(abs_path).exists()

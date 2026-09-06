@@ -223,6 +223,14 @@ frp_doctor_collect_facts() {
     frpc_a=unknown; frpc_e=unknown
     frontend_a=unknown; frontend_e=unknown
   fi
+  if type frp_is_darwin >/dev/null 2>&1 && frp_is_darwin && type frp_macos_launchd_running >/dev/null 2>&1; then
+    if frp_macos_launchd_running; then
+      frpc_a=active
+    else
+      frpc_a=inactive
+    fi
+    frpc_e=enabled
+  fi
 
   IFS=$'\t' read -r clock_status clock_detail <<<"$(frp_doctor_clock_status)"
   disk_mb="$(frp_doctor_disk_mb "$(frp_doctor_fs /var/lib/frp-auto-deploy)")"

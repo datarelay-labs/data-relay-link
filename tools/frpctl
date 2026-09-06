@@ -260,19 +260,28 @@ frpctl_invoke() {
   fi
 }
 
+frpctl_lib_candidate() {
+  local name="$1" cand mapped=""
+  local -a cands=()
+  if declare -F frpctl_path >/dev/null 2>&1; then
+    mapped="$(frpctl_path "/usr/local/lib/frp-auto-deploy/${name}")"
+  fi
+  cands+=("${_FRPCTL_DIR}/../lib/${name}")
+  [[ -n "$mapped" ]] && cands+=("$mapped")
+  cands+=("/usr/local/lib/frp-auto-deploy/${name}")
+  cands+=("/Library/Application Support/frp-auto-deploy/lib/${name}")
+  for cand in "${cands[@]}"; do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  return 1
+}
+
 frpctl_grammar_py() {
-  local here
-  if [[ -n "${_FRPCTL_DIR:-}" && -f "${_FRPCTL_DIR}/../lib/frp_ctl_grammar.py" ]]; then
-    printf '%s' "${_FRPCTL_DIR}/../lib/frp_ctl_grammar.py"
-    return 0
-  fi
-  if [[ -f /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py ]]; then
-    printf '%s' /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
-    return 0
-  fi
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -f "${here}/../lib/frp_ctl_grammar.py" ]]; then
-    printf '%s' "${here}/../lib/frp_ctl_grammar.py"
+  local path
+  if path="$(frpctl_lib_candidate frp_ctl_grammar.py)"; then
+    printf '%s' "$path"
     return 0
   fi
   echo "ERROR: missing frp_ctl_grammar.py" >&2
@@ -280,18 +289,9 @@ frpctl_grammar_py() {
 }
 
 frpctl_repl_py() {
-  local here
-  if [[ -n "${_FRPCTL_DIR:-}" && -f "${_FRPCTL_DIR}/../lib/frp_ctl_repl.py" ]]; then
-    printf '%s' "${_FRPCTL_DIR}/../lib/frp_ctl_repl.py"
-    return 0
-  fi
-  if [[ -f /usr/local/lib/frp-auto-deploy/frp_ctl_repl.py ]]; then
-    printf '%s' /usr/local/lib/frp-auto-deploy/frp_ctl_repl.py
-    return 0
-  fi
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -f "${here}/../lib/frp_ctl_repl.py" ]]; then
-    printf '%s' "${here}/../lib/frp_ctl_repl.py"
+  local path
+  if path="$(frpctl_lib_candidate frp_ctl_repl.py)"; then
+    printf '%s' "$path"
     return 0
   fi
   return 1
@@ -1644,7 +1644,10 @@ frpctl_readline_complete() {
   if [[ "$point" != "${#line}" ]]; then
     return 0
   fi
-  mapfile -t cands < <(frpctl_completion_candidates "$line" || true)
+  cands=()
+  while IFS= read -r _cand; do
+    [[ -n "$_cand" ]] && cands+=("$_cand")
+  done < <(frpctl_completion_candidates "$line" || true)
   if [[ ${#cands[@]} -eq 0 ]]; then
     return 0
   fi
@@ -2212,7 +2215,10 @@ frpctl_tokenize() {
   [[ -n "$line" ]] || return 0
   py="$(frpctl_grammar_py)" || return 1
   json="$(python3 "$py" tokenize "$line")" || return 2
-  mapfile -t _FRP_CTL_TOKENS < <(python3 -c 'import json,sys; [print(t) for t in json.loads(sys.argv[1])]' "$json")
+  _FRP_CTL_TOKENS=()
+  while IFS= read -r _tok; do
+    [[ -n "$_tok" ]] && _FRP_CTL_TOKENS+=("$_tok")
+  done < <(python3 -c 'import json,sys; [print(t) for t in json.loads(sys.argv[1])]' "$json")
 }
 
 frpctl_history_maybe_record() {
