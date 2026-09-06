@@ -13,8 +13,14 @@ try {
     Install-FrpAutostartTask | Out-Null
     Assert-FrpTrue (Test-FrpAutostartTaskExists) 'registered after install'
     $runCmd = Get-FrpAutostartRunCommand
-    Assert-FrpTrue ($runCmd -match 'frp-client\.cmd start$') 'run command targets frp-client.cmd start'
+    $runArgs = Get-FrpAutostartRunArguments
+    Assert-FrpTrue ($runCmd -match 'frp-client\.cmd$') 'run command targets frp-client.cmd'
+    Assert-FrpEqual 'start' $runArgs 'run arguments are start'
     Assert-FrpTrue ($runCmd -match [regex]::Escape((Get-FrpToolsDir))) 'run command uses the persisted tools dir, not the temp bootstrap tree'
+    $xml = New-FrpAutostartTaskXml -Command $runCmd -Arguments $runArgs
+    Assert-FrpTrue ($xml -match 'DisallowStartIfOnBatteries>false') 'battery disallow disabled'
+    Assert-FrpTrue ($xml -match 'S-1-5-18') 'runs as SYSTEM'
+    Assert-FrpTrue ($xml -match 'BootTrigger') 'boot trigger present'
 
     # Idempotent: re-install (overwrite) does not throw.
     Install-FrpAutostartTask | Out-Null
