@@ -84,17 +84,35 @@ if (-not $ZeroTouch) {
     exit 1
 }
 
+# Finding A: Zero-Touch lost-response recovery. If a prior enrollment
+# attempt on this host redeemed a ticket and/or enrolled but crashed (or the
+# HTTP response was lost) before local state was committed, a matching
+# crash-safe pending-enrollment transaction lets Invoke-FrpZeroTouch resume
+# without a Bootstrap Ticket or CA hash. Do not require them up front in
+# that case (the ticket is single-use and must not be re-supplied/re-used).
+Initialize-FrpDirectories
+$__frpResumeMachineId = Get-FrpOrCreateClientId
+$__frpResumePending = (-not (Test-FrpIsEnrolled)) -and (Test-FrpPendingEnrollMatches -MachineId $__frpResumeMachineId)
+if ($__frpResumePending -and -not $AllocatorUrl) {
+    $__frpPendingPeek = Get-FrpPendingEnrollRaw
+    if ($__frpPendingPeek -and $__frpPendingPeek.allocator_url) {
+        $AllocatorUrl = [string]$__frpPendingPeek.allocator_url
+    }
+}
+
 if (-not $AllocatorUrl) {
     Write-Host 'ERROR: -AllocatorUrl / FRP_ALLOCATOR_URL is required'
     exit 1
 }
-if (-not $CaSha256) {
-    Write-Host 'ERROR: -CaSha256 / FRP_ALLOCATOR_CA_SHA256 is required'
-    exit 1
-}
-if (-not $BootstrapTicket) {
-    Write-Host 'ERROR: -BootstrapTicket / FRP_BOOTSTRAP_TICKET is required'
-    exit 1
+if (-not $__frpResumePending) {
+    if (-not $CaSha256) {
+        Write-Host 'ERROR: -CaSha256 / FRP_ALLOCATOR_CA_SHA256 is required'
+        exit 1
+    }
+    if (-not $BootstrapTicket) {
+        Write-Host 'ERROR: -BootstrapTicket / FRP_BOOTSTRAP_TICKET is required'
+        exit 1
+    }
 }
 
 $rc = Invoke-FrpZeroTouch -AllocatorUrl $AllocatorUrl -CaSha256 $CaSha256 `

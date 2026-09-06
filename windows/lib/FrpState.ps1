@@ -416,6 +416,206 @@ function Test-FrpCanResumeInstall {
     return ($status -eq 'enrolled_incomplete')
 }
 
+function Get-FrpIdentityPublicFingerprint {
+    <#
+    .SYNOPSIS
+      SHA-256 fingerprint (hex) of this client's management public key PEM,
+      when a local identity exists. Used only for crash-safe pending-enrollment
+      recovery bookkeeping (Finding A; see Save-FrpPendingEnroll below), never
+      for trust decisions, which remain signature-based.
+    #>
+    $path = Get-FrpIdentityPubPath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $pem = [System.IO.File]::ReadAllText($path)
+        return Get-FrpSha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($pem))
+    } catch {
+        return $null
+    }
+}
+
+function Get-FrpPendingEnrollRaw {
+    <#
+    .SYNOPSIS
+      Raw (undecrypted-secret) pending-enrollment record, or $null if absent
+      or unreadable. Internal helper for Save-/Read-/Test-FrpPendingEnroll*.
+    #>
+    $path = Get-FrpPendingEnrollPath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $raw = [System.IO.File]::ReadAllText($path)
+        return ($raw | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Test-FrpPendingEnrollExists {
+    Test-Path -LiteralPath (Get-FrpPendingEnrollPath)
+}
+
+function Test-FrpPendingEnrollMatches {
+    <#
+    .SYNOPSIS
+      True when a crash-safe pending-enrollment transaction exists for this
+      host's machine id. Callers must not treat a non-matching (e.g. stale,
+      foreign) pending file as resumable.
+    #>
+    param([Parameter(Mandatory = $true)][string]$MachineId)
+    $raw = Get-FrpPendingEnrollRaw
+    if ($null -eq $raw) { return $false }
+    return ([string]$raw.machine_id -eq $MachineId)
+}
+
+function Save-FrpPendingEnroll {
+    <#
+    .SYNOPSIS
+      Finding A: Zero-Touch lost-response recovery. Persists the minimum
+      needed to resume an interrupted zero-touch enrollment without
+      re-redeeming a single-use Bootstrap Ticket: enrollment id/secret,
+      machine id, a services snapshot/digest, the management key
+      fingerprint, and (once the allocator has responded) the exact enroll
+      response needed to finish the local commit without another network
+      round trip.
+
+      Stored under the Windows state directory (ProgramData\frp-auto-deploy\
+      state\enroll-pending.json by default), restricted ACL (SYSTEM /
+      Administrators only), atomic replace (temp file + Move-Item). The
+      enrollment secret is DPAPI-protected (LocalMachine scope, falling back
+      to CurrentUser) on a real Windows host; on a non-Windows / test host it
+      is stored as plain JSON, matching the existing Save-FrpIdentityKey
+      fallback behavior for this project.
+
+      Never weakens ticket single-use semantics: this file never contains
+      the Bootstrap Ticket itself, only the Enrollment ID/Secret pair the
+      allocator already issued in exchange for it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('redeemed', 'enrolled')][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$MachineId,
+        [Parameter(Mandatory = $true)][string]$Hostname,
+        [Parameter(Mandatory = $true)][string]$AllocatorUrl,
+        [Parameter(Mandatory = $true)][string]$EnrollmentId,
+        [Parameter(Mandatory = $true)][string]$EnrollmentSecret,
+        [Parameter(Mandatory = $true)]$Services,
+        [hashtable]$EnrollMeta,
+        $AllocatedServices
+    )
+    Initialize-FrpDirectories
+    $path = Get-FrpPendingEnrollPath
+    $existing = Get-FrpPendingEnrollRaw
+
+    $now = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+    $createdAt = $now
+    if ($existing -and $existing.created_at) { $createdAt = $existing.created_at }
+
+    $servicesPlain = ConvertTo-FrpPlainObject $Services
+    $canonicalServices = Get-FrpCanonicalJson -Object $servicesPlain
+    $digest = Get-FrpSha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($canonicalServices))
+
+    $record = [ordered]@{
+        schema_version  = 1
+        created_at      = $createdAt
+        updated_at      = $now
+        phase           = $Phase
+        machine_id      = $MachineId
+        hostname        = $Hostname
+        allocator_url   = $AllocatorUrl
+        enroll_id       = $EnrollmentId
+        services        = $servicesPlain
+        services_digest = $digest
+    }
+    $fp = Get-FrpIdentityPublicFingerprint
+    if ($fp) { $record['mgmt_fingerprint'] = $fp }
+
+    if (Test-FrpIsWindowsHost) {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($EnrollmentSecret)
+        $scope = [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+        try {
+            $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
+        } catch {
+            # Fall back to CurrentUser if LocalMachine DPAPI is unavailable.
+            $protected = [System.Security.Cryptography.ProtectedData]::Protect(
+                $bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+        }
+        $record['enroll_secret_dpapi'] = [Convert]::ToBase64String($protected)
+    } else {
+        Write-Warning 'DPAPI unavailable; storing pending-enrollment secret as plain JSON under the test root. Do not use this mode on production Windows hosts.'
+        $record['enroll_secret'] = $EnrollmentSecret
+    }
+
+    if ($EnrollMeta) {
+        $record['enroll_meta'] = ConvertTo-FrpPlainObject $EnrollMeta
+    } elseif ($existing -and $existing.enroll_meta) {
+        $record['enroll_meta'] = ConvertTo-FrpPlainObject $existing.enroll_meta
+    }
+    if ($AllocatedServices) {
+        $record['allocated_services'] = ConvertTo-FrpPlainObject $AllocatedServices
+    } elseif ($existing -and $existing.allocated_services) {
+        $record['allocated_services'] = ConvertTo-FrpPlainObject $existing.allocated_services
+    }
+
+    $json = ($record | ConvertTo-Json -Depth 10)
+    $tmp = "$path.tmp"
+    [System.IO.File]::WriteAllText($tmp, $json + "`n")
+    Restrict-FrpFileAcl -Path $tmp
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+    Restrict-FrpFileAcl -Path $path
+    return $path
+}
+
+function Read-FrpPendingEnroll {
+    <#
+    .SYNOPSIS
+      Reads back the pending-enrollment record written by
+      Save-FrpPendingEnroll, decrypting the DPAPI-protected secret when
+      present. Returns $null if no pending record exists.
+    #>
+    $raw = Get-FrpPendingEnrollRaw
+    if ($null -eq $raw) { return $null }
+    $propNames = @($raw.PSObject.Properties.Name)
+    $secret = $null
+    if (($propNames -contains 'enroll_secret_dpapi') -and $raw.enroll_secret_dpapi) {
+        $protected = [Convert]::FromBase64String([string]$raw.enroll_secret_dpapi)
+        try {
+            $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $protected, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
+        } catch {
+            $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $protected, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+        }
+        $secret = [System.Text.Encoding]::UTF8.GetString($bytes)
+    } elseif ($propNames -contains 'enroll_secret') {
+        $secret = [string]$raw.enroll_secret
+    }
+    return @{
+        Phase             = [string]$raw.phase
+        MachineId         = [string]$raw.machine_id
+        Hostname          = [string]$raw.hostname
+        AllocatorUrl      = [string]$raw.allocator_url
+        EnrollmentId      = [string]$raw.enroll_id
+        EnrollmentSecret  = $secret
+        Services          = @($raw.services)
+        EnrollMeta        = $raw.enroll_meta
+        AllocatedServices = @($raw.allocated_services)
+        MgmtFingerprint   = [string]$raw.mgmt_fingerprint
+    }
+}
+
+function Clear-FrpPendingEnroll {
+    <#
+    .SYNOPSIS
+      Removes the pending-enrollment recovery transaction. Callers must only
+      do this after the local commit (client-state.json + frpc.toml +
+      management identity) has succeeded, so it is never replayed against a
+      future, unrelated Enrollment Code.
+    #>
+    $path = Get-FrpPendingEnrollPath
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-FrpEnabledServiceCount {
     param($Services)
     if ($null -eq $Services) { return 0 }

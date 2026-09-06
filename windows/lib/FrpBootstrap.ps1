@@ -557,10 +557,21 @@ function Invoke-FrpClientApplyDraft {
 }
 
 function Invoke-FrpZeroTouch {
+    <#
+    .NOTES
+      AllocatorUrl / CaSha256 / BootstrapTicket are intentionally NOT
+      [Parameter(Mandatory)]: PowerShell's mandatory-parameter binder rejects
+      an explicit empty string, but a Finding A crash-safe resume (see
+      Test-FrpPendingEnrollMatches below) legitimately needs to call this
+      with CaSha256/BootstrapTicket omitted or blank (the CA is already
+      pinned to disk and the Bootstrap Ticket must not be re-supplied /
+      re-used). Presence is validated explicitly in the body instead, with a
+      resume-aware exception for CaSha256/BootstrapTicket.
+    #>
     param(
-        [Parameter(Mandatory = $true)][string]$AllocatorUrl,
-        [Parameter(Mandatory = $true)][string]$CaSha256,
-        [Parameter(Mandatory = $true)][string]$BootstrapTicket,
+        [string]$AllocatorUrl,
+        [string]$CaSha256,
+        [string]$BootstrapTicket,
         [string]$Platform = 'windows',
         [string]$ServicesJson,
         [string]$SshUser,
@@ -589,20 +600,13 @@ function Invoke-FrpZeroTouch {
             return 2
         }
 
-        if ($AllocatorUrl -notmatch '^https://') {
-            throw 'ERROR: plain HTTP allocator URL is not supported; HTTPS is required'
-        }
-        if ([string]::IsNullOrWhiteSpace($CaSha256)) {
-            throw 'ERROR: zero-touch setup requires FRP_ALLOCATOR_CA_SHA256 / -CaSha256'
-        }
-        if ([string]::IsNullOrWhiteSpace($BootstrapTicket)) {
-            throw 'ERROR: bootstrap ticket is missing'
-        }
-
+        # Finding A: Zero-Touch lost-response recovery. Compute the machine
+        # id before requiring CA/ticket args (it is deterministic and
+        # independent of them) so a lost /bootstrap/redeem or /enroll
+        # response can be recovered by resuming from a local crash-safe
+        # pending-enrollment transaction instead of re-redeeming a
+        # single-use Bootstrap Ticket.
         Initialize-FrpDirectories
-        Write-Host 'Bootstrapping allocator CA (pin verify)...'
-        Get-FrpCaCertificate -AllocatorUrl $AllocatorUrl -ExpectedSha256 $CaSha256 | Out-Null
-
         $machineId = Get-FrpOrCreateClientId
         if (-not $Hostname) {
             $Hostname = $env:COMPUTERNAME
@@ -610,50 +614,153 @@ function Invoke-FrpZeroTouch {
         }
         $Hostname = ([string]$Hostname).Trim()
 
-        Write-Host 'Redeeming bootstrap ticket...'
-        $redeem = Invoke-FrpBootstrapRedeem -AllocatorUrl $AllocatorUrl -Ticket $BootstrapTicket `
-            -MachineId $machineId -Hostname $Hostname
-
-        # Ticket redeem is authoritative. Empty services = management-only.
-        # Get-FrpDefaultServices is only for explicit local guided UX.
-        $services = @($redeem.Services)
-        if ($UseLocalDefaults) {
-            $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
-        } elseif (-not [string]::IsNullOrWhiteSpace($ServicesJson) -and @($services).Count -eq 0) {
-            $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
+        $resumePending = $false
+        $pending = $null
+        if (Test-FrpPendingEnrollMatches -MachineId $machineId) {
+            $resumePending = $true
+            $pending = Read-FrpPendingEnroll
+            if (-not $AllocatorUrl) { $AllocatorUrl = $pending.AllocatorUrl }
         }
-        # else: keep ticket services as-is (including empty)
 
-        Write-Host 'Generating management identity...'
-        $id = New-FrpEcdsaIdentity
-        Save-FrpIdentityKey -PrivatePem $id.PrivatePem | Out-Null
-        Save-FrpIdentityPublic -PublicPem $id.PublicPem | Out-Null
+        if ($AllocatorUrl -notmatch '^https://') {
+            throw 'ERROR: plain HTTP allocator URL is not supported; HTTPS is required'
+        }
+        if (-not $resumePending) {
+            if ([string]::IsNullOrWhiteSpace($CaSha256)) {
+                throw 'ERROR: zero-touch setup requires FRP_ALLOCATOR_CA_SHA256 / -CaSha256'
+            }
+            if ([string]::IsNullOrWhiteSpace($BootstrapTicket)) {
+                throw 'ERROR: bootstrap ticket is missing'
+            }
+        }
 
-        Write-Host 'Enrolling with allocator...'
-        $enroll = Invoke-FrpEnroll -AllocatorUrl $AllocatorUrl `
-            -EnrollmentId $redeem.EnrollmentId -EnrollmentSecret $redeem.EnrollmentSecret `
-            -MachineId $machineId -Hostname $Hostname -Services $services -PublicPem $id.PublicPem
+        $caPath = Get-FrpAllocatorCaPath
+        if ($resumePending -and (Test-Path -LiteralPath $caPath)) {
+            # Already pinned by the earlier (crashed) attempt; no CA hash is
+            # required to resume.
+        } else {
+            Write-Host 'Bootstrapping allocator CA (pin verify)...'
+            Get-FrpCaCertificate -AllocatorUrl $AllocatorUrl -ExpectedSha256 $CaSha256 | Out-Null
+        }
 
-        $token = Unprotect-FrpTokenPbkdf2 -Ciphertext $enroll.TokenCiphertext -Secret $redeem.EnrollmentSecret
-        $mac = Get-FrpDerivedMacKey -Secret $redeem.EnrollmentSecret -MachineId $machineId
+        $enrollmentId = $null
+        $enrollmentSecret = $null
+        $services = $null
+        $publicPem = $null
+
+        if ($resumePending) {
+            Write-Host 'A previous enrollment did not finish (response lost or interrupted).'
+            Write-Host 'Resuming from local crash-safe recovery state; the Bootstrap Ticket is not reused.'
+            $enrollmentId = $pending.EnrollmentId
+            $enrollmentSecret = $pending.EnrollmentSecret
+            if ([string]::IsNullOrWhiteSpace($enrollmentSecret)) {
+                throw 'ERROR: local recovery state is present but unusable. Create a new Enrollment Code and re-enroll this client.'
+            }
+            $services = @($pending.Services)
+            # Identity was generated and saved to disk before the pending
+            # record moved to phase=redeemed; reuse it (a fresh keypair would
+            # not match what the allocator may have already bound on an
+            # "enrolled" exact replay).
+            if (-not (Test-Path -LiteralPath (Get-FrpIdentityPubPath))) {
+                throw 'ERROR: local recovery state is present but the management identity is missing. Create a new Enrollment Code and re-enroll this client.'
+            }
+            $publicPem = [System.IO.File]::ReadAllText((Get-FrpIdentityPubPath))
+        } else {
+            Write-Host 'Redeeming bootstrap ticket...'
+            $redeem = Invoke-FrpBootstrapRedeem -AllocatorUrl $AllocatorUrl -Ticket $BootstrapTicket `
+                -MachineId $machineId -Hostname $Hostname
+
+            # Ticket redeem is authoritative. Empty services = management-only.
+            # Get-FrpDefaultServices is only for explicit local guided UX.
+            $services = @($redeem.Services)
+            if ($UseLocalDefaults) {
+                $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
+            } elseif (-not [string]::IsNullOrWhiteSpace($ServicesJson) -and @($services).Count -eq 0) {
+                $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
+            }
+            # else: keep ticket services as-is (including empty)
+
+            Write-Host 'Generating management identity...'
+            $id = New-FrpEcdsaIdentity
+            Save-FrpIdentityKey -PrivatePem $id.PrivatePem | Out-Null
+            Save-FrpIdentityPublic -PublicPem $id.PublicPem | Out-Null
+            $publicPem = $id.PublicPem
+
+            $enrollmentId = $redeem.EnrollmentId
+            $enrollmentSecret = $redeem.EnrollmentSecret
+        }
+
+        $enrollResult = $null
+        if ($resumePending -and [string]$pending.Phase -eq 'enrolled' -and $pending.EnrollMeta -and @($pending.AllocatedServices).Count -gt 0) {
+            # The server-committed /enroll response was cached locally before
+            # the prior crash; finish the local commit without another
+            # network round trip or ticket/enrollment-code reuse.
+            Write-Host 'Reusing the previously completed enrollment response...'
+            $meta = $pending.EnrollMeta
+            $transport = [string]$meta.frp_transport
+            if (-not $transport) { $transport = 'tcp' }
+            $enrollResult = @{
+                FrpServer       = [string]$meta.frp_server
+                FrpServerPort   = [int]$meta.frp_server_port
+                FrpTransport    = $transport
+                TokenCiphertext = [string]$meta.token_ciphertext
+                Services        = @($pending.AllocatedServices)
+            }
+        } else {
+            # Persist the enrollment secret and exact request now, before
+            # calling /enroll, so a crash after the server commits (but
+            # before the response is received or written) can be recovered
+            # by an exact replay instead of requiring a new Enrollment Code.
+            Save-FrpPendingEnroll -Phase 'redeemed' -MachineId $machineId -Hostname $Hostname `
+                -AllocatorUrl $AllocatorUrl -EnrollmentId $enrollmentId -EnrollmentSecret $enrollmentSecret `
+                -Services $services | Out-Null
+
+            Write-Host 'Enrolling with allocator...'
+            $enrollResult = Invoke-FrpEnroll -AllocatorUrl $AllocatorUrl `
+                -EnrollmentId $enrollmentId -EnrollmentSecret $enrollmentSecret `
+                -MachineId $machineId -Hostname $Hostname -Services $services -PublicPem $publicPem
+
+            Save-FrpPendingEnroll -Phase 'enrolled' -MachineId $machineId -Hostname $Hostname `
+                -AllocatorUrl $AllocatorUrl -EnrollmentId $enrollmentId -EnrollmentSecret $enrollmentSecret `
+                -Services $services -EnrollMeta @{
+                    frp_server       = $enrollResult.FrpServer
+                    frp_server_port  = $enrollResult.FrpServerPort
+                    frp_transport    = $enrollResult.FrpTransport
+                    token_ciphertext = $enrollResult.TokenCiphertext
+                } -AllocatedServices $enrollResult.Services | Out-Null
+
+            if ($env:FRP_WINDOWS_HOOK_CRASH_AFTER_ENROLL -eq '1') {
+                # Test-only: simulate a crash/lost response after the
+                # allocator has committed the enrollment and the response
+                # was cached locally, but before any further local commit
+                # step runs.
+                throw 'ERROR: simulated crash after enrollment commit (FRP_WINDOWS_HOOK_CRASH_AFTER_ENROLL=1)'
+            }
+        }
+
+        $token = Unprotect-FrpTokenPbkdf2 -Ciphertext $enrollResult.TokenCiphertext -Secret $enrollmentSecret
+        $mac = Get-FrpDerivedMacKey -Secret $enrollmentSecret -MachineId $machineId
         Save-FrpIdentityMac -MacKeyHex $mac | Out-Null
 
-        $merged = Merge-FrpAllocatedPorts -LocalServices $services -AllocatedList $enroll.Services
+        $merged = Merge-FrpAllocatedPorts -LocalServices $services -AllocatedList $enrollResult.Services
         $hostId = ($machineId.Substring(0, [Math]::Min(12, $machineId.Length)))
 
-        $enabledCount = Get-FrpEnabledServiceCount -Services $merged
-        $initialStatus = $(if ($enabledCount -le 0) { 'enrolled_incomplete' } else { 'enrolled_incomplete' })
+        Save-FrpClientState -AllocatorUrl $AllocatorUrl -FrpServer $enrollResult.FrpServer `
+            -FrpServerPort $enrollResult.FrpServerPort -Hostname $Hostname -MachineId $machineId `
+            -HostId $hostId -Services $merged -Transport $enrollResult.FrpTransport `
+            -InstallStatus 'enrolled_incomplete' | Out-Null
 
-        Save-FrpClientState -AllocatorUrl $AllocatorUrl -FrpServer $enroll.FrpServer `
-            -FrpServerPort $enroll.FrpServerPort -Hostname $Hostname -MachineId $machineId `
-            -HostId $hostId -Services $merged -Transport $enroll.FrpTransport `
-            -InstallStatus $initialStatus | Out-Null
-
-        New-FrpClientToml -ServerAddr $enroll.FrpServer -ServerPort $enroll.FrpServerPort `
-            -Token $token -HostId $hostId -Services $merged -Transport $enroll.FrpTransport | Out-Null
+        New-FrpClientToml -ServerAddr $enrollResult.FrpServer -ServerPort $enrollResult.FrpServerPort `
+            -Token $token -HostId $hostId -Services $merged -Transport $enrollResult.FrpTransport | Out-Null
 
         # Wipe plaintext token from local variable ASAP
         $token = $null
+
+        # Local state (client-state.json + frpc.toml + management identity,
+        # all written above) is now committed. The crash-safe recovery
+        # transaction is no longer needed; clear it so it is never replayed
+        # against a future, unrelated Enrollment Code.
+        Clear-FrpPendingEnroll
 
         return (Complete-FrpZeroTouchPostEnroll -SkipStart:$SkipStart -SkipDownload:$SkipDownload -Services $merged)
     } finally {

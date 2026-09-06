@@ -342,11 +342,40 @@ frp_client_main() {
     exit 1
   fi
 
+  # Determine this host's machine ID before the existing/partial install
+  # gates below. A crash-safe pending enrollment transaction (Finding A) is
+  # keyed by machine ID, and a lost-response retry for *this* host must not
+  # be misclassified as a foreign already-installed or partial install.
+  local etc_frp
+  etc_frp="$(frp_client_path /etc/frp)"
+  mkdir -p "$etc_frp"
+  if [[ -n "${FRP_TEST_MACHINE_ID:-}" ]]; then
+    MACHINE_ID="$FRP_TEST_MACHINE_ID"
+  elif frp_is_darwin; then
+    MACHINE_ID="$(frp_macos_machine_id)" || exit 1
+  elif [[ -s /etc/machine-id ]]; then
+    MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
+  elif [[ -s "${etc_frp}/client-id" ]]; then
+    MACHINE_ID="$(tr -d '\n' <"${etc_frp}/client-id")"
+  else
+    MACHINE_ID="$(openssl rand -hex 16)"
+    printf '%s\n' "$MACHINE_ID" >"${etc_frp}/client-id"
+    chmod 600 "${etc_frp}/client-id"
+  fi
+
+  FRP_RESUME_PENDING=0
+  if frp_pending_enroll_exists_for "$MACHINE_ID"; then
+    FRP_RESUME_PENDING=1
+    if [[ -z "${FRP_ALLOCATOR_URL:-}" ]]; then
+      FRP_ALLOCATOR_URL="$(frp_pending_enroll_allocator_url || true)"
+    fi
+  fi
+
   if frp_client_has_existing_install; then
     frp_client_existing_install_message
     return 1
   fi
-  if frp_client_has_partial_install; then
+  if frp_client_has_partial_install && [[ "$FRP_RESUME_PENDING" != "1" ]]; then
     echo "ERROR: a partial FRP client installation was found." >&2
     echo "Repair it with: sudo frpctl update" >&2
     echo "or uninstall locally and enroll again." >&2
@@ -403,7 +432,23 @@ frp_client_main() {
   chmod 600 "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
   trap 'rm -rf "$TMPDIR" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"; unset FRP_TOKEN ENROLL_SECRET FRP_ENROLLMENT_CODE TOKEN_CIPHERTEXT FRP_BOOTSTRAP_TICKET' EXIT
 
-  if frp_zero_touch_active; then
+  RESUME_PHASE=""
+  if [[ "$FRP_RESUME_PENDING" == "1" ]]; then
+    echo "A previous enrollment did not finish (response lost or interrupted)." >&2
+    echo "Resuming from local crash-safe recovery state; the Bootstrap Ticket is not reused." >&2
+    if ! frp_pending_enroll_load "$MACHINE_ID" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE" \
+      RESUME_PHASE ENROLL_ID ENROLL_SECRET; then
+      echo "ERROR: local recovery state is present but unusable." >&2
+      echo "Create a new Enrollment Code and re-enroll this client." >&2
+      frp_emit_failure_class RECOVERY_REQUIRED
+      return 1
+    fi
+    FRP_ZERO_TOUCH_COMPLETE=1
+    FRP_SERVICES_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1],encoding="utf-8"))))' "$SERVICES_FILE")"
+    export FRP_SERVICES_JSON
+    services_load_from_env
+    unset FRP_SERVICES_JSON
+  elif frp_zero_touch_active; then
     :
   else
     frp_ux_intro
@@ -417,23 +462,6 @@ frp_client_main() {
     ENROLL_ID="${FRP_ENROLLMENT_CODE%%.*}"
     ENROLL_SECRET="${FRP_ENROLLMENT_CODE#*.}"
     collect_services
-  fi
-
-  local etc_frp
-  etc_frp="$(frp_client_path /etc/frp)"
-  mkdir -p "$etc_frp"
-  if [[ -n "${FRP_TEST_MACHINE_ID:-}" ]]; then
-    MACHINE_ID="$FRP_TEST_MACHINE_ID"
-  elif frp_is_darwin; then
-    MACHINE_ID="$(frp_macos_machine_id)" || exit 1
-  elif [[ -s /etc/machine-id ]]; then
-    MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
-  elif [[ -s "${etc_frp}/client-id" ]]; then
-    MACHINE_ID="$(tr -d '\n' <"${etc_frp}/client-id")"
-  else
-    MACHINE_ID="$(openssl rand -hex 16)"
-    printf '%s\n' "$MACHINE_ID" >"${etc_frp}/client-id"
-    chmod 600 "${etc_frp}/client-id"
   fi
 
   HOSTNAME_VALUE="$(frp_short_hostname)"
@@ -451,7 +479,10 @@ frp_client_main() {
     exit 1
   fi
 
-  if frp_zero_touch_active; then
+  if [[ "$FRP_RESUME_PENDING" == "1" ]]; then
+    : # Enrollment Code/Ticket was already redeemed in a prior attempt; a
+      # Bootstrap Ticket is single-use and must not be redeemed again.
+  elif frp_zero_touch_active; then
     echo "Completing one-time setup ..."
     if ! frp_redeem_bootstrap_ticket "$ALLOCATOR_URL" "$MACHINE_ID" "$HOSTNAME_VALUE" \
       "$SERVICES_FILE" ENROLL_ID ENROLL_SECRET; then
@@ -464,10 +495,32 @@ frp_client_main() {
     unset FRP_SERVICES_JSON
   fi
 
-  echo "Validating enrollment and requesting persistent public ports ..."
-  frp_enroll_services "$ALLOCATOR_URL" "$ENROLL_ID" "$ENROLL_SECRET" \
-    "$MACHINE_ID" "$HOSTNAME_VALUE" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE" \
-    || exit 1
+  if [[ "$FRP_RESUME_PENDING" == "1" && "$RESUME_PHASE" == "enrolled" ]]; then
+    # The server-committed /enroll response was cached locally before the
+    # prior crash; finish the local commit without another network round
+    # trip or ticket/enrollment-code reuse.
+    echo "Reusing the previously completed enrollment response ..."
+  else
+    # Persist the enrollment secret and exact request now, before calling
+    # /enroll, so a crash after the server commits (but before the response
+    # is received or written) can be recovered by an exact replay instead of
+    # requiring a new Enrollment Code.
+    frp_pending_enroll_write redeemed "$MACHINE_ID" "$HOSTNAME_VALUE" "$ALLOCATOR_URL" \
+      "$ENROLL_ID" "$ENROLL_SECRET" "$SERVICES_FILE"
+    echo "Validating enrollment and requesting persistent public ports ..."
+    frp_enroll_services "$ALLOCATOR_URL" "$ENROLL_ID" "$ENROLL_SECRET" \
+      "$MACHINE_ID" "$HOSTNAME_VALUE" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE" \
+      || exit 1
+    frp_pending_enroll_write enrolled "$MACHINE_ID" "$HOSTNAME_VALUE" "$ALLOCATOR_URL" \
+      "$ENROLL_ID" "$ENROLL_SECRET" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
+    if [[ "${FRP_CLIENT_HOOK_CRASH_AFTER_ENROLL:-}" == "1" ]]; then
+      # Test-only: simulate a crash/lost response after the allocator has
+      # committed the enrollment and the response was cached locally, but
+      # before any further local commit step runs.
+      echo "ERROR: simulated crash after enrollment commit" >&2
+      exit 1
+    fi
+  fi
   FRP_SERVER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["frp_server"])' "$ENROLL_META_FILE")"
   FRP_SERVER_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["frp_server_port"])' "$ENROLL_META_FILE")"
   FRP_PUBLIC_HOSTNAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("public_hostname",""))' "$ENROLL_META_FILE")"
@@ -584,6 +637,12 @@ frp_client_main() {
     echo "ERROR: client-state.json must not contain secrets" >&2
     exit 1
   }
+
+  # Local state (client-state.json + frpc.toml + management identity, all
+  # written above) is now committed. The crash-safe recovery transaction is
+  # no longer needed; clear it so it is never replayed against a future,
+  # unrelated Enrollment Code.
+  frp_pending_enroll_clear
 
   frp_client_install_management_files "${_FRP_INSTALL_CLIENT_DIR}"
 

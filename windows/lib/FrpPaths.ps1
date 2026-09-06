@@ -41,6 +41,7 @@ function Get-FrpFrpcPath { Join-Path (Get-FrpBinDir) 'frpc.exe' }
 function Get-FrpTomlPath { Join-Path (Get-FrpConfigDir) 'frpc.toml' }
 function Get-FrpStatePath { Join-Path (Get-FrpStateDir) 'client-state.json' }
 function Get-FrpClientIdPath { Join-Path (Get-FrpStateDir) 'client-id' }
+function Get-FrpPendingEnrollPath { Join-Path (Get-FrpStateDir) 'enroll-pending.json' }
 function Get-FrpIdentityKeyPath {
     $root = Get-FrpStateDir
     $dpapi = Join-Path $root 'client-identity.key.dpapi'

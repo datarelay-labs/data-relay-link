@@ -39,6 +39,7 @@ done
 ./tests/test-allocator-ready.sh
 ./tests/test-create-client.sh
 ./tests/test-zero-touch-bootstrap.sh
+./tests/test-pending-enroll-recovery.sh
 ./tests/test-ssh-explicit-user.sh
 ./tests/test-passive-online.sh
 ./tests/test-io-hardening.sh

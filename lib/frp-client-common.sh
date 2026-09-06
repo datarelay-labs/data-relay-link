@@ -87,6 +87,10 @@ frp_client_identity_mac_path() {
   frp_client_path /etc/frp/client-identity.mac
 }
 
+frp_pending_enroll_path() {
+  frp_client_path /etc/frp/enroll-pending.json
+}
+
 frp_allocator_ca_path() {
   frp_client_path /etc/frp-auto-deploy/allocator-ca.crt
 }
@@ -498,6 +502,18 @@ frp_identity_derive_and_store_mac() {
     return 1
   fi
   frp_identity_store_mac "$mac"
+}
+
+frp_identity_public_fingerprint() {
+  # SHA-256 fingerprint (hex) of this client's management public key, when a
+  # local identity exists. Used only for crash-safe recovery bookkeeping
+  # (lib/frp-client-common.sh pending-enrollment helpers); never required for
+  # trust decisions, which remain signature-based.
+  local pub py
+  pub="$(frp_client_identity_pub_path)"
+  [[ -f "$pub" ]] || return 1
+  py="$(frp_mgmt_auth_py)" || return 1
+  python3 "$py" fingerprint "$pub" 2>/dev/null | tr -d '\n'
 }
 
 frp_read_existing_token() {
@@ -2146,6 +2162,266 @@ PY
       return 1
       ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# Crash-safe pending enrollment transaction (Finding A: Zero-Touch lost-
+# response recovery).
+#
+# If the HTTPS response from /bootstrap/redeem or /enroll is lost, or the
+# client process crashes/is killed after the server has committed but before
+# local state (client-state.json + frpc.toml + management identity) is
+# written, the Enrollment Code/Secret and the exact request that was
+# authorized must not be lost. Losing them makes exact retry impossible,
+# because a used Bootstrap Ticket cannot be redeemed again and a fresh
+# Enrollment Code changes the authorized identity.
+#
+# This pending file preserves the minimum needed for exact retry: the
+# enrollment id/secret pair, machine id, hostname, the exact services
+# snapshot (and its digest) that was authorized, the management-key
+# fingerprint when a local identity exists, and the operation phase. It is
+# written atomically, root-owned, mode 0600, under frp_client_path (so it
+# honors FRP_CLIENT_TEST_ROOT in tests) and is cleared only after local state
+# has been committed successfully. It never weakens ticket single-use
+# semantics: the pending file only lets the client skip the (now consumed)
+# /bootstrap/redeem call and replay the already-authorized /enroll exactly,
+# which the allocator independently recognizes as an idempotent replay of a
+# used Enrollment Code (frp-port-allocator.py _used_enrollment_idempotent_replay).
+frp_pending_enroll_exists_for() {
+  local machine_id="$1" path
+  path="$(frp_pending_enroll_path)"
+  [[ -f "$path" ]] || return 1
+  python3 - "$path" "$machine_id" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+except Exception:
+    raise SystemExit(1)
+if not isinstance(data, dict):
+    raise SystemExit(1)
+if str(data.get('machine_id') or '') != sys.argv[2]:
+    raise SystemExit(1)
+if str(data.get('phase') or '') not in ('redeemed', 'enrolled'):
+    raise SystemExit(1)
+if not data.get('enroll_id') or not data.get('enroll_secret'):
+    raise SystemExit(1)
+PY
+}
+
+frp_pending_enroll_write() {
+  # Args: phase machine_id hostname_value allocator_url enroll_id enroll_secret
+  #       services_file [allocated_file] [meta_file]
+  # The secret is passed via environment, not argv, to keep it out of any
+  # process listing.
+  local phase="$1" machine_id="$2" hostname_value="$3" allocator_url="$4"
+  local enroll_id="$5" enroll_secret="$6" services_file="$7"
+  local allocated_file="${8:-}" meta_file="${9:-}"
+  local dest mgmt_fp
+  dest="$(frp_pending_enroll_path)"
+  mkdir -p "$(dirname "$dest")"
+  mgmt_fp="$(frp_identity_public_fingerprint 2>/dev/null || true)"
+  # NOTE: use a private env var name for the secret, not ENROLL_SECRET -
+  # callers hold their own global ENROLL_SECRET and `unset ENROLL_SECRET`
+  # below would otherwise clobber it (no `local` scope for env assignments).
+  _FRP_PENDING_ENROLL_SECRET="$enroll_secret" python3 - "$dest" "$phase" "$machine_id" "$hostname_value" \
+    "$allocator_url" "$enroll_id" "$services_file" "$mgmt_fp" \
+    "$allocated_file" "$meta_file" <<'PY'
+import hashlib, json, os, sys, tempfile, time
+from pathlib import Path
+
+dest = Path(sys.argv[1])
+phase = sys.argv[2]
+machine_id = sys.argv[3]
+hostname_value = sys.argv[4]
+allocator_url = sys.argv[5]
+enroll_id = sys.argv[6]
+services_file = sys.argv[7]
+mgmt_fp = sys.argv[8]
+allocated_file = sys.argv[9]
+meta_file = sys.argv[10]
+secret = os.environ.get('_FRP_PENDING_ENROLL_SECRET', '')
+
+services = []
+if services_file:
+    sp = Path(services_file)
+    if sp.is_file():
+        try:
+            services = json.loads(sp.read_text(encoding='utf-8'))
+        except Exception:
+            services = []
+if isinstance(services, dict):
+    services = services.get('services', services)
+digest = hashlib.sha256(
+    json.dumps(services, sort_keys=True, separators=(',', ':')).encode('utf-8')
+).hexdigest()
+
+record = {}
+if dest.is_file():
+    try:
+        existing = json.loads(dest.read_text(encoding='utf-8'))
+        if isinstance(existing, dict):
+            record = existing
+    except Exception:
+        record = {}
+
+now = int(time.time())
+record['schema_version'] = 1
+record.setdefault('created_at', now)
+record['updated_at'] = now
+record['phase'] = phase
+record['machine_id'] = machine_id
+record['hostname'] = hostname_value
+record['allocator_url'] = allocator_url
+record['enroll_id'] = enroll_id
+record['enroll_secret'] = secret
+record['services'] = services
+record['services_digest'] = digest
+if mgmt_fp:
+    record['mgmt_fingerprint'] = mgmt_fp
+else:
+    record.pop('mgmt_fingerprint', None)
+
+if allocated_file:
+    ap = Path(allocated_file)
+    if ap.is_file():
+        try:
+            record['allocated_services'] = json.loads(ap.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+if meta_file:
+    mp = Path(meta_file)
+    if mp.is_file():
+        try:
+            record['enroll_meta'] = json.loads(mp.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+
+dest.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=dest.name + '.', suffix='.tmp', dir=str(dest.parent))
+try:
+    with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+        json.dump(record, fh, indent=2, sort_keys=True)
+        fh.write('\n')
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, dest)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+PY
+  unset _FRP_PENDING_ENROLL_SECRET
+}
+
+frp_pending_enroll_load() {
+  # Args: machine_id services_out allocated_out meta_out phase_var enroll_id_var enroll_secret_var
+  # On success, writes the pending services snapshot to services_out (always)
+  # and, when the cached phase is "enrolled" with a usable cached response,
+  # writes allocated_out/meta_out so the caller can finish the local commit
+  # without another /enroll round trip. Falls back to phase "redeemed" (exact
+  # replay via /enroll) when the cached response is missing or incomplete.
+  local machine_id="$1" services_out="$2" allocated_out="$3" meta_out="$4"
+  local phase_var="$5" enroll_id_var="$6" enroll_secret_var="$7"
+  local path parsed
+  path="$(frp_pending_enroll_path)"
+  [[ -f "$path" ]] || return 1
+  parsed="$(python3 - "$path" "$machine_id" "$services_out" "$allocated_out" "$meta_out" <<'PY'
+import json, sys
+from pathlib import Path
+
+path, machine_id, services_out, allocated_out, meta_out = sys.argv[1:6]
+try:
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+except Exception:
+    print('ERR')
+    raise SystemExit(0)
+if not isinstance(data, dict) or str(data.get('machine_id') or '') != machine_id:
+    print('ERR')
+    raise SystemExit(0)
+
+phase = str(data.get('phase') or '')
+enroll_id = str(data.get('enroll_id') or '')
+enroll_secret = str(data.get('enroll_secret') or '')
+if phase not in ('redeemed', 'enrolled') or not enroll_id or not enroll_secret:
+    print('ERR')
+    raise SystemExit(0)
+
+services = data.get('services')
+if not isinstance(services, list):
+    services = []
+Path(services_out).write_text(json.dumps(services, indent=2) + '\n', encoding='utf-8')
+
+if phase == 'enrolled':
+    allocated = data.get('allocated_services')
+    meta = data.get('enroll_meta')
+    usable = (
+        isinstance(allocated, list)
+        and isinstance(meta, dict)
+        and meta.get('token_ciphertext')
+        and meta.get('frp_server')
+        and meta.get('frp_server_port')
+    )
+    if usable:
+        Path(allocated_out).write_text(json.dumps(allocated) + '\n', encoding='utf-8')
+        Path(meta_out).write_text(json.dumps(meta) + '\n', encoding='utf-8')
+    else:
+        # Cached response is incomplete; fall back to an exact /enroll replay.
+        phase = 'redeemed'
+
+print('OK\t%s\t%s\t%s' % (phase, enroll_id, enroll_secret))
+PY
+)"
+  [[ "$parsed" == OK$'\t'* ]] || return 1
+  local p e s
+  p="$(printf '%s' "$parsed" | awk -F'\t' 'NR==1{print $2}')"
+  e="$(printf '%s' "$parsed" | awk -F'\t' 'NR==1{print $3}')"
+  s="$(printf '%s' "$parsed" | awk -F'\t' 'NR==1{print $4}')"
+  printf -v "$phase_var" '%s' "$p"
+  printf -v "$enroll_id_var" '%s' "$e"
+  printf -v "$enroll_secret_var" '%s' "$s"
+  return 0
+}
+
+frp_pending_enroll_allocator_url() {
+  # Best-effort fallback so a bare resume (no re-supplied environment) can
+  # still find the same allocator without requiring the admin to remember
+  # FRP_ALLOCATOR_URL from the original attempt.
+  local path
+  path="$(frp_pending_enroll_path)"
+  [[ -f "$path" ]] || return 1
+  python3 -c '
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+url = str(data.get("allocator_url") or "") if isinstance(data, dict) else ""
+if not url:
+    raise SystemExit(1)
+sys.stdout.write(url)
+' "$path" 2>/dev/null
+}
+
+frp_pending_enroll_read() {
+  local path
+  path="$(frp_pending_enroll_path)"
+  [[ -f "$path" ]] || return 1
+  python3 -c '
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(data, dict):
+    raise SystemExit(1)
+print(json.dumps(data))
+' "$path"
+}
+
+frp_pending_enroll_clear() {
+  local path
+  path="$(frp_pending_enroll_path)"
+  rm -f "$path" 2>/dev/null || true
 }
 
 frp_redeem_bootstrap_ticket() {

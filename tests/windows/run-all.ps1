@@ -21,6 +21,7 @@ $tests = @(
     'test-zero-service.ps1',
     'test-install-start-failure.ps1',
     'test-partial-resume.ps1',
+    'test-pending-enroll-recovery.ps1',
     'test-update-rollback.ps1',
     'test-pid-ownership.ps1',
     'test-acl-fail-closed.ps1',
