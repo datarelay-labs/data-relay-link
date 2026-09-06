@@ -23,9 +23,9 @@ function Import-FrpWindowsModules {
     if ($env:FRP_WINDOWS_ROOT) {
         [void]$roots.Add((Join-Path $env:FRP_WINDOWS_ROOT 'lib'))
     }
-    [void]$roots.Add((Join-Path $env:ProgramData 'frp-auto-deploy\lib'))
-    # When running from repo
-    [void]$roots.Add((Join-Path $PSScriptRoot '..\lib'))
+    if ($env:ProgramData) {
+        [void]$roots.Add((Join-Path $env:ProgramData 'frp-auto-deploy\lib'))
+    }
 
     $libDir = $null
     foreach ($r in $roots) {
@@ -46,7 +46,10 @@ function Import-FrpWindowsModules {
     }
 }
 
-Import-FrpWindowsModules
+# Dot-source so dotted lib functions stay in this script scope. A normal
+# function call would discard them when Import-FrpWindowsModules returns
+# (powershell.exe -File FrpClient.ps1 doctor|status|update).
+. Import-FrpWindowsModules
 try { Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue | Out-Null } catch { }
 
 function Show-FrpClientHelp {
@@ -57,7 +60,7 @@ frp-client (Windows)
   stop        Stop project-managed frpc
   status      Running / enrolled summary
   info        Connection details (RDP/SSH/HTTP)
-  update      Update frpc.exe (preserve identity/ports); --check for dry run
+  update      Update frpc.exe (preserve identity/ports); -Check for dry run
   uninstall   Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor      Basic local checks
   autostart   Optional autostart helper (stub)
