@@ -1,9 +1,10 @@
-# run-all.ps1 — Windows client test suite (pwsh 7 on Linux CI or Windows)
+# run-all.ps1 — Windows client test suite
+# Invoke child tests with the current host engine so a "PowerShell 5.1" CI job
+# actually runs powershell.exe, while PS7 / Linux CI continue to use pwsh.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $failed = 0
 $passed = 0
-$skipped = 0
 
 $tests = @(
     'test-crypto.ps1',
@@ -26,17 +27,30 @@ $tests = @(
     'test-multi-service.ps1',
     'test-ca-pinning.ps1',
     'test-uninstall.ps1',
-    'test-cross-language.ps1'
+    'test-cross-language.ps1',
+    'test-installed-cli-persistence.ps1',
+    'test-project-version.ps1'
 )
 
+function Get-FrpTestHostExe {
+    try {
+        $p = (Get-Process -Id $PID -ErrorAction Stop).Path
+        if ($p -and (Test-Path -LiteralPath $p)) { return $p }
+    } catch { }
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        return 'powershell.exe'
+    }
+    return 'pwsh'
+}
 
-Write-Host '=== frp-auto-deploy Windows client tests ==='
+$hostExe = Get-FrpTestHostExe
+Write-Host ("=== frp-auto-deploy Windows client tests (host={0} PS={1}) ===" -f $hostExe, $PSVersionTable.PSVersion)
 foreach ($t in $tests) {
     $path = Join-Path $root $t
     Write-Host ""
     Write-Host "--- $t ---"
     try {
-        & pwsh -NoProfile -File $path
+        & $hostExe -NoProfile -File $path
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAIL $t (exit $LASTEXITCODE)"
             $failed++

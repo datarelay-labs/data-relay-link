@@ -8,7 +8,10 @@ try {
     Assert-FrpEqual 3389 ([int]$svcs[0].local_port) 'rdp port'
 
     $enrollList = Get-FrpEnrollServiceList -Services $svcs
-    Assert-FrpEqual 'rdp' $enrollList[0].preset 'rdp is first-class API preset'
+    Assert-FrpEqual 'custom' $enrollList[0].preset 'rdp wire preset is custom TCP'
+    Assert-FrpEqual 'rdp' $enrollList[0].id 'rdp local id preserved'
+    Assert-FrpEqual 3389 ([int]$enrollList[0].local_port) 'rdp local port'
+    Assert-FrpEqual '127.0.0.1' $enrollList[0].local_ip 'rdp local ip'
 
     $mid = Get-FrpOrCreateClientId
     $map = Merge-FrpAllocatedPorts -LocalServices $svcs -AllocatedList @(@{ id = 'rdp'; remote_port = 60100 })
