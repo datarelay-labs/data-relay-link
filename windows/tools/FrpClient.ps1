@@ -56,7 +56,7 @@ function Import-FrpWindowsModules {
         throw 'ERROR: cannot locate windows/lib modules'
     }
     foreach ($mod in @(
-            'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
+            'FrpPaths.ps1', 'FrpLock.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
             'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpAutostart.ps1', 'FrpBootstrap.ps1'
         )) {
         . (Join-Path $libDir $mod)
@@ -187,6 +187,8 @@ function Invoke-FrpClientUpdate {
         Write-Host 'Identity, ports, and frpc.toml token would be preserved.'
         return 0
     }
+    if (-not (Enter-FrpClientLock)) { return 1 }
+    try {
     Initialize-FrpDirectories
     $backupRoot = Join-Path (Get-FrpBackupDir) ("update-" + (Get-Date -Format 'yyyyMMddHHmmss'))
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
@@ -254,16 +256,42 @@ function Invoke-FrpClientUpdate {
         }
         return 1
     }
+    } finally {
+        Exit-FrpClientLock
+    }
 }
 
 
 function Invoke-FrpClientUninstall {
+    if (-not (Enter-FrpClientLock)) { return 1 }
+    try {
+        return (Invoke-FrpClientUninstallLocked)
+    } finally {
+        Exit-FrpClientLock
+    }
+}
+
+function Invoke-FrpClientUninstallLocked {
     Write-Host 'LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED'
     Write-Host 'This removes local frpc binaries, config, state, and tools.'
     Write-Host 'Public port reservations on the server remain until an administrator revokes them.'
-    try { Stop-FrpClient | Out-Null } catch { }
-    try { Uninstall-FrpAutostartTask | Out-Null } catch {
-        Write-Host ("WARNING: failed to remove autostart task: {0}" -f $_.Exception.Message)
+    try {
+        Stop-FrpClient | Out-Null
+    } catch {
+        Write-Host ("ERROR: failed to stop project-owned frpc: {0}" -f $_.Exception.Message)
+        Write-Host 'ERROR: leaving product files in place. Uninstall did not complete.'
+        return 1
+    }
+    try {
+        Uninstall-FrpAutostartTask | Out-Null
+    } catch {
+        Write-Host ("ERROR: failed to remove autostart task: {0}" -f $_.Exception.Message)
+        Write-Host 'ERROR: leaving product files in place so autostart can be recovered. Uninstall did not complete.'
+        return 1
+    }
+    if (Test-FrpAutostartTaskExists) {
+        Write-Host 'ERROR: autostart task still present; leaving product files in place.'
+        return 1
     }
     $root = Get-FrpWindowsRoot
     if (Test-Path -LiteralPath $root) {
@@ -380,14 +408,16 @@ function Show-FrpClientList {
 
 function Invoke-FrpAddServiceCli {
     param([string]$Preset, [string]$Id, [string]$Name, [string]$TargetHost, [int]$TargetPort, [string]$SshUser)
-    try {
-        $sid = Add-FrpDraftService -Preset $Preset -Id $Id -Name $Name -TargetHost $TargetHost -TargetPort $TargetPort -SshUser $SshUser
-    } catch {
-        Write-Host $_.Exception.Message
-        return 1
-    }
-    Write-Host ("Pending service {0} added. Run apply to make it live." -f $sid)
-    return 0
+    return (Invoke-FrpWithClientLock {
+        try {
+            $sid = Add-FrpDraftService -Preset $Preset -Id $Id -Name $Name -TargetHost $TargetHost -TargetPort $TargetPort -SshUser $SshUser
+        } catch {
+            Write-Host $_.Exception.Message
+            return 1
+        }
+        Write-Host ("Pending service {0} added. Run apply to make it live." -f $sid)
+        return 0
+    })
 }
 
 function Invoke-FrpSetServiceCli {
@@ -396,14 +426,16 @@ function Invoke-FrpSetServiceCli {
         Write-Host 'ERROR: usage: frp-client set-service <id> <property> <value>'
         return 2
     }
-    try {
-        Set-FrpDraftServiceField -Id $Id -Property $Property -Value $Value | Out-Null
-    } catch {
-        Write-Host $_.Exception.Message
-        return 1
-    }
-    Write-Host ("Pending service {0} {1} updated. Run apply to make it live." -f $Id, $Property)
-    return 0
+    return (Invoke-FrpWithClientLock {
+        try {
+            Set-FrpDraftServiceField -Id $Id -Property $Property -Value $Value | Out-Null
+        } catch {
+            Write-Host $_.Exception.Message
+            return 1
+        }
+        Write-Host ("Pending service {0} {1} updated. Run apply to make it live." -f $Id, $Property)
+        return 0
+    })
 }
 
 function Invoke-FrpEnableServiceCli {
@@ -412,36 +444,40 @@ function Invoke-FrpEnableServiceCli {
         Write-Host ("ERROR: usage: frp-client {0} <id>" -f $(if ($Enable) { 'enable-service' } else { 'disable-service' }))
         return 2
     }
-    $wasEnabled = $true
-    try {
-        Ensure-FrpDraftPending | Out-Null
-        $map = Get-FrpDraftServiceMap
-        $sid = $Id.Trim().ToLowerInvariant()
-        if (-not $map.Contains($sid)) { throw ("ERROR: unknown service: {0}" -f $sid) }
-        $wasEnabled = ($map[$sid]['enabled'] -ne $false)
-        Set-FrpDraftServiceEnabled -Id $Id -Enable $Enable | Out-Null
-    } catch {
-        Write-Host $_.Exception.Message
-        return 1
-    }
-    if ($Enable) {
-        Write-Host ("Service {0} will be enabled (same public port reused). Run apply to make it live." -f $Id)
-    } elseif ($wasEnabled) {
-        Write-Host ("Service {0} will be disabled. The public reservation remains until released server-side." -f $Id)
-    } else {
-        Write-Host ("Service {0} is already disabled in the pending state." -f $Id)
-    }
-    return 0
+    return (Invoke-FrpWithClientLock {
+        $wasEnabled = $true
+        try {
+            Ensure-FrpDraftPending | Out-Null
+            $map = Get-FrpDraftServiceMap
+            $sid = $Id.Trim().ToLowerInvariant()
+            if (-not $map.Contains($sid)) { throw ("ERROR: unknown service: {0}" -f $sid) }
+            $wasEnabled = ($map[$sid]['enabled'] -ne $false)
+            Set-FrpDraftServiceEnabled -Id $Id -Enable $Enable | Out-Null
+        } catch {
+            Write-Host $_.Exception.Message
+            return 1
+        }
+        if ($Enable) {
+            Write-Host ("Service {0} will be enabled (same public port reused). Run apply to make it live." -f $Id)
+        } elseif ($wasEnabled) {
+            Write-Host ("Service {0} will be disabled. The public reservation remains until released server-side." -f $Id)
+        } else {
+            Write-Host ("Service {0} is already disabled in the pending state." -f $Id)
+        }
+        return 0
+    })
 }
 
 function Invoke-FrpClientDiscardDraft {
-    $existed = Remove-FrpDraftState
-    if ($existed) {
-        Write-Host 'Pending service changes discarded.'
-    } else {
-        Write-Host 'No pending service changes.'
-    }
-    return 0
+    return (Invoke-FrpWithClientLock {
+        $existed = Remove-FrpDraftState
+        if ($existed) {
+            Write-Host 'Pending service changes discarded.'
+        } else {
+            Write-Host 'No pending service changes.'
+        }
+        return 0
+    })
 }
 
 switch ($Command) {

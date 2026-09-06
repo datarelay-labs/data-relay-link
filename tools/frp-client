@@ -1074,6 +1074,8 @@ frp_client_apply_pending() {
 frp_client_discard_pending() {
   local pending
   pending="$(frp_client_draft_path)"
+  frp_acquire_client_lock || return 1
+  trap 'frp_release_client_lock' EXIT
   rm -f "$pending"
   echo "Pending service changes discarded."
 }
@@ -1123,6 +1125,8 @@ frp_client_cmd_main() {
     add-service)
       frp_require_root
       shift
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_add_service_cli "$@"
       ;;
@@ -1130,6 +1134,8 @@ frp_client_cmd_main() {
       frp_require_root
       shift
       [[ $# -ge 3 ]] || { echo "ERROR: usage: frp-client set-service <id> <property> <value>" >&2; exit 2; }
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_set_service_field "$1" "$2" "$3"
       ;;
@@ -1137,6 +1143,8 @@ frp_client_cmd_main() {
       frp_require_root
       shift
       [[ $# -ge 1 ]] || { echo "ERROR: usage: frp-client enable-service <id>" >&2; exit 2; }
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_set_service_enabled "$1" 1
       ;;
@@ -1144,6 +1152,8 @@ frp_client_cmd_main() {
       frp_require_root
       shift
       [[ $# -ge 1 ]] || { echo "ERROR: usage: frp-client disable-service <id>" >&2; exit 2; }
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_set_service_enabled "$1" 0
       ;;

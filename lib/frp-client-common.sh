@@ -3569,11 +3569,11 @@ frp_client_restart() {
     return 0
   fi
   if frp_is_darwin; then
-    frp_macos_launchd_set_enabled enable
+    frp_macos_launchd_set_enabled enable || return 1
     if frp_macos_launchd_running; then
-      frp_macos_launchd_kickstart
+      frp_macos_launchd_kickstart || return 1
     else
-      frp_macos_launchd_bootstrap
+      frp_macos_launchd_bootstrap || return 1
     fi
   else
     systemctl enable frpc >/dev/null && systemctl restart frpc

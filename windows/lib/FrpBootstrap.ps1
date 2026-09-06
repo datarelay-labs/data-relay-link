@@ -327,17 +327,21 @@ function Complete-FrpZeroTouchPostEnroll {
     }
 
     # Register product autostart so frpc survives reboot without an
-    # interactive login. Only needed when this client actually runs frpc
-    # (management-only installs return above and never reach this point).
-    # Non-fatal: a scheduler permission issue should not abort enrollment.
+    # interactive login. Required whenever this client has enabled public
+    # services. Management-only installs return above and never reach here.
     if ($env:FRP_WINDOWS_SKIP_AUTOSTART -eq '1') {
         Write-Host 'Skipping autostart registration (FRP_WINDOWS_SKIP_AUTOSTART=1)'
     } else {
         try {
             Install-FrpAutostartTask | Out-Null
+            if (-not (Test-FrpAutostartHealthy)) {
+                throw 'ERROR: autostart task was not registered as a SYSTEM boot task'
+            }
             Write-Host ("Registered autostart ({0}): frpc starts at system boot (SYSTEM, no login required)." -f (Get-FrpAutostartTaskName))
         } catch {
-            Write-Host ("WARNING: failed to register autostart: {0}" -f $_.Exception.Message)
+            Write-Host ("ERROR: failed to register autostart: {0}" -f $_.Exception.Message)
+            Write-Host 'ERROR: enabled public services require reboot persistence without login. This client is not fully installed.'
+            return 1
         }
     }
 
@@ -440,15 +444,44 @@ function Invoke-FrpEnrollServices {
     }
 }
 
+function Invoke-FrpCompensatePreviousServices {
+    <#
+    .SYNOPSIS
+      Re-apply the pre-mutation service set to the allocator after local
+      activation failed. Mirrors Unix frp_compensate_previous.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$AllocatorUrl,
+        [Parameter(Mandatory = $true)][string]$MachineId,
+        [Parameter(Mandatory = $true)][string]$Hostname,
+        $Services
+    )
+    if ($env:FRP_WINDOWS_FAIL_SERVER_COMPENSATE -eq '1') {
+        throw 'ERROR: simulated server compensation failure (FRP_WINDOWS_FAIL_SERVER_COMPENSATE=1)'
+    }
+    Write-Host 'Attempting server registry compensation with the previous service set ...'
+    $null = Invoke-FrpEnrollServices -AllocatorUrl $AllocatorUrl -MachineId $MachineId `
+        -Hostname $Hostname -Services $Services
+}
+
 function Invoke-FrpClientApplyDraft {
     <#
     .SYNOPSIS
       Apply pending draft service changes: identity-auth request to the
       allocator, merge allocated ports, regenerate frpc.toml + client-state.json,
       restart frpc if it was running. Existing FRP token is reused (identity
-      auth never rotates it). Rolls local runtime files back on activation
-      failure; the server reservation is preserved either way.
+      auth never rotates it). On local activation failure: restore local files
+      and compensate the server reservation (Unix-equivalent transaction).
     #>
+    if (-not (Enter-FrpClientLock)) { return 1 }
+    try {
+        return (Invoke-FrpClientApplyDraftLocked)
+    } finally {
+        Exit-FrpClientLock
+    }
+}
+
+function Invoke-FrpClientApplyDraftLocked {
     if (-not (Test-FrpIsEnrolled)) {
         Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
         return 1
@@ -477,6 +510,7 @@ function Invoke-FrpClientApplyDraft {
     $hostnameValue = [string]$current.hostname
     $allocatorUrl = [string]$current.allocator_url
     $hostId = [string]$current.host_id
+    $priorEnrollList = @(Get-FrpEnrollServiceList -Services $current.services)
 
     $enrollList = Get-FrpEnrollServiceList -Services $draftMap
 
@@ -484,13 +518,27 @@ function Invoke-FrpClientApplyDraft {
     Write-Host 'Authenticating client...'
     Write-Host 'Applying configuration...'
 
+    $serverMutated = $false
     try {
         $result = Invoke-FrpEnrollServices -AllocatorUrl $allocatorUrl -MachineId $machineId `
             -Hostname $hostnameValue -Services $enrollList
+        $serverMutated = $true
     } catch {
         Write-Host ("ERROR: apply failed: {0}" -f $_.Exception.Message)
         Write-Host 'The server was not changed; local configuration was not changed.'
+        Write-Host 'LOCAL_ROLLBACK=N/A'
+        Write-Host 'SERVER_ROLLBACK=N/A'
         return 1
+    }
+
+    $emitApplyRollback = {
+        param([string]$LocalRollback, [string]$ServerRollback)
+        Write-Host ("LOCAL_ROLLBACK={0}" -f $LocalRollback)
+        Write-Host ("SERVER_ROLLBACK={0}" -f $ServerRollback)
+        if ($ServerRollback -eq 'FAIL') {
+            Write-Host 'RECOVERY_REQUIRED=YES'
+            Write-Host 'WARNING: server registry may not match local configuration. Reconcile by editing and applying again.'
+        }
     }
 
     foreach ($sid in @($draftMap.Keys)) {
@@ -499,6 +547,16 @@ function Invoke-FrpClientApplyDraft {
         $alloc = @($result.Services) | Where-Object { [string]$_.id -eq $sid } | Select-Object -First 1
         if ($null -eq $alloc) {
             Write-Host ("ERROR: allocator response is missing service {0}" -f $sid)
+            $localRollback = 'N/A'
+            $serverRollback = 'FAIL'
+            try {
+                Invoke-FrpCompensatePreviousServices -AllocatorUrl $allocatorUrl -MachineId $machineId `
+                    -Hostname $hostnameValue -Services $priorEnrollList
+                $serverRollback = 'PASS'
+            } catch {
+                $serverRollback = 'FAIL'
+            }
+            & $emitApplyRollback $localRollback $serverRollback
             return 1
         }
         $item['remote_port'] = [int]$alloc.remote_port
@@ -508,6 +566,15 @@ function Invoke-FrpClientApplyDraft {
     $existingToken = Get-FrpTokenFromToml
     if (-not $existingToken) {
         Write-Host 'ERROR: existing FRP client configuration is missing the FRP token; re-enroll this client.'
+        $serverRollback = 'FAIL'
+        try {
+            Invoke-FrpCompensatePreviousServices -AllocatorUrl $allocatorUrl -MachineId $machineId `
+                -Hostname $hostnameValue -Services $priorEnrollList
+            $serverRollback = 'PASS'
+        } catch {
+            $serverRollback = 'FAIL'
+        }
+        & $emitApplyRollback 'N/A' $serverRollback
         return 1
     }
 
@@ -536,6 +603,9 @@ function Invoke-FrpClientApplyDraft {
     }
 
     try {
+        if ($env:FRP_WINDOWS_FAIL_APPLY_ACTIVATE -eq '1') {
+            throw 'ERROR: simulated local activation failure (FRP_WINDOWS_FAIL_APPLY_ACTIVATE=1)'
+        }
         New-FrpClientToml -ServerAddr $result.FrpServer -ServerPort $result.FrpServerPort -Token $existingToken `
             -HostId $hostId -Services $draftMap -Transport $transport | Out-Null
 
@@ -550,27 +620,48 @@ function Invoke-FrpClientApplyDraft {
             if (Test-Path -LiteralPath (Get-FrpFrpcPath)) {
                 Start-FrpClient | Out-Null
             }
-            try { Install-FrpAutostartTask | Out-Null } catch { }
+            Install-FrpAutostartTask | Out-Null
+            if (-not (Test-FrpAutostartHealthy)) {
+                throw 'ERROR: autostart task was not registered as a SYSTEM boot task'
+            }
         } else {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
         }
     } catch {
         Write-Host ("ERROR: failed to activate new configuration: {0}" -f $_.Exception.Message)
         Write-Host 'Restoring previous local configuration...'
-        foreach ($name in @($snapshotMap.Keys)) {
-            $bak = Join-Path $backupRoot $name
-            $dest = $snapshotMap[$name]
-            if (Test-Path -LiteralPath $bak) { Copy-Item -LiteralPath $bak -Destination $dest -Force }
+        $localRollback = 'FAIL'
+        try {
+            foreach ($name in @($snapshotMap.Keys)) {
+                $bak = Join-Path $backupRoot $name
+                $dest = $snapshotMap[$name]
+                if (Test-Path -LiteralPath $bak) { Copy-Item -LiteralPath $bak -Destination $dest -Force }
+            }
+            if ($wasRunning) { Start-FrpClient | Out-Null }
+            $localRollback = 'PASS'
+        } catch {
+            $localRollback = 'FAIL'
         }
-        if ($wasRunning) { try { Start-FrpClient | Out-Null } catch { } }
-        Write-Host 'LOCAL_ROLLBACK=PASS'
-        Write-Host 'SERVER_ROLLBACK=N/A'
-        Write-Host 'WARNING: the server reservation may not match local configuration. Reconcile by editing and applying again.'
+        $serverRollback = 'FAIL'
+        if ($serverMutated) {
+            try {
+                Invoke-FrpCompensatePreviousServices -AllocatorUrl $allocatorUrl -MachineId $machineId `
+                    -Hostname $hostnameValue -Services $priorEnrollList
+                $serverRollback = 'PASS'
+            } catch {
+                $serverRollback = 'FAIL'
+            }
+        } else {
+            $serverRollback = 'N/A'
+        }
+        & $emitApplyRollback $localRollback $serverRollback
         return 1
     }
 
     Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue
     Write-Host 'Applied pending changes.'
+    Write-Host 'LOCAL_ROLLBACK=N/A'
+    Write-Host 'SERVER_ROLLBACK=N/A'
     return 0
 }
 
@@ -751,18 +842,23 @@ function Invoke-FrpClientSync {
     .SYNOPSIS
       Explicit mutation: reconcile local services against server releases.
     #>
-    if (-not (Test-FrpIsEnrolled)) {
-        Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
-        return 1
-    }
+    if (-not (Enter-FrpClientLock)) { return 1 }
     try {
-        $null = Invoke-FrpReconcileReleasedServices
-    } catch {
-        Write-Host ("ERROR: sync failed: {0}" -f $_.Exception.Message)
-        return 1
+        if (-not (Test-FrpIsEnrolled)) {
+            Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
+            return 1
+        }
+        try {
+            $null = Invoke-FrpReconcileReleasedServices
+        } catch {
+            Write-Host ("ERROR: sync failed: {0}" -f $_.Exception.Message)
+            return 1
+        }
+        Write-Host 'Client sync complete.'
+        return 0
+    } finally {
+        Exit-FrpClientLock
     }
-    Write-Host 'Client sync complete.'
-    return 0
 }
 
 function Invoke-FrpZeroTouch {

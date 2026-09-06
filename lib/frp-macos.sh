@@ -218,9 +218,16 @@ frp_macos_launchd_bootout() {
 
 frp_macos_launchd_bootstrap() {
   local plist
+  frp_launchd_usable || return 0
   plist="$(frp_macos_fs /etc/systemd/system/frpc.service)"
-  frp_invoke launchctl bootstrap system "$plist" >/dev/null 2>&1 ||
-    frp_invoke launchctl load -w "$plist" >/dev/null 2>&1
+  if frp_invoke launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+    return 0
+  fi
+  if frp_invoke launchctl load -w "$plist" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "ERROR: launchctl bootstrap/load of ${plist} failed" >&2
+  return 1
 }
 
 frp_macos_launchd_kickstart() {
@@ -239,7 +246,22 @@ frp_macos_launchd_running() {
 }
 
 frp_macos_launchd_set_enabled() {
-  frp_invoke launchctl "$1" "system/${FRP_MACOS_LAUNCHD_LABEL}" >/dev/null 2>&1 || true
+  local action="${1:-}"
+  if ! frp_launchd_usable; then
+    return 0
+  fi
+  case "$action" in
+    enable|disable) ;;
+    *)
+      echo "ERROR: launchctl enable/disable action is invalid: ${action}" >&2
+      return 1
+      ;;
+  esac
+  if ! frp_invoke launchctl "$action" "system/${FRP_MACOS_LAUNCHD_LABEL}"; then
+    echo "ERROR: launchctl ${action} system/${FRP_MACOS_LAUNCHD_LABEL} failed" >&2
+    return 1
+  fi
+  return 0
 }
 
 frp_macos_recent_logs() {

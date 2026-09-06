@@ -79,6 +79,7 @@ function Test-FrpProcessOwned {
     $expectedBase = [System.IO.Path]::GetFileNameWithoutExtension($ExpectedExe)
     $path = $null
     try { $path = $p.Path } catch { $path = $null }
+    if ($env:FRP_WINDOWS_SIMULATE_PATH_UNAVAILABLE -eq '1') { $path = $null }
 
     # Fake-process tests (Linux CI sleep surrogate) may expose a Path that is
     # not the recorded ExpectedExe; allow only under explicit test env.
@@ -98,8 +99,8 @@ function Test-FrpProcessOwned {
         } catch { }
         return $false
     }
-    # Path unavailable (some hosts): fall back to process name
-    if ($p.ProcessName -ieq $expectedBase -or $p.ProcessName -ieq $expectedLeaf) { return $true }
+    # Path unavailable: cannot prove ownership. Do not treat basename "frpc"
+    # as sufficient — an unrelated frpc.exe must not be killed.
     return $false
 }
 

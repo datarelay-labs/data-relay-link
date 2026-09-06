@@ -113,22 +113,23 @@ function Test-FrpIsEnrolled {
     return $true
 }
 
+function Assert-FrpLocalMachineDpapiAvailable {
+    if ($env:FRP_WINDOWS_FAIL_DPAPI_LOCALMACHINE -eq '1') {
+        throw 'ERROR: LocalMachine DPAPI is required for persistent Windows secrets'
+    }
+}
+
 function Save-FrpIdentityKey {
     param([Parameter(Mandatory = $true)][string]$PrivatePem)
     Initialize-FrpDirectories
     $stateDir = Get-FrpStateDir
     if (Test-FrpIsWindowsHost) {
+        Assert-FrpLocalMachineDpapiAvailable
         Add-Type -AssemblyName System.Security -ErrorAction Stop | Out-Null
         $path = Join-Path $stateDir 'client-identity.key.dpapi'
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($PrivatePem)
         $scope = [System.Security.Cryptography.DataProtectionScope]::LocalMachine
-        try {
-            $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
-        } catch {
-            # Fall back to CurrentUser if LocalMachine DPAPI is unavailable.
-            $protected = [System.Security.Cryptography.ProtectedData]::Protect(
-                $bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-        }
+        $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
         [System.IO.File]::WriteAllBytes($path, $protected)
         Restrict-FrpFileAcl -Path $path
         return $path
@@ -150,13 +151,9 @@ function Read-FrpIdentityKey {
     if ((Test-Path -LiteralPath $dpapi) -and (Test-FrpIsWindowsHost)) {
         Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue | Out-Null
         $protected = [System.IO.File]::ReadAllBytes($dpapi)
-        try {
-            $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
-                $protected, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
-        } catch {
-            $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
-                $protected, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-        }
+        Assert-FrpLocalMachineDpapiAvailable
+        $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+            $protected, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
         return [System.Text.Encoding]::UTF8.GetString($bytes)
     }
     if (Test-Path -LiteralPath $plain) {
@@ -485,10 +482,10 @@ function Save-FrpPendingEnroll {
       Stored under the Windows state directory (ProgramData\frp-auto-deploy\
       state\enroll-pending.json by default), restricted ACL (SYSTEM /
       Administrators only), atomic replace (temp file + Move-Item). The
-      enrollment secret is DPAPI-protected (LocalMachine scope, falling back
-      to CurrentUser) on a real Windows host; on a non-Windows / test host it
-      is stored as plain JSON, matching the existing Save-FrpIdentityKey
-      fallback behavior for this project.
+      enrollment secret is DPAPI-protected with LocalMachine scope on a real
+      Windows host (fail closed if LocalMachine DPAPI is unavailable). On a
+      non-Windows / test host it is stored as plain JSON, matching
+      Save-FrpIdentityKey test-root behavior.
 
       Never weakens ticket single-use semantics: this file never contains
       the Bootstrap Ticket itself, only the Enrollment ID/Secret pair the
@@ -533,16 +530,11 @@ function Save-FrpPendingEnroll {
     if ($fp) { $record['mgmt_fingerprint'] = $fp }
 
     if (Test-FrpIsWindowsHost) {
+        Assert-FrpLocalMachineDpapiAvailable
         Add-Type -AssemblyName System.Security -ErrorAction Stop | Out-Null
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($EnrollmentSecret)
         $scope = [System.Security.Cryptography.DataProtectionScope]::LocalMachine
-        try {
-            $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
-        } catch {
-            # Fall back to CurrentUser if LocalMachine DPAPI is unavailable.
-            $protected = [System.Security.Cryptography.ProtectedData]::Protect(
-                $bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-        }
+        $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
         $record['enroll_secret_dpapi'] = [Convert]::ToBase64String($protected)
     } else {
         Write-Warning 'DPAPI unavailable; storing pending-enrollment secret as plain JSON under the test root. Do not use this mode on production Windows hosts.'
@@ -582,13 +574,9 @@ function Read-FrpPendingEnroll {
     $secret = $null
     if (($propNames -contains 'enroll_secret_dpapi') -and $raw.enroll_secret_dpapi) {
         $protected = [Convert]::FromBase64String([string]$raw.enroll_secret_dpapi)
-        try {
-            $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
-                $protected, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
-        } catch {
-            $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
-                $protected, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-        }
+        Assert-FrpLocalMachineDpapiAvailable
+        $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+            $protected, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
         $secret = [System.Text.Encoding]::UTF8.GetString($bytes)
     } elseif ($propNames -contains 'enroll_secret') {
         $secret = [string]$raw.enroll_secret

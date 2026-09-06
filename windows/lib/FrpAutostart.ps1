@@ -105,8 +105,10 @@ function Invoke-FrpSchtasks {
         $p = Start-Process -FilePath 'schtasks.exe' -ArgumentList $ArgString -Wait -PassThru -NoNewWindow `
             -RedirectStandardOutput $out -RedirectStandardError $err
         $detail = ''
+        $output = ''
         try { $detail = (Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue) } catch { }
-        return @{ ExitCode = [int]$p.ExitCode; Detail = $detail }
+        try { $output = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) } catch { }
+        return @{ ExitCode = [int]$p.ExitCode; Detail = $detail; Output = $output }
     } finally {
         Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $err -Force -ErrorAction SilentlyContinue
@@ -146,6 +148,9 @@ function Install-FrpAutostartTask {
         } finally {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
+        if (-not (Test-FrpAutostartHealthy -TaskName $TaskName)) {
+            throw 'ERROR: autostart task exists but is not a SYSTEM boot task at the installed product path'
+        }
         return $true
     }
 
@@ -161,6 +166,9 @@ function Install-FrpAutostartTask {
     $tmp = "$marker.tmp"
     ($payload | ConvertTo-Json) | Set-Content -LiteralPath $tmp
     Move-Item -LiteralPath $tmp -Destination $marker -Force
+    if (-not (Test-FrpAutostartHealthy -TaskName $TaskName)) {
+        throw 'ERROR: autostart task exists but is not a SYSTEM boot task at the installed product path'
+    }
     return $true
 }
 
@@ -172,6 +180,40 @@ function Test-FrpAutostartTaskExists {
         return ($result.ExitCode -eq 0)
     }
     return (Test-Path -LiteralPath (Get-FrpAutostartMarkerPath -TaskName $TaskName))
+}
+
+function Test-FrpAutostartHealthy {
+    <#
+    .SYNOPSIS
+      True only when the product autostart task exists, runs as SYSTEM, has a
+      boot trigger, and invokes the installed frp-autostart.cmd wrapper.
+    #>
+    param([string]$TaskName = (Get-FrpAutostartTaskName))
+    if (-not (Test-FrpAutostartTaskExists -TaskName $TaskName)) { return $false }
+    $expectedCmd = Get-FrpAutostartRunCommand
+    if (Test-FrpIsWindowsHost) {
+        $result = Invoke-FrpSchtasks -ArgString ('/Query /TN "{0}" /XML' -f $TaskName)
+        if ($result.ExitCode -ne 0) { return $false }
+        $xml = [string]$result.Output
+        if ($xml -notmatch 'S-1-5-18') { return $false }
+        if ($xml -notmatch 'BootTrigger') { return $false }
+        $cmdEsc = [System.Security.SecurityElement]::Escape($expectedCmd)
+        if ($xml -notmatch [regex]::Escape($expectedCmd) -and ($cmdEsc -and $xml -notmatch [regex]::Escape($cmdEsc))) {
+            return $false
+        }
+        return $true
+    }
+    $markerPath = Get-FrpAutostartMarkerPath -TaskName $TaskName
+    try {
+        $raw = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    if ([string]$raw.run_as -ne 'SYSTEM') { return $false }
+    if ([string]$raw.trigger -ne 'ONSTART') { return $false }
+    $run = [string]$raw.run
+    if (-not $run -or $run -notmatch [regex]::Escape($expectedCmd)) { return $false }
+    return $true
 }
 
 function Uninstall-FrpAutostartTask {
@@ -191,9 +233,15 @@ function Uninstall-FrpAutostartTask {
         if ($result.ExitCode -ne 0) {
             throw ("ERROR: failed to remove autostart task (schtasks exit {0}): {1}" -f $result.ExitCode, $result.Detail)
         }
+        if (Test-FrpAutostartTaskExists -TaskName $TaskName) {
+            throw 'ERROR: autostart task still present after removal'
+        }
         return $true
     }
     $marker = Get-FrpAutostartMarkerPath -TaskName $TaskName
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    if (Test-FrpAutostartTaskExists -TaskName $TaskName) {
+        throw 'ERROR: autostart task still present after removal'
+    }
     return $true
 }
