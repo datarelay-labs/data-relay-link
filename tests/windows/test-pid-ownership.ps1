@@ -29,6 +29,18 @@ try {
     Assert-FrpTrue ($null -ne (Get-Process -Id $unrelated -ErrorAction SilentlyContinue)) 'unrelated still alive'
     Assert-FrpTrue ($null -eq (Read-FrpPidMetadata)) 'metadata cleared'
 
+    # Same basename, different absolute path => not owned when Path is available.
+    # Simulate via a live process whose Path leaf is not frpc but we force expected
+    # to a path with the same leaf as a fake sibling binary.
+    $fakeOther = Join-Path (Get-FrpBinDir) 'other-frpc.exe'
+    Set-Content -LiteralPath $fakeOther -Value 'dummy-other'
+    $selfPath = $null
+    try { $selfPath = (Get-Process -Id $PID).Path } catch { $selfPath = $null }
+    if ($selfPath) {
+        # Current host process Path is available and does not match ExpectedExe.
+        Assert-FrpTrue (-not (Test-FrpProcessOwned -ProcessId $PID -ExpectedExe $fakeOther)) 'different absolute path not owned'
+    }
+
     Write-FrpTestPass 'test-pid-ownership'
 } finally {
     Remove-Item Env:FRP_WINDOWS_ALLOW_FAKE_PROCESS -ErrorAction SilentlyContinue

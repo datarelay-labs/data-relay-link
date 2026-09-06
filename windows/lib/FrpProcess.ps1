@@ -79,23 +79,27 @@ function Test-FrpProcessOwned {
     $expectedBase = [System.IO.Path]::GetFileNameWithoutExtension($ExpectedExe)
     $path = $null
     try { $path = $p.Path } catch { $path = $null }
-    if ($path) {
-        $leaf = [System.IO.Path]::GetFileName($path)
-        if ($leaf -ieq $expectedLeaf) { return $true }
-        # Absolute path match
-        try {
-            if ([System.IO.Path]::GetFullPath($path) -ieq [System.IO.Path]::GetFullPath($ExpectedExe)) { return $true }
-        } catch { }
-        return $false
-    }
-    # Path unavailable (some hosts): fall back to process name
-    if ($p.ProcessName -ieq $expectedBase -or $p.ProcessName -ieq $expectedLeaf) { return $true }
-    # Fake-process tests: allow sleep when metadata exe was recorded as sleep
+
+    # Fake-process tests (Linux CI sleep surrogate) may expose a Path that is
+    # not the recorded ExpectedExe; allow only under explicit test env.
     if ($env:FRP_WINDOWS_ALLOW_FAKE_PROCESS -eq '1') {
         if ($expectedBase -ieq 'sleep' -or $expectedLeaf -ieq 'sleep' -or $expectedLeaf -ieq 'sleep.exe') {
             if ($p.ProcessName -ieq 'sleep') { return $true }
         }
     }
+
+    if ($path) {
+        # Prefer canonical absolute-path match when the OS exposes Path.
+        # Same basename at a different path is NOT owned (PID reuse / unrelated install).
+        try {
+            if ([System.IO.Path]::GetFullPath($path) -ieq [System.IO.Path]::GetFullPath($ExpectedExe)) {
+                return $true
+            }
+        } catch { }
+        return $false
+    }
+    # Path unavailable (some hosts): fall back to process name
+    if ($p.ProcessName -ieq $expectedBase -or $p.ProcessName -ieq $expectedLeaf) { return $true }
     return $false
 }
 
