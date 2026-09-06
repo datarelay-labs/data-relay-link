@@ -453,6 +453,9 @@ function Invoke-FrpClientApplyDraft {
         Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
         return 1
     }
+    # Drop services already released server-side before applying draft changes.
+    try { $null = Invoke-FrpReconcileReleasedServices } catch { }
+
     $draftPath = Get-FrpDraftPath
     if (-not (Test-Path -LiteralPath $draftPath)) {
         Write-Host 'No pending changes.'
@@ -557,6 +560,190 @@ function Invoke-FrpClientApplyDraft {
 
     Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue
     Write-Host 'Applied pending changes.'
+    return 0
+}
+
+function Invoke-FrpApplyReconcileRuntime {
+    <#
+    .SYNOPSIS
+      After released services are dropped from client-state.json, regenerate
+      frpc.toml and refresh runtime. Zero enabled services => management_only
+      and stop frpc (no ghost proxies).
+    #>
+    param([bool]$DroppedEnabled)
+    if (-not $DroppedEnabled) { return }
+    $toml = Get-FrpTomlPath
+    if (-not (Test-Path -LiteralPath $toml)) { return }
+    $token = Get-FrpTokenFromToml
+    if (-not $token) { return }
+    $state = Read-FrpClientState
+    $map = ConvertTo-FrpServiceMap -Services $state.services
+    $transport = [string]$state.frp_transport
+    if (-not $transport) { $transport = 'tcp' }
+    New-FrpClientToml -ServerAddr ([string]$state.frp_server) -ServerPort ([int]$state.frp_server_port) `
+        -Token $token -HostId ([string]$state.host_id) -Services $map -Transport $transport | Out-Null
+
+    $enabledAny = $false
+    foreach ($sid in $map.Keys) {
+        if ($map[$sid].enabled -ne $false) { $enabledAny = $true; break }
+    }
+    if (-not $enabledAny) {
+        Set-FrpInstallStatus -Status 'management_only'
+        try { Stop-FrpClient | Out-Null } catch { }
+        return
+    }
+    $wasRunning = (Get-FrpClientStatus).Running
+    if ($wasRunning) {
+        Stop-FrpClient | Out-Null
+        Start-FrpClient | Out-Null
+    }
+}
+
+function Invoke-FrpReconcileReleasedServices {
+    <#
+    .SYNOPSIS
+      Drop local services that no longer exist in the server registry
+      (server-side `frpctl release service`). Mirrors Unix
+      frp_client_reconcile_released_services: identity-auth POST with
+      X-Mgmt-Reconcile: 1. Offline tests may inject
+      FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'.
+    #>
+    if (-not (Test-Path -LiteralPath (Get-FrpStatePath))) { return $false }
+    if ($env:FRP_SKIP_CONNECTIVITY_CHECK -eq '1' -and -not $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS) {
+        return $false
+    }
+
+    $state = Read-FrpClientState
+    $map = ConvertTo-FrpServiceMap -Services $state.services
+    if ($map.Count -eq 0) { return $false }
+
+    $registryIds = $null
+    if ($env:FRP_CLIENT_RECONCILE_REGISTRY_IDS) {
+        $parsedIds = $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS | ConvertFrom-Json
+        if ($null -eq $parsedIds) {
+            $registryIds = @()
+        } elseif ($parsedIds -is [string]) {
+            $registryIds = @([string]$parsedIds)
+        } else {
+            $registryIds = @($parsedIds | ForEach-Object { [string]$_ })
+        }
+    } else {
+        if (-not (Test-FrpIsEnrolled)) { return $false }
+        $allocatorUrl = [string]$state.allocator_url
+        $machineId = [string]$state.machine_id
+        $hostnameValue = [string]$state.hostname
+        if (-not $allocatorUrl -or -not $machineId) { return $false }
+        if ($allocatorUrl -notmatch '^https://') { return $false }
+
+        $payload = [ordered]@{
+            machine_id = $machineId
+            hostname   = $hostnameValue
+        }
+        $body = Get-FrpCanonicalJson -Object $payload
+        $ts = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+        $nonce = New-FrpNonce
+        $message = Get-FrpSignedMessage -MachineId $machineId -Body $body -Timestamp $ts -Nonce $nonce -Op 'enroll'
+        $privatePem = Read-FrpIdentityKey
+        $signature = Protect-FrpSignMessage -PrivatePem $privatePem -Message $message
+        $privatePem = $null
+        $headers = @{
+            'X-Mgmt-Auth'      = '1'
+            'X-Mgmt-Reconcile' = '1'
+            'X-Timestamp'      = [string]$ts
+            'X-Mgmt-Nonce'     = $nonce
+            'X-Mgmt-Signature' = $signature
+        }
+        try {
+            $respText = Invoke-FrpHttpsJson -Method POST -Url $allocatorUrl -Body $body -Headers $headers
+            $data = $respText | ConvertFrom-Json
+        } catch {
+            return $false
+        }
+        if ($data.error) { return $false }
+        $received = [string]$data.response_hmac
+        $copy = ConvertTo-FrpPlainObject $data
+        if ($copy.ContainsKey('response_hmac')) { $copy.Remove('response_hmac') }
+        $canonical = Get-FrpCanonicalJson -Object $copy
+        $mac = Read-FrpIdentityMac
+        $expected = Get-FrpHmacHex -Secret $mac -Message $canonical
+        if (-not $received -or -not (Test-FrpFixedTimeEquals -Left $received -Right $expected -IgnoreCase)) {
+            return $false
+        }
+        $registryIds = @()
+        if ($data.registry_service_ids) {
+            $registryIds = @($data.registry_service_ids | ForEach-Object { [string]$_ })
+        }
+    }
+
+    $idSet = @{}
+    foreach ($rid in $registryIds) {
+        if ($null -ne $rid -and [string]$rid -ne '') { $idSet[[string]$rid] = $true }
+    }
+
+    $droppedEnabled = $false
+    $newMap = [ordered]@{}
+    foreach ($sid in @($map.Keys)) {
+        if ($idSet.ContainsKey([string]$sid)) {
+            $newMap[$sid] = $map[$sid]
+            continue
+        }
+        if ($map[$sid].enabled -ne $false) { $droppedEnabled = $true }
+    }
+
+    if ($newMap.Count -eq $map.Count) { return $false }
+
+    $enabledLeft = 0
+    foreach ($sid in $newMap.Keys) {
+        if ($newMap[$sid].enabled -ne $false) { $enabledLeft++ }
+    }
+    $installStatus = [string]$state.install_status
+    if (-not $installStatus) { $installStatus = 'installed' }
+    if ($enabledLeft -eq 0) { $installStatus = 'management_only' }
+
+    Save-FrpClientState -AllocatorUrl ([string]$state.allocator_url) -FrpServer ([string]$state.frp_server) `
+        -FrpServerPort ([int]$state.frp_server_port) -Hostname ([string]$state.hostname) `
+        -MachineId ([string]$state.machine_id) -HostId ([string]$state.host_id) `
+        -Services $newMap -Transport ([string]$state.frp_transport) `
+        -InstallStatus $installStatus | Out-Null
+
+    # Keep a pending draft consistent with the post-release registry.
+    $draftPath = Get-FrpDraftPath
+    if (Test-Path -LiteralPath $draftPath) {
+        try {
+            $draft = Read-FrpDraftState
+            $draftMap = ConvertTo-FrpServiceMap -Services $draft.services
+            $draftNew = [ordered]@{}
+            foreach ($sid in @($draftMap.Keys)) {
+                if ($idSet.ContainsKey([string]$sid)) { $draftNew[$sid] = $draftMap[$sid] }
+            }
+            if ($draftNew.Count -eq 0) {
+                Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue
+            } else {
+                Save-FrpDraftServiceMap -ServiceMap $draftNew | Out-Null
+            }
+        } catch { }
+    }
+
+    Invoke-FrpApplyReconcileRuntime -DroppedEnabled $droppedEnabled
+    return $true
+}
+
+function Invoke-FrpClientSync {
+    <#
+    .SYNOPSIS
+      Explicit mutation: reconcile local services against server releases.
+    #>
+    if (-not (Test-FrpIsEnrolled)) {
+        Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
+        return 1
+    }
+    try {
+        $null = Invoke-FrpReconcileReleasedServices
+    } catch {
+        Write-Host ("ERROR: sync failed: {0}" -f $_.Exception.Message)
+        return 1
+    }
+    Write-Host 'Client sync complete.'
     return 0
 }
 

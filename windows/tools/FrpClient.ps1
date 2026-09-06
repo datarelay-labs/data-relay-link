@@ -8,7 +8,8 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet(
         'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'autostart', 'help',
-        'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service', 'apply', 'discard'
+        'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service',
+        'apply', 'discard', 'sync', 'reconcile'
     )]
     [string]$Command = 'help',
 
@@ -86,6 +87,8 @@ frp-client (Windows)
   disable-service   Disable a pending service: <id> (public port preserved)
   apply             Send pending draft changes to the server (identity auth)
   discard           Discard pending draft changes
+  sync              Reconcile local services against server releases
+                       (alias: reconcile; after frpctl release service)
   update            Update frpc.exe (preserve identity/ports); -Check for dry run
   uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor            Basic local checks
@@ -101,7 +104,8 @@ do not need it.
 Adding, editing, enabling, or disabling a service only edits a local pending
 draft (client-draft.json). Run `apply` to authenticate with this client's
 management identity and make the change live. `frpctl release service` on
-the server is the only way to release a public port reservation.
+the server is the only way to release a public port reservation; then run
+`sync` on this client to drop the released service and avoid ghost proxies.
 '@ | Write-Host
 }
 
@@ -469,6 +473,8 @@ switch ($Command) {
     'disable-service' { exit (Invoke-FrpEnableServiceCli -Id $Id -Enable $false) }
     'apply' { exit (Invoke-FrpClientApplyDraft) }
     'discard' { exit (Invoke-FrpClientDiscardDraft) }
+    'sync' { exit (Invoke-FrpClientSync) }
+    'reconcile' { exit (Invoke-FrpClientSync) }
     'update' { exit (Invoke-FrpClientUpdate -CheckOnly:$Check) }
     'uninstall' { exit (Invoke-FrpClientUninstall) }
     'doctor' { exit (Invoke-FrpClientDoctor) }

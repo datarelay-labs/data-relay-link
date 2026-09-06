@@ -35,6 +35,7 @@ $tests = @(
     'test-enroll-list-mapping.ps1',
     'test-apply-identity-auth.ps1',
     'test-service-cli.ps1',
+    'test-reconcile-release.ps1',
     'test-autostart.ps1',
     'test-autostart-cli.ps1'
 )
