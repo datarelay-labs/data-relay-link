@@ -84,6 +84,61 @@ frp_u_rm_file() {
   rm -f "$path"
 }
 
+frp_u_pid_executable() {
+  local pid="$1"
+  if [[ -e "/proc/${pid}/exe" ]]; then
+    readlink -f "/proc/${pid}/exe" 2>/dev/null || true
+    return 0
+  fi
+  ps -p "$pid" -ww -o command= 2>/dev/null | awk '{print $1}'
+}
+
+frp_u_stop_owned_frpc() {
+  local canonical pid exe still
+  canonical="$(frp_u_path /usr/local/bin/frpc)"
+  [[ -n "$canonical" ]] || return 0
+  still=0
+  if [[ -d /proc ]]; then
+    for pid in /proc/[0-9]*; do
+      pid="${pid#/proc/}"
+      [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+      exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
+      if [[ "$exe" == "$canonical" || "$exe" == "${canonical} (deleted)" ]]; then
+        kill "$pid" 2>/dev/null || true
+        still=1
+      fi
+    done
+  else
+    while read -r pid cmd; do
+      [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+      exe="${cmd%% *}"
+      if [[ "$exe" == "$canonical" ]]; then
+        kill "$pid" 2>/dev/null || true
+        still=1
+      fi
+    done < <(ps -axo pid=,command= 2>/dev/null || true)
+  fi
+  if [[ "$still" == "1" ]]; then
+    sleep 1
+    still=0
+    if [[ -d /proc ]]; then
+      for pid in /proc/[0-9]*; do
+        pid="${pid#/proc/}"
+        exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
+        if [[ "$exe" == "$canonical" || "$exe" == "${canonical} (deleted)" ]]; then
+          kill -9 "$pid" 2>/dev/null || true
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "ERROR: failed to stop project-owned frpc pid ${pid}" >&2
+            echo "FAILURE_CLASS=OWNED_PROCESS_STOP_FAILED" >&2
+            return 1
+          fi
+        fi
+      done
+    fi
+  fi
+  return 0
+}
+
 SKIP_SYSTEMD=0
 if [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" || -n "${FRP_CLIENT_TEST_ROOT:-}" || "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
   SKIP_SYSTEMD=1
@@ -96,16 +151,18 @@ echo
 
 if [[ "$SKIP_SYSTEMD" != "1" ]]; then
   if frp_u_is_darwin; then
-    frp_macos_launchd_set_enabled disable
+    if ! frp_macos_launchd_set_enabled disable; then
+      echo 'ERROR: failed to persist launchd disable; leaving files for recovery.' >&2
+      echo 'FAILURE_CLASS=LAUNCHD_DISABLE_FAILED' >&2
+      exit 1
+    fi
     frp_macos_launchd_bootout
   elif command -v systemctl >/dev/null 2>&1; then
     systemctl stop frpc 2>/dev/null || true
     systemctl disable frpc 2>/dev/null || true
   fi
 fi
-if [[ "$SKIP_SYSTEMD" != "1" ]]; then
-  pkill -x frpc 2>/dev/null || true
-fi
+frp_u_stop_owned_frpc
 
 frp_u_rm_file "$(frp_u_path /etc/systemd/system/frpc.service)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
