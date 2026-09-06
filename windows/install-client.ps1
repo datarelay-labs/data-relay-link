@@ -67,6 +67,16 @@ foreach ($mod in @(
 # Load DPAPI assembly when present (Windows).
 try { Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue | Out-Null } catch { }
 
+# Generated one-liners and Short URL bootstraps set FRP_ZERO_TOUCH=1 and
+# invoke this script with -File (never irm|iex). Honor that env so enrollment
+# does not require a redundant -ZeroTouch switch.
+if (-not $ZeroTouch) {
+    $ztEnv = ([string]$env:FRP_ZERO_TOUCH).Trim().ToLowerInvariant()
+    if ($ztEnv -eq '1' -or $ztEnv -eq 'true' -or $ztEnv -eq 'yes') {
+        $ZeroTouch = $true
+    }
+}
+
 if (-not $ZeroTouch) {
     Show-FrpInstallHelp
     Write-Host ''

@@ -204,7 +204,7 @@ def render_short_url_windows_bootstrap_script(
         '  $env:FRP_BOOTSTRAP_TICKET = %s' % powershell_quote(ticket),
         "  $env:FRP_ZERO_TOUCH = '1'",
         "  $env:FRP_PLATFORM = 'windows'",
-        '  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer',
+        '  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -ZeroTouch',
         '  $rc = $LASTEXITCODE',
         '  Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue',
         '  if ($rc -ne 0) { exit $rc }',

@@ -613,7 +613,7 @@ def print_one_line_windows(
             "$env:FRP_ALLOCATOR_CA_SHA256=__CA__;"
             "$env:FRP_BOOTSTRAP_TICKET=__TICKET__;"
             "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
-            "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p;"
+            "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
             "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
             "if($rc -ne 0){exit $rc}"
             "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"

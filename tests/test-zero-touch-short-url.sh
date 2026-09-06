@@ -235,8 +235,8 @@ curl -fsSk "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET}?platform=window
   -o "$SCRIPT_WIN" || fail "GET /i Windows query dispatch"
 grep -q 'Get-FileHash -Algorithm SHA256' "$SCRIPT_WIN" \
   || fail "Windows bootstrap missing SHA256 verification"
-grep -q 'ExecutionPolicy Bypass -File \$installer' "$SCRIPT_WIN" \
-  || fail "Windows bootstrap missing -File execution"
+grep -q 'ExecutionPolicy Bypass -File \$installer -ZeroTouch' "$SCRIPT_WIN" \
+  || fail "Windows bootstrap missing -File -ZeroTouch execution"
 grep -q 'dist/bootstrap-client\\.ps1' "$SCRIPT_WIN" \
   || fail "Windows bootstrap missing PS1 checksum entry"
 if grep -qiE 'Invoke-RestMethod|Invoke-WebRequest.+\|' "$SCRIPT_WIN"; then
