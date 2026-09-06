@@ -105,6 +105,27 @@ frp_u_project_files_py() {
   return 1
 }
 
+# Canonical SERVER_ONLY / CLIENT_ONLY / SHARED ownership for dual-role uninstall.
+for _frp_own in \
+  "$(frp_u_path /usr/local/lib/frp-auto-deploy/frp-role-ownership.sh)" \
+  "${_HERE}/lib/frp-role-ownership.sh" \
+  "${_HERE}/../lib/frp-role-ownership.sh"; do
+  if [[ -f "$_frp_own" ]]; then
+    # shellcheck disable=SC1090
+    . "$_frp_own"
+    break
+  fi
+done
+unset _frp_own
+if ! declare -F frp_role_is_shared_lib >/dev/null 2>&1; then
+  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py '
+  frp_role_is_shared_lib() {
+    local base="$1"
+    [[ "$FRP_ROLE_SHARED_LIB_BASENAMES" == *" ${base} "* ]]
+  }
+fi
+
+
 frp_u_legacy_marker_is_server() {
   local legacy="$1" op
   [[ -f "$legacy" ]] || return 1
@@ -154,7 +175,6 @@ CLIENT_PRESENT=0
 if frp_u_client_present; then
   CLIENT_PRESENT=1
 fi
-SHARED_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp-client-common.sh '
 
 # Remove managed project files from the canonical server manifest.
 if py="$(frp_u_project_files_py)"; then
@@ -162,7 +182,7 @@ if py="$(frp_u_project_files_py)"; then
   for rel in "${_managed_rels[@]}"; do
     [[ -n "$rel" ]] || continue
     base="$(basename "$rel")"
-    if [[ "$CLIENT_PRESENT" == "1" && "$SHARED_BASENAMES" == *" ${base} "* ]]; then
+    if [[ "$CLIENT_PRESENT" == "1" ]] && frp_role_is_shared_lib "$base"; then
       continue
     fi
     frp_u_rm_file "$(frp_u_path "/${rel}")"
@@ -184,20 +204,22 @@ else
   libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
     for f in frp-port-allocator.py frp_pki.py frp_frontend.py frp_client_registry.py \
-      frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py frp_doctor.py \
-      frp-doctor-common.sh frp_ctl_grammar.py frp_ctl_repl.py frp_install_txn.py \
+      frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
+      frp_install_txn.py \
       frp-server-upgrade.sh frp_project_files.py frp_control_locks.py frp_server_config.py \
+      frp-role-ownership.sh \
       server-project-files.manifest release-manifest.json SHA256SUMS; do
       frp_u_rm_file "${libdir}/${f}"
     done
+    # SHARED libs: only remove when client role is absent.
     if [[ "$CLIENT_PRESENT" != "1" ]]; then
-      frp_u_rm_file "${libdir}/frp-common.sh"
-      frp_u_rm_file "${libdir}/frp_mgmt_auth.py"
-      frp_u_rm_file "${libdir}/frp-client-common.sh"
+      for f in frp-common.sh frp_mgmt_auth.py frp-client-common.sh \
+        frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py; do
+        frp_u_rm_file "${libdir}/${f}"
+      done
     fi
   fi
 fi
-
 # Dual-role: keep /usr/local/bin/frpctl (client). Manifest only lists sbin.
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frps)"
 frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/frontend.conf)"
