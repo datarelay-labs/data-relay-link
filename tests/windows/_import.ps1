@@ -9,7 +9,7 @@ $env:FRP_WINDOWS_ROOT = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-te
 New-Item -ItemType Directory -Path $env:FRP_WINDOWS_ROOT -Force | Out-Null
 
 foreach ($mod in @(
-        'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1',
+        'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
         'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpBootstrap.ps1'
     )) {
     . (Join-Path $script:WindowsLib $mod)

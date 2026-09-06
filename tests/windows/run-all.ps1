@@ -29,7 +29,11 @@ $tests = @(
     'test-uninstall.ps1',
     'test-cross-language.ps1',
     'test-installed-cli-persistence.ps1',
-    'test-project-version.ps1'
+    'test-project-version.ps1',
+    'test-draft-crud.ps1',
+    'test-enroll-list-mapping.ps1',
+    'test-apply-identity-auth.ps1',
+    'test-service-cli.ps1'
 )
 
 function Get-FrpTestHostExe {

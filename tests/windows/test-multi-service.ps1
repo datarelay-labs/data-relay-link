@@ -12,8 +12,11 @@ try {
     Assert-FrpEqual 2 @($svcs).Count 'two services'
     $list = Get-FrpEnrollServiceList -Services $svcs
     $presets = @($list | ForEach-Object { $_.preset })
-    Assert-FrpTrue ($presets -contains 'rdp') 'rdp first-class'
+    # RDP is a local UX alias; the wire protocol uses preset=custom (server ALLOWED_PRESETS).
+    Assert-FrpTrue ($presets -contains 'custom') 'rdp maps to wire preset custom'
     Assert-FrpTrue ($presets -contains 'http') 'http kept'
+    $rdpEntry = @($list | Where-Object { $_.id -eq 'rdp' })[0]
+    Assert-FrpEqual 'custom' $rdpEntry.preset 'rdp wire preset is custom'
 
     $merged = Merge-FrpAllocatedPorts -LocalServices $svcs -AllocatedList @(
         @{ id = 'rdp'; remote_port = 60001 },

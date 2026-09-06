@@ -333,6 +333,214 @@ function Complete-FrpZeroTouchPostEnroll {
     return 0
 }
 
+function Invoke-FrpEnrollServices {
+    <#
+    .SYNOPSIS
+      Identity-authenticated apply request (P2.3 management identity, not an
+      Enrollment Code). Mirrors the Unix identity-auth branch of
+      frp_enroll_services: ECDSA-P256-signed canonical request with
+      X-Mgmt-Auth / X-Mgmt-Nonce / X-Mgmt-Signature, response verified with
+      the client's stored MAC key. The FRP auth token is never rotated here;
+      identity-auth responses must not contain secret material.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$AllocatorUrl,
+        [Parameter(Mandatory = $true)][string]$MachineId,
+        [Parameter(Mandatory = $true)][string]$Hostname,
+        [Parameter(Mandatory = $true)]$Services
+    )
+    if ($AllocatorUrl -notmatch '^https://') {
+        throw 'ERROR: allocator URL must be https://'
+    }
+    if (-not (Test-FrpIsEnrolled)) {
+        throw "ERROR: this client does not have a usable management identity."
+    }
+
+    $payload = [ordered]@{
+        machine_id = $MachineId
+        hostname   = $Hostname
+        services   = @($Services)
+    }
+    $body = Get-FrpCanonicalJson -Object $payload
+    $ts = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+    $nonce = New-FrpNonce
+    $message = Get-FrpSignedMessage -MachineId $MachineId -Body $body -Timestamp $ts -Nonce $nonce -Op 'enroll'
+    $privatePem = Read-FrpIdentityKey
+    $signature = Protect-FrpSignMessage -PrivatePem $privatePem -Message $message
+    $privatePem = $null
+
+    $headers = @{
+        'X-Mgmt-Auth'      = '1'
+        'X-Timestamp'      = [string]$ts
+        'X-Mgmt-Nonce'     = $nonce
+        'X-Mgmt-Signature' = $signature
+    }
+    $respText = Invoke-FrpHttpsJson -Method POST -Url $AllocatorUrl -Body $body -Headers $headers
+    $data = $respText | ConvertFrom-Json
+
+    if ($data.error) {
+        $err = [string]$data.error
+        $lowered = $err.ToLowerInvariant()
+        if ($lowered -match 'revoked' -or $lowered -match 'does not have a management identity' -or $lowered -match 'unknown client identity') {
+            throw ("ERROR: this client's management identity has been revoked. Create a new Enrollment Code on the server, then re-enroll this client. [{0}]" -f $err)
+        }
+        throw ("ERROR: allocator rejected the change: {0}" -f $err)
+    }
+
+    $received = [string]$data.response_hmac
+    $copy = ConvertTo-FrpPlainObject $data
+    if ($copy.ContainsKey('response_hmac')) { $copy.Remove('response_hmac') }
+    $canonical = Get-FrpCanonicalJson -Object $copy
+    $mac = Read-FrpIdentityMac
+    $expected = Get-FrpHmacHex -Secret $mac -Message $canonical
+    if (-not $received -or -not (Test-FrpFixedTimeEquals -Left $received -Right $expected -IgnoreCase)) {
+        throw 'ERROR: allocator response HMAC verification failed'
+    }
+    $propNames = @($data.PSObject.Properties.Name)
+    if ($propNames -contains 'ssh_port' -or $propNames -contains 'https_port') {
+        throw 'ERROR: allocator returned a legacy SSH/HTTPS response'
+    }
+    if ($propNames -contains 'token_ciphertext' -or $propNames -contains 'mgmt_mac_key' -or $data.token) {
+        throw 'ERROR: allocator returned unexpected secret material'
+    }
+    if ($propNames -notcontains 'services') {
+        throw 'ERROR: allocator response is missing services'
+    }
+    $transport = [string]$data.frp_transport
+    if (-not $transport) { $transport = 'tcp' }
+    $transport = $transport.Trim().ToLowerInvariant()
+    if ($transport -ne 'tcp' -and $transport -ne 'wss') {
+        throw 'ERROR: allocator returned an unsupported FRP transport'
+    }
+    return @{
+        FrpServer      = [string]$data.frp_server
+        FrpServerPort  = [int]$data.frp_server_port
+        FrpTransport   = $transport
+        Services       = @($data.services)
+        PublicHostname = [string]$data.public_hostname
+    }
+}
+
+function Invoke-FrpClientApplyDraft {
+    <#
+    .SYNOPSIS
+      Apply pending draft service changes: identity-auth request to the
+      allocator, merge allocated ports, regenerate frpc.toml + client-state.json,
+      restart frpc if it was running. Existing FRP token is reused (identity
+      auth never rotates it). Rolls local runtime files back on activation
+      failure; the server reservation is preserved either way.
+    #>
+    if (-not (Test-FrpIsEnrolled)) {
+        Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
+        return 1
+    }
+    $draftPath = Get-FrpDraftPath
+    if (-not (Test-Path -LiteralPath $draftPath)) {
+        Write-Host 'No pending changes.'
+        return 0
+    }
+
+    $current = Read-FrpClientState
+    $draftState = Read-FrpDraftState
+    $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
+
+    $enabledCount = 0
+    foreach ($sid in $draftMap.Keys) { if ($draftMap[$sid]['enabled'] -ne $false) { $enabledCount++ } }
+    if ($enabledCount -le 0) {
+        Write-Host 'ERROR: at least one enabled service is required.'
+        return 1
+    }
+
+    $machineId = [string]$current.machine_id
+    $hostnameValue = [string]$current.hostname
+    $allocatorUrl = [string]$current.allocator_url
+    $hostId = [string]$current.host_id
+
+    $enrollList = Get-FrpEnrollServiceList -Services $draftMap
+
+    Write-Host ''
+    Write-Host 'Authenticating client...'
+    Write-Host 'Applying configuration...'
+
+    try {
+        $result = Invoke-FrpEnrollServices -AllocatorUrl $allocatorUrl -MachineId $machineId `
+            -Hostname $hostnameValue -Services $enrollList
+    } catch {
+        Write-Host ("ERROR: apply failed: {0}" -f $_.Exception.Message)
+        Write-Host 'The server was not changed; local configuration was not changed.'
+        return 1
+    }
+
+    foreach ($sid in @($draftMap.Keys)) {
+        $item = $draftMap[$sid]
+        if ($item['enabled'] -eq $false) { continue }
+        $alloc = @($result.Services) | Where-Object { [string]$_.id -eq $sid } | Select-Object -First 1
+        if ($null -eq $alloc) {
+            Write-Host ("ERROR: allocator response is missing service {0}" -f $sid)
+            return 1
+        }
+        $item['remote_port'] = [int]$alloc.remote_port
+        $draftMap[$sid] = $item
+    }
+
+    $existingToken = Get-FrpTokenFromToml
+    if (-not $existingToken) {
+        Write-Host 'ERROR: existing FRP client configuration is missing the FRP token; re-enroll this client.'
+        return 1
+    }
+
+    $transport = [string]$result.FrpTransport
+    if (-not $transport) { $transport = [string]$current.frp_transport }
+    if (-not $transport) { $transport = 'tcp' }
+
+    Initialize-FrpDirectories
+    $backupRoot = Join-Path (Get-FrpBackupDir) ("apply-" + (Get-Date -Format 'yyyyMMddHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    $snapshotMap = [ordered]@{
+        'frpc.toml'         = (Get-FrpTomlPath)
+        'client-state.json' = (Get-FrpStatePath)
+    }
+    foreach ($name in @($snapshotMap.Keys)) {
+        $src = $snapshotMap[$name]
+        if (Test-Path -LiteralPath $src) {
+            Copy-Item -LiteralPath $src -Destination (Join-Path $backupRoot $name) -Force
+        }
+    }
+
+    $wasRunning = (Get-FrpClientStatus).Running
+
+    try {
+        New-FrpClientToml -ServerAddr $result.FrpServer -ServerPort $result.FrpServerPort -Token $existingToken `
+            -HostId $hostId -Services $draftMap -Transport $transport | Out-Null
+
+        Save-FrpClientState -AllocatorUrl $allocatorUrl -FrpServer $result.FrpServer -FrpServerPort $result.FrpServerPort `
+            -Hostname $hostnameValue -MachineId $machineId -HostId $hostId -Services $draftMap -Transport $transport `
+            -InstallStatus 'installed' | Out-Null
+
+        if ($wasRunning) {
+            Stop-FrpClient | Out-Null
+            Start-FrpClient | Out-Null
+        }
+    } catch {
+        Write-Host ("ERROR: failed to activate new configuration: {0}" -f $_.Exception.Message)
+        Write-Host 'Restoring previous local configuration...'
+        foreach ($name in @($snapshotMap.Keys)) {
+            $bak = Join-Path $backupRoot $name
+            $dest = $snapshotMap[$name]
+            if (Test-Path -LiteralPath $bak) { Copy-Item -LiteralPath $bak -Destination $dest -Force }
+        }
+        if ($wasRunning) { try { Start-FrpClient | Out-Null } catch { } }
+        Write-Host 'LOCAL_ROLLBACK=PASS'
+        Write-Host 'SERVER_ROLLBACK=N/A'
+        Write-Host 'WARNING: the server reservation may not match local configuration. Reconcile by editing and applying again.'
+        return 1
+    }
+
+    Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue
+    Write-Host 'Applied pending changes.'
+    return 0
+}
+
 function Invoke-FrpZeroTouch {
     param(
         [Parameter(Mandatory = $true)][string]$AllocatorUrl,

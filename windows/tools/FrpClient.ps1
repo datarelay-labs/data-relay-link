@@ -6,13 +6,26 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'autostart', 'help')]
+    [ValidateSet(
+        'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'autostart', 'help',
+        'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service', 'apply', 'discard'
+    )]
     [string]$Command = 'help',
+
+    [Parameter(Position = 1)][string]$Id,
+    [Parameter(Position = 2)][string]$Property,
+    [Parameter(Position = 3)][string]$Value,
 
     [switch]$Check,
     [switch]$Force,
     [string]$DownloadUrl,
-    [string]$ExpectedSha256
+    [string]$ExpectedSha256,
+
+    [string]$Preset = 'custom',
+    [string]$Name,
+    [string]$TargetHost = '127.0.0.1',
+    [int]$TargetPort,
+    [string]$SshUser
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +52,7 @@ function Import-FrpWindowsModules {
         throw 'ERROR: cannot locate windows/lib modules'
     }
     foreach ($mod in @(
-            'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1',
+            'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
             'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpBootstrap.ps1'
         )) {
         . (Join-Path $libDir $mod)
@@ -56,15 +69,29 @@ function Show-FrpClientHelp {
     @'
 frp-client (Windows)
 
-  start       Start frpc from existing config (no re-enroll)
-  stop        Stop project-managed frpc
-  status      Running / enrolled summary
-  info        Connection details (RDP/SSH/HTTP)
-  update      Update frpc.exe (preserve identity/ports); -Check for dry run
-  uninstall   Remove local software (SERVER RESERVATIONS PRESERVED)
-  doctor      Basic local checks
-  autostart   Optional autostart helper (stub)
+  start             Start frpc from existing config (no re-enroll)
+  stop              Stop project-managed frpc
+  status            Running / enrolled summary
+  info              Connection details (RDP/SSH/HTTP)
+  list              List configured services (read-only)
+  add-service       Add a pending service to the draft (alias: add)
+                       -Preset ssh|http|https|custom -Id <id> -Name <name>
+                       -TargetHost <ip> -TargetPort <port> [-SshUser <user>]
+  set-service       Edit a pending service: <id> <property> <value>
+                       properties: name, target-host, target-port, ssh-user
+  enable-service    Enable a pending service: <id> (reuses same public port)
+  disable-service   Disable a pending service: <id> (public port preserved)
+  apply             Send pending draft changes to the server (identity auth)
+  discard           Discard pending draft changes
+  update            Update frpc.exe (preserve identity/ports); -Check for dry run
+  uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
+  doctor            Basic local checks
+  autostart         Show/enable/disable startup autostart (-Enable / -Disable)
 
+Adding, editing, enabling, or disabling a service only edits a local pending
+draft (client-draft.json). Run `apply` to authenticate with this client's
+management identity and make the change live. `frpctl release service` on
+the server is the only way to release a public port reservation.
 '@ | Write-Host
 }
 
@@ -270,6 +297,105 @@ function Invoke-FrpClientAutostart {
     return 0
 }
 
+function Show-FrpClientList {
+    if (-not (Test-Path -LiteralPath (Get-FrpStatePath))) {
+        Write-Host 'ERROR: not enrolled (client-state.json missing)'
+        return 1
+    }
+    $state = Read-FrpClientState
+    $map = ConvertTo-FrpServiceMap -Services $state.services
+    if ($map.Count -eq 0) {
+        Write-Host '(none)'
+        return 0
+    }
+    $labels = @{ ssh = 'SSH / TCP'; http = 'HTTP / TCP'; https = 'HTTPS / TCP' }
+    $n = 0
+    foreach ($sid in $map.Keys) {
+        $n++
+        $item = $map[$sid]
+        $enabled = ($item.enabled -ne $false)
+        $stateLabel = $(if ($enabled) { 'enabled' } else { 'disabled' })
+        $preset = [string]$item.preset
+        $typeLabel = $labels[$preset]
+        if (-not $typeLabel) { $typeLabel = 'Custom TCP' }
+        Write-Host ("{0}. {1}" -f $n, $sid)
+        Write-Host ("   Type        : {0}" -f $typeLabel)
+        Write-Host ("   Target      : {0}:{1}" -f $item.local_ip, $item.local_port)
+        if ($item.remote_port) {
+            Write-Host ("   Public port : {0}" -f $item.remote_port)
+        }
+        Write-Host ("   State       : {0}" -f $stateLabel)
+        Write-Host ''
+    }
+    return 0
+}
+
+function Invoke-FrpAddServiceCli {
+    param([string]$Preset, [string]$Id, [string]$Name, [string]$TargetHost, [int]$TargetPort, [string]$SshUser)
+    try {
+        $sid = Add-FrpDraftService -Preset $Preset -Id $Id -Name $Name -TargetHost $TargetHost -TargetPort $TargetPort -SshUser $SshUser
+    } catch {
+        Write-Host $_.Exception.Message
+        return 1
+    }
+    Write-Host ("Pending service {0} added. Run apply to make it live." -f $sid)
+    return 0
+}
+
+function Invoke-FrpSetServiceCli {
+    param([string]$Id, [string]$Property, [string]$Value)
+    if (-not $Id -or -not $Property -or [string]::IsNullOrEmpty($Value)) {
+        Write-Host 'ERROR: usage: frp-client set-service <id> <property> <value>'
+        return 2
+    }
+    try {
+        Set-FrpDraftServiceField -Id $Id -Property $Property -Value $Value | Out-Null
+    } catch {
+        Write-Host $_.Exception.Message
+        return 1
+    }
+    Write-Host ("Pending service {0} {1} updated. Run apply to make it live." -f $Id, $Property)
+    return 0
+}
+
+function Invoke-FrpEnableServiceCli {
+    param([string]$Id, [bool]$Enable)
+    if (-not $Id) {
+        Write-Host ("ERROR: usage: frp-client {0} <id>" -f $(if ($Enable) { 'enable-service' } else { 'disable-service' }))
+        return 2
+    }
+    $wasEnabled = $true
+    try {
+        Ensure-FrpDraftPending | Out-Null
+        $map = Get-FrpDraftServiceMap
+        $sid = $Id.Trim().ToLowerInvariant()
+        if (-not $map.Contains($sid)) { throw ("ERROR: unknown service: {0}" -f $sid) }
+        $wasEnabled = ($map[$sid]['enabled'] -ne $false)
+        Set-FrpDraftServiceEnabled -Id $Id -Enable $Enable | Out-Null
+    } catch {
+        Write-Host $_.Exception.Message
+        return 1
+    }
+    if ($Enable) {
+        Write-Host ("Service {0} will be enabled (same public port reused). Run apply to make it live." -f $Id)
+    } elseif ($wasEnabled) {
+        Write-Host ("Service {0} will be disabled. The public reservation remains until released server-side." -f $Id)
+    } else {
+        Write-Host ("Service {0} is already disabled in the pending state." -f $Id)
+    }
+    return 0
+}
+
+function Invoke-FrpClientDiscardDraft {
+    $existed = Remove-FrpDraftState
+    if ($existed) {
+        Write-Host 'Pending service changes discarded.'
+    } else {
+        Write-Host 'No pending service changes.'
+    }
+    return 0
+}
+
 switch ($Command) {
     'help' { Show-FrpClientHelp; exit 0 }
     'start' {
@@ -291,6 +417,14 @@ switch ($Command) {
         exit 0
     }
     'info' { exit (Show-FrpClientInfo) }
+    'list' { exit (Show-FrpClientList) }
+    'add-service' { exit (Invoke-FrpAddServiceCli -Preset $Preset -Id $Id -Name $Name -TargetHost $TargetHost -TargetPort $TargetPort -SshUser $SshUser) }
+    'add' { exit (Invoke-FrpAddServiceCli -Preset $Preset -Id $Id -Name $Name -TargetHost $TargetHost -TargetPort $TargetPort -SshUser $SshUser) }
+    'set-service' { exit (Invoke-FrpSetServiceCli -Id $Id -Property $Property -Value $Value) }
+    'enable-service' { exit (Invoke-FrpEnableServiceCli -Id $Id -Enable $true) }
+    'disable-service' { exit (Invoke-FrpEnableServiceCli -Id $Id -Enable $false) }
+    'apply' { exit (Invoke-FrpClientApplyDraft) }
+    'discard' { exit (Invoke-FrpClientDiscardDraft) }
     'update' { exit (Invoke-FrpClientUpdate -CheckOnly:$Check) }
     'uninstall' { exit (Invoke-FrpClientUninstall) }
     'doctor' { exit (Invoke-FrpClientDoctor) }
