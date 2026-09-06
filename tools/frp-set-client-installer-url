@@ -1,14 +1,103 @@
 #!/usr/bin/env python3
-import json, os, sys, tempfile
-from pathlib import Path
+"""Set the Zero-Touch client installer URL (fail closed).
 
-if len(sys.argv)!=2:
-    print(f'Usage: {sys.argv[0]} <raw-install-client-url>', file=sys.stderr); sys.exit(2)
-path=Path(os.environ.get('FRP_DEPLOY_TEST_ROOT', '') + '/etc/frp-auto-deploy/config.json')
-cfg=json.loads(path.read_text())
-cfg['client_installer_url']=sys.argv[1]
-fd,tmp=tempfile.mkstemp(prefix='config.',suffix='.tmp',dir=str(path.parent))
-with os.fdopen(fd,'w') as f:
-    json.dump(cfg,f,indent=2,sort_keys=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
-os.chmod(tmp,0o600); os.replace(tmp,path)
-print('Client installer URL updated.')
+Requires HTTPS. Rejects userinfo, control characters, whitespace tricks,
+malformed URLs, and unsupported schemes. Uses the server lifecycle lock
+and atomic config writes.
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def fail(message: str) -> None:
+    print('ERROR: %s' % message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _load(name, rel):
+    here = Path(__file__).resolve()
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    candidates = [
+        here.parent.parent / 'lib' / rel,
+        Path('/usr/local/lib/frp-auto-deploy') / rel,
+    ]
+    if root:
+        candidates.insert(1, Path(root) / 'usr/local/lib/frp-auto-deploy' / rel)
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(name, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise RuntimeError('%s is unavailable' % rel)
+
+
+def validate_https_installer_url(url: str) -> str:
+    if url is None:
+        fail('client installer URL is required')
+    if not isinstance(url, str):
+        fail('client installer URL must be a string')
+    # Reject whitespace / control characters before parsing (urlsplit is permissive).
+    if url.strip() != url:
+        fail('client installer URL must not have leading/trailing whitespace')
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
+        fail('client installer URL must not contain control characters')
+    if any(ch.isspace() for ch in url):
+        fail('client installer URL must not contain whitespace')
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except (TypeError, ValueError):
+        fail('client installer URL is malformed')
+    if parsed.scheme != 'https':
+        fail('client installer URL must use https')
+    if not parsed.hostname:
+        fail('client installer URL hostname is required')
+    if parsed.username is not None or parsed.password is not None:
+        fail('client installer URL must not contain embedded credentials')
+    if port is not None and not (1 <= port <= 65535):
+        fail('client installer URL port is invalid')
+    if not parsed.path or parsed.path == '/':
+        fail('client installer URL path is required')
+    return url
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) != 1:
+        print('Usage: frp-set-client-installer-url <https-install-client-url>', file=sys.stderr)
+        raise SystemExit(2)
+    url = validate_https_installer_url(argv[0])
+
+    SCFG = _load('frp_server_config', 'frp_server_config.py')
+    LOCKS = _load('frp_control_locks', 'frp_control_locks.py')
+
+    test_root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    root = Path(test_root or '/')
+    cfg_path = SCFG.config_path()
+    if not cfg_path.is_file():
+        fail('server config.json is missing')
+
+    try:
+        with LOCKS.ExclusiveFileLock(LOCKS.lifecycle_lock_path(root)):
+            cfg = SCFG.load_config(cfg_path)
+            cfg['client_installer_url'] = url
+            SCFG.atomic_write_config(cfg_path, cfg)
+    except LOCKS.LockTimeout:
+        fail('timed out waiting for the server lifecycle lock')
+    except SCFG.ConfigError as exc:
+        fail(str(exc))
+    except Exception as exc:
+        fail(str(exc))
+
+    print('Client installer URL updated.')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
