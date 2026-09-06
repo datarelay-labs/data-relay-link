@@ -188,22 +188,26 @@ function Start-FrpClient {
 
     $frpc = Get-FrpFrpcPath
     $toml = Get-FrpTomlPath
-    $log = Get-FrpLogPath
-    $argList = @('-c', $toml)
-    # Window-close resilient: Hidden + not tied to console
-    $p = Start-Process -FilePath $frpc -ArgumentList $argList -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $log -RedirectStandardError $log
-    if (-not $p -or $p.Id -le 0) {
-        throw 'ERROR: failed to start frpc'
+    # Win32_Process.Create starts outside the OpenSSH/WinRM job object, so
+    # frpc keeps running after the install/start session disconnects.
+    # Start-Process from an SSH session is killed with that session.
+    $cmd = '"{0}" -c "{1}"' -f $frpc, $toml
+    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine      = $cmd
+        CurrentDirectory = [System.IO.Path]::GetDirectoryName($frpc)
     }
-    Write-FrpPidFile -ProcessId $p.Id -ExePath $frpc
+    if ($null -eq $created -or [int]$created.ReturnValue -ne 0 -or [int]$created.ProcessId -le 0) {
+        throw ('ERROR: failed to start frpc (Win32_Process.Create rc={0})' -f $(if ($created) { $created.ReturnValue } else { 'null' }))
+    }
+    $procId = [int]$created.ProcessId
+    Write-FrpPidFile -ProcessId $procId -ExePath $frpc
     Start-Sleep -Milliseconds 400
-    if (-not (Test-FrpProcessAlive -ProcessId $p.Id -ValidateOwnership -ExpectedExe $frpc)) {
+    if (-not (Test-FrpProcessAlive -ProcessId $procId -ValidateOwnership -ExpectedExe $frpc)) {
         Clear-FrpPidFile
         throw 'ERROR: frpc exited immediately; check logs\frpc.log'
     }
-    Write-Host ("frpc started (pid {0})" -f $p.Id)
-    return $p.Id
+    Write-Host ("frpc started (pid {0})" -f $procId)
+    return $procId
 }
 
 function Stop-FrpClient {

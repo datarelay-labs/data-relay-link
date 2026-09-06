@@ -31,6 +31,10 @@ try {
         }
         Write-FrpTestPass 'test-process-control (windows path present)'
     }
+
+    $procSrc = Get-Content -LiteralPath (Join-Path $script:WindowsLib 'FrpProcess.ps1') -Raw
+    Assert-FrpTrue ($procSrc -match 'Win32_Process') 'starts frpc via Win32_Process.Create so SSH sessions do not reap it'
+    Assert-FrpTrue ($procSrc -notmatch 'RedirectStandardOutput') 'does not redirect frpc stdio through Start-Process'
 } finally {
     Remove-Item Env:FRP_WINDOWS_ALLOW_FAKE_PROCESS -ErrorAction SilentlyContinue
     Remove-FrpWindowsTestRoot
