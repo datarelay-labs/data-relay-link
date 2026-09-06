@@ -530,6 +530,10 @@ function Invoke-FrpClientApplyDraft {
     }
 
     $wasRunning = (Get-FrpClientStatus).Running
+    $enabledAny = $false
+    foreach ($sid in $draftMap.Keys) {
+        if ($draftMap[$sid]['enabled'] -ne $false) { $enabledAny = $true; break }
+    }
 
     try {
         New-FrpClientToml -ServerAddr $result.FrpServer -ServerPort $result.FrpServerPort -Token $existingToken `
@@ -539,9 +543,12 @@ function Invoke-FrpClientApplyDraft {
             -Hostname $hostnameValue -MachineId $machineId -HostId $hostId -Services $draftMap -Transport $transport `
             -InstallStatus 'installed' | Out-Null
 
-        if ($wasRunning) {
-            Stop-FrpClient | Out-Null
+        if ($enabledAny) {
+            if ($wasRunning) { Stop-FrpClient | Out-Null }
             Start-FrpClient | Out-Null
+            try { Install-FrpAutostartTask | Out-Null } catch { }
+        } else {
+            if ($wasRunning) { Stop-FrpClient | Out-Null }
         }
     } catch {
         Write-Host ("ERROR: failed to activate new configuration: {0}" -f $_.Exception.Message)
