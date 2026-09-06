@@ -44,5 +44,7 @@ Assert-FrpTrue ($tls -notmatch 'MatchesHostname[^\r\n]*-or\s*\$true') 'no Matche
 Assert-FrpTrue ($tls -notmatch '-or\s*\$true') 'no -or $true in FrpTls.ps1'
 Assert-FrpTrue ($tls -match 'function\s+Test-FrpCertificateHostname') 'hostname helper present'
 Assert-FrpTrue ($tls -match 'Test-FrpCertificateHostname') 'validator uses hostname helper'
+Assert-FrpTrue ($tls -match 'FRP_WINDOWS_FORCE_CURL') 'allocator JSON curl is opt-in, not default'
+Assert-FrpTrue ($tls -notmatch 'Start-Process -FilePath ''curl.exe'' -ArgumentList \$args') 'allocator JSON does not Start-Process curl ArgumentList'
 
 Write-FrpTestPass 'test-security'

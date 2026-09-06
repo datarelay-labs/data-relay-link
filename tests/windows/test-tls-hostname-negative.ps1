@@ -8,6 +8,7 @@ try {
     Assert-FrpTrue ($tlsSrc -notmatch '-or\s*\$true') 'FrpTls.ps1 must not contain -or $true bypass'
     Assert-FrpTrue ($tlsSrc -match 'function\s+Test-FrpCertificateHostname') 'Test-FrpCertificateHostname defined'
     Assert-FrpTrue ($tlsSrc -match 'FRP_WINDOWS_FORCE_DOTNET_HTTP') 'force .NET HTTP env hook present'
+    Assert-FrpTrue ($tlsSrc -match 'FRP_WINDOWS_FORCE_CURL') 'curl allocator JSON is opt-in'
     Write-FrpTestPass 'tls-source-no-or-true'
 
     $openssl = Get-Command openssl -ErrorAction SilentlyContinue

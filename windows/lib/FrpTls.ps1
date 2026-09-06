@@ -401,10 +401,14 @@ function Invoke-FrpHttpsJson {
         throw "ERROR: trusted allocator CA is missing ($CaPath)"
     }
 
-    # Prefer curl --cacert when available (matches Linux client semantics).
-    # FRP_WINDOWS_FORCE_DOTNET_HTTP=1 skips curl for tests; does not weaken production.
+    # Windows curl.exe (schannel) does not honor --cacert the way OpenSSL curl
+    # does, and Start-Process -ArgumentList splits "-H Content-Type: application/json"
+    # into a bogus host named "application". Use the request-local .NET pin by
+    # default. Opt into curl only with FRP_WINDOWS_FORCE_CURL=1.
     $forceDotNetHttp = ($env:FRP_WINDOWS_FORCE_DOTNET_HTTP -eq '1')
-    if (-not $forceDotNetHttp -and (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+    $forceCurl = ($env:FRP_WINDOWS_FORCE_CURL -eq '1')
+    $useCurl = (-not $forceDotNetHttp) -and $forceCurl -and (Get-Command curl.exe -ErrorAction SilentlyContinue)
+    if ($useCurl) {
         $tmpBody = $null
         $tmpResp = [System.IO.Path]::GetTempFileName()
         $args = @(
@@ -426,8 +430,10 @@ function Invoke-FrpHttpsJson {
         }
         $args += @('-o', $tmpResp, $Url)
         try {
-            $p = Start-Process -FilePath 'curl.exe' -ArgumentList $args -Wait -PassThru -NoNewWindow
-            if ($p.ExitCode -ne 0) {
+            # Call operator keeps each argument intact. Do not use Start-Process
+            # -ArgumentList here: headers with colons/spaces get split.
+            & curl.exe @args
+            if ($LASTEXITCODE -ne 0) {
                 throw 'ERROR: allocator request failed'
             }
             return [System.IO.File]::ReadAllText($tmpResp, [System.Text.Encoding]::UTF8)
