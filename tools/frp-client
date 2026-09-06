@@ -148,9 +148,8 @@ PY
 frp_client_status() {
   local path
   path="$(frp_client_state_path)"
-  # Drop local services the server already released, including a last
-  # enabled service after `frpctl release service --force`.
-  frp_client_reconcile_released_services || true
+  # status is read-only: do not contact the allocator or mutate local state.
+  # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
   python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" <<'PY'
 import json, sys
@@ -273,12 +272,19 @@ PY
 frp_client_list() {
   local path
   path="$(frp_client_state_path)"
-  # Reconcile local services against the server registry. After
-  # `frpctl release service`, the reservation is removed server-side but
-  # the client local state can retain a stale entry until we check.
-  frp_client_reconcile_released_services || true
+  # list is read-only: do not contact the allocator or mutate local state.
+  # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
   frp_print_state_services "$path"
+}
+
+frp_client_sync() {
+  # Explicit mutation: reconcile local services against server releases.
+  frp_load_client_state "$(frp_client_state_path)"
+  frp_acquire_client_lock || return 1
+  trap 'frp_release_client_lock' EXIT
+  frp_client_reconcile_released_services || true
+  echo "Client sync complete."
 }
 
 frp_select_service_id() {
@@ -1059,6 +1065,8 @@ frp_client_apply_pending() {
   frp_load_client_state "$current"
   frp_acquire_client_lock || return 1
   trap 'unset FRP_ENROLLMENT_CODE FRP_CLIENT_OPERATION_ID; frp_release_client_lock' EXIT
+  # Drop services already released server-side before applying draft changes.
+  frp_client_reconcile_released_services || true
   frp_apply_candidate
   rm -f "$pending"
 }
@@ -1088,6 +1096,10 @@ frp_client_cmd_main() {
     list)
       frp_require_root
       frp_client_list
+      ;;
+    sync|reconcile)
+      frp_require_root
+      frp_client_sync
       ;;
     apply)
       frp_require_root
@@ -1145,26 +1157,28 @@ frp_client_cmd_main() {
       ;;
     -h|--help|help)
       cat <<'EOF'
-Usage: frp-client [status|info|list|update]
+Usage: frp-client [status|info|list|sync|update]
 
   (no args)   Interactive service management menu
-  status      Show local client and service status
-  info        Show connection information
-  list        List configured services
+  status      Show local client and service status (read-only)
+  info        Show connection information (read-only)
+  list        List configured services (read-only)
+  sync        Reconcile local services against server releases
   update      Upgrade frp-auto-deploy management tools without re-enrolling
 
 An Enrollment Code is required only to enroll this client or to
 recover its management identity. Ordinary later changes are
 authorized by the local client identity and do not require a
 new Enrollment Code. A software update does not require an
-Enrollment Code. Read-only commands do not contact the allocator.
+Enrollment Code. Read-only commands (status/info/list) do not
+contact the allocator. Use sync (or apply) to reconcile releases.
 
 For everyday use, prefer: sudo frpctl
 EOF
       ;;
     *)
       echo "ERROR: unknown command: $cmd" >&2
-      echo "Usage: frp-client [status|info|list|update]" >&2
+      echo "Usage: frp-client [status|info|list|sync|update]" >&2
       exit 2
       ;;
   esac

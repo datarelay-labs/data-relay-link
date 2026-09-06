@@ -4085,6 +4085,12 @@ frp_client_apply_upgrade() {
     return 1
   fi
 
+  # Serialize against apply/sync/frp-update and other client mutations.
+  frp_acquire_client_lock || return 1
+  _frp_client_upgrade_release_lock() { frp_release_client_lock; }
+  # shellcheck disable=SC2064
+  trap '_frp_client_upgrade_release_lock' RETURN
+
   local kind="${_FRP_CLIENT_UPDATE_KIND:-bundle}"
   local candidate_meta candidate_channel="unknown" candidate_ref="unknown"
   local installed_channel installed_ref expected_channel="" expected_ref=""
@@ -4222,7 +4228,7 @@ frp_client_apply_upgrade() {
   staged="$(mktemp -d)"
   backup=""
   # shellcheck disable=SC2064
-  trap 'rm -rf "'"$staged"'"' RETURN
+  trap 'rm -rf "'"$staged"'"; _frp_client_upgrade_release_lock' RETURN
 
   echo "Staging new management files..."
   frp_client_upgrade_stage "$source" "$staged" || return 1
