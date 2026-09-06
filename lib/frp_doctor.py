@@ -193,6 +193,16 @@ def _doctor_macos_prefix():
     return str(os.environ.get('FRP_MACOS_PREFIX') or '/usr/local').rstrip('/')
 
 
+def client_has_enabled_services(state):
+    services = (state or {}).get('services') if isinstance(state, dict) else None
+    if not isinstance(services, dict):
+        return False
+    for rec in services.values():
+        if isinstance(rec, dict) and rec.get('enabled', True) is not False:
+            return True
+    return False
+
+
 def macos_map_path(abs_path):
     """Mirror lib/frp-macos.sh frp_macos_map_path for doctor file probes."""
     p = str(abs_path or '')
@@ -2323,7 +2333,29 @@ def check_client(report, paths, facts, skip_network):
     elif not paths.is_file(toml_path) and report.role in ('client', 'dual', 'partial_client'):
         report.add('frpc_config', FAIL, 'frpc.toml is missing', '', 'sudo frp-client manage and Apply, or restore from backup', 'state')
 
-    check_unit(report, facts, 'frpc', 'frpc_service', 'frpc.service')
+    if state is not None and not client_has_enabled_services(state):
+        info = (facts.get('units') or {}).get('frpc') or {}
+        active = str(info.get('active') or 'unknown')
+        if active in ('inactive', 'failed'):
+            report.add(
+                'frpc_service', PASS,
+                'frpc is inactive because no enabled services are published',
+                'state=%s' % active,
+                '',
+                'runtime',
+            )
+        elif active == 'active':
+            report.add(
+                'frpc_service', INFO,
+                'frpc is running with no enabled services',
+                'state=%s' % active,
+                '',
+                'runtime',
+            )
+        else:
+            check_unit(report, facts, 'frpc', 'frpc_service', 'frpc.service')
+    else:
+        check_unit(report, facts, 'frpc', 'frpc_service', 'frpc.service')
 
     alloc_url = ''
     frp_host = ''
