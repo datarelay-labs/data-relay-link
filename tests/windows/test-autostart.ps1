@@ -3,13 +3,16 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 . (Join-Path $PSScriptRoot '_import.ps1')
 try {
+    # Isolate from any leftover product/E2E scheduled task on Windows CI hosts.
+    $env:FRP_AUTOSTART_TASK_NAME = 'FRPAutoDeployClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $taskName = Get-FrpAutostartTaskName
-    Assert-FrpEqual 'FRPAutoDeployClient' $taskName 'product-owned task name'
+    Assert-FrpEqual $env:FRP_AUTOSTART_TASK_NAME $taskName 'product-owned task name'
     # Never collides with the E2E reverse-SSH scheduled task.
     Assert-FrpTrue ($taskName -notmatch '(?i)reverse|ssh|e2e') 'task name does not look like the E2E reverse-SSH task'
+    try { Uninstall-FrpAutostartTask -TaskName $taskName | Out-Null } catch { }
 
     # --- Low-level register/query/remove (marker backend on non-Windows) -----
-    Assert-FrpTrue (-not (Test-FrpAutostartTaskExists)) 'not registered initially'
+    Assert-FrpTrue (-not (Test-FrpAutostartTaskExists -TaskName $taskName)) 'not registered initially'
     Install-FrpAutostartTask | Out-Null
     Assert-FrpTrue (Test-FrpAutostartTaskExists) 'registered after install'
     $runCmd = Get-FrpAutostartRunCommand

@@ -43,6 +43,10 @@ try {
     & openssl genrsa -out $caKey 2048 2>$null | Out-Null
     & openssl req -new -x509 -key $caKey -out $caCrt -days 2 -subj '/CN=FRP Test CA' 2>$null | Out-Null
 
+    # OpenSSL writes progress to stderr; PS5.1 treats that as a terminating error
+    # under $ErrorActionPreference=Stop even when redirected with 2>$null.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & openssl genrsa -out $goodKey 2048 2>$null | Out-Null
     & openssl req -new -key $goodKey -out $goodCsr -subj '/CN=correct.example.test' 2>$null | Out-Null
     Set-Content -LiteralPath $extGood -Value @"
@@ -74,6 +78,7 @@ subjectAltName=DNS:*.example.test
 extendedKeyUsage=serverAuth
 "@
     & openssl x509 -req -in $wildCsr -CA $caCrt -CAkey $caKey -CAcreateserial -out $wildCrt -days 2 -extfile $extWild 2>$null | Out-Null
+    $ErrorActionPreference = $prevEap
 
     $goodCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($goodCrt)
     $badCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($badCrt)

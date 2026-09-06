@@ -118,6 +118,7 @@ function Save-FrpIdentityKey {
     Initialize-FrpDirectories
     $stateDir = Get-FrpStateDir
     if (Test-FrpIsWindowsHost) {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop | Out-Null
         $path = Join-Path $stateDir 'client-identity.key.dpapi'
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($PrivatePem)
         $scope = [System.Security.Cryptography.DataProtectionScope]::LocalMachine
@@ -532,6 +533,7 @@ function Save-FrpPendingEnroll {
     if ($fp) { $record['mgmt_fingerprint'] = $fp }
 
     if (Test-FrpIsWindowsHost) {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop | Out-Null
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($EnrollmentSecret)
         $scope = [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         try {

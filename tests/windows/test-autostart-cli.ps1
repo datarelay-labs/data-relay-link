@@ -13,6 +13,7 @@ try {
 $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-autostart-cli-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 $env:FRP_WINDOWS_ROOT = $tmpRoot
+$env:FRP_AUTOSTART_TASK_NAME = 'FRPAutoDeployClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 try {
     $statusOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart status exits 0'
@@ -23,11 +24,11 @@ try {
     Assert-FrpTrue ($enableOut -match 'Autostart enabled') 'autostart -Enable message'
     Assert-FrpTrue ($enableOut -match 'SYSTEM') 'autostart -Enable documents SYSTEM / no login'
 
-    $markerPath = Join-Path (Join-Path $tmpRoot 'state') 'autostart-task.FRPAutoDeployClient.json'
+    $markerPath = Join-Path (Join-Path $tmpRoot 'state') ("autostart-task.{0}.json" -f $env:FRP_AUTOSTART_TASK_NAME)
     Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart marker persisted on disk'
 
     $statusOut2 = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
-    Assert-FrpTrue ($statusOut2 -match 'enabled \(FRPAutoDeployClient\)') 'autostart status shows enabled'
+    Assert-FrpTrue ($statusOut2 -match ('enabled \({0}\)' -f [regex]::Escape($env:FRP_AUTOSTART_TASK_NAME))) 'autostart status shows enabled'
 
     $bothOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable -Disable 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -ne 0) '-Enable and -Disable together is rejected'

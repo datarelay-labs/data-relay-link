@@ -7,6 +7,7 @@ if (-not $script:WindowsLib) {
 
 $env:FRP_WINDOWS_ROOT = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $env:FRP_WINDOWS_ROOT -Force | Out-Null
+try { Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue | Out-Null } catch { }
 
 foreach ($mod in @(
         'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
