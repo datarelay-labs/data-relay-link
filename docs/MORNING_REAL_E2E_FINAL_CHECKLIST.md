@@ -25,11 +25,34 @@ git rev-parse origin/main
 | Branch | `integration/morning-e2e-ready` |
 | PR | https://github.com/datarelay-labs/frp-auto-deploy/pull/9 (do **not** merge) |
 | Overnight start HEAD | `54b86e7bc09c15908d654eeee6c6f8ec7193277d` |
-| Exact candidate HEAD | `git rev-parse origin/integration/morning-e2e-ready` (must match local HEAD) |
+| Code+test+dist candidate | `f234b727f097845ab0b9d33b320106c017c9d5d8` |
+| Exact candidate HEAD | `git rev-parse origin/integration/morning-e2e-ready` (must match local HEAD; may be this docs commit on top of `f234b72`) |
 | Project version | `2.1.3` (dev channel; v2.2.0 not tagged) |
 | FRP version | `0.70.1` |
 
 PASS: local HEAD == `origin/integration/morning-e2e-ready`. FAIL: diverge or dirty worktree.
+
+## Overnight close (read first)
+
+Do these **before** section C (final-candidate Mac reboot).
+
+1. **Wake the Mac** (lid / power / Wi-Fi). Overnight it became unreachable after the reboot baseline; public `:6001` dropped and the reverse tunnel hung. The controller **cleared** the stale `127.0.0.1:2222` listener so `com.frp-e2e.reverse-ssh` can bind again.
+2. Confirm reverse + product tunnel:
+   ```bash
+   ssh -o ConnectTimeout=8 frp-e2e-macos hostname
+   ssh -o ConnectTimeout=8 -p 6001 -i ~/.ssh/frp_e2e_ed25519 leeruda@221.139.249.112 hostname
+   ```
+3. **Mac in-place update was NOT applied overnight** (`sudo` password required; do not kickstart launchd to fake reboot PASS). Windows **was** staged in place (same CLIENT `1851ce75`, `:6003`).
+4. From **this controller**, after `frp-e2e-macos` works, copy the candidate tree and run **source `--upgrade`** (not channel `frpctl update`, which would miss PR #9). This needs a sudo password at the Mac keyboard or a TTY:
+   ```bash
+   cd ~/frp-auto-deploy-dev
+   git pull --ff-only origin integration/morning-e2e-ready
+   rsync -a --delete --exclude .git --exclude tests/tmp ./ frp-e2e-macos:frp-candidate/
+   ssh -t frp-e2e-macos 'sudo bash "$HOME/frp-candidate/install-client.sh" --upgrade --source "$HOME/frp-candidate"'
+   ssh -t frp-e2e-macos 'sudo frpctl show status; sudo frpctl doctor'
+   ```
+   PASS: CLIENT ID still `2d6b3b90…`, public port still `6001`, one product `frpc`, launchd loaded, doctor PASS. Then continue at **C**.
+5. Windows is already on the overnight candidate libs (`FrpLock.ps1` present). Do **not** re-enroll. Expected `:6003` only — never `:6002`.
 
 ## Hosts and expected live state
 
@@ -86,7 +109,9 @@ Legend for every step: **Destructive** = yes/no. **Cleanup** = command or n/a.
 
 ## C. Mac reboot persistence (final candidate)
 
-Overnight reboot of the **pre-change** install already passed (`MAC_REBOOT_BASELINE=PASS`, boot `Sep 7 00:16`). This morning reboot is the **final candidate** gate if an in-place update was staged.
+Overnight reboot of the **pre-change** install already passed (`MAC_REBOOT_BASELINE=PASS`, boot `Sep 7 00:16`). `MAC_FINAL_CANDIDATE_POST_CHANGE_REBOOT` is **not** claimed overnight.
+
+This morning reboot is the **final candidate** gate **after** the in-place update in Overnight close step 4.
 
 - **Destructive:** reboot only (identity must survive)
 - **Command:**
@@ -269,6 +294,8 @@ Overnight: **public hostname not configured**; IP `221.139.249.112` works.
 ---
 
 ## Preflight (do first)
+
+If `frp-e2e-macos` is BLOCKED: wake the Mac, wait for Wi-Fi, then retry. Overnight the reverse `:2222` listener was freed so the E2E LaunchAgent can rebind.
 
 ```bash
 for h in frp-e2e-server frp-e2e-client frp-e2e-aws frp-e2e-rocky8 frp-e2e-macos frp-e2e-windows; do
