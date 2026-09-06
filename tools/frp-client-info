@@ -169,7 +169,11 @@ def print_tags():
 
 
 def print_groups():
-    groups = CREG.client_group_memberships(state, client)
+    try:
+        groups = CREG.client_group_memberships(state, client)
+    except ValueError as exc:
+        print('ERROR: %s' % exc, file=sys.stderr)
+        raise SystemExit(1)
     if not groups:
         print('(no groups)')
         return

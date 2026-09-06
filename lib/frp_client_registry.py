@@ -519,10 +519,12 @@ def normalize_group_ids(value):
 
 
 def client_group_ids(client):
-    try:
-        return normalize_group_ids((client or {}).get('group_ids'))
-    except ValueError:
-        return []
+    """Return normalized group IDs.
+
+    Malformed membership fails closed (raises ValueError) so show/filter
+    paths cannot silently present corrupted state as ungrouped.
+    """
+    return normalize_group_ids((client or {}).get('group_ids'))
 
 
 def set_client_group_ids(client, group_ids):
@@ -625,9 +627,14 @@ def find_group_id_by_name(state, name, exclude_id=None):
 def client_matches_group(state, client, selector):
     if selector == SYSTEM_GROUP_ALL:
         return True
+    try:
+        ids = client_group_ids(client)
+    except ValueError:
+        # Malformed membership is never silently treated as ungrouped.
+        return False
     if selector == SYSTEM_GROUP_UNGROUPED:
-        return not client_group_ids(client)
-    return selector in client_group_ids(client)
+        return not ids
+    return selector in ids
 
 
 def clients_in_group(state, selector):
@@ -644,12 +651,22 @@ def group_member_count(state, selector):
 
 
 def client_group_memberships(state, client):
+    """Return known memberships; raise ValueError on malformed or dangling IDs."""
     groups = ensure_groups_map(state)
-    return [
-        (gid, groups[gid])
-        for gid in client_group_ids(client)
-        if isinstance(groups.get(gid), dict)
-    ]
+    ids = client_group_ids(client)
+    out = []
+    dangling = []
+    for gid in ids:
+        group = groups.get(gid)
+        if isinstance(group, dict):
+            out.append((gid, group))
+        else:
+            dangling.append(gid)
+    if dangling:
+        raise ValueError(
+            'client references unknown group id(s): %s' % ', '.join(dangling)
+        )
+    return out
 
 
 def apply_observed_fields(client, hostname=None, source_ip=None, seen_at=None):
