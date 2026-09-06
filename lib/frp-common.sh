@@ -258,8 +258,11 @@ frp_validate_https_url() {
 import sys
 from urllib.parse import urlsplit
 
+url = sys.argv[1]
+if url.strip() != url or any(ord(ch) < 32 or ord(ch) == 127 for ch in url) or any(ch.isspace() for ch in url):
+    raise SystemExit(1)
 try:
-    parsed = urlsplit(sys.argv[1])
+    parsed = urlsplit(url)
     port = parsed.port
 except (TypeError, ValueError):
     raise SystemExit(1)
@@ -1536,7 +1539,7 @@ frp_txn_legacy_marker_path() {
 frp_txn_role_for_operation() {
   case "$1" in
     install|project-update|frp-update) printf 'server' ;;
-    client-update) printf 'client' ;;
+    client-update|client-frp-update) printf 'client' ;;
     *) return 1 ;;
   esac
 }
