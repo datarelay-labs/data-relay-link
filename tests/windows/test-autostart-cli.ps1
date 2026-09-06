@@ -43,15 +43,30 @@ try {
     $disableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Disable 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart -Disable exits 0'
     Assert-FrpTrue ($disableOut -match 'Autostart disabled') 'autostart -Disable message'
-    Assert-FrpTrue (-not (Test-Path -LiteralPath $markerPath)) 'autostart marker removed on disk'
+    if ($env:OS -match 'Windows' -or $env:WinDir) {
+        & schtasks.exe /Query /TN $env:FRP_AUTOSTART_TASK_NAME 2>&1 | Out-Null
+        Assert-FrpTrue ($LASTEXITCODE -ne 0) 'schtasks task removed after -Disable'
+    } else {
+        Assert-FrpTrue (-not (Test-Path -LiteralPath $markerPath)) 'autostart marker removed on disk'
+    }
 
     # uninstall removes a registered autostart task too.
     & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable 2>&1 | Out-String | Out-Null
-    Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart re-enabled before uninstall'
+    if ($env:OS -match 'Windows' -or $env:WinDir) {
+        & schtasks.exe /Query /TN $env:FRP_AUTOSTART_TASK_NAME 2>&1 | Out-Null
+        Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart re-enabled before uninstall'
+    } else {
+        Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart re-enabled before uninstall'
+    }
     $uninstallOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath uninstall 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'uninstall exits 0'
     Assert-FrpTrue ($uninstallOut -match 'SERVER RESERVATIONS PRESERVED') 'uninstall message'
-    Assert-FrpTrue (-not (Test-Path -LiteralPath $tmpRoot -PathType Container) -or -not (Test-Path -LiteralPath $markerPath)) 'autostart marker gone after uninstall'
+    if ($env:OS -match 'Windows' -or $env:WinDir) {
+        & schtasks.exe /Query /TN $env:FRP_AUTOSTART_TASK_NAME 2>&1 | Out-Null
+        Assert-FrpTrue ($LASTEXITCODE -ne 0) 'schtasks task gone after uninstall'
+    } else {
+        Assert-FrpTrue (-not (Test-Path -LiteralPath $tmpRoot -PathType Container) -or -not (Test-Path -LiteralPath $markerPath)) 'autostart marker gone after uninstall'
+    }
     Assert-FrpTrue ((Get-Content -LiteralPath $clientPath -Raw) -match 'Uninstall-FrpAutostartTask') 'uninstall source calls Uninstall-FrpAutostartTask'
 
     Write-FrpTestPass 'test-autostart-cli'
