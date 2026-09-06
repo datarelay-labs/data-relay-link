@@ -25,7 +25,10 @@ param(
     [string]$Name,
     [string]$TargetHost = '127.0.0.1',
     [int]$TargetPort,
-    [string]$SshUser
+    [string]$SshUser,
+
+    [switch]$Enable,
+    [switch]$Disable
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,7 +56,7 @@ function Import-FrpWindowsModules {
     }
     foreach ($mod in @(
             'FrpPaths.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
-            'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpBootstrap.ps1'
+            'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpAutostart.ps1', 'FrpBootstrap.ps1'
         )) {
         . (Join-Path $libDir $mod)
     }
@@ -86,7 +89,14 @@ frp-client (Windows)
   update            Update frpc.exe (preserve identity/ports); -Check for dry run
   uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor            Basic local checks
-  autostart         Show/enable/disable startup autostart (-Enable / -Disable)
+  autostart         Show/enable/disable the startup autostart task
+                       (-Enable / -Disable; no args shows current status)
+
+Autostart registers a product-owned Scheduled Task (FRPAutoDeployClient)
+that runs `frp-client start` as SYSTEM at system boot, so frpc survives a
+reboot without an interactive login. Zero-touch install registers it
+automatically for clients with public services; management-only clients
+do not need it.
 
 Adding, editing, enabling, or disabling a service only edits a local pending
 draft (client-draft.json). Run `apply` to authenticate with this client's
@@ -248,6 +258,9 @@ function Invoke-FrpClientUninstall {
     Write-Host 'This removes local frpc binaries, config, state, and tools.'
     Write-Host 'Public port reservations on the server remain until an administrator revokes them.'
     try { Stop-FrpClient | Out-Null } catch { }
+    try { Uninstall-FrpAutostartTask | Out-Null } catch {
+        Write-Host ("WARNING: failed to remove autostart task: {0}" -f $_.Exception.Message)
+    }
     $root = Get-FrpWindowsRoot
     if (Test-Path -LiteralPath $root) {
         Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
@@ -291,9 +304,40 @@ function Invoke-FrpClientDoctor {
 }
 
 function Invoke-FrpClientAutostart {
-    Write-Host 'Autostart: not configured'
-    Write-Host 'Optional Task Scheduler / Windows Service registration is not part of the MVP.'
-    Write-Host 'After reboot, run: frp-client start'
+    param([switch]$Enable, [switch]$Disable)
+    if ($Enable -and $Disable) {
+        Write-Host 'ERROR: specify only one of -Enable or -Disable'
+        return 2
+    }
+    $taskName = Get-FrpAutostartTaskName
+    if ($Disable) {
+        try {
+            Uninstall-FrpAutostartTask -TaskName $taskName | Out-Null
+        } catch {
+            Write-Host $_.Exception.Message
+            return 1
+        }
+        Write-Host ("Autostart disabled ({0} removed)." -f $taskName)
+        return 0
+    }
+    if ($Enable) {
+        try {
+            Install-FrpAutostartTask -TaskName $taskName | Out-Null
+        } catch {
+            Write-Host $_.Exception.Message
+            return 1
+        }
+        Write-Host ("Autostart enabled: {0} runs 'frp-client start' at system startup." -f $taskName)
+        Write-Host 'Runs as SYSTEM; no interactive login is required.'
+        return 0
+    }
+    if (Test-FrpAutostartTaskExists -TaskName $taskName) {
+        Write-Host ("Autostart: enabled ({0})" -f $taskName)
+        Write-Host ("Runs   : {0}" -f (Get-FrpAutostartRunCommand))
+    } else {
+        Write-Host 'Autostart: not configured'
+        Write-Host 'Run: frp-client autostart -Enable'
+    }
     return 0
 }
 
@@ -428,6 +472,6 @@ switch ($Command) {
     'update' { exit (Invoke-FrpClientUpdate -CheckOnly:$Check) }
     'uninstall' { exit (Invoke-FrpClientUninstall) }
     'doctor' { exit (Invoke-FrpClientDoctor) }
-    'autostart' { exit (Invoke-FrpClientAutostart) }
+    'autostart' { exit (Invoke-FrpClientAutostart -Enable:$Enable -Disable:$Disable) }
     default { Show-FrpClientHelp; exit 1 }
 }

@@ -1,0 +1,53 @@
+# test-autostart-cli.ps1 — FrpClient.ps1 autostart -Enable/-Disable/status,
+# and uninstall removes the autostart task (subprocess, marker backend).
+. (Join-Path $PSScriptRoot 'common.ps1')
+
+$clientPath = Join-Path $script:RepoRoot 'windows/tools/FrpClient.ps1'
+$hostExe = 'pwsh'
+if ($PSVersionTable.PSEdition -eq 'Desktop') { $hostExe = 'powershell.exe' }
+try {
+    $hp = (Get-Process -Id $PID).Path
+    if ($hp) { $hostExe = $hp }
+} catch { }
+
+$tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-autostart-cli-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
+$env:FRP_WINDOWS_ROOT = $tmpRoot
+try {
+    $statusOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart status exits 0'
+    Assert-FrpTrue ($statusOut -match 'not configured') 'autostart initially not configured'
+
+    $enableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable 2>&1 | Out-String
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart -Enable exits 0'
+    Assert-FrpTrue ($enableOut -match 'Autostart enabled') 'autostart -Enable message'
+    Assert-FrpTrue ($enableOut -match 'SYSTEM') 'autostart -Enable documents SYSTEM / no login'
+
+    $markerPath = Join-Path (Join-Path $tmpRoot 'state') 'autostart-task.FRPAutoDeployClient.json'
+    Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart marker persisted on disk'
+
+    $statusOut2 = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
+    Assert-FrpTrue ($statusOut2 -match 'enabled \(FRPAutoDeployClient\)') 'autostart status shows enabled'
+
+    $bothOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable -Disable 2>&1 | Out-String
+    Assert-FrpTrue ($LASTEXITCODE -ne 0) '-Enable and -Disable together is rejected'
+
+    $disableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Disable 2>&1 | Out-String
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart -Disable exits 0'
+    Assert-FrpTrue ($disableOut -match 'Autostart disabled') 'autostart -Disable message'
+    Assert-FrpTrue (-not (Test-Path -LiteralPath $markerPath)) 'autostart marker removed on disk'
+
+    # uninstall removes a registered autostart task too.
+    & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable 2>&1 | Out-String | Out-Null
+    Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart re-enabled before uninstall'
+    $uninstallOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath uninstall 2>&1 | Out-String
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'uninstall exits 0'
+    Assert-FrpTrue ($uninstallOut -match 'SERVER RESERVATIONS PRESERVED') 'uninstall message'
+    Assert-FrpTrue (-not (Test-Path -LiteralPath $tmpRoot -PathType Container) -or -not (Test-Path -LiteralPath $markerPath)) 'autostart marker gone after uninstall'
+    Assert-FrpTrue ((Get-Content -LiteralPath $clientPath -Raw) -match 'Uninstall-FrpAutostartTask') 'uninstall source calls Uninstall-FrpAutostartTask'
+
+    Write-FrpTestPass 'test-autostart-cli'
+} finally {
+    Remove-Item Env:FRP_WINDOWS_ROOT -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+}

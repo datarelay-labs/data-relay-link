@@ -33,7 +33,9 @@ $tests = @(
     'test-draft-crud.ps1',
     'test-enroll-list-mapping.ps1',
     'test-apply-identity-auth.ps1',
-    'test-service-cli.ps1'
+    'test-service-cli.ps1',
+    'test-autostart.ps1',
+    'test-autostart-cli.ps1'
 )
 
 function Get-FrpTestHostExe {

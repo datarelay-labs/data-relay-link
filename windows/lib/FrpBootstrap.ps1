@@ -322,6 +322,21 @@ function Complete-FrpZeroTouchPostEnroll {
         throw 'ERROR: simulated failure before start (FRP_WINDOWS_FAIL_BEFORE_START=1)'
     }
 
+    # Register product autostart so frpc survives reboot without an
+    # interactive login. Only needed when this client actually runs frpc
+    # (management-only installs return above and never reach this point).
+    # Non-fatal: a scheduler permission issue should not abort enrollment.
+    if ($env:FRP_WINDOWS_SKIP_AUTOSTART -eq '1') {
+        Write-Host 'Skipping autostart registration (FRP_WINDOWS_SKIP_AUTOSTART=1)'
+    } else {
+        try {
+            Install-FrpAutostartTask | Out-Null
+            Write-Host ("Registered autostart ({0}): frpc starts at system boot (SYSTEM, no login required)." -f (Get-FrpAutostartTaskName))
+        } catch {
+            Write-Host ("WARNING: failed to register autostart: {0}" -f $_.Exception.Message)
+        }
+    }
+
     if (-not $SkipStart) {
         Start-FrpClient | Out-Null
     }
