@@ -12,6 +12,7 @@ function Initialize-FrpDirectories {
         (Get-FrpCertsDir),
         (Get-FrpLogsDir),
         (Get-FrpToolsDir),
+        (Get-FrpLibDir),
         (Get-FrpBackupDir)
     )
     foreach ($d in $dirs) {
@@ -269,7 +270,8 @@ function ConvertTo-FrpServiceRecord {
 function Get-FrpEnrollServiceList {
     <#
     .SYNOPSIS
-      Build enrollment request service objects (rdp is a first-class server preset).
+      Build enrollment request service objects for the allocator wire protocol.
+      Local UI alias "rdp" is mapped to preset=custom (server ALLOWED_PRESETS).
     #>
     param($Services)
     $list = New-Object System.Collections.ArrayList
@@ -278,15 +280,18 @@ function Get-FrpEnrollServiceList {
         $item = $map[$sid]
         if ($item.enabled -eq $false) { continue }
         $preset = [string]$item.preset
+        $wirePreset = $preset
+        # RDP is a local UX alias; wire protocol uses custom TCP.
+        if ($preset -eq 'rdp') { $wirePreset = 'custom' }
         $out = [ordered]@{
             id         = [string]$item.id
             name       = [string]$item.name
             protocol   = 'tcp'
             local_ip   = [string]$item.local_ip
             local_port = [int]$item.local_port
-            preset     = $preset
+            preset     = $wirePreset
         }
-        if ($preset -eq 'ssh' -and $item.ssh_user) {
+        if ($wirePreset -eq 'ssh' -and $item.ssh_user) {
             $out['ssh_user'] = [string]$item.ssh_user
         }
         [void]$list.Add([pscustomobject]$out)

@@ -288,8 +288,10 @@ function Complete-FrpZeroTouchPostEnroll {
         }
     }
 
-    # Install tools copy into ProgramData from package windows/tools
+    # Persist product CLI + lib modules into ProgramData so a new PowerShell
+    # process can run after the bootstrap temp tree is removed.
     if ($script:FrpWindowsSrcRoot) {
+        Initialize-FrpDirectories
         $srcClient = Join-Path $script:FrpWindowsSrcRoot 'tools/FrpClient.ps1'
         $srcCmd = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-client.cmd'
         if (Test-Path -LiteralPath $srcClient) {
@@ -297,6 +299,13 @@ function Complete-FrpZeroTouchPostEnroll {
         }
         if (Test-Path -LiteralPath $srcCmd) {
             Copy-Item -LiteralPath $srcCmd -Destination (Join-Path (Get-FrpToolsDir) 'frp-client.cmd') -Force
+        }
+        $srcLib = Join-Path $script:FrpWindowsSrcRoot 'lib'
+        if (Test-Path -LiteralPath $srcLib) {
+            $destLib = Get-FrpLibDir
+            Get-ChildItem -LiteralPath $srcLib -Filter '*.ps1' -File -ErrorAction SilentlyContinue | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destLib $_.Name) -Force
+            }
         }
     }
 

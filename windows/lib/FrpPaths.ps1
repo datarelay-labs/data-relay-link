@@ -34,6 +34,7 @@ function Get-FrpStateDir { Join-Path (Get-FrpWindowsRoot) 'state' }
 function Get-FrpCertsDir { Join-Path (Get-FrpWindowsRoot) 'certs' }
 function Get-FrpLogsDir { Join-Path (Get-FrpWindowsRoot) 'logs' }
 function Get-FrpToolsDir { Join-Path (Get-FrpWindowsRoot) 'tools' }
+function Get-FrpLibDir { Join-Path (Get-FrpWindowsRoot) 'lib' }
 function Get-FrpBackupDir { Join-Path (Get-FrpWindowsRoot) 'backups' }
 
 function Get-FrpFrpcPath { Join-Path (Get-FrpBinDir) 'frpc.exe' }
@@ -61,7 +62,20 @@ function Get-FrpProjectVersion {
     if ($env:PROJECT_VERSION -and $env:PROJECT_VERSION.Trim().Length -gt 0) {
         return $env:PROJECT_VERSION.Trim()
     }
-    return '2.1.1'
+    # Prefer installed version file (written at install/update).
+    try {
+        $verPath = Get-FrpVersionPath
+        if (Test-Path -LiteralPath $verPath) {
+            foreach ($line in Get-Content -LiteralPath $verPath -ErrorAction Stop) {
+                if ($line -match '^\s*PROJECT_VERSION\s*=\s*(.+)\s*$') {
+                    $v = $Matches[1].Trim()
+                    if ($v) { return $v }
+                }
+            }
+        }
+    } catch { }
+    # Packaged fallback must track canonical VERSION (do not hardcode stale releases).
+    return '2.1.3'
 }
 
 function Get-FrpUpstreamVersion {
