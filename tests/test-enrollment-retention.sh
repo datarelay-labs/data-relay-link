@@ -214,11 +214,10 @@ grep -q 'expired enrollment' "$WORK/rev-exp.err" || fail "EXPIRED_REVOKE_REFUSAL
 pass "EXPIRED_REVOKE_REFUSAL"
 
 seed_manual eeeeeeeeeeeeeeee completed '2026-08-30T01:00:00Z'
-if python3 "$REVOKE" eeeeeeeeeeeeeeee >/dev/null 2>"$WORK/rev-comp.err"; then
-  fail "COMPLETED_REVOKE_REFUSAL"
-fi
-grep -q 'completed enrollment' "$WORK/rev-comp.err" || fail "COMPLETED_REVOKE_REFUSAL message"
-pass "COMPLETED_REVOKE_REFUSAL"
+# used/completed Enrollment Codes remain authorization-bearing for exact replay
+# and must stay administratively revocable.
+python3 "$REVOKE" eeeeeeeeeeeeeeee >/dev/null
+pass "COMPLETED_REVOKE_ALLOWED"
 
 seed_manual ffffffffffffffff revoked '2026-08-30T00:05:00Z'
 if python3 "$REVOKE" ffffffffffffffff >/dev/null 2>"$WORK/rev-rev.err"; then

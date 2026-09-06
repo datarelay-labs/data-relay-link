@@ -55,10 +55,8 @@ def utc_now_iso():
 
 
 def refuse_state(record, kind):
-    if record.get('completed_at'):
-        raise SystemExit('ERROR: completed enrollment %s cannot be revoked' % kind)
-    if record.get('used_at'):
-        raise SystemExit('ERROR: completed enrollment %s cannot be revoked' % kind)
+    # used_at / completed_at remain authorization-bearing for exact lost-response
+    # replay until expiry. Administrators must be able to revoke those credentials.
     if record.get('revoked_at'):
         raise SystemExit('ERROR: enrollment %s is already revoked' % kind)
     if int(record.get('expires_at') or 0) < int(time.time()):
