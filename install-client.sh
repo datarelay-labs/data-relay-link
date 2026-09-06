@@ -342,25 +342,18 @@ frp_client_main() {
     exit 1
   fi
 
-  # Determine this host's machine ID before the existing/partial install
-  # gates below. A crash-safe pending enrollment transaction (Finding A) is
-  # keyed by machine ID, and a lost-response retry for *this* host must not
-  # be misclassified as a foreign already-installed or partial install.
-  local etc_frp
-  etc_frp="$(frp_client_path /etc/frp)"
-  mkdir -p "$etc_frp"
+  # Resolve machine ID without creating client directories yet. Missing URL must
+  # fail closed before any partial install tree is written (CASE B).
   if [[ -n "${FRP_TEST_MACHINE_ID:-}" ]]; then
     MACHINE_ID="$FRP_TEST_MACHINE_ID"
   elif frp_is_darwin; then
     MACHINE_ID="$(frp_macos_machine_id)" || exit 1
   elif [[ -s /etc/machine-id ]]; then
     MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
-  elif [[ -s "${etc_frp}/client-id" ]]; then
-    MACHINE_ID="$(tr -d '\n' <"${etc_frp}/client-id")"
+  elif [[ -s "$(frp_client_path /etc/frp/client-id)" ]]; then
+    MACHINE_ID="$(tr -d '\n' <"$(frp_client_path /etc/frp/client-id)")"
   else
     MACHINE_ID="$(openssl rand -hex 16)"
-    printf '%s\n' "$MACHINE_ID" >"${etc_frp}/client-id"
-    chmod 600 "${etc_frp}/client-id"
   fi
 
   FRP_RESUME_PENDING=0
@@ -385,6 +378,15 @@ frp_client_main() {
   fi
 
   frp_require_allocator_url
+
+  local etc_frp
+  etc_frp="$(frp_client_path /etc/frp)"
+  mkdir -p "$etc_frp"
+  if [[ ! -s "${etc_frp}/client-id" ]]; then
+    printf '%s\n' "$MACHINE_ID" >"${etc_frp}/client-id"
+    chmod 600 "${etc_frp}/client-id"
+  fi
+
   if frp_zero_touch_active; then
     frp_zero_touch_require_inputs || return 1
   fi
