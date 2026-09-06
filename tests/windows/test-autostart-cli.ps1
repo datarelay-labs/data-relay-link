@@ -25,7 +25,14 @@ try {
     Assert-FrpTrue ($enableOut -match 'SYSTEM') 'autostart -Enable documents SYSTEM / no login'
 
     $markerPath = Join-Path (Join-Path $tmpRoot 'state') ("autostart-task.{0}.json" -f $env:FRP_AUTOSTART_TASK_NAME)
-    Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart marker persisted on disk'
+    if ($env:OS -match 'Windows' -or $env:WinDir) {
+        # Real Windows uses schtasks; marker files are the non-Windows test backend.
+        $query = & schtasks.exe /Query /TN $env:FRP_AUTOSTART_TASK_NAME 2>&1 | Out-String
+        Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart task registered with schtasks'
+        Assert-FrpTrue ($query -match [regex]::Escape($env:FRP_AUTOSTART_TASK_NAME)) 'schtasks query shows task name'
+    } else {
+        Assert-FrpTrue (Test-Path -LiteralPath $markerPath) 'autostart marker persisted on disk'
+    }
 
     $statusOut2 = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
     Assert-FrpTrue ($statusOut2 -match ('enabled \({0}\)' -f [regex]::Escape($env:FRP_AUTOSTART_TASK_NAME))) 'autostart status shows enabled'
@@ -49,6 +56,10 @@ try {
 
     Write-FrpTestPass 'test-autostart-cli'
 } finally {
+    try {
+        & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Disable 2>&1 | Out-Null
+    } catch { }
+    Remove-Item Env:FRP_AUTOSTART_TASK_NAME -ErrorAction SilentlyContinue
     Remove-Item Env:FRP_WINDOWS_ROOT -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
