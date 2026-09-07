@@ -17,8 +17,9 @@ usage() {
   cat <<'EOF'
 Usage: frp-update [--check]
 
-Upgrade the local FRP server binary to the version tested by frp-auto-deploy.
-If the new binary fails health checks, the previous binary is restored automatically.
+Upgrade the local FRP binary (frps on server, frpc on client) to the version
+tested by frp-auto-deploy. If the new binary fails health checks, the previous
+binary is restored automatically.
 
   --check, --dry-run   report current/target versions without changing anything
   -h, --help           show this help

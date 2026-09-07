@@ -4047,6 +4047,7 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${bindir}/frpctl"
+  install -m 0755 "${source}/tools/frp-update" "${bindir}/frp-update"
   if [[ -f "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" ]]; then
     install -m 0644 "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" \
       "${libdir}/${FRP_MACOS_LAUNCHD_LABEL}.plist"
@@ -4069,7 +4070,8 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
-    "usr/local/bin/frpctl:0755:tools/frpctl"
+    "usr/local/bin/frpctl:0755:tools/frpctl" \
+    "usr/local/bin/frp-update:0755:tools/frp-update"
 }
 
 frp_client_upgrade_validate_existing() {
@@ -4159,6 +4161,7 @@ frp_client_upgrade_validate_staged() {
   done < <(frp_client_upgrade_destinations)
   bash -n "${staged}/usr/local/bin/frp-client" || return 1
   bash -n "${staged}/usr/local/bin/frpctl" || return 1
+  bash -n "${staged}/usr/local/bin/frp-update" || return 1
   bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-client-common.sh" || return 1
   bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-common.sh" || return 1
   bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-doctor-common.sh" || return 1
@@ -4174,6 +4177,10 @@ frp_client_upgrade_validate_staged() {
   }
   [[ -x "${staged}/usr/local/bin/frpctl" ]] || {
     echo "ERROR: staged frpctl is not executable" >&2
+    return 1
+  }
+  [[ -x "${staged}/usr/local/bin/frp-update" ]] || {
+    echo "ERROR: staged frp-update is not executable" >&2
     return 1
   }
   if [[ "${FRP_CLIENT_UPGRADE_HOOK_FAIL:-}" == "validate" ]]; then

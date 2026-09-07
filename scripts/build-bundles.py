@@ -102,6 +102,7 @@ client_files=[
  'lib/frp-role-ownership.sh',
  'tools/frp-client',
  'tools/frpctl',
+ 'tools/frp-update',
  'client/com.datarelay.frp-auto-deploy.frpc.plist',
 ]
 client_lines=[

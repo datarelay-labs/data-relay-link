@@ -1937,7 +1937,12 @@ frpctl_dispatch_canonical() {
         return 1
       fi
       ;;
-    update_frp) frpctl_require_server || return 1; frpctl_run frp-update $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    update_frp)
+      if ! frpctl_is_server && ! frpctl_is_client; then
+        frpctl_require_install || return 1
+      fi
+      frpctl_run frp-update $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     restore_backup) frpctl_require_server || return 1; frpctl_run frp-restore "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("path",""))' "$result")" ;;
     doctor)
       if ! type frp_doctor_main >/dev/null 2>&1; then
@@ -2056,7 +2061,9 @@ frpctl_dispatch() {
       frpctl_client_update "$@"
       ;;
     server-update|frp-update)
-      frpctl_require_server || return 1
+      if ! frpctl_is_server && ! frpctl_is_client; then
+        frpctl_require_install || return 1
+      fi
       frpctl_run frp-update "$@"
       ;;
     project-update)

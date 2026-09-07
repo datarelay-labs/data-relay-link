@@ -702,6 +702,7 @@ cp -a "$CL" "$FV"
 write_dummy_bin "$FV/usr/local/bin/frpc" frpc "0.69.0"
 run_json "$FV" "$WORKDIR/fv.json" || true
 [[ "$(check_status "$WORKDIR/fv.json" frp_version)" == "FAIL" ]] || fail "frp version mismatch"
+grep -q 'frpctl update frp' "$WORKDIR/fv.json" || fail "client frp-update guidance"
 pass "FRP_VERSION_MISMATCH"
 
 # Stale lock

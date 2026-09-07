@@ -90,7 +90,7 @@ MARKER_NOTE = 'Do not delete the pending marker by hand unless recovering from a
 def _recovery_for_role(role, kind):
     if kind == 'frp':
         if role in ('client', 'partial_client'):
-            return 'sudo frpctl update'
+            return 'sudo frpctl update frp'
         return 'sudo frpctl frp-update'
     if role in ('client', 'partial_client'):
         return 'sudo frpctl update'
