@@ -27,8 +27,8 @@ git rev-parse origin/main
 | Overnight start HEAD | `54b86e7bc09c15908d654eeee6c6f8ec7193277d` |
 | Code+test+dist candidate | `f234b727f097845ab0b9d33b320106c017c9d5d8` |
 | Exact candidate HEAD | `git rev-parse origin/integration/morning-e2e-ready` (must match local HEAD; may be this docs commit on top of `f234b72`) |
-| Project version | `2.1.3` (dev channel; v2.2.0 not tagged) |
-| FRP version | `0.70.1` |
+| Project version | `2.2.0` (dev channel; v2.2.0 not tagged) |
+| FRP version | `0.71.0` |
 
 PASS: local HEAD == `origin/integration/morning-e2e-ready`. FAIL: diverge or dirty worktree.
 
@@ -90,7 +90,7 @@ Legend for every step: **Destructive** = yes/no. **Cleanup** = command or n/a.
   ```bash
   ssh frp-e2e-server 'sudo frpctl show version; sudo frpctl show status; sudo frpctl doctor'
   ```
-- **Expected:** Role Server, project 2.1.3, FRP 0.70.1, frps/allocator active, doctor PASS.
+- **Expected:** Role Server, project 2.2.0, FRP 0.71.0, frps/allocator active, doctor PASS.
 - **PASS:** doctor PASS, registry ready, 3 reserved ports.
 - **FAIL:** doctor FAIL, allocator/frps down, registry invalid.
 - **Cleanup:** n/a

@@ -1,8 +1,8 @@
 class FrpAutoDeploy < Formula
   desc "FRP reverse-tunnel client for Apple Silicon macOS"
   homepage "https://github.com/datarelay-labs/frp-auto-deploy"
-  url "https://github.com/datarelay-labs/frp-auto-deploy/archive/refs/tags/v2.1.3.tar.gz"
-  version "2.1.3"
+  url "https://github.com/datarelay-labs/frp-auto-deploy/archive/refs/tags/v2.2.0.tar.gz"
+  version "2.2.0"
   sha256 "REPLACE_AT_TAG_TIME_WITH_RELEASE_TARBALL_SHA256"
   license "MIT"
 
@@ -30,7 +30,7 @@ class FrpAutoDeploy < Formula
   end
 
   test do
-    assert_match "PROJECT_VERSION=2.1.3", (libexec/"VERSION").read
+    assert_match "PROJECT_VERSION=2.2.0", (libexec/"VERSION").read
     assert_predicate bin/"frpctl", :executable?
   end
 end

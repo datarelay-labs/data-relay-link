@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the isolated nginx config used in Enterprise single-443 mode.
 
-FRP 0.70.1 WebSocket path is the compile-time constant FrpWebsocketPath
-('/~!frp'). That path is not a server configuration key in v0.70.1.
+FRP 0.71.0 WebSocket path is the compile-time constant FrpWebsocketPath
+('/~!frp'). That path is not a server configuration key in v0.71.0.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import os
 import re
 from pathlib import Path
 
-# pkg/util/net/websocket.go in fatedier/frp v0.70.1
+# pkg/util/net/websocket.go in fatedier/frp v0.71.0
 FRP_WEBSOCKET_PATH = '/~!frp'
 DEFAULT_BACKEND_CONTROL_PORT = 7000
 DEFAULT_ALLOCATOR_LISTEN_PORT = 6099
@@ -111,7 +111,7 @@ def render_nginx_conf(
     error_log = _require_error_log(error_log)
     temp_root = _require_abs_path(temp_root, 'temp_root')
     if websocket_path != FRP_WEBSOCKET_PATH:
-        raise ValueError('FRP 0.70.1 WebSocket path is fixed at %s' % FRP_WEBSOCKET_PATH)
+        raise ValueError('FRP 0.71.0 WebSocket path is fixed at %s' % FRP_WEBSOCKET_PATH)
 
     # Exact-match FRP WebSocket path. The '!' in /~!frp is not special in nginx
     # prefix/exact locations; quoting still keeps the config unambiguous.

@@ -439,7 +439,7 @@ frp_doctor_main() {
   extra+=(--facts "$facts_file")
   extra+=(--format "$fmt")
   extra+=(--embedded-version "${PROJECT_VERSION:-}")
-  extra+=(--pinned-frp "${FRP_VERSION:-0.70.1}")
+  extra+=(--pinned-frp "${FRP_VERSION:-0.71.0}")
   if [[ "$verbose" == "1" ]]; then
     extra+=(--verbose)
   fi

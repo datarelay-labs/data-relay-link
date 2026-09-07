@@ -296,7 +296,7 @@ for bin in "$STATE/bin/frpc" "$TREE/usr/local/bin/frp-client"; do
   cat >"$bin" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == --version ]]; then
-  echo "frpc version 0.70.1"
+  echo "frpc version 0.71.0"
   exit 0
 fi
 exit 0

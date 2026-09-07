@@ -2,7 +2,7 @@
 
 Base: current architecture at `origin/feature/macos-client-current-main` (`afc446c`)
 Branch: `feature/windows-client-current-main`
-FRP pin: **0.70.1** (Windows amd64 zip SHA256 pinned in `lib/frp-common.sh`)
+FRP pin: **0.71.0** (Windows amd64 zip SHA256 pinned in `lib/frp-common.sh`)
 
 ## Reusable server protocol
 

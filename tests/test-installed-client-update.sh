@@ -17,7 +17,7 @@ write_runtime_fixture() {
   cat >"$tree/usr/local/bin/frpc" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = verify ]; then exit 0; fi
-if [ "${1:-}" = --version ]; then echo "frpc version 0.70.1"; exit 0; fi
+if [ "${1:-}" = --version ]; then echo "frpc version 0.71.0"; exit 0; fi
 exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frpc"

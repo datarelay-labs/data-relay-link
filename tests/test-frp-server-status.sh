@@ -27,7 +27,7 @@ chmod 0755 "$TREE/usr/local/bin/frps"
 
 cat >"$TREE/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.0.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 
 python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
@@ -79,7 +79,7 @@ fi
 
 grep -q "Project version : 1.0.0" "$OUT" || fail "project version"
 grep -q "Installed FRP   : 0.70.0" "$OUT" || fail "installed frp"
-grep -q "Tested FRP      : 0.70.1" "$OUT" || fail "tested frp"
+grep -q "Tested FRP      : 0.71.0" "$OUT" || fail "tested frp"
 grep -q "Upstream latest : unavailable" "$OUT" || fail "upstream unavailable"
 grep -q "Update status   : update available" "$OUT" || fail "update available"
 grep -q "FRP public      : TCP/443" "$OUT" || fail "control port"
@@ -121,7 +121,7 @@ pass "status missing binary"
 # Current version
 cat >"$TREE/usr/local/bin/frps" <<'EOF'
 #!/usr/bin/env bash
-echo "frps version 0.70.1"
+echo "frps version 0.71.0"
 exit 0
 EOF
 chmod 0755 "$TREE/usr/local/bin/frps"

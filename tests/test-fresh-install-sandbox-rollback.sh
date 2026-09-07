@@ -37,7 +37,7 @@ write_dummy_frps() {
   cat >"$dest" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  echo "frps version 0.70.1"
+  echo "frps version 0.71.0"
   exit 0
 fi
 if [[ "${1:-}" == "verify" ]]; then
@@ -168,7 +168,7 @@ seed_absent_units() {
   done
 }
 
-write_dummy_frps "$WORKDIR/frps-0.70.1"
+write_dummy_frps "$WORKDIR/frps-0.71.0"
 write_mock_systemctl "$WORKDIR/mock-systemctl"
 
 export FRP_PUBLIC_IP=203.0.113.10
@@ -181,7 +181,7 @@ export FRP_ALLOCATOR_LISTEN_PORT=6099
 export FRP_ALLOCATOR_PUBLIC_URL=https://203.0.113.10:6099/enroll
 export FRP_PORT_START=6000
 export FRP_PORT_END=6098
-export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1"
+export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0"
 export FRP_INSTALL_HOOK_SKIP_SYSTEMD=1
 unset FRP_SERVER_CONFIG FRP_PKI_DIR FRP_PUBLIC_HOSTNAME || true
 

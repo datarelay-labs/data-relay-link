@@ -55,7 +55,7 @@ if [ "$1" = verify ]; then
   exit 0
 fi
 if [ "$1" = --version ]; then
-  echo "frpc version 0.70.1"
+  echo "frpc version 0.71.0"
   exit 0
 fi
 exit 0
@@ -154,7 +154,7 @@ PY
   if [[ "$with_version" == "1" ]]; then
     cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
     chmod 644 "$tree/etc/frp-auto-deploy/version"
   fi

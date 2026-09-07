@@ -182,7 +182,7 @@ PY
 [[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" ]] || fail "mgmt auth helper not installed"
 [[ -f "$TREE/etc/frp-auto-deploy/version" ]] || fail "client version file missing"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$TREE/etc/frp-auto-deploy/version" || fail "client project version"
-grep -q 'FRP_VERSION=0.70.1' "$TREE/etc/frp-auto-deploy/version" || fail "client FRP version"
+grep -q 'FRP_VERSION=0.71.0' "$TREE/etc/frp-auto-deploy/version" || fail "client FRP version"
 [[ -f "$TREE/etc/frp-auto-deploy/allocator-ca.crt" ]] || fail "trusted CA missing"
 grep -q 'serverPort = 8443' "$TREE/etc/frp/frpc.toml" || fail "frpc must use public control port"
 if grep -q 'serverPort = 443' "$TREE/etc/frp/frpc.toml"; then

@@ -4,13 +4,13 @@
 > **Repository:** `datarelay-labs/frp-auto-deploy`
 > **Document status:** Master / Living Document
 > **Last updated:** 2026-09-05
-> **Current stable baseline:** Project 2.1.3 (published tag `v2.1.3`)
+> **Current stable baseline:** Project 2.2.0 (published tag `v2.2.0`)
 > **Development candidate:** `integration/morning-e2e-ready` adds macOS,
 > Windows, and Group MVP; all three remain human-Real-E2E pending and are not stable
 > **Release HEAD (published stable):** `97cb84ebb0b09d771c623778b1a551edd6fc9204`
-> **Pinned upstream FRP:** 0.70.1
+> **Pinned upstream FRP:** 0.71.0
 > **Primary management interface:** `sudo frpctl`
-> **ZERO_TOUCH_SHORT_URL_TRUST_MODEL:** OPTION_B_EXTERNAL_REVERSE_PROXY (stable in v2.1.3)
+> **ZERO_TOUCH_SHORT_URL_TRUST_MODEL:** OPTION_B_EXTERNAL_REVERSE_PROXY (stable in v2.2.0)
 
 ---
 
@@ -320,7 +320,7 @@ Validated
 현재 기준:
 
 ```text
-FRP 0.70.1
+FRP 0.71.0
 ```
 
 ---
@@ -1442,20 +1442,20 @@ Prometheus/Grafana/RMM 형태의 motion
 현재 repository 기준:
 
 ```text
-Published stable:       2.1.3 (tag v2.1.3)
+Published stable:       2.2.0 (tag v2.2.0)
 Development candidate: integration/morning-e2e-ready
 Candidate-only scope:   macOS / Windows / Group MVP (human Real E2E pending)
-FRP:                    0.70.1
+FRP:                    0.71.0
 Published Release HEAD: 97cb84ebb0b09d771c623778b1a551edd6fc9204
 ZERO_TOUCH_SHORT_URL_TRUST_MODEL: OPTION_B_EXTERNAL_REVERSE_PROXY
 ```
 
-v2.1.3 stable focus:
+v2.2.0 stable focus:
 
 - Ideal Zero-Touch `/i/<ticket>` short URL (Option B)
 - optional `bootstrap_hostname` + operator reverse proxy
 - transitional `zt1.` package remains the default fallback
-- FRP remains 0.70.1
+- FRP remains 0.71.0
 
 Ideal `/i/<ticket>` short URL is implemented as an additive Option B feature
 (operator reverse proxy + `bootstrap_hostname`). See

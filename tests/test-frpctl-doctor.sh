@@ -23,7 +23,7 @@ export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
 
 write_dummy_bin() {
-  local dest="$1" name="$2" version="${3:-0.70.1}"
+  local dest="$1" name="$2" version="${3:-0.71.0}"
   mkdir -p "$(dirname "$dest")"
   cat >"$dest" <<EOF
 #!/usr/bin/env bash
@@ -691,7 +691,7 @@ pass "DOCTOR_FRP_UPDATE_GUIDANCE"
 VM="$WORKDIR/ver-mis"
 cp -a "$CL" "$VM"
 echo 'PROJECT_VERSION=1.2.0' >"$VM/etc/frp-auto-deploy/version"
-echo 'FRP_VERSION=0.70.1' >>"$VM/etc/frp-auto-deploy/version"
+echo 'FRP_VERSION=0.71.0' >>"$VM/etc/frp-auto-deploy/version"
 run_json "$VM" "$WORKDIR/ver.json" || true
 [[ "$(check_status "$WORKDIR/ver.json" project_version)" == "FAIL" ]] || fail "project version mismatch"
 grep -q 'frpctl update' "$WORKDIR/ver.json" || fail "version recovery"

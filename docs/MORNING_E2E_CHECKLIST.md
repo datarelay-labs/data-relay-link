@@ -85,7 +85,7 @@ URLs, tokens, or generated commands into reports.
   Linux/Unix and the required service profile, then run the generated command
   directly on the Mac without recording it. Verify:
   `ssh frp-e2e-macos 'sudo frpctl show status; sudo frpctl show services; sudo frpctl doctor; sudo launchctl print system/com.datarelay.frp-auto-deploy.frpc'`.
-- **Expected result:** Darwin arm64 is detected, FRP 0.70.1 is installed, the
+- **Expected result:** Darwin arm64 is detected, FRP 0.71.0 is installed, the
   launchd daemon is running, enrollment appears on the server, and the
   published service is reachable.
 - **What must remain unchanged:** Remote Login, firewall, users, Homebrew

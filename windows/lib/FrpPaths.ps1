@@ -76,21 +76,21 @@ function Get-FrpProjectVersion {
         }
     } catch { }
     # Packaged fallback must track canonical VERSION (do not hardcode stale releases).
-    return '2.1.3'
+    return '2.2.0'
 }
 
 function Get-FrpUpstreamVersion {
     if ($env:FRP_VERSION -and $env:FRP_VERSION.Trim().Length -gt 0) {
         return $env:FRP_VERSION.Trim()
     }
-    return '0.70.1'
+    return '0.71.0'
 }
 
 function Get-FrpWindowsAmd64Sha256 {
     if ($env:FRP_SHA256_WINDOWS_AMD64 -and $env:FRP_SHA256_WINDOWS_AMD64.Trim().Length -gt 0) {
         return $env:FRP_SHA256_WINDOWS_AMD64.Trim().ToLowerInvariant()
     }
-    return '531f3cd3cc41c0b4f077b54fe6b7dd83c0ff727e7f0bf412a4c78fa279165de5'
+    return '9e5062e3e5cf07e67144a3a4acf175ef6a2486f3605dd6cf288bae34ab39819f'
 }
 
 function Get-FrpWindowsAmd64Url {

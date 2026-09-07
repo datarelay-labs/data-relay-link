@@ -248,9 +248,9 @@ def write_single443_tree(tree, pki_host='203.0.113.10'):
         'usr/local/bin', 'usr/local/lib/frp-auto-deploy', 'etc/systemd/system',
     ):
         (tree / rel).mkdir(parents=True, exist_ok=True)
-    (tree / 'etc/frp-auto-deploy/version').write_text('PROJECT_VERSION=2.1.0\nFRP_VERSION=0.70.1\n')
+    (tree / 'etc/frp-auto-deploy/version').write_text('PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n')
     frps = tree / 'usr/local/bin/frps'
-    frps.write_text('#!/bin/sh\necho "frps version 0.70.1"\n')
+    frps.write_text('#!/bin/sh\necho "frps version 0.71.0"\n')
     os.chmod(frps, 0o755)
     shutil.copy(str(ROOT / 'server' / 'frp-port-allocator.py'), str(tree / 'usr/local/lib/frp-auto-deploy/frp-port-allocator.py'))
     (tree / 'etc/systemd/system/frps.service').write_text('[Unit]\nDescription=fixture\n')

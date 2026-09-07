@@ -145,7 +145,7 @@ if ! collect_services_interactive >"$WORKDIR/yes.out" 2>"$WORKDIR/yes.err"; then
   fail "Yes should complete collect_services_interactive"
 fi
 grep -q 'Ready to install' "$WORKDIR/yes.out" || fail "summary before yes"
-grep -q 'install FRP v0.70.1' "$WORKDIR/yes.out" || fail "frp version in summary"
+grep -q 'install FRP v0.71.0' "$WORKDIR/yes.out" || fail "frp version in summary"
 grep -q 'Public port : assigned automatically' "$WORKDIR/yes.out" || fail "public port automatic"
 [[ "$(services_count)" == "1" ]] || fail "yes count"
 python3 - "$SERVICES_FILE" <<'PY' || fail "yes ssh payload"

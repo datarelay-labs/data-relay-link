@@ -44,7 +44,7 @@ Path(sys.argv[1]).write_text(json.dumps({
 PY
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.4.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 
@@ -81,7 +81,7 @@ reg.write_text(json.dumps({
 PY
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.4.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 
@@ -249,7 +249,7 @@ run_repl "$CLIENT" "$WORKDIR/client-repl.out" status help version exit || fail "
 grep -q 'FRP Auto Deploy CLI' "$WORKDIR/client-repl.out" || fail "client repl banner"
 grep -q 'Role            : Client' "$WORKDIR/client-repl.out" || fail "client repl role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-repl.out" || fail "client repl version"
-grep -q 'FRP version     : 0.70.1' "$WORKDIR/client-repl.out" || fail "client repl frp version"
+grep -q 'FRP version     : 0.71.0' "$WORKDIR/client-repl.out" || fail "client repl frp version"
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
 grep -q 'FRP Client' "$WORKDIR/client-repl.out" || fail "client repl status body"

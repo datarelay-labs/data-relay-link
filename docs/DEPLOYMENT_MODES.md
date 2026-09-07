@@ -128,7 +128,7 @@ Compared for this project: nginx, HAProxy, Caddy.
 | Isolated config + dedicated systemd unit | Yes | Yes | Yes |
 | Long-lived WebSocket timeouts | `proxy_read_timeout` | `timeout tunnel` | Yes |
 | Private CA (no automatic public ACME) | Explicit | Explicit | Fights the model |
-| Path `/~!frp` (FRP 0.70.1 constant) | Exact `location` | ACL path | Yes |
+| Path `/~!frp` (FRP 0.71.0 constant) | Exact `location` | ACL path | Yes |
 
 **nginx** is used because it is present as `nginx` on the supported package
 managers, WebSocket reverse-proxy behaviour is stable, and a **dedicated**
@@ -158,7 +158,7 @@ the distro unit. Uninstall never enables or starts distro `nginx.service`.
   loopback backend is verified as `DNS:localhost` (present on every project
   leaf). The public certificate identity for clients is unchanged. Other
   paths return 404.
-- `GET /~!frp` is the FRP 0.70.1 WebSocket path (`FrpWebsocketPath`), matched
+- `GET /~!frp` is the FRP 0.71.0 WebSocket path (`FrpWebsocketPath`), matched
   with an exact `location =`. After HTTP Upgrade, nginx proxies to
   `http://127.0.0.1:<frp_control_listen>`. Management POST `/enroll` never
   reaches frps.
@@ -179,9 +179,9 @@ First enrollment still:
 Frontend and allocator leaves are both issued by that CA. The fingerprint is
 not the leaf. This is not TOFU.
 
-## FRP 0.70.1 facts used (not guessed)
+## FRP 0.71.0 facts used (not guessed)
 
-From tagged v0.70.1 source and `conf/frp{c,s}_full_example.toml`:
+From tagged v0.71.0 source and `conf/frp{c,s}_full_example.toml`:
 
 - `transport.protocol`: `tcp`, `kcp`, `quic`, `websocket`, `wss`
 - WebSocket path is **not** configurable; it is `/~!frp`

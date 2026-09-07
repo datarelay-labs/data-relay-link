@@ -30,9 +30,9 @@ jobs:
           git diff --exit-code dist/
       - name: Verify pinned FRP binary
         run: |
-          version=0.70.1
+          version=0.71.0
           archive="$RUNNER_TEMP/frp.tar.gz"
           curl -fsSL -o "$archive" \
             "https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_darwin_arm64.tar.gz"
-          echo "cfa733b5a261c1647edee3c1fc4133d2542989b28f5602e81d47fc821d25c55f  $archive" |
+          echo "45be02b186860d375ed49a8941ae9569628a54bf14e67fc36b29c98c99dabcc6  $archive" |
             shasum -a 256 -c -

@@ -39,7 +39,7 @@ reg.write_text(json.dumps({
 PY
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.4.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 

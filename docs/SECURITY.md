@@ -1,10 +1,10 @@
 # Security architecture
 
-This document describes the security model of `frp-auto-deploy` **2.1.3**.
+This document describes the security model of `frp-auto-deploy` **2.2.0**.
 It is not a certification, audit report, or guarantee against a compromised
 root account.
 
-Pinned FRP version: **0.70.1**. Product version is independent of the
+Pinned FRP version: **0.71.0**. Product version is independent of the
 management protocol version (`schema: 1` in signed requests) and of FRP.
 
 ## 1. FRP tunnel authentication

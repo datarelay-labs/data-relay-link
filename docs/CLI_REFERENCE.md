@@ -218,7 +218,7 @@ update frp [--check]
 `update` with no resource keeps the previous role default (client project
 tools on a client; `frp-update` on a server). Updater security is unchanged:
 stable tag, verified SHA256SUMS, fail-closed, rollback, no re-enrollment, no
-CA/token/port loss. FRP stays pinned at 0.70.1.
+CA/token/port loss. FRP stays pinned at 0.71.0.
 
 ## Other
 

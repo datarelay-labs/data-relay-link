@@ -46,7 +46,7 @@ PY
 }
 
 write_dummy_frps() {
-  local dest="$1" version="${2:-0.70.1}"
+  local dest="$1" version="${2:-0.71.0}"
   mkdir -p "$(dirname "$dest")"
   cat >"$dest" <<EOF
 #!/usr/bin/env bash
@@ -63,7 +63,7 @@ EOF
 }
 
 write_dummy_frpc() {
-  local dest="$1" version="${2:-0.70.1}"
+  local dest="$1" version="${2:-0.71.0}"
   mkdir -p "$(dirname "$dest")"
   cat >"$dest" <<EOF
 #!/usr/bin/env bash
@@ -153,7 +153,7 @@ import tarfile, io, sys
 from pathlib import Path
 buf = io.BytesIO()
 with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-    info = tarfile.TarInfo("frp_0.70.1_linux_amd64/frps")
+    info = tarfile.TarInfo("frp_0.71.0_linux_amd64/frps")
     data = b"#!/bin/sh\necho ok\n"
     info.size = len(data)
     info.mode = 0o755
@@ -167,14 +167,14 @@ pass "ARCHIVE_EXPECTED_MEMBER"
 # ---------------------------------------------------------------------------
 # FRP binary validation
 # ---------------------------------------------------------------------------
-write_dummy_frps "$WORKDIR/frps-ok" "0.70.1"
-frp_validate_frp_binary "$WORKDIR/frps-ok" "0.70.1" amd64 || fail "valid dummy rejected"
+write_dummy_frps "$WORKDIR/frps-ok" "0.71.0"
+frp_validate_frp_binary "$WORKDIR/frps-ok" "0.71.0" amd64 || fail "valid dummy rejected"
 write_dummy_frps "$WORKDIR/frps-wrong-ver" "0.99.0"
-if frp_validate_frp_binary "$WORKDIR/frps-wrong-ver" "0.70.1" amd64 2>"$WORKDIR/wrong-ver.err"; then
+if frp_validate_frp_binary "$WORKDIR/frps-wrong-ver" "0.71.0" amd64 2>"$WORKDIR/wrong-ver.err"; then
   fail "wrong FRP version should be rejected"
 fi
 write_fake_elf "$WORKDIR/frps-i386" 3
-if frp_validate_frp_binary "$WORKDIR/frps-i386" "0.70.1" amd64 2>"$WORKDIR/wrong-arch.err"; then
+if frp_validate_frp_binary "$WORKDIR/frps-i386" "0.71.0" amd64 2>"$WORKDIR/wrong-arch.err"; then
   fail "wrong ELF arch should be rejected"
 fi
 grep -q 'architecture' "$WORKDIR/wrong-arch.err" || fail "arch error message"
@@ -191,7 +191,7 @@ pass "FRP_WRONG_ARCH_REJECTED"
 # ---------------------------------------------------------------------------
 SRV="$WORKDIR/server-fresh"
 mkdir -p "$SRV"
-write_dummy_frps "$WORKDIR/frps-0.70.1" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-0.71.0" "0.71.0"
 export FRP_SERVER_TEST_ROOT="$SRV"
 export FRP_PUBLIC_HOST='203.0.113.10'
 export FRP_CONTROL_PUBLIC_PORT=443
@@ -200,7 +200,7 @@ export FRP_ALLOCATOR_PUBLIC_PORT=6099
 export FRP_ALLOCATOR_LISTEN_PORT=6099
 export FRP_PORT_START=6000
 export FRP_PORT_END=6098
-export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1"
+export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0"
 export FRP_INSTALL_HOOK_SKIP_SYSTEMD=1
 unset FRP_SERVER_CONFIG FRP_PKI_DIR || true
 if ! frp_server_main >"$WORKDIR/fresh-server.out" 2>"$WORKDIR/fresh-server.err"; then
@@ -218,7 +218,7 @@ assert_mode "$SRV/etc/frp-auto-deploy/pki/ca.key" "0o600"
 assert_mode "$SRV/etc/frp-auto-deploy/pki/server.key" "0o600"
 [[ -f "$SRV/etc/frp-auto-deploy/pki/ca.crt" ]] || fail "CA missing"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$SRV/etc/frp-auto-deploy/version" || fail "server version"
-grep -q 'FRP_VERSION=0.70.1' "$SRV/etc/frp-auto-deploy/version" || fail "server FRP version"
+grep -q 'FRP_VERSION=0.71.0' "$SRV/etc/frp-auto-deploy/version" || fail "server FRP version"
 grep -q 'transport.tls.force = true' "$SRV/etc/frp/frps.toml" || fail "direct tls.force"
 grep -q 'bindPort = 443' "$SRV/etc/frp/frps.toml" || fail "direct bindPort"
 if grep -q 'bindAddr' "$SRV/etc/frp/frps.toml"; then
@@ -780,7 +780,7 @@ pass "SERVER_UNINSTALL_PRESERVES_STATE"
 # Reinstall after uninstall
 unset FRP_UNINSTALL_TEST_ROOT
 export FRP_SERVER_TEST_ROOT="$SRV"
-export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1"
+export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0"
 export FRP_INSTALL_HOOK_SKIP_SYSTEMD=1
 if ! frp_server_main >"$WORKDIR/re-after.out" 2>"$WORKDIR/re-after.err"; then
   cat "$WORKDIR/re-after.out" "$WORKDIR/re-after.err" >&2
@@ -969,7 +969,7 @@ echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"$UP/etc/
 chmod 600 "$UP/etc/frp/client-identity.mac"
 cat >"$UP/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.7.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 STATE_BEFORE="$(frp_file_sha256 "$UP/etc/frp/client-state.json")"
 CA_BEFORE="$(frp_file_sha256 "$UP/etc/frp-auto-deploy/allocator-ca.crt")"
@@ -1020,7 +1020,7 @@ cp -a "$UP/etc/frp/client-identity.pub" "$UP191/etc/frp/client-identity.pub"
 cp -a "$UP/etc/frp/client-identity.mac" "$UP191/etc/frp/client-identity.mac"
 cat >"$UP191/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.9.1
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 STATE191="$(frp_file_sha256 "$UP191/etc/frp/client-state.json")"
 CA191="$(frp_file_sha256 "$UP191/etc/frp-auto-deploy/allocator-ca.crt")"
@@ -1041,7 +1041,7 @@ pass "PROJECT_UPDATE_1_9_1_TO_CURRENT"
 python3 - "$UP/etc/frp-auto-deploy/version" <<'PY'
 import sys
 from pathlib import Path
-Path(sys.argv[1]).write_text("PROJECT_VERSION=9.9.9\nFRP_VERSION=0.70.1\n")
+Path(sys.argv[1]).write_text("PROJECT_VERSION=9.9.9\nFRP_VERSION=0.71.0\n")
 PY
 export FRP_CLIENT_TEST_ROOT="$UP"
 if "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/down.out" 2>"$WORKDIR/down.err"; then
@@ -1050,7 +1050,7 @@ fi
 grep -q 'FAILURE_CLASS=DOWNGRADE_REFUSED' "$WORKDIR/down.out" "$WORKDIR/down.err" || fail "downgrade class"
 cat >"$UP/etc/frp-auto-deploy/version" <<EOF
 PROJECT_VERSION=${PROJECT_VERSION}
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1074,7 @@ setup_update_tree() {
   chmod 600 "$tree/var/lib/frp-auto-deploy/registry.json"
   cat >"$tree/etc/frp-auto-deploy/version" <<EOF
 PROJECT_VERSION=${PROJECT_VERSION}
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 
@@ -1096,7 +1096,7 @@ pass "FRP_UPDATE_WRONG_VERSION"
 
 UA="$WORKDIR/upd-arch"
 setup_update_tree "$UA" "0.70.0"
-write_dummy_frps "$WORKDIR/frps-arch" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-arch" "0.71.0"
 if env \
   FRP_UPDATE_TEST_HARNESS=1 \
   FRP_UPDATE_TEST_MARKER="$MARKER" \
@@ -1113,7 +1113,7 @@ pass "FRP_UPDATE_WRONG_ARCH"
 
 RB="$WORKDIR/upd-rb"
 setup_update_tree "$RB" "0.70.0"
-write_dummy_frps "$WORKDIR/frps-new" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-new" "0.71.0"
 RB_RC=0
 env \
   FRP_UPDATE_TEST_HARNESS=1 \
@@ -1122,7 +1122,7 @@ env \
   FRP_UPDATE_ROOT="$RB" \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
   FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-new" \
-  FRP_UPDATE_HOOK_HEALTH_FAIL_VERSION=0.70.1 \
+  FRP_UPDATE_HOOK_HEALTH_FAIL_VERSION=0.71.0 \
   FRP_UPDATE_HOOK_ROLLBACK_RESTART_FAIL=1 \
   "$UPDATE" >"$WORKDIR/rb.out" 2>"$WORKDIR/rb.err" || RB_RC=$?
 [[ "$RB_RC" -ne 0 ]] || fail "rollback failure should be non-zero"
@@ -1135,11 +1135,11 @@ pass "ROLLBACK_FAILURE_REPORTED"
 INTU="$WORKDIR/upd-int"
 setup_update_tree "$INTU" "0.70.0"
 mkdir -p "$INTU/var/lib/frp-auto-deploy"
-echo '{"operation":"update","phase":"commit","previous_version":"0.70.0","candidate_version":"0.70.1"}' \
+echo '{"operation":"update","phase":"commit","previous_version":"0.70.0","candidate_version":"0.71.0"}' \
   >"$INTU/var/lib/frp-auto-deploy/server-update-pending.json"
-# Next successful same-version (already current after we put 0.70.1? tree is 0.70.0)
-# Leave marker; running update to 0.70.1 should complete and clear marker.
-write_dummy_frps "$WORKDIR/frps-int" "0.70.1"
+# Next successful same-version (already current after we put 0.71.0? tree is 0.70.0)
+# Leave marker; running update to 0.71.0 should complete and clear marker.
+write_dummy_frps "$WORKDIR/frps-int" "0.71.0"
 if ! env \
   FRP_UPDATE_TEST_HARNESS=1 \
   FRP_UPDATE_TEST_MARKER="$MARKER" \
@@ -1162,7 +1162,7 @@ for i in 1 2 3 4 5 6 7; do
   mkdir -p "$BR/var/lib/frp-auto-deploy/backups/2020010${i}T000000Z-0.69.0"
   write_dummy_frps "$BR/var/lib/frp-auto-deploy/backups/2020010${i}T000000Z-0.69.0/frps" "0.69.0"
 done
-write_dummy_frps "$WORKDIR/frps-br" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-br" "0.71.0"
 env \
   FRP_UPDATE_TEST_HARNESS=1 \
   FRP_UPDATE_TEST_MARKER="$MARKER" \

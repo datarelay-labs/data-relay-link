@@ -23,7 +23,7 @@ seed_state() {
     >"$tree/etc/frp-auto-deploy/config.json"
   cat >"$tree/etc/frp-auto-deploy/version" <<EOF
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
 SOURCE_REF=main
 BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -184,7 +184,7 @@ python3 "$ROOT/tools/frp-backup" "$WORKDIR/cross.tar.gz" >/dev/null
 # Simulate newer installed product while backup remains older.
 cat >"$CROSS/etc/frp-auto-deploy/version" <<EOF
 PROJECT_VERSION=2.1.2
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
 SOURCE_REF=main
 BUNDLE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

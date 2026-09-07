@@ -12,8 +12,8 @@ FRP_CLIENT_BACKUP_KEEP="${FRP_CLIENT_BACKUP_KEEP:-5}"
 FRP_CLIENT_UPGRADE_BACKUP_KEEP="${FRP_CLIENT_UPGRADE_BACKUP_KEEP:-5}"
 
 # Defaults match VERSION. A sibling VERSION file overrides project/FRP versions.
-PROJECT_VERSION="${PROJECT_VERSION:-2.1.3}"
-FRP_VERSION="${FRP_VERSION:-0.70.1}"
+PROJECT_VERSION="${PROJECT_VERSION:-2.2.0}"
+FRP_VERSION="${FRP_VERSION:-0.71.0}"
 _FRP_CLIENT_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_FRP_CLIENT_COMMON_DIR}/../VERSION" ]]; then
   # shellcheck disable=SC1091
@@ -578,7 +578,7 @@ frp_client_installed_frp_version() {
     printf '%s' "$fv"
     return 0
   fi
-  printf '%s' "${FRP_VERSION:-0.70.1}"
+  printf '%s' "${FRP_VERSION:-0.71.0}"
 }
 
 frp_client_installed_release_channel() {
@@ -1226,7 +1226,7 @@ frp_ux_prompt_new_service() {
 }
 
 frp_ux_print_install_summary() {
-  local services_file="$1" version="${2:-0.70.1}"
+  local services_file="$1" version="${2:-0.71.0}"
   python3 - "$services_file" "$version" <<'PY'
 import json, sys
 from pathlib import Path
