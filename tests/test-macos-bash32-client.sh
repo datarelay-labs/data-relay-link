@@ -7,6 +7,7 @@ hits="$(grep -nE '[[:space:]](mapfile|readarray)[[:space:]]|declare -A ' \
   "$ROOT/tools/frp-client" \
   "$ROOT/lib/frp-client-common.sh" \
   "$ROOT/lib/frp-macos.sh" \
+  "$ROOT/lib/frp-doctor-common.sh" \
   "$ROOT/tools/frpctl" \
   || true)"
 if [[ -n "$hits" ]]; then
