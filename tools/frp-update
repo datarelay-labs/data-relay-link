@@ -527,13 +527,17 @@ else
 fi
 INSTALLED_NEW=1
 
+# Clear the pending marker before restart. Client restarts can drop the SSH
+# path used to drive the update; leaving client-frp-update pending would make a
+# later project upgrade attempt treat the FRP binary backup as a tools snapshot.
+frp_txn_clear "$FRP_TXN_ROLE"
+
 echo "Restarting ${UPDATE_ROLE} runtime..."
 restart_frp_unit || fail_update SERVICE_START_FAILED
 
 echo "Running health checks..."
 health_check || fail_update HEALTH_CHECK_FAILED
 
-frp_txn_clear "$FRP_TXN_ROLE"
 frp_audit_emit frp_update.completed
 echo
 echo "FRP update completed successfully."

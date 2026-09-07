@@ -441,6 +441,48 @@ unset FRP_CLIENT_UPGRADE_HOOK_FAIL FRP_CLIENT_UPGRADE_HOOK_ROLLBACK_FAIL
 grep -q 'UPDATE_ROLLBACK_FAILED' "$WORKDIR/rollback-failure.out" "$WORKDIR/rollback-failure.err" || fail "rollback failure class"
 grep -q 'RECOVERY_REQUIRED' "$WORKDIR/rollback-failure.out" "$WORKDIR/rollback-failure.err" || fail "rollback recovery marker"
 [[ -f "$ROLL_FAIL/var/lib/frp-auto-deploy/client-update-pending.json" ]] || fail "client rollback left no pending marker"
+
+# Interrupted client-frp-update must not be recovered as a tools backup (would wipe tools).
+FRP_PEND="$WORKDIR/frp-pending-not-tools"
+write_client_fixture "$FRP_PEND" 1 1
+export FRP_CLIENT_TEST_ROOT="$FRP_PEND"
+mkdir -p "$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only"
+printf 'frpc-binary' >"$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only/frpc"
+chmod 0755 "$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only/frpc"
+python3 - "$FRP_PEND/var/lib/frp-auto-deploy/client-update-pending.json" <<'PY'
+import json,sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  "schema_version": 2,
+  "operation": "client-frp-update",
+  "phase": "commit",
+  "mutation_started": True,
+  "previous_version": "0.70.1",
+  "candidate_version": "0.71.0",
+  "snapshot_path": str(Path(sys.argv[1]).resolve().parent / "backups" / "frp-only"),
+}))
+PY
+BEFORE_CLIENT="$(file_sha "$FRP_PEND/usr/local/bin/frp-client")"
+BEFORE_COMMON="$(file_sha "$FRP_PEND/usr/local/lib/frp-auto-deploy/frp-client-common.sh")"
+# frpc shim already reports 0.71.0 via write_dummy_frpc
+"$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/frp-pending.out" 2>"$WORKDIR/frp-pending.err" \
+  || fail "client-frp-update pending recovery should continue"
+[[ -f "$FRP_PEND/usr/local/bin/frp-client" ]] || fail "frp-client wiped by wrong snapshot recovery"
+[[ -f "$FRP_PEND/usr/local/lib/frp-auto-deploy/frp-client-common.sh" ]] || fail "common lib wiped by wrong snapshot recovery"
+[[ ! -f "$FRP_PEND/var/lib/frp-auto-deploy/client-update-pending.json" ]] || fail "client-frp-update pending not cleared"
+grep -q 'already reached 0.71.0' "$WORKDIR/frp-pending.out" "$WORKDIR/frp-pending.err" \
+  || fail "missing frp-update pending clear message"
+# Direct restore_tools must refuse FRP-only snapshots.
+# shellcheck disable=SC1091
+. "$ROOT/lib/frp-client-common.sh"
+if frp_client_upgrade_restore_tools "$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only" 2>"$WORKDIR/restore-refuse.err"; then
+  fail "restore_tools should refuse FRP binary backup"
+fi
+grep -q 'missing manifest' "$WORKDIR/restore-refuse.err" || fail "restore_tools refuse reason"
+# After a successful recovery+upgrade the tools may refresh; the critical assertion is no wipe-from-frp-backup.
+[[ -n "$BEFORE_CLIENT" && -n "$BEFORE_COMMON" ]] || fail "fixture digests missing"
+pass "CLIENT_FRP_UPDATE_PENDING_NOT_TOOLS_WIPE"
+
 pass "UPGRADE_ROLLBACK"
 pass "NO_PARTIAL_TOOL_INSTALL"
 pass "CLIENT_STATE_UNCHANGED_ON_FAILURE"

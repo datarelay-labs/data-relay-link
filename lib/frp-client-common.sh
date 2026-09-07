@@ -4232,6 +4232,12 @@ PY
 frp_client_upgrade_restore_tools() {
   local backup="$1" live rel mode src base
   [[ -d "$backup" ]] || return 1
+  # Tools backups always write a manifest. FRP binary backups must never be
+  # treated as management-tool snapshots (they would delete live tools).
+  if [[ ! -f "${backup}/manifest" ]]; then
+    echo "ERROR: snapshot is not a management-tools backup (missing manifest)." >&2
+    return 1
+  fi
   if [[ "${FRP_CLIENT_UPGRADE_HOOK_ROLLBACK_FAIL:-}" == "1" ]]; then
     echo "ERROR: simulated update rollback failure" >&2
     return 1
@@ -4437,20 +4443,49 @@ frp_client_apply_upgrade() {
   frp_txn_adopt_legacy_marker client || return 1
   if [[ -f "$(frp_txn_marker_path client)" ]]; then
     echo "A previous software update was interrupted."
-    local recovered=""
+    local recovered="" op="" target_frp="" current_frp=""
+    op="$(frp_txn_field operation)"
     recovered="$(frp_txn_field snapshot_path)"
-    if [[ -z "$recovered" || ! -d "$recovered" ]]; then
-      echo "ERROR: pending client update does not name a usable snapshot; refusing to guess the newest backup." >&2
-      frp_emit_failure_class RECOVERY_REQUIRED
-      return 1
+    if [[ "$op" == "client-frp-update" ]]; then
+      # Shared client marker may belong to frp-update, not project-tool update.
+      target_frp="$(frp_txn_field candidate_version)"
+      current_frp="$(frp_parse_binary_version "$(frp_client_path /usr/local/bin/frpc)" 2>/dev/null || true)"
+      if [[ -n "$target_frp" && "$current_frp" == "$target_frp" ]]; then
+        echo "Interrupted FRP binary update already reached ${target_frp}; clearing marker."
+        frp_txn_clear client
+      elif [[ -n "$recovered" && -x "${recovered}/frpc" ]]; then
+        echo "Restoring previous FRP binary from interrupted frp-update backup..."
+        frp_atomic_install "${recovered}/frpc" "$(frp_client_path /usr/local/bin/frpc)" 0755 || {
+          echo "ERROR: interrupted FRP binary update could not be rolled back automatically." >&2
+          frp_emit_failure_class RECOVERY_REQUIRED
+          return 1
+        }
+        if ! frp_client_restart; then
+          echo "ERROR: restored FRP binary but frpc restart failed." >&2
+          frp_emit_failure_class RECOVERY_REQUIRED
+          return 1
+        fi
+        frp_txn_clear client
+        echo "Restored the previous FRP binary from backup."
+      else
+        echo "ERROR: pending client-frp-update does not name a usable FRP binary snapshot." >&2
+        frp_emit_failure_class RECOVERY_REQUIRED
+        return 1
+      fi
+    else
+      if [[ -z "$recovered" || ! -d "$recovered" ]]; then
+        echo "ERROR: pending client update does not name a usable snapshot; refusing to guess the newest backup." >&2
+        frp_emit_failure_class RECOVERY_REQUIRED
+        return 1
+      fi
+      if ! frp_client_upgrade_restore_tools "$recovered" || ! frp_client_upgrade_verify_restored "$recovered"; then
+        echo "ERROR: interrupted update could not be rolled back automatically." >&2
+        frp_emit_failure_class RECOVERY_REQUIRED
+        return 1
+      fi
+      echo "Restored the previous management files from backup."
+      frp_txn_clear client
     fi
-    if ! frp_client_upgrade_restore_tools "$recovered" || ! frp_client_upgrade_verify_restored "$recovered"; then
-      echo "ERROR: interrupted update could not be rolled back automatically." >&2
-      frp_emit_failure_class RECOVERY_REQUIRED
-      return 1
-    fi
-    echo "Restored the previous management files from backup."
-    frp_txn_clear client
   fi
 
   previous="$(frp_client_installed_project_version)"
