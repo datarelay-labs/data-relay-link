@@ -244,14 +244,17 @@ for need in frp_mgmt_auth.py frp_pki.py frp_client_registry.py \
 done
 pass "ALLOCATOR_RUNTIME_DEPENDENCY_RESTART"
 
-# --- Dev/main artifact identity ---
-meta="$(frp_validate_release_source_metadata "$ROOT" "main" "dev")" || fail "dev metadata validate"
+# --- Working-tree artifact identity (dev/main or stable/vVERSION) ---
+want_channel="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["channel"])')"
+want_ref="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["git_ref"])')"
+meta="$(frp_validate_release_source_metadata "$ROOT" "$want_ref" "$want_channel")" \
+  || fail "tree metadata validate"
 channel="$(printf '%s' "$meta" | awk -F'\t' '{print $2}')"
 ref="$(printf '%s' "$meta" | awk -F'\t' '{print $3}')"
-[[ "$channel" == "dev" ]] || fail "channel=$channel"
-[[ "$ref" == "main" ]] || fail "ref=$ref"
-pass "DEV_MAIN_ARTIFACT_IDENTITY"
-pass "STABLE_IMMUTABLE_CHANNEL (working tree is explicit dev; tagged stable unchanged)"
+[[ "$channel" == "$want_channel" ]] || fail "channel=$channel want=$want_channel"
+[[ "$ref" == "$want_ref" ]] || fail "ref=$ref want=$want_ref"
+pass "TREE_ARTIFACT_IDENTITY"
+pass "STABLE_IMMUTABLE_CHANNEL (stable defaults remain vPROJECT_VERSION)"
 
 echo
 echo "CORE_CORRECTNESS_LIFECYCLE_TEST=PASS"

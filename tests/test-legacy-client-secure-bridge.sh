@@ -191,13 +191,14 @@ BUNDLE="$ROOT/dist/bootstrap-client.sh"
 [[ -x "$BUNDLE" ]] || fail "generated bootstrap-client.sh missing"
 grep -q 'release-manifest.json' "$BUNDLE" || fail "generated bundle missing release-manifest.json"
 extract_bundle_file "$BUNDLE" "release-manifest.json" "$WORKDIR/bundle-release-manifest.json"
-python3 - "$WORKDIR/bundle-release-manifest.json" "$PROJECT_VERSION" <<'PY' || fail "bundle manifest identity"
+python3 - "$WORKDIR/bundle-release-manifest.json" "$ROOT/release-manifest.json" "$PROJECT_VERSION" <<'PY' || fail "bundle manifest identity"
 import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
-assert data.get("project_version") == sys.argv[2]
-assert data.get("channel") == "dev"
-assert data.get("git_ref") == "main"
+want = json.loads(Path(sys.argv[2]).read_text())
+assert data.get("project_version") == sys.argv[3]
+assert data.get("channel") == want.get("channel"), data.get("channel")
+assert data.get("git_ref") == want.get("git_ref"), data.get("git_ref")
 PY
 pass "CLIENT_BUNDLE_CONTAINS_RELEASE_MANIFEST"
 pass "REAL_GENERATED_CLIENT_BUNDLE"
@@ -210,8 +211,10 @@ pass "REAL_GENERATED_CLIENT_BUNDLE"
 # shellcheck disable=SC1091
 . "$ROOT/lib/frp-client-common.sh"
 
+WANT_CHANNEL="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["channel"])')"
+WANT_REF="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["git_ref"])')"
 VALID_META="$(frp_validate_release_source_metadata "$ROOT")" || fail "valid source metadata"
-[[ "$VALID_META" == "${PROJECT_VERSION}"$'\tdev\tmain' ]] ||
+[[ "$VALID_META" == "${PROJECT_VERSION}"$'\t'"${WANT_CHANNEL}"$'\t'"${WANT_REF}" ]] ||
   fail "valid metadata triple: $VALID_META"
 pass "CLIENT_CANDIDATE_METADATA_VALID"
 
@@ -219,12 +222,14 @@ BADCH="$WORKDIR/bad-channel"
 mkdir -p "$BADCH"
 cp "$ROOT/VERSION" "$BADCH/VERSION"
 cp "$ROOT/release-manifest.json" "$BADCH/release-manifest.json"
+# Force an impossible channel/ref pair (stable must be vPROJECT_VERSION, not main).
 python3 - "$BADCH/release-manifest.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
 d = json.loads(p.read_text())
 d["channel"] = "stable"
+d["git_ref"] = "main"
 p.write_text(json.dumps(d) + "\n")
 PY
 if frp_validate_release_source_metadata "$BADCH" >/dev/null 2>"$WORKDIR/bad-channel.err"; then
@@ -232,18 +237,34 @@ if frp_validate_release_source_metadata "$BADCH" >/dev/null 2>"$WORKDIR/bad-chan
 fi
 grep -qi 'channel/ref disagreement\|channel mismatch' "$WORKDIR/bad-channel.err" ||
   fail "channel disagreement message"
-if FRP_EXPECTED_RELEASE_CHANNEL=stable \
-  frp_validate_release_source_metadata "$ROOT" >/dev/null 2>"$WORKDIR/expected-stable.err"; then
-  fail "expected stable accepted a dev candidate"
+# Expect the opposite channel of the working tree.
+if [[ "$WANT_CHANNEL" == "dev" ]]; then
+  if FRP_EXPECTED_RELEASE_CHANNEL=stable \
+    frp_validate_release_source_metadata "$ROOT" >/dev/null 2>"$WORKDIR/expected-stable.err"; then
+    fail "expected stable accepted a dev candidate"
+  fi
+  grep -qi 'channel mismatch' "$WORKDIR/expected-stable.err" || fail "expected channel mismatch"
+else
+  if FRP_EXPECTED_RELEASE_CHANNEL=dev \
+    frp_validate_release_source_metadata "$ROOT" >/dev/null 2>"$WORKDIR/expected-dev.err"; then
+    fail "expected dev accepted a stable candidate"
+  fi
+  grep -qi 'channel mismatch' "$WORKDIR/expected-dev.err" || fail "expected channel mismatch"
 fi
-grep -qi 'channel mismatch' "$WORKDIR/expected-stable.err" || fail "expected channel mismatch"
 pass "CLIENT_CANDIDATE_METADATA_CHANNEL_MISMATCH"
 
 BADREF="$WORKDIR/bad-ref"
 mkdir -p "$BADREF"
 cp "$ROOT/VERSION" "$BADREF/VERSION"
 cp "$ROOT/release-manifest.json" "$BADREF/release-manifest.json"
-if FRP_EXPECTED_RELEASE_CHANNEL=dev FRP_EXPECTED_SOURCE_REF="v${PROJECT_VERSION}" \
+if [[ "$WANT_CHANNEL" == "dev" ]]; then
+  BAD_EXPECT_CHANNEL=dev
+  BAD_EXPECT_REF="v${PROJECT_VERSION}"
+else
+  BAD_EXPECT_CHANNEL=stable
+  BAD_EXPECT_REF=main
+fi
+if FRP_EXPECTED_RELEASE_CHANNEL="$BAD_EXPECT_CHANNEL" FRP_EXPECTED_SOURCE_REF="$BAD_EXPECT_REF" \
   frp_validate_release_source_metadata "$ROOT" >/dev/null 2>"$WORKDIR/bad-ref.err"; then
   fail "expected ref mismatch accepted"
 fi

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "project_version": "2.2.0",
   "frp_version": "0.71.0",
-  "channel": "dev",
-  "git_ref": "main",
+  "channel": "stable",
+  "git_ref": "v2.2.0",
   "owner": "datarelay-labs",
   "repo": "frp-auto-deploy",
   "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy",
@@ -19,7 +19,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This working-tree manifest is the mutable main / channel=dev identity. Published stable artifacts use channel=stable with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.2.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
@@ -33,7 +33,7 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "f1ec6e0c5c94ed9f1b6b3859096b4249df10ff8869ff09ed02087a51b250ce06"
+      "sha256": "bbd5abb3a716a0ee2d5f267ceecdec1173dc540dc5a7256bfc3a2ba30cf2a4f0"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
