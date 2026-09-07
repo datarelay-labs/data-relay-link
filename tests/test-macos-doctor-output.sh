@@ -117,10 +117,10 @@ print('old_macos_fail_ok')
 PY
 pass "DARWIN_OLD_RELEASE_MACOS_SUPPORT_FAIL"
 
-# Linux path must keep the container-matrix check.
+# Linux path must keep the container-matrix check even when this file runs on Darwin CI.
 python3 - "$ROOT/lib/frp_doctor.py" <<'PY' || fail "linux distro_support regression"
 import importlib.util, os, sys
-os.environ.pop('FRP_TEST_UNAME_S', None)
+os.environ['FRP_TEST_UNAME_S'] = 'Linux'
 spec = importlib.util.spec_from_file_location('frp_doctor', sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
@@ -203,7 +203,7 @@ pass "DARWIN_LAUNCHD_RUNTIME_LABEL"
 
 python3 - "$ROOT/lib/frp_doctor.py" <<'PY' || fail "linux frpc.service runtime label"
 import importlib.util, os, sys
-os.environ.pop('FRP_TEST_UNAME_S', None)
+os.environ['FRP_TEST_UNAME_S'] = 'Linux'
 spec = importlib.util.spec_from_file_location('frp_doctor', sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
