@@ -1365,11 +1365,13 @@ frp_server_rollback_snapshot() {
   if [[ ! -f "$py" ]]; then
     py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_install_txn.py)"
   fi
-  if frp_server_skip_systemd || frp_server_test_mode; then
-    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest"
-  else
-    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" --apply-services
+  local apply=()
+  if ! frp_server_skip_systemd && ! frp_server_test_mode; then
+    apply=(--apply-services)
+  elif [[ -n "${FRP_INSTALL_TXN_HOOK_SYSTEMCTL:-}" ]]; then
+    apply=(--apply-services)
   fi
+  python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" "${apply[@]}"
 }
 
 frp_server_fail_after_mutation() {
@@ -1558,6 +1560,22 @@ frp_server_end_tmp() {
     eval "$FRP_SERVER_SAVED_EXIT_TRAP"
   else
     trap - EXIT
+  fi
+}
+
+frp_server_ensure_sandbox_dirs() {
+  # Persistent paths listed in unit ReadWritePaths must exist before systemd
+  # starts the allocator/frontend. Missing dirs cause status=226/NAMESPACE.
+  local etc_frp etc_proj var_lib var_log run_dir
+  etc_frp="$(frp_server_fs /etc/frp)"
+  etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
+  var_lib="$(frp_server_fs /var/lib/frp-auto-deploy)"
+  var_log="$(frp_server_fs /var/log/frp-auto-deploy)"
+  run_dir="$(frp_server_fs /run/frp-auto-deploy)"
+  mkdir -p "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
+  chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
+  if [[ ${EUID} -eq 0 ]]; then
+    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" 2>/dev/null || true
   fi
 }
 
@@ -1804,11 +1822,12 @@ frp_server_main() {
     return 1
   fi
 
-  mkdir -p "$etc_frp" "$etc_proj" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" \
+  mkdir -p "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" \
     "$(dirname "$unit_frps")"
+  frp_server_ensure_sandbox_dirs
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir"
   if [[ ${EUID} -eq 0 ]]; then
-    chown root:root "$etc_frp" "$etc_proj" "$var_lib" 2>/dev/null || true
+    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$(frp_server_fs /var/log/frp-auto-deploy)" 2>/dev/null || true
   fi
 
   TOKEN_ACTION=""
@@ -1932,6 +1951,7 @@ frp_server_main() {
     fi
   fi
 
+  frp_server_ensure_sandbox_dirs
   if ! frp_server_skip_systemd; then
     systemctl daemon-reload || {
       frp_server_fail_after_mutation SYSTEMD_RELOAD_FAILED "systemd daemon-reload failed"

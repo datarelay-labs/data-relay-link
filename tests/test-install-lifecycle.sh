@@ -234,6 +234,11 @@ assert cfg.get('frp_transport')=='tcp'
 assert cfg.get('listen_host')=='0.0.0.0'
 PY
 [[ ! -f "$SRV/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "stale txn marker after success"
+[[ -d "$SRV/var/log/frp-auto-deploy" ]] || fail "fresh install missing /var/log/frp-auto-deploy"
+assert_mode "$SRV/var/log/frp-auto-deploy" "0o700"
+assert_mode "$SRV/var/lib/frp-auto-deploy" "0o700"
+assert_mode "$SRV/etc/frp-auto-deploy" "0o700"
+assert_mode "$SRV/etc/frp" "0o700"
 pass "SERVER_FRESH_INSTALL"
 pass "DIRECT_MODE_REGRESSION"
 pass "TEMP_FILE_SECURITY"
@@ -677,6 +682,12 @@ if grep -q 'installation complete' "$WORKDIR/start-fail.out"; then
   fail "false success on start failure"
 fi
 grep -q 'FAILURE_CLASS=SERVICE_START_FAILED' "$WORKDIR/start-fail.out" "$WORKDIR/start-fail.err" || fail "start failure class"
+if grep -q 'UPGRADE_ROLLBACK=FAIL' "$WORKDIR/start-fail.out" "$WORKDIR/start-fail.err"; then
+  fail "fresh start-fail rollback reported FAIL"
+fi
+[[ ! -f "$FAILTREE/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "start-fail left pending marker"
+[[ ! -f "$FAILTREE/etc/systemd/system/frps.service" ]] || fail "start-fail left frps unit"
+[[ ! -f "$FAILTREE/etc/systemd/system/frp-port-allocator.service" ]] || fail "start-fail left allocator unit"
 if [[ -f "$FAILTREE/etc/frp-auto-deploy/version" ]]; then
   if grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$FAILTREE/etc/frp-auto-deploy/version"; then
     fail "version committed after start failure"

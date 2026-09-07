@@ -283,7 +283,11 @@ def read_project_version(root=''):
         ]
     )
     for path in candidates:
-        if not path.is_file():
+        try:
+            present = path.is_file()
+        except OSError:
+            continue
+        if not present:
             continue
         try:
             for line in path.read_text(encoding='utf-8', errors='replace').splitlines():

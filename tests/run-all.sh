@@ -89,6 +89,7 @@ python3 tests/test-frontend-proxy.py
 ./tests/test-probe-tcp-injection.sh
 ./tests/test-immutable-release-channel.sh
 ./tests/test-install-txn-rollback.sh
+./tests/test-fresh-install-sandbox-rollback.sh
 python3 tests/test-audit-log.py
 ./tests/test-frp-compatibility.sh
 ./tests/test-backup-restore.sh

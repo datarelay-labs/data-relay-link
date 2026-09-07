@@ -41,40 +41,100 @@ def _mode(path):
     return stat.S_IMODE(path.stat().st_mode)
 
 
+def _systemctl_executable():
+    hook = os.environ.get('FRP_INSTALL_TXN_HOOK_SYSTEMCTL')
+    if hook:
+        return hook
+    return shutil.which('systemctl')
+
+
+def _query_host_systemd():
+    """Avoid touching host systemd from fixture trees unless a mock is injected."""
+    if os.environ.get('FRP_INSTALL_TXN_HOOK_SYSTEMCTL'):
+        return True
+    if os.environ.get('FRP_SERVER_TEST_ROOT'):
+        return False
+    return _systemctl_executable() is not None
+
+
+def _run_systemctl_query(args, timeout=5):
+    exe = _systemctl_executable()
+    if not exe:
+        return None
+    try:
+        return subprocess.run(
+            [exe, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _unit_existed_from_load(load_state):
+    return load_state in ('loaded', 'masked', 'stub')
+
+
+def _unit_existed(item):
+    """Whether the unit existed before the transaction.
+
+    Fresh-install units are typically LoadState=not-found while
+    ``systemctl is-active`` still prints ``inactive``. Absence itself is
+    the restored state; do not treat that inactive result as "must stop".
+    """
+    if item.get('existed') is not None:
+        return bool(item.get('existed'))
+    load_state = item.get('load_state')
+    if load_state is not None:
+        return _unit_existed_from_load(load_state)
+    enabled = item.get('enabled')
+    if enabled in (None, 'not-found'):
+        return False
+    return True
+
+
 def _unit_state(unit):
-    """Best-effort enabled/active capture. Never raises."""
-    state = {'unit': unit, 'enabled': None, 'active': None}
-    if not shutil.which('systemctl'):
+    """Best-effort enabled/active/existence capture. Never raises."""
+    state = {
+        'unit': unit,
+        'enabled': None,
+        'active': None,
+        'load_state': None,
+        'existed': False,
+    }
+    if not _systemctl_executable():
         return state
     try:
-        enabled = subprocess.run(
-            ['systemctl', 'is-enabled', unit],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        state['enabled'] = (enabled.stdout or '').strip() or None
+        loaded = _run_systemctl_query(['show', '-p', 'LoadState', '--value', unit])
+        if loaded is not None:
+            state['load_state'] = (loaded.stdout or '').strip() or None
+            state['existed'] = _unit_existed_from_load(state['load_state'])
     except (OSError, subprocess.SubprocessError):
         pass
     try:
-        active = subprocess.run(
-            ['systemctl', 'is-active', unit],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        state['active'] = (active.stdout or '').strip() or None
+        enabled = _run_systemctl_query(['is-enabled', unit])
+        if enabled is not None:
+            state['enabled'] = (enabled.stdout or '').strip() or None
     except (OSError, subprocess.SubprocessError):
         pass
+    try:
+        active = _run_systemctl_query(['is-active', unit])
+        if active is not None:
+            state['active'] = (active.stdout or '').strip() or None
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not state['existed'] and state.get('enabled') not in (None, 'not-found'):
+        # Some systemd versions report is-enabled before LoadState is useful.
+        state['existed'] = True
     return state
 
 
 def capture_service_states(root):
     """Capture project unit and nginx ownership-relevant service state."""
     root = Path(root)
-    if str(root) not in ('', '/', '.') and os.environ.get('FRP_SERVER_TEST_ROOT'):
+    if not _query_host_systemd():
         return {'units': [], 'skipped': True}
     units = [_unit_state(name) for name in UNIT_NAMES]
     nginx = _unit_state('nginx.service')
@@ -149,11 +209,12 @@ def restore(root, dest):
 def _systemctl(args, timeout=30):
     if os.environ.get('FRP_INSTALL_TXN_HOOK_SYSTEMD_FAIL') == '1':
         return False
-    if not shutil.which('systemctl'):
+    exe = _systemctl_executable()
+    if not exe:
         return False
     try:
         result = subprocess.run(
-            ['systemctl', *args],
+            [exe, *args],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=timeout,
@@ -164,6 +225,39 @@ def _systemctl(args, timeout=30):
         return False
 
 
+def _restore_enabled(unit, enabled):
+    if enabled in ('enabled', 'enabled-runtime'):
+        return _systemctl(['enable', unit], timeout=30)
+    if enabled in ('disabled', 'disabled-runtime'):
+        return _systemctl(['disable', unit], timeout=30)
+    return True
+
+
+def _restore_active(unit, item):
+    existed = _unit_existed(item)
+    active = item.get('active')
+    if not existed:
+        # Fresh-install / previously absent: unit files were already removed.
+        # reset-failed clears leftover NAMESPACE/start failures; ignore not-found.
+        _systemctl(['reset-failed', unit], timeout=30)
+        current = _unit_state(unit)
+        if current.get('active') != 'active':
+            return True
+        if not _systemctl(['stop', unit], timeout=60):
+            current = _unit_state(unit)
+            return current.get('active') != 'active'
+        current = _unit_state(unit)
+        return current.get('active') != 'active'
+    if active == 'active':
+        return _systemctl(['restart', unit], timeout=60)
+    if active in ('inactive', 'failed'):
+        if not _systemctl(['stop', unit], timeout=60):
+            return False
+        current = _unit_state(unit)
+        return current.get('active') != 'active'
+    return True
+
+
 def apply_service_states(meta, skip=False):
     """Restore enabled/active semantics for project units after file restore."""
     if skip or not meta:
@@ -171,7 +265,7 @@ def apply_service_states(meta, skip=False):
     services = meta.get('services') or {}
     if services.get('skipped'):
         return True
-    if not shutil.which('systemctl'):
+    if not _systemctl_executable():
         return True
     if not _systemctl(['daemon-reload'], timeout=30):
         return False
@@ -179,36 +273,18 @@ def apply_service_states(meta, skip=False):
         unit = str(item.get('unit') or '')
         if not unit:
             continue
-        enabled = item.get('enabled')
-        active = item.get('active')
-        if enabled in ('enabled', 'enabled-runtime'):
-            if not _systemctl(['enable', unit], timeout=30):
+        if _unit_existed(item):
+            if not _restore_enabled(unit, item.get('enabled')):
                 return False
-        elif enabled in ('disabled', 'disabled-runtime'):
-            if not _systemctl(['disable', unit], timeout=30):
-                return False
-        if active == 'active':
-            if not _systemctl(['restart', unit], timeout=60):
-                return False
-        elif active in ('inactive', 'failed'):
-            if not _systemctl(['stop', unit], timeout=60):
-                return False
+        if not _restore_active(unit, item):
+            return False
     nginx = services.get('nginx') or {}
     if nginx:
-        enabled = nginx.get('enabled')
-        active = nginx.get('active')
-        if enabled in ('enabled', 'enabled-runtime'):
-            if not _systemctl(['enable', 'nginx.service'], timeout=30):
+        if _unit_existed(nginx):
+            if not _restore_enabled('nginx.service', nginx.get('enabled')):
                 return False
-        elif enabled in ('disabled', 'disabled-runtime'):
-            if not _systemctl(['disable', 'nginx.service'], timeout=30):
-                return False
-        if active == 'active':
-            if not _systemctl(['restart', 'nginx.service'], timeout=60):
-                return False
-        elif active in ('inactive', 'failed'):
-            if not _systemctl(['stop', 'nginx.service'], timeout=60):
-                return False
+        if not _restore_active('nginx.service', nginx):
+            return False
     return True
 
 
@@ -218,13 +294,17 @@ def verify_service_states(meta, skip=False):
     services = meta.get('services') or {}
     if services.get('skipped'):
         return True
-    if not shutil.which('systemctl'):
+    if not _systemctl_executable():
         return True
     for item in services.get('units') or []:
         unit = str(item.get('unit') or '')
         if not unit:
             continue
         current = _unit_state(unit)
+        if not _unit_existed(item):
+            if current.get('active') == 'active':
+                return False
+            continue
         expected_enabled = item.get('enabled')
         expected_active = item.get('active')
         if expected_enabled in ('enabled', 'enabled-runtime'):
@@ -255,7 +335,9 @@ def main(argv=None):
     if meta is None:
         sys.stderr.write('ERROR: install snapshot metadata is missing\n')
         return 1
-    skip = bool(os.environ.get('FRP_SERVER_TEST_ROOT'))
+    skip = bool(os.environ.get('FRP_SERVER_TEST_ROOT')) and not os.environ.get(
+        'FRP_INSTALL_TXN_HOOK_SYSTEMCTL'
+    )
     if args.apply_services:
         if not apply_service_states(meta, skip=skip):
             sys.stderr.write('ERROR: service-state restoration failed\n')
