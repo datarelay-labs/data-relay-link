@@ -156,25 +156,113 @@ frp_u_purge_confirm_ok() {
   [[ "$confirm" == "yes" ]]
 }
 
+frp_u_release_control_locks() {
+  if [[ -n "${FRP_UNINSTALL_LOCK_HOLD:-}" ]]; then
+    rm -f "$FRP_UNINSTALL_LOCK_HOLD"
+  fi
+  if [[ -n "${FRP_UNINSTALL_LOCKER_PID:-}" ]]; then
+    wait "$FRP_UNINSTALL_LOCKER_PID" 2>/dev/null || true
+    unset FRP_UNINSTALL_LOCKER_PID
+  fi
+  if [[ -n "${FRP_UNINSTALL_LOCK_STATUS:-}" ]]; then
+    rm -f "$FRP_UNINSTALL_LOCK_STATUS"
+  fi
+  unset FRP_UNINSTALL_LOCK_HOLD FRP_UNINSTALL_LOCK_STATUS
+}
+
 frp_u_acquire_control_locks() {
-  local root timeout life_lock reg_lock
-  root="${FRP_UNINSTALL_TEST_ROOT:-/}"
+  local timeout life_lock reg_lock status deadline
   timeout="${FRP_UNINSTALL_LOCK_TIMEOUT:-30}"
   life_lock="$(frp_u_path /var/lib/frp-auto-deploy/server-lifecycle.lock)"
   reg_lock="$(frp_u_path /var/lib/frp-auto-deploy/registry.lock)"
   mkdir -p "$(dirname "$life_lock")" "$(dirname "$reg_lock")"
-  exec {FRP_UNINSTALL_LIFE_FD}>>"$life_lock"
-  exec {FRP_UNINSTALL_REG_FD}>>"$reg_lock"
-  if ! flock -w "$timeout" "$FRP_UNINSTALL_LIFE_FD"; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required to serialize server uninstall." >&2
+    echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
+    exit 1
+  fi
+  # Hold canonical fcntl locks (same as backup/restore) without depending on
+  # the util-linux flock CLI, which Amazon Linux containers may omit.
+  FRP_UNINSTALL_LOCK_HOLD="$(mktemp "${TMPDIR:-/tmp}/frp-uninstall-hold.XXXXXX")"
+  FRP_UNINSTALL_LOCK_STATUS="$(mktemp "${TMPDIR:-/tmp}/frp-uninstall-status.XXXXXX")"
+  python3 - "$life_lock" "$reg_lock" "$timeout" "$FRP_UNINSTALL_LOCK_HOLD" "$FRP_UNINSTALL_LOCK_STATUS" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+life_path, reg_path, timeout_s, hold_path, status_path = (
+    sys.argv[1],
+    sys.argv[2],
+    float(sys.argv[3]),
+    sys.argv[4],
+    sys.argv[5],
+)
+deadline = time.monotonic() + timeout_s
+
+
+def write_status(msg):
+    tmp = status_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(msg)
+    os.replace(tmp, status_path)
+
+
+def lock_nb(path):
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise TimeoutError
+            time.sleep(0.05)
+
+
+try:
+    parent = os.path.dirname(life_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    parent = os.path.dirname(reg_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    life_fd = lock_nb(life_path)
+    reg_fd = lock_nb(reg_path)
+    write_status("LOCKED")
+    while os.path.exists(hold_path):
+        time.sleep(0.05)
+    os.close(reg_fd)
+    os.close(life_fd)
+except TimeoutError:
+    write_status("TIMEOUT")
+    raise SystemExit(2)
+except Exception:
+    write_status("ERROR")
+    raise
+PY
+  FRP_UNINSTALL_LOCKER_PID=$!
+  status=""
+  deadline=$((SECONDS + timeout + 2))
+  while (( SECONDS < deadline )); do
+    if [[ -s "$FRP_UNINSTALL_LOCK_STATUS" ]]; then
+      status="$(tr -d '\n' <"$FRP_UNINSTALL_LOCK_STATUS" || true)"
+      break
+    fi
+    if ! kill -0 "$FRP_UNINSTALL_LOCKER_PID" 2>/dev/null; then
+      status="$(tr -d '\n' <"$FRP_UNINSTALL_LOCK_STATUS" 2>/dev/null || true)"
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$status" != "LOCKED" ]]; then
     echo "ERROR: timed out waiting for the server lifecycle lock." >&2
     echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
+    frp_u_release_control_locks
     exit 1
   fi
-  if ! flock -w "$timeout" "$FRP_UNINSTALL_REG_FD"; then
-    echo "ERROR: timed out waiting for the registry lock." >&2
-    echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
-    exit 1
-  fi
+  trap 'frp_u_release_control_locks' EXIT
 }
 
 frp_u_systemctl() {
