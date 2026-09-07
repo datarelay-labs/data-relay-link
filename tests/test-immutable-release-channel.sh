@@ -79,8 +79,8 @@ if frp_verify_client_update_artifact "$GOOD"; then
 fi
 pass "UPDATE_SHA256_VERIFIED"
 
-# Working-tree manifest on main is channel=dev / git_ref=main.
-# Tagged stable artifacts remain channel=stable / git_ref=vVERSION (STABLE_* above).
+# Working-tree on main is normally channel=dev / git_ref=main.
+# The immutable release commit (and tagged tree) uses channel=stable / git_ref=vVERSION.
 python3 - "$ROOT/release-manifest.json" "$ROOT/VERSION" <<'PY' || fail "manifest channel/ref"
 import json, sys
 from pathlib import Path
@@ -92,18 +92,28 @@ for line in Path(sys.argv[2]).read_text().splitlines():
         values[k.strip()] = v.strip()
 project = values["PROJECT_VERSION"]
 assert data.get("project_version") == project, data.get("project_version")
-assert data.get("channel") == "dev", data.get("channel")
-assert data.get("git_ref") == "main", data.get("git_ref")
+channel = data.get("channel")
+ref = data.get("git_ref")
+if channel == "dev":
+    assert ref == "main", ref
+elif channel == "stable":
+    assert ref == "v%s" % project, ref
+else:
+    raise AssertionError("unexpected channel %r" % (channel,))
 assert "bootstrap-server.sh" in (data.get("artifacts") or {})
 server = data["artifacts"]["bootstrap-server.sh"]
 assert not server.get("sha256"), "server bundle hash must not live in the embedded manifest"
 PY
-pass "DEV_MAIN_WORKING_TREE_IDENTITY"
+pass "RELEASE_MANIFEST_CHANNEL_REF_IDENTITY"
 
-# Source tree with channel=dev must validate as expected channel=dev ref=main.
-DEV_META="$(frp_validate_release_source_metadata "$ROOT" "main" "dev")" || fail "dev metadata validation"
-[[ "$DEV_META" == "${PROJECT_VERSION}"$'\tdev\tmain' ]] || fail "dev metadata triple: $DEV_META"
-pass "DEV_MAIN_ARTIFACT_IDENTITY"
+# Source tree metadata must agree with the active channel/ref pair.
+MANIFEST_CHANNEL="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["channel"])')"
+MANIFEST_REF="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["git_ref"])')"
+TREE_META="$(frp_validate_release_source_metadata "$ROOT" "$MANIFEST_REF" "$MANIFEST_CHANNEL")" \
+  || fail "tree metadata validation"
+[[ "$TREE_META" == "${PROJECT_VERSION}"$'\t'"${MANIFEST_CHANNEL}"$'\t'"${MANIFEST_REF}" ]] \
+  || fail "tree metadata triple: $TREE_META"
+pass "TREE_ARTIFACT_IDENTITY"
 
 # STABLE_IMMUTABLE: tagged stable line still resolves to vPROJECT_VERSION (not main).
 unset FRP_RELEASE_CHANNEL || true
