@@ -2074,7 +2074,10 @@ if [[ "${FRP_SERVER_SOURCED:-}" != "1" ]]; then
       case "$1" in
         --check|--dry-run) FRP_SERVER_UPGRADE_CHECK=1; shift ;;
         --source)
-          [[ $# -ge 2 ]] || { echo "ERROR: --source requires a directory" >&2; exit 2; }
+          if [[ $# -lt 2 || "$2" == --* ]]; then
+            echo "ERROR: --source requires a directory" >&2
+            exit 2
+          fi
           FRP_SERVER_UPGRADE_SOURCE="$2"
           shift 2
           ;;

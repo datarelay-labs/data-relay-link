@@ -312,7 +312,8 @@ function Save-FrpClientState {
         [string]$Transport = 'tcp',
         [string]$ProjectVersion,
         [string]$FrpVersion,
-        [string]$InstallStatus
+        [string]$InstallStatus,
+        [string]$PublicHostname
     )
     Initialize-FrpDirectories
     $transport = ([string]$Transport).Trim().ToLowerInvariant()
@@ -349,6 +350,22 @@ function Save-FrpClientState {
         platform         = 'windows'
         install_status   = $(if ($InstallStatus) { $InstallStatus } elseif (-not $enabledAny) { 'management_only' } else { 'installed' })
     }
+    $hostnamePresent = $PSBoundParameters.ContainsKey('PublicHostname')
+    if ($hostnamePresent) {
+        $alias = ([string]$PublicHostname).Trim()
+        if ($alias) { $state['public_hostname'] = $alias }
+    } else {
+        $pathExisting = Get-FrpStatePath
+        if (Test-Path -LiteralPath $pathExisting) {
+            try {
+                $prev = Read-FrpClientState
+                if (@($prev.PSObject.Properties.Name) -contains 'public_hostname') {
+                    $prevAlias = ([string]$prev.public_hostname).Trim()
+                    if ($prevAlias) { $state['public_hostname'] = $prevAlias }
+                }
+            } catch { }
+        }
+    }
     $path = Get-FrpStatePath
     $json = Get-FrpCanonicalJson -Object $state
     # Pretty-print for operators (canonical used only for crypto). Use ConvertTo-Json carefully.
@@ -370,7 +387,54 @@ function Read-FrpClientState {
     return ($raw | ConvertFrom-Json)
 }
 
+function Test-FrpObjectHasProperty {
+    param($Object, [Parameter(Mandatory = $true)][string]$Name)
+    if ($null -eq $Object) { return $false }
+    if ($Object -is [System.Collections.IDictionary]) {
+        return $Object.Contains($Name)
+    }
+    return (@($Object.PSObject.Properties.Name) -contains $Name)
+}
 
+function Get-FrpStateChangeClass {
+    <#
+    .SYNOPSIS
+      Classify draft vs current: local (name/ssh_user), runtime (ports/enable/add/remove), or none.
+    #>
+    param($Current, $Draft)
+    $curMap = ConvertTo-FrpServiceMap -Services $Current.services
+    $newMap = ConvertTo-FrpServiceMap -Services $Draft.services
+    $hasRuntime = $false
+    $hasLocal = $false
+    $all = @{}
+    foreach ($k in @($curMap.Keys)) { $all[[string]$k] = $true }
+    foreach ($k in @($newMap.Keys)) { $all[[string]$k] = $true }
+    foreach ($sid in @($all.Keys)) {
+        $a = $null
+        $b = $null
+        if ($curMap.Contains($sid)) { $a = $curMap[$sid] }
+        if ($newMap.Contains($sid)) { $b = $newMap[$sid] }
+        if ($null -eq $a -or $null -eq $b) {
+            $hasRuntime = $true
+            continue
+        }
+        $aEn = ($a.enabled -ne $false)
+        $bEn = ($b.enabled -ne $false)
+        if ($aEn -ne $bEn) { $hasRuntime = $true }
+        $aPort = 0
+        $bPort = 0
+        try { $aPort = [int]$a.local_port } catch { }
+        try { $bPort = [int]$b.local_port } catch { }
+        if ([string]$a.local_ip -ne [string]$b.local_ip -or $aPort -ne $bPort) {
+            $hasRuntime = $true
+        }
+        if ([string]$a.name -ne [string]$b.name) { $hasLocal = $true }
+        if ([string]$a.ssh_user -ne [string]$b.ssh_user) { $hasLocal = $true }
+    }
+    if ($hasRuntime) { return 'runtime' }
+    if ($hasLocal) { return 'local' }
+    return 'none'
+}
 
 function Get-FrpInstallStatus {
     if (-not (Test-Path -LiteralPath (Get-FrpStatePath))) { return $null }

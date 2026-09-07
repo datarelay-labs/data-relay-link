@@ -75,6 +75,10 @@ frp_client_pending_path() {
   frp_client_path /etc/frp/apply-pending.json
 }
 
+frp_client_draft_path() {
+  frp_client_path /var/lib/frp-auto-deploy/client-draft.json
+}
+
 frp_client_identity_key_path() {
   frp_client_path /etc/frp/client-identity.key
 }
@@ -2543,71 +2547,254 @@ PY
   return 0
 }
 
-frp_client_apply_reconcile_runtime() {
-  local dropped="$1" toml token
-  [[ "$dropped" == 1 ]] || return 0
-  toml="$(frp_client_toml_path)"
-  [[ -f "$toml" ]] || return 0
-  token="$(frp_token_from_toml_file "$toml" || true)"
-  [[ -n "$token" ]] || return 0
-  frp_regenerate_toml_from_state "$token" || return 0
-  frp_regenerate_access_from_state || true
-  frp_client_restart || true
+frp_client_reconcile_fail() {
+  local class="$1" msg="$2"
+  echo "ERROR: ${msg}" >&2
+  frp_emit_failure_class "$class"
+  return 1
 }
 
-frp_client_reconcile_released_services() {
-  local path allocator_url machine_id hostname_value request timestamp signature nonce response curl_err py key_path mac
-  local dropped_marker dropped=0
-  path="$(frp_client_state_path)"
-  [[ -f "$path" ]] || return 0
-  if [[ "${FRP_SKIP_CONNECTIVITY_CHECK:-}" == "1" ]]; then
+# After accepted server reconciliation: converge local artifacts to the
+# authoritative service set. Server release is not undone on local runtime
+# failure; callers must report recovery-needed instead of claiming success.
+frp_client_apply_reconcile_runtime() {
+  local dropped_enabled="${1:-0}" dropped_any="${2:-0}" hostname_changed="${3:-0}"
+  local toml token
+  if [[ "$dropped_any" != 1 && "$dropped_enabled" != 1 && "$hostname_changed" != 1 ]]; then
     return 0
   fi
-  if ! python3 - "$path" <<'PY'
-import json, sys
-from pathlib import Path
-state = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-services = state.get('services') or {}
-if not isinstance(services, dict) or not services:
-    raise SystemExit(1)
-PY
-  then
+  if [[ "$dropped_any" == 1 || "$dropped_enabled" == 1 ]]; then
+    toml="$(frp_client_toml_path)"
+    if [[ -f "$toml" ]]; then
+      token="$(frp_token_from_toml_file "$toml" || true)"
+      if [[ -z "$token" ]]; then
+        echo "ERROR: cannot regenerate frpc.toml; FRP token is unavailable." >&2
+        frp_emit_failure_class CONFIG_GENERATION_FAILED
+        echo "RECOVERY_REQUIRED=YES" >&2
+        return 1
+      fi
+      if ! frp_regenerate_toml_from_state "$token"; then
+        echo "ERROR: failed to regenerate frpc.toml after server reconciliation." >&2
+        frp_emit_failure_class CONFIG_GENERATION_FAILED
+        echo "RECOVERY_REQUIRED=YES" >&2
+        return 1
+      fi
+    fi
+  fi
+  if [[ "$dropped_any" == 1 || "$hostname_changed" == 1 ]]; then
+    if ! frp_regenerate_access_from_state; then
+      echo "ERROR: failed to regenerate access-info.txt after server reconciliation." >&2
+      frp_emit_failure_class CONFIG_GENERATION_FAILED
+      echo "RECOVERY_REQUIRED=YES" >&2
+      return 1
+    fi
+  fi
+  if [[ "$dropped_enabled" == 1 ]]; then
+    if ! frp_client_restart; then
+      echo "ERROR: failed to restart frpc after server reconciliation." >&2
+      frp_emit_failure_class FRPC_RESTART_FAILED
+      echo "RECOVERY_REQUIRED=YES" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Reconcile local client state against the allocator.
+# Arg1: 1 = strict (explicit sync: missing identity is a failure)
+#       0/empty = apply/pre-sync (skip quietly when not enrolled)
+# Returns 0 for NO_CHANGE and SUCCESS, 1 for FAILURE.
+# Sets FRP_RECONCILE_STATUS=NO_CHANGE|SUCCESS|FAILURE
+frp_client_reconcile_released_services() {
+  local strict="${1:-0}"
+  local path allocator_url machine_id hostname_value request timestamp signature nonce response curl_err py key_path mac
+  local result_line dropped_enabled=0 dropped_any=0 hostname_changed=0
+  FRP_RECONCILE_STATUS=NO_CHANGE
+  path="$(frp_client_state_path)"
+  [[ -f "$path" ]] || return 0
+
+  if [[ "${FRP_CLIENT_HOOK_RECONCILE_UNREACHABLE:-}" == "1" ]]; then
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail ALLOCATOR_UNREACHABLE "allocator unreachable"
+    return 1
+  fi
+  if [[ "${FRP_CLIENT_HOOK_RECONCILE_HMAC:-}" == "1" ]]; then
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail HMAC_VERIFICATION_FAILED "allocator response HMAC verification failed"
+    return 1
+  fi
+  if [[ "${FRP_CLIENT_HOOK_RECONCILE_MALFORMED:-}" == "1" ]]; then
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail INVALID_RESPONSE "allocator returned a malformed reconcile response"
+    return 1
+  fi
+  if [[ "${FRP_CLIENT_HOOK_RECONCILE_STATE:-}" == "1" ]]; then
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail STATE_WRITE_FAILED "failed to update local client state"
+    return 1
+  fi
+
+  if [[ -z "${FRP_CLIENT_RECONCILE_REGISTRY_IDS:-}" && -z "${FRP_CLIENT_RECONCILE_RESPONSE:-}" && "${FRP_SKIP_CONNECTIVITY_CHECK:-}" == "1" ]]; then
     return 0
   fi
 
-  if [[ -n "${FRP_CLIENT_RECONCILE_REGISTRY_IDS:-}" ]]; then
-    dropped_marker="$(
-      REGISTRY_IDS="$FRP_CLIENT_RECONCILE_REGISTRY_IDS" STATE_PATH="$path" python3 - <<'PY'
-import json, os
+  if [[ -n "${FRP_CLIENT_RECONCILE_REGISTRY_IDS:-}" || -n "${FRP_CLIENT_RECONCILE_RESPONSE:-}" ]]; then
+    if ! result_line="$(
+      STATE_PATH="$path" \
+      DRAFT_PATH="$(frp_client_draft_path)" \
+      CANDIDATE_PATH="${CANDIDATE_FILE:-${FRP_CLIENT_CANDIDATE:-}}" \
+      REGISTRY_IDS="${FRP_CLIENT_RECONCILE_REGISTRY_IDS:-}" \
+      RAW_RESPONSE="${FRP_CLIENT_RECONCILE_RESPONSE:-}" \
+      MGMT_MAC_KEY="$(frp_identity_load_mac 2>/dev/null || true)" \
+      PUBLIC_HOSTNAME_PRESENT="${FRP_CLIENT_RECONCILE_PUBLIC_HOSTNAME_PRESENT:-}" \
+      PUBLIC_HOSTNAME_VALUE="${FRP_CLIENT_RECONCILE_PUBLIC_HOSTNAME:-}" \
+      python3 - <<'PY'
+import hashlib, hmac, json, os, sys
 from pathlib import Path
-state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
-ids = set(json.loads(os.environ['REGISTRY_IDS']))
+
+def fail(msg, cls='RECONCILE_FAILED', code=1):
+    print('ERROR: %s' % msg, file=sys.stderr)
+    print('FAILURE_CLASS=%s' % cls, file=sys.stderr)
+    raise SystemExit(code)
+
+def apply_public_hostname(state, payload):
+    if not isinstance(payload, dict) or 'public_hostname' not in payload:
+        return False
+    alias = str(payload.get('public_hostname') or '').strip()
+    old = str(state.get('public_hostname') or '').strip()
+    if alias:
+        if old == alias:
+            return False
+        state['public_hostname'] = alias
+        return True
+    if old or 'public_hostname' in state:
+        state.pop('public_hostname', None)
+        return True
+    return False
+
+def prune_draft(path, id_set):
+    p = Path(path) if path else None
+    if p is None or not p.is_file():
+        return
+    try:
+        draft = json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return
+    services = draft.get('services') or {}
+    if not isinstance(services, dict):
+        return
+    new = {sid: rec for sid, rec in services.items() if sid in id_set}
+    if len(new) == len(services):
+        return
+    if not new:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return
+    draft['services'] = new
+    p.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+state_path = Path(os.environ['STATE_PATH'])
+try:
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+except Exception:
+    fail('client-state.json is not valid JSON', 'STATE_WRITE_FAILED')
+
+payload = None
+raw = os.environ.get('RAW_RESPONSE') or ''
+if raw:
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail('allocator returned a malformed reconcile response', 'INVALID_RESPONSE')
+    if not isinstance(payload, dict):
+        fail('allocator returned a malformed reconcile response', 'INVALID_RESPONSE')
+    if payload.get('error'):
+        fail('allocator rejected the reconcile request: %s' % payload.get('error'), 'INVALID_RESPONSE')
+    secret = os.environ.get('MGMT_MAC_KEY') or ''
+    if not secret:
+        fail('management response key is missing', 'MANAGEMENT_IDENTITY')
+    received = payload.pop('response_hmac', None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    expected = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    if not received or not hmac.compare_digest(str(received), expected):
+        fail('allocator response HMAC verification failed', 'HMAC_VERIFICATION_FAILED')
+    if 'registry_service_ids' not in payload:
+        fail('allocator returned a malformed reconcile response', 'INVALID_RESPONSE')
+    ids = set(str(x) for x in (payload.get('registry_service_ids') or []))
+else:
+    try:
+        ids = set(str(x) for x in json.loads(os.environ.get('REGISTRY_IDS') or '[]'))
+    except Exception:
+        fail('invalid injected registry service ids', 'INVALID_RESPONSE')
+    payload = {}
+    if os.environ.get('PUBLIC_HOSTNAME_PRESENT') == '1':
+        payload['public_hostname'] = os.environ.get('PUBLIC_HOSTNAME_VALUE') or ''
+
 services = state.get('services') or {}
+if not isinstance(services, dict):
+    services = {}
 dropped_enabled = False
+dropped_any = False
 for sid in list(services.keys()):
     rec = services.get(sid) or {}
     if sid not in ids:
+        dropped_any = True
         if rec.get('enabled', True) is not False:
             dropped_enabled = True
         services.pop(sid, None)
 state['services'] = services
-Path(os.environ['STATE_PATH']).write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-print('DROPPED_ENABLED=1' if dropped_enabled else 'DROPPED_ENABLED=0')
+hostname_changed = apply_public_hostname(state, payload)
+try:
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+except OSError:
+    fail('failed to update local client state', 'STATE_WRITE_FAILED')
+prune_draft(os.environ.get('DRAFT_PATH') or '', ids)
+cand = os.environ.get('CANDIDATE_PATH') or ''
+if cand and cand != os.environ.get('DRAFT_PATH'):
+    prune_draft(cand, ids)
+changed = dropped_any or hostname_changed
+print('STATUS=%s DROPPED_ENABLED=%s DROPPED_ANY=%s HOSTNAME_CHANGED=%s' % (
+    'SUCCESS' if changed else 'NO_CHANGE',
+    '1' if dropped_enabled else '0',
+    '1' if dropped_any else '0',
+    '1' if hostname_changed else '0',
+))
 PY
-    )"
-    [[ "$dropped_marker" == *DROPPED_ENABLED=1* ]] && dropped=1
-    frp_client_apply_reconcile_runtime "$dropped"
+    )"; then
+      FRP_RECONCILE_STATUS=FAILURE
+      return 1
+    fi
+    FRP_RECONCILE_STATUS="${result_line#STATUS=}"
+    FRP_RECONCILE_STATUS="${FRP_RECONCILE_STATUS%% *}"
+    [[ "$result_line" == *DROPPED_ENABLED=1* ]] && dropped_enabled=1
+    [[ "$result_line" == *DROPPED_ANY=1* ]] && dropped_any=1
+    [[ "$result_line" == *HOSTNAME_CHANGED=1* ]] && hostname_changed=1
+    if ! frp_client_apply_reconcile_runtime "$dropped_enabled" "$dropped_any" "$hostname_changed"; then
+      FRP_RECONCILE_STATUS=FAILURE
+      return 1
+    fi
     return 0
   fi
 
   if [[ "$(frp_identity_status)" != enrolled ]]; then
+    if [[ "$strict" == "1" ]]; then
+      FRP_RECONCILE_STATUS=FAILURE
+      frp_client_reconcile_fail MANAGEMENT_IDENTITY "this client does not have a usable management identity"
+      return 1
+    fi
     return 0
   fi
 
   allocator_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("allocator_url") or "")' "$path")"
   machine_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("machine_id") or "")' "$path")"
   hostname_value="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("hostname") or "")' "$path")"
-  [[ -n "$allocator_url" && -n "$machine_id" ]] || return 0
+  if [[ -z "$allocator_url" || -z "$machine_id" ]]; then
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail MANAGEMENT_IDENTITY "client state is missing allocator URL or machine ID"
+    return 1
+  fi
 
   request="$(python3 - "$machine_id" "$hostname_value" <<'PY'
 import json, sys
@@ -2618,8 +2805,16 @@ print(json.dumps({
 PY
 )"
   timestamp="$(date +%s)"
-  py="$(frp_mgmt_auth_py)" || return 0
-  key_path="$(frp_client_identity_key_path)" || return 0
+  py="$(frp_mgmt_auth_py)" || {
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail MANAGEMENT_IDENTITY "management signing helpers are unavailable"
+    return 1
+  }
+  key_path="$(frp_client_identity_key_path)" || {
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail MANAGEMENT_IDENTITY "management identity key is missing"
+    return 1
+  }
   nonce="$(python3 - "$py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location('frp_mgmt_auth', sys.argv[1])
@@ -2627,7 +2822,11 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 print(mod.new_nonce())
 PY
-)"
+)" || {
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail MANAGEMENT_IDENTITY "failed to create a management nonce"
+    return 1
+  }
   signature="$(BODY="$request" python3 - "$py" "$key_path" "$machine_id" "$timestamp" "$nonce" <<'PY'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location('frp_mgmt_auth', sys.argv[1])
@@ -2638,7 +2837,11 @@ body = os.environ['BODY']
 message = mod.signed_message(machine_id, body, ts, nonce)
 sys.stdout.write(mod.sign_message(key, message))
 PY
-)"
+)" || {
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail MANAGEMENT_IDENTITY "failed to sign the reconcile request"
+    return 1
+  }
   curl_err="$(mktemp)"
   if ! response="$(frp_allocator_curl \
     -X POST \
@@ -2651,40 +2854,133 @@ PY
     --data "$request" \
     "$allocator_url" 2>"$curl_err")"; then
     rm -f "$curl_err"
-    return 0
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail ALLOCATOR_UNREACHABLE "allocator unreachable"
+    return 1
   fi
   rm -f "$curl_err"
-  mac="$(frp_identity_load_mac)" || return 0
-  dropped_marker="$(
-    REGISTRY_IDS="$response" STATE_PATH="$path" MGMT_MAC_KEY="$mac" python3 - <<'PY'
-import hashlib,hmac,json,os,sys
+  mac="$(frp_identity_load_mac)" || {
+    FRP_RECONCILE_STATUS=FAILURE
+    frp_client_reconcile_fail MANAGEMENT_IDENTITY "management response key is missing"
+    return 1
+  }
+  if ! result_line="$(
+    RAW_RESPONSE="$response" STATE_PATH="$path" \
+    DRAFT_PATH="$(frp_client_draft_path)" \
+    CANDIDATE_PATH="${CANDIDATE_FILE:-${FRP_CLIENT_CANDIDATE:-}}" \
+    MGMT_MAC_KEY="$mac" \
+    python3 - <<'PY'
+import hashlib, hmac, json, os, sys
 from pathlib import Path
-secret=os.environ['MGMT_MAC_KEY']
-d=json.loads(os.environ['REGISTRY_IDS'])
-if isinstance(d, dict) and d.get('error'):
-    raise SystemExit(0)
-received=d.pop('response_hmac',None)
-canonical=json.dumps(d,sort_keys=True,separators=(',',':'),ensure_ascii=False)
-expected=hmac.new(secret.encode(),canonical.encode(),hashlib.sha256).hexdigest()
-if not received or not hmac.compare_digest(received,expected):
-    raise SystemExit(0)
-ids=set(str(x) for x in (d.get('registry_service_ids') or []))
-state=json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
-services=state.get('services') or {}
-dropped_enabled=False
+
+def fail(msg, cls='RECONCILE_FAILED', code=1):
+    print('ERROR: %s' % msg, file=sys.stderr)
+    print('FAILURE_CLASS=%s' % cls, file=sys.stderr)
+    raise SystemExit(code)
+
+def apply_public_hostname(state, payload):
+    if not isinstance(payload, dict) or 'public_hostname' not in payload:
+        return False
+    alias = str(payload.get('public_hostname') or '').strip()
+    old = str(state.get('public_hostname') or '').strip()
+    if alias:
+        if old == alias:
+            return False
+        state['public_hostname'] = alias
+        return True
+    if old or 'public_hostname' in state:
+        state.pop('public_hostname', None)
+        return True
+    return False
+
+def prune_draft(path, id_set):
+    p = Path(path) if path else None
+    if p is None or not p.is_file():
+        return
+    try:
+        draft = json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return
+    services = draft.get('services') or {}
+    if not isinstance(services, dict):
+        return
+    new = {sid: rec for sid, rec in services.items() if sid in id_set}
+    if len(new) == len(services):
+        return
+    if not new:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return
+    draft['services'] = new
+    p.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+try:
+    payload = json.loads(os.environ.get('RAW_RESPONSE') or '')
+except Exception:
+    fail('allocator returned a malformed reconcile response', 'INVALID_RESPONSE')
+if not isinstance(payload, dict):
+    fail('allocator returned a malformed reconcile response', 'INVALID_RESPONSE')
+if payload.get('error'):
+    fail('allocator rejected the reconcile request: %s' % payload.get('error'), 'INVALID_RESPONSE')
+secret = os.environ['MGMT_MAC_KEY']
+received = payload.pop('response_hmac', None)
+canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+expected = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+if not received or not hmac.compare_digest(str(received), expected):
+    fail('allocator response HMAC verification failed', 'HMAC_VERIFICATION_FAILED')
+if 'registry_service_ids' not in payload:
+    fail('allocator returned a malformed reconcile response', 'INVALID_RESPONSE')
+ids = set(str(x) for x in (payload.get('registry_service_ids') or []))
+state_path = Path(os.environ['STATE_PATH'])
+try:
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+except Exception:
+    fail('client-state.json is not valid JSON', 'STATE_WRITE_FAILED')
+services = state.get('services') or {}
+if not isinstance(services, dict):
+    services = {}
+dropped_enabled = False
+dropped_any = False
 for sid in list(services.keys()):
-    rec=services.get(sid) or {}
+    rec = services.get(sid) or {}
     if sid not in ids:
+        dropped_any = True
         if rec.get('enabled', True) is not False:
-            dropped_enabled=True
+            dropped_enabled = True
         services.pop(sid, None)
-state['services']=services
-Path(os.environ['STATE_PATH']).write_text(json.dumps(state, indent=2, sort_keys=True)+'\n', encoding='utf-8')
-print('DROPPED_ENABLED=1' if dropped_enabled else 'DROPPED_ENABLED=0')
+state['services'] = services
+hostname_changed = apply_public_hostname(state, payload)
+try:
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+except OSError:
+    fail('failed to update local client state', 'STATE_WRITE_FAILED')
+prune_draft(os.environ.get('DRAFT_PATH') or '', ids)
+cand = os.environ.get('CANDIDATE_PATH') or ''
+if cand and cand != os.environ.get('DRAFT_PATH'):
+    prune_draft(cand, ids)
+changed = dropped_any or hostname_changed
+print('STATUS=%s DROPPED_ENABLED=%s DROPPED_ANY=%s HOSTNAME_CHANGED=%s' % (
+    'SUCCESS' if changed else 'NO_CHANGE',
+    '1' if dropped_enabled else '0',
+    '1' if dropped_any else '0',
+    '1' if hostname_changed else '0',
+))
 PY
-  )" || return 0
-  [[ "$dropped_marker" == *DROPPED_ENABLED=1* ]] && dropped=1
-  frp_client_apply_reconcile_runtime "$dropped"
+  )"; then
+    FRP_RECONCILE_STATUS=FAILURE
+    return 1
+  fi
+  FRP_RECONCILE_STATUS="${result_line#STATUS=}"
+  FRP_RECONCILE_STATUS="${FRP_RECONCILE_STATUS%% *}"
+  [[ "$result_line" == *DROPPED_ENABLED=1* ]] && dropped_enabled=1
+  [[ "$result_line" == *DROPPED_ANY=1* ]] && dropped_any=1
+  [[ "$result_line" == *HOSTNAME_CHANGED=1* ]] && hostname_changed=1
+  if ! frp_client_apply_reconcile_runtime "$dropped_enabled" "$dropped_any" "$hostname_changed"; then
+    FRP_RECONCILE_STATUS=FAILURE
+    return 1
+  fi
 }
 
 frp_enroll_services() {
@@ -2845,9 +3141,8 @@ meta={
     'frp_transport': transport,
     'token_ciphertext': '',
 }
-alias=str(d.get('public_hostname') or '').strip()
-if alias:
-    meta['public_hostname']=alias
+if 'public_hostname' in d:
+    meta['public_hostname']=str(d.get('public_hostname') or '').strip()
 Path(os.environ['META_FILE']).write_text(json.dumps(meta)+'\n', encoding='utf-8')
 PY
     then
@@ -2913,9 +3208,8 @@ meta={
     'token_ciphertext': token,
     'mgmt_status': str(d.get('mgmt_status') or ''),
 }
-alias=str(d.get('public_hostname') or '').strip()
-if alias:
-    meta['public_hostname']=alias
+if 'public_hostname' in d:
+    meta['public_hostname']=str(d.get('public_hostname') or '').strip()
 Path(os.environ['META_FILE']).write_text(json.dumps(meta)+'\n', encoding='utf-8')
 PY
   if [[ -n "$pubkey_pem" ]]; then
@@ -3379,6 +3673,10 @@ PY
 
 frp_regenerate_access_from_state() {
   local state server
+  if [[ "${FRP_CLIENT_HOOK_ACCESS_REGEN:-}" == "1" ]]; then
+    echo "ERROR: simulated access-info regeneration failure" >&2
+    return 1
+  fi
   state="$(frp_client_state_path)"
   [[ -f "$state" ]] || return 1
   frp_load_client_state "$state" || return 1
@@ -3388,6 +3686,10 @@ frp_regenerate_access_from_state() {
 
 frp_regenerate_toml_from_state() {
   local state token server port host_id enabled_list
+  if [[ "${FRP_CLIENT_HOOK_TOML_REGEN:-}" == "1" ]]; then
+    echo "ERROR: simulated TOML regeneration failure" >&2
+    return 1
+  fi
   state="$(frp_client_state_path)"
   [[ -f "$state" ]] || return 1
   frp_load_client_state "$state" || return 1

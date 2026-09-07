@@ -168,27 +168,81 @@ def _hold_lock_hook() -> None:
         time.sleep(0.05)
 
 
-def create_backup(root: Path, output: Path) -> None:
+def _lexists(path: Path) -> bool:
+    try:
+        os.lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
+def _is_symlink(path: Path) -> bool:
+    try:
+        return stat.S_ISLNK(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def _reject_symlink_components(path: Path, what: str) -> None:
+    parts = path.parts
+    if not parts:
+        fail(f"refusing empty {what}")
+    acc = Path(parts[0])
+    prefixes = [acc]
+    for part in parts[1:]:
+        acc = acc / part
+        prefixes.append(acc)
+    for prefix in prefixes:
+        if _is_symlink(prefix):
+            fail(f"refusing {what} that traverses a symlink")
+
+
+def _validate_user_path(raw: str, *, what: str) -> Path:
+    if not raw or raw in {".", "..", "/", "//", "-"}:
+        fail(f"refusing unsafe {what}")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if ".." in path.parts or "\\" in raw:
+        fail(f"refusing unsafe {what}")
+    _reject_symlink_components(path, what)
+    return path
+
+
+def create_backup(root: Path, output: Path, *, secure_parent: bool) -> None:
     if os.environ.get("FRP_BACKUP_ALREADY_LOCKED") == "1":
         _hold_lock_hook()
         files = collect_files(root)
-        _stage_backup(root, output, files)
+        _stage_backup(root, output, files, secure_parent=secure_parent)
         return
     locks = _load_locks()
     timeout = float(os.environ.get("FRP_BACKUP_LOCK_TIMEOUT", "30"))
     with locks.acquire_control_locks(root, timeout=timeout):
         _hold_lock_hook()
         files = collect_files(root)
-        _stage_backup(root, output, files)
+        _stage_backup(root, output, files, secure_parent=secure_parent)
 
 
-def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]]) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(output.parent, 0o700)
-    if os.geteuid() == 0:
-        os.chown(output.parent, 0, 0)
-    if output.is_symlink():
+def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]], *, secure_parent: bool) -> None:
+    parent = output.parent
+    if secure_parent:
+        parent.mkdir(parents=True, exist_ok=True)
+        if _is_symlink(parent):
+            fail("refusing to write through a symlink parent directory")
+        os.chmod(parent, 0o700)
+        if os.geteuid() == 0:
+            os.chown(parent, 0, 0)
+    else:
+        if not parent.is_dir() or _is_symlink(parent):
+            fail("backup parent directory does not exist")
+        if _is_symlink(parent):
+            fail("refusing backup parent directory that is a symlink")
+    if _lexists(output) and _is_symlink(output):
         fail("refusing to overwrite a symlink")
+    if _lexists(output) and not output.is_file():
+        fail("backup output must be a regular file")
 
     with tempfile.TemporaryDirectory(prefix=".frp-backup-", dir=str(output.parent)) as tmp_name:
         stage = Path(tmp_name)
@@ -256,8 +310,15 @@ def main() -> int:
     root = Path(test_root or "/")
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     default = root / f"var/lib/frp-auto-deploy/backups/server-backup-{now}.tar.gz"
-    output = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else default
-    create_backup(root, output)
+    if len(sys.argv) == 2:
+        output = _validate_user_path(sys.argv[1], what="backup output path")
+        parent = output.parent
+        if not parent.is_dir() or _is_symlink(parent):
+            fail("backup parent directory does not exist")
+        create_backup(root, output, secure_parent=False)
+    else:
+        output = default
+        create_backup(root, output, secure_parent=True)
     print("WARNING: this backup contains private keys, authentication tokens, and enrollment secrets.")
     print(f"Backup created: {output}")
     _audit_emit("backup.created", details={"path": str(output.name)})

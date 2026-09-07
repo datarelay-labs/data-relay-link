@@ -139,13 +139,24 @@ collect_services() {
 }
 
 print_complete() {
-  local server="$1" services_json_file="$2"
+  local server="$1" services_json_file="$2" alias="${3:-}"
+  if [[ -z "$alias" && -f "$services_json_file" ]]; then
+    alias="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(d.get("public_hostname","") if isinstance(d,dict) else "")' "$services_json_file" 2>/dev/null || true)"
+  fi
   if frp_zero_touch_active || [[ "${FRP_ZERO_TOUCH_COMPLETE:-}" == "1" ]]; then
-    python3 - "$server" "$services_json_file" <<'PY'
+    python3 - "$server" "$services_json_file" "$alias" <<'PY'
 import json, sys
 from pathlib import Path
 server = sys.argv[1]
-services = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+raw = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+alias = (sys.argv[3] or '').strip()
+if isinstance(raw, dict) and 'services' in raw:
+    services = list((raw.get('services') or {}).values())
+    if not alias:
+        alias = str(raw.get('public_hostname') or '').strip()
+else:
+    services = raw
+preferred = alias if alias and alias != server else ''
 print()
 print('FRP client setup complete.')
 print()
@@ -162,36 +173,69 @@ for item in services:
         continue
     preset = item.get('preset') or 'custom'
     remote_port = item.get('remote_port')
+    host = preferred or server
     if preset == 'ssh':
         user = item.get('ssh_user')
         print('SSH tunnel ready')
         print()
         if user:
             print('Connect:')
-            print('  ssh -p %s %s@%s' % (remote_port, user, server))
+            if preferred:
+                print('  Preferred:')
+                print('    ssh -p %s %s@%s' % (remote_port, user, preferred))
+                print('  Fallback:')
+                print('    ssh -p %s %s@%s' % (remote_port, user, server))
+            else:
+                print('  ssh -p %s %s@%s' % (remote_port, user, server))
         else:
             print('SSH user: legacy / unspecified')
         print()
     elif preset == 'http':
         print('Connect:')
-        print('  http://%s:%s' % (server, remote_port))
+        if preferred:
+            print('  Preferred:')
+            print('    http://%s:%s' % (preferred, remote_port))
+            print('  Fallback:')
+            print('    http://%s:%s' % (server, remote_port))
+        else:
+            print('  http://%s:%s' % (server, remote_port))
         print()
     elif preset == 'https':
         print('Connect:')
-        print('  https://%s:%s' % (server, remote_port))
+        if preferred:
+            print('  Preferred:')
+            print('    https://%s:%s' % (preferred, remote_port))
+            print('  Fallback:')
+            print('    https://%s:%s' % (server, remote_port))
+        else:
+            print('  https://%s:%s' % (server, remote_port))
         print()
     else:
         print('Connect:')
-        print('  %s:%s' % (server, remote_port))
+        if preferred:
+            print('  Preferred:')
+            print('    %s:%s' % (preferred, remote_port))
+            print('  Fallback:')
+            print('    %s:%s' % (server, remote_port))
+        else:
+            print('  %s:%s' % (server, remote_port))
         print()
 PY
     return 0
   fi
-  python3 - "$server" "$services_json_file" "$(frp_os)" <<'PY'
+  python3 - "$server" "$services_json_file" "$(frp_os)" "$alias" <<'PY'
 import json,sys
 from pathlib import Path
 server = sys.argv[1]
-services = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+raw = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+alias = (sys.argv[4] if len(sys.argv) > 4 else '').strip()
+if isinstance(raw, dict) and 'services' in raw:
+    services = list((raw.get('services') or {}).values())
+    if not alias:
+        alias = str(raw.get('public_hostname') or '').strip()
+else:
+    services = raw
+preferred = alias if alias and alias != server else ''
 print()
 print('=========================================')
 print(' FRP Installation Complete')
@@ -215,21 +259,45 @@ for item in services:
         if user:
             print('Connect from another machine with:')
             print()
-            print(f'  ssh -p {remote_port} {user}@{server}')
+            if preferred:
+                print('  Preferred:')
+                print(f'    ssh -p {remote_port} {user}@{preferred}')
+                print('  Fallback:')
+                print(f'    ssh -p {remote_port} {user}@{server}')
+            else:
+                print(f'  ssh -p {remote_port} {user}@{server}')
         else:
             print('SSH user: legacy / unspecified')
     elif preset == 'http':
         print('Access:')
         print()
-        print(f'  http://{server}:{remote_port}')
+        if preferred:
+            print('  Preferred:')
+            print(f'    http://{preferred}:{remote_port}')
+            print('  Fallback:')
+            print(f'    http://{server}:{remote_port}')
+        else:
+            print(f'  http://{server}:{remote_port}')
     elif preset == 'https':
         print('Access:')
         print()
-        print(f'  https://{server}:{remote_port}')
+        if preferred:
+            print('  Preferred:')
+            print(f'    https://{preferred}:{remote_port}')
+            print('  Fallback:')
+            print(f'    https://{server}:{remote_port}')
+        else:
+            print(f'  https://{server}:{remote_port}')
     else:
         print('Connect:')
         print()
-        print(f'  {server}:{remote_port}')
+        if preferred:
+            print('  Preferred:')
+            print(f'    {preferred}:{remote_port}')
+            print('  Fallback:')
+            print(f'    {server}:{remote_port}')
+        else:
+            print(f'  {server}:{remote_port}')
     print()
 print('For normal operation, this is the only command you need to remember:')
 print()
@@ -648,7 +716,7 @@ frp_client_main() {
 
   frp_client_install_management_files "${_FRP_INSTALL_CLIENT_DIR}"
 
-  print_complete "$FRP_SERVER" "$SERVICES_FILE"
+  print_complete "$FRP_SERVER" "$SERVICES_FILE" "${FRP_PUBLIC_HOSTNAME:-}"
 }
 
 frp_client_installer_usage() {
@@ -673,7 +741,11 @@ if [[ "${FRP_CLIENT_SOURCED:-}" != "1" ]]; then
         shift
         ;;
       --source)
-        FRP_CLIENT_UPDATE_SOURCE="${2:-}"
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --source requires a directory" >&2
+          exit 2
+        fi
+        FRP_CLIENT_UPDATE_SOURCE="$2"
         shift 2
         ;;
       --check|--dry-run)

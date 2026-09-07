@@ -116,6 +116,12 @@ function Show-FrpClientInfo {
     }
     $state = Read-FrpClientState
     $server = [string]$state.frp_server
+    $alias = ''
+    if (Test-FrpObjectHasProperty -Object $state -Name 'public_hostname') {
+        $alias = ([string]$state.public_hostname).Trim()
+    }
+    $preferred = ''
+    if ($alias -and $alias -ne $server) { $preferred = $alias }
     Write-Host ("FRP Server: {0}" -f $server)
     Write-Host ("Transport: {0}" -f $state.frp_transport)
     Write-Host ("Machine ID: {0}" -f $state.machine_id)
@@ -126,14 +132,14 @@ function Show-FrpClientInfo {
     $items = @()
     if ($services -is [System.Collections.IDictionary]) {
         foreach ($k in $services.Keys) {
-            $rec = $services[$k]
-            $items += $rec
+            $items += $services[$k]
         }
     } else {
         foreach ($p in $services.PSObject.Properties) {
             $items += $p.Value
         }
     }
+    $httpsGuidanceShown = $false
     foreach ($item in $items) {
         $enabled = $true
         if ($null -ne $item.enabled) { $enabled = [bool]$item.enabled }
@@ -147,28 +153,75 @@ function Show-FrpClientInfo {
         $localPort = $item.local_port
         Write-Host ("{0} ({1})" -f $sid, $name)
         Write-Host ("  Target : {0}:{1}" -f $localIp, $localPort)
-        Write-Host ("  Public : {0}:{1}" -f $server, $remote)
+        if ($preferred) {
+            Write-Host ("  Public : {0}:{1}" -f $preferred, $remote)
+            Write-Host ("  Fallback public : {0}:{1}" -f $server, $remote)
+        } else {
+            Write-Host ("  Public : {0}:{1}" -f $server, $remote)
+        }
         $isRdp = ($preset -eq 'rdp') -or ($sid -eq 'rdp') -or ([int]$localPort -eq 3389 -and $preset -eq 'custom')
         if ($isRdp) {
             Write-Host '  Connect:'
-            Write-Host ("    mstsc /v:{0}:{1}" -f $server, $remote)
+            if ($preferred) {
+                Write-Host '    Preferred:'
+                Write-Host ("      mstsc /v:{0}:{1}" -f $preferred, $remote)
+                Write-Host '    Fallback:'
+                Write-Host ("      mstsc /v:{0}:{1}" -f $server, $remote)
+            } else {
+                Write-Host ("    mstsc /v:{0}:{1}" -f $server, $remote)
+            }
         } elseif ($preset -eq 'ssh') {
             $user = [string]$item.ssh_user
             if ($user) {
                 Write-Host '  Connect:'
-                Write-Host ("    ssh -p {0} {1}@{2}" -f $remote, $user, $server)
+                if ($preferred) {
+                    Write-Host '    Preferred:'
+                    Write-Host ("      ssh -p {0} {1}@{2}" -f $remote, $user, $preferred)
+                    Write-Host '    Fallback:'
+                    Write-Host ("      ssh -p {0} {1}@{2}" -f $remote, $user, $server)
+                } else {
+                    Write-Host ("    ssh -p {0} {1}@{2}" -f $remote, $user, $server)
+                }
             } else {
                 Write-Host '  SSH user: legacy / unspecified'
             }
         } elseif ($preset -eq 'http') {
             Write-Host '  URL:'
-            Write-Host ("    http://{0}:{1}" -f $server, $remote)
+            if ($preferred) {
+                Write-Host '    Preferred:'
+                Write-Host ("      http://{0}:{1}" -f $preferred, $remote)
+                Write-Host '    Fallback:'
+                Write-Host ("      http://{0}:{1}" -f $server, $remote)
+            } else {
+                Write-Host ("    http://{0}:{1}" -f $server, $remote)
+            }
         } elseif ($preset -eq 'https') {
             Write-Host '  URL:'
-            Write-Host ("    https://{0}:{1}" -f $server, $remote)
+            if ($preferred) {
+                Write-Host '    Preferred:'
+                Write-Host ("      https://{0}:{1}" -f $preferred, $remote)
+                Write-Host '    Fallback:'
+                Write-Host ("      https://{0}:{1}" -f $server, $remote)
+            } else {
+                Write-Host ("    https://{0}:{1}" -f $server, $remote)
+            }
+            if ($preferred -and -not $httpsGuidanceShown) {
+                Write-Host '  Note:'
+                Write-Host '    TLS is passed through to the target HTTPS service.'
+                Write-Host '    To avoid certificate warnings, the target service certificate'
+                Write-Host ("    must be valid for {0}." -f $preferred)
+                $httpsGuidanceShown = $true
+            }
         } else {
             Write-Host '  Connect:'
-            Write-Host ("    {0}:{1}" -f $server, $remote)
+            if ($preferred) {
+                Write-Host '    Preferred:'
+                Write-Host ("      {0}:{1}" -f $preferred, $remote)
+                Write-Host '    Fallback:'
+                Write-Host ("      {0}:{1}" -f $server, $remote)
+            } else {
+                Write-Host ("    {0}:{1}" -f $server, $remote)
+            }
         }
         Write-Host ''
     }

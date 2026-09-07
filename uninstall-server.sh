@@ -156,14 +156,120 @@ frp_u_purge_confirm_ok() {
   [[ "$confirm" == "yes" ]]
 }
 
+frp_u_acquire_control_locks() {
+  local root timeout life_lock reg_lock
+  root="${FRP_UNINSTALL_TEST_ROOT:-/}"
+  timeout="${FRP_UNINSTALL_LOCK_TIMEOUT:-30}"
+  life_lock="$(frp_u_path /var/lib/frp-auto-deploy/server-lifecycle.lock)"
+  reg_lock="$(frp_u_path /var/lib/frp-auto-deploy/registry.lock)"
+  mkdir -p "$(dirname "$life_lock")" "$(dirname "$reg_lock")"
+  exec {FRP_UNINSTALL_LIFE_FD}>>"$life_lock"
+  exec {FRP_UNINSTALL_REG_FD}>>"$reg_lock"
+  if ! flock -w "$timeout" "$FRP_UNINSTALL_LIFE_FD"; then
+    echo "ERROR: timed out waiting for the server lifecycle lock." >&2
+    echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
+    exit 1
+  fi
+  if ! flock -w "$timeout" "$FRP_UNINSTALL_REG_FD"; then
+    echo "ERROR: timed out waiting for the registry lock." >&2
+    echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
+    exit 1
+  fi
+}
+
+frp_u_systemctl() {
+  if [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
+    "${FRP_UNINSTALL_HOOK_SYSTEMCTL}" "$@"
+    return $?
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl "$@"
+}
+
+frp_u_unit_load_state() {
+  local unit="$1" st
+  st="$(frp_u_systemctl show -p LoadState --value "$unit" 2>/dev/null || true)"
+  printf '%s' "$st"
+}
+
+frp_u_unit_exists() {
+  local st
+  st="$(frp_u_unit_load_state "$1")"
+  [[ "$st" == "loaded" || "$st" == "masked" || "$st" == "stub" ]]
+}
+
+frp_u_unit_active() {
+  local st
+  st="$(frp_u_systemctl is-active "$1" 2>/dev/null || true)"
+  [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
+}
+
+frp_u_stop_product_units() {
+  local unit
+  for unit in frp-frontend frp-port-allocator frps; do
+    if ! frp_u_unit_exists "$unit" && ! frp_u_unit_active "$unit"; then
+      continue
+    fi
+    if frp_u_unit_active "$unit"; then
+      if ! frp_u_systemctl stop "$unit"; then
+        echo "ERROR: failed to stop ${unit}." >&2
+        echo "FAILURE_CLASS=SERVICE_STOP_FAILED" >&2
+        return 1
+      fi
+    fi
+    if frp_u_unit_active "$unit"; then
+      echo "ERROR: ${unit} remains active after stop." >&2
+      echo "FAILURE_CLASS=SERVICE_STILL_ACTIVE" >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
+frp_u_disable_product_units() {
+  local unit enabled
+  for unit in frp-frontend frp-port-allocator frps; do
+    if ! frp_u_unit_exists "$unit"; then
+      continue
+    fi
+    if frp_u_systemctl disable "$unit" >/dev/null 2>&1; then
+      continue
+    fi
+    enabled="$(frp_u_systemctl is-enabled "$unit" 2>/dev/null || true)"
+    case "$enabled" in
+      enabled|enabled-runtime|linked|linked-runtime)
+        echo "ERROR: failed to disable ${unit}." >&2
+        echo "FAILURE_CLASS=SERVICE_DISABLE_FAILED" >&2
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
+frp_u_acquire_control_locks
+
 SKIP_SYSTEMD=0
-if [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" || "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+if [[ "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+  SKIP_SYSTEMD=1
+elif [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" && -z "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
+  SKIP_SYSTEMD=1
+elif [[ -z "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] && ! command -v systemctl >/dev/null 2>&1; then
+  if [[ -z "${FRP_UNINSTALL_TEST_ROOT:-}" ]]; then
+    echo "ERROR: cannot prove product services are stopped (systemctl is unavailable)." >&2
+    echo "FAILURE_CLASS=SERVICE_STOP_FAILED" >&2
+    exit 1
+  fi
   SKIP_SYSTEMD=1
 fi
 
-if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
-  systemctl stop frp-frontend frp-port-allocator frps 2>/dev/null || true
-  systemctl disable frp-frontend frp-port-allocator frps 2>/dev/null || true
+if [[ "$SKIP_SYSTEMD" != "1" ]]; then
+  if ! frp_u_stop_product_units; then
+    exit 1
+  fi
+  if ! frp_u_disable_product_units; then
+    exit 1
+  fi
 fi
 # Never enable, start, or unmask distro nginx.service. Uninstall removes
 # frp-frontend.service only. If this project installed nginx and disabled
@@ -234,9 +340,13 @@ elif [[ -L "$libdir" ]]; then
   exit 1
 fi
 
-if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload
-  systemctl reset-failed 2>/dev/null || true
+if [[ "$SKIP_SYSTEMD" != "1" ]]; then
+  frp_u_systemctl daemon-reload || {
+    echo "ERROR: systemd daemon-reload failed." >&2
+    echo "FAILURE_CLASS=SERVICE_STOP_FAILED" >&2
+    exit 1
+  }
+  frp_u_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
 if [[ "$PURGE" == true ]]; then

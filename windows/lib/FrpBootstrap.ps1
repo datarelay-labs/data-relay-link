@@ -209,6 +209,7 @@ function Invoke-FrpEnroll {
     if ($transport -ne 'tcp' -and $transport -ne 'wss') {
         throw 'ERROR: allocator returned an unsupported FRP transport'
     }
+    $propNames = @($data.PSObject.Properties.Name)
     return @{
         FrpServer       = [string]$data.frp_server
         FrpServerPort   = [int]$data.frp_server_port
@@ -216,6 +217,8 @@ function Invoke-FrpEnroll {
         TokenCiphertext = [string]$data.token_ciphertext
         Services        = @($data.services)
         MgmtStatus      = [string]$data.mgmt_status
+        PublicHostname  = [string]$data.public_hostname
+        PublicHostnamePresent = ($propNames -contains 'public_hostname')
     }
 }
 
@@ -441,6 +444,7 @@ function Invoke-FrpEnrollServices {
         FrpTransport   = $transport
         Services       = @($data.services)
         PublicHostname = [string]$data.public_hostname
+        PublicHostnamePresent = ($propNames -contains 'public_hostname')
     }
 }
 
@@ -462,6 +466,44 @@ function Invoke-FrpCompensatePreviousServices {
     Write-Host 'Attempting server registry compensation with the previous service set ...'
     $null = Invoke-FrpEnrollServices -AllocatorUrl $AllocatorUrl -MachineId $MachineId `
         -Hostname $Hostname -Services $Services
+}
+
+function Invoke-FrpApplyLocalMetadata {
+    <#
+    .SYNOPSIS
+      Apply display-name / ssh_user-only draft changes without contacting the allocator.
+    #>
+    param($Current, $DraftMap)
+    $curMap = ConvertTo-FrpServiceMap -Services $Current.services
+    foreach ($sid in @($DraftMap.Keys)) {
+        $item = $DraftMap[$sid]
+        if ($curMap.Contains($sid) -and $null -ne $curMap[$sid].remote_port -and [string]$curMap[$sid].remote_port -ne '') {
+            if ($null -eq $item['remote_port'] -or [string]$item['remote_port'] -eq '') {
+                $item['remote_port'] = [int]$curMap[$sid].remote_port
+                $DraftMap[$sid] = $item
+            }
+        }
+    }
+    $saveArgs = @{
+        AllocatorUrl  = [string]$Current.allocator_url
+        FrpServer     = [string]$Current.frp_server
+        FrpServerPort = [int]$Current.frp_server_port
+        Hostname      = [string]$Current.hostname
+        MachineId     = [string]$Current.machine_id
+        HostId        = [string]$Current.host_id
+        Services      = $DraftMap
+        Transport     = $(if ($Current.frp_transport) { [string]$Current.frp_transport } else { 'tcp' })
+        InstallStatus = $(if ($Current.install_status) { [string]$Current.install_status } else { 'installed' })
+    }
+    if (Test-FrpObjectHasProperty -Object $Current -Name 'public_hostname') {
+        $saveArgs['PublicHostname'] = [string]$Current.public_hostname
+    }
+    Save-FrpClientState @saveArgs | Out-Null
+    Remove-Item -LiteralPath (Get-FrpDraftPath) -Force -ErrorAction SilentlyContinue
+    Write-Host 'Applied local changes.'
+    Write-Host 'Allocator contacted : NO'
+    Write-Host 'frpc restarted      : NO'
+    return 0
 }
 
 function Invoke-FrpClientApplyDraft {
@@ -486,8 +528,6 @@ function Invoke-FrpClientApplyDraftLocked {
         Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
         return 1
     }
-    # Drop services already released server-side before applying draft changes.
-    try { $null = Invoke-FrpReconcileReleasedServices } catch { }
 
     $draftPath = Get-FrpDraftPath
     if (-not (Test-Path -LiteralPath $draftPath)) {
@@ -497,14 +537,51 @@ function Invoke-FrpClientApplyDraftLocked {
 
     $current = Read-FrpClientState
     $draftState = Read-FrpDraftState
-    $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
+    $changeClass = Get-FrpStateChangeClass -Current $current -Draft $draftState
+    if ($changeClass -eq 'none') {
+        Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue
+        Write-Host 'No pending changes.'
+        return 0
+    }
 
+    $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
     $enabledCount = 0
     foreach ($sid in $draftMap.Keys) { if ($draftMap[$sid]['enabled'] -ne $false) { $enabledCount++ } }
     if ($enabledCount -le 0) {
         Write-Host 'ERROR: at least one enabled service is required.'
         return 1
     }
+
+    if ($changeClass -eq 'local') {
+        return (Invoke-FrpApplyLocalMetadata -Current $current -DraftMap $draftMap)
+    }
+
+    try {
+        $null = Invoke-FrpReconcileReleasedServices
+    } catch {
+        Write-Host 'ERROR: cannot apply because client synchronization failed.'
+        $msg = [string]$_.Exception.Message
+        if ($msg) { Write-Host $msg }
+        return 1
+    }
+
+    if (-not (Test-Path -LiteralPath $draftPath)) {
+        Write-Host 'No pending changes.'
+        return 0
+    }
+    $current = Read-FrpClientState
+    $draftState = Read-FrpDraftState
+    $changeClass = Get-FrpStateChangeClass -Current $current -Draft $draftState
+    if ($changeClass -eq 'none') {
+        Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue
+        Write-Host 'No pending changes.'
+        return 0
+    }
+    if ($changeClass -eq 'local') {
+        $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
+        return (Invoke-FrpApplyLocalMetadata -Current $current -DraftMap $draftMap)
+    }
+    $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
 
     $machineId = [string]$current.machine_id
     $hostnameValue = [string]$current.hostname
@@ -601,6 +678,12 @@ function Invoke-FrpClientApplyDraftLocked {
     foreach ($sid in $draftMap.Keys) {
         if ($draftMap[$sid]['enabled'] -ne $false) { $enabledAny = $true; break }
     }
+    $saveHostname = @{}
+    if ($result.ContainsKey('PublicHostnamePresent') -and $result.PublicHostnamePresent) {
+        $saveHostname['PublicHostname'] = [string]$result.PublicHostname
+    } elseif (Test-FrpObjectHasProperty -Object $current -Name 'public_hostname') {
+        $saveHostname['PublicHostname'] = [string]$current.public_hostname
+    }
 
     try {
         if ($env:FRP_WINDOWS_FAIL_APPLY_ACTIVATE -eq '1') {
@@ -611,7 +694,7 @@ function Invoke-FrpClientApplyDraftLocked {
 
         Save-FrpClientState -AllocatorUrl $allocatorUrl -FrpServer $result.FrpServer -FrpServerPort $result.FrpServerPort `
             -Hostname $hostnameValue -MachineId $machineId -HostId $hostId -Services $draftMap -Transport $transport `
-            -InstallStatus 'installed' | Out-Null
+            -InstallStatus 'installed' @saveHostname | Out-Null
 
         if ($enabledAny) {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
@@ -668,30 +751,61 @@ function Invoke-FrpClientApplyDraftLocked {
 function Invoke-FrpApplyReconcileRuntime {
     <#
     .SYNOPSIS
-      After released services are dropped from client-state.json, regenerate
-      frpc.toml and refresh runtime. Zero enabled services => management_only
-      and stop frpc (no ghost proxies).
+      After accepted server reconciliation, converge frpc.toml and runtime.
+      Server release is not undone on local runtime failure.
     #>
-    param([bool]$DroppedEnabled)
+    param(
+        [bool]$DroppedEnabled,
+        [bool]$DroppedAny = $false,
+        [bool]$HostnameChanged = $false
+    )
+    if (-not $DroppedEnabled -and -not $DroppedAny -and -not $HostnameChanged) { return }
+    if ($DroppedAny -or $DroppedEnabled) {
+        if ($env:FRP_CLIENT_HOOK_TOML_REGEN -eq '1') {
+            Write-Host 'ERROR: simulated TOML regeneration failure'
+            Write-Host 'FAILURE_CLASS=CONFIG_GENERATION_FAILED'
+            Write-Host 'RECOVERY_REQUIRED=YES'
+            throw 'ERROR: failed to regenerate frpc.toml after server reconciliation.'
+        }
+        $toml = Get-FrpTomlPath
+        if (Test-Path -LiteralPath $toml) {
+            $token = Get-FrpTokenFromToml
+            if (-not $token) {
+                Write-Host 'ERROR: cannot regenerate frpc.toml; FRP token is unavailable.'
+                Write-Host 'FAILURE_CLASS=CONFIG_GENERATION_FAILED'
+                Write-Host 'RECOVERY_REQUIRED=YES'
+                throw 'ERROR: cannot regenerate frpc.toml; FRP token is unavailable.'
+            }
+            $state = Read-FrpClientState
+            $map = ConvertTo-FrpServiceMap -Services $state.services
+            $transport = [string]$state.frp_transport
+            if (-not $transport) { $transport = 'tcp' }
+            New-FrpClientToml -ServerAddr ([string]$state.frp_server) -ServerPort ([int]$state.frp_server_port) `
+                -Token $token -HostId ([string]$state.host_id) -Services $map -Transport $transport | Out-Null
+        }
+    }
+    if ($env:FRP_CLIENT_HOOK_ACCESS_REGEN -eq '1') {
+        Write-Host 'ERROR: simulated access-info regeneration failure'
+        Write-Host 'FAILURE_CLASS=CONFIG_GENERATION_FAILED'
+        Write-Host 'RECOVERY_REQUIRED=YES'
+        throw 'ERROR: failed to regenerate access-info.txt after server reconciliation.'
+    }
     if (-not $DroppedEnabled) { return }
-    $toml = Get-FrpTomlPath
-    if (-not (Test-Path -LiteralPath $toml)) { return }
-    $token = Get-FrpTokenFromToml
-    if (-not $token) { return }
+    if ($env:FRP_CLIENT_HOOK_RESTART_FAIL -eq '1') {
+        Write-Host 'ERROR: simulated service restart failure'
+        Write-Host 'FAILURE_CLASS=FRPC_RESTART_FAILED'
+        Write-Host 'RECOVERY_REQUIRED=YES'
+        throw 'ERROR: failed to restart frpc after server reconciliation.'
+    }
     $state = Read-FrpClientState
     $map = ConvertTo-FrpServiceMap -Services $state.services
-    $transport = [string]$state.frp_transport
-    if (-not $transport) { $transport = 'tcp' }
-    New-FrpClientToml -ServerAddr ([string]$state.frp_server) -ServerPort ([int]$state.frp_server_port) `
-        -Token $token -HostId ([string]$state.host_id) -Services $map -Transport $transport | Out-Null
-
     $enabledAny = $false
     foreach ($sid in $map.Keys) {
         if ($map[$sid].enabled -ne $false) { $enabledAny = $true; break }
     }
     if (-not $enabledAny) {
         Set-FrpInstallStatus -Status 'management_only'
-        try { Stop-FrpClient | Out-Null } catch { }
+        Stop-FrpClient | Out-Null
         return
     }
     $wasRunning = (Get-FrpClientStatus).Running
@@ -704,23 +818,88 @@ function Invoke-FrpApplyReconcileRuntime {
 function Invoke-FrpReconcileReleasedServices {
     <#
     .SYNOPSIS
-      Drop local services that no longer exist in the server registry
-      (server-side `frpctl release service`). Mirrors Unix
-      frp_client_reconcile_released_services: identity-auth POST with
-      X-Mgmt-Reconcile: 1. Offline tests may inject
-      FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'.
+      Reconcile local services and public_hostname against the server registry.
+      Returns $true on SUCCESS (change applied), $false on NO_CHANGE.
+      Throws on FAILURE. Strict (explicit sync) treats missing identity as failure.
     #>
+    param([switch]$Strict)
     if (-not (Test-Path -LiteralPath (Get-FrpStatePath))) { return $false }
-    if ($env:FRP_SKIP_CONNECTIVITY_CHECK -eq '1' -and -not $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS) {
+
+    if ($env:FRP_CLIENT_HOOK_RECONCILE_UNREACHABLE -eq '1') {
+        Write-Host 'ERROR: allocator unreachable'
+        Write-Host 'FAILURE_CLASS=ALLOCATOR_UNREACHABLE'
+        throw 'ERROR: allocator unreachable'
+    }
+    if ($env:FRP_CLIENT_HOOK_RECONCILE_HMAC -eq '1') {
+        Write-Host 'ERROR: allocator response HMAC verification failed'
+        Write-Host 'FAILURE_CLASS=HMAC_VERIFICATION_FAILED'
+        throw 'ERROR: allocator response HMAC verification failed'
+    }
+    if ($env:FRP_CLIENT_HOOK_RECONCILE_MALFORMED -eq '1') {
+        Write-Host 'ERROR: allocator returned a malformed reconcile response'
+        Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+        throw 'ERROR: allocator returned a malformed reconcile response'
+    }
+    if ($env:FRP_CLIENT_HOOK_RECONCILE_STATE -eq '1') {
+        Write-Host 'ERROR: failed to update local client state'
+        Write-Host 'FAILURE_CLASS=STATE_WRITE_FAILED'
+        throw 'ERROR: failed to update local client state'
+    }
+
+    if ($env:FRP_SKIP_CONNECTIVITY_CHECK -eq '1' -and -not $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS -and -not $env:FRP_CLIENT_RECONCILE_RESPONSE) {
         return $false
     }
 
     $state = Read-FrpClientState
     $map = ConvertTo-FrpServiceMap -Services $state.services
-    if ($map.Count -eq 0) { return $false }
-
     $registryIds = $null
-    if ($env:FRP_CLIENT_RECONCILE_REGISTRY_IDS) {
+    $hostnamePresent = $false
+    $hostnameValue = ''
+
+    if ($env:FRP_CLIENT_RECONCILE_RESPONSE) {
+        try {
+            $data = $env:FRP_CLIENT_RECONCILE_RESPONSE | ConvertFrom-Json
+        } catch {
+            Write-Host 'ERROR: allocator returned a malformed reconcile response'
+            Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+            throw 'ERROR: allocator returned a malformed reconcile response'
+        }
+        if ($data.error) {
+            Write-Host ("ERROR: allocator rejected the reconcile request: {0}" -f [string]$data.error)
+            Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+            throw ("ERROR: allocator rejected the reconcile request: {0}" -f [string]$data.error)
+        }
+        $mac = $null
+        try { $mac = Read-FrpIdentityMac } catch { $mac = $null }
+        if (-not $mac) {
+            Write-Host 'ERROR: management response key is missing'
+            Write-Host 'FAILURE_CLASS=MANAGEMENT_IDENTITY'
+            throw 'ERROR: management response key is missing'
+        }
+        $received = [string]$data.response_hmac
+        $copy = ConvertTo-FrpPlainObject $data
+        if ($copy.ContainsKey('response_hmac')) { $copy.Remove('response_hmac') }
+        $canonical = Get-FrpCanonicalJson -Object $copy
+        $expected = Get-FrpHmacHex -Secret $mac -Message $canonical
+        if (-not $received -or -not (Test-FrpFixedTimeEquals -Left $received -Right $expected -IgnoreCase)) {
+            Write-Host 'ERROR: allocator response HMAC verification failed'
+            Write-Host 'FAILURE_CLASS=HMAC_VERIFICATION_FAILED'
+            throw 'ERROR: allocator response HMAC verification failed'
+        }
+        if (-not (Test-FrpObjectHasProperty -Object $data -Name 'registry_service_ids')) {
+            Write-Host 'ERROR: allocator returned a malformed reconcile response'
+            Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+            throw 'ERROR: allocator returned a malformed reconcile response'
+        }
+        $registryIds = @()
+        if ($null -ne $data.registry_service_ids) {
+            $registryIds = @($data.registry_service_ids | ForEach-Object { [string]$_ })
+        }
+        if (Test-FrpObjectHasProperty -Object $data -Name 'public_hostname') {
+            $hostnamePresent = $true
+            $hostnameValue = [string]$data.public_hostname
+        }
+    } elseif ($env:FRP_CLIENT_RECONCILE_REGISTRY_IDS) {
         $parsedIds = $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS | ConvertFrom-Json
         if ($null -eq $parsedIds) {
             $registryIds = @()
@@ -729,17 +908,36 @@ function Invoke-FrpReconcileReleasedServices {
         } else {
             $registryIds = @($parsedIds | ForEach-Object { [string]$_ })
         }
+        if ($env:FRP_CLIENT_RECONCILE_PUBLIC_HOSTNAME_PRESENT -eq '1') {
+            $hostnamePresent = $true
+            $hostnameValue = [string]$env:FRP_CLIENT_RECONCILE_PUBLIC_HOSTNAME
+        }
     } else {
-        if (-not (Test-FrpIsEnrolled)) { return $false }
+        if (-not (Test-FrpIsEnrolled)) {
+            if ($Strict) {
+                Write-Host 'ERROR: this client does not have a usable management identity'
+                Write-Host 'FAILURE_CLASS=MANAGEMENT_IDENTITY'
+                throw 'ERROR: this client does not have a usable management identity'
+            }
+            return $false
+        }
         $allocatorUrl = [string]$state.allocator_url
         $machineId = [string]$state.machine_id
-        $hostnameValue = [string]$state.hostname
-        if (-not $allocatorUrl -or -not $machineId) { return $false }
-        if ($allocatorUrl -notmatch '^https://') { return $false }
+        $hostnameLocal = [string]$state.hostname
+        if (-not $allocatorUrl -or -not $machineId) {
+            Write-Host 'ERROR: client state is missing allocator URL or machine ID'
+            Write-Host 'FAILURE_CLASS=MANAGEMENT_IDENTITY'
+            throw 'ERROR: client state is missing allocator URL or machine ID'
+        }
+        if ($allocatorUrl -notmatch '^https://') {
+            Write-Host 'ERROR: allocator URL must be https://'
+            Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+            throw 'ERROR: allocator URL must be https://'
+        }
 
         $payload = [ordered]@{
             machine_id = $machineId
-            hostname   = $hostnameValue
+            hostname   = $hostnameLocal
         }
         $body = Get-FrpCanonicalJson -Object $payload
         $ts = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
@@ -759,9 +957,15 @@ function Invoke-FrpReconcileReleasedServices {
             $respText = Invoke-FrpHttpsJson -Method POST -Url $allocatorUrl -Body $body -Headers $headers
             $data = $respText | ConvertFrom-Json
         } catch {
-            return $false
+            Write-Host 'ERROR: allocator unreachable'
+            Write-Host 'FAILURE_CLASS=ALLOCATOR_UNREACHABLE'
+            throw 'ERROR: allocator unreachable'
         }
-        if ($data.error) { return $false }
+        if ($data.error) {
+            Write-Host ("ERROR: allocator rejected the reconcile request: {0}" -f [string]$data.error)
+            Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+            throw ("ERROR: allocator rejected the reconcile request: {0}" -f [string]$data.error)
+        }
         $received = [string]$data.response_hmac
         $copy = ConvertTo-FrpPlainObject $data
         if ($copy.ContainsKey('response_hmac')) { $copy.Remove('response_hmac') }
@@ -769,18 +973,22 @@ function Invoke-FrpReconcileReleasedServices {
         $mac = Read-FrpIdentityMac
         $expected = Get-FrpHmacHex -Secret $mac -Message $canonical
         if (-not $received -or -not (Test-FrpFixedTimeEquals -Left $received -Right $expected -IgnoreCase)) {
-            return $false
+            Write-Host 'ERROR: allocator response HMAC verification failed'
+            Write-Host 'FAILURE_CLASS=HMAC_VERIFICATION_FAILED'
+            throw 'ERROR: allocator response HMAC verification failed'
         }
-        # Require an explicit reconcile payload. A missing key must not be
-        # treated as "zero services" (that would wipe local state / drafts when
-        # a mocked enroll response is accidentally reused).
-        $propNames = @($data.PSObject.Properties | ForEach-Object { $_.Name })
-        if ($propNames -notcontains 'registry_service_ids') {
-            return $false
+        if (-not (Test-FrpObjectHasProperty -Object $data -Name 'registry_service_ids')) {
+            Write-Host 'ERROR: allocator returned a malformed reconcile response'
+            Write-Host 'FAILURE_CLASS=INVALID_RESPONSE'
+            throw 'ERROR: allocator returned a malformed reconcile response'
         }
         $registryIds = @()
         if ($null -ne $data.registry_service_ids) {
             $registryIds = @($data.registry_service_ids | ForEach-Object { [string]$_ })
+        }
+        if (Test-FrpObjectHasProperty -Object $data -Name 'public_hostname') {
+            $hostnamePresent = $true
+            $hostnameValue = [string]$data.public_hostname
         }
     }
 
@@ -790,16 +998,30 @@ function Invoke-FrpReconcileReleasedServices {
     }
 
     $droppedEnabled = $false
+    $droppedAny = $false
     $newMap = [ordered]@{}
     foreach ($sid in @($map.Keys)) {
         if ($idSet.ContainsKey([string]$sid)) {
             $newMap[$sid] = $map[$sid]
             continue
         }
+        $droppedAny = $true
         if ($map[$sid].enabled -ne $false) { $droppedEnabled = $true }
     }
 
-    if ($newMap.Count -eq $map.Count) { return $false }
+    $oldAlias = ''
+    if (Test-FrpObjectHasProperty -Object $state -Name 'public_hostname') {
+        $oldAlias = ([string]$state.public_hostname).Trim()
+    }
+    $hostnameChanged = $false
+    $saveHostname = @{}
+    if ($hostnamePresent) {
+        $alias = ([string]$hostnameValue).Trim()
+        $saveHostname['PublicHostname'] = $alias
+        if ($alias -ne $oldAlias) { $hostnameChanged = $true }
+    }
+
+    if (-not $droppedAny -and -not $hostnameChanged) { return $false }
 
     $enabledLeft = 0
     foreach ($sid in $newMap.Keys) {
@@ -813,9 +1035,8 @@ function Invoke-FrpReconcileReleasedServices {
         -FrpServerPort ([int]$state.frp_server_port) -Hostname ([string]$state.hostname) `
         -MachineId ([string]$state.machine_id) -HostId ([string]$state.host_id) `
         -Services $newMap -Transport ([string]$state.frp_transport) `
-        -InstallStatus $installStatus | Out-Null
+        -InstallStatus $installStatus @saveHostname | Out-Null
 
-    # Keep a pending draft consistent with the post-release registry.
     $draftPath = Get-FrpDraftPath
     if (Test-Path -LiteralPath $draftPath) {
         try {
@@ -833,7 +1054,7 @@ function Invoke-FrpReconcileReleasedServices {
         } catch { }
     }
 
-    Invoke-FrpApplyReconcileRuntime -DroppedEnabled $droppedEnabled
+    Invoke-FrpApplyReconcileRuntime -DroppedEnabled $droppedEnabled -DroppedAny $droppedAny -HostnameChanged $hostnameChanged
     return $true
 }
 
@@ -846,10 +1067,11 @@ function Invoke-FrpClientSync {
     try {
         if (-not (Test-FrpIsEnrolled)) {
             Write-Host 'ERROR: not enrolled; run install-client.ps1 -ZeroTouch first'
+            Write-Host 'FAILURE_CLASS=MANAGEMENT_IDENTITY'
             return 1
         }
         try {
-            $null = Invoke-FrpReconcileReleasedServices
+            $null = Invoke-FrpReconcileReleasedServices -Strict
         } catch {
             Write-Host ("ERROR: sync failed: {0}" -f $_.Exception.Message)
             return 1
@@ -1010,6 +1232,8 @@ function Invoke-FrpZeroTouch {
                 FrpTransport    = $transport
                 TokenCiphertext = [string]$meta.token_ciphertext
                 Services        = @($pending.AllocatedServices)
+                PublicHostname  = [string]$meta.public_hostname
+                PublicHostnamePresent = (Test-FrpObjectHasProperty -Object $meta -Name 'public_hostname')
             }
         } else {
             # Persist the enrollment secret and exact request now, before
@@ -1025,14 +1249,18 @@ function Invoke-FrpZeroTouch {
                 -EnrollmentId $enrollmentId -EnrollmentSecret $enrollmentSecret `
                 -MachineId $machineId -Hostname $Hostname -Services $services -PublicPem $publicPem
 
+            $enrollMeta = @{
+                frp_server       = $enrollResult.FrpServer
+                frp_server_port  = $enrollResult.FrpServerPort
+                frp_transport    = $enrollResult.FrpTransport
+                token_ciphertext = $enrollResult.TokenCiphertext
+            }
+            if ($enrollResult.ContainsKey('PublicHostnamePresent') -and $enrollResult.PublicHostnamePresent) {
+                $enrollMeta['public_hostname'] = [string]$enrollResult.PublicHostname
+            }
             Save-FrpPendingEnroll -Phase 'enrolled' -MachineId $machineId -Hostname $Hostname `
                 -AllocatorUrl $AllocatorUrl -EnrollmentId $enrollmentId -EnrollmentSecret $enrollmentSecret `
-                -Services $services -EnrollMeta @{
-                    frp_server       = $enrollResult.FrpServer
-                    frp_server_port  = $enrollResult.FrpServerPort
-                    frp_transport    = $enrollResult.FrpTransport
-                    token_ciphertext = $enrollResult.TokenCiphertext
-                } -AllocatedServices $enrollResult.Services | Out-Null
+                -Services $services -EnrollMeta $enrollMeta -AllocatedServices $enrollResult.Services | Out-Null
 
             if ($env:FRP_WINDOWS_HOOK_CRASH_AFTER_ENROLL -eq '1') {
                 # Test-only: simulate a crash/lost response after the
@@ -1050,10 +1278,14 @@ function Invoke-FrpZeroTouch {
         $merged = Merge-FrpAllocatedPorts -LocalServices $services -AllocatedList $enrollResult.Services
         $hostId = ($machineId.Substring(0, [Math]::Min(12, $machineId.Length)))
 
+        $saveHostname = @{}
+        if ($enrollResult.ContainsKey('PublicHostnamePresent') -and $enrollResult.PublicHostnamePresent) {
+            $saveHostname['PublicHostname'] = [string]$enrollResult.PublicHostname
+        }
         Save-FrpClientState -AllocatorUrl $AllocatorUrl -FrpServer $enrollResult.FrpServer `
             -FrpServerPort $enrollResult.FrpServerPort -Hostname $Hostname -MachineId $machineId `
             -HostId $hostId -Services $merged -Transport $enrollResult.FrpTransport `
-            -InstallStatus 'enrolled_incomplete' | Out-Null
+            -InstallStatus 'enrolled_incomplete' @saveHostname | Out-Null
 
         New-FrpClientToml -ServerAddr $enrollResult.FrpServer -ServerPort $enrollResult.FrpServerPort `
             -Token $token -HostId $hostId -Services $merged -Transport $enrollResult.FrpTransport | Out-Null

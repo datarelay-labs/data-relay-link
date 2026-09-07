@@ -1512,9 +1512,7 @@ class Allocator:
             'frp_transport': cfg_frp_transport(self.cfg),
             'registry_service_ids': registry_service_ids,
         }
-        alias = cfg_public_hostname(self.cfg)
-        if alias:
-            response_payload['public_hostname'] = alias
+        response_payload['public_hostname'] = cfg_public_hostname(self.cfg)
         response_payload['response_hmac'] = MGMT.hmac_hex(
             response_mac_key, canonical_json(response_payload)
         )
@@ -1837,9 +1835,7 @@ class Allocator:
             'frp_transport': cfg_frp_transport(self.cfg),
             'services': allocated,
         }
-        alias = cfg_public_hostname(self.cfg)
-        if alias:
-            response_payload['public_hostname'] = alias
+        response_payload['public_hostname'] = cfg_public_hostname(self.cfg)
         if identity_auth:
             mac_secret = response_mac_key
             if not mac_secret:
