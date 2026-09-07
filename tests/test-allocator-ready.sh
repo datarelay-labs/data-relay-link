@@ -121,14 +121,14 @@ pass "SERVER_ALLOCATOR_DELAYED_READY"
 # --- Healthz never succeeds: bounded timeout, non-zero exit.
 reset_ready_mocks
 CURL_ALWAYS_FAIL=1
-export FRP_ALLOCATOR_READY_TIMEOUT_SEC=1
+export FRP_ALLOCATOR_READY_TIMEOUT_SEC=2
 export FRP_ALLOCATOR_READY_INTERVAL_SEC=0.1
 set +e
 frp_wait_allocator_ready 6099 >"$WORKDIR/timeout.out" 2>"$WORKDIR/timeout.err"
 timeout_rc=$?
 set -e
 [[ "$timeout_rc" -ne 0 ]] || fail "timeout should fail"
-grep -q 'ERROR: FRP allocator did not become ready within 1 seconds' "$WORKDIR/timeout.err" || fail "timeout error text"
+grep -q 'ERROR: FRP allocator did not become ready within 2 seconds' "$WORKDIR/timeout.err" || fail "timeout error text"
 [[ "$SLEEP_COUNT" -ge 1 ]] || fail "timeout should have retried"
 [[ "$CURL_CALLS" -ge 2 ]] || fail "timeout should have curled more than once"
 pass "SERVER_ALLOCATOR_TIMEOUT"

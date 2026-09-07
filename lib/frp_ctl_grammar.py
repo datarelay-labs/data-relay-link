@@ -377,10 +377,9 @@ def _root_help(role):
     lines.extend(
         [
             "  update project [--check]",
+            "  update frp [--check]",
         ]
     )
-    if server:
-        lines.append("  update frp [--check]")
     lines.extend(
         [
             "",
@@ -510,12 +509,10 @@ def _create_help(role):
 
 
 def _update_help(role):
-    _, server = _role_parts(role)
     lines = [
         "Update\n======\n\nUsage:\n  update project [--check]",
+        "  update frp [--check]",
     ]
-    if server:
-        lines.append("  update frp [--check]")
     lines.append("\nA software update does not re-enroll clients or rotate CA/token/ports.\n")
     return "\n".join(lines)
 
@@ -772,9 +769,10 @@ def context_help(tokens, role, names=None, clients=None):
             ]
         )
     if verb == "update":
-        rows = [("project", "Update project management tools")]
-        if server:
-            rows.append(("frp", "Update the FRP binary"))
+        rows = [
+            ("project", "Update project management tools"),
+            ("frp", "Update the FRP binary"),
+        ]
         return _fmt_available(rows)
     if verb == "release":
         return _fmt_available(
@@ -1387,7 +1385,7 @@ def _match_release(tokens, role, names=None):
 
 
 def _match_update(tokens, role, names=None):
-    _, server = _role_parts(role)
+    client_role, server = _role_parts(role)
     if len(tokens) == 1:
         return {"status": "ok", "action": "update_default"}
     resource = tokens[1]
@@ -1395,10 +1393,10 @@ def _match_update(tokens, role, names=None):
         if resource.startswith("-"):
             return {"status": "ok", "action": "update_default", "passthrough": tokens[1:]}
         action = "update_project" if resource == "project" else "update_frp"
-        if resource == "frp" and not server:
-            return {"status": "role", "need": "server", "command": "update frp"}
+        if resource == "frp" and not server and not client_role:
+            return {"status": "role", "need": "client or server", "command": "update frp"}
         return {"status": "ok", "action": action, "passthrough": tokens[2:]}
-    avail = ["project"] + (["frp"] if server else [])
+    avail = ["project", "frp"]
     return incomplete("Unknown update target.", ["update project [--check]", "update frp [--check]"], avail)
 
 
@@ -1601,9 +1599,11 @@ def _tab_desc_map(line, role, names=None, clients=None):
             "service": "Release one service reservation",
         }, "named"
     if verb == "update" and len(filled) == 1:
-        rows = {"project": "Update project management tools", "--check": "Check only"}
-        if server:
-            rows["frp"] = "Update the FRP binary"
+        rows = {
+            "project": "Update project management tools",
+            "frp": "Update the FRP binary",
+            "--check": "Check only",
+        }
         return rows, "named"
     if verb == "show" and len(filled) >= 2 and filled[1] == "client" and len(filled) == 2:
         return {}, "clients"
@@ -1767,10 +1767,7 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
         return []
     if verb == "update":
         if len(filled) == 1:
-            items = ["project", "--check"]
-            if server:
-                items.append("frp")
-            return _filter(items, prefix)
+            return _filter(["project", "frp", "--check"], prefix)
         if filled[1] in ("project", "frp"):
             return _filter(["--check"], prefix)
         return []

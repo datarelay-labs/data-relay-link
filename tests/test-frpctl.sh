@@ -142,6 +142,8 @@ export FRP_CTL_DRY_RUN=1
 grep -qx 'DISPATCH frp-client' "$WORKDIR/client-manage.out" || fail "manage dispatch"
 "$CTL" update >"$WORKDIR/client-update.out"
 grep -qx 'DISPATCH frp-client update' "$WORKDIR/client-update.out" || fail "client update dispatch"
+"$CTL" update frp --check >"$WORKDIR/client-upd-frp.out"
+grep -qx 'DISPATCH frp-update --check' "$WORKDIR/client-upd-frp.out" || fail "client update frp"
 "$CTL" info >"$WORKDIR/client-info.out"
 grep -qx 'DISPATCH frp-client info' "$WORKDIR/client-info.out" || fail "info dispatch"
 "$CTL" services >"$WORKDIR/client-services.out"
@@ -149,6 +151,7 @@ grep -qx 'DISPATCH frp-client list' "$WORKDIR/client-services.out" || fail "serv
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_CLIENT_MANAGE_DISPATCH"
 pass "FRPCTL_CLIENT_UPDATE_DISPATCH"
+pass "FRPCTL_CLIENT_UPDATE_FRP"
 
 if "$CTL" clients >"$WORKDIR/client-clients.out" 2>"$WORKDIR/client-clients.err"; then
   fail "client host should reject server clients command"
