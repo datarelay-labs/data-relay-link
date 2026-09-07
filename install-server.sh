@@ -1365,13 +1365,14 @@ frp_server_rollback_snapshot() {
   if [[ ! -f "$py" ]]; then
     py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_install_txn.py)"
   fi
-  local apply=()
+  # Bash 4.2 (Amazon Linux 2) treats empty "${arr[@]}" as unbound under set -u.
   if ! frp_server_skip_systemd && ! frp_server_test_mode; then
-    apply=(--apply-services)
+    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" --apply-services
   elif [[ -n "${FRP_INSTALL_TXN_HOOK_SYSTEMCTL:-}" ]]; then
-    apply=(--apply-services)
+    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" --apply-services
+  else
+    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest"
   fi
-  python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" "${apply[@]}"
 }
 
 frp_server_fail_after_mutation() {

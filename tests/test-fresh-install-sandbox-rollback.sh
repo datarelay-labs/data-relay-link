@@ -437,4 +437,10 @@ unset FRP_INSTALL_HOOK_START_FAIL FRP_INSTALL_TXN_HOOK_SYSTEMCTL
 [[ -x "$DUAL/usr/local/bin/frpctl" ]] || fail "rollback removed client frpctl"
 pass "DUAL_ROLE_ROLLBACK_PRESERVES_CLIENT"
 
+# Bash 4.2 (Amazon Linux 2) + set -u rejects empty "${arr[@]}".
+if grep -nE '\$\{apply\[@\]\}' "$ROOT/install-server.sh"; then
+  fail "empty-array restore args break bash 4.2 set -u"
+fi
+pass "BASH42_EMPTY_ARRAY_SAFE"
+
 echo "FRESH_INSTALL_SANDBOX_ROLLBACK_TEST=PASS"
