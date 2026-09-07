@@ -229,11 +229,16 @@ def test_live_frontend_proxy():
                     nginx_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     nginx_proc.kill()
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+                    nginx_proc.wait(timeout=5)
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            if proc.poll() is None:
+                raise SystemExit('FAIL test allocator still running pid=%s' % proc.pid)
 
 
 def write_single443_tree(tree, pki_host='203.0.113.10'):

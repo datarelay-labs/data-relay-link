@@ -8,14 +8,9 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 
 WORKDIR="$(mktemp -d)"
 ALLOC_PID=""
-cleanup() {
-  if [[ -n "${ALLOC_PID}" ]]; then
-    kill "$ALLOC_PID" 2>/dev/null || true
-    wait "$ALLOC_PID" 2>/dev/null || true
-  fi
-  rm -rf "$WORKDIR"
-}
-trap cleanup EXIT
+# shellcheck source=lib/frp-test-procs.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/frp-test-procs.sh"
+frp_test_arm_cleanup
 
 TREE="$WORKDIR/tree"
 mkdir -p "$TREE/etc/frp-auto-deploy/pki" \

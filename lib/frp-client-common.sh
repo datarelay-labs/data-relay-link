@@ -3579,6 +3579,9 @@ frp_release_client_lock() {
     exec {FRP_CLIENT_LOCK_FD}>&- 2>/dev/null || true
     unset FRP_CLIENT_LOCK_FD
     rm -f "${lock}.pid"
+    if [[ -f "$lock" ]]; then
+      rm -f "$lock"
+    fi
   fi
   if [[ -d "$lock" ]]; then
     rm -rf "$lock"

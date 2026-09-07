@@ -77,6 +77,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-frpctl-doctor.sh
 ./tests/test-port-architecture.sh
 ./tests/test-ca-bootstrap.sh
+./tests/test-allocator-process-cleanup.sh
 ./tests/test-pki-https.py
 python3 tests/test-frontend-proxy.py
 ./tests/test-distro-matrix.sh
@@ -94,6 +95,16 @@ python3 tests/test-audit-log.py
 ./tests/test-frp-compatibility.sh
 ./tests/test-backup-restore.sh
 ./tests/test-server-uninstall-fail-closed.sh
+
+echo "=== leftover test allocators ==="
+# shellcheck source=lib/frp-test-procs.sh
+. "$ROOT/tests/lib/frp-test-procs.sh"
+if ! frp_test_assert_no_tmp_allocators; then
+  echo "FAIL leftover test-owned allocators after run-all" >&2
+  frp_test_stop_tmp_allocators || true
+  exit 1
+fi
+echo "POST_RUN_ALL_TEST_ALLOCATORS=0"
 
 echo "=== secret scan ==="
 ./scripts/secret-scan.sh

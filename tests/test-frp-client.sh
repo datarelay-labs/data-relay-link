@@ -5,7 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 ALLOC_PID=""
-trap '[[ -n "$ALLOC_PID" ]] && kill "$ALLOC_PID" 2>/dev/null || true; rm -rf "$WORKDIR"' EXIT
+# shellcheck source=lib/frp-test-procs.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/frp-test-procs.sh"
+frp_test_arm_cleanup
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
@@ -703,6 +705,19 @@ fi
 flock -u "$LOCKFD"
 exec {LOCKFD}>&-
 pass "draft mutation lock; read-only status unlocked"
+
+# flock-based release must remove the lock file; doctor treats leftovers as stale.
+rm -f "$TREE/etc/frp/client-manage.lock" "$TREE/etc/frp/client-manage.lock.pid"
+rm -rf "$TREE/etc/frp/client-manage.lock"
+unset FRP_CLIENT_LOCK_FD || true
+frp_acquire_client_lock
+lock_path="$(frp_client_lock_dir)"
+[[ -e "$lock_path" || -f "${lock_path}.pid" ]] || fail "acquire did not create a lock"
+frp_release_client_lock
+if [[ -e "$lock_path" || -f "${lock_path}.pid" ]]; then
+  fail "lock release left $lock_path"
+fi
+pass "lock release leaves no stale lock file"
 
 # Existing install refuses re-enrollment via the installer
 fp_before="$(python3 "$ROOT/lib/frp_mgmt_auth.py" fingerprint "$TREE/etc/frp/client-identity.pub")"

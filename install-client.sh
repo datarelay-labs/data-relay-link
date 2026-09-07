@@ -500,7 +500,15 @@ frp_client_main() {
   ENROLL_META_FILE="$(mktemp)"
   TMPDIR="$(frp_secure_mktemp_dir)"
   chmod 600 "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
-  trap 'rm -rf "$TMPDIR" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"; unset FRP_TOKEN ENROLL_SECRET FRP_ENROLLMENT_CODE TOKEN_CIPHERTEXT FRP_BOOTSTRAP_TICKET' EXIT
+  _frp_client_enroll_tmp_cleanup() {
+    rm -rf "$TMPDIR" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
+    unset FRP_TOKEN ENROLL_SECRET FRP_ENROLLMENT_CODE TOKEN_CIPHERTEXT FRP_BOOTSTRAP_TICKET
+  }
+  # Sourced callers (tests, frpctl wrappers) already own EXIT. Replacing or
+  # chaining that trap leaks test allocators or SIGSEGVs bash on restore.
+  if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    trap '_frp_client_enroll_tmp_cleanup' EXIT
+  fi
 
   RESUME_PHASE=""
   if [[ "$FRP_RESUME_PENDING" == "1" ]]; then
@@ -717,6 +725,9 @@ frp_client_main() {
   frp_client_install_management_files "${_FRP_INSTALL_CLIENT_DIR}"
 
   print_complete "$FRP_SERVER" "$SERVICES_FILE" "${FRP_PUBLIC_HOSTNAME:-}"
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    _frp_client_enroll_tmp_cleanup
+  fi
 }
 
 frp_client_installer_usage() {

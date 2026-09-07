@@ -431,8 +431,6 @@ frp_doctor_main() {
 
   py="$(frp_doctor_py)" || return 2
   facts_file="$(mktemp)"
-  # Temp facts only. EXIT removes it; do not override the frpctl INT trap.
-  trap 'rm -f "$facts_file"' EXIT
 
   frp_doctor_collect_facts "$facts_file" || true
 
@@ -457,6 +455,5 @@ frp_doctor_main() {
   rc=$?
   set -e
   rm -f "$facts_file"
-  trap - EXIT
   return "$rc"
 }

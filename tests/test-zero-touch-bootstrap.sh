@@ -6,7 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 ALLOC_PID=""
 LISTEN_PID=""
-trap '[[ -n "$ALLOC_PID" ]] && kill "$ALLOC_PID" 2>/dev/null || true; [[ -n "$LISTEN_PID" ]] && kill "$LISTEN_PID" 2>/dev/null || true; rm -rf "$WORKDIR"' EXIT
+# shellcheck source=lib/frp-test-procs.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/frp-test-procs.sh"
+frp_test_arm_cleanup
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }

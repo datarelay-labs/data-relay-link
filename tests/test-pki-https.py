@@ -61,6 +61,22 @@ def start_allocator(cfg_path):
     return proc
 
 
+def stop_allocator(proc, timeout=5):
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+    if proc.poll() is None:
+        raise SystemExit('FAIL test allocator still running pid=%s' % proc.pid)
+
+
 def wait_https(url, ca, timeout=5.0):
     ctx = ssl.create_default_context(cafile=str(ca))
     deadline = time.time() + timeout
@@ -120,8 +136,7 @@ def test_https_healthz():
             pass_('allocator starts with TLS')
             pass_('verified /healthz succeeds')
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            stop_allocator(proc)
 
 
 def test_plain_http_rejected():
@@ -140,8 +155,7 @@ def test_plain_http_rejected():
                 pass
             pass_('plain HTTP is not supported')
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            stop_allocator(proc)
 
 
 def test_unknown_ca_fails():
@@ -166,8 +180,7 @@ def test_unknown_ca_fails():
                         fail('unknown CA', exc)
             pass_('unknown CA fails')
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            stop_allocator(proc)
 
 
 def test_wrong_san_fails():
@@ -186,8 +199,7 @@ def test_wrong_san_fails():
                 pass
             pass_('wrong SAN fails')
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            stop_allocator(proc)
 
 
 def test_ca_crt_public_only():
@@ -212,8 +224,7 @@ def test_ca_crt_public_only():
                 fail('ca.crt mismatch')
             pass_('/ca.crt returns public certificate only')
         finally:
-            proc.terminate()
-            proc.wait(timeout=5)
+            stop_allocator(proc)
 
 
 def test_refuse_plain_start():
@@ -234,9 +245,7 @@ def test_refuse_plain_start():
                 fail('missing TLS error', out)
             pass_('allocator fails closed without TLS')
         finally:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait(timeout=5)
+            stop_allocator(proc)
 
 
 def test_ca_preserved_on_reissue():
