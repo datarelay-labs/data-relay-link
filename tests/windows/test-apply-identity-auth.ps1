@@ -20,6 +20,7 @@ try {
     New-FrpClientToml -ServerAddr 'example.test' -ServerPort 7000 -Token 'tok-existing' `
         -HostId 'abcd1234' -Services $services -Transport 'tcp' | Out-Null
 
+    $env:FRP_SKIP_CONNECTIVITY_CHECK = '1'
     Add-FrpDraftService -Preset 'custom' -Id 'web' -Name 'Web' -TargetHost '10.0.0.5' -TargetPort 8080 | Out-Null
     Assert-FrpTrue (Test-FrpDraftPending) 'draft pending before apply'
 

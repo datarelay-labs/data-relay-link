@@ -59,6 +59,8 @@ python3 tests/test-client-registry.py
 python3 tests/test-restore-readiness.py
 ./tests/test-frp-client.sh
 ./tests/test-release-service-client-state-reconcile.sh
+./tests/test-client-sync-reconcile.sh
+./tests/test-source-arg.sh
 ./tests/test-lifecycle.sh
 ./tests/test-guided-ux.sh
 ./tests/test-client-upgrade.sh
@@ -90,6 +92,7 @@ python3 tests/test-frontend-proxy.py
 python3 tests/test-audit-log.py
 ./tests/test-frp-compatibility.sh
 ./tests/test-backup-restore.sh
+./tests/test-server-uninstall-fail-closed.sh
 
 echo "=== secret scan ==="
 ./scripts/secret-scan.sh

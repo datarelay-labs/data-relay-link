@@ -107,8 +107,12 @@ BACKUP_STDOUT="$WORKDIR/backup.stdout"
 python3 "$ROOT/tools/frp-backup" "$BACKUP" >"$BACKUP_STDOUT" \
   || fail "backup creation"
 [[ -f "$BACKUP" ]] || fail "backup archive missing"
-[[ "$(mode_of "$OUTDIR")" == "0o700" ]] || fail "backup directory mode"
+CUSTOM_PARENT_UID="$(stat -c %u "$OUTDIR")"
+CUSTOM_PARENT_MODE="$(mode_of "$OUTDIR")"
+[[ "$CUSTOM_PARENT_MODE" == "0o755" ]] || fail "custom parent fixture mode"
 [[ "$(mode_of "$BACKUP")" == "0o600" ]] || fail "backup archive mode"
+[[ "$(stat -c %u "$OUTDIR")" == "$CUSTOM_PARENT_UID" ]] || fail "custom parent owner changed"
+[[ "$(mode_of "$OUTDIR")" == "$CUSTOM_PARENT_MODE" ]] || fail "custom parent mode changed"
 grep -q 'contains private keys' "$BACKUP_STDOUT" || fail "secret warning missing"
 if grep -qE 'token-original-super-secret|private note|original-enrollment' "$BACKUP_STDOUT"; then
   fail "backup leaked a secret"
@@ -299,5 +303,48 @@ grep -q 'RESTORE_ROLLBACK_FAILED' "$WORKDIR/rbhealth.stderr" || fail "RESTORE_RO
 grep -q 'RECOVERY_REQUIRED' "$WORKDIR/rbhealth.stderr" || fail "restore recovery required"
 [[ -f "$HEALTH/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "restore pending missing"
 pass "RESTORE_ROLLBACK_FAILURE"
+
+# Default product-owned backup directory is secured; custom parents are not taken over.
+DEFAULT_TREE="$WORKDIR/default-root"
+seed_state "$DEFAULT_TREE" default-dir
+export FRP_DEPLOY_TEST_ROOT="$DEFAULT_TREE"
+python3 "$ROOT/tools/frp-backup" >"$WORKDIR/default.stdout" \
+  || fail "default backup creation"
+DEFAULT_DIR="$DEFAULT_TREE/var/lib/frp-auto-deploy/backups"
+[[ -d "$DEFAULT_DIR" ]] || fail "default backup directory missing"
+[[ "$(mode_of "$DEFAULT_DIR")" == "0o700" ]] || fail "default backup directory mode"
+DEFAULT_ARCHIVE="$(find "$DEFAULT_DIR" -maxdepth 1 -type f -name 'server-backup-*.tar.gz' | head -n 1)"
+[[ -n "$DEFAULT_ARCHIVE" ]] || fail "default backup archive missing"
+[[ "$(mode_of "$DEFAULT_ARCHIVE")" == "0o600" ]] || fail "default backup archive mode"
+pass "BACKUP_DEFAULT_DIRECTORY_SECURE"
+
+LINK_TARGET="$WORKDIR/link-target.tar.gz"
+cp "$BACKUP" "$LINK_TARGET"
+LINK_OUT="$WORKDIR/backup-symlink.tar.gz"
+ln -s "$LINK_TARGET" "$LINK_OUT"
+PARENT_BEFORE_UID="$(stat -c %u "$WORKDIR")"
+PARENT_BEFORE_MODE="$(mode_of "$WORKDIR")"
+if python3 "$ROOT/tools/frp-backup" "$LINK_OUT" >"$WORKDIR/sym.out" 2>"$WORKDIR/sym.err"; then
+  fail "backup target symlink accepted"
+fi
+grep -qi 'symlink' "$WORKDIR/sym.err" || fail "backup symlink diagnostic"
+[[ "$(stat -c %u "$WORKDIR")" == "$PARENT_BEFORE_UID" ]] || fail "symlink backup changed parent owner"
+[[ "$(mode_of "$WORKDIR")" == "$PARENT_BEFORE_MODE" ]] || fail "symlink backup changed parent mode"
+pass "BACKUP_TARGET_SYMLINK_REJECTED"
+
+RESTORE_LINK="$WORKDIR/restore-symlink.tar.gz"
+ln -s "$BACKUP" "$RESTORE_LINK"
+if python3 "$ROOT/tools/frp-restore" "$RESTORE_LINK" >"$WORKDIR/rsym.out" 2>"$WORKDIR/rsym.err"; then
+  fail "restore archive symlink accepted"
+fi
+grep -qi 'symlink' "$WORKDIR/rsym.err" || fail "restore symlink diagnostic"
+pass "RESTORE_ARCHIVE_SYMLINK_REJECTED"
+
+printf 'this is not a tar archive\n' >"$WORKDIR/corrupt.tar.gz"
+if python3 "$ROOT/tools/frp-restore" "$WORKDIR/corrupt.tar.gz" >"$WORKDIR/corr.out" 2>"$WORKDIR/corr.err"; then
+  fail "corrupted archive accepted"
+fi
+grep -qi 'not a valid tar archive\|backup is not a valid' "$WORKDIR/corr.err" || fail "corrupt archive diagnostic"
+pass "RESTORE_CORRUPT_ARCHIVE_REJECTED"
 
 echo "BACKUP_RESTORE_TEST=PASS"
