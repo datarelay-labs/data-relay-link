@@ -17,8 +17,10 @@ reset_env() {
     FRP_PORT_START FRP_PORT_END FRP_ALLOCATOR_PORT \
     FRP_ALLOCATOR_PUBLIC_PORT FRP_ALLOCATOR_LISTEN_PORT \
     FRP_ALLOCATOR_URL FRP_ALLOCATOR_PUBLIC_URL FRP_CLIENT_INSTALLER_URL \
+    FRP_WINDOWS_CLIENT_INSTALLER_URL \
     FRP_SERVER_CONFIG DETECTED_PUBLIC_IP DETECTED_INTERNAL_IP \
-    CLIENT_INSTALLER_URL FRP_DEPLOYMENT_MODE FRP_CONFIRM_MODE_SWITCH \
+    CLIENT_INSTALLER_URL WINDOWS_CLIENT_INSTALLER_URL \
+    FRP_DEPLOYMENT_MODE FRP_CONFIRM_MODE_SWITCH \
     FRP_LISTEN_HOST FRP_CONTROL_BIND_ADDR FRP_TRANSPORT FRP_MODE_SWITCH \
     EXISTING_DEPLOYMENT_MODE EXISTING_SERVER_CONFIG FRP_RELEASE_CHANNEL || true
 }
@@ -186,6 +188,7 @@ Path(sys.argv[1]).write_text(json.dumps({
   "listen_port": 6099,
   "allocator_public_url": "http://203.0.113.10/enroll",
   "client_installer_url": "https://example.invalid/bootstrap-client.sh",
+  "windows_client_installer_url": "https://example.invalid/bootstrap-client.ps1",
 }, indent=2, sort_keys=True) + "\n")
 PY
 reset_env
@@ -195,6 +198,8 @@ resolve_server_settings
 [[ "$FRP_PUBLIC_IP" == '203.0.113.10' ]] || fail "CASE D public ip overwritten"
 [[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://203.0.113.10:6099/enroll' ]] || fail "CASE D HTTP URL must not be reused"
 [[ "$CLIENT_INSTALLER_URL" == 'https://example.invalid/bootstrap-client.sh' ]] || fail "CASE D installer URL overwritten"
+[[ "$WINDOWS_CLIENT_INSTALLER_URL" == 'https://example.invalid/bootstrap-client.ps1' ]] \
+  || fail "CASE D Windows installer URL overwritten"
 pass "CASE D rerun preserves runtime config"
 
 # Explicit env wins over existing config.

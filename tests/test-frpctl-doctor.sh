@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
+# Linux doctor fixtures must not inherit Darwin path/platform overrides.
+unset FRP_TEST_UNAME_S FRP_TEST_UNAME_M FRP_TEST_MACOS_PRODUCT_VERSION \
+  FRP_MACOS_STATE_ROOT FRP_MACOS_PREFIX FRP_MACOS_LAUNCHD_LABEL || true
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
@@ -20,7 +23,7 @@ export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
 
 write_dummy_bin() {
-  local dest="$1" name="$2" version="${3:-0.70.1}"
+  local dest="$1" name="$2" version="${3:-0.71.0}"
   mkdir -p "$(dirname "$dest")"
   cat >"$dest" <<EOF
 #!/usr/bin/env bash
@@ -392,9 +395,25 @@ else
 fi
 snapshot "$CL" "$WORKDIR/client.after"
 assert_unchanged "$WORKDIR/client.before" "$WORKDIR/client.after" "healthy client"
+python3 - "$WORKDIR/client.json" <<'PY' || fail "linux doctor runtime/distro labels"
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+text = json.dumps(data)
+assert 'launchd job' not in text
+assert 'com.datarelay.frp-auto-deploy.frpc' not in text
+ids = {c.get('id'): c for c in data.get('checks') or []}
+assert 'distro_support' in ids
+assert 'automated container matrix' in (ids['distro_support'].get('message') or '')
+assert 'macos_support' not in ids
+frpc = ids.get('frpc_service') or {}
+assert 'frpc.service' in (frpc.get('message') or '')
+assert 'launchd' not in (frpc.get('message') or '')
+PY
 pass "HEALTHY_CLIENT"
 pass "DISABLED_SERVICE_LEGITIMATE"
 pass "DOCTOR_JSON"
+pass "LINUX_DOCTOR_DISTRO_AND_SYSTEMD_LABELS"
 
 # ---------------------------------------------------------------------------
 # WARN only: missing access-info
@@ -672,7 +691,7 @@ pass "DOCTOR_FRP_UPDATE_GUIDANCE"
 VM="$WORKDIR/ver-mis"
 cp -a "$CL" "$VM"
 echo 'PROJECT_VERSION=1.2.0' >"$VM/etc/frp-auto-deploy/version"
-echo 'FRP_VERSION=0.70.1' >>"$VM/etc/frp-auto-deploy/version"
+echo 'FRP_VERSION=0.71.0' >>"$VM/etc/frp-auto-deploy/version"
 run_json "$VM" "$WORKDIR/ver.json" || true
 [[ "$(check_status "$WORKDIR/ver.json" project_version)" == "FAIL" ]] || fail "project version mismatch"
 grep -q 'frpctl update' "$WORKDIR/ver.json" || fail "version recovery"
@@ -683,6 +702,7 @@ cp -a "$CL" "$FV"
 write_dummy_bin "$FV/usr/local/bin/frpc" frpc "0.69.0"
 run_json "$FV" "$WORKDIR/fv.json" || true
 [[ "$(check_status "$WORKDIR/fv.json" frp_version)" == "FAIL" ]] || fail "frp version mismatch"
+grep -q 'frpctl update frp' "$WORKDIR/fv.json" || fail "client frp-update guidance"
 pass "FRP_VERSION_MISMATCH"
 
 # Stale lock

@@ -1,0 +1,38 @@
+name: macos-client
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: |
+          for test in tests/test-macos-*.sh; do
+            bash "$test"
+          done
+
+  apple-silicon:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify client port
+        run: |
+          test "$(uname -m)" = arm64
+          for test in tests/test-macos-*.sh; do
+            /bin/bash "$test"
+          done
+          python3 scripts/build-bundles.py
+          git diff --exit-code dist/
+      - name: Verify pinned FRP binary
+        run: |
+          version=0.71.0
+          archive="$RUNNER_TEMP/frp.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_darwin_arm64.tar.gz"
+          echo "45be02b186860d375ed49a8941ae9569628a54bf14e67fc36b29c98c99dabcc6  $archive" |
+            shasum -a 256 -c -

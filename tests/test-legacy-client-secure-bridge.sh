@@ -20,7 +20,7 @@ write_runtime_fixture() {
   cat >"$tree/usr/local/bin/frpc" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = verify ]; then exit 0; fi
-if [ "${1:-}" = --version ]; then echo "frpc version 0.70.1"; exit 0; fi
+if [ "${1:-}" = --version ]; then echo "frpc version 0.71.0"; exit 0; fi
 exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frpc"
@@ -173,7 +173,7 @@ from pathlib import Path
 bundle, rel, dest = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 text = bundle.read_text()
 pat = re.compile(
-    r"base64 -d >\"\$TMP/" + re.escape(rel) + r"\" <<'B64'\n(.*?)\nB64",
+    r"(?:base64 -d|_frp_b64d) >\"\$TMP/" + re.escape(rel) + r"\" <<'B64'\n(.*?)\nB64",
     re.S,
 )
 match = pat.search(text)
@@ -257,7 +257,7 @@ NOCH="$WORKDIR/no-channel"
 write_runtime_fixture "$NOCH"
 write_version "$NOCH" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 export FRP_CLIENT_TEST_ROOT="$NOCH"
 [[ "$(frp_client_installed_release_channel)" == "unknown" ]] || fail "missing channel not unknown"
@@ -267,7 +267,7 @@ NOREF="$WORKDIR/no-ref"
 write_runtime_fixture "$NOREF"
 write_version "$NOREF" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
 EOF
 export FRP_CLIENT_TEST_ROOT="$NOREF"
@@ -278,7 +278,7 @@ NOSHA="$WORKDIR/no-sha"
 write_runtime_fixture "$NOSHA"
 write_version "$NOSHA" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
 SOURCE_REF=main
 EOF
@@ -294,7 +294,7 @@ write_runtime_fixture "$LEGACY"
 install_old_tools "$LEGACY"
 write_version "$LEGACY" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 snapshot_preserved_state "$LEGACY" "$WORKDIR/legacy.before"
 export FRP_CLIENT_TEST_ROOT="$LEGACY"
@@ -372,7 +372,7 @@ write_runtime_fixture "$DEV_TREE"
 install_old_tools "$DEV_TREE"
 write_version "$DEV_TREE" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 snapshot_preserved_state "$DEV_TREE" "$WORKDIR/dev-bridge.before"
 export FRP_CLIENT_HOOK_LOG="$WORKDIR/dev-bridge.hooks"
@@ -427,7 +427,7 @@ write_runtime_fixture "$STABLE_TREE"
 install_old_tools "$STABLE_TREE"
 write_version "$STABLE_TREE" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 snapshot_preserved_state "$STABLE_TREE" "$WORKDIR/stable-bridge.before"
 if ! FRP_CLIENT_TEST_ROOT="$STABLE_TREE" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
@@ -462,7 +462,7 @@ write_runtime_fixture "$BUG"
 install_old_tools "$BUG"
 write_version "$BUG" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=stable
 SOURCE_REF=v2.1.0
 EOF
@@ -509,7 +509,7 @@ MODERN="$WORKDIR/modern"
 write_runtime_fixture "$MODERN"
 write_version "$MODERN" <<'EOF'
 PROJECT_VERSION=2.1.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
 SOURCE_REF=main
 BUNDLE_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

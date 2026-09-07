@@ -54,15 +54,15 @@ def require_v2(state):
 
 
 if len(sys.argv) not in (2, 3):
-    print(f'Usage: {sys.argv[0]} <client-id|label|hostname> [overview|services|tags]', file=sys.stderr)
+    print(f'Usage: {sys.argv[0]} <client-id|label|hostname> [overview|services|tags|groups]', file=sys.stderr)
     sys.exit(2)
 
 q = sys.argv[1]
 view = (sys.argv[2] if len(sys.argv) > 2 else 'overview').strip().lower()
 if view in ('', 'info'):
     view = 'overview'
-if view not in ('overview', 'services', 'tags'):
-    print('ERROR: unknown view. Use overview, services, or tags.', file=sys.stderr)
+if view not in ('overview', 'services', 'tags', 'groups'):
+    print('ERROR: unknown view. Use overview, services, tags, or groups.', file=sys.stderr)
     sys.exit(2)
 
 cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
@@ -168,9 +168,28 @@ def print_tags():
         ))
 
 
+def print_groups():
+    try:
+        groups = CREG.client_group_memberships(state, client)
+    except ValueError as exc:
+        print('ERROR: %s' % exc, file=sys.stderr)
+        raise SystemExit(1)
+    if not groups:
+        print('(no groups)')
+        return
+    print('%-14s %s' % ('GROUP ID', 'NAME'))
+    for gid, group in groups:
+        print('%-14s %s' % (
+            CREG.sanitize_display(gid, 14),
+            CREG.sanitize_display(group.get('name') or '-', 64),
+        ))
+
+
 if view == 'overview':
     print_overview()
 elif view == 'services':
     print_services()
-else:
+elif view == 'tags':
     print_tags()
+else:
+    print_groups()

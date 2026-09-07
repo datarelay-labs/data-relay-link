@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 LOCK = threading.Lock()
 MAX_CLOCK_SKEW = 300
@@ -283,7 +283,11 @@ def read_project_version(root=''):
         ]
     )
     for path in candidates:
-        if not path.is_file():
+        try:
+            present = path.is_file()
+        except OSError:
+            continue
+        if not present:
             continue
         try:
             for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
@@ -985,13 +989,18 @@ class Allocator:
             return False
         return True
 
-    def build_short_url_script(self, raw_ticket):
+    def build_short_url_script(self, raw_ticket, platform='linux'):
         """Build the generic short-URL bootstrap script, or None on failure."""
         if ZT is None or PKI is None:
             return None
         self.reload_cfg_if_changed()
         allocator = str(self.cfg.get('allocator_public_url') or '').strip()
-        installer = str(self.cfg.get('client_installer_url') or '').strip()
+        if platform == 'windows':
+            installer = str(
+                self.cfg.get('windows_client_installer_url') or ''
+            ).strip()
+        else:
+            installer = str(self.cfg.get('client_installer_url') or '').strip()
         ca_path = str(self.cfg.get('tls_ca_cert') or '').strip()
         if not allocator.lower().startswith('https://'):
             return None
@@ -1006,6 +1015,10 @@ class Allocator:
         if not ca_fp:
             return None
         try:
+            if platform == 'windows':
+                return ZT.render_short_url_windows_bootstrap_script(
+                    allocator, ca_fp, raw_ticket, installer
+                )
             return ZT.render_short_url_bootstrap_script(
                 allocator, ca_fp, raw_ticket, installer
             )
@@ -1503,9 +1516,7 @@ class Allocator:
             'frp_transport': cfg_frp_transport(self.cfg),
             'registry_service_ids': registry_service_ids,
         }
-        alias = cfg_public_hostname(self.cfg)
-        if alias:
-            response_payload['public_hostname'] = alias
+        response_payload['public_hostname'] = cfg_public_hostname(self.cfg)
         response_payload['response_hmac'] = MGMT.hmac_hex(
             response_mac_key, canonical_json(response_payload)
         )
@@ -1828,9 +1839,7 @@ class Allocator:
             'frp_transport': cfg_frp_transport(self.cfg),
             'services': allocated,
         }
-        alias = cfg_public_hostname(self.cfg)
-        if alias:
-            response_payload['public_hostname'] = alias
+        response_payload['public_hostname'] = cfg_public_hostname(self.cfg)
         if identity_auth:
             mac_secret = response_mac_key
             if not mac_secret:
@@ -1899,6 +1908,23 @@ def make_handler(allocator):
             parsed = urlparse(self.path)
             return parsed.path or '/'
 
+        def _short_url_platform(self):
+            parsed = urlparse(self.path)
+            requested = (
+                parse_qs(parsed.query, keep_blank_values=True)
+                .get('platform', [''])[0]
+                .strip()
+                .lower()
+            )
+            if requested == 'windows':
+                return 'windows'
+            if requested == 'linux':
+                return 'linux'
+            user_agent = str(self.headers.get('User-Agent') or '')
+            if 'powershell' in user_agent.lower():
+                return 'windows'
+            return 'linux'
+
         def _handle_short_url_get(self, path):
             match = SHORT_URL_PATH_RE.match(path)
             if not match:
@@ -1911,15 +1937,19 @@ def make_handler(allocator):
                     404, 'text/plain; charset=utf-8', unavailable
                 )
                 return True
-            script = allocator.build_short_url_script(raw_ticket)
+            platform = self._short_url_platform()
+            script = allocator.build_short_url_script(raw_ticket, platform)
             if not script:
                 self._send_bootstrap_headers(
                     503, 'text/plain; charset=utf-8', unavailable
                 )
                 return True
-            self._send_bootstrap_headers(
-                200, 'text/x-shellscript; charset=utf-8', script
+            content_type = (
+                'text/plain; charset=utf-8'
+                if platform == 'windows'
+                else 'text/x-shellscript; charset=utf-8'
             )
+            self._send_bootstrap_headers(200, content_type, script)
             return True
 
         def _with_slot(self, fn):

@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Create and mutate server-owned manual groups and memberships."""
+import argparse
+import fcntl
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+
+
+def load_module(name, relative):
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / 'lib' / relative,
+        Path(ROOT) / 'usr/local/lib/frp-auto-deploy' / relative if ROOT else None,
+        Path('/usr/local/lib/frp-auto-deploy') / relative,
+    ]
+    for path in candidates:
+        if path is not None and path.is_file():
+            spec = importlib.util.spec_from_file_location(name, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+CREG = load_module('frp_client_registry', 'frp_client_registry.py')
+if CREG is None:
+    raise SystemExit('ERROR: missing frp_client_registry.py')
+
+
+def fail(message):
+    raise SystemExit('ERROR: %s' % message)
+
+
+def registry_path():
+    cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
+    path = Path(cfg['registry_file'])
+    if ROOT and not str(path).startswith(ROOT):
+        path = Path(ROOT + str(path))
+    return path
+
+
+def mutate_registry(callback):
+    path = registry_path()
+    lock_path = path.parent / 'registry.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        state = json.loads(path.read_text()) if path.exists() else {
+            'schema_version': 2, 'reserved': [], 'clients': {}, 'groups': {},
+        }
+        if state.get('schema_version') != 2:
+            fail('unsupported registry schema version')
+        if not isinstance(state.get('clients', {}), dict):
+            fail('registry clients must be an object')
+        try:
+            groups = CREG.ensure_groups_map(state)
+        except ValueError as exc:
+            fail(str(exc))
+        if state.get('groups') is None:
+            state['groups'] = groups
+        result = callback(state)
+        CREG.atomic_write_json(path, state)
+        return result
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def audit(event, **fields):
+    module = load_module('frp_audit', 'frp_audit.py')
+    if module is not None:
+        try:
+            module.emit(event, **fields)
+        except Exception:
+            pass
+
+
+def cmd_create(args):
+    try:
+        name = CREG.validate_group_name(args.name)
+        description = CREG.validate_group_description(args.description)
+    except ValueError as exc:
+        fail(str(exc))
+
+    def change(state):
+        if CREG.find_group_id_by_name(state, name):
+            fail('group name already exists: %s' % name)
+        gid = CREG.generate_group_id(state['groups'])
+        now = CREG.utc_now_iso()
+        group = {'name': name, 'created_at': now, 'updated_at': now}
+        if description:
+            group['description'] = description
+        state['groups'][gid] = group
+        return gid, group
+
+    gid, group = mutate_registry(change)
+    print('Created group %s' % gid)
+    print('Name     : %s' % group['name'])
+    audit('group.created', group_id=gid, group_name=group['name'])
+
+
+def cmd_set(args):
+    try:
+        value = (
+            CREG.validate_group_name(args.value)
+            if args.property == 'name'
+            else CREG.validate_group_description(args.value)
+        )
+    except ValueError as exc:
+        fail(str(exc))
+
+    def change(state):
+        gid, group = CREG.resolve_manual_group_or_exit(state, args.selector)
+        old = str(group.get(args.property) or '')
+        if args.property == 'name':
+            clash = CREG.find_group_id_by_name(state, value, exclude_id=gid)
+            if clash:
+                fail('group name already exists: %s' % value)
+            group['name'] = value
+        elif value:
+            group['description'] = value
+        else:
+            group.pop('description', None)
+        group['updated_at'] = CREG.utc_now_iso()
+        return gid, group, old
+
+    gid, group, old = mutate_registry(change)
+    print('Updated group %s' % gid)
+    print('%s: %s' % (args.property.capitalize(), group.get(args.property) or '(cleared)'))
+    event = 'group.renamed' if args.property == 'name' else 'group.description_changed'
+    audit(
+        event,
+        group_id=gid,
+        group_name=group.get('name'),
+        details={'old_value': old},
+    )
+
+
+def cmd_delete(args):
+    def change(state):
+        gid, group = CREG.resolve_manual_group_or_exit(state, args.selector)
+        for client in state['clients'].values():
+            if not isinstance(client, dict):
+                continue
+            try:
+                ids = CREG.normalize_group_ids(client.get('group_ids'))
+            except ValueError:
+                fail('client has malformed group_ids')
+            CREG.set_client_group_ids(client, [item for item in ids if item != gid])
+        state['groups'].pop(gid)
+        return gid, str(group.get('name') or '')
+
+    gid, name = mutate_registry(change)
+    print('Deleted group %s (%s)' % (gid, name))
+    print('Client identity, services, and ports were not changed.')
+    audit('group.deleted', group_id=gid, group_name=name)
+
+
+def change_membership(args, adding):
+    def change(state):
+        mid, client = CREG.resolve_client_or_exit(state, args.client)
+        gid, group = CREG.resolve_manual_group_or_exit(state, args.group)
+        try:
+            ids = CREG.normalize_group_ids(client.get('group_ids'))
+        except ValueError as exc:
+            fail(str(exc))
+        present = gid in ids
+        if adding and not present:
+            ids.append(gid)
+        if not adding and present:
+            ids.remove(gid)
+        CREG.set_client_group_ids(client, ids)
+        return mid, gid, group, present
+
+    mid, gid, group, present = mutate_registry(change)
+    name = CREG.sanitize_display(group.get('name') or gid, 64)
+    cid = CREG.sanitize_display(mid, 16)
+    if adding:
+        if present:
+            print('Client %s already in group %s (%s)' % (cid, gid, name))
+        else:
+            print('Added client %s to group %s (%s)' % (cid, gid, name))
+            audit('group.member_added', group_id=gid, group_name=name, client_id=mid)
+    elif present:
+        print('Removed client %s from group %s (%s)' % (cid, gid, name))
+        audit('group.member_removed', group_id=gid, group_name=name, client_id=mid)
+    else:
+        print('Client %s was not in group %s (%s)' % (cid, gid, name))
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description='Manage manual client groups')
+    subs = parser.add_subparsers(dest='command', required=True)
+    create = subs.add_parser('create')
+    create.add_argument('name')
+    create.add_argument('--description', default='')
+    create.set_defaults(func=cmd_create)
+    set_cmd = subs.add_parser('set')
+    set_cmd.add_argument('selector')
+    set_cmd.add_argument('property', choices=('name', 'description'))
+    set_cmd.add_argument('value')
+    set_cmd.set_defaults(func=cmd_set)
+    delete = subs.add_parser('delete')
+    delete.add_argument('selector')
+    delete.set_defaults(func=cmd_delete)
+    for command, adding in (('add-member', True), ('remove-member', False)):
+        member = subs.add_parser(command)
+        member.add_argument('client')
+        member.add_argument('group')
+        member.set_defaults(func=lambda args, add=adding: change_membership(args, add))
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    args.func(args)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except BrokenPipeError:
+        pass

@@ -288,6 +288,23 @@ def parse_args(argv=None):
         metavar='PATH',
         help='JSON list of services (same schema as FRP_SERVICES_JSON)',
     )
+    p.add_argument(
+        '--platform',
+        choices=('linux', 'windows'),
+        default='linux',
+        help='Client platform for the one-line command (default: linux)',
+    )
+    p.add_argument(
+        '--rdp',
+        action='store_true',
+        help='Windows RDP convenience service (custom TCP to 127.0.0.1:3389)',
+    )
+    p.add_argument(
+        '--rdp-port',
+        default=None,
+        metavar='PORT',
+        help='Local RDP listen port (default 3389)',
+    )
     return p.parse_args(argv)
 
 
@@ -302,6 +319,31 @@ def ssh_service(ssh_user, ssh_port):
         'ssh_user': ssh_user,
         'enabled': True,
     }
+
+
+def rdp_service(rdp_port):
+    # RDP is intentionally represented by the existing custom TCP contract.
+    return {
+        'id': 'rdp',
+        'name': 'RDP',
+        'protocol': 'tcp',
+        'local_ip': '127.0.0.1',
+        'local_port': int(rdp_port),
+        'preset': 'custom',
+        'enabled': True,
+    }
+
+
+def ps_single_quote(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def derive_sha256sums_url(installer_url):
+    suffix = '/dist/bootstrap-client.ps1'
+    url = str(installer_url or '').strip()
+    if url.endswith(suffix):
+        return url[:-len(suffix)] + '/SHA256SUMS'
+    return ''
 
 
 def load_services_file(path):
@@ -529,6 +571,106 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     print()
 
 
+def print_one_line_windows(
+    ticket, ttl, note, public_host, control_public, allocator, ca_fp,
+    installer, rdp_port=None, client_name='', management_only=False,
+    ticket_id='', bootstrap_hostname=''
+):
+    zt = _zt()
+    command = ''
+    bootstrap_host = str(bootstrap_hostname or '').strip().lower()
+    if bootstrap_host and zt is not None:
+        try:
+            command = zt.short_url_windows_command(bootstrap_host, ticket)
+        except ValueError:
+            command = ''
+
+    if not command:
+        sums_url = derive_sha256sums_url(installer)
+        if not sums_url:
+            fail(
+                'cannot derive SHA256SUMS URL from Windows installer URL; '
+                'use an official .../dist/bootstrap-client.ps1 path'
+            )
+        inner = (
+            "$ErrorActionPreference='Stop';"
+            "$ProgressPreference='SilentlyContinue';"
+            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+            "$d=Join-Path $env:TEMP ('frp-bs-'+[guid]::NewGuid().ToString('N'));"
+            "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
+            "try{"
+            "$m=Join-Path $d 'SHA256SUMS';$p=Join-Path $d 'bootstrap-client.ps1';"
+            "(New-Object Net.WebClient).DownloadFile(__SUMS__,$m);"
+            "(New-Object Net.WebClient).DownloadFile(__INSTALLER__,$p);"
+            "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
+            "if($_ -match '^([0-9a-fA-F]{64})\\s+dist/bootstrap-client\\.ps1\\s*$'){"
+            "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
+            "$w=$Matches[1].ToLowerInvariant()}};"
+            "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"
+            "$g=(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant();"
+            "if($g -ne $w){throw 'bootstrap-client.ps1 SHA256 mismatch'};"
+            "$env:FRP_ALLOCATOR_URL=__ALLOCATOR__;"
+            "$env:FRP_ALLOCATOR_CA_SHA256=__CA__;"
+            "$env:FRP_BOOTSTRAP_TICKET=__TICKET__;"
+            "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
+            "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
+            "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
+            "if($rc -ne 0){exit $rc}"
+            "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"
+        )
+        inner = (
+            inner.replace('__SUMS__', ps_single_quote(sums_url))
+            .replace('__INSTALLER__', ps_single_quote(installer))
+            .replace('__ALLOCATOR__', ps_single_quote(allocator))
+            .replace('__CA__', ps_single_quote(ca_fp))
+            .replace('__TICKET__', ps_single_quote(ticket))
+        )
+        command = (
+            'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+            + ps_single_quote(inner)
+        )
+
+    tracking_id = str(ticket_id or '').strip()
+    print()
+    print('Zero-touch Windows client command')
+    print('=================================')
+    print()
+    print('This command contains a short-lived one-time bootstrap ticket.')
+    print('Treat the command as sensitive until it expires or is used.')
+    print()
+    if tracking_id:
+        print('Enrollment ID: %s' % tracking_id)
+        print()
+    print(command)
+    print()
+    print('Expires: %s (%s seconds)' % (iso(int(time.time()) + ttl), ttl))
+    if client_name:
+        print('Client name: %s' % client_name)
+    if note:
+        print('Note: %s' % note)
+    if public_host and control_public:
+        print('FRP Server: %s:%s' % (public_host, control_public))
+    if rdp_port:
+        print('RDP local target: 127.0.0.1:%s' % int(rdp_port))
+    if bootstrap_host and '?platform=windows' in command:
+        print('Bootstrap host: %s' % bootstrap_host)
+    print()
+    print('Run this single line in an elevated Windows PowerShell window.')
+    print('It downloads a PS1, verifies bootstrap-client.ps1 against SHA256SUMS,')
+    print('then executes the verified installer with powershell -File.')
+    if management_only:
+        print('This enrolls management identity only; no service or public port is created.')
+    print()
+    print('The ticket cannot be reused by another machine once bound.')
+    print('After reboot, run frp-client start; re-enrollment is not required.')
+    if tracking_id:
+        print()
+        print('Track or revoke with the Enrollment ID (not the ticket secret):')
+        print('  show enrollments')
+        print('  revoke enrollment %s' % tracking_id)
+    print()
+
+
 def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname=''):
     tracking_id = str(ticket_id or '').strip()
     if not tracking_id and ticket:
@@ -624,10 +766,17 @@ def main(argv=None):
         fail('--ssh-user requires --ssh')
     if a.ssh_port is not None and not a.ssh:
         fail('--ssh-port requires --ssh')
-    if a.services_file and a.ssh:
-        fail('use either --ssh or --services-file, not both')
-    if (a.ssh or a.services_file) and not a.one_line:
-        fail('--ssh and --services-file require --one-line')
+    if a.rdp_port is not None and not a.rdp:
+        fail('--rdp-port requires --rdp')
+    if sum(bool(v) for v in (a.ssh, a.rdp, a.services_file)) > 1:
+        fail('use only one of --ssh, --rdp, or --services-file')
+    if (a.ssh or a.rdp or a.services_file) and not a.one_line:
+        fail('--ssh, --rdp, and --services-file require --one-line')
+    platform = str(a.platform or 'linux').strip().lower()
+    if platform == 'windows' and not a.one_line:
+        fail('--platform windows requires --one-line')
+    if a.rdp and platform != 'windows':
+        fail('--rdp requires --platform windows')
 
     ssh_port = 22
     port_explicit = a.ssh_port is not None
@@ -636,6 +785,11 @@ def main(argv=None):
         if ssh_port is None:
             fail('invalid --ssh-port; must be an integer 1-65535')
     ssh_user = normalize_ssh_user(a.ssh_user)
+    rdp_port = 3389
+    if a.rdp_port is not None:
+        rdp_port = coerce_port(a.rdp_port)
+        if rdp_port is None:
+            fail('invalid --rdp-port; must be an integer 1-65535')
 
     cfg = json.loads(Path(CONFIG).read_text())
     enroll_dir = remap(cfg['enrollments_dir'])
@@ -650,12 +804,17 @@ def main(argv=None):
     allocator = str(cfg.get('allocator_public_url', '') or '').strip()
     ca_path = remap(str(cfg.get('tls_ca_cert') or '/etc/frp-auto-deploy/pki/ca.crt'))
     ca_fp = fingerprint_from_cert(ca_path) if ca_path.is_file() else ''
-    installer = str(cfg.get('client_installer_url', '') or '').strip()
+    if platform == 'windows':
+        installer = str(cfg.get('windows_client_installer_url', '') or '').strip()
+        installer_label = 'Windows client installer URL'
+    else:
+        installer = str(cfg.get('client_installer_url', '') or '').strip()
+        installer_label = 'client installer URL'
 
     reject_control_chars('--note', a.note)
     reject_control_chars('--client-name', a.client_name)
     reject_control_chars('allocator public URL', allocator)
-    reject_control_chars('client installer URL', installer)
+    reject_control_chars(installer_label, installer)
     reject_control_chars('--ssh-user', ssh_user)
     client_name = str(a.client_name or '').strip()
     note = str(a.note or '')
@@ -697,6 +856,11 @@ def main(argv=None):
         fail(NONINTERACTIVE_SSH_USER_ERROR)
 
     if not installer:
+        if platform == 'windows':
+            fail(
+                'Windows client installer URL is not configured; '
+                'set windows_client_installer_url before --one-line --platform windows'
+            )
         fail(
             'client installer URL is not configured; '
             'run sudo frp-set-client-installer-url before --one-line'
@@ -717,10 +881,14 @@ def main(argv=None):
         reject_control_chars('--client-name', client_name)
         reject_control_chars('--note', note)
 
+    rdp_local = None
     if a.ssh:
         ssh_user, ssh_port = resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit)
         reject_control_chars('--ssh-user', ssh_user)
         raw_services = [ssh_service(ssh_user, ssh_port)]
+    elif a.rdp:
+        raw_services = [rdp_service(rdp_port)]
+        rdp_local = rdp_port
     else:
         raw_services = load_services_file(a.services_file) if a.services_file else []
 
@@ -745,22 +913,41 @@ def main(argv=None):
     except Exception as exc:
         fail('failed to issue bootstrap ticket: %s' % exc)
 
-    print_one_line(
-        ticket,
-        ttl,
-        note,
-        public_host,
-        control_public,
-        allocator,
-        ca_fp,
-        installer,
-        ssh_user,
-        ssh_pre_port,
-        client_name=client_name,
-        management_only=not services,
-        ticket_id=str((ticket_record or {}).get('id') or ''),
-        bootstrap_hostname=str(cfg.get('bootstrap_hostname') or '').strip(),
-    )
+    ticket_id = str((ticket_record or {}).get('id') or '')
+    bootstrap_hostname = str(cfg.get('bootstrap_hostname') or '').strip()
+    if platform == 'windows':
+        print_one_line_windows(
+            ticket,
+            ttl,
+            note,
+            public_host,
+            control_public,
+            allocator,
+            ca_fp,
+            installer,
+            rdp_port=rdp_local,
+            client_name=client_name,
+            management_only=not services,
+            ticket_id=ticket_id,
+            bootstrap_hostname=bootstrap_hostname,
+        )
+    else:
+        print_one_line(
+            ticket,
+            ttl,
+            note,
+            public_host,
+            control_public,
+            allocator,
+            ca_fp,
+            installer,
+            ssh_user,
+            ssh_pre_port,
+            client_name=client_name,
+            management_only=not services,
+            ticket_id=ticket_id,
+            bootstrap_hostname=bootstrap_hostname,
+        )
     try:
         here = Path(__file__).resolve()
         for path in (

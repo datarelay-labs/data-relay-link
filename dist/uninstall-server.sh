@@ -105,6 +105,27 @@ frp_u_project_files_py() {
   return 1
 }
 
+# Canonical SERVER_ONLY / CLIENT_ONLY / SHARED ownership for dual-role uninstall.
+for _frp_own in \
+  "$(frp_u_path /usr/local/lib/frp-auto-deploy/frp-role-ownership.sh)" \
+  "${_HERE}/lib/frp-role-ownership.sh" \
+  "${_HERE}/../lib/frp-role-ownership.sh"; do
+  if [[ -f "$_frp_own" ]]; then
+    # shellcheck disable=SC1090
+    . "$_frp_own"
+    break
+  fi
+done
+unset _frp_own
+if ! declare -F frp_role_is_shared_lib >/dev/null 2>&1; then
+  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py '
+  frp_role_is_shared_lib() {
+    local base="$1"
+    [[ "$FRP_ROLE_SHARED_LIB_BASENAMES" == *" ${base} "* ]]
+  }
+fi
+
+
 frp_u_legacy_marker_is_server() {
   local legacy="$1" op
   [[ -f "$legacy" ]] || return 1
@@ -135,14 +156,208 @@ frp_u_purge_confirm_ok() {
   [[ "$confirm" == "yes" ]]
 }
 
+frp_u_release_control_locks() {
+  if [[ -n "${FRP_UNINSTALL_LOCK_HOLD:-}" ]]; then
+    rm -f "$FRP_UNINSTALL_LOCK_HOLD"
+  fi
+  if [[ -n "${FRP_UNINSTALL_LOCKER_PID:-}" ]]; then
+    wait "$FRP_UNINSTALL_LOCKER_PID" 2>/dev/null || true
+    unset FRP_UNINSTALL_LOCKER_PID
+  fi
+  if [[ -n "${FRP_UNINSTALL_LOCK_STATUS:-}" ]]; then
+    rm -f "$FRP_UNINSTALL_LOCK_STATUS"
+  fi
+  unset FRP_UNINSTALL_LOCK_HOLD FRP_UNINSTALL_LOCK_STATUS
+}
+
+frp_u_acquire_control_locks() {
+  local timeout life_lock reg_lock status deadline
+  timeout="${FRP_UNINSTALL_LOCK_TIMEOUT:-30}"
+  life_lock="$(frp_u_path /var/lib/frp-auto-deploy/server-lifecycle.lock)"
+  reg_lock="$(frp_u_path /var/lib/frp-auto-deploy/registry.lock)"
+  mkdir -p "$(dirname "$life_lock")" "$(dirname "$reg_lock")"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required to serialize server uninstall." >&2
+    echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
+    exit 1
+  fi
+  # Hold canonical fcntl locks (same as backup/restore) without depending on
+  # the util-linux flock CLI, which Amazon Linux containers may omit.
+  FRP_UNINSTALL_LOCK_HOLD="$(mktemp "${TMPDIR:-/tmp}/frp-uninstall-hold.XXXXXX")"
+  FRP_UNINSTALL_LOCK_STATUS="$(mktemp "${TMPDIR:-/tmp}/frp-uninstall-status.XXXXXX")"
+  python3 - "$life_lock" "$reg_lock" "$timeout" "$FRP_UNINSTALL_LOCK_HOLD" "$FRP_UNINSTALL_LOCK_STATUS" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+life_path, reg_path, timeout_s, hold_path, status_path = (
+    sys.argv[1],
+    sys.argv[2],
+    float(sys.argv[3]),
+    sys.argv[4],
+    sys.argv[5],
+)
+deadline = time.monotonic() + timeout_s
+
+
+def write_status(msg):
+    tmp = status_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(msg)
+    os.replace(tmp, status_path)
+
+
+def lock_nb(path):
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise TimeoutError
+            time.sleep(0.05)
+
+
+try:
+    parent = os.path.dirname(life_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    parent = os.path.dirname(reg_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    life_fd = lock_nb(life_path)
+    reg_fd = lock_nb(reg_path)
+    write_status("LOCKED")
+    while os.path.exists(hold_path):
+        time.sleep(0.05)
+    os.close(reg_fd)
+    os.close(life_fd)
+except TimeoutError:
+    write_status("TIMEOUT")
+    raise SystemExit(2)
+except Exception:
+    write_status("ERROR")
+    raise
+PY
+  FRP_UNINSTALL_LOCKER_PID=$!
+  status=""
+  deadline=$((SECONDS + timeout + 2))
+  while (( SECONDS < deadline )); do
+    if [[ -s "$FRP_UNINSTALL_LOCK_STATUS" ]]; then
+      status="$(tr -d '\n' <"$FRP_UNINSTALL_LOCK_STATUS" || true)"
+      break
+    fi
+    if ! kill -0 "$FRP_UNINSTALL_LOCKER_PID" 2>/dev/null; then
+      status="$(tr -d '\n' <"$FRP_UNINSTALL_LOCK_STATUS" 2>/dev/null || true)"
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$status" != "LOCKED" ]]; then
+    echo "ERROR: timed out waiting for the server lifecycle lock." >&2
+    echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
+    frp_u_release_control_locks
+    exit 1
+  fi
+  trap 'frp_u_release_control_locks' EXIT
+}
+
+frp_u_systemctl() {
+  if [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
+    "${FRP_UNINSTALL_HOOK_SYSTEMCTL}" "$@"
+    return $?
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl "$@"
+}
+
+frp_u_unit_load_state() {
+  local unit="$1" st
+  st="$(frp_u_systemctl show -p LoadState --value "$unit" 2>/dev/null || true)"
+  printf '%s' "$st"
+}
+
+frp_u_unit_exists() {
+  local st
+  st="$(frp_u_unit_load_state "$1")"
+  [[ "$st" == "loaded" || "$st" == "masked" || "$st" == "stub" ]]
+}
+
+frp_u_unit_active() {
+  local st
+  st="$(frp_u_systemctl is-active "$1" 2>/dev/null || true)"
+  [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
+}
+
+frp_u_stop_product_units() {
+  local unit
+  for unit in frp-frontend frp-port-allocator frps; do
+    if ! frp_u_unit_exists "$unit" && ! frp_u_unit_active "$unit"; then
+      continue
+    fi
+    if frp_u_unit_active "$unit"; then
+      if ! frp_u_systemctl stop "$unit"; then
+        echo "ERROR: failed to stop ${unit}." >&2
+        echo "FAILURE_CLASS=SERVICE_STOP_FAILED" >&2
+        return 1
+      fi
+    fi
+    if frp_u_unit_active "$unit"; then
+      echo "ERROR: ${unit} remains active after stop." >&2
+      echo "FAILURE_CLASS=SERVICE_STILL_ACTIVE" >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
+frp_u_disable_product_units() {
+  local unit enabled
+  for unit in frp-frontend frp-port-allocator frps; do
+    if ! frp_u_unit_exists "$unit"; then
+      continue
+    fi
+    if frp_u_systemctl disable "$unit" >/dev/null 2>&1; then
+      continue
+    fi
+    enabled="$(frp_u_systemctl is-enabled "$unit" 2>/dev/null || true)"
+    case "$enabled" in
+      enabled|enabled-runtime|linked|linked-runtime)
+        echo "ERROR: failed to disable ${unit}." >&2
+        echo "FAILURE_CLASS=SERVICE_DISABLE_FAILED" >&2
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
+frp_u_acquire_control_locks
+
 SKIP_SYSTEMD=0
-if [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" || "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+if [[ "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+  SKIP_SYSTEMD=1
+elif [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" && -z "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
+  SKIP_SYSTEMD=1
+elif [[ -z "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] && ! command -v systemctl >/dev/null 2>&1; then
+  if [[ -z "${FRP_UNINSTALL_TEST_ROOT:-}" ]]; then
+    echo "ERROR: cannot prove product services are stopped (systemctl is unavailable)." >&2
+    echo "FAILURE_CLASS=SERVICE_STOP_FAILED" >&2
+    exit 1
+  fi
   SKIP_SYSTEMD=1
 fi
 
-if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
-  systemctl stop frp-frontend frp-port-allocator frps 2>/dev/null || true
-  systemctl disable frp-frontend frp-port-allocator frps 2>/dev/null || true
+if [[ "$SKIP_SYSTEMD" != "1" ]]; then
+  if ! frp_u_stop_product_units; then
+    exit 1
+  fi
+  if ! frp_u_disable_product_units; then
+    exit 1
+  fi
 fi
 # Never enable, start, or unmask distro nginx.service. Uninstall removes
 # frp-frontend.service only. If this project installed nginx and disabled
@@ -154,7 +369,6 @@ CLIENT_PRESENT=0
 if frp_u_client_present; then
   CLIENT_PRESENT=1
 fi
-SHARED_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp-client-common.sh '
 
 # Remove managed project files from the canonical server manifest.
 if py="$(frp_u_project_files_py)"; then
@@ -162,7 +376,7 @@ if py="$(frp_u_project_files_py)"; then
   for rel in "${_managed_rels[@]}"; do
     [[ -n "$rel" ]] || continue
     base="$(basename "$rel")"
-    if [[ "$CLIENT_PRESENT" == "1" && "$SHARED_BASENAMES" == *" ${base} "* ]]; then
+    if [[ "$CLIENT_PRESENT" == "1" ]] && frp_role_is_shared_lib "$base"; then
       continue
     fi
     frp_u_rm_file "$(frp_u_path "/${rel}")"
@@ -184,20 +398,22 @@ else
   libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
     for f in frp-port-allocator.py frp_pki.py frp_frontend.py frp_client_registry.py \
-      frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py frp_doctor.py \
-      frp-doctor-common.sh frp_ctl_grammar.py frp_ctl_repl.py frp_install_txn.py \
+      frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
+      frp_install_txn.py \
       frp-server-upgrade.sh frp_project_files.py frp_control_locks.py frp_server_config.py \
+      frp-role-ownership.sh \
       server-project-files.manifest release-manifest.json SHA256SUMS; do
       frp_u_rm_file "${libdir}/${f}"
     done
+    # SHARED libs: only remove when client role is absent.
     if [[ "$CLIENT_PRESENT" != "1" ]]; then
-      frp_u_rm_file "${libdir}/frp-common.sh"
-      frp_u_rm_file "${libdir}/frp_mgmt_auth.py"
-      frp_u_rm_file "${libdir}/frp-client-common.sh"
+      for f in frp-common.sh frp_mgmt_auth.py frp-client-common.sh \
+        frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py; do
+        frp_u_rm_file "${libdir}/${f}"
+      done
     fi
   fi
 fi
-
 # Dual-role: keep /usr/local/bin/frpctl (client). Manifest only lists sbin.
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frps)"
 frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/frontend.conf)"
@@ -212,9 +428,13 @@ elif [[ -L "$libdir" ]]; then
   exit 1
 fi
 
-if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload
-  systemctl reset-failed 2>/dev/null || true
+if [[ "$SKIP_SYSTEMD" != "1" ]]; then
+  frp_u_systemctl daemon-reload || {
+    echo "ERROR: systemd daemon-reload failed." >&2
+    echo "FAILURE_CLASS=SERVICE_STOP_FAILED" >&2
+    exit 1
+  }
+  frp_u_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
 if [[ "$PURGE" == true ]]; then

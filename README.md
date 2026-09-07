@@ -21,28 +21,29 @@ It solves the operational work around FRP:
 
 | Item | Current |
 | --- | --- |
-| Published stable release | **v2.1.2** |
-| Project version (this tree) | **2.1.3** |
-| Pinned / tested FRP | **v0.70.1** |
+| Published stable release | **v2.2.0** |
+| Project version (this tree) | **2.2.0** |
+| Pinned / tested FRP | **v0.71.0** |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
-| Published stable install source | immutable `v2.1.2` tag |
-| Next immutable tag (after final gate) | `v2.1.3` |
-| `main` branch | development channel; may contain post-v2.1.2 changes |
+| Published stable install source | immutable `v2.2.0` tag |
+| Integration candidate | macOS, Windows, Group MVP; human Real E2E pending |
+| `main` branch | development channel; may contain post-v2.2.0 changes |
 
-Current project version: **2.1.3**
-Current pinned FRP version: **v0.70.1**
+Current project version: **2.2.0**
+Current pinned FRP version: **v0.71.0**
 
-**v2.1.2** is the **current stable release** (published tag). Stable field installs
-use the immutable `v2.1.2` tag until `v2.1.3` is tagged after the final release
-gate. This tree prepares **2.1.3** (Zero-Touch `/i/<ticket>` short URL via
-optional `bootstrap_hostname` + operator reverse proxy). Following
+**v2.2.0** is the **current stable release** (published tag). Stable field
+installs use the immutable `v2.2.0` tag. The
+`integration/morning-e2e-ready` candidate includes macOS, Windows, and Group
+MVP work; those additions remain human-Real-E2E pending and are **not** stable
+platform claims. Following
 mutable `main` is explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
 
 On development builds, use release channel, source ref, and verified
 bundle SHA256 to identify the exact build.
 
-FRP **0.71.x is not automatically adopted**. `show upstream` is informational;
+FRP **beyond the pinned version is not automatically adopted**. `show upstream` is informational;
 the project remains pinned to the version that has been tested.
 
 ---
@@ -208,19 +209,19 @@ More detail: [docs/DEPLOYMENT_MODES.md](docs/DEPLOYMENT_MODES.md)
 
 # 3. Install the server
 
-For a published stable installation, use the immutable v2.1.2 bundle:
+For a published stable installation, use the immutable v2.2.0 bundle:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.2/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
-After the `v2.1.3` tag exists, the project-line immutable install source is:
+The project-line immutable install source is:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.3/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
@@ -722,14 +723,15 @@ Automated userspace/container portability is exercised on:
 | Amazon Linux 2023 | PASS |
 | Amazon Linux 2 | PASS |
 
-Stable scope is **Linux/systemd**. macOS and Windows are **not** stable-supported
-in 2.1.3. Design target is a few to a few dozen systems (not 100+ fleet
-orchestration).
+Stable platform scope is **Linux/systemd**. The integration branch contains
+macOS launchd and Windows client candidates plus Group MVP, all pending human
+Real E2E and not stable-supported. Design target is **1–50 clients**, not 100+
+fleet orchestration.
 
 Real-environment validation and container validation are **not the same claim**.
 For example, SELinux Enforcing, native ARM64 systemd, and some older OpenSSL
 environments have separate validation gates. Rocky Linux 8.10 is a
-release-validated Short URL Real E2E platform for 2.1.3 (see
+release-validated Short URL Real E2E platform for 2.2.0 (see
 `docs/ZERO_TOUCH_SHORT_URL.md`); that is not a Rocky 9 SELinux claim.
 
 See [docs/RELEASE_VALIDATION.md](docs/RELEASE_VALIDATION.md) for the authoritative

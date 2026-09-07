@@ -33,6 +33,7 @@ files=[
  'lib/frp_enrollment_lifecycle.py',
  'lib/frp_audit.py',
  'lib/frp_project_files.py',
+ 'lib/frp-role-ownership.sh',
  'lib/frp_control_locks.py',
  'lib/frp_server_config.py',
  'lib/frp_zero_touch.py',
@@ -53,6 +54,8 @@ files=[
  'tools/frp-enroll-bulk',
  'tools/frp-clients',
  'tools/frp-client-info',
+ 'tools/frp-groups',
+ 'tools/frp-group-set',
  'tools/frp-release-client',
  'tools/frp-release-service',
  'tools/frp-revoke-client',
@@ -87,22 +90,33 @@ client_files=[
  'VERSION',
  'release-manifest.json',
  'install-client.sh',
+ 'uninstall-client.sh',
  'lib/frp-common.sh',
+ 'lib/frp-macos.sh',
  'lib/frp-client-common.sh',
  'lib/frp_mgmt_auth.py',
  'lib/frp-doctor-common.sh',
  'lib/frp_doctor.py',
  'lib/frp_ctl_grammar.py',
  'lib/frp_ctl_repl.py',
+ 'lib/frp-role-ownership.sh',
  'tools/frp-client',
  'tools/frpctl',
+ 'tools/frp-update',
+ 'client/com.datarelay.frp-auto-deploy.frpc.plist',
 ]
-client_lines=['#!/usr/bin/env bash','set -euo pipefail','TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT']
+client_lines=[
+ '#!/usr/bin/env bash',
+ 'set -euo pipefail',
+ '_frp_b64d() { base64 --decode 2>/dev/null || base64 -D; }',
+ 'TMP="$(mktemp -d)"',
+ 'trap \'rm -rf "$TMP"\' EXIT',
+]
 for rel in client_files:
     data=base64.b64encode(bundle_payload(rel)).decode()
     parent=str(Path(rel).parent)
     if parent!='.': client_lines.append(f'mkdir -p "$TMP/{parent}"')
-    client_lines.append(f"base64 -d >\"$TMP/{rel}\" <<'B64'")
+    client_lines.append(f"_frp_b64d >\"$TMP/{rel}\" <<'B64'")
     for i in range(0,len(data),76): client_lines.append(data[i:i+76])
     client_lines.append('B64')
 for rel in client_files:
@@ -112,7 +126,47 @@ client_lines.append('exec "$TMP/install-client.sh" "$@"')
 (dist/'bootstrap-client.sh').write_text('\n'.join(client_lines)+'\n')
 (dist/'bootstrap-client.sh').chmod(0o755)
 
+# Windows PowerShell bootstrap: embed the complete windows/ client tree.
+# dist/bootstrap-client.ps1 is generated; do not hand-edit it.
+win_files = [
+    path.relative_to(root).as_posix()
+    for path in sorted((root / 'windows').rglob('*'))
+    if path.is_file()
+]
+ps_lines = [
+    '#Requires -Version 5.1',
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$tmp = Join-Path $env:TEMP ('frp-win-bundle-' + [guid]::NewGuid().ToString('N'))",
+    'New-Item -ItemType Directory -Force -Path $tmp | Out-Null',
+    'try {',
+]
+for rel in win_files:
+    data = base64.b64encode((root / rel).read_bytes()).decode('ascii')
+    parent = str(Path(rel).parent).replace('\\', '/')
+    ps_lines.append(f"  $dir = Join-Path $tmp '{parent}'")
+    ps_lines.append('  New-Item -ItemType Directory -Force -Path $dir | Out-Null')
+    ps_lines.append(f"  $out = Join-Path $tmp '{rel}'")
+    ps_lines.append("  $b64 = @'")
+    ps_lines.extend(data[i:i+120] for i in range(0, len(data), 120))
+    ps_lines.append("'@")
+    ps_lines.append(
+        "  [IO.File]::WriteAllBytes($out, "
+        "[Convert]::FromBase64String(($b64 -replace '\\s','')))"
+    )
+ps_lines.extend([
+    "  $installer = Join-Path $tmp 'windows/install-client.ps1'",
+    '  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer @args',
+    '  exit $LASTEXITCODE',
+    '} finally {',
+    '  Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue',
+    '}',
+])
+(dist/'bootstrap-client.ps1').write_text(
+    '\n'.join(ps_lines)+'\n', encoding='utf-8'
+)
+
 for src,dst in [('uninstall-client.sh','uninstall-client.sh'),('uninstall-server.sh','uninstall-server.sh')]:
     (dist/dst).write_bytes((root/src).read_bytes())
     (dist/dst).chmod(0o755)
-print('Built dist/bootstrap-server.sh and client bundles')
+print('Built dist/bootstrap-server.sh, bootstrap-client.sh, and bootstrap-client.ps1')

@@ -23,7 +23,7 @@ setup_tree() {
     "$tree/usr/local/sbin" "$tree/etc/systemd/system"
   cat >"$tree/usr/local/bin/frps" <<'EOF'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--version" ]] && echo "0.70.1"
+[[ "${1:-}" == "--version" ]] && echo "0.71.0"
 exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frps"
@@ -44,7 +44,7 @@ EOF
     >"$tree/var/lib/frp-auto-deploy/registry.json"
   cat >"$tree/etc/frp-auto-deploy/version" <<EOF
 PROJECT_VERSION=2.0.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=stable
 SOURCE_REF=v${PROJECT_VERSION}
 EOF

@@ -22,5 +22,6 @@
   "bootstrap_dir": "/var/lib/frp-auto-deploy/bootstrap",
   "enrollment_retention_days": 30,
   "token_file": "/etc/frp/server_token",
-  "client_installer_url": ""
+  "client_installer_url": "",
+  "windows_client_installer_url": ""
 }

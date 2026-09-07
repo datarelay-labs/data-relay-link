@@ -13,11 +13,17 @@ if [[ -f "${_FRPCTL_DIR}/../lib/frp-doctor-common.sh" ]]; then
 elif [[ -f /usr/local/lib/frp-auto-deploy/frp-doctor-common.sh ]]; then
   # shellcheck disable=SC1091
   . /usr/local/lib/frp-auto-deploy/frp-doctor-common.sh
+elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-doctor-common.sh' ]]; then
+  # shellcheck disable=SC1091
+  . '/Library/Application Support/frp-auto-deploy/lib/frp-doctor-common.sh'
 fi
 
 frpctl_path() {
   local p="$1"
   local root="${FRP_CTL_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-}}}}"
+  if declare -F frp_platform_map_path >/dev/null 2>&1; then
+    p="$(frp_platform_map_path "$p")"
+  fi
   if [[ -n "$root" ]]; then
     printf '%s' "${root}${p}"
   else
@@ -254,19 +260,28 @@ frpctl_invoke() {
   fi
 }
 
+frpctl_lib_candidate() {
+  local name="$1" cand mapped=""
+  local -a cands=()
+  if declare -F frpctl_path >/dev/null 2>&1; then
+    mapped="$(frpctl_path "/usr/local/lib/frp-auto-deploy/${name}")"
+  fi
+  cands+=("${_FRPCTL_DIR}/../lib/${name}")
+  [[ -n "$mapped" ]] && cands+=("$mapped")
+  cands+=("/usr/local/lib/frp-auto-deploy/${name}")
+  cands+=("/Library/Application Support/frp-auto-deploy/lib/${name}")
+  for cand in "${cands[@]}"; do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  return 1
+}
+
 frpctl_grammar_py() {
-  local here
-  if [[ -n "${_FRPCTL_DIR:-}" && -f "${_FRPCTL_DIR}/../lib/frp_ctl_grammar.py" ]]; then
-    printf '%s' "${_FRPCTL_DIR}/../lib/frp_ctl_grammar.py"
-    return 0
-  fi
-  if [[ -f /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py ]]; then
-    printf '%s' /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
-    return 0
-  fi
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -f "${here}/../lib/frp_ctl_grammar.py" ]]; then
-    printf '%s' "${here}/../lib/frp_ctl_grammar.py"
+  local path
+  if path="$(frpctl_lib_candidate frp_ctl_grammar.py)"; then
+    printf '%s' "$path"
     return 0
   fi
   echo "ERROR: missing frp_ctl_grammar.py" >&2
@@ -274,18 +289,9 @@ frpctl_grammar_py() {
 }
 
 frpctl_repl_py() {
-  local here
-  if [[ -n "${_FRPCTL_DIR:-}" && -f "${_FRPCTL_DIR}/../lib/frp_ctl_repl.py" ]]; then
-    printf '%s' "${_FRPCTL_DIR}/../lib/frp_ctl_repl.py"
-    return 0
-  fi
-  if [[ -f /usr/local/lib/frp-auto-deploy/frp_ctl_repl.py ]]; then
-    printf '%s' /usr/local/lib/frp-auto-deploy/frp_ctl_repl.py
-    return 0
-  fi
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -f "${here}/../lib/frp_ctl_repl.py" ]]; then
-    printf '%s' "${here}/../lib/frp_ctl_repl.py"
+  local path
+  if path="$(frpctl_lib_candidate frp_ctl_repl.py)"; then
+    printf '%s' "$path"
     return 0
   fi
   return 1
@@ -312,7 +318,7 @@ frpctl_grammar_payload() {
 import json, sys
 from pathlib import Path
 role, cfg_path, root, state_path = sys.argv[1:5]
-names, services, local_services, clients_meta = [], {}, [], []
+names, services, local_services, clients_meta, groups = [], {}, [], [], []
 inventory_warning = False
 server_role = role in ("server", "both", "dual")
 client_role = role in ("client", "both", "dual")
@@ -351,6 +357,13 @@ if cfg.is_file():
                 if isinstance(client, dict)
             ]
             mids = [mid for mid, _client in items]
+            raw_groups = (state or {}).get("groups") or {}
+            if isinstance(raw_groups, dict):
+                for gid, group in raw_groups.items():
+                    if isinstance(group, dict):
+                        groups.extend([str(gid), str(group.get("name") or "")])
+            else:
+                inventory_warning = True
             for mid, client in items:
                 cid = unique_short(mid, mids)
                 if not cid or "\n" in cid or "\r" in cid:
@@ -394,6 +407,7 @@ json.dump({
     "clients": clients_meta,
     "services": services,
     "local_services": local_services,
+    "groups": sorted(set(item for item in groups if item)),
     "inventory_warning": inventory_warning,
 }, sys.stdout)
 PY
@@ -645,7 +659,11 @@ frpctl_zt_prompt_ssh() {
 
 frpctl_zt_invoke_create_client() {
   # Usage: frpctl_zt_invoke_create_client [extra frp-create-client args...]
-  local -a args=("$@")
+  local -a args=()
+  if [[ -n "${_FRP_ZT_PLATFORM:-}" ]]; then
+    args+=(--platform "$_FRP_ZT_PLATFORM")
+  fi
+  args+=("$@")
   if [[ -n "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
     args+=(--client-name "$_FRP_ZT_CLIENT_NAME")
   fi
@@ -660,6 +678,7 @@ frpctl_zt_run_ssh() {
   _FRP_ZT_NOTE=""
   _FRP_ZT_SSH_USER=""
   _FRP_ZT_SSH_PORT=""
+  _FRP_ZT_PLATFORM="${_FRP_ZT_PLATFORM:-linux}"
   frpctl_zt_prompt_client_identification || return 1
   frpctl_zt_prompt_ssh || return 1
   frpctl_zt_invoke_create_client \
@@ -667,6 +686,27 @@ frpctl_zt_run_ssh() {
     --ssh \
     --ssh-user "$_FRP_ZT_SSH_USER" \
     --ssh-port "$_FRP_ZT_SSH_PORT"
+}
+
+frpctl_zt_run_rdp() {
+  local rdp_port=""
+  _FRP_ZT_CLIENT_NAME=""
+  _FRP_ZT_NOTE=""
+  _FRP_ZT_PLATFORM=windows
+  frpctl_zt_prompt_client_identification || return 1
+  echo
+  echo "RDP"
+  echo "==="
+  echo
+  echo "This installer does not enable Remote Desktop or change Windows Firewall."
+  rdp_port="$(frpctl_read "RDP port [3389]: " "3389")" || return 1
+  rdp_port="${rdp_port#"${rdp_port%%[![:space:]]*}"}"
+  rdp_port="${rdp_port%"${rdp_port##*[![:space:]]}"}"
+  if [[ ! "$rdp_port" =~ ^[0-9]+$ ]] || ((rdp_port < 1 || rdp_port > 65535)); then
+    echo "ERROR: invalid RDP port; must be an integer 1-65535" >&2
+    return 1
+  fi
+  frpctl_zt_invoke_create_client --one-line --rdp --rdp-port "$rdp_port"
 }
 
 frpctl_zt_run_management() {
@@ -779,6 +819,7 @@ frpctl_zt_run_services() {
   _FRP_ZT_CLIENT_NAME=""
   _FRP_ZT_NOTE=""
   _FRP_ZT_SVC_JSON=""
+  _FRP_ZT_PLATFORM="${_FRP_ZT_PLATFORM:-linux}"
 
   frpctl_zt_prompt_client_identification || return 1
 
@@ -853,11 +894,11 @@ frpctl_zt_run_services() {
   return "$rc"
 }
 
-frpctl_guided_zero_touch() {
+frpctl_guided_zero_touch_linux() {
   local choice
   echo
-  echo "Zero-touch enrollment"
-  echo "====================="
+  echo "Linux Zero-touch enrollment"
+  echo "==========================="
   echo
   echo "How do you want to configure this client?"
   echo
@@ -867,8 +908,54 @@ frpctl_guided_zero_touch() {
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
-    1) frpctl_zt_run_ssh ;;
-    2) frpctl_zt_run_services ;;
+    1) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_ssh ;;
+    2) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_services ;;
+    3|"") return 0 ;;
+    *)
+      echo "ERROR: select 1-3" >&2
+      return 1
+      ;;
+  esac
+}
+
+frpctl_guided_zero_touch_windows() {
+  local choice
+  echo
+  echo "Windows Zero-touch enrollment"
+  echo "============================="
+  echo
+  echo "1) RDP only"
+  echo "2) Configure TCP services"
+  echo "3) Back"
+  echo
+  choice="$(frpctl_read "Select: " "")" || return 1
+  case "$choice" in
+    1) frpctl_zt_run_rdp ;;
+    2) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_services ;;
+    3|"") return 0 ;;
+    *)
+      echo "ERROR: select 1-3" >&2
+      return 1
+      ;;
+  esac
+}
+
+frpctl_guided_zero_touch() {
+  local choice
+  echo
+  echo "Zero-touch enrollment"
+  echo "====================="
+  echo
+  echo "Client platform:"
+  echo
+  echo "1) Linux"
+  echo "2) Windows"
+  echo "3) Back"
+  echo
+  choice="$(frpctl_read "Select: " "")" || return 1
+  case "$choice" in
+    1) frpctl_guided_zero_touch_linux ;;
+    2) frpctl_guided_zero_touch_windows ;;
     3|"") return 0 ;;
     *)
       echo "ERROR: select 1-3" >&2
@@ -890,7 +977,7 @@ frpctl_guided_enroll() {
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
     1)
-      frpctl_zt_run_ssh
+      _FRP_ZT_PLATFORM=linux; frpctl_zt_run_ssh
       ;;
     2)
       frpctl_run frp-create-client
@@ -1346,7 +1433,7 @@ frpctl_known_commands() {
   local client=0 server=0
   frpctl_is_client && client=1
   frpctl_is_server && server=1
-  printf '%s\n' help menu status doctor version update clear exit quit q history show
+    printf '%s\n' help menu status doctor version update clear exit quit q history show
   if [[ "$client" == "1" ]]; then
     printf '%s\n' services manage info client-status client-update \
       add enable disable apply discard set
@@ -1356,7 +1443,7 @@ frpctl_known_commands() {
       enroll-bulk enrollments enrollment-revoke enrollment-purge \
       revoke revoke-client release-service release-client \
       backup restore project-update frp-update upstream audit \
-      server-status server-update set unset create release purge
+      server-status server-update set unset create release purge add remove delete rename
   fi
 }
 
@@ -1557,7 +1644,10 @@ frpctl_readline_complete() {
   if [[ "$point" != "${#line}" ]]; then
     return 0
   fi
-  mapfile -t cands < <(frpctl_completion_candidates "$line" || true)
+  cands=()
+  while IFS= read -r _cand; do
+    [[ -n "$_cand" ]] && cands+=("$_cand")
+  done < <(frpctl_completion_candidates "$line" || true)
   if [[ ${#cands[@]} -eq 0 ]]; then
     return 0
   fi
@@ -1720,6 +1810,11 @@ frpctl_dispatch_canonical() {
     show_status) frpctl_status $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     show_version) echo; frpctl_print_version; echo ;;
     show_clients) frpctl_require_server || return 1; frpctl_invoke frp-clients $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    show_groups) frpctl_require_server || return 1; frpctl_invoke frp-groups ;;
+    show_group)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-groups "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
+      ;;
     show_client)
       frpctl_require_server || return 1
       frpctl_invoke frp-client-info \
@@ -1739,6 +1834,13 @@ frpctl_dispatch_canonical() {
     set_client)
       frpctl_require_server || return 1
       frpctl_set_client_from_canon "$result"
+      ;;
+    set_group)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-group-set set \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("property",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
       ;;
     unset_client)
       frpctl_require_server || return 1
@@ -1789,6 +1891,31 @@ frpctl_dispatch_canonical() {
     create_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-create-client $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     create_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enroll-bulk $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     create_backup) frpctl_require_server || return 1; frpctl_run frp-backup $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    create_group)
+      frpctl_require_server || return 1
+      if [[ -n "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")" ]]; then
+        frpctl_invoke frp-group-set create \
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          --description \
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")"
+      else
+        frpctl_invoke frp-group-set create \
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")"
+      fi
+      ;;
+    delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" ;;
+    add_group_member)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-group-set add-member \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
+      ;;
+    remove_group_member)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-group-set remove-member \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
+      ;;
     revoke_client) frpctl_require_server || return 1; frpctl_invoke frp-revoke-client "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     revoke_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-revoke "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("id",""))' "$result")" ;;
     purge_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollment "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("id",""))' "$result")" ;;
@@ -1810,7 +1937,12 @@ frpctl_dispatch_canonical() {
         return 1
       fi
       ;;
-    update_frp) frpctl_require_server || return 1; frpctl_run frp-update $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    update_frp)
+      if ! frpctl_is_server && ! frpctl_is_client; then
+        frpctl_require_install || return 1
+      fi
+      frpctl_run frp-update $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     restore_backup) frpctl_require_server || return 1; frpctl_run frp-restore "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("path",""))' "$result")" ;;
     doctor)
       if ! type frp_doctor_main >/dev/null 2>&1; then
@@ -1929,7 +2061,9 @@ frpctl_dispatch() {
       frpctl_client_update "$@"
       ;;
     server-update|frp-update)
-      frpctl_require_server || return 1
+      if ! frpctl_is_server && ! frpctl_is_client; then
+        frpctl_require_install || return 1
+      fi
       frpctl_run frp-update "$@"
       ;;
     project-update)
@@ -2088,7 +2222,10 @@ frpctl_tokenize() {
   [[ -n "$line" ]] || return 0
   py="$(frpctl_grammar_py)" || return 1
   json="$(python3 "$py" tokenize "$line")" || return 2
-  mapfile -t _FRP_CTL_TOKENS < <(python3 -c 'import json,sys; [print(t) for t in json.loads(sys.argv[1])]' "$json")
+  _FRP_CTL_TOKENS=()
+  while IFS= read -r _tok; do
+    [[ -n "$_tok" ]] && _FRP_CTL_TOKENS+=("$_tok")
+  done < <(python3 -c 'import json,sys; [print(t) for t in json.loads(sys.argv[1])]' "$json")
 }
 
 frpctl_history_maybe_record() {

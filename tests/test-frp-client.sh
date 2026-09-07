@@ -5,7 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 ALLOC_PID=""
-trap '[[ -n "$ALLOC_PID" ]] && kill "$ALLOC_PID" 2>/dev/null || true; rm -rf "$WORKDIR"' EXIT
+# shellcheck source=lib/frp-test-procs.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/frp-test-procs.sh"
+frp_test_arm_cleanup
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
@@ -180,7 +182,7 @@ PY
 [[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" ]] || fail "mgmt auth helper not installed"
 [[ -f "$TREE/etc/frp-auto-deploy/version" ]] || fail "client version file missing"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$TREE/etc/frp-auto-deploy/version" || fail "client project version"
-grep -q 'FRP_VERSION=0.70.1' "$TREE/etc/frp-auto-deploy/version" || fail "client FRP version"
+grep -q 'FRP_VERSION=0.71.0' "$TREE/etc/frp-auto-deploy/version" || fail "client FRP version"
 [[ -f "$TREE/etc/frp-auto-deploy/allocator-ca.crt" ]] || fail "trusted CA missing"
 grep -q 'serverPort = 8443' "$TREE/etc/frp/frpc.toml" || fail "frpc must use public control port"
 if grep -q 'serverPort = 443' "$TREE/etc/frp/frpc.toml"; then
@@ -673,6 +675,49 @@ if ! "$ROOT/tools/frp-client" apply >"$WORKDIR/stale-lock.out" 2>"$WORKDIR/stale
   fi
 fi
 pass "local management lock"
+
+# Draft mutation commands must take the same lock; read-only status must not.
+LOCKFILE="$TREE/etc/frp/client-manage.lock"
+python3 - "$WORKDIR/state.before" "$STATE" <<'PY'
+import pathlib,sys
+pathlib.Path(sys.argv[2]).write_bytes(pathlib.Path(sys.argv[1]).read_bytes())
+PY
+exec {LOCKFD}>>"$LOCKFILE"
+flock -n "$LOCKFD"
+if "$ROOT/tools/frp-client" add-service --preset custom --id web --name Web --target-host 127.0.0.1 --target-port 8080 \
+  >"$WORKDIR/add-lock.out" 2>"$WORKDIR/add-lock.err"; then
+  flock -u "$LOCKFD"
+  exec {LOCKFD}>&-
+  fail "lock should block add-service"
+fi
+grep -q 'another frp-client management operation is already running' "$WORKDIR/add-lock.err" || fail "add-service lock error"
+if "$ROOT/tools/frp-client" discard-pending >"$WORKDIR/disc-lock.out" 2>"$WORKDIR/disc-lock.err"; then
+  flock -u "$LOCKFD"
+  exec {LOCKFD}>&-
+  fail "lock should block discard-pending"
+fi
+grep -q 'another frp-client management operation is already running' "$WORKDIR/disc-lock.err" || fail "discard lock error"
+if ! "$ROOT/tools/frp-client" status >"$WORKDIR/status-lock.out" 2>"$WORKDIR/status-lock.err"; then
+  flock -u "$LOCKFD"
+  exec {LOCKFD}>&-
+  fail "status should remain usable while a management lock is held"
+fi
+flock -u "$LOCKFD"
+exec {LOCKFD}>&-
+pass "draft mutation lock; read-only status unlocked"
+
+# flock-based release must remove the lock file; doctor treats leftovers as stale.
+rm -f "$TREE/etc/frp/client-manage.lock" "$TREE/etc/frp/client-manage.lock.pid"
+rm -rf "$TREE/etc/frp/client-manage.lock"
+unset FRP_CLIENT_LOCK_FD || true
+frp_acquire_client_lock
+lock_path="$(frp_client_lock_dir)"
+[[ -e "$lock_path" || -f "${lock_path}.pid" ]] || fail "acquire did not create a lock"
+frp_release_client_lock
+if [[ -e "$lock_path" || -f "${lock_path}.pid" ]]; then
+  fail "lock release left $lock_path"
+fi
+pass "lock release leaves no stale lock file"
 
 # Existing install refuses re-enrollment via the installer
 fp_before="$(python3 "$ROOT/lib/frp_mgmt_auth.py" fingerprint "$TREE/etc/frp/client-identity.pub")"

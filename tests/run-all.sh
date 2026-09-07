@@ -30,12 +30,16 @@ python3 tests/test-mgmt-identity.py
 ./tests/test-client-config.sh
 ./tests/test-client-allocator-url.sh
 ./tests/test-client-platform.sh
+for macos_test in ./tests/test-macos-*.sh; do
+  "$macos_test"
+done
 ./tests/test-portability.sh
 ./tests/test-server-install-config.sh
 ./tests/test-public-hostname.sh
 ./tests/test-allocator-ready.sh
 ./tests/test-create-client.sh
 ./tests/test-zero-touch-bootstrap.sh
+./tests/test-pending-enroll-recovery.sh
 ./tests/test-ssh-explicit-user.sh
 ./tests/test-passive-online.sh
 ./tests/test-io-hardening.sh
@@ -50,16 +54,20 @@ python3 tests/test-core-correctness-p1.py
 ./tests/test-management-commands.sh
 ./tests/test-client-metadata.sh
 ./tests/test-client-tags.sh
+./tests/test-client-groups.sh
 python3 tests/test-client-registry.py
 python3 tests/test-restore-readiness.py
 ./tests/test-frp-client.sh
 ./tests/test-release-service-client-state-reconcile.sh
+./tests/test-client-sync-reconcile.sh
+./tests/test-source-arg.sh
 ./tests/test-lifecycle.sh
 ./tests/test-guided-ux.sh
 ./tests/test-client-upgrade.sh
 bash ./tests/test-installed-client-update.sh
 ./tests/test-legacy-client-secure-bridge.sh
 ./tests/test-install-lifecycle.sh
+./tests/test-uninstall-owned-frpc.sh
 ./tests/test-frpctl.sh
 ./tests/test-frpctl-completion.sh
 ./tests/test-create-zero-touch.sh
@@ -69,6 +77,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-frpctl-doctor.sh
 ./tests/test-port-architecture.sh
 ./tests/test-ca-bootstrap.sh
+./tests/test-allocator-process-cleanup.sh
 ./tests/test-pki-https.py
 python3 tests/test-frontend-proxy.py
 ./tests/test-distro-matrix.sh
@@ -81,9 +90,21 @@ python3 tests/test-frontend-proxy.py
 ./tests/test-probe-tcp-injection.sh
 ./tests/test-immutable-release-channel.sh
 ./tests/test-install-txn-rollback.sh
+./tests/test-fresh-install-sandbox-rollback.sh
 python3 tests/test-audit-log.py
 ./tests/test-frp-compatibility.sh
 ./tests/test-backup-restore.sh
+./tests/test-server-uninstall-fail-closed.sh
+
+echo "=== leftover test allocators ==="
+# shellcheck source=lib/frp-test-procs.sh
+. "$ROOT/tests/lib/frp-test-procs.sh"
+if ! frp_test_assert_no_tmp_allocators; then
+  echo "FAIL leftover test-owned allocators after run-all" >&2
+  frp_test_stop_tmp_allocators || true
+  exit 1
+fi
+echo "POST_RUN_ALL_TEST_ALLOCATORS=0"
 
 echo "=== secret scan ==="
 ./scripts/secret-scan.sh

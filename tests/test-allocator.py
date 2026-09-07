@@ -674,6 +674,33 @@ def case_admin_metadata_and_source_ip():
         env.cleanup()
 
 
+def case_unreadable_host_version_fallback():
+    """0700 host version dir must not crash healthz; fall back to repo VERSION."""
+    import unittest.mock
+
+    expected = ''
+    for line in (ROOT / 'VERSION').read_text(encoding='utf-8').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and key.strip() == 'PROJECT_VERSION':
+            expected = value.strip()
+            break
+    if not expected:
+        fail('unreadable version fixture', 'missing PROJECT_VERSION')
+
+    real_is_file = Path.is_file
+
+    def fake_is_file(self, *args, **kwargs):
+        if str(self) == '/etc/frp-auto-deploy/version':
+            raise PermissionError(13, 'Permission denied', str(self))
+        return real_is_file(self, *args, **kwargs)
+
+    with unittest.mock.patch.object(Path, 'is_file', fake_is_file):
+        got = MOD.read_project_version()
+    if got != expected:
+        fail('unreadable host version fallback', got)
+    pass_('unreadable 0700 host version falls back')
+
+
 def main():
     case_a_single_ssh()
     case_b_no_ssh()
@@ -696,6 +723,7 @@ def main():
     case_lost_response_retry()
     case_range_6000_exhaustion()
     case_admin_metadata_and_source_ip()
+    case_unreadable_host_version_fallback()
     print()
     print('ALLOCATOR_GENERIC_TESTS=PASS')
 

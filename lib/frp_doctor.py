@@ -37,7 +37,7 @@ NETWORK_TIMEOUT = 5
 DISK_WARN_MB = 100
 BACKUP_KEEP_DEFAULT = 5
 MAX_CLOCK_SKEW = 300
-PINNED_FRP_DEFAULT = '0.70.1'
+PINNED_FRP_DEFAULT = '0.71.0'
 
 PASS = 'PASS'
 INFO = 'INFO'
@@ -75,6 +75,9 @@ HEX64_RE = re.compile(r'^[0-9a-f]{64}$')
 SUPPORTED_DISTRO_IDS = {
     'ubuntu', 'rocky', 'almalinux', 'amzn', 'centos', 'rhel', 'debian', 'fedora',
 }
+MACOS_LAUNCHD_LABEL_DEFAULT = 'com.datarelay.frp-auto-deploy.frpc'
+MACOS_MIN_PRODUCT_MAJOR_DEFAULT = 11
+MACOS_OS_IDS = {'macos', 'darwin'}
 
 
 class DoctorError(Exception):
@@ -87,7 +90,7 @@ MARKER_NOTE = 'Do not delete the pending marker by hand unless recovering from a
 def _recovery_for_role(role, kind):
     if kind == 'frp':
         if role in ('client', 'partial_client'):
-            return 'sudo frpctl update'
+            return 'sudo frpctl update frp'
         return 'sudo frpctl frp-update'
     if role in ('client', 'partial_client'):
         return 'sudo frpctl update'
@@ -178,14 +181,111 @@ def openssl_bin():
     return shutil.which('openssl')
 
 
+def _doctor_is_darwin():
+    forced = str(os.environ.get('FRP_TEST_UNAME_S') or '').strip()
+    if forced:
+        return forced == 'Darwin'
+    return sys.platform == 'darwin'
+
+
+def _doctor_launchd_label():
+    label = str(os.environ.get('FRP_MACOS_LAUNCHD_LABEL') or MACOS_LAUNCHD_LABEL_DEFAULT).strip()
+    return label or MACOS_LAUNCHD_LABEL_DEFAULT
+
+
+def _macos_min_product_major():
+    raw = str(os.environ.get('FRP_MACOS_MIN_PRODUCT_VERSION') or MACOS_MIN_PRODUCT_MAJOR_DEFAULT).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return MACOS_MIN_PRODUCT_MAJOR_DEFAULT
+
+
+def _facts_is_darwin(facts=None):
+    if _doctor_is_darwin():
+        return True
+    platform = (facts or {}).get('platform') or {}
+    os_family = str(platform.get('os_family') or '').strip().lower()
+    if os_family in MACOS_OS_IDS:
+        return True
+    os_id = str(platform.get('os_id') or '').strip().lower()
+    return os_id in MACOS_OS_IDS
+
+
+def _frpc_runtime_label(facts=None):
+    if _facts_is_darwin(facts):
+        return 'launchd job %s' % _doctor_launchd_label()
+    return 'frpc.service'
+
+
+def _frpc_runtime_recovery(facts=None):
+    if _facts_is_darwin(facts):
+        return (
+            'inspect the job with launchctl print system/%s; doctor does not restart services'
+            % _doctor_launchd_label()
+        )
+    return 'inspect the unit with systemctl status frpc; doctor does not restart services'
+
+
+def _doctor_macos_state_root():
+    return str(os.environ.get('FRP_MACOS_STATE_ROOT') or '/Library/Application Support/frp-auto-deploy').rstrip('/')
+
+
+def _doctor_macos_prefix():
+    return str(os.environ.get('FRP_MACOS_PREFIX') or '/usr/local').rstrip('/')
+
+
+def client_has_enabled_services(state):
+    services = (state or {}).get('services') if isinstance(state, dict) else None
+    if not isinstance(services, dict):
+        return False
+    for rec in services.values():
+        if isinstance(rec, dict) and rec.get('enabled', True) is not False:
+            return True
+    return False
+
+
+def macos_map_path(abs_path):
+    """Mirror lib/frp-macos.sh frp_macos_map_path for doctor file probes."""
+    p = str(abs_path or '')
+    if not p:
+        return p
+    state = _doctor_macos_state_root()
+    prefix = _doctor_macos_prefix()
+    if p in ('/etc/frp', '/etc/frp-auto-deploy'):
+        return state
+    if p.startswith('/etc/frp/'):
+        return state + '/' + p[len('/etc/frp/'):]
+    if p.startswith('/etc/frp-auto-deploy/'):
+        return state + '/' + p[len('/etc/frp-auto-deploy/'):]
+    if p == '/var/lib/frp-auto-deploy':
+        return state + '/state'
+    if p.startswith('/var/lib/frp-auto-deploy/'):
+        return state + '/state/' + p[len('/var/lib/frp-auto-deploy/'):]
+    if p == '/etc/systemd/system/frpc.service':
+        return '/Library/LaunchDaemons/com.datarelay.frp-auto-deploy.frpc.plist'
+    if p == '/usr/local/lib/frp-auto-deploy':
+        return state + '/lib'
+    if p.startswith('/usr/local/lib/frp-auto-deploy/'):
+        return state + '/lib/' + p[len('/usr/local/lib/frp-auto-deploy/'):]
+    if p == '/usr/local/bin/frpc':
+        return state + '/bin/frpc'
+    if p.startswith('/usr/local/bin/'):
+        return prefix + '/bin/' + p[len('/usr/local/bin/'):]
+    if p.startswith('/usr/local/sbin/'):
+        return prefix + '/sbin/' + p[len('/usr/local/sbin/'):]
+    return p
+
+
 class Paths(object):
     def __init__(self, root):
         self.root = str(root or '')
 
     def p(self, abs_path):
+        mapped = macos_map_path(abs_path) if _doctor_is_darwin() else abs_path
         if self.root:
-            return Path(self.root + abs_path)
-        return Path(abs_path)
+            return Path(self.root + mapped)
+        return Path(mapped)
 
     def exists(self, abs_path):
         return self.p(abs_path).exists()
@@ -1012,6 +1112,37 @@ def validate_registry(state, cfg=None):
         reserved = []
     if not isinstance(reserved, list):
         return FAIL, 'registry reserved list is invalid', issues
+    groups = state.get('groups')
+    if groups is None:
+        groups = {}
+    if not isinstance(groups, dict):
+        return FAIL, 'registry groups is not an object', issues
+    group_names = {}
+    valid_group_ids = set()
+    for gid, group in groups.items():
+        if not isinstance(gid, str) or not re.fullmatch(r'grp_[0-9a-f]{8}', gid):
+            issues.append('invalid group id %s' % gid)
+            continue
+        valid_group_ids.add(gid)
+        if not isinstance(group, dict):
+            issues.append('group %s record is not an object' % gid)
+            continue
+        name = group.get('name')
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', name):
+            issues.append('group %s has invalid name' % gid)
+            continue
+        if name.lower() in ('all', 'ungrouped'):
+            issues.append('group %s uses reserved name %s' % (gid, name))
+        if name in group_names:
+            issues.append('duplicate group name %s' % name)
+        group_names[name] = gid
+        description = group.get('description')
+        if description is not None and (
+            not isinstance(description, str)
+            or len(description) > 1024
+            or any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in description)
+        ):
+            issues.append('group %s has invalid description' % gid)
     port_start = port_end = None
     protected = set()
     if cfg:
@@ -1037,6 +1168,20 @@ def validate_registry(state, cfg=None):
         if not isinstance(client, dict):
             issues.append('client record is not an object')
             continue
+        group_ids = client.get('group_ids')
+        if group_ids is not None:
+            if not isinstance(group_ids, list):
+                issues.append('client %s group_ids must be a list' % str(mid)[:12])
+            else:
+                seen_group_ids = set()
+                for gid in group_ids:
+                    if not isinstance(gid, str) or not re.fullmatch(r'grp_[0-9a-f]{8}', gid):
+                        issues.append('client %s has invalid group id' % str(mid)[:12])
+                    elif gid in seen_group_ids:
+                        issues.append('client %s has duplicate group id %s' % (str(mid)[:12], gid))
+                    elif gid not in valid_group_ids:
+                        issues.append('client %s references nonexistent group %s' % (str(mid)[:12], gid))
+                    seen_group_ids.add(gid)
         if 'ssh_port' in client or 'https_port' in client:
             issues.append('legacy SSH/HTTPS fields are present')
             continue
@@ -1086,21 +1231,79 @@ def validate_registry(state, cfg=None):
     return PASS, msg, infos
 
 
+def check_macos_support(report, facts):
+    platform = facts.get('platform') or {}
+    arch = str(platform.get('arch') or '').strip().lower()
+    macos_ver = str(platform.get('macos_version') or '').strip()
+    issues = []
+    recs = []
+    if arch and arch not in ('arm64', 'aarch64'):
+        issues.append('architecture %s is not Apple Silicon' % arch)
+        recs.append('The macOS client requires Apple Silicon (arm64); Intel Macs are not supported.')
+    if macos_ver:
+        major = macos_ver.split('.')[0]
+        try:
+            min_major = _macos_min_product_major()
+            if int(major) < min_major:
+                issues.append('macOS %s is older than the supported minimum (macOS %s)' % (macos_ver, min_major))
+                recs.append('macOS %s or newer is required' % min_major)
+        except ValueError:
+            pass
+    detail_bits = []
+    if macos_ver:
+        detail_bits.append('macos=%s' % macos_ver)
+    if arch:
+        detail_bits.append('arch=%s' % arch)
+    detail = '; '.join(detail_bits)
+    if issues:
+        report.add(
+            'macos_support', FAIL,
+            '; '.join(issues),
+            detail,
+            recs[0] if recs else '',
+            'host',
+        )
+        return
+    report.add(
+        'macos_support', PASS,
+        'Apple Silicon macOS is a supported client platform',
+        detail,
+        '',
+        'host',
+    )
+
+
 def check_host_facts(report, facts):
     platform = facts.get('platform') or {}
     os_name = platform.get('os') or 'unknown'
     os_id = str(platform.get('os_id') or '').strip()
-    detail_bits = [
-        'OS=%s' % os_name,
-        'kernel=%s' % (platform.get('kernel') or 'unknown'),
-        'arch=%s' % (platform.get('arch') or 'unknown'),
-        'bash=%s' % (platform.get('bash') or 'unknown'),
-        'python=%s' % (platform.get('python') or 'unknown'),
-        'openssl=%s' % (platform.get('openssl') or 'unknown'),
-        'systemd=%s' % (platform.get('systemd') or 'unknown'),
-    ]
+    darwin = _facts_is_darwin(facts)
+    if darwin:
+        detail_bits = [
+            'OS=%s' % os_name,
+            'kernel=%s' % (platform.get('kernel') or 'unknown'),
+            'arch=%s' % (platform.get('arch') or 'unknown'),
+            'bash=%s' % (platform.get('bash') or 'unknown'),
+            'python=%s' % (platform.get('python') or 'unknown'),
+            'openssl=%s' % (platform.get('openssl') or 'unknown'),
+            'service_manager=%s' % (platform.get('service_manager') or 'launchd'),
+        ]
+        if platform.get('macos_version'):
+            detail_bits.append('macos=%s' % platform.get('macos_version'))
+    else:
+        detail_bits = [
+            'OS=%s' % os_name,
+            'kernel=%s' % (platform.get('kernel') or 'unknown'),
+            'arch=%s' % (platform.get('arch') or 'unknown'),
+            'bash=%s' % (platform.get('bash') or 'unknown'),
+            'python=%s' % (platform.get('python') or 'unknown'),
+            'openssl=%s' % (platform.get('openssl') or 'unknown'),
+            'systemd=%s' % (platform.get('systemd') or 'unknown'),
+        ]
     report.add('host_facts', INFO, 'support facts collected', '; '.join(detail_bits), '', 'host')
-    if os_id and os_id not in SUPPORTED_DISTRO_IDS:
+    if darwin:
+        check_macos_support(report, facts)
+    elif os_id and os_id not in SUPPORTED_DISTRO_IDS:
         report.add(
             'distro_support', WARN,
             'this distribution is not part of the automated container matrix',
@@ -1435,8 +1638,12 @@ def check_unit(report, facts, unit, check_id, label):
     systemd_usable = bool(facts.get('systemd_usable'))
     units = facts.get('units') or {}
     info = units.get(unit) or {}
+    darwin_frpc = unit == 'frpc' and _facts_is_darwin(facts)
+    if darwin_frpc:
+        label = _frpc_runtime_label(facts)
     if not systemd_usable and not info:
-        report.add(check_id, NOT_TESTED, '%s was not tested (systemd unavailable)' % label, '', '', 'runtime')
+        unavailable = 'launchd state unavailable' if darwin_frpc else 'systemd unavailable'
+        report.add(check_id, NOT_TESTED, '%s was not tested (%s)' % (label, unavailable), '', '', 'runtime')
         return 'not_tested'
     active = str(info.get('active') or 'unknown')
     if active == 'active':
@@ -1447,11 +1654,14 @@ def check_unit(report, facts, unit, check_id, label):
         detail = 'state=%s' % active
         if journal:
             detail += '\n' + redact(journal)
+        recovery = _frpc_runtime_recovery(facts) if darwin_frpc else (
+            'inspect the unit with systemctl status %s; doctor does not restart services' % unit
+        )
         report.add(
             check_id, FAIL,
             '%s is not active' % label,
             detail,
-            'inspect the unit with systemctl status %s; doctor does not restart services' % unit,
+            recovery,
             'runtime',
         )
         return active
@@ -2230,7 +2440,29 @@ def check_client(report, paths, facts, skip_network):
     elif not paths.is_file(toml_path) and report.role in ('client', 'dual', 'partial_client'):
         report.add('frpc_config', FAIL, 'frpc.toml is missing', '', 'sudo frp-client manage and Apply, or restore from backup', 'state')
 
-    check_unit(report, facts, 'frpc', 'frpc_service', 'frpc.service')
+    if state is not None and not client_has_enabled_services(state):
+        info = (facts.get('units') or {}).get('frpc') or {}
+        active = str(info.get('active') or 'unknown')
+        if active in ('inactive', 'failed'):
+            report.add(
+                'frpc_service', PASS,
+                'frpc is inactive because no enabled services are published',
+                'state=%s' % active,
+                '',
+                'runtime',
+            )
+        elif active == 'active':
+            report.add(
+                'frpc_service', INFO,
+                'frpc is running with no enabled services',
+                'state=%s' % active,
+                '',
+                'runtime',
+            )
+        else:
+            check_unit(report, facts, 'frpc', 'frpc_service', _frpc_runtime_label(facts))
+    else:
+        check_unit(report, facts, 'frpc', 'frpc_service', _frpc_runtime_label(facts))
 
     alloc_url = ''
     frp_host = ''
@@ -2377,7 +2609,7 @@ def render_human(report, quiet=False, verbose=False):
             lines.append('-' * len(title))
             for item in items:
                 if not verbose and item['status'] in (PASS, INFO, NOT_APPLICABLE) and key == 'host':
-                    if item['id'] == 'host_facts' or item['id'] == 'distro_support':
+                    if item['id'] in ('host_facts', 'distro_support', 'macos_support'):
                         lines.append('%-18s %s — %s' % (item['id'][:18], item['status'], item['message']))
                         continue
                 if not verbose and item['status'] in (PASS, INFO) and key not in ('security', 'state', 'runtime', 'network', 'installation'):

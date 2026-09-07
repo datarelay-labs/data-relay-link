@@ -8,14 +8,9 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 
 WORKDIR="$(mktemp -d)"
 ALLOC_PID=""
-cleanup() {
-  if [[ -n "${ALLOC_PID}" ]]; then
-    kill "$ALLOC_PID" 2>/dev/null || true
-    wait "$ALLOC_PID" 2>/dev/null || true
-  fi
-  rm -rf "$WORKDIR"
-}
-trap cleanup EXIT
+# shellcheck source=lib/frp-test-procs.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/frp-test-procs.sh"
+frp_test_arm_cleanup
 
 TREE="$WORKDIR/tree"
 mkdir -p "$TREE/etc/frp-auto-deploy/pki" \
@@ -73,6 +68,10 @@ cfg = {
     "client_installer_url": (
         "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/"
         "v2.1.2/dist/bootstrap-client.sh"
+    ),
+    "windows_client_installer_url": (
+        "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/"
+        "v2.1.2/dist/bootstrap-client.ps1"
     ),
     "tls_ca_cert": str(tree / "etc/frp-auto-deploy/pki/ca.crt"),
     "tls_server_cert": str(tree / "etc/frp-auto-deploy/pki/server.crt"),
@@ -144,6 +143,22 @@ grep -E -q "curl -fsSL 'https://bootstrap\.example\.com/i/bt1\." "$OUT_MULTI" \
   || { cat "$OUT_MULTI"; fail "multi short URL shape"; }
 pass "MULTI_SERVICE_SHORT_URL"
 
+OUT_WINDOWS="$WORKDIR/windows.out"
+python3 "$ROOT/tools/frp-create-client" --one-line --platform windows --rdp \
+  --client-name short-rdp --note 'rdp' >"$OUT_WINDOWS" \
+  || fail "Windows short URL command"
+grep -q 'powershell.exe .* -Command' "$OUT_WINDOWS" \
+  || fail "Windows one-line missing PowerShell command"
+grep -q '?platform=windows' "$OUT_WINDOWS" \
+  || fail "Windows one-line missing platform dispatch"
+grep -q 'RDP local target: 127.0.0.1:3389' "$OUT_WINDOWS" \
+  || fail "Windows RDP custom TCP preset missing"
+if grep -qiE '(^|[;|[:space:]])(irm|iex)([;|[:space:]]|$)|Invoke-RestMethod' \
+  "$OUT_WINDOWS"; then
+  fail "Windows one-line contains download-and-execute alias"
+fi
+pass "WINDOWS_ONE_LINE"
+
 TICKET="$(python3 - "$OUT_SSH" <<'PY'
 import re
 import sys
@@ -209,6 +224,34 @@ grep -q 'FRP Auto Deploy' "$SCRIPT1" || fail "script header"
 if grep -qiE 'curl -k|curl --insecure|wget --no-check-certificate' "$SCRIPT1"; then
   fail "short URL script contains insecure TLS"
 fi
+
+SCRIPT_WIN="$WORKDIR/script-windows.ps1"
+curl -fsSk "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET}?platform=windows" \
+  -o "$SCRIPT_WIN" || fail "GET /i Windows query dispatch"
+grep -q 'Get-FileHash -Algorithm SHA256' "$SCRIPT_WIN" \
+  || fail "Windows bootstrap missing SHA256 verification"
+grep -q 'ExecutionPolicy Bypass -File \$installer -ZeroTouch' "$SCRIPT_WIN" \
+  || fail "Windows bootstrap missing -File -ZeroTouch execution"
+grep -q 'dist/bootstrap-client\\.ps1' "$SCRIPT_WIN" \
+  || fail "Windows bootstrap missing PS1 checksum entry"
+if grep -qiE 'Invoke-RestMethod|Invoke-WebRequest.+\|' "$SCRIPT_WIN"; then
+  fail "Windows bootstrap contains download-and-execute pipe"
+fi
+
+SCRIPT_UA="$WORKDIR/script-windows-ua.ps1"
+curl -fsSk -A 'WindowsPowerShell/5.1' \
+  "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET}" \
+  -o "$SCRIPT_UA" || fail "GET /i Windows User-Agent dispatch"
+grep -q 'Get-FileHash -Algorithm SHA256' "$SCRIPT_UA" \
+  || fail "PowerShell User-Agent did not receive Windows bootstrap"
+
+SCRIPT_LINUX="$WORKDIR/script-explicit-linux.sh"
+curl -fsSk -A 'WindowsPowerShell/5.1' \
+  "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET}?platform=linux" \
+  -o "$SCRIPT_LINUX" || fail "GET /i explicit Linux dispatch"
+grep -q '^#!/bin/bash' "$SCRIPT_LINUX" \
+  || fail "explicit Linux did not preserve bash bootstrap"
+pass "WINDOWS_AND_LINUX_DISPATCH"
 
 HDRS="$WORKDIR/headers.txt"
 curl -sSk -D "$HDRS" -o /dev/null "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET}" \

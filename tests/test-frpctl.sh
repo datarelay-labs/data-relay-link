@@ -44,7 +44,7 @@ Path(sys.argv[1]).write_text(json.dumps({
 PY
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.4.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 
@@ -81,7 +81,7 @@ reg.write_text(json.dumps({
 PY
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.4.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 
@@ -142,6 +142,8 @@ export FRP_CTL_DRY_RUN=1
 grep -qx 'DISPATCH frp-client' "$WORKDIR/client-manage.out" || fail "manage dispatch"
 "$CTL" update >"$WORKDIR/client-update.out"
 grep -qx 'DISPATCH frp-client update' "$WORKDIR/client-update.out" || fail "client update dispatch"
+"$CTL" update frp --check >"$WORKDIR/client-upd-frp.out"
+grep -qx 'DISPATCH frp-update --check' "$WORKDIR/client-upd-frp.out" || fail "client update frp"
 "$CTL" info >"$WORKDIR/client-info.out"
 grep -qx 'DISPATCH frp-client info' "$WORKDIR/client-info.out" || fail "info dispatch"
 "$CTL" services >"$WORKDIR/client-services.out"
@@ -149,6 +151,7 @@ grep -qx 'DISPATCH frp-client list' "$WORKDIR/client-services.out" || fail "serv
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_CLIENT_MANAGE_DISPATCH"
 pass "FRPCTL_CLIENT_UPDATE_DISPATCH"
+pass "FRPCTL_CLIENT_UPDATE_FRP"
 
 if "$CTL" clients >"$WORKDIR/client-clients.out" 2>"$WORKDIR/client-clients.err"; then
   fail "client host should reject server clients command"
@@ -169,7 +172,7 @@ grep -qx 'DISPATCH frp-create-client' "$WORKDIR/server-create.out" || fail "crea
 "$CTL" enroll >"$WORKDIR/server-enroll.out"
 grep -qx 'DISPATCH frp-create-client' "$WORKDIR/server-enroll.out" || fail "enroll dispatch"
 "$CTL" enroll --one-line --ssh >"$WORKDIR/server-enroll-ssh.out"
-grep -qx 'DISPATCH frp-create-client --one-line --ssh' "$WORKDIR/server-enroll-ssh.out" \
+grep -Eqx 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' "$WORKDIR/server-enroll-ssh.out" \
   || fail "enroll --one-line --ssh dispatch"
 pass "FRPCTL_ENROLL_ONE_LINE_DISPATCH"
 "$CTL" client-info customer-dp >"$WORKDIR/server-info.out"
@@ -249,7 +252,7 @@ run_repl "$CLIENT" "$WORKDIR/client-repl.out" status help version exit || fail "
 grep -q 'FRP Auto Deploy CLI' "$WORKDIR/client-repl.out" || fail "client repl banner"
 grep -q 'Role            : Client' "$WORKDIR/client-repl.out" || fail "client repl role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-repl.out" || fail "client repl version"
-grep -q 'FRP version     : 0.70.1' "$WORKDIR/client-repl.out" || fail "client repl frp version"
+grep -q 'FRP version     : 0.71.0' "$WORKDIR/client-repl.out" || fail "client repl frp version"
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
 grep -q 'FRP Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
@@ -332,7 +335,7 @@ run_repl "$SERVER" "$WORKDIR/guided-enroll.out" menu 3 1 zt-ssh-client "" aella 
 grep -q 'Create enrollment' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
 grep -q 'Zero-touch SSH' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
 grep -q 'Manual Enrollment Code' "$WORKDIR/guided-enroll.out" || fail "guided enroll manual option"
-grep -q 'DISPATCH frp-create-client --one-line --ssh --ssh-user aella --ssh-port 22 --client-name zt-ssh-client' \
+grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella --ssh-port 22 --client-name zt-ssh-client' \
   "$WORKDIR/guided-enroll.out" \
   || fail "guided enroll did not dispatch zero-touch"
 pass "FRPCTL_GUIDED_ENROLL_ZERO_TOUCH"
@@ -348,7 +351,7 @@ pass "FRPCTL_GUIDED_ENROLL_MANUAL"
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/enroll-oneline.out" "enroll --one-line --ssh" exit \
   || fail "repl enroll --one-line --ssh"
-grep -q 'DISPATCH frp-create-client --one-line --ssh' "$WORKDIR/enroll-oneline.out" \
+grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' "$WORKDIR/enroll-oneline.out" \
   || fail "enroll --one-line --ssh dispatch"
 pass "FRPCTL_ENROLL_ONE_LINE_SSH"
 pass "FRPCTL_REPL_SERVER_REVOKE_DISPATCH"

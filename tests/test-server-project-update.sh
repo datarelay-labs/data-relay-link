@@ -33,7 +33,7 @@ setup_tree() {
     "$tree/usr/local/sbin" "$tree/etc/systemd/system"
   cat >"$tree/usr/local/bin/frps" <<'EOF'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--version" ]] && echo "0.70.1"
+[[ "${1:-}" == "--version" ]] && echo "0.71.0"
 exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frps"
@@ -83,7 +83,7 @@ EOF
 EOF
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=2.0.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 RELEASE_CHANNEL=stable
 SOURCE_REF=v2.1.1
 BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -153,7 +153,7 @@ cmp "$ROOT/tools/frp-project-update" "$OK/usr/local/sbin/frp-project-update" >/d
   fail "project updater not installed"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$OK/etc/frp-auto-deploy/version" ||
   fail "project version not updated"
-grep -q 'FRP_VERSION=0.70.1' "$OK/etc/frp-auto-deploy/version" || fail "FRP metadata changed"
+grep -q 'FRP_VERSION=0.71.0' "$OK/etc/frp-auto-deploy/version" || fail "FRP metadata changed"
 pass "STATE_REGISTRY_TOKEN_CA_PRESERVED"
 pass "NO_CLIENT_REENROLLMENT"
 
@@ -444,7 +444,7 @@ pass "SCHEMA1_PENDING_COMPAT"
 
 UNKNOWN="$WORKDIR/unknown"
 setup_tree "$UNKNOWN"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.70.1\n' >"$UNKNOWN/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$UNKNOWN/etc/frp-auto-deploy/version"
 rm -f "$UNKNOWN/var/lib/frp-auto-deploy/update-pending.json"
 if env -u FRP_RELEASE_CHANNEL FRP_SERVER_TEST_ROOT="$UNKNOWN" \
   "$UPDATE" --source "$ROOT" --check >"$WORKDIR/unknown.out" 2>"$WORKDIR/unknown.err"; then
@@ -459,7 +459,7 @@ pass "UNKNOWN_CHANNEL_NO_SILENT_STABLE_FALLBACK"
 
 PENDDEV="$WORKDIR/penddev"
 setup_tree "$PENDDEV"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.70.1\n' >"$PENDDEV/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$PENDDEV/etc/frp-auto-deploy/version"
 printf '{"schema_version":2,"operation":"project-update","phase":"commit","release_channel":"dev","source_ref":"main","previous_version":"2.1.0","candidate_version":"2.1.3"}\n' \
   >"$PENDDEV/var/lib/frp-auto-deploy/update-pending.json"
 env -u FRP_RELEASE_CHANNEL FRP_SERVER_TEST_ROOT="$PENDDEV" \
@@ -471,7 +471,7 @@ pass "PENDING_DEV_RETRY_STAYS_DEV"
 # Real OCI partial-state fixture: unknown version metadata + schema-1 pending + mixed files.
 OCI="$WORKDIR/oci"
 setup_tree "$OCI"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.70.1\n' >"$OCI/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$OCI/etc/frp-auto-deploy/version"
 python3 - "$OCI/var/lib/frp-auto-deploy/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -548,7 +548,7 @@ write_identity() {
   local tree="$1" project="$2" channel="$3" ref="$4" sha="${5:-}"
   {
     printf 'PROJECT_VERSION=%s\n' "$project"
-    printf 'FRP_VERSION=0.70.1\n'
+    printf 'FRP_VERSION=0.71.0\n'
     printf 'RELEASE_CHANNEL=%s\n' "$channel"
     printf 'SOURCE_REF=%s\n' "$ref"
     if [[ -n "$sha" ]]; then
@@ -628,7 +628,7 @@ grep -q 'Server project update completed successfully' "$WORKDIR/refresh.out" ||
 grep -q 'Same-version update : refreshed management files' "$WORKDIR/refresh.out" || fail "oci same-version refresh line"
 grep -q "BUNDLE_SHA256=${OCI_CANDIDATE_SHA}" "$REFRESH/etc/frp-auto-deploy/version" || fail "verified sha not persisted"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$REFRESH/etc/frp-auto-deploy/version" || fail "project version lost"
-grep -q 'FRP_VERSION=0.70.1' "$REFRESH/etc/frp-auto-deploy/version" || fail "frp version changed"
+grep -q 'FRP_VERSION=0.71.0' "$REFRESH/etc/frp-auto-deploy/version" || fail "frp version changed"
 grep -q 'RELEASE_CHANNEL=dev' "$REFRESH/etc/frp-auto-deploy/version" || fail "channel not preserved"
 grep -q 'SOURCE_REF=main' "$REFRESH/etc/frp-auto-deploy/version" || fail "source ref not preserved"
 [[ "$(state_digest "$REFRESH")" == "$REFRESH_STATE" ]] || fail "oci refresh changed protected state"

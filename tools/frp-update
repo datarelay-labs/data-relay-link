@@ -8,6 +8,9 @@ if [[ -f "${_SCRIPT_DIR}/../lib/frp-common.sh" ]]; then
 elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
   # shellcheck disable=SC1091
   . /usr/local/lib/frp-auto-deploy/frp-common.sh
+elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh' ]]; then
+  # shellcheck disable=SC1091
+  . '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh'
 else
   echo "ERROR: missing lib/frp-common.sh" >&2
   exit 1
@@ -17,8 +20,9 @@ usage() {
   cat <<'EOF'
 Usage: frp-update [--check]
 
-Upgrade the local FRP server binary to the version tested by frp-auto-deploy.
-If the new binary fails health checks, the previous binary is restored automatically.
+Upgrade the local FRP binary (frps on server, frpc on client) to the version
+tested by frp-auto-deploy. If the new binary fails health checks, the previous
+binary is restored automatically.
 
   --check, --dry-run   report current/target versions without changing anything
   -h, --help           show this help
@@ -144,6 +148,13 @@ health_check() {
     return 0
   fi
   if [[ "${UPDATE_ROLE:-server}" == "client" ]]; then
+    if frp_is_darwin; then
+      if declare -F frp_macos_launchd_running >/dev/null 2>&1 && frp_macos_launchd_running; then
+        return 0
+      fi
+      echo "ERROR: frpc is not active" >&2
+      return 1
+    fi
     systemctl is-active --quiet frpc || {
       echo "ERROR: frpc is not active" >&2
       return 1
@@ -233,6 +244,7 @@ do_rollback() {
 
 fail_update() {
   local class="${1:-STAGING_FAILED}"
+  local txn_role="${FRP_TXN_ROLE:-server}"
   echo >&2
   echo "FRP update failed." >&2
   frp_emit_failure_class "$class"
@@ -246,17 +258,17 @@ fail_update() {
       echo
       echo "The previous FRP version is running."
       report_preservation
-      frp_txn_clear server
+      frp_txn_clear "$txn_role"
       exit 1
     fi
-    echo "CRITICAL: FRP update failed and automatic rollback did not recover frps." >&2
+    echo "CRITICAL: FRP update failed and automatic rollback did not recover runtime." >&2
     frp_emit_failure_class UPDATE_ROLLBACK_FAILED
     echo "RECOVERY_REQUIRED" >&2
     echo "FAILURE_CLASS=UPDATE_ROLLBACK_FAILED" >&2
     report_preservation
     exit 2
   fi
-  frp_txn_clear server
+  frp_txn_clear "$txn_role"
   exit 1
 }
 
@@ -284,9 +296,17 @@ precheck() {
     return 1
   fi
   if [[ "$SKIP_SYSTEMD" != "1" ]]; then
-    require_cmd systemctl || return 1
+    if frp_is_darwin; then
+      require_cmd launchctl || return 1
+    else
+      require_cmd systemctl || return 1
+    fi
   fi
-  if ! frp_has_disk_kb "$(dirname "$FRPS_BIN")" 65536; then
+  _frp_update_disk_bin="$FRPS_BIN"
+  if [[ "$UPDATE_ROLE" == "client" ]]; then
+    _frp_update_disk_bin="$FRPC_BIN"
+  fi
+  if ! frp_has_disk_kb "$(dirname "$_frp_update_disk_bin")" 65536; then
     echo "ERROR: not enough disk space to install FRP" >&2
     return 1
   fi
@@ -387,6 +407,19 @@ restart_frp_unit() {
       fi
       return 0
     fi
+    if frp_is_darwin; then
+      if declare -F frp_client_restart >/dev/null 2>&1; then
+        frp_client_restart || return 1
+        return 0
+      fi
+      frp_macos_launchd_set_enabled enable || return 1
+      if frp_macos_launchd_running; then
+        frp_macos_launchd_kickstart || return 1
+      else
+        frp_macos_launchd_bootstrap || return 1
+      fi
+      return 0
+    fi
     systemctl restart frpc
     return
   fi
@@ -396,10 +429,47 @@ restart_frp_unit() {
 # --- main ---
 UPDATE_ROLE=server
 UPDATE_FAIL_CLASS=""
+TXN_OPERATION=frp-update
 precheck || exit 1
-# frp-update transaction markers are server-role (operation frp-update).
-FRP_TXN_ROLE=server
+# Role-correct transaction markers: client frpc update must not use server txn.
+if [[ "$UPDATE_ROLE" == "client" ]]; then
+  FRP_TXN_ROLE=client
+  TXN_OPERATION=client-frp-update
+else
+  FRP_TXN_ROLE=server
+  TXN_OPERATION=frp-update
+fi
 export FRP_TXN_ROLE
+
+# Serialize against other lifecycle mutations for the same role.
+if [[ "$UPDATE_ROLE" == "client" ]]; then
+  if [[ -f /usr/local/lib/frp-auto-deploy/frp-client-common.sh ]]; then
+    # shellcheck disable=SC1091
+    . /usr/local/lib/frp-auto-deploy/frp-client-common.sh
+  elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh' ]]; then
+    # shellcheck disable=SC1091
+    . '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh'
+  elif [[ -f "${_SCRIPT_DIR}/../lib/frp-client-common.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "${_SCRIPT_DIR}/../lib/frp-client-common.sh"
+  fi
+  if declare -F frp_acquire_client_lock >/dev/null 2>&1; then
+    frp_acquire_client_lock || exit 1
+    trap 'frp_release_client_lock; cleanup' EXIT
+  fi
+else
+  _frp_update_server_lock="$(frp_path /var/lib/frp-auto-deploy/server-lifecycle.lock)"
+  mkdir -p "$(dirname "$_frp_update_server_lock")"
+  if command -v flock >/dev/null 2>&1 && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" != "1" || -z "${FRP_DEPLOY_TEST_ROOT:-}${FRP_UPDATE_ROOT:-}" ]]; then
+    exec {FRP_UPDATE_LOCK_FD}>>"$_frp_update_server_lock"
+    if ! flock -n "$FRP_UPDATE_LOCK_FD"; then
+      echo "ERROR: another server lifecycle operation is already running." >&2
+      exit 1
+    fi
+    trap 'exec {FRP_UPDATE_LOCK_FD}>&- 2>/dev/null || true; cleanup' EXIT
+  fi
+fi
+
 if [[ "$UPDATE_ROLE" == "client" ]]; then
   PREVIOUS_VERSION="$(frp_parse_binary_version "$FRPC_BIN")"
 else
@@ -432,7 +502,7 @@ echo "Checking prerequisites..."
 frp_checksum_for "$TARGET_VERSION" "$FRP_ARCH" >/dev/null
 
 TMPDIR="$(frp_secure_mktemp_dir)"
-FRP_TXN_MUTATION_STARTED=false frp_txn_write frp-update stage "$PREVIOUS_VERSION" "$TARGET_VERSION"
+FRP_TXN_MUTATION_STARTED=false frp_txn_write "$TXN_OPERATION" stage "$PREVIOUS_VERSION" "$TARGET_VERSION"
 
 echo "Downloading FRP v${TARGET_VERSION}..."
 prepare_new_binary || fail_update "${UPDATE_FAIL_CLASS:-DOWNLOAD_FAILED}"
@@ -447,7 +517,7 @@ echo "Creating rollback backup..."
 create_backup || fail_update STAGING_FAILED
 FRP_TXN_SNAPSHOT_PATH="$BACKUP_DIR" \
 FRP_TXN_MUTATION_STARTED=true \
-  frp_txn_write frp-update commit "$PREVIOUS_VERSION" "$TARGET_VERSION"
+  frp_txn_write "$TXN_OPERATION" commit "$PREVIOUS_VERSION" "$TARGET_VERSION"
 
 echo "Installing FRP v${TARGET_VERSION}..."
 if [[ "$UPDATE_ROLE" == "client" ]]; then
@@ -457,13 +527,17 @@ else
 fi
 INSTALLED_NEW=1
 
+# Clear the pending marker before restart. Client restarts can drop the SSH
+# path used to drive the update; leaving client-frp-update pending would make a
+# later project upgrade attempt treat the FRP binary backup as a tools snapshot.
+frp_txn_clear "$FRP_TXN_ROLE"
+
 echo "Restarting ${UPDATE_ROLE} runtime..."
 restart_frp_unit || fail_update SERVICE_START_FAILED
 
 echo "Running health checks..."
 health_check || fail_update HEALTH_CHECK_FAILED
 
-frp_txn_clear server
 frp_audit_emit frp_update.completed
 echo
 echo "FRP update completed successfully."

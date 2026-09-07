@@ -1,0 +1,93 @@
+# test-cross-language.ps1 — Python ↔ PowerShell vectors
+. (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot '_import.ps1')
+
+$crossDir = Join-Path $PSScriptRoot 'cross'
+$gen = Join-Path $crossDir 'generate_python_vectors.py'
+$verify = Join-Path $crossDir 'verify_ps_signature.py'
+$vectorsPath = Join-Path $crossDir 'vectors.json'
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+$tmpFiles = @()
+
+try {
+    Assert-FrpTrue (Test-Path -LiteralPath $gen) 'generator exists'
+    $env:PYTHONUTF8 = '1'
+    $env:PYTHONIOENCODING = 'utf-8'
+    & python3 $gen
+    if ($LASTEXITCODE -ne 0) { throw 'generator failed' }
+    Assert-FrpTrue (Test-Path -LiteralPath $vectorsPath) 'vectors.json written'
+    $tmpFiles += $vectorsPath
+
+    $v = Get-Content -LiteralPath $vectorsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    # PowerShell decrypts Python ciphertext
+    $pt = Unprotect-FrpTokenPbkdf2 -Ciphertext $v.token_ciphertext_python -Secret $v.secret
+    Assert-FrpEqual $v.token $pt 'PS decrypts Python ciphertext'
+
+    # Python decrypts PowerShell ciphertext. Write ciphertext to a BOM-less
+    # UTF-8 file — piping through PS5.1 can inject U+FEFF and break ascii codecs.
+    $psCt = Protect-FrpTokenPbkdf2 -Token $v.token -Secret $v.secret
+    $env:FRP_ENROLL_SECRET = $v.secret
+    $ctFile = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-ps-ct-' + [guid]::NewGuid().ToString('N') + '.txt')
+    $tmpFiles += $ctFile
+    $authPy = Join-Path $script:RepoRoot 'lib/frp_mgmt_auth.py'
+    [System.IO.File]::WriteAllText($ctFile, [string]$psCt, $utf8NoBom)
+    $pyCode = @"
+from pathlib import Path
+import importlib.util, os
+p = Path(r'$authPy')
+spec = importlib.util.spec_from_file_location('frp_mgmt_auth', p)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+ct = Path(r'$ctFile').read_text(encoding='utf-8').strip()
+print(mod.decrypt_token_pbkdf2(ct, os.environ['FRP_ENROLL_SECRET']))
+"@
+    $pyPt = & python3 -c $pyCode
+    Remove-Item Env:FRP_ENROLL_SECRET -ErrorAction SilentlyContinue
+    Assert-FrpTrue ($null -ne $pyPt -and [string]$pyPt -ne '') 'Python decrypt produced output'
+    Assert-FrpEqual $v.token ([string]$pyPt).Trim() 'Python decrypts PS ciphertext'
+
+    # MAC derivation matches
+    $mac = Get-FrpDerivedMacKey -Secret $v.secret -MachineId $v.machine_id
+    Assert-FrpEqual $v.derive_mac_key $mac 'derive_mac_key match'
+
+    # Canonical signed message matches Python
+    $msg = Get-FrpSignedMessage -MachineId $v.machine_id -Body $v.body -Timestamp ([int64]$v.ts) -Nonce $v.nonce
+    Assert-FrpEqual $v.signed_message $msg 'signed_message match'
+
+    # PowerShell verifies Python signature
+    Assert-FrpTrue (
+        Test-FrpSignature -PublicPem $v.python_public_pem -Message $v.signed_message -SignatureBase64 $v.python_signature_b64
+    ) 'PS verifies Python signature'
+
+    # PowerShell signs; Python verifies via JSON file (avoids PS5.1 CLI quoting of JSON body).
+    $id = New-FrpEcdsaIdentity
+    $sig = Protect-FrpSignMessage -PrivatePem $id.PrivatePem -Message $msg
+    $verifyPayload = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-ps-verify-' + [guid]::NewGuid().ToString('N') + '.json')
+    $tmpFiles += $verifyPayload
+    $payloadObj = [ordered]@{
+        pubkey_pem = [string]$id.PublicPem
+        body       = [string]$v.body
+        ts         = [int64]$v.ts
+        nonce      = [string]$v.nonce
+        machine_id = [string]$v.machine_id
+        sig_b64    = [string]$sig
+        op         = 'enroll'
+    }
+    $payloadJson = ($payloadObj | ConvertTo-Json -Compress)
+    [System.IO.File]::WriteAllText($verifyPayload, $payloadJson, $utf8NoBom)
+    & python3 $verify --from-json $verifyPayload
+    if ($LASTEXITCODE -ne 0) { throw 'Python verify of PS signature failed' }
+
+    Write-FrpTestPass 'test-cross-language'
+} finally {
+    Remove-Item Env:FRP_ENROLL_SECRET -ErrorAction SilentlyContinue
+    Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue
+    Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
+    foreach ($f in $tmpFiles) {
+        Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path $crossDir 'ps-ciphertext.txt') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $crossDir 'ps-pub.pem') -Force -ErrorAction SilentlyContinue
+    Remove-FrpWindowsTestRoot
+}

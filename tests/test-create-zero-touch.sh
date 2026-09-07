@@ -39,7 +39,7 @@ reg.write_text(json.dumps({
 PY
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.4.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
 }
 
@@ -121,17 +121,27 @@ pass "CREATE_ZERO_TOUCH_CONTEXT_HELP"
 
 # --- Guided: SSH only ---
 run_repl "$SERVER" "$WORKDIR/zt-ssh.out" \
-  "create zero-touch" 1 office-ssh "Seoul office" aella 22 exit \
+  "create zero-touch" 1 1 office-ssh "Seoul office" aella 22 exit \
   || fail "zero-touch ssh guided"
 grep -q 'Zero-touch enrollment' "$WORKDIR/zt-ssh.out" || fail "zero-touch heading"
 grep -q '1) SSH only' "$WORKDIR/zt-ssh.out" || fail "ssh only option"
-grep -q 'DISPATCH frp-create-client --one-line --ssh --ssh-user aella --ssh-port 22 --client-name office-ssh --note Seoul office' \
+grep -q 'DISPATCH frp-create-client --platform linux --one-line --ssh --ssh-user aella --ssh-port 22 --client-name office-ssh --note Seoul office' \
   "$WORKDIR/zt-ssh.out" || fail "ssh only dispatch"
 pass "ZERO_TOUCH_SSH_GUIDED"
 
+# --- Guided: Windows RDP custom TCP preset ---
+run_repl "$SERVER" "$WORKDIR/zt-rdp.out" \
+  "create zero-touch" 2 1 office-rdp "Windows desktop" 3389 exit \
+  || fail "zero-touch Windows RDP guided"
+grep -q 'Windows Zero-touch enrollment' "$WORKDIR/zt-rdp.out" \
+  || fail "Windows platform menu"
+grep -q 'DISPATCH frp-create-client --platform windows --one-line --rdp --rdp-port 3389 --client-name office-rdp --note Windows desktop' \
+  "$WORKDIR/zt-rdp.out" || fail "Windows RDP dispatch"
+pass "ZERO_TOUCH_WINDOWS_RDP_GUIDED"
+
 # --- Guided menu intentionally hides management-only ---
 run_repl "$SERVER" "$WORKDIR/zt-no-mgmt.out" \
-  "create zero-touch" 3 exit \
+  "create zero-touch" 1 3 exit \
   || fail "zero-touch back option"
 grep -q '1) SSH only' "$WORKDIR/zt-no-mgmt.out" || fail "ssh only option missing"
 grep -q '2) Configure services' "$WORKDIR/zt-no-mgmt.out" || fail "configure services option missing"
@@ -146,14 +156,14 @@ pass "ZERO_TOUCH_MANAGEMENT_ONLY_HIDDEN"
 
 # --- Guided: multi-service SSH+HTTP ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-http.out" \
-  "create zero-touch" 2 multi-http "" \
+  "create zero-touch" 1 2 multi-http "" \
   1 "" "" "" aella \
   2 "" "" "" \
   5 \
   exit \
   || fail "zero-touch multi ssh+http"
 grep -q 'SERVICES_JSON ' "$WORKDIR/zt-multi-http.out" || fail "multi-http missing SERVICES_JSON"
-grep -q 'DISPATCH frp-create-client --one-line --services-file ' "$WORKDIR/zt-multi-http.out" \
+grep -q 'DISPATCH frp-create-client --platform linux --one-line --services-file ' "$WORKDIR/zt-multi-http.out" \
   || fail "multi-http missing services-file dispatch"
 grep -qF -- '--client-name multi-http' "$WORKDIR/zt-multi-http.out" || fail "multi-http client-name"
 python3 - "$WORKDIR/zt-multi-http.out" <<'PY' || fail "multi-http services content"
@@ -180,7 +190,7 @@ pass "ZERO_TOUCH_MULTI_SERVICE_SSH_HTTP"
 
 # --- Guided: multi-service SSH+HTTPS ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-https.out" \
-  "create zero-touch" 2 multi-https "" \
+  "create zero-touch" 1 2 multi-https "" \
   1 "" "" "" aella \
   3 "" "" "" \
   5 \
@@ -201,7 +211,7 @@ pass "ZERO_TOUCH_MULTI_SERVICE_SSH_HTTPS"
 
 # --- Remote LAN target hosts ---
 run_repl "$SERVER" "$WORKDIR/zt-lan.out" \
-  "create zero-touch" 2 lan-client "lan note" \
+  "create zero-touch" 1 2 lan-client "lan note" \
   1 ssh 10.10.10.20 22 ops \
   2 web 10.10.10.30 80 \
   5 \
@@ -247,11 +257,11 @@ pass "MANUAL_ENROLLMENT_COMPAT"
 # --- Legacy one-line compatibility ---
 "$CTL" create enrollment --one-line --ssh --ssh-user aella --client-name legacy01 \
   >"$WORKDIR/legacy-oneline.out"
-grep -qx 'DISPATCH frp-create-client --one-line --ssh --ssh-user aella --client-name legacy01' \
+grep -Eqx 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella --client-name legacy01' \
   "$WORKDIR/legacy-oneline.out" || fail "legacy create enrollment --one-line"
 run_repl "$SERVER" "$WORKDIR/legacy-enroll.out" "enroll --one-line --ssh --ssh-user aella" exit \
   || fail "legacy enroll --one-line"
-grep -q 'DISPATCH frp-create-client --one-line --ssh --ssh-user aella' \
+grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella' \
   "$WORKDIR/legacy-enroll.out" || fail "legacy enroll dispatch"
 pass "LEGACY_ONE_LINE_COMPAT"
 

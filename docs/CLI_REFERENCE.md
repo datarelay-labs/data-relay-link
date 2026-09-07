@@ -51,9 +51,13 @@ other. There is no `delete client`.
 show status
 show version
 show clients
+show clients --group <GROUP>
 show client <ID>
 show client <ID> services
 show client <ID> tags
+show client <ID> groups
+show groups
+show group <GROUP>
 show enrollments
 show audit
 show upstream
@@ -136,6 +140,8 @@ commands.
 ## create / add
 
 ```text
+create group <name> [--description TEXT]
+add client <CLIENT> group <GROUP>
 create zero-touch
 create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]
 create enrollments --count N
@@ -143,6 +149,23 @@ create enrollments --csv clients.csv
 create backup [path]
 add service [--preset ssh|http|https|custom] ...
 ```
+
+Manual groups have immutable IDs (`grp_` plus eight lowercase hex digits),
+mutable names and descriptions, and multiple client memberships. Group
+selectors resolve in this order: exact ID, unique ID prefix, unique exact
+name. `all` and `ungrouped` are reserved virtual selectors, not stored group
+objects.
+
+```text
+rename group <GROUP> <name>
+set group <GROUP> name <name>
+set group <GROUP> description <text>
+delete group <GROUP>
+remove client <CLIENT> group <GROUP>
+```
+
+Deleting a group removes its membership references but does not change client
+identity, services, or ports. Enrollment-time group assignment is deferred.
 
 `create zero-touch` is the recommended everyday client onboarding path.
 Enrollment Code and bootstrap ticket secrets are never completed or shown by
@@ -195,7 +218,7 @@ update frp [--check]
 `update` with no resource keeps the previous role default (client project
 tools on a client; `frp-update` on a server). Updater security is unchanged:
 stable tag, verified SHA256SUMS, fail-closed, rollback, no re-enrollment, no
-CA/token/port loss. FRP stays pinned at 0.70.1.
+CA/token/port loss. FRP stays pinned at 0.71.0.
 
 ## Other
 

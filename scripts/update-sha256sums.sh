@@ -29,7 +29,7 @@ for _name, meta in artifacts.items():
     # Both bundles embed a normalized manifest with artifact sha256 fields
     # stripped. The top-level manifest can therefore pin the client bundle
     # without creating a self-referential client-bundle hash.
-    if path == 'dist/bootstrap-client.sh':
+    if path in ('dist/bootstrap-client.sh', 'dist/bootstrap-client.ps1'):
         meta['sha256'] = sums.get(path, '')
 manifest_path.write_text(
     json.dumps(manifest, indent=2, sort_keys=False) + '\n', encoding='utf-8'

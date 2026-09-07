@@ -197,7 +197,7 @@ EOF
   chmod 600 "$tree/etc/frp/server_token"
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=1.0.0
-FRP_VERSION=0.70.1
+FRP_VERSION=0.71.0
 EOF
   write_registry "$tree/var/lib/frp-auto-deploy/registry.json"
   python3 - "$tree/etc/frp-auto-deploy/config.json" <<'PY'
@@ -235,7 +235,7 @@ run_update() {
 
 # --- CASE A: already current ---
 A="$WORKDIR/case-a"
-setup_tree "$A" "0.70.1"
+setup_tree "$A" "0.71.0"
 cp "$A/usr/local/bin/frps" "$WORKDIR/case-a.frps.before"
 cp "$A/etc/frp/server_token" "$WORKDIR/case-a.token.before"
 cp "$A/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/case-a.registry.before"
@@ -257,7 +257,7 @@ pass "CASE A already current"
 # --- CASE B / H / I: successful upgrade preserves token, registry, ports ---
 B="$WORKDIR/case-b"
 setup_tree "$B" "0.70.0"
-write_dummy_frps "$WORKDIR/frps-0.70.1" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-0.71.0" "0.71.0"
 cp "$B/etc/frp/server_token" "$WORKDIR/case-b.token.before"
 cp "$B/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/case-b.registry.before"
 B_OUT="$WORKDIR/case-b.out"
@@ -267,7 +267,7 @@ if ! env \
   FRP_DEPLOY_TEST_ROOT="$B" \
   FRP_UPDATE_ROOT="$B" \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
-  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1" \
+  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0" \
   "$UPDATE" >"$B_OUT"; then
   fail "CASE B update failed"
 fi
@@ -275,7 +275,7 @@ assert_no_leak "$B_OUT" "test-update-token-do-not-use"
 grep -q "FRP update completed successfully" "$B_OUT" || fail "CASE B success message"
 grep -q "TOKEN_PRESERVED=PASS" "$B_OUT" || fail "CASE B TOKEN_PRESERVED"
 grep -q "REGISTRY_PRESERVED=PASS" "$B_OUT" || fail "CASE B REGISTRY_PRESERVED"
-[[ "$(frp_parse_binary_version "$B/usr/local/bin/frps")" == "0.70.1" ]] || fail "CASE B installed version"
+[[ "$(frp_parse_binary_version "$B/usr/local/bin/frps")" == "0.71.0" ]] || fail "CASE B installed version"
 bytes_equal "$WORKDIR/case-b.token.before" "$B/etc/frp/server_token" || fail "CASE B token changed"
 bytes_equal "$WORKDIR/case-b.registry.before" "$B/var/lib/frp-auto-deploy/registry.json" || fail "CASE B registry changed"
 python3 - "$B/var/lib/frp-auto-deploy/registry.json" <<'PY'
@@ -329,7 +329,7 @@ pass "CASE C download failure"
 # --- CASE D: checksum failure ---
 D="$WORKDIR/case-d"
 setup_tree "$D" "0.70.0"
-write_dummy_frps "$WORKDIR/frps-0.70.1-d" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-0.71.0-d" "0.71.0"
 cp "$D/usr/local/bin/frps" "$WORKDIR/case-d.frps.before"
 D_SHA_BEFORE="$(file_sha "$D/usr/local/bin/frps")"
 if env \
@@ -338,7 +338,7 @@ if env \
   FRP_DEPLOY_TEST_ROOT="$D" \
   FRP_UPDATE_ROOT="$D" \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
-  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1-d" \
+  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0-d" \
   FRP_UPDATE_HOOK_CHECKSUM_FAIL=1 \
   "$UPDATE" >"$WORKDIR/case-d.out" 2>"$WORKDIR/case-d.err"; then
   fail "CASE D should fail"
@@ -361,7 +361,7 @@ pass "CASE D checksum helper"
 # --- CASE E: config validation failure ---
 E="$WORKDIR/case-e"
 setup_tree "$E" "0.70.0"
-write_dummy_frps "$WORKDIR/frps-0.70.1-e" "0.70.1" 1
+write_dummy_frps "$WORKDIR/frps-0.71.0-e" "0.71.0" 1
 cp "$E/usr/local/bin/frps" "$WORKDIR/case-e.frps.before"
 if env \
   FRP_UPDATE_TEST_HARNESS=1 \
@@ -369,7 +369,7 @@ if env \
   FRP_DEPLOY_TEST_ROOT="$E" \
   FRP_UPDATE_ROOT="$E" \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
-  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1-e" \
+  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0-e" \
   FRP_UPDATE_HOOK_VERIFY_FAIL=1 \
   "$UPDATE" >"$WORKDIR/case-e.out" 2>"$WORKDIR/case-e.err"; then
   fail "CASE E should fail"
@@ -381,7 +381,7 @@ pass "CASE E config validation failure"
 # --- CASE F / G: health failure rolls back ---
 F="$WORKDIR/case-f"
 setup_tree "$F" "0.70.0"
-write_dummy_frps "$WORKDIR/frps-0.70.1-f" "0.70.1"
+write_dummy_frps "$WORKDIR/frps-0.71.0-f" "0.71.0"
 cp "$F/usr/local/bin/frps" "$WORKDIR/case-f.frps.before"
 cp "$F/etc/frp/server_token" "$WORKDIR/case-f.token.before"
 cp "$F/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/case-f.registry.before"
@@ -392,8 +392,8 @@ env \
   FRP_DEPLOY_TEST_ROOT="$F" \
   FRP_UPDATE_ROOT="$F" \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
-  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.70.1-f" \
-  FRP_UPDATE_HOOK_HEALTH_FAIL_VERSION=0.70.1 \
+  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0-f" \
+  FRP_UPDATE_HOOK_HEALTH_FAIL_VERSION=0.71.0 \
   "$UPDATE" >"$WORKDIR/case-f.out" 2>"$WORKDIR/case-f.err" || F_RC=$?
 [[ "$F_RC" -eq 1 ]] || fail "CASE F exit code wanted 1 got $F_RC"
 grep -q "Rollback completed successfully" "$WORKDIR/case-f.out" || fail "CASE F rollback message"
@@ -430,6 +430,10 @@ grep -q 'init-registry' "$ROOT/install-server.sh" || fail "CASE J missing regist
 grep -q 'frp_write_version_file "$(frp_server_fs /etc/frp-auto-deploy/version)"' "$ROOT/install-server.sh" || fail "CASE J missing version metadata"
 grep -q 'frp-update' "$ROOT/install-server.sh" || fail "CASE J missing frp-update install"
 grep -q 'lib/frp-common.sh' "$ROOT/install-server.sh" || fail "CASE J missing common lib"
+grep -q "/Library/Application Support/frp-auto-deploy/lib/frp-common.sh" "$UPDATE" \
+  || fail "CASE J missing macOS Application Support frp-common path"
+grep -q "/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh" "$UPDATE" \
+  || fail "CASE J missing macOS Application Support frp-client-common path"
 grep -q 'TOKEN_PRESERVED' "$ROOT/install-server.sh" || fail "CASE J missing token preservation reporting"
 if grep -Eiq 'token rotation|rotate.*token|openssl rand.*server_token' "$ROOT/install-server.sh"; then
   fail "CASE J installer appears to rotate tokens"

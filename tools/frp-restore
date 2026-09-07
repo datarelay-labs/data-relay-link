@@ -564,6 +564,43 @@ def make_snapshot(root: Path) -> Path:
     return snapshot
 
 
+def _is_symlink(path: Path) -> bool:
+    try:
+        return stat.S_ISLNK(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def _reject_symlink_components(path: Path, what: str) -> None:
+    parts = path.parts
+    if not parts:
+        raise RestoreError(f"refusing empty {what}")
+    acc = Path(parts[0])
+    prefixes = [acc]
+    for part in parts[1:]:
+        acc = acc / part
+        prefixes.append(acc)
+    for prefix in prefixes:
+        if _is_symlink(prefix):
+            raise RestoreError(f"{what} traverses a symlink")
+
+
+def _validate_archive_arg(raw: str) -> Path:
+    if not raw or raw in {".", "..", "/", "//", "-"}:
+        raise RestoreError("refusing unsafe backup archive path")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if ".." in path.parts or "\\" in raw:
+        raise RestoreError("refusing unsafe backup archive path")
+    _reject_symlink_components(path, "backup archive")
+    if _is_symlink(path):
+        raise RestoreError("backup archive is a symlink")
+    if not path.is_file():
+        raise RestoreError("backup archive is missing or is a symlink")
+    return path
+
+
 def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] in {"-h", "--help"}:
         print("Usage: frp-restore BACKUP.tar.gz")
@@ -572,9 +609,10 @@ def main() -> int:
     if os.geteuid() != 0 and not test_root:
         error("run with sudo")
         return 1
-    archive = Path(sys.argv[1]).resolve()
-    if not archive.is_file() or archive.is_symlink():
-        error("backup archive is missing or is a symlink")
+    try:
+        archive = _validate_archive_arg(sys.argv[1])
+    except RestoreError as exc:
+        error(str(exc))
         return 1
     root = Path(test_root or "/")
 

@@ -92,6 +92,44 @@ def short_url_command(hostname, ticket):
     return 'curl -fsSL %s | sudo bash' % shell_quote(url)
 
 
+def powershell_quote(value):
+    """Return a PowerShell single-quoted literal."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def short_url_windows_command(hostname, ticket):
+    """Download the short bootstrap and execute it with PowerShell -File."""
+    url = short_url_for_ticket(hostname, ticket) + '?platform=windows'
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$ProgressPreference='SilentlyContinue';"
+        "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+        "$p=Join-Path $env:TEMP ('frp-short-'+[guid]::NewGuid().ToString('N')+'.ps1');"
+        "try{"
+        "(New-Object Net.WebClient).DownloadFile(%s,$p);"
+        "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p;"
+        "$rc=$LASTEXITCODE;if($rc -ne 0){exit $rc}"
+        "}finally{Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue}"
+    ) % powershell_quote(url)
+    return (
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+        + powershell_quote(script)
+    )
+
+
+def sha256sums_url_for_installer(installer_url):
+    installer = str(installer_url or '').strip()
+    suffix = '/dist/bootstrap-client.ps1'
+    if not installer.endswith(suffix):
+        raise ValueError(
+            'Windows installer URL must end with /dist/bootstrap-client.ps1'
+        )
+    sums_url = installer[:-len(suffix)] + '/SHA256SUMS'
+    if not sums_url.lower().startswith('https://'):
+        raise ValueError('SHA256SUMS URL must be HTTPS')
+    return sums_url
+
+
 def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installer_url):
     """Return a small generic bootstrap script that reuses the zt1 installer path.
 
@@ -116,6 +154,63 @@ def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installe
         '# Stock OS trust for the publicly trusted installer URL only.',
         '# Allocator/Private-CA trust comes from the opaque package pin.',
         'curl -fsSL --proto "=https" --tlsv1.2 "$INSTALLER" | bash -s -- "$PACKAGE"',
+        '',
+    ]
+    return '\n'.join(lines)
+
+
+def render_short_url_windows_bootstrap_script(
+    allocator_url, ca_sha256, ticket, installer_url
+):
+    """Return a PowerShell bootstrap that verifies the installer before -File."""
+    allocator = str(allocator_url or '').strip()
+    ca = str(ca_sha256 or '').strip().lower()
+    ticket = str(ticket or '').strip()
+    installer = str(installer_url or '').strip()
+    if not allocator.lower().startswith('https://'):
+        raise ValueError('allocator URL must be HTTPS')
+    if len(ca) != 64 or any(ch not in '0123456789abcdef' for ch in ca):
+        raise ValueError('invalid CA fingerprint')
+    if not BOOTSTRAP_TICKET_RE.fullmatch(ticket):
+        raise ValueError('invalid bootstrap ticket')
+    if not installer.lower().startswith('https://'):
+        raise ValueError('installer URL must be HTTPS')
+    sums_url = sha256sums_url_for_installer(installer)
+    lines = [
+        '#Requires -Version 5.1',
+        "# FRP Auto Deploy - Windows Zero-Touch short URL bootstrap",
+        "$ErrorActionPreference = 'Stop'",
+        "$ProgressPreference = 'SilentlyContinue'",
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+        "$dir = Join-Path $env:TEMP ('frp-bs-' + [guid]::NewGuid().ToString('N'))",
+        'New-Item -ItemType Directory -Force -Path $dir | Out-Null',
+        'try {',
+        "  $sums = Join-Path $dir 'SHA256SUMS'",
+        "  $installer = Join-Path $dir 'bootstrap-client.ps1'",
+        '  (New-Object Net.WebClient).DownloadFile(%s, $sums)' % powershell_quote(sums_url),
+        '  (New-Object Net.WebClient).DownloadFile(%s, $installer)' % powershell_quote(installer),
+        '  $want = $null',
+        '  Get-Content -LiteralPath $sums | ForEach-Object {',
+        "    if ($_ -match '^([0-9a-fA-F]{64})\\s+dist/bootstrap-client\\.ps1\\s*$') {",
+        '      if ($want) { throw "duplicate bootstrap-client.ps1 hash" }',
+        '      $want = $Matches[1].ToLowerInvariant()',
+        '    }',
+        '  }',
+        '  if (-not $want) { throw "bootstrap-client.ps1 hash missing from SHA256SUMS" }',
+        '  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()',
+        '  if ($got -ne $want) { throw "bootstrap-client.ps1 SHA256 mismatch" }',
+        '  $env:FRP_ALLOCATOR_URL = %s' % powershell_quote(allocator),
+        '  $env:FRP_ALLOCATOR_CA_SHA256 = %s' % powershell_quote(ca),
+        '  $env:FRP_BOOTSTRAP_TICKET = %s' % powershell_quote(ticket),
+        "  $env:FRP_ZERO_TOUCH = '1'",
+        "  $env:FRP_PLATFORM = 'windows'",
+        '  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -ZeroTouch',
+        '  $rc = $LASTEXITCODE',
+        '  Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue',
+        '  if ($rc -ne 0) { exit $rc }',
+        '} finally {',
+        '  Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue',
+        '}',
         '',
     ]
     return '\n'.join(lines)

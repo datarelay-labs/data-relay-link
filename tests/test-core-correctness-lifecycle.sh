@@ -203,6 +203,34 @@ FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
 [[ ! -f "$TREE/var/lib/frp-auto-deploy/registry.json" ]] || fail "purge left registry"
 pass "SERVER_PURGE_PRESERVES_CLIENT_ROLE"
 
+# --- Dual-role shared lib ownership ---
+mkdir -p "$TREE/usr/local/lib/frp-auto-deploy" "$TREE/usr/local/bin" \
+  "$TREE/etc/frp" "$TREE/etc/frp-auto-deploy"
+for f in frp-common.sh frp_mgmt_auth.py frp-client-common.sh \
+  frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py \
+  frp-role-ownership.sh frp_project_files.py server-project-files.manifest; do
+  cp "$ROOT/lib/$f" "$TREE/usr/local/lib/frp-auto-deploy/" 2>/dev/null \
+    || echo "x" >"$TREE/usr/local/lib/frp-auto-deploy/$f"
+done
+cp "$ROOT/lib/frp_project_files.py" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/server-project-files.manifest" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/frp-role-ownership.sh" "$TREE/usr/local/lib/frp-auto-deploy/"
+echo '{"machine_id":"m1"}' >"$TREE/etc/frp/client-state.json"
+echo '#!/bin/sh' >"$TREE/usr/local/bin/frp-client"
+chmod +x "$TREE/usr/local/bin/frp-client"
+echo 'cfg' >"$TREE/etc/frp-auto-deploy/config.json"
+# Server-only file that must be removed
+echo 'server-only' >"$TREE/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
+
+FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
+  bash "$ROOT/uninstall-server.sh" >/dev/null
+[[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp-doctor-common.sh" ]] || fail "server uninstall removed doctor shared lib"
+[[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py" ]] || fail "server uninstall removed ctl shared lib"
+[[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh" ]] || fail "server uninstall removed client-common"
+[[ -f "$TREE/usr/local/bin/frp-client" ]] || fail "server uninstall removed frp-client"
+[[ ! -f "$TREE/usr/local/lib/frp-auto-deploy/frp-port-allocator.py" ]] || fail "server uninstall left server-only lib"
+pass "DUAL_ROLE_SERVER_UNINSTALL_PRESERVES_CLIENT_LIBS"
+
 # --- Allocator runtime helpers list ---
 # shellcheck source=lib/frp-server-upgrade.sh
 . "$ROOT/lib/frp-server-upgrade.sh"

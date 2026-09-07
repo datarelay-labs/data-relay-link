@@ -31,6 +31,7 @@ project usr/local/lib/frp-auto-deploy/frp_client_registry.py 0644 lib/frp_client
 project usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py 0644 lib/frp_enrollment_lifecycle.py python
 project usr/local/lib/frp-auto-deploy/frp_audit.py 0644 lib/frp_audit.py python
 project usr/local/lib/frp-auto-deploy/frp_project_files.py 0644 lib/frp_project_files.py python
+project usr/local/lib/frp-auto-deploy/frp-role-ownership.sh 0644 lib/frp-role-ownership.sh bash
 project usr/local/lib/frp-auto-deploy/frp_control_locks.py 0644 lib/frp_control_locks.py python
 project usr/local/lib/frp-auto-deploy/frp_server_config.py 0644 lib/frp_server_config.py python
 project usr/local/lib/frp-auto-deploy/frp_zero_touch.py 0644 lib/frp_zero_touch.py python
@@ -48,6 +49,8 @@ project usr/local/sbin/frp-enroll-bulk 0755 tools/frp-enroll-bulk python
 project usr/local/sbin/frp-clients 0755 tools/frp-clients python
 project usr/local/sbin/frp-client-info 0755 tools/frp-client-info python
 project usr/local/sbin/frp-client-set 0755 tools/frp-client-set python
+project usr/local/sbin/frp-groups 0755 tools/frp-groups python
+project usr/local/sbin/frp-group-set 0755 tools/frp-group-set python
 project usr/local/sbin/frp-release-client 0755 tools/frp-release-client python
 project usr/local/sbin/frp-release-service 0755 tools/frp-release-service python
 project usr/local/sbin/frp-revoke-client 0755 tools/frp-revoke-client python

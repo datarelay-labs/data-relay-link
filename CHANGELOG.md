@@ -2,10 +2,27 @@
 
 ## Unreleased
 
+## 2.2.0 — 2026-09-07
+
+Feature and platform release. Pinned FRP upgraded **0.70.1 → 0.71.0**.
+
+- Qualifies macOS Apple Silicon (launchd), Windows amd64 (hash-verified
+  PowerShell `-File` bootstrap), Manual Group MVP, `public_hostname`, and
+  Rocky Linux 9.4 on the supported platform matrix
+- Upstream FRP pin moved to **0.71.0** after compatibility review (WebSocket
+  path `/~!frp` unchanged; config verify PASS; no product config migration)
 - Enrollment retention hardening: terminal records (`expired`, `completed`,
   `revoked`) retained for `enrollment_retention_days` (default 30), then
   pair-aware automatic cleanup; `purge enrollment` / `purge enrollments
   --older-than` for manual housekeeping; audit log retention unchanged
+- Operator checklist: `docs/MORNING_E2E_CHECKLIST.md`
+
+### Compatibility
+
+Already enrolled 2.1.3 clients remain compatible during a server-first upgrade
+window. Do not upgrade clients ahead of the server. FRP rolling window supports
+`frps 0.71.0 + frpc 0.70.1` during server-first FRP binary upgrade; product
+policy still requires project server upgrade before clients.
 
 ## 2.1.3 — 2026-09-04
 

@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
@@ -36,6 +37,12 @@ parser.add_argument(
     default=[],
     metavar='KEY=VALUE',
     help='show clients with this tag; multiple --tag filters use AND semantics',
+)
+parser.add_argument(
+    '--group',
+    default=None,
+    metavar='GROUP',
+    help='show clients in this group (ID, unique prefix, or exact name)',
 )
 args = parser.parse_args()
 tag_filters = []
@@ -92,6 +99,21 @@ public_ip = CREG.sanitize_display(cfg.get('public_ip') or cfg.get('public_host')
 public_hostname = CREG.sanitize_display(cfg.get('public_hostname') or '', 253)
 access_host = public_hostname or public_ip
 clients = CREG.sorted_clients(state)
+if args.group:
+    try:
+        gid, _group = CREG.resolve_group(state, args.group)
+    except CREG.GroupLookupError as exc:
+        if exc.matches:
+            print('ERROR: multiple groups matched.', file=sys.stderr)
+            print(CREG.format_group_candidate_table(exc.matches), file=sys.stderr, end='')
+        else:
+            print('ERROR: group not found: %s' % CREG.sanitize_display(args.group), file=sys.stderr)
+        raise SystemExit(1)
+    clients = [
+        (mid, client)
+        for mid, client in clients
+        if CREG.client_matches_group(state, client, gid)
+    ]
 if tag_filters:
     clients = [
         (mid, client)

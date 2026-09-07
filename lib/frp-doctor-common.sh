@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only doctor orchestration. Source this file; do not execute it.
-# Must stay compatible with Bash 4.2.
+# Must stay compatible with Bash 3.2 (macOS) and Bash 4.2 (Linux).
 
 if [[ -n "${FRP_DOCTOR_LOADED:-}" ]]; then
   return 0 2>/dev/null || exit 0
@@ -51,6 +51,9 @@ frp_doctor_root() {
 
 frp_doctor_fs() {
   local p="$1"
+  if declare -F frp_platform_map_path >/dev/null 2>&1; then
+    p="$(frp_platform_map_path "$p")"
+  fi
   local root
   root="$(frp_doctor_root)"
   if [[ -n "$root" ]]; then
@@ -182,7 +185,7 @@ frp_doctor_collect_facts() {
   local facts_file="$1"
   local root py_ver openssl_ver systemd_ver kernel arch os_name os_id
   local frps_a frps_e alloc_a alloc_e frpc_a frpc_e frontend_a frontend_e
-  local clock_status clock_detail disk_mb
+  local clock_status clock_detail disk_mb macos_ver service_manager os_family
   local systemd_usable=0 skip_net=0 expect_root=1 have_systemctl=0
   root="$(frp_doctor_root)"
   [[ -z "$root" ]] || expect_root=0
@@ -191,20 +194,37 @@ frp_doctor_collect_facts() {
 
   os_name="Linux"
   os_id="unknown"
-  if type frp_detect_platform >/dev/null 2>&1; then
-    frp_detect_platform
-    os_name="${DISTRO_NAME:-Linux}"
-    os_id="${DISTRO_ID:-unknown}"
-  elif [[ -r /etc/os-release ]]; then
-    os_id="$(awk -F= '$1=="ID" {gsub(/"/,"",$2); print $2; exit}' /etc/os-release)"
-    os_name="$(awk -F= '$1=="PRETTY_NAME" {gsub(/"/,"",$2); print $2; exit}' /etc/os-release)"
+  os_family="linux"
+  macos_ver=""
+  service_manager=""
+  if type frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    os_family="darwin"
+    os_id="macos"
+    os_name="macOS"
+    service_manager="launchd"
+    if type frp_macos_product_version >/dev/null 2>&1; then
+      macos_ver="$(frp_macos_product_version 2>/dev/null || true)"
+      if [[ -n "$macos_ver" ]]; then
+        os_name="macOS ${macos_ver}"
+      fi
+    fi
+    arch="${FRP_TEST_UNAME_M:-$(uname -m 2>/dev/null || true)}"
+  else
+    if type frp_detect_platform >/dev/null 2>&1; then
+      frp_detect_platform
+      os_name="${DISTRO_NAME:-Linux}"
+      os_id="${DISTRO_ID:-unknown}"
+    elif [[ -r /etc/os-release ]]; then
+      os_id="$(awk -F= '$1=="ID" {gsub(/"/,"",$2); print $2; exit}' /etc/os-release)"
+      os_name="$(awk -F= '$1=="PRETTY_NAME" {gsub(/"/,"",$2); print $2; exit}' /etc/os-release)"
+    fi
+    arch="$(uname -m 2>/dev/null || true)"
   fi
   kernel="$(uname -r 2>/dev/null || true)"
-  arch="$(uname -m 2>/dev/null || true)"
   py_ver="$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || true)"
   openssl_ver="$(openssl version 2>/dev/null || true)"
   systemd_ver=""
-  if type frp_systemd_version >/dev/null 2>&1; then
+  if [[ "$os_family" != "darwin" ]] && type frp_systemd_version >/dev/null 2>&1; then
     systemd_ver="$(frp_systemd_version 2>/dev/null || true)"
   fi
 
@@ -220,6 +240,14 @@ frp_doctor_collect_facts() {
     frpc_a=unknown; frpc_e=unknown
     frontend_a=unknown; frontend_e=unknown
   fi
+  if type frp_is_darwin >/dev/null 2>&1 && frp_is_darwin && type frp_macos_launchd_running >/dev/null 2>&1; then
+    if frp_macos_launchd_running; then
+      frpc_a=active
+    else
+      frpc_a=inactive
+    fi
+    frpc_e=enabled
+  fi
 
   IFS=$'\t' read -r clock_status clock_detail <<<"$(frp_doctor_clock_status)"
   disk_mb="$(frp_doctor_disk_mb "$(frp_doctor_fs /var/lib/frp-auto-deploy)")"
@@ -233,14 +261,15 @@ frp_doctor_collect_facts() {
     "$frontend_a" "$frontend_e" \
     "$clock_status" "$clock_detail" \
     "$os_name" "$os_id" "$kernel" "$arch" "$BASH_VERSION" "$py_ver" "$openssl_ver" "$systemd_ver" \
-    "$disk_mb" <<'PY'
+    "$disk_mb" "${macos_ver}" "${service_manager}" "${os_family}" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 expect_root, systemd_usable, have_systemctl, skip_net = (sys.argv[i] == "1" for i in range(2, 6))
 (frps_a, frps_e, alloc_a, alloc_e, frpc_a, frpc_e, frontend_a, frontend_e,
  clock_status, clock_detail, os_name, os_id, kernel, arch,
- bash, py_ver, openssl_ver, systemd_ver, disk_mb) = sys.argv[6:25]
+ bash, py_ver, openssl_ver, systemd_ver, disk_mb, macos_ver, service_manager,
+ os_family) = sys.argv[6:28]
 avail = int(disk_mb) if disk_mb.isdigit() else None
 facts = {
     "expect_root_owner": expect_root,
@@ -257,12 +286,15 @@ facts = {
     "platform": {
         "os": os_name,
         "os_id": os_id,
+        "os_family": os_family,
         "kernel": kernel,
         "arch": arch,
         "bash": bash,
         "python": py_ver,
         "openssl": openssl_ver,
         "systemd": systemd_ver,
+        "service_manager": service_manager,
+        "macos_version": macos_ver,
     },
     "disk": {"path": "/var/lib/frp-auto-deploy", "avail_mb": avail},
     "listeners": {},
@@ -399,8 +431,6 @@ frp_doctor_main() {
 
   py="$(frp_doctor_py)" || return 2
   facts_file="$(mktemp)"
-  # Temp facts only. EXIT removes it; do not override the frpctl INT trap.
-  trap 'rm -f "$facts_file"' EXIT
 
   frp_doctor_collect_facts "$facts_file" || true
 
@@ -409,7 +439,7 @@ frp_doctor_main() {
   extra+=(--facts "$facts_file")
   extra+=(--format "$fmt")
   extra+=(--embedded-version "${PROJECT_VERSION:-}")
-  extra+=(--pinned-frp "${FRP_VERSION:-0.70.1}")
+  extra+=(--pinned-frp "${FRP_VERSION:-0.71.0}")
   if [[ "$verbose" == "1" ]]; then
     extra+=(--verbose)
   fi
@@ -425,6 +455,5 @@ frp_doctor_main() {
   rc=$?
   set -e
   rm -f "$facts_file"
-  trap - EXIT
   return "$rc"
 }

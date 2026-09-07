@@ -3,13 +3,14 @@
 > **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap
 > **Repository:** `datarelay-labs/frp-auto-deploy`
 > **Document status:** Master / Living Document
-> **Last updated:** 2026-09-04
-> **Current stable baseline:** Project 2.1.2 (published tag `v2.1.2`)
-> **Next project line:** 2.1.3 (this tree; tag not created yet)
-> **Release HEAD (published stable):** `6f25e190ba48444d05bfe77fdd4f2c9105a235e2`
-> **Pinned upstream FRP:** 0.70.1
+> **Last updated:** 2026-09-05
+> **Current stable baseline:** Project 2.2.0 (published tag `v2.2.0`)
+> **Development candidate:** `integration/morning-e2e-ready` adds macOS,
+> Windows, and Group MVP; all three remain human-Real-E2E pending and are not stable
+> **Release HEAD (published stable):** `97cb84ebb0b09d771c623778b1a551edd6fc9204`
+> **Pinned upstream FRP:** 0.71.0
 > **Primary management interface:** `sudo frpctl`
-> **ZERO_TOUCH_SHORT_URL_TRUST_MODEL:** OPTION_B_EXTERNAL_REVERSE_PROXY (implemented on feature branch; not yet a tagged release)
+> **ZERO_TOUCH_SHORT_URL_TRUST_MODEL:** OPTION_B_EXTERNAL_REVERSE_PROXY (stable in v2.2.0)
 
 ---
 
@@ -319,7 +320,7 @@ Validated
 현재 기준:
 
 ```text
-FRP 0.70.1
+FRP 0.71.0
 ```
 
 ---
@@ -1441,42 +1442,42 @@ Prometheus/Grafana/RMM 형태의 motion
 현재 repository 기준:
 
 ```text
-Published stable:     2.1.2 (tag v2.1.2)
-Next project line:    2.1.3 (candidate tree; tag not created)
-FRP:                  0.70.1
-Published Release HEAD: 6f25e190ba48444d05bfe77fdd4f2c9105a235e2
+Published stable:       2.2.0 (tag v2.2.0)
+Development candidate: integration/morning-e2e-ready
+Candidate-only scope:   macOS / Windows / Group MVP (human Real E2E pending)
+FRP:                    0.71.0
+Published Release HEAD: 97cb84ebb0b09d771c623778b1a551edd6fc9204
 ZERO_TOUCH_SHORT_URL_TRUST_MODEL: OPTION_B_EXTERNAL_REVERSE_PROXY
 ```
 
-v2.1.3 focus (this tree):
+v2.2.0 stable focus:
 
 - Ideal Zero-Touch `/i/<ticket>` short URL (Option B)
 - optional `bootstrap_hostname` + operator reverse proxy
 - transitional `zt1.` package remains the default fallback
-- FRP remains 0.70.1
+- FRP remains 0.71.0
 
 Ideal `/i/<ticket>` short URL is implemented as an additive Option B feature
 (operator reverse proxy + `bootstrap_hostname`). See
 `docs/ZERO_TOUCH_SHORT_URL.md`. Missing `bootstrap_hostname` keeps the `zt1`
 fallback.
 
-v2.1.2 release-validated platforms:
+The integration candidate additionally contains:
 
-- baseline Linux
-- Amazon Linux 2023
-- Rocky Linux 8.10
+- macOS Apple Silicon launchd client
+- Windows amd64 PowerShell client
+- Manual Group MVP
 
-Not v2.1.1 supported:
-
-- macOS Apple Silicon
-- Windows 10/11
+These three additions are **candidate / human-Real-E2E pending**, not stable
+platform or feature claims.
 
 Target management scale:
 
 - 1–5 clients: extremely easy
 - 10–30 clients: comfortable
 - 30–50 clients: manageable with simple Group/Tag/Filter
-- 100–1000: not a product target
+- Product target: 1–50 clients
+- 100+: not a product target
 
 2.1.1의 주요 stable milestone:
 
@@ -1640,7 +1641,7 @@ branch 또는 development 작업 중.
 
 # 56. Phase 3 — Group & Fleet Management
 
-**Status: PLANNED — NEXT MAJOR PRODUCT FEATURE**
+**Status: CANDIDATE — MANUAL GROUP MVP HUMAN REAL E2E PENDING**
 
 목표:
 
@@ -1728,9 +1729,9 @@ Production Group
 
 # 59. Phase 6 — Additional Platform Support
 
-**Status: DEFERRED / DEMAND DRIVEN**
+**Status: macOS/WINDOWS CANDIDATE — HUMAN REAL E2E PENDING**
 
-실제 사용자 요구가 확인되면 검토:
+Integration candidate validation scope:
 
 ### Windows Client
 
@@ -2101,10 +2102,12 @@ doctor clients --group production
 ```
 
 같은 LE / MAIN |
-| Phase 3 | Manual/Dynamic Group & Filters | **PLANNED — NEXT** |
+| Phase 3 | Manual Group MVP | **CANDIDATE — HUMAN E2E PENDING** |
+| Phase 3+ | Dynamic Group & Filters | PLANNED |
 | Phase 4 | Safe Fleet Operations | PLANNED |
 | Phase 5 | Pilot/Production Rollout | FUTURE |
-| Phase 6 | Windows/Additional Platforms | DEFERRED / DEMAND DRIVEN |
+| Phase 6 | macOS/Windows | **CANDIDATE — HUMAN E2E PENDING** |
+| Phase 6+ | Additional Platforms | DEFERRED / DEMAND DRIVEN |
 | Phase 7 | UDP/Additional Protocols | DEFERRED |
 
 ---

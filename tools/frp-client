@@ -12,7 +12,8 @@ frp_client_source_lib() {
   for cand in \
     "$here/lib/frp-client-common.sh" \
     "$here/../lib/frp-client-common.sh" \
-    /usr/local/lib/frp-auto-deploy/frp-client-common.sh
+    /usr/local/lib/frp-auto-deploy/frp-client-common.sh \
+    '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh'
   do
     if [[ -f "$cand" ]]; then
       # shellcheck source=lib/frp-client-common.sh
@@ -99,7 +100,11 @@ frp_client_update_cmd() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --source)
-        source="${2:-}"
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --source requires a directory" >&2
+          return 2
+        fi
+        source="$2"
         shift 2
         ;;
       --check|--dry-run)
@@ -147,9 +152,11 @@ PY
 frp_client_status() {
   local path
   path="$(frp_client_state_path)"
+  # status is read-only: do not contact the allocator or mutate local state.
+  # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
-  python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" <<'PY'
-import json, subprocess, sys
+  python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" <<'PY'
+import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 tested = sys.argv[2]
@@ -162,15 +169,7 @@ bundle_sha256 = sys.argv[9]
 services = data.get('services') or {}
 enabled = sum(1 for s in services.values() if s.get('enabled', True) is not False)
 disabled = len(services) - enabled
-active = 'unknown'
-if test_root or skip_systemd == '1':
-    active = 'test'
-else:
-    try:
-        r = subprocess.run(['systemctl', 'is-active', 'frpc'], capture_output=True, text=True, timeout=3)
-        active = (r.stdout or r.stderr or 'unknown').strip() or 'unknown'
-    except Exception:
-        active = 'unknown'
+active = sys.argv[10]
 allocator = 'configured' if data.get('allocator_url') else 'missing'
 print('FRP Client')
 print('==========')
@@ -217,14 +216,17 @@ PY
   fi
 }
 
-frp_client_info() {
-  local access
-  access="$(frp_client_access_path)"
-  if [[ -f "$access" ]]; then
-    cat "$access"
-    return 0
-  fi
+frp_client_list() {
   local path
+  path="$(frp_client_state_path)"
+  # list is read-only: do not contact the allocator or mutate local state.
+  # Use `frp-client sync` (or apply) to reconcile released services.
+  frp_load_client_state "$path"
+  frp_print_state_services "$path"
+}
+
+frp_client_info() {
+  local path tmp server
   path="$(frp_client_state_path)"
   if [[ ! -f "$path" ]]; then
     echo "ERROR: This client predates local management state." >&2
@@ -232,57 +234,25 @@ frp_client_info() {
     return 1
   fi
   frp_load_client_state "$path"
-  python3 - "$path" <<'PY'
-import json, sys
-from pathlib import Path
-data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-def clean(value, limit=253):
-    text = str(value or '')
-    return ''.join(' ' if ord(c) < 32 or 127 <= ord(c) <= 159 else c for c in text)[:limit].strip()
-server = clean(data.get('frp_server', ''))
-print(f'FRP Server: {server}')
-print()
-print('Services:')
-print()
-for sid, item in (data.get('services') or {}).items():
-    if item.get('enabled', True) is False:
-        continue
-    sid = clean(sid, 32)
-    name = clean(item.get('name') or sid, 64)
-    remote = item.get('remote_port')
-    print(sid if name == sid else f'{sid} ({name})')
-    print(f"  Target : {clean(item.get('local_ip'))}:{item.get('local_port')}")
-    print(f"  Public : {server}:{remote}")
-    preset = item.get('preset') or 'custom'
-    if preset == 'ssh':
-        user = clean(item.get('ssh_user'), 32)
-        if user:
-            print('  Connect:')
-            print(f"    ssh -p {remote} {user}@{server}")
-        else:
-            print('  SSH user: legacy / unspecified')
-    elif preset == 'http':
-        print('  URL:')
-        print(f'    http://{server}:{remote}')
-    elif preset == 'https':
-        print('  URL:')
-        print(f'    https://{server}:{remote}')
-    else:
-        print('  Connect:')
-        print(f'    {server}:{remote}')
-    print()
-PY
+  tmp="$(mktemp)"
+  server="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("frp_server",""))' "$path")"
+  if ! render_access_info "$tmp" "$server" "$path"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cat "$tmp"
+  rm -f "$tmp"
 }
 
-frp_client_list() {
-  local path
-  path="$(frp_client_state_path)"
-  # Reconcile disabled services against the server registry. After
-  # `frpctl release service`, the reservation is removed server-side but
-  # the client local state can retain a stale disabled entry until we check.
-  frp_client_reconcile_released_services || true
-  frp_load_client_state "$path"
-  frp_print_state_services "$path"
+frp_client_sync() {
+  # Explicit mutation: reconcile local services and management metadata.
+  frp_load_client_state "$(frp_client_state_path)"
+  frp_acquire_client_lock || return 1
+  trap 'frp_release_client_lock' EXIT
+  if ! frp_client_reconcile_released_services 1; then
+    return 1
+  fi
+  echo "Client sync complete."
 }
 
 frp_select_service_id() {
@@ -492,6 +462,24 @@ frp_apply_candidate() {
     return $?
   fi
 
+  if ! frp_client_reconcile_released_services; then
+    echo "ERROR: cannot apply because client synchronization failed." >&2
+    return 1
+  fi
+  if frp_state_has_diff "$current" "$candidate"; then
+    echo "No pending changes."
+    return 0
+  fi
+  change_class="$(frp_state_change_class "$current" "$candidate")"
+  if [[ "$change_class" == local ]]; then
+    frp_apply_local_metadata "$current" "$candidate"
+    return $?
+  fi
+  if [[ "$change_class" == none ]]; then
+    echo "No pending changes."
+    return 0
+  fi
+
   if ! frp_lifecycle_recover; then
     if [[ ! -f "$(frp_client_toml_path)" ]] && [[ "$(frp_identity_status)" == enrolled ]]; then
       echo "ERROR: local runtime configuration is incomplete and cannot be repaired automatically." >&2
@@ -543,8 +531,11 @@ import json,sys
 from pathlib import Path
 cand=json.loads(Path(sys.argv[1]).read_text())
 cur=json.loads(Path(sys.argv[2]).read_text())
-for key in ('allocator_url','frp_server','frp_server_port','hostname','machine_id','host_id'):
-    cand.setdefault(key, cur.get(key))
+for key in ('allocator_url','frp_server','frp_server_port','hostname','machine_id','host_id','public_hostname'):
+    if key in cur and key not in cand:
+        cand[key] = cur[key]
+    elif key in cur:
+        cand.setdefault(key, cur.get(key))
 Path(sys.argv[1]).write_text(json.dumps(cand, indent=2, sort_keys=True)+'\n', encoding='utf-8')
 PY
 
@@ -663,11 +654,12 @@ transport=str(meta.get('frp_transport') or s.get('frp_transport') or 'tcp').stri
 if transport not in ('tcp', 'wss'):
     raise SystemExit('ERROR: allocator returned an unsupported FRP transport')
 s['frp_transport']=transport
-alias=str(meta.get('public_hostname') or '').strip()
-if alias:
-    s['public_hostname']=alias
-else:
-    s.pop('public_hostname', None)
+if 'public_hostname' in meta:
+    alias=str(meta.get('public_hostname') or '').strip()
+    if alias:
+        s['public_hostname']=alias
+    else:
+        s.pop('public_hostname', None)
 p.write_text(json.dumps(s, indent=2, sort_keys=True)+'\n')
 PY
   if ! frp_merge_ports_into_state "$candidate" "$allocated"; then
@@ -776,7 +768,10 @@ PY
   if ! frp_client_restart; then
     restore_needed=1
   else
-    mapfile -t PROXY_NAMES < <(SERVICES_FILE="$enabled_list" proxy_names_from_services "$host_id")
+    PROXY_NAMES=()
+    while IFS= read -r _frp_proxy_name; do
+      [[ -n "$_frp_proxy_name" ]] && PROXY_NAMES+=("$_frp_proxy_name")
+    done < <(SERVICES_FILE="$enabled_list" proxy_names_from_services "$host_id")
     if ! frp_client_wait_proxies "${PROXY_NAMES[@]}"; then
       restore_needed=1
     fi
@@ -1067,6 +1062,8 @@ frp_client_apply_pending() {
 frp_client_discard_pending() {
   local pending
   pending="$(frp_client_draft_path)"
+  frp_acquire_client_lock || return 1
+  trap 'frp_release_client_lock' EXIT
   rm -f "$pending"
   echo "Pending service changes discarded."
 }
@@ -1090,6 +1087,10 @@ frp_client_cmd_main() {
       frp_require_root
       frp_client_list
       ;;
+    sync|reconcile)
+      frp_require_root
+      frp_client_sync
+      ;;
     apply)
       frp_require_root
       current="$(frp_client_state_path)"
@@ -1112,6 +1113,8 @@ frp_client_cmd_main() {
     add-service)
       frp_require_root
       shift
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_add_service_cli "$@"
       ;;
@@ -1119,6 +1122,8 @@ frp_client_cmd_main() {
       frp_require_root
       shift
       [[ $# -ge 3 ]] || { echo "ERROR: usage: frp-client set-service <id> <property> <value>" >&2; exit 2; }
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_set_service_field "$1" "$2" "$3"
       ;;
@@ -1126,6 +1131,8 @@ frp_client_cmd_main() {
       frp_require_root
       shift
       [[ $# -ge 1 ]] || { echo "ERROR: usage: frp-client enable-service <id>" >&2; exit 2; }
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_set_service_enabled "$1" 1
       ;;
@@ -1133,6 +1140,8 @@ frp_client_cmd_main() {
       frp_require_root
       shift
       [[ $# -ge 1 ]] || { echo "ERROR: usage: frp-client disable-service <id>" >&2; exit 2; }
+      frp_acquire_client_lock || exit 1
+      trap 'frp_release_client_lock' EXIT
       frp_load_client_state "$(frp_client_state_path)"
       frp_client_set_service_enabled "$1" 0
       ;;
@@ -1146,26 +1155,28 @@ frp_client_cmd_main() {
       ;;
     -h|--help|help)
       cat <<'EOF'
-Usage: frp-client [status|info|list|update]
+Usage: frp-client [status|info|list|sync|update]
 
   (no args)   Interactive service management menu
-  status      Show local client and service status
-  info        Show connection information
-  list        List configured services
+  status      Show local client and service status (read-only)
+  info        Show connection information (read-only)
+  list        List configured services (read-only)
+  sync        Reconcile local services against server releases
   update      Upgrade frp-auto-deploy management tools without re-enrolling
 
 An Enrollment Code is required only to enroll this client or to
 recover its management identity. Ordinary later changes are
 authorized by the local client identity and do not require a
 new Enrollment Code. A software update does not require an
-Enrollment Code. Read-only commands do not contact the allocator.
+Enrollment Code. Read-only commands (status/info/list) do not
+contact the allocator. Use sync (or apply) to reconcile releases.
 
 For everyday use, prefer: sudo frpctl
 EOF
       ;;
     *)
       echo "ERROR: unknown command: $cmd" >&2
-      echo "Usage: frp-client [status|info|list|update]" >&2
+      echo "Usage: frp-client [status|info|list|sync|update]" >&2
       exit 2
       ;;
   esac

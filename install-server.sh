@@ -37,6 +37,8 @@ for f in \
   "$BASE_DIR/tools/frp-enroll-bulk" \
   "$BASE_DIR/tools/frp-clients" \
   "$BASE_DIR/tools/frp-client-info" \
+  "$BASE_DIR/tools/frp-groups" \
+  "$BASE_DIR/tools/frp-group-set" \
   "$BASE_DIR/tools/frp-release-client" \
   "$BASE_DIR/tools/frp-release-service" \
   "$BASE_DIR/tools/frp-revoke-client" \
@@ -57,6 +59,7 @@ done
 . "$BASE_DIR/lib/frp-server-upgrade.sh"
 
 DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
+DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
 # Historical owner/repo, concatenated only to recognize the obsolete project URL.
 LEGACY_CLIENT_INSTALLER_OWNER='RickLee-kr'
 LEGACY_CLIENT_INSTALLER_REPO='frp-auto-deploy'
@@ -676,6 +679,7 @@ load_existing_server_config() {
   EXISTING_ALLOCATOR_LISTEN_PORT=""
   EXISTING_ALLOCATOR_URL=""
   EXISTING_CLIENT_INSTALLER_URL=""
+  EXISTING_WINDOWS_CLIENT_INSTALLER_URL=""
   EXISTING_DEPLOYMENT_MODE=""
   EXISTING_SERVER_CONFIG=""
   [[ -r "$path" ]] || return 0
@@ -704,6 +708,7 @@ mapping = {
     'allocator_listen_port': 'EXISTING_ALLOCATOR_LISTEN_PORT',
     'allocator_public_port': 'EXISTING_ALLOCATOR_PUBLIC_PORT',
     'client_installer_url': 'EXISTING_CLIENT_INSTALLER_URL',
+    'windows_client_installer_url': 'EXISTING_WINDOWS_CLIENT_INSTALLER_URL',
     'deployment_mode': 'EXISTING_DEPLOYMENT_MODE',
 }
 # public_ip is the control endpoint; public_host is a legacy synonym.
@@ -713,7 +718,7 @@ order = [
     'control_port', 'frp_control_public_port', 'frp_control_listen_port',
     'port_start', 'port_end',
     'listen_port', 'allocator_listen_port', 'allocator_public_port',
-    'client_installer_url',
+    'client_installer_url', 'windows_client_installer_url',
     'deployment_mode',
 ]
 seen = {}
@@ -779,6 +784,15 @@ resolve_server_settings() {
   FRP_PORT_END="${FRP_PORT_END:-${EXISTING_PORT_END:-}}"
   CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
   frp_migrate_legacy_client_installer_url
+  WINDOWS_CLIENT_INSTALLER_URL="${FRP_WINDOWS_CLIENT_INSTALLER_URL:-${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL}}"
+  if ! frp_validate_https_url "$CLIENT_INSTALLER_URL"; then
+    echo "ERROR: client_installer_url must be a valid https:// URL" >&2
+    exit 1
+  fi
+  if ! frp_validate_https_url "$WINDOWS_CLIENT_INSTALLER_URL"; then
+    echo "ERROR: windows_client_installer_url must be a valid https:// URL" >&2
+    exit 1
+  fi
   FRP_MODE_SWITCH=0
 
   # Public vs listen: dedicated vars win; a single legacy FRP_CONTROL_PORT or
@@ -1077,16 +1091,17 @@ write_server_config() {
     "$FRP_ALLOCATOR_LISTEN_PORT" \
     "$FRP_ALLOCATOR_PUBLIC_URL" \
     "$CLIENT_INSTALLER_URL" \
+    "$WINDOWS_CLIENT_INSTALLER_URL" \
     "$pki" \
     "${FRP_PUBLIC_HOSTNAME:-}" \
     "${FRP_BOOTSTRAP_HOSTNAME:-}" <<'PY'
 import json, os, sys, tempfile
 from pathlib import Path
 path = Path(sys.argv[1])
-pki = sys.argv[11]
+pki = sys.argv[12]
 host = sys.argv[2]
-hostname = (sys.argv[12] if len(sys.argv) > 12 else '').strip()
-bootstrap_hostname = (sys.argv[13] if len(sys.argv) > 13 else '').strip()
+hostname = (sys.argv[13] if len(sys.argv) > 13 else '').strip()
+bootstrap_hostname = (sys.argv[14] if len(sys.argv) > 14 else '').strip()
 cfg = {
     'public_host': host,
     'public_ip': host,
@@ -1109,6 +1124,7 @@ cfg = {
     'enrollment_retention_days': 30,
     'token_file': '/etc/frp/server_token',
     'client_installer_url': sys.argv[10],
+    'windows_client_installer_url': sys.argv[11],
     'tls_ca_cert': pki.rstrip('/') + '/ca.crt',
     'tls_server_cert': pki.rstrip('/') + '/server.crt',
     'tls_server_key': pki.rstrip('/') + '/server.key',
@@ -1349,10 +1365,13 @@ frp_server_rollback_snapshot() {
   if [[ ! -f "$py" ]]; then
     py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_install_txn.py)"
   fi
-  if frp_server_skip_systemd || frp_server_test_mode; then
-    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest"
-  else
+  # Bash 4.2 (Amazon Linux 2) treats empty "${arr[@]}" as unbound under set -u.
+  if ! frp_server_skip_systemd && ! frp_server_test_mode; then
     python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" --apply-services
+  elif [[ -n "${FRP_INSTALL_TXN_HOOK_SYSTEMCTL:-}" ]]; then
+    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" --apply-services
+  else
+    python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest"
   fi
 }
 
@@ -1542,6 +1561,22 @@ frp_server_end_tmp() {
     eval "$FRP_SERVER_SAVED_EXIT_TRAP"
   else
     trap - EXIT
+  fi
+}
+
+frp_server_ensure_sandbox_dirs() {
+  # Persistent paths listed in unit ReadWritePaths must exist before systemd
+  # starts the allocator/frontend. Missing dirs cause status=226/NAMESPACE.
+  local etc_frp etc_proj var_lib var_log run_dir
+  etc_frp="$(frp_server_fs /etc/frp)"
+  etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
+  var_lib="$(frp_server_fs /var/lib/frp-auto-deploy)"
+  var_log="$(frp_server_fs /var/log/frp-auto-deploy)"
+  run_dir="$(frp_server_fs /run/frp-auto-deploy)"
+  mkdir -p "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
+  chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
+  if [[ ${EUID} -eq 0 ]]; then
+    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" 2>/dev/null || true
   fi
 }
 
@@ -1788,11 +1823,12 @@ frp_server_main() {
     return 1
   fi
 
-  mkdir -p "$etc_frp" "$etc_proj" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" \
+  mkdir -p "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" \
     "$(dirname "$unit_frps")"
+  frp_server_ensure_sandbox_dirs
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir"
   if [[ ${EUID} -eq 0 ]]; then
-    chown root:root "$etc_frp" "$etc_proj" "$var_lib" 2>/dev/null || true
+    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$(frp_server_fs /var/log/frp-auto-deploy)" 2>/dev/null || true
   fi
 
   TOKEN_ACTION=""
@@ -1916,6 +1952,7 @@ frp_server_main() {
     fi
   fi
 
+  frp_server_ensure_sandbox_dirs
   if ! frp_server_skip_systemd; then
     systemctl daemon-reload || {
       frp_server_fail_after_mutation SYSTEMD_RELOAD_FAILED "systemd daemon-reload failed"
@@ -2058,7 +2095,10 @@ if [[ "${FRP_SERVER_SOURCED:-}" != "1" ]]; then
       case "$1" in
         --check|--dry-run) FRP_SERVER_UPGRADE_CHECK=1; shift ;;
         --source)
-          [[ $# -ge 2 ]] || { echo "ERROR: --source requires a directory" >&2; exit 2; }
+          if [[ $# -lt 2 || "$2" == --* ]]; then
+            echo "ERROR: --source requires a directory" >&2
+            exit 2
+          fi
           FRP_SERVER_UPGRADE_SOURCE="$2"
           shift 2
           ;;

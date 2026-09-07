@@ -139,13 +139,24 @@ collect_services() {
 }
 
 print_complete() {
-  local server="$1" services_json_file="$2"
+  local server="$1" services_json_file="$2" alias="${3:-}"
+  if [[ -z "$alias" && -f "$services_json_file" ]]; then
+    alias="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(d.get("public_hostname","") if isinstance(d,dict) else "")' "$services_json_file" 2>/dev/null || true)"
+  fi
   if frp_zero_touch_active || [[ "${FRP_ZERO_TOUCH_COMPLETE:-}" == "1" ]]; then
-    python3 - "$server" "$services_json_file" <<'PY'
+    python3 - "$server" "$services_json_file" "$alias" <<'PY'
 import json, sys
 from pathlib import Path
 server = sys.argv[1]
-services = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+raw = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+alias = (sys.argv[3] or '').strip()
+if isinstance(raw, dict) and 'services' in raw:
+    services = list((raw.get('services') or {}).values())
+    if not alias:
+        alias = str(raw.get('public_hostname') or '').strip()
+else:
+    services = raw
+preferred = alias if alias and alias != server else ''
 print()
 print('FRP client setup complete.')
 print()
@@ -162,36 +173,69 @@ for item in services:
         continue
     preset = item.get('preset') or 'custom'
     remote_port = item.get('remote_port')
+    host = preferred or server
     if preset == 'ssh':
         user = item.get('ssh_user')
         print('SSH tunnel ready')
         print()
         if user:
             print('Connect:')
-            print('  ssh -p %s %s@%s' % (remote_port, user, server))
+            if preferred:
+                print('  Preferred:')
+                print('    ssh -p %s %s@%s' % (remote_port, user, preferred))
+                print('  Fallback:')
+                print('    ssh -p %s %s@%s' % (remote_port, user, server))
+            else:
+                print('  ssh -p %s %s@%s' % (remote_port, user, server))
         else:
             print('SSH user: legacy / unspecified')
         print()
     elif preset == 'http':
         print('Connect:')
-        print('  http://%s:%s' % (server, remote_port))
+        if preferred:
+            print('  Preferred:')
+            print('    http://%s:%s' % (preferred, remote_port))
+            print('  Fallback:')
+            print('    http://%s:%s' % (server, remote_port))
+        else:
+            print('  http://%s:%s' % (server, remote_port))
         print()
     elif preset == 'https':
         print('Connect:')
-        print('  https://%s:%s' % (server, remote_port))
+        if preferred:
+            print('  Preferred:')
+            print('    https://%s:%s' % (preferred, remote_port))
+            print('  Fallback:')
+            print('    https://%s:%s' % (server, remote_port))
+        else:
+            print('  https://%s:%s' % (server, remote_port))
         print()
     else:
         print('Connect:')
-        print('  %s:%s' % (server, remote_port))
+        if preferred:
+            print('  Preferred:')
+            print('    %s:%s' % (preferred, remote_port))
+            print('  Fallback:')
+            print('    %s:%s' % (server, remote_port))
+        else:
+            print('  %s:%s' % (server, remote_port))
         print()
 PY
     return 0
   fi
-  python3 - "$server" "$services_json_file" <<'PY'
+  python3 - "$server" "$services_json_file" "$(frp_os)" "$alias" <<'PY'
 import json,sys
 from pathlib import Path
 server = sys.argv[1]
-services = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+raw = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+alias = (sys.argv[4] if len(sys.argv) > 4 else '').strip()
+if isinstance(raw, dict) and 'services' in raw:
+    services = list((raw.get('services') or {}).values())
+    if not alias:
+        alias = str(raw.get('public_hostname') or '').strip()
+else:
+    services = raw
+preferred = alias if alias and alias != server else ''
 print()
 print('=========================================')
 print(' FRP Installation Complete')
@@ -215,21 +259,45 @@ for item in services:
         if user:
             print('Connect from another machine with:')
             print()
-            print(f'  ssh -p {remote_port} {user}@{server}')
+            if preferred:
+                print('  Preferred:')
+                print(f'    ssh -p {remote_port} {user}@{preferred}')
+                print('  Fallback:')
+                print(f'    ssh -p {remote_port} {user}@{server}')
+            else:
+                print(f'  ssh -p {remote_port} {user}@{server}')
         else:
             print('SSH user: legacy / unspecified')
     elif preset == 'http':
         print('Access:')
         print()
-        print(f'  http://{server}:{remote_port}')
+        if preferred:
+            print('  Preferred:')
+            print(f'    http://{preferred}:{remote_port}')
+            print('  Fallback:')
+            print(f'    http://{server}:{remote_port}')
+        else:
+            print(f'  http://{server}:{remote_port}')
     elif preset == 'https':
         print('Access:')
         print()
-        print(f'  https://{server}:{remote_port}')
+        if preferred:
+            print('  Preferred:')
+            print(f'    https://{preferred}:{remote_port}')
+            print('  Fallback:')
+            print(f'    https://{server}:{remote_port}')
+        else:
+            print(f'  https://{server}:{remote_port}')
     else:
         print('Connect:')
         print()
-        print(f'  {server}:{remote_port}')
+        if preferred:
+            print('  Preferred:')
+            print(f'    {preferred}:{remote_port}')
+            print('  Fallback:')
+            print(f'    {server}:{remote_port}')
+        else:
+            print(f'  {server}:{remote_port}')
     print()
 print('For normal operation, this is the only command you need to remember:')
 print()
@@ -250,11 +318,56 @@ print('  sudo frp-client')
 print('  sudo frp-client status')
 print('  sudo frp-client info')
 print()
-print('Systemd service:')
-print('  sudo systemctl status frpc --no-pager')
+if sys.argv[3] == 'darwin':
+    print('launchd daemon:')
+    print('  sudo launchctl print system/com.datarelay.frp-auto-deploy.frpc')
+else:
+    print('Systemd service:')
+    print('  sudo systemctl status frpc --no-pager')
 print()
 print('=========================================')
 PY
+}
+
+frp_client_install_service_definition() {
+  if frp_is_darwin; then
+    frp_macos_launchd_install
+    return
+  fi
+  local unit_src="${_FRP_INSTALL_CLIENT_DIR}/client/frpc.service"
+  if [[ -f "$unit_src" ]]; then
+    frp_write_compatible_systemd_unit "$unit_src" /etc/systemd/system/frpc.service
+  else
+    cat >/etc/systemd/system/frpc.service <<'EOF2'
+[Unit]
+Description=FRP Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frpc -c /etc/frp/frpc.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF2
+  fi
+}
+
+frp_client_service_reload() {
+  frp_is_darwin || systemctl daemon-reload
+}
+
+frp_client_service_start() {
+  if frp_is_darwin; then
+    frp_macos_launchd_set_enabled enable || return 1
+    frp_macos_launchd_bootout
+    frp_macos_launchd_bootstrap || return 1
+  else
+    systemctl enable frpc >/dev/null && systemctl restart frpc
+  fi
 }
 
 frp_client_existing_install_message() {
@@ -297,11 +410,33 @@ frp_client_main() {
     exit 1
   fi
 
+  # Resolve machine ID without creating client directories yet. Missing URL must
+  # fail closed before any partial install tree is written (CASE B).
+  if [[ -n "${FRP_TEST_MACHINE_ID:-}" ]]; then
+    MACHINE_ID="$FRP_TEST_MACHINE_ID"
+  elif frp_is_darwin; then
+    MACHINE_ID="$(frp_macos_machine_id)" || exit 1
+  elif [[ -s /etc/machine-id ]]; then
+    MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
+  elif [[ -s "$(frp_client_path /etc/frp/client-id)" ]]; then
+    MACHINE_ID="$(tr -d '\n' <"$(frp_client_path /etc/frp/client-id)")"
+  else
+    MACHINE_ID="$(openssl rand -hex 16)"
+  fi
+
+  FRP_RESUME_PENDING=0
+  if frp_pending_enroll_exists_for "$MACHINE_ID"; then
+    FRP_RESUME_PENDING=1
+    if [[ -z "${FRP_ALLOCATOR_URL:-}" ]]; then
+      FRP_ALLOCATOR_URL="$(frp_pending_enroll_allocator_url || true)"
+    fi
+  fi
+
   if frp_client_has_existing_install; then
     frp_client_existing_install_message
     return 1
   fi
-  if frp_client_has_partial_install; then
+  if frp_client_has_partial_install && [[ "$FRP_RESUME_PENDING" != "1" ]]; then
     echo "ERROR: a partial FRP client installation was found." >&2
     echo "Repair it with: sudo frpctl update" >&2
     echo "or uninstall locally and enroll again." >&2
@@ -311,30 +446,53 @@ frp_client_main() {
   fi
 
   frp_require_allocator_url
+
+  local etc_frp
+  etc_frp="$(frp_client_path /etc/frp)"
+  mkdir -p "$etc_frp"
+  if [[ ! -s "${etc_frp}/client-id" ]]; then
+    printf '%s\n' "$MACHINE_ID" >"${etc_frp}/client-id"
+    chmod 600 "${etc_frp}/client-id"
+  fi
+
   if frp_zero_touch_active; then
     frp_zero_touch_require_inputs || return 1
   fi
   frp_bootstrap_allocator_ca "$ALLOCATOR_URL" || return 1
+  frp_detect_os >/dev/null || exit 1
   frp_detect_architecture || exit 1
 
   if [[ -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-    frp_require_bash || exit 1
-    frp_detect_platform
-    frp_detect_package_manager
-    frp_print_detected_linux
-    echo
-    frp_require_systemd || exit 1
-    FRP_DEPENDENCY_ROLE=client
-    if [[ "${FRP_INSTALL_HOOK_DEP_FAIL:-}" == "1" ]]; then
-      echo "ERROR: simulated package manager failure" >&2
-      frp_emit_failure_class DEPENDENCY_INSTALL_FAILED
-      exit 1
+    if frp_is_darwin; then
+      frp_macos_require_supported_release || exit 1
+      frp_macos_print_detected
+      echo
+      frp_require_service_manager || exit 1
+      frp_macos_require_dependencies || {
+        frp_emit_failure_class DEPENDENCY_INSTALL_FAILED
+        exit 1
+      }
+      frp_require_python || exit 1
+      frp_macos_ensure_dirs || exit 1
+    else
+      frp_require_bash || exit 1
+      frp_detect_platform
+      frp_detect_package_manager
+      frp_print_detected_linux
+      echo
+      frp_require_service_manager || exit 1
+      FRP_DEPENDENCY_ROLE=client
+      if [[ "${FRP_INSTALL_HOOK_DEP_FAIL:-}" == "1" ]]; then
+        echo "ERROR: simulated package manager failure" >&2
+        frp_emit_failure_class DEPENDENCY_INSTALL_FAILED
+        exit 1
+      fi
+      ensure_dependencies || {
+        frp_emit_failure_class DEPENDENCY_INSTALL_FAILED
+        exit 1
+      }
+      frp_require_python || exit 1
     fi
-    ensure_dependencies || {
-      frp_emit_failure_class DEPENDENCY_INSTALL_FAILED
-      exit 1
-    }
-    frp_require_python || exit 1
   fi
 
   SERVICES_FILE="$(mktemp)"
@@ -342,9 +500,33 @@ frp_client_main() {
   ENROLL_META_FILE="$(mktemp)"
   TMPDIR="$(frp_secure_mktemp_dir)"
   chmod 600 "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
-  trap 'rm -rf "$TMPDIR" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"; unset FRP_TOKEN ENROLL_SECRET FRP_ENROLLMENT_CODE TOKEN_CIPHERTEXT FRP_BOOTSTRAP_TICKET' EXIT
+  _frp_client_enroll_tmp_cleanup() {
+    rm -rf "$TMPDIR" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
+    unset FRP_TOKEN ENROLL_SECRET FRP_ENROLLMENT_CODE TOKEN_CIPHERTEXT FRP_BOOTSTRAP_TICKET
+  }
+  # Sourced callers (tests, frpctl wrappers) already own EXIT. Replacing or
+  # chaining that trap leaks test allocators or SIGSEGVs bash on restore.
+  if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    trap '_frp_client_enroll_tmp_cleanup' EXIT
+  fi
 
-  if frp_zero_touch_active; then
+  RESUME_PHASE=""
+  if [[ "$FRP_RESUME_PENDING" == "1" ]]; then
+    echo "A previous enrollment did not finish (response lost or interrupted)." >&2
+    echo "Resuming from local crash-safe recovery state; the Bootstrap Ticket is not reused." >&2
+    if ! frp_pending_enroll_load "$MACHINE_ID" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE" \
+      RESUME_PHASE ENROLL_ID ENROLL_SECRET; then
+      echo "ERROR: local recovery state is present but unusable." >&2
+      echo "Create a new Enrollment Code and re-enroll this client." >&2
+      frp_emit_failure_class RECOVERY_REQUIRED
+      return 1
+    fi
+    FRP_ZERO_TOUCH_COMPLETE=1
+    FRP_SERVICES_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1],encoding="utf-8"))))' "$SERVICES_FILE")"
+    export FRP_SERVICES_JSON
+    services_load_from_env
+    unset FRP_SERVICES_JSON
+  elif frp_zero_touch_active; then
     :
   else
     frp_ux_intro
@@ -358,21 +540,6 @@ frp_client_main() {
     ENROLL_ID="${FRP_ENROLLMENT_CODE%%.*}"
     ENROLL_SECRET="${FRP_ENROLLMENT_CODE#*.}"
     collect_services
-  fi
-
-  local etc_frp
-  etc_frp="$(frp_client_path /etc/frp)"
-  mkdir -p "$etc_frp"
-  if [[ -n "${FRP_TEST_MACHINE_ID:-}" ]]; then
-    MACHINE_ID="$FRP_TEST_MACHINE_ID"
-  elif [[ -s /etc/machine-id ]]; then
-    MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
-  elif [[ -s "${etc_frp}/client-id" ]]; then
-    MACHINE_ID="$(tr -d '\n' <"${etc_frp}/client-id")"
-  else
-    MACHINE_ID="$(openssl rand -hex 16)"
-    printf '%s\n' "$MACHINE_ID" >"${etc_frp}/client-id"
-    chmod 600 "${etc_frp}/client-id"
   fi
 
   HOSTNAME_VALUE="$(frp_short_hostname)"
@@ -390,7 +557,10 @@ frp_client_main() {
     exit 1
   fi
 
-  if frp_zero_touch_active; then
+  if [[ "$FRP_RESUME_PENDING" == "1" ]]; then
+    : # Enrollment Code/Ticket was already redeemed in a prior attempt; a
+      # Bootstrap Ticket is single-use and must not be redeemed again.
+  elif frp_zero_touch_active; then
     echo "Completing one-time setup ..."
     if ! frp_redeem_bootstrap_ticket "$ALLOCATOR_URL" "$MACHINE_ID" "$HOSTNAME_VALUE" \
       "$SERVICES_FILE" ENROLL_ID ENROLL_SECRET; then
@@ -403,10 +573,32 @@ frp_client_main() {
     unset FRP_SERVICES_JSON
   fi
 
-  echo "Validating enrollment and requesting persistent public ports ..."
-  frp_enroll_services "$ALLOCATOR_URL" "$ENROLL_ID" "$ENROLL_SECRET" \
-    "$MACHINE_ID" "$HOSTNAME_VALUE" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE" \
-    || exit 1
+  if [[ "$FRP_RESUME_PENDING" == "1" && "$RESUME_PHASE" == "enrolled" ]]; then
+    # The server-committed /enroll response was cached locally before the
+    # prior crash; finish the local commit without another network round
+    # trip or ticket/enrollment-code reuse.
+    echo "Reusing the previously completed enrollment response ..."
+  else
+    # Persist the enrollment secret and exact request now, before calling
+    # /enroll, so a crash after the server commits (but before the response
+    # is received or written) can be recovered by an exact replay instead of
+    # requiring a new Enrollment Code.
+    frp_pending_enroll_write redeemed "$MACHINE_ID" "$HOSTNAME_VALUE" "$ALLOCATOR_URL" \
+      "$ENROLL_ID" "$ENROLL_SECRET" "$SERVICES_FILE"
+    echo "Validating enrollment and requesting persistent public ports ..."
+    frp_enroll_services "$ALLOCATOR_URL" "$ENROLL_ID" "$ENROLL_SECRET" \
+      "$MACHINE_ID" "$HOSTNAME_VALUE" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE" \
+      || exit 1
+    frp_pending_enroll_write enrolled "$MACHINE_ID" "$HOSTNAME_VALUE" "$ALLOCATOR_URL" \
+      "$ENROLL_ID" "$ENROLL_SECRET" "$SERVICES_FILE" "$ALLOCATED_FILE" "$ENROLL_META_FILE"
+    if [[ "${FRP_CLIENT_HOOK_CRASH_AFTER_ENROLL:-}" == "1" ]]; then
+      # Test-only: simulate a crash/lost response after the allocator has
+      # committed the enrollment and the response was cached locally, but
+      # before any further local commit step runs.
+      echo "ERROR: simulated crash after enrollment commit" >&2
+      exit 1
+    fi
+  fi
   FRP_SERVER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["frp_server"])' "$ENROLL_META_FILE")"
   FRP_SERVER_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["frp_server_port"])' "$ENROLL_META_FILE")"
   FRP_PUBLIC_HOSTNAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("public_hostname",""))' "$ENROLL_META_FILE")"
@@ -421,8 +613,8 @@ frp_client_main() {
 
   if [[ "${FRP_SKIP_DOWNLOAD:-}" != "1" ]]; then
     ARCHIVE="$TMPDIR/frp.tar.gz"
-    URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
-    echo "Downloading FRP ${FRP_VERSION} (${FRP_ARCH}) ..."
+    URL="$(frp_release_url "$FRP_VERSION" "$FRP_ARCH")"
+    echo "Downloading FRP ${FRP_VERSION} ($(frp_os)/${FRP_ARCH}) ..."
     if [[ "${FRP_INSTALL_HOOK_DOWNLOAD_FAIL:-}" == "1" ]]; then
       echo "ERROR: failed to download FRP archive" >&2
       frp_emit_failure_class DOWNLOAD_FAILED
@@ -434,10 +626,17 @@ frp_client_main() {
       exit 1
     fi
     echo "Verifying checksum ..."
-    printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | sha256sum -c - || {
-      frp_emit_failure_class INTEGRITY_FAILED
-      exit 1
-    }
+    if frp_is_darwin; then
+      frp_macos_sha256_check "$EXPECTED_SHA" "$ARCHIVE" || {
+        frp_emit_failure_class INTEGRITY_FAILED
+        exit 1
+      }
+    else
+      printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | sha256sum -c - || {
+        frp_emit_failure_class INTEGRITY_FAILED
+        exit 1
+      }
+    fi
     extracted="$(frp_extract_frp_member "$ARCHIVE" "$TMPDIR" frpc)" || {
       frp_emit_failure_class STAGING_FAILED
       exit 1
@@ -446,7 +645,7 @@ frp_client_main() {
       frp_emit_failure_class INTEGRITY_FAILED
       exit 1
     }
-    frp_atomic_install "$extracted" /usr/local/bin/frpc 0755 || {
+    frp_atomic_install "$extracted" "$(frp_client_path /usr/local/bin/frpc)" 0755 || {
       frp_emit_failure_class FILE_COMMIT_FAILED
       exit 1
     }
@@ -462,78 +661,46 @@ frp_client_main() {
   frp_client_verify_config "$FRPC_TOML" || exit 1
 
   if [[ "$(services_count)" != "0" && "${FRP_SKIP_SYSTEMD:-}" != "1" && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-    echo "Installing systemd service ..."
-    UNIT_SRC=""
-    if [[ -f "${_FRP_INSTALL_CLIENT_DIR}/client/frpc.service" ]]; then
-      UNIT_SRC="${_FRP_INSTALL_CLIENT_DIR}/client/frpc.service"
-    fi
-    if [[ -n "$UNIT_SRC" ]]; then
-      install -m 0644 "$UNIT_SRC" /etc/systemd/system/frpc.service
-    else
-      cat >/etc/systemd/system/frpc.service <<'EOF2'
-[Unit]
-Description=FRP Client
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/frpc -c /etc/frp/frpc.toml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF2
-    fi
+    echo "Installing $(frp_service_manager) service ..."
+    frp_client_install_service_definition || {
+      frp_emit_failure_class FILE_COMMIT_FAILED
+      exit 1
+    }
     echo "Starting FRP client ..."
-    systemctl daemon-reload || {
+    frp_client_service_reload || {
       frp_emit_failure_class SYSTEMD_RELOAD_FAILED
       exit 1
     }
-    if ! systemctl enable frpc >/dev/null; then
-      echo "ERROR: systemd enable failed; installation is not complete." >&2
-      frp_emit_failure_class SYSTEMD_ENABLE_FAILED
-      exit 1
-    fi
-    if ! systemctl restart frpc; then
+    if ! frp_client_service_start; then
       echo "ERROR: frpc failed to start; local files were written and the server reservation is preserved." >&2
       frp_emit_failure_class SERVICE_START_FAILED
       exit 1
     fi
 
     echo "Verifying published proxies ..."
-    mapfile -t PROXY_NAMES < <(proxy_names_from_services "$HOST_ID")
+    PROXY_NAMES=()
+    while IFS= read -r proxy_name; do
+      [[ -n "$proxy_name" ]] && PROXY_NAMES+=("$proxy_name")
+    done < <(proxy_names_from_services "$HOST_ID")
     if ! wait_for_proxies "${PROXY_NAMES[@]}"; then
       echo "ERROR: frpc did not register every requested proxy successfully" >&2
-      journalctl -u frpc -n 80 --no-pager >&2 || true
+      if frp_is_darwin; then
+        frp_macos_recent_logs 80 >&2 || true
+      else
+        journalctl -u frpc -n 80 --no-pager >&2 || true
+      fi
       frp_emit_failure_class HEALTH_CHECK_FAILED
       exit 1
     fi
   elif [[ "$(services_count)" == "0" ]]; then
     echo "Management-only mode: frpc is not started until a service is enabled."
     if [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-      echo "Installing inactive systemd service for future services ..."
-      if [[ -f "${_FRP_INSTALL_CLIENT_DIR}/client/frpc.service" ]]; then
-        install -m 0644 "${_FRP_INSTALL_CLIENT_DIR}/client/frpc.service" /etc/systemd/system/frpc.service
-      else
-        cat >/etc/systemd/system/frpc.service <<'EOF2'
-[Unit]
-Description=FRP Client
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/frpc -c /etc/frp/frpc.toml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF2
-      fi
-      systemctl daemon-reload || {
+      echo "Installing inactive $(frp_service_manager) service for future services ..."
+      frp_client_install_service_definition || {
+        frp_emit_failure_class FILE_COMMIT_FAILED
+        exit 1
+      }
+      frp_client_service_reload || {
         frp_emit_failure_class SYSTEMD_RELOAD_FAILED
         exit 1
       }
@@ -549,9 +716,18 @@ EOF2
     exit 1
   }
 
+  # Local state (client-state.json + frpc.toml + management identity, all
+  # written above) is now committed. The crash-safe recovery transaction is
+  # no longer needed; clear it so it is never replayed against a future,
+  # unrelated Enrollment Code.
+  frp_pending_enroll_clear
+
   frp_client_install_management_files "${_FRP_INSTALL_CLIENT_DIR}"
 
-  print_complete "$FRP_SERVER" "$SERVICES_FILE"
+  print_complete "$FRP_SERVER" "$SERVICES_FILE" "${FRP_PUBLIC_HOSTNAME:-}"
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    _frp_client_enroll_tmp_cleanup
+  fi
 }
 
 frp_client_installer_usage() {
@@ -576,7 +752,11 @@ if [[ "${FRP_CLIENT_SOURCED:-}" != "1" ]]; then
         shift
         ;;
       --source)
-        FRP_CLIENT_UPDATE_SOURCE="${2:-}"
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --source requires a directory" >&2
+          exit 2
+        fi
+        FRP_CLIENT_UPDATE_SOURCE="$2"
         shift 2
         ;;
       --check|--dry-run)

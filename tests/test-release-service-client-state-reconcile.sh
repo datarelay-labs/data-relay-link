@@ -10,6 +10,10 @@ trap 'rm -rf "$WORKDIR"' EXIT
 TREE="$WORKDIR/client-root"
 mkdir -p "$TREE/etc/frp" "$TREE/etc/frp-auto-deploy" "$TREE/usr/local/lib/frp-auto-deploy"
 cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
+cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
+if [[ -f "$ROOT/lib/frp-macos.sh" ]]; then
+  cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-macos.sh"
+fi
 
 write_state() {
   local web_enabled="$1"
@@ -74,6 +78,15 @@ run_reconcile() {
     bash -c 'source "$FRP_CLIENT_LIB"; frp_client_reconcile_released_services'
 }
 
+read_has_ssh() {
+  python3 - "$TREE/etc/frp/client-state.json" <<'PY'
+import json, sys
+from pathlib import Path
+state = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+print("ssh" in (state.get("services") or {}))
+PY
+}
+
 echo "=== case: released on server => disabled web record removed ==="
 write_state "false"
 run_reconcile '["ssh"]'
@@ -83,5 +96,17 @@ echo "=== case: disabled but reserved on server => web record kept ==="
 write_state "false"
 run_reconcile '["ssh","web"]'
 [[ "$(read_has_web)" == "True" ]] || { echo "web record removed unexpectedly after disable"; exit 1; }
+
+echo "=== case: last enabled service force-released => enabled ssh record removed ==="
+write_state "true"
+run_reconcile '[]'
+[[ "$(read_has_ssh)" == "False" ]] || { echo "enabled ssh still present after last-service release"; exit 1; }
+[[ "$(read_has_web)" == "False" ]] || { echo "enabled web still present after last-service release"; exit 1; }
+
+echo "=== case: enabled ssh still reserved => ssh record kept ==="
+write_state "true"
+run_reconcile '["ssh"]'
+[[ "$(read_has_ssh)" == "True" ]] || { echo "enabled ssh removed while still reserved"; exit 1; }
+[[ "$(read_has_web)" == "False" ]] || { echo "enabled web not dropped after server release"; exit 1; }
 
 echo "PASS test-release-service-client-state-reconcile"
