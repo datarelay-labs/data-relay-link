@@ -203,9 +203,18 @@ export FRP_MOCK_UNIT_DIR="$UNIT"
 export FRP_UNINSTALL_LOCK_TIMEOUT=1
 LOCK="$TREE/var/lib/frp-auto-deploy/registry.lock"
 : >"$LOCK"
-flock -x "$LOCK" sleep 5 &
+python3 - "$LOCK" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+time.sleep(8)
+PY
 LOCK_PID=$!
-sleep 0.1
+sleep 0.2
 if "$ROOT/uninstall-server.sh" >"$WORKDIR/lock.out" 2>"$WORKDIR/lock.err"; then
   kill "$LOCK_PID" 2>/dev/null || true
   fail "lock contention uninstall succeeded"
@@ -290,5 +299,26 @@ if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/dual2.out" 2>"$WORKDIR/dual2.err"; t
 fi
 [[ -f "$TREE/etc/frp/client-state.json" ]] || fail "second uninstall removed client"
 pass "SECOND_UNINSTALL_SAFE"
+
+# 13. util-linux flock CLI must not be required (Amazon Linux containers)
+TREE="$WORKDIR/noflock"
+seed "$TREE"
+UNIT="$WORKDIR/units-noflock"
+mkdir -p "$UNIT"
+NOFLOCK="$WORKDIR/noflock-bin"
+mkdir -p "$NOFLOCK"
+printf '#!/bin/sh\necho flock-should-not-run >&2\nexit 127\n' >"$NOFLOCK/flock"
+chmod +x "$NOFLOCK/flock"
+if ! (
+  export FRP_UNINSTALL_TEST_ROOT="$TREE"
+  export FRP_MOCK_UNIT_DIR="$UNIT"
+  export PATH="$NOFLOCK:$PATH"
+  "$ROOT/uninstall-server.sh" >"$WORKDIR/noflock.out" 2>"$WORKDIR/noflock.err"
+); then
+  fail "uninstall without flock CLI: $(cat "$WORKDIR/noflock.err")"
+fi
+grep -q flock-should-not-run "$WORKDIR/noflock.err" && fail "uninstall invoked flock CLI"
+assert_state_present "$TREE"
+pass "UNINSTALL_WITHOUT_FLOCK_CLI"
 
 echo "SERVER_UNINSTALL_FAIL_CLOSED_TEST=PASS"
