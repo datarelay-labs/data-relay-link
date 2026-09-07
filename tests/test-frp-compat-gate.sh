@@ -103,8 +103,9 @@ pass "UNVERIFIED_BINARY_NOT_EXECUTED"
 # Simulate by requiring report.status absent when only websocket would have
 # historically written PASS. We assert the new script does not create PASS
 # before archive verification by grepping the script contract.
-grep -n 'echo "PASS" >' "$CHECK" && fail "legacy early PASS write still present" || true
-# Positive: PASS file creation only via atomic rename near end
+if grep -n 'echo "PASS" >' "$CHECK"; then
+  fail "legacy early PASS write still present"
+fi
 grep -q 'report.status.tmp' "$CHECK" || fail "atomic status tmp missing"
 pass "REPORT_ATOMICITY"
 

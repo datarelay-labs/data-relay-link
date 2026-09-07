@@ -36,9 +36,7 @@ if [[ "$APPLY" != "1" ]]; then
 fi
 
 REPORT_JSON="${FRP_COMPAT_REPORT:-$ROOT/.frp-compat-stage/$VERSION/report.json}"
-REPORT_STATUS="${REPORT_JSON%.json}.status"
 if [[ "$REPORT_JSON" == *.status ]]; then
-  REPORT_STATUS="$REPORT_JSON"
   REPORT_JSON="${REPORT_JSON%.status}.json"
 fi
 
