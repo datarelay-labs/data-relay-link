@@ -137,6 +137,33 @@ try {
     Remove-Item Env:FRP_CLIENT_HOOK_RECONCILE_UNREACHABLE -ErrorAction SilentlyContinue
     Remove-Item Env:FRP_SKIP_CONNECTIVITY_CHECK -ErrorAction SilentlyContinue
 
+    Reset-FrpFixture
+    $null = Remove-FrpDraftState
+    Add-FrpDraftService -Preset 'custom' -Id 'e2ehttp' -Name 'e2ehttp' -TargetHost '127.0.0.1' -TargetPort 18080 | Out-Null
+    $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS = '["ssh","web"]'
+    $null = Invoke-FrpReconcileReleasedServices
+    $committed = ConvertTo-FrpServiceMap -Services (Read-FrpClientState).services
+    Assert-FrpTrue ($committed.Contains('ssh')) 'pending-add committed keeps ssh'
+    Assert-FrpTrue ($committed.Contains('web')) 'pending-add committed keeps web'
+    Assert-FrpTrue (-not $committed.Contains('e2ehttp')) 'pending-add not committed yet'
+    $draftKept = ConvertTo-FrpServiceMap -Services (Read-FrpDraftState).services
+    Assert-FrpTrue ($draftKept.Contains('e2ehttp')) 'pending add survives reconcile'
+    Remove-Item Env:FRP_CLIENT_RECONCILE_REGISTRY_IDS -ErrorAction SilentlyContinue
+
+    Reset-FrpFixture
+    $null = Remove-FrpDraftState
+    Add-FrpDraftService -Preset 'custom' -Id 'e2ehttp' -Name 'e2ehttp' -TargetHost '127.0.0.1' -TargetPort 18080 | Out-Null
+    $env:FRP_CLIENT_RECONCILE_REGISTRY_IDS = '["ssh"]'
+    $null = Invoke-FrpReconcileReleasedServices
+    $committed2 = ConvertTo-FrpServiceMap -Services (Read-FrpClientState).services
+    Assert-FrpTrue ($committed2.Contains('ssh')) 'released+pending keeps ssh'
+    Assert-FrpTrue (-not $committed2.Contains('web')) 'released web dropped from committed'
+    $draftMixed = ConvertTo-FrpServiceMap -Services (Read-FrpDraftState).services
+    Assert-FrpTrue ($draftMixed.Contains('ssh')) 'draft keeps ssh'
+    Assert-FrpTrue (-not $draftMixed.Contains('web')) 'draft drops released web'
+    Assert-FrpTrue ($draftMixed.Contains('e2ehttp')) 'draft keeps pending add after release prune'
+    Remove-Item Env:FRP_CLIENT_RECONCILE_REGISTRY_IDS -ErrorAction SilentlyContinue
+
     Write-FrpTestPass 'test-sync-reconcile'
 } finally {
     Remove-Item Env:FRP_CLIENT_RECONCILE_REGISTRY_IDS -ErrorAction SilentlyContinue

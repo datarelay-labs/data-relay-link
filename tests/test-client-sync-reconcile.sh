@@ -413,4 +413,113 @@ grep -q 'ssh -p 6001 leeruda@203.0.113.10' "$WORKDIR/install-complete.out" \
   || fail "install complete missing fallback host"
 pass "FRESH_INSTALL_OUTPUT_MATCHES_INFO"
 
+# Pending adds must survive reconcile: registry_service_ids cannot include
+# services that have not been allocated yet. Released committed services
+# must still be dropped from both committed state and the draft.
+write_state ''
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+import json, shutil, sys
+from pathlib import Path
+src, dest = Path(sys.argv[1]), Path(sys.argv[2])
+# committed: ssh only
+d = json.loads(src.read_text(encoding='utf-8'))
+d['services'] = {'ssh': d['services']['ssh']}
+src.write_text(json.dumps(d, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+shutil.copyfile(src, dest)
+draft = json.loads(dest.read_text(encoding='utf-8'))
+draft['services']['e2ehttp'] = {
+    'id': 'e2ehttp', 'name': 'e2ehttp', 'preset': 'http', 'protocol': 'tcp',
+    'local_ip': '127.0.0.1', 'local_port': 18080, 'enabled': True,
+}
+dest.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+PY
+export FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'
+export CANDIDATE_FILE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_CANDIDATE="$CANDIDATE_FILE"
+run_reconcile
+unset FRP_CLIENT_RECONCILE_REGISTRY_IDS CANDIDATE_FILE FRP_CLIENT_CANDIDATE
+[[ "$RECONCILE_RC" -eq 0 ]] || fail "pending-add reconcile rc=$RECONCILE_RC $(cat "$WORKDIR/reconcile.err")"
+[[ "$(state_json "sorted(state['services'])")" == "['ssh']" ]] || fail "committed gained pending add"
+python3 - "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "pending add stripped from draft"
+import json, sys
+from pathlib import Path
+d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+svcs = d.get('services') or {}
+assert 'ssh' in svcs, svcs
+assert 'e2ehttp' in svcs, svcs
+PY
+pass "RECONCILE_KEEPS_PENDING_ADD"
+
+write_state ''
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+import json, shutil, sys
+from pathlib import Path
+src, dest = Path(sys.argv[1]), Path(sys.argv[2])
+shutil.copyfile(src, dest)
+draft = json.loads(dest.read_text(encoding='utf-8'))
+draft['services']['e2ehttp'] = {
+    'id': 'e2ehttp', 'name': 'e2ehttp', 'preset': 'http', 'protocol': 'tcp',
+    'local_ip': '127.0.0.1', 'local_port': 18080, 'enabled': True,
+}
+dest.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+PY
+export FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'
+export CANDIDATE_FILE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_CANDIDATE="$CANDIDATE_FILE"
+run_reconcile
+unset FRP_CLIENT_RECONCILE_REGISTRY_IDS CANDIDATE_FILE FRP_CLIENT_CANDIDATE
+[[ "$RECONCILE_RC" -eq 0 ]] || fail "released+pending reconcile rc=$RECONCILE_RC"
+[[ "$(state_json "sorted(state['services'])")" == "['ssh']" ]] || fail "released web not dropped from committed"
+python3 - "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "draft should drop released web and keep pending http"
+import json, sys
+from pathlib import Path
+d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+svcs = d.get('services') or {}
+assert 'ssh' in svcs, svcs
+assert 'web' not in svcs, svcs
+assert 'e2ehttp' in svcs, svcs
+PY
+pass "RECONCILE_DROPS_RELEASED_KEEPS_PENDING_ADD"
+
+write_state ''
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+import json, shutil, sys
+from pathlib import Path
+src, dest = Path(sys.argv[1]), Path(sys.argv[2])
+d = json.loads(src.read_text(encoding='utf-8'))
+d['services'] = {'ssh': d['services']['ssh']}
+src.write_text(json.dumps(d, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+shutil.copyfile(src, dest)
+draft = json.loads(dest.read_text(encoding='utf-8'))
+draft['services']['e2ehttp'] = {
+    'id': 'e2ehttp', 'name': 'e2ehttp', 'preset': 'http', 'protocol': 'tcp',
+    'local_ip': '127.0.0.1', 'local_port': 18080, 'enabled': True,
+}
+dest.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+PY
+export FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'
+export FRP_CLIENT_CANDIDATE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_TOOL_SOURCED=1
+set +e
+bash -c '
+  source "$ROOT/tools/frp-client"
+  CANDIDATE_FILE="$FRP_CLIENT_CANDIDATE"
+  frp_apply_candidate
+' >"$WORKDIR/apply-add.out" 2>"$WORKDIR/apply-add.err"
+APPLY_ADD_RC=$?
+set -e
+unset FRP_CLIENT_RECONCILE_REGISTRY_IDS FRP_CLIENT_CANDIDATE
+python3 - "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "apply reconcile stripped pending add"
+import json, sys
+from pathlib import Path
+d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+assert 'e2ehttp' in (d.get('services') or {}), d
+PY
+if grep -q 'No pending changes.' "$WORKDIR/apply-add.out"; then
+  fail "apply treated pending add as no-op"
+fi
+# Apply continues to allocator enroll; injected registry has no live allocator.
+# The defect under test is the false no-op, not enroll success.
+pass "APPLY_DOES_NOT_NOOP_PENDING_ADD"
+
 echo "CLIENT_SYNC_RECONCILE_TEST=PASS"

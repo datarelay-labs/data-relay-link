@@ -999,6 +999,8 @@ function Invoke-FrpReconcileReleasedServices {
 
     $droppedEnabled = $false
     $droppedAny = $false
+    $committedIds = @{}
+    foreach ($sid in @($map.Keys)) { $committedIds[[string]$sid] = $true }
     $newMap = [ordered]@{}
     foreach ($sid in @($map.Keys)) {
         if ($idSet.ContainsKey([string]$sid)) {
@@ -1044,7 +1046,10 @@ function Invoke-FrpReconcileReleasedServices {
             $draftMap = ConvertTo-FrpServiceMap -Services $draft.services
             $draftNew = [ordered]@{}
             foreach ($sid in @($draftMap.Keys)) {
-                if ($idSet.ContainsKey([string]$sid)) { $draftNew[$sid] = $draftMap[$sid] }
+                $sidS = [string]$sid
+                if ($idSet.ContainsKey($sidS) -or -not $committedIds.ContainsKey($sidS)) {
+                    $draftNew[$sid] = $draftMap[$sid]
+                }
             }
             if ($draftNew.Count -eq 0) {
                 Remove-Item -LiteralPath $draftPath -Force -ErrorAction SilentlyContinue

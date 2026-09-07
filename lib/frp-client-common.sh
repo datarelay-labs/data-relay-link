@@ -2672,7 +2672,10 @@ def apply_public_hostname(state, payload):
         return True
     return False
 
-def prune_draft(path, id_set):
+def prune_draft(path, id_set, committed_ids):
+    # Drop server-released services from a pending draft/candidate.
+    # Keep services that are not yet committed — those are pending adds and
+    # cannot appear in registry_service_ids until apply allocates them.
     p = Path(path) if path else None
     if p is None or not p.is_file():
         return
@@ -2683,7 +2686,11 @@ def prune_draft(path, id_set):
     services = draft.get('services') or {}
     if not isinstance(services, dict):
         return
-    new = {sid: rec for sid, rec in services.items() if sid in id_set}
+    new = {}
+    for sid, rec in services.items():
+        sid_s = str(sid)
+        if sid_s in id_set or sid_s not in committed_ids:
+            new[sid] = rec
     if len(new) == len(services):
         return
     if not new:
@@ -2737,6 +2744,7 @@ if not isinstance(services, dict):
     services = {}
 dropped_enabled = False
 dropped_any = False
+committed_ids = set(str(x) for x in services.keys())
 for sid in list(services.keys()):
     rec = services.get(sid) or {}
     if sid not in ids:
@@ -2750,10 +2758,10 @@ try:
     state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 except OSError:
     fail('failed to update local client state', 'STATE_WRITE_FAILED')
-prune_draft(os.environ.get('DRAFT_PATH') or '', ids)
+prune_draft(os.environ.get('DRAFT_PATH') or '', ids, committed_ids)
 cand = os.environ.get('CANDIDATE_PATH') or ''
 if cand and cand != os.environ.get('DRAFT_PATH'):
-    prune_draft(cand, ids)
+    prune_draft(cand, ids, committed_ids)
 changed = dropped_any or hostname_changed
 print('STATUS=%s DROPPED_ENABLED=%s DROPPED_ANY=%s HOSTNAME_CHANGED=%s' % (
     'SUCCESS' if changed else 'NO_CHANGE',
@@ -2893,7 +2901,10 @@ def apply_public_hostname(state, payload):
         return True
     return False
 
-def prune_draft(path, id_set):
+def prune_draft(path, id_set, committed_ids):
+    # Drop server-released services from a pending draft/candidate.
+    # Keep services that are not yet committed — those are pending adds and
+    # cannot appear in registry_service_ids until apply allocates them.
     p = Path(path) if path else None
     if p is None or not p.is_file():
         return
@@ -2904,7 +2915,11 @@ def prune_draft(path, id_set):
     services = draft.get('services') or {}
     if not isinstance(services, dict):
         return
-    new = {sid: rec for sid, rec in services.items() if sid in id_set}
+    new = {}
+    for sid, rec in services.items():
+        sid_s = str(sid)
+        if sid_s in id_set or sid_s not in committed_ids:
+            new[sid] = rec
     if len(new) == len(services):
         return
     if not new:
@@ -2943,6 +2958,7 @@ if not isinstance(services, dict):
     services = {}
 dropped_enabled = False
 dropped_any = False
+committed_ids = set(str(x) for x in services.keys())
 for sid in list(services.keys()):
     rec = services.get(sid) or {}
     if sid not in ids:
@@ -2956,10 +2972,10 @@ try:
     state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 except OSError:
     fail('failed to update local client state', 'STATE_WRITE_FAILED')
-prune_draft(os.environ.get('DRAFT_PATH') or '', ids)
+prune_draft(os.environ.get('DRAFT_PATH') or '', ids, committed_ids)
 cand = os.environ.get('CANDIDATE_PATH') or ''
 if cand and cand != os.environ.get('DRAFT_PATH'):
-    prune_draft(cand, ids)
+    prune_draft(cand, ids, committed_ids)
 changed = dropped_any or hostname_changed
 print('STATUS=%s DROPPED_ENABLED=%s DROPPED_ANY=%s HOSTNAME_CHANGED=%s' % (
     'SUCCESS' if changed else 'NO_CHANGE',
