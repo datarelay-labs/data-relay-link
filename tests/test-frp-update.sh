@@ -430,6 +430,10 @@ grep -q 'init-registry' "$ROOT/install-server.sh" || fail "CASE J missing regist
 grep -q 'frp_write_version_file "$(frp_server_fs /etc/frp-auto-deploy/version)"' "$ROOT/install-server.sh" || fail "CASE J missing version metadata"
 grep -q 'frp-update' "$ROOT/install-server.sh" || fail "CASE J missing frp-update install"
 grep -q 'lib/frp-common.sh' "$ROOT/install-server.sh" || fail "CASE J missing common lib"
+grep -q "/Library/Application Support/frp-auto-deploy/lib/frp-common.sh" "$UPDATE" \
+  || fail "CASE J missing macOS Application Support frp-common path"
+grep -q "/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh" "$UPDATE" \
+  || fail "CASE J missing macOS Application Support frp-client-common path"
 grep -q 'TOKEN_PRESERVED' "$ROOT/install-server.sh" || fail "CASE J missing token preservation reporting"
 if grep -Eiq 'token rotation|rotate.*token|openssl rand.*server_token' "$ROOT/install-server.sh"; then
   fail "CASE J installer appears to rotate tokens"

@@ -8,6 +8,9 @@ if [[ -f "${_SCRIPT_DIR}/../lib/frp-common.sh" ]]; then
 elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
   # shellcheck disable=SC1091
   . /usr/local/lib/frp-auto-deploy/frp-common.sh
+elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh' ]]; then
+  # shellcheck disable=SC1091
+  . '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh'
 else
   echo "ERROR: missing lib/frp-common.sh" >&2
   exit 1
@@ -145,6 +148,13 @@ health_check() {
     return 0
   fi
   if [[ "${UPDATE_ROLE:-server}" == "client" ]]; then
+    if frp_is_darwin; then
+      if declare -F frp_macos_launchd_running >/dev/null 2>&1 && frp_macos_launchd_running; then
+        return 0
+      fi
+      echo "ERROR: frpc is not active" >&2
+      return 1
+    fi
     systemctl is-active --quiet frpc || {
       echo "ERROR: frpc is not active" >&2
       return 1
@@ -286,9 +296,17 @@ precheck() {
     return 1
   fi
   if [[ "$SKIP_SYSTEMD" != "1" ]]; then
-    require_cmd systemctl || return 1
+    if frp_is_darwin; then
+      require_cmd launchctl || return 1
+    else
+      require_cmd systemctl || return 1
+    fi
   fi
-  if ! frp_has_disk_kb "$(dirname "$FRPS_BIN")" 65536; then
+  _frp_update_disk_bin="$FRPS_BIN"
+  if [[ "$UPDATE_ROLE" == "client" ]]; then
+    _frp_update_disk_bin="$FRPC_BIN"
+  fi
+  if ! frp_has_disk_kb "$(dirname "$_frp_update_disk_bin")" 65536; then
     echo "ERROR: not enough disk space to install FRP" >&2
     return 1
   fi
@@ -389,6 +407,19 @@ restart_frp_unit() {
       fi
       return 0
     fi
+    if frp_is_darwin; then
+      if declare -F frp_client_restart >/dev/null 2>&1; then
+        frp_client_restart || return 1
+        return 0
+      fi
+      frp_macos_launchd_set_enabled enable || return 1
+      if frp_macos_launchd_running; then
+        frp_macos_launchd_kickstart || return 1
+      else
+        frp_macos_launchd_bootstrap || return 1
+      fi
+      return 0
+    fi
     systemctl restart frpc
     return
   fi
@@ -415,6 +446,9 @@ if [[ "$UPDATE_ROLE" == "client" ]]; then
   if [[ -f /usr/local/lib/frp-auto-deploy/frp-client-common.sh ]]; then
     # shellcheck disable=SC1091
     . /usr/local/lib/frp-auto-deploy/frp-client-common.sh
+  elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh' ]]; then
+    # shellcheck disable=SC1091
+    . '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh'
   elif [[ -f "${_SCRIPT_DIR}/../lib/frp-client-common.sh" ]]; then
     # shellcheck disable=SC1091
     . "${_SCRIPT_DIR}/../lib/frp-client-common.sh"
