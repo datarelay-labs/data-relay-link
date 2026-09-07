@@ -3,14 +3,29 @@
 > **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap
 > **Repository:** `datarelay-labs/frp-auto-deploy`
 > **Document status:** Master / Living Document
-> **Last updated:** 2026-09-05
+> **Last updated:** 2026-09-08
 > **Current stable baseline:** Project 2.2.0 (published tag `v2.2.0`)
-> **Development candidate:** `integration/morning-e2e-ready` adds macOS,
-> Windows, and Group MVP; all three remain human-Real-E2E pending and are not stable
-> **Release HEAD (published stable):** `97cb84ebb0b09d771c623778b1a551edd6fc9204`
-> **Pinned upstream FRP:** 0.71.0
+> **Development line:** post-v2.2.0 hardening continues on `main` / feature branches
+> **Release HEAD (published stable):** `04a2474c6f3b83f444341752bfd6c4a500480556`
+> **Pinned upstream FRP:** 0.71.0 (exact pin; not follow-latest)
 > **Primary management interface:** `sudo frpctl`
 > **ZERO_TOUCH_SHORT_URL_TRUST_MODEL:** OPTION_B_EXTERNAL_REVERSE_PROXY (stable in v2.2.0)
+
+### Current validated platforms (v2.2.0)
+
+| Platform | Validation level |
+|----------|------------------|
+| Ubuntu 24 physical | Real E2E validated |
+| Rocky Linux 8.10 | Real E2E validated |
+| Rocky Linux 9.4 | Real E2E validated |
+| Amazon Linux 2023 | Real E2E validated |
+| Amazon Linux 2 | Container / CI portability (no live host in v2.2.0 gate) |
+| macOS Apple Silicon | Real E2E validated |
+| Windows 10 PS5.1 | Real E2E validated |
+| Windows PowerShell 7 | Automated CI validated; same real host SKIPPED when `pwsh` absent |
+
+Windows Zero-Touch remains: download → SHA256 verify → `powershell.exe -File`. Never `irm \| iex`.
+
 
 ---
 
@@ -2102,13 +2117,36 @@ doctor clients --group production
 ```
 
 같은 LE / MAIN |
-| Phase 3 | Manual Group MVP | **CANDIDATE — HUMAN E2E PENDING** |
-| Phase 3+ | Dynamic Group & Filters | PLANNED |
-| Phase 4 | Safe Fleet Operations | PLANNED |
-| Phase 5 | Pilot/Production Rollout | FUTURE |
-| Phase 6 | macOS/Windows | **CANDIDATE — HUMAN E2E PENDING** |
+| Phase 3 | Manual Group MVP | **SHIPPED in v2.2.0** (Real E2E validated) |
+| Phase 3+ | Dynamic Group & Filters | OPTIONAL / LATER (demand-driven) |
+| Phase 4 | Safe Fleet Operations | DEPRIORITIZED (not in lightweight 1–50 scope) |
+| Phase 5 | Pilot/Production Rollout | FUTURE / DEMAND DRIVEN |
+| Phase 6 | macOS/Windows | **SHIPPED in v2.2.0** (see platform matrix above) |
 | Phase 6+ | Additional Platforms | DEFERRED / DEMAND DRIVEN |
 | Phase 7 | UDP/Additional Protocols | DEFERRED |
+
+---
+
+## 2026-09-08 Decision — Post-v2.2.0 hardening + Product Master currency
+
+v2.2.0 shipped with pinned FRP **0.71.0** after Double Full Real E2E on the
+integration candidate. Post-release hardening addresses libedit Tab completion,
+fail-closed FRP compatibility gating, public operational-metadata scrubbing in
+docs, and documentation version drift.
+
+**Authoritative Product Master attachment:** not available in this agent
+session (`BLOCKED_MISSING_AUTHORITATIVE_MASTER` for full historical restore).
+This living tree was updated for current release/platform truth only; product
+philosophy remains Lightweight / CLI / Zero-Touch / Official pinned FRP /
+Fail Closed / 1–50 clients. No Web UI, DB, fleet orchestration, or automatic
+DNS/ACME was added.
+
+**Current direction (authoritative over older roadmap prose):**
+
+- Manual Group MVP: shipped
+- Dynamic Group / Safe Fleet Operations / Controlled Rollout: optional or
+  deprioritized; not required for the 1–50 client product
+- FRP remains exact-pinned; future bumps need explicit qualification
 
 ---
 

@@ -21,6 +21,26 @@ except ImportError:  # pragma: no cover
     readline = None
 
 
+def readline_backend():
+    """Identify the actual Python readline backend (not the OS name).
+
+    Returns ``gnu``, ``libedit``, or ``unknown``. Detection prefers module
+    metadata over ``uname`` so Homebrew GNU Readline on macOS and
+    libedit-backed builds elsewhere are handled correctly.
+    """
+    if readline is None:
+        return "unknown"
+    doc = (getattr(readline, "__doc__", "") or "").lower()
+    if "libedit" in doc or "editline" in doc:
+        return "libedit"
+    if "gnu readline" in doc or "gnu's readline" in doc:
+        return "gnu"
+    # GNU readline exposes this; libedit/editline typically does not.
+    if getattr(readline, "_READLINE_LIBRARY_VERSION", None):
+        return "gnu"
+    return "unknown"
+
+
 def _load_grammar():
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -132,15 +152,43 @@ class LineEditor:
     def bind(self):
         if readline is None:
             return False
+        backend = readline_backend()
         try:
-            # First Tab shows all ambiguous matches (custom display hook).
-            readline.parse_and_bind("set show-all-if-ambiguous on")
-            readline.parse_and_bind("set show-all-if-unmodified on")
-            readline.parse_and_bind("set page-completions off")
-            readline.parse_and_bind("set completion-query-items 999999")
-            readline.parse_and_bind("set bell-style none")
-            readline.parse_and_bind("set horizontal-scroll-mode off")
-            readline.parse_and_bind("tab: complete")
+            if backend == "libedit":
+                # libedit/editline uses bind syntax, not GNU "tab: complete".
+                # Without this, Tab inserts a literal tab and the incomplete
+                # token is executed as a command (e.g. "statu" → Unknown).
+                for stmt in (
+                    "bind -e",
+                    "bind '^I' rl_complete",
+                    "bind '\\t' rl_complete",
+                ):
+                    try:
+                        readline.parse_and_bind(stmt)
+                    except Exception:
+                        pass
+            else:
+                # GNU Readline (and unknown backends that accept GNU syntax).
+                for stmt in (
+                    "set show-all-if-ambiguous on",
+                    "set show-all-if-unmodified on",
+                    "set page-completions off",
+                    "set completion-query-items 999999",
+                    "set bell-style none",
+                    "set horizontal-scroll-mode off",
+                    "tab: complete",
+                ):
+                    try:
+                        readline.parse_and_bind(stmt)
+                    except Exception:
+                        pass
+                if backend == "unknown":
+                    # Also attempt libedit Tab binding when detection is unsure.
+                    for stmt in ("bind -e", "bind '^I' rl_complete"):
+                        try:
+                            readline.parse_and_bind(stmt)
+                        except Exception:
+                            pass
             readline.set_completer(self.completer)
             readline.set_completer_delims(" \t")
             hook = getattr(readline, "set_completion_display_matches_hook", None)
@@ -257,6 +305,7 @@ def main(argv=None):
             print("READLINE_UNAVAILABLE")
             return 1
         print("READLINE_OK")
+        print("READLINE_BACKEND=%s" % readline_backend())
         return 0
     frpctl_bin = os.environ.get("FRPCTL_BIN") or "frpctl"
     if "--frpctl" in argv:

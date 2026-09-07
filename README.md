@@ -34,11 +34,10 @@ Current project version: **2.2.0**
 Current pinned FRP version: **v0.71.0**
 
 **v2.2.0** is the **current stable release** (published tag). Stable field
-installs use the immutable `v2.2.0` tag. The
-`integration/morning-e2e-ready` candidate includes macOS, Windows, and Group
-MVP work; those additions remain human-Real-E2E pending and are **not** stable
-platform claims. Following
-mutable `main` is explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
+installs use the immutable `v2.2.0` tag. macOS Apple Silicon, Windows PS5.1,
+Group MVP, and Rocky 8/9 Real E2E are included in the v2.2.0 qualification.
+Following mutable `main` is explicit opt-in only, for example
+`FRP_RELEASE_CHANNEL=dev`.
 
 On development builds, use release channel, source ref, and verified
 bundle SHA256 to identify the exact build.
@@ -781,7 +780,7 @@ or free public ports.
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/uninstall-client.sh \
+  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.0/dist/uninstall-client.sh \
   | sudo bash
 ```
 
@@ -792,7 +791,7 @@ Server uninstall preserves token, CA, configuration, registry, and reservations:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/uninstall-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.0/dist/uninstall-server.sh \
   | sudo bash
 ```
 
@@ -800,7 +799,7 @@ Destructive purge is for test/decommission scenarios only:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/uninstall-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.0/dist/uninstall-server.sh \
   | sudo bash -s -- --purge --yes
 ```
 
@@ -813,7 +812,8 @@ curl -fsSL \
 - No automatic cloud firewall, security group, UFW, firewalld, iptables, or
   external NAT configuration
 - No automatic SSH account, password, or SSH key management
-- Windows and macOS client automation are not stable-supported
+- Windows PS5.1 and macOS Apple Silicon Real E2E are validated in v2.2.0;
+  PowerShell 7 is CI-validated (same-host PS7 only when `pwsh` is installed)
 - Some real-VM / SELinux / ARM64 / older OpenSSL combinations remain separately
   classified in the validation matrix
 - Project bootstrap scripts are checksummed, not cryptographically signed
