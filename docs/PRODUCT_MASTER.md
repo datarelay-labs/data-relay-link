@@ -4,8 +4,8 @@
 > **Repository:** `datarelay-labs/frp-auto-deploy`
 > **Document status:** Master / Living Document
 > **Last updated:** 2026-09-08
-> **Current stable baseline:** Project 2.2.0 (published tag `v2.2.0`)
-> **Development line:** post-v2.2.0 hardening continues on `main` / feature branches
+> **Current stable baseline:** Project 2.2.0 published; **2.2.1** stable identity (this line)
+> **Development line:** 2.2.1 hardening (libedit, FRP gate, metadata, docs) on release candidate
 > **Release HEAD (published stable):** `04a2474c6f3b83f444341752bfd6c4a500480556`
 > **Pinned upstream FRP:** 0.71.0 (exact pin; not follow-latest)
 > **Primary management interface:** `sudo frpctl`
@@ -2163,3 +2163,11 @@ NO라면 제품 범위에 추가하지 않는다.
 ---
 
 **End of Product Master Document**
+
+
+## 2026-09-08 Decision — 2.2.1 follow-up release (do not retag v2.2.0)
+
+Addendum hardening landed after `v2.2.0` was already published. Product Master
+full authoritative restore remains **BLOCKED_MISSING_AUTHORITATIVE_MASTER**
+without Owner attachment. Currency/platform matrix was updated in-tree.
+Follow-up release is **v2.2.1** (FRP remains exact pin **0.71.0**).

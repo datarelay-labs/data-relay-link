@@ -17,7 +17,7 @@ while IFS=: read -r rel mode src; do
 done < <(frp_client_upgrade_destinations)
 version="$(frp_client_version_file)"
 mkdir -p "$(dirname "$version")"
-printf 'PROJECT_VERSION=2.2.0\nFRP_VERSION=0.71.0\n' >"$version"
+printf 'PROJECT_VERSION=2.2.1\nFRP_VERSION=0.71.0\n' >"$version"
 
 backup="$(frp_client_upgrade_backup_tools "$ROOT")"
 while IFS=: read -r rel mode src; do
@@ -28,5 +28,5 @@ printf 'mutated\n' >"$version"
 frp_client_upgrade_restore_tools "$backup"
 frp_client_upgrade_verify_restored "$backup"
 grep -q '^original:' "$(frp_client_path /usr/local/bin/frpctl)"
-grep -q '^PROJECT_VERSION=2.2.0' "$version"
+grep -q '^PROJECT_VERSION=2.2.1' "$version"
 echo "MACOS_UPDATE_ROLLBACK_TEST=PASS"

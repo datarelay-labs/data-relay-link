@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "project_version": "2.2.0",
+  "project_version": "2.2.1",
   "frp_version": "0.71.0",
   "channel": "stable",
-  "git_ref": "v2.2.0",
+  "git_ref": "v2.2.1",
   "owner": "datarelay-labs",
   "repo": "frp-auto-deploy",
   "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy",
@@ -19,7 +19,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.2.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.2.1 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
@@ -33,12 +33,12 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "112ce1fbf42f6ad286deade599a046ef32c8d9a23f441bd122fd3374c7da78ae"
+      "sha256": "a954e04c1bb4a79460117bae856f4bf7a61bad191036d9133baf0ad833c5251c"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "530cd17b8e606b159cee68b08552eb3d69b2e19537c41027f952031a050228f3"
+      "sha256": "2354fc78df0faa82a1ea9922e3eb02dd102676326d7b1f8a6f4a753bc660e440"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
