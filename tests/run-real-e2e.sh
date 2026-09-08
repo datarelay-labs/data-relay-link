@@ -347,7 +347,7 @@ server_install_env() {
     "FRP_PORT_START=6000"
     "FRP_PORT_END=6098"
     "FRP_ALLOCATOR_PUBLIC_URL=https://$SERVER_IP:6099/enroll"
-    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/$HEAD_SHA/dist/bootstrap-client.sh"
+    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/$HEAD_SHA/dist/bootstrap-client.sh"
   )
   if [[ -n "$PUBLIC_HOSTNAME" ]]; then
     env+=("FRP_PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME")
@@ -488,7 +488,9 @@ if 'web' in services:
 print('server registry: web removed for %s' % mid)
 PY
 
-  run_client 23-client-show-services "sudo /usr/local/bin/frpctl show services" || fail_stop
+  # Server release does not mutate client-state.json; explicit sync reconciles.
+  run_client 23-client-sync "sudo /usr/local/bin/frp-client sync" || fail_stop
+  run_client 23b-client-show-services "sudo /usr/local/bin/frpctl show services" || fail_stop
   python_remote "$CLIENT_ALIAS" 24-client-state-assert <<'PY' || fail_stop
 import json
 from pathlib import Path

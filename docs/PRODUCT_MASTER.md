@@ -1,7 +1,7 @@
 # FRP Auto Deploy — Product Master Document
 
 > **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap  
-> **Repository:** `datarelay-labs/frp-auto-deploy`  
+> **Repository:** `xdr-labs/frp-auto-deploy`
 > **Canonical repository path:** `docs/PRODUCT_MASTER.md`  
 > **Document status:** Master / Living Document  
 > **Last updated:** 2026-09-08  

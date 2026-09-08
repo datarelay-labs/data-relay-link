@@ -24,7 +24,7 @@ if [[ -f "${_FRP_COMMON_DIR}/../VERSION" ]]; then
   . "${_FRP_COMMON_DIR}/../VERSION"
 fi
 
-FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-datarelay-labs}"
+FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-xdr-labs}"
 FRP_GITHUB_REPO="${FRP_GITHUB_REPO:-frp-auto-deploy}"
 FRP_GITHUB_RAW_HOST="${FRP_GITHUB_RAW_HOST:-raw.githubusercontent.com}"
 
