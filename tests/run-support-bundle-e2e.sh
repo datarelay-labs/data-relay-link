@@ -74,7 +74,10 @@ sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/l
 sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
 sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/bin/frp-support-bundle
+sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/sbin/frp-support-bundle
 sudo install -m 0755 $TMP_CLI/frpctl /usr/local/bin/frpctl
+# sudo secure_path often prefers sbin; keep both entrypoints in sync.
+sudo install -m 0755 $TMP_CLI/frpctl /usr/local/sbin/frpctl
 sudo rm -rf $TMP_CLI
 sudo frpctl help 2>/dev/null | grep -q support-bundle
 sudo test -x /usr/local/bin/frp-support-bundle"
