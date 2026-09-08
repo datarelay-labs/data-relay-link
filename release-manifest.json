@@ -33,7 +33,7 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "0e159f05ee3124774a671a6825dbea7e0a26dec833ce242ceadd18449debb321"
+      "sha256": "6fecb443b1a958fb78e4c8f8000d331036a3cdf896ee66c8f40a5c15371c7836"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",

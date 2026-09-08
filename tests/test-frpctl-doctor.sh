@@ -165,6 +165,7 @@ write_server_healthy() {
   write_dummy_bin "$tree/usr/local/sbin/frp-create-client" frp-create-client
   cp "$ROOT/server/frp-port-allocator.py" "$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
   cp "$ROOT/lib/frp_access_control.py" "$tree/usr/local/lib/frp-auto-deploy/frp_access_control.py"
+  cp "$ROOT/lib/frp_service_profiles.py" "$tree/usr/local/lib/frp-auto-deploy/frp_service_profiles.py"
   write_unit "$tree/etc/systemd/system/frps.service"
   write_unit "$tree/etc/systemd/system/frp-port-allocator.service"
   write_unit "$tree/etc/systemd/system/frp-access-plugin.service"
@@ -198,6 +199,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "allocator_public_url": "https://203.0.113.10:9443/enroll",
     "registry_file": "/var/lib/frp-auto-deploy/registry.json",
     "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
+    "service_profiles_file": "/var/lib/frp-auto-deploy/service-profiles.json",
     "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
@@ -237,6 +239,9 @@ PY
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/frp-auto-deploy/access-control.json"
   chmod 600 "$tree/var/lib/frp-auto-deploy/access-control.json"
+  printf '{"schema_version":1,"profiles":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
+  chmod 600 "$tree/var/lib/frp-auto-deploy/service-profiles.json"
   chmod 700 "$tree/var/log/frp-auto-deploy"
   echo '{"schema_version":1,"nonces":{"abc":1}}' >"$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
   chmod 600 "$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"

@@ -1818,6 +1818,11 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       frpctl_invoke frp-groups "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
       ;;
+    show_profiles) frpctl_require_server || return 1; frpctl_invoke frp-profile list ;;
+    show_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-profile show "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      ;;
     show_client)
       frpctl_require_server || return 1
       frpctl_invoke frp-client-info \
@@ -1842,6 +1847,13 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       frpctl_invoke frp-group-set set \
         "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("property",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
+      ;;
+    set_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-profile set \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
         "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("property",""))' "$result")" \
         "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
       ;;
@@ -1906,7 +1918,14 @@ frpctl_dispatch_canonical() {
           "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")"
       fi
       ;;
+    create_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-profile create \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+        $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" ;;
+    delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" ;;
     add_group_member)
       frpctl_require_server || return 1
       frpctl_invoke frp-group-set add-member \

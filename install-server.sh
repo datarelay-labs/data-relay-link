@@ -17,6 +17,7 @@ for f in \
   "$BASE_DIR/server/frp-access-plugin.service" \
   "$BASE_DIR/server/frp-frontend.service" \
   "$BASE_DIR/lib/frp_access_control.py" \
+  "$BASE_DIR/lib/frp_service_profiles.py" \
   "$BASE_DIR/lib/frp_mgmt_auth.py" \
   "$BASE_DIR/lib/frp_pki.py" \
   "$BASE_DIR/lib/frp_frontend.py" \
@@ -46,6 +47,7 @@ for f in \
   "$BASE_DIR/tools/frp-release-client" \
   "$BASE_DIR/tools/frp-release-service" \
   "$BASE_DIR/tools/frp-access" \
+  "$BASE_DIR/tools/frp-profile" \
   "$BASE_DIR/tools/frp-revoke-client" \
   "$BASE_DIR/tools/frp-client-set" \
   "$BASE_DIR/tools/frp-set-client-installer-url" \
@@ -1130,6 +1132,7 @@ cfg = {
     'enrollment_retention_days': 30,
     'token_file': '/etc/frp/server_token',
     'access_control_file': '/var/lib/frp-auto-deploy/access-control.json',
+    'service_profiles_file': '/var/lib/frp-auto-deploy/service-profiles.json',
     'access_conn_log_file': '/var/log/frp-auto-deploy/access-conn.jsonl',
     'access_plugin_addr': '127.0.0.1:6101',
     'access_plugin_path': '/access-auth',
@@ -1781,7 +1784,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file access_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_frontend sbin_dir
+  local registry_file access_control_file service_profiles_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_frontend sbin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
@@ -1935,6 +1938,26 @@ PY
     fi
   fi
   [[ -f "$access_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "access-control.json is missing"; return 1; }
+
+  service_profiles_file="$(frp_server_fs /var/lib/frp-auto-deploy/service-profiles.json)"
+  if [[ ! -f "$service_profiles_file" ]]; then
+    if ! python3 - "$service_profiles_file" "$BASE_DIR/lib/frp_service_profiles.py" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("frp_service_profiles", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.save_profiles_state(mod.empty_profiles_state(), path=path)
+print(path)
+PY
+    then
+      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create service-profiles.json"
+      return 1
+    fi
+  fi
+  chmod 600 "$service_profiles_file"
+  [[ -f "$service_profiles_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "service-profiles.json is missing"; return 1; }
   chmod 600 "$access_control_file"
 
   frp_server_install_manifest_files "$lib_dir" "$sbin_dir"

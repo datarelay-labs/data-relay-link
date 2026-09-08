@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""Manage server-owned Service Profiles (creation templates)."""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+
+
+def load_mod(name: str, rel: str):
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / "lib" / rel,
+        Path("/usr/local/lib/frp-auto-deploy") / rel,
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/frp-auto-deploy" / rel)
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(name, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit("ERROR: missing %s" % rel)
+
+
+PROF = load_mod("frp_service_profiles", "frp_service_profiles.py")
+
+
+def load_cfg():
+    path = Path(ROOT + "/etc/frp-auto-deploy/config.json")
+    if not path.is_file():
+        raise SystemExit("ERROR: missing /etc/frp-auto-deploy/config.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def audit(event, **fields):
+    try:
+        module = load_mod("frp_audit", "frp_audit.py")
+    except SystemExit:
+        return
+    try:
+        module.emit(event, **fields)
+    except Exception:
+        pass
+
+
+def fail(message):
+    raise SystemExit("ERROR: %s" % message)
+
+
+def print_profile(pid, profile):
+    print("Profile ID    : %s" % pid)
+    print("Name          : %s" % (profile.get("name") or "-"))
+    print("Description   : %s" % (profile.get("description") or "-"))
+    print("Preset        : %s" % (profile.get("preset") or "-"))
+    print("Target        : %s:%s" % (profile.get("local_ip") or "-", profile.get("local_port") or "-"))
+    if str(profile.get("preset") or "") == "ssh" or profile.get("ssh_user"):
+        print("SSH user      : %s" % (profile.get("ssh_user") or "-"))
+    health = profile.get("health_check")
+    if isinstance(health, dict) and health.get("type"):
+        bits = ["type=%s" % health.get("type")]
+        if health.get("timeout_seconds") is not None:
+            bits.append("timeout=%ss" % health.get("timeout_seconds"))
+        if health.get("interval_seconds") is not None:
+            bits.append("interval=%ss" % health.get("interval_seconds"))
+        if health.get("max_failed") is not None:
+            bits.append("max_failed=%s" % health.get("max_failed"))
+        if health.get("path"):
+            bits.append("path=%s" % health.get("path"))
+        print("Health check  : %s" % " ".join(bits))
+    else:
+        print("Health check  : disabled")
+    print("Created       : %s" % (profile.get("created_at") or "-"))
+    print("Updated       : %s" % (profile.get("updated_at") or "-"))
+
+
+def cmd_list(cfg, _args):
+    state = PROF.load_profiles_state(cfg=cfg)
+    print("%-18s %-24s %-8s %s" % ("PROFILE ID", "NAME", "PRESET", "TARGET"))
+    print("-" * 72)
+    rows = PROF.list_profiles(state)
+    if not rows:
+        print("(none)")
+        return
+    for pid, profile in rows:
+        target = "%s:%s" % (profile.get("local_ip") or "-", profile.get("local_port") or "-")
+        print(
+            "%-18s %-24s %-8s %s"
+            % (
+                pid,
+                (profile.get("name") or "-")[:24],
+                (profile.get("preset") or "-")[:8],
+                target,
+            )
+        )
+
+
+def cmd_show(cfg, args):
+    state = PROF.load_profiles_state(cfg=cfg)
+    try:
+        pid, profile = PROF.resolve_profile(state, args.selector)
+    except PROF.ProfileError as exc:
+        fail(str(exc))
+    print_profile(pid, profile)
+
+
+def _health_from_args(args):
+    health_type = str(getattr(args, "health_type", "") or "").strip().lower()
+    if not health_type or health_type in ("disabled", "none", "off"):
+        return None
+    health = {"type": health_type}
+    if getattr(args, "health_timeout", None):
+        health["timeout_seconds"] = args.health_timeout
+    if getattr(args, "health_interval", None):
+        health["interval_seconds"] = args.health_interval
+    if getattr(args, "health_max_failed", None):
+        health["max_failed"] = args.health_max_failed
+    if getattr(args, "health_path", None):
+        health["path"] = args.health_path
+    return health
+
+
+def cmd_create(cfg, args):
+    try:
+        def mut(state):
+            return PROF.create_profile(
+                state,
+                args.name,
+                preset=args.preset,
+                local_ip=args.target_host,
+                local_port=args.target_port,
+                description=args.description or "",
+                ssh_user=args.ssh_user or "",
+                health_check=_health_from_args(args),
+            )
+
+        pid, record = PROF.mutate_profiles_state(mut, cfg=cfg)
+    except PROF.ProfileError as exc:
+        fail(str(exc))
+    print("Created profile %s" % pid)
+    print("Name     : %s" % record["name"])
+    print("Preset   : %s" % record["preset"])
+    print("Target   : %s:%s" % (record["local_ip"], record["local_port"]))
+    audit(
+        "profile.created",
+        profile_id=pid,
+        profile_name=record.get("name"),
+        details={"preset": record.get("preset")},
+    )
+
+
+def cmd_set(cfg, args):
+    try:
+        def mut(state):
+            return PROF.update_profile(state, args.selector, args.property, args.value)
+
+        pid, profile, old = PROF.mutate_profiles_state(mut, cfg=cfg)
+    except PROF.ProfileError as exc:
+        fail(str(exc))
+    print("Updated profile %s" % pid)
+    shown = profile.get(args.property.replace("-", "_"))
+    if args.property in ("target-host", "local-ip"):
+        shown = profile.get("local_ip")
+    elif args.property in ("target-port", "local-port"):
+        shown = profile.get("local_port")
+    elif args.property in ("ssh-user",):
+        shown = profile.get("ssh_user")
+    elif args.property == "description":
+        shown = profile.get("description") or "(cleared)"
+    elif args.property.startswith("health"):
+        shown = profile.get("health_check") or "(cleared)"
+    print("%s: %s" % (args.property, shown if shown is not None else "(cleared)"))
+    audit(
+        "profile.updated",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={"property": args.property, "old_value": old},
+    )
+
+
+def cmd_delete(cfg, args):
+    try:
+        def mut(state):
+            return PROF.delete_profile(state, args.selector)
+
+        pid, name = PROF.mutate_profiles_state(mut, cfg=cfg)
+    except PROF.ProfileError as exc:
+        fail(str(exc))
+    print("Deleted profile %s (%s)" % (pid, name or "-"))
+    print("Existing services were not changed.")
+    audit("profile.deleted", profile_id=pid, profile_name=name)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="Manage Service Profiles")
+    subs = parser.add_subparsers(dest="command", required=True)
+
+    list_cmd = subs.add_parser("list")
+    list_cmd.set_defaults(func=cmd_list)
+
+    show = subs.add_parser("show")
+    show.add_argument("selector")
+    show.set_defaults(func=cmd_show)
+
+    create = subs.add_parser("create")
+    create.add_argument("name")
+    create.add_argument("--preset", required=True, choices=("ssh", "http", "https", "custom"))
+    create.add_argument("--target-host", required=True)
+    create.add_argument("--target-port", required=True)
+    create.add_argument("--description", default="")
+    create.add_argument("--ssh-user", default="")
+    create.add_argument("--health-type", default="")
+    create.add_argument("--health-timeout", default="")
+    create.add_argument("--health-interval", default="")
+    create.add_argument("--health-max-failed", default="")
+    create.add_argument("--health-path", default="")
+    create.set_defaults(func=cmd_create)
+
+    set_cmd = subs.add_parser("set")
+    set_cmd.add_argument("selector")
+    set_cmd.add_argument(
+        "property",
+        choices=(
+            "name",
+            "description",
+            "preset",
+            "target-host",
+            "target-port",
+            "ssh-user",
+            "health-type",
+            "health-timeout",
+            "health-interval",
+            "health-max-failed",
+            "health-path",
+        ),
+    )
+    set_cmd.add_argument("value")
+    set_cmd.set_defaults(func=cmd_set)
+
+    delete = subs.add_parser("delete")
+    delete.add_argument("selector")
+    delete.set_defaults(func=cmd_delete)
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    cfg = load_cfg()
+    args.func(cfg, args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BrokenPipeError:
+        pass

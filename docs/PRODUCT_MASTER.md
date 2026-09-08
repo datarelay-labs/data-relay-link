@@ -3370,7 +3370,7 @@ Manage a few to a few dozen clients with frpctl
 | Access Control Pack (Named Lists / TTL / Conn Log) | **MAIN / IN PROGRESS** (feature branch; not yet in stable) |
 | Target Health Check | **PLANNED** (P1 remaining) |
 | Support Bundle | **PLANNED** (P1 remaining) |
-| Service Profiles | **PLANNED** (P1 remaining) |
+| Service Profiles | **COMPLETE/STABLE CANDIDATE** |
 | macOS Apple Silicon | **STABLE / Real E2E validated** |
 | Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
 | Rocky 8 / Rocky 9 / AL2023 | **STABLE / Real E2E validated** |
