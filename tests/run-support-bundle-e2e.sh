@@ -35,10 +35,55 @@ if ! sshx "$CLIENT" 'echo ok' >/dev/null 2>&1; then
   blocker "client unreachable ($CLIENT); local suite already passed"
 fi
 
+# Live hosts may predate this feature; sync the Support Bundle surface before
+# invoking `frpctl support-bundle` (same pattern as target-health / access-control).
+echo "=== sync support-bundle feature onto server ==="
+TMP_SRV=/tmp/frp-support-srv-$$
+sshx "$SERVER" "sudo rm -rf $TMP_SRV && sudo mkdir -p $TMP_SRV && sudo chmod 777 $TMP_SRV"
+for f in \
+  lib/frp_support_bundle.py \
+  lib/frp_ctl_grammar.py \
+  lib/frp_doctor.py \
+  tools/frp-support-bundle \
+  tools/frpctl
+do
+  scp -o BatchMode=yes -o ConnectTimeout=12 "$ROOT/$f" "$SERVER:$TMP_SRV/$(basename "$f")"
+done
+sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_support_bundle.py /usr/local/lib/frp-auto-deploy/frp_support_bundle.py
+sudo install -m 0644 $TMP_SRV/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_SRV/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
+sudo install -m 0755 $TMP_SRV/frp-support-bundle /usr/local/sbin/frp-support-bundle
+sudo install -m 0755 $TMP_SRV/frpctl /usr/local/sbin/frpctl
+sudo rm -rf $TMP_SRV
+sudo frpctl help 2>/dev/null | grep -q support-bundle
+sudo test -x /usr/local/sbin/frp-support-bundle"
+
+echo "=== sync support-bundle feature onto client ==="
+TMP_CLI=/tmp/frp-support-cli-$$
+sshx "$CLIENT" "sudo rm -rf $TMP_CLI && sudo mkdir -p $TMP_CLI && sudo chmod 777 $TMP_CLI"
+for f in \
+  lib/frp_support_bundle.py \
+  lib/frp_ctl_grammar.py \
+  lib/frp_doctor.py \
+  tools/frp-support-bundle \
+  tools/frpctl
+do
+  scp -o BatchMode=yes -o ConnectTimeout=12 "$ROOT/$f" "$CLIENT:$TMP_CLI/$(basename "$f")"
+done
+sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/lib/frp-auto-deploy/frp_support_bundle.py
+sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
+sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/bin/frp-support-bundle
+sudo install -m 0755 $TMP_CLI/frpctl /usr/local/bin/frpctl
+sudo rm -rf $TMP_CLI
+sudo frpctl help 2>/dev/null | grep -q support-bundle
+sudo test -x /usr/local/bin/frp-support-bundle"
+pass "REMOTE_FEATURE_SYNC"
+
 run_remote_bundle() {
   local host="$1" label="$2"
   local remote_path="/tmp/frp-support-e2e-${label}.tar.gz"
-  sshx "$host" "sudo frpctl support-bundle --output ${remote_path}" \
+  sshx "$host" "sudo frpctl support-bundle --output ${remote_path} && sudo chmod a+r ${remote_path}" \
     | tee "$OUT_DIR/${label}.create.log"
   sshx "$host" "test -f ${remote_path} && tar -tzf ${remote_path} | head"
   # shellcheck disable=SC2029

@@ -344,6 +344,11 @@ assert r.get('status') == 'ok' and r.get('action') == 'support_bundle', r
 assert '--output' in (r.get('passthrough') or [])
 r2 = g.match(g.tokenize('support-bundle'), 'client')
 assert r2.get('status') == 'ok' and r2.get('action') == 'support_bundle', r2
+for role in ('server', 'client', 'both'):
+    help_txt = g.help_text([], role)
+    assert 'support-bundle' in help_txt, (role, help_txt)
+    concise = g._concise_root(role)
+    assert 'support-bundle' in concise, (role, concise)
 print('ok')
 PY
 pass "FRPCTL_GRAMMAR"
