@@ -85,6 +85,23 @@ function Restrict-FrpFileAcl {
     } catch { }
 }
 
+function Get-FrpExpectedHostId {
+    <#
+    .SYNOPSIS
+      Build host_id matching Linux install-client / Access Control expected_host_id.
+      Format: sanitize(hostname) + '-' + machine_id[0:8]
+      sanitize: tr -cs 'A-Za-z0-9._-' '-'
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Hostname,
+        [Parameter(Mandatory = $true)][string]$MachineId
+    )
+    $safe = [regex]::Replace([string]$Hostname, '[^A-Za-z0-9._-]+', '-')
+    $mid = [string]$MachineId
+    if ($mid.Length -gt 8) { $mid = $mid.Substring(0, 8) }
+    return ('{0}-{1}' -f $safe, $mid)
+}
+
 function Get-FrpOrCreateClientId {
     Initialize-FrpDirectories
     $path = Get-FrpClientIdPath

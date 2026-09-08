@@ -586,7 +586,7 @@ function Invoke-FrpClientApplyDraftLocked {
     $machineId = [string]$current.machine_id
     $hostnameValue = [string]$current.hostname
     $allocatorUrl = [string]$current.allocator_url
-    $hostId = [string]$current.host_id
+    $hostId = Get-FrpExpectedHostId -Hostname $hostnameValue -MachineId $machineId
     $priorEnrollList = @(Get-FrpEnrollServiceList -Services $current.services)
 
     $enrollList = Get-FrpEnrollServiceList -Services $draftMap
@@ -1281,7 +1281,8 @@ function Invoke-FrpZeroTouch {
         Save-FrpIdentityMac -MacKeyHex $mac | Out-Null
 
         $merged = Merge-FrpAllocatedPorts -LocalServices $services -AllocatedList $enrollResult.Services
-        $hostId = ($machineId.Substring(0, [Math]::Min(12, $machineId.Length)))
+        # Must match Linux HOST_ID / Access Control expected_host_id so proxies map.
+        $hostId = Get-FrpExpectedHostId -Hostname $Hostname -MachineId $machineId
 
         $saveHostname = @{}
         if ($enrollResult.ContainsKey('PublicHostnamePresent') -and $enrollResult.PublicHostnamePresent) {
