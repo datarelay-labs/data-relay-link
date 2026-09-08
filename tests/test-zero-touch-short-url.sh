@@ -66,11 +66,11 @@ cfg = {
     "allocator_listen_port": port,
     "allocator_public_url": "https://203.0.113.10:%s/enroll" % port,
     "client_installer_url": (
-        "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/"
+        "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/"
         "v2.1.2/dist/bootstrap-client.sh"
     ),
     "windows_client_installer_url": (
-        "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/"
+        "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/"
         "v2.1.2/dist/bootstrap-client.ps1"
     ),
     "tls_ca_cert": str(tree / "etc/frp-auto-deploy/pki/ca.crt"),

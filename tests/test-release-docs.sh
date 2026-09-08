@@ -125,10 +125,16 @@ grep -qE '^## 2\.1\.0 — ' CHANGELOG.md || fail "CHANGELOG missing historical 2
 pass "VERSION_STABLE_WORDING"
 
 grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md || fail "README missing immutable server bootstrap URL"
-if grep -nE 'raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/main/dist/bootstrap-(server|client)\.sh' \
+if grep -nE 'raw.githubusercontent.com/(datarelay-labs|xdr-labs)/frp-auto-deploy/main/dist/bootstrap-(server|client)\.sh' \
   README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md GITHUB_SETUP.md; then
   fail "stable docs still point bootstrap installs at mutable main"
 fi
+if grep -nE 'datarelay-labs/frp-auto-deploy' \
+  README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md docs/FRP_UPGRADE.md docs/PRODUCT_MASTER.md GITHUB_SETUP.md; then
+  fail "stable docs still reference old repository owner datarelay-labs"
+fi
+grep -qF 'xdr-labs/frp-auto-deploy' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
+  fail "docs missing canonical xdr-labs repository"
 grep -q 'FRP_RELEASE_CHANNEL=dev' README.md || fail "README missing opt-in dev channel note"
 grep -q 'one-time verified bridge' README.md || fail "README missing legacy client bridge"
 grep -q 'one-time verified bridge' docs/FRP_UPGRADE.md || fail "upgrade doc missing legacy bridge"

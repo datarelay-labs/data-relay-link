@@ -135,7 +135,7 @@ From the project documentation, install or re-run the current server bootstrap. 
 Non-interactive example (replace the documentation addresses):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-server.sh \
+curl -fsSL https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-server.sh \
 | sudo env \
     FRP_PUBLIC_HOST=203.0.113.10 \
     FRP_ALLOCATOR_URL=https://203.0.113.10:6099/enroll \
@@ -186,7 +186,7 @@ The command prints an enrollment code and a client install one-liner that sets `
 On the remote Linux host, run the command printed by `frp-create-client`. Example shape:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh \
+curl -fsSL https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh \
 | sudo env FRP_ALLOCATOR_URL='https://203.0.113.10:6099/enroll' FRP_ALLOCATOR_CA_SHA256='<sha256>' bash
 ```
 

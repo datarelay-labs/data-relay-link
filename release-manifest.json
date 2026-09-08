@@ -4,9 +4,9 @@
   "frp_version": "0.71.0",
   "channel": "stable",
   "git_ref": "v2.2.1",
-  "owner": "datarelay-labs",
+  "owner": "xdr-labs",
   "repo": "frp-auto-deploy",
-  "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy",
+  "https_raw_base": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy",
   "signing": false,
   "checksum_file": "SHA256SUMS",
   "supported_frp_versions": {
@@ -33,7 +33,7 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "a954e04c1bb4a79460117bae856f4bf7a61bad191036d9133baf0ad833c5251c"
+      "sha256": "a6634f90dd393cf7e4c11d5fccd618f7541e7dcd2bbfc46aba805b71959bc670"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",

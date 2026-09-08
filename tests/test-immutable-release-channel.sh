@@ -21,7 +21,7 @@ export FRP_RELEASE_CHANNEL=stable
 ref="$(frp_release_git_ref)"
 [[ "$ref" == "v${PROJECT_VERSION}" ]] || fail "stable ref is $ref"
 url="$(frp_default_client_installer_url)"
-[[ "$url" == "https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v${PROJECT_VERSION}/dist/bootstrap-client.sh" ]] \
+[[ "$url" == "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v${PROJECT_VERSION}/dist/bootstrap-client.sh" ]] \
   || fail "stable installer URL: $url"
 upd="$(frp_default_client_update_url)"
 [[ "$upd" == "$url" ]] || fail "stable update URL mismatch: $upd"
@@ -42,7 +42,7 @@ unset FRP_RELEASE_CHANNEL FRP_CLIENT_INSTALLER_URL || true
 export FRP_RELEASE_CHANNEL=stable
 # shellcheck source=install-server.sh
 # Source only the migration helpers by extracting behavior via a mini check.
-MAIN_URL="https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/main/dist/bootstrap-client.sh"
+MAIN_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh"
 frp_is_official_main_installer_url "$MAIN_URL" || fail "main URL not recognized"
 STABLE_URL="$(frp_default_client_installer_url)"
 [[ "$STABLE_URL" != "$MAIN_URL" ]] || fail "stable default still main"
@@ -59,8 +59,8 @@ grep -qi 'HTTPS' /tmp/frp-release-channel-http.err || fail "HTTPS requirement me
 pass "UPDATE_HTTPS_REQUIRED"
 
 # A stable client also rejects mutable refs even when transport is HTTPS.
-export FRP_CLIENT_UPDATE_URL="https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/main/dist/bootstrap-client.sh"
-export FRP_CLIENT_UPDATE_METADATA_URL="https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/main/SHA256SUMS"
+export FRP_CLIENT_UPDATE_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh"
+export FRP_CLIENT_UPDATE_METADATA_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/SHA256SUMS"
 if frp_client_fetch_and_upgrade >/tmp/frp-release-channel-main.out 2>/tmp/frp-release-channel-main.err; then
   fail "stable update should reject mutable main"
 fi

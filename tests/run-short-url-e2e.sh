@@ -10,7 +10,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5)
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/short-url-e2e-$RUN_ID}"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.sh"
+INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.sh"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.txt"
 : >"$SUMMARY"

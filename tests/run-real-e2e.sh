@@ -347,7 +347,7 @@ server_install_env() {
     "FRP_PORT_START=6000"
     "FRP_PORT_END=6098"
     "FRP_ALLOCATOR_PUBLIC_URL=https://$SERVER_IP:6099/enroll"
-    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/$HEAD_SHA/dist/bootstrap-client.sh"
+    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/$HEAD_SHA/dist/bootstrap-client.sh"
   )
   if [[ -n "$PUBLIC_HOSTNAME" ]]; then
     env+=("FRP_PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME")
