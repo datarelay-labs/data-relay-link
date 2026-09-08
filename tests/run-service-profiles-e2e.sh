@@ -26,11 +26,13 @@ deploy_file() {
 }
 
 deploy_file "$SERVER" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/frp-auto-deploy/frp_service_profiles.py 644
+deploy_file "$SERVER" "$ROOT/lib/frp_health_check.py" /usr/local/lib/frp-auto-deploy/frp_health_check.py 644
 deploy_file "$SERVER" "$ROOT/tools/frp-profile" /usr/local/sbin/frp-profile 755
 deploy_file "$SERVER" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py 644
 deploy_file "$SERVER" "$ROOT/tools/frpctl" /usr/local/sbin/frpctl 755
 deploy_file "$SERVER" "$ROOT/server/frp-port-allocator.py" /usr/local/lib/frp-auto-deploy/frp-port-allocator.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/frp-auto-deploy/frp_service_profiles.py 644
+deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_health_check.py" /usr/local/lib/frp-auto-deploy/frp_health_check.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/tools/frp-client" /usr/local/sbin/frp-client 755
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/tools/frpctl" /usr/local/sbin/frpctl 755
@@ -53,8 +55,74 @@ PY'
 sshx "$SERVER" 'sudo systemctl restart frp-port-allocator && sleep 1 && systemctl is-active frp-port-allocator' \
   || fail "allocator restart"
 
+# Shared e2e clients may retain Target Health fixtures whose health target is down.
+# Apply waits for "start proxy success", which FRP withholds while health checks fail.
+sshx "$CLIENT_HOST" 'sudo python3 - <<'\''PY'\''
+import json, os, signal, socket, subprocess, time
+from pathlib import Path
+
+def port_open(port: int) -> bool:
+    s = socket.socket()
+    s.settimeout(0.5)
+    try:
+        s.connect(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+state_path = Path("/etc/frp/client-state.json")
+ports = set()
+if state_path.is_file():
+    state = json.loads(state_path.read_text())
+    for item in (state.get("services") or {}).values():
+        hc = item.get("health_check") if isinstance(item, dict) else None
+        if not isinstance(hc, dict):
+            continue
+        if str(hc.get("type") or "").lower() != "http":
+            continue
+        try:
+            ports.add(int(item.get("local_port")))
+        except (TypeError, ValueError):
+            pass
+
+stub = Path("/tmp/frp-e2e-health-stub.py")
+stub.write_text(
+    "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+    "import sys\n"
+    "port = int(sys.argv[1])\n"
+    "class H(BaseHTTPRequestHandler):\n"
+    "    def do_GET(self):\n"
+    "        self.send_response(200)\n"
+    "        self.end_headers()\n"
+    "        self.wfile.write(b\"ok\\n\")\n"
+    "    def log_message(self, *args):\n"
+    "        pass\n"
+    "HTTPServer((\"127.0.0.1\", port), H).serve_forever()\n"
+)
+for port in sorted(ports):
+    if port_open(port):
+        continue
+    log = f"/tmp/frp-e2e-health-stub-{port}.log"
+    subprocess.Popen(
+        ["python3", str(stub), str(port)],
+        stdout=open(log, "ab"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    for _ in range(20):
+        if port_open(port):
+            break
+        time.sleep(0.1)
+    else:
+        raise SystemExit(f"failed to start health stub on {port}")
+print("health_stub_ports=%s" % (",".join(str(p) for p in sorted(ports)) or "none"))
+PY' || fail "health stub for existing http health checks"
+
 PROFILE_NAME="e2e-ssh-profile-$$"
-SERVICE_ID="e2eprofssh"
+SERVICE_ID="e2eprofssh$$"
+SERVICE_ID2="e2eprofssh2$$"
 
 # Cleanup leftovers from prior runs.
 sshx "$SERVER" "sudo frpctl delete profile '$PROFILE_NAME' >/dev/null 2>&1 || true"
@@ -82,6 +150,39 @@ print(want or 'NOTFOUND')
 PY")"
 [[ "$CLIENT_ID" != "NOTFOUND" && -n "$CLIENT_ID" ]] || blocker "no enrolled client found"
 echo "CLIENT_ID=$CLIENT_ID"
+
+# Drop prior fixed-id leftovers and this run's ids if present.
+for sid in e2eprofssh e2eprofssh2 "$SERVICE_ID" "$SERVICE_ID2"; do
+  sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$sid' >/dev/null 2>&1 || true"
+done
+sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+# Keep client.toml aligned if a prior run left stale proxies after a failed apply.
+sshx "$CLIENT_HOST" 'sudo bash -s' <<'EOF' >/dev/null || true
+set -euo pipefail
+. /usr/local/lib/frp-auto-deploy/frp-client-common.sh
+path="$(frp_client_state_path)"
+python3 - "$path" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+st = json.loads(path.read_text())
+svcs = st.get("services") or {}
+changed = False
+for sid in list(svcs):
+    if sid.startswith("e2eprofssh"):
+        svcs.pop(sid, None)
+        changed = True
+if changed:
+    path.write_text(json.dumps(st, indent=2) + "\n")
+print("changed=%s" % changed)
+PY
+token="$(frp_token_from_toml_file "$(frp_client_toml_path)" || true)"
+if [[ -n "${token:-}" ]]; then
+  frp_regenerate_toml_from_state "$token" || true
+  frp_regenerate_access_from_state || true
+  frp_client_restart || true
+fi
+EOF
 
 # Seed draft on client from profile, then apply.
 sshx "$CLIENT_HOST" "sudo frpctl add service --profile '$PROFILE_NAME' --id '$SERVICE_ID' --name E2EProfileSSH" \
@@ -140,7 +241,6 @@ PY")"
 pass "profile edit leaves existing service unchanged"
 
 # New service from edited profile gets new defaults.
-SERVICE_ID2="e2eprofssh2"
 sshx "$CLIENT_HOST" "sudo frpctl add service --profile '$PROFILE_NAME' --id '$SERVICE_ID2' --name E2EProfileSSH2" >/dev/null
 sshx "$CLIENT_HOST" "sudo python3 - <<'PY'
 import json
@@ -167,7 +267,8 @@ PY")"
 pass "delete profile leaves existing service"
 
 # Cleanup live e2e service to avoid port clutter.
-sshx "$SERVER" "sudo frpctl release service '$CLIENT_ID' '$SERVICE_ID' >/dev/null 2>&1 || true"
+sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$SERVICE_ID' >/dev/null 2>&1 || true"
+sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$SERVICE_ID2' >/dev/null 2>&1 || true"
 sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
 
 echo "TARGETED_REAL_E2E=PASS" >"$OUT_DIR/result.env"
