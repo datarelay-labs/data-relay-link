@@ -71,14 +71,20 @@ class PolicyCache:
                     and self.load_error is None
                 ):
                     return
-                if self.access_path.exists():
-                    self.access_state = ACL.load_access_state(path=self.access_path, cfg=self.cfg)
-                else:
-                    self.access_state = ACL.empty_access_state()
-                if self.registry_path.exists():
-                    self.registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
-                else:
-                    self.registry = {"schema_version": 2, "clients": {}}
+                # Authoritative policy/registry must be present. Soft-empty would
+                # PUBLIC-allow missing bindings; fail closed instead.
+                missing = []
+                if not self.access_path.exists():
+                    missing.append("%s missing" % self.access_path.name)
+                if not self.registry_path.exists():
+                    missing.append("%s missing" % self.registry_path.name)
+                if missing:
+                    self.access_mtime = access_m
+                    self.registry_mtime = reg_m
+                    self.load_error = "; ".join(missing)
+                    return
+                self.access_state = ACL.load_access_state(path=self.access_path, cfg=self.cfg)
+                self.registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
                 ACL.validate_access_state(self.access_state)
                 self.access_mtime = access_m
                 self.registry_mtime = reg_m

@@ -181,6 +181,37 @@ grep -qi 'ALLOW' "$WORKDIR/repl-still.out" || fail "failed replace must preserve
 grep -qi 'ALLOW' "$WORKDIR/repl-ok-test.out" || fail "successful replace should allow new source"
 pass "atomic replace-source preserves on failure"
 
+# Expired-only cleanup must succeed while binding stays ALLOWLIST (no PUBLIC).
+python3 - <<'PY' || fail "seed only-expired allowlist"
+import importlib.util, os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
+spec = importlib.util.spec_from_file_location(
+    "frp_access_control",
+    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+)
+acl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(acl)
+path = root / "var/lib/frp-auto-deploy/access-control.json"
+state = acl.load_access_state(path=path)
+lid, _ = acl.resolve_access_list(state, "Office")
+past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+state["access_lists"][lid]["entries"] = []
+acl.add_source_entry(state, lid, "expired-only", "203.0.113.77", expires_at=past)
+acl.save_access_state(state, path=path)
+PY
+"$CTL" access remove-expired Office --yes >"$WORKDIR/exp-only.out"
+"$CTL" access test demo ssh 203.0.113.77 >"$WORKDIR/exp-only-test.out"
+grep -qi 'DENY' "$WORKDIR/exp-only-test.out" || fail "after expired cleanup auth must DENY"
+MODE="$("$CTL" access show-service demo ssh | awk -F: '/Access mode/{print $2}' | tr -d ' ')"
+[[ "$MODE" == "ALLOWLIST" ]] || fail "expired cleanup must stay ALLOWLIST"
+"$CTL" access show Office >"$WORKDIR/exp-only-list.out"
+if grep -qi '203.0.113.77' "$WORKDIR/exp-only-list.out"; then
+  fail "expired entry should be removed"
+fi
+pass "expired-only cleanup stays ALLOWLIST"
+
 "$CTL" access public demo ssh >/dev/null
 
 export FRP_SERVER_SOURCED=1

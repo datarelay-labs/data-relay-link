@@ -683,10 +683,9 @@ def remove_expired_entries(state: dict, list_id: str, now: Optional[datetime] = 
             removed.append(entry)
         else:
             kept.append(entry)
-    if removed and list_services_using(state, list_id) and not list_has_usable_entries(
-        {"entries": kept}, now=now
-    ):
-        raise AccessError(EMPTY_ALLOWLIST_MESSAGE)
+    # Expired entries are already non-matching for authorization. Cleanup may
+    # leave a referenced ALLOWLIST with zero usable sources; stay ALLOWLIST
+    # (no PUBLIC fallback). Manual last-usable removal remains rejected elsewhere.
     lst["entries"] = kept
     if removed:
         lst["updated_at"] = utc_now_iso()

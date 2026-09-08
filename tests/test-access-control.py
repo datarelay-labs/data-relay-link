@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -277,11 +278,217 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(replaced["cidr"], "198.51.100.2/32")
         self.assertEqual(len(self.state["access_lists"][lid]["entries"]), 1)
 
+    def test_expired_cleanup_allowed_while_allowlist_empty(self):
+        """Expired-only cleanup succeeds; binding stays ALLOWLIST; auth stays DENY."""
+        lid, _ = ACL.create_access_list(self.state, "TempOnly")
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(microsecond=0)
+        ACL.add_source_entry(
+            self.state,
+            lid,
+            "gone",
+            "198.51.100.9",
+            expires_at=past.isoformat().replace("+00:00", "Z"),
+        )
+        # Direct mutation: assign ALLOWLIST that already has only expired sources.
+        self.state.setdefault("service_access", {}).setdefault("machine-aaa", {})["ssh"] = {
+            "access_mode": ACL.MODE_ALLOWLIST,
+            "access_list_id": lid,
+        }
+        removed = ACL.remove_expired_entries(self.state, lid)
+        self.assertEqual(len(removed), 1)
+        self.assertEqual(self.state["access_lists"][lid]["entries"], [])
+        binding = ACL.get_service_binding(self.state, "machine-aaa", "ssh")
+        self.assertEqual(binding["access_mode"], ACL.MODE_ALLOWLIST)
+        deny = ACL.authorize(
+            self.state,
+            self.registry,
+            client_id="machine-aaa",
+            service_id="ssh",
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(deny["decision"], ACL.DECISION_DENY)
+        self.assertNotEqual(deny.get("reason"), ACL.REASON_PUBLIC)
+
     def test_save_load_roundtrip(self):
         ACL.save_access_state(self.state, path=self.access_path)
         loaded = ACL.load_access_state(path=self.access_path)
         self.assertEqual(loaded["schema_version"], ACL.ACCESS_SCHEMA_VERSION)
         self.assertEqual(loaded["access_lists"], {})
+
+
+class PolicyCacheFailClosedTests(unittest.TestCase):
+    """PolicyCache must fail closed when authoritative files disappear."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.etc = self.root / "etc" / "frp-auto-deploy"
+        self.var = self.root / "var" / "lib" / "frp-auto-deploy"
+        self.etc.mkdir(parents=True)
+        self.var.mkdir(parents=True)
+        self.access_path = self.var / "access-control.json"
+        self.registry_path = self.var / "registry.json"
+        self.config_path = self.etc / "config.json"
+        self.state = ACL.empty_access_state()
+        lid, _ = ACL.create_access_list(self.state, "Office")
+        ACL.add_source_entry(self.state, lid, "net", "198.51.100.0/24")
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        ACL.save_access_state(self.state, path=self.access_path)
+        self.registry = {
+            "schema_version": 2,
+            "clients": {
+                "machine-aaa": {
+                    "label": "alpha",
+                    "hostname": "alpha-host",
+                    "services": {"ssh": {"remote_port": 6001, "enabled": True}},
+                }
+            },
+            "reserved": [6001],
+        }
+        self.registry_path.write_text(json.dumps(self.registry) + "\n", encoding="utf-8")
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "access_control_file": str(self.access_path),
+                    "access_conn_log_file": str(self.var / "access-conn.jsonl"),
+                    "registry_file": str(self.registry_path),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.environ["FRP_DEPLOY_TEST_ROOT"] = ""
+        plugin_path = ROOT / "server" / "frp-access-plugin.py"
+        spec = importlib.util.spec_from_file_location(
+            "frp_access_plugin_test", str(plugin_path)
+        )
+        self.plugin = importlib.util.module_from_spec(spec)
+        # Ensure plugin resolves lib next to repo, not missing install root.
+        sys.modules.pop("frp_access_control", None)
+        spec.loader.exec_module(self.plugin)
+        self.cache = self.plugin.PolicyCache(self.config_path)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _authorize_via_cache(self, source_ip="198.51.100.9"):
+        access_state, registry, load_error, _cfg = self.cache.snapshot()
+        if load_error is not None:
+            return {
+                "decision": ACL.DECISION_DENY,
+                "reason": ACL.REASON_AUTHORIZATION_ERROR,
+                "load_error": load_error,
+            }
+        proxy = ACL.expected_proxy_name("alpha-host", "machine-aaa", "ssh")
+        return ACL.authorize(
+            access_state, registry, proxy_name=proxy, source_ip=source_ip
+        )
+
+    def test_policy_cache_healthy_allowlist(self):
+        access_state, registry, load_error, _cfg = self.cache.snapshot()
+        self.assertIsNone(load_error)
+        self.assertTrue(self.access_path.exists())
+        self.assertTrue(self.registry_path.exists())
+        result = self._authorize_via_cache()
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+
+    def test_missing_access_policy_fail_closed_and_recovery(self):
+        result = self._authorize_via_cache()
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        backup = self.access_path.read_bytes()
+        self.access_path.unlink()
+        # Force mtime re-check
+        self.cache.access_mtime = object()
+        access_state, registry, load_error, _cfg = self.cache.snapshot()
+        self.assertIsNotNone(load_error)
+        self.assertIn("missing", load_error)
+        denied = self._authorize_via_cache()
+        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
+        self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
+        # Restore
+        self.access_path.write_bytes(backup)
+        self.cache.access_mtime = object()
+        access_state, registry, load_error, _cfg = self.cache.snapshot()
+        self.assertIsNone(load_error)
+        recovered = self._authorize_via_cache()
+        self.assertEqual(recovered["decision"], ACL.DECISION_ALLOW)
+
+    def test_missing_registry_fail_closed_and_recovery(self):
+        result = self._authorize_via_cache()
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        backup = self.registry_path.read_bytes()
+        self.registry_path.unlink()
+        self.cache.registry_mtime = object()
+        _a, _r, load_error, _cfg = self.cache.snapshot()
+        self.assertIsNotNone(load_error)
+        self.assertIn("missing", load_error)
+        denied = self._authorize_via_cache()
+        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
+        self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
+        self.registry_path.write_bytes(backup)
+        self.cache.registry_mtime = object()
+        _a, _r, load_error, _cfg = self.cache.snapshot()
+        self.assertIsNone(load_error)
+        recovered = self._authorize_via_cache()
+        self.assertEqual(recovered["decision"], ACL.DECISION_ALLOW)
+
+    def test_healthz_503_when_policy_missing(self):
+        from http.client import HTTPConnection
+        from threading import Thread
+        import time
+
+        handler = self.plugin.make_handler(self.cache, "/access-auth")
+        server = self.plugin.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = server.server_address[1]
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            body = json.loads(resp.read().decode())
+            self.assertTrue(body.get("ok"))
+            conn.close()
+
+            self.access_path.unlink()
+            self.cache.access_mtime = object()
+            time.sleep(0.05)
+            conn = HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 503)
+            body = json.loads(resp.read().decode())
+            self.assertFalse(body.get("ok"))
+            self.assertTrue(body.get("error"))
+            conn.close()
+
+            # NewUserConn must reject without PUBLIC fallback
+            payload = {
+                "op": "NewUserConn",
+                "content": {
+                    "proxy_name": ACL.expected_proxy_name(
+                        "alpha-host", "machine-aaa", "ssh"
+                    ),
+                    "remote_addr": "198.51.100.9:12345",
+                },
+            }
+            raw = json.dumps(payload).encode()
+            conn = HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request(
+                "POST",
+                "/access-auth?op=NewUserConn",
+                body=raw,
+                headers={"Content-Type": "application/json", "Content-Length": str(len(raw))},
+            )
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            out = json.loads(resp.read().decode())
+            self.assertTrue(out.get("reject"))
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

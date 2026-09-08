@@ -257,9 +257,80 @@ sleep "$SLEEP_SECS"
 if probe "$SOURCE_B_HOST"; then fail "TTL post"; else pass TTL_POST; fi
 sshx "$SERVER" "sudo frp-access log ${CLIENT_ID} ${SERVICE_ID} --limit 30" | tee "$OUT_DIR/access-log.txt"
 
+# Expired-only cleanup: prune expired rows; stay ALLOWLIST; stay DENY.
+echo "=== expired cleanup ==="
+sshx "$SERVER" "sudo python3 - <<'PY'
+import importlib.util, json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/frp-auto-deploy/frp_access_control.py')
+acl=importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
+path=Path('/var/lib/frp-auto-deploy/access-control.json')
+state=acl.load_access_state(path=path)
+lid,_=acl.resolve_access_list(state,'E2E-Allow')
+past=(datetime.now(timezone.utc)-timedelta(hours=2)).replace(microsecond=0).isoformat().replace('+00:00','Z')
+state['access_lists'][lid]['entries']=[]
+acl.add_source_entry(state, lid, 'expired-only', '${SOURCE_B_IP}/32', expires_at=past)
+# Keep ALLOWLIST binding even with only expired sources.
+sa=state.setdefault('service_access', {}).setdefault('${CLIENT_ID}', {})
+sa['${SERVICE_ID}']={'access_mode':'ALLOWLIST','access_list_id':lid}
+acl.save_access_state(state, path=path)
+print('seeded_expired_only')
+PY"
+sshx "$SERVER" "sudo frp-access remove-expired 'E2E-Allow' --yes" | tee "$OUT_DIR/expired-cleanup.txt"
+MODE="$(sshx "$SERVER" "sudo frp-access show-service ${CLIENT_ID} ${SERVICE_ID}" | awk -F: '/Access mode/{print \$2}' | tr -d ' ')"
+[[ "$MODE" == "ALLOWLIST" ]] || fail "expired cleanup must stay ALLOWLIST"
+if probe "$SOURCE_A_HOST"; then fail "A should DENY after expired-only cleanup"; else pass EXPIRED_CLEANUP_DENY; fi
+pass EXPIRED_CLEANUP_ALLOWLIST
+
+# Missing access-control.json => health 503 + connection DENY; restore recovers.
+echo "=== missing access policy fail-closed ==="
+sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json /var/lib/frp-auto-deploy/access-control.json.bak-e2e"
+sleep 1
+CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
+[[ "$CODE" == "503" ]] || fail "healthz expected 503 when policy missing (got $CODE)"
+if probe "$SOURCE_A_HOST"; then
+  sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json.bak-e2e /var/lib/frp-auto-deploy/access-control.json"
+  fail "missing policy must DENY"
+fi
+pass MISSING_POLICY_DENY
+sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json.bak-e2e /var/lib/frp-auto-deploy/access-control.json"
+sleep 1
+CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
+[[ "$CODE" == "200" ]] || fail "healthz expected 200 after policy restore (got $CODE)"
+# Re-seed usable SourceA for subsequent checks
+sshx "$SERVER" "sudo frp-access add-source 'E2E-Allow' --name SourceA --source ${SOURCE_A_IP}/32 --yes" >/dev/null
+sleep 1
+probe "$SOURCE_A_HOST" || fail "A after policy restore"
+pass MISSING_POLICY_RECOVERY
+
+# Missing registry => health 503 + connection DENY; restore recovers.
+echo "=== missing registry fail-closed ==="
+sshx "$SERVER" "sudo cp -a /var/lib/frp-auto-deploy/registry.json /var/lib/frp-auto-deploy/registry.json.bak-e2e
+sudo mv /var/lib/frp-auto-deploy/registry.json /var/lib/frp-auto-deploy/registry.json.gone-e2e"
+sleep 1
+CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health-reg.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
+[[ "$CODE" == "503" ]] || fail "healthz expected 503 when registry missing (got $CODE)"
+if probe "$SOURCE_A_HOST"; then
+  sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/registry.json.gone-e2e /var/lib/frp-auto-deploy/registry.json"
+  fail "missing registry must DENY"
+fi
+pass MISSING_REGISTRY_DENY
+sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/registry.json.gone-e2e /var/lib/frp-auto-deploy/registry.json
+sudo rm -f /var/lib/frp-auto-deploy/registry.json.bak-e2e"
+sleep 2
+CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health-reg2.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
+[[ "$CODE" == "200" ]] || fail "healthz expected 200 after registry restore (got $CODE)"
+# Wait for published port again if frps was unsettled
+for i in $(seq 1 24); do
+  if sshx "$SERVER" "ss -lnt | grep -q ':${PUBLIC_PORT} '" >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+probe "$SOURCE_A_HOST" || fail "A after registry restore"
+pass MISSING_REGISTRY_RECOVERY
+
 # disable/enable on client
-echo "=== disable/enable ==="
-sshx "$CLIENT_HOST" "sudo frpctl disable service ${SERVICE_ID}; sudo frpctl apply" \
+echo "=== disable/enable ==="sshx "$CLIENT_HOST" "sudo frpctl disable service ${SERVICE_ID}; sudo frpctl apply" \
   || sshx "$CLIENT_HOST" "sudo frp-client disable-service ${SERVICE_ID}; sudo frp-client apply"
 sleep 3
 sshx "$CLIENT_HOST" "sudo frpctl enable service ${SERVICE_ID}; sudo frpctl apply" \
@@ -334,6 +405,9 @@ REAL_E2E_ALLOW_A=PASS
 REAL_E2E_DENY_B=PASS
 REAL_E2E_TTL_PRE_EXPIRY=PASS
 REAL_E2E_TTL_POST_EXPIRY=PASS
+REAL_E2E_EXPIRED_CLEANUP=PASS
+REAL_E2E_MISSING_POLICY=PASS
+REAL_E2E_MISSING_REGISTRY=PASS
 REAL_E2E_REBOOT=PASS
 REAL_E2E_CLEANUP=PASS
 EOF
