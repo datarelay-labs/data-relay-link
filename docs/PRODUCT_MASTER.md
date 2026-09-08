@@ -3608,6 +3608,12 @@ Canonical docs/PRODUCT_MASTER.md
 
 앞으로:
 
+```text
+PRODUCT_MASTER_FULL_RESTORE=PASS
+AUTHORITATIVE_MASTER_AVAILABLE=YES
+AUTHORITATIVE_MASTER_SOURCE=Owner-reconstructed canonical Product Master (synced to docs/PRODUCT_MASTER.md)
+```
+
 - Product Master의 별도 복사본을 새 canonical source로 만들지 않는다.
 - 모든 authoritative 변경은 `docs/PRODUCT_MASTER.md`에 반영한다.
 - 큰 제품 결정은 Decision Log에 추가한다.
