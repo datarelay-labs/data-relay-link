@@ -453,6 +453,7 @@ Canonical grammar:
   unset client ID label|note|tag [KEY]
   create zero-touch | create enrollment | create backup
   revoke client ID | release client ID | release service ID SID
+  access | access list | access menu
   update project [--check] | update frp [--check]
   doctor | help | menu | history | exit
 
@@ -504,12 +505,13 @@ frpctl_print_server_menu() {
   echo "4) Create enrollments"
   echo "5) Show enrollments"
   echo "6) Create backup / Restore backup"
-  echo "7) Update project"
-  echo "8) Update FRP"
-  echo "9) Doctor"
-  echo "10) Show audit"
-  echo "11) Help"
-  echo "12) Exit"
+  echo "7) Access Control"
+  echo "8) Update project"
+  echo "9) Update FRP"
+  echo "10) Doctor"
+  echo "11) Show audit"
+  echo "12) Help"
+  echo "13) Exit"
 }
 
 frpctl_print_both_menu() {
@@ -1218,16 +1220,17 @@ frpctl_server_menu() {
           *) echo "ERROR: select 1-2" >&2 ;;
         esac
         ;;
-      7) frpctl_run frp-project-update ;;
-      8) frpctl_run frp-update ;;
-      9) frpctl_dispatch doctor || true ;;
-      10) frpctl_audit_tail ;;
-      11) frpctl_usage ;;
-      12)
+      7) frpctl_run frp-access menu ;;
+      8) frpctl_run frp-project-update ;;
+      9) frpctl_run frp-update ;;
+      10) frpctl_dispatch doctor || true ;;
+      11) frpctl_audit_tail ;;
+      12) frpctl_usage ;;
+      13)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-12" >&2 ;;
+      *) echo "ERROR: select 1-13" >&2 ;;
     esac
   done
 }
@@ -1433,7 +1436,7 @@ frpctl_known_commands() {
   local client=0 server=0
   frpctl_is_client && client=1
   frpctl_is_server && server=1
-    printf '%s\n' help menu status doctor version update clear exit quit q history show
+  printf '%s\n' help menu status doctor version update clear exit quit q history show
   if [[ "$client" == "1" ]]; then
     printf '%s\n' services manage info client-status client-update \
       add enable disable apply discard set
@@ -1443,7 +1446,7 @@ frpctl_known_commands() {
       enroll-bulk enrollments enrollment-revoke enrollment-purge \
       revoke revoke-client release-service release-client \
       backup restore project-update frp-update upstream audit \
-      server-status server-update set unset create release purge add remove delete rename
+      server-status server-update set unset create release purge add remove delete rename access
   fi
 }
 
@@ -1950,6 +1953,11 @@ frpctl_dispatch_canonical() {
         return 2
       fi
       frp_doctor_main $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
+    access_cmd)
+      frpctl_require_server || return 1
+      # shellcheck disable=SC2046,SC2086
+      frpctl_invoke frp-access $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
       ;;
     help)
       extra_args="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")"

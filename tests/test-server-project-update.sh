@@ -83,6 +83,8 @@ EOF
   }
 }
 EOF
+  printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/access-control.json"
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=2.0.0
 FRP_VERSION=0.71.0
@@ -93,7 +95,8 @@ EOF
   printf 'old allocator\n' >"$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
   printf 'old unit\n' >"$tree/etc/systemd/system/frp-port-allocator.service"
   cp "$ROOT/server/frp-frontend.service" "$tree/etc/systemd/system/frp-frontend.service"
-  chmod 600 "$tree/etc/frp/server_token" "$tree/var/lib/frp-auto-deploy/registry.json"
+  chmod 600 "$tree/etc/frp/server_token" "$tree/var/lib/frp-auto-deploy/registry.json" \
+    "$tree/var/lib/frp-auto-deploy/access-control.json"
   chmod 600 "$tree/etc/frp-auto-deploy/pki/"*
 }
 
@@ -107,6 +110,7 @@ paths = [
     "usr/local/bin/frps", "etc/frp/frps.toml", "etc/frp/server_token",
     "etc/frp-auto-deploy/config.json", "etc/frp-auto-deploy/pki",
     "var/lib/frp-auto-deploy/registry.json",
+    "var/lib/frp-auto-deploy/access-control.json",
     "var/lib/frp-auto-deploy/enrollments",
     "var/lib/frp-auto-deploy/bootstrap",
 ]

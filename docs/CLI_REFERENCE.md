@@ -208,6 +208,32 @@ Purging enrollment metadata does not delete audit events.
 `release` keeps the existing confirmation, locking, and passive port recheck.
 `restore` keeps archive validation, snapshot, restart, doctor, and rollback.
 
+## access (server)
+
+Named reusable Service Access Lists, optional TTL entries, and recent
+connection authorization history. Access is keyed by CLIENT ID + Service ID
+(not by public port). Modes are `PUBLIC` (default for existing services) and
+`ALLOWLIST`.
+
+```text
+access
+access list
+access create <name> [--description TEXT]
+access add-source <list> --name <name> --source <ip|cidr> [--ttl 30m|1h|4h|1d]
+access remove-source <list> --source <ip|cidr|name|id>
+access show <list>
+access delete <list>
+access assign <client> <service-id> <list>
+access public <client> <service-id>
+access show-service <client> <service-id>
+access test <client> <service-id> <source-ip>
+access log <client> <service-id> [--limit N] [--allow|--deny]
+```
+
+Interactive `frpctl` server menu includes Access Control. Empty ALLOWLIST
+assignment is refused. Deleting a list that is still referenced is refused.
+IP allowlisting is defense-in-depth; keep target authentication enabled.
+
 ## update
 
 ```text

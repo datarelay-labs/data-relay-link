@@ -29,12 +29,14 @@ REQUIRED = {
     "etc/frp/frps.toml",
     "etc/frp/server_token",
     "var/lib/frp-auto-deploy/registry.json",
+    "var/lib/frp-auto-deploy/access-control.json",
 }
 OPTIONAL_EXACT = {
     "etc/frp-auto-deploy/frontend.conf",
     "var/lib/frp-auto-deploy/mgmt-nonces.json",
     "var/lib/frp-auto-deploy/nginx-ownership",
     "var/log/frp-auto-deploy/audit.jsonl",
+    "var/log/frp-auto-deploy/access-conn.jsonl",
 }
 TREE_PREFIXES = (
     "etc/frp-auto-deploy/pki/",
@@ -43,6 +45,7 @@ TREE_PREFIXES = (
 )
 TREE_ROOTS = tuple(prefix.rstrip("/") for prefix in TREE_PREFIXES)
 AUDIT_ROTATED_PREFIX = "var/log/frp-auto-deploy/audit.jsonl."
+ACCESS_CONN_ROTATED_PREFIX = "var/log/frp-auto-deploy/access-conn.jsonl."
 
 
 class RestoreError(RuntimeError):
@@ -68,6 +71,9 @@ def allowed_path(rel: str) -> bool:
         return True
     if rel.startswith(AUDIT_ROTATED_PREFIX):
         suffix = rel[len(AUDIT_ROTATED_PREFIX) :]
+        return suffix.isdigit() and not rel.endswith(".lock")
+    if rel.startswith(ACCESS_CONN_ROTATED_PREFIX):
+        suffix = rel[len(ACCESS_CONN_ROTATED_PREFIX) :]
         return suffix.isdigit() and not rel.endswith(".lock")
     return False
 
@@ -186,6 +192,26 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise RestoreError(f"backup manifest checksum is invalid: {rel}")
         declared[rel] = item
+
+    # Pre-Access-Control backups: synthesize empty policy for same-version restore.
+    access_rel = "var/lib/frp-auto-deploy/access-control.json"
+    synthesized_access = False
+    if access_rel not in declared:
+        access_path = destination / "payload" / access_rel
+        access_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = (
+            b'{\n  "access_lists": {},\n  "schema_version": 1,\n'
+            b'  "service_access": {}\n}\n'
+        )
+        access_path.write_bytes(payload)
+        os.chmod(access_path, 0o600)
+        declared[access_rel] = {
+            "path": access_rel,
+            "sha256": sha256(access_path),
+            "mode": "0600",
+        }
+        synthesized_access = True
+
     missing = REQUIRED - declared.keys()
     if missing:
         raise RestoreError(f"backup is missing required file: {sorted(missing)[0]}")
@@ -211,12 +237,19 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         for line in checksums_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    if supplied_lines != checksum_lines:
+    if synthesized_access:
+        expected_without_access = [
+            line for line in checksum_lines if not line.endswith(f"payload/{access_rel}")
+        ]
+        if supplied_lines != expected_without_access:
+            raise RestoreError("checksum manifest does not match the backup manifest")
+    elif supplied_lines != checksum_lines:
         raise RestoreError("checksum manifest does not match the backup manifest")
 
     for rel in (
         "etc/frp-auto-deploy/config.json",
         "var/lib/frp-auto-deploy/registry.json",
+        "var/lib/frp-auto-deploy/access-control.json",
     ):
         try:
             value = json.loads((destination / "payload" / rel).read_text(encoding="utf-8"))

@@ -155,7 +155,7 @@ def canonical_verbs(role):
     if server:
         verbs.extend([
             "set", "unset", "create", "revoke", "purge", "release",
-            "restore", "add", "remove", "delete", "rename",
+            "restore", "add", "remove", "delete", "rename", "access",
         ])
     if client:
         verbs.extend(["add", "enable", "disable", "apply", "discard", "set"])
@@ -283,6 +283,22 @@ def help_text(tokens, role):
         return (
             "Doctor\n======\n\nUsage:\n  doctor\n  doctor --json\n  doctor --verbose\n"
         )
+    if verb == "access":
+        return (
+            "Access Control\n"
+            "==============\n\n"
+            "Manage Named Access Lists and service source policies.\n\n"
+            "Usage:\n"
+            "  access\n"
+            "  access list\n"
+            "  access create <name> [--description TEXT]\n"
+            "  access add-source <list> --name NAME --source CIDR [--ttl 4h]\n"
+            "  access assign <client> <service> <list>\n"
+            "  access public <client> <service>\n"
+            "  access test <client> <service> <source-ip>\n"
+            "  access menu\n\n"
+            "Passthrough: remaining arguments are forwarded to frp-access.\n"
+        )
     lines = [
         "Unknown help topic: %s" % " ".join(tokens),
         "",
@@ -380,10 +396,14 @@ def _root_help(role):
             "  update frp [--check]",
         ]
     )
-    lines.extend(
+    other = [
+        "",
+        "Other",
+    ]
+    if server:
+        other.append("  access               Access Control Pack (server)")
+    other.extend(
         [
-            "",
-            "Other",
             "  doctor",
             "  menu                 Guided numbered menu",
             "  history              This session only (not saved to disk)",
@@ -395,6 +415,7 @@ def _root_help(role):
             "status and version remain shortcuts for show status / show version.",
         ]
     )
+    lines.extend(other)
     return "\n".join(lines) + "\n"
 
 
@@ -834,18 +855,19 @@ def _concise_root(role):
         ("update", "Update project or FRP"),
         ("restore", "Restore backup"),
         ("doctor", "Run health checks"),
+        ("access", "Access Control Pack"),
         ("help", "Detailed help"),
         ("menu", "Guided menu"),
         ("history", "Session command history"),
         ("exit", "Leave frpctl"),
     ]
     if not server:
-        hide = {"create", "revoke", "purge", "release", "restore"}
+        hide = {"create", "revoke", "purge", "release", "restore", "access"}
         if not client:
             hide.update({"set", "unset"})
         rows = [(n, d) for n, d in rows if n not in hide]
         if client:
-            rows = [(n, d) for n, d in rows if n not in {"revoke", "purge", "release", "restore", "create"}]
+            rows = [(n, d) for n, d in rows if n not in {"revoke", "purge", "release", "restore", "create", "access"}]
             extra = [
                 ("add", "Add a local service"),
                 ("enable", "Enable a local service"),
@@ -898,6 +920,7 @@ def match(tokens, role, names=None, clients=None):
         "apply": lambda toks, role, names=None: {"status": "ok", "action": "apply"},
         "discard": lambda toks, role, names=None: {"status": "ok", "action": "discard"},
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
+        "access": lambda toks, role, names=None: {"status": "ok", "action": "access_cmd", "passthrough": toks[1:]},
         "help": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "?": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "menu": lambda toks, role, names=None: {"status": "ok", "action": "menu"},
@@ -912,7 +935,7 @@ def match(tokens, role, names=None, clients=None):
     fn = handlers.get(verb)
     if fn is None:
         return {"status": "unknown", "command": verb}
-    if verb in ("set", "unset", "create", "revoke", "purge", "release", "restore", "remove", "delete", "rename") and not server and verb != "set":
+    if verb in ("set", "unset", "create", "revoke", "purge", "release", "restore", "remove", "delete", "rename", "access") and not server and verb != "set":
         if verb == "set" and client:
             return fn(tokens, role, names)
         return {"status": "role", "need": "server", "command": verb}
@@ -1501,6 +1524,7 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "update": "Update project or FRP",
         "restore": "Restore backup",
         "doctor": "Run health checks",
+        "access": "Access Control Pack",
         "help": "Detailed help",
         "menu": "Guided menu",
         "history": "Session command history",
@@ -1516,6 +1540,8 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "quit": "Leave frpctl",
         "q": "Leave frpctl",
     }
+    if not server:
+        verb_map.pop("access", None)
     if not filled:
         return verb_map, "verbs"
     verb = filled[0]

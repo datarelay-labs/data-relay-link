@@ -27,12 +27,14 @@ REQUIRED = (
     "etc/frp/frps.toml",
     "etc/frp/server_token",
     "var/lib/frp-auto-deploy/registry.json",
+    "var/lib/frp-auto-deploy/access-control.json",
 )
 OPTIONAL_FILES = (
     "etc/frp-auto-deploy/frontend.conf",
     "var/lib/frp-auto-deploy/mgmt-nonces.json",
     "var/lib/frp-auto-deploy/nginx-ownership",
     "var/log/frp-auto-deploy/audit.jsonl",
+    "var/log/frp-auto-deploy/access-conn.jsonl",
 )
 OPTIONAL_TREES = (
     "etc/frp-auto-deploy/pki",
@@ -41,6 +43,7 @@ OPTIONAL_TREES = (
 )
 # Rotated audit companions (audit.jsonl.1 .. audit.jsonl.N).
 AUDIT_ROTATED_GLOB = "var/log/frp-auto-deploy/audit.jsonl.*"
+ACCESS_CONN_ROTATED_GLOB = "var/log/frp-auto-deploy/access-conn.jsonl.*"
 
 
 def fail(message: str) -> "NoReturn":
@@ -116,8 +119,38 @@ def _audit_emit(event, **kwargs):
         return
 
 
+def ensure_access_control_file(root: Path) -> None:
+    """Create empty access-control.json when missing (pre-feature installs)."""
+    rel = "var/lib/frp-auto-deploy/access-control.json"
+    path = root / rel
+    if path.exists() or path.is_symlink():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "access_lists": {},
+        "service_access": {},
+    }
+    fd, tmp = tempfile.mkstemp(prefix="access-control.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def collect_files(root: Path) -> list[tuple[str, Path]]:
     found: dict[str, Path] = {}
+    ensure_access_control_file(root)
     for rel in REQUIRED:
         source = safe_source(root, rel, required=True)
         assert source is not None
@@ -146,6 +179,13 @@ def collect_files(root: Path) -> list[tuple[str, Path]]:
     audit_dir = root / "var/log/frp-auto-deploy"
     if audit_dir.is_dir() and not audit_dir.is_symlink():
         for source in sorted(audit_dir.glob("audit.jsonl.*")):
+            if source.is_symlink() or not source.is_file():
+                continue
+            if source.name.endswith(".lock"):
+                continue
+            child_rel = source.relative_to(root).as_posix()
+            found[child_rel] = source
+        for source in sorted(audit_dir.glob("access-conn.jsonl.*")):
             if source.is_symlink() or not source.is_file():
                 continue
             if source.name.endswith(".lock"):

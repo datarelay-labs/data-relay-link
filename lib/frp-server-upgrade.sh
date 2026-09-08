@@ -162,6 +162,7 @@ frp_server_upgrade_preserved_digest() {
     "$(frp_server_fs /etc/frp-auto-deploy/config.json)" \
     "$(frp_server_fs /etc/frp-auto-deploy/pki)" \
     "$(frp_server_fs /var/lib/frp-auto-deploy/registry.json)" \
+    "$(frp_server_fs /var/lib/frp-auto-deploy/access-control.json)" \
     "$(frp_server_fs /var/lib/frp-auto-deploy/enrollments)" \
     "$(frp_server_fs /var/lib/frp-auto-deploy/bootstrap)" \
     "$(frp_server_fs /var/lib/frp-auto-deploy/nginx-ownership)"
@@ -371,6 +372,7 @@ frp_server_upgrade_restore_snapshot_files() {
     return 0
   fi
   frp_server_systemctl daemon-reload || true
+  frp_server_restart_unit frp-access-plugin || return 1
   frp_server_restart_unit frps || return 1
   frp_server_restart_unit frp-port-allocator || return 1
   if frp_server_upgrade_is_single443; then
@@ -432,7 +434,7 @@ frp_server_upgrade_rollback() {
 frp_server_apply_project_upgrade() {
   local source="$1" check_only="${2:-0}"
   local version_file previous target staged snapshot backups preserved_before
-  local restart_frps=0 restart_alloc=0 restart_frontend=0 rel
+  local restart_frps=0 restart_alloc=0 restart_access=0 restart_frontend=0 rel
   local resolved_channel resolved_ref
   local candidate_meta target_channel target_ref
   local installed_channel installed_ref installed_bundle target_bundle
@@ -556,6 +558,9 @@ frp_server_apply_project_upgrade() {
   for rel in "${FRP_ALLOCATOR_RUNTIME_HELPERS[@]}"; do
     frp_server_upgrade_changed "$staged" "usr/local/lib/frp-auto-deploy/${rel}" && restart_alloc=1
   done
+  frp_server_upgrade_changed "$staged" etc/systemd/system/frp-access-plugin.service && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp-access-plugin.py && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp_access_control.py && restart_access=1
   if frp_server_upgrade_is_single443; then
     frp_server_upgrade_changed "$staged" etc/systemd/system/frp-frontend.service && restart_frontend=1
   fi
@@ -600,7 +605,7 @@ frp_server_apply_project_upgrade() {
     return 1
   fi
 
-  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_frontend" == "1" ]]; then
+  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_frontend" == "1" ]]; then
     if ! frp_server_skip_systemd; then
       frp_server_systemctl daemon-reload || {
         frp_server_upgrade_rollback "$snapshot"; return 1;
@@ -608,6 +613,9 @@ frp_server_apply_project_upgrade() {
     else
       frp_server_record_action "daemon-reload"
     fi
+  fi
+  if [[ "$restart_access" == "1" ]]; then
+    frp_server_restart_unit frp-access-plugin || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_frps" == "1" ]]; then
     frp_server_restart_unit frps || { frp_server_upgrade_rollback "$snapshot"; return 1; }

@@ -32,6 +32,8 @@ EOF
   printf 'token-%s-super-secret\n' "$marker" >"$tree/etc/frp/server_token"
   printf '{"schema_version":2,"clients":{"client-a":{"label":"%s","notes":"private note","services":{"ssh":{"remote_port":6001}}}},"reserved":[6002]}\n' \
     "$marker" >"$tree/var/lib/frp-auto-deploy/registry.json"
+  printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/access-control.json"
   printf 'nonce-%s\n' "$marker" >"$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
   printf 'ca-key-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.key"
   printf 'ca-cert-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.crt"

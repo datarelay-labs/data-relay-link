@@ -365,7 +365,27 @@ old reservation.
 
 Token rotation is not automatic. Reinstall preserves the existing FRP token.
 
-## 16. Mixed product versions
+## 16. Service Access Control (defense-in-depth)
+
+Published TCP services may be `PUBLIC` (default) or `ALLOWLIST` using Named
+Access Lists. Authorization runs in the FRP NewUserConn plugin on loopback
+only. For ALLOWLIST services, plugin/policy failure **denies** the user
+connection (fail closed). PUBLIC services keep open access when policy loads
+successfully.
+
+Access Control does **not** replace target authentication. Keep SSH keys,
+application auth, and database credentials enabled. Do not apply Service
+Access Lists to FRP control, enrollment/management, or the single-443
+frontend itself.
+
+Connection authorization events are written to a bounded local log
+(`/var/log/frp-auto-deploy/access-conn.jsonl`). Enrollment tickets, FRP
+tokens, CA keys, and passwords are not logged.
+
+If an upstream device SNATs clients, allowlists must use the source address
+observed by `frps`.
+
+## 17. Mixed product versions
 
 Project **2.1.0** does not change management protocol schema `1`. An already
 enrolled **1.9.1** or **2.0.0** client is expected to keep its tunnel and signed

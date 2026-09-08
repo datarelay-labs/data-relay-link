@@ -259,6 +259,9 @@ assert 'bindAddr = "127.0.0.1"' in toml
 assert 'bindPort = 7000' in toml
 assert 'proxyBindAddr = "0.0.0.0"' in toml
 assert 'transport.tls.force = false' in toml
+assert '[[httpPlugins]]' in toml
+assert 'name = "frp-access"' in toml
+assert 'NewUserConn' in toml
 conf = Path(sys.argv[3]).read_text()
 assert 'location = "/~!frp"' in conf
 assert 'proxy_pass http://127.0.0.1:7000' in conf

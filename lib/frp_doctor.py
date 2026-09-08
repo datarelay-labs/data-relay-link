@@ -1634,6 +1634,165 @@ def check_backups_and_locks(report, paths, role):
             )
 
 
+def check_access_control(report, paths, facts, cfg, registry_state):
+    """Validate Access Control Pack state, plugin wiring, and log path."""
+    import importlib.util
+    import sys as _sys
+
+    acl = None
+    candidates = []
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.append(Path(root) / 'usr/local/lib/frp-auto-deploy/frp_access_control.py')
+    candidates.extend([
+        Path(__file__).resolve().parent / 'frp_access_control.py',
+        Path('/usr/local/lib/frp-auto-deploy/frp_access_control.py'),
+    ])
+    prev_bytecode = _sys.dont_write_bytecode
+    _sys.dont_write_bytecode = True
+    try:
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            try:
+                spec = importlib.util.spec_from_file_location('frp_access_control', str(candidate))
+                acl = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(acl)
+                break
+            except Exception as exc:
+                report.add(
+                    'ACCESS_CONFIG_ERROR', FAIL,
+                    'ACCESS_CONFIG_ERROR: access control module failed to load',
+                    str(exc),
+                    're-run the server installer',
+                    'state',
+                )
+                return
+    finally:
+        _sys.dont_write_bytecode = prev_bytecode
+    if acl is None:
+        report.add(
+            'ACCESS_CONFIG_ERROR', FAIL,
+            'ACCESS_CONFIG_ERROR: frp_access_control.py is missing',
+            '',
+            're-run the server installer',
+            'installation',
+        )
+        return
+
+    access_rel = '/var/lib/frp-auto-deploy/access-control.json'
+    if isinstance(cfg, dict):
+        configured = str(cfg.get('access_control_file') or '').strip()
+        if configured.startswith('/'):
+            access_rel = configured
+    access_path = paths.p(access_rel)
+    if not paths.is_file(access_rel):
+        report.add(
+            'ACCESS_CONFIG_ERROR', FAIL,
+            'ACCESS_CONFIG_ERROR: access-control.json is missing',
+            access_rel,
+            're-run the server installer to create an empty access-control.json',
+            'state',
+        )
+        access_state = None
+    else:
+        try:
+            access_state = acl.load_access_state(path=access_path, cfg=cfg if isinstance(cfg, dict) else None)
+            report.add(
+                'ACCESS_CONFIG_ERROR', PASS,
+                'access-control.json is readable and valid',
+                access_rel, '', 'state',
+            )
+        except Exception as exc:
+            report.add(
+                'ACCESS_CONFIG_ERROR', FAIL,
+                'ACCESS_CONFIG_ERROR: access-control.json is invalid',
+                str(exc),
+                'restore access-control.json from backup or recreate with frp-access',
+                'state',
+            )
+            access_state = None
+
+    if access_state is not None:
+        registry = registry_state if isinstance(registry_state, dict) else {'clients': {}}
+        for issue in acl.doctor_issues(access_state, registry):
+            cls = str(issue.get('class') or 'ACCESS_CONFIG_ERROR')
+            severity = str(issue.get('severity') or 'error').lower()
+            status = FAIL if severity == 'error' else (WARN if severity == 'warn' else INFO)
+            report.add(
+                cls,
+                status,
+                '%s: %s' % (cls, issue.get('message') or 'issue'),
+                '',
+                'inspect Access Control with frpctl access; doctor does not rewrite ACL state',
+                'state',
+            )
+
+    toml_rel = '/etc/frp/frps.toml'
+    if paths.is_file(toml_rel):
+        text = paths.read_text(toml_rel) or ''
+        has_plugin = (
+            '[[httpPlugins]]' in text
+            and 'name = "frp-access"' in text
+            and 'NewUserConn' in text
+            and 'path = "/access-auth"' in text
+        )
+        if has_plugin:
+            report.add(
+                'ACCESS_PLUGIN_ERROR', PASS,
+                'frps.toml wires NewUserConn httpPlugins to frp-access',
+                '', '', 'installation',
+            )
+        else:
+            report.add(
+                'ACCESS_PLUGIN_ERROR', FAIL,
+                'ACCESS_PLUGIN_ERROR: frps.toml is missing NewUserConn httpPlugins for frp-access',
+                '',
+                're-run the server installer to regenerate frps.toml',
+                'installation',
+            )
+    else:
+        report.add(
+            'ACCESS_PLUGIN_ERROR', FAIL,
+            'ACCESS_PLUGIN_ERROR: frps.toml is missing',
+            toml_rel,
+            're-run the server installer',
+            'installation',
+        )
+
+    check_unit(report, facts, 'frp-access-plugin', 'access_plugin_service', 'frp-access-plugin.service')
+
+    log_rel = '/var/log/frp-auto-deploy/access-conn.jsonl'
+    if isinstance(cfg, dict):
+        configured_log = str(cfg.get('access_conn_log_file') or '').strip()
+        if configured_log.startswith('/'):
+            log_rel = configured_log
+    log_dir_rel = str(Path(log_rel).parent)
+    log_dir = paths.p(log_dir_rel)
+    if not log_dir.exists():
+        report.add(
+            'ACCESS_LOG_ERROR', FAIL,
+            'ACCESS_LOG_ERROR: access connection log directory is missing',
+            log_dir_rel,
+            're-run the server installer so /var/log/frp-auto-deploy is created',
+            'state',
+        )
+    elif not os.access(str(log_dir), os.W_OK):
+        report.add(
+            'ACCESS_LOG_ERROR', FAIL,
+            'ACCESS_LOG_ERROR: access connection log directory is not writable',
+            log_dir_rel,
+            'ensure /var/log/frp-auto-deploy is writable by the access plugin',
+            'state',
+        )
+    else:
+        report.add(
+            'ACCESS_LOG_ERROR', PASS,
+            'access connection log directory is writable',
+            log_dir_rel, '', 'state',
+        )
+
+
 def check_unit(report, facts, unit, check_id, label):
     systemd_usable = bool(facts.get('systemd_usable'))
     units = facts.get('units') or {}
@@ -2107,6 +2266,8 @@ def check_server(report, paths, facts, skip_network):
                     'frontend GET /ca.crt failed (%s)' % (fe_ca.get('error_class') or 'unreachable'),
                     fe_ca.get('detail') or '', rec, 'network',
                 )
+
+    check_access_control(report, paths, facts, cfg if isinstance(cfg, dict) else {}, state if isinstance(state, dict) else {})
 
     bootstrap_abs = '/var/lib/frp-auto-deploy/bootstrap'
     enrollments_abs = '/var/lib/frp-auto-deploy/enrollments'

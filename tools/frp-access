@@ -1,0 +1,694 @@
+#!/usr/bin/env python3
+"""Manage Named Access Lists, service bindings, policy tests, and access logs."""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+
+
+def load_mod(name: str, rel: str):
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / "lib" / rel,
+        Path("/usr/local/lib/frp-auto-deploy") / rel,
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/frp-auto-deploy" / rel)
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(name, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit("ERROR: missing %s" % rel)
+
+
+ACL = load_mod("frp_access_control", "frp_access_control.py")
+CREG = load_mod("frp_client_registry", "frp_client_registry.py")
+
+
+def load_cfg():
+    path = Path(ROOT + "/etc/frp-auto-deploy/config.json")
+    if not path.is_file():
+        raise SystemExit("ERROR: missing /etc/frp-auto-deploy/config.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_registry(cfg):
+    path = ACL.registry_path_from_cfg(cfg)
+    if not path.is_file():
+        return {"schema_version": 2, "clients": {}, "reserved": []}
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if state.get("schema_version") != 2:
+        raise SystemExit("ERROR: unsupported registry schema version")
+    return state
+
+
+def short_client(registry, mid):
+    clients = list((registry.get("clients") or {}))
+    client = (registry.get("clients") or {}).get(mid) or {}
+    label = CREG.sanitize_display(client.get("label") or "", 32)
+    sid = CREG.unique_short_id(mid, clients)
+    return label or sid
+
+
+def service_display(registry, mid, sid):
+    client = (registry.get("clients") or {}).get(mid) or {}
+    svc = (client.get("services") or {}).get(sid) or {}
+    port = svc.get("remote_port") if isinstance(svc, dict) else None
+    return "%s:%s" % (short_client(registry, mid), sid), port
+
+
+def cmd_list(cfg, _args):
+    state = ACL.load_access_state(cfg=cfg)
+    registry = load_registry(cfg)
+    print("Access Lists")
+    print("============")
+    print()
+    print("%-3s %-18s %-8s %-12s %-10s" % ("#", "NAME", "ENTRIES", "ACTIVE/TEMP", "USED BY"))
+    lists = sorted(
+        (state.get("access_lists") or {}).items(),
+        key=lambda item: str((item[1] or {}).get("name") or "").lower(),
+    )
+    if not lists:
+        print("(none)")
+        return
+    for idx, (lid, lst) in enumerate(lists, 1):
+        entries = lst.get("entries") or []
+        active = sum(1 for e in entries if ACL.entry_is_active(e))
+        temp = sum(1 for e in entries if e.get("expires_at"))
+        used = len(ACL.list_services_using(state, lid))
+        print(
+            "%-3d %-18s %-8d %-12s %d services"
+            % (
+                idx,
+                CREG.sanitize_display(lst.get("name") or "-", 18),
+                len(entries),
+                "%d/%d" % (active, temp),
+                used,
+            )
+        )
+
+
+def cmd_create(cfg, args):
+    def mut(state):
+        lid, record = ACL.create_access_list(state, args.name, args.description or "")
+        return lid, record
+
+    lid, record = ACL.mutate_access_state(mut, cfg=cfg)
+    print("Created Access List")
+    print("  ID   : %s" % lid)
+    print("  Name : %s" % record["name"])
+
+
+def cmd_show(cfg, args):
+    state = ACL.load_access_state(cfg=cfg)
+    registry = load_registry(cfg)
+    lid, lst = ACL.resolve_access_list(state, args.list)
+    print("Access List: %s" % lst.get("name"))
+    print("=" * (14 + len(str(lst.get("name") or ""))))
+    print()
+    print("ID          : %s" % lid)
+    print("Description :")
+    print("  %s" % (lst.get("description") or "(none)"))
+    print()
+    print("%-3s %-18s %-20s %s" % ("#", "NAME", "CIDR", "EXPIRATION"))
+    for idx, entry in enumerate(lst.get("entries") or [], 1):
+        exp = ACL.parse_iso_ts(entry.get("expires_at")) if entry.get("expires_at") else None
+        print(
+            "%-3d %-18s %-20s %s"
+            % (
+                idx,
+                CREG.sanitize_display(entry.get("name") or "-", 18),
+                entry.get("cidr") or "-",
+                ACL.format_remaining(exp),
+            )
+        )
+    if not (lst.get("entries") or []):
+        print("(no sources)")
+    print()
+    print("Used by")
+    print("-------")
+    used = ACL.list_services_using(state, lid)
+    if not used:
+        print("(none)")
+    else:
+        for mid, sid in used:
+            label, port = service_display(registry, mid, sid)
+            print("%-22s %s" % (label, port if port is not None else "-"))
+
+
+def cmd_add_source(cfg, args):
+    def mut(state):
+        lid, _lst = ACL.resolve_access_list(state, args.list)
+        used = ACL.list_services_using(state, lid)
+        if used and not args.yes:
+            # Non-interactive: require --yes when shared; interactive path handles prompt.
+            if not sys.stdin.isatty():
+                raise ACL.AccessError(
+                    "Access List is used by %d service(s); re-run with --yes to confirm."
+                    % len(used)
+                )
+        entry = ACL.add_source_entry(
+            state,
+            lid,
+            args.name,
+            args.source,
+            ttl=args.ttl,
+        )
+        return lid, entry, used
+
+    try:
+        lid, entry, used = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+    if used:
+        registry = load_registry(cfg)
+        print("This Access List is used by %d services:" % len(used))
+        for mid, sid in used:
+            label, port = service_display(registry, mid, sid)
+            print("  %-22s port %s" % (label, port if port is not None else "-"))
+        print("This change affects all services above.")
+    print("Added source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+    if entry.get("expires_at"):
+        print("Expires at  : %s" % entry.get("expires_at"))
+
+
+def cmd_remove_source(cfg, args):
+    def mut(state):
+        lid, _lst = ACL.resolve_access_list(state, args.list)
+        return ACL.remove_source_entry(state, lid, args.source)
+
+    try:
+        entry = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+    print("Removed source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+
+
+def cmd_delete(cfg, args):
+    def mut(state):
+        lid, lst = ACL.resolve_access_list(state, args.list)
+        ACL.delete_access_list(state, lid)
+        return lst.get("name")
+
+    try:
+        name = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+    print("Deleted Access List %s" % name)
+
+
+def cmd_edit_info(cfg, args):
+    def mut(state):
+        lid, _lst = ACL.resolve_access_list(state, args.list)
+        return ACL.update_access_list_info(
+            state,
+            lid,
+            name=args.name,
+            description=args.description,
+        )
+
+    try:
+        lst = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+    print("Updated Access List %s" % lst.get("name"))
+
+
+def cmd_remove_expired(cfg, args):
+    def mut(state):
+        lid, _lst = ACL.resolve_access_list(state, args.list)
+        return ACL.remove_expired_entries(state, lid)
+
+    try:
+        removed = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+    print("Removed %d expired entr%s" % (len(removed), "y" if len(removed) == 1 else "ies"))
+
+
+def resolve_service(cfg, client_sel, service_id):
+    registry = load_registry(cfg)
+    mid, client = CREG.resolve_client_or_exit(registry, client_sel)
+    sid = str(service_id).strip().lower()
+    services = client.get("services") or {}
+    if sid not in services:
+        raise SystemExit("ERROR: service not found: %s" % sid)
+    return registry, mid, client, sid, services[sid]
+
+
+def cmd_assign(cfg, args):
+    registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
+
+    def mut(state):
+        lid, lst = ACL.resolve_access_list(state, args.list)
+        ACL.set_service_binding(state, mid, sid, ACL.MODE_ALLOWLIST, lid)
+        return lst
+
+    try:
+        lst = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        # Interactive empty-allowlist UX
+        msg = str(exc)
+        if "No allowed sources" in msg and sys.stdin.isatty():
+            print(msg)
+            print()
+            print("1) Add source")
+            print("2) Cancel")
+            choice = input("Select [2]: ").strip() or "2"
+            if choice == "1":
+                raise SystemExit(
+                    "Use: frpctl access add-source %r --name NAME --source CIDR" % args.list
+                )
+            raise SystemExit(0)
+        raise SystemExit("ERROR: %s" % exc)
+    print("Assigned Access List %s to %s:%s (port %s)" % (
+        lst.get("name"), short_client(registry, mid), sid, svc.get("remote_port"),
+    ))
+
+
+def cmd_public(cfg, args):
+    registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
+
+    def mut(state):
+        ACL.set_service_binding(state, mid, sid, ACL.MODE_PUBLIC, None)
+        return True
+
+    ACL.mutate_access_state(mut, cfg=cfg)
+    print("Set %s:%s to PUBLIC (port %s)" % (
+        short_client(registry, mid), sid, svc.get("remote_port"),
+    ))
+
+
+def cmd_show_service(cfg, args):
+    registry, mid, client, sid, svc = resolve_service(cfg, args.client, args.service)
+    state = ACL.load_access_state(cfg=cfg)
+    binding = ACL.get_service_binding(state, mid, sid)
+    print("Service Access")
+    print("==============")
+    print()
+    print("Client        : %s" % short_client(registry, mid))
+    print("Service ID    : %s" % sid)
+    print("Public port   : %s" % (svc.get("remote_port") if svc else "-"))
+    print("State         : %s" % ("ENABLED" if svc.get("enabled", True) else "DISABLED"))
+    print("Access mode   : %s" % binding["access_mode"])
+    list_name = "-"
+    entries = []
+    if binding["access_mode"] == ACL.MODE_ALLOWLIST and binding.get("access_list_id"):
+        lst = (state.get("access_lists") or {}).get(binding["access_list_id"]) or {}
+        list_name = lst.get("name") or binding["access_list_id"]
+        entries = lst.get("entries") or []
+    print("Access list   : %s" % list_name)
+    print()
+    print("Allowed sources")
+    print("---------------")
+    if binding["access_mode"] == ACL.MODE_PUBLIC:
+        print("(public — any source)")
+    elif not entries:
+        print("(none)")
+    else:
+        for entry in entries:
+            exp = ACL.parse_iso_ts(entry.get("expires_at")) if entry.get("expires_at") else None
+            print(
+                "%-18s %-20s %s"
+                % (
+                    CREG.sanitize_display(entry.get("name") or "-", 18),
+                    entry.get("cidr") or "-",
+                    ACL.format_remaining(exp),
+                )
+            )
+    print()
+    print("Recent Access")
+    print("-------------")
+    events = ACL.read_conn_log(cfg=cfg, client_id=mid, service_id=sid, limit=5)
+    if not events:
+        print("(none)")
+    else:
+        for event in events:
+            ts = str(event.get("timestamp") or "")
+            if "T" in ts:
+                ts = ts.replace("T", " ").replace("Z", "")
+                if len(ts) >= 8:
+                    ts = ts[11:19] if len(ts) >= 19 else ts
+            match = event.get("matched_entry_name") or "-"
+            if event.get("reason") == ACL.REASON_ENTRY_EXPIRED and match != "-":
+                match = "%s (expired)" % match
+            print(
+                "%-10s %-16s %-6s %s"
+                % (ts, event.get("source_ip") or "-", event.get("decision") or "-", match)
+            )
+
+
+def cmd_test(cfg, args):
+    registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
+    state = ACL.load_access_state(cfg=cfg)
+    verdict = ACL.authorize(
+        state,
+        registry,
+        client_id=mid,
+        service_id=sid,
+        source_ip=args.source,
+    )
+    binding = ACL.get_service_binding(state, mid, sid)
+    list_name = "-"
+    if binding.get("access_list_id"):
+        lst = (state.get("access_lists") or {}).get(binding["access_list_id"]) or {}
+        list_name = lst.get("name") or binding["access_list_id"]
+    print("Access Policy Test")
+    print("==================")
+    print()
+    print("Client        : %s" % short_client(registry, mid))
+    print("Service ID    : %s" % sid)
+    print("Public port   : %s" % (svc.get("remote_port") if svc else "-"))
+    print("Mode          : %s" % verdict.get("access_mode"))
+    print("Access list   : %s" % list_name)
+    print("Source IP     : %s" % verdict.get("source_ip"))
+    print()
+    if verdict.get("matched_entry_name"):
+        print("Matched entry")
+        print("-------------")
+        print("%s" % verdict.get("matched_entry_name"))
+        # find cidr
+        lst = (state.get("access_lists") or {}).get(binding.get("access_list_id")) or {}
+        for entry in lst.get("entries") or []:
+            if entry.get("id") == verdict.get("matched_entry_id"):
+                print("%s" % entry.get("cidr"))
+                break
+        print()
+    print("Decision      : %s" % verdict.get("decision"))
+    if verdict.get("decision") != ACL.DECISION_ALLOW or verdict.get("reason") != ACL.REASON_PUBLIC:
+        if verdict.get("decision") == ACL.DECISION_DENY or verdict.get("reason") not in (
+            ACL.REASON_PUBLIC,
+            ACL.REASON_CIDR_MATCH,
+        ):
+            print("Reason        : %s" % verdict.get("reason"))
+        elif verdict.get("reason") == ACL.REASON_CIDR_MATCH:
+            pass
+        else:
+            print("Reason        : %s" % verdict.get("reason"))
+
+
+def cmd_log(cfg, args):
+    registry, mid, _client, sid, _svc = resolve_service(cfg, args.client, args.service)
+    decision = None
+    if args.allow and args.deny:
+        raise SystemExit("ERROR: use only one of --allow / --deny")
+    if args.allow:
+        decision = ACL.DECISION_ALLOW
+    elif args.deny:
+        decision = ACL.DECISION_DENY
+    events = ACL.read_conn_log(
+        cfg=cfg,
+        client_id=mid,
+        service_id=sid,
+        decision=decision,
+        limit=args.limit,
+    )
+    print("Recent Access")
+    print("=============")
+    print()
+    print("%-20s %-15s %-8s %s" % ("TIME", "SOURCE", "DECISION", "MATCH"))
+    if not events:
+        print("(none)")
+        return
+    for event in events:
+        ts = str(event.get("timestamp") or "").replace("T", " ").replace("Z", "")
+        if len(ts) > 19:
+            ts = ts[:19]
+        match = event.get("matched_entry_name") or "-"
+        if event.get("reason") == ACL.REASON_ENTRY_EXPIRED and match != "-":
+            match = "%s (expired)" % match
+        print(
+            "%-20s %-15s %-8s %s"
+            % (ts, event.get("source_ip") or "-", event.get("decision") or "-", match)
+        )
+
+
+def interactive_menu(cfg):
+    while True:
+        print()
+        print("Access Control")
+        print("==============")
+        print()
+        print("1) List access lists")
+        print("2) Create access list")
+        print("3) Edit access list")
+        print("4) Delete access list")
+        print("5) Assign access list to service")
+        print("6) Set service PUBLIC")
+        print("7) Show service access")
+        print("8) Test source IP")
+        print("9) Recent access log")
+        print("10) Back")
+        choice = input("Select: ").strip()
+        if choice in ("10", "q", "Q", ""):
+            return
+        try:
+            if choice == "1":
+                cmd_list(cfg, argparse.Namespace())
+            elif choice == "2":
+                name = input("Name: ").strip()
+                desc = input("Description (optional): ").strip()
+                cmd_create(cfg, argparse.Namespace(name=name, description=desc))
+            elif choice == "3":
+                interactive_edit_list(cfg)
+            elif choice == "4":
+                sel = input("Access list: ").strip()
+                cmd_delete(cfg, argparse.Namespace(list=sel))
+            elif choice == "5":
+                client = input("Client: ").strip()
+                service = input("Service ID: ").strip()
+                lst = input("Access list: ").strip()
+                cmd_assign(cfg, argparse.Namespace(client=client, service=service, list=lst))
+            elif choice == "6":
+                client = input("Client: ").strip()
+                service = input("Service ID: ").strip()
+                cmd_public(cfg, argparse.Namespace(client=client, service=service))
+            elif choice == "7":
+                client = input("Client: ").strip()
+                service = input("Service ID: ").strip()
+                cmd_show_service(cfg, argparse.Namespace(client=client, service=service))
+            elif choice == "8":
+                client = input("Client: ").strip()
+                service = input("Service ID: ").strip()
+                source = input("Source IP: ").strip()
+                cmd_test(cfg, argparse.Namespace(client=client, service=service, source=source))
+            elif choice == "9":
+                client = input("Client: ").strip()
+                service = input("Service ID: ").strip()
+                cmd_log(
+                    cfg,
+                    argparse.Namespace(client=client, service=service, limit=50, allow=False, deny=False),
+                )
+            else:
+                print("Unknown selection")
+        except (ACL.AccessError, SystemExit) as exc:
+            if isinstance(exc, SystemExit):
+                code = exc.code
+                if code not in (0, None):
+                    print(exc if isinstance(code, str) else ("ERROR" if code else ""), file=sys.stderr)
+            else:
+                print("ERROR: %s" % exc, file=sys.stderr)
+
+
+def interactive_edit_list(cfg):
+    sel = input("Access list: ").strip()
+    state = ACL.load_access_state(cfg=cfg)
+    lid, lst = ACL.resolve_access_list(state, sel)
+    while True:
+        cmd_show(cfg, argparse.Namespace(list=lid))
+        print()
+        print("Actions")
+        print("=======")
+        print("1) Add source")
+        print("2) Edit source")
+        print("3) Remove source")
+        print("4) Add temporary source")
+        print("5) Edit list information")
+        print("6) Remove expired entries")
+        print("7) Back")
+        choice = input("Select: ").strip()
+        if choice in ("7", "q", "Q", ""):
+            return
+        used = ACL.list_services_using(state, lid)
+        if choice in ("1", "2", "3", "4", "5", "6") and used and choice != "7":
+            registry = load_registry(cfg)
+            print()
+            print("This Access List is used by %d services:" % len(used))
+            for mid, sid in used:
+                label, port = service_display(registry, mid, sid)
+                print("  %-22s port %s" % (label, port if port is not None else "-"))
+            print("This change affects all services above.")
+            confirm = input("Continue? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                continue
+        if choice == "1":
+            name = input("Name: ").strip()
+            source = input("CIDR/IP: ").strip()
+            cmd_add_source(
+                cfg,
+                argparse.Namespace(list=lid, name=name, source=source, ttl=None, yes=True),
+            )
+        elif choice == "4":
+            name = input("Name: ").strip()
+            source = input("CIDR/IP: ").strip()
+            ttl = input("TTL (e.g. 4h): ").strip()
+            cmd_add_source(
+                cfg,
+                argparse.Namespace(list=lid, name=name, source=source, ttl=ttl, yes=True),
+            )
+        elif choice == "3":
+            source = input("Source (name/CIDR/id): ").strip()
+            cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source))
+        elif choice == "5":
+            name = input("New name (blank=keep): ").strip() or None
+            desc = input("New description (blank=keep): ").strip()
+            desc = None if desc == "" and name is None else (desc if desc != "" or True else None)
+            # only pass description if user typed something including empty to clear? keep simple
+            ns = argparse.Namespace(
+                list=lid,
+                name=name,
+                description=input("Description (blank keeps current; '-' clears): ").strip(),
+            )
+            if ns.description == "":
+                ns.description = None
+            elif ns.description == "-":
+                ns.description = ""
+            cmd_edit_info(cfg, ns)
+        elif choice == "6":
+            cmd_remove_expired(cfg, argparse.Namespace(list=lid))
+        elif choice == "2":
+            print("Edit source: remove then re-add with new values.")
+            source = input("Existing source (name/CIDR/id): ").strip()
+            cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source))
+            name = input("New name: ").strip()
+            cidr = input("New CIDR/IP: ").strip()
+            ttl = input("TTL (blank=permanent): ").strip() or None
+            cmd_add_source(
+                cfg,
+                argparse.Namespace(list=lid, name=name, source=cidr, ttl=ttl, yes=True),
+            )
+        state = ACL.load_access_state(cfg=cfg)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="frp-access", description="FRP Auto Deploy Access Control")
+    sub = parser.add_subparsers(dest="cmd")
+
+    sub.add_parser("list", help="List access lists")
+    sub.add_parser("menu", help="Interactive Access Control menu")
+
+    p = sub.add_parser("create", help="Create access list")
+    p.add_argument("name")
+    p.add_argument("--description", default="")
+
+    p = sub.add_parser("show", help="Show access list")
+    p.add_argument("list")
+
+    p = sub.add_parser("delete", help="Delete access list")
+    p.add_argument("list")
+
+    p = sub.add_parser("add-source", help="Add source to access list")
+    p.add_argument("list")
+    p.add_argument("--name", required=True)
+    p.add_argument("--source", required=True)
+    p.add_argument("--ttl", default=None)
+    p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("remove-source", help="Remove source from access list")
+    p.add_argument("list")
+    p.add_argument("--source", required=True)
+
+    p = sub.add_parser("edit-info", help="Edit access list name/description")
+    p.add_argument("list")
+    p.add_argument("--name", default=None)
+    p.add_argument("--description", default=None)
+
+    p = sub.add_parser("remove-expired", help="Remove expired entries")
+    p.add_argument("list")
+
+    p = sub.add_parser("assign", help="Assign access list to service")
+    p.add_argument("client")
+    p.add_argument("service")
+    p.add_argument("list")
+
+    p = sub.add_parser("public", help="Set service PUBLIC")
+    p.add_argument("client")
+    p.add_argument("service")
+
+    p = sub.add_parser("show-service", help="Show service access")
+    p.add_argument("client")
+    p.add_argument("service")
+
+    p = sub.add_parser("test", help="Policy preview for a source IP")
+    p.add_argument("client")
+    p.add_argument("service")
+    p.add_argument("source")
+
+    p = sub.add_parser("log", help="Show recent access log")
+    p.add_argument("client")
+    p.add_argument("service")
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--allow", action="store_true")
+    p.add_argument("--deny", action="store_true")
+
+    return parser
+
+
+def main(argv=None):
+    argv = list(argv if argv is not None else sys.argv[1:])
+    parser = build_parser()
+    if not argv:
+        cfg = load_cfg()
+        interactive_menu(cfg)
+        return
+    args = parser.parse_args(argv)
+    cfg = load_cfg()
+    try:
+        if args.cmd == "list":
+            cmd_list(cfg, args)
+        elif args.cmd == "menu":
+            interactive_menu(cfg)
+        elif args.cmd == "create":
+            cmd_create(cfg, args)
+        elif args.cmd == "show":
+            cmd_show(cfg, args)
+        elif args.cmd == "delete":
+            cmd_delete(cfg, args)
+        elif args.cmd == "add-source":
+            cmd_add_source(cfg, args)
+        elif args.cmd == "remove-source":
+            cmd_remove_source(cfg, args)
+        elif args.cmd == "edit-info":
+            cmd_edit_info(cfg, args)
+        elif args.cmd == "remove-expired":
+            cmd_remove_expired(cfg, args)
+        elif args.cmd == "assign":
+            cmd_assign(cfg, args)
+        elif args.cmd == "public":
+            cmd_public(cfg, args)
+        elif args.cmd == "show-service":
+            cmd_show_service(cfg, args)
+        elif args.cmd == "test":
+            cmd_test(cfg, args)
+        elif args.cmd == "log":
+            cmd_log(cfg, args)
+        else:
+            parser.print_help()
+            raise SystemExit(2)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BrokenPipeError:
+        pass

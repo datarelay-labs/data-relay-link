@@ -28,6 +28,26 @@ def load_creg():
 CREG = load_creg()
 
 
+def load_acl():
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / 'lib' / 'frp_access_control.py',
+        Path('/usr/local/lib/frp-auto-deploy/frp_access_control.py'),
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_access_control.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_access_control', str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+ACL = load_acl()
+
+
 def require_v2(state):
     if not isinstance(state, dict) or state.get('schema_version') != 2:
         version = 1
@@ -104,8 +124,25 @@ def print_overview():
     print('Tag count      : %s' % len(tags))
 
 
+def access_column(service_id):
+    if ACL is None:
+        return 'PUBLIC'
+    try:
+        access_state = ACL.load_access_state(cfg=cfg)
+        binding = ACL.get_service_binding(access_state, mid, service_id)
+        if binding.get('access_mode') != ACL.MODE_ALLOWLIST:
+            return 'PUBLIC'
+        list_id = binding.get('access_list_id')
+        lst = (access_state.get('access_lists') or {}).get(list_id) or {}
+        entries = lst.get('entries') or []
+        active = sum(1 for entry in entries if isinstance(entry, dict) and ACL.entry_is_active(entry))
+        return 'ALLOWLIST (%s)' % active
+    except Exception:
+        return 'PUBLIC'
+
+
 def print_services():
-    print('%-10s %-6s %-14s %-22s %s' % ('SERVICE', 'TYPE', 'TARGET', 'PUBLIC', 'STATE'))
+    print('%-10s %-6s %-14s %-22s %-14s %s' % ('SERVICE', 'TYPE', 'TARGET', 'PUBLIC', 'ACCESS', 'STATE'))
     if not services:
         print('(no services)')
         return
@@ -125,8 +162,8 @@ def print_services():
         sid_txt = CREG.sanitize_display(sid, 10)
         target = '%s:%s' % (local_ip, local_port)
         public = '%s:%s' % (access_host or 'host', remote_port)
-        print('%-10s %-6s %-14s %-22s %s' % (
-            sid_txt, protocol, target[:14], public[:22], enabled_flag,
+        print('%-10s %-6s %-14s %-22s %-14s %s' % (
+            sid_txt, protocol, target[:14], public[:22], access_column(sid)[:14], enabled_flag,
         ))
     ssh_sid, ssh = CREG.first_ssh_service(client)
     if ssh:

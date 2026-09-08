@@ -29,6 +29,9 @@ root = Path(sys.argv[1])
   'deployment_mode': 'direct',
 }) + '\n')
 (root / 'var/lib/frp-auto-deploy/registry.json').write_text(json.dumps({'schema_version': 2, 'clients': {}}) + '\n')
+(root / 'var/lib/frp-auto-deploy/access-control.json').write_text(
+    json.dumps({'schema_version': 1, 'access_lists': {}, 'service_access': {}}) + '\n'
+)
 (root / 'etc/frp-auto-deploy/version').write_text(
     'PROJECT_VERSION=2.2.1\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=main\n'
     'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
