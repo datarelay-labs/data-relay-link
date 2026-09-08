@@ -257,6 +257,8 @@ CA/token/port loss. FRP stays pinned at 0.71.0.
 
 ```text
 doctor
+support-bundle
+support-bundle --output <path>
 help
 help show
 help set client
@@ -269,6 +271,11 @@ history
 clear
 exit
 ```
+
+`support-bundle` writes a sanitized read-only diagnostic archive
+(`frp-support-<hostname>-<YYYYMMDDTHHMMSSZ>.tar.gz`). Private keys, tokens,
+enrollment secrets, and auth material are omitted or redacted. It does not
+restart services.
 
 Root `?` lists verbs only. Detailed syntax is under `help` / `help <verb>`
 or a context `?`. `menu` is the guided numbered interface using the same

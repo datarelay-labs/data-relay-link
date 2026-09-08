@@ -26,6 +26,7 @@ project usr/local/lib/frp-auto-deploy/frp_frontend.py 0644 lib/frp_frontend.py p
 project usr/local/lib/frp-auto-deploy/frp-common.sh 0644 lib/frp-common.sh bash
 project usr/local/lib/frp-auto-deploy/frp-doctor-common.sh 0644 lib/frp-doctor-common.sh bash
 project usr/local/lib/frp-auto-deploy/frp_doctor.py 0644 lib/frp_doctor.py python
+project usr/local/lib/frp-auto-deploy/frp_support_bundle.py 0644 lib/frp_support_bundle.py python
 project usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py 0644 lib/frp_ctl_grammar.py python
 project usr/local/lib/frp-auto-deploy/frp_ctl_repl.py 0644 lib/frp_ctl_repl.py python
 project usr/local/lib/frp-auto-deploy/frp_install_txn.py 0644 lib/frp_install_txn.py python
@@ -65,6 +66,7 @@ project usr/local/sbin/frp-server-status 0755 tools/frp-server-status bash
 project usr/local/sbin/frp-project-update 0755 tools/frp-project-update bash
 project usr/local/sbin/frp-backup 0755 tools/frp-backup python
 project usr/local/sbin/frp-restore 0755 tools/frp-restore python
+project usr/local/sbin/frp-support-bundle 0755 tools/frp-support-bundle python
 project usr/local/sbin/frp-update 0755 tools/frp-update bash
 project usr/local/sbin/frp-upstream 0755 tools/frp-upstream bash
 project usr/local/sbin/frpctl 0755 tools/frpctl bash

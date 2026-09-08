@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  frp-client lifecycle tool for Windows (start/stop/status/info/update/uninstall/doctor/autostart).
+  frp-client lifecycle tool for Windows (start/stop/status/info/update/uninstall/doctor/support-bundle/autostart).
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
     [ValidateSet(
-        'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'autostart', 'help',
+        'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'support-bundle', 'autostart', 'help',
         'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service',
         'apply', 'discard', 'sync', 'reconcile'
     )]
@@ -29,7 +29,9 @@ param(
     [string]$SshUser,
 
     [switch]$Enable,
-    [switch]$Disable
+    [switch]$Disable,
+
+    [string]$Output
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,6 +94,7 @@ frp-client (Windows)
   update            Update frpc.exe (preserve identity/ports); -Check for dry run
   uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor            Basic local checks
+  support-bundle    Create a sanitized local diagnostic zip (-Output <path>)
   autostart         Show/enable/disable the startup autostart task
                        (-Enable / -Disable; no args shows current status)
 
@@ -388,6 +391,93 @@ function Invoke-FrpClientDoctor {
     return 0
 }
 
+function Invoke-FrpClientSupportBundle {
+    param([string]$OutputPath)
+    # Read-only Windows stub: collect sanitized metadata into a zip. Never
+    # include private keys, tokens, or identity secret material.
+    $root = Get-FrpWindowsRoot
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+    $hostName = $env:COMPUTERNAME
+    if (-not $hostName) { $hostName = 'windows' }
+    $hostName = ($hostName -replace '[^A-Za-z0-9._-]', '-')
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        $dir = Join-Path $root 'support-bundles'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $OutputPath = Join-Path $dir ("frp-support-{0}-{1}.zip" -f $hostName, $stamp)
+    }
+    $stage = Join-Path $env:TEMP ("frp-support-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    try {
+        $meta = @{
+            format = 'frp-auto-deploy-support-bundle-windows'
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+            hostname = $hostName
+            role = 'client'
+            root = $root
+            read_only = $true
+            secrets_policy = 'private keys and tokens omitted'
+        } | ConvertTo-Json -Depth 4
+        Set-Content -LiteralPath (Join-Path $stage 'meta.json') -Value $meta -Encoding UTF8
+
+        $doctorOut = & {
+            $ErrorActionPreference = 'Continue'
+            Invoke-FrpClientDoctor | Out-String
+        }
+        Set-Content -LiteralPath (Join-Path $stage 'doctor.txt') -Value $doctorOut -Encoding UTF8
+
+        $safeCopies = @()
+        foreach ($rel in @('allocator-ca.crt', 'client-identity.pub')) {
+            $src = Join-Path $root $rel
+            if (Test-Path -LiteralPath $src) {
+                Copy-Item -LiteralPath $src -Destination (Join-Path $stage $rel) -Force
+                $safeCopies += $rel
+            }
+        }
+        # Summarize client-state without secret fields.
+        $statePath = Get-FrpStatePath
+        if (Test-Path -LiteralPath $statePath) {
+            try {
+                $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+                $summary = [ordered]@{
+                    client_id = $state.client_id
+                    label = $state.label
+                    hostname = $state.hostname
+                    allocator_url = $state.allocator_url
+                    server_addr = $state.frp_server
+                    transport = $state.transport
+                }
+                ($summary | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $stage 'client-summary.json') -Encoding UTF8
+            } catch {
+                Set-Content -LiteralPath (Join-Path $stage 'client-summary.json') -Value '{"error":"unreadable"}' -Encoding UTF8
+            }
+        }
+        $omitted = @(
+            'client-identity.key',
+            'client-identity.mac',
+            'any auth.token / server token material'
+        )
+        Set-Content -LiteralPath (Join-Path $stage 'OMITTED_SECRETS.txt') -Value ($omitted -join "`n") -Encoding UTF8
+
+        if (Test-Path -LiteralPath $OutputPath) { Remove-Item -LiteralPath $OutputPath -Force }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $OutputPath)
+        $size = (Get-Item -LiteralPath $OutputPath).Length
+        Write-Host 'Support bundle created'
+        Write-Host ("  path     : {0}" -f $OutputPath)
+        Write-Host ("  size     : {0} bytes" -f $size)
+        Write-Host ("  sections : meta, doctor, client-summary{0}" -f ($(if ($safeCopies.Count) { ', public-certs' } else { '' })))
+        Write-Host '  redaction: private keys and tokens omitted'
+        return 0
+    } catch {
+        Write-Host ("ERROR: support-bundle failed: {0}" -f $_.Exception.Message)
+        return 1
+    } finally {
+        if (Test-Path -LiteralPath $stage) {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-FrpClientAutostart {
     param([switch]$Enable, [switch]$Disable)
     if ($Enable -and $Disable) {
@@ -567,6 +657,7 @@ switch ($Command) {
     'update' { exit (Invoke-FrpClientUpdate -CheckOnly:$Check) }
     'uninstall' { exit (Invoke-FrpClientUninstall) }
     'doctor' { exit (Invoke-FrpClientDoctor) }
+    'support-bundle' { exit (Invoke-FrpClientSupportBundle -OutputPath $Output) }
     'autostart' { exit (Invoke-FrpClientAutostart -Enable:$Enable -Disable:$Disable) }
     default { Show-FrpClientHelp; exit 1 }
 }
