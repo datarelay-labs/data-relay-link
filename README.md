@@ -33,9 +33,12 @@ Documentation: **https://frp.xdr.ooo**
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
 
-`v2.2.0` remains an immutable historical release. `v2.2.1` is the current stable release and keeps FRP pinned at `0.71.0`.
+Current project version: **2.2.1**
+Current pinned FRP version: **v0.71.0**
 
-The mutable `main` branch can advance after a release. Normal field installations should use the immutable stable tag.
+`v2.2.0` remains an immutable historical release. `v2.2.1` is the **current stable release** and keeps FRP pinned at `0.71.0`. Stable field installs use the immutable `v2.2.1` tag. Following mutable `main` is explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
+
+On development builds, use release channel, source ref, and verified bundle SHA256 to identify the exact build.
 
 ---
 
@@ -68,7 +71,7 @@ The post-release documentation restoration phase **`CANONICAL_PRODUCT_MASTER_RES
 | `SHA256SUMS` updated | **YES** |
 | README stale release state fixed | **YES** |
 | Security stale release state fixed | **YES** |
-| `docs/GITHUB_SETUP.md` stale state fixed | **NO — remaining docs follow-up** |
+| Root `GITHUB_SETUP.md` release URLs | **YES — already points at immutable `v2.2.1`**; no `docs/GITHUB_SETUP.md` exists |
 | Owner manual E2E required | **NO** |
 | Final documentation state | **CANONICAL** |
 
@@ -261,7 +264,23 @@ sudo frpctl create enrollment \
   --label branch-a
 ```
 
-The SSH account must already exist on the target system. FRP Auto Deploy does not create OS users, passwords, SSH keys, or configure `sshd`.
+The SSH account must already exist on the target system. There is **no default username**:
+do not assume `ubuntu`, `root`, or any distro-specific account.
+
+Interactive creation may prompt:
+
+```text
+Client SSH user: aella
+SSH port [22]: 22
+```
+
+Zero-touch does **not**:
+
+- create an OS user
+- install or enable an SSH server
+- set a password
+- create or modify SSH keys / `authorized_keys`
+- change `sshd_config`
 
 When `bootstrap_hostname` is configured with an operator-owned public DNS/TLS/reverse-proxy endpoint, the Linux Short URL can look like:
 
@@ -299,6 +318,12 @@ A client can publish one or many TCP services.
 FRP Server:<assigned-port>
         ->
 Client 127.0.0.1:22
+```
+
+Connect with the assigned public service port:
+
+```bash
+ssh -p <public-port> aella@203.0.113.10
 ```
 
 ### Multiple local services
@@ -465,6 +490,8 @@ sudo frpctl update frp --check
 ```
 
 `show upstream` is informational. FRP Auto Deploy does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
+
+Legacy clients that do not have persisted release identity fail closed on remote update. Use the **one-time verified bridge** documented in [`docs/FRP_UPGRADE.md`](docs/FRP_UPGRADE.md); do not guess or silently switch a legacy install to a release channel.
 
 ---
 
