@@ -385,7 +385,7 @@ frp_client_existing_install_message() {
   echo "  sudo frpctl update" >&2
   echo >&2
   echo "or, from the bootstrap bundle:" >&2
-  echo "  curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v${PROJECT_VERSION}/dist/bootstrap-client.sh | sudo bash -s -- --upgrade" >&2
+  echo "  curl -fsSL https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/v${PROJECT_VERSION}/dist/bootstrap-client.sh | sudo bash -s -- --upgrade" >&2
   echo >&2
   echo "Use sudo frp-client to change published services." >&2
   echo "An Enrollment Code is only for first install or trust recovery." >&2

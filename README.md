@@ -185,7 +185,7 @@ For normal field installation, use the immutable stable tag:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-server.sh \
   | sudo bash
 ```
 

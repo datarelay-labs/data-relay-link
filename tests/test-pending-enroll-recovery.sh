@@ -100,7 +100,7 @@ pki = root / 'pki'
     'enrollments_dir': str(root / 'enrollments'),
     'bootstrap_dir': str(root / 'bootstrap'),
     'token_file': str(root / 'server_token'),
-    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
 }, indent=2) + '\n')
 PY
@@ -125,7 +125,7 @@ port = int(sys.argv[2])
     'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
     'tls_server_cert': '/etc/frp-auto-deploy/pki/server.crt',
     'tls_server_key': '/etc/frp-auto-deploy/pki/server.key',
-    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
     'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
     'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
     'registry_file': '/var/lib/frp-auto-deploy/registry.json',

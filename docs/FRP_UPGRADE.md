@@ -150,7 +150,7 @@ One-time verified bridge (development line: `channel=dev`,
 
 ```bash
 COMMIT=<immutable-commit-sha>
-BASE="https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/${COMMIT}"
+BASE="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${COMMIT}"
 curl -fsSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 curl -fsSL "${BASE}/dist/bootstrap-client.sh" -o bootstrap-client.sh
 expected="$(awk '$2=="dist/bootstrap-client.sh" {print $1; exit}' SHA256SUMS)"
