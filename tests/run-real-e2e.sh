@@ -515,6 +515,9 @@ PY" || fail_stop
   MATRIX_DNS=SKIP
 
   run_client 52-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\frp-auto-deploy') { exit 1 }; Write-Output UNINSTALL_OK\"" || fail_stop
+  # Local uninstall preserves server reservations by design; release so matrix fleet
+  # DNS does not probe a dead Windows proxy after the profile completes.
+  run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/sbin/frpctl release client '$CLIENT_MID_PREFIX'" || fail_stop
   MATRIX_UNINSTALL=PASS
 }
 
