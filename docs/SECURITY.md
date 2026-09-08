@@ -1,6 +1,6 @@
 # Security architecture
 
-This document describes the security model of `frp-auto-deploy` **2.2.0**.
+This document describes the security model of `frp-auto-deploy` **2.2.1**.
 It is not a certification, audit report, or guarantee against a compromised
 root account.
 
@@ -160,8 +160,8 @@ The Windows Short URL appends `?platform=windows`. The returned PowerShell
 bootstrap downloads both `SHA256SUMS` and `dist/bootstrap-client.ps1`, verifies
 the script with `Get-FileHash -Algorithm SHA256`, and only then executes it with
 `powershell.exe -File`. It never uses `irm | iex` or another download-and-execute
-pipeline. Windows support on `integration/morning-e2e-ready` remains a
-human-Real-E2E-pending candidate, not a stable platform claim.
+pipeline. Windows PS5.1 Real E2E is validated in v2.2.1; PowerShell 7 remains
+CI-validated (same real host only when `pwsh` is available).
 
 ## 6a. Enrollment retention and purge
 

@@ -27,7 +27,7 @@ It solves the operational work around FRP:
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Published stable install source | immutable `v2.2.1` tag |
-| Integration candidate | macOS, Windows, Group MVP; human Real E2E pending |
+| Stable platforms (v2.2.1) | Linux Real E2E + macOS Apple Silicon + Windows PS5.1; PS7 CI |
 | `main` branch | development channel; may contain post-v2.2.1 changes |
 
 Current project version: **2.2.1**
@@ -207,7 +207,7 @@ More detail: [docs/DEPLOYMENT_MODES.md](docs/DEPLOYMENT_MODES.md)
 
 # 3. Install the server
 
-For a published stable installation, use the immutable v2.2.0 bundle:
+For a published stable installation, use the immutable v2.2.1 tag:
 
 ```bash
 curl -fsSL \
@@ -721,10 +721,10 @@ Automated userspace/container portability is exercised on:
 | Amazon Linux 2023 | PASS |
 | Amazon Linux 2 | PASS |
 
-Stable platform scope is **Linux/systemd**. The integration branch contains
-macOS launchd and Windows client candidates plus Group MVP, all pending human
-Real E2E and not stable-supported. Design target is **1–50 clients**, not 100+
-fleet orchestration.
+Stable platform scope for **v2.2.1** includes Linux/systemd Real E2E hosts,
+macOS Apple Silicon, and Windows PS5.1 (PowerShell 7 is CI-validated). Manual
+Group MVP is shipped. Design target is **1–50 clients**, not 100+ fleet
+orchestration.
 
 Real-environment validation and container validation are **not the same claim**.
 For example, SELinux Enforcing, native ARM64 systemd, and some older OpenSSL
@@ -811,7 +811,7 @@ curl -fsSL \
 - No automatic cloud firewall, security group, UFW, firewalld, iptables, or
   external NAT configuration
 - No automatic SSH account, password, or SSH key management
-- Windows PS5.1 and macOS Apple Silicon Real E2E are validated in v2.2.0;
+- Windows PS5.1 and macOS Apple Silicon Real E2E are validated in v2.2.1;
   PowerShell 7 is CI-validated (same-host PS7 only when `pwsh` is installed)
 - Some real-VM / SELinux / ARM64 / older OpenSSL combinations remain separately
   classified in the validation matrix
