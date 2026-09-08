@@ -81,6 +81,7 @@ bash ./tests/test-installed-client-update.sh
 python3 tests/test-access-control.py
 ./tests/test-access-control.sh
 ./tests/test-target-health.sh
+./tests/test-support-bundle.sh
 python3 tests/test-service-profiles.py
 ./tests/test-service-profiles.sh
 ./tests/test-ca-bootstrap.sh
