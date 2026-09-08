@@ -215,6 +215,29 @@ Purging enrollment metadata does not delete audit events.
 `release` keeps the existing confirmation, locking, and passive port recheck.
 `restore` keeps archive validation, snapshot, restart, doctor, and rollback.
 
+
+## profiles (server)
+
+Reusable server-owned service creation templates. Profiles seed client drafts
+only; they never store public ports, CLIENT IDs, Service IDs, or ACL
+assignments. Editing or deleting a profile does not mutate existing services.
+
+```text
+show profiles
+show profile <PROFILE>
+create profile <name> --preset ssh|http|https|custom --target-host HOST --target-port PORT
+                 [--description TEXT] [--ssh-user USER]
+set profile <PROFILE> name|description|preset|target-host|target-port|ssh-user <value>
+delete profile <PROFILE>
+```
+
+On a client host, seed a pending service from a profile, then run `apply`:
+
+```text
+add service --profile <PROFILE|NAME> [--id ID] [--name NAME]
+apply
+```
+
 ## access (server)
 
 Named reusable Service Access Lists, optional TTL entries, and recent

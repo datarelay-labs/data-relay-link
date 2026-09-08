@@ -1862,6 +1862,102 @@ def check_port_collision(report, facts, listen_port, unit_state, check_id, label
         report.add(check_id, NOT_TESTED, '%s listen port is not in use' % label, 'port=%s unit_state=%s' % (listen_port, unit_state), '', 'runtime')
 
 
+
+def check_service_profiles(report, paths, facts, cfg):
+    """Validate Service Profiles store readability and schema."""
+    import importlib.util
+    import sys as _sys
+
+    prof = None
+    candidates = []
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.append(Path(root) / 'usr/local/lib/frp-auto-deploy/frp_service_profiles.py')
+    candidates.extend([
+        Path(__file__).resolve().parent / 'frp_service_profiles.py',
+        Path('/usr/local/lib/frp-auto-deploy/frp_service_profiles.py'),
+    ])
+    prev_bytecode = _sys.dont_write_bytecode
+    _sys.dont_write_bytecode = True
+    try:
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            try:
+                spec = importlib.util.spec_from_file_location('frp_service_profiles', str(candidate))
+                prof = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(prof)
+                break
+            except Exception as exc:
+                report.add(
+                    'SERVICE_PROFILES_ERROR', FAIL,
+                    'SERVICE_PROFILES_ERROR: service profiles module failed to load',
+                    str(exc),
+                    're-run the server installer',
+                    'state',
+                )
+                return
+    finally:
+        _sys.dont_write_bytecode = prev_bytecode
+    if prof is None:
+        report.add(
+            'SERVICE_PROFILES_ERROR', FAIL,
+            'SERVICE_PROFILES_ERROR: frp_service_profiles.py is missing',
+            '',
+            're-run the server installer',
+            'installation',
+        )
+        return
+
+    profiles_rel = '/var/lib/frp-auto-deploy/service-profiles.json'
+    if isinstance(cfg, dict):
+        configured = str(cfg.get('service_profiles_file') or '').strip()
+        if configured.startswith('/'):
+            profiles_rel = configured
+    if not paths.is_file(profiles_rel):
+        report.add(
+            'SERVICE_PROFILES_ERROR', FAIL,
+            'SERVICE_PROFILES_ERROR: service-profiles.json is missing',
+            profiles_rel,
+            're-run the server installer to create an empty service-profiles.json',
+            'state',
+        )
+        return
+    try:
+        profiles_path = paths.p(profiles_rel)
+        state = prof.load_profiles_state(
+            path=profiles_path,
+            cfg=cfg if isinstance(cfg, dict) else None,
+        )
+        report.add(
+            'SERVICE_PROFILES_ERROR', PASS,
+            'service-profiles.json is readable and valid',
+            profiles_rel, '', 'state',
+        )
+    except Exception as exc:
+        report.add(
+            'SERVICE_PROFILES_ERROR', FAIL,
+            'SERVICE_PROFILES_ERROR: service-profiles.json is invalid',
+            str(exc),
+            'restore service-profiles.json from backup or recreate with frpctl create profile',
+            'state',
+        )
+        return
+    for issue in prof.doctor_issues(state):
+        cls = str(issue.get('class') or 'SERVICE_PROFILES_ERROR')
+        severity = str(issue.get('severity') or 'error').lower()
+        status = FAIL if severity == 'error' else (WARN if severity == 'warn' else INFO)
+        report.add(
+            cls,
+            status,
+            '%s: %s' % (cls, issue.get('message') or 'issue'),
+            '',
+            'inspect Service Profiles with frpctl show profiles',
+            'state',
+        )
+
+
+
 def check_server(report, paths, facts, skip_network):
     expect_root = bool(facts.get('expect_root_owner'))
     cfg, err = load_json_path(paths, '/etc/frp-auto-deploy/config.json')
@@ -2268,6 +2364,7 @@ def check_server(report, paths, facts, skip_network):
                 )
 
     check_access_control(report, paths, facts, cfg if isinstance(cfg, dict) else {}, state if isinstance(state, dict) else {})
+    check_service_profiles(report, paths, facts, cfg if isinstance(cfg, dict) else {})
 
     bootstrap_abs = '/var/lib/frp-auto-deploy/bootstrap'
     enrollments_abs = '/var/lib/frp-auto-deploy/enrollments'

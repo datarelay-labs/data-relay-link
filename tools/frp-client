@@ -1026,10 +1026,204 @@ path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='ut
 PY
 }
 
+frp_client_resolve_profile_json() {
+  local selector="$1"
+  python3 - "$selector" <<'PY'
+import importlib.util
+import json
+import os
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import quote, urlparse
+
+selector = sys.argv[1].strip()
+root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "") or os.environ.get("FRP_CLIENT_TEST_ROOT", "")
+
+
+def load_module(name, filename):
+    candidates = []
+    lib = os.environ.get("FRP_CLIENT_LIB", "")
+    if lib:
+        base = Path(lib).resolve().parent
+        candidates.append(base / filename)
+        candidates.append(base.parent / "lib" / filename)
+    if root:
+        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy" / filename)
+    candidates.append(Path("/usr/local/lib/frp-auto-deploy") / filename)
+    # Source checkout when tools/frp-client is used directly.
+    candidates.append(Path(__file__).resolve().parent.parent / "lib" / filename if False else Path("."))
+    here = Path(sys.argv[0]).resolve() if sys.argv[0] else Path.cwd()
+    # When invoked as `python3 -`, argv0 is '-'; fall back to CWD heuristics via env.
+    src = os.environ.get("FRP_SOURCE_ROOT", "")
+    if src:
+        candidates.insert(0, Path(src) / "lib" / filename)
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(name, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit("ERROR: missing %s" % filename)
+
+
+PROF = load_module("frp_service_profiles", "frp_service_profiles.py")
+
+
+def rooted(path):
+    path = Path(path)
+    if root and str(path).startswith("/"):
+        return Path(root + str(path))
+    return path
+
+
+cfg_path = rooted("/etc/frp-auto-deploy/config.json")
+cfg = None
+if cfg_path.is_file():
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+profiles_path = PROF.service_profiles_path(cfg)
+if profiles_path.is_file():
+    state = PROF.load_profiles_state(path=profiles_path, cfg=cfg)
+    _pid, profile = PROF.resolve_profile(state, selector)
+    print(json.dumps(PROF.public_profile_view(profile)))
+    raise SystemExit(0)
+
+state_path = rooted("/etc/frp/client-state.json")
+if not state_path.is_file():
+    raise SystemExit("ERROR: profile store not found locally and client-state.json is missing")
+client_state = json.loads(state_path.read_text(encoding="utf-8"))
+allocator_url = str(client_state.get("allocator_url") or "").strip()
+machine_id = str(client_state.get("machine_id") or "").strip()
+if not allocator_url or not machine_id:
+    raise SystemExit("ERROR: client-state is missing allocator_url or machine_id")
+
+MGMT = load_module("frp_mgmt_auth", "frp_mgmt_auth.py")
+key_path = rooted("/etc/frp/client-identity.key")
+if not key_path.is_file():
+    raise SystemExit("ERROR: management identity is missing; re-enroll this client")
+
+body = b""
+ts = int(time.time())
+nonce = MGMT.new_nonce()
+message = MGMT.signed_message(machine_id, body, ts, nonce)
+signature = MGMT.sign_message(str(key_path), message)
+parsed = urlparse(allocator_url)
+if parsed.scheme != "https" or not parsed.netloc:
+    raise SystemExit("ERROR: invalid allocator_url")
+fetch_url = "%s://%s/v1/profiles/%s" % (parsed.scheme, parsed.netloc, quote(selector, safe=""))
+
+req = urllib.request.Request(fetch_url, method="GET")
+req.add_header("X-Mgmt-Auth", "1")
+req.add_header("X-Timestamp", str(ts))
+req.add_header("X-Mgmt-Nonce", nonce)
+req.add_header("X-Mgmt-Signature", signature)
+req.add_header("X-Machine-Id", machine_id)
+
+ctx = ssl.create_default_context()
+ca = os.environ.get("FRP_ALLOCATOR_CA", "")
+ca_path = Path(ca) if ca else rooted("/etc/frp-auto-deploy/allocator-ca.crt")
+if ca_path.is_file():
+    ctx.load_verify_locations(cafile=str(ca_path))
+try:
+    with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", errors="replace")
+    raise SystemExit("ERROR: profile fetch failed: HTTP %s %s" % (exc.code, detail)) from exc
+except Exception as exc:
+    raise SystemExit("ERROR: profile fetch failed: %s" % exc) from exc
+if not isinstance(payload, dict) or not payload.get("id"):
+    raise SystemExit("ERROR: allocator returned an invalid profile")
+print(json.dumps(payload))
+PY
+}
+
+frp_client_add_service_from_profile() {
+  local selector="$1" sid="$2" name="$3"
+  local profile_json payload
+  export FRP_SOURCE_ROOT="${FRP_SOURCE_ROOT:-}"
+  if [[ -z "${FRP_SOURCE_ROOT}" ]]; then
+    local here
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$here/../lib/frp_service_profiles.py" ]]; then
+      export FRP_SOURCE_ROOT="$(cd "$here/.." && pwd)"
+    fi
+  fi
+  profile_json="$(frp_client_resolve_profile_json "$selector")" || return $?
+  frp_client_ensure_pending
+  payload="$(PROFILE_JSON="$profile_json" FRP_SOURCE_ROOT="${FRP_SOURCE_ROOT:-}" python3 - "$sid" "$name" <<'PY'
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+def load_prof():
+    candidates = []
+    src = os.environ.get("FRP_SOURCE_ROOT", "")
+    if src:
+        candidates.append(Path(src) / "lib" / "frp_service_profiles.py")
+    lib = os.environ.get("FRP_CLIENT_LIB", "")
+    if lib:
+        base = Path(lib).resolve().parent
+        candidates.append(base / "frp_service_profiles.py")
+        candidates.append(base.parent / "lib" / "frp_service_profiles.py")
+    root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "") or os.environ.get("FRP_CLIENT_TEST_ROOT", "")
+    if root:
+        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_service_profiles.py")
+    candidates.append(Path("/usr/local/lib/frp-auto-deploy/frp_service_profiles.py"))
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("frp_service_profiles", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit("ERROR: missing frp_service_profiles.py")
+
+PROF = load_prof()
+profile = json.loads(os.environ["PROFILE_JSON"])
+payload = PROF.profile_to_service_payload(profile, service_id=sys.argv[1], name=sys.argv[2])
+print(json.dumps(payload))
+PY
+)" || return $?
+  frp_state_add_payload "$payload"
+  sid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$payload")"
+  python3 - "$payload" "$selector" <<'PY' 2>/dev/null || true
+import importlib.util, json, os, sys
+from pathlib import Path
+payload = json.loads(sys.argv[1])
+selector = sys.argv[2]
+candidates = []
+src = os.environ.get("FRP_SOURCE_ROOT", "")
+if src:
+    candidates.append(Path(src) / "lib" / "frp_audit.py")
+root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+if root:
+    candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_audit.py")
+candidates.append(Path("/usr/local/lib/frp-auto-deploy/frp_audit.py"))
+for path in candidates:
+    if path.is_file():
+        spec = importlib.util.spec_from_file_location("frp_audit", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.try_emit(
+            "profile.applied_to_draft",
+            profile_id=selector,
+            details={"service_id": payload.get("id"), "preset": payload.get("preset")},
+        )
+        break
+PY
+  echo "Pending service ${sid} added from profile ${selector}. Run apply to make it live."
+}
+
 frp_client_add_service_cli() {
-  local preset="custom" sid="" name="" host="127.0.0.1" port="" user=""
+  local preset="custom" sid="" name="" host="127.0.0.1" port="" user="" profile=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --profile) profile="$2"; shift 2 ;;
       --preset) preset="$2"; shift 2 ;;
       --id) sid="$2"; shift 2 ;;
       --name) name="$2"; shift 2 ;;
@@ -1042,6 +1236,15 @@ frp_client_add_service_cli() {
         ;;
     esac
   done
+  if [[ -n "$profile" ]]; then
+    if [[ "$preset" != "custom" || -n "$port" || -n "$user" ]]; then
+      echo "ERROR: when using --profile, do not also set --preset/--target-port/--ssh-user" >&2
+      return 2
+    fi
+    # host default is 127.0.0.1; allow it without treating as conflict unless explicitly needed
+    frp_client_add_service_from_profile "$profile" "$sid" "$name"
+    return $?
+  fi
   case "$preset" in
     ssh) sid="${sid:-ssh}"; name="${name:-SSH}"; port="${port:-22}"; [[ -n "$user" ]] || {
       echo "ERROR: --ssh-user is required for ssh services" >&2; return 2; } ;;

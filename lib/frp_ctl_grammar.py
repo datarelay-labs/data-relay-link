@@ -167,7 +167,7 @@ def _show_resources(role):
     client, server = _role_parts(role)
     items = ["status", "version"]
     if server:
-        items.extend(["clients", "client", "groups", "group", "enrollments", "audit", "upstream"])
+        items.extend(["clients", "client", "groups", "group", "profiles", "profile", "enrollments", "audit", "upstream"])
     if client:
         items.extend(["services", "info"])
     return items
@@ -177,7 +177,7 @@ def _set_resources(role):
     client, server = _role_parts(role)
     items = []
     if server:
-        items.extend(["client", "group", "installer-url", "server"])
+        items.extend(["client", "group", "profile", "installer-url", "server"])
     if client:
         items.append("service")
     return items
@@ -194,7 +194,7 @@ def _unset_resources(role):
 def _create_resources(role):
     _, server = _role_parts(role)
     if server:
-        return ["zero-touch", "enrollment", "enrollments", "backup", "group"]
+        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "profile"]
     return []
 
 
@@ -353,6 +353,8 @@ def _root_help(role):
             [
                 "  show groups",
                 "  show group <GROUP>",
+                "  show profiles",
+                "  show profile <PROFILE>",
                 "  show clients --group <GROUP>",
                 "  show client <ID> groups",
                 "  set client <ID> label <value>",
@@ -362,9 +364,12 @@ def _root_help(role):
                 "  unset client <ID> note",
                 "  unset client <ID> tag <key>",
                 "  create group <name> [--description TEXT]",
+                "  create profile <name> --preset ... --target-host ... --target-port ...",
                 "  rename group <GROUP> <name>",
                 "  set group <GROUP> name|description <value>",
+                "  set profile <PROFILE> <prop> <value>",
                 "  delete group <GROUP>",
+                "  delete profile <PROFILE>",
                 "  add client <ID> group <GROUP>",
                 "  remove client <ID> group <GROUP>",
             ]
@@ -373,6 +378,7 @@ def _root_help(role):
         lines.extend(
             [
                 "  add service",
+                "  add service --profile <PROFILE> [--id ID] [--name NAME]",
                 "  set service <id> target-host <host>",
                 "  set service <id> target-port <port>",
                 "  set service <id> ssh-user <user>",
@@ -469,6 +475,16 @@ def _show_help(rest, role):
             "  show clients --group <GROUP>\n"
             "  show client <ID> groups\n"
         )
+    if topic in ("profile", "profiles"):
+        return (
+            "Show service profiles\n"
+            "=====================\n\n"
+            "Usage:\n"
+            "  show profiles\n"
+            "  show profile <PROFILE>\n\n"
+            "Profiles are server-owned creation templates. They do not store\n"
+            "public ports, CLIENT IDs, Service IDs, or ACL assignments.\n"
+        )
     return "Usage:\n  show %s\n" % topic
 
 
@@ -505,6 +521,19 @@ def _set_help(rest, role):
             "Service IDs cannot be renamed. Pending changes are live only after apply.\n"
             "Health checks are disabled by default. Enabling tcp/http uses FRP healthCheck.\n"
         )
+    if rest and rest[0] == "profile":
+        return (
+            "Set profile configuration\n"
+            "=========================\n\n"
+            "Usage:\n"
+            "  set profile <PROFILE> name <value>\n"
+            "  set profile <PROFILE> description <value>\n"
+            "  set profile <PROFILE> preset <ssh|http|https|custom>\n"
+            "  set profile <PROFILE> target-host <host>\n"
+            "  set profile <PROFILE> target-port <port>\n"
+            "  set profile <PROFILE> ssh-user <user>\n\n"
+            "Editing a profile does not mutate existing services.\n"
+        )
     avail = _set_resources(role)
     return (
         "Set configuration\n"
@@ -536,6 +565,9 @@ def _create_help(role):
         "======\n\n"
         "Usage:\n"
         "  create group <name> [--description TEXT]\n"
+        "  create profile <name> --preset ssh|http|https|custom\n"
+        "                 --target-host HOST --target-port PORT\n"
+        "                 [--description TEXT] [--ssh-user USER]\n"
         "  create zero-touch\n"
         "  create enrollment\n"
         "  create enrollments --count N\n"
@@ -588,8 +620,11 @@ def _verb_help(verb, role):
             "Add\n===\n\nUsage:\n"
             "  add client <ID> group <GROUP>\n"
             "  add service [--preset ssh|http|https|custom] [--id ID] [--name NAME]\n"
-            "              [--target-host HOST] [--target-port PORT] [--ssh-user USER]\n\n"
+            "              [--target-host HOST] [--target-port PORT] [--ssh-user USER]\n"
+            "  add service --profile <PROFILE|NAME> [--id ID] [--name NAME]\n\n"
             "Pending until apply. Does not release server-side reservations.\n"
+            "Profile seeding copies template defaults only; public ports stay\n"
+            "unallocated until apply. Editing a profile never mutates services.\n"
         ),
         "enable": "Enable service\n==============\n\nUsage:\n  enable service <service-id>\n",
         "disable": (
@@ -601,7 +636,7 @@ def _verb_help(verb, role):
             "=======================\n\n"
             "Usage:\n  remove client <ID> group <GROUP>\n"
         ),
-        "delete": "Delete group\n============\n\nUsage:\n  delete group <GROUP>\n",
+        "delete": ("Delete\n======\n\nUsage:\n  delete group <GROUP>\n  delete profile <PROFILE>\n\nDeleting a profile does not change existing services.\n"),
         "rename": "Rename group\n============\n\nUsage:\n  rename group <GROUP> <name>\n",
     }
     return mapping.get(verb, "Usage:\n  %s\n" % verb)
@@ -1000,6 +1035,16 @@ def _match_show(tokens, role, names=None):
         if len(tokens) > 3:
             return incomplete("Unexpected arguments.", ["show group <GROUP>"])
         return {"status": "ok", "action": "show_group", "group": tokens[2]}
+    if resource == "profiles":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["show profiles"])
+        return {"status": "ok", "action": "show_profiles"}
+    if resource == "profile":
+        if len(tokens) < 3:
+            return incomplete("Missing profile selector.", ["show profile <PROFILE>"])
+        if len(tokens) > 3:
+            return incomplete("Unexpected arguments.", ["show profile <PROFILE>"])
+        return {"status": "ok", "action": "show_profile", "profile": tokens[2]}
     if resource == "enrollments":
         return {"status": "ok", "action": "show_enrollments"}
     if resource == "audit":
@@ -1149,6 +1194,32 @@ def _match_set(tokens, role, names=None):
             "status": "ok",
             "action": "set_group",
             "group": tokens[2],
+            "property": tokens[3],
+            "value": tokens[4],
+        }
+    if resource == "profile":
+        props = [
+            "name", "description", "preset", "target-host", "target-port", "ssh-user",
+            "health-type", "health-timeout", "health-interval", "health-max-failed", "health-path",
+        ]
+        if not server:
+            return {"status": "role", "need": "server", "command": "set profile"}
+        if len(tokens) < 3:
+            return incomplete("Missing profile selector.", ["set profile <PROFILE> <prop> <value>"])
+        if len(tokens) < 4 or tokens[3] not in props:
+            return incomplete(
+                "Missing or unknown profile property.",
+                ["set profile <PROFILE> <prop> <value>"],
+                props,
+            )
+        if len(tokens) < 5:
+            return incomplete("Missing value.", ["set profile <PROFILE> %s <value>" % tokens[3]])
+        if len(tokens) > 5:
+            return {"status": "error", "message": "Too many arguments. Quote values that contain spaces."}
+        return {
+            "status": "ok",
+            "action": "set_profile",
+            "profile": tokens[2],
             "property": tokens[3],
             "value": tokens[4],
         }
@@ -1340,6 +1411,22 @@ def _match_create(tokens, role, names=None):
             "name": tokens[2],
             "description": description,
         }
+    if resource == "profile":
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing profile name.",
+                [
+                    "create profile <name> --preset ssh|http|https|custom "
+                    "--target-host HOST --target-port PORT "
+                    "[--description TEXT] [--ssh-user USER]"
+                ],
+            )
+        return {
+            "status": "ok",
+            "action": "create_profile",
+            "name": tokens[2],
+            "passthrough": tokens[3:],
+        }
     return incomplete("Unknown create resource.", ["create <resource>"], avail)
 
 
@@ -1487,9 +1574,25 @@ def _match_remove(tokens, role, names=None):
 
 
 def _match_delete(tokens, role, names=None):
-    if len(tokens) < 3 or tokens[1] != "group":
-        return incomplete("Missing group selector.", ["delete group <GROUP>"], ["group"])
-    return {"status": "ok", "action": "delete_group", "group": tokens[2]}
+    if len(tokens) < 2:
+        return incomplete(
+            "Missing resource.",
+            ["delete group <GROUP>", "delete profile <PROFILE>"],
+            ["group", "profile"],
+        )
+    if tokens[1] == "group":
+        if len(tokens) < 3:
+            return incomplete("Missing group selector.", ["delete group <GROUP>"], ["group"])
+        return {"status": "ok", "action": "delete_group", "group": tokens[2]}
+    if tokens[1] == "profile":
+        if len(tokens) < 3:
+            return incomplete("Missing profile selector.", ["delete profile <PROFILE>"], ["profile"])
+        return {"status": "ok", "action": "delete_profile", "profile": tokens[2]}
+    return incomplete(
+        "Unknown delete resource.",
+        ["delete group <GROUP>", "delete profile <PROFILE>"],
+        ["group", "profile"],
+    )
 
 
 def _match_rename(tokens, role, names=None):

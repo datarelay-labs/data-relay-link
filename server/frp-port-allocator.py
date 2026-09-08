@@ -67,6 +67,22 @@ def _load_mgmt_auth():
 MGMT = _load_mgmt_auth()
 
 
+def _load_service_profiles():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_service_profiles.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_service_profiles.py',
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_service_profiles', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+PROF = _load_service_profiles()
+
+
 def _load_client_registry():
     candidates = [
         Path(__file__).resolve().parent / 'frp_client_registry.py',
@@ -1895,6 +1911,46 @@ class Allocator:
 
 
 
+
+    def authenticate_mgmt_read(self, headers, body=b''):
+        """Authenticate a management identity for read-only allocator GETs."""
+        machine_id = str(
+            headers.get('X-Machine-Id')
+            or headers.get('X-Machine-ID')
+            or headers.get('X-Client-Id')
+            or ''
+        ).strip()
+        if not machine_id:
+            return None, 'missing machine id'
+        with self.registry_lock():
+            state = self.load_registry()
+            client = (state.get('clients') or {}).get(machine_id)
+            error, now, nonce = self.verify_mgmt_against_client(
+                client, machine_id, headers, body
+            )
+            if error:
+                return None, error
+            if nonce:
+                nonce_error = self.commit_nonce(machine_id, nonce, int(time.time()))
+                if nonce_error:
+                    return None, nonce_error
+            return machine_id, None
+
+    def list_profiles_payload(self):
+        if PROF is None:
+            return []
+        state = PROF.load_profiles_state(cfg=self.cfg)
+        return [PROF.public_profile_view(p) for _pid, p in PROF.list_profiles(state)]
+
+    def get_profile_payload(self, selector):
+        if PROF is None:
+            raise KeyError('profiles unavailable')
+        state = PROF.load_profiles_state(cfg=self.cfg)
+        _pid, profile = PROF.resolve_profile(state, selector)
+        return PROF.public_profile_view(profile)
+
+
+
 def make_handler(allocator):
     class Handler(BaseHTTPRequestHandler):
         server_version = 'frp-auto-deploy/1.2'
@@ -2030,6 +2086,49 @@ def make_handler(allocator):
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if path == '/v1/profiles' or path.startswith('/v1/profiles/'):
+                    if PROF is None:
+                        self.send_json(
+                            503,
+                            api_error(
+                                'service profiles are unavailable on this server',
+                                'SERVER_MUTATION_FAILED',
+                            ),
+                        )
+                        return
+                    _mid, auth_error = allocator.authenticate_mgmt_read(self.headers, b'')
+                    if auth_error:
+                        self.send_json(
+                            403, api_error(auth_error, classify_auth_error(auth_error))
+                        )
+                        return
+                    try:
+                        if path == '/v1/profiles':
+                            self.send_json(
+                                200, {'profiles': allocator.list_profiles_payload()}
+                            )
+                            return
+                        selector = path[len('/v1/profiles/'):]
+                        if not selector or '/' in selector:
+                            self.send_json(404, {'error': 'not found'})
+                            return
+                        from urllib.parse import unquote
+                        selector = unquote(selector)
+                        self.send_json(200, allocator.get_profile_payload(selector))
+                        return
+                    except Exception as exc:
+                        # ProfileError / KeyError -> 404
+                        msg = str(exc) or 'profile not found'
+                        lowered = msg.lower()
+                        if 'unknown profile' in lowered or 'unavailable' in lowered:
+                            self.send_json(404, api_error(msg, 'AUTH_FAILED'))
+                            return
+                        print('allocator profile error: %s' % exc, flush=True)
+                        self.send_json(
+                            500,
+                            api_error('internal server error', 'SERVER_MUTATION_FAILED'),
+                        )
+                        return
                 self.send_json(404, {'error': 'not found'})
 
             self._with_slot(_handle)

@@ -30,6 +30,7 @@ REQUIRED = {
     "etc/frp/server_token",
     "var/lib/frp-auto-deploy/registry.json",
     "var/lib/frp-auto-deploy/access-control.json",
+    "var/lib/frp-auto-deploy/service-profiles.json",
 }
 OPTIONAL_EXACT = {
     "etc/frp-auto-deploy/frontend.conf",
@@ -212,6 +213,25 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         }
         synthesized_access = True
 
+
+    # Pre-Service-Profiles backups: synthesize empty profile store.
+    profiles_rel = "var/lib/frp-auto-deploy/service-profiles.json"
+    synthesized_profiles = False
+    if profiles_rel not in declared:
+        profiles_path = destination / "payload" / profiles_rel
+        profiles_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = (
+            b'{\n  "profiles": {},\n  "schema_version": 1\n}\n'
+        )
+        profiles_path.write_bytes(payload)
+        os.chmod(profiles_path, 0o600)
+        declared[profiles_rel] = {
+            "path": profiles_rel,
+            "sha256": sha256(profiles_path),
+            "mode": "0600",
+        }
+        synthesized_profiles = True
+
     missing = REQUIRED - declared.keys()
     if missing:
         raise RestoreError(f"backup is missing required file: {sorted(missing)[0]}")
@@ -237,11 +257,17 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         for line in checksums_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    if synthesized_access:
-        expected_without_access = [
-            line for line in checksum_lines if not line.endswith(f"payload/{access_rel}")
+    if synthesized_access or synthesized_profiles:
+        skip = set()
+        if synthesized_access:
+            skip.add(f"payload/{access_rel}")
+        if synthesized_profiles:
+            skip.add(f"payload/{profiles_rel}")
+        expected_without = [
+            line for line in checksum_lines
+            if not any(line.endswith(item) for item in skip)
         ]
-        if supplied_lines != expected_without_access:
+        if supplied_lines != expected_without:
             raise RestoreError("checksum manifest does not match the backup manifest")
     elif supplied_lines != checksum_lines:
         raise RestoreError("checksum manifest does not match the backup manifest")
@@ -250,6 +276,7 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         "etc/frp-auto-deploy/config.json",
         "var/lib/frp-auto-deploy/registry.json",
         "var/lib/frp-auto-deploy/access-control.json",
+        "var/lib/frp-auto-deploy/service-profiles.json",
     ):
         try:
             value = json.loads((destination / "payload" / rel).read_text(encoding="utf-8"))
