@@ -105,6 +105,84 @@ grep -qi 'DENY' "$WORKDIR/test-deny.out" || fail "test deny"
 grep -qi 'ALLOW' "$WORKDIR/test-public.out" || fail "public allow"
 pass "frpctl access list/create/add-source/assign/test/public"
 
+# Shared-list confirmation: non-interactive requires --yes before mutation.
+"$CTL" access assign demo ssh Office >/dev/null
+if "$CTL" access add-source Office --name other --source 198.51.100.20 \
+  >"$WORKDIR/shared-add.out" 2>"$WORKDIR/shared-add.err"; then
+  fail "shared add-source without --yes should fail"
+fi
+grep -qi '\-\-yes' "$WORKDIR/shared-add.err" || fail "shared add-source --yes hint"
+grep -q 'This Access List is used by' "$WORKDIR/shared-add.out" \
+  || fail "shared add-source should show impacted services before fail"
+if "$CTL" access remove-source Office --source 198.51.100.10 \
+  >"$WORKDIR/shared-rm.out" 2>"$WORKDIR/shared-rm.err"; then
+  fail "shared remove-source without --yes should fail"
+fi
+grep -qi '\-\-yes' "$WORKDIR/shared-rm.err" || fail "shared remove-source --yes hint"
+if "$CTL" access edit-info Office --description 'updated' \
+  >"$WORKDIR/shared-edit.out" 2>"$WORKDIR/shared-edit.err"; then
+  fail "shared edit-info without --yes should fail"
+fi
+grep -qi '\-\-yes' "$WORKDIR/shared-edit.err" || fail "shared edit-info --yes hint"
+
+# Seed an expired entry, then shared remove-expired requires --yes.
+python3 - <<'PY' || fail "seed expired entry"
+import importlib.util, json, os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
+spec = importlib.util.spec_from_file_location(
+    "frp_access_control",
+    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+)
+acl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(acl)
+path = root / "var/lib/frp-auto-deploy/access-control.json"
+state = acl.load_access_state(path=path)
+lid, _ = acl.resolve_access_list(state, "Office")
+past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+acl.add_source_entry(state, lid, "oldtmp", "203.0.113.50", expires_at=past)
+acl.save_access_state(state, path=path)
+PY
+if "$CTL" access remove-expired Office \
+  >"$WORKDIR/shared-exp.out" 2>"$WORKDIR/shared-exp.err"; then
+  fail "shared remove-expired without --yes should fail"
+fi
+grep -qi '\-\-yes' "$WORKDIR/shared-exp.err" || fail "shared remove-expired --yes hint"
+"$CTL" access remove-expired Office --yes >"$WORKDIR/shared-exp-yes.out"
+"$CTL" access add-source Office --name other --source 198.51.100.20 --yes >"$WORKDIR/shared-add-yes.out"
+grep -q 'This Access List is used by' "$WORKDIR/shared-add-yes.out" || fail "shared add with --yes shows impact"
+"$CTL" access edit-info Office --description 'updated' --yes >"$WORKDIR/shared-edit-yes.out"
+"$CTL" access remove-source Office --source 198.51.100.20 --yes >"$WORKDIR/shared-rm-yes.out"
+pass "shared list confirmation + --yes automation"
+
+# Last usable source cannot be removed while referenced (no PUBLIC fallback).
+if "$CTL" access remove-source Office --source 198.51.100.10 --yes \
+  >"$WORKDIR/last.out" 2>"$WORKDIR/last.err"; then
+  fail "last usable remove-source should fail"
+fi
+grep -qi 'empty ALLOWLIST\|Use Disable' "$WORKDIR/last.err" || fail "last usable guard message"
+"$CTL" access test demo ssh 198.51.100.10 >"$WORKDIR/last-still.out"
+grep -qi 'ALLOW' "$WORKDIR/last-still.out" || fail "previous source must remain after failed last-remove"
+MODE="$("$CTL" access show-service demo ssh | awk -F: '/Access mode/{print $2}' | tr -d ' ')"
+[[ "$MODE" == "ALLOWLIST" ]] || fail "must stay ALLOWLIST after failed last-remove"
+pass "last usable source removal safety"
+
+# Failed atomic replace-source must preserve previous entry.
+if "$CTL" access replace-source Office --source 198.51.100.10 --name bad --new-source 'not-an-ip' --yes \
+  >"$WORKDIR/repl.out" 2>"$WORKDIR/repl.err"; then
+  fail "invalid replace-source should fail"
+fi
+"$CTL" access test demo ssh 198.51.100.10 >"$WORKDIR/repl-still.out"
+grep -qi 'ALLOW' "$WORKDIR/repl-still.out" || fail "failed replace must preserve old source"
+"$CTL" access replace-source Office --source 198.51.100.10 --name home2 --new-source 198.51.100.11 --yes \
+  >"$WORKDIR/repl-ok.out"
+"$CTL" access test demo ssh 198.51.100.11 >"$WORKDIR/repl-ok-test.out"
+grep -qi 'ALLOW' "$WORKDIR/repl-ok-test.out" || fail "successful replace should allow new source"
+pass "atomic replace-source preserves on failure"
+
+"$CTL" access public demo ssh >/dev/null
+
 export FRP_SERVER_SOURCED=1
 # shellcheck disable=SC1091
 . "$ROOT/lib/frp-common.sh"

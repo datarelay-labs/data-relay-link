@@ -65,6 +65,43 @@ def service_display(registry, mid, sid):
     return "%s:%s" % (short_client(registry, mid), sid), port
 
 
+def print_shared_list_impact(registry, used):
+    print("This Access List is used by %d services:" % len(used))
+    print()
+    for mid, sid in used:
+        label, port = service_display(registry, mid, sid)
+        print("%-18s %s" % (label, port if port is not None else "-"))
+    print()
+    print("This change affects all services above.")
+
+
+def confirm_shared_list_mutation(cfg, list_ref, *, yes=False):
+    """Show shared-list impact and require confirmation before mutation.
+
+    Interactive menu paths pass yes=True after their own prompt to avoid
+    double confirmation. Non-interactive shared mutations require --yes.
+    """
+    state = ACL.load_access_state(cfg=cfg)
+    lid, lst = ACL.resolve_access_list(state, list_ref)
+    used = ACL.list_services_using(state, lid)
+    if not used:
+        return lid, lst, used
+    registry = load_registry(cfg)
+    print_shared_list_impact(registry, used)
+    print()
+    if yes:
+        return lid, lst, used
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            "ERROR: Access List is used by %d service(s); re-run with --yes to confirm."
+            % len(used)
+        )
+    answer = input("Continue? [y/N]: ").strip().lower()
+    if answer not in ("y", "yes"):
+        raise SystemExit("Aborted.")
+    return lid, lst, used
+
+
 def cmd_list(cfg, _args):
     state = ACL.load_access_state(cfg=cfg)
     registry = load_registry(cfg)
@@ -145,44 +182,30 @@ def cmd_show(cfg, args):
 
 
 def cmd_add_source(cfg, args):
+    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+
     def mut(state):
-        lid, _lst = ACL.resolve_access_list(state, args.list)
-        used = ACL.list_services_using(state, lid)
-        if used and not args.yes:
-            # Non-interactive: require --yes when shared; interactive path handles prompt.
-            if not sys.stdin.isatty():
-                raise ACL.AccessError(
-                    "Access List is used by %d service(s); re-run with --yes to confirm."
-                    % len(used)
-                )
-        entry = ACL.add_source_entry(
+        return ACL.add_source_entry(
             state,
             lid,
             args.name,
             args.source,
             ttl=args.ttl,
         )
-        return lid, entry, used
 
     try:
-        lid, entry, used = ACL.mutate_access_state(mut, cfg=cfg)
+        entry = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
-    if used:
-        registry = load_registry(cfg)
-        print("This Access List is used by %d services:" % len(used))
-        for mid, sid in used:
-            label, port = service_display(registry, mid, sid)
-            print("  %-22s port %s" % (label, port if port is not None else "-"))
-        print("This change affects all services above.")
     print("Added source %s (%s)" % (entry.get("name"), entry.get("cidr")))
     if entry.get("expires_at"):
         print("Expires at  : %s" % entry.get("expires_at"))
 
 
 def cmd_remove_source(cfg, args):
+    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+
     def mut(state):
-        lid, _lst = ACL.resolve_access_list(state, args.list)
         return ACL.remove_source_entry(state, lid, args.source)
 
     try:
@@ -190,6 +213,28 @@ def cmd_remove_source(cfg, args):
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Removed source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+
+
+def cmd_replace_source(cfg, args):
+    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+
+    def mut(state):
+        return ACL.replace_source_entry(
+            state,
+            lid,
+            args.source,
+            args.name,
+            args.new_source,
+            ttl=args.ttl,
+        )
+
+    try:
+        entry = ACL.mutate_access_state(mut, cfg=cfg)
+    except ACL.AccessError as exc:
+        raise SystemExit("ERROR: %s" % exc)
+    print("Replaced source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+    if entry.get("expires_at"):
+        print("Expires at  : %s" % entry.get("expires_at"))
 
 
 def cmd_delete(cfg, args):
@@ -206,8 +251,9 @@ def cmd_delete(cfg, args):
 
 
 def cmd_edit_info(cfg, args):
+    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+
     def mut(state):
-        lid, _lst = ACL.resolve_access_list(state, args.list)
         return ACL.update_access_list_info(
             state,
             lid,
@@ -223,8 +269,20 @@ def cmd_edit_info(cfg, args):
 
 
 def cmd_remove_expired(cfg, args):
+    state = ACL.load_access_state(cfg=cfg)
+    lid, lst = ACL.resolve_access_list(state, args.list)
+    now = ACL.utc_now()
+    expired = []
+    for entry in lst.get("entries") or []:
+        exp = ACL.parse_iso_ts(entry.get("expires_at")) if entry.get("expires_at") else None
+        if exp is not None and exp <= now:
+            expired.append(entry)
+    if not expired:
+        print("Removed 0 expired entries")
+        return
+    confirm_shared_list_mutation(cfg, lid, yes=bool(args.yes))
+
     def mut(state):
-        lid, _lst = ACL.resolve_access_list(state, args.list)
         return ACL.remove_expired_entries(state, lid)
 
     try:
@@ -518,14 +576,11 @@ def interactive_edit_list(cfg):
         if choice in ("7", "q", "Q", ""):
             return
         used = ACL.list_services_using(state, lid)
-        if choice in ("1", "2", "3", "4", "5", "6") and used and choice != "7":
+        if choice in ("1", "2", "3", "4", "5", "6") and used:
             registry = load_registry(cfg)
             print()
-            print("This Access List is used by %d services:" % len(used))
-            for mid, sid in used:
-                label, port = service_display(registry, mid, sid)
-                print("  %-22s port %s" % (label, port if port is not None else "-"))
-            print("This change affects all services above.")
+            print_shared_list_impact(registry, used)
+            print()
             confirm = input("Continue? [y/N]: ").strip().lower()
             if confirm not in ("y", "yes"):
                 continue
@@ -546,34 +601,35 @@ def interactive_edit_list(cfg):
             )
         elif choice == "3":
             source = input("Source (name/CIDR/id): ").strip()
-            cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source))
+            cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source, yes=True))
         elif choice == "5":
             name = input("New name (blank=keep): ").strip() or None
-            desc = input("New description (blank=keep): ").strip()
-            desc = None if desc == "" and name is None else (desc if desc != "" or True else None)
-            # only pass description if user typed something including empty to clear? keep simple
-            ns = argparse.Namespace(
-                list=lid,
-                name=name,
-                description=input("Description (blank keeps current; '-' clears): ").strip(),
+            desc = input("Description (blank keeps current; '-' clears): ").strip()
+            if desc == "":
+                desc = None
+            elif desc == "-":
+                desc = ""
+            cmd_edit_info(
+                cfg,
+                argparse.Namespace(list=lid, name=name, description=desc, yes=True),
             )
-            if ns.description == "":
-                ns.description = None
-            elif ns.description == "-":
-                ns.description = ""
-            cmd_edit_info(cfg, ns)
         elif choice == "6":
-            cmd_remove_expired(cfg, argparse.Namespace(list=lid))
+            cmd_remove_expired(cfg, argparse.Namespace(list=lid, yes=True))
         elif choice == "2":
-            print("Edit source: remove then re-add with new values.")
             source = input("Existing source (name/CIDR/id): ").strip()
-            cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source))
             name = input("New name: ").strip()
             cidr = input("New CIDR/IP: ").strip()
             ttl = input("TTL (blank=permanent): ").strip() or None
-            cmd_add_source(
+            cmd_replace_source(
                 cfg,
-                argparse.Namespace(list=lid, name=name, source=cidr, ttl=ttl, yes=True),
+                argparse.Namespace(
+                    list=lid,
+                    source=source,
+                    name=name,
+                    new_source=cidr,
+                    ttl=ttl,
+                    yes=True,
+                ),
             )
         state = ACL.load_access_state(cfg=cfg)
 
@@ -605,14 +661,25 @@ def build_parser():
     p = sub.add_parser("remove-source", help="Remove source from access list")
     p.add_argument("list")
     p.add_argument("--source", required=True)
+    p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("replace-source", help="Replace source entry atomically")
+    p.add_argument("list")
+    p.add_argument("--source", required=True, help="Existing source selector")
+    p.add_argument("--name", required=True)
+    p.add_argument("--new-source", required=True)
+    p.add_argument("--ttl", default=None)
+    p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("edit-info", help="Edit access list name/description")
     p.add_argument("list")
     p.add_argument("--name", default=None)
     p.add_argument("--description", default=None)
+    p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("remove-expired", help="Remove expired entries")
     p.add_argument("list")
+    p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("assign", help="Assign access list to service")
     p.add_argument("client")
@@ -666,6 +733,8 @@ def main(argv=None):
             cmd_add_source(cfg, args)
         elif args.cmd == "remove-source":
             cmd_remove_source(cfg, args)
+        elif args.cmd == "replace-source":
+            cmd_replace_source(cfg, args)
         elif args.cmd == "edit-info":
             cmd_edit_info(cfg, args)
         elif args.cmd == "remove-expired":

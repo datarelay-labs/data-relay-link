@@ -49,6 +49,12 @@ REASON_AUTHORIZATION_ERROR = "AUTHORIZATION_ERROR"
 REASON_EMPTY_ALLOWLIST = "EMPTY_ALLOWLIST"
 REASON_UNMAPPED_PROXY = "UNMAPPED_PROXY"
 
+EMPTY_ALLOWLIST_MESSAGE = (
+    "No allowed sources are configured.\n"
+    "An empty ALLOWLIST would block every user connection.\n"
+    "Use Disable if you intend to stop publishing the service."
+)
+
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 ENTRY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 TTL_RE = re.compile(r"^(\d+)([smhd])$", re.IGNORECASE)
@@ -449,26 +455,8 @@ def set_service_binding(state: dict, machine_id: str, service_id: str, mode: str
     if not list_id or list_id not in (state.get("access_lists") or {}):
         raise AccessError("ALLOWLIST requires an existing access list")
     entries = (state["access_lists"][list_id].get("entries") or [])
-    if not entries:
-        raise AccessError(
-            "No allowed sources are configured.\n"
-            "An empty ALLOWLIST would block every user connection.\n"
-            "Use Disable if you intend to stop publishing the service."
-        )
-    # Require at least one currently usable (non-expired) entry.
-    now = utc_now()
-    usable = False
-    for entry in entries:
-        exp = parse_iso_ts(entry.get("expires_at")) if entry.get("expires_at") is not None else None
-        if exp is None or exp > now:
-            usable = True
-            break
-    if not usable:
-        raise AccessError(
-            "No allowed sources are configured.\n"
-            "An empty ALLOWLIST would block every user connection.\n"
-            "Use Disable if you intend to stop publishing the service."
-        )
+    if not entries or not list_has_usable_entries({"entries": entries}):
+        raise AccessError(EMPTY_ALLOWLIST_MESSAGE)
     client_map[sid] = {"access_mode": MODE_ALLOWLIST, "access_list_id": list_id}
 
 
@@ -542,6 +530,52 @@ def delete_access_list(state: dict, list_id: str) -> None:
     lists.pop(list_id, None)
 
 
+def list_has_usable_entries(access_list: dict, now: Optional[datetime] = None) -> bool:
+    now = now or utc_now()
+    entries = access_list.get("entries") if isinstance(access_list, dict) else None
+    if not isinstance(entries, list):
+        return False
+    return any(entry_is_active(entry, now) for entry in entries if isinstance(entry, dict))
+
+
+def ensure_referenced_list_keeps_usable(
+    state: dict, list_id: str, now: Optional[datetime] = None
+) -> None:
+    """Referenced ALLOWLIST must keep at least one usable source after mutation."""
+    if not list_services_using(state, list_id):
+        return
+    lst = (state.get("access_lists") or {}).get(list_id)
+    if not isinstance(lst, dict) or not list_has_usable_entries(lst, now=now):
+        raise AccessError(EMPTY_ALLOWLIST_MESSAGE)
+
+
+def find_source_entry(state: dict, list_id: str, selector: str) -> dict:
+    lst = (state.get("access_lists") or {}).get(list_id)
+    if not isinstance(lst, dict):
+        raise AccessError("access list not found")
+    entries = lst.get("entries") or []
+    query = str(selector or "").strip()
+    if not query:
+        raise AccessError("missing source selector")
+    for entry in entries:
+        if entry.get("id") == query:
+            return entry
+    try:
+        want = canonicalize_cidr(query)
+    except AccessError:
+        want = None
+    if want:
+        for entry in entries:
+            if canonicalize_cidr(entry.get("cidr") or "") == want:
+                return entry
+    hits = [e for e in entries if str(e.get("name") or "").lower() == query.lower()]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise AccessError("ambiguous source name: %s" % query)
+    raise AccessError("source entry not found: %s" % query)
+
+
 def add_source_entry(
     state: dict,
     list_id: str,
@@ -582,34 +616,56 @@ def remove_source_entry(state: dict, list_id: str, selector: str) -> dict:
     if not isinstance(lst, dict):
         raise AccessError("access list not found")
     entries = lst.get("entries") or []
-    query = str(selector or "").strip()
-    if not query:
-        raise AccessError("missing source selector")
-    target = None
-    # by id
-    for entry in entries:
-        if entry.get("id") == query:
-            target = entry
-            break
-    if target is None:
-        try:
-            want = canonicalize_cidr(query)
-        except AccessError:
-            want = None
-        if want:
-            for entry in entries:
-                if canonicalize_cidr(entry.get("cidr") or "") == want:
-                    target = entry
-                    break
-    if target is None:
-        hits = [e for e in entries if str(e.get("name") or "").lower() == query.lower()]
-        if len(hits) == 1:
-            target = hits[0]
-        elif len(hits) > 1:
-            raise AccessError("ambiguous source name: %s" % query)
-    if target is None:
-        raise AccessError("source entry not found: %s" % query)
+    target = find_source_entry(state, list_id, selector)
+    remaining = [entry for entry in entries if entry is not target]
+    if list_services_using(state, list_id) and not list_has_usable_entries({"entries": remaining}):
+        raise AccessError(EMPTY_ALLOWLIST_MESSAGE)
     entries.remove(target)
+    lst["updated_at"] = utc_now_iso()
+    return target
+
+
+def replace_source_entry(
+    state: dict,
+    list_id: str,
+    selector: str,
+    name: str,
+    source: str,
+    ttl: Optional[str] = None,
+    expires_at: Optional[str] = None,
+) -> dict:
+    """Validate new values, then replace an existing entry in one state mutation."""
+    lst = (state.get("access_lists") or {}).get(list_id)
+    if not isinstance(lst, dict):
+        raise AccessError("access list not found")
+    target = find_source_entry(state, list_id, selector)
+    name = validate_entry_name(name)
+    cidr = canonicalize_cidr(source)
+    exp = None
+    if expires_at is not None and str(expires_at).strip() != "":
+        exp = parse_iso_ts(expires_at)
+    elif ttl:
+        exp = parse_ttl(ttl)
+    for entry in lst.get("entries") or []:
+        if entry is target:
+            continue
+        if canonicalize_cidr(entry.get("cidr") or "") == cidr:
+            raise AccessError("equivalent CIDR already present: %s" % cidr)
+    # Preview usability with the replacement applied before mutating.
+    preview_entry = dict(target)
+    preview_entry["name"] = name
+    preview_entry["cidr"] = cidr
+    preview_entry["expires_at"] = format_iso(exp)
+    preview_entries = [
+        preview_entry if entry is target else entry for entry in (lst.get("entries") or [])
+    ]
+    if list_services_using(state, list_id) and not list_has_usable_entries(
+        {"entries": preview_entries}
+    ):
+        raise AccessError(EMPTY_ALLOWLIST_MESSAGE)
+    target["name"] = name
+    target["cidr"] = cidr
+    target["expires_at"] = format_iso(exp)
     lst["updated_at"] = utc_now_iso()
     return target
 
@@ -627,6 +683,10 @@ def remove_expired_entries(state: dict, list_id: str, now: Optional[datetime] = 
             removed.append(entry)
         else:
             kept.append(entry)
+    if removed and list_services_using(state, list_id) and not list_has_usable_entries(
+        {"entries": kept}, now=now
+    ):
+        raise AccessError(EMPTY_ALLOWLIST_MESSAGE)
     lst["entries"] = kept
     if removed:
         lst["updated_at"] = utc_now_iso()
@@ -804,11 +864,13 @@ def authorize(
         if proxy_name:
             mapped = build_proxy_map(registry).get(proxy_name)
             if mapped is None:
+                # Mapping failure must fail closed. Never treat unmapped
+                # managed-proxy names as PUBLIC / ALLOWLIST bypass.
                 result.update(
                     {
-                        "decision": DECISION_ALLOW,
+                        "decision": DECISION_DENY,
                         "reason": REASON_UNMAPPED_PROXY,
-                        "access_mode": MODE_PUBLIC,
+                        "access_mode": MODE_ALLOWLIST,
                     }
                 )
                 return result

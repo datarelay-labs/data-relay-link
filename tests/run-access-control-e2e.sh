@@ -178,9 +178,71 @@ pass ACCESS_TEST
 sshx "$SERVER" "sudo frp-access add-source 'E2E-Allow' --name SourceB --source ${SOURCE_B_IP}/32 --yes"
 sleep 1
 probe "$SOURCE_B_HOST" || fail "B after add"
-sshx "$SERVER" "sudo frp-access remove-source 'E2E-Allow' --source ${SOURCE_B_IP}/32"
+sshx "$SERVER" "sudo frp-access remove-source 'E2E-Allow' --source ${SOURCE_B_IP}/32 --yes"
 sleep 1
 if probe "$SOURCE_B_HOST"; then fail "B after remove"; else pass LIST_UPDATE; fi
+
+# Runtime mapping-failure fail-closed (registry hostname drift vs live proxy_name)
+echo "=== UNMAPPED_PROXY fail-closed ==="
+ORIG_HOST="$(sshx "$SERVER" "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+print(reg['clients']['$CLIENT_ID'].get('hostname') or '')
+PY")"
+sshx "$SERVER" "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+path=Path('/var/lib/frp-auto-deploy/registry.json')
+reg=json.loads(path.read_text())
+client=reg['clients']['$CLIENT_ID']
+client['hostname']='drift-unmapped-e2e'
+path.write_text(json.dumps(reg, indent=2, sort_keys=True)+'\n')
+print('drifted')
+PY"
+sleep 2
+# Plugin reloads on registry mtime; allowed source must still DENY when unmapped.
+if probe "$SOURCE_A_HOST"; then
+  # Restore before failing so later steps are not poisoned.
+  sshx "$SERVER" "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+path=Path('/var/lib/frp-auto-deploy/registry.json')
+reg=json.loads(path.read_text())
+reg['clients']['$CLIENT_ID']['hostname']='$ORIG_HOST'
+path.write_text(json.dumps(reg, indent=2, sort_keys=True)+'\n')
+PY"
+  fail "UNMAPPED_PROXY should DENY"
+fi
+pass UNMAPPED_PROXY_DENY
+sshx "$SERVER" "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+path=Path('/var/lib/frp-auto-deploy/registry.json')
+reg=json.loads(path.read_text())
+reg['clients']['$CLIENT_ID']['hostname']='$ORIG_HOST'
+path.write_text(json.dumps(reg, indent=2, sort_keys=True)+'\n')
+print('restored')
+PY"
+sleep 2
+probe "$SOURCE_A_HOST" || fail "A after mapping restore"
+pass UNMAPPED_PROXY_RESTORE
+
+# Confirm authorize reason on server for an unmapped name while ALLOWLIST is assigned
+sshx "$SERVER" "sudo python3 - <<'PY'
+import importlib.util, json
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/frp-auto-deploy/frp_access_control.py')
+acl=importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
+cfg=json.loads(Path('/etc/frp-auto-deploy/config.json').read_text())
+state=acl.load_access_state(cfg=cfg)
+reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+v=acl.authorize(state, reg, proxy_name='totally-unmapped-proxy', source_ip='${SOURCE_A_IP}')
+assert v['decision']=='DENY', v
+assert v['reason']=='UNMAPPED_PROXY', v
+print('authorize_unmapped_ok')
+PY" || fail "authorize unmapped reason"
+pass UNMAPPED_PROXY_REASON
 
 # TTL
 echo "=== TTL $TTL ==="

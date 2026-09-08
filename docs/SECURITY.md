@@ -376,7 +376,8 @@ successfully.
 Access Control does **not** replace target authentication. Keep SSH keys,
 application auth, and database credentials enabled. Do not apply Service
 Access Lists to FRP control, enrollment/management, or the single-443
-frontend itself.
+frontend itself. Unmapped or drifted published-service proxy names fail
+closed (DENY); they must never fall back to PUBLIC.
 
 Connection authorization events are written to a bounded local log
 (`/var/log/frp-auto-deploy/access-conn.jsonl`). Enrollment tickets, FRP

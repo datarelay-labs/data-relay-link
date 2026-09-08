@@ -219,6 +219,64 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(result["service_id"], "ssh")
         self.assertEqual(result["client_id"], "machine-aaa")
 
+    def test_unmapped_proxy_fail_closed(self):
+        """Registered ALLOWLIST service must DENY when proxy_name mapping fails."""
+        lid, _ = ACL.create_access_list(self.state, "Mapped")
+        ACL.add_source_entry(self.state, lid, "net", "198.51.100.0/24")
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        # Correct mapping still allows.
+        good = ACL.expected_proxy_name("alpha-host", "machine-aaa", "ssh")
+        allow = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=good,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(allow["decision"], ACL.DECISION_ALLOW)
+        # Drifted/unknown proxy_name must not PUBLIC-bypass ALLOWLIST.
+        deny = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name="drifted-host-machine-ssh",
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(deny["decision"], ACL.DECISION_DENY)
+        self.assertEqual(deny["reason"], ACL.REASON_UNMAPPED_PROXY)
+        self.assertNotEqual(deny["decision"], ACL.DECISION_ALLOW)
+        self.assertNotEqual(deny.get("reason"), ACL.REASON_PUBLIC)
+
+    def test_last_usable_source_removal_rejected(self):
+        lid, _ = ACL.create_access_list(self.state, "LastOne")
+        ACL.add_source_entry(self.state, lid, "only", "203.0.113.10")
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        with self.assertRaises(ACL.AccessError) as ctx:
+            ACL.remove_source_entry(self.state, lid, "203.0.113.10")
+        self.assertIn("empty ALLOWLIST", str(ctx.exception))
+        self.assertIn("Use Disable", str(ctx.exception))
+        # Previous entry preserved; binding stays ALLOWLIST (no PUBLIC fallback).
+        entries = self.state["access_lists"][lid]["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["cidr"], "203.0.113.10/32")
+        binding = ACL.get_service_binding(self.state, "machine-aaa", "ssh")
+        self.assertEqual(binding["access_mode"], ACL.MODE_ALLOWLIST)
+
+    def test_replace_source_atomic_preserves_on_failure(self):
+        lid, _ = ACL.create_access_list(self.state, "Replace")
+        ACL.add_source_entry(self.state, lid, "old", "198.51.100.1")
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        with self.assertRaises(ACL.AccessError):
+            ACL.replace_source_entry(self.state, lid, "198.51.100.1", "bad", "not-an-ip")
+        entries = self.state["access_lists"][lid]["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["name"], "old")
+        self.assertEqual(entries[0]["cidr"], "198.51.100.1/32")
+        replaced = ACL.replace_source_entry(
+            self.state, lid, "198.51.100.1", "new", "198.51.100.2"
+        )
+        self.assertEqual(replaced["name"], "new")
+        self.assertEqual(replaced["cidr"], "198.51.100.2/32")
+        self.assertEqual(len(self.state["access_lists"][lid]["entries"]), 1)
+
     def test_save_load_roundtrip(self):
         ACL.save_access_state(self.state, path=self.access_path)
         loaded = ACL.load_access_state(path=self.access_path)
