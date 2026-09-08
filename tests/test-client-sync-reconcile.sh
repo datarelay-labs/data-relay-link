@@ -17,6 +17,7 @@ mkdir -p \
 cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
 cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
 cp "$ROOT/lib/frp_mgmt_auth.py" "$TREE/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py"
+cp "$ROOT/lib/frp_health_check.py" "$TREE/usr/local/lib/frp-auto-deploy/frp_health_check.py"
 if [[ -f "$ROOT/lib/frp-macos.sh" ]]; then
   cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-macos.sh"
 fi
