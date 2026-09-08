@@ -11,6 +11,7 @@ $tests = @(
     'test-token-decrypt.ps1',
     'test-canonical-sign.ps1',
     'test-config.ps1',
+    'test-host-id.ps1',
     'test-security.ps1',
     'test-tls-hostname-negative.ps1',
     'test-persistence.ps1',

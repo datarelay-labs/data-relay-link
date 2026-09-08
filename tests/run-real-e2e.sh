@@ -221,12 +221,20 @@ wait_host() {
 wait_external_ssh() {
   local name="${1:-wait-external-ssh}" tries="${2:-$EXT_TRIES}" delay="${3:-$EXT_DELAY}"
   local host="${4:-$ACCESS_HOST}" port="${5:-$SSH_PUBLIC_PORT}" user="${6:-$TUNNEL_SSH_USER}"
+  local remote_cmd="${7:-}"
   local i start rc=1
+  if [[ -z "$remote_cmd" ]]; then
+    if [[ "$PLATFORM_KIND" == "windows" ]]; then
+      remote_cmd='hostname'
+    else
+      remote_cmd='hostname && id -un'
+    fi
+  fi
   start="$(date +%s)"
   for i in $(seq 1 "$tries"); do
     if ssh "${SSH_OPTS[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o IdentitiesOnly=yes -i "$SSH_KEY" -p "$port" "$user@$host" \
-      'hostname && id -un' >"$OUT_DIR/${name}.log" 2>&1; then
+      "$remote_cmd" >"$OUT_DIR/${name}.log" 2>&1; then
       rc=0
       break
     fi
@@ -381,6 +389,133 @@ PY
   redact "$out"
   record "$name" "$([[ $rc -eq 0 ]] && echo PASS || echo FAIL)" "$rc" "$(( $(date +%s) - start ))"
   return "$rc"
+}
+
+create_zero_touch_windows() {
+  local out="$1" enc_out="$2" name="$3" note_text="$4"
+  local start rc=0
+  start="$(date +%s)"
+  set +e
+  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
+    "sudo /usr/local/sbin/frp-create-client --one-line --platform windows --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
+    >"$out" 2>&1
+  rc=$?
+  set -uo pipefail
+  if [[ "$rc" -eq 0 ]]; then
+    python3 - "$out" "$enc_out" <<'PY'
+import base64, re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+line = next((l for l in text.splitlines() if l.startswith("powershell.exe -NoProfile")), "")
+m = re.match(r"powershell\.exe -NoProfile -ExecutionPolicy Bypass -Command '(.*)'\s*$", line)
+if not m:
+    raise SystemExit("missing windows one-line command")
+# Official -Command uses '' escapes; EncodedCommand needs the decoded script body.
+script = m.group(1).replace("''", "'")
+open(sys.argv[2], "w", encoding="utf-8").write(
+    base64.b64encode(script.encode("utf-16le")).decode("ascii")
+)
+PY
+    rc=$?
+  fi
+  redact "$out"
+  record "$name" "$([[ $rc -eq 0 ]] && echo PASS || echo FAIL)" "$rc" "$(( $(date +%s) - start ))"
+  return "$rc"
+}
+
+discover_client_identity_windows() {
+  local start rc=0
+  start="$(date +%s)"
+  set +e
+  CLIENT_MID="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
+    "powershell.exe -NoProfile -Command \"\$j=Get-Content 'C:\\ProgramData\\frp-auto-deploy\\state\\client-state.json' -Raw | ConvertFrom-Json; Write-Output ([string]\$j.machine_id)\"" \
+    2>"$OUT_DIR/discover-mid.err" | tr -d '\r' | tr -d '\n')"
+  rc=$?
+  if [[ "$rc" -eq 0 && -n "$CLIENT_MID" ]]; then
+    CLIENT_MID_PREFIX="${CLIENT_MID:0:8}"
+    SSH_PUBLIC_PORT="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
+      "powershell.exe -NoProfile -Command \"\$j=Get-Content 'C:\\ProgramData\\frp-auto-deploy\\state\\client-state.json' -Raw | ConvertFrom-Json; Write-Output ([string]\$j.services.ssh.remote_port)\"" \
+      2>>"$OUT_DIR/discover-mid.err" | tr -d '\r' | tr -d '\n')"
+    rc=$?
+  fi
+  set -uo pipefail
+  local elapsed=$(( $(date +%s) - start ))
+  if [[ "$rc" -ne 0 || -z "$CLIENT_MID" || -z "$SSH_PUBLIC_PORT" ]]; then
+    record discover-client-identity FAIL 1 "$elapsed"
+    note "CLIENT_MID='$CLIENT_MID' SSH_PUBLIC_PORT='$SSH_PUBLIC_PORT'"
+    return 1
+  fi
+  note "CLIENT_MID=$CLIENT_MID"
+  note "CLIENT_MID_PREFIX=$CLIENT_MID_PREFIX"
+  note "SSH_PUBLIC_PORT=$SSH_PUBLIC_PORT"
+  note "ACCESS_HOST=$ACCESS_HOST"
+  printf '%s\n' "$CLIENT_MID" >"$OUT_DIR/client-mid.txt"
+  printf '%s\n' "$SSH_PUBLIC_PORT" >"$OUT_DIR/ssh-public-port.txt"
+  record discover-client-identity PASS 0 "$elapsed"
+}
+
+pin_windows_installer_url() {
+  local url="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.ps1"
+  run_server win-pin-installer "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path('/etc/frp-auto-deploy/config.json')
+c = json.loads(p.read_text(encoding='utf-8'))
+c['windows_client_installer_url'] = '$url'
+p.write_text(json.dumps(c, indent=2) + '\n', encoding='utf-8')
+print(c['windows_client_installer_url'])
+PY
+sudo systemctl restart frp-port-allocator
+sleep 1
+systemctl is-active frp-port-allocator"
+}
+
+scenario_windows_full() {
+  # Minimal Real E2E for Windows client: enroll + published SSH + uninstall.
+  # Full Linux service/reboot/backup matrix is not portable to Windows OpenSSH/cmd.
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status frps 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
+  run_client 02-client-before 'powershell.exe -NoProfile -Command "$env:COMPUTERNAME; $PSVersionTable.PSVersion.ToString(); ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"' || fail_stop
+
+  pin_windows_installer_url || fail_stop
+
+  run_client 04-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd') { & 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\frp-auto-deploy') { exit 1 }; Write-Output UNINSTALL_OK } else { Write-Output NO_INSTALL }\"" || fail_stop
+  record 03-server-purge SKIP 0 0
+  record 05-server-install SKIP 0 0
+  MATRIX_INSTALL=PASS
+
+  create_zero_touch_windows "$OUT_DIR/07-zero-touch-create.log" "$OUT_DIR/07-zero-touch.enc" 07-zero-touch-create "automated-real-e2e-$PROFILE" || fail_stop
+  local enc
+  enc="$(tr -d '\n\r' <"$OUT_DIR/07-zero-touch.enc")"
+  run_client 08-zero-touch-run "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc" || fail_stop
+  redact "$OUT_DIR/08-zero-touch-run.log"
+  discover_client_identity_windows || fail_stop
+  run_server 09-server-enrollment "sudo /usr/local/sbin/frpctl show clients; echo ====; sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  wait_external_ssh 09b-external-ssh || fail_stop
+  MATRIX_ENROLL=PASS
+
+  run_client 10-client-info "powershell.exe -NoProfile -Command \"& 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' info\"" || fail_stop
+  run_server 11-proxy-mapped "sudo python3 - <<'PY'
+import json, sys
+sys.path.insert(0, '/usr/local/lib/frp-auto-deploy')
+from frp_access_control import authorize, expected_proxy_name
+from pathlib import Path
+reg = json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+acl = json.loads(Path('/var/lib/frp-auto-deploy/access-control.json').read_text())
+mid = '$CLIENT_MID'
+client = (reg.get('clients') or {}).get(mid) or {}
+host = str(client.get('hostname') or '')
+name = expected_proxy_name(host, mid, 'ssh')
+v = authorize(acl, reg, proxy_name=name, source_ip='127.0.0.1')
+print('proxy_name', name, 'decision', v.get('decision'), 'reason', v.get('reason'))
+if v.get('decision') != 'ALLOW':
+    raise SystemExit('expected mapped PUBLIC allow')
+print('PROXY_MAPPED_OK')
+PY" || fail_stop
+  MATRIX_SERVICE=PASS
+  MATRIX_REBOOT=SKIP
+  MATRIX_DNS=SKIP
+
+  run_client 52-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\frp-auto-deploy') { exit 1 }; Write-Output UNINSTALL_OK\"" || fail_stop
+  MATRIX_UNINSTALL=PASS
 }
 
 scenario_unsupported() {
@@ -625,6 +760,20 @@ main() {
 
   assert_host_identity "$SERVER_ALIAS" "$EXPECTED_SERVER_HOST" server || finish 2
   assert_host_identity "$CLIENT_ALIAS" "$EXPECTED_CLIENT_HOST" client || finish 2
+
+  if [[ "$PLATFORM_KIND" == "windows" ]]; then
+    case "$SCENARIO" in
+      full|install)
+        scenario_windows_full
+        ;;
+      *)
+        note "windows scenario '$SCENARIO' not implemented; use full"
+        finish 2
+        ;;
+    esac
+    note "FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    finish 0
+  fi
 
   case "$SCENARIO" in
     full)
