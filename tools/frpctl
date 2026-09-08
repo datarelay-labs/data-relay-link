@@ -455,7 +455,7 @@ Canonical grammar:
   revoke client ID | release client ID | release service ID SID
   access | access list | access menu
   update project [--check] | update frp [--check]
-  doctor | help | menu | history | exit
+  doctor | support-bundle | help | menu | history | exit
 
 status and version remain shortcuts. Older flat commands (clients,
 client-set, enroll, ...) still work for scripts. See 'help legacy'.
@@ -1436,7 +1436,7 @@ frpctl_known_commands() {
   local client=0 server=0
   frpctl_is_client && client=1
   frpctl_is_server && server=1
-  printf '%s\n' help menu status doctor version update clear exit quit q history show
+  printf '%s\n' help menu status doctor support-bundle version update clear exit quit q history show
   if [[ "$client" == "1" ]]; then
     printf '%s\n' services manage info client-status client-update \
       add enable disable apply discard set
@@ -1954,6 +1954,9 @@ frpctl_dispatch_canonical() {
       fi
       frp_doctor_main $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
       ;;
+    support_bundle)
+      frpctl_run frp-support-bundle $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     access_cmd)
       frpctl_require_server || return 1
       # shellcheck disable=SC2046,SC2086
@@ -2047,6 +2050,9 @@ frpctl_dispatch() {
         return 2
       fi
       frp_doctor_main "$@"
+      ;;
+    support-bundle)
+      frpctl_run frp-support-bundle "$@"
       ;;
     client-status)
       frpctl_require_client || return 1

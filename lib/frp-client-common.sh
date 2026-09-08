@@ -4119,6 +4119,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_doctor.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_support_bundle.py" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_support_bundle.py" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp_ctl_grammar.py" ]] || {
     echo "ERROR: missing ${source}/lib/frp_ctl_grammar.py" >&2
     return 1
@@ -4135,6 +4139,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/tools/frpctl" >&2
     return 1
   }
+  [[ -f "${source}/tools/frp-support-bundle" ]] || {
+    echo "ERROR: missing ${source}/tools/frp-support-bundle" >&2
+    return 1
+  }
   install -m 0644 "${source}/lib/frp-client-common.sh" "${libdir}/frp-client-common.sh"
   install -m 0644 "${source}/lib/frp-common.sh" "${libdir}/frp-common.sh"
   install -m 0644 "${source}/lib/frp-macos.sh" "${libdir}/frp-macos.sh"
@@ -4142,10 +4150,12 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_health_check.py" "${libdir}/frp_health_check.py"
   install -m 0644 "${source}/lib/frp-doctor-common.sh" "${libdir}/frp-doctor-common.sh"
   install -m 0644 "${source}/lib/frp_doctor.py" "${libdir}/frp_doctor.py"
+  install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${bindir}/frpctl"
+  install -m 0755 "${source}/tools/frp-support-bundle" "${bindir}/frp-support-bundle"
   install -m 0755 "${source}/tools/frp-update" "${bindir}/frp-update"
   if [[ -f "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" ]]; then
     install -m 0644 "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" \
@@ -4166,11 +4176,13 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp_health_check.py:0644:lib/frp_health_check.py" \
     "usr/local/lib/frp-auto-deploy/frp-doctor-common.sh:0644:lib/frp-doctor-common.sh" \
     "usr/local/lib/frp-auto-deploy/frp_doctor.py:0644:lib/frp_doctor.py" \
+    "usr/local/lib/frp-auto-deploy/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/frpctl:0755:tools/frpctl" \
+    "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
 }
 
@@ -4268,8 +4280,10 @@ frp_client_upgrade_validate_staged() {
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_health_check.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_doctor.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_support_bundle.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_repl.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/bin/frp-support-bundle" || return 1
   rm -rf "${staged}/usr/local/lib/frp-auto-deploy/__pycache__" \
     "${staged}/usr/local/lib/frp-auto-deploy/"*.pyc 2>/dev/null || true
   [[ -x "${staged}/usr/local/bin/frp-client" ]] || {
@@ -4278,6 +4292,10 @@ frp_client_upgrade_validate_staged() {
   }
   [[ -x "${staged}/usr/local/bin/frpctl" ]] || {
     echo "ERROR: staged frpctl is not executable" >&2
+    return 1
+  }
+  [[ -x "${staged}/usr/local/bin/frp-support-bundle" ]] || {
+    echo "ERROR: staged frp-support-bundle is not executable" >&2
     return 1
   }
   [[ -x "${staged}/usr/local/bin/frp-update" ]] || {

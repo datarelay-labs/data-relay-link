@@ -269,6 +269,8 @@ grep -q 'lib/frp-common.sh' "$ROOT/scripts/build-bundles.py" || fail "client bun
 grep -q "'release-manifest.json'" "$ROOT/scripts/build-bundles.py" || fail "client bundle missing release-manifest"
 grep -q 'lib/frp_doctor.py' "$ROOT/scripts/build-bundles.py" || fail "bundle missing doctor engine"
 grep -q 'lib/frp-doctor-common.sh' "$ROOT/scripts/build-bundles.py" || fail "bundle missing doctor lib"
+grep -q 'lib/frp_support_bundle.py' "$ROOT/scripts/build-bundles.py" || fail "bundle missing support-bundle lib"
+grep -q 'tools/frp-support-bundle' "$ROOT/scripts/build-bundles.py" || fail "bundle missing support-bundle tool"
 if grep -q 'Debian/Ubuntu only' "$ROOT/install-server.sh"; then
   fail "server installer still apt-only"
 fi

@@ -148,6 +148,7 @@ def canonical_verbs(role):
         "clear",
         "exit",
         "doctor",
+        "support-bundle",
         "status",
         "version",
         "update",
@@ -283,6 +284,12 @@ def help_text(tokens, role):
         return (
             "Doctor\n======\n\nUsage:\n  doctor\n  doctor --json\n  doctor --verbose\n"
         )
+    if verb == "support-bundle":
+        return (
+            "Support Bundle\n==============\n\n"
+            "Usage:\n  support-bundle\n  support-bundle --output <path>\n\n"
+            "Create a sanitized read-only diagnostic archive. Never includes private keys or tokens.\n"
+        )
     if verb == "access":
         return (
             "Access Control\n"
@@ -413,6 +420,7 @@ def _root_help(role):
     other.extend(
         [
             "  doctor",
+            "  support-bundle [--output PATH]",
             "  menu                 Guided numbered menu",
             "  history              This session only (not saved to disk)",
             "  help, ?",
@@ -874,6 +882,7 @@ def _concise_root(role):
         ("update", "Update project or FRP"),
         ("restore", "Restore backup"),
         ("doctor", "Run health checks"),
+        ("support-bundle", "Create sanitized diagnostic archive"),
         ("access", "Access Control Pack"),
         ("help", "Detailed help"),
         ("menu", "Guided menu"),
@@ -897,7 +906,7 @@ def _concise_root(role):
             # Keep a stable everyday list for client-only hosts.
             keep = {
                 "show", "set", "add", "enable", "disable", "apply", "discard",
-                "update", "doctor", "help", "menu", "history", "exit",
+                "update", "doctor", "support-bundle", "help", "menu", "history", "exit",
             }
             rows = extra + rows
             rows = [(n, d) for n, d in rows if n in keep]
@@ -939,6 +948,7 @@ def match(tokens, role, names=None, clients=None):
         "apply": lambda toks, role, names=None: {"status": "ok", "action": "apply"},
         "discard": lambda toks, role, names=None: {"status": "ok", "action": "discard"},
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
+        "support-bundle": lambda toks, role, names=None: {"status": "ok", "action": "support_bundle", "passthrough": toks[1:]},
         "access": lambda toks, role, names=None: {"status": "ok", "action": "access_cmd", "passthrough": toks[1:]},
         "help": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "?": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
@@ -1545,6 +1555,7 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "update": "Update project or FRP",
         "restore": "Restore backup",
         "doctor": "Run health checks",
+        "support-bundle": "Create sanitized diagnostic archive",
         "access": "Access Control Pack",
         "help": "Detailed help",
         "menu": "Guided menu",
@@ -1881,6 +1892,8 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
         return []
     if verb == "doctor":
         return _filter(["--json", "--verbose", "--quiet"], prefix)
+    if verb == "support-bundle":
+        return _filter(["--output"], prefix)
     return []
 
 
@@ -1907,6 +1920,8 @@ def _legacy_completion(tokens, trailing, role, names, services):
         )
     if cmd == "doctor":
         return _filter(["--json", "--verbose", "--quiet"], prefix)
+    if cmd == "support-bundle":
+        return _filter(["--output"], prefix)
     return []
 
 

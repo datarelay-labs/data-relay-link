@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""CLI entry for frpctl support-bundle / frp-support-bundle."""
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+
+def _load():
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parent.parent / "lib" / "frp_support_bundle.py",
+        Path("/usr/local/lib/frp-auto-deploy/frp_support_bundle.py"),
+        Path("/Library/Application Support/frp-auto-deploy/lib/frp_support_bundle.py"),
+    )
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("frp_support_bundle", str(path))
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            return module
+    sys.stderr.write("ERROR: frp_support_bundle.py is unavailable\n")
+    raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    raise SystemExit(_load().main())

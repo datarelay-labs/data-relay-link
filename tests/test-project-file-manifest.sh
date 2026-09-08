@@ -38,11 +38,13 @@ if "server-project-files.manifest" not in (root / "scripts" / "build-bundles.py"
 
 required = {
     "usr/local/lib/frp-auto-deploy/frp_audit.py",
+    "usr/local/lib/frp-auto-deploy/frp_support_bundle.py",
     "usr/local/sbin/frp-enrollments",
     "usr/local/sbin/frp-enrollment-revoke",
     "usr/local/sbin/frp-enroll-bulk",
     "usr/local/sbin/frp-backup",
     "usr/local/sbin/frp-restore",
+    "usr/local/sbin/frp-support-bundle",
     "usr/local/sbin/frp-upstream",
 }
 missing = sorted(required - managed)

@@ -30,6 +30,7 @@ for f in \
   "$BASE_DIR/lib/server-project-files.manifest" \
   "$BASE_DIR/lib/frp-doctor-common.sh" \
   "$BASE_DIR/lib/frp_doctor.py" \
+  "$BASE_DIR/lib/frp_support_bundle.py" \
   "$BASE_DIR/lib/frp_ctl_grammar.py" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
   "$BASE_DIR/release-manifest.json" \
@@ -53,6 +54,7 @@ for f in \
   "$BASE_DIR/tools/frp-project-update" \
   "$BASE_DIR/tools/frp-backup" \
   "$BASE_DIR/tools/frp-restore" \
+  "$BASE_DIR/tools/frp-support-bundle" \
   "$BASE_DIR/tools/frp-update" \
   "$BASE_DIR/tools/frp-upstream" \
   "$BASE_DIR/tools/frpctl"; do
