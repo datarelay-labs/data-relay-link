@@ -1,213 +1,145 @@
-# frp-auto-deploy
+# FRP Auto Deploy
 
-`frp-auto-deploy` is a lightweight deployment and operations layer for the official
-[fatedier/frp](https://github.com/fatedier/frp) binaries. It does **not** fork or
-modify FRP.
+**Lightweight, CLI-first, Zero-Touch remote access management on top of official FRP.**
 
-It solves the operational work around FRP:
+FRP Auto Deploy helps you securely reach servers and services behind NAT or firewalls without building a full VPN, RMM platform, or custom FRP fork.
 
-- install and update `frps` / `frpc`
-- enroll remote clients securely over HTTPS
-- assign persistent public TCP ports
-- publish one or many services from each client
-- manage clients and services with a single operator CLI: `frpctl`
-- preserve identity, CA, token, registry, and port reservations across normal updates
-- provide backup / restore, diagnostics, audit events, and release-safe lifecycle controls
+- Official [`fatedier/frp`](https://github.com/fatedier/frp) only
+- Exact pinned/tested FRP version
+- Zero-Touch and manual enrollment
+- Immutable client identity
+- Persistent public-port reservations
+- SSH, HTTP, HTTPS passthrough, and Custom TCP
+- Local and internal-LAN targets
+- Linux, macOS, and Windows client support according to the validation matrix below
+- One primary operator interface: `sudo frpctl`
 
-> Example addresses such as `203.0.113.10`, `192.0.2.50`, and `198.51.100.10`
-> are documentation-only RFC 5737 addresses. Replace them with your own values.
+Documentation: **https://frp.xdr.ooo**
 
-## Release status
+---
+
+## Current stable release
 
 | Item | Current |
 | --- | --- |
-| Published stable release | **v2.2.1** |
-| Project version (this tree) | **2.2.1** |
-| Pinned / tested FRP | **v0.71.0** |
+| FRP Auto Deploy | **v2.2.1** |
+| Pinned upstream FRP | **v0.71.0** |
+| Stable install source | immutable `v2.2.1` tag |
+| Qualified candidate | `2140be5b6342c3651c16a458f8ea1bc9b577d992` |
+| Release commit | `19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f` |
+| Release qualification | **Double Full Real E2E PASS / PASS** on the same exact candidate HEAD |
+| Candidate/release tree | **tree-identical** |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
-| Published stable install source | immutable `v2.2.1` tag |
-| Stable platforms (v2.2.1) | Linux Real E2E + macOS Apple Silicon + Windows PS5.1; PS7 CI |
-| `main` branch | development channel; may contain post-v2.2.1 changes |
+| Intended scale | approximately **1–50 clients** |
 
-Current project version: **2.2.1**
-Current pinned FRP version: **v0.71.0**
+`v2.2.0` remains an immutable historical release. `v2.2.1` is the current stable release and keeps FRP pinned at `0.71.0`.
 
-**v2.2.1** is the **current stable release** identity in this tree
-(post-**v2.2.0** hardening; FRP remains **0.71.0**). Stable field installs use
-the immutable `v2.2.1` tag. Following mutable `main` is explicit opt-in only,
-for example `FRP_RELEASE_CHANNEL=dev`.
-
-On development builds, use release channel, source ref, and verified
-bundle SHA256 to identify the exact build.
-
-FRP **beyond the pinned version is not automatically adopted**. `show upstream` is informational;
-the project remains pinned to the version that has been tested.
+The mutable `main` branch can advance after a release. Normal field installations should use the immutable stable tag.
 
 ---
 
-# 1. The mental model
+## Supported client platforms — v2.2.1
 
-A client can sit behind NAT or a firewall and still publish local or LAN services
-through one public FRP server.
+Real-host validation and container/CI portability are deliberately reported separately.
 
-```mermaid
-flowchart LR
-    U["Operator / Internet user"]
-    S["FRP Server<br/>Public entry point"]
-    C1["Client A<br/>behind NAT"]
-    C2["Client B<br/>behind NAT"]
-    L1["127.0.0.1:22<br/>SSH"]
-    L2["127.0.0.1:443<br/>HTTPS"]
-    L3["10.10.20.30:22<br/>LAN SSH"]
-    L4["10.10.20.40:80<br/>LAN HTTP"]
+| Platform | v2.2.1 validation claim |
+| --- | --- |
+| **Ubuntu 24 physical host** | **Real E2E validated** |
+| **Rocky Linux 8.10** | **Real E2E validated** |
+| **Rocky Linux 9.4** | **Real E2E validated** |
+| **Amazon Linux 2023** | **Real E2E validated** |
+| **macOS Apple Silicon** | **Real E2E validated** |
+| **Windows 10 / PowerShell 5.1** | **Real E2E validated** |
+| **Amazon Linux 2** | **Container / CI portability only** — no live-host Real E2E claim |
+| **PowerShell 7** | **CI validated** — same-host Real E2E is claimed only where `pwsh` is actually installed |
 
-    U -->|"public service port"| S
-    C1 -->|"FRP control"| S
-    C2 -->|"FRP control"| S
-    C1 --> L1
-    C1 --> L2
-    C2 --> L3
-    C2 --> L4
-```
+Additional automated Linux portability coverage includes Ubuntu 22.04/24.04, Rocky Linux 8/9, AlmaLinux 9, Amazon Linux 2023, and Amazon Linux 2.
 
-The FRP server does not need to know how an application works. It publishes TCP
-connections. SSH, HTTP, HTTPS passthrough, and custom TCP are all represented as
-services.
+The FRP Auto Deploy **server remains Linux-based**. macOS and Windows are client platforms; a Windows FRP Auto Deploy server is not part of the current product scope.
 
-A typical client may therefore be:
+### What the final Real E2E covered
 
-- **SSH only** — publish the client's own `127.0.0.1:22`
-- **multiple local services** — SSH + HTTPS from the same client
-- **a small gateway** — publish services on other hosts reachable from the client,
-  for example `10.10.20.30:22` and `10.10.20.40:80`
+Across applicable platforms, the v2.2.1 release path validated the actual product lifecycle, including:
 
----
+- install and Zero-Touch enrollment
+- persistent `CLIENT ID`
+- service identity and public-port preservation
+- real SSH connectivity
+- real HTTP connectivity
+- internal-LAN target publishing
+- service lifecycle
+- sync/reconcile
+- reboot/autostart
+- update preservation
+- backup/restore
+- Manual Group MVP
+- Public Hostname behavior
 
-# 2. Choose the deployment pattern
+Amazon Linux 2 and PowerShell 7 remain intentionally narrower claims as shown in the table above.
 
-There are only **two deployment modes**: `direct` and `single443`.
-
-**NAT is a network topology, not a deployment mode.**
-A Direct server can have a public IP or sit behind a firewall/NAT.
-
-| Environment | Recommended pattern | Public inbound TCP |
-| --- | --- | --- |
-| Public-IP server, normal firewall policy | Direct, default ports | `443`, `6099`, `6000-6098` |
-| Server behind firewall / NAT | Direct with public/listen port split | example `8443`, `9443`, `6000-6098` |
-| Enterprise network that strongly prefers TLS on 443 | Enterprise single-443 | `443`, `6000-6098` |
-
-## 2.1 Public-IP server — Direct defaults
-
-```mermaid
-flowchart LR
-    I["Internet"]
-    subgraph S["FRP Server (Public IP)"]
-        C["FRP Control<br/>TCP/443"]
-        A["Enrollment / Management HTTPS<br/>TCP/6099"]
-        P["Published Services<br/>TCP/6000-6098"]
-    end
-
-    I -->|"TCP/443"| C
-    I -->|"TCP/6099"| A
-    I -->|"TCP/6000-6098"| P
-```
-
-Default Direct values:
-
-```text
-FRP control       public 443  = listen 443
-Allocator HTTPS   public 6099 = listen 6099
-Published ports   6000-6098
-```
-
-## 2.2 Server behind firewall / NAT — Direct with port split
-
-Example: public `8443` and `9443` are translated to the private FRP server.
-
-```mermaid
-flowchart LR
-    I["Internet"]
-    F["Firewall / NAT"]
-    subgraph S["FRP Server<br/>Private IP 192.0.2.50"]
-        C["FRP Control<br/>listen TCP/443"]
-        A["Enrollment / Management HTTPS<br/>listen TCP/6099"]
-        P["Published Services<br/>TCP/6000-6098"]
-    end
-
-    I -->|"TCP/8443"| F
-    I -->|"TCP/9443"| F
-    I -->|"TCP/6000-6098"| F
-    F -->|"8443 → 443"| C
-    F -->|"9443 → 6099"| A
-    F -->|"6000-6098 → same ports"| P
-```
-
-Example DNAT:
-
-```text
-203.0.113.10:8443       -> 192.0.2.50:443
-203.0.113.10:9443       -> 192.0.2.50:6099
-203.0.113.10:6000-6098  -> 192.0.2.50:6000-6098
-```
-
-Clients always use the **public** endpoints:
-
-```text
-FRP control : 203.0.113.10:8443
-Enrollment  : https://203.0.113.10:9443/enroll
-SSH example : ssh -p 6000 user@203.0.113.10
-```
-
-See [examples/pfsense-firewall.md](examples/pfsense-firewall.md).
-
-## 2.3 Enterprise single-443
-
-Use this when a corporate network allows TCP connectivity to non-standard ports
-but resets TLS ClientHello there, or when policy strongly prefers control and
-enrollment on TCP/443.
-
-```mermaid
-flowchart LR
-    I["Internet"]
-
-    subgraph S["FRP Server"]
-        F["FRP Frontend<br/>Public TCP/443"]
-        A["Allocator / Enrollment HTTPS<br/>127.0.0.1:6099"]
-        C["FRP Control<br/>127.0.0.1:7000"]
-        P["Published Services<br/>TCP/6000-6098"]
-
-        F -->|"/enroll, /ca.crt"| A
-        F -->|"/~!frp (WSS)"| C
-    end
-
-    I -->|"TCP/443"| F
-    I -->|"TCP/6000-6098"| P
-```
-
-Public inbound:
-
-```text
-TCP/443        HTTPS enrollment + FRP control over WSS
-TCP/6000-6098 published services
-```
-
-Internal only:
-
-```text
-127.0.0.1:6099 allocator backend
-127.0.0.1:7000 FRP control backend
-```
-
-**Do not publish 6099 or 7000 in single-443 mode.**
-
-More detail: [docs/DEPLOYMENT_MODES.md](docs/DEPLOYMENT_MODES.md)
+See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) and the full documentation at https://frp.xdr.ooo/reference/platforms.
 
 ---
 
-# 3. Install the server
+## What problem does it solve?
 
-For a published stable installation, use the immutable v2.2.1 tag:
+A typical remote system looks like this:
+
+```text
+Internet
+   |
+Firewall / NAT
+   |
+Private network
+   |
+Server
+```
+
+Traditional support access often means requesting a VPN account, changing firewall/NAT rules, configuring a bastion, or deploying a separate remote-management product.
+
+FRP Auto Deploy instead lets the client initiate an outbound FRP tunnel to a server you control:
+
+```text
+                    Internet
+                        |
+              FRP Auto Deploy Server
+                  Public endpoint
+                        |
+                 outbound FRP tunnel
+                        |
+          +-------------+-------------+
+          |             |             |
+       Client A      Client B      Client C
+      NAT/firewall  NAT/firewall  NAT/firewall
+```
+
+The client can publish services running locally or services on other LAN hosts that the client can reach.
+
+---
+
+## Core product principles
+
+```text
+CLI First
+Zero-Touch First
+Lightweight First
+Fail Closed
+Official FRP only
+Pinned / Tested FRP
+Immutable CLIENT ID
+Persistent public-port reservation
+Update preserves identity/services/ports
+No accidental re-enrollment
+```
+
+This project is intentionally **not** a Web UI, database-backed RMM, Kubernetes platform, enterprise RBAC system, or hundreds/thousands-endpoint fleet orchestrator.
+
+---
+
+## Install the server
+
+For normal field installation, use the immutable stable tag:
 
 ```bash
 curl -fsSL \
@@ -215,67 +147,7 @@ curl -fsSL \
   | sudo bash
 ```
 
-The project-line immutable install source is:
-
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-server.sh \
-  | sudo bash
-```
-
-A fresh interactive install asks for the values in this order:
-
-| Step | Prompt | Typical Direct default | single-443 default |
-| --- | --- | --- | --- |
-| 1 | Public IP | detected public IP | detected public IP |
-| 2 | Public DNS hostname (optional) | empty (IP only) | empty (IP only) |
-| 3 | Internal FRP server IP | detected private IP | detected private IP |
-| 4 | Deployment mode | `Direct` | choose `Enterprise single-443` |
-| 5 | Public FRP control port | `443` | `443` |
-| 6 | FRP listen/backend port | `443` | `7000` |
-| 7 | Public enrollment HTTPS port | `6099` | `443` |
-| 8 | Allocator listen/backend port | `6099` | `6099` |
-| 9 | Published service range | `6000-6098` | `6000-6098` |
-| 10 | Allocator public URL | derived HTTPS URL | derived `https://IP/enroll` |
-
-**Public IP** is the default and primary infrastructure endpoint (FRP control,
-allocator URL host). **Public hostname** is an optional DNS alias for
-published-service access only. DNS records are configured outside FRP Auto
-Deploy. HTTPS published services use TCP passthrough; the target certificate
-must cover the hostname if you advertise one.
-
-The installer stores runtime settings in:
-
-```text
-/etc/frp-auto-deploy/config.json
-```
-
-It does **not** configure OCI Security Lists, AWS security groups, UFW,
-firewalld, iptables, or external NAT. Open or translate the ports required by
-the deployment pattern you selected.
-
-Useful non-interactive variables:
-
-```text
-FRP_PUBLIC_IP
-FRP_PUBLIC_HOST                  legacy alias for Public IP / control host
-FRP_PUBLIC_HOSTNAME              optional DNS access alias
-FRP_INTERNAL_IP
-FRP_DEPLOYMENT_MODE              direct | single443
-FRP_CONTROL_PUBLIC_PORT
-FRP_CONTROL_LISTEN_PORT
-FRP_ALLOCATOR_PUBLIC_PORT
-FRP_ALLOCATOR_LISTEN_PORT
-FRP_ALLOCATOR_PUBLIC_URL
-FRP_PORT_START
-FRP_PORT_END
-FRP_CONFIRM_MODE_SWITCH          yes, for non-interactive mode cutover
-```
-
-Switching Direct ↔ single-443 is a maintenance-window cutover, not a
-zero-downtime operation.
-
-## Verify the server
+Then verify:
 
 ```bash
 sudo frpctl show version
@@ -283,579 +155,311 @@ sudo frpctl show status
 sudo frpctl doctor
 ```
 
-For single-443 you should see:
-
-```text
-frps       : active
-allocator  : active
-frontend   : active
-
-FRP control public : <public-host>:443
-FRP control local  : 127.0.0.1:7000
-Allocator public   : https://<public-host>/enroll
-Allocator local    : 127.0.0.1:6099
-```
-
-`doctor` is read-only and performs deeper installation, security, state,
-runtime, and network consistency checks.
+FRP Auto Deploy does **not** automatically modify external firewall/NAT rules, cloud security groups, UFW, firewalld, iptables, or DNS-provider records.
 
 ---
 
-# 4. Enroll a client
+## Deployment modes
 
-There are two normal first-install workflows:
+There are two product deployment modes.
 
-1. **Zero-touch** — server generates one command for the remote machine
-2. **Manual Enrollment Code** — operator creates an Enrollment Code and the client
-   chooses services interactively
+### Direct
 
-Enrollment establishes a persistent client management identity. Normal later
-service changes and software updates do **not** require re-enrollment.
+Typical public ports:
 
-## 4.1 Zero-touch SSH
+```text
+TCP/443        FRP control
+TCP/6099       Enrollment / management HTTPS
+TCP/6000-6098 Published services
+```
+
+A Direct server can use a public IP directly or sit behind an external firewall/DNAT device.
+
+### Enterprise single-443
+
+For environments that require control/enrollment on TCP/443:
+
+```text
+Public TCP/443
+  +-- HTTPS enrollment / management
+  +-- FRP control over WSS
+
+Published services
+  +-- TCP/6000-6098
+```
+
+Internal allocator/FRP backend ports remain local to the server.
+
+NAT is a network topology, not a third deployment mode.
+
+See [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md).
+
+---
+
+## Enroll a client
+
+### Zero-Touch
 
 On the server:
-
-```bash
-sudo frpctl create enrollment \
-  --one-line \
-  --ssh \
-  --ssh-user aella \
-  --label branch-a
-```
-
-The SSH account must already exist on the client. There is **no default username**:
-do not assume `ubuntu`, `root`, or any distro-specific account.
-
-Interactive creation may prompt:
-
-```text
-Client SSH user: aella
-SSH port [22]: 22
-```
-
-Zero-touch does **not**:
-
-- create an OS user
-- install or enable an SSH server
-- set a password
-- create or modify SSH keys / `authorized_keys`
-- change `sshd_config`
-
-The server prints a one-time install command containing a short-lived bootstrap
-ticket. Send that command securely to the remote operator and run it once.
-
-When `bootstrap_hostname` is configured and an operator reverse proxy terminates
-publicly trusted HTTPS for that name, the preferred command is:
-
-```bash
-curl -fsSL https://bootstrap.example.com/i/<opaque-ticket> | sudo bash
-```
-
-Otherwise the v2.1.2 transitional form is printed:
-
-```bash
-curl -fsSL <immutable-installer> | sudo bash -s -- 'zt1.<opaque>'
-```
-
-See `docs/ZERO_TOUCH_SHORT_URL.md`.
-
-After enrollment:
-
-```bash
-sudo frpctl show clients
-sudo frpctl show enrollments
-```
-
-Connect with the assigned public service port:
-
-```bash
-ssh -p <public-port> aella@203.0.113.10
-```
-
-## 4.2 Manual Enrollment Code
-
-On the server:
-
-```bash
-sudo frpctl create enrollment
-```
-
-The output includes:
-
-- a non-secret Enrollment ID for tracking/revocation
-- a short-lived Enrollment Code shown at creation time
-- the allocator HTTPS URL
-- the allocator CA SHA256 fingerprint
-- the client bootstrap command
-
-Copy the generated client install command **as printed**. On the client, run it
-and enter the Enrollment Code when prompted.
-
-The client then opens a service menu:
-
-```text
-1) SSH
-2) HTTP
-3) HTTPS
-4) Custom TCP
-5) Back
-```
-
-The FRP server assigns public service ports automatically. The client chooses
-the **target host and target port**, not the external public port.
-
----
-
-# 5. Common client scenarios
-
-## Scenario A — publish only the client's SSH
-
-During the first manual enrollment:
-
-```text
-Type        : SSH
-Service ID  : ssh
-Target host : 127.0.0.1
-Target port : 22
-SSH user    : aella
-```
-
-Result:
-
-```text
-Internet -> FRP Server:<assigned-port> -> client 127.0.0.1:22
-```
-
-## Scenario B — publish SSH + local HTTPS
-
-Add two services before selecting **Install and connect**:
-
-```text
-Service 1
-  Type        : SSH
-  Service ID  : ssh
-  Target      : 127.0.0.1:22
-
-Service 2
-  Type        : HTTPS
-  Service ID  : web-admin
-  Target      : 127.0.0.1:443
-```
-
-Each service gets its own persistent public port.
-
-HTTPS is TCP passthrough. FRP does not terminate the application's HTTPS
-session.
-
-## Scenario C — use the client as a gateway to other LAN hosts
-
-The FRP client does not have to publish a service running on itself.
-
-Example:
-
-```text
-Service 1
-  Type        : SSH
-  Service ID  : lan-ssh
-  Target      : 10.10.20.30:22
-
-Service 2
-  Type        : HTTP
-  Service ID  : lan-web
-  Target      : 10.10.20.40:80
-```
-
-Flow:
-
-```mermaid
-flowchart LR
-    U["Internet user"]
-    S["FRP Server"]
-    C["FRP Client<br/>gateway host"]
-    H1["10.10.20.30:22<br/>SSH"]
-    H2["10.10.20.40:80<br/>HTTP"]
-
-    U -->|"public service port"| S
-    C -->|"FRP tunnel"| S
-    C --> H1
-    C --> H2
-```
-
-The FRP client only needs normal IP reachability to those internal targets.
-
-## Scenario D — custom TCP service
-
-Examples:
-
-```text
-Grafana       127.0.0.1:3000
-API           10.10.30.20:8080
-PostgreSQL    10.10.30.30:5432
-Appliance UI  10.10.40.50:8443
-```
-
-Choose **Custom TCP**, give the service a stable Service ID, and enter the target
-host/port.
-
----
-
-# 6. `frpctl` — the everyday operator CLI
-
-For normal operations, remember one command:
 
 ```bash
 sudo frpctl
 ```
 
-`frpctl` starts a persistent interactive CLI.
+Then use the guided command:
 
 ```text
-Tab   show or complete valid next tokens immediately
-?     context-sensitive help
-help  full command help
-↑/↓   in-memory history for this session only
-menu  guided numbered menu
-exit  leave the CLI
+create zero-touch
 ```
 
-Grammar:
+Or create an explicit SSH profile:
+
+```bash
+sudo frpctl create enrollment \
+  --one-line \
+  --ssh \
+  --ssh-user admin \
+  --label branch-a
+```
+
+The SSH account must already exist on the target system. FRP Auto Deploy does not create OS users, passwords, SSH keys, or configure `sshd`.
+
+When `bootstrap_hostname` is configured with an operator-owned public DNS/TLS/reverse-proxy endpoint, the Linux Short URL can look like:
+
+```bash
+curl -fsSL https://bootstrap.example.com/i/<opaque-ticket> | sudo bash
+```
+
+The full `/i/<ticket>` URL is a short-lived credential and should be handled as sensitive data.
+
+### Windows Zero-Touch security rule
+
+Production Windows bootstrap does **not** use `irm ... | iex`.
+
+The required trust flow is:
 
 ```text
-<verb> <resource> [target] [property] [value]
+download bootstrap file
+        ->
+verify expected SHA256
+        ->
+powershell.exe -File
 ```
 
-The canonical server-side client selector is immutable **CLIENT ID**. Label and
-hostname are convenient shortcuts, but changing metadata never changes the
-CLIENT ID.
+See [`docs/WINDOWS_CLIENT.md`](docs/WINDOWS_CLIENT.md).
 
-## Server examples
+---
+
+## Publish services
+
+A client can publish one or many TCP services.
+
+### SSH only
+
+```text
+FRP Server:<assigned-port>
+        ->
+Client 127.0.0.1:22
+```
+
+### Multiple local services
+
+```text
+ssh        -> 127.0.0.1:22
+web-admin  -> 127.0.0.1:443
+```
+
+### Internal LAN targets
+
+```text
+lan-ssh -> 10.10.20.30:22
+lan-web -> 10.10.20.40:80
+```
+
+Supported service model:
+
+- SSH
+- HTTP
+- HTTPS passthrough
+- Custom TCP
+
+HTTPS is TCP passthrough; FRP Auto Deploy does not terminate the application's TLS session or manage the application certificate.
+
+---
+
+## `frpctl` — primary management interface
+
+Start the persistent operator CLI:
+
+```bash
+sudo frpctl
+```
+
+Typical server operations:
 
 ```text
 show status
 show version
 show clients
-show client <ID>
-show client <ID> services
-show client <ID> tags
+show client <CLIENT-ID>
 show enrollments
+show groups
 show audit
-show upstream
-
-set client <ID> label production-gateway
-set client <ID> note "Seoul office gateway"
-set client <ID> tag site seoul
-
-unset client <ID> label
-unset client <ID> note
-unset client <ID> tag site
 
 create enrollment
-create enrollment --one-line --ssh --ssh-user aella --label branch-a
-create enrollments --count 3
 create backup
 
-revoke enrollment <ID>
-revoke client <CLIENT-ID>
+set client <CLIENT-ID> label branch-a
+set client <CLIENT-ID> tag site seoul
 
-release service <CLIENT-ID> <service-id>
+revoke client <CLIENT-ID>
+release service <CLIENT-ID> <SERVICE-ID>
 release client <CLIENT-ID>
 
+doctor
 update project --check
-update project
 update frp --check
-
-doctor
 ```
 
-## Client examples
+The canonical client identity is immutable `CLIENT ID`. Label, hostname, note, tags, and groups are metadata and do not replace identity.
 
-```text
-show status
-show version
-show services
-show info
-
-add service
-set service <service-id> target-host <host>
-set service <service-id> target-port <port>
-set service <service-id> ssh-user <user>
-set service <service-id> name <value>
-
-enable service <service-id>
-disable service <service-id>
-
-apply
-discard
-
-update project --check
-doctor
-```
-
-Client service edits are staged. Use `apply` to make them live or `discard` to
-drop pending changes.
-
-Full reference: [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md)
+Full CLI reference: [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md).
 
 ---
 
-# 7. Lifecycle semantics — important
+## Lifecycle semantics
 
-These operations are deliberately different:
+These operations intentionally mean different things:
 
 ```text
 disable   != release
 revoke    != release
 uninstall != release
-uninstall != purge
 update    != re-enrollment
 ```
 
-| Operation | What it does | Public port reservation |
+| Operation | Identity | Public port |
 | --- | --- | --- |
-| `disable service` | temporarily stops publishing the service | **kept** |
-| `enable service` | republishes the service | **same port reused** |
-| edit + `apply` | changes target/name/config | **kept when possible** |
-| `revoke client` | removes management identity / blocks management | **kept** |
-| `release service` | returns one service's public port | **released** |
-| `release client` | removes the server client record and all reservations | **released** |
-| client uninstall | removes local client state only | **server ports remain** |
-| server uninstall | removes runtime/software | state is preserved |
-| server purge | destructive server cleanup | state deleted |
+| disable service | kept | **reserved** |
+| enable service | kept | **same port reused** |
+| edit service | kept | **preserved** |
+| revoke client | management blocked | **reserved** |
+| release service | kept | **released for that service** |
+| release client | removed | **released** |
+| local client uninstall | server identity remains | **reserved** |
+| normal update | preserved | **preserved** |
 
-There is intentionally no ambiguous `delete client` command. If you mean
-"free the public ports and remove the server record", use `release client`.
+Normal project/FRP updates do not require re-enrollment and are designed to preserve client identity, services, and public-port reservations.
 
 ---
 
-# 8. Backup, restore, and updates
+## Public Hostname / DNS
 
-## Backup / restore
+The authoritative model is:
 
-On the server:
+```text
+Public IP       = infrastructure/control endpoint
+Public Hostname = optional user-facing alias for published services
+```
+
+For example:
+
+```text
+ssh -p 6000 admin@access.example.com
+ssh -p 6000 admin@203.0.113.10
+```
+
+IP fallback is preserved. FRP Auto Deploy does not automatically manage DNS-provider records, ACME/Let's Encrypt, external NAT, or application certificates.
+
+---
+
+## Manual Group MVP
+
+v2.2.1 includes the lightweight Group model intended for a few to a few dozen clients:
+
+- Manual Group CRUD
+- immutable Group ID
+- multiple group membership
+- tags
+- basic filters
+- persistence
+- audit
+- backup/restore preservation
+
+Dynamic Group, nested hierarchy, broad destructive fleet operations, canary rollout frameworks, and hundreds/thousands-client orchestration are not current core scope.
+
+---
+
+## Security model
+
+The management plane is designed to fail closed.
+
+- HTTPS-only enrollment/management
+- project private CA
+- canonical DER SHA256 CA pin during first bootstrap
+- persistent ECDSA P-256 client management identity
+- signed requests
+- timestamp and nonce replay protection
+- high-entropy, TTL, single-use Zero-Touch tickets
+- first-machine binding
+- bootstrap secrets hashed at rest
+- FRP tunnel credential separated from management identity
+- no general TLS-verification bypass
+
+Installer/release artifacts use SHA256 integrity verification. The project currently does not require a separate long-lived signing PKI for release operation.
+
+See [`docs/SECURITY.md`](docs/SECURITY.md).
+
+---
+
+## Backup, restore, and updates
 
 ```bash
 sudo frpctl create backup
 sudo frpctl restore backup <path>
-```
 
-Backup/restore covers project state such as configuration, registry, enrollment
-metadata, token, and PKI according to the documented backup format.
-
-## Project update
-
-Check first:
-
-```bash
 sudo frpctl update project --check
-```
-
-Then update:
-
-```bash
 sudo frpctl update project
-```
 
-The updater verifies release metadata and `SHA256SUMS`. Same-version updates are
-identified by verified bundle SHA256, not by `PROJECT_VERSION` alone. This
-allows a development build to refresh management code without falsely reporting
-"not needed" only because both trees say the same `PROJECT_VERSION`.
-
-A normal project update does not re-enroll clients or intentionally rotate the
-CA, FRP token, client identity, or persistent service ports.
-
-Legacy clients that do not have persisted release identity fail closed on remote
-update. Use the **one-time verified bridge** documented in
-[docs/FRP_UPGRADE.md](docs/FRP_UPGRADE.md); do not guess or silently switch a
-legacy install to a release channel.
-
-## FRP binary update
-
-```bash
 sudo frpctl show upstream
 sudo frpctl update frp --check
 ```
 
-`show upstream` may report a newer upstream FRP release. That does not mean the
-project will install it. Only the pinned/tested FRP version is accepted by the
-normal update path.
+`show upstream` is informational. FRP Auto Deploy does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
 
 ---
 
-# 9. Security model
-
-The management plane is designed to fail closed.
-
-- Enrollment and management use **HTTPS only**
-- The server maintains a project private CA
-- First client trust uses a supplied **CA SHA256 fingerprint** and X.509 parsing
-- Later management requests use the stored CA
-- Clients receive a persistent ECDSA management identity after enrollment
-- FRP data/control authentication still uses the FRP token
-- Zero-touch bootstrap tickets are short-lived and sensitive
-- `show enrollments`, Tab completion, help, status, and audit views do not expose
-  enrollment secrets
-- `frpctl` history is session-only and is not written to disk
-- `frpctl` tokenization does not perform shell variable expansion, globbing, or
-  command substitution
-- Plain HTTP allocator operation is not supported
-- Production verification should not disable TLS verification
-- Installer bundles are covered by `SHA256SUMS`; this project does not currently
-  ship cryptographic signatures for its own bootstrap scripts
-
-Security details: [docs/SECURITY.md](docs/SECURITY.md)
-
----
-
-# 10. Supported platforms and validation
-
-Automated userspace/container portability is exercised on:
-
-| Distribution | Automated container matrix |
-| --- | --- |
-| Ubuntu 22.04 | PASS |
-| Ubuntu 24.04 | PASS |
-| Rocky Linux 8 | PASS |
-| Rocky Linux 9 | PASS |
-| AlmaLinux 9 | PASS |
-| Amazon Linux 2023 | PASS |
-| Amazon Linux 2 | PASS |
-
-Stable platform scope for **v2.2.1** includes Linux/systemd Real E2E hosts,
-macOS Apple Silicon, and Windows PS5.1 (PowerShell 7 is CI-validated). Manual
-Group MVP is shipped. Design target is **1–50 clients**, not 100+ fleet
-orchestration.
-
-Real-environment validation and container validation are **not the same claim**.
-For example, SELinux Enforcing, native ARM64 systemd, and some older OpenSSL
-environments have separate validation gates. Rocky Linux 8.10 is a
-release-validated Short URL Real E2E platform for 2.2.0 (see
-`docs/ZERO_TOUCH_SHORT_URL.md`); that is not a Rocky 9 SELinux claim.
-
-See [docs/RELEASE_VALIDATION.md](docs/RELEASE_VALIDATION.md) for the authoritative
-support/validation classification.
-
----
-
-# 11. Useful files and services
-
-Server:
-
-```text
-/etc/frp/frps.toml
-/etc/frp/server_token
-/etc/frp-auto-deploy/config.json
-/etc/frp-auto-deploy/version
-/etc/frp-auto-deploy/pki/
-/var/lib/frp-auto-deploy/registry.json
-/var/lib/frp-auto-deploy/enrollments/
-/var/lib/frp-auto-deploy/bootstrap/
-```
-
-Client:
-
-```text
-/etc/frp/frpc.toml
-/etc/frp/client-state.json
-/etc/frp/client-identity.key
-/etc/frp-auto-deploy/allocator-ca.crt
-```
-
-Systemd units:
-
-```text
-frps.service
-frp-port-allocator.service
-frp-frontend.service    # single-443 only
-frpc.service            # client
-```
-
----
-
-# 12. Uninstall and decommission
-
-Client uninstall is **local-only**. It intentionally does not contact the server
-or free public ports.
-
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/uninstall-client.sh \
-  | sudo bash
-```
-
-If the client is being permanently decommissioned, release its server-side
-reservations separately.
-
-Server uninstall preserves token, CA, configuration, registry, and reservations:
-
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/uninstall-server.sh \
-  | sudo bash
-```
-
-Destructive purge is for test/decommission scenarios only:
-
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/uninstall-server.sh \
-  | sudo bash -s -- --purge --yes
-```
-
----
-
-# 13. Known limits
+## Current limits
 
 - TCP services only
-- Published service NAT uses the same public/internal FRP service port number
-- No automatic cloud firewall, security group, UFW, firewalld, iptables, or
-  external NAT configuration
-- No automatic SSH account, password, or SSH key management
-- Windows PS5.1 and macOS Apple Silicon Real E2E are validated in v2.2.1;
-  PowerShell 7 is CI-validated (same-host PS7 only when `pwsh` is installed)
-- Some real-VM / SELinux / ARM64 / older OpenSSL combinations remain separately
-  classified in the validation matrix
-- Project bootstrap scripts are checksummed, not cryptographically signed
-- Designed for a few to a few dozen systems; not a 100+ fleet orchestration product
+- Server platform is Linux
+- Amazon Linux 2 has portability/CI validation only in the current release qualification
+- PowerShell 7 is CI validated; same-host Real E2E depends on `pwsh` being present
+- some SELinux Enforcing, native ARM64 systemd, older OpenSSL/system-library, and unusual network-topology combinations remain separate validation gates
+- no automatic cloud firewall/NAT/DNS/ACME management
+- no automatic SSH account/password/key management
+- project bootstrap scripts are checksummed; independent project artifact signing remains a known residual supply-chain improvement area
+- intended for approximately 1–50 clients, not large-scale fleet orchestration
 
 ---
 
-# 14. Documentation map
+## Documentation
 
-| Topic | Document |
+| Topic | Link |
 | --- | --- |
-| CLI grammar and all commands | [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) |
-| Direct vs single-443 | [docs/DEPLOYMENT_MODES.md](docs/DEPLOYMENT_MODES.md) |
-| Security and trust model | [docs/SECURITY.md](docs/SECURITY.md) |
-| FRP / project upgrade behavior | [docs/FRP_UPGRADE.md](docs/FRP_UPGRADE.md) |
-| Release validation claims | [docs/RELEASE_VALIDATION.md](docs/RELEASE_VALIDATION.md) |
-| Release checklist | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) |
-| OCI acceptance | [docs/OCI_ACCEPTANCE.md](docs/OCI_ACCEPTANCE.md) |
-| pfSense / DNAT example | [examples/pfsense-firewall.md](examples/pfsense-firewall.md) |
-| Changes by release | [CHANGELOG.md](CHANGELOG.md) |
+| Full documentation | **https://frp.xdr.ooo** |
+| Supported platforms | https://frp.xdr.ooo/reference/platforms |
+| Quick Start | https://frp.xdr.ooo/getting-started/quickstart |
+| CLI Reference | [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
+| Deployment modes | [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md) |
+| Security | [`docs/SECURITY.md`](docs/SECURITY.md) |
+| Release validation | [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) |
+| FRP/project upgrade | [`docs/FRP_UPGRADE.md`](docs/FRP_UPGRADE.md) |
+| Product Master | [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) |
+| Changes by release | [`CHANGELOG.md`](CHANGELOG.md) |
 
 ---
 
-## Quick operator checklist
+## Product definition in one sentence
 
-Server:
-
-```bash
-sudo frpctl show version
-sudo frpctl show status
-sudo frpctl show clients
-sudo frpctl show enrollments
-sudo frpctl doctor
-```
-
-Client:
-
-```bash
-sudo frpctl show status
-sudo frpctl show services
-sudo frpctl show info
-sudo frpctl doctor
-```
-
-If those commands are healthy and the assigned public service port is reachable,
-the normal FRP path is ready.
+> FRP Auto Deploy v2.2.1 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.
