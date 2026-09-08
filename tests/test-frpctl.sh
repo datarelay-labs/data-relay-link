@@ -233,7 +233,8 @@ export FRP_CTL_TEST_MENU=1
 run_repl "$SERVER" "$WORKDIR/server-menu.out" menu exit || fail "server menu repl"
 grep -q 'Role            : Server' "$WORKDIR/server-menu.out" || fail "server role"
 grep -q '2) Manage clients' "$WORKDIR/server-menu.out" || fail "server menu manage clients"
-grep -q '8) Update FRP' "$WORKDIR/server-menu.out" || fail "server menu frp update"
+grep -q '7) Access Control' "$WORKDIR/server-menu.out" || fail "server menu access control"
+grep -q '9) Update FRP' "$WORKDIR/server-menu.out" || fail "server menu frp update"
 pass "FRPCTL_SERVER_DETECTION"
 
 unset FRP_CTL_TEST_MENU

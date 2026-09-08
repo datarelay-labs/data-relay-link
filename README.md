@@ -10,6 +10,7 @@ FRP Auto Deploy helps you securely reach servers and services behind NAT or fire
 - Immutable client identity
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
+- Named Access Lists / temporary TTL / connection access log (main feature; not yet in published stable)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
 - One primary operator interface: `sudo frpctl`
@@ -451,6 +452,19 @@ v2.2.1 includes the lightweight Group model intended for a few to a few dozen cl
 - backup/restore preservation
 
 Dynamic Group, nested hierarchy, broad destructive fleet operations, canary rollout frameworks, and hundreds/thousands-client orchestration are not current core scope.
+
+## Access Control Pack
+
+On current feature work (not yet published in immutable `v2.2.1`):
+
+- Named reusable Access Lists (IPv4/IPv6 CIDR)
+- Service modes: `PUBLIC` (default) and `ALLOWLIST`
+- Optional temporary sources with absolute expiry (`expires_at`)
+- Bounded connection ALLOW/DENY log
+- `frpctl access ...` interactive menu and scriptable CLI
+- FRP 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed for ALLOWLIST)
+
+IP allowlisting is defense-in-depth. Keep target authentication enabled.
 
 ---
 

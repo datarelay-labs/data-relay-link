@@ -44,6 +44,10 @@ def seed_tree(root: Path) -> None:
         json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n",
         encoding="utf-8",
     )
+    (root / "var/lib/frp-auto-deploy/access-control.json").write_text(
+        json.dumps({"schema_version": 1, "access_lists": {}, "service_access": {}}) + "\n",
+        encoding="utf-8",
+    )
     (root / "etc/frp/frps.toml").write_text('bindPort = 443\n', encoding="utf-8")
     (root / "etc/frp/server_token").write_text("token\n", encoding="utf-8")
     (root / "etc/frp-auto-deploy/pki/ca.crt").write_text("ca\n", encoding="utf-8")

@@ -3367,6 +3367,10 @@ Manage a few to a few dozen clients with frpctl
 | Zero-Touch Short URL Option B | **STABLE** |
 | Public Hostname / DNS alias | **STABLE** |
 | Simple Manual Group MVP | **STABLE** |
+| Access Control Pack (Named Lists / TTL / Conn Log) | **MAIN / IN PROGRESS** (feature branch; not yet in stable) |
+| Target Health Check | **PLANNED** (P1 remaining) |
+| Support Bundle | **PLANNED** (P1 remaining) |
+| Service Profiles | **PLANNED** (P1 remaining) |
 | macOS Apple Silicon | **STABLE / Real E2E validated** |
 | Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
 | Rocky 8 / Rocky 9 / AL2023 | **STABLE / Real E2E validated** |
@@ -3620,6 +3624,40 @@ AUTHORITATIVE_MASTER_SOURCE=Owner-reconstructed canonical Product Master (synced
 - 현재 버전/HEAD/test state는 release마다 갱신한다.
 - historical decision은 보존하되 current direction과 혼동하지 않도록 표시한다.
 - 실제 code/test/release가 문서보다 항상 우선한다.
+
+---
+
+
+# 73. Access Control Pack (Named Lists / TTL / Connection Log)
+
+**Status: MAIN / feature branch (not yet in published stable v2.2.1)**
+
+Published service connections can be authorized with:
+
+- **PUBLIC** — default for all existing services without access metadata
+- **ALLOWLIST** — Named reusable Access List of CIDR/IP sources
+
+Temporary Access stores absolute `expires_at` on list entries (TTL inputs like
+`30m` / `4h` / `1d`). Expired entries do not match.
+
+Connection Access Log records recent ALLOW/DENY decisions (bounded local
+JSONL). Logging failures do not change authorization; ALLOWLIST policy
+failures fail closed.
+
+Enforcement uses FRP **0.71.0 NewUserConn** server HTTP plugin on loopback
+(`127.0.0.1:6101`). Firewall automation is not used. Control / enrollment /
+single-443 frontend paths are never filtered by Service Access Lists.
+
+Access Control is defense-in-depth. Target authentication (SSH keys, app auth,
+database auth) must remain enabled.
+
+Remaining approved product features after this pack:
+
+```text
+P1 Target Health Check
+P1 Support Bundle
+P1 Service Profiles
+```
 
 ---
 

@@ -18,6 +18,7 @@ CTL="$ROOT/tools/frpctl"
 . "$ROOT/VERSION"
 export FRP_SKIP_SYSTEMD=1
 export FRP_DOCTOR_SKIP_NETWORK=1
+export PYTHONDONTWRITEBYTECODE=1
 export FRP_DOCTOR_PY="$ROOT/lib/frp_doctor.py"
 export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
@@ -156,17 +157,28 @@ PY
 write_server_healthy() {
   local tree="$1"
   mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy" \
+    "$tree/var/log/frp-auto-deploy" \
     "$tree/usr/local/bin" "$tree/usr/local/sbin" "$tree/usr/local/lib/frp-auto-deploy" \
     "$tree/etc/systemd/system"
   write_version "$tree"
   write_dummy_bin "$tree/usr/local/bin/frps" frps
   write_dummy_bin "$tree/usr/local/sbin/frp-create-client" frp-create-client
   cp "$ROOT/server/frp-port-allocator.py" "$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
+  cp "$ROOT/lib/frp_access_control.py" "$tree/usr/local/lib/frp-auto-deploy/frp_access_control.py"
   write_unit "$tree/etc/systemd/system/frps.service"
   write_unit "$tree/etc/systemd/system/frp-port-allocator.service"
+  write_unit "$tree/etc/systemd/system/frp-access-plugin.service"
   echo 'test-frp-token-do-not-use' >"$tree/etc/frp/server_token"
   chmod 600 "$tree/etc/frp/server_token"
-  echo 'bindPort = 443' >"$tree/etc/frp/frps.toml"
+  cat >"$tree/etc/frp/frps.toml" <<'EOF'
+bindPort = 443
+
+[[httpPlugins]]
+name = "frp-access"
+addr = "127.0.0.1:6101"
+path = "/access-auth"
+ops = ["NewUserConn"]
+EOF
   chmod 600 "$tree/etc/frp/frps.toml"
   gen_pki "$tree/etc/frp-auto-deploy/pki" "203.0.113.10"
   python3 - "$tree/etc/frp-auto-deploy/config.json" <<'PY'
@@ -185,6 +197,10 @@ Path(sys.argv[1]).write_text(json.dumps({
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:9443/enroll",
     "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+    "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
+    "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
+    "access_plugin_addr": "127.0.0.1:6101",
+    "access_plugin_path": "/access-auth",
     "token_file": "/etc/frp/server_token",
     "tls_ca_cert": "/etc/frp-auto-deploy/pki/ca.crt",
     "tls_server_cert": "/etc/frp-auto-deploy/pki/server.crt",
@@ -218,6 +234,10 @@ Path(sys.argv[1]).write_text(json.dumps({
 }, indent=2, sort_keys=True) + "\n")
 PY
   chmod 600 "$tree/var/lib/frp-auto-deploy/registry.json"
+  printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/access-control.json"
+  chmod 600 "$tree/var/lib/frp-auto-deploy/access-control.json"
+  chmod 700 "$tree/var/log/frp-auto-deploy"
   echo '{"schema_version":1,"nonces":{"abc":1}}' >"$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
   chmod 600 "$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
 }

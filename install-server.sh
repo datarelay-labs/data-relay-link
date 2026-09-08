@@ -10,10 +10,13 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for f in \
   "$BASE_DIR/VERSION" \
   "$BASE_DIR/server/frp-port-allocator.py" \
+  "$BASE_DIR/server/frp-access-plugin.py" \
   "$BASE_DIR/server/migrate_token.py" \
   "$BASE_DIR/server/frps.service" \
   "$BASE_DIR/server/frp-port-allocator.service" \
+  "$BASE_DIR/server/frp-access-plugin.service" \
   "$BASE_DIR/server/frp-frontend.service" \
+  "$BASE_DIR/lib/frp_access_control.py" \
   "$BASE_DIR/lib/frp_mgmt_auth.py" \
   "$BASE_DIR/lib/frp_pki.py" \
   "$BASE_DIR/lib/frp_frontend.py" \
@@ -41,6 +44,7 @@ for f in \
   "$BASE_DIR/tools/frp-group-set" \
   "$BASE_DIR/tools/frp-release-client" \
   "$BASE_DIR/tools/frp-release-service" \
+  "$BASE_DIR/tools/frp-access" \
   "$BASE_DIR/tools/frp-revoke-client" \
   "$BASE_DIR/tools/frp-client-set" \
   "$BASE_DIR/tools/frp-set-client-installer-url" \
@@ -1123,6 +1127,10 @@ cfg = {
     'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
     'enrollment_retention_days': 30,
     'token_file': '/etc/frp/server_token',
+    'access_control_file': '/var/lib/frp-auto-deploy/access-control.json',
+    'access_conn_log_file': '/var/log/frp-auto-deploy/access-conn.jsonl',
+    'access_plugin_addr': '127.0.0.1:6101',
+    'access_plugin_path': '/access-auth',
     'client_installer_url': sys.argv[10],
     'windows_client_installer_url': sys.argv[11],
     'tls_ca_cert': pki.rstrip('/') + '/ca.crt',
@@ -1170,6 +1178,12 @@ transport.tls.force = false
 allowPorts = [
   { start = ${FRP_PORT_START}, end = ${FRP_PORT_END} }
 ]
+
+[[httpPlugins]]
+name = "frp-access"
+addr = "127.0.0.1:6101"
+path = "/access-auth"
+ops = ["NewUserConn"]
 EOF2
   else
     frp_atomic_write "$dest" 0600 <<EOF2
@@ -1184,6 +1198,12 @@ transport.tls.force = true
 allowPorts = [
   { start = ${FRP_PORT_START}, end = ${FRP_PORT_END} }
 ]
+
+[[httpPlugins]]
+name = "frp-access"
+addr = "127.0.0.1:6101"
+path = "/access-auth"
+ops = ["NewUserConn"]
 EOF2
   fi
 }
@@ -1594,9 +1614,9 @@ frp_server_record_action() {
 frp_server_enable_units() {
   if frp_server_skip_systemd; then
     if frp_mode_is_single443; then
-      frp_server_record_action "enable frps frp-port-allocator frp-frontend"
+      frp_server_record_action "enable frps frp-access-plugin frp-port-allocator frp-frontend"
     else
-      frp_server_record_action "enable frps frp-port-allocator"
+      frp_server_record_action "enable frps frp-access-plugin frp-port-allocator"
       frp_server_record_action "disable frp-frontend"
     fi
     if [[ "${FRP_INSTALL_HOOK_ENABLE_FAIL:-}" == "1" ]]; then
@@ -1606,9 +1626,9 @@ frp_server_enable_units() {
     return 0
   fi
   if frp_mode_is_single443; then
-    frp_server_systemctl enable frps frp-port-allocator frp-frontend >/dev/null
+    frp_server_systemctl enable frps frp-access-plugin frp-port-allocator frp-frontend >/dev/null
   else
-    frp_server_systemctl enable frps frp-port-allocator >/dev/null
+    frp_server_systemctl enable frps frp-access-plugin frp-port-allocator >/dev/null
     frp_server_systemctl disable --now frp-frontend >/dev/null 2>&1 || true
   fi
 }
@@ -1759,7 +1779,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file backups_dir lib_dir unit_frps unit_alloc unit_frontend sbin_dir
+  local registry_file access_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_frontend sbin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
@@ -1769,10 +1789,12 @@ frp_server_main() {
   frps_toml="$(frp_server_fs /etc/frp/frps.toml)"
   frontend_conf="$(frp_server_fs /etc/frp-auto-deploy/frontend.conf)"
   registry_file="$(frp_server_fs /var/lib/frp-auto-deploy/registry.json)"
+  access_control_file="$(frp_server_fs /var/lib/frp-auto-deploy/access-control.json)"
   backups_dir="$(frp_server_fs /var/lib/frp-auto-deploy/backups)"
   lib_dir="$(frp_server_fs /usr/local/lib/frp-auto-deploy)"
   unit_frps="$(frp_server_fs /etc/systemd/system/frps.service)"
   unit_alloc="$(frp_server_fs /etc/systemd/system/frp-port-allocator.service)"
+  unit_access="$(frp_server_fs /etc/systemd/system/frp-access-plugin.service)"
   unit_frontend="$(frp_server_fs /etc/systemd/system/frp-frontend.service)"
   sbin_dir="$(frp_server_fs /usr/local/sbin)"
 
@@ -1793,12 +1815,16 @@ frp_server_main() {
   fi
 
   local hash_frps_before hash_toml_before hash_unit_frps_before hash_unit_alloc_before
+  local hash_unit_access_before hash_access_plugin_before hash_access_lib_before
   local hash_frontend_conf_before hash_unit_frontend_before
   local hash_alloc_helpers_before=() alloc_helper_rel
   hash_frps_before="$(frp_file_sha256 "$(frp_server_fs /usr/local/bin/frps)")"
   hash_toml_before="$(frp_file_sha256 "$frps_toml")"
   hash_unit_frps_before="$(frp_file_sha256 "$unit_frps")"
   hash_unit_alloc_before="$(frp_file_sha256 "$unit_alloc")"
+  hash_unit_access_before="$(frp_file_sha256 "$unit_access")"
+  hash_access_plugin_before="$(frp_file_sha256 "${lib_dir}/frp-access-plugin.py")"
+  hash_access_lib_before="$(frp_file_sha256 "${lib_dir}/frp_access_control.py")"
   # Any Python module imported by the allocator must be listed in FRP_ALLOCATOR_RUNTIME_HELPERS.
   for alloc_helper_rel in frp-port-allocator.py "${FRP_ALLOCATOR_RUNTIME_HELPERS[@]}"; do
     hash_alloc_helpers_before+=("$(frp_file_sha256 "${lib_dir}/${alloc_helper_rel}")")
@@ -1890,11 +1916,33 @@ frp_server_main() {
   [[ -f "$registry_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "registry.json is missing"; return 1; }
   chmod 600 "$registry_file"
 
+  if [[ ! -f "$access_control_file" ]]; then
+    if ! python3 - "$access_control_file" "$BASE_DIR/lib/frp_access_control.py" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("frp_access_control", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+path = Path(sys.argv[1])
+mod.save_access_state(mod.empty_access_state(), path=path)
+PY
+    then
+      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create access-control.json"
+      return 1
+    fi
+  fi
+  [[ -f "$access_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "access-control.json is missing"; return 1; }
+  chmod 600 "$access_control_file"
+
   frp_server_install_manifest_files "$lib_dir" "$sbin_dir"
   install -m 0644 "$BASE_DIR/server/frps.service" "$unit_frps"
   frp_write_compatible_systemd_unit \
     "$BASE_DIR/server/frp-port-allocator.service" \
     "$unit_alloc"
+  frp_write_compatible_systemd_unit \
+    "$BASE_DIR/server/frp-access-plugin.service" \
+    "$unit_access"
   if frp_mode_is_single443; then
     write_frontend_config "$frontend_conf"
     write_frontend_unit "$unit_frontend"
@@ -1902,10 +1950,11 @@ frp_server_main() {
     rm -f "$unit_frontend" "$frontend_conf"
   fi
 
-  local need_frps_restart=0 need_alloc_restart=0 need_frontend_restart=0
+  local need_frps_restart=0 need_alloc_restart=0 need_access_restart=0 need_frontend_restart=0
   if [[ "$existing_install" != "1" ]]; then
     need_frps_restart=1
     need_alloc_restart=1
+    need_access_restart=1
     if frp_mode_is_single443; then
       need_frontend_restart=1
     fi
@@ -1929,6 +1978,15 @@ frp_server_main() {
       fi
       _alloc_idx=$((_alloc_idx + 1))
     done
+    if [[ "$(frp_file_sha256 "$unit_access")" != "$hash_unit_access_before" ]]; then
+      need_access_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "${lib_dir}/frp-access-plugin.py")" != "$hash_access_plugin_before" ]]; then
+      need_access_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "${lib_dir}/frp_access_control.py")" != "$hash_access_lib_before" ]]; then
+      need_access_restart=1
+    fi
     if [[ "${PKI_ACTION:-}" == "reissued-server" || "${PKI_ACTION:-}" == "generated" ]]; then
       need_alloc_restart=1
       if frp_mode_is_single443; then
@@ -1946,6 +2004,7 @@ frp_server_main() {
     if [[ "${FRP_MODE_SWITCH:-0}" == "1" ]]; then
       need_frps_restart=1
       need_alloc_restart=1
+      need_access_restart=1
       if frp_mode_is_single443; then
         need_frontend_restart=1
       fi
@@ -1974,6 +2033,12 @@ frp_server_main() {
     fi
   fi
 
+  if [[ "$need_access_restart" == "1" ]]; then
+    if ! frp_server_restart_unit frp-access-plugin; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "frp-access-plugin failed to start; installation is not complete."
+      return 1
+    fi
+  fi
   if [[ "$need_frps_restart" == "1" ]]; then
     if ! frp_server_restart_unit frps; then
       frp_server_fail_after_mutation SERVICE_START_FAILED "frps failed to start; installation is not complete."

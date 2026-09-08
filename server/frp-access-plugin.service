@@ -1,0 +1,24 @@
+[Unit]
+Description=FRP Auto Deploy Access Control Plugin (NewUserConn)
+After=network-online.target
+Wants=network-online.target
+Before=frps.service
+
+[Service]
+Type=simple
+RuntimeDirectory=frp-auto-deploy
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 /usr/local/lib/frp-auto-deploy/frp-access-plugin.py --config /etc/frp-auto-deploy/config.json
+Restart=always
+RestartSec=2
+User=root
+Group=root
+# Hardening below requires systemd 232+. The installer strips these lines on
+# older systemd (Amazon Linux 2 is 219) rather than failing unit load.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/frp-auto-deploy /var/log/frp-auto-deploy /run/frp-auto-deploy /etc/frp-auto-deploy /etc/frp
+
+[Install]
+WantedBy=multi-user.target

@@ -157,6 +157,34 @@ try:
     atomic_write_json(path, state)
 finally:
     unlock_registry(lock_fd)
+
+# Best-effort: clear Access Control Pack bindings for the released client.
+try:
+    here = Path(__file__).resolve()
+    acl_candidates = [
+        here.parent.parent / 'lib' / 'frp_access_control.py',
+        Path('/usr/local/lib/frp-auto-deploy/frp_access_control.py'),
+    ]
+    if ROOT:
+        acl_candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_access_control.py')
+    for acl_path in acl_candidates:
+        if not acl_path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location('frp_access_control', str(acl_path))
+        acl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acl)
+        access_path = acl.access_control_path(cfg)
+        if not access_path.is_file():
+            break
+
+        def _clear(state, _mid=mid):
+            acl.clear_client_bindings(state, _mid)
+
+        acl.mutate_access_state(_clear, path=access_path, cfg=cfg)
+        break
+except Exception:
+    pass
+
 print('Released.')
 try:
     here = Path(__file__).resolve()

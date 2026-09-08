@@ -16,9 +16,9 @@ git ls-files -o --exclude-standard '*.sh' | xargs -r bash -n
 bash -n tools/frp-server-status tools/frp-project-update tools/frp-update tools/frp-upstream tools/frp-client tools/frpctl
 
 echo "=== Python compile ==="
-python3 -m py_compile server/frp-port-allocator.py server/migrate_token.py scripts/build-bundles.py lib/frp_mgmt_auth.py lib/frp_pki.py lib/frp_frontend.py lib/frp_doctor.py lib/frp_install_txn.py lib/frp_client_registry.py lib/frp_audit.py lib/frp_project_files.py lib/frp_control_locks.py lib/frp_server_config.py lib/frp_zero_touch.py lib/frp_ctl_grammar.py lib/frp_ctl_repl.py lib/frp_enrollment_lifecycle.py
-python3 -m py_compile tools/frp-create-client tools/frp-enrollments tools/frp-enrollment-revoke tools/frp-enrollment-purge tools/frp-enroll-bulk tools/frp-clients tools/frp-client-info tools/frp-client-set tools/frp-release-client tools/frp-release-service tools/frp-revoke-client tools/frp-set-client-installer-url tools/frp-server-set tools/frp-backup tools/frp-restore
-python3 -m py_compile tests/test-allocator.py tests/test-enrollment-security.py tests/test-mgmt-identity.py tests/test-pki-https.py tests/test-bootstrap-ticket.py tests/test-frontend-proxy.py tests/test-client-registry.py
+python3 -m py_compile server/frp-port-allocator.py server/frp-access-plugin.py server/migrate_token.py scripts/build-bundles.py lib/frp_mgmt_auth.py lib/frp_pki.py lib/frp_frontend.py lib/frp_doctor.py lib/frp_install_txn.py lib/frp_client_registry.py lib/frp_audit.py lib/frp_project_files.py lib/frp_control_locks.py lib/frp_server_config.py lib/frp_zero_touch.py lib/frp_ctl_grammar.py lib/frp_ctl_repl.py lib/frp_enrollment_lifecycle.py lib/frp_access_control.py
+python3 -m py_compile tools/frp-create-client tools/frp-enrollments tools/frp-enrollment-revoke tools/frp-enrollment-purge tools/frp-enroll-bulk tools/frp-clients tools/frp-client-info tools/frp-client-set tools/frp-release-client tools/frp-release-service tools/frp-access tools/frp-revoke-client tools/frp-set-client-installer-url tools/frp-server-set tools/frp-backup tools/frp-restore
+python3 -m py_compile tests/test-allocator.py tests/test-enrollment-security.py tests/test-mgmt-identity.py tests/test-pki-https.py tests/test-bootstrap-ticket.py tests/test-frontend-proxy.py tests/test-client-registry.py tests/test-access-control.py
 
 echo "=== tests ==="
 ./tests/test-server-migration.sh
@@ -78,6 +78,8 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-product-upgrade-policy.sh
 ./tests/test-frpctl-doctor.sh
 ./tests/test-port-architecture.sh
+python3 tests/test-access-control.py
+./tests/test-access-control.sh
 ./tests/test-ca-bootstrap.sh
 ./tests/test-allocator-process-cleanup.sh
 ./tests/test-pki-https.py
