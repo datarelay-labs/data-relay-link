@@ -377,6 +377,44 @@ frp_mgmt_auth_py() {
   return 1
 }
 
+frp_health_check_py() {
+  local cand libdir here
+  if [[ -n "${FRP_HEALTH_CHECK_PY:-}" && -f "${FRP_HEALTH_CHECK_PY}" ]]; then
+    printf '%s' "$FRP_HEALTH_CHECK_PY"
+    return 0
+  fi
+  libdir="$(frp_client_lib_dir)"
+  for cand in \
+    "${libdir}/frp_health_check.py" \
+    "${FRP_CLIENT_LIB:-}/frp_health_check.py"
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  if [[ -n "${FRP_CLIENT_LIB:-}" && -f "${FRP_CLIENT_LIB}" ]]; then
+    cand="$(dirname "$FRP_CLIENT_LIB")/frp_health_check.py"
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  fi
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for cand in \
+    "$here/frp_health_check.py" \
+    "$here/../lib/frp_health_check.py" \
+    /usr/local/lib/frp-auto-deploy/frp_health_check.py
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  echo "ERROR: missing frp_health_check.py" >&2
+  return 1
+}
+
 frp_identity_status() {
   local key pub mac macval
   key="$(frp_client_identity_key_path)"
@@ -1479,14 +1517,19 @@ PY
 }
 
 frp_write_client_state() {
-  python3 - "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$FRP_CLIENT_STATE_SCHEMA" "$8" "${9:-tcp}" "${10:-}" <<'PY'
-import json, os, sys, tempfile
+  local _hc_py
+  _hc_py="$(frp_health_check_py)" || return 1
+  python3 - "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$FRP_CLIENT_STATE_SCHEMA" "$8" "${9:-tcp}" "${10:-}" "$_hc_py" <<'PY'
+import importlib.util, json, os, sys, tempfile
 from pathlib import Path
 dest, allocator_url, server, server_port, hostname, machine_id, host_id = sys.argv[1:8]
 schema = int(sys.argv[8])
 services_raw = json.loads(Path(sys.argv[9]).read_text(encoding='utf-8'))
 transport = str(sys.argv[10] if len(sys.argv) > 10 else 'tcp').strip().lower() or 'tcp'
 public_hostname = str(sys.argv[11] if len(sys.argv) > 11 else '').strip()
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[12])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 if transport not in ('tcp', 'wss'):
     raise SystemExit('ERROR: unsupported FRP transport')
 services = {}
@@ -1514,6 +1557,10 @@ for item in items:
         rec['remote_port'] = int(item['remote_port'])
     if rec['preset'] == 'ssh' and item.get('ssh_user'):
         rec['ssh_user'] = item['ssh_user']
+    try:
+        HC.copy_health_check(item, rec)
+    except HC.HealthCheckError as exc:
+        raise SystemExit('ERROR: %s' % exc)
     services[rec['id']] = rec
 state = {
     'schema_version': schema,
@@ -1564,11 +1611,16 @@ PY
 }
 
 services_add_json() {
-  python3 - "$SERVICES_FILE" "$1" <<'PY'
-import json, re, sys
+  local _hc_py
+  _hc_py="$(frp_health_check_py)" || return 1
+  python3 - "$SERVICES_FILE" "$1" "$_hc_py" <<'PY'
+import importlib.util, json, re, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 raw = json.loads(sys.argv[2])
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[3])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 data = json.loads(path.read_text(encoding='utf-8'))
 sid = str(raw.get('id', '')).strip().lower()
 if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,31}', sid or ''):
@@ -1614,6 +1666,10 @@ if preset == 'ssh':
     if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
         raise SystemExit('ERROR: invalid ssh_user')
     item['ssh_user'] = ssh_user
+try:
+    HC.copy_health_check(raw, item)
+except HC.HealthCheckError as exc:
+    raise SystemExit('ERROR: %s' % exc)
 if len(data) >= 32:
     raise SystemExit('ERROR: too many services')
 data.append(item)
@@ -1622,9 +1678,15 @@ PY
 }
 
 services_load_from_env() {
-  python3 - "$SERVICES_FILE" <<'PY'
-import json, os, re, sys
+  local _hc_py
+  _hc_py="$(frp_health_check_py)" || return 1
+  python3 - "$SERVICES_FILE" "$_hc_py" <<'PY'
+import importlib.util, json, os, re, sys
 from pathlib import Path
+
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[2])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 
 def add(path, raw):
     data = json.loads(path.read_text(encoding='utf-8'))
@@ -1672,6 +1734,10 @@ def add(path, raw):
         if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
             raise SystemExit('ERROR: invalid ssh_user')
         item['ssh_user'] = ssh_user
+    try:
+        HC.copy_health_check(raw, item)
+    except HC.HealthCheckError as exc:
+        raise SystemExit('ERROR: %s' % exc)
     if len(data) >= 32:
         raise SystemExit('ERROR: too many services')
     data.append(item)
@@ -1775,10 +1841,15 @@ render_frpc_toml() {
       return 1
     fi
   fi
-  python3 - "$dest" "$server" "$server_port" "$token" "$host_id" "$services_json_file" "$transport" "$ca_file" <<'PY'
-import json, sys
+  local _hc_py
+  _hc_py="$(frp_health_check_py)" || return 1
+  python3 - "$dest" "$server" "$server_port" "$token" "$host_id" "$services_json_file" "$transport" "$ca_file" "$_hc_py" <<'PY'
+import importlib.util, json, sys
 from pathlib import Path
 dest, server, server_port, token, host_id, svc_path, transport, ca_file = sys.argv[1:9]
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[9])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 raw = json.loads(Path(svc_path).read_text(encoding='utf-8'))
 if isinstance(raw, dict) and 'services' in raw:
     services = []
@@ -1814,6 +1885,10 @@ for item in services:
         f'localPort = {int(item["local_port"])}',
         f'remotePort = {int(item["remote_port"])}',
     ])
+    try:
+        lines.extend(HC.health_check_toml_lines(item.get('health_check')))
+    except HC.HealthCheckError as exc:
+        raise SystemExit('ERROR: %s' % exc)
 text = '\n'.join(lines) + '\n'
 path = Path(dest)
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -3035,10 +3110,13 @@ PY
         ;;
     esac
   fi
-  request="$(python3 - "$machine_id" "$hostname_value" "$services_file" "$pubkey_pem" <<'PY'
-import json, os, sys
+  request="$(python3 - "$machine_id" "$hostname_value" "$services_file" "$pubkey_pem" "$(frp_health_check_py)" <<'PY'
+import importlib.util, json, os, sys
 from pathlib import Path
 raw=json.loads(Path(sys.argv[3]).read_text(encoding='utf-8'))
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[5])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 if isinstance(raw, dict) and 'services' in raw:
     services=[]
     for sid, item in raw['services'].items():
@@ -3062,6 +3140,10 @@ for item in services:
     if out['preset']=='ssh':
         if item.get('ssh_user'):
             out['ssh_user']=item['ssh_user']
+    try:
+        HC.copy_health_check(item, out)
+    except HC.HealthCheckError as exc:
+        raise SystemExit('ERROR: %s' % exc)
     enabled.append(out)
 payload={
   'machine_id': sys.argv[1],
@@ -3287,6 +3369,8 @@ def pair_notes(a, b):
         new_user = b.get('ssh_user') or 'legacy / unspecified'
         if old_user != new_user:
             notes.append(('local', f'SSH user: {old_user} -> {new_user}'))
+    if a.get('health_check') != b.get('health_check'):
+        notes.append(('runtime', 'health check configuration changed'))
     return notes
 
 cur, cur_data = svcs(sys.argv[2])
@@ -3924,11 +4008,17 @@ frp_client_wait_proxies() {
 }
 
 frp_print_state_services() {
-  python3 - "$1" <<'PY'
-import json, sys
+  local _hc_py client_active
+  _hc_py="$(frp_health_check_py)" || return 1
+  client_active="$(frp_client_service_status 2>/dev/null || printf 'unknown')"
+  python3 - "$1" "$_hc_py" "$client_active" <<'PY'
+import importlib.util, json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-server = data.get('frp_server', '')
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[2])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
+client_label = HC.client_status_label(sys.argv[3])
 services = data.get('services') or {}
 if not services:
     print('(none)')
@@ -3947,6 +4037,10 @@ for sid, item in services.items():
     if remote:
         print(f"   Public port : {remote}")
     print(f"   State       : {state}")
+    print(f"   Health      : {HC.format_health_config(item.get('health_check'))}")
+    print(f"   CLIENT      : {client_label}")
+    print(f"   TUNNEL      : {HC.tunnel_status_label(item)}")
+    print(f"   TARGET      : {HC.target_status_label(item)}")
     print()
 PY
 }
@@ -4013,6 +4107,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_mgmt_auth.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_health_check.py" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_health_check.py" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp-doctor-common.sh" ]] || {
     echo "ERROR: missing ${source}/lib/frp-doctor-common.sh" >&2
     return 1
@@ -4041,6 +4139,7 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp-common.sh" "${libdir}/frp-common.sh"
   install -m 0644 "${source}/lib/frp-macos.sh" "${libdir}/frp-macos.sh"
   install -m 0644 "${source}/lib/frp_mgmt_auth.py" "${libdir}/frp_mgmt_auth.py"
+  install -m 0644 "${source}/lib/frp_health_check.py" "${libdir}/frp_health_check.py"
   install -m 0644 "${source}/lib/frp-doctor-common.sh" "${libdir}/frp-doctor-common.sh"
   install -m 0644 "${source}/lib/frp_doctor.py" "${libdir}/frp_doctor.py"
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
@@ -4064,6 +4163,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp-macos.sh:0644:lib/frp-macos.sh" \
     "usr/local/lib/frp-auto-deploy/com.datarelay.frp-auto-deploy.frpc.plist:0644:client/com.datarelay.frp-auto-deploy.frpc.plist" \
     "usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py:0644:lib/frp_mgmt_auth.py" \
+    "usr/local/lib/frp-auto-deploy/frp_health_check.py:0644:lib/frp_health_check.py" \
     "usr/local/lib/frp-auto-deploy/frp-doctor-common.sh:0644:lib/frp-doctor-common.sh" \
     "usr/local/lib/frp-auto-deploy/frp_doctor.py:0644:lib/frp_doctor.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
@@ -4166,6 +4266,7 @@ frp_client_upgrade_validate_staged() {
   bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-common.sh" || return 1
   bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-doctor-common.sh" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_health_check.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_doctor.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_repl.py" || return 1

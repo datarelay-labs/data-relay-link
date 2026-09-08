@@ -11,6 +11,7 @@ TREE="$WORKDIR/client-root"
 mkdir -p "$TREE/etc/frp" "$TREE/etc/frp-auto-deploy" "$TREE/usr/local/lib/frp-auto-deploy"
 cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
 cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
+cp "$ROOT/lib/frp_health_check.py" "$TREE/usr/local/lib/frp-auto-deploy/frp_health_check.py"
 if [[ -f "$ROOT/lib/frp-macos.sh" ]]; then
   cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-macos.sh"
 fi

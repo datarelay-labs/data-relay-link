@@ -85,6 +85,28 @@ def _load_client_registry():
 CREG = _load_client_registry()
 
 
+def _load_health_check():
+    candidates = [
+        Path(__file__).resolve().parent / 'frp_health_check.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_health_check.py',
+        Path('/usr/local/lib/frp-auto-deploy/frp_health_check.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_health_check.py')
+        candidates.insert(0, Path(root) / 'lib' / 'frp_health_check.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_health_check', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+HC = _load_health_check()
+
+
 def _load_enrollment_lifecycle():
     candidates = [
         Path(__file__).resolve().parent / 'frp_enrollment_lifecycle.py',
@@ -784,6 +806,13 @@ def normalize_service(raw):
         if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
             raise ServiceValidationError('invalid ssh_user')
         service['ssh_user'] = ssh_user
+    if 'health_check' in raw:
+        if HC is None:
+            raise ServiceValidationError('health_check helpers unavailable')
+        try:
+            HC.copy_health_check(raw, service)
+        except HC.HealthCheckError as exc:
+            raise ServiceValidationError(str(exc)) from exc
     return service
 
 
@@ -1668,6 +1697,8 @@ class Allocator:
                             }
                             if spec['preset'] == 'ssh':
                                 stored['ssh_user'] = spec['ssh_user']
+                            if 'health_check' in spec:
+                                stored['health_check'] = spec['health_check']
                             updated[sid] = stored
                             allocated.append({
                                 'id': sid,
@@ -1779,6 +1810,8 @@ class Allocator:
                             }
                             if spec['preset'] == 'ssh':
                                 stored['ssh_user'] = spec['ssh_user']
+                            if 'health_check' in spec:
+                                stored['health_check'] = spec['health_check']
                             updated[sid] = stored
                             allocated.append({
                                 'id': sid,
