@@ -278,7 +278,7 @@ acl.save_access_state(state, path=path)
 print('seeded_expired_only')
 PY"
 sshx "$SERVER" "sudo frp-access remove-expired 'E2E-Allow' --yes" | tee "$OUT_DIR/expired-cleanup.txt"
-MODE="$(sshx "$SERVER" "sudo frp-access show-service ${CLIENT_ID} ${SERVICE_ID}" | awk -F: '/Access mode/{print \$2}' | tr -d ' ')"
+MODE="$(sshx "$SERVER" "sudo frp-access show-service ${CLIENT_ID} ${SERVICE_ID}" | awk -F: '/Access mode/{print $2}' | tr -d ' ')"
 [[ "$MODE" == "ALLOWLIST" ]] || fail "expired cleanup must stay ALLOWLIST"
 if probe "$SOURCE_A_HOST"; then fail "A should DENY after expired-only cleanup"; else pass EXPIRED_CLEANUP_DENY; fi
 pass EXPIRED_CLEANUP_ALLOWLIST
