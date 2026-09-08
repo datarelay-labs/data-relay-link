@@ -488,7 +488,9 @@ if 'web' in services:
 print('server registry: web removed for %s' % mid)
 PY
 
-  run_client 23-client-show-services "sudo /usr/local/bin/frpctl show services" || fail_stop
+  # Server release does not mutate client-state.json; explicit sync reconciles.
+  run_client 23-client-sync "sudo /usr/local/bin/frp-client sync" || fail_stop
+  run_client 23b-client-show-services "sudo /usr/local/bin/frpctl show services" || fail_stop
   python_remote "$CLIENT_ALIAS" 24-client-state-assert <<'PY' || fail_stop
 import json
 from pathlib import Path
