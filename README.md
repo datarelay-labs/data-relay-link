@@ -39,6 +39,45 @@ The mutable `main` branch can advance after a release. Normal field installation
 
 ---
 
+## Canonical Product Master / documentation closure
+
+The post-release documentation restoration phase **`CANONICAL_PRODUCT_MASTER_RESTORE_V2_2_1_DOCS_CLOSURE`** completed with **PASS**.
+
+| Closure item | Result |
+| --- | --- |
+| Start HEAD / v2.2.1 release commit | `19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f` |
+| Final `main` HEAD after canonical docs merge | `343f292d91d01c3f263ff5c443f101d185b5527f` |
+| v2.2.1 tag target changed | **NO** |
+| v2.2.0 tag changed | **NO** |
+| New release created | **NO** |
+| Product runtime files changed | **NO** |
+| `dist/` changed | **NO** |
+| Real E2E rerun | **NO — not required for docs-only closure** |
+| Owner authoritative Master available | **YES** |
+| Owner Master backup | **PASS** |
+| Canonical Product Master restore | **PASS** |
+| Product Master structural check | **PASS** |
+| Current release data updated | **YES** |
+| Platform matrix updated | **YES** |
+| Release history preserved | **YES** |
+| Provenance added | **YES** |
+| Known corruption removed | **YES** |
+| `BLOCKED_MISSING_AUTHORITATIVE_MASTER` removed | **YES** |
+| Public metadata scan | **PASS** |
+| Secret scan | **PASS** |
+| `SHA256SUMS` updated | **YES** |
+| README stale release state fixed | **YES** |
+| Security stale release state fixed | **YES** |
+| `docs/GITHUB_SETUP.md` stale state fixed | **NO — remaining docs follow-up** |
+| Owner manual E2E required | **NO** |
+| Final documentation state | **CANONICAL** |
+
+The damaged session-start / old GitHub `docs/PRODUCT_MASTER.md` copies matched at **2,173 lines** with SHA256 `67329d74f58276d75f3b140baf135fb09fc097899de60a192bcafd4f63743709`. Through **PR #12**, that truncated derivative was replaced by the Owner-reconstructed, full integrated Product Master (approximately **3,625 lines**), with release history preserved and provenance added. The incomplete surgical PR #13 was closed as superseded.
+
+The canonical source is now [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md). The documentation-only merge advanced repository `main` to `343f292…` but did **not** move the immutable `v2.2.1` tag, create a new release, or change runtime artifacts. Therefore the stable release identity remains **v2.2.1 / release commit `19d4b6f…` / FRP 0.71.0**.
+
+---
+
 ## Supported client platforms — v2.2.1
 
 Real-host validation and container/CI portability are deliberately reported separately.
