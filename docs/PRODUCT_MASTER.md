@@ -3367,10 +3367,11 @@ Manage a few to a few dozen clients with frpctl
 | Zero-Touch Short URL Option B | **STABLE** |
 | Public Hostname / DNS alias | **STABLE** |
 | Simple Manual Group MVP | **STABLE** |
-| Access Control Pack (Named Lists / TTL / Conn Log) | **MAIN / IN PROGRESS** (feature branch; not yet in stable) |
-| Target Health Check | **PLANNED** (P1 remaining) |
-| Support Bundle | **PLANNED** (P1 remaining) |
+| Access Control Pack (Named Lists / TTL / Conn Log) | **COMPLETE/STABLE CANDIDATE** |
+| Target Health Check | **COMPLETE/STABLE CANDIDATE** |
+| Support Bundle | **COMPLETE/STABLE CANDIDATE** |
 | Service Profiles | **COMPLETE/STABLE CANDIDATE** |
+| FEATURE FREEZE | **ACTIVE** |
 | macOS Apple Silicon | **STABLE / Real E2E validated** |
 | Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
 | Rocky 8 / Rocky 9 / AL2023 | **STABLE / Real E2E validated** |
@@ -3651,13 +3652,19 @@ single-443 frontend paths are never filtered by Service Access Lists.
 Access Control is defense-in-depth. Target authentication (SSH keys, app auth,
 database auth) must remain enabled.
 
-Remaining approved product features after this pack:
+Remaining approved product features after this pack: **none**.
 
 ```text
-P1 Target Health Check
-P1 Support Bundle
-P1 Service Profiles
+Access Control Pack = COMPLETE/STABLE CANDIDATE
+Target Health Check = COMPLETE/STABLE CANDIDATE
+Support Bundle = COMPLETE/STABLE CANDIDATE
+Service Profiles = COMPLETE/STABLE CANDIDATE
+FEATURE FREEZE = ACTIVE
 ```
+
+No further product feature development until the next explicitly approved release scope.
+v2.2.1 remains the published stable tag; this freeze qualifies exact main HEAD as
+release-ready without inventing a new version/tag in this closure.
 
 ---
 
