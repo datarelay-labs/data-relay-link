@@ -597,8 +597,17 @@ main() {
   note "STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   if [[ "$PLATFORM_KIND" == "macos" ]]; then
-    # Product macOS client is not on origin/main for v2.1.1.
-    scenario_unsupported "macos client not implemented on release branch (see feature/macos-arm64-v2.2); sudo also requires password on host"
+    if ! ssh "${SSH_OPTS[@]}" -o ConnectTimeout=8 "$CLIENT_ALIAS" 'echo ok' >/dev/null 2>&1; then
+      note "ENVIRONMENT_BLOCKER: macOS SSH management path unreachable"
+      record macos-ssh-unreachable SKIP 0 0
+      MATRIX_INSTALL=BLOCKED
+      MATRIX_ENROLL=BLOCKED
+      MATRIX_SERVICE=BLOCKED
+      MATRIX_REBOOT=BLOCKED
+      MATRIX_UNINSTALL=BLOCKED
+      MATRIX_DNS=BLOCKED
+      finish 0
+    fi
   fi
   if [[ "$PLATFORM_KIND" == "windows" ]]; then
     if ! ssh "${SSH_OPTS[@]}" -o ConnectTimeout=5 "$CLIENT_ALIAS" 'echo ok' >/dev/null 2>&1; then
@@ -612,7 +621,6 @@ main() {
       MATRIX_DNS=BLOCKED
       finish 0
     fi
-    scenario_unsupported "windows client not implemented on release branch (see feature/windows-client)"
   fi
 
   assert_host_identity "$SERVER_ALIAS" "$EXPECTED_SERVER_HOST" server || finish 2
