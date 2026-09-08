@@ -19,18 +19,18 @@ Then configure the installed FRP server so `frp-create-client` prints the correc
 
 ```bash
 sudo frp-set-client-installer-url \
-  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh
+  https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-client.sh
 ```
 
 Server one-liner after the repository is pushed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-server.sh | sudo bash
 ```
 
 Client one-liner after the server prints an enrollment (replace the allocator URL with the value from your runtime config):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh \
+curl -fsSL https://raw.githubusercontent.com/datarelay-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-client.sh \
 | sudo env FRP_ALLOCATOR_URL='https://203.0.113.10:6099/enroll' FRP_ALLOCATOR_CA_SHA256='<sha256>' bash
 ```

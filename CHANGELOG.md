@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 2.2.1 — 2026-09-08
+
+Maintenance / hardening release on pinned FRP **0.71.0**. Does not move or
+retag published **v2.2.0**.
+
+- macOS / libedit Tab completion: detect readline backend and bind libedit
+  completion; PTY regression coverage plus macOS CI job
+- FRP compatibility gate fail-closed: digest-before-extract, atomic PASS
+  report; bump script validates report content
+- Public metadata sanitization: morning checklists use RFC5737 templates;
+  `scripts/check-public-metadata.sh` scanner
+- Docs currency for post-v2.2.0 install/signing residual risk notes
+
+### Compatibility
+
+Already enrolled 2.2.0 clients remain compatible during a server-first upgrade
+window. Do not upgrade clients ahead of the server. FRP remains **0.71.0**.
+
 ## 2.2.0 — 2026-09-07
 
 Feature and platform release. Pinned FRP upgraded **0.70.1 → 0.71.0**.

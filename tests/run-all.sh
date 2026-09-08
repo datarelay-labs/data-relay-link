@@ -70,6 +70,8 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-uninstall-owned-frpc.sh
 ./tests/test-frpctl.sh
 ./tests/test-frpctl-completion.sh
+./tests/test-frpctl-pty-completion.sh
+./tests/test-frp-compat-gate.sh
 ./tests/test-create-zero-touch.sh
 ./tests/test-zero-touch-short-command.sh
 ./tests/test-zero-touch-short-url.sh
@@ -108,6 +110,9 @@ echo "POST_RUN_ALL_TEST_ALLOCATORS=0"
 
 echo "=== secret scan ==="
 ./scripts/secret-scan.sh
+
+echo "=== public metadata scan ==="
+./scripts/check-public-metadata.sh
 
 echo "=== whitespace ==="
 git diff --check HEAD

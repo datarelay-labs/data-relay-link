@@ -15,6 +15,9 @@ jobs:
           for test in tests/test-macos-*.sh; do
             bash "$test"
           done
+          bash tests/test-frpctl-pty-completion.sh
+          bash tests/test-frp-compat-gate.sh
+          bash scripts/check-public-metadata.sh
 
   apple-silicon:
     runs-on: macos-15
@@ -26,6 +29,7 @@ jobs:
           for test in tests/test-macos-*.sh; do
             /bin/bash "$test"
           done
+          /bin/bash tests/test-frpctl-pty-completion.sh
           python3 scripts/build-bundles.py
           git diff --exit-code dist/
       - name: Verify pinned FRP binary

@@ -30,7 +30,7 @@ root = Path(sys.argv[1])
 }) + '\n')
 (root / 'var/lib/frp-auto-deploy/registry.json').write_text(json.dumps({'schema_version': 2, 'clients': {}}) + '\n')
 (root / 'etc/frp-auto-deploy/version').write_text(
-    'PROJECT_VERSION=2.2.0\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=main\n'
+    'PROJECT_VERSION=2.2.1\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=main\n'
     'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
 )
 (root / 'etc/frp/frps.toml').write_text('bindPort = 443\n')

@@ -301,9 +301,15 @@ Checksums:
 
 - Official FRP archives are checked against pinned SHA256 values
 - Repository `SHA256SUMS` covers tracked source/release files
+- `scripts/check-frp-compatibility.sh` verifies digests **before** extract/execute
+  and writes an atomic PASS report only after required checks succeed
 
-This project does **not** currently ship cryptographic signatures of its own
-bundles. Checksum verification is not the same as signature verification.
+This project does **not** currently ship cryptographic signatures or GitHub
+artifact attestations of its own bundles (`release-manifest.json` records
+`"signing": false`). SHA256 verification protects against accidental corruption
+and many tampering cases when the checksum channel is trusted, but it is **not**
+the same as an independently signed release. Residual supply-chain risk remains
+accepted for v2.2.x until a low-risk signing/attestation path is added.
 
 ## 14. Threat boundaries
 
