@@ -239,6 +239,84 @@ function Set-FrpDraftServiceField {
             if (-not (Test-FrpValidSshUser -Value $Value)) { throw 'ERROR: invalid ssh_user' }
             $item['ssh_user'] = $Value
         }
+        'health-type' {
+            $type = $Value.Trim().ToLowerInvariant()
+            if ($type -eq 'disabled') {
+                if ($item -is [hashtable] -or $item -is [System.Collections.IDictionary]) {
+                    if ($item.Contains('health_check')) { $item.Remove('health_check') }
+                } else {
+                    $item.PSObject.Properties.Remove('health_check')
+                }
+            } elseif ($type -eq 'tcp' -or $type -eq 'http') {
+                $existing = $null
+                if ($item -is [hashtable] -or $item -is [System.Collections.IDictionary]) {
+                    if ($item.Contains('health_check')) { $existing = $item['health_check'] }
+                } elseif ($null -ne $item.PSObject.Properties['health_check']) {
+                    $existing = $item.health_check
+                }
+                $timeout = 3; $interval = 10; $maxFailed = 1; $path = '/health'
+                if ($null -ne $existing) {
+                    $hcMap = @{}
+                    if ($existing -is [hashtable] -or $existing -is [System.Collections.IDictionary]) {
+                        foreach ($k in $existing.Keys) { $hcMap[[string]$k] = $existing[$k] }
+                    } else {
+                        foreach ($p in $existing.PSObject.Properties) { $hcMap[$p.Name] = $p.Value }
+                    }
+                    if ($hcMap.ContainsKey('timeout_seconds')) { [void][int]::TryParse([string]$hcMap['timeout_seconds'], [ref]$timeout) }
+                    if ($hcMap.ContainsKey('interval_seconds')) { [void][int]::TryParse([string]$hcMap['interval_seconds'], [ref]$interval) }
+                    if ($hcMap.ContainsKey('max_failed')) { [void][int]::TryParse([string]$hcMap['max_failed'], [ref]$maxFailed) }
+                    if ($hcMap.ContainsKey('path') -and [string]$hcMap['path']) { $path = [string]$hcMap['path'] }
+                }
+                $hc = [ordered]@{
+                    type = $type
+                    timeout_seconds = $timeout
+                    interval_seconds = $interval
+                    max_failed = $maxFailed
+                }
+                if ($type -eq 'http') { $hc['path'] = $path }
+                $item['health_check'] = [pscustomobject]$hc
+            } else {
+                throw 'ERROR: invalid health type; use tcp, http, or disabled'
+            }
+        }
+        'health-timeout' {
+            if (-not $item['health_check']) { throw 'ERROR: enable health-type (tcp|http) before setting health-timeout' }
+            $n = 0
+            if (-not [int]::TryParse($Value, [ref]$n) -or $n -lt 1) { throw 'ERROR: invalid health-timeout; must be a positive integer' }
+            $hc = [ordered]@{}
+            foreach ($p in $item['health_check'].PSObject.Properties) { $hc[$p.Name] = $p.Value }
+            $hc['timeout_seconds'] = $n
+            $item['health_check'] = [pscustomobject]$hc
+        }
+        'health-interval' {
+            if (-not $item['health_check']) { throw 'ERROR: enable health-type (tcp|http) before setting health-interval' }
+            $n = 0
+            if (-not [int]::TryParse($Value, [ref]$n) -or $n -lt 1) { throw 'ERROR: invalid health-interval; must be a positive integer' }
+            $hc = [ordered]@{}
+            foreach ($p in $item['health_check'].PSObject.Properties) { $hc[$p.Name] = $p.Value }
+            $hc['interval_seconds'] = $n
+            $item['health_check'] = [pscustomobject]$hc
+        }
+        'health-max-failed' {
+            if (-not $item['health_check']) { throw 'ERROR: enable health-type (tcp|http) before setting health-max-failed' }
+            $n = 0
+            if (-not [int]::TryParse($Value, [ref]$n) -or $n -lt 1) { throw 'ERROR: invalid health-max-failed; must be a positive integer' }
+            $hc = [ordered]@{}
+            foreach ($p in $item['health_check'].PSObject.Properties) { $hc[$p.Name] = $p.Value }
+            $hc['max_failed'] = $n
+            $item['health_check'] = [pscustomobject]$hc
+        }
+        'health-path' {
+            if (-not $item['health_check']) { throw 'ERROR: enable health-type (tcp|http) before setting health-path' }
+            $hcType = [string]$item['health_check'].type
+            if ($hcType -ne 'http') { throw 'ERROR: health-path is only valid when health-type is http' }
+            $path = $Value.Trim()
+            if (-not $path.StartsWith('/')) { throw 'ERROR: invalid health path; must start with /' }
+            $hc = [ordered]@{}
+            foreach ($p in $item['health_check'].PSObject.Properties) { $hc[$p.Name] = $p.Value }
+            $hc['path'] = $path
+            $item['health_check'] = [pscustomobject]$hc
+        }
         default { throw 'ERROR: unknown service property' }
     }
     $map[$sid] = $item

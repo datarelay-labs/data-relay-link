@@ -118,7 +118,7 @@ for _frp_own in \
 done
 unset _frp_own
 if ! declare -F frp_role_is_shared_lib >/dev/null 2>&1; then
-  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py '
+  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py '
   frp_role_is_shared_lib() {
     local base="$1"
     [[ "$FRP_ROLE_SHARED_LIB_BASENAMES" == *" ${base} "* ]]
@@ -400,7 +400,7 @@ else
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
     for f in frp-port-allocator.py frp-access-plugin.py frp_access_control.py frp_pki.py frp_frontend.py frp_client_registry.py \
       frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
-      frp_install_txn.py \
+      frp_install_txn.py frp_health_check.py \
       frp-server-upgrade.sh frp_project_files.py frp_control_locks.py frp_server_config.py \
       frp-role-ownership.sh \
       server-project-files.manifest release-manifest.json SHA256SUMS; do
@@ -408,7 +408,7 @@ else
     done
     # SHARED libs: only remove when client role is absent.
     if [[ "$CLIENT_PRESENT" != "1" ]]; then
-      for f in frp-common.sh frp_mgmt_auth.py frp-client-common.sh \
+      for f in frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh \
         frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py; do
         frp_u_rm_file "${libdir}/${f}"
       done

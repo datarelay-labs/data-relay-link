@@ -28,11 +28,14 @@ frp_client_source_lib() {
 frp_client_source_lib
 
 frp_state_add_payload() {
-  python3 - "$CANDIDATE_FILE" "$1" <<'PY'
-import json, re, sys
+  python3 - "$CANDIDATE_FILE" "$1" "$(frp_health_check_py)" <<'PY'
+import importlib.util, json, re, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 raw = json.loads(sys.argv[2])
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[3])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 state = json.loads(path.read_text(encoding='utf-8'))
 services = state.setdefault('services', {})
 sid = str(raw.get('id', '')).strip().lower()
@@ -82,6 +85,10 @@ if preset == 'ssh':
     if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
         raise SystemExit('ERROR: invalid ssh_user')
     item['ssh_user'] = ssh_user
+try:
+    HC.copy_health_check(raw, item)
+except HC.HealthCheckError as exc:
+    raise SystemExit('ERROR: %s' % exc)
 services[sid] = item
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
@@ -155,8 +162,8 @@ frp_client_status() {
   # status is read-only: do not contact the allocator or mutate local state.
   # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
-  python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" <<'PY'
-import json, sys
+  python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" "$(frp_health_check_py)" <<'PY'
+import importlib.util, json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 tested = sys.argv[2]
@@ -170,6 +177,10 @@ services = data.get('services') or {}
 enabled = sum(1 for s in services.values() if s.get('enabled', True) is not False)
 disabled = len(services) - enabled
 active = sys.argv[10]
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[11])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
+client_label = HC.client_status_label(active)
 allocator = 'configured' if data.get('allocator_url') else 'missing'
 print('FRP Client')
 print('==========')
@@ -196,6 +207,10 @@ for sid, item in services.items():
     if item.get('remote_port') is not None:
         print(f"  public port   : {item.get('remote_port')}")
     print(f"  state         : {state}")
+    print(f"  health        : {HC.format_health_config(item.get('health_check'))}")
+    print(f"  CLIENT        : {client_label}")
+    print(f"  TUNNEL        : {HC.tunnel_status_label(item)}")
+    print(f"  TARGET        : {HC.target_status_label(item)}")
     print()
 PY
   frp_lifecycle_report
@@ -935,11 +950,14 @@ PY
 frp_client_set_service_field() {
   local sid="$1" prop="$2" value="$3"
   frp_client_ensure_pending
-  python3 - "$CANDIDATE_FILE" "$sid" "$prop" "$value" <<'PY'
-import json, re, sys
+  python3 - "$CANDIDATE_FILE" "$sid" "$prop" "$value" "$(frp_health_check_py)" <<'PY'
+import importlib.util, json, re, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 sid, prop, value = sys.argv[2:5]
+spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[5])
+HC = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(HC)
 state = json.loads(path.read_text(encoding='utf-8'))
 item = (state.get('services') or {}).get(sid)
 if not isinstance(item, dict):
@@ -968,6 +986,11 @@ elif prop == 'ssh-user':
     if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', value or ''):
         raise SystemExit('ERROR: invalid ssh_user')
     item['ssh_user'] = value
+elif prop in HC.SERVICE_HEALTH_PROPS:
+    try:
+        HC.apply_health_property(item, prop, value)
+    except HC.HealthCheckError as exc:
+        raise SystemExit('ERROR: %s' % exc)
 else:
     raise SystemExit('ERROR: unknown service property')
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')

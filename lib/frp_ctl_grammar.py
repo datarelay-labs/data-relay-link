@@ -370,6 +370,11 @@ def _root_help(role):
                 "  set service <id> target-port <port>",
                 "  set service <id> ssh-user <user>",
                 "  set service <id> name <value>",
+                "  set service <id> health-type <tcp|http|disabled>",
+                "  set service <id> health-timeout <seconds>",
+                "  set service <id> health-interval <seconds>",
+                "  set service <id> health-max-failed <count>",
+                "  set service <id> health-path </path>",
                 "  enable service <id>",
                 "  disable service <id>",
                 "  apply",
@@ -483,8 +488,14 @@ def _set_help(rest, role):
             "  set service <service-id> target-host <host>\n"
             "  set service <service-id> target-port <port>\n"
             "  set service <service-id> ssh-user <user>\n"
-            "  set service <service-id> name <value>\n\n"
+            "  set service <service-id> name <value>\n"
+            "  set service <service-id> health-type <tcp|http|disabled>\n"
+            "  set service <service-id> health-timeout <seconds>\n"
+            "  set service <service-id> health-interval <seconds>\n"
+            "  set service <service-id> health-max-failed <count>\n"
+            "  set service <service-id> health-path </path>\n\n"
             "Service IDs cannot be renamed. Pending changes are live only after apply.\n"
+            "Health checks are disabled by default. Enabling tcp/http uses FRP healthCheck.\n"
         )
     avail = _set_resources(role)
     return (
@@ -694,6 +705,11 @@ def context_help(tokens, role, names=None, clients=None):
                     ("target-port", "Local target port"),
                     ("ssh-user", "SSH username"),
                     ("name", "Display name"),
+                    ("health-type", "tcp | http | disabled"),
+                    ("health-timeout", "Probe timeout seconds"),
+                    ("health-interval", "Probe interval seconds"),
+                    ("health-max-failed", "Failures before unhealthy"),
+                    ("health-path", "HTTP health path (http only)"),
                 ]
             )
         if tokens[1] == "installer-url":
@@ -1129,7 +1145,9 @@ def _match_set(tokens, role, names=None):
     if resource == "service":
         if not client:
             return {"status": "role", "need": "client", "command": "set service"}
-        props = ["target-host", "target-port", "ssh-user", "name"]
+        props = ["target-host", "target-port", "ssh-user", "name",
+                 "health-type", "health-timeout", "health-interval",
+                 "health-max-failed", "health-path"]
         if len(tokens) < 3:
             return incomplete("Missing service ID.", ["set service <service-id> <property> <value>"])
         if len(tokens) < 4:
@@ -1746,7 +1764,20 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
             if len(filled) == 2:
                 return _filter(local_services, prefix)
             if len(filled) == 3:
-                return _filter(["target-host", "target-port", "ssh-user", "name"], prefix)
+                return _filter(
+                    [
+                        "target-host",
+                        "target-port",
+                        "ssh-user",
+                        "name",
+                        "health-type",
+                        "health-timeout",
+                        "health-interval",
+                        "health-max-failed",
+                        "health-path",
+                    ],
+                    prefix,
+                )
         return []
     if verb == "unset":
         if len(filled) == 1:

@@ -265,6 +265,28 @@ function ConvertTo-FrpServiceRecord {
     if ($preset -eq 'ssh' -and $ht['ssh_user']) {
         $rec['ssh_user'] = [string]$ht['ssh_user']
     }
+    if ($null -ne $ht['health_check'] -and $ht['health_check']) {
+        $hc = $ht['health_check']
+        $hcMap = @{}
+        if ($hc -is [hashtable] -or $hc -is [System.Collections.IDictionary]) {
+            foreach ($k in $hc.Keys) { $hcMap[[string]$k] = $hc[$k] }
+        } else {
+            foreach ($p in $hc.PSObject.Properties) { $hcMap[$p.Name] = $p.Value }
+        }
+        $hcType = ([string]$hcMap['type']).Trim().ToLowerInvariant()
+        if ($hcType -eq 'tcp' -or $hcType -eq 'http') {
+            $normalized = [ordered]@{
+                type              = $hcType
+                timeout_seconds   = $(if ($hcMap.ContainsKey('timeout_seconds')) { [int]$hcMap['timeout_seconds'] } else { 3 })
+                interval_seconds  = $(if ($hcMap.ContainsKey('interval_seconds')) { [int]$hcMap['interval_seconds'] } else { 10 })
+                max_failed        = $(if ($hcMap.ContainsKey('max_failed')) { [int]$hcMap['max_failed'] } else { 1 })
+            }
+            if ($hcType -eq 'http') {
+                $normalized['path'] = $(if ($hcMap.ContainsKey('path') -and [string]$hcMap['path']) { [string]$hcMap['path'] } else { '/health' })
+            }
+            $rec['health_check'] = [pscustomobject]$normalized
+        }
+    }
     return $rec
 }
 
@@ -294,6 +316,15 @@ function Get-FrpEnrollServiceList {
         }
         if ($wirePreset -eq 'ssh' -and $item.ssh_user) {
             $out['ssh_user'] = [string]$item.ssh_user
+        }
+        $hc = $null
+        if ($item -is [hashtable] -or $item -is [System.Collections.IDictionary]) {
+            if ($item.Contains('health_check')) { $hc = $item['health_check'] }
+        } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['health_check']) {
+            $hc = $item.health_check
+        }
+        if ($null -ne $hc -and $hc) {
+            $out['health_check'] = $hc
         }
         [void]$list.Add([pscustomobject]$out)
     }

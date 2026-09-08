@@ -20,6 +20,7 @@ project usr/local/lib/frp-auto-deploy/frp-port-allocator.py 0700 server/frp-port
 project usr/local/lib/frp-auto-deploy/frp-access-plugin.py 0700 server/frp-access-plugin.py python
 project usr/local/lib/frp-auto-deploy/frp_access_control.py 0644 lib/frp_access_control.py python
 project usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py 0644 lib/frp_mgmt_auth.py python
+project usr/local/lib/frp-auto-deploy/frp_health_check.py 0644 lib/frp_health_check.py python
 project usr/local/lib/frp-auto-deploy/frp_pki.py 0644 lib/frp_pki.py python
 project usr/local/lib/frp-auto-deploy/frp_frontend.py 0644 lib/frp_frontend.py python
 project usr/local/lib/frp-auto-deploy/frp-common.sh 0644 lib/frp-common.sh bash

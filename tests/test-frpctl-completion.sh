@@ -133,6 +133,13 @@ if echo "$all_client" | has_line create; then fail "client offered create"; fi
 pass "FRPCTL_TAB_CLIENT_ROLE_COMMANDS"
 pass "FRPCTL_TAB_SERVER_COMMAND_NOT_ON_CLIENT"
 
+export FRP_CTL_TEST_ROOT="$CLIENT"
+svc_props="$(cands "set service ssh ")"
+echo "$svc_props" | has_line target-host || fail "set service missing target-host"
+echo "$svc_props" | has_line health-type || fail "set service missing health-type"
+echo "$svc_props" | has_line health-path || fail "set service missing health-path"
+pass "FRPCTL_TAB_SET_SERVICE_HEALTH"
+
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"

@@ -62,6 +62,35 @@ function New-FrpClientToml {
         [void]$lines.Add(('localIP = "{0}"' -f (Escape-FrpTomlString $item.local_ip)))
         [void]$lines.Add(('localPort = {0}' -f [int]$item.local_port))
         [void]$lines.Add(('remotePort = {0}' -f [int]$item.remote_port))
+        $hc = $null
+        if ($item -is [hashtable] -or $item -is [System.Collections.IDictionary]) {
+            if ($item.Contains('health_check')) { $hc = $item['health_check'] }
+        } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['health_check']) {
+            $hc = $item.health_check
+        }
+        if ($null -ne $hc) {
+            $hcMap = @{}
+            if ($hc -is [hashtable] -or $hc -is [System.Collections.IDictionary]) {
+                foreach ($k in $hc.Keys) { $hcMap[[string]$k] = $hc[$k] }
+            } else {
+                foreach ($p in $hc.PSObject.Properties) { $hcMap[$p.Name] = $p.Value }
+            }
+            $hcType = [string]$hcMap['type']
+            if ($hcType -eq 'tcp' -or $hcType -eq 'http') {
+                [void]$lines.Add(('healthCheck.type = "{0}"' -f (Escape-FrpTomlString $hcType)))
+                $timeout = 3; if ($hcMap.ContainsKey('timeout_seconds')) { [void][int]::TryParse([string]$hcMap['timeout_seconds'], [ref]$timeout) }
+                $interval = 10; if ($hcMap.ContainsKey('interval_seconds')) { [void][int]::TryParse([string]$hcMap['interval_seconds'], [ref]$interval) }
+                $maxFailed = 1; if ($hcMap.ContainsKey('max_failed')) { [void][int]::TryParse([string]$hcMap['max_failed'], [ref]$maxFailed) }
+                [void]$lines.Add(('healthCheck.timeoutSeconds = {0}' -f $timeout))
+                [void]$lines.Add(('healthCheck.maxFailed = {0}' -f $maxFailed))
+                [void]$lines.Add(('healthCheck.intervalSeconds = {0}' -f $interval))
+                if ($hcType -eq 'http') {
+                    $path = '/health'
+                    if ($hcMap.ContainsKey('path') -and [string]$hcMap['path']) { $path = [string]$hcMap['path'] }
+                    [void]$lines.Add(('healthCheck.path = "{0}"' -f (Escape-FrpTomlString $path)))
+                }
+            }
+        }
     }
 
     $text = ($lines -join "`n") + "`n"

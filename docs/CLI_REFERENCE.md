@@ -115,11 +115,18 @@ set service <service-id> target-host <host>
 set service <service-id> target-port <port>
 set service <service-id> ssh-user <user>
 set service <service-id> name <value>
+set service <service-id> health-type <tcp|http|disabled>
+set service <service-id> health-timeout <seconds>
+set service <service-id> health-interval <seconds>
+set service <service-id> health-max-failed <count>
+set service <service-id> health-path </path>
 ```
 
 Service IDs are immutable. Pending service edits become live only after
 `apply`. Disable/enable reuse the same public port. Client-side disable does
-not release the server reservation.
+not release the server reservation. Health checks are disabled by default;
+when enabled, FRP `healthCheck` settings are written into `frpc.toml`.
+`show services` / `status` report CLIENT / TUNNEL / TARGET separately.
 
 ## unset
 

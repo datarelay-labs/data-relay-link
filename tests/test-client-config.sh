@@ -93,6 +93,33 @@ assert text.count('[[proxies]]') == 4
 PY
 pass "frpc.toml generic proxies"
 
+# Health check render (disabled by default; optional healthCheck when present)
+cat >"$WORKDIR/services-health.json" <<'EOF'
+[
+  {
+    "id": "api",
+    "name": "API",
+    "protocol": "tcp",
+    "local_ip": "127.0.0.1",
+    "local_port": 8080,
+    "remote_port": 6005,
+    "preset": "custom",
+    "health_check": {
+      "type": "tcp",
+      "timeout_seconds": 3,
+      "interval_seconds": 10,
+      "max_failed": 1
+    }
+  }
+]
+EOF
+HEALTH_TOML="$WORKDIR/frpc-health.toml"
+render_frpc_toml "$HEALTH_TOML" "203.0.113.10" "443" "dummy-token" "host-h" "$WORKDIR/services-health.json"
+grep -q 'healthCheck.type = "tcp"' "$HEALTH_TOML" || fail "healthCheck.type missing"
+grep -q 'healthCheck.timeoutSeconds = 3' "$HEALTH_TOML" || fail "healthCheck.timeoutSeconds missing"
+grep -q 'healthCheck.path' "$HEALTH_TOML" && fail "tcp health should omit path"
+pass "frpc.toml healthCheck tcp"
+
 ACCESS="$WORKDIR/access-info.txt"
 render_access_info "$ACCESS" "203.0.113.10" "$SERVICES_FILE"
 python3 - "$ACCESS" <<'PY' || fail "access-info"
