@@ -821,16 +821,15 @@ svc.update(draft)
 if not svc:
     print("(no services configured)")
     raise SystemExit(0)
-print("Services")
-print()
+print("ID           NAME           TARGET")
+print("--           ----           ------")
 for idx, sid in enumerate(sorted(svc), start=1):
     item = svc[sid] if isinstance(svc[sid], dict) else {}
     name = item.get("name") or sid
     host = item.get("local_ip") or "-"
     port = item.get("local_port")
     target = "%s:%s" % (host, port) if port is not None else str(host)
-    state = "enabled" if item.get("enabled", True) is not False else "disabled"
-    print("%d) %-12s %-14s %-22s %s" % (idx, sid, name, target, state))
+    print("%d) %-12s %-14s %s" % (idx, sid, name, target))
     print("ID\t%s" % sid)
 PY
 }
@@ -2704,7 +2703,7 @@ frpctl_dispatch_canonical() {
       frpctl_require_client || return 1
       frpctl_invoke frp-client disable-service "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("service",""))' "$result")"
       ;;
-    apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
+    apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
     client_pause) frpctl_client_pause ;;
     client_resume) frpctl_client_resume ;;

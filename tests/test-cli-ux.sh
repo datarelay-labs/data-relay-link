@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Focused CLI UX tests: service-add grammar, auto Service IDs, messages.
+# Focused CLI UX tests: service-add grammar, auto Service IDs, wizard, apply quiet.
 # Local fixtures only — no network, containers, daemons, or sleeps.
 set -euo pipefail
 
@@ -17,6 +17,9 @@ export FRP_SOURCE_ROOT="$ROOT"
 export FRP_SKIP_SYSTEMD=1
 export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
+unset FRP_CLIENT_TEST_INPUT FRP_CTL_TEST_INPUT FRP_CTL_DRY_RUN || true
+unset _FRP_CLIENT_INPUT_READY _FRP_CLIENT_INPUT_FILE || true
+unset _FRP_CTL_INPUT_READY _FRP_CTL_INPUT_FILE || true
 
 # --- Grammar: service add ? / Tab ---
 python3 - <<'PY' || fail "service add help/completion"
@@ -25,32 +28,38 @@ sys.path.insert(0, "lib")
 import frp_ctl_grammar as g
 
 help_text = g.context_help(["service", "add"], "client")
-for needle in ("ssh", "http", "https", "custom", "profile", "127.0.0.1", "192.168", "service apply", "automatic"):
+for needle in ("ssh", "http", "https", "custom", "profile", "127.0.0.1", "192.168", "service apply"):
     if needle.lower() not in help_text.lower() and needle not in help_text:
-        # allow "generated automatically" instead of bare "automatic"
-        if needle == "automatic" and "generated automatically" in help_text.lower():
-            continue
         raise SystemExit("missing in service add ?: %s" % needle)
+if "generated automatically" not in help_text.lower() and "automatic" not in help_text.lower():
+    raise SystemExit("missing auto ID guidance in service add ?")
+# Normal help must not advertise --id
+if "--id" in help_text:
+    raise SystemExit("service add ? must not advertise --id")
 
 cands = g.completion_candidates("service add ", "client", [], {}, [], trailing=True)
 if cands != ["ssh", "http", "https", "custom", "profile"]:
     raise SystemExit("service add tab=%r" % cands)
 
 ssh_flags = g.completion_candidates("service add ssh --", "client", [], {}, [], trailing=False)
-for flag in ("--target-host", "--target-port", "--ssh-user", "--name", "--id"):
-    if flag not in ssh_flags:
-        raise SystemExit("ssh flags missing %s: %r" % (flag, ssh_flags))
-if "--preset" in ssh_flags or "--profile" in ssh_flags:
-    raise SystemExit("ssh flags should not include irrelevant options: %r" % ssh_flags)
+if "--id" in ssh_flags:
+    raise SystemExit("ssh Tab must not offer --id: %r" % ssh_flags)
 
 http_flags = g.completion_candidates("service add http --", "client", [], {}, [], trailing=False)
-if "--ssh-user" in http_flags:
-    raise SystemExit("http flags should not include --ssh-user")
+if "--id" in http_flags or "--ssh-user" in http_flags:
+    raise SystemExit("http Tab must not offer --id/--ssh-user: %r" % http_flags)
+
+https_flags = g.completion_candidates("service add https --", "client", [], {}, [], trailing=False)
+if "--id" in https_flags:
+    raise SystemExit("https Tab must not offer --id: %r" % https_flags)
 
 custom_flags = g.completion_candidates("service add custom --", "client", [], {}, [], trailing=False)
-for flag in ("--target-host", "--target-port", "--name", "--id"):
-    if flag not in custom_flags:
-        raise SystemExit("custom flags missing %s" % flag)
+if "--id" in custom_flags:
+    raise SystemExit("custom Tab must not offer --id: %r" % custom_flags)
+
+adv = g.help_text(["advanced"], "client")
+if "--id" not in adv:
+    raise SystemExit("help advanced must document hidden --id")
 
 root = g.canonical_verbs("client")
 if "status" in root or "version" in root:
@@ -77,12 +86,21 @@ assert suggest_service_id("ssh", []) == "ssh"
 assert suggest_service_id("http", []) == "http"
 assert suggest_service_id("https", []) == "https"
 assert suggest_service_id("custom", [], target_port=3389) == "tcp-3389"
-used = ["ssh", "ssh-2", "http", "tcp-3389"]
+assert suggest_service_id("custom", [], target_port=555) == "tcp-555"
+used = ["ssh", "ssh-2", "http", "https", "tcp-3389", "tcp-555"]
 assert suggest_service_id("ssh", used) == "ssh-3"
 assert suggest_service_id("http", used) == "http-2"
+assert suggest_service_id("https", used) == "https-2"
 assert suggest_service_id("custom", used, target_port=3389) == "tcp-3389-2"
+assert suggest_service_id("custom", used, target_port=555) == "tcp-555-2"
 PY
 pass "SERVICE_ID_UNIT"
+
+# --- wait_for_proxies must quiet-match (no journal dump on success) ---
+if ! grep -n 'start proxy success' "$ROOT/lib/frp-client-common.sh" | grep -q 'grep -qF'; then
+  fail "wait_for_proxies must use quiet grep -qF"
+fi
+pass "APPLY_PROXY_MATCH_QUIET"
 
 # --- frp-client auto ID + bare add + explicit override ---
 CLIENT="$WORKDIR/client"
@@ -114,21 +132,24 @@ bare_rc=$?
 set -e
 [[ "$bare_rc" -eq 2 ]] || fail "bare add non-tty rc=$bare_rc"
 grep -q 'Missing service type' "$WORKDIR/bare.err" || fail "bare add usage"
-grep -q 'service add ssh' "$WORKDIR/bare.err" || fail "bare add example"
+grep -q 'service add' "$WORKDIR/bare.err" || fail "bare add example"
 if grep -qi 'id is required' "$WORKDIR/bare.err" "$WORKDIR/bare.out"; then
   fail "bare add must not require --id"
 fi
 pass "BARE_ADD_NON_TTY"
 
+# Non-interactive automation still works with explicit fields
 "$ROOT/tools/frp-client" add-service ssh --ssh-user aella >"$WORKDIR/add1.out"
 grep -q "Pending service 'ssh' added" "$WORKDIR/add1.out" || fail "first ssh id"
 grep -q 'service apply' "$WORKDIR/add1.out" || fail "apply guidance"
 "$ROOT/tools/frp-client" add-service ssh --ssh-user root >"$WORKDIR/add2.out"
 grep -q "Pending service 'ssh-2' added" "$WORKDIR/add2.out" || fail "second ssh id"
-"$ROOT/tools/frp-client" add-service http >"$WORKDIR/add-http.out"
+"$ROOT/tools/frp-client" add-service http --target-host 127.0.0.1 --target-port 80 >"$WORKDIR/add-http.out"
 grep -q "Pending service 'http' added" "$WORKDIR/add-http.out" || fail "http id"
-"$ROOT/tools/frp-client" add-service custom --target-port 3389 >"$WORKDIR/add-custom.out"
-grep -q "Pending service 'tcp-3389' added" "$WORKDIR/add-custom.out" || fail "custom id"
+"$ROOT/tools/frp-client" add-service https --target-host 127.0.0.1 --target-port 443 >"$WORKDIR/add-https.out"
+grep -q "Pending service 'https' added" "$WORKDIR/add-https.out" || fail "https id"
+"$ROOT/tools/frp-client" add-service custom --target-port 555 >"$WORKDIR/add-custom.out"
+grep -q "Pending service 'tcp-555' added" "$WORKDIR/add-custom.out" || fail "custom id"
 "$ROOT/tools/frp-client" add-service ssh --id special-ssh --ssh-user aella >"$WORKDIR/add-spec.out"
 grep -q "Pending service 'special-ssh' added" "$WORKDIR/add-spec.out" || fail "explicit id"
 pass "SERVICE_ID_AUTO_AND_OVERRIDE"
@@ -152,6 +173,10 @@ Path(sys.argv[1]).write_text(json.dumps({
                   "local_ip":"127.0.0.1","local_port":22,"enabled":True,"ssh_user":"b"},
         "http": {"id":"http","name":"HTTP","preset":"http","protocol":"tcp",
                  "local_ip":"127.0.0.1","local_port":80,"enabled":True},
+        "https": {"id":"https","name":"HTTPS","preset":"https","protocol":"tcp",
+                  "local_ip":"127.0.0.1","local_port":443,"enabled":True},
+        "tcp-555": {"id":"tcp-555","name":"TCP 555","preset":"custom","protocol":"tcp",
+                    "local_ip":"127.0.0.1","local_port":555,"enabled":True},
         "tcp-3389": {"id":"tcp-3389","name":"RDP","preset":"custom","protocol":"tcp",
                      "local_ip":"127.0.0.1","local_port":3389,"enabled":True},
     },
@@ -160,11 +185,138 @@ PY
 rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
 "$ROOT/tools/frp-client" add-service ssh --ssh-user c >"$WORKDIR/add3.out"
 grep -q "Pending service 'ssh-3' added" "$WORKDIR/add3.out" || fail "ssh-3 after collisions"
-"$ROOT/tools/frp-client" add-service http >"$WORKDIR/add-http2.out"
+"$ROOT/tools/frp-client" add-service http --target-port 80 >"$WORKDIR/add-http2.out"
 grep -q "Pending service 'http-2' added" "$WORKDIR/add-http2.out" || fail "http-2"
-"$ROOT/tools/frp-client" add-service custom --target-port 3389 >"$WORKDIR/add-custom2.out"
-grep -q "Pending service 'tcp-3389-2' added" "$WORKDIR/add-custom2.out" || fail "tcp-3389-2"
+"$ROOT/tools/frp-client" add-service https --target-port 443 >"$WORKDIR/add-https2.out"
+grep -q "Pending service 'https-2' added" "$WORKDIR/add-https2.out" || fail "https-2"
+"$ROOT/tools/frp-client" add-service custom --target-port 555 >"$WORKDIR/add-custom2.out"
+grep -q "Pending service 'tcp-555-2' added" "$WORKDIR/add-custom2.out" || fail "tcp-555-2"
 pass "SERVICE_ID_COLLISION"
+
+# --- Wizard: bare add numeric selection owns input ---
+rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
+python3 - "$CLIENT/etc/frp/client-state.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "allocator_url": "https://127.0.0.1:9/enroll",
+    "frp_server": "203.0.113.10",
+    "frp_server_port": 443,
+    "hostname": "cli-ux",
+    "machine_id": "00112233445566778899aabbccddeeff",
+    "host_id": "cli-ux-00112233",
+    "services": {},
+}, indent=2, sort_keys=True) + "\n")
+PY
+# Invalid 9 then valid 3 (HTTPS): local defaults → confirm
+export FRP_CLIENT_TEST_INPUT="$(printf '%s\n' 9 3 1 '' '' Y)"
+unset _FRP_CLIENT_INPUT_READY _FRP_CLIENT_INPUT_FILE || true
+"$ROOT/tools/frp-client" add-service >"$WORKDIR/wiz-bare.out" 2>"$WORKDIR/wiz-bare.err"
+grep -q 'ERROR: select 1-6' "$WORKDIR/wiz-bare.err" || fail "invalid select should re-prompt"
+grep -q 'HTTPS service' "$WORKDIR/wiz-bare.out" "$WORKDIR/wiz-bare.err" || fail "bare wizard chose HTTPS"
+grep -q "Pending service 'https' added" "$WORKDIR/wiz-bare.out" || fail "bare wizard https pending"
+python3 - "$CLIENT/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "bare wizard draft"
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+s=d["services"]["https"]
+assert s["local_ip"]=="127.0.0.1" and int(s["local_port"])==443
+PY
+pass "BARE_ADD_WIZARD_NUMERIC"
+
+# --- Wizard: service add http enters wizard (not instant create) ---
+rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_TEST_INPUT="$(printf '%s\n' 1 '' '' Y)"
+unset _FRP_CLIENT_INPUT_READY || true
+"$ROOT/tools/frp-client" add-service http >"$WORKDIR/wiz-http.out" 2>"$WORKDIR/wiz-http.err"
+grep -q 'HTTP service' "$WORKDIR/wiz-http.out" "$WORKDIR/wiz-http.err" || fail "http wizard title"
+grep -q 'Where is the HTTP service' "$WORKDIR/wiz-http.err" || fail "http location prompt"
+grep -q "Pending service 'http' added" "$WORKDIR/wiz-http.out" || fail "http wizard pending"
+python3 - "$CLIENT/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "http local defaults"
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+s=d["services"]["http"]
+assert s["local_ip"]=="127.0.0.1" and int(s["local_port"])==80, s
+assert s["name"]=="HTTP"
+PY
+if grep -q 'Service ID' "$WORKDIR/wiz-http.out"; then
+  fail "wizard confirmation must not display Service ID"
+fi
+pass "HTTP_WIZARD_LOCAL"
+
+# LAN HTTP
+rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_TEST_INPUT="$(printf '%s\n' 2 10.10.10.60 '' '' Y)"
+unset _FRP_CLIENT_INPUT_READY || true
+"$ROOT/tools/frp-client" add-service http >"$WORKDIR/wiz-http-lan.out" 2>"$WORKDIR/wiz-http-lan.err"
+grep -q "Pending service 'http' added" "$WORKDIR/wiz-http-lan.out" || fail "lan http pending"
+python3 - "$CLIENT/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "lan http draft"
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+s=d["services"]["http"]
+assert s["local_ip"]=="10.10.10.60" and int(s["local_port"])==80, s
+PY
+pass "HTTP_WIZARD_LAN"
+
+# SSH defaults port 22
+rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
+unset SUDO_USER || true
+export USER=root LOGNAME=root
+export FRP_CLIENT_TEST_INPUT="$(printf '%s\n' 1 '' tester '' Y)"
+unset _FRP_CLIENT_INPUT_READY || true
+"$ROOT/tools/frp-client" add-service ssh >"$WORKDIR/wiz-ssh.out" 2>"$WORKDIR/wiz-ssh.err"
+grep -q "Pending service 'ssh' added" "$WORKDIR/wiz-ssh.out" || fail "ssh wizard pending"
+python3 - "$CLIENT/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "ssh defaults"
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+s=d["services"]["ssh"]
+assert s["local_ip"]=="127.0.0.1" and int(s["local_port"])==22, s
+assert s["ssh_user"]=="tester"
+PY
+pass "SSH_WIZARD"
+
+# HTTPS defaults 443
+rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_TEST_INPUT="$(printf '%s\n' 1 '' '' Y)"
+unset _FRP_CLIENT_INPUT_READY || true
+"$ROOT/tools/frp-client" add-service https >"$WORKDIR/wiz-https.out" 2>"$WORKDIR/wiz-https.err"
+python3 - "$CLIENT/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "https defaults"
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+s=d["services"]["https"]
+assert s["local_ip"]=="127.0.0.1" and int(s["local_port"])==443, s
+PY
+pass "HTTPS_WIZARD"
+
+# Custom requires port; LAN example
+rm -f "$CLIENT/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_TEST_INPUT="$(printf '%s\n' 2 10.10.10.60 555 '' Y)"
+unset _FRP_CLIENT_INPUT_READY || true
+"$ROOT/tools/frp-client" add-service custom >"$WORKDIR/wiz-custom.out" 2>"$WORKDIR/wiz-custom.err"
+grep -q "Pending service 'tcp-555' added" "$WORKDIR/wiz-custom.out" || fail "custom wizard id"
+python3 - "$CLIENT/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "custom draft"
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+s=d["services"]["tcp-555"]
+assert s["local_ip"]=="10.10.10.60" and int(s["local_port"])==555, s
+assert s["name"]=="TCP 555"
+PY
+pass "CUSTOM_WIZARD"
+
+# Type-only without TTY / test input must not silently create for http
+# (non-TTY automation without flags still creates — intentional compat)
+"$ROOT/tools/frp-client" add-service http </dev/null >"$WORKDIR/http-nontty.out" 2>"$WORKDIR/http-nontty.err" || true
+grep -q "Pending service 'http" "$WORKDIR/http-nontty.out" || fail "non-tty http automation compat"
+pass "HTTP_NON_TTY_AUTOMATION_COMPAT"
+
+unset FRP_CLIENT_TEST_INPUT
+unset _FRP_CLIENT_INPUT_READY || true
 
 # --- Canonical service set error ---
 export FRP_CTL_DRY_RUN=1
@@ -187,13 +339,13 @@ grep -qx 'DISPATCH frp-client set-service ssh target-port 2222' "$WORKDIR/leg-se
 grep -q 'DISPATCH frp-client add-service ssh --ssh-user aella' "$WORKDIR/pos-add.out" || fail "positional add dispatch"
 "$ROOT/tools/frpctl" service add --preset ssh --id web >"$WORKDIR/leg-add.out"
 grep -qx 'DISPATCH frp-client add-service --preset ssh --id web' "$WORKDIR/leg-add.out" || fail "legacy flag add"
+"$ROOT/tools/frpctl" service apply --verbose >"$WORKDIR/apply-v.out"
+grep -qx 'DISPATCH frp-client apply-pending --verbose' "$WORKDIR/apply-v.out" || fail "apply --verbose dispatch"
 pass "LEGACY_AND_POSITIONAL_DISPATCH"
 
 # --- Menu Add uses add-service (not bare frp-client) ---
 export FRP_CTL_TEST_INPUT=$'2\n1\n6\n5\n'
 export FRP_CTL_DRY_RUN=1
-# Menu → Service → Add → Cancel wizard → Exit client menu path is complex;
-# assert source wiring instead (fast, deterministic).
 grep -q 'frpctl_invoke frp-client add-service' "$ROOT/tools/frpctl" \
   || fail "menu add must call frp-client add-service"
 if grep -nE 'frpctl_client_service_menu|frpctl_client_service_add_menu' -A20 "$ROOT/tools/frpctl" \

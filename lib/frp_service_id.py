@@ -109,12 +109,11 @@ def validate_service_id(sid: str) -> str:
 
 
 TARGET_HOST_HELP = (
-    "Target host is the service machine as seen from this FRP client.\n"
+    "The target is viewed from this FRP client.\n"
     "\n"
-    "Use:\n"
-    "  127.0.0.1       service runs on this FRP client\n"
-    "  192.168.x.x     another server reachable on the LAN\n"
-    "  hostname        another resolvable internal host"
+    "Examples:\n"
+    "  192.168.10.20\n"
+    "  server01.internal"
 )
 
 
@@ -143,12 +142,11 @@ Available:
   custom    Any TCP service
   profile   Start from a server Service Profile
 
-Examples:
+Interactive (recommended):
 
-  service add ssh --ssh-user aella
-  service add ssh --target-host 192.168.10.20 --ssh-user root
-  service add http --target-host 192.168.10.30
-  service add custom --target-host 192.168.10.40 --target-port 8080
+  service add
+  service add http
+  service add ssh
 
 Service IDs are generated automatically.
 
@@ -159,6 +157,8 @@ Public ports are allocated automatically when you run:
 To throw away pending changes:
 
   service discard
+
+Advanced automation flags: help advanced
 """
 
 

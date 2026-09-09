@@ -299,6 +299,8 @@ def help_text(tokens, role):
     verb = tokens[0]
     if verb == "legacy":
         return _legacy_help(role)
+    if verb == "advanced":
+        return _advanced_help(role)
     if verb == "show":
         return _show_help(tokens[1:], role)
     if verb == "set":
@@ -514,6 +516,7 @@ def _root_help(role):
             "  menu                 Guided numbered menu",
             "  history              This session only (not saved to disk)",
             "  help, ?",
+            "  help advanced        Automation / hidden flags",
             "  help legacy          Compatibility aliases",
             "  clear",
             "  exit",
@@ -579,6 +582,7 @@ def _root_help_dual():
         "  menu",
         "  history",
         "  help, ?",
+        "  help advanced",
         "  help legacy",
         "  clear",
         "  exit",
@@ -595,6 +599,7 @@ def _service_help(rest, role):
         "Service management\n"
         "==================\n\n"
         "Usage:\n"
+        "  service add\n"
         "  service add ssh|http|https|custom\n"
         "  service add profile <PROFILE>\n"
         "  service set <id> <property> <value>\n"
@@ -602,17 +607,13 @@ def _service_help(rest, role):
         "  service disable <id>\n"
         "  service apply\n"
         "  service discard\n\n"
-        "Examples:\n"
-        "  service add ssh --ssh-user aella\n"
-        "  service add ssh --target-host 192.168.10.20 --ssh-user root\n"
-        "  service add http --target-host 192.168.10.30\n"
-        "  service add custom --target-host 192.168.10.40 --target-port 8080\n"
-        "  service add profile office-ssh\n\n"
+        "Interactive examples:\n"
+        "  service add\n"
+        "  service add http\n"
+        "  service add ssh\n\n"
         "Service IDs are generated automatically. Draft changes stay pending\n"
         "until service apply. service discard drops pending changes only.\n\n"
-        "Advanced:\n"
-        "  --id ID   Override the automatic Service ID (immutable once created)\n"
-        "  --name    Display name\n"
+        "Advanced automation: help advanced\n"
     )
 
 
@@ -826,16 +827,16 @@ def _verb_help(verb, role):
         "restore": "Restore\n=======\n\nUsage:\n  restore backup <path>\n",
         "add": (
             "Add\n===\n\nUsage:\n"
+            "  service add\n"
             "  service add ssh|http|https|custom\n"
             "  service add profile <PROFILE>\n"
             "  add client <ID> group <GROUP>\n\n"
-            "Prefer service add on client hosts. Legacy forms still work:\n"
-            "  add service [--preset ssh|http|https|custom] ...\n"
-            "  add service --profile <PROFILE|NAME> [--id ID] [--name NAME]\n\n"
+            "Prefer service add on client hosts (interactive wizard).\n"
+            "Legacy forms still work for automation; see help advanced.\n\n"
             "Pending until service apply. Does not release server-side reservations.\n"
             "Profile seeding copies template defaults only; public ports stay\n"
             "unallocated until apply. Editing a profile never mutates services.\n"
-            "Service IDs are generated automatically (--id is an advanced override).\n"
+            "Service IDs are generated automatically.\n"
         ),
         "enable": "Enable service\n==============\n\nUsage:\n  enable service <service-id>\n",
         "disable": (
@@ -851,6 +852,36 @@ def _verb_help(verb, role):
         "rename": "Rename group\n============\n\nUsage:\n  rename group <GROUP> <name>\n",
     }
     return mapping.get(verb, "Usage:\n  %s\n" % verb)
+
+
+def _advanced_help(role):
+    client, _server = _role_parts(role)
+    lines = [
+        "Advanced / automation",
+        "=====================",
+        "",
+        "Normal interactive use prefers the service-add wizard:",
+        "  service add",
+        "  service add http",
+        "",
+        "Non-interactive automation may still pass explicit flags:",
+        "  service add ssh --ssh-user USER [--target-host HOST] [--target-port PORT]",
+        "  service add http --target-host HOST [--target-port PORT] [--name NAME]",
+        "  service add https --target-host HOST [--target-port PORT] [--name NAME]",
+        "  service add custom --target-port PORT [--target-host HOST] [--name NAME]",
+        "  service add profile <PROFILE> [--name NAME]",
+        "",
+        "Hidden legacy override (not shown in Tab / normal help):",
+        "  --id ID     Force a Service ID (immutable once created)",
+        "",
+        "service apply --verbose  Include diagnostic frpc journal output",
+        "",
+        "Compatibility aliases: help legacy",
+    ]
+    if not client:
+        lines.insert(3, "(Most service-add flags require a client role.)")
+        lines.insert(4, "")
+    return "\n".join(lines) + "\n"
 
 
 def _legacy_help(role):
@@ -1153,41 +1184,44 @@ def _service_add_type_help(stype):
     if stype == "ssh":
         return (
             "Usage:\n"
-            "  service add ssh [--target-host HOST] [--target-port PORT]\n"
-            "                  [--ssh-user USER] [--name NAME]\n\n"
-            "Default target: 127.0.0.1:22. Service ID is allocated automatically.\n"
-            "Advanced: --id ID overrides the automatic Service ID.\n"
+            "  service add ssh\n\n"
+            "Starts the SSH service wizard (location, port, SSH user, name).\n"
+            "Default target: this FRP client, TCP/22.\n"
+            "Service ID is allocated automatically.\n"
             "Apply with service apply; discard with service discard.\n"
         )
     if stype in ("http", "https"):
         port = "80" if stype == "http" else "443"
         return (
             "Usage:\n"
-            "  service add %s [--target-host HOST] [--target-port PORT] [--name NAME]\n\n"
-            "Default target: 127.0.0.1:%s. Service ID is allocated automatically.\n"
-            "Advanced: --id ID overrides the automatic Service ID.\n"
+            "  service add %s\n\n"
+            "Starts the %s service wizard (location, port, name).\n"
+            "Default target: this FRP client, TCP/%s.\n"
+            "Service ID is allocated automatically.\n"
             "Apply with service apply; discard with service discard.\n"
-            % (stype, port)
+            % (stype, stype.upper(), port)
         )
     if stype == "custom":
         return (
             "Usage:\n"
-            "  service add custom --target-port PORT [--target-host HOST] [--name NAME]\n\n"
-            "Publish any TCP service. Service ID is allocated automatically.\n"
-            "Advanced: --id ID overrides the automatic Service ID.\n"
+            "  service add custom\n\n"
+            "Starts the Custom TCP wizard. Target port is required.\n"
+            "Service ID is allocated automatically (tcp-<port>).\n"
             "Apply with service apply; discard with service discard.\n"
         )
     if stype == "profile":
         return (
             "Usage:\n"
-            "  service add profile <PROFILE> [--name NAME]\n\n"
+            "  service add profile <PROFILE>\n\n"
             "Start from a server Service Profile. Public ports stay unallocated\n"
-            "until service apply. Advanced: --id ID overrides automatic Service ID.\n"
+            "until service apply. Service ID is allocated automatically.\n"
         )
     if stype.startswith("--"):
         return (
-            "Legacy flags still work with service add.\n"
-            "Prefer: service add ssh|http|https|custom|profile\n"
+            "Prefer the interactive wizard:\n"
+            "  service add\n"
+            "  service add ssh|http|https|custom\n\n"
+            "Automation flags: help advanced\n"
         )
     return (
         "Unknown service type: %s\n\n"
@@ -2015,9 +2049,11 @@ def _match_service(tokens, role, names=None):
     if sub in ("enable", "disable"):
         return _match_enable_disable([sub, "service"] + tokens[2:], role, names)
     if sub == "apply":
-        if len(tokens) > 2:
-            return incomplete("Unexpected arguments.", ["service apply"])
-        return {"status": "ok", "action": "apply"}
+        rest = tokens[2:]
+        for tok in rest:
+            if tok not in ("--verbose", "-v"):
+                return incomplete("Unexpected arguments.", ["service apply", "service apply --verbose"])
+        return {"status": "ok", "action": "apply", "passthrough": rest}
     if sub == "discard":
         if len(tokens) > 2:
             return incomplete("Unexpected arguments.", ["service discard"])
@@ -2134,40 +2170,19 @@ def completion_candidates(
 
 
 def _service_add_completion(after_add, prefix=""):
-    """Candidates after `service add` / `add service` (types first, then flags)."""
-    legacy_flags = [
-        "--preset",
-        "--id",
-        "--name",
-        "--target-host",
-        "--target-port",
-        "--ssh-user",
-        "--profile",
-    ]
-    type_flags = {
-        "ssh": ["--target-host", "--target-port", "--ssh-user", "--name", "--id"],
-        "http": ["--target-host", "--target-port", "--name", "--id"],
-        "https": ["--target-host", "--target-port", "--name", "--id"],
-        "custom": ["--target-host", "--target-port", "--name", "--id"],
-        "profile": ["--name", "--id"],
-    }
+    """Candidates after `service add` / `add service` (types only for normal UX)."""
+    # Do not offer --id (or other raw flags) in normal Tab completion.
+    # Automation may still pass hidden legacy flags explicitly.
     if not after_add:
-        # Typing `--…` before a type still completes legacy flags.
         if str(prefix or "").startswith("--"):
-            return legacy_flags
+            return []
         return list(SERVICE_ADD_TYPES)
     head = after_add[0]
     if head.startswith("--"):
-        return legacy_flags
-    if head in type_flags:
-        rest = after_add[1:]
-        flags = type_flags[head]
-        if not rest:
-            return flags
-        # Flag/value pairs: odd count means completing a flag value.
-        if len(rest) % 2 == 1:
-            return []
-        return flags
+        return []
+    if head in SERVICE_ADD_TYPES:
+        # After a type, prefer wizard; do not advertise flags.
+        return []
     return []
 
 

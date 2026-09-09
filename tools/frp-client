@@ -799,12 +799,15 @@ PY
   if ! frp_client_restart; then
     restore_needed=1
   else
+    echo "FRP client restarted."
     PROXY_NAMES=()
     while IFS= read -r _frp_proxy_name; do
       [[ -n "$_frp_proxy_name" ]] && PROXY_NAMES+=("$_frp_proxy_name")
     done < <(SERVICES_FILE="$enabled_list" proxy_names_from_services "$host_id")
     if ! frp_client_wait_proxies "${PROXY_NAMES[@]}"; then
       restore_needed=1
+    else
+      echo "Published services verified."
     fi
   fi
 
@@ -1251,19 +1254,13 @@ frp_client_print_pending_saved() {
 }
 
 frp_client_print_target_host_help() {
-  local py
-  py="$(frp_client_service_id_py)" || {
-    cat <<'EOF'
-Target host is the service machine as seen from this FRP client.
+  cat <<'EOF'
+The target is viewed from this FRP client.
 
-Use:
-  127.0.0.1       service runs on this FRP client
-  192.168.x.x     another server reachable on the LAN
-  hostname        another resolvable internal host
+Examples:
+  192.168.10.20
+  server01.internal
 EOF
-    return 0
-  }
-  python3 "$py" target-host-help
 }
 
 frp_client_print_add_usage() {
@@ -1277,40 +1274,81 @@ Available:
   custom
   profile
 
-Example:
-  frpctl service add ssh --ssh-user aella
+Interactive:
+  frpctl service add
+  frpctl service add http
+
+Automation:
+  frpctl service add http --target-host 127.0.0.1 --target-port 80
 EOF
+}
+
+frp_client_trim() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  v="${v//$'\r'/}"
+  printf '%s' "$v"
+}
+
+frp_client_input_init() {
+  # Open FRP_CLIENT_TEST_INPUT once in the current shell so nested
+  # `var="$(frp_client_read_prompt …)"` subshells inherit the same fd.
+  if [[ -n "${FRP_CLIENT_TEST_INPUT:-}" && -z "${_FRP_CLIENT_INPUT_READY:-}" ]]; then
+    _FRP_CLIENT_INPUT_FILE="$(mktemp)"
+    printf '%s' "${FRP_CLIENT_TEST_INPUT}" >"$_FRP_CLIENT_INPUT_FILE"
+    if [[ "${FRP_CLIENT_TEST_INPUT}" != *$'\n' ]]; then
+      printf '\n' >>"$_FRP_CLIENT_INPUT_FILE"
+    fi
+    exec 8<"$_FRP_CLIENT_INPUT_FILE"
+    _FRP_CLIENT_INPUT_READY=1
+  fi
+}
+
+frp_client_default_ssh_user() {
+  local u=""
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    u="$SUDO_USER"
+  elif [[ -n "${USER:-}" && "${USER}" != "root" ]]; then
+    u="$USER"
+  elif [[ -n "${LOGNAME:-}" && "${LOGNAME}" != "root" ]]; then
+    u="$LOGNAME"
+  fi
+  printf '%s' "$u"
 }
 
 frp_client_add_service_wizard() {
   local choice
-  echo
-  echo "Add service"
-  echo "==========="
-  echo
-  echo "1) SSH"
-  echo "2) HTTP"
-  echo "3) HTTPS"
-  echo "4) Custom TCP"
-  echo "5) Server profile"
-  echo "6) Cancel"
-  echo
-  choice="$(frp_client_read_prompt "Select: " "")" || return 1
-  case "$choice" in
-    1) frp_client_add_service_interactive ssh ;;
-    2) frp_client_add_service_interactive http ;;
-    3) frp_client_add_service_interactive https ;;
-    4) frp_client_add_service_interactive custom ;;
-    5) frp_client_add_service_interactive profile ;;
-    6|"")
-      echo "Cancelled."
-      return 0
-      ;;
-    *)
-      echo "ERROR: select 1-6" >&2
-      return 2
-      ;;
-  esac
+  frp_client_input_init
+  while true; do
+    echo
+    echo "Add service"
+    echo "==========="
+    echo
+    echo "1) SSH"
+    echo "2) HTTP"
+    echo "3) HTTPS"
+    echo "4) Custom TCP"
+    echo "5) Server profile"
+    echo "6) Cancel"
+    echo
+    choice="$(frp_client_read_prompt "Select [1]: " "1")" || return 1
+    choice="$(frp_client_trim "$choice")"
+    case "$choice" in
+      1) frp_client_add_service_interactive ssh; return $? ;;
+      2) frp_client_add_service_interactive http; return $? ;;
+      3) frp_client_add_service_interactive https; return $? ;;
+      4) frp_client_add_service_interactive custom; return $? ;;
+      5) frp_client_add_service_interactive profile; return $? ;;
+      6)
+        echo "Cancelled."
+        return 0
+        ;;
+      *)
+        echo "ERROR: select 1-6" >&2
+        ;;
+    esac
+  done
 }
 
 frp_client_read_prompt() {
@@ -1327,15 +1365,7 @@ frp_client_read_prompt() {
       return 1
     fi
   elif [[ -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
-    if [[ -z "${_FRP_CLIENT_INPUT_READY:-}" ]]; then
-      _FRP_CLIENT_INPUT_FILE="$(mktemp)"
-      printf '%s' "${FRP_CLIENT_TEST_INPUT}" >"$_FRP_CLIENT_INPUT_FILE"
-      if [[ "${FRP_CLIENT_TEST_INPUT}" != *$'\n' ]]; then
-        printf '\n' >>"$_FRP_CLIENT_INPUT_FILE"
-      fi
-      exec 8<"$_FRP_CLIENT_INPUT_FILE"
-      _FRP_CLIENT_INPUT_READY=1
-    fi
+    frp_client_input_init
     if ! IFS= read -r value <&8; then
       return 1
     fi
@@ -1348,34 +1378,88 @@ frp_client_read_prompt() {
   printf '%s' "$value"
 }
 
+frp_client_prompt_target_location() {
+  # Prints location menu on stderr; echoes chosen host on stdout.
+  # Returns 0 on success, 1 on EOF, 2 on cancel.
+  local label="${1:-service}"
+  local choice host=""
+  echo >&2
+  echo "Where is the ${label}?" >&2
+  echo >&2
+  echo "1) This FRP client" >&2
+  echo "2) Another host reachable from this client" >&2
+  echo "3) Cancel" >&2
+  echo >&2
+  while true; do
+    choice="$(frp_client_read_prompt "Select [1]: " "1")" || return 1
+    choice="$(frp_client_trim "$choice")"
+    case "$choice" in
+      1)
+        printf '%s' "127.0.0.1"
+        return 0
+        ;;
+      2)
+        echo >&2
+        frp_client_print_target_host_help >&2
+        echo >&2
+        while true; do
+          host="$(frp_client_read_prompt "Target host: " "")" || return 1
+          host="$(frp_client_trim "$host")"
+          if [[ -n "$host" ]]; then
+            printf '%s' "$host"
+            return 0
+          fi
+          echo "ERROR: target host is required." >&2
+        done
+        ;;
+      3)
+        echo "Cancelled." >&2
+        return 2
+        ;;
+      *)
+        echo "ERROR: select 1-3" >&2
+        ;;
+    esac
+  done
+}
+
 frp_client_add_service_interactive() {
   local preset="$1"
   local host="127.0.0.1" port="" user="" name="" sid="" profile=""
-  local default_port="" default_name="" title=""
+  local default_port="" default_name="" title="" label="" loc_rc=0
+  local confirm="" type_label=""
+  frp_client_input_init
   case "$preset" in
     ssh)
-      title="Add SSH service"
+      title="SSH service"
+      label="SSH service"
+      type_label="SSH"
       default_port=22
       default_name="SSH"
       ;;
     http)
-      title="Add HTTP service"
+      title="HTTP service"
+      label="HTTP service"
+      type_label="HTTP"
       default_port=80
       default_name="HTTP"
       ;;
     https)
-      title="Add HTTPS service"
+      title="HTTPS service"
+      label="HTTPS service"
+      type_label="HTTPS"
       default_port=443
       default_name="HTTPS"
       ;;
     custom)
-      title="Add custom TCP service"
+      title="Custom TCP service"
+      label="service"
+      type_label="Custom TCP"
       default_name=""
       ;;
     profile)
       profile="$(frp_client_read_prompt "Profile name: " "")" || return 1
-      profile="${profile#"${profile%%[![:space:]]*}"}"
-      profile="${profile%"${profile##*[![:space:]]}"}"
+      profile="$(frp_client_trim "$profile")"
       if [[ -z "$profile" ]]; then
         echo "Missing profile." >&2
         echo >&2
@@ -1393,34 +1477,38 @@ frp_client_add_service_interactive() {
   esac
   echo
   echo "$title"
-  echo "==============="
-  echo
-  frp_client_print_target_host_help
-  echo
-  host="$(frp_client_read_prompt "Target host [127.0.0.1]: " "127.0.0.1")" || return 1
-  host="${host#"${host%%[![:space:]]*}"}"
-  host="${host%"${host##*[![:space:]]}"}"
-  [[ -n "$host" ]] || host="127.0.0.1"
+  local underline
+  underline="$(printf '%*s' "${#title}" '' | tr ' ' '=')"
+  echo "$underline"
+
+  host="$(frp_client_prompt_target_location "$label")" || loc_rc=$?
+  if [[ "$loc_rc" -eq 2 ]]; then
+    return 0
+  fi
+  if [[ "$loc_rc" -ne 0 ]]; then
+    return "$loc_rc"
+  fi
+
   if [[ -n "$default_port" ]]; then
     port="$(frp_client_read_prompt "Target port [${default_port}]: " "$default_port")" || return 1
   else
     port="$(frp_client_read_prompt "Target port: " "")" || return 1
   fi
-  port="${port#"${port%%[![:space:]]*}"}"
-  port="${port%"${port##*[![:space:]]}"}"
+  port="$(frp_client_trim "$port")"
   if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
     echo "ERROR: invalid target port; must be an integer 1-65535" >&2
     return 2
   fi
   if [[ "$preset" == "ssh" ]]; then
-    echo
-    echo "SSH user"
-    echo "  Login username shown in the generated SSH connection command."
-    echo
+    local default_user
+    default_user="$(frp_client_default_ssh_user)"
     while true; do
-      user="$(frp_client_read_prompt "SSH user: " "")" || return 1
-      user="${user#"${user%%[![:space:]]*}"}"
-      user="${user%"${user##*[![:space:]]}"}"
+      if [[ -n "$default_user" ]]; then
+        user="$(frp_client_read_prompt "SSH user [${default_user}]: " "$default_user")" || return 1
+      else
+        user="$(frp_client_read_prompt "SSH user: " "")" || return 1
+      fi
+      user="$(frp_client_trim "$user")"
       [[ -n "$user" ]] && break
       echo "ERROR: SSH user is required." >&2
     done
@@ -1429,13 +1517,28 @@ frp_client_add_service_interactive() {
     default_name="TCP ${port}"
   fi
   name="$(frp_client_read_prompt "Display name [${default_name}]: " "$default_name")" || return 1
-  name="${name#"${name%%[![:space:]]*}"}"
-  name="${name%"${name##*[![:space:]]}"}"
+  name="$(frp_client_trim "$name")"
   [[ -n "$name" ]] || name="$default_name"
+
+  echo
+  echo "Configuration"
+  echo "-------------"
+  echo
+  echo "Type   : ${type_label}"
+  echo "Target : ${host}:${port}"
+  echo "Name   : ${name}"
+  echo
+  confirm="$(frp_client_read_prompt "Add this service? [Y/n]: " "Y")" || return 1
+  confirm="$(frp_client_trim "$confirm")"
+  case "$confirm" in
+    ''|Y|y|yes|YES) ;;
+    *)
+      echo "Cancelled."
+      return 0
+      ;;
+  esac
+
   sid="$(frp_client_suggest_service_id "$preset" "$port")" || return 1
-  echo
-  echo "Service ID : ${sid} (automatic)"
-  echo
   frp_client_add_service_core "$preset" "$sid" "$name" "$host" "$port" "$user"
 }
 
@@ -1556,6 +1659,7 @@ PY
 frp_client_add_service_cli() {
   local preset="" sid="" name="" host="127.0.0.1" port="" user="" profile=""
   local positional="" host_set=0
+  local interactive=0 has_explicit=0
 
   # Bare invocation → guided wizard (TTY) or concise usage (non-TTY).
   if [[ $# -eq 0 ]]; then
@@ -1578,6 +1682,7 @@ frp_client_add_service_cli() {
         preset="$2"; shift 2
         ;;
       --id)
+        # Hidden legacy override; not shown in normal Tab/help/wizard.
         [[ $# -ge 2 ]] || { echo "ERROR: --id requires a value" >&2; return 2; }
         sid="$2"; shift 2
         ;;
@@ -1640,6 +1745,13 @@ frp_client_add_service_cli() {
     fi
   fi
 
+  if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+    interactive=1
+  fi
+  if [[ "$host_set" -eq 1 || -n "$port" || -n "$name" || -n "$sid" || -n "$user" ]]; then
+    has_explicit=1
+  fi
+
   if [[ "$positional" == "profile" || -n "$profile" ]]; then
     if [[ -n "$preset" && "$preset" != "custom" ]]; then
       echo "ERROR: when using a profile, do not also set a preset type" >&2
@@ -1650,7 +1762,7 @@ frp_client_add_service_cli() {
       return 2
     fi
     if [[ -z "$profile" ]]; then
-      if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+      if [[ "$interactive" -eq 1 ]]; then
         frp_client_add_service_interactive profile
         return $?
       fi
@@ -1665,7 +1777,7 @@ frp_client_add_service_cli() {
   fi
 
   if [[ -z "$preset" ]]; then
-    if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+    if [[ "$interactive" -eq 1 ]]; then
       frp_client_add_service_wizard
       return $?
     fi
@@ -1673,25 +1785,28 @@ frp_client_add_service_cli() {
     return 2
   fi
 
-  # Interactive type with no required flags → guided prompts for missing fields.
+  # Type-only interactive commands enter the guided wizard (skip type pick).
+  # Explicit flags keep the non-interactive automation path.
+  case "$preset" in
+    ssh|http|https|custom)
+      if [[ "$interactive" -eq 1 && "$has_explicit" -eq 0 ]]; then
+        frp_client_add_service_interactive "$preset"
+        return $?
+      fi
+      ;;
+  esac
+
   case "$preset" in
     ssh)
       if [[ -z "$user" ]]; then
-        if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
-          # Keep any explicit flags; prompt only for remaining fields.
-          if [[ -z "$port" && "$host" == "127.0.0.1" && "$host_set" -eq 0 && -z "$name" && -z "$sid" ]]; then
-            frp_client_add_service_interactive ssh
-            return $?
-          fi
-        fi
         cat <<'EOF' >&2
 SSH user is required.
 
 Example:
-  service add ssh --ssh-user aella
+  service add ssh --ssh-user aella --target-host 127.0.0.1
 
-For a LAN host:
-  service add ssh --target-host 192.168.10.20 --ssh-user root
+Or run interactively:
+  service add ssh
 EOF
         return 2
       fi
@@ -1708,10 +1823,6 @@ EOF
       ;;
     custom)
       if [[ -z "$port" ]]; then
-        if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
-          frp_client_add_service_interactive custom
-          return $?
-        fi
         echo "Target port is required." >&2
         echo >&2
         echo "Example:" >&2
@@ -1837,6 +1948,13 @@ frp_client_cmd_main() {
       ;;
     apply-pending)
       frp_require_root
+      shift
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --verbose|-v) FRP_APPLY_VERBOSE=1; export FRP_APPLY_VERBOSE; shift ;;
+          *) echo "ERROR: unknown apply-pending option: $1" >&2; exit 2 ;;
+        esac
+      done
       frp_client_apply_pending
       ;;
     discard-pending)

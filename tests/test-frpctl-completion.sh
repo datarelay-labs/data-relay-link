@@ -155,11 +155,12 @@ echo "$add_types" | has_line custom || fail "service add missing custom"
 echo "$add_types" | has_line profile || fail "service add missing profile"
 if echo "$add_types" | has_line --preset; then fail "service add Tab should not lead with --preset"; fi
 ssh_flags="$(cands "service add ssh --")"
-echo "$ssh_flags" | has_line --ssh-user || fail "ssh flags missing --ssh-user"
-echo "$ssh_flags" | has_line --target-host || fail "ssh flags missing --target-host"
-if echo "$ssh_flags" | has_line --profile; then fail "ssh flags should not include --profile"; fi
+if echo "$ssh_flags" | has_line --id; then fail "ssh Tab must not offer --id"; fi
 http_flags="$(cands "service add http --")"
 if echo "$http_flags" | has_line --ssh-user; then fail "http flags should not include --ssh-user"; fi
+if echo "$http_flags" | has_line --id; then fail "http Tab must not offer --id"; fi
+https_flags="$(cands "service add https --")"
+if echo "$https_flags" | has_line --id; then fail "https Tab must not offer --id"; fi
 svc_props="$(cands "service set ssh ")"
 echo "$svc_props" | has_line target-host || fail "service set missing target-host"
 echo "$svc_props" | has_line health-type || fail "service set missing health-type"

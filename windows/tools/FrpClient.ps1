@@ -82,7 +82,6 @@ frp-client (Windows)
   list              List configured services (read-only)
   add-service       Add a pending service to the draft (alias: add)
                        -Preset ssh|http|https|custom
-                       [-Id <id>]  (advanced override; usually omitted)
                        [-Name <name>] [-TargetHost <ip>] [-TargetPort <port>]
                        [-SshUser <user>]  (required for ssh)
   set-service       Edit a pending service: <id> <property> <value>
@@ -102,8 +101,9 @@ frp-client (Windows)
   autostart         Show/enable/disable the startup autostart task
                        (-Enable / -Disable; no args shows current status)
 
-Service IDs are generated automatically (ssh, http, https, tcp-<port>,
-with -2/-3 suffixes on collision). Pass -Id only as an advanced override.
+Choose the service type, target host, and port. Service IDs are generated
+automatically (ssh, http, https, tcp-<port>, with -2/-3 suffixes on collision).
+Operators do not need to invent a Service ID.
 
 Target host is the service machine as seen from this FRP client:
   127.0.0.1       service runs on this FRP client

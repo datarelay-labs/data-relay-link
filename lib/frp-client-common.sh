@@ -1228,10 +1228,20 @@ frp_prompt_service_id() {
 }
 
 frp_prompt_target_host() {
-  local default="${1:-127.0.0.1}"
+  local default="${1-127.0.0.1}"
   local -n _frp_host_out="$2"
   frp_ux_target_host_help
-  _frp_host_out="$(read_tty "Target host [${default}]: " "$default")"
+  if [[ -n "$default" ]]; then
+    _frp_host_out="$(read_tty "Target host [${default}]: " "$default")"
+  else
+    while true; do
+      _frp_host_out="$(read_tty "Target host: " "")"
+      _frp_host_out="${_frp_host_out#"${_frp_host_out%%[![:space:]]*}"}"
+      _frp_host_out="${_frp_host_out%"${_frp_host_out##*[![:space:]]}"}"
+      [[ -n "$_frp_host_out" ]] && break
+      echo "ERROR: target host is required." >&2
+    done
+  fi
 }
 
 frp_prompt_target_port() {
@@ -1262,44 +1272,67 @@ frp_prompt_ssh_user() {
 
 frp_ux_prompt_new_service() {
   local dest="${1:-}"
-  local choice sid host port user name _frp_new_payload
+  local choice sid host port user name _frp_new_payload loc
   while true; do
     echo
     frp_ux_add_service_menu
-    choice="$(read_tty "Select: " "")"
+    choice="$(read_tty "Select [1]: " "1")"
+    choice="${choice#"${choice%%[![:space:]]*}"}"
+    choice="${choice%"${choice##*[![:space:]]}"}"
+    choice="${choice//$'\r'/}"
     case "$choice" in
       1)
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port ssh 22 port
-        frp_prompt_ssh_user user
+        frp_prompt_ssh_user user "${FRP_SSH_USER:-${SUDO_USER:-${USER:-}}}"
         maybe_warn_connectivity "$host" "$port" "SSH"
         sid="$(frp_ux_suggest_service_id ssh)" || return 1
-        echo "Service ID: $sid"
         _frp_new_payload="$(service_payload ssh "$sid" SSH "$host" "$port" "$user")"
         ;;
       2)
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port http 80 port
         maybe_warn_connectivity "$host" "$port" "HTTP"
         sid="$(frp_ux_suggest_service_id http)" || return 1
-        echo "Service ID: $sid"
         _frp_new_payload="$(service_payload http "$sid" HTTP "$host" "$port")"
         ;;
       3)
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port https 443 port
         maybe_warn_connectivity "$host" "$port" "HTTPS"
         sid="$(frp_ux_suggest_service_id https)" || return 1
-        echo "Service ID: $sid"
         _frp_new_payload="$(service_payload https "$sid" HTTPS "$host" "$port")"
         ;;
       4)
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port custom "" port
         maybe_warn_connectivity "$host" "$port" "TCP"
         sid="$(frp_ux_suggest_service_id custom "$port")" || return 1
-        echo "Service ID: $sid"
-        name="$(read_tty "Display name [${sid}]: " "$sid")"
+        name="$(read_tty "Display name [TCP ${port}]: " "TCP ${port}")"
         _frp_new_payload="$(service_payload custom "$sid" "$name" "$host" "$port")"
         ;;
       5)
@@ -2121,6 +2154,16 @@ for item in services:
 PY
 }
 
+frp_client_dump_frpc_logs() {
+  # Diagnostic dump for failure / explicit verbose paths only.
+  local lines="${1:-80}"
+  if frp_is_darwin; then
+    frp_macos_recent_logs "$lines" >&2 || true
+  else
+    journalctl -u frpc -n "$lines" --no-pager >&2 || true
+  fi
+}
+
 wait_for_proxies() {
   local logs proxy missing
   local -a names=("$@")
@@ -2137,12 +2180,16 @@ wait_for_proxies() {
     fi
     missing=""
     for proxy in "${names[@]}"; do
-      if ! grep -F "[${proxy}] start proxy success" <<<"$logs"; then
+      # Quiet match: never print historical journal lines on success.
+      if ! grep -qF "[${proxy}] start proxy success" <<<"$logs"; then
         missing="$proxy"
         break
       fi
     done
     if [[ -z "$missing" ]]; then
+      if [[ "${FRP_APPLY_VERBOSE:-}" == "1" ]]; then
+        frp_client_dump_frpc_logs 80
+      fi
       return 0
     fi
   done
@@ -4185,7 +4232,12 @@ frp_client_wait_proxies() {
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     return 0
   fi
-  wait_for_proxies "$@"
+  if wait_for_proxies "$@"; then
+    return 0
+  fi
+  echo "ERROR: frpc did not register every requested proxy successfully" >&2
+  frp_client_dump_frpc_logs 80
+  return 1
 }
 
 frp_print_state_services() {
