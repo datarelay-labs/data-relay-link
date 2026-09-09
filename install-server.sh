@@ -792,7 +792,7 @@ resolve_server_settings() {
   FRP_INTERNAL_IP="${FRP_INTERNAL_IP:-}"
   FRP_PORT_START="${FRP_PORT_START:-${EXISTING_PORT_START:-}}"
   FRP_PORT_END="${FRP_PORT_END:-${EXISTING_PORT_END:-}}"
-  # Recompute defaults from effective SOURCE_REF (may be a commit SHA pin).
+  # Recompute defaults from DISTRIBUTION_REF (bootstrap location), not content SHA.
   DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
   DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
   if [[ -n "${FRP_CLIENT_INSTALLER_URL:-}" ]]; then

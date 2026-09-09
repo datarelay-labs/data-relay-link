@@ -685,7 +685,22 @@ frp_client_has_verified_build_identity() {
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
 }
 
+frp_client_admin_expected_channel() {
+  # Administrator opt-in for legacy secure-bridge recovery.
+  # Bundle-stamped FRP_RELEASE_CHANNEL alone is candidate provenance and must
+  # not bypass the legacy bridge.
+  local raw="${FRP_EXPECTED_RELEASE_CHANNEL:-}"
+  if [[ -z "$raw" && -n "${FRP_RELEASE_CHANNEL:-}" && \
+        "${FRP_BUNDLE_STAMPED_CHANNEL:-0}" != "1" ]]; then
+    raw="$FRP_RELEASE_CHANNEL"
+  fi
+  [[ -n "$raw" ]] || return 1
+  frp_client_known_release_channel "$raw"
+}
+
 frp_client_explicit_expected_channel() {
+  # Prefer admin opt-in; otherwise accept bundle-stamped FRP_RELEASE_CHANNEL as
+  # the candidate's declared release line (for metadata agreement checks).
   local raw="${FRP_EXPECTED_RELEASE_CHANNEL:-${FRP_RELEASE_CHANNEL:-}}"
   [[ -n "$raw" ]] || return 1
   frp_client_known_release_channel "$raw"
@@ -4876,7 +4891,21 @@ frp_client_apply_upgrade() {
     return 1
   fi
   if [[ "$kind" != "source" ]] && ! frp_client_has_trustworthy_release_line \
-      && [[ -z "$expected_channel" ]]; then
+      && [[ -z "$(frp_client_admin_expected_channel || true)" ]]; then
+    frp_client_report_identity "$previous" "unknown" \
+      "$installed_channel" "unknown" "$installed_ref" "unknown" \
+      "$installed_bundle" "${target_bundle:-unknown}"
+    echo "FRP version               : ${FRP_VERSION}"
+    echo
+    frp_client_emit_legacy_secure_bridge
+    return 1
+  fi
+  # Channel+ref without an external verified SHA is still not a safe auto-upgrade
+  # target. A bundle stamp alone must not reinterpret that identity (e.g. stable
+  # / v2.1.0 / unknown SHA → silent dev).
+  if [[ "$kind" != "source" ]] && frp_client_has_trustworthy_release_line \
+      && ! frp_client_has_verified_build_identity \
+      && [[ -z "$(frp_client_admin_expected_channel || true)" ]]; then
     frp_client_report_identity "$previous" "unknown" \
       "$installed_channel" "unknown" "$installed_ref" "unknown" \
       "$installed_bundle" "${target_bundle:-unknown}"
@@ -5142,8 +5171,9 @@ frp_client_fetch_and_upgrade() {
     return 1
   fi
   explicit_channel="$(frp_client_explicit_expected_channel || true)"
+  admin_channel="$(frp_client_admin_expected_channel || true)"
   if frp_client_has_existing_install; then
-    if ! frp_client_has_trustworthy_release_line && [[ -z "$explicit_channel" ]]; then
+    if ! frp_client_has_trustworthy_release_line && [[ -z "$admin_channel" ]]; then
       frp_client_report_identity \
         "$(frp_client_installed_project_version)" "unknown" \
         "$(frp_client_installed_release_channel)" "unknown" \

@@ -214,9 +214,17 @@ frp_channel_default_source_ref() {
 }
 
 frp_release_git_ref() {
+  # Resolve the *distribution/bootstrap* git ref used in raw GitHub URLs.
+  # Keep this separate from SOURCE_REF content identity: commit SHAs identify
+  # build content and must not silently become download refs (a generated
+  # dist committed to git cannot contain the SHA of the commit that stores it).
   local ref ch
-  # Explicit install/update pin wins.
-  if [[ -n "${FRP_SOURCE_REF:-}" ]]; then
+  if [[ -n "${FRP_DISTRIBUTION_REF:-}" ]]; then
+    printf '%s' "$FRP_DISTRIBUTION_REF"
+    return 0
+  fi
+  # Non-commit SOURCE_REF pins (tag / main / branch) remain valid download refs.
+  if [[ -n "${FRP_SOURCE_REF:-}" ]] && ! frp_is_commit_source_ref "$FRP_SOURCE_REF"; then
     printf '%s' "$FRP_SOURCE_REF"
     return 0
   fi
@@ -226,9 +234,14 @@ frp_release_git_ref() {
     frp_channel_default_source_ref "$ch"
     return 0
   fi
-  # Prefer the persisted install provenance (may be a commit SHA).
-  ref="$(frp_read_kv_file "$(frp_version_state_file)" SOURCE_REF)"
+  ref="$(frp_read_kv_file "$(frp_version_state_file)" DISTRIBUTION_REF)"
   if [[ -n "$ref" ]]; then
+    printf '%s' "$ref"
+    return 0
+  fi
+  # Legacy persisted SOURCE_REF only when it is already a distribution identity.
+  ref="$(frp_read_kv_file "$(frp_version_state_file)" SOURCE_REF)"
+  if [[ -n "$ref" ]] && ! frp_is_commit_source_ref "$ref"; then
     printf '%s' "$ref"
     return 0
   fi
@@ -586,7 +599,7 @@ frp_atomic_install() {
 
 frp_write_version_file() {
   local dest="$1"
-  local dir tmp channel source_ref bundle existing existing_ref
+  local dir tmp channel source_ref distribution_ref bundle existing existing_ref
   dir="$(dirname "$dest")"
   mkdir -p "$dir"
   if [[ -n "${FRP_RELEASE_CHANNEL:-}" ]]; then
@@ -613,6 +626,20 @@ frp_write_version_file() {
       source_ref="$existing_ref"
     else
       source_ref="$(frp_channel_default_source_ref "$channel")"
+    fi
+  fi
+  if [[ -n "${FRP_DISTRIBUTION_REF:-}" ]]; then
+    distribution_ref="$FRP_DISTRIBUTION_REF"
+  else
+    distribution_ref="$(frp_read_kv_file "$dest" DISTRIBUTION_REF)"
+    if [[ -z "$distribution_ref" ]]; then
+      # Prefer a non-commit SOURCE_REF as the download location; otherwise the
+      # release-line default (dev→main, stable→vX.Y.Z).
+      if [[ -n "$source_ref" ]] && ! frp_is_commit_source_ref "$source_ref"; then
+        distribution_ref="$source_ref"
+      else
+        distribution_ref="$(frp_channel_default_source_ref "$channel")"
+      fi
     fi
   fi
   bundle="${FRP_BUNDLE_SHA256:-}"
@@ -645,6 +672,7 @@ frp_write_version_file() {
     printf 'FRP_VERSION=%s\n' "${FRP_VERSION}"
     printf 'RELEASE_CHANNEL=%s\n' "${channel}"
     printf 'SOURCE_REF=%s\n' "${source_ref}"
+    printf 'DISTRIBUTION_REF=%s\n' "${distribution_ref}"
     if [[ -n "$bundle" ]]; then
       printf 'BUNDLE_SHA256=%s\n' "$bundle"
     fi

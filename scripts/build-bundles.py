@@ -9,18 +9,6 @@ root=Path(__file__).resolve().parents[1]
 dist=root/'dist'
 dist.mkdir(exist_ok=True)
 
-def bundle_payload(rel):
-    data = (root / rel).read_bytes()
-    if rel != 'release-manifest.json':
-        return data
-    # Artifact hashes describe the outer bundles. Strip them from the
-    # embedded manifest so a bundle never contains a hash of itself.
-    import_data = json.loads(data.decode('utf-8'))
-    for meta in (import_data.get('artifacts') or {}).values():
-        if isinstance(meta, dict):
-            meta.pop('sha256', None)
-    return (json.dumps(import_data, indent=2, sort_keys=False) + '\n').encode('utf-8')
-
 def read_project_version():
     values = {}
     for line in (root / 'VERSION').read_text(encoding='utf-8').splitlines():
@@ -30,15 +18,24 @@ def read_project_version():
     return values.get('PROJECT_VERSION', '0.0.0')
 
 def detect_build_provenance():
-    """Return (channel, source_ref) for this working tree build.
+    """Return (channel, source_ref, distribution_ref) for this working tree build.
 
-    Exact tag vPROJECT_VERSION → stable / that tag.
-    Otherwise → development / immutable commit SHA (never claim a stable tag).
+    Concepts (kept separate on purpose):
+      channel          — release line: stable | dev
+      source_ref       — content/build identity (tag or commit SHA)
+      distribution_ref — bootstrap download location (tag / branch / main)
+
+    Exact tag vPROJECT_VERSION → stable / that tag / that tag.
+    Otherwise → development / immutable commit SHA / branch-or-main.
+
+    Never stamp a content commit SHA as the distribution ref: a generated
+    dist committed to git cannot contain the SHA of the commit that stores it.
     """
     project = read_project_version()
     expected_tag = 'v%s' % project
     override_ref = (os.environ.get('FRP_BUILD_SOURCE_REF') or '').strip()
     override_channel = (os.environ.get('FRP_BUILD_RELEASE_CHANNEL') or '').strip().lower()
+    override_dist = (os.environ.get('FRP_BUILD_DISTRIBUTION_REF') or '').strip()
     if override_ref:
         channel = override_channel or (
             'stable' if override_ref == expected_tag else 'dev'
@@ -47,7 +44,11 @@ def detect_build_provenance():
             channel = 'dev'
         if channel not in ('dev', 'stable'):
             channel = 'dev'
-        return channel, override_ref
+        dist_ref = override_dist or (
+            override_ref if channel == 'stable' or not _looks_like_commit(override_ref)
+            else _default_dev_distribution_ref()
+        )
+        return channel, override_ref, dist_ref
     try:
         exact = subprocess.check_output(
             ['git', '-C', str(root), 'describe', '--tags', '--exact-match', 'HEAD'],
@@ -57,7 +58,7 @@ def detect_build_provenance():
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         exact = ''
     if exact == expected_tag:
-        return 'stable', expected_tag
+        return 'stable', expected_tag, expected_tag
     try:
         sha = subprocess.check_output(
             ['git', '-C', str(root), 'rev-parse', 'HEAD'],
@@ -74,22 +75,69 @@ def detect_build_provenance():
                 channel = 'dev'
             if channel not in ('dev', 'stable'):
                 channel = 'stable'
-            return channel, ref
+            return channel, ref, override_dist or ref
         except Exception:
-            return 'stable', expected_tag
-    return 'dev', sha
+            return 'stable', expected_tag, expected_tag
+    dist_ref = override_dist or _default_dev_distribution_ref()
+    return 'dev', sha, dist_ref
 
-def provenance_preamble(channel, source_ref):
-    # Shell-safe single-quoted embeds (refs are hex / vX.Y.Z / main).
+def _looks_like_commit(value):
+    import re
+    return bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', value or ''))
+
+def _default_dev_distribution_ref():
+    """Branch tip when available; otherwise the continuous release-line (main)."""
+    try:
+        branch = subprocess.check_output(
+            ['git', '-C', str(root), 'symbolic-ref', '--short', '-q', 'HEAD'],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        branch = ''
+    if branch and branch != 'HEAD':
+        return branch
+    return 'main'
+
+def bundle_payload(rel, channel):
+    data = (root / rel).read_bytes()
+    if rel != 'release-manifest.json':
+        return data
+    # Artifact hashes describe the outer bundles. Strip them from the
+    # embedded manifest so a bundle never contains a hash of itself.
+    # Dev bundles also rewrite release-line identity to channel=dev / git_ref=main
+    # so stamped FRP_RELEASE_CHANNEL=dev agrees with validation. The tree's
+    # canonical release-manifest.json (stable / vX.Y.Z) is left untouched.
+    import_data = json.loads(data.decode('utf-8'))
+    if channel == 'dev':
+        import_data['channel'] = 'dev'
+        import_data['git_ref'] = 'main'
+    for meta in (import_data.get('artifacts') or {}).values():
+        if isinstance(meta, dict):
+            meta.pop('sha256', None)
+    return (json.dumps(import_data, indent=2, sort_keys=False) + '\n').encode('utf-8')
+
+def provenance_preamble(channel, source_ref, distribution_ref):
+    # Shell-safe single-quoted embeds (refs are hex / vX.Y.Z / main / branches).
     def sh_quote(value):
         return "'" + value.replace("'", "'\"'\"'") + "'"
     return [
         '# Bundle provenance stamped at build time.',
+        '# SOURCE_REF = content/build identity; DISTRIBUTION_REF = installer URL ref.',
         'if [[ -z "${FRP_SOURCE_REF:-}" ]]; then',
         '  export FRP_SOURCE_REF=%s' % sh_quote(source_ref),
         'fi',
+        '# FRP_BUNDLE_STAMPED_CHANNEL=1 only when this preamble supplied the channel.',
+        '# An administrator-exported FRP_RELEASE_CHANNEL remains an explicit opt-in',
+        '# for legacy secure-bridge recovery and must not be confused with the stamp.',
+        'FRP_BUNDLE_STAMPED_CHANNEL=0',
         'if [[ -z "${FRP_RELEASE_CHANNEL:-}" ]]; then',
         '  export FRP_RELEASE_CHANNEL=%s' % sh_quote(channel),
+        '  FRP_BUNDLE_STAMPED_CHANNEL=1',
+        'fi',
+        'export FRP_BUNDLE_STAMPED_CHANNEL',
+        'if [[ -z "${FRP_DISTRIBUTION_REF:-}" ]]; then',
+        '  export FRP_DISTRIBUTION_REF=%s' % sh_quote(distribution_ref),
         'fi',
         '# Prefer hashing the on-disk bootstrap when not piped via stdin.',
         'if [[ -z "${FRP_BUNDLE_SHA256:-}" ]]; then',
@@ -102,7 +150,7 @@ def provenance_preamble(channel, source_ref):
         'fi',
     ]
 
-BUILD_CHANNEL, BUILD_SOURCE_REF = detect_build_provenance()
+BUILD_CHANNEL, BUILD_SOURCE_REF, BUILD_DISTRIBUTION_REF = detect_build_provenance()
 
 files=[
  'VERSION',
@@ -168,10 +216,10 @@ files=[
 ]
 
 lines=['#!/usr/bin/env bash','set -euo pipefail']
-lines.extend(provenance_preamble(BUILD_CHANNEL, BUILD_SOURCE_REF))
+lines.extend(provenance_preamble(BUILD_CHANNEL, BUILD_SOURCE_REF, BUILD_DISTRIBUTION_REF))
 lines.extend(['TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT'])
 for rel in files:
-    data=base64.b64encode(bundle_payload(rel)).decode()
+    data=base64.b64encode(bundle_payload(rel, BUILD_CHANNEL)).decode()
     parent=str(Path(rel).parent)
     if parent!='.': lines.append(f'mkdir -p "$TMP/{parent}"')
     lines.append(f"base64 -d >\"$TMP/{rel}\" <<'B64'")
@@ -211,14 +259,14 @@ client_lines=[
  '#!/usr/bin/env bash',
  'set -euo pipefail',
 ]
-client_lines.extend(provenance_preamble(BUILD_CHANNEL, BUILD_SOURCE_REF))
+client_lines.extend(provenance_preamble(BUILD_CHANNEL, BUILD_SOURCE_REF, BUILD_DISTRIBUTION_REF))
 client_lines.extend([
  '_frp_b64d() { base64 --decode 2>/dev/null || base64 -D; }',
  'TMP="$(mktemp -d)"',
  'trap \'rm -rf "$TMP"\' EXIT',
 ])
 for rel in client_files:
-    data=base64.b64encode(bundle_payload(rel)).decode()
+    data=base64.b64encode(bundle_payload(rel, BUILD_CHANNEL)).decode()
     parent=str(Path(rel).parent)
     if parent!='.': client_lines.append(f'mkdir -p "$TMP/{parent}"')
     client_lines.append(f"_frp_b64d >\"$TMP/{rel}\" <<'B64'")
@@ -245,6 +293,7 @@ ps_lines = [
     # Provenance for Windows enroll (mirrors bash bootstrap stamps).
     f"if (-not $env:FRP_SOURCE_REF) {{ $env:FRP_SOURCE_REF = '{BUILD_SOURCE_REF}' }}",
     f"if (-not $env:FRP_RELEASE_CHANNEL) {{ $env:FRP_RELEASE_CHANNEL = '{BUILD_CHANNEL}' }}",
+    f"if (-not $env:FRP_DISTRIBUTION_REF) {{ $env:FRP_DISTRIBUTION_REF = '{BUILD_DISTRIBUTION_REF}' }}",
     "$tmp = Join-Path $env:TEMP ('frp-win-bundle-' + [guid]::NewGuid().ToString('N'))",
     'New-Item -ItemType Directory -Force -Path $tmp | Out-Null',
     'try {',
@@ -279,5 +328,6 @@ for src,dst in [('uninstall-client.sh','uninstall-client.sh'),('uninstall-server
     (dist/dst).chmod(0o755)
 print(
     'Built dist/bootstrap-server.sh, bootstrap-client.sh, and bootstrap-client.ps1'
-    f' (channel={BUILD_CHANNEL} source_ref={BUILD_SOURCE_REF})'
+    f' (channel={BUILD_CHANNEL} source_ref={BUILD_SOURCE_REF}'
+    f' distribution_ref={BUILD_DISTRIBUTION_REF})'
 )

@@ -192,13 +192,30 @@ BUNDLE="$ROOT/dist/bootstrap-client.sh"
 grep -q 'release-manifest.json' "$BUNDLE" || fail "generated bundle missing release-manifest.json"
 extract_bundle_file "$BUNDLE" "release-manifest.json" "$WORKDIR/bundle-release-manifest.json"
 python3 - "$WORKDIR/bundle-release-manifest.json" "$ROOT/release-manifest.json" "$PROJECT_VERSION" <<'PY' || fail "bundle manifest identity"
-import json, sys
+import json, subprocess, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
 want = json.loads(Path(sys.argv[2]).read_text())
-assert data.get("project_version") == sys.argv[3]
-assert data.get("channel") == want.get("channel"), data.get("channel")
-assert data.get("git_ref") == want.get("git_ref"), data.get("git_ref")
+project = sys.argv[3]
+assert data.get("project_version") == project
+# Dev working-tree builds embed the release-line identity (dev/main). The
+# canonical tree manifest remains the stable tag line and must not be rewritten.
+try:
+    exact = subprocess.check_output(
+        ["git", "describe", "--tags", "--exact-match", "HEAD"],
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).strip()
+except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    exact = ""
+if exact == "v%s" % project:
+    assert data.get("channel") == "stable", data.get("channel")
+    assert data.get("git_ref") == "v%s" % project, data.get("git_ref")
+else:
+    assert data.get("channel") == "dev", data.get("channel")
+    assert data.get("git_ref") == "main", data.get("git_ref")
+    assert want.get("channel") == "stable", want.get("channel")
+    assert want.get("git_ref") == "v%s" % project, want.get("git_ref")
 PY
 pass "CLIENT_BUNDLE_CONTAINS_RELEASE_MANIFEST"
 pass "REAL_GENERATED_CLIENT_BUNDLE"
