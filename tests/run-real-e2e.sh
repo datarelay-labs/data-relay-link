@@ -66,6 +66,22 @@ apply_profile() {
       CLIENT_LABEL="${CLIENT_LABEL:-real-e2e-rocky8}"
       PLATFORM_KIND=linux
       ;;
+    rocky-linux-9.4|rocky9)
+      PROFILE=rocky-linux-9.4
+      CLIENT_ALIAS="${CLIENT_ALIAS:-frp-e2e-rocky9-rescue}"
+      EXPECTED_CLIENT_HOST="${EXPECTED_CLIENT_HOST:-localhost.localdomain}"
+      TUNNEL_SSH_USER="${TUNNEL_SSH_USER:-root}"
+      CLIENT_LABEL="${CLIENT_LABEL:-real-e2e-rocky9}"
+      PLATFORM_KIND=linux
+      ;;
+    ubuntu-24.04|ubuntu24)
+      PROFILE=ubuntu-24.04
+      CLIENT_ALIAS="${CLIENT_ALIAS:-frp-e2e-linux114}"
+      EXPECTED_CLIENT_HOST="${EXPECTED_CLIENT_HOST:-frp-client}"
+      TUNNEL_SSH_USER="${TUNNEL_SSH_USER:-aella}"
+      CLIENT_LABEL="${CLIENT_LABEL:-real-e2e-ubuntu24}"
+      PLATFORM_KIND=linux
+      ;;
     macos|macos-arm64)
       PROFILE=macos-arm64
       CLIENT_ALIAS="${CLIENT_ALIAS:-frp-e2e-macos}"
