@@ -496,6 +496,110 @@ def cmd_log(cfg, args):
         )
 
 
+def _short_client_id(mid: str, mids: list[str], n: int = 8) -> str:
+    text = str(mid)
+    length = min(n, len(text)) or 1
+    while length <= len(text):
+        prefix = text[:length]
+        if sum(1 for item in mids if str(item).startswith(prefix)) == 1:
+            return prefix
+        length += 1
+    return text
+
+
+def pick_client(cfg) -> str:
+    """Numbered local client picker. Returns CLIENT ID selector or typed value."""
+    reg = load_registry(cfg)
+    clients = reg.get("clients") or {}
+    if not isinstance(clients, dict) or not clients:
+        return input("Client: ").strip()
+    items = [(str(mid), client) for mid, client in clients.items() if isinstance(client, dict)]
+    mids = [mid for mid, _ in items]
+    print()
+    print("Select client:")
+    print()
+    rows = []
+    for mid, client in sorted(items, key=lambda pair: pair[0]):
+        cid = _short_client_id(mid, mids)
+        label = str(client.get("label") or "-").strip() or "-"
+        host = str(client.get("hostname") or "-").strip() or "-"
+        rows.append((cid, mid, label, host))
+    for idx, (cid, _mid, label, host) in enumerate(rows, start=1):
+        print("%d) %-10s %-12s %s" % (idx, cid, label, host))
+    print()
+    choice = input("Select: ").strip()
+    if choice.isdigit():
+        n = int(choice)
+        if 1 <= n <= len(rows):
+            return rows[n - 1][0]
+    return choice
+
+
+def pick_service(cfg, client_sel: str) -> str:
+    """Numbered service picker for one client. Falls back to typed Service ID."""
+    reg = load_registry(cfg)
+    clients = reg.get("clients") or {}
+    mid = None
+    client = None
+    # Resolve short/label/host like other tools when possible.
+    try:
+        mid, client = CREG.resolve_client(reg, client_sel)
+    except Exception:
+        for key, item in clients.items():
+            if str(key) == client_sel or str(key).startswith(client_sel):
+                mid, client = str(key), item
+                break
+            if isinstance(item, dict) and (
+                str(item.get("label") or "") == client_sel
+                or str(item.get("hostname") or "") == client_sel
+            ):
+                mid, client = str(key), item
+                break
+    services = (client or {}).get("services") or {} if isinstance(client, dict) else {}
+    if not isinstance(services, dict) or not services:
+        return input("Service ID: ").strip()
+    print()
+    print("Select service:")
+    print()
+    rows = []
+    for sid, item in sorted(services.items(), key=lambda pair: str(pair[0])):
+        rec = item if isinstance(item, dict) else {}
+        port = rec.get("remote_port") or "-"
+        rows.append((str(sid), port))
+    for idx, (sid, port) in enumerate(rows, start=1):
+        print("%d) %-12s %s" % (idx, sid, port))
+    print()
+    choice = input("Select: ").strip()
+    if choice.isdigit():
+        n = int(choice)
+        if 1 <= n <= len(rows):
+            return rows[n - 1][0]
+    return choice
+
+
+def pick_access_list(cfg) -> str:
+    state = ACL.load_access_state(cfg=cfg)
+    lists = state.get("access_lists") or {}
+    if not isinstance(lists, dict) or not lists:
+        return input("Access list: ").strip()
+    print()
+    print("Select Access List:")
+    print()
+    rows = []
+    for lid, lst in sorted(lists.items(), key=lambda pair: str((pair[1] or {}).get("name") or pair[0])):
+        name = str((lst or {}).get("name") or lid)
+        rows.append((str(lid), name))
+    for idx, (lid, name) in enumerate(rows, start=1):
+        print("%d) %s" % (idx, name))
+    print()
+    choice = input("Select: ").strip()
+    if choice.isdigit():
+        n = int(choice)
+        if 1 <= n <= len(rows):
+            return rows[n - 1][1]
+    return choice
+
+
 def interactive_menu(cfg):
     while True:
         print()
@@ -525,29 +629,29 @@ def interactive_menu(cfg):
             elif choice == "3":
                 interactive_edit_list(cfg)
             elif choice == "4":
-                sel = input("Access list: ").strip()
+                sel = pick_access_list(cfg)
                 cmd_delete(cfg, argparse.Namespace(list=sel))
             elif choice == "5":
-                client = input("Client: ").strip()
-                service = input("Service ID: ").strip()
-                lst = input("Access list: ").strip()
+                client = pick_client(cfg)
+                service = pick_service(cfg, client)
+                lst = pick_access_list(cfg)
                 cmd_assign(cfg, argparse.Namespace(client=client, service=service, list=lst))
             elif choice == "6":
-                client = input("Client: ").strip()
-                service = input("Service ID: ").strip()
+                client = pick_client(cfg)
+                service = pick_service(cfg, client)
                 cmd_public(cfg, argparse.Namespace(client=client, service=service))
             elif choice == "7":
-                client = input("Client: ").strip()
-                service = input("Service ID: ").strip()
+                client = pick_client(cfg)
+                service = pick_service(cfg, client)
                 cmd_show_service(cfg, argparse.Namespace(client=client, service=service))
             elif choice == "8":
-                client = input("Client: ").strip()
-                service = input("Service ID: ").strip()
+                client = pick_client(cfg)
+                service = pick_service(cfg, client)
                 source = input("Source IP: ").strip()
                 cmd_test(cfg, argparse.Namespace(client=client, service=service, source=source))
             elif choice == "9":
-                client = input("Client: ").strip()
-                service = input("Service ID: ").strip()
+                client = pick_client(cfg)
+                service = pick_service(cfg, client)
                 cmd_log(
                     cfg,
                     argparse.Namespace(client=client, service=service, limit=50, allow=False, deny=False),
@@ -564,7 +668,7 @@ def interactive_menu(cfg):
 
 
 def interactive_edit_list(cfg):
-    sel = input("Access list: ").strip()
+    sel = pick_access_list(cfg)
     state = ACL.load_access_state(cfg=cfg)
     lid, lst = ACL.resolve_access_list(state, sel)
     while True:
