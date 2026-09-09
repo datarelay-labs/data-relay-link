@@ -876,7 +876,10 @@ def main(argv=None):
     if alloc_mod is None:
         fail('allocator module is missing')
 
-    if is_interactive_stdin() and (not client_name or not str(a.note or '').strip()):
+    # Guided frpctl already collected identification. Re-prompt only when the
+    # operator did not supply a client name (direct CLI / incomplete flags).
+    # An empty optional description with --client-name is intentional.
+    if is_interactive_stdin() and not client_name:
         client_name, note = prompt_client_identification(client_name, note)
         reject_control_chars('--client-name', client_name)
         reject_control_chars('--note', note)

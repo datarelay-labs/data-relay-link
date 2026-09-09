@@ -5,13 +5,44 @@ No eval, no glob, no variable expansion, no command substitution.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
+from pathlib import Path
 
 UNQUOTED_META = set("$`;|&><*?(){}[]")
+SERVICE_ADD_TYPES = ("ssh", "http", "https", "custom", "profile")
+SERVICE_SET_PROPS = [
+    "target-host",
+    "target-port",
+    "ssh-user",
+    "name",
+    "health-type",
+    "health-timeout",
+    "health-interval",
+    "health-max-failed",
+    "health-path",
+]
+
+
+def _load_service_add_concept_help():
+    try:
+        from frp_service_id import SERVICE_ADD_CONCEPT_HELP as text
+        return text
+    except ImportError:
+        pass
+    path = Path(__file__).resolve().parent / "frp_service_id.py"
+    if path.is_file():
+        spec = importlib.util.spec_from_file_location("_frp_service_id_help", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return getattr(mod, "SERVICE_ADD_CONCEPT_HELP", "")
+    return ""
+
+
+SERVICE_ADD_CONCEPT_HELP = _load_service_add_concept_help()
 LEGACY_COMMANDS = {
     "clients",
-    "client",
     "client-info",
     "client-set",
     "edit-client",
@@ -36,7 +67,8 @@ LEGACY_COMMANDS = {
     "client-status",
     "server-status",
 }
-SHELL_REJECT = {"shell", "exec", "bash", "sh", "system"}
+# "system" is a client maintenance namespace; do not treat it as a shell escape.
+SHELL_REJECT = {"shell", "exec", "bash", "sh"}
 
 
 class ParseError(ValueError):
@@ -139,6 +171,7 @@ def _role_parts(role):
 
 
 def canonical_verbs(role):
+    """Root Tab/help verbs. Legacy aliases still match() but are hidden here."""
     client, server = _role_parts(role)
     verbs = [
         "show",
@@ -147,25 +180,23 @@ def canonical_verbs(role):
         "history",
         "clear",
         "exit",
-        "doctor",
-        "support-bundle",
-        "status",
-        "version",
-        "update",
     ]
     if server:
+        # Category-first discovery; legacy verbs remain matchable aliases.
         verbs.extend([
-            "set", "unset", "create", "revoke", "purge", "release",
-            "restore", "add", "remove", "delete", "rename", "access",
+            "client", "enrollment", "group", "profile", "access", "server", "system",
         ])
     if client:
-        verbs.extend(["add", "enable", "disable", "apply", "discard", "set"])
+        verbs.extend(["service", "client", "system"])
+        # Client-only: omit status/version from root Tab (use show …).
+    if not client and not server:
+        verbs.extend(["status", "version", "doctor", "support-bundle", "update"])
     return sorted(set(verbs))
 
 
 def _show_resources(role):
     client, server = _role_parts(role)
-    items = ["status", "version"]
+    items = ["status", "version", "health"]
     if server:
         items.extend(["clients", "client", "groups", "group", "profiles", "profile", "enrollments", "audit", "upstream"])
     if client:
@@ -265,6 +296,8 @@ def help_text(tokens, role):
     verb = tokens[0]
     if verb == "legacy":
         return _legacy_help(role)
+    if verb == "advanced":
+        return _advanced_help(role)
     if verb == "show":
         return _show_help(tokens[1:], role)
     if verb == "set":
@@ -275,6 +308,20 @@ def help_text(tokens, role):
         return _create_help(role)
     if verb == "update":
         return _update_help(role)
+    if verb == "service":
+        return _service_help(tokens[1:], role)
+    if verb == "client":
+        return _client_ns_help(role)
+    if verb == "system":
+        return _system_help(role)
+    if verb == "enrollment":
+        return _enrollment_help(role)
+    if verb == "group":
+        return _group_ns_help(role)
+    if verb == "profile":
+        return _profile_ns_help(role)
+    if verb == "server":
+        return _server_ns_help(role)
     if verb in (
         "revoke", "purge", "release", "restore", "add", "remove",
         "delete", "rename", "enable", "disable",
@@ -283,12 +330,14 @@ def help_text(tokens, role):
     if verb == "doctor":
         return (
             "Doctor\n======\n\nUsage:\n  doctor\n  doctor --json\n  doctor --verbose\n"
+            "\nCanonical forms:\n  show health\n  system doctor\n"
         )
     if verb == "support-bundle":
         return (
             "Support Bundle\n==============\n\n"
             "Usage:\n  support-bundle\n  support-bundle --output <path>\n\n"
             "Create a sanitized read-only diagnostic archive. Never includes private keys or tokens.\n"
+            "\nCanonical form:\n  system support-bundle\n"
         )
     if verb == "access":
         return (
@@ -319,20 +368,65 @@ def help_text(tokens, role):
     return "\n".join(lines) + "\n"
 
 
+
 def _root_help(role):
     client, server = _role_parts(role)
+    if client and server:
+        return _root_help_dual()
     lines = [
         "FRP Auto Deploy CLI",
         "===================",
         "",
-        "Grammar: <verb> <resource> [target] [property] [value]",
-        "",
-        "Discover commands with Tab. Type 'help <verb>' for details.",
-        "",
-        "Show",
-        "  show status",
-        "  show version",
     ]
+    if client and not server:
+        lines.extend(
+            [
+                "Commands are grouped by resource:",
+                "",
+                "  show",
+                "  service",
+                "  client",
+                "  system",
+                "",
+                "Type '<resource> ?' or press Tab to discover actions.",
+                "",
+            ]
+        )
+    elif server and not client:
+        lines.extend(
+            [
+                "Commands are grouped by resource:",
+                "",
+                "  show",
+                "  client",
+                "  enrollment",
+                "  group",
+                "  profile",
+                "  access",
+                "  server",
+                "  system",
+                "",
+                "Type '<resource> ?' or press Tab to discover actions.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Grammar: <verb> <resource> [target] [property] [value]",
+                "",
+                "Discover commands with Tab. Type 'help <verb>' for details.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "Show",
+            "  show status",
+            "  show version",
+            "  show health",
+        ]
+    )
     if server:
         lines.extend(
             [
@@ -341,82 +435,95 @@ def _root_help(role):
                 "  show client <ID> services",
                 "  show client <ID> tags",
                 "  show enrollments",
-                "  show audit",
-                "  show upstream",
-            ]
-        )
-    if client:
-        lines.extend(["  show services", "  show info"])
-    lines.extend(["", "Configure"])
-    if server:
-        lines.extend(
-            [
                 "  show groups",
                 "  show group <GROUP>",
                 "  show profiles",
                 "  show profile <PROFILE>",
-                "  show clients --group <GROUP>",
-                "  show client <ID> groups",
-                "  set client <ID> label <value>",
-                "  set client <ID> note <value>",
-                "  set client <ID> tag <key> <value>",
-                "  unset client <ID> label",
-                "  unset client <ID> note",
-                "  unset client <ID> tag <key>",
-                "  create group <name> [--description TEXT]",
-                "  create profile <name> --preset ... --target-host ... --target-port ...",
-                "  rename group <GROUP> <name>",
-                "  set group <GROUP> name|description <value>",
-                "  set profile <PROFILE> <prop> <value>",
-                "  delete group <GROUP>",
-                "  delete profile <PROFILE>",
-                "  add client <ID> group <GROUP>",
-                "  remove client <ID> group <GROUP>",
+                "  show audit",
+                "  show upstream",
+                "  server show",
+            ]
+        )
+    if client:
+        lines.extend(["  show services", "  show info"])
+    if server:
+        lines.extend(
+            [
+                "",
+                "Clients",
+                "  client set <ID> label|note|tag ...",
+                "  client release <ID>",
+                "  client revoke <ID>",
+                "",
+                "Enrollment",
+                "  enrollment zero-touch",
+                "  enrollment create",
+                "  enrollment list",
+                "  enrollment show <id>",
+                "  enrollment revoke <id>",
+                "  enrollment purge <id>",
+                "",
+                "Groups",
+                "  group list|show|create|set|add-member|remove-member|delete",
+                "",
+                "Profiles",
+                "  profile list|show|create|set|delete",
+                "",
+                "Server",
+                "  server show",
+                "  server installer [<url>]",
+                "  server reconfigure",
+                "",
+                "Access",
+                "  access",
             ]
         )
     if client:
         lines.extend(
             [
-                "  add service",
-                "  add service --profile <PROFILE> [--id ID] [--name NAME]",
-                "  set service <id> target-host <host>",
-                "  set service <id> target-port <port>",
-                "  set service <id> ssh-user <user>",
-                "  set service <id> name <value>",
-                "  set service <id> health-type <tcp|http|disabled>",
-                "  set service <id> health-timeout <seconds>",
-                "  set service <id> health-interval <seconds>",
-                "  set service <id> health-max-failed <count>",
-                "  set service <id> health-path </path>",
-                "  enable service <id>",
-                "  disable service <id>",
-                "  apply",
-                "  discard",
+                "",
+                "Configure",
+                "  service add ssh|http|https|custom",
+                "  service add profile <PROFILE>",
+                "  service set <id> target-host <host>",
+                "  service set <id> target-port <port>",
+                "  service set <id> ssh-user <user>",
+                "  service set <id> name <value>",
+                "  service set <id> health-type <tcp|http|disabled>",
+                "  service enable <id>",
+                "  service disable <id>",
+                "  service apply",
+                "  service discard",
             ]
         )
     lines.extend(["", "Lifecycle"])
+    if client:
+        lines.extend(
+            [
+                "  client pause",
+                "  client resume",
+                "  client uninstall",
+            ]
+        )
     if server:
         lines.extend(
             [
-                "  create zero-touch",
-                "  create enrollment [--ssh --ssh-user USER --label NAME]",
-                "  create enrollments --count N",
-                "  create backup",
-                "  revoke enrollment <id>",
-                "  purge enrollment <id>",
-                "  purge enrollments --older-than <days>",
-                "  revoke client <ID>",
-                "  release service <ID> <service-id>",
-                "  release client <ID>",
-                "  restore backup <path>",
+                "  system update [--check]",
+                "  system update frp [--check]",
+                "  system backup",
+                "  system restore <path>",
+                "  system doctor",
+                "  system support-bundle [--output PATH]",
             ]
         )
-    lines.extend(
-        [
-            "  update project [--check]",
-            "  update frp [--check]",
-        ]
-    )
+    elif client:
+        lines.extend(
+            [
+                "  system update [--check]",
+                "  system doctor",
+                "  system support-bundle [--output PATH]",
+            ]
+        )
     other = [
         "",
         "Other",
@@ -425,20 +532,236 @@ def _root_help(role):
         other.append("  access               Access Control Pack (server)")
     other.extend(
         [
-            "  doctor",
-            "  support-bundle [--output PATH]",
             "  menu                 Guided numbered menu",
             "  history              This session only (not saved to disk)",
             "  help, ?",
+            "  help advanced        Automation / hidden flags",
             "  help legacy          Compatibility aliases",
-            "  clear",
             "  exit",
-            "",
-            "status and version remain shortcuts for show status / show version.",
         ]
     )
+    if server or client:
+        other.extend(
+            [
+                "",
+                "Legacy verb forms (set/create/revoke/...) still match; see help legacy.",
+            ]
+        )
     lines.extend(other)
     return "\n".join(lines) + "\n"
+
+
+def _root_help_dual():
+    """Full help for hosts with both client and server roles."""
+    lines = [
+        "FRP Auto Deploy CLI",
+        "===================",
+        "",
+        "This host has both an FRP client and an FRP server installed.",
+        "",
+        "Commands are grouped by resource on both roles.",
+        "Type '<resource> ?' or press Tab to discover actions.",
+        "",
+        "Client commands",
+        "---------------",
+        "  show services|info|status|version|health",
+        "  service add|set|enable|disable|apply|discard",
+        "  client pause|resume|uninstall",
+        "",
+        "Server commands",
+        "---------------",
+        "  show status|version|health|clients|client|groups|profiles|enrollments|audit|upstream",
+        "  client set|release|revoke ...",
+        "  enrollment zero-touch|create|list|show|revoke|purge",
+        "  group list|show|create|set|add-member|remove-member|delete",
+        "  profile list|show|create|set|delete",
+        "  server show|installer|reconfigure",
+        "  access",
+        "",
+        "Common commands",
+        "---------------",
+        "  system update|doctor|support-bundle|backup|restore",
+        "  menu",
+        "  history",
+        "  help, ?",
+        "  help advanced",
+        "  help legacy",
+        "  exit",
+        "",
+        "Legacy verb forms still match; see help legacy.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _service_help(rest, role):
+    _ = rest
+    client, _server = _role_parts(role)
+    if not client:
+        return "Service commands require a client role on this host.\n"
+    return (
+        "Service management\n"
+        "==================\n\n"
+        "Usage:\n"
+        "  service add\n"
+        "  service add ssh|http|https|custom\n"
+        "  service add profile <PROFILE>\n"
+        "  service set <id> <property> <value>\n"
+        "  service enable <id>\n"
+        "  service disable <id>\n"
+        "  service apply\n"
+        "  service discard\n\n"
+        "Interactive examples:\n"
+        "  service add\n"
+        "  service add http\n"
+        "  service add ssh\n\n"
+        "Service IDs are generated automatically. Draft changes stay pending\n"
+        "until service apply. service discard drops pending changes only.\n\n"
+        "Advanced automation: help advanced\n"
+    )
+
+
+def _client_ns_help(role):
+    client, server = _role_parts(role)
+    if not client and not server:
+        return "Client commands require a client or server role on this host.\n"
+    parts = ["Client commands", "===============", ""]
+    if client:
+        parts.extend(
+            [
+                "Lifecycle (this host):",
+                "  client pause",
+                "  client resume",
+                "  client uninstall",
+                "",
+                "pause blocks all FRP remote access and survives reboot.",
+                "resume restores autostart and starts frpc with the existing identity.",
+                "uninstall removes local software only; server reservations remain.",
+                "",
+            ]
+        )
+    if server:
+        parts.extend(
+            [
+                "Registered clients (server):",
+                "  client set <ID> label <value>",
+                "  client set <ID> note <value>",
+                "  client set <ID> tag <key> <value>",
+                "  client release <ID>",
+                "  client revoke <ID>",
+                "",
+                "Read-only views stay under show client <ID>.",
+                "Legacy forms: set client / release client / revoke client.",
+                "",
+            ]
+        )
+    return "\n".join(parts)
+
+
+def _system_help(role):
+    client, server = _role_parts(role)
+    if not client and not server:
+        return "System maintenance commands require an installed FRP Auto Deploy role.\n"
+    lines = [
+        "System maintenance",
+        "==================",
+        "",
+        "Usage:",
+        "  system update [--check]",
+        "  system update project [--check]",
+        "  system update frp [--check]",
+        "  system update-frp [--check]",
+        "  system doctor",
+        "  system support-bundle [--output PATH]",
+    ]
+    if server:
+        lines.extend(
+            [
+                "  system backup [path]",
+                "  system restore <path>",
+            ]
+        )
+    lines.append("")
+    if client and not server:
+        lines.append("On client hosts, system update updates FRP Auto Deploy client tooling.")
+    elif server:
+        lines.append("Canonical forms for update/doctor/support-bundle/backup/restore.")
+        lines.append("Legacy root verbs (update, doctor, create backup, ...) still match.")
+    return "\n".join(lines) + "\n"
+
+
+def _enrollment_help(role):
+    _, server = _role_parts(role)
+    if not server:
+        return "Enrollment commands require a server role on this host.\n"
+    return (
+        "Enrollment\n"
+        "==========\n\n"
+        "Usage:\n"
+        "  enrollment zero-touch\n"
+        "  enrollment create [...]\n"
+        "  enrollment list\n"
+        "  enrollment show <id>\n"
+        "  enrollment revoke <id>\n"
+        "  enrollment purge <id>\n\n"
+        "Recommended: enrollment zero-touch\n\n"
+        "Legacy forms: create zero-touch, create enrollment, show enrollments,\n"
+        "revoke enrollment, purge enrollment.\n"
+    )
+
+
+def _group_ns_help(role):
+    _, server = _role_parts(role)
+    if not server:
+        return "Group commands require a server role on this host.\n"
+    return (
+        "Groups\n"
+        "======\n\n"
+        "Usage:\n"
+        "  group list\n"
+        "  group show <GROUP>\n"
+        "  group create <name> [--description TEXT]\n"
+        "  group set <GROUP> name|description <value>\n"
+        "  group add-member <CLIENT> <GROUP>\n"
+        "  group remove-member <CLIENT> <GROUP>\n"
+        "  group delete <GROUP>\n\n"
+        "Legacy forms: show groups, create group, set group, add/remove client group,\n"
+        "delete group, rename group.\n"
+    )
+
+
+def _profile_ns_help(role):
+    _, server = _role_parts(role)
+    if not server:
+        return "Profile commands require a server role on this host.\n"
+    return (
+        "Service Profiles\n"
+        "================\n\n"
+        "Usage:\n"
+        "  profile list\n"
+        "  profile show <PROFILE>\n"
+        "  profile create <name> --preset ... --target-host ... --target-port ...\n"
+        "  profile set <PROFILE> <prop> <value>\n"
+        "  profile delete <PROFILE>\n\n"
+        "Legacy forms: show profiles, create profile, set profile, delete profile.\n"
+    )
+
+
+def _server_ns_help(role):
+    _, server = _role_parts(role)
+    if not server:
+        return "Server commands require a server role on this host.\n"
+    return (
+        "Server settings\n"
+        "===============\n\n"
+        "Usage:\n"
+        "  server show\n"
+        "  server installer [<url>]\n"
+        "  server reconfigure\n\n"
+        "server show prints effective public configuration (no secrets).\n"
+        "server installer sets the client installer URL (or prompts for guided setup).\n"
+        "server reconfigure adjusts the public endpoint (guided flow).\n\n"
+        "Legacy: set installer-url, set server hostname|bootstrap-hostname.\n"
+    )
 
 
 def _show_help(rest, role):
@@ -451,6 +774,15 @@ def _show_help(rest, role):
             "Available:\n  " + "\n  ".join(avail) + "\n"
         )
     topic = rest[0]
+    if topic == "health":
+        return (
+            "Show health\n"
+            "===========\n\n"
+            "Usage:\n"
+            "  show health\n"
+            "  show health --json\n\n"
+            "Same as: doctor / system doctor\n"
+        )
     if topic == "client":
         return (
             "Show client information\n"
@@ -509,17 +841,17 @@ def _set_help(rest, role):
             "Set service configuration\n"
             "=========================\n\n"
             "Usage:\n"
-            "  set service <service-id> target-host <host>\n"
-            "  set service <service-id> target-port <port>\n"
-            "  set service <service-id> ssh-user <user>\n"
-            "  set service <service-id> name <value>\n"
-            "  set service <service-id> health-type <tcp|http|disabled>\n"
-            "  set service <service-id> health-timeout <seconds>\n"
-            "  set service <service-id> health-interval <seconds>\n"
-            "  set service <service-id> health-max-failed <count>\n"
-            "  set service <service-id> health-path </path>\n\n"
-            "Service IDs cannot be renamed. Pending changes are live only after apply.\n"
-            "Health checks are disabled by default. Enabling tcp/http uses FRP healthCheck.\n"
+            "  service set <id> target-host <host>\n"
+            "  service set <id> target-port <port>\n"
+            "  service set <id> ssh-user <user>\n"
+            "  service set <id> name <value>\n"
+            "  service set <id> health-type <tcp|http|disabled>\n"
+            "  service set <id> health-timeout <seconds>\n"
+            "  service set <id> health-interval <seconds>\n"
+            "  service set <id> health-max-failed <count>\n"
+            "  service set <id> health-path </path>\n\n"
+            "Service IDs cannot be renamed. Pending changes are live only after\n"
+            "service apply. Health checks are disabled by default.\n"
         )
     if rest and rest[0] == "profile":
         return (
@@ -618,13 +950,16 @@ def _verb_help(verb, role):
         "restore": "Restore\n=======\n\nUsage:\n  restore backup <path>\n",
         "add": (
             "Add\n===\n\nUsage:\n"
-            "  add client <ID> group <GROUP>\n"
-            "  add service [--preset ssh|http|https|custom] [--id ID] [--name NAME]\n"
-            "              [--target-host HOST] [--target-port PORT] [--ssh-user USER]\n"
-            "  add service --profile <PROFILE|NAME> [--id ID] [--name NAME]\n\n"
-            "Pending until apply. Does not release server-side reservations.\n"
+            "  service add\n"
+            "  service add ssh|http|https|custom\n"
+            "  service add profile <PROFILE>\n"
+            "  add client <ID> group <GROUP>\n\n"
+            "Prefer service add on client hosts (interactive wizard).\n"
+            "Legacy forms still work for automation; see help advanced.\n\n"
+            "Pending until service apply. Does not release server-side reservations.\n"
             "Profile seeding copies template defaults only; public ports stay\n"
             "unallocated until apply. Editing a profile never mutates services.\n"
+            "Service IDs are generated automatically.\n"
         ),
         "enable": "Enable service\n==============\n\nUsage:\n  enable service <service-id>\n",
         "disable": (
@@ -642,13 +977,50 @@ def _verb_help(verb, role):
     return mapping.get(verb, "Usage:\n  %s\n" % verb)
 
 
+def _advanced_help(role):
+    client, _server = _role_parts(role)
+    lines = [
+        "Advanced / automation",
+        "=====================",
+        "",
+        "Normal interactive use prefers the service-add wizard:",
+        "  service add",
+        "  service add http",
+        "",
+        "Non-interactive automation may still pass explicit flags:",
+        "  service add ssh --ssh-user USER [--target-host HOST] [--target-port PORT]",
+        "  service add http --target-host HOST [--target-port PORT] [--name NAME]",
+        "  service add https --target-host HOST [--target-port PORT] [--name NAME]",
+        "  service add custom --target-port PORT [--target-host HOST] [--name NAME]",
+        "  service add profile <PROFILE> [--name NAME]",
+        "",
+        "Hidden legacy override (not shown in Tab / normal help):",
+        "  --id ID     Force a Service ID (immutable once created)",
+        "",
+        "service apply --verbose  Include diagnostic frpc journal output",
+        "",
+        "Compatibility aliases: help legacy",
+    ]
+    if not client:
+        lines.insert(3, "(Most service-add flags require a client role.)")
+        lines.insert(4, "")
+    return "\n".join(lines) + "\n"
+
+
 def _legacy_help(role):
+    _ = role
     return (
         "Compatibility aliases\n"
         "=====================\n\n"
         "These older commands still work for scripts. Tab completion and\n"
         "canonical help hide them.\n\n"
-        "  clients, client, client-info, client-set, edit-client\n"
+        "Client service (prefer service …):\n"
+        "  add service, set service, enable service, disable service\n"
+        "  apply, discard\n\n"
+        "Client maintenance (prefer system …):\n"
+        "  update project, doctor, support-bundle\n\n"
+        "Other compatibility forms:\n"
+        "  clients, client <ID>, client-info, client-set, edit-client\n"
         "  enroll, create-client, enroll-bulk, enrollments, enrollment-revoke\n"
         "  revoke ID, revoke-client, release-service, release-client\n"
         "  project-update, frp-update, server-update, client-update\n"
@@ -675,7 +1047,11 @@ def context_help(tokens, role, names=None, clients=None):
     verb = tokens[0]
     if verb == "show":
         if len(tokens) == 1:
-            rows = [("status", "Host status"), ("version", "Installed versions")]
+            rows = [
+                ("status", "Host status"),
+                ("version", "Installed versions"),
+                ("health", "Run health checks (doctor)"),
+            ]
             if server:
                 rows.extend(
                     [
@@ -698,6 +1074,8 @@ def context_help(tokens, role, names=None, clients=None):
                     ("tags", "Administrator tags only"),
                 ]
             )
+        if tokens[1] == "health":
+            return "Usage:\n  show health\n  show health --json\n\nSame as: doctor / system doctor\n"
         return "Usage:\n  show %s\n" % tokens[1]
     if verb == "set":
         if len(tokens) == 1:
@@ -880,7 +1258,167 @@ def context_help(tokens, role, names=None, clients=None):
         )
     if verb == "restore":
         return _fmt_available([("backup", "Restore from a backup archive")])
+    if verb == "service":
+        if not client:
+            return "Service commands require a client role on this host.\n"
+        if len(tokens) >= 2 and tokens[1] == "add":
+            if len(tokens) == 2:
+                text = (SERVICE_ADD_CONCEPT_HELP or "").rstrip()
+                return text + "\n" if text else help_text(["service"], role)
+            return _service_add_type_help(tokens[2])
+        return _fmt_section(
+            "Service management",
+            [
+                ("add", "Add a service"),
+                ("set", "Change a service"),
+                ("enable", "Enable a service"),
+                ("disable", "Disable a service"),
+                ("apply", "Apply pending service changes"),
+                ("discard", "Discard pending service changes"),
+            ],
+        )
+    if verb == "client":
+        rows = []
+        if client:
+            rows.extend(
+                [
+                    ("pause", "Block all FRP remote access"),
+                    ("resume", "Resume FRP remote access"),
+                    ("uninstall", "Remove FRP Auto Deploy from this machine"),
+                ]
+            )
+        if server:
+            rows.extend(
+                [
+                    ("set", "Configure registered client metadata"),
+                    ("release", "Return reserved public ports"),
+                    ("revoke", "Revoke management identity"),
+                ]
+            )
+        if rows:
+            title = "Client lifecycle" if client and not server else "Client commands"
+            return _fmt_section(title, rows)
+        return help_text(tokens, role)
+    if verb == "system":
+        rows = [
+            ("update", "Update FRP Auto Deploy"),
+            ("update-frp", "Update the FRP binary"),
+            ("doctor", "Run health checks"),
+            ("support-bundle", "Create sanitized diagnostic archive"),
+        ]
+        if server:
+            rows.extend(
+                [
+                    ("backup", "Create a server backup"),
+                    ("restore", "Restore from a backup archive"),
+                ]
+            )
+        return _fmt_section("System maintenance", rows)
+    if verb == "enrollment" and server:
+        return _fmt_section(
+            "Enrollment",
+            [
+                ("zero-touch", "Zero-touch enrollment (recommended)"),
+                ("create", "Manual Enrollment Code"),
+                ("list", "List issued enrollments"),
+                ("show", "Show one enrollment (no secrets)"),
+                ("revoke", "Revoke a pending enrollment"),
+                ("purge", "Permanently remove terminal enrollment metadata"),
+            ],
+        )
+    if verb == "group" and server:
+        return _fmt_section(
+            "Groups",
+            [
+                ("list", "List groups"),
+                ("show", "Show one group"),
+                ("create", "Create a group"),
+                ("set", "Rename or edit description"),
+                ("add-member", "Add a client to a group"),
+                ("remove-member", "Remove a client from a group"),
+                ("delete", "Delete a group"),
+            ],
+        )
+    if verb == "profile" and server:
+        return _fmt_section(
+            "Service Profiles",
+            [
+                ("list", "List profiles"),
+                ("show", "Show one profile"),
+                ("create", "Create a profile"),
+                ("set", "Edit profile properties"),
+                ("delete", "Delete a profile"),
+            ],
+        )
+    if verb == "server" and server:
+        return _fmt_section(
+            "Server settings",
+            [
+                ("show", "Effective public configuration"),
+                ("installer", "Set client installer URL"),
+                ("reconfigure", "Reconfigure public endpoint"),
+            ],
+        )
     return help_text(tokens, role)
+
+
+def _fmt_section(title, rows):
+    parts = [title, ""]
+    width = max((len(name) for name, _desc in rows), default=8)
+    for name, desc in rows:
+        parts.append("  %s  %s" % (name.ljust(width), desc))
+    return "\n".join(parts) + "\n"
+
+
+def _service_add_type_help(stype):
+    stype = (stype or "").strip().lower()
+    if stype == "ssh":
+        return (
+            "Usage:\n"
+            "  service add ssh\n\n"
+            "Starts the SSH service wizard (location, port, SSH user, name).\n"
+            "Default target: this FRP client, TCP/22.\n"
+            "Service ID is allocated automatically.\n"
+            "Apply with service apply; discard with service discard.\n"
+        )
+    if stype in ("http", "https"):
+        port = "80" if stype == "http" else "443"
+        return (
+            "Usage:\n"
+            "  service add %s\n\n"
+            "Starts the %s service wizard (location, port, name).\n"
+            "Default target: this FRP client, TCP/%s.\n"
+            "Service ID is allocated automatically.\n"
+            "Apply with service apply; discard with service discard.\n"
+            % (stype, stype.upper(), port)
+        )
+    if stype == "custom":
+        return (
+            "Usage:\n"
+            "  service add custom\n\n"
+            "Starts the Custom TCP wizard. Target port is required.\n"
+            "Service ID is allocated automatically (tcp-<port>).\n"
+            "Apply with service apply; discard with service discard.\n"
+        )
+    if stype == "profile":
+        return (
+            "Usage:\n"
+            "  service add profile <PROFILE>\n\n"
+            "Start from a server Service Profile. Public ports stay unallocated\n"
+            "until service apply. Service ID is allocated automatically.\n"
+        )
+    if stype.startswith("--"):
+        return (
+            "Prefer the interactive wizard:\n"
+            "  service add\n"
+            "  service add ssh|http|https|custom\n\n"
+            "Automation flags: help advanced\n"
+        )
+    return (
+        "Unknown service type: %s\n\n"
+        "Available: ssh, http, https, custom, profile\n"
+        % stype
+    )
 
 
 def _context_client_list(names, clients):
@@ -906,45 +1444,63 @@ def _context_client_list(names, clients):
 
 def _concise_root(role):
     client, server = _role_parts(role)
+    if client and not server:
+        rows = [
+            ("show", "View status and configuration"),
+            ("service", "Manage published services"),
+            ("client", "Control this FRP client"),
+            ("system", "Maintenance and diagnostics"),
+            ("help", "Detailed help"),
+            ("menu", "Guided menu"),
+            ("history", "Session command history"),
+            ("exit", "Leave frpctl"),
+        ]
+        return _fmt_available(rows)
+    if server and not client:
+        rows = [
+            ("show", "View status and configuration"),
+            ("client", "Manage registered clients"),
+            ("enrollment", "Issue and manage enrollments"),
+            ("group", "Manage client groups"),
+            ("profile", "Manage service profiles"),
+            ("access", "Access Control Pack"),
+            ("server", "Public server settings"),
+            ("system", "Maintenance and diagnostics"),
+            ("help", "Detailed help"),
+            ("menu", "Guided menu"),
+            ("history", "Session command history"),
+            ("exit", "Leave frpctl"),
+        ]
+        return _fmt_available(rows)
+    if client and server:
+        parts = [
+            "Client",
+            "  service              Manage published services",
+            "  client               Lifecycle and registered-client management",
+            "",
+            "Server",
+            "  show                 View status and configuration",
+            "  enrollment           Issue and manage enrollments",
+            "  group                Manage client groups",
+            "  profile              Manage service profiles",
+            "  access               Access Control Pack",
+            "  server               Public server settings",
+            "",
+            "Common",
+            "  system               Maintenance and diagnostics",
+            "  help                 Detailed help",
+            "  menu                 Guided menu",
+            "  history              Session command history",
+            "  exit                 Leave frpctl",
+        ]
+        return "\n".join(parts) + "\n"
     rows = [
         ("show", "View status and configuration"),
-        ("set", "Change configuration"),
-        ("unset", "Remove configuration values"),
-        ("create", "Create enrollment or backup"),
-        ("revoke", "Revoke management access"),
-        ("purge", "Remove terminal enrollment metadata"),
-        ("release", "Return reserved public ports"),
-        ("update", "Update project or FRP"),
-        ("restore", "Restore backup"),
-        ("doctor", "Run health checks"),
-        ("support-bundle", "Create sanitized diagnostic archive"),
-        ("access", "Access Control Pack"),
         ("help", "Detailed help"),
         ("menu", "Guided menu"),
         ("history", "Session command history"),
         ("exit", "Leave frpctl"),
     ]
-    if not server:
-        hide = {"create", "revoke", "purge", "release", "restore", "access"}
-        if not client:
-            hide.update({"set", "unset"})
-        rows = [(n, d) for n, d in rows if n not in hide]
-        if client:
-            rows = [(n, d) for n, d in rows if n not in {"revoke", "purge", "release", "restore", "create", "access"}]
-            extra = [
-                ("add", "Add a local service"),
-                ("enable", "Enable a local service"),
-                ("disable", "Disable a local service"),
-                ("apply", "Apply pending service changes"),
-                ("discard", "Discard pending service changes"),
-            ]
-            # Keep a stable everyday list for client-only hosts.
-            keep = {
-                "show", "set", "add", "enable", "disable", "apply", "discard",
-                "update", "doctor", "support-bundle", "help", "menu", "history", "exit",
-            }
-            rows = extra + rows
-            rows = [(n, d) for n, d in rows if n in keep]
     return _fmt_available([(n, d) for n, d in rows])
 
 
@@ -982,6 +1538,13 @@ def match(tokens, role, names=None, clients=None):
         "disable": _match_enable_disable,
         "apply": lambda toks, role, names=None: {"status": "ok", "action": "apply"},
         "discard": lambda toks, role, names=None: {"status": "ok", "action": "discard"},
+        "service": _match_service,
+        "client": _match_client_ns,
+        "system": _match_system,
+        "enrollment": _match_enrollment,
+        "group": _match_group_ns,
+        "profile": _match_profile_ns,
+        "server": _match_server_ns,
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
         "support-bundle": lambda toks, role, names=None: {"status": "ok", "action": "support_bundle", "passthrough": toks[1:]},
         "access": lambda toks, role, names=None: {"status": "ok", "action": "access_cmd", "passthrough": toks[1:]},
@@ -999,12 +1562,16 @@ def match(tokens, role, names=None, clients=None):
     fn = handlers.get(verb)
     if fn is None:
         return {"status": "unknown", "command": verb}
-    if verb in ("set", "unset", "create", "revoke", "purge", "release", "restore", "remove", "delete", "rename", "access") and not server and verb != "set":
+    if verb in ("set", "unset", "create", "revoke", "purge", "release", "restore", "remove", "delete", "rename", "access", "enrollment", "group", "profile", "server") and not server and verb != "set":
         if verb == "set" and client:
             return fn(tokens, role, names)
         return {"status": "role", "need": "server", "command": verb}
-    if verb in ("enable", "disable", "apply", "discard") and not client:
+    if verb in ("enable", "disable", "apply", "discard", "service") and not client:
         return {"status": "role", "need": "client", "command": verb}
+    if verb == "client" and not client and not server:
+        return {"status": "role", "need": "client or server", "command": verb}
+    if verb == "system" and not client and not server:
+        return {"status": "role", "need": "client or server", "command": verb}
     if verb == "add" and not client and not server:
         return {"status": "role", "need": "client or server", "command": verb}
     return fn(tokens, role, names)
@@ -1023,6 +1590,8 @@ def _match_show(tokens, role, names=None):
         return {"status": "ok", "action": "show_status", "passthrough": tokens[2:]}
     if resource == "version":
         return {"status": "ok", "action": "show_version"}
+    if resource == "health":
+        return {"status": "ok", "action": "doctor", "passthrough": tokens[2:]}
     if resource == "clients":
         return {"status": "ok", "action": "show_clients", "passthrough": tokens[2:]}
     if resource == "groups":
@@ -1089,7 +1658,7 @@ def _match_show(tokens, role, names=None):
     return incomplete("Unknown show resource.", ["show <resource>"], avail)
 
 
-def _match_set(tokens, role, names=None):
+def _match_set(tokens, role, names=None, form="legacy"):
     client, server = _role_parts(role)
     avail = _set_resources(role)
     if len(tokens) == 1:
@@ -1226,21 +1795,47 @@ def _match_set(tokens, role, names=None):
     if resource == "service":
         if not client:
             return {"status": "role", "need": "client", "command": "set service"}
-        props = ["target-host", "target-port", "ssh-user", "name",
-                 "health-type", "health-timeout", "health-interval",
-                 "health-max-failed", "health-path"]
+        props = list(SERVICE_SET_PROPS)
+        sid = tokens[2] if len(tokens) > 2 else "<id>"
+        preferred = "Preferred: service set <id> <property> <value>"
+        if form == "canonical":
+            usage_full = "service set %s <property> <value>" % sid
+            usage_missing_id = "service set <id> <property> <value>"
+
+            def usage_for_prop(prop):
+                return "service set %s %s <value>" % (sid, prop)
+        else:
+            usage_full = "set service <service-id> <property> <value>"
+            usage_missing_id = "set service <service-id> <property> <value>"
+
+            def usage_for_prop(prop):
+                return "set service <id> %s <value>" % prop
+
+        def with_preferred(usage):
+            lines = [usage]
+            if form != "canonical":
+                lines.append(preferred)
+            return lines
+
         if len(tokens) < 3:
-            return incomplete("Missing service ID.", ["set service <service-id> <property> <value>"])
+            return incomplete("Missing service ID.", with_preferred(usage_missing_id))
         if len(tokens) < 4:
             return incomplete(
                 "Missing service property.",
-                ["set service <service-id> <property> <value>"],
+                with_preferred(usage_full),
                 props,
             )
         if tokens[3] not in props:
-            return incomplete("Unknown service property.", ["set service <id> <property> <value>"], props)
+            return incomplete(
+                "Unknown service property.",
+                with_preferred(usage_full),
+                props,
+            )
         if len(tokens) < 5:
-            return incomplete("Missing value.", ["set service <id> %s <value>" % tokens[3]])
+            return incomplete(
+                "Missing value.",
+                with_preferred(usage_for_prop(tokens[3])),
+            )
         return {
             "status": "ok",
             "action": "set_service",
@@ -1616,7 +2211,358 @@ def _match_enable_disable(tokens, role, names=None):
     return {"status": "ok", "action": "%s_service" % verb, "service": tokens[2]}
 
 
-def completion_candidates(line, role, names, services, local_services, trailing=None, groups=None):
+def _match_service(tokens, role, names=None):
+    """Canonical client service namespace → same actions as legacy forms."""
+    client, _server = _role_parts(role)
+    if not client:
+        return {"status": "role", "need": "client", "command": "service"}
+    avail = ["add", "set", "enable", "disable", "apply", "discard"]
+    if len(tokens) == 1:
+        return incomplete(
+            "Service management",
+            [
+                "service add ...",
+                "service set <id> <property> <value>",
+                "service enable <id>",
+                "service disable <id>",
+                "service apply",
+                "service discard",
+            ],
+            avail,
+            tip="service ?",
+        )
+    sub = tokens[1]
+    if sub == "add":
+        return {"status": "ok", "action": "add_service", "passthrough": tokens[2:]}
+    if sub == "set":
+        return _match_set(["set", "service"] + tokens[2:], role, names, form="canonical")
+    if sub in ("enable", "disable"):
+        return _match_enable_disable([sub, "service"] + tokens[2:], role, names)
+    if sub == "apply":
+        rest = tokens[2:]
+        for tok in rest:
+            if tok not in ("--verbose", "-v"):
+                return incomplete("Unexpected arguments.", ["service apply", "service apply --verbose"])
+        return {"status": "ok", "action": "apply", "passthrough": rest}
+    if sub == "discard":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["service discard"])
+        return {"status": "ok", "action": "discard"}
+    return incomplete("Unknown service command.", ["service <op> ..."], avail, tip="service ?")
+
+
+def _match_client_ns(tokens, role, names=None):
+    """Client lifecycle + server registered-client management namespace."""
+    client, server = _role_parts(role)
+    lifecycle = ["pause", "resume", "uninstall"]
+    manage = ["set", "release", "revoke"]
+    if len(tokens) == 1:
+        avail = []
+        usage = []
+        title = "Client commands"
+        if client:
+            avail.extend(lifecycle)
+            usage.extend(["client pause", "client resume", "client uninstall"])
+            title = "Client lifecycle"
+        if server:
+            avail.extend(manage)
+            usage.extend(
+                [
+                    "client set <ID> label|note|tag ...",
+                    "client release <ID>",
+                    "client revoke <ID>",
+                ]
+            )
+            if client:
+                title = "Client commands"
+            else:
+                title = "Registered client management"
+        if not avail:
+            return {"status": "role", "need": "client or server", "command": "client"}
+        return incomplete(title, usage, avail, tip="client ?")
+    sub = tokens[1]
+    if client and sub in lifecycle:
+        if len(tokens) > 2 and sub != "uninstall":
+            return incomplete("Unexpected arguments.", ["client %s" % sub])
+        action = "client_%s" % sub
+        passthrough = tokens[2:] if sub == "uninstall" else []
+        return {"status": "ok", "action": action, "passthrough": passthrough}
+    if server and sub in manage:
+        if sub == "set":
+            return _match_set(["set", "client"] + tokens[2:], role, names)
+        if sub == "release":
+            return _match_release(["release", "client"] + tokens[2:], role, names)
+        return _match_revoke(["revoke", "client"] + tokens[2:], role, names)
+    # Compatibility: `client <ID>` → legacy frp-client-info on server hosts.
+    if server and sub not in lifecycle and sub not in manage:
+        return {"status": "legacy"}
+    if client:
+        avail = list(lifecycle)
+        if server:
+            avail.extend(manage)
+        return incomplete(
+            "Unknown client command.",
+            ["client pause|resume|uninstall"] + (
+                ["client set|release|revoke ..."] if server else []
+            ),
+            avail,
+        )
+    return {"status": "role", "need": "client or server", "command": "client"}
+
+
+def _match_system(tokens, role, names=None):
+    client, server = _role_parts(role)
+    if not client and not server:
+        return {"status": "role", "need": "client or server", "command": "system"}
+    avail = ["update", "update-frp", "doctor", "support-bundle"]
+    usage = [
+        "system update [--check]",
+        "system update project [--check]",
+        "system update frp [--check]",
+        "system update-frp [--check]",
+        "system doctor",
+        "system support-bundle [--output PATH]",
+    ]
+    if server:
+        avail.extend(["backup", "restore"])
+        usage.extend(["system backup [path]", "system restore <path>"])
+    if len(tokens) == 1:
+        return incomplete(
+            "System maintenance",
+            usage,
+            avail,
+            tip="system ?",
+        )
+    sub = tokens[1]
+    if sub == "update":
+        # Bare `system update` / `system update --check` → project tooling update.
+        rest = tokens[2:]
+        if not rest:
+            return {"status": "ok", "action": "update_project", "passthrough": []}
+        if rest[0].startswith("-"):
+            return {"status": "ok", "action": "update_project", "passthrough": rest}
+        if rest[0] == "project":
+            return {"status": "ok", "action": "update_project", "passthrough": rest[1:]}
+        if rest[0] == "frp":
+            return {"status": "ok", "action": "update_frp", "passthrough": rest[1:]}
+        return incomplete(
+            "Unknown update target.",
+            ["system update [--check]", "system update project [--check]", "system update frp [--check]"],
+            ["project", "frp", "--check"],
+        )
+    if sub == "update-frp":
+        return {"status": "ok", "action": "update_frp", "passthrough": tokens[2:]}
+    if sub == "doctor":
+        return {"status": "ok", "action": "doctor", "passthrough": tokens[2:]}
+    if sub == "support-bundle":
+        return {"status": "ok", "action": "support_bundle", "passthrough": tokens[2:]}
+    if sub == "backup":
+        if not server:
+            return {"status": "role", "need": "server", "command": "system backup"}
+        return {"status": "ok", "action": "create_backup", "passthrough": tokens[2:]}
+    if sub == "restore":
+        if not server:
+            return {"status": "role", "need": "server", "command": "system restore"}
+        if len(tokens) < 3:
+            return incomplete("Missing backup path.", ["system restore <path>", "restore backup <path>"])
+        return {
+            "status": "ok",
+            "action": "restore_backup",
+            "path": tokens[2],
+            "passthrough": tokens[3:],
+        }
+    return incomplete("Unknown system command.", usage, avail)
+
+
+def _match_enrollment(tokens, role, names=None):
+    _, server = _role_parts(role)
+    if not server:
+        return {"status": "role", "need": "server", "command": "enrollment"}
+    avail = ["zero-touch", "create", "list", "show", "revoke", "purge"]
+    if len(tokens) == 1:
+        return incomplete(
+            "Enrollment",
+            [
+                "enrollment zero-touch",
+                "enrollment create [...]",
+                "enrollment list",
+                "enrollment show <id>",
+                "enrollment revoke <id>",
+                "enrollment purge <id>",
+            ],
+            avail,
+            tip="enrollment ?",
+        )
+    sub = tokens[1]
+    if sub == "zero-touch":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["enrollment zero-touch"])
+        return {"status": "ok", "action": "create_zero_touch"}
+    if sub == "create":
+        return {"status": "ok", "action": "create_enrollment", "passthrough": tokens[2:]}
+    if sub == "list":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["enrollment list"])
+        return {"status": "ok", "action": "show_enrollments"}
+    if sub == "show":
+        if len(tokens) < 3:
+            return incomplete("Missing enrollment id.", ["enrollment show <id>"])
+        if len(tokens) > 3:
+            return incomplete("Unexpected arguments.", ["enrollment show <id>"])
+        return {"status": "ok", "action": "show_enrollment", "id": tokens[2]}
+    if sub == "revoke":
+        return _match_revoke(["revoke", "enrollment"] + tokens[2:], role, names)
+    if sub == "purge":
+        return _match_purge(["purge", "enrollment"] + tokens[2:], role, names)
+    return incomplete("Unknown enrollment command.", ["enrollment <op> ..."], avail, tip="enrollment ?")
+
+
+def _match_group_ns(tokens, role, names=None):
+    _, server = _role_parts(role)
+    if not server:
+        return {"status": "role", "need": "server", "command": "group"}
+    avail = ["list", "show", "create", "set", "add-member", "remove-member", "delete"]
+    if len(tokens) == 1:
+        return incomplete(
+            "Groups",
+            [
+                "group list",
+                "group show <GROUP>",
+                "group create <name> [--description TEXT]",
+                "group set <GROUP> name|description <value>",
+                "group add-member <CLIENT> <GROUP>",
+                "group remove-member <CLIENT> <GROUP>",
+                "group delete <GROUP>",
+            ],
+            avail,
+            tip="group ?",
+        )
+    sub = tokens[1]
+    if sub == "list":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["group list"])
+        return {"status": "ok", "action": "show_groups"}
+    if sub == "show":
+        return _match_show(["show", "group"] + tokens[2:], role, names)
+    if sub == "create":
+        return _match_create(["create", "group"] + tokens[2:], role, names)
+    if sub == "set":
+        return _match_set(["set", "group"] + tokens[2:], role, names)
+    if sub == "add-member":
+        if len(tokens) < 4:
+            return incomplete(
+                "Missing client or group.",
+                ["group add-member <CLIENT> <GROUP>"],
+            )
+        if len(tokens) > 4:
+            return incomplete("Unexpected arguments.", ["group add-member <CLIENT> <GROUP>"])
+        return {
+            "status": "ok",
+            "action": "add_group_member",
+            "client": tokens[2],
+            "group": tokens[3],
+        }
+    if sub == "remove-member":
+        if len(tokens) < 4:
+            return incomplete(
+                "Missing client or group.",
+                ["group remove-member <CLIENT> <GROUP>"],
+            )
+        if len(tokens) > 4:
+            return incomplete("Unexpected arguments.", ["group remove-member <CLIENT> <GROUP>"])
+        return {
+            "status": "ok",
+            "action": "remove_group_member",
+            "client": tokens[2],
+            "group": tokens[3],
+        }
+    if sub == "delete":
+        return _match_delete(["delete", "group"] + tokens[2:], role, names)
+    return incomplete("Unknown group command.", ["group <op> ..."], avail, tip="group ?")
+
+
+def _match_profile_ns(tokens, role, names=None):
+    _, server = _role_parts(role)
+    if not server:
+        return {"status": "role", "need": "server", "command": "profile"}
+    avail = ["list", "show", "create", "set", "delete"]
+    if len(tokens) == 1:
+        return incomplete(
+            "Service Profiles",
+            [
+                "profile list",
+                "profile show <PROFILE>",
+                "profile create <name> --preset ... --target-host ... --target-port ...",
+                "profile set <PROFILE> <prop> <value>",
+                "profile delete <PROFILE>",
+            ],
+            avail,
+            tip="profile ?",
+        )
+    sub = tokens[1]
+    if sub == "list":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["profile list"])
+        return {"status": "ok", "action": "show_profiles"}
+    if sub == "show":
+        return _match_show(["show", "profile"] + tokens[2:], role, names)
+    if sub == "create":
+        return _match_create(["create", "profile"] + tokens[2:], role, names)
+    if sub == "set":
+        return _match_set(["set", "profile"] + tokens[2:], role, names)
+    if sub == "delete":
+        return _match_delete(["delete", "profile"] + tokens[2:], role, names)
+    return incomplete("Unknown profile command.", ["profile <op> ..."], avail, tip="profile ?")
+
+
+def _match_server_ns(tokens, role, names=None):
+    _, server = _role_parts(role)
+    if not server:
+        return {"status": "role", "need": "server", "command": "server"}
+    avail = ["show", "installer", "reconfigure"]
+    if len(tokens) == 1:
+        return incomplete(
+            "Server settings",
+            [
+                "server show",
+                "server installer [<url>]",
+                "server reconfigure",
+            ],
+            avail,
+            tip="server ?",
+        )
+    sub = tokens[1]
+    if sub == "show":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["server show"])
+        return {"status": "ok", "action": "server_show"}
+    if sub == "installer":
+        if len(tokens) == 2:
+            return incomplete(
+                "Missing installer URL (or use the guided menu).",
+                ["server installer <url>", "set installer-url <url>"],
+                tip="server installer ?",
+            )
+        if len(tokens) > 3:
+            return incomplete("Unexpected arguments.", ["server installer <url>"])
+        return {"status": "ok", "action": "set_installer_url", "value": tokens[2]}
+    if sub == "reconfigure":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["server reconfigure"])
+        return {"status": "ok", "action": "server_reconfigure"}
+    return incomplete("Unknown server command.", ["server show|installer|reconfigure"], avail, tip="server ?")
+
+
+def completion_candidates(
+    line,
+    role,
+    names,
+    services,
+    local_services,
+    trailing=None,
+    groups=None,
+    profiles=None,
+):
     try:
         tokens = tokenize(line)
     except ParseError:
@@ -1633,7 +2579,33 @@ def completion_candidates(line, role, names, services, local_services, trailing=
     verb = tokens[0]
     if verb in LEGACY_COMMANDS:
         return _legacy_completion(tokens, trailing, role, names, services)
-    return _canonical_completion(tokens, trailing, role, names, services, local_services, groups or [])
+    return _canonical_completion(
+        tokens,
+        trailing,
+        role,
+        names,
+        services,
+        local_services,
+        groups or [],
+        profiles or [],
+    )
+
+
+def _service_add_completion(after_add, prefix=""):
+    """Candidates after `service add` / `add service` (types only for normal UX)."""
+    # Do not offer --id (or other raw flags) in normal Tab completion.
+    # Automation may still pass hidden legacy flags explicitly.
+    if not after_add:
+        if str(prefix or "").startswith("--"):
+            return []
+        return list(SERVICE_ADD_TYPES)
+    head = after_add[0]
+    if head.startswith("--"):
+        return []
+    if head in SERVICE_ADD_TYPES:
+        # After a type, prefer wizard; do not advertise flags.
+        return []
+    return []
 
 
 def _tab_desc_map(line, role, names=None, clients=None):
@@ -1667,23 +2639,35 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "clear": "Clear the screen",
         "status": "Host status shortcut",
         "version": "Installed versions shortcut",
-        "add": "Add a local service",
-        "enable": "Enable a local service",
-        "disable": "Disable a local service",
-        "apply": "Apply pending local changes",
-        "discard": "Discard pending local changes",
+        "service": "Manage published services",
+        "client": "Client lifecycle / registered clients",
+        "system": "Maintenance and diagnostics",
+        "enrollment": "Issue and manage enrollments",
+        "group": "Manage client groups",
+        "profile": "Manage service profiles",
+        "server": "Public server settings",
+        "add": "Add a local service (legacy)",
+        "enable": "Enable a local service (legacy)",
+        "disable": "Disable a local service (legacy)",
+        "apply": "Apply pending local changes (legacy)",
+        "discard": "Discard pending local changes (legacy)",
         "quit": "Leave frpctl",
         "q": "Leave frpctl",
     }
     if not server:
         verb_map.pop("access", None)
+        for key in ("enrollment", "group", "profile", "server"):
+            verb_map.pop(key, None)
     if not filled:
-        return verb_map, "verbs"
+        # Tab root candidates come from canonical_verbs only.
+        keep = set(canonical_verbs(role))
+        return {k: v for k, v in verb_map.items() if k in keep}, "verbs"
     verb = filled[0]
     if verb == "show" and len(filled) == 1:
         rows = {
             "status": "Host status",
             "version": "Installed versions",
+            "health": "Run health checks (doctor)",
             "clients": "Registered client table",
             "client": "One client (overview, services, or tags)",
             "enrollments": "Issued enrollment credentials",
@@ -1691,6 +2675,10 @@ def _tab_desc_map(line, role, names=None, clients=None):
             "upstream": "FRP upstream check",
             "services": "Local services",
             "info": "Local connection info",
+            "groups": "Client groups",
+            "group": "One group",
+            "profiles": "Service profiles",
+            "profile": "One service profile",
         }
         return rows, "named"
     if verb == "set" and len(filled) == 1:
@@ -1717,6 +2705,8 @@ def _tab_desc_map(line, role, names=None, clients=None):
                 "note": "Administrator description",
                 "tag": "Key/value metadata",
             }, "named"
+    if verb == "set" and client and len(filled) == 2 and filled[1] == "service":
+        return {}, "local_services"
     if verb == "unset" and len(filled) == 1:
         return {
             "client": "Remove client metadata",
@@ -1766,6 +2756,114 @@ def _tab_desc_map(line, role, names=None, clients=None):
             "--check": "Check only",
         }
         return rows, "named"
+    if verb == "service" and client and len(filled) == 1:
+        return {
+            "add": "Add a service",
+            "set": "Change a service",
+            "enable": "Enable a service",
+            "disable": "Disable a service",
+            "apply": "Apply pending service changes",
+            "discard": "Discard pending service changes",
+        }, "named"
+    if verb == "service" and client and len(filled) >= 2 and filled[1] == "add":
+        if len(filled) == 2:
+            return {
+                "ssh": "Publish an SSH service",
+                "http": "Publish an HTTP service",
+                "https": "Publish an HTTPS service",
+                "custom": "Publish another TCP service",
+                "profile": "Start from a server Service Profile",
+            }, "named"
+    if verb == "service" and client and len(filled) == 2 and filled[1] in (
+        "set",
+        "enable",
+        "disable",
+    ):
+        return {}, "local_services"
+    if verb == "add" and client and len(filled) >= 2 and filled[1] == "service":
+        if len(filled) == 2:
+            return {
+                "ssh": "Publish an SSH service",
+                "http": "Publish an HTTP service",
+                "https": "Publish an HTTPS service",
+                "custom": "Publish another TCP service",
+                "profile": "Start from a server Service Profile",
+            }, "named"
+    if verb in ("enable", "disable") and client and len(filled) == 2 and filled[1] == "service":
+        return {}, "local_services"
+    if verb == "client" and len(filled) == 1:
+        rows = {}
+        if client:
+            rows.update(
+                {
+                    "pause": "Block all FRP remote access",
+                    "resume": "Resume FRP remote access",
+                    "uninstall": "Remove FRP Auto Deploy from this machine",
+                }
+            )
+        if server:
+            rows.update(
+                {
+                    "set": "Configure registered client metadata",
+                    "release": "Return reserved public ports",
+                    "revoke": "Revoke management identity",
+                }
+            )
+        if rows:
+            return rows, "named"
+    if verb == "client" and server and len(filled) >= 2 and filled[1] in ("set", "release", "revoke"):
+        if len(filled) == 2:
+            return {}, "clients"
+        if filled[1] == "set" and len(filled) == 3:
+            return {
+                "label": "Administrator display label",
+                "note": "Administrator description",
+                "tag": "Key/value metadata",
+            }, "named"
+    if verb == "system" and len(filled) == 1:
+        rows = {
+            "update": "Update FRP Auto Deploy",
+            "update-frp": "Update the FRP binary",
+            "doctor": "Run health checks",
+            "support-bundle": "Create sanitized diagnostic archive",
+        }
+        if server:
+            rows["backup"] = "Create a server backup"
+            rows["restore"] = "Restore from a backup archive"
+        return rows, "named"
+    if verb == "enrollment" and server and len(filled) == 1:
+        return {
+            "zero-touch": "Zero-touch enrollment (recommended)",
+            "create": "Manual Enrollment Code",
+            "list": "List issued enrollments",
+            "show": "Show one enrollment",
+            "revoke": "Revoke a pending enrollment",
+            "purge": "Remove terminal enrollment metadata",
+        }, "named"
+    if verb == "group" and server and len(filled) == 1:
+        return {
+            "list": "List groups",
+            "show": "Show one group",
+            "create": "Create a group",
+            "set": "Edit group name or description",
+            "add-member": "Add a client to a group",
+            "remove-member": "Remove a client from a group",
+            "delete": "Delete a group",
+        }, "named"
+    if verb == "profile" and server and len(filled) == 1:
+        return {
+            "list": "List profiles",
+            "show": "Show one profile",
+            "create": "Create a profile",
+            "set": "Edit profile properties",
+            "delete": "Delete a profile",
+        }, "named"
+    if verb == "server" and server and len(filled) == 1:
+        return {
+            "show": "Effective public configuration",
+            "installer": "Set client installer URL",
+            "reconfigure": "Reconfigure public endpoint",
+        }, "named"
     if verb == "show" and len(filled) >= 2 and filled[1] == "client" and len(filled) == 2:
         return {}, "clients"
     if verb == "revoke" and len(filled) >= 2 and filled[1] == "client" and len(filled) == 2:
@@ -1775,7 +2873,14 @@ def _tab_desc_map(line, role, names=None, clients=None):
     return {}, "plain"
 
 
-def format_tab_candidates(line, matches, role, names=None, clients=None):
+def format_tab_candidates(
+    line,
+    matches,
+    role,
+    names=None,
+    clients=None,
+    local_service_details=None,
+):
     """Format ambiguous Tab matches for operator display. Never prints secrets."""
     matches = [m.rstrip() for m in (matches or []) if m is not None and str(m).strip()]
     if not matches:
@@ -1794,6 +2899,28 @@ def format_tab_candidates(line, matches, role, names=None, clients=None):
                 % (mid, item.get("label") or "-", item.get("hostname") or "-")
             )
         return "\n".join(lines)
+    if style == "local_services":
+        by_id = {}
+        for item in local_service_details or []:
+            if isinstance(item, dict) and item.get("id"):
+                by_id[str(item["id"])] = item
+        if by_id:
+            lines = ["%-12s %-16s %-22s %s" % ("ID", "NAME", "TARGET", "STATE")]
+            for mid in matches:
+                item = by_id.get(mid) or {}
+                name = item.get("name") or "-"
+                target = item.get("target") or "-"
+                enabled = item.get("enabled")
+                if enabled is True:
+                    state = "enabled"
+                elif enabled is False:
+                    state = "disabled"
+                else:
+                    state = str(item.get("state") or item.get("preset") or "-")
+                lines.append(
+                    "%-12s %-16s %-22s %s" % (mid, name, target, state)
+                )
+            return "\n".join(lines)
     if style in ("named", "verbs") and any(descs.get(m) for m in matches):
         # Prefer grammar insertion order over readline alphabetical sort.
         seen = set(matches)
@@ -1828,8 +2955,9 @@ def _filter(items, prefix):
     return [item for item in items if item.startswith(prefix)]
 
 
-def _canonical_completion(tokens, trailing, role, names, services, local_services, groups):
+def _canonical_completion(tokens, trailing, role, names, services, local_services, groups, profiles=None):
     client, server = _role_parts(role)
+    profiles = profiles or []
     prefix = _current_prefix(tokens, trailing)
     filled = tokens if trailing else tokens[:-1]
     if not filled:
@@ -1839,6 +2967,7 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
         topics = [
             "show", "set", "unset", "create", "add", "remove", "delete",
             "rename", "update", "revoke", "purge", "release", "legacy",
+            "service", "client", "system", "enrollment", "group", "profile", "server",
         ]
         if len(filled) == 1:
             return _filter(topics, prefix)
@@ -1857,6 +2986,8 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
                 return _filter(["services", "tags", "groups"], prefix)
         if filled[1] == "group" and server and len(filled) == 2:
             return _filter(groups, prefix)
+        if filled[1] == "profile" and server and len(filled) == 2:
+            return _filter(profiles, prefix)
         return []
     if verb == "set":
         if len(filled) == 1:
@@ -1871,19 +3002,18 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
                 return _filter(groups, prefix)
             if len(filled) == 3:
                 return _filter(["name", "description"], prefix)
-        if filled[1] == "server" and server:
+        if filled[1] == "profile" and server:
             if len(filled) == 2:
-                return _filter(["hostname", "bootstrap-hostname"], prefix)
-        if filled[1] == "service" and client:
-            if len(filled) == 2:
-                return _filter(local_services, prefix)
+                return _filter(profiles, prefix)
             if len(filled) == 3:
                 return _filter(
                     [
+                        "name",
+                        "description",
+                        "preset",
                         "target-host",
                         "target-port",
                         "ssh-user",
-                        "name",
                         "health-type",
                         "health-timeout",
                         "health-interval",
@@ -1892,6 +3022,14 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
                     ],
                     prefix,
                 )
+        if filled[1] == "server" and server:
+            if len(filled) == 2:
+                return _filter(["hostname", "bootstrap-hostname"], prefix)
+        if filled[1] == "service" and client:
+            if len(filled) == 2:
+                return _filter(local_services, prefix)
+            if len(filled) == 3:
+                return _filter(list(SERVICE_SET_PROPS), prefix)
         return []
     if verb == "unset":
         if len(filled) == 1:
@@ -1965,16 +3103,122 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
             if len(filled) == 4:
                 return _filter(groups, prefix)
         if filled[1] == "service" and client:
-            return _filter(
-                ["--preset", "--id", "--name", "--target-host", "--target-port", "--ssh-user"],
-                prefix,
-            )
+            return _filter(_service_add_completion(filled[2:], prefix), prefix)
         return []
     if verb in ("enable", "disable"):
         if len(filled) == 1:
             return _filter(["service"], prefix)
         if filled[1] == "service" and len(filled) == 2:
             return _filter(local_services, prefix)
+        return []
+    if verb == "service" and client:
+        if len(filled) == 1:
+            return _filter(
+                ["add", "set", "enable", "disable", "apply", "discard"],
+                prefix,
+            )
+        sub = filled[1]
+        if sub == "add":
+            return _filter(_service_add_completion(filled[2:], prefix), prefix)
+        if sub == "set":
+            if len(filled) == 2:
+                return _filter(local_services, prefix)
+            if len(filled) == 3:
+                return _filter(list(SERVICE_SET_PROPS), prefix)
+            return []
+        if sub in ("enable", "disable"):
+            if len(filled) == 2:
+                return _filter(local_services, prefix)
+            return []
+        return []
+    if verb == "client":
+        ops = []
+        if client:
+            ops.extend(["pause", "resume", "uninstall"])
+        if server:
+            ops.extend(["set", "release", "revoke"])
+        if len(filled) == 1:
+            if ops:
+                return _filter(ops, prefix)
+            return []
+        if server and filled[1] == "set":
+            if len(filled) == 2:
+                return _filter(names, prefix)
+            if len(filled) == 3:
+                return _filter(["label", "note", "tag"], prefix)
+            return []
+        if server and filled[1] in ("release", "revoke") and len(filled) == 2:
+            return _filter(names, prefix)
+        return []
+    if verb == "system":
+        ops = ["update", "update-frp", "doctor", "support-bundle"]
+        if server:
+            ops.extend(["backup", "restore"])
+        if len(filled) == 1:
+            return _filter(ops, prefix)
+        if filled[1] == "update":
+            return _filter(["project", "frp", "--check"], prefix)
+        if filled[1] == "update-frp":
+            return _filter(["--check"], prefix)
+        if filled[1] == "doctor":
+            return _filter(["--json", "--verbose", "--quiet", "--skip-network"], prefix)
+        if filled[1] == "support-bundle":
+            return _filter(["--output"], prefix)
+        return []
+    if verb == "enrollment" and server:
+        if len(filled) == 1:
+            return _filter(
+                ["zero-touch", "create", "list", "show", "revoke", "purge"],
+                prefix,
+            )
+        if filled[1] == "create":
+            return _filter(
+                ["--one-line", "--ssh", "--ssh-user", "--ssh-port", "--ttl", "--note", "--label", "--client-name"],
+                prefix,
+            )
+        return []
+    if verb == "group" and server:
+        if len(filled) == 1:
+            return _filter(
+                ["list", "show", "create", "set", "add-member", "remove-member", "delete"],
+                prefix,
+            )
+        if filled[1] in ("show", "set", "delete") and len(filled) == 2:
+            return _filter(groups, prefix)
+        if filled[1] == "set" and len(filled) == 3:
+            return _filter(["name", "description"], prefix)
+        if filled[1] in ("add-member", "remove-member"):
+            if len(filled) == 2:
+                return _filter(names, prefix)
+            if len(filled) == 3:
+                return _filter(groups, prefix)
+        return []
+    if verb == "profile" and server:
+        if len(filled) == 1:
+            return _filter(["list", "show", "create", "set", "delete"], prefix)
+        if filled[1] in ("show", "set", "delete") and len(filled) == 2:
+            return _filter(profiles, prefix)
+        if filled[1] == "set" and len(filled) == 3:
+            return _filter(
+                [
+                    "name",
+                    "description",
+                    "preset",
+                    "target-host",
+                    "target-port",
+                    "ssh-user",
+                    "health-type",
+                    "health-timeout",
+                    "health-interval",
+                    "health-max-failed",
+                    "health-path",
+                ],
+                prefix,
+            )
+        return []
+    if verb == "server" and server:
+        if len(filled) == 1:
+            return _filter(["show", "installer", "reconfigure"], prefix)
         return []
     if verb == "remove":
         if len(filled) == 1:
@@ -1987,7 +3231,15 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
             if len(filled) == 4:
                 return _filter(groups, prefix)
         return []
-    if verb in ("delete", "rename"):
+    if verb == "delete":
+        if len(filled) == 1:
+            return _filter(["group", "profile"], prefix)
+        if filled[1] == "group" and len(filled) == 2:
+            return _filter(groups, prefix)
+        if filled[1] == "profile" and len(filled) == 2:
+            return _filter(profiles, prefix)
+        return []
+    if verb == "rename":
         if len(filled) == 1:
             return _filter(["group"], prefix)
         if filled[1] == "group" and len(filled) == 2:
@@ -2028,11 +3280,11 @@ def _legacy_completion(tokens, trailing, role, names, services):
     return []
 
 
-def complete_line(line, role, names, services, local_services, groups=None):
+def complete_line(line, role, names, services, local_services, groups=None, profiles=None):
     trailing = bool(line) and line[-1:] in " \t"
     cands = completion_candidates(
         line, role, names, services, local_services,
-        trailing=trailing, groups=groups or [],
+        trailing=trailing, groups=groups or [], profiles=profiles or [],
     )
     if not cands:
         return line
@@ -2104,6 +3356,7 @@ def main(argv=None):
     services = payload.get("services") or {}
     local_services = payload.get("local_services") or []
     groups = payload.get("groups") or []
+    profiles = payload.get("profiles") or []
     if cmd == "match":
         tokens = payload.get("tokens") or argv[1:]
         json.dump(match(tokens, role, names=names, clients=payload.get("clients") or []), sys.stdout)
@@ -2115,12 +3368,18 @@ def main(argv=None):
         return 0
     if cmd == "complete":
         line = payload.get("line") or (argv[1] if len(argv) > 1 else "")
-        for item in completion_candidates(line, role, names, services, local_services, groups=groups):
+        for item in completion_candidates(
+            line, role, names, services, local_services, groups=groups, profiles=profiles
+        ):
             sys.stdout.write(item + "\n")
         return 0
     if cmd == "complete-line":
         line = payload.get("line") or (argv[1] if len(argv) > 1 else "")
-        sys.stdout.write(complete_line(line, role, names, services, local_services, groups=groups))
+        sys.stdout.write(
+            complete_line(
+                line, role, names, services, local_services, groups=groups, profiles=profiles
+            )
+        )
         return 0
     raise SystemExit("unknown grammar action")
 

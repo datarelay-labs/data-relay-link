@@ -94,8 +94,8 @@ echo "$help_create" | grep -A1 'Recommended:' | grep -q 'create zero-touch' \
 echo "$help_create" | grep -q 'Generate a one-line Zero-touch' || fail "help create zero-touch description"
 echo "$help_create" | grep -q 'Manual Enrollment Code' || fail "help create enrollment description"
 root_help="$(frpctl_grammar_call help '{"tokens":[]}')"
-echo "$root_help" | grep -q 'create zero-touch' || fail "root help missing create zero-touch"
-echo "$root_help" | grep -q 'create enrollment' || fail "root help missing create enrollment"
+echo "$root_help" | grep -q 'enrollment zero-touch' || fail "root help missing enrollment zero-touch"
+echo "$root_help" | grep -qE 'enrollment create|create enrollment' || fail "root help missing enrollment create"
 pass "CREATE_ZERO_TOUCH_HELP"
 
 # --- context help ---
@@ -157,8 +157,8 @@ pass "ZERO_TOUCH_MANAGEMENT_ONLY_HIDDEN"
 # --- Guided: multi-service SSH+HTTP ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-http.out" \
   "create zero-touch" 1 2 multi-http "" \
-  1 "" "" "" aella \
-  2 "" "" "" \
+  1 "" "" aella \
+  2 "" "" \
   5 \
   exit \
   || fail "zero-touch multi ssh+http"
@@ -191,8 +191,8 @@ pass "ZERO_TOUCH_MULTI_SERVICE_SSH_HTTP"
 # --- Guided: multi-service SSH+HTTPS ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-https.out" \
   "create zero-touch" 1 2 multi-https "" \
-  1 "" "" "" aella \
-  3 "" "" "" \
+  1 "" "" aella \
+  3 "" "" \
   5 \
   exit \
   || fail "zero-touch multi ssh+https"
@@ -212,8 +212,8 @@ pass "ZERO_TOUCH_MULTI_SERVICE_SSH_HTTPS"
 # --- Remote LAN target hosts ---
 run_repl "$SERVER" "$WORKDIR/zt-lan.out" \
   "create zero-touch" 1 2 lan-client "lan note" \
-  1 ssh 10.10.10.20 22 ops \
-  2 web 10.10.10.30 80 \
+  1 10.10.10.20 22 ops \
+  2 10.10.10.30 80 \
   5 \
   exit \
   || fail "zero-touch remote lan"

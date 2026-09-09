@@ -59,6 +59,9 @@ class LineEditor:
         self.clients = payload.get("clients") or []
         self.services = payload.get("services") or {}
         self.local_services = payload.get("local_services") or []
+        self.local_service_details = payload.get("local_service_details") or []
+        self.groups = payload.get("groups") or []
+        self.profiles = payload.get("profiles") or []
         self._matches = []
         self._last_display_key = None
         self.prompt = "frpctl> "
@@ -74,6 +77,8 @@ class LineEditor:
                 self.services,
                 self.local_services,
                 trailing=trailing,
+                groups=self.groups,
+                profiles=self.profiles,
             )
             # Unique -> replace current word (append space). Longer common
             # prefix -> extend only. Fully ambiguous -> return candidates so
@@ -124,6 +129,8 @@ class LineEditor:
             self.services,
             self.local_services,
             trailing=bool(line) and line[-1:] in " \t",
+            groups=self.groups,
+            profiles=self.profiles,
         )
         if preferred:
             rank = {name: idx for idx, name in enumerate(preferred)}
@@ -134,6 +141,7 @@ class LineEditor:
             self.role,
             names=self.names,
             clients=self.clients,
+            local_service_details=self.local_service_details,
         )
         if not body:
             return
@@ -292,9 +300,11 @@ def run_repl(frpctl_bin, payload):
             sys.stderr.write("ERROR: could not run frpctl: %s\n" % exc)
             continue
         if proc.returncode not in (0, 130) and tokens[0] not in ("?", "help"):
-            print()
-            print("Command failed with exit code %s." % proc.returncode)
-            print()
+            # Usage/input errors (exit 2) already printed actionable guidance.
+            if proc.returncode != 2:
+                print()
+                print("Command failed with exit code %s." % proc.returncode)
+                print()
     return 0
 
 

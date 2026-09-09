@@ -52,7 +52,11 @@ REASON_UNMAPPED_PROXY = "UNMAPPED_PROXY"
 EMPTY_ALLOWLIST_MESSAGE = (
     "No allowed sources are configured.\n"
     "An empty ALLOWLIST would block every user connection.\n"
-    "Use Disable if you intend to stop publishing the service."
+    "Use Disable if you intend to stop publishing the service.\n"
+    "\n"
+    "Add a source first:\n"
+    "\n"
+    "  access add-source <list> --name <name> --source <CIDR>"
 )
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")

@@ -53,6 +53,7 @@ the state root.
 
 ## Uninstall
 
-Run `sudo frpctl uninstall` or the client uninstaller. Local files and the
+Run `sudo frpctl client uninstall` or the client uninstaller (`uninstall-client.sh`).
+Local files and the
 LaunchDaemon are removed. Server-side enrollment records and port reservations
 are intentionally retained and must be released explicitly on the server.

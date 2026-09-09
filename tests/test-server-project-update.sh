@@ -240,11 +240,16 @@ grep -Eqi 'missing (or invalid )?.*release-manifest|missing project file: .*rele
 pass "METADATA_REQUIRED"
 
 # Simulated HTTPS remote fetch. The curl mock serves immutable local fixtures.
+# The generated dist may be a dev bundle even while the tree manifest documents
+# the stable tag line — use the stamp channel for fixture validation.
 FIX="$WORKDIR/fixture"
 MOCKBIN="$WORKDIR/mockbin"
 mkdir -p "$FIX" "$MOCKBIN"
 cp "$ROOT/dist/bootstrap-server.sh" "$FIX/bootstrap-server.sh"
 printf '%s  dist/bootstrap-server.sh\n' "$(sha "$FIX/bootstrap-server.sh")" >"$FIX/SHA256SUMS"
+BUNDLE_CHANNEL="$(awk -F= '/export FRP_RELEASE_CHANNEL=/{gsub(/'\''/,"",$2); print $2; exit}' \
+  "$FIX/bootstrap-server.sh")"
+[[ -n "$BUNDLE_CHANNEL" ]] || fail "dist bootstrap missing channel stamp"
 cat >"$MOCKBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -269,7 +274,7 @@ REMOTE="$WORKDIR/remote"
 setup_tree "$REMOTE"
 REMOTE_BEFORE="$(state_digest "$REMOTE")"
 env PATH="$MOCKBIN:$PATH" FRP_TEST_FIXTURE="$FIX" FRP_SERVER_TEST_ROOT="$REMOTE" \
-  FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  FRP_RELEASE_CHANNEL="$BUNDLE_CHANNEL" \
   FRP_SERVER_PROJECT_SHA256SUMS_URL=https://fixture.invalid/SHA256SUMS \
   FRP_SERVER_PROJECT_UPDATE_URL=https://fixture.invalid/bootstrap-server.sh \
   "$UPDATE" >"$WORKDIR/remote.out"
@@ -283,7 +288,7 @@ printf '\n# tampered\n' >>"$FIX/bootstrap-server.sh"
 TAMPER="$WORKDIR/tamper"
 setup_tree "$TAMPER"
 if env PATH="$MOCKBIN:$PATH" FRP_TEST_FIXTURE="$FIX" FRP_SERVER_TEST_ROOT="$TAMPER" \
-  FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  FRP_RELEASE_CHANNEL="$BUNDLE_CHANNEL" \
   FRP_SERVER_PROJECT_SHA256SUMS_URL=https://fixture.invalid/SHA256SUMS \
   FRP_SERVER_PROJECT_UPDATE_URL=https://fixture.invalid/bootstrap-server.sh \
   "$UPDATE" >"$WORKDIR/tamper.out" 2>"$WORKDIR/tamper.err"; then
@@ -307,7 +312,7 @@ printf '%s  dist/other.sh\n' "$(printf other | sha256sum | awk '{print $1}')" >"
 MISSING="$WORKDIR/missing-sha"
 setup_tree "$MISSING"
 if env PATH="$MOCKBIN:$PATH" FRP_TEST_FIXTURE="$FIX" FRP_SERVER_TEST_ROOT="$MISSING" \
-  FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  FRP_RELEASE_CHANNEL="$BUNDLE_CHANNEL" \
   FRP_SERVER_PROJECT_SHA256SUMS_URL=https://fixture.invalid/SHA256SUMS \
   FRP_SERVER_PROJECT_UPDATE_URL=https://fixture.invalid/bootstrap-server.sh \
   "$UPDATE" >"$WORKDIR/missing-sha.out" 2>"$WORKDIR/missing-sha.err"; then

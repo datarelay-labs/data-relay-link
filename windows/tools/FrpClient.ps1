@@ -9,7 +9,7 @@ param(
     [ValidateSet(
         'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'support-bundle', 'autostart', 'help',
         'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service',
-        'apply', 'discard', 'sync', 'reconcile'
+        'apply', 'discard', 'sync', 'reconcile', 'pause', 'resume'
     )]
     [string]$Command = 'help',
 
@@ -81,8 +81,9 @@ frp-client (Windows)
   info              Connection details (RDP/SSH/HTTP)
   list              List configured services (read-only)
   add-service       Add a pending service to the draft (alias: add)
-                       -Preset ssh|http|https|custom -Id <id> -Name <name>
-                       -TargetHost <ip> -TargetPort <port> [-SshUser <user>]
+                       -Preset ssh|http|https|custom
+                       [-Name <name>] [-TargetHost <ip>] [-TargetPort <port>]
+                       [-SshUser <user>]  (required for ssh)
   set-service       Edit a pending service: <id> <property> <value>
                        properties: name, target-host, target-port, ssh-user
   enable-service    Enable a pending service: <id> (reuses same public port)
@@ -92,11 +93,22 @@ frp-client (Windows)
   sync              Reconcile local services against server releases
                        (alias: reconcile; after frpctl release service)
   update            Update frpc.exe (preserve identity/ports); -Check for dry run
+  pause             Stop frpc and disable autostart (identity/ports preserved)
+  resume            Re-enable autostart and start frpc
   uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor            Basic local checks
   support-bundle    Create a sanitized local diagnostic zip (-Output <path>)
   autostart         Show/enable/disable the startup autostart task
                        (-Enable / -Disable; no args shows current status)
+
+Choose the service type, target host, and port. Service IDs are generated
+automatically (ssh, http, https, tcp-<port>, with -2/-3 suffixes on collision).
+Operators do not need to invent a Service ID.
+
+Target host is the service machine as seen from this FRP client:
+  127.0.0.1       service runs on this FRP client
+  192.168.x.x     another server reachable on the LAN
+  hostname        another resolvable internal host
 
 Autostart registers a product-owned Scheduled Task (FRPAutoDeployClient)
 that runs `frp-client start` as SYSTEM at system boot, so frpc survives a
@@ -317,6 +329,56 @@ function Invoke-FrpClientUpdate {
     }
 }
 
+
+function Invoke-FrpClientPause {
+    $taskName = Get-FrpAutostartTaskName
+    $wasAutostart = Test-FrpAutostartTaskExists -TaskName $taskName
+    $st = Get-FrpClientStatus
+    if ((-not $st.Running) -and (-not $wasAutostart)) {
+        Write-Host 'Client already paused. FRP remote access remains blocked.'
+        return 0
+    }
+    try {
+        Stop-FrpClient | Out-Null
+    } catch {
+        Write-Host ("ERROR: failed to stop frpc: {0}" -f $_.Exception.Message)
+        return 1
+    }
+    if ($wasAutostart) {
+        try {
+            Uninstall-FrpAutostartTask -TaskName $taskName | Out-Null
+        } catch {
+            Write-Host ("ERROR: failed to disable autostart: {0}" -f $_.Exception.Message)
+            return 1
+        }
+    }
+    Write-Host 'Client paused. All FRP remote access is blocked.'
+    Write-Host 'Identity, services, and public ports are preserved.'
+    return 0
+}
+
+function Invoke-FrpClientResume {
+    $taskName = Get-FrpAutostartTaskName
+    $st = Get-FrpClientStatus
+    $hasAutostart = Test-FrpAutostartTaskExists -TaskName $taskName
+    if ($st.Running -and $hasAutostart) {
+        Write-Host 'Client already running.'
+        return 0
+    }
+    try {
+        if (-not $hasAutostart) {
+            Install-FrpAutostartTask -TaskName $taskName | Out-Null
+        }
+        if (-not $st.Running) {
+            Start-FrpClient | Out-Null
+        }
+    } catch {
+        Write-Host ("ERROR: failed to resume FRP client: {0}" -f $_.Exception.Message)
+        return 1
+    }
+    Write-Host 'Client resumed. FRP remote access is restored.'
+    return 0
+}
 
 function Invoke-FrpClientUninstall {
     if (-not (Enter-FrpClientLock)) { return 1 }
@@ -611,26 +673,33 @@ function Show-FrpClientList {
     $map = ConvertTo-FrpServiceMap -Services $state.services
     if ($map.Count -eq 0) {
         Write-Host '(none)'
-        return 0
-    }
-    $labels = @{ ssh = 'SSH / TCP'; http = 'HTTP / TCP'; https = 'HTTPS / TCP' }
-    $n = 0
-    foreach ($sid in $map.Keys) {
-        $n++
-        $item = $map[$sid]
-        $enabled = ($item.enabled -ne $false)
-        $stateLabel = $(if ($enabled) { 'enabled' } else { 'disabled' })
-        $preset = [string]$item.preset
-        $typeLabel = $labels[$preset]
-        if (-not $typeLabel) { $typeLabel = 'Custom TCP' }
-        Write-Host ("{0}. {1}" -f $n, $sid)
-        Write-Host ("   Type        : {0}" -f $typeLabel)
-        Write-Host ("   Target      : {0}:{1}" -f $item.local_ip, $item.local_port)
-        if ($item.remote_port) {
-            Write-Host ("   Public port : {0}" -f $item.remote_port)
+    } else {
+        $labels = @{ ssh = 'SSH / TCP'; http = 'HTTP / TCP'; https = 'HTTPS / TCP' }
+        $n = 0
+        foreach ($sid in $map.Keys) {
+            $n++
+            $item = $map[$sid]
+            $enabled = ($item.enabled -ne $false)
+            $stateLabel = $(if ($enabled) { 'enabled' } else { 'disabled' })
+            $preset = [string]$item.preset
+            $typeLabel = $labels[$preset]
+            if (-not $typeLabel) { $typeLabel = 'Custom TCP' }
+            Write-Host ("{0}. {1}" -f $n, $sid)
+            Write-Host ("   Type        : {0}" -f $typeLabel)
+            Write-Host ("   Target      : {0}:{1}" -f $item.local_ip, $item.local_port)
+            if ($item.remote_port) {
+                Write-Host ("   Public port : {0}" -f $item.remote_port)
+            }
+            Write-Host ("   State       : {0}" -f $stateLabel)
+            Write-Host ''
         }
-        Write-Host ("   State       : {0}" -f $stateLabel)
-        Write-Host ''
+    }
+    if (Test-FrpDraftPending) {
+        Write-Host 'Pending service changes exist.'
+        Write-Host 'Run:'
+        Write-Host '  apply'
+        Write-Host 'or:'
+        Write-Host '  discard'
     }
     return 0
 }
@@ -644,7 +713,13 @@ function Invoke-FrpAddServiceCli {
             Write-Host $_.Exception.Message
             return 1
         }
-        Write-Host ("Pending service {0} added. Run apply to make it live." -f $sid)
+        Write-Host ("Pending service '{0}' added." -f $sid)
+        Write-Host ''
+        Write-Host 'Apply:'
+        Write-Host '  apply'
+        Write-Host ''
+        Write-Host 'Discard:'
+        Write-Host '  discard'
         return 0
     })
 }
@@ -662,7 +737,13 @@ function Invoke-FrpSetServiceCli {
             Write-Host $_.Exception.Message
             return 1
         }
-        Write-Host ("Pending service {0} {1} updated. Run apply to make it live." -f $Id, $Property)
+        Write-Host ("Pending service '{0}' {1} updated." -f $Id, $Property)
+        Write-Host ''
+        Write-Host 'Apply:'
+        Write-Host '  apply'
+        Write-Host ''
+        Write-Host 'Discard:'
+        Write-Host '  discard'
         return 0
     })
 }
@@ -687,12 +768,18 @@ function Invoke-FrpEnableServiceCli {
             return 1
         }
         if ($Enable) {
-            Write-Host ("Service {0} will be enabled (same public port reused). Run apply to make it live." -f $Id)
+            Write-Host ("Service '{0}' will be enabled (same public port reused)." -f $Id)
         } elseif ($wasEnabled) {
-            Write-Host ("Service {0} will be disabled. The public reservation remains until released server-side." -f $Id)
+            Write-Host ("Service '{0}' will be disabled. The public reservation remains until released server-side." -f $Id)
         } else {
-            Write-Host ("Service {0} is already disabled in the pending state." -f $Id)
+            Write-Host ("Service '{0}' is already disabled in the pending state." -f $Id)
         }
+        Write-Host ''
+        Write-Host 'Apply:'
+        Write-Host '  apply'
+        Write-Host ''
+        Write-Host 'Discard:'
+        Write-Host '  discard'
         return 0
     })
 }
@@ -741,6 +828,8 @@ switch ($Command) {
     'sync' { exit (Invoke-FrpClientSync) }
     'reconcile' { exit (Invoke-FrpClientSync) }
     'update' { exit (Invoke-FrpClientUpdate -CheckOnly:$Check) }
+    'pause' { exit (Invoke-FrpClientPause) }
+    'resume' { exit (Invoke-FrpClientResume) }
     'uninstall' { exit (Invoke-FrpClientUninstall) }
     'doctor' { exit (Invoke-FrpClientDoctor) }
     'support-bundle' { exit (Invoke-FrpClientSupportBundle -OutputPath $Output) }

@@ -200,12 +200,12 @@ HOOK="$WORKDIR/hook.log"
 : >"$HOOK"
 export FRP_CLIENT_HOOK_LOG="$HOOK"
 before="$(python3 - "$TREE" <<'PY'
-import hashlib, os, sys
+import hashlib, sys
 from pathlib import Path
 root=Path(sys.argv[1])
 h=hashlib.sha256()
 for p in sorted(root.rglob('*')):
-    if p.is_file():
+    if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc':
         h.update(p.read_bytes())
 print(h.hexdigest())
 PY
@@ -219,12 +219,23 @@ from pathlib import Path
 root=Path(sys.argv[1])
 h=hashlib.sha256()
 for p in sorted(root.rglob('*')):
-    if p.is_file():
+    if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc':
         h.update(p.read_bytes())
 print(h.hexdigest())
 PY
 )"
 [[ "$before" == "$after" ]] || fail "read-only CLI modified files"
+if grep -q 'Pending service changes exist' "$WORKDIR/list.out"; then
+  fail "list should not invent pending notice without draft"
+fi
+# Create empty draft marker and ensure list reports it (cheap detection).
+mkdir -p "$TREE/var/lib/frp-auto-deploy"
+cp "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json"
+"$ROOT/tools/frp-client" list >"$WORKDIR/list-pending.out"
+grep -q 'Pending service changes exist' "$WORKDIR/list-pending.out" || fail "list pending notice"
+grep -q 'service apply' "$WORKDIR/list-pending.out" || fail "list pending apply"
+grep -q 'service discard' "$WORKDIR/list-pending.out" || fail "list pending discard"
+rm -f "$TREE/var/lib/frp-auto-deploy/client-draft.json"
 if grep -qx enroll "$HOOK"; then fail "read-only contacted allocator"; fi
 if grep -qx restart "$HOOK"; then fail "read-only restarted frpc"; fi
 grep -q "Project version : ${PROJECT_VERSION}" "$WORKDIR/status.out" || fail "status project version"
@@ -245,7 +256,7 @@ from pathlib import Path
 root=Path(sys.argv[1])
 h=hashlib.sha256()
 for p in sorted(root.rglob('*')):
-    if p.is_file():
+    if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc':
         h.update(p.read_bytes())
 print(h.hexdigest())
 PY
@@ -728,7 +739,7 @@ if frp_client_main >"$WORKDIR/reinstall.out" 2>"$WORKDIR/reinstall.err"; then
   fail "installer should refuse an existing client"
 fi
 grep -q 'already has an FRP client installed' "$WORKDIR/reinstall.err" || fail "existing-install refusal message"
-grep -q 'frpctl update' "$WORKDIR/reinstall.err" || fail "existing-install should point at upgrade"
+grep -q 'frpctl system update' "$WORKDIR/reinstall.err" || fail "existing-install should point at upgrade"
 fp_after="$(python3 "$ROOT/lib/frp_mgmt_auth.py" fingerprint "$TREE/etc/frp/client-identity.pub")"
 [[ "$fp_before" == "$fp_after" ]] || fail "refused reinstall rotated identity"
 cmp -s "$TREE/etc/frp/client-identity.key" "$WORKDIR/key.before" || fail "refused reinstall replaced key"
