@@ -197,7 +197,7 @@ if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   # SHARED with server: remove only when server role is absent.
   if [[ "$SERVER_PRESENT" != "1" ]]; then
     for f in frp-common.sh frp_mgmt_auth.py frp_health_check.py \
-      frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py \
+      frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py frp_service_id.py \
       frp-role-ownership.sh; do
       frp_u_rm_file "${libdir}/${f}"
     done

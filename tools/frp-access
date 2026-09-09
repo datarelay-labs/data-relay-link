@@ -324,9 +324,14 @@ def cmd_assign(cfg, args):
             print("2) Cancel")
             choice = input("Select [2]: ").strip() or "2"
             if choice == "1":
-                raise SystemExit(
-                    "Use: frpctl access add-source %r --name NAME --source CIDR" % args.list
+                print()
+                print("Add a source first:")
+                print()
+                print(
+                    "  access add-source %s --name <name> --source <CIDR>"
+                    % args.list
                 )
+                raise SystemExit(2)
             raise SystemExit(0)
         raise SystemExit("ERROR: %s" % exc)
     print("Assigned Access List %s to %s:%s (port %s)" % (

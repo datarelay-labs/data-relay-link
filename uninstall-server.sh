@@ -118,7 +118,7 @@ for _frp_own in \
 done
 unset _frp_own
 if ! declare -F frp_role_is_shared_lib >/dev/null 2>&1; then
-  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py '
+  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py frp_service_id.py '
   frp_role_is_shared_lib() {
     local base="$1"
     [[ "$FRP_ROLE_SHARED_LIB_BASENAMES" == *" ${base} "* ]]

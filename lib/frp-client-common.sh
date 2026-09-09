@@ -1006,18 +1006,74 @@ EOF
   fi
 }
 
+frp_ux_service_id_py() {
+  local cand
+  for cand in \
+    "${_FRP_CLIENT_COMMON_DIR}/frp_service_id.py" \
+    "${FRP_SOURCE_ROOT:-}/lib/frp_service_id.py" \
+    "${FRP_CLIENT_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    "${FRP_DEPLOY_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    /usr/local/lib/frp-auto-deploy/frp_service_id.py
+  do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  return 1
+}
+
+frp_ux_used_service_ids_json() {
+  python3 - "${SERVICES_FILE:-}" <<'PY'
+import json, sys
+from pathlib import Path
+used = []
+path = Path(sys.argv[1]) if sys.argv[1] else None
+if path and path.is_file():
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        data = None
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                sid = str(item.get("id") or "").strip().lower()
+                if sid:
+                    used.append(sid)
+    elif isinstance(data, dict):
+        for sid in (data.get("services") or {}):
+            text = str(sid or "").strip().lower()
+            if text:
+                used.append(text)
+print(json.dumps(used))
+PY
+}
+
+frp_ux_suggest_service_id() {
+  local preset="$1" port="${2:--}"
+  local py used
+  py="$(frp_ux_service_id_py)" || {
+    echo "ERROR: missing frp_service_id.py" >&2
+    return 1
+  }
+  used="$(frp_ux_used_service_ids_json)"
+  python3 "$py" suggest "$preset" "$port" "$used"
+}
+
 frp_ux_target_host_help() {
+  local py
+  py="$(frp_ux_service_id_py)" || true
+  if [[ -n "${py:-}" ]]; then
+    python3 "$py" target-host-help
+    echo
+    return 0
+  fi
   cat <<'EOF'
-Target host
-  The IP address or hostname where the actual service runs.
+Target host is the service machine as seen from this FRP client.
 
-  Use 127.0.0.1 if the service is running on this machine.
-  Enter another reachable internal IP if it runs on another server.
-
-  Examples:
-    127.0.0.1
-    192.168.10.20
-    internal-api.example.local
+Use:
+  127.0.0.1       service runs on this FRP client
+  192.168.x.x     another server reachable on the LAN
+  hostname        another resolvable internal host
 
 EOF
 }
@@ -1213,35 +1269,37 @@ frp_ux_prompt_new_service() {
     choice="$(read_tty "Select: " "")"
     case "$choice" in
       1)
-        frp_prompt_service_id ssh sid
         frp_prompt_target_host 127.0.0.1 host
         frp_prompt_target_port ssh 22 port
         frp_prompt_ssh_user user
         maybe_warn_connectivity "$host" "$port" "SSH"
+        sid="$(frp_ux_suggest_service_id ssh)" || return 1
+        echo "Service ID: $sid"
         _frp_new_payload="$(service_payload ssh "$sid" SSH "$host" "$port" "$user")"
         ;;
       2)
-        frp_prompt_service_id http sid
         frp_prompt_target_host 127.0.0.1 host
         frp_prompt_target_port http 80 port
         maybe_warn_connectivity "$host" "$port" "HTTP"
+        sid="$(frp_ux_suggest_service_id http)" || return 1
+        echo "Service ID: $sid"
         _frp_new_payload="$(service_payload http "$sid" HTTP "$host" "$port")"
         ;;
       3)
-        frp_prompt_service_id https sid
         frp_prompt_target_host 127.0.0.1 host
         frp_prompt_target_port https 443 port
         maybe_warn_connectivity "$host" "$port" "HTTPS"
+        sid="$(frp_ux_suggest_service_id https)" || return 1
+        echo "Service ID: $sid"
         _frp_new_payload="$(service_payload https "$sid" HTTPS "$host" "$port")"
         ;;
       4)
-        frp_ux_service_id_help
-        echo
-        sid="$(read_tty "Service ID: " "")"
-        name="$(read_tty "Display name [${sid}]: " "$sid")"
         frp_prompt_target_host 127.0.0.1 host
         frp_prompt_target_port custom "" port
         maybe_warn_connectivity "$host" "$port" "TCP"
+        sid="$(frp_ux_suggest_service_id custom "$port")" || return 1
+        echo "Service ID: $sid"
+        name="$(read_tty "Display name [${sid}]: " "$sid")"
         _frp_new_payload="$(service_payload custom "$sid" "$name" "$host" "$port")"
         ;;
       5)
@@ -4250,6 +4308,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_ctl_grammar.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_service_id.py" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_service_id.py" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp_ctl_repl.py" ]] || {
     echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
     return 1
@@ -4275,6 +4337,7 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_doctor.py" "${libdir}/frp_doctor.py"
   install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
+  install -m 0644 "${source}/lib/frp_service_id.py" "${libdir}/frp_service_id.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${bindir}/frpctl"
@@ -4301,6 +4364,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp_doctor.py:0644:lib/frp_doctor.py" \
     "usr/local/lib/frp-auto-deploy/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
+    "usr/local/lib/frp-auto-deploy/frp_service_id.py:0644:lib/frp_service_id.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
@@ -4405,6 +4469,7 @@ frp_client_upgrade_validate_staged() {
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_doctor.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_support_bundle.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_service_id.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_repl.py" || return 1
   python3 -m py_compile "${staged}/usr/local/bin/frp-support-bundle" || return 1
   rm -rf "${staged}/usr/local/lib/frp-auto-deploy/__pycache__" \

@@ -169,10 +169,22 @@ create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]
 create enrollments --count N
 create enrollments --csv clients.csv
 create backup [path]
+service add ssh|http|https|custom
+service add profile <PROFILE>
+service add ssh --ssh-user USER [--target-host HOST]
+service add http [--target-host HOST]
+service add custom --target-port PORT [--target-host HOST]
+service add ssh --id ID ...   # advanced: override automatic Service ID
+```
+
+Compatibility: `service add --preset …`, `add service …` still work.
+Service IDs are generated automatically (`ssh`, `ssh-2`, `tcp-3389`, …).
+Public ports are allocated on `service apply`.
+
+```text
 service add [--preset ssh|http|https|custom] ...
 ```
 
-Compatibility: `add service …` still works.
 Manual groups have immutable IDs (`grp_` plus eight lowercase hex digits),
 mutable names and descriptions, and multiple client memberships. Group
 selectors resolve in this order: exact ID, unique ID prefix, unique exact
@@ -197,8 +209,12 @@ Enrollment Code and bootstrap ticket secrets are never completed or shown by
 ## service (client)
 
 ```text
-service add [--preset ssh|http|https|custom] ...
-service add --profile <PROFILE|NAME> [--id ID] [--name NAME]
+service add ssh|http|https|custom
+service add profile <PROFILE>
+service add ssh --ssh-user USER [--target-host HOST]
+service add http [--target-host HOST]
+service add custom --target-port PORT [--target-host HOST]
+service add ssh --id ID ...          # advanced: override automatic Service ID
 service set <service-id> <property> <value>
 service enable <service-id>
 service disable <service-id>
@@ -206,12 +222,18 @@ service apply
 service discard
 ```
 
-Canonical client service management. Draft mutations stay pending until
+Canonical client service management. Service IDs are generated automatically
+(`ssh`, `ssh-2`, `tcp-3389`, …). Draft mutations stay pending until
 `service apply`. `service discard` drops pending changes only.
+
+Target host is the service machine as seen from this FRP client
+(`127.0.0.1` for local, LAN IP/hostname for another reachable host).
 
 Compatibility aliases (same backends):
 
 ```text
+service add --preset …
+service add --profile …
 add service …
 set service …
 enable service <service-id>

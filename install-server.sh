@@ -34,6 +34,7 @@ for f in \
   "$BASE_DIR/lib/frp_support_bundle.py" \
   "$BASE_DIR/lib/frp_ctl_grammar.py" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
+  "$BASE_DIR/lib/frp_service_id.py" \
   "$BASE_DIR/release-manifest.json" \
   "$BASE_DIR/tools/frp-create-client" \
   "$BASE_DIR/tools/frp-enrollments" \
@@ -2196,25 +2197,38 @@ EOF2
   fi
   frp_print_nat_summary
   cat <<EOF2
-Create a client enrollment:
-  sudo frpctl create-client
-  sudo frp-create-client
+Everyday management
+====================
 
-Everyday command (remember this one):
   sudo frpctl
-  Then type help inside the CLI.
 
-Check schema v2 deployment readiness:
-  sudo frpctl status
-  sudo frp-server-status
-  sudo frp-server-status --check
+Then use Tab or '?' to discover commands.
 
-Update FRP to the tested version:
-  sudo frpctl update
-  sudo frp-update
+Next steps
+==========
+
+Create a Zero-Touch client:
+  sudo frpctl create zero-touch
+
+Create a Manual Enrollment Code:
+  sudo frpctl create enrollment
+
+Check server status:
+  sudo frpctl show status
 
 List clients:
+  sudo frpctl show clients
+
+Run diagnostics:
+  sudo frpctl doctor
+
+Advanced / troubleshooting
+==========================
+
+  sudo frp-create-client
   sudo frp-clients
+  sudo frp-server-status
+  sudo frp-update
 
 ============================================================
 EOF2

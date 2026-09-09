@@ -128,7 +128,13 @@ echo "$all_client" | has_line system || fail "client list system"
 if echo "$all_client" | has_line add; then fail "client offered legacy add at root"; fi
 if echo "$all_client" | has_line apply; then fail "client offered legacy apply at root"; fi
 if echo "$all_client" | has_line doctor; then fail "client offered doctor at root"; fi
-echo "$all_client" | has_line status || fail "client list status"
+# status/version remain executable shortcuts but are hidden from client-only Tab discovery
+if echo "$all_client" | has_line status; then
+  fail "client-only Tab must not list status shortcut"
+fi
+if echo "$all_client" | has_line version; then
+  fail "client-only Tab must not list version shortcut"
+fi
 if echo "$all_client" | has_line enroll; then fail "client offered enroll"; fi
 if echo "$all_client" | has_line clients; then fail "client offered clients"; fi
 if echo "$all_client" | has_line revoke; then fail "client offered revoke"; fi
@@ -141,6 +147,19 @@ svc_ns="$(cands "service ")"
 echo "$svc_ns" | has_line add || fail "service missing add"
 echo "$svc_ns" | has_line apply || fail "service missing apply"
 echo "$svc_ns" | has_line enable || fail "service missing enable"
+add_types="$(cands "service add ")"
+echo "$add_types" | has_line ssh || fail "service add missing ssh"
+echo "$add_types" | has_line http || fail "service add missing http"
+echo "$add_types" | has_line https || fail "service add missing https"
+echo "$add_types" | has_line custom || fail "service add missing custom"
+echo "$add_types" | has_line profile || fail "service add missing profile"
+if echo "$add_types" | has_line --preset; then fail "service add Tab should not lead with --preset"; fi
+ssh_flags="$(cands "service add ssh --")"
+echo "$ssh_flags" | has_line --ssh-user || fail "ssh flags missing --ssh-user"
+echo "$ssh_flags" | has_line --target-host || fail "ssh flags missing --target-host"
+if echo "$ssh_flags" | has_line --profile; then fail "ssh flags should not include --profile"; fi
+http_flags="$(cands "service add http --")"
+if echo "$http_flags" | has_line --ssh-user; then fail "http flags should not include --ssh-user"; fi
 svc_props="$(cands "service set ssh ")"
 echo "$svc_props" | has_line target-host || fail "service set missing target-host"
 echo "$svc_props" | has_line health-type || fail "service set missing health-type"

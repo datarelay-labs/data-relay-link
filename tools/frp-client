@@ -233,6 +233,17 @@ if fail:
     print("Recovery required : yes")
 PY
   fi
+  frp_client_print_draft_pending_notice
+}
+
+frp_client_print_draft_pending_notice() {
+  if [[ -f "$(frp_client_draft_path)" ]]; then
+    echo "Pending service changes exist."
+    echo "Run:"
+    echo "  service apply"
+    echo "or:"
+    echo "  service discard"
+  fi
 }
 
 frp_client_list() {
@@ -242,6 +253,7 @@ frp_client_list() {
   # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
   frp_print_state_services "$path"
+  frp_client_print_draft_pending_notice
 }
 
 frp_client_info() {
@@ -998,7 +1010,13 @@ elif prop in HC.SERVICE_HEALTH_PROPS:
 else:
     raise SystemExit('ERROR: unknown service property')
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-print('Pending service %s %s updated. Run apply to make it live.' % (sid, prop))
+print('Pending change saved.')
+print()
+print('Apply:')
+print('  service apply')
+print()
+print('Discard:')
+print('  service discard')
 PY
 }
 
@@ -1017,15 +1035,21 @@ if not isinstance(item, dict):
 currently = item.get('enabled', True) is not False
 if enable:
     item['enabled'] = True
-    print('Service %s will be enabled. Run apply to make it live.' % sid)
+    print("Service '%s' will be enabled (same public port reused)." % sid)
 elif currently:
     enabled_count = sum(1 for rec in state['services'].values() if rec.get('enabled', True) is not False)
     if enabled_count <= 1:
         raise SystemExit('ERROR: at least one enabled service is required.')
     item['enabled'] = False
-    print('Service %s will be disabled. The public reservation remains until release service.' % sid)
+    print("Service '%s' will be disabled. The public reservation remains until released server-side." % sid)
 else:
-    print('Service %s is already disabled in the pending state.' % sid)
+    print("Service '%s' is already disabled in the pending state." % sid)
+print()
+print('Apply:')
+print('  service apply')
+print()
+print('Discard:')
+print('  service discard')
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 }
@@ -1145,6 +1169,289 @@ print(json.dumps(payload))
 PY
 }
 
+frp_client_service_id_py() {
+  local here cand
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for cand in \
+    "${FRP_SOURCE_ROOT:-}/lib/frp_service_id.py" \
+    "$here/../lib/frp_service_id.py" \
+    "${FRP_CLIENT_LIB:+$(dirname "${FRP_CLIENT_LIB}")/frp_service_id.py}" \
+    "${FRP_CLIENT_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    "${FRP_DEPLOY_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    /usr/local/lib/frp-auto-deploy/frp_service_id.py
+  do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  echo "ERROR: missing frp_service_id.py" >&2
+  return 1
+}
+
+frp_client_used_service_ids_json() {
+  # Union of committed + draft Service IDs (for auto-ID collision checks).
+  python3 - "$(frp_client_state_path)" "$(frp_client_draft_path)" <<'PY'
+import json, sys
+from pathlib import Path
+used = set()
+for raw in sys.argv[1:3]:
+    path = Path(raw)
+    if not path.is_file():
+        continue
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    for sid in (data.get("services") or {}):
+        text = str(sid or "").strip().lower()
+        if text:
+            used.add(text)
+print(json.dumps(sorted(used)))
+PY
+}
+
+frp_client_suggest_service_id() {
+  local preset="$1" port="${2:-}"
+  local py used
+  py="$(frp_client_service_id_py)" || return 1
+  used="$(frp_client_used_service_ids_json)"
+  python3 "$py" suggest "$preset" "${port:--}" "$used"
+}
+
+frp_client_print_pending_added() {
+  local sid="$1"
+  local py
+  py="$(frp_client_service_id_py)" || {
+    echo "Pending service '${sid}' added."
+    echo
+    echo "Apply:"
+    echo "  service apply"
+    echo
+    echo "Discard:"
+    echo "  service discard"
+    return 0
+  }
+  python3 - "$py" "$sid" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("frp_service_id", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(mod.pending_change_footer(sys.argv[2], added=True))
+PY
+}
+
+frp_client_print_pending_saved() {
+  echo "Pending change saved."
+  echo
+  echo "Apply:"
+  echo "  service apply"
+  echo
+  echo "Discard:"
+  echo "  service discard"
+}
+
+frp_client_print_target_host_help() {
+  local py
+  py="$(frp_client_service_id_py)" || {
+    cat <<'EOF'
+Target host is the service machine as seen from this FRP client.
+
+Use:
+  127.0.0.1       service runs on this FRP client
+  192.168.x.x     another server reachable on the LAN
+  hostname        another resolvable internal host
+EOF
+    return 0
+  }
+  python3 "$py" target-host-help
+}
+
+frp_client_print_add_usage() {
+  cat <<'EOF' >&2
+Missing service type.
+
+Available:
+  ssh
+  http
+  https
+  custom
+  profile
+
+Example:
+  frpctl service add ssh --ssh-user aella
+EOF
+}
+
+frp_client_add_service_wizard() {
+  local choice
+  echo
+  echo "Add service"
+  echo "==========="
+  echo
+  echo "1) SSH"
+  echo "2) HTTP"
+  echo "3) HTTPS"
+  echo "4) Custom TCP"
+  echo "5) Server profile"
+  echo "6) Cancel"
+  echo
+  choice="$(frp_client_read_prompt "Select: " "")" || return 1
+  case "$choice" in
+    1) frp_client_add_service_interactive ssh ;;
+    2) frp_client_add_service_interactive http ;;
+    3) frp_client_add_service_interactive https ;;
+    4) frp_client_add_service_interactive custom ;;
+    5) frp_client_add_service_interactive profile ;;
+    6|"")
+      echo "Cancelled."
+      return 0
+      ;;
+    *)
+      echo "ERROR: select 1-6" >&2
+      return 2
+      ;;
+  esac
+}
+
+frp_client_read_prompt() {
+  local prompt="$1" default="${2:-}" value=""
+  if [[ -n "${FRP_CTL_TEST_INPUT:-}" ]]; then
+    # Prefer frpctl test harness when nested under guided menus.
+    if declare -F frpctl_read >/dev/null 2>&1; then
+      frpctl_read "$prompt" "$default"
+      return $?
+    fi
+  fi
+  if [[ -t 0 ]]; then
+    if ! IFS= read -r -p "$prompt" value; then
+      return 1
+    fi
+  elif [[ -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+    if [[ -z "${_FRP_CLIENT_INPUT_READY:-}" ]]; then
+      _FRP_CLIENT_INPUT_FILE="$(mktemp)"
+      printf '%s' "${FRP_CLIENT_TEST_INPUT}" >"$_FRP_CLIENT_INPUT_FILE"
+      if [[ "${FRP_CLIENT_TEST_INPUT}" != *$'\n' ]]; then
+        printf '\n' >>"$_FRP_CLIENT_INPUT_FILE"
+      fi
+      exec 8<"$_FRP_CLIENT_INPUT_FILE"
+      _FRP_CLIENT_INPUT_READY=1
+    fi
+    if ! IFS= read -r value <&8; then
+      return 1
+    fi
+  else
+    return 1
+  fi
+  if [[ -z "$value" ]]; then
+    value="$default"
+  fi
+  printf '%s' "$value"
+}
+
+frp_client_add_service_interactive() {
+  local preset="$1"
+  local host="127.0.0.1" port="" user="" name="" sid="" profile=""
+  local default_port="" default_name="" title=""
+  case "$preset" in
+    ssh)
+      title="Add SSH service"
+      default_port=22
+      default_name="SSH"
+      ;;
+    http)
+      title="Add HTTP service"
+      default_port=80
+      default_name="HTTP"
+      ;;
+    https)
+      title="Add HTTPS service"
+      default_port=443
+      default_name="HTTPS"
+      ;;
+    custom)
+      title="Add custom TCP service"
+      default_name=""
+      ;;
+    profile)
+      profile="$(frp_client_read_prompt "Profile name: " "")" || return 1
+      profile="${profile#"${profile%%[![:space:]]*}"}"
+      profile="${profile%"${profile##*[![:space:]]}"}"
+      if [[ -z "$profile" ]]; then
+        echo "Missing profile." >&2
+        echo >&2
+        echo "Use:" >&2
+        echo "  service add profile <PROFILE>" >&2
+        return 2
+      fi
+      frp_client_add_service_from_profile "$profile" "" ""
+      return $?
+      ;;
+    *)
+      echo "ERROR: unknown service type: $preset" >&2
+      return 2
+      ;;
+  esac
+  echo
+  echo "$title"
+  echo "==============="
+  echo
+  frp_client_print_target_host_help
+  echo
+  host="$(frp_client_read_prompt "Target host [127.0.0.1]: " "127.0.0.1")" || return 1
+  host="${host#"${host%%[![:space:]]*}"}"
+  host="${host%"${host##*[![:space:]]}"}"
+  [[ -n "$host" ]] || host="127.0.0.1"
+  if [[ -n "$default_port" ]]; then
+    port="$(frp_client_read_prompt "Target port [${default_port}]: " "$default_port")" || return 1
+  else
+    port="$(frp_client_read_prompt "Target port: " "")" || return 1
+  fi
+  port="${port#"${port%%[![:space:]]*}"}"
+  port="${port%"${port##*[![:space:]]}"}"
+  if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+    echo "ERROR: invalid target port; must be an integer 1-65535" >&2
+    return 2
+  fi
+  if [[ "$preset" == "ssh" ]]; then
+    echo
+    echo "SSH user"
+    echo "  Login username shown in the generated SSH connection command."
+    echo
+    while true; do
+      user="$(frp_client_read_prompt "SSH user: " "")" || return 1
+      user="${user#"${user%%[![:space:]]*}"}"
+      user="${user%"${user##*[![:space:]]}"}"
+      [[ -n "$user" ]] && break
+      echo "ERROR: SSH user is required." >&2
+    done
+  fi
+  if [[ "$preset" == "custom" ]]; then
+    default_name="TCP ${port}"
+  fi
+  name="$(frp_client_read_prompt "Display name [${default_name}]: " "$default_name")" || return 1
+  name="${name#"${name%%[![:space:]]*}"}"
+  name="${name%"${name##*[![:space:]]}"}"
+  [[ -n "$name" ]] || name="$default_name"
+  sid="$(frp_client_suggest_service_id "$preset" "$port")" || return 1
+  echo
+  echo "Service ID : ${sid} (automatic)"
+  echo
+  frp_client_add_service_core "$preset" "$sid" "$name" "$host" "$port" "$user"
+}
+
+frp_client_add_service_core() {
+  local preset="$1" sid="$2" name="$3" host="$4" port="$5" user="${6:-}"
+  local payload
+  frp_client_ensure_pending
+  payload="$(python3 -c 'import json,sys; print(json.dumps({
+    "id": sys.argv[1], "name": sys.argv[2], "preset": sys.argv[3],
+    "protocol": "tcp", "local_ip": sys.argv[4], "local_port": int(sys.argv[5]),
+    "ssh_user": sys.argv[6],
+  }))' "$sid" "$name" "$preset" "$host" "$port" "$user")"
+  frp_state_add_payload "$payload"
+  frp_client_print_pending_added "$sid"
+}
+
 frp_client_add_service_from_profile() {
   local selector="$1" sid="$2" name="$3"
   local profile_json payload
@@ -1158,6 +1465,23 @@ frp_client_add_service_from_profile() {
   fi
   profile_json="$(frp_client_resolve_profile_json "$selector")" || return $?
   frp_client_ensure_pending
+  # Auto-generate Service ID from profile preset when not overridden.
+  if [[ -z "$sid" ]]; then
+    local preset_hint port_hint
+    preset_hint="$(PROFILE_JSON="$profile_json" python3 - <<'PY'
+import json, os
+p = json.loads(os.environ["PROFILE_JSON"])
+print(str(p.get("preset") or "custom").strip().lower() or "custom")
+PY
+)"
+    port_hint="$(PROFILE_JSON="$profile_json" python3 - <<'PY'
+import json, os
+p = json.loads(os.environ["PROFILE_JSON"])
+print(p.get("target_port") or p.get("local_port") or "")
+PY
+)"
+    sid="$(frp_client_suggest_service_id "$preset_hint" "${port_hint:-}")" || return 1
+  fi
   payload="$(PROFILE_JSON="$profile_json" FRP_SOURCE_ROOT="${FRP_SOURCE_ROOT:-}" python3 - "$sid" "$name" <<'PY'
 import importlib.util
 import json
@@ -1189,7 +1513,7 @@ def load_prof():
 
 PROF = load_prof()
 profile = json.loads(os.environ["PROFILE_JSON"])
-payload = PROF.profile_to_service_payload(profile, service_id=sys.argv[1], name=sys.argv[2])
+payload = PROF.profile_to_service_payload(profile, service_id=sys.argv[1] or None, name=sys.argv[2] or None)
 print(json.dumps(payload))
 PY
 )" || return $?
@@ -1220,56 +1544,192 @@ for path in candidates:
         )
         break
 PY
-  echo "Pending service ${sid} added from profile ${selector}. Run apply to make it live."
+  echo "Pending service '${sid}' added from profile ${selector}."
+  echo
+  echo "Apply:"
+  echo "  service apply"
+  echo
+  echo "Discard:"
+  echo "  service discard"
 }
 
 frp_client_add_service_cli() {
-  local preset="custom" sid="" name="" host="127.0.0.1" port="" user="" profile=""
+  local preset="" sid="" name="" host="127.0.0.1" port="" user="" profile=""
+  local positional="" host_set=0
+
+  # Bare invocation → guided wizard (TTY) or concise usage (non-TTY).
+  if [[ $# -eq 0 ]]; then
+    if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+      frp_client_add_service_wizard
+      return $?
+    fi
+    frp_client_print_add_usage
+    return 2
+  fi
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --profile) profile="$2"; shift 2 ;;
-      --preset) preset="$2"; shift 2 ;;
-      --id) sid="$2"; shift 2 ;;
-      --name) name="$2"; shift 2 ;;
-      --target-host) host="$2"; shift 2 ;;
-      --target-port) port="$2"; shift 2 ;;
-      --ssh-user) user="$2"; shift 2 ;;
-      *)
+      --profile)
+        [[ $# -ge 2 ]] || { echo "ERROR: --profile requires a value" >&2; return 2; }
+        profile="$2"; shift 2
+        ;;
+      --preset)
+        [[ $# -ge 2 ]] || { echo "ERROR: --preset requires a value" >&2; return 2; }
+        preset="$2"; shift 2
+        ;;
+      --id)
+        [[ $# -ge 2 ]] || { echo "ERROR: --id requires a value" >&2; return 2; }
+        sid="$2"; shift 2
+        ;;
+      --name)
+        [[ $# -ge 2 ]] || { echo "ERROR: --name requires a value" >&2; return 2; }
+        name="$2"; shift 2
+        ;;
+      --target-host)
+        [[ $# -ge 2 ]] || { echo "ERROR: --target-host requires a value" >&2; return 2; }
+        host="$2"; host_set=1; shift 2
+        ;;
+      --target-port)
+        [[ $# -ge 2 ]] || { echo "ERROR: --target-port requires a value" >&2; return 2; }
+        port="$2"; shift 2
+        ;;
+      --ssh-user)
+        [[ $# -ge 2 ]] || { echo "ERROR: --ssh-user requires a value" >&2; return 2; }
+        user="$2"; shift 2
+        ;;
+      -h|--help|help|\?)
+        local py
+        py="$(frp_client_service_id_py)" && python3 "$py" add-help && return 0
+        frp_client_print_add_usage
+        return 0
+        ;;
+      --*)
         echo "ERROR: unknown add service option: $1" >&2
+        return 2
+        ;;
+      ssh|http|https|custom|profile)
+        if [[ -n "$positional" ]]; then
+          if [[ "$positional" == "profile" && -z "$profile" ]]; then
+            profile="$1"; shift
+            continue
+          fi
+          echo "ERROR: unexpected argument: $1" >&2
+          return 2
+        fi
+        positional="$1"
+        shift
+        if [[ "$positional" == "profile" && $# -gt 0 && "$1" != --* ]]; then
+          profile="$1"
+          shift
+        fi
+        ;;
+      *)
+        echo "ERROR: unknown add service argument: $1" >&2
+        echo >&2
+        frp_client_print_add_usage
         return 2
         ;;
     esac
   done
-  if [[ -n "$profile" ]]; then
-    if [[ "$preset" != "custom" || -n "$port" || -n "$user" ]]; then
-      echo "ERROR: when using --profile, do not also set --preset/--target-port/--ssh-user" >&2
+
+  if [[ -n "$positional" ]]; then
+    if [[ "$positional" == "profile" ]]; then
+      profile="${profile}"
+    else
+      preset="$positional"
+    fi
+  fi
+
+  if [[ "$positional" == "profile" || -n "$profile" ]]; then
+    if [[ -n "$preset" && "$preset" != "custom" ]]; then
+      echo "ERROR: when using a profile, do not also set a preset type" >&2
       return 2
     fi
-    # host default is 127.0.0.1; allow it without treating as conflict unless explicitly needed
+    if [[ -n "$port" || -n "$user" ]]; then
+      echo "ERROR: when using a profile, do not also set --target-port/--ssh-user" >&2
+      return 2
+    fi
+    if [[ -z "$profile" ]]; then
+      if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+        frp_client_add_service_interactive profile
+        return $?
+      fi
+      echo "Missing profile." >&2
+      echo >&2
+      echo "Use:" >&2
+      echo "  service add profile <PROFILE>" >&2
+      return 2
+    fi
     frp_client_add_service_from_profile "$profile" "$sid" "$name"
     return $?
   fi
+
+  if [[ -z "$preset" ]]; then
+    if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+      frp_client_add_service_wizard
+      return $?
+    fi
+    frp_client_print_add_usage
+    return 2
+  fi
+
+  # Interactive type with no required flags → guided prompts for missing fields.
   case "$preset" in
-    ssh) sid="${sid:-ssh}"; name="${name:-SSH}"; port="${port:-22}"; [[ -n "$user" ]] || {
-      echo "ERROR: --ssh-user is required for ssh services" >&2; return 2; } ;;
-    http) sid="${sid:-http}"; name="${name:-HTTP}"; port="${port:-80}" ;;
-    https) sid="${sid:-https}"; name="${name:-HTTPS}"; port="${port:-443}" ;;
-    custom)
-      [[ -n "$sid" ]] || { echo "ERROR: --id is required for custom services" >&2; return 2; }
-      name="${name:-$sid}"
-      [[ -n "$port" ]] || { echo "ERROR: --target-port is required" >&2; return 2; }
+    ssh)
+      if [[ -z "$user" ]]; then
+        if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+          # Keep any explicit flags; prompt only for remaining fields.
+          if [[ -z "$port" && "$host" == "127.0.0.1" && "$host_set" -eq 0 && -z "$name" && -z "$sid" ]]; then
+            frp_client_add_service_interactive ssh
+            return $?
+          fi
+        fi
+        cat <<'EOF' >&2
+SSH user is required.
+
+Example:
+  service add ssh --ssh-user aella
+
+For a LAN host:
+  service add ssh --target-host 192.168.10.20 --ssh-user root
+EOF
+        return 2
+      fi
+      name="${name:-SSH}"
+      port="${port:-22}"
       ;;
-    *) echo "ERROR: preset must be ssh, http, https, or custom" >&2; return 2 ;;
+    http)
+      name="${name:-HTTP}"
+      port="${port:-80}"
+      ;;
+    https)
+      name="${name:-HTTPS}"
+      port="${port:-443}"
+      ;;
+    custom)
+      if [[ -z "$port" ]]; then
+        if [[ -t 0 || -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT:-}" ]]; then
+          frp_client_add_service_interactive custom
+          return $?
+        fi
+        echo "Target port is required." >&2
+        echo >&2
+        echo "Example:" >&2
+        echo "  service add custom --target-port 3389" >&2
+        return 2
+      fi
+      name="${name:-TCP ${port}}"
+      ;;
+    *)
+      echo "ERROR: service type must be ssh, http, https, custom, or profile" >&2
+      return 2
+      ;;
   esac
-  frp_client_ensure_pending
-  local payload
-  payload="$(python3 -c 'import json,sys; print(json.dumps({
-    "id": sys.argv[1], "name": sys.argv[2], "preset": sys.argv[3],
-    "protocol": "tcp", "local_ip": sys.argv[4], "local_port": int(sys.argv[5]),
-    "ssh_user": sys.argv[6],
-  }))' "$sid" "$name" "$preset" "$host" "$port" "$user")"
-  frp_state_add_payload "$payload"
-  echo "Pending service ${sid} added. Run apply to make it live."
+
+  if [[ -z "$sid" ]]; then
+    sid="$(frp_client_suggest_service_id "$preset" "$port")" || return 1
+  fi
+  frp_client_add_service_core "$preset" "$sid" "$name" "$host" "$port" "$user"
 }
 
 frp_client_apply_pending() {

@@ -93,6 +93,109 @@ function Test-FrpValidServiceId {
     return ([string]$Id -cmatch '^[a-z0-9][a-z0-9._-]{0,31}$')
 }
 
+function Get-FrpUsedServiceIds {
+    <#
+    .SYNOPSIS
+      Union of Service IDs from committed client-state.json and pending draft.
+    #>
+    $used = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($path in @((Get-FrpStatePath), (Get-FrpDraftPath))) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        try {
+            $raw = [System.IO.File]::ReadAllText($path)
+            $state = $raw | ConvertFrom-Json
+            $map = ConvertTo-FrpServiceMap -Services $state.services
+            foreach ($key in $map.Keys) {
+                $text = ([string]$key).Trim().ToLowerInvariant()
+                if ($text) { [void]$used.Add($text) }
+            }
+        } catch { }
+    }
+    return @($used)
+}
+
+function Truncate-FrpServiceIdBase {
+    param(
+        [string]$Stem,
+        [string]$Suffix,
+        [int]$MaxLen = 32
+    )
+    $idRe = '^[a-z0-9][a-z0-9._-]{0,31}$'
+    $room = $MaxLen - $Suffix.Length
+    if ($room -lt 1) {
+        $room = 1
+        if ($Suffix.Length -gt ($MaxLen - 1)) {
+            $Suffix = $Suffix.Substring($Suffix.Length - ($MaxLen - 1))
+        }
+    }
+    $stem = if ($Stem.Length -gt $room) { $Stem.Substring(0, $room) } else { $Stem }
+    while ($stem -and -not (("$stem$Suffix") -cmatch $idRe)) {
+        $stem = $stem.Substring(0, $stem.Length - 1)
+    }
+    if (-not $stem) {
+        $stem = 'svc'
+        while (($stem.Length + $Suffix.Length) -gt $MaxLen -and $stem.Length -gt 1) {
+            $stem = $stem.Substring(0, $stem.Length - 1)
+        }
+    }
+    $candidate = "$stem$Suffix"
+    if (-not ($candidate -cmatch $idRe)) {
+        $cleaned = ($candidate.ToLowerInvariant() -replace '[^a-z0-9._-]', '-')
+        $cleaned = $cleaned.Trim('.', '-', '_')
+        if (-not $cleaned) { $cleaned = 'svc' }
+        if ($cleaned[0] -notmatch '[a-z0-9]') { $cleaned = "s$cleaned" }
+        if ($cleaned.Length -gt $MaxLen) { $cleaned = $cleaned.Substring(0, $MaxLen) }
+        $candidate = $cleaned
+    }
+    return $candidate
+}
+
+function Get-FrpSuggestedServiceId {
+    <#
+    .SYNOPSIS
+      Allocate the next free Service ID. Mirrors lib/frp_service_id.py exactly:
+      ssh→ssh/ssh-2, http→http/http-2, https→https/https-2,
+      custom port 3389→tcp-3389/tcp-3389-2; max length 32; safe truncate.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Preset,
+        [int]$TargetPort = 0,
+        [string[]]$UsedIds
+    )
+    $maxLen = 32
+    $idRe = '^[a-z0-9][a-z0-9._-]{0,31}$'
+    $preset = ([string]$Preset).Trim().ToLowerInvariant()
+    if ($null -eq $UsedIds) { $UsedIds = @(Get-FrpUsedServiceIds) }
+    $used = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($item in $UsedIds) {
+        $text = ([string]$item).Trim().ToLowerInvariant()
+        if ($text) { [void]$used.Add($text) }
+    }
+    $base = $null
+    if (@('ssh', 'http', 'https') -contains $preset) {
+        $base = $preset
+    } else {
+        if ($TargetPort -lt 1 -or $TargetPort -gt 65535) {
+            throw 'ERROR: target_port is required for custom services'
+        }
+        $base = "tcp-$TargetPort"
+    }
+
+    if (-not $used.Contains($base) -and ($base -cmatch $idRe)) {
+        return $base
+    }
+    $n = 2
+    while ($true) {
+        $suffix = "-$n"
+        $candidate = Truncate-FrpServiceIdBase -Stem $base -Suffix $suffix -MaxLen $maxLen
+        if (-not $used.Contains($candidate) -and ($candidate -cmatch $idRe)) {
+            return $candidate
+        }
+        $n++
+        if ($n -gt 10000) { throw 'ERROR: unable to allocate a free service id' }
+    }
+}
+
 function Test-FrpValidServiceName {
     param([string]$Name)
     if ([string]::IsNullOrEmpty($Name) -or $Name.Length -gt 64) { return $false }
@@ -124,6 +227,7 @@ function Add-FrpDraftService {
     .SYNOPSIS
       Add a pending service to the draft. Mirrors Unix
       frp_client_add_service_cli / frp_state_add_payload validation.
+      -Id is optional; when omitted a free ID is generated automatically.
     #>
     param(
         [string]$Preset = 'custom',
@@ -136,27 +240,29 @@ function Add-FrpDraftService {
     $preset = ([string]$Preset).Trim().ToLowerInvariant()
     switch ($preset) {
         'ssh' {
-            if (-not $Id) { $Id = 'ssh' }
             if (-not $Name) { $Name = 'SSH' }
             if ($TargetPort -le 0) { $TargetPort = 22 }
             if (-not $SshUser) { throw 'ERROR: -SshUser is required for ssh services' }
         }
         'http' {
-            if (-not $Id) { $Id = 'http' }
             if (-not $Name) { $Name = 'HTTP' }
             if ($TargetPort -le 0) { $TargetPort = 80 }
         }
         'https' {
-            if (-not $Id) { $Id = 'https' }
             if (-not $Name) { $Name = 'HTTPS' }
             if ($TargetPort -le 0) { $TargetPort = 443 }
         }
         'custom' {
-            if (-not $Id) { throw 'ERROR: -Id is required for custom services' }
-            if (-not $Name) { $Name = $Id }
             if ($TargetPort -le 0) { throw 'ERROR: -TargetPort is required' }
+            if (-not $Name -and $Id) { $Name = $Id }
         }
         default { throw 'ERROR: preset must be ssh, http, https, or custom' }
+    }
+    if (-not $Id) {
+        $Id = Get-FrpSuggestedServiceId -Preset $preset -TargetPort $TargetPort
+    }
+    if (-not $Name) {
+        if ($preset -eq 'custom') { $Name = $Id } else { $Name = $Id.ToUpperInvariant() }
     }
     $sid = $Id.Trim().ToLowerInvariant()
     if (-not (Test-FrpValidServiceId -Id $sid)) {
