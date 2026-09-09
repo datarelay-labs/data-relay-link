@@ -200,6 +200,10 @@ Path(sys.argv[1]).write_text(json.dumps({
     "registry_file": "/var/lib/frp-auto-deploy/registry.json",
     "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
     "service_profiles_file": "/var/lib/frp-auto-deploy/service-profiles.json",
+    "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
+    "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+    "egress_listen_addr": "0.0.0.0",
+    "egress_listen_port": 6080,
     "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
@@ -239,6 +243,9 @@ PY
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/frp-auto-deploy/access-control.json"
   chmod 600 "$tree/var/lib/frp-auto-deploy/access-control.json"
+  printf '{"schema_version":1,"egress_profiles":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/egress-control.json"
+  chmod 600 "$tree/var/lib/frp-auto-deploy/egress-control.json"
   printf '{"schema_version":1,"profiles":{}}\n' \
     >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
   chmod 600 "$tree/var/lib/frp-auto-deploy/service-profiles.json"

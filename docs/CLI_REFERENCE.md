@@ -264,6 +264,30 @@ Interactive `frpctl` server menu includes Access Control. Empty ALLOWLIST
 assignment is refused. Deleting a list that is still referenced is refused.
 IP allowlisting is defense-in-depth; keep target authentication enabled.
 
+## Controlled Egress
+
+Agentless outbound HTTP/HTTPS forward proxy policy (separate from Access Control).
+
+```text
+create egress-profile <name> [--description TEXT]
+show egress-profiles
+show egress-profile <PROFILE>
+set egress-profile <PROFILE> --name NAME
+set egress-profile <PROFILE> --description TEXT
+add egress-profile <PROFILE> destination <FQDN> <PORT>
+add egress-profile <PROFILE> source <CIDR>
+remove egress-profile <PROFILE> destination <SELECTOR>
+remove egress-profile <PROFILE> source <SELECTOR>
+enable egress-profile <PROFILE>
+disable egress-profile <PROFILE>
+delete egress-profile <PROFILE>
+egress status
+egress test <source-ip> <host> <port>
+```
+
+Default is DENY. Protected hosts need only `HTTP_PROXY` / `HTTPS_PROXY`.
+See `docs/CONTROLLED_EGRESS.md`.
+
 ## update
 
 ```text

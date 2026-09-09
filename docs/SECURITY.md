@@ -386,7 +386,28 @@ tokens, CA keys, and passwords are not logged.
 If an upstream device SNATs clients, allowlists must use the source address
 observed by `frps`.
 
-## 17. Mixed product versions
+## 17. Controlled Egress (agentless outbound)
+
+Controlled Egress is a **separate policy plane** from inbound Access Control.
+
+Authoritative state: `/var/lib/frp-auto-deploy/egress-control.json`  
+Connection log: `/var/log/frp-auto-deploy/egress-conn.jsonl`  
+Daemon: `frp-egress-gateway.service` (default listen `0.0.0.0:6080`)
+
+Security contract:
+
+- Default DENY; missing/corrupt/invalid policy fails closed
+- Primary caller authorization is source IP/CIDR (no agent on protected hosts)
+- Destinations are FQDN + port (exact or strict `*.suffix`); IP literals denied by default
+- Server-side DNS; every resolved candidate IP is validated before connect
+- Reject loopback, RFC1918, link-local, ULA, metadata (`169.254.169.254`), multicast/reserved
+- Resolve once → validate → connect to that exact IP (rebinding-safe)
+- Do not log Proxy-Authorization, cookies, bodies, or TLS payloads
+- Egress failure must not take down inbound `frps`; inbound Access Control remains independent
+
+See `docs/CONTROLLED_EGRESS.md`.
+
+## 18. Mixed product versions
 
 Project **2.1.0** does not change management protocol schema `1`. An already
 enrolled **1.9.1** or **2.0.0** client is expected to keep its tunnel and signed

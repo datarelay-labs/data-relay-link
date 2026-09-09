@@ -1823,6 +1823,11 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       frpctl_invoke frp-profile show "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
       ;;
+    show_egress_profiles) frpctl_require_server || return 1; frpctl_invoke frp-egress list ;;
+    show_egress_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress show "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      ;;
     show_client)
       frpctl_require_server || return 1
       frpctl_invoke frp-client-info \
@@ -1924,6 +1929,61 @@ frpctl_dispatch_canonical() {
         "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
         $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
       ;;
+    create_egress_profile)
+      frpctl_require_server || return 1
+      if [[ -n "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")" ]]; then
+        frpctl_invoke frp-egress create \
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          --description \
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")"
+      else
+        frpctl_invoke frp-egress create \
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")"
+      fi
+      ;;
+    set_egress_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress set \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
+        $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
+    add_egress_destination)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress add-destination \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("host",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("port",""))' "$result")"
+      ;;
+    add_egress_source)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress add-source \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("cidr",""))' "$result")"
+      ;;
+    remove_egress_destination)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress remove-destination \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("destination",""))' "$result")"
+      ;;
+    remove_egress_source)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress remove-source \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("source",""))' "$result")"
+      ;;
+    enable_egress_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress enable "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      ;;
+    disable_egress_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress disable "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      ;;
+    delete_egress_profile)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-egress delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      ;;
     delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" ;;
     delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" ;;
     add_group_member)
@@ -1980,6 +2040,11 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       # shellcheck disable=SC2046,SC2086
       frpctl_invoke frp-access $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
+    egress_cmd)
+      frpctl_require_server || return 1
+      # shellcheck disable=SC2046,SC2086
+      frpctl_invoke frp-egress $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
       ;;
     help)
       extra_args="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")"

@@ -294,7 +294,7 @@ frp_u_unit_active() {
 
 frp_u_stop_product_units() {
   local unit
-  for unit in frp-frontend frp-access-plugin frp-port-allocator frps; do
+  for unit in frp-frontend frp-egress-gateway frp-access-plugin frp-port-allocator frps; do
     if ! frp_u_unit_exists "$unit" && ! frp_u_unit_active "$unit"; then
       continue
     fi
@@ -316,7 +316,7 @@ frp_u_stop_product_units() {
 
 frp_u_disable_product_units() {
   local unit enabled
-  for unit in frp-frontend frp-access-plugin frp-port-allocator frps; do
+  for unit in frp-frontend frp-egress-gateway frp-access-plugin frp-port-allocator frps; do
     if ! frp_u_unit_exists "$unit"; then
       continue
     fi
@@ -386,19 +386,20 @@ else
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frps.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-port-allocator.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-access-plugin.service)"
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-egress-gateway.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-frontend.service)"
   frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/frontend.conf)"
   frp_u_rm_file "$(frp_u_path /usr/local/bin/frps)"
   for tool in frp-create-client frp-enrollments frp-enrollment-revoke frp-enrollment-purge frp-enroll-bulk \
     frp-clients frp-client-info frp-client-set frp-release-client \
-    frp-release-service frp-access frp-profile frp-revoke-client frp-set-client-installer-url \
+    frp-release-service frp-access frp-egress frp-profile frp-revoke-client frp-set-client-installer-url \
     frp-server-set frp-server-status frp-update frp-upstream frp-project-update frp-backup frp-restore frp-support-bundle; do
     frp_u_rm_file "$(frp_u_path /usr/local/sbin/${tool})"
   done
   frp_u_rm_file "$(frp_u_path /usr/local/sbin/frpctl)"
   libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
-    for f in frp-port-allocator.py frp-access-plugin.py frp_access_control.py frp_pki.py frp_frontend.py frp_client_registry.py \
+    for f in frp-port-allocator.py frp-access-plugin.py frp-egress-gateway.py frp_access_control.py frp_egress_control.py frp_pki.py frp_frontend.py frp_client_registry.py \
       frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
       frp_install_txn.py frp_health_check.py frp_service_profiles.py \
       frp-server-upgrade.sh frp_project_files.py frp_control_locks.py frp_server_config.py \
@@ -497,6 +498,7 @@ ${p}"
   try_rm_rf "${var_lib}/backups"
   try_rm_file "${var_lib}/registry.json"
   try_rm_file "${var_lib}/access-control.json"
+  try_rm_file "${var_lib}/egress-control.json"
   try_rm_file "${var_lib}/service-profiles.json"
   try_rm_file "${var_lib}/service-profiles.json.lock"
   try_rm_file "${var_lib}/mgmt-nonces.json"

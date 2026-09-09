@@ -336,6 +336,9 @@ frp_server_upgrade_verify_rollback_health() {
   frp_server_health_frps || return 1
   frp_server_health_allocator "$(frp_server_upgrade_allocator_port)" || return 1
   frp_server_health_access || return 1
+  if declare -F frp_server_health_egress >/dev/null 2>&1; then
+    frp_server_health_egress || return 1
+  fi
   if frp_server_upgrade_is_single443; then
     frp_server_health_frontend || return 1
   fi
@@ -432,10 +435,77 @@ frp_server_upgrade_rollback() {
   return 0
 }
 
+frp_server_upgrade_ensure_egress() {
+  # Bootstrap Controlled Egress state/unit on upgrades from pre-egress installs.
+  local egress_file cfg_file unit_file
+  egress_file="$(frp_server_fs /var/lib/frp-auto-deploy/egress-control.json)"
+  cfg_file="$(frp_server_fs /etc/frp-auto-deploy/config.json)"
+  unit_file="$(frp_server_fs /etc/systemd/system/frp-egress-gateway.service)"
+  if [[ ! -f "$egress_file" ]]; then
+    local mod=""
+    if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_egress_control.py" ]]; then
+      mod="$BASE_DIR/lib/frp_egress_control.py"
+    else
+      mod="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_egress_control.py)"
+    fi
+    python3 - "$egress_file" "$mod" <<'PY' || return 1
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.save_egress_state(mod.empty_egress_state(), path=path)
+PY
+    chmod 600 "$egress_file"
+  fi
+  if [[ -f "$cfg_file" ]]; then
+    python3 - "$cfg_file" <<'PY' || true
+import json, sys, tempfile, os
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text(encoding="utf-8"))
+changed = False
+defaults = {
+    "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
+    "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+    "egress_listen_addr": "0.0.0.0",
+    "egress_listen_port": 6080,
+}
+for key, value in defaults.items():
+    if key not in cfg or cfg.get(key) in (None, ""):
+        cfg[key] = value
+        changed = True
+if changed:
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+PY
+  fi
+  if [[ -f "$unit_file" ]] && ! frp_server_skip_systemd && ! frp_server_test_mode; then
+    frp_server_systemctl enable frp-egress-gateway >/dev/null || return 1
+  elif [[ -f "$unit_file" ]]; then
+    frp_server_record_action "enable frp-egress-gateway"
+  fi
+  return 0
+}
+
 frp_server_apply_project_upgrade() {
   local source="$1" check_only="${2:-0}"
   local version_file previous target staged snapshot backups preserved_before
-  local restart_frps=0 restart_alloc=0 restart_access=0 restart_frontend=0 rel
+  local restart_frps=0 restart_alloc=0 restart_access=0 restart_egress=0 restart_frontend=0 rel
   local resolved_channel resolved_ref
   local candidate_meta target_channel target_ref
   local installed_channel installed_ref installed_bundle target_bundle
@@ -562,6 +632,9 @@ frp_server_apply_project_upgrade() {
   frp_server_upgrade_changed "$staged" etc/systemd/system/frp-access-plugin.service && restart_access=1
   frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp-access-plugin.py && restart_access=1
   frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp_access_control.py && restart_access=1
+  frp_server_upgrade_changed "$staged" etc/systemd/system/frp-egress-gateway.service && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp-egress-gateway.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp_egress_control.py && restart_egress=1
   if frp_server_upgrade_is_single443; then
     frp_server_upgrade_changed "$staged" etc/systemd/system/frp-frontend.service && restart_frontend=1
   fi
@@ -588,6 +661,12 @@ frp_server_apply_project_upgrade() {
     frp_emit_failure_class FILE_COMMIT_FAILED
     return 1
   fi
+  if ! frp_server_upgrade_ensure_egress; then
+    frp_server_upgrade_rollback "$snapshot"
+    frp_emit_failure_class FILE_COMMIT_FAILED
+    return 1
+  fi
+  restart_egress=1
   if ! frp_server_upgrade_post_mutation_guard; then
     frp_server_upgrade_rollback "$snapshot"
     frp_emit_failure_class FILE_COMMIT_FAILED
@@ -606,7 +685,7 @@ frp_server_apply_project_upgrade() {
     return 1
   fi
 
-  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_frontend" == "1" ]]; then
+  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_egress" == "1" || "$restart_frontend" == "1" ]]; then
     if ! frp_server_skip_systemd; then
       frp_server_systemctl daemon-reload || {
         frp_server_upgrade_rollback "$snapshot"; return 1;
@@ -618,6 +697,10 @@ frp_server_apply_project_upgrade() {
   if [[ "$restart_access" == "1" ]]; then
     frp_server_restart_unit frp-access-plugin || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_access || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
+  if [[ "$restart_egress" == "1" ]]; then
+    frp_server_restart_unit frp-egress-gateway || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_health_egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_frps" == "1" ]]; then
     frp_server_restart_unit frps || { frp_server_upgrade_rollback "$snapshot"; return 1; }
@@ -641,6 +724,9 @@ frp_server_apply_project_upgrade() {
   fi
   if [[ "$restart_access" != "1" ]]; then
     frp_server_health_access || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
+  if [[ "$restart_egress" != "1" ]]; then
+    frp_server_health_egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if frp_server_upgrade_is_single443 && [[ "$restart_frontend" != "1" ]]; then
     frp_server_health_frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }

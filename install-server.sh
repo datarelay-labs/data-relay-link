@@ -11,12 +11,15 @@ for f in \
   "$BASE_DIR/VERSION" \
   "$BASE_DIR/server/frp-port-allocator.py" \
   "$BASE_DIR/server/frp-access-plugin.py" \
+  "$BASE_DIR/server/frp-egress-gateway.py" \
   "$BASE_DIR/server/migrate_token.py" \
   "$BASE_DIR/server/frps.service" \
   "$BASE_DIR/server/frp-port-allocator.service" \
   "$BASE_DIR/server/frp-access-plugin.service" \
+  "$BASE_DIR/server/frp-egress-gateway.service" \
   "$BASE_DIR/server/frp-frontend.service" \
   "$BASE_DIR/lib/frp_access_control.py" \
+  "$BASE_DIR/lib/frp_egress_control.py" \
   "$BASE_DIR/lib/frp_service_profiles.py" \
   "$BASE_DIR/lib/frp_mgmt_auth.py" \
   "$BASE_DIR/lib/frp_pki.py" \
@@ -47,6 +50,7 @@ for f in \
   "$BASE_DIR/tools/frp-release-client" \
   "$BASE_DIR/tools/frp-release-service" \
   "$BASE_DIR/tools/frp-access" \
+  "$BASE_DIR/tools/frp-egress" \
   "$BASE_DIR/tools/frp-profile" \
   "$BASE_DIR/tools/frp-revoke-client" \
   "$BASE_DIR/tools/frp-client-set" \
@@ -1133,7 +1137,11 @@ cfg = {
     'token_file': '/etc/frp/server_token',
     'access_control_file': '/var/lib/frp-auto-deploy/access-control.json',
     'service_profiles_file': '/var/lib/frp-auto-deploy/service-profiles.json',
+    'egress_control_file': '/var/lib/frp-auto-deploy/egress-control.json',
     'access_conn_log_file': '/var/log/frp-auto-deploy/access-conn.jsonl',
+    'egress_conn_log_file': '/var/log/frp-auto-deploy/egress-conn.jsonl',
+    'egress_listen_addr': '0.0.0.0',
+    'egress_listen_port': 6080,
     'access_plugin_addr': '127.0.0.1:6101',
     'access_plugin_path': '/access-auth',
     'client_installer_url': sys.argv[10],
@@ -1619,9 +1627,9 @@ frp_server_record_action() {
 frp_server_enable_units() {
   if frp_server_skip_systemd; then
     if frp_mode_is_single443; then
-      frp_server_record_action "enable frps frp-access-plugin frp-port-allocator frp-frontend"
+      frp_server_record_action "enable frps frp-access-plugin frp-egress-gateway frp-port-allocator frp-frontend"
     else
-      frp_server_record_action "enable frps frp-access-plugin frp-port-allocator"
+      frp_server_record_action "enable frps frp-access-plugin frp-egress-gateway frp-port-allocator"
       frp_server_record_action "disable frp-frontend"
     fi
     if [[ "${FRP_INSTALL_HOOK_ENABLE_FAIL:-}" == "1" ]]; then
@@ -1631,9 +1639,9 @@ frp_server_enable_units() {
     return 0
   fi
   if frp_mode_is_single443; then
-    frp_server_systemctl enable frps frp-access-plugin frp-port-allocator frp-frontend >/dev/null
+    frp_server_systemctl enable frps frp-access-plugin frp-egress-gateway frp-port-allocator frp-frontend >/dev/null
   else
-    frp_server_systemctl enable frps frp-access-plugin frp-port-allocator >/dev/null
+    frp_server_systemctl enable frps frp-access-plugin frp-egress-gateway frp-port-allocator >/dev/null
     frp_server_systemctl disable --now frp-frontend >/dev/null 2>&1 || true
   fi
 }
@@ -1705,6 +1713,19 @@ PY
     echo "ERROR: access plugin /healthz returned ${code} (expected 200)" >&2
     return 1
   fi
+  return 0
+}
+
+frp_server_health_egress() {
+  # Egress gateway readiness: unit active. Isolated from inbound FRP health.
+  if [[ "${FRP_INSTALL_HOOK_EGRESS_HEALTH_FAIL:-}" == "1" ]]; then
+    echo "ERROR: simulated egress health check failure" >&2
+    return 1
+  fi
+  if frp_server_skip_systemd; then
+    return 0
+  fi
+  frp_wait_unit_active frp-egress-gateway || return 1
   return 0
 }
 
@@ -1818,7 +1839,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file access_control_file service_profiles_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_frontend sbin_dir
+  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_frontend sbin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
@@ -1829,11 +1850,13 @@ frp_server_main() {
   frontend_conf="$(frp_server_fs /etc/frp-auto-deploy/frontend.conf)"
   registry_file="$(frp_server_fs /var/lib/frp-auto-deploy/registry.json)"
   access_control_file="$(frp_server_fs /var/lib/frp-auto-deploy/access-control.json)"
+  egress_control_file="$(frp_server_fs /var/lib/frp-auto-deploy/egress-control.json)"
   backups_dir="$(frp_server_fs /var/lib/frp-auto-deploy/backups)"
   lib_dir="$(frp_server_fs /usr/local/lib/frp-auto-deploy)"
   unit_frps="$(frp_server_fs /etc/systemd/system/frps.service)"
   unit_alloc="$(frp_server_fs /etc/systemd/system/frp-port-allocator.service)"
   unit_access="$(frp_server_fs /etc/systemd/system/frp-access-plugin.service)"
+  unit_egress="$(frp_server_fs /etc/systemd/system/frp-egress-gateway.service)"
   unit_frontend="$(frp_server_fs /etc/systemd/system/frp-frontend.service)"
   sbin_dir="$(frp_server_fs /usr/local/sbin)"
 
@@ -1855,6 +1878,7 @@ frp_server_main() {
 
   local hash_frps_before hash_toml_before hash_unit_frps_before hash_unit_alloc_before
   local hash_unit_access_before hash_access_plugin_before hash_access_lib_before
+  local hash_unit_egress_before hash_egress_gateway_before hash_egress_lib_before
   local hash_frontend_conf_before hash_unit_frontend_before
   local hash_alloc_helpers_before=() alloc_helper_rel
   hash_frps_before="$(frp_file_sha256 "$(frp_server_fs /usr/local/bin/frps)")"
@@ -1864,6 +1888,9 @@ frp_server_main() {
   hash_unit_access_before="$(frp_file_sha256 "$unit_access")"
   hash_access_plugin_before="$(frp_file_sha256 "${lib_dir}/frp-access-plugin.py")"
   hash_access_lib_before="$(frp_file_sha256 "${lib_dir}/frp_access_control.py")"
+  hash_unit_egress_before="$(frp_file_sha256 "$unit_egress")"
+  hash_egress_gateway_before="$(frp_file_sha256 "${lib_dir}/frp-egress-gateway.py")"
+  hash_egress_lib_before="$(frp_file_sha256 "${lib_dir}/frp_egress_control.py")"
   # Any Python module imported by the allocator must be listed in FRP_ALLOCATOR_RUNTIME_HELPERS.
   for alloc_helper_rel in frp-port-allocator.py "${FRP_ALLOCATOR_RUNTIME_HELPERS[@]}"; do
     hash_alloc_helpers_before+=("$(frp_file_sha256 "${lib_dir}/${alloc_helper_rel}")")
@@ -1994,6 +2021,62 @@ PY
   [[ -f "$service_profiles_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "service-profiles.json is missing"; return 1; }
   chmod 600 "$access_control_file"
 
+  if [[ ! -f "$egress_control_file" ]]; then
+    if ! python3 - "$egress_control_file" "$BASE_DIR/lib/frp_egress_control.py" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.save_egress_state(mod.empty_egress_state(), path=path)
+print(path)
+PY
+    then
+      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create egress-control.json"
+      return 1
+    fi
+  fi
+  chmod 600 "$egress_control_file"
+  [[ -f "$egress_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "egress-control.json is missing"; return 1; }
+
+  # Ensure Controlled Egress keys exist on upgrades without rewriting unrelated config.
+  if [[ -f "$(frp_server_fs /etc/frp-auto-deploy/config.json)" ]]; then
+    python3 - "$(frp_server_fs /etc/frp-auto-deploy/config.json)" <<'PY' || true
+import json, sys, tempfile, os
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text(encoding="utf-8"))
+changed = False
+defaults = {
+    "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
+    "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+    "egress_listen_addr": "0.0.0.0",
+    "egress_listen_port": 6080,
+}
+for key, value in defaults.items():
+    if key not in cfg or cfg.get(key) in (None, ""):
+        cfg[key] = value
+        changed = True
+if changed:
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+PY
+  fi
+
   frp_server_install_manifest_files "$lib_dir" "$sbin_dir"
   install -m 0644 "$BASE_DIR/server/frps.service" "$unit_frps"
   frp_write_compatible_systemd_unit \
@@ -2002,6 +2085,9 @@ PY
   frp_write_compatible_systemd_unit \
     "$BASE_DIR/server/frp-access-plugin.service" \
     "$unit_access"
+  frp_write_compatible_systemd_unit \
+    "$BASE_DIR/server/frp-egress-gateway.service" \
+    "$unit_egress"
   if frp_mode_is_single443; then
     write_frontend_config "$frontend_conf"
     write_frontend_unit "$unit_frontend"
@@ -2009,11 +2095,12 @@ PY
     rm -f "$unit_frontend" "$frontend_conf"
   fi
 
-  local need_frps_restart=0 need_alloc_restart=0 need_access_restart=0 need_frontend_restart=0
+  local need_frps_restart=0 need_alloc_restart=0 need_access_restart=0 need_egress_restart=0 need_frontend_restart=0
   if [[ "$existing_install" != "1" ]]; then
     need_frps_restart=1
     need_alloc_restart=1
     need_access_restart=1
+    need_egress_restart=1
     if frp_mode_is_single443; then
       need_frontend_restart=1
     fi
@@ -2046,6 +2133,15 @@ PY
     if [[ "$(frp_file_sha256 "${lib_dir}/frp_access_control.py")" != "$hash_access_lib_before" ]]; then
       need_access_restart=1
     fi
+    if [[ "$(frp_file_sha256 "$unit_egress")" != "$hash_unit_egress_before" ]]; then
+      need_egress_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "${lib_dir}/frp-egress-gateway.py")" != "$hash_egress_gateway_before" ]]; then
+      need_egress_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "${lib_dir}/frp_egress_control.py")" != "$hash_egress_lib_before" ]]; then
+      need_egress_restart=1
+    fi
     if [[ "${PKI_ACTION:-}" == "reissued-server" || "${PKI_ACTION:-}" == "generated" ]]; then
       need_alloc_restart=1
       if frp_mode_is_single443; then
@@ -2064,6 +2160,7 @@ PY
       need_frps_restart=1
       need_alloc_restart=1
       need_access_restart=1
+      need_egress_restart=1
       if frp_mode_is_single443; then
         need_frontend_restart=1
       fi
@@ -2095,6 +2192,12 @@ PY
   if [[ "$need_access_restart" == "1" ]]; then
     if ! frp_server_restart_unit frp-access-plugin; then
       frp_server_fail_after_mutation SERVICE_START_FAILED "frp-access-plugin failed to start; installation is not complete."
+      return 1
+    fi
+  fi
+  if [[ "$need_egress_restart" == "1" ]]; then
+    if ! frp_server_restart_unit frp-egress-gateway; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "frp-egress-gateway failed to start; installation is not complete."
       return 1
     fi
   fi
@@ -2132,6 +2235,12 @@ PY
   if [[ "$need_access_restart" == "1" ]] || [[ "$existing_install" != "1" ]] || [[ "$need_frps_restart" == "1" ]]; then
     if ! frp_server_health_access; then
       frp_server_fail_after_mutation HEALTH_CHECK_FAILED "access plugin health check failed; previous semantic configuration restored."
+      return 1
+    fi
+  fi
+  if [[ "$need_egress_restart" == "1" ]] || [[ "$existing_install" != "1" ]]; then
+    if ! frp_server_health_egress; then
+      frp_server_fail_after_mutation HEALTH_CHECK_FAILED "egress gateway health check failed; previous semantic configuration restored."
       return 1
     fi
   fi

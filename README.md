@@ -1,20 +1,28 @@
 # FRP Auto Deploy
 
-**Lightweight, CLI-first, Zero-Touch remote access management on top of official FRP.**
+**Legacy technical identity for Data Relay — secure connectivity for isolated networks.**
 
-FRP Auto Deploy helps you securely reach servers and services behind NAT or firewalls without building a full VPN, RMM platform, or custom FRP fork.
+Data Relay provides:
 
-- Official [`fatedier/frp`](https://github.com/fatedier/frp) only
+- **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access on official FRP
+- **Controlled Egress** (outbound) — agentless HTTP/HTTPS forward proxy for approved destinations only
+
+FRP Auto Deploy remains the repository/package/CLI name until a separate naming migration. It helps you securely reach servers behind NAT or firewalls **and** allow closed networks to reach only the Internet destinations they need — without a full VPN, RMM platform, SWG/SASE stack, or custom FRP fork.
+
+- Official [`fatedier/frp`](https://github.com/fatedier/frp) only (inbound)
 - Exact pinned/tested FRP version
 - Zero-Touch and manual enrollment
 - Immutable client identity
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
 - Named Access Lists / temporary TTL / connection access log
+- Agentless Controlled Egress profiles (FQDN + source CIDR, default DENY)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
 - One primary operator interface: `sudo frpctl`
 
+Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)  
+Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)  
 Documentation: **https://frp.xdr.ooo**
 
 ---

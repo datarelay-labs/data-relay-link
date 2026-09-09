@@ -167,7 +167,7 @@ def _show_resources(role):
     client, server = _role_parts(role)
     items = ["status", "version"]
     if server:
-        items.extend(["clients", "client", "groups", "group", "profiles", "profile", "enrollments", "audit", "upstream"])
+        items.extend(["clients", "client", "groups", "group", "profiles", "profile", "egress-profiles", "egress-profile", "enrollments", "audit", "upstream"])
     if client:
         items.extend(["services", "info"])
     return items
@@ -177,7 +177,7 @@ def _set_resources(role):
     client, server = _role_parts(role)
     items = []
     if server:
-        items.extend(["client", "group", "profile", "installer-url", "server"])
+        items.extend(["client", "group", "profile", "egress-profile", "installer-url", "server"])
     if client:
         items.append("service")
     return items
@@ -194,7 +194,7 @@ def _unset_resources(role):
 def _create_resources(role):
     _, server = _role_parts(role)
     if server:
-        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "profile"]
+        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "profile", "egress-profile"]
     return []
 
 
@@ -985,6 +985,7 @@ def match(tokens, role, names=None, clients=None):
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
         "support-bundle": lambda toks, role, names=None: {"status": "ok", "action": "support_bundle", "passthrough": toks[1:]},
         "access": lambda toks, role, names=None: {"status": "ok", "action": "access_cmd", "passthrough": toks[1:]},
+        "egress": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": toks[1:]},
         "help": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "?": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "menu": lambda toks, role, names=None: {"status": "ok", "action": "menu"},
@@ -999,12 +1000,15 @@ def match(tokens, role, names=None, clients=None):
     fn = handlers.get(verb)
     if fn is None:
         return {"status": "unknown", "command": verb}
-    if verb in ("set", "unset", "create", "revoke", "purge", "release", "restore", "remove", "delete", "rename", "access") and not server and verb != "set":
+    if verb in ("set", "unset", "create", "revoke", "purge", "release", "restore", "remove", "delete", "rename", "access", "egress") and not server and verb != "set":
         if verb == "set" and client:
             return fn(tokens, role, names)
         return {"status": "role", "need": "server", "command": verb}
-    if verb in ("enable", "disable", "apply", "discard") and not client:
+    if verb in ("apply", "discard") and not client:
         return {"status": "role", "need": "client", "command": verb}
+    if verb in ("enable", "disable"):
+        if not client and not server:
+            return {"status": "role", "need": "client or server", "command": verb}
     if verb == "add" and not client and not server:
         return {"status": "role", "need": "client or server", "command": verb}
     return fn(tokens, role, names)
@@ -1045,6 +1049,16 @@ def _match_show(tokens, role, names=None):
         if len(tokens) > 3:
             return incomplete("Unexpected arguments.", ["show profile <PROFILE>"])
         return {"status": "ok", "action": "show_profile", "profile": tokens[2]}
+    if resource == "egress-profiles":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["show egress-profiles"])
+        return {"status": "ok", "action": "show_egress_profiles"}
+    if resource == "egress-profile":
+        if len(tokens) < 3:
+            return incomplete("Missing egress profile selector.", ["show egress-profile <PROFILE>"])
+        if len(tokens) > 3:
+            return incomplete("Unexpected arguments.", ["show egress-profile <PROFILE>"])
+        return {"status": "ok", "action": "show_egress_profile", "profile": tokens[2]}
     if resource == "enrollments":
         return {"status": "ok", "action": "show_enrollments"}
     if resource == "audit":
@@ -1248,6 +1262,23 @@ def _match_set(tokens, role, names=None):
             "property": tokens[3],
             "value": tokens[4],
         }
+    if resource == "egress-profile":
+        if not server:
+            return {"status": "role", "need": "server", "command": "set egress-profile"}
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile selector.",
+                [
+                    "set egress-profile <PROFILE> --name NAME",
+                    "set egress-profile <PROFILE> --description TEXT",
+                ],
+            )
+        return {
+            "status": "ok",
+            "action": "set_egress_profile",
+            "profile": tokens[2],
+            "passthrough": tokens[3:],
+        }
     if resource == "installer-url":
         if not server:
             return {"status": "role", "need": "server", "command": "set installer-url"}
@@ -1427,6 +1458,26 @@ def _match_create(tokens, role, names=None):
             "name": tokens[2],
             "passthrough": tokens[3:],
         }
+    if resource == "egress-profile":
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile name.",
+                ["create egress-profile <name> [--description TEXT]"],
+            )
+        description = ""
+        if len(tokens) > 3:
+            if len(tokens) != 5 or tokens[3] != "--description":
+                return incomplete(
+                    "Unexpected arguments.",
+                    ["create egress-profile <name> [--description TEXT]"],
+                )
+            description = tokens[4]
+        return {
+            "status": "ok",
+            "action": "create_egress_profile",
+            "name": tokens[2],
+            "description": description,
+        }
     return incomplete("Unknown create resource.", ["create <resource>"], avail)
 
 
@@ -1559,17 +1610,122 @@ def _match_add(tokens, role, names=None):
         if len(tokens) < 5 or tokens[3] != "group":
             return incomplete("Missing group.", ["add client <CLIENT> group <GROUP>"])
         return {"status": "ok", "action": "add_group_member", "client": tokens[2], "group": tokens[4]}
+    if len(tokens) >= 2 and tokens[1] == "egress-profile" and server:
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile selector.",
+                [
+                    "add egress-profile <PROFILE> destination <FQDN> <PORT>",
+                    "add egress-profile <PROFILE> source <CIDR>",
+                ],
+            )
+        if len(tokens) < 4:
+            return incomplete(
+                "Missing destination|source.",
+                [
+                    "add egress-profile <PROFILE> destination <FQDN> <PORT>",
+                    "add egress-profile <PROFILE> source <CIDR>",
+                ],
+                ["destination", "source"],
+            )
+        kind = tokens[3]
+        if kind == "destination":
+            if len(tokens) != 6:
+                return incomplete(
+                    "Missing destination host/port.",
+                    ["add egress-profile <PROFILE> destination <FQDN> <PORT>"],
+                )
+            return {
+                "status": "ok",
+                "action": "add_egress_destination",
+                "profile": tokens[2],
+                "host": tokens[4],
+                "port": tokens[5],
+            }
+        if kind == "source":
+            if len(tokens) != 5:
+                return incomplete(
+                    "Missing source CIDR.",
+                    ["add egress-profile <PROFILE> source <CIDR>"],
+                )
+            return {
+                "status": "ok",
+                "action": "add_egress_source",
+                "profile": tokens[2],
+                "cidr": tokens[4],
+            }
+        return incomplete(
+            "Unknown egress-profile add target.",
+            [
+                "add egress-profile <PROFILE> destination <FQDN> <PORT>",
+                "add egress-profile <PROFILE> source <CIDR>",
+            ],
+            ["destination", "source"],
+        )
     available = []
     if client_role:
         available.append("service")
     if server:
-        available.append("client")
-    return incomplete("Missing resource.", ["add service ...", "add client <CLIENT> group <GROUP>"], available)
+        available.extend(["client", "egress-profile"])
+    return incomplete(
+        "Missing resource.",
+        [
+            "add service ...",
+            "add client <CLIENT> group <GROUP>",
+            "add egress-profile <PROFILE> destination <FQDN> <PORT>",
+            "add egress-profile <PROFILE> source <CIDR>",
+        ],
+        available,
+    )
 
 
 def _match_remove(tokens, role, names=None):
+    _, server = _role_parts(role)
+    if len(tokens) >= 2 and tokens[1] == "egress-profile" and server:
+        if len(tokens) < 5:
+            return incomplete(
+                "Missing egress remove arguments.",
+                [
+                    "remove egress-profile <PROFILE> destination <SELECTOR>",
+                    "remove egress-profile <PROFILE> source <SELECTOR>",
+                ],
+                ["destination", "source"],
+            )
+        kind = tokens[3]
+        if kind == "destination" and len(tokens) == 5:
+            return {
+                "status": "ok",
+                "action": "remove_egress_destination",
+                "profile": tokens[2],
+                "destination": tokens[4],
+            }
+        if kind == "source" and len(tokens) == 5:
+            return {
+                "status": "ok",
+                "action": "remove_egress_source",
+                "profile": tokens[2],
+                "source": tokens[4],
+            }
+        return incomplete(
+            "Unknown egress-profile remove target.",
+            [
+                "remove egress-profile <PROFILE> destination <SELECTOR>",
+                "remove egress-profile <PROFILE> source <SELECTOR>",
+            ],
+            ["destination", "source"],
+        )
     if len(tokens) < 5 or tokens[1] != "client" or tokens[3] != "group":
-        return incomplete("Missing client or group.", ["remove client <CLIENT> group <GROUP>"], ["client"])
+        avail = ["client"]
+        if server:
+            avail.append("egress-profile")
+        return incomplete(
+            "Missing client or group.",
+            [
+                "remove client <CLIENT> group <GROUP>",
+                "remove egress-profile <PROFILE> destination|source <SELECTOR>",
+            ],
+            avail,
+        )
     return {"status": "ok", "action": "remove_group_member", "client": tokens[2], "group": tokens[4]}
 
 
@@ -1577,8 +1733,8 @@ def _match_delete(tokens, role, names=None):
     if len(tokens) < 2:
         return incomplete(
             "Missing resource.",
-            ["delete group <GROUP>", "delete profile <PROFILE>"],
-            ["group", "profile"],
+            ["delete group <GROUP>", "delete profile <PROFILE>", "delete egress-profile <PROFILE>"],
+            ["group", "profile", "egress-profile"],
         )
     if tokens[1] == "group":
         if len(tokens) < 3:
@@ -1588,10 +1744,18 @@ def _match_delete(tokens, role, names=None):
         if len(tokens) < 3:
             return incomplete("Missing profile selector.", ["delete profile <PROFILE>"], ["profile"])
         return {"status": "ok", "action": "delete_profile", "profile": tokens[2]}
+    if tokens[1] == "egress-profile":
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile selector.",
+                ["delete egress-profile <PROFILE>"],
+                ["egress-profile"],
+            )
+        return {"status": "ok", "action": "delete_egress_profile", "profile": tokens[2]}
     return incomplete(
         "Unknown delete resource.",
-        ["delete group <GROUP>", "delete profile <PROFILE>"],
-        ["group", "profile"],
+        ["delete group <GROUP>", "delete profile <PROFILE>", "delete egress-profile <PROFILE>"],
+        ["group", "profile", "egress-profile"],
     )
 
 
@@ -1609,8 +1773,31 @@ def _match_rename(tokens, role, names=None):
 
 def _match_enable_disable(tokens, role, names=None):
     verb = tokens[0]
+    client_role, server = _role_parts(role)
+    if len(tokens) >= 2 and tokens[1] == "egress-profile" and server:
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile selector.",
+                ["%s egress-profile <PROFILE>" % verb],
+            )
+        return {
+            "status": "ok",
+            "action": "%s_egress_profile" % verb,
+            "profile": tokens[2],
+        }
     if len(tokens) < 2 or tokens[1] != "service":
-        return incomplete("Missing resource.", ["%s service <service-id>" % verb], ["service"])
+        avail = []
+        if client_role:
+            avail.append("service")
+        if server:
+            avail.append("egress-profile")
+        return incomplete(
+            "Missing resource.",
+            ["%s service <service-id>" % verb, "%s egress-profile <PROFILE>" % verb],
+            avail,
+        )
+    if not client_role:
+        return {"status": "role", "need": "client", "command": "%s service" % verb}
     if len(tokens) < 3:
         return incomplete("Missing service ID.", ["%s service <service-id>" % verb])
     return {"status": "ok", "action": "%s_service" % verb, "service": tokens[2]}

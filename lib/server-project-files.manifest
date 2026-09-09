@@ -18,7 +18,9 @@
 
 project usr/local/lib/frp-auto-deploy/frp-port-allocator.py 0700 server/frp-port-allocator.py python
 project usr/local/lib/frp-auto-deploy/frp-access-plugin.py 0700 server/frp-access-plugin.py python
+project usr/local/lib/frp-auto-deploy/frp-egress-gateway.py 0700 server/frp-egress-gateway.py python
 project usr/local/lib/frp-auto-deploy/frp_access_control.py 0644 lib/frp_access_control.py python
+project usr/local/lib/frp-auto-deploy/frp_egress_control.py 0644 lib/frp_egress_control.py python
 project usr/local/lib/frp-auto-deploy/frp_service_profiles.py 0644 lib/frp_service_profiles.py python
 project usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py 0644 lib/frp_mgmt_auth.py python
 project usr/local/lib/frp-auto-deploy/frp_health_check.py 0644 lib/frp_health_check.py python
@@ -46,6 +48,7 @@ optional usr/local/lib/frp-auto-deploy/SHA256SUMS 0644 SHA256SUMS none
 unit etc/systemd/system/frps.service 0644 server/frps.service none
 unit etc/systemd/system/frp-port-allocator.service 0644 server/frp-port-allocator.service none
 unit etc/systemd/system/frp-access-plugin.service 0644 server/frp-access-plugin.service none
+unit etc/systemd/system/frp-egress-gateway.service 0644 server/frp-egress-gateway.service none
 unit-single443 etc/systemd/system/frp-frontend.service 0644 server/frp-frontend.service none
 project usr/local/sbin/frp-create-client 0755 tools/frp-create-client python
 project usr/local/sbin/frp-enrollments 0755 tools/frp-enrollments python
@@ -60,6 +63,7 @@ project usr/local/sbin/frp-group-set 0755 tools/frp-group-set python
 project usr/local/sbin/frp-release-client 0755 tools/frp-release-client python
 project usr/local/sbin/frp-release-service 0755 tools/frp-release-service python
 project usr/local/sbin/frp-access 0755 tools/frp-access python
+project usr/local/sbin/frp-egress 0755 tools/frp-egress python
 project usr/local/sbin/frp-profile 0755 tools/frp-profile python
 project usr/local/sbin/frp-revoke-client 0755 tools/frp-revoke-client python
 project usr/local/sbin/frp-set-client-installer-url 0755 tools/frp-set-client-installer-url python
@@ -81,6 +85,7 @@ version etc/frp-auto-deploy/version - - none
 protected etc/frp/server_token - - none
 protected var/lib/frp-auto-deploy/registry.json - - none
 protected var/lib/frp-auto-deploy/access-control.json - - none
+protected var/lib/frp-auto-deploy/egress-control.json - - none
 protected var/lib/frp-auto-deploy/service-profiles.json - - none
 protected-prefix etc/frp-auto-deploy/pki/ - - none
 protected-prefix var/lib/frp-auto-deploy/enrollments/ - - none

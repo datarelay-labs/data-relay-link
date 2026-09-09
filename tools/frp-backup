@@ -28,6 +28,7 @@ REQUIRED = (
     "etc/frp/server_token",
     "var/lib/frp-auto-deploy/registry.json",
     "var/lib/frp-auto-deploy/access-control.json",
+    "var/lib/frp-auto-deploy/egress-control.json",
     "var/lib/frp-auto-deploy/service-profiles.json",
 )
 OPTIONAL_FILES = (
@@ -36,6 +37,7 @@ OPTIONAL_FILES = (
     "var/lib/frp-auto-deploy/nginx-ownership",
     "var/log/frp-auto-deploy/audit.jsonl",
     "var/log/frp-auto-deploy/access-conn.jsonl",
+    "var/log/frp-auto-deploy/egress-conn.jsonl",
 )
 OPTIONAL_TREES = (
     "etc/frp-auto-deploy/pki",
@@ -45,6 +47,7 @@ OPTIONAL_TREES = (
 # Rotated audit companions (audit.jsonl.1 .. audit.jsonl.N).
 AUDIT_ROTATED_GLOB = "var/log/frp-auto-deploy/audit.jsonl.*"
 ACCESS_CONN_ROTATED_GLOB = "var/log/frp-auto-deploy/access-conn.jsonl.*"
+EGRESS_CONN_ROTATED_GLOB = "var/log/frp-auto-deploy/egress-conn.jsonl.*"
 
 
 def fail(message: str) -> "NoReturn":
@@ -157,6 +160,13 @@ def collect_files(root: Path) -> list[tuple[str, Path]]:
             child_rel = source.relative_to(root).as_posix()
             found[child_rel] = source
         for source in sorted(audit_dir.glob("access-conn.jsonl.*")):
+            if source.is_symlink() or not source.is_file():
+                continue
+            if source.name.endswith(".lock"):
+                continue
+            child_rel = source.relative_to(root).as_posix()
+            found[child_rel] = source
+        for source in sorted(audit_dir.glob("egress-conn.jsonl.*")):
             if source.is_symlink() or not source.is_file():
                 continue
             if source.name.endswith(".lock"):

@@ -2003,6 +2003,135 @@ def check_service_profiles(report, paths, facts, cfg):
 
 
 
+def check_egress_control(report, paths, facts, cfg):
+    """Validate Controlled Egress policy, unit, and listen configuration (read-only)."""
+    import importlib.util
+    import sys as _sys
+
+    eg = None
+    candidates = []
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.append(Path(root) / 'usr/local/lib/frp-auto-deploy/frp_egress_control.py')
+    candidates.extend([
+        Path(__file__).resolve().parent / 'frp_egress_control.py',
+        Path('/usr/local/lib/frp-auto-deploy/frp_egress_control.py'),
+    ])
+    prev_bytecode = _sys.dont_write_bytecode
+    _sys.dont_write_bytecode = True
+    try:
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            try:
+                spec = importlib.util.spec_from_file_location('frp_egress_control', str(candidate))
+                eg = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(eg)
+                break
+            except Exception as exc:
+                report.add(
+                    'EGRESS_CONFIG_ERROR', FAIL,
+                    'EGRESS_CONFIG_ERROR: egress control module failed to load',
+                    str(exc),
+                    're-run the server installer',
+                    'state',
+                )
+                return
+    finally:
+        _sys.dont_write_bytecode = prev_bytecode
+    if eg is None:
+        report.add(
+            'EGRESS_CONFIG_ERROR', FAIL,
+            'EGRESS_CONFIG_ERROR: frp_egress_control.py is missing',
+            '',
+            're-run the server installer',
+            'installation',
+        )
+        return
+
+    egress_rel = '/var/lib/frp-auto-deploy/egress-control.json'
+    if isinstance(cfg, dict):
+        configured = str(cfg.get('egress_control_file') or '').strip()
+        if configured.startswith('/'):
+            egress_rel = configured
+    if not paths.is_file(egress_rel):
+        report.add(
+            'EGRESS_CONFIG_ERROR', FAIL,
+            'EGRESS_CONFIG_ERROR: egress-control.json is missing',
+            egress_rel,
+            're-run the server installer to create an empty egress-control.json',
+            'state',
+        )
+        return
+    try:
+        egress_path = paths.p(egress_rel)
+        state = eg.load_egress_state(
+            path=egress_path,
+            cfg=cfg if isinstance(cfg, dict) else None,
+        )
+        report.add(
+            'EGRESS_CONFIG_ERROR', PASS,
+            'egress-control.json is readable and valid',
+            egress_rel, '', 'state',
+        )
+    except Exception as exc:
+        report.add(
+            'EGRESS_CONFIG_ERROR', FAIL,
+            'EGRESS_CONFIG_ERROR: egress-control.json is invalid (fail-closed)',
+            str(exc),
+            'restore egress-control.json from backup or recreate with frpctl create egress-profile',
+            'state',
+        )
+        return
+
+    try:
+        host, port = eg.listen_bind(cfg if isinstance(cfg, dict) else None)
+        report.add(
+            'EGRESS_LISTEN', INFO,
+            'Controlled Egress listen configured',
+            '%s:%s' % (host, port),
+            '',
+            'runtime',
+        )
+    except Exception as exc:
+        report.add(
+            'EGRESS_CONFIG_ERROR', FAIL,
+            'EGRESS_CONFIG_ERROR: invalid egress listen configuration',
+            str(exc),
+            'fix egress_listen_addr / egress_listen_port in config.json',
+            'state',
+        )
+
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ['systemctl', 'is-active', 'frp-egress-gateway'],
+            capture_output=True, text=True, timeout=5,
+        )
+        unit_state = (proc.stdout or '').strip() or 'unknown'
+    except Exception:
+        unit_state = 'unknown'
+    if unit_state == 'active':
+        report.add('EGRESS_UNIT', PASS, 'frp-egress-gateway is active', unit_state, '', 'runtime')
+    elif unit_state == 'failed':
+        report.add('EGRESS_UNIT', FAIL, 'frp-egress-gateway failed', unit_state, 'systemctl status frp-egress-gateway', 'runtime')
+    else:
+        report.add('EGRESS_UNIT', WARN, 'frp-egress-gateway is not active', unit_state, 'systemctl status frp-egress-gateway', 'runtime')
+
+    for issue in eg.doctor_issues(state):
+        cls = str(issue.get('class') or 'EGRESS_CONFIG_ERROR')
+        severity = str(issue.get('severity') or 'error').lower()
+        status = FAIL if severity == 'error' else (WARN if severity == 'warn' else INFO)
+        report.add(
+            cls,
+            status,
+            '%s: %s' % (cls, issue.get('message') or 'issue'),
+            '',
+            'inspect Controlled Egress with frpctl show egress-profiles',
+            'state',
+        )
+
+
 def check_server(report, paths, facts, skip_network):
     expect_root = bool(facts.get('expect_root_owner'))
     cfg, err = load_json_path(paths, '/etc/frp-auto-deploy/config.json')
@@ -2410,6 +2539,7 @@ def check_server(report, paths, facts, skip_network):
 
     check_access_control(report, paths, facts, cfg if isinstance(cfg, dict) else {}, state if isinstance(state, dict) else {})
     check_service_profiles(report, paths, facts, cfg if isinstance(cfg, dict) else {})
+    check_egress_control(report, paths, facts, cfg if isinstance(cfg, dict) else {})
 
     bootstrap_abs = '/var/lib/frp-auto-deploy/bootstrap'
     enrollments_abs = '/var/lib/frp-auto-deploy/enrollments'

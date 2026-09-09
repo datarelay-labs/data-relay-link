@@ -30,6 +30,7 @@ REQUIRED = {
     "etc/frp/server_token",
     "var/lib/frp-auto-deploy/registry.json",
     "var/lib/frp-auto-deploy/access-control.json",
+    "var/lib/frp-auto-deploy/egress-control.json",
     "var/lib/frp-auto-deploy/service-profiles.json",
 }
 OPTIONAL_EXACT = {
@@ -38,6 +39,7 @@ OPTIONAL_EXACT = {
     "var/lib/frp-auto-deploy/nginx-ownership",
     "var/log/frp-auto-deploy/audit.jsonl",
     "var/log/frp-auto-deploy/access-conn.jsonl",
+    "var/log/frp-auto-deploy/egress-conn.jsonl",
 }
 TREE_PREFIXES = (
     "etc/frp-auto-deploy/pki/",
@@ -47,6 +49,7 @@ TREE_PREFIXES = (
 TREE_ROOTS = tuple(prefix.rstrip("/") for prefix in TREE_PREFIXES)
 AUDIT_ROTATED_PREFIX = "var/log/frp-auto-deploy/audit.jsonl."
 ACCESS_CONN_ROTATED_PREFIX = "var/log/frp-auto-deploy/access-conn.jsonl."
+EGRESS_CONN_ROTATED_PREFIX = "var/log/frp-auto-deploy/egress-conn.jsonl."
 
 
 class RestoreError(RuntimeError):
@@ -75,6 +78,9 @@ def allowed_path(rel: str) -> bool:
         return suffix.isdigit() and not rel.endswith(".lock")
     if rel.startswith(ACCESS_CONN_ROTATED_PREFIX):
         suffix = rel[len(ACCESS_CONN_ROTATED_PREFIX) :]
+        return suffix.isdigit() and not rel.endswith(".lock")
+    if rel.startswith(EGRESS_CONN_ROTATED_PREFIX):
+        suffix = rel[len(EGRESS_CONN_ROTATED_PREFIX) :]
         return suffix.isdigit() and not rel.endswith(".lock")
     return False
 
@@ -226,6 +232,7 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         "etc/frp-auto-deploy/config.json",
         "var/lib/frp-auto-deploy/registry.json",
         "var/lib/frp-auto-deploy/access-control.json",
+        "var/lib/frp-auto-deploy/egress-control.json",
         "var/lib/frp-auto-deploy/service-profiles.json",
     ):
         try:
@@ -337,16 +344,17 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
     # Restore rotated audit companions declared in the backup payload.
     audit_payload_dir = payload / "var/log/frp-auto-deploy"
     if audit_payload_dir.is_dir():
-        for source in sorted(audit_payload_dir.glob("audit.jsonl.*")):
-            if not source.is_file() or source.name.endswith(".lock"):
-                continue
-            rel = source.relative_to(payload).as_posix()
-            if not allowed_path(rel):
-                continue
-            atomic_file(source, root / rel, rel)
-            count += 1
-            if allow_hook and hook_after and count >= hook_after:
-                raise RestoreError("simulated restore failure")
+        for pattern in ("audit.jsonl.*", "access-conn.jsonl.*", "egress-conn.jsonl.*"):
+            for source in sorted(audit_payload_dir.glob(pattern)):
+                if not source.is_file() or source.name.endswith(".lock"):
+                    continue
+                rel = source.relative_to(payload).as_posix()
+                if not allowed_path(rel):
+                    continue
+                atomic_file(source, root / rel, rel)
+                count += 1
+                if allow_hook and hook_after and count >= hook_after:
+                    raise RestoreError("simulated restore failure")
 
 
 def _load_module(name, filename):

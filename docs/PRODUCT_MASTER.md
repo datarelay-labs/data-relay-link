@@ -74,25 +74,41 @@ README, CLI Reference, Security 문서, Deployment Mode 문서 등 세부 문서
 
 ## 2.1 제품명
 
-**FRP Auto Deploy**
+**Data Relay**
+
+Legacy / technical identity (repository, packages, CLI): **FRP Auto Deploy**
+
+Broad source rename is deferred. Operators continue to use `sudo frpctl`.
 
 ---
 
 ## 2.2 제품 정의
 
-FRP Auto Deploy는 공식 `fatedier/frp`를 수정하거나 fork하지 않고 그 위에 구축하는:
+Data Relay는 폐쇄망/제한망을 위한 경량 보안 연결 게이트웨이다.
+
+```text
+Data Relay
+  ├── Secure Remote Access  (official FRP — inbound)
+  └── Controlled Egress     (agentless HTTP/HTTPS forward proxy — outbound)
+```
+
+> **필요한 연결만 안전하게 열어주는 폐쇄망/제한망용 경량 연결 게이트웨이**
+
+FRP Auto Deploy라는 기술 명칭은 공식 `fatedier/frp`를 수정하거나 fork하지 않고 그 위에 구축하는:
 
 > **Lightweight FRP Deployment & Operations Layer**
 
-이다.
+를 가리키며, 현재는 Data Relay의 **Secure Remote Access** 기둥으로 유지된다.
 
-보다 사용자 관점에서 정의하면:
+보다 사용자 관점에서 inbound 기능을 정의하면:
 
 > **방화벽 또는 NAT 뒤에 있는 서버와 서비스를 VPN이나 복잡한 NAT 설정 없이 외부에서 안전하고 쉽게 연결하고 관리하기 위한 Zero-Touch Remote Access Management 도구**
 
 이다.
 
-FRP 자체가 터널링 엔진이라면 FRP Auto Deploy는 그 위에서 다음을 담당한다.
+Outbound Controlled Egress는 보호 호스트에 agent를 설치하지 않고 `HTTP_PROXY` / `HTTPS_PROXY`만으로 승인된 FQDN만 허용한다. 상세는 `docs/CONTROLLED_EGRESS.md`, `docs/DATA_RELAY_ROADMAP.md`.
+
+FRP 자체가 터널링 엔진이라면 FRP Auto Deploy(inbound 운영 계층)는 그 위에서 다음을 담당한다.
 
 - 설치
 - 초기 등록
