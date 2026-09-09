@@ -93,7 +93,7 @@ try:
     with contextlib.redirect_stdout(out): editor.display_matches('', ['client','installer-url'], 13)
     first=out.getvalue()
     assert 'client' in first and 'installer-url' in first
-    assert first.count('frpctl> set ') == 1, first
+    assert first.count('drlink> set ') == 1, first
     assert fake.line == 'set '
     out=io.StringIO()
     with contextlib.redirect_stdout(out): editor.display_matches('', ['client','installer-url'], 13)

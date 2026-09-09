@@ -350,7 +350,7 @@ def wait_prompt(timeout=8):
     while time.time() < end:
         read_more(0.25)
         stripped = strip_ansi(bytes(buf)).replace(b"\r", b"").rstrip(b"\x00")
-        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>"):
+        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>") or stripped.endswith(b"drlink> ") or stripped.endswith(b"drlink>"):
             return True
     return False
 
@@ -395,7 +395,7 @@ if CLEAR_RE.search(chunk):
 # Buffer preserved: prompt + "create " restored
 read_more(0.5)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> create" not in tail and not tail.rstrip().endswith(b"create "):
+if b"frpctl> create" not in tail and b"drlink> create" not in tail and not tail.rstrip().endswith(b"create "):
     if b"create " not in tail:
         fail_pty("PTY: create buffer not preserved", chunk)
 

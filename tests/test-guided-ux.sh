@@ -169,7 +169,7 @@ need "$WORKDIR/complete.out" 'Your FRP client is running successfully' 'success 
 need "$WORKDIR/complete.out" 'Local target : 127.0.0.1:22' 'complete target'
 need "$WORKDIR/complete.out" 'Public port  : 6002' 'complete public'
 need "$WORKDIR/complete.out" 'ssh -p 6002 aella@203.0.113.10' 'complete ssh'
-need "$WORKDIR/complete.out" 'sudo frpctl' 'complete frpctl'
+need "$WORKDIR/complete.out" 'sudo drlink' 'complete drlink'
 need "$WORKDIR/complete.out" 'sudo frp-client' 'complete manage'
 need "$WORKDIR/complete.out" 'sudo frp-client status' 'complete status'
 need "$WORKDIR/complete.out" 'sudo frp-client info' 'complete info'

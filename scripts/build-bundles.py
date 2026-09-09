@@ -81,6 +81,7 @@ files=[
  'tools/frp-support-bundle',
  'tools/frp-update',
  'tools/frp-upstream',
+ 'tools/drlink',
  'tools/frpctl',
 ]
 
@@ -116,6 +117,7 @@ client_files=[
  'lib/frp_ctl_repl.py',
  'lib/frp-role-ownership.sh',
  'tools/frp-client',
+ 'tools/drlink',
  'tools/frpctl',
  'tools/frp-support-bundle',
  'tools/frp-update',

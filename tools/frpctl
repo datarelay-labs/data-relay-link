@@ -3,6 +3,7 @@
 # Thin dispatcher over existing commands. Does not reimplement registry or
 # client-state mutations.
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 _FRPCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRP_CTL_CMD_NAME="${FRP_CTL_CMD_NAME:-$(basename "${BASH_SOURCE[0]}")}"

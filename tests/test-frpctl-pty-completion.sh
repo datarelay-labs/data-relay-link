@@ -82,7 +82,7 @@ def read_some(timeout=0.2):
 deadline = time.time() + 8.0
 while time.time() < deadline:
     read_some(0.25)
-    if b"frpctl>" in buf:
+    if b"drlink>" in buf or b"frpctl>" in buf:
         break
 else:
     try:

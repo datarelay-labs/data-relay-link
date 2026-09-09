@@ -384,7 +384,7 @@ def wait_prompt(timeout=8):
     while time.time() < end:
         read_more(0.25)
         stripped = strip_ansi(bytes(buf)).replace(b"\r", b"").rstrip(b"\x00")
-        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>"):
+        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>") or stripped.endswith(b"drlink> ") or stripped.endswith(b"drlink>"):
             return True
     return False
 
@@ -531,7 +531,7 @@ def wait_prompt(timeout=8):
     while time.time() < end:
         read_more(0.25)
         stripped = strip_ansi(bytes(buf)).replace(b"\r", b"").rstrip(b"\x00")
-        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>"):
+        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>") or stripped.endswith(b"drlink> ") or stripped.endswith(b"drlink>"):
             return True
     return False
 
@@ -572,7 +572,7 @@ print("TAB_UNIQUE_INLINE")
 
 # --- Root candidates on first Tab ---
 before = len(buf)
-prompt_before = count_substr(bytes(buf), b"frpctl>")
+prompt_before = count_substr(bytes(buf), b"frpctl>") + count_substr(bytes(buf), b"drlink>")
 os.write(fd, b"\t")
 read_more(1.0)
 root = bytes(buf[before:])
@@ -587,9 +587,14 @@ if CLEAR_RE.search(root):
 if not wait_prompt(timeout=3):
     # readline redisplays prompt after display hook; wait a bit more
     read_more(0.5)
-if not (visible(bytes(buf)).rstrip().endswith(b"frpctl>") or visible(bytes(buf)).rstrip().endswith(b"frpctl> ")):
+if not (
+    visible(bytes(buf)).rstrip().endswith(b"frpctl>")
+    or visible(bytes(buf)).rstrip().endswith(b"frpctl> ")
+    or visible(bytes(buf)).rstrip().endswith(b"drlink>")
+    or visible(bytes(buf)).rstrip().endswith(b"drlink> ")
+):
     # after tab on empty, prompt should still be present
-    if b"frpctl>" not in visible(bytes(buf[before:])):
+    if b"frpctl>" not in visible(bytes(buf[before:])) and b"drlink>" not in visible(bytes(buf[before:])):
         fail_pty("PTY: root tab did not restore prompt", root)
 print("TAB_ROOT_CANDIDATES_FIRST_PRESS")
 
@@ -624,8 +629,8 @@ if CLEAR_RE.search(set_chunk):
 # buffer preserved: after list, prompt+set should be editable
 read_more(0.4)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> set" not in tail and not tail.rstrip().endswith(b"set "):
-    # Accept either redisplayed "frpctl> set " or trailing "set "
+if b"frpctl> set" not in tail and b"drlink> set" not in tail and not tail.rstrip().endswith(b"set "):
+    # Accept either redisplayed prompt+set or trailing "set "
     if b"set " not in tail:
         fail_pty("PTY: set buffer not preserved", set_chunk)
 print("TAB_SET_CANDIDATES_FIRST_PRESS")

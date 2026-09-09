@@ -199,14 +199,19 @@ pass "fresh install writes client-state"
 HOOK="$WORKDIR/hook.log"
 : >"$HOOK"
 export FRP_CLIENT_HOOK_LOG="$HOOK"
-before="$(python3 - "$TREE" <<'PY'
-import hashlib, os, sys
+before_map="$WORKDIR/before-map.json"
+before="$(python3 - "$TREE" "$before_map" <<'PY'
+import hashlib, json, sys
 from pathlib import Path
 root=Path(sys.argv[1])
 h=hashlib.sha256()
+files={}
 for p in sorted(root.rglob('*')):
     if p.is_file():
-        h.update(p.read_bytes())
+        data=p.read_bytes()
+        h.update(data)
+        files[str(p.relative_to(root))]=hashlib.sha256(data).hexdigest()
+Path(sys.argv[2]).write_text(json.dumps(files, sort_keys=True), encoding='utf-8')
 print(h.hexdigest())
 PY
 )"
@@ -224,7 +229,21 @@ for p in sorted(root.rglob('*')):
 print(h.hexdigest())
 PY
 )"
-[[ "$before" == "$after" ]] || fail "read-only CLI modified files"
+if [[ "$before" != "$after" ]]; then
+  python3 - "$TREE" "$before_map" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+before=json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+after={}
+for p in sorted(root.rglob('*')):
+    if p.is_file():
+        after[str(p.relative_to(root))]=hashlib.sha256(p.read_bytes()).hexdigest()
+changed=sorted(k for k in set(before)|set(after) if before.get(k)!=after.get(k))
+print("DEBUG_CHANGED_FILES=" + json.dumps(changed, ensure_ascii=True))
+PY
+  fail "read-only CLI modified files"
+fi
 if grep -qx enroll "$HOOK"; then fail "read-only contacted allocator"; fi
 if grep -qx restart "$HOOK"; then fail "read-only restarted frpc"; fi
 grep -q "Project version : ${PROJECT_VERSION}" "$WORKDIR/status.out" || fail "status project version"
