@@ -213,7 +213,7 @@ MAX_NONCES_PER_CLIENT=256
 Replayed nonces and stale timestamps are rejected. A retry of the same logical
 Apply uses a new timestamp/nonce/signature and reuses existing public ports.
 
-`frpctl doctor` is read-only and does not consume a nonce.
+`drlink doctor` is read-only and does not consume a nonce.
 
 ## 9. Revoke vs release
 
@@ -360,7 +360,7 @@ old reservation.
 | Server host completely lost | Restore the backups above, then reinstall |
 | Client local state lost | New enrollment or Enrollment Code recovery |
 | Client identity lost | Enrollment Code recovery (`frp-revoke-client` if the old key must be blocked) |
-| CA lost or compromised | Advanced manual recovery; **not** solved by `frpctl update` |
+| CA lost or compromised | Advanced manual recovery; **not** solved by `drlink update` |
 | Registry lost | Restore `registry.json` from backup; the installer will not invent reservations |
 
 Token rotation is not automatic. Reinstall preserves the existing FRP token.

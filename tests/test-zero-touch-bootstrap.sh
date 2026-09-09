@@ -738,7 +738,7 @@ if run_zero_touch "$CLIENT2" "$LIVE_TICKET" 'aabbccddeeff00112233445566778899' "
   fail "existing install should refuse"
 fi
 grep -q 'This client is already installed' "$WORKDIR/again.err" || fail "already installed message"
-grep -q 'frpctl update' "$WORKDIR/again.err" || fail "already installed update hint"
+grep -q 'drlink update' "$WORKDIR/again.err" || fail "already installed update hint"
 if grep -q bootstrap_redeem "$WORKDIR/again.out.hook"; then
   fail "existing install redeemed ticket"
 fi

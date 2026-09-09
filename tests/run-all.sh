@@ -87,6 +87,7 @@ python3 tests/test-egress-control.py
 ./tests/test-support-bundle.sh
 python3 tests/test-service-profiles.py
 ./tests/test-service-profiles.sh
+./tests/test-user-facing-branding.sh
 ./tests/test-ca-bootstrap.sh
 ./tests/test-allocator-process-cleanup.sh
 ./tests/test-pki-https.py

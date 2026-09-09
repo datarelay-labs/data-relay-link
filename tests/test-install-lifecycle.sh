@@ -922,7 +922,7 @@ if frp_client_main >"$WORKDIR/rerun.out" 2>"$WORKDIR/rerun.err"; then
   fail "existing client installer should refuse"
 fi
 grep -q 'already has an FRP client installed' "$WORKDIR/rerun.err" || fail "refuse message"
-grep -q 'sudo frpctl update' "$WORKDIR/rerun.err" || fail "directs to update"
+grep -q 'sudo drlink update' "$WORKDIR/rerun.err" || fail "directs to update"
 pass "CLIENT_REINSTALL_SAFE"
 
 # ---------------------------------------------------------------------------

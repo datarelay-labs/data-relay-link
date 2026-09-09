@@ -2,7 +2,7 @@
 
 > **Product:** Data Relay  
 > **Pillar:** Agentless Controlled Egress  
-> **CLI:** `sudo frpctl` (legacy technical identity: FRP Auto Deploy)  
+> **CLI:** `sudo drlink`  
 > **Default proxy port:** `6080`
 
 ## What it is
@@ -25,12 +25,12 @@ HTTPS traffic uses `CONNECT`. Application TLS stays end-to-end between the clien
 3. Create an Egress Profile:
 
 ```text
-sudo frpctl
-frpctl> create egress-profile ubuntu-update
-frpctl> add egress-profile ubuntu-update destination security.ubuntu.com 443
-frpctl> add egress-profile ubuntu-update destination archive.ubuntu.com 443
-frpctl> add egress-profile ubuntu-update source 203.0.113.10/32
-frpctl> show egress-profile ubuntu-update
+sudo drlink
+drlink> create egress-profile ubuntu-update
+drlink> add egress-profile ubuntu-update destination security.ubuntu.com 443
+drlink> add egress-profile ubuntu-update destination archive.ubuntu.com 443
+drlink> add egress-profile ubuntu-update source 203.0.113.10/32
+drlink> show egress-profile ubuntu-update
 ```
 
 4. On the closed host, set `HTTP_PROXY` / `HTTPS_PROXY` (or app-specific proxy settings).
@@ -71,7 +71,7 @@ Inbound Access Control (`access-control.json`) and Egress Control (`egress-contr
 
 ## Doctor / backup
 
-- `frpctl doctor` checks egress policy validity, listen configuration, and gateway unit state (read-only).
+- `drlink doctor` checks egress policy validity, listen configuration, and gateway unit state (read-only).
 - Server backup/restore includes `var/lib/frp-auto-deploy/egress-control.json`.
 
 ## Verified client patterns

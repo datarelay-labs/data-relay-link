@@ -1,13 +1,13 @@
-# FRP Auto Deploy
+# Data Relay Link
 
-**Legacy technical identity for Data Relay — secure connectivity for isolated networks.**
+**Data Relay Labs / Data Relay — secure connectivity for isolated networks.**
 
 Data Relay provides:
 
 - **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access on official FRP
 - **Controlled Egress** (outbound) — agentless HTTP/HTTPS forward proxy for approved destinations only
 
-FRP Auto Deploy remains the repository/package/CLI name until a separate naming migration. It helps you securely reach servers behind NAT or firewalls **and** allow closed networks to reach only the Internet destinations they need — without a full VPN, RMM platform, SWG/SASE stack, or custom FRP fork.
+Data Relay Link helps you securely reach servers behind NAT or firewalls **and** allow closed networks to reach only the Internet destinations they need — without a full VPN, RMM platform, SWG/SASE stack, or custom FRP fork.
 
 - Official [`fatedier/frp`](https://github.com/fatedier/frp) only (inbound)
 - Exact pinned/tested FRP version
@@ -19,7 +19,7 @@ FRP Auto Deploy remains the repository/package/CLI name until a separate naming 
 - Agentless Controlled Egress profiles (FQDN + source CIDR, default DENY)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
-- One primary operator interface: `sudo frpctl`
+- One primary operator interface: `sudo drlink`
 
 Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)  
 Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)  
@@ -31,7 +31,7 @@ Documentation: **https://frp.xdr.ooo**
 
 | Item | Current |
 | --- | --- |
-| FRP Auto Deploy | **v2.3.0** |
+| Data Relay Link | **v2.3.0** |
 | Pinned upstream FRP | **v0.71.0** |
 | Intended install source | immutable `v2.3.0` tag (recreate/move on final audit HEAD) |
 | Default deployment mode | **Direct** |
@@ -80,7 +80,7 @@ Real-host validation and container/CI portability are deliberately reported sepa
 
 Additional automated Linux portability coverage includes Ubuntu 22.04/24.04, Rocky Linux 8/9, AlmaLinux 9, Amazon Linux 2023, and Amazon Linux 2.
 
-The FRP Auto Deploy **server remains Linux-based**. macOS and Windows are client platforms; a Windows FRP Auto Deploy server is not part of the current product scope.
+The Data Relay Link **server remains Linux-based**. macOS and Windows are client platforms; a Windows Data Relay Link server is not part of the current product scope.
 
 ### What the final Real E2E covered
 
@@ -126,12 +126,12 @@ Server
 
 Traditional support access often means requesting a VPN account, changing firewall/NAT rules, configuring a bastion, or deploying a separate remote-management product.
 
-FRP Auto Deploy instead lets the client initiate an outbound FRP tunnel to a server you control:
+Data Relay Link lets the client initiate an outbound FRP tunnel to a server you control:
 
 ```text
                     Internet
                         |
-              FRP Auto Deploy Server
+              Data Relay Link Server
                   Public endpoint
                         |
                  outbound FRP tunnel
@@ -178,12 +178,12 @@ curl -fsSL \
 Then verify:
 
 ```bash
-sudo frpctl show version
-sudo frpctl show status
-sudo frpctl doctor
+sudo drlink show version
+sudo drlink show status
+sudo drlink doctor
 ```
 
-FRP Auto Deploy does **not** automatically modify external firewall/NAT rules, cloud security groups, UFW, firewalld, iptables, or DNS-provider records.
+Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, UFW, firewalld, iptables, or DNS-provider records.
 
 ---
 
@@ -231,7 +231,7 @@ See [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md).
 On the server:
 
 ```bash
-sudo frpctl
+sudo drlink
 ```
 
 Then use the guided command:
@@ -243,7 +243,7 @@ create zero-touch
 Or create an explicit SSH profile:
 
 ```bash
-sudo frpctl create enrollment \
+sudo drlink create enrollment \
   --one-line \
   --ssh \
   --ssh-user admin \
@@ -333,16 +333,16 @@ Supported service model:
 - HTTPS passthrough
 - Custom TCP
 
-HTTPS is TCP passthrough; FRP Auto Deploy does not terminate the application's TLS session or manage the application certificate.
+HTTPS is TCP passthrough; Data Relay Link does not terminate the application's TLS session or manage the application certificate.
 
 ---
 
-## `frpctl` — primary management interface
+## `drlink` — primary management interface
 
 Start the persistent operator CLI:
 
 ```bash
-sudo frpctl
+sudo drlink
 ```
 
 Typical server operations:
@@ -419,7 +419,7 @@ ssh -p 6000 admin@access.example.com
 ssh -p 6000 admin@203.0.113.10
 ```
 
-IP fallback is preserved. FRP Auto Deploy does not automatically manage DNS-provider records, ACME/Let's Encrypt, external NAT, or application certificates.
+IP fallback is preserved. Data Relay Link does not automatically manage DNS-provider records, ACME/Let's Encrypt, external NAT, or application certificates.
 
 ---
 
@@ -446,7 +446,7 @@ Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE):
 - Service modes: `PUBLIC` (default) and `ALLOWLIST`
 - Optional temporary sources with absolute expiry (`expires_at`)
 - Bounded connection ALLOW/DENY log
-- `frpctl access ...` interactive menu and scriptable CLI
+- `drlink access ...` interactive menu and scriptable CLI
 - FRP 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed for ALLOWLIST)
 
 IP allowlisting is defense-in-depth. Keep target authentication enabled.
@@ -478,17 +478,17 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 ## Backup, restore, and updates
 
 ```bash
-sudo frpctl create backup
-sudo frpctl restore backup <path>
+sudo drlink create backup
+sudo drlink restore backup <path>
 
-sudo frpctl update project --check
-sudo frpctl update project
+sudo drlink update project --check
+sudo drlink update project
 
-sudo frpctl show upstream
-sudo frpctl update frp --check
+sudo drlink show upstream
+sudo drlink update frp --check
 ```
 
-`show upstream` is informational. FRP Auto Deploy does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
+`show upstream` is informational. Data Relay Link does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
 
 Legacy clients that do not have persisted release identity fail closed on remote update. Use the **one-time verified bridge** documented in [`docs/FRP_UPGRADE.md`](docs/FRP_UPGRADE.md); do not guess or silently switch a legacy install to a release channel.
 
@@ -527,4 +527,4 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 ## Product definition in one sentence
 
-> FRP Auto Deploy v2.3.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.
+> Data Relay Link v2.3.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.

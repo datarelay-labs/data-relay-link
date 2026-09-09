@@ -1,6 +1,6 @@
-# frpctl command reference
+# drlink command reference
 
-`frpctl` is the everyday operator CLI. It does not add new backend behavior.
+`drlink` is the everyday operator CLI. It does not add new backend behavior.
 Existing tools (`frp-clients`, `frp-client-set`, `frp-create-client`, …) remain
 the implementation.
 
@@ -29,7 +29,7 @@ reprint the list. Tab never runs the command and never clears the screen.
 Type `?` (then Enter) for detailed context help when needed.
 
 `↑` / `↓` walk this session only. History is never written to disk
-(`~/.bash_history`, `~/.frpctl_history`, or `HISTFILE`).
+(`~/.bash_history`, `~/.drlink_history`, or `HISTFILE`).
 
 The canonical client selector is **CLIENT ID**: the immutable short machine
 identity (usually 8 hex characters; longer when that prefix is not unique).
@@ -97,10 +97,10 @@ set server bootstrap-hostname <fqdn>
 
 `set server hostname` configures an optional DNS alias for published-service
 access. It does not change FRP control (`frp_server` / `serverAddr`), CLIENT ID,
-public ports, or the CA. DNS records are managed outside FRP Auto Deploy.
+public ports, or the CA. DNS records are managed outside Data Relay Link.
 
 `set server bootstrap-hostname` configures the optional publicly trusted
-Zero-Touch short URL hostname. FRP Auto Deploy does not create DNS records,
+Zero-Touch short URL hostname. Data Relay Link does not create DNS records,
 issue certificates, or configure ACME. See `docs/ZERO_TOUCH_SHORT_URL.md`.
 
 The backend still accepts `--tag key=value`. The parser converts
@@ -260,7 +260,7 @@ access test <client> <service-id> <source-ip>
 access log <client> <service-id> [--limit N] [--allow|--deny]
 ```
 
-Interactive `frpctl` server menu includes Access Control. Empty ALLOWLIST
+Interactive `drlink` server menu includes Access Control. Empty ALLOWLIST
 assignment is refused. Deleting a list that is still referenced is refused.
 IP allowlisting is defense-in-depth; keep target authentication enabled.
 

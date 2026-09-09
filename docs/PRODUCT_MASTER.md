@@ -1,4 +1,4 @@
-# FRP Auto Deploy — Product Master Document
+# Data Relay Link — Product Master Document
 
 > **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap  
 > **Repository:** `xdr-labs/frp-auto-deploy`
@@ -8,7 +8,7 @@
 > **Current release:** Project `2.3.0` / FRP `0.71.0` — **FINAL AUDIT CLOSURE** (recreate/move premature `v2.3.0` tag on final HEAD)
 > **Release commit:** _(set when the final `v2.3.0` tag is moved/recreated)_
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
-> **Primary management interface:** `sudo frpctl`
+> **Primary management interface:** `sudo drlink`
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
 
 ## 2026-09-07 Consolidation Notice
@@ -76,9 +76,9 @@ README, CLI Reference, Security 문서, Deployment Mode 문서 등 세부 문서
 
 **Data Relay**
 
-Legacy / technical identity (repository, packages, CLI): **FRP Auto Deploy**
+Legacy / technical identity (repository path and upstream internals): **frp-auto-deploy / FRP**
 
-Broad source rename is deferred. Operators continue to use `sudo frpctl`.
+Broad source rename is deferred for internals. Operators use `sudo drlink`.
 
 ---
 
