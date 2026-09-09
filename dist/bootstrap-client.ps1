@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-if (-not $env:FRP_SOURCE_REF) { $env:FRP_SOURCE_REF = '6d1c12795e2ca56c173223b95c80959ff0fc0a53' }
+if (-not $env:FRP_SOURCE_REF) { $env:FRP_SOURCE_REF = '6c67360fa793e2e088a818ea30500158d12dd521' }
 if (-not $env:FRP_RELEASE_CHANNEL) { $env:FRP_RELEASE_CHANNEL = 'dev' }
 $tmp = Join-Path $env:TEMP ('frp-win-bundle-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null

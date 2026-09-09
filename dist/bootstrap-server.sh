@@ -2,7 +2,7 @@
 set -euo pipefail
 # Bundle provenance stamped at build time.
 if [[ -z "${FRP_SOURCE_REF:-}" ]]; then
-  export FRP_SOURCE_REF='6d1c12795e2ca56c173223b95c80959ff0fc0a53'
+  export FRP_SOURCE_REF='6c67360fa793e2e088a818ea30500158d12dd521'
 fi
 if [[ -z "${FRP_RELEASE_CHANNEL:-}" ]]; then
   export FRP_RELEASE_CHANNEL='dev'
