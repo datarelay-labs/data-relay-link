@@ -330,7 +330,8 @@ probe "$SOURCE_A_HOST" || fail "A after registry restore"
 pass MISSING_REGISTRY_RECOVERY
 
 # disable/enable on client
-echo "=== disable/enable ==="sshx "$CLIENT_HOST" "sudo frpctl disable service ${SERVICE_ID}; sudo frpctl apply" \
+echo "=== disable/enable ==="
+sshx "$CLIENT_HOST" "sudo frpctl disable service ${SERVICE_ID}; sudo frpctl apply" \
   || sshx "$CLIENT_HOST" "sudo frp-client disable-service ${SERVICE_ID}; sudo frp-client apply"
 sleep 3
 sshx "$CLIENT_HOST" "sudo frpctl enable service ${SERVICE_ID}; sudo frpctl apply" \

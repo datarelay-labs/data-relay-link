@@ -11,7 +11,7 @@ SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.112}"
 SERVER_ALIAS="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 SSH_KEY="${FRP_E2E_SSH_KEY:-$HOME/.ssh/frp_e2e_ed25519}"
-TARGETS="${FRP_E2E_MATRIX_TARGETS:-baseline-linux,amazon-linux-2023,rocky-linux-8.10,macos-arm64,windows-10}"
+TARGETS="${FRP_E2E_MATRIX_TARGETS:-ubuntu-24.04,amazon-linux-2023,rocky-linux-8.10,rocky-linux-9.4,macos-arm64,windows-10}"
 INCLUDE_FLEET="${FRP_E2E_MATRIX_FLEET:-1}"
 INCLUDE_DNS_IP_FALLBACK="${FRP_E2E_MATRIX_IP_FALLBACK:-1}"
 
