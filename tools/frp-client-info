@@ -126,9 +126,12 @@ def print_overview():
 
 def access_column(service_id):
     if ACL is None:
-        return 'PUBLIC'
+        return 'ERROR'
     try:
-        access_state = ACL.load_access_state(cfg=cfg)
+        access_path = ACL.access_control_path(cfg)
+        if not access_path.exists():
+            return 'ERROR'
+        access_state = ACL.require_access_state(path=access_path, cfg=cfg)
         binding = ACL.get_service_binding(access_state, mid, service_id)
         if binding.get('access_mode') != ACL.MODE_ALLOWLIST:
             return 'PUBLIC'
@@ -138,7 +141,7 @@ def access_column(service_id):
         active = sum(1 for entry in entries if isinstance(entry, dict) and ACL.entry_is_active(entry))
         return 'ALLOWLIST (%s)' % active
     except Exception:
-        return 'PUBLIC'
+        return 'ERROR'
 
 
 def print_services():

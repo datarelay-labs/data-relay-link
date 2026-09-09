@@ -42,6 +42,32 @@ def _load_module(name: str, rel: str):
 ACL = _load_module("frp_access_control", "frp_access_control.py")
 
 
+def _load_registry_validator():
+    """Reuse allocator registry schema validation (no soft-empty)."""
+    import importlib.util
+
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent / "frp-port-allocator.py",
+        Path("/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"),
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/frp-auto-deploy/frp-port-allocator.py")
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "frp_port_allocator_validate", str(path)
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.require_registry_v2, mod.validate_registry_invariants
+    raise SystemExit("ERROR: missing frp-port-allocator.py for registry validation")
+
+
+_require_registry_v2, _validate_registry_invariants = _load_registry_validator()
+del _validate_registry_invariants  # reserved for allocator; Access uses schema only
+
+
 class PolicyCache:
     def __init__(self, config_path: Path):
         self.config_path = config_path
@@ -84,7 +110,11 @@ class PolicyCache:
                     self.load_error = "; ".join(missing)
                     return
                 self.access_state = ACL.load_access_state(path=self.access_path, cfg=self.cfg)
-                self.registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
+                raw_registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
+                # Structural schema validation only (schema_version + clients map).
+                # Full port-ownership invariants belong to the allocator; Access
+                # Plugin needs a valid mapping structure to authorize proxies.
+                self.registry = _require_registry_v2(raw_registry)
                 ACL.validate_access_state(self.access_state)
                 self.access_mtime = access_m
                 self.registry_mtime = reg_m

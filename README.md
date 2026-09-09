@@ -19,13 +19,13 @@ Documentation: **https://frp.xdr.ooo**
 
 ---
 
-## Current stable release
+## Current release — v2.3.0 FINAL AUDIT CLOSURE
 
 | Item | Current |
 | --- | --- |
 | FRP Auto Deploy | **v2.3.0** |
 | Pinned upstream FRP | **v0.71.0** |
-| Stable install source | immutable `v2.3.0` tag |
+| Intended install source | immutable `v2.3.0` tag (recreate/move on final audit HEAD) |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
@@ -33,51 +33,25 @@ Documentation: **https://frp.xdr.ooo**
 Current project version: **2.3.0**
 Current pinned FRP version: **v0.71.0**
 
-`v2.2.1` and earlier tags remain immutable historical releases. `v2.3.0` is the
-**current stable release** and keeps FRP pinned at `0.71.0`. Stable field
-installs use the immutable `v2.3.0` tag. Following mutable `main` is explicit
-opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
+`v2.2.1` and earlier tags remain immutable historical releases. This tree
+prepares **v2.3.0 FINAL AUDIT CLOSURE** with FRP pinned at `0.71.0`. A
+premature GitHub `v2.3.0` tag/release already exists; after this PR lands,
+recreate or move that tag onto the final audit-closure HEAD before treating
+field installs as final. Following mutable `main` is explicit opt-in only,
+for example `FRP_RELEASE_CHANNEL=dev`.
 
 On development builds, use release channel, source ref, and verified bundle SHA256 to identify the exact build.
 
 ---
 
-## Canonical Product Master / documentation closure
+## Canonical Product Master (historical v2.2.1 docs closure)
 
-The post-release documentation restoration phase **`CANONICAL_PRODUCT_MASTER_RESTORE_V2_2_1_DOCS_CLOSURE`** completed with **PASS**.
-
-| Closure item | Result |
-| --- | --- |
-| Start HEAD / v2.2.1 release commit | `19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f` |
-| Final `main` HEAD after canonical docs merge | `343f292d91d01c3f263ff5c443f101d185b5527f` |
-| v2.2.1 tag target changed | **NO** |
-| v2.2.0 tag changed | **NO** |
-| New release created | **NO** |
-| Product runtime files changed | **NO** |
-| `dist/` changed | **NO** |
-| Real E2E rerun | **NO — not required for docs-only closure** |
-| Owner authoritative Master available | **YES** |
-| Owner Master backup | **PASS** |
-| Canonical Product Master restore | **PASS** |
-| Product Master structural check | **PASS** |
-| Current release data updated | **YES** |
-| Platform matrix updated | **YES** |
-| Release history preserved | **YES** |
-| Provenance added | **YES** |
-| Known corruption removed | **YES** |
-| `BLOCKED_MISSING_AUTHORITATIVE_MASTER` removed | **YES** |
-| Public metadata scan | **PASS** |
-| Secret scan | **PASS** |
-| `SHA256SUMS` updated | **YES** |
-| README stale release state fixed | **YES** |
-| Security stale release state fixed | **YES** |
-| Root `GITHUB_SETUP.md` release URLs | **YES — already points at immutable `v2.2.1`**; no `docs/GITHUB_SETUP.md` exists |
-| Owner manual E2E required | **NO** |
-| Final documentation state | **CANONICAL** |
-
-The damaged session-start / old GitHub `docs/PRODUCT_MASTER.md` copies matched at **2,173 lines** with SHA256 `67329d74f58276d75f3b140baf135fb09fc097899de60a192bcafd4f63743709`. Through **PR #12**, that truncated derivative was replaced by the Owner-reconstructed, full integrated Product Master (approximately **3,625 lines**), with release history preserved and provenance added. The incomplete surgical PR #13 was closed as superseded.
-
-The canonical source is now [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md). The documentation-only merge advanced repository `main` to `343f292…` but did **not** move the immutable `v2.2.1` tag, create a new release, or change runtime artifacts. Therefore the stable release identity remains **v2.2.1 / release commit `19d4b6f…` / FRP 0.71.0**.
+The post-**v2.2.1** documentation restoration phase
+**`CANONICAL_PRODUCT_MASTER_RESTORE_V2_2_1_DOCS_CLOSURE`** completed with
+**PASS**. That work restored [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md)
+without moving the immutable `v2.2.1` tag or changing runtime artifacts. It is
+historical context only; current product version and platform claims are under
+**v2.3.0 FINAL AUDIT CLOSURE** above.
 
 ---
 
@@ -458,7 +432,7 @@ Dynamic Group, nested hierarchy, broad destructive fleet operations, canary roll
 
 ## Access Control Pack
 
-Included in published stable `v2.3.0`:
+Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE):
 
 - Named reusable Access Lists (IPv4/IPv6 CIDR)
 - Service modes: `PUBLIC` (default) and `ALLOWLIST`

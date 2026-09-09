@@ -92,7 +92,14 @@ cfg = json.loads(CFG.read_text())
 reg = Path(cfg['registry_file'])
 if ROOT and not str(reg).startswith(ROOT):
     reg = Path(ROOT + str(reg))
-state = json.loads(reg.read_text()) if reg.exists() else {'schema_version': 2, 'clients': {}}
+if not reg.exists():
+    print('ERROR: registry.json is missing (authoritative registry state required)', file=sys.stderr)
+    raise SystemExit(1)
+try:
+    state = json.loads(reg.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print('ERROR: unable to read registry.json: %s' % exc, file=sys.stderr)
+    raise SystemExit(1)
 require_v2(state)
 
 public_ip = CREG.sanitize_display(cfg.get('public_ip') or cfg.get('public_host') or '', 253)

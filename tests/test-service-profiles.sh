@@ -7,7 +7,7 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+trap 'rm -rf "$WORKDIR"; unset FRP_DEPLOY_TEST_ROOT FRP_SOURCE_ROOT' EXIT
 TREE="$WORKDIR/root"
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 export FRP_CTL_TEST_ROOT="$TREE"
@@ -221,22 +221,26 @@ print("ok")
 PY
 pass "profile audit events"
 
-# Backup ensure_* includes profiles
-python3 - <<'PY' || fail "backup ensure profiles"
-import json, os
-from importlib.machinery import SourceFileLoader
+# Backup must fail when service-profiles.json is missing (no silent recreate).
+python3 - <<'PY' || fail "backup missing profiles fails"
+import os, sys, types
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 profiles = root / "var/lib/frp-auto-deploy/service-profiles.json"
 profiles.unlink()
-mod = SourceFileLoader("frp_backup", str(Path(os.environ["FRP_SOURCE_ROOT"]) / "tools/frp-backup")).load_module()
-mod.ensure_service_profiles_file(root)
-assert profiles.is_file()
-data = json.loads(profiles.read_text())
-assert data["schema_version"] == 1 and data["profiles"] == {}
+path = Path(os.environ["FRP_SOURCE_ROOT"]) / "tools/frp-backup"
+mod = types.ModuleType("frp_backup")
+exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), mod.__dict__)
+failed = False
+try:
+    mod.collect_files(root)
+except SystemExit:
+    failed = True
+assert failed, "backup should fail without service-profiles.json"
+assert not profiles.exists(), "backup must not recreate missing profiles"
 print("ok")
 PY
-pass "backup ensure_service_profiles_file"
+pass "backup missing profiles fails closed"
 
 
 # Doctor check for missing/invalid profiles
@@ -249,13 +253,15 @@ doc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(doc)
 tree = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 paths = doc.Paths(str(tree))
-report = doc.Report()
 cfg = json.loads((tree / "etc/frp-auto-deploy/config.json").read_text())
-# valid
+# Restore a valid empty store after the missing-profiles backup check.
+profiles = tree / "var/lib/frp-auto-deploy/service-profiles.json"
+profiles.write_text('{"schema_version":1,"profiles":{}}\n', encoding="utf-8")
+report = doc.Report()
 doc.check_service_profiles(report, paths, {}, cfg)
 assert any(c["status"] == doc.PASS and "readable and valid" in c["message"] for c in report.checks), report.checks
 # missing
-(tree / "var/lib/frp-auto-deploy/service-profiles.json").unlink()
+profiles.unlink()
 report2 = doc.Report()
 doc.check_service_profiles(report2, paths, {}, cfg)
 assert any(c["status"] == doc.FAIL and "missing" in c["message"] for c in report2.checks), report2.checks

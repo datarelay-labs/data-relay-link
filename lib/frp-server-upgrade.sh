@@ -335,6 +335,7 @@ frp_server_upgrade_verify_rollback_health() {
   fi
   frp_server_health_frps || return 1
   frp_server_health_allocator "$(frp_server_upgrade_allocator_port)" || return 1
+  frp_server_health_access || return 1
   if frp_server_upgrade_is_single443; then
     frp_server_health_frontend || return 1
   fi
@@ -616,6 +617,7 @@ frp_server_apply_project_upgrade() {
   fi
   if [[ "$restart_access" == "1" ]]; then
     frp_server_restart_unit frp-access-plugin || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_health_access || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_frps" == "1" ]]; then
     frp_server_restart_unit frps || { frp_server_upgrade_rollback "$snapshot"; return 1; }
@@ -636,6 +638,9 @@ frp_server_apply_project_upgrade() {
   if [[ "$restart_alloc" != "1" ]]; then
     frp_server_health_allocator "$(frp_server_upgrade_allocator_port)" ||
       { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
+  if [[ "$restart_access" != "1" ]]; then
+    frp_server_health_access || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if frp_server_upgrade_is_single443 && [[ "$restart_frontend" != "1" ]]; then
     frp_server_health_frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }

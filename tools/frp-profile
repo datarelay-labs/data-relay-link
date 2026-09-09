@@ -158,7 +158,12 @@ def cmd_create(cfg, args):
 def cmd_set(cfg, args):
     try:
         def mut(state):
-            return PROF.update_profile(state, args.selector, args.property, args.value)
+            value = args.value
+            if args.property == "preset" and str(value).strip().lower() == "ssh":
+                ssh_user = str(getattr(args, "ssh_user", "") or "").strip()
+                if ssh_user:
+                    value = "ssh:%s" % ssh_user
+            return PROF.update_profile(state, args.selector, args.property, value)
 
         pid, profile, old = PROF.mutate_profiles_state(mut, cfg=cfg)
     except PROF.ProfileError as exc:
@@ -173,6 +178,10 @@ def cmd_set(cfg, args):
         shown = profile.get("ssh_user")
     elif args.property == "description":
         shown = profile.get("description") or "(cleared)"
+    elif args.property == "preset":
+        shown = profile.get("preset")
+        if shown == "ssh" and profile.get("ssh_user"):
+            shown = "%s (ssh_user=%s)" % (shown, profile.get("ssh_user"))
     elif args.property.startswith("health"):
         shown = profile.get("health_check") or "(cleared)"
     print("%s: %s" % (args.property, shown if shown is not None else "(cleared)"))
@@ -241,6 +250,11 @@ def build_parser():
         ),
     )
     set_cmd.add_argument("value")
+    set_cmd.add_argument(
+        "--ssh-user",
+        default="",
+        help="with property=preset ssh, set ssh_user atomically (non-SSH → SSH transition)",
+    )
     set_cmd.set_defaults(func=cmd_set)
 
     delete = subs.add_parser("delete")

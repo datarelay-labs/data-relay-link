@@ -180,7 +180,12 @@ def client_status_label(frpc_active: str) -> str:
     return CLIENT_UNKNOWN
 
 
-def tunnel_status_label(item: dict) -> str:
+def tunnel_status_label(item: dict, *, live_state: Optional[str] = None) -> str:
+    """Report tunnel status from live evidence only.
+
+    ``remote_port`` is a persistent reservation, not proof the FRP tunnel is
+    up. Without explicit live proxy/tunnel evidence, return UNKNOWN.
+    """
     enabled = item.get("enabled", True) is not False
     if not enabled:
         return TUNNEL_OFFLINE
@@ -191,7 +196,12 @@ def tunnel_status_label(item: dict) -> str:
         int(remote)
     except (TypeError, ValueError):
         return TUNNEL_UNKNOWN
-    return TUNNEL_ONLINE
+    evidence = str(live_state or "").strip().lower()
+    if evidence in ("online", "up", "active"):
+        return TUNNEL_ONLINE
+    if evidence in ("offline", "down", "inactive"):
+        return TUNNEL_OFFLINE
+    return TUNNEL_UNKNOWN
 
 
 def probe_target(local_ip: Any, local_port: Any, hc: Any) -> str:

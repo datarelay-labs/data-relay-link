@@ -46,14 +46,17 @@ def registry_path():
 
 def mutate_registry(callback):
     path = registry_path()
+    if not path.exists():
+        fail('registry.json is missing (authoritative registry state required)')
     lock_path = path.parent / 'registry.lock'
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        state = json.loads(path.read_text()) if path.exists() else {
-            'schema_version': 2, 'reserved': [], 'clients': {}, 'groups': {},
-        }
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            fail('unable to read registry.json: %s' % exc)
         if state.get('schema_version') != 2:
             fail('unsupported registry schema version')
         if not isinstance(state.get('clients', {}), dict):

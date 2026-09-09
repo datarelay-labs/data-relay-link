@@ -1,3 +1,6 @@
+# Template formula for a future community/private tap only.
+# This is NOT official Homebrew core support and is not published as a tap yet.
+# Fill sha256 from the immutable v2.3.0 release tarball when that tag is final.
 class FrpAutoDeploy < Formula
   desc "FRP reverse-tunnel client for Apple Silicon macOS"
   homepage "https://github.com/xdr-labs/frp-auto-deploy"

@@ -394,7 +394,7 @@ function Invoke-FrpClientDoctor {
 function Invoke-FrpClientSupportBundle {
     param([string]$OutputPath)
     # Read-only Windows stub: collect sanitized metadata into a zip. Never
-    # include private keys, tokens, or identity secret material.
+    # include private keys, tokens, DPAPI blobs, or identity secret material.
     $root = Get-FrpWindowsRoot
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
     $hostName = $env:COMPUTERNAME
@@ -407,6 +407,7 @@ function Invoke-FrpClientSupportBundle {
     }
     $stage = Join-Path $env:TEMP ("frp-support-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    $sections = New-Object System.Collections.Generic.List[string]
     try {
         $meta = @{
             format = 'frp-auto-deploy-support-bundle-windows'
@@ -415,45 +416,130 @@ function Invoke-FrpClientSupportBundle {
             role = 'client'
             root = $root
             read_only = $true
-            secrets_policy = 'private keys and tokens omitted'
+            secrets_policy = 'private keys, tokens, and DPAPI secrets omitted'
         } | ConvertTo-Json -Depth 4
         Set-Content -LiteralPath (Join-Path $stage 'meta.json') -Value $meta -Encoding UTF8
+        [void]$sections.Add('meta')
 
         $doctorOut = & {
             $ErrorActionPreference = 'Continue'
             Invoke-FrpClientDoctor | Out-String
         }
         Set-Content -LiteralPath (Join-Path $stage 'doctor.txt') -Value $doctorOut -Encoding UTF8
+        [void]$sections.Add('doctor')
 
         $safeCopies = @()
-        foreach ($rel in @('allocator-ca.crt', 'client-identity.pub')) {
-            $src = Join-Path $root $rel
-            if (Test-Path -LiteralPath $src) {
-                Copy-Item -LiteralPath $src -Destination (Join-Path $stage $rel) -Force
-                $safeCopies += $rel
+        $publicSources = @(
+            @{ Src = (Get-FrpAllocatorCaPath); Name = 'allocator-ca.crt' },
+            @{ Src = (Get-FrpIdentityPubPath); Name = 'client-identity.pub' }
+        )
+        foreach ($item in $publicSources) {
+            if (Test-Path -LiteralPath $item.Src) {
+                $destDir = Join-Path $stage 'certs'
+                New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+                Copy-Item -LiteralPath $item.Src -Destination (Join-Path $destDir $item.Name) -Force
+                $safeCopies += $item.Name
             }
         }
+        if ($safeCopies.Count) { [void]$sections.Add('public-certs') }
+
         # Summarize client-state without secret fields.
         $statePath = Get-FrpStatePath
         if (Test-Path -LiteralPath $statePath) {
             try {
                 $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-                $summary = [ordered]@{
-                    client_id = $state.client_id
-                    label = $state.label
-                    hostname = $state.hostname
-                    allocator_url = $state.allocator_url
-                    server_addr = $state.frp_server
-                    transport = $state.transport
+                $machineId = $(if ($state.machine_id) { [string]$state.machine_id } else { [string]$state.client_id })
+                $svcOut = [ordered]@{}
+                if ($null -ne $state.services) {
+                    $map = ConvertTo-FrpServiceMap -Services $state.services
+                    foreach ($sid in $map.Keys) {
+                        $item = $map[$sid]
+                        $localIp = $(if ($item.local_ip) { [string]$item.local_ip } else { '127.0.0.1' })
+                        $localPort = $item.local_port
+                        $entry = [ordered]@{
+                            enabled     = ($item.enabled -ne $false)
+                            type        = $(if ($item.preset) { [string]$item.preset } else { [string]$item.protocol })
+                            local_ip    = $localIp
+                            local_port  = $localPort
+                            remote_port = $item.remote_port
+                            name        = $item.name
+                            target      = ('{0}:{1}' -f $localIp, $localPort)
+                        }
+                        if ($null -ne $item.health_check -and $item.health_check) {
+                            $entry['health_check'] = $item.health_check
+                        }
+                        $svcOut[[string]$sid] = [pscustomobject]$entry
+                    }
                 }
-                ($summary | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $stage 'client-summary.json') -Encoding UTF8
+                $summary = [ordered]@{
+                    machine_id       = $machineId
+                    client_id        = $(if ($state.client_id) { [string]$state.client_id } else { $machineId })
+                    label            = $state.label
+                    hostname         = $state.hostname
+                    allocator_url    = $state.allocator_url
+                    frp_server       = $state.frp_server
+                    frp_server_port  = $state.frp_server_port
+                    frp_transport    = $(if ($state.frp_transport) { $state.frp_transport } else { $state.transport })
+                    services         = [pscustomobject]$svcOut
+                }
+                ($summary | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $stage 'client-summary.json') -Encoding UTF8
+                [void]$sections.Add('client-summary')
             } catch {
                 Set-Content -LiteralPath (Join-Path $stage 'client-summary.json') -Value '{"error":"unreadable"}' -Encoding UTF8
+                [void]$sections.Add('client-summary')
             }
         }
+
+        # Sanitized generated frpc.toml (tokens redacted); never copy raw secrets.
+        $tomlPath = Get-FrpTomlPath
+        if (Test-Path -LiteralPath $tomlPath) {
+            try {
+                $lines = New-Object System.Collections.Generic.List[string]
+                foreach ($line in Get-Content -LiteralPath $tomlPath -ErrorAction Stop) {
+                    $stripped = $line.Trim()
+                    $lower = $stripped.ToLowerInvariant()
+                    if ($lower.StartsWith('auth.token') -or ($lower.Contains('token') -and $lower.Contains('='))) {
+                        $key = ($line -split '=', 2)[0].TrimEnd()
+                        [void]$lines.Add(('{0} = "<redacted>"' -f $key))
+                        continue
+                    }
+                    if ($lower.Contains('begin') -and $lower.Contains('private key')) {
+                        [void]$lines.Add('# <private key omitted>')
+                        continue
+                    }
+                    [void]$lines.Add($line)
+                }
+                $genDir = Join-Path $stage 'generated'
+                New-Item -ItemType Directory -Force -Path $genDir | Out-Null
+                Set-Content -LiteralPath (Join-Path $genDir 'frpc.toml.sanitized') -Value ($lines -join "`n") -Encoding UTF8
+                [void]$sections.Add('generated-config')
+            } catch { }
+        }
+
+        # Process / service status via existing helpers when available.
+        try {
+            $st = Get-FrpClientStatus
+            $statusLines = @(
+                ('Running   : {0}' -f $st.Running),
+                ('Pid       : {0}' -f $st.Pid),
+                ('Enrolled  : {0}' -f $st.Enrolled),
+                ('Server    : {0}' -f $st.Server),
+                ('Transport : {0}' -f $st.Transport),
+                ('StatePath : {0}' -f $st.StatePath),
+                ('TomlPath  : {0}' -f $st.TomlPath),
+                ('FrpcPath  : {0}' -f $st.FrpcPath)
+            )
+            Set-Content -LiteralPath (Join-Path $stage 'service-status.txt') -Value ($statusLines -join "`n") -Encoding UTF8
+            [void]$sections.Add('service-status')
+        } catch {
+            Set-Content -LiteralPath (Join-Path $stage 'service-status.txt') -Value 'service status unavailable' -Encoding UTF8
+        }
+
         $omitted = @(
             'client-identity.key',
+            'client-identity.key.dpapi',
             'client-identity.mac',
+            'enroll-pending.json (DPAPI / enrollment secrets)',
             'any auth.token / server token material'
         )
         Set-Content -LiteralPath (Join-Path $stage 'OMITTED_SECRETS.txt') -Value ($omitted -join "`n") -Encoding UTF8
@@ -465,8 +551,8 @@ function Invoke-FrpClientSupportBundle {
         Write-Host 'Support bundle created'
         Write-Host ("  path     : {0}" -f $OutputPath)
         Write-Host ("  size     : {0} bytes" -f $size)
-        Write-Host ("  sections : meta, doctor, client-summary{0}" -f ($(if ($safeCopies.Count) { ', public-certs' } else { '' })))
-        Write-Host '  redaction: private keys and tokens omitted'
+        Write-Host ("  sections : {0}" -f ($sections -join ', '))
+        Write-Host '  redaction: private keys, tokens, and DPAPI secrets omitted'
         return 0
     } catch {
         Write-Host ("ERROR: support-bundle failed: {0}" -f $_.Exception.Message)

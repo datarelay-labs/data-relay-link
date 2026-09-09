@@ -79,10 +79,10 @@ if frp_verify_client_update_artifact "$GOOD"; then
 fi
 pass "UPDATE_SHA256_VERIFIED"
 
-# Working-tree on main is normally channel=dev / git_ref=main.
-# The immutable release commit (and tagged tree) uses channel=stable / git_ref=vVERSION.
-python3 - "$ROOT/release-manifest.json" "$ROOT/VERSION" <<'PY' || fail "manifest channel/ref"
-import json, sys
+# Top-level release-manifest pins official artifact hashes. Bundles embed a
+# copy with artifact sha256 fields stripped so a bundle never hashes itself.
+python3 - "$ROOT/release-manifest.json" "$ROOT/VERSION" "$ROOT/dist/bootstrap-server.sh" <<'PY' || fail "manifest channel/ref"
+import base64, json, re, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
 values = {}
@@ -102,7 +102,19 @@ else:
     raise AssertionError("unexpected channel %r" % (channel,))
 assert "bootstrap-server.sh" in (data.get("artifacts") or {})
 server = data["artifacts"]["bootstrap-server.sh"]
-assert not server.get("sha256"), "server bundle hash must not live in the embedded manifest"
+assert server.get("sha256"), "top-level manifest must pin bootstrap-server.sh sha256"
+# Embedded copy inside the server bundle must not carry any artifact sha256.
+bundle = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"base64 -d >\"\$TMP/release-manifest\.json\" <<'B64'\n(.*?)\nB64",
+    bundle,
+    re.S,
+)
+assert match, "embedded release-manifest.json missing from bootstrap-server.sh"
+embedded = json.loads(base64.b64decode(match.group(1)).decode("utf-8"))
+for name, meta in (embedded.get("artifacts") or {}).items():
+    if isinstance(meta, dict):
+        assert not meta.get("sha256"), "%s sha256 must not live in the embedded manifest" % name
 PY
 pass "RELEASE_MANIFEST_CHANNEL_REF_IDENTITY"
 

@@ -53,6 +53,12 @@ this release.
   upgrade window. Do not upgrade clients ahead of the server. FRP remains
   **0.71.0**.
 
+### Audit closure
+
+- FINAL AUDIT CLOSURE hardening and release-documentation sync for prepared
+  **2.3.0** (recreate or move the premature GitHub `v2.3.0` tag onto final
+  audit-closure HEAD; no new product features)
+
 ## 2.2.1 — 2026-09-08
 
 Maintenance / hardening release on pinned FRP **0.71.0**. Does not move or

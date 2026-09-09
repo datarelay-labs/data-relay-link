@@ -158,7 +158,8 @@ try:
 finally:
     unlock_registry(lock_fd)
 
-# Best-effort: clear Access Control Pack bindings for the released client.
+# Access Control binding cleanup is required after registry release.
+acl_cleanup_error = None
 try:
     here = Path(__file__).resolve()
     acl_candidates = [
@@ -167,25 +168,25 @@ try:
     ]
     if ROOT:
         acl_candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_access_control.py')
+    acl = None
     for acl_path in acl_candidates:
         if not acl_path.is_file():
             continue
         spec = importlib.util.spec_from_file_location('frp_access_control', str(acl_path))
         acl = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(acl)
-        access_path = acl.access_control_path(cfg)
-        if not access_path.is_file():
-            break
-
+        break
+    if acl is None:
+        raise RuntimeError('frp_access_control.py is unavailable')
+    access_path = acl.access_control_path(cfg)
+    if access_path.is_file():
         def _clear(state, _mid=mid):
             acl.clear_client_bindings(state, _mid)
 
         acl.mutate_access_state(_clear, path=access_path, cfg=cfg)
-        break
-except Exception:
-    pass
+except Exception as exc:
+    acl_cleanup_error = str(exc)
 
-print('Released.')
 try:
     here = Path(__file__).resolve()
     for path in (
@@ -196,7 +197,23 @@ try:
             spec = importlib.util.spec_from_file_location('frp_audit', str(path))
             audit = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(audit)
-            audit.try_emit('client.released', client_id=mid)
+            if acl_cleanup_error:
+                audit.try_emit(
+                    'client.release_partial',
+                    client_id=mid,
+                    details={'acl_cleanup_error': acl_cleanup_error},
+                )
+            else:
+                audit.try_emit('client.released', client_id=mid)
             break
 except Exception:
     pass
+if acl_cleanup_error:
+    print(
+        'ERROR: client released from registry, but Access Control cleanup failed: %s'
+        % acl_cleanup_error,
+        file=sys.stderr,
+    )
+    print('PARTIAL: registry updated; Access bindings may still reference this client.')
+    raise SystemExit(1)
+print('Released.')

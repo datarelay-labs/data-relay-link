@@ -295,14 +295,7 @@ def reject_forbidden_fields(raw: dict) -> None:
             raise ProfileError("profiles must not store %s" % key)
 
 
-def load_profiles_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
-    path = path or service_profiles_path(cfg)
-    if not path.exists():
-        return empty_profiles_state()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ProfileError("service-profiles.json is unreadable: %s" % exc) from exc
+def _parse_profiles_state(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ProfileError("service-profiles.json must be a JSON object")
     version = raw.get("schema_version")
@@ -311,6 +304,35 @@ def load_profiles_state(path: Optional[Path] = None, cfg: Optional[dict] = None)
     if not isinstance(raw.get("profiles"), dict):
         raise ProfileError("profiles must be an object")
     return raw
+
+
+def require_profiles_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+    """Load authoritative profile store. Missing file is corruption."""
+    path = path or service_profiles_path(cfg)
+    if not path.exists():
+        raise ProfileError(
+            "service-profiles.json is missing (authoritative profile store required)"
+        )
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProfileError("service-profiles.json is unreadable: %s" % exc) from exc
+    return _parse_profiles_state(raw)
+
+
+def load_profiles_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+    """Load profile store for installed runtime (missing → error)."""
+    return require_profiles_state(path=path, cfg=cfg)
+
+
+def initialize_profiles_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+    """Explicit install/init: create empty profile store when absent."""
+    path = path or service_profiles_path(cfg)
+    if path.exists():
+        return require_profiles_state(path=path, cfg=cfg)
+    state = empty_profiles_state()
+    save_profiles_state(state, path=path, cfg=cfg)
+    return state
 
 
 def save_profiles_state(state: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
@@ -325,7 +347,7 @@ def save_profiles_state(state: dict, path: Optional[Path] = None, cfg: Optional[
 def mutate_profiles_state(mutator, path: Optional[Path] = None, cfg: Optional[dict] = None):
     path = path or service_profiles_path(cfg)
     with FileLock(profiles_lock_path(path)):
-        state = load_profiles_state(path=path, cfg=cfg)
+        state = require_profiles_state(path=path, cfg=cfg)
         result = mutator(state)
         validate_profiles_state(state)
         atomic_write_json(path, state)
@@ -508,9 +530,22 @@ def update_profile(state: dict, selector: str, prop: str, value: str) -> tuple[s
             profile.pop("description", None)
     elif prop == "preset":
         old = str(profile.get("preset") or "")
-        preset = validate_preset(value)
+        # Atomic non-SSH → SSH transition: "ssh:<user>" or "ssh --ssh-user <user>"
+        # style values are accepted so preset and ssh_user change together.
+        text = str(value or "").strip()
+        ssh_user_inline = ""
+        preset_token = text
+        if text.lower().startswith("ssh:") or text.lower().startswith("ssh="):
+            preset_token = "ssh"
+            ssh_user_inline = text[4:].strip()
+        elif " " in text and text.split(None, 1)[0].lower() == "ssh":
+            preset_token = "ssh"
+            ssh_user_inline = text.split(None, 1)[1].strip()
+        preset = validate_preset(preset_token)
         profile["preset"] = preset
         if preset == "ssh":
+            if ssh_user_inline:
+                profile["ssh_user"] = validate_ssh_user(ssh_user_inline, required=True)
             validate_ssh_user(profile.get("ssh_user") or "", required=True)
         elif "local_port" not in profile and preset in DEFAULT_PORTS:
             profile["local_port"] = DEFAULT_PORTS[preset]
@@ -543,26 +578,30 @@ def update_profile(state: dict, selector: str, prop: str, value: str) -> tuple[s
             else:
                 profile.pop("health_check", None)
     elif prop in ("health-timeout", "health_timeout", "health-timeout-seconds"):
-        current = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {"type": "tcp"}
+        prior = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {}
+        old = str(prior.get("timeout_seconds") or "")
+        current = dict(prior) if prior else {"type": "tcp"}
         current["timeout_seconds"] = value
         profile["health_check"] = normalize_health_check_optional(current)
-        old = str(current.get("timeout_seconds") or "")
     elif prop in ("health-interval", "health_interval", "health-interval-seconds"):
-        current = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {"type": "tcp"}
+        prior = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {}
+        old = str(prior.get("interval_seconds") or "")
+        current = dict(prior) if prior else {"type": "tcp"}
         current["interval_seconds"] = value
         profile["health_check"] = normalize_health_check_optional(current)
-        old = str(current.get("interval_seconds") or "")
     elif prop in ("health-max-failed", "health_max_failed"):
-        current = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {"type": "tcp"}
+        prior = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {}
+        old = str(prior.get("max_failed") or "")
+        current = dict(prior) if prior else {"type": "tcp"}
         current["max_failed"] = value
         profile["health_check"] = normalize_health_check_optional(current)
-        old = str(current.get("max_failed") or "")
     elif prop in ("health-path", "health_path"):
-        current = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {"type": "http"}
+        prior = dict(profile.get("health_check") or {}) if isinstance(profile.get("health_check"), dict) else {}
+        old = str(prior.get("path") or "")
+        current = dict(prior) if prior else {"type": "http"}
         current["type"] = "http"
         current["path"] = value
         profile["health_check"] = normalize_health_check_optional(current)
-        old = str(current.get("path") or "")
     else:
         raise ProfileError(
             "unknown profile property; use name|description|preset|"

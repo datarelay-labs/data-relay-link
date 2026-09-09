@@ -197,14 +197,7 @@ class FileLock:
             self.fd = None
 
 
-def load_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
-    path = path or access_control_path(cfg)
-    if not path.exists():
-        return empty_access_state()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise AccessError("access-control.json is unreadable: %s" % exc) from exc
+def _parse_access_state(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise AccessError("access-control.json must be a JSON object")
     version = raw.get("schema_version")
@@ -215,6 +208,40 @@ def load_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -
     if not isinstance(raw.get("service_access"), dict):
         raise AccessError("service_access must be an object")
     return raw
+
+
+def require_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+    """Load authoritative Access Control state. Missing file is corruption."""
+    path = path or access_control_path(cfg)
+    if not path.exists():
+        raise AccessError(
+            "access-control.json is missing (authoritative Access Control state required)"
+        )
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AccessError("access-control.json is unreadable: %s" % exc) from exc
+    return _parse_access_state(raw)
+
+
+def load_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+    """Load Access Control state for installed runtime (missing → error).
+
+    Installer/init must call initialize_access_state() explicitly. Soft-empty
+    fallback is intentionally not used here so missing policy cannot become
+    PUBLIC via mutation or display paths.
+    """
+    return require_access_state(path=path, cfg=cfg)
+
+
+def initialize_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+    """Explicit install/init: create empty Access Control state when absent."""
+    path = path or access_control_path(cfg)
+    if path.exists():
+        return require_access_state(path=path, cfg=cfg)
+    state = empty_access_state()
+    save_access_state(state, path=path, cfg=cfg)
+    return state
 
 
 def save_access_state(state: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
@@ -229,7 +256,7 @@ def save_access_state(state: dict, path: Optional[Path] = None, cfg: Optional[di
 def mutate_access_state(mutator, path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
     path = path or access_control_path(cfg)
     with FileLock(access_lock_path(path)):
-        state = load_access_state(path=path, cfg=cfg)
+        state = require_access_state(path=path, cfg=cfg)
         result = mutator(state)
         validate_access_state(state)
         atomic_write_json(path, state)

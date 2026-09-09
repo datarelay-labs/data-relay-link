@@ -113,13 +113,20 @@ fi
 pass "NO_TLS_VERIFY_DISABLE"
 pass "NO_CURL_K_PRODUCTION_FLOW"
 
-if grep -nE 'release candidate' README.md CHANGELOG.md docs/SECURITY.md docs/DEPLOYMENT_MODES.md; then
-  fail "docs still describe the current release as a release candidate"
+# During FINAL AUDIT CLOSURE, docs may describe 2.3.0 as prepared until the
+# immutable tag is moved/recreated on final HEAD. Do not require premature
+# "current stable release" wording, and do not ban preparation language.
+if grep -qF 'FINAL AUDIT CLOSURE' README.md || grep -qF 'current stable release' README.md; then
+  :
+else
+  fail "README missing FINAL AUDIT CLOSURE or current stable release wording"
 fi
 if grep -nE 'v2\.1\.1 is not tagged|not a tagged stable release until|not created until real-environment' README.md CHANGELOG.md docs/*.md; then
   fail "docs still say v2.1.1 is untagged"
 fi
-grep -qF 'current stable release' README.md || fail "README missing stable wording"
+if grep -nE 'stable identity remains \*\*v2\.2\.1|stable release identity remains \*\*v2\.2\.1' README.md; then
+  fail "README still claims v2.2.1 as current stable identity"
+fi
 grep -qE '^## 2\.1\.1 — ' CHANGELOG.md || fail "CHANGELOG missing 2.1.1 heading"
 grep -qE '^## 2\.1\.0 — ' CHANGELOG.md || fail "CHANGELOG missing historical 2.1.0 heading"
 pass "VERSION_STABLE_WORDING"

@@ -5,9 +5,9 @@
 > **Canonical repository path:** `docs/PRODUCT_MASTER.md`  
 > **Document status:** Master / Living Document  
 > **Last updated:** 2026-09-09
-> **Current stable:** Project `2.3.0` / tag `v2.3.0` / FRP `0.71.0`
-> **Release commit:** _(set at tag time to exact `v2.3.0` commit)_
-> **Release qualification:** Double Full Real E2E required on the exact release candidate HEAD
+> **Current release:** Project `2.3.0` / FRP `0.71.0` — **FINAL AUDIT CLOSURE** (recreate/move premature `v2.3.0` tag on final HEAD)
+> **Release commit:** _(set when the final `v2.3.0` tag is moved/recreated)_
+> **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
 > **Primary management interface:** `sudo frpctl`
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
 
@@ -28,12 +28,12 @@
 - 목표 규모는 **1~50 Clients**, 특히 few to a few dozen 중심이다.
 - 대형 fleet orchestration, Web UI, Database, HA orchestrator는 현재 제품 목표가 아니다.
 - official FRP만 사용하고 exact version으로 pin한다.
-- 현재 published stable은 `v2.3.0`이며 pinned FRP는 `0.71.0`이다.
+- 현재 준비 중인 release는 `v2.3.0` FINAL AUDIT CLOSURE이며 pinned FRP는 `0.71.0`이다. 조기 GitHub `v2.3.0` tag는 final audit HEAD로 재생성/이동한다.
 - `v2.2.0`은 FRP `0.71.0`을 처음 stable로 채택한 historical release이며, `v2.2.1`은 그 이후 hardening patch release다. `v2.3.0`은 Access Control Pack, Target Health Check, Support Bundle, Service Profiles를 포함한 feature-complete release다.
 - Zero-Touch Short URL은 Option B(operator-owned reverse proxy + optional `bootstrap_hostname`) 모델로 `v2.1.3`에 stable 도입됐다.
 - `public_hostname`은 published service용 optional user-facing alias이며 control identity가 아니다.
 - Group은 몇십 대 관리를 위한 **Simple Manual Group + multiple membership + Tags + basic filters** 범위가 기준이다.
-- macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.0` stable validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
+- macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.0` validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
 
 ---
 
@@ -401,8 +401,8 @@ Validated
 현재 상태:
 
 ```text
-Current published stable FRP = 0.71.0
-Current project stable        = 2.3.0
+Current prepared FRP          = 0.71.0
+Current project version       = 2.3.0 (FINAL AUDIT CLOSURE)
 Historical v2.1.3 FRP        = 0.70.1
 ```
 
@@ -2222,9 +2222,9 @@ Stable release supported
 
 한 단계 PASS가 다음 단계를 자동 의미하지 않는다.
 
-## Current stable validation matrix
+## Current validation matrix — v2.3.0 FINAL AUDIT CLOSURE
 
-현재 `v2.3.0` stable qualification 대상:
+현재 `v2.3.0` qualification 대상:
 
 | Platform | Validation level |
 |---|---|
@@ -2356,16 +2356,17 @@ Bulk Operation
 
 # 50. Current Product Status
 
-## 50.1 Published Stable
+## 50.1 Current release — v2.3.0 FINAL AUDIT CLOSURE
 
-현재 GitHub published stable:
+현재 준비 중인 release (premature GitHub `v2.3.0` tag는 final audit HEAD로 재생성/이동):
 
 ```text
 Project:              2.3.0
-Tag:                  v2.3.0
+Tag:                  v2.3.0 (recreate/move on final HEAD)
 FRP:                  0.71.0
 Feature freeze:       ACTIVE
 Product feature complete: YES
+FINAL_AUDIT_CLOSURE:  IN PROGRESS
 ```
 
 `v2.3.0` 주요 사항:
@@ -2483,22 +2484,23 @@ OWNER_MANUAL_E2E_REQUIRED=NO
 현재 runtime/release work는 closed 상태다.
 
 ```text
-CURRENT_STABLE=2.3.0
+CURRENT_VERSION=2.3.0
 PINNED_FRP=0.71.0
+FINAL_AUDIT_CLOSURE=YES
 UNRESOLVED_RELEASE_BLOCKERS=0
 FEATURE_FREEZE_ACTIVE=YES
 ```
 
-Release 이후 code/runtime 변경이 필요하면 이미 published 된 tag를 움직이지 않고 새로운 patch release를 사용한다.
+Final tag move/recreate 이후 code/runtime 변경이 필요하면 이미 확정된 tag를 움직이지 않고 새로운 patch release를 사용한다. Historical `v2.2.1` 및 이전 tag는 그대로 immutable이다.
 
 ---
 
 # 51. Main / Development State
 
-현재 release line은 `v2.3.0`으로 closed 상태이며 별도의 open release candidate를 current stable처럼 취급하지 않는다.
+현재 release line은 `v2.3.0` FINAL AUDIT CLOSURE로 준비 중이며, premature GitHub tag를 final HEAD로 맞춘 뒤에야 field install의 최종 기준으로 취급한다.
 
 ```text
-Published Stable = v2.3.0
+Prepared release = v2.3.0 FINAL AUDIT CLOSURE
 Pinned FRP       = 0.71.0
 ```
 
@@ -2750,7 +2752,7 @@ macOS Apple Silicon
 Windows 10
 ```
 
-현재 `v2.2.1`에서 Ubuntu 24 physical, Rocky 8.10, Rocky 9.4, Amazon Linux 2023, macOS Apple Silicon, Windows 10/PS5.1은 Real E2E validated다. Amazon Linux 2는 live host 없이 Container/CI portability만 검증됐으며 PowerShell 7은 CI validated로 구분한다.
+현재 `v2.3.0`에서 Ubuntu 24 physical, Rocky 8.10, Rocky 9.4, Amazon Linux 2023, macOS Apple Silicon, Windows 10/PS5.1은 Real E2E validated다. Amazon Linux 2는 live host 없이 Container/CI portability만 검증됐으며 PowerShell 7은 CI validated로 구분한다.
 
 ### Linux
 
@@ -3386,7 +3388,7 @@ Manage a few to a few dozen clients with frpctl
 
 | 영역 | 현재 상태 / 방향 |
 |---|---|
-| Published Stable | **v2.3.0 / FRP 0.71.0** |
+| Prepared release (FINAL AUDIT CLOSURE) | **v2.3.0 / FRP 0.71.0** (recreate/move premature tag on final HEAD) |
 | Zero-Touch Short URL Option B | **STABLE** |
 | Public Hostname / DNS alias | **STABLE** |
 | Simple Manual Group MVP | **STABLE** |
@@ -3408,9 +3410,9 @@ Manage a few to a few dozen clients with frpctl
 
 ---
 
-# 71.1 Current Release Closure — v2.3.0
+# 71.1 Current Release Closure — v2.3.0 FINAL AUDIT CLOSURE
 
-Current stable closure:
+Current release closure:
 
 ```text
 PROJECT_VERSION=2.3.0
@@ -3418,13 +3420,15 @@ FRP_VERSION=0.71.0
 
 FEATURE_FREEZE_ACTIVE=YES
 PRODUCT_FEATURE_COMPLETE=YES
+FINAL_AUDIT_CLOSURE=YES
 
 FULL_REAL_E2E_PASS_1=(set during final qualification)
 FULL_REAL_E2E_PASS_2=(set during final qualification)
 PASS_HEADS_IDENTICAL=(set during final qualification)
 
-TAG_V2_3_0_CREATED=(set at tag time)
-GITHUB_RELEASE_V2_3_0_PUBLISHED=(set at release time)
+TAG_V2_3_0_PREMATURE=YES (exists; recreate/move onto final audit HEAD)
+TAG_V2_3_0_FINAL=(set when tag is moved/recreated on final HEAD)
+GITHUB_RELEASE_V2_3_0_FINAL=(set at final release time)
 
 UNRESOLVED_RELEASE_BLOCKERS=0
 ```
@@ -3678,7 +3682,8 @@ FEATURE FREEZE = ACTIVE
 ```
 
 No further product feature development until the next explicitly approved release scope.
-`v2.3.0` is the published stable tag for this feature-complete product line.
+`v2.3.0` is the feature-complete product line under FINAL AUDIT CLOSURE; treat the
+GitHub tag as final only after it is recreated or moved onto the audit-closure HEAD.
 
 ---
 

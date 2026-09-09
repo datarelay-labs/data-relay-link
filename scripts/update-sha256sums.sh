@@ -22,18 +22,23 @@ for line in Path('SHA256SUMS').read_text(encoding='utf-8').splitlines():
 manifest_path = Path('release-manifest.json')
 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 artifacts = manifest.setdefault('artifacts', {})
+synced = 0
 for _name, meta in artifacts.items():
     if not isinstance(meta, dict):
         continue
-    path = str(meta.get('path') or '')
-    # Both bundles embed a normalized manifest with artifact sha256 fields
-    # stripped. The top-level manifest can therefore pin the client bundle
-    # without creating a self-referential client-bundle hash.
-    if path in ('dist/bootstrap-client.sh', 'dist/bootstrap-client.ps1'):
-        meta['sha256'] = sums.get(path, '')
+    path = str(meta.get('path') or '').strip()
+    if not path:
+        continue
+    # Never self-reference metadata checksum files.
+    if path in ('SHA256SUMS', 'release-manifest.json'):
+        continue
+    if path not in sums:
+        raise SystemExit('ERROR: artifact path missing from SHA256SUMS: %s' % path)
+    meta['sha256'] = sums[path]
+    synced += 1
 manifest_path.write_text(
     json.dumps(manifest, indent=2, sort_keys=False) + '\n', encoding='utf-8'
 )
-print('Synced release-manifest.json artifact hashes')
+print('Synced release-manifest.json artifact hashes (%d)' % synced)
 PY
 fi

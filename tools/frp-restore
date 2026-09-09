@@ -194,44 +194,6 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
             raise RestoreError(f"backup manifest checksum is invalid: {rel}")
         declared[rel] = item
 
-    # Pre-Access-Control backups: synthesize empty policy for same-version restore.
-    access_rel = "var/lib/frp-auto-deploy/access-control.json"
-    synthesized_access = False
-    if access_rel not in declared:
-        access_path = destination / "payload" / access_rel
-        access_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = (
-            b'{\n  "access_lists": {},\n  "schema_version": 1,\n'
-            b'  "service_access": {}\n}\n'
-        )
-        access_path.write_bytes(payload)
-        os.chmod(access_path, 0o600)
-        declared[access_rel] = {
-            "path": access_rel,
-            "sha256": sha256(access_path),
-            "mode": "0600",
-        }
-        synthesized_access = True
-
-
-    # Pre-Service-Profiles backups: synthesize empty profile store.
-    profiles_rel = "var/lib/frp-auto-deploy/service-profiles.json"
-    synthesized_profiles = False
-    if profiles_rel not in declared:
-        profiles_path = destination / "payload" / profiles_rel
-        profiles_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = (
-            b'{\n  "profiles": {},\n  "schema_version": 1\n}\n'
-        )
-        profiles_path.write_bytes(payload)
-        os.chmod(profiles_path, 0o600)
-        declared[profiles_rel] = {
-            "path": profiles_rel,
-            "sha256": sha256(profiles_path),
-            "mode": "0600",
-        }
-        synthesized_profiles = True
-
     missing = REQUIRED - declared.keys()
     if missing:
         raise RestoreError(f"backup is missing required file: {sorted(missing)[0]}")
@@ -257,19 +219,7 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         for line in checksums_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    if synthesized_access or synthesized_profiles:
-        skip = set()
-        if synthesized_access:
-            skip.add(f"payload/{access_rel}")
-        if synthesized_profiles:
-            skip.add(f"payload/{profiles_rel}")
-        expected_without = [
-            line for line in checksum_lines
-            if not any(line.endswith(item) for item in skip)
-        ]
-        if supplied_lines != expected_without:
-            raise RestoreError("checksum manifest does not match the backup manifest")
-    elif supplied_lines != checksum_lines:
+    if supplied_lines != checksum_lines:
         raise RestoreError("checksum manifest does not match the backup manifest")
 
     for rel in (
@@ -513,7 +463,7 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         raise RestoreError("restored CA certificate is missing")
     if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
         return
-    units = ["frps.service", "frp-port-allocator.service"]
+    units = ["frps.service", "frp-port-allocator.service", "frp-access-plugin.service"]
     frontend = (root / "etc/frp-auto-deploy/frontend.conf").is_file()
     if frontend:
         units.append("frp-frontend.service")
@@ -558,6 +508,13 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         return True
 
     _wait_until_ready(allocator_healthy, "allocator /healthz failed")
+
+    def access_plugin_healthy() -> bool:
+        addr = str(config.get("access_plugin_addr") or "127.0.0.1:6101").strip() or "127.0.0.1:6101"
+        urllib.request.urlopen(f"http://{addr}/healthz", timeout=5).read()
+        return True
+
+    _wait_until_ready(access_plugin_healthy, "access plugin /healthz failed")
     if frontend:
         host = str(config.get("public_host") or "")
         port = int(config.get("frp_control_public_port") or 443)
@@ -591,7 +548,7 @@ def restart_services(root: Path, allow_hook: bool = True) -> None:
         return
     if allow_hook and os.environ.get("FRP_RESTORE_HOOK_RESTART_FAIL") == "1":
         raise RestoreError("simulated service restart failure")
-    units = ["frps.service", "frp-port-allocator.service"]
+    units = ["frps.service", "frp-port-allocator.service", "frp-access-plugin.service"]
     if (root / "etc/frp-auto-deploy/frontend.conf").is_file():
         units.append("frp-frontend.service")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
