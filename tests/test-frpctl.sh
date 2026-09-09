@@ -221,8 +221,11 @@ run_repl "$CLIENT" "$WORKDIR/client-menu.out" menu exit || fail "client menu rep
 unset FRP_CTL_TEST_MENU
 grep -q 'Role            : Client' "$WORKDIR/client-menu.out" || fail "client role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-menu.out" || fail "client menu version"
-grep -q '4) Manage services' "$WORKDIR/client-menu.out" || fail "client menu manage"
-grep -q '5) Update project' "$WORKDIR/client-menu.out" || fail "client menu update"
+grep -q '1) Show' "$WORKDIR/client-menu.out" || fail "client menu show"
+grep -q '2) Service' "$WORKDIR/client-menu.out" || fail "client menu service"
+grep -q '3) Client' "$WORKDIR/client-menu.out" || fail "client menu client"
+grep -q '4) System' "$WORKDIR/client-menu.out" || fail "client menu system"
+grep -q '5) Exit' "$WORKDIR/client-menu.out" || fail "client menu exit"
 [[ "$(prompt_count "$WORKDIR/client-menu.out")" -ge 2 ]] || fail "menu returns to prompt"
 pass "FRPCTL_CLIENT_DETECTION"
 pass "FRPCTL_REPL_MENU_RETURNS_TO_PROMPT"
@@ -267,7 +270,15 @@ pass "FRPCTL_REPL_EXIT"
 
 run_repl "$CLIENT" "$WORKDIR/client-qhelp.out" '?' exit || fail "client ? help"
 grep -q 'show' "$WORKDIR/client-qhelp.out" || fail "question mark help show"
-grep -q 'set' "$WORKDIR/client-qhelp.out" || fail "question mark help set"
+grep -q 'service' "$WORKDIR/client-qhelp.out" || fail "question mark help service"
+grep -q 'client' "$WORKDIR/client-qhelp.out" || fail "question mark help client"
+grep -q 'system' "$WORKDIR/client-qhelp.out" || fail "question mark help system"
+if grep -qE '^\s+add\s' "$WORKDIR/client-qhelp.out"; then
+  fail "root ? showed legacy add"
+fi
+if grep -qE '^\s+apply\s' "$WORKDIR/client-qhelp.out"; then
+  fail "root ? showed legacy apply"
+fi
 if grep -q 'Grammar: <verb>' "$WORKDIR/client-qhelp.out"; then
   fail "root ? dumped full syntax tree"
 fi

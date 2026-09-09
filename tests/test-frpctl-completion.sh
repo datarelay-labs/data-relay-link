@@ -122,10 +122,13 @@ export FRP_CTL_TEST_ROOT="$CLIENT"
 [[ "$(cands sho)" == "show" ]] || fail "sho -> show"
 all_client="$(cands "")"
 echo "$all_client" | has_line show || fail "client list show"
-echo "$all_client" | has_line add || fail "client list add"
-echo "$all_client" | has_line apply || fail "client list apply"
+echo "$all_client" | has_line service || fail "client list service"
+echo "$all_client" | has_line client || fail "client list client"
+echo "$all_client" | has_line system || fail "client list system"
+if echo "$all_client" | has_line add; then fail "client offered legacy add at root"; fi
+if echo "$all_client" | has_line apply; then fail "client offered legacy apply at root"; fi
+if echo "$all_client" | has_line doctor; then fail "client offered doctor at root"; fi
 echo "$all_client" | has_line status || fail "client list status"
-echo "$all_client" | has_line doctor || fail "client list doctor"
 if echo "$all_client" | has_line enroll; then fail "client offered enroll"; fi
 if echo "$all_client" | has_line clients; then fail "client offered clients"; fi
 if echo "$all_client" | has_line revoke; then fail "client offered revoke"; fi
@@ -134,11 +137,19 @@ pass "FRPCTL_TAB_CLIENT_ROLE_COMMANDS"
 pass "FRPCTL_TAB_SERVER_COMMAND_NOT_ON_CLIENT"
 
 export FRP_CTL_TEST_ROOT="$CLIENT"
-svc_props="$(cands "set service ssh ")"
-echo "$svc_props" | has_line target-host || fail "set service missing target-host"
-echo "$svc_props" | has_line health-type || fail "set service missing health-type"
-echo "$svc_props" | has_line health-path || fail "set service missing health-path"
+svc_ns="$(cands "service ")"
+echo "$svc_ns" | has_line add || fail "service missing add"
+echo "$svc_ns" | has_line apply || fail "service missing apply"
+echo "$svc_ns" | has_line enable || fail "service missing enable"
+svc_props="$(cands "service set ssh ")"
+echo "$svc_props" | has_line target-host || fail "service set missing target-host"
+echo "$svc_props" | has_line health-type || fail "service set missing health-type"
+# Legacy set service still completes
+legacy_props="$(cands "set service ssh ")"
+echo "$legacy_props" | has_line target-host || fail "set service missing target-host"
+echo "$legacy_props" | has_line health-path || fail "set service missing health-path"
 pass "FRPCTL_TAB_SET_SERVICE_HEALTH"
+pass "FRPCTL_TAB_SERVICE_NAMESPACE"
 
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
@@ -159,11 +170,14 @@ pass "FRPCTL_TAB_CLIENT_COMMAND_NOT_ON_SERVER"
 export FRP_CTL_TEST_ROOT="$BOTH"
 all_both="$(cands "")"
 echo "$all_both" | has_line show || fail "dual missing show"
-echo "$all_both" | has_line add || fail "dual missing add"
+echo "$all_both" | has_line service || fail "dual missing service"
+echo "$all_both" | has_line client || fail "dual missing client"
+echo "$all_both" | has_line system || fail "dual missing system"
 echo "$all_both" | has_line create || fail "dual missing create"
 echo "$all_both" | has_line set || fail "dual missing set"
-echo "$all_both" | has_line apply || fail "dual missing apply"
+echo "$all_both" | has_line add || fail "dual missing add (server group)"
 echo "$all_both" | has_line doctor || fail "dual missing doctor"
+if echo "$all_both" | has_line apply; then fail "dual offered legacy apply at root"; fi
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"
 

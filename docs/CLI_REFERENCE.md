@@ -11,7 +11,20 @@ Grammar:
 ```
 
 Host role decides which commands appear in Tab and help. Dual-role hosts see
-the union. There is no `server …` / `client …` top-level namespace.
+the union of server verbs and client resource namespaces (`service`, `client`,
+`system`).
+
+Client-only hosts use a resource-first root:
+
+```text
+show      View status and configuration
+service   Manage published services
+client    Control this FRP client
+system    Maintenance and diagnostics
+```
+
+Older client forms (`add service`, `apply`, `doctor`, …) remain as compatibility
+aliases; Tab and canonical help show the new structure. See `help legacy`.
 
 Interactive keys:
 
@@ -108,22 +121,24 @@ The backend still accepts `--tag key=value`. The parser converts
 (`tag location "OCI Osaka"`). The older `tag key=value` token is still
 accepted.
 
-Client:
+Client (canonical):
 
 ```text
-set service <service-id> target-host <host>
-set service <service-id> target-port <port>
-set service <service-id> ssh-user <user>
-set service <service-id> name <value>
-set service <service-id> health-type <tcp|http|disabled>
-set service <service-id> health-timeout <seconds>
-set service <service-id> health-interval <seconds>
-set service <service-id> health-max-failed <count>
-set service <service-id> health-path </path>
+service set <service-id> target-host <host>
+service set <service-id> target-port <port>
+service set <service-id> ssh-user <user>
+service set <service-id> name <value>
+service set <service-id> health-type <tcp|http|disabled>
+service set <service-id> health-timeout <seconds>
+service set <service-id> health-interval <seconds>
+service set <service-id> health-max-failed <count>
+service set <service-id> health-path </path>
 ```
 
+Compatibility alias: `set service …` (same backend).
+
 Service IDs are immutable. Pending service edits become live only after
-`apply`. Disable/enable reuse the same public port. Client-side disable does
+`service apply` (alias: `apply`). Disable/enable reuse the same public port. Client-side disable does
 not release the server reservation. Health checks are disabled by default;
 when enabled, FRP `healthCheck` settings are written into `frpc.toml`.
 `show services` / `status` report CLIENT / TUNNEL / TARGET separately.
@@ -154,9 +169,10 @@ create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]
 create enrollments --count N
 create enrollments --csv clients.csv
 create backup [path]
-add service [--preset ssh|http|https|custom] ...
+service add [--preset ssh|http|https|custom] ...
 ```
 
+Compatibility: `add service …` still works.
 Manual groups have immutable IDs (`grp_` plus eight lowercase hex digits),
 mutable names and descriptions, and multiple client memberships. Group
 selectors resolve in this order: exact ID, unique ID prefix, unique exact
@@ -178,16 +194,54 @@ identity, services, or ports. Enrollment-time group assignment is deferred.
 Enrollment Code and bootstrap ticket secrets are never completed or shown by
 `show` / `?` / Tab.
 
-## enable / disable / apply / discard
+## service (client)
 
 ```text
+service add [--preset ssh|http|https|custom] ...
+service add --profile <PROFILE|NAME> [--id ID] [--name NAME]
+service set <service-id> <property> <value>
+service enable <service-id>
+service disable <service-id>
+service apply
+service discard
+```
+
+Canonical client service management. Draft mutations stay pending until
+`service apply`. `service discard` drops pending changes only.
+
+Compatibility aliases (same backends):
+
+```text
+add service …
+set service …
 enable service <service-id>
 disable service <service-id>
 apply
 discard
 ```
 
-Client-local pending changes. `apply` does not release server ports.
+## client lifecycle
+
+```text
+client pause
+client resume
+client uninstall
+```
+
+`pause` stops frpc and disables autostart so the block survives reboot. CLIENT ID,
+services, public ports, and Access Control are preserved. `resume` restores
+autostart and starts frpc without re-enrollment. `uninstall` is local-only;
+server reservations remain until an explicit server `release` / `revoke`.
+
+## system (client maintenance)
+
+```text
+system update [--check]
+system doctor
+system support-bundle [--output PATH]
+```
+
+Compatibility aliases: `update project`, `doctor`, `support-bundle`.
 
 ## revoke / purge / release / restore
 
@@ -231,13 +285,14 @@ set profile <PROFILE> name|description|preset|target-host|target-port|ssh-user <
 delete profile <PROFILE>
 ```
 
-On a client host, seed a pending service from a profile, then run `apply`:
+On a client host, seed a pending service from a profile, then run `service apply`:
 
 ```text
-add service --profile <PROFILE|NAME> [--id ID] [--name NAME]
-apply
+service add --profile <PROFILE|NAME> [--id ID] [--name NAME]
+service apply
 ```
 
+Compatibility: `add service --profile …` then `apply`.
 ## access (server)
 
 Named reusable Service Access Lists, optional TTL entries, and recent

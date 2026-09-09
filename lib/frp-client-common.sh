@@ -3971,6 +3971,7 @@ frp_client_restart() {
     return 1
   fi
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    frp_client_clear_pause_marker
     return 0
   fi
   if frp_is_darwin; then
@@ -3985,9 +3986,131 @@ frp_client_restart() {
   fi
 }
 
+frp_client_pause_marker_path() {
+  frp_client_path /etc/frp/client-paused
+}
+
+frp_client_write_pause_marker() {
+  local path parent
+  path="$(frp_client_pause_marker_path)"
+  parent="$(dirname "$path")"
+  mkdir -p "$parent"
+  printf 'paused\n' >"$path"
+}
+
+frp_client_clear_pause_marker() {
+  rm -f "$(frp_client_pause_marker_path)" 2>/dev/null || true
+}
+
+frp_client_is_paused() {
+  # Prefer live autostart state; fall back to test marker under fixtures.
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    [[ -f "$(frp_client_pause_marker_path)" ]]
+    return $?
+  fi
+  if frp_is_darwin; then
+    # launchctl print disabled state is not always queryable in older macOS;
+    # inactive + missing enabled unit is treated as paused when marker exists,
+    # otherwise rely on systemd-style disable via launchctl print when available.
+    if [[ -f "$(frp_client_pause_marker_path)" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+  local enabled
+  enabled="$(systemctl is-enabled frpc 2>/dev/null || true)"
+  case "$enabled" in
+    disabled|masked) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_client_autostart_label() {
+  if frp_client_is_paused; then
+    printf 'disabled'
+  else
+    if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+      printf 'enabled'
+      return 0
+    fi
+    if frp_is_darwin; then
+      printf 'enabled'
+      return 0
+    fi
+    local enabled
+    enabled="$(systemctl is-enabled frpc 2>/dev/null || true)"
+    case "$enabled" in
+      enabled|static|alias|indirect|generated) printf 'enabled' ;;
+      *) printf '%s' "${enabled:-unknown}" ;;
+    esac
+  fi
+}
+
+frp_client_lifecycle_label() {
+  if frp_client_is_paused; then
+    printf 'PAUSED'
+  else
+    printf 'ACTIVE'
+  fi
+}
+
+frp_client_pause() {
+  frp_client_hook_log pause
+  if frp_client_is_paused; then
+    echo "Client already paused. FRP remote access remains blocked."
+    return 0
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    frp_client_write_pause_marker
+    echo "Client paused. All FRP remote access is blocked."
+    echo "Identity, services, and public ports are preserved."
+    return 0
+  fi
+  if frp_is_darwin; then
+    frp_macos_launchd_set_enabled disable || return 1
+    frp_macos_launchd_bootout
+    frp_client_write_pause_marker
+  else
+    systemctl stop frpc >/dev/null 2>&1 || true
+    systemctl disable frpc >/dev/null 2>&1 || {
+      echo "ERROR: failed to disable frpc autostart" >&2
+      return 1
+    }
+  fi
+  echo "Client paused. All FRP remote access is blocked."
+  echo "Identity, services, and public ports are preserved."
+}
+
+frp_client_resume() {
+  frp_client_hook_log resume
+  if ! frp_client_is_paused; then
+    local active
+    active="$(frp_client_service_status 2>/dev/null || printf 'unknown')"
+    if [[ "$active" == "active" || "$active" == "test" ]]; then
+      echo "Client already running."
+      return 0
+    fi
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    frp_client_clear_pause_marker
+    echo "Client resumed. FRP remote access is restored."
+    return 0
+  fi
+  frp_client_clear_pause_marker
+  if ! frp_client_restart; then
+    echo "ERROR: failed to resume FRP client" >&2
+    return 1
+  fi
+  echo "Client resumed. FRP remote access is restored."
+}
+
 frp_client_service_status() {
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-    printf 'test'
+    if frp_client_is_paused; then
+      printf 'inactive'
+    else
+      printf 'test'
+    fi
   elif frp_is_darwin; then
     frp_macos_launchd_running && printf 'active' || printf 'inactive'
   else

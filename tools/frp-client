@@ -162,7 +162,7 @@ frp_client_status() {
   # status is read-only: do not contact the allocator or mutate local state.
   # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
-  python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" "$(frp_health_check_py)" <<'PY'
+  python3 - "$path" "$(frp_client_installed_frp_version)" "${FRP_CLIENT_TEST_ROOT:-}" "${FRP_SKIP_SYSTEMD:-}" "$(frp_identity_label)" "$(frp_client_installed_project_version)" "$(frp_client_installed_release_channel)" "$(frp_client_installed_source_ref)" "$(frp_client_installed_bundle_sha256)" "$(frp_client_service_status)" "$(frp_health_check_py)" "$(frp_client_lifecycle_label)" "$(frp_client_autostart_label)" <<'PY'
 import importlib.util, json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
@@ -181,6 +181,8 @@ spec = importlib.util.spec_from_file_location('frp_health_check', sys.argv[11])
 HC = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(HC)
 client_label = HC.client_status_label(active)
+lifecycle = sys.argv[12]
+autostart = sys.argv[13]
 allocator = 'configured' if data.get('allocator_url') else 'missing'
 print('FRP Client')
 print('==========')
@@ -195,7 +197,9 @@ print(f"Allocator       : {allocator}")
 print(f"Management identity : {sys.argv[5]}")
 print(f"FRP version     : {tested}")
 print(f"Bundle SHA256   : {bundle_sha256}")
+print(f"Client state    : {lifecycle}")
 print(f"frpc            : {active}")
+print(f"Autostart       : {autostart}")
 print()
 print(f"Services        : {enabled} enabled / {disabled} disabled")
 print()
@@ -1379,9 +1383,17 @@ frp_client_cmd_main() {
       frp_require_root
       frp_client_discard_pending
       ;;
+    pause)
+      frp_require_root
+      frp_client_pause
+      ;;
+    resume)
+      frp_require_root
+      frp_client_resume
+      ;;
     -h|--help|help)
       cat <<'EOF'
-Usage: frp-client [status|info|list|sync|update]
+Usage: frp-client [status|info|list|sync|update|pause|resume]
 
   (no args)   Interactive service management menu
   status      Show local client and service status (read-only)
@@ -1389,6 +1401,8 @@ Usage: frp-client [status|info|list|sync|update]
   list        List configured services (read-only)
   sync        Reconcile local services against server releases
   update      Upgrade frp-auto-deploy management tools without re-enrolling
+  pause       Stop frpc and disable autostart (identity preserved)
+  resume      Re-enable autostart and start frpc
 
 An Enrollment Code is required only to enroll this client or to
 recover its management identity. Ordinary later changes are
@@ -1402,7 +1416,7 @@ EOF
       ;;
     *)
       echo "ERROR: unknown command: $cmd" >&2
-      echo "Usage: frp-client [status|info|list|sync|update]" >&2
+      echo "Usage: frp-client [status|info|list|sync|update|pause|resume]" >&2
       exit 2
       ;;
   esac

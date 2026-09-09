@@ -1000,8 +1000,12 @@ resolve_server_settings() {
     FRP_TRANSPORT=tcp
   fi
 
-  local derived_url
-  derived_url="$(frp_format_https_url "$FRP_PUBLIC_HOST" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+  local derived_url allocator_host
+  allocator_host="$FRP_PUBLIC_IP"
+  if [[ -n "${FRP_PUBLIC_HOSTNAME:-}" ]]; then
+    allocator_host="$FRP_PUBLIC_HOSTNAME"
+  fi
+  derived_url="$(frp_format_https_url "$allocator_host" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
   if [[ -n "${FRP_ALLOCATOR_PUBLIC_URL:-}" ]]; then
     if [[ "${FRP_ALLOCATOR_PUBLIC_URL,,}" == http://* ]]; then
       echo "ERROR: allocator public URL must be HTTPS; plain HTTP is not supported" >&2

@@ -9,7 +9,7 @@ param(
     [ValidateSet(
         'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'support-bundle', 'autostart', 'help',
         'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service',
-        'apply', 'discard', 'sync', 'reconcile'
+        'apply', 'discard', 'sync', 'reconcile', 'pause', 'resume'
     )]
     [string]$Command = 'help',
 
@@ -92,6 +92,8 @@ frp-client (Windows)
   sync              Reconcile local services against server releases
                        (alias: reconcile; after frpctl release service)
   update            Update frpc.exe (preserve identity/ports); -Check for dry run
+  pause             Stop frpc and disable autostart (identity/ports preserved)
+  resume            Re-enable autostart and start frpc
   uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor            Basic local checks
   support-bundle    Create a sanitized local diagnostic zip (-Output <path>)
@@ -317,6 +319,56 @@ function Invoke-FrpClientUpdate {
     }
 }
 
+
+function Invoke-FrpClientPause {
+    $taskName = Get-FrpAutostartTaskName
+    $wasAutostart = Test-FrpAutostartTaskExists -TaskName $taskName
+    $st = Get-FrpClientStatus
+    if ((-not $st.Running) -and (-not $wasAutostart)) {
+        Write-Host 'Client already paused. FRP remote access remains blocked.'
+        return 0
+    }
+    try {
+        Stop-FrpClient | Out-Null
+    } catch {
+        Write-Host ("ERROR: failed to stop frpc: {0}" -f $_.Exception.Message)
+        return 1
+    }
+    if ($wasAutostart) {
+        try {
+            Uninstall-FrpAutostartTask -TaskName $taskName | Out-Null
+        } catch {
+            Write-Host ("ERROR: failed to disable autostart: {0}" -f $_.Exception.Message)
+            return 1
+        }
+    }
+    Write-Host 'Client paused. All FRP remote access is blocked.'
+    Write-Host 'Identity, services, and public ports are preserved.'
+    return 0
+}
+
+function Invoke-FrpClientResume {
+    $taskName = Get-FrpAutostartTaskName
+    $st = Get-FrpClientStatus
+    $hasAutostart = Test-FrpAutostartTaskExists -TaskName $taskName
+    if ($st.Running -and $hasAutostart) {
+        Write-Host 'Client already running.'
+        return 0
+    }
+    try {
+        if (-not $hasAutostart) {
+            Install-FrpAutostartTask -TaskName $taskName | Out-Null
+        }
+        if (-not $st.Running) {
+            Start-FrpClient | Out-Null
+        }
+    } catch {
+        Write-Host ("ERROR: failed to resume FRP client: {0}" -f $_.Exception.Message)
+        return 1
+    }
+    Write-Host 'Client resumed. FRP remote access is restored.'
+    return 0
+}
 
 function Invoke-FrpClientUninstall {
     if (-not (Enter-FrpClientLock)) { return 1 }
@@ -741,6 +793,8 @@ switch ($Command) {
     'sync' { exit (Invoke-FrpClientSync) }
     'reconcile' { exit (Invoke-FrpClientSync) }
     'update' { exit (Invoke-FrpClientUpdate -CheckOnly:$Check) }
+    'pause' { exit (Invoke-FrpClientPause) }
+    'resume' { exit (Invoke-FrpClientResume) }
     'uninstall' { exit (Invoke-FrpClientUninstall) }
     'doctor' { exit (Invoke-FrpClientDoctor) }
     'support-bundle' { exit (Invoke-FrpClientSupportBundle -OutputPath $Output) }

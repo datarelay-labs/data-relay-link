@@ -488,14 +488,42 @@ frpctl_print_version() {
 }
 
 frpctl_print_client_menu() {
-  echo "1) Show status"
-  echo "2) Show services"
-  echo "3) Show connection information"
-  echo "4) Manage services"
-  echo "5) Update project"
-  echo "6) Doctor"
-  echo "7) Help"
-  echo "8) Exit"
+  echo "1) Show"
+  echo "2) Service"
+  echo "3) Client"
+  echo "4) System"
+  echo "5) Exit"
+}
+
+frpctl_print_client_show_menu() {
+  echo "1) Status"
+  echo "2) Services"
+  echo "3) Connection information"
+  echo "4) Back"
+}
+
+frpctl_print_client_service_menu() {
+  echo "1) Add"
+  echo "2) Set"
+  echo "3) Enable"
+  echo "4) Disable"
+  echo "5) Apply"
+  echo "6) Discard"
+  echo "7) Back"
+}
+
+frpctl_print_client_lifecycle_menu() {
+  echo "1) Pause"
+  echo "2) Resume"
+  echo "3) Uninstall"
+  echo "4) Back"
+}
+
+frpctl_print_client_system_menu() {
+  echo "1) Update"
+  echo "2) Doctor"
+  echo "3) Support Bundle"
+  echo "4) Back"
 }
 
 frpctl_print_server_menu() {
@@ -593,20 +621,167 @@ frpctl_client_menu() {
     fi
     choice="$(frpctl_read "Select: " "")" || return 1
     case "$choice" in
-      1) frpctl_run frp-client status ;;
-      2) frpctl_run frp-client list ;;
-      3) frpctl_run frp-client info ;;
-      4) frpctl_run frp-client ;;
-      5) frpctl_client_update ;;
-      6) frpctl_dispatch doctor || true ;;
-      7) frpctl_repl_help ;;
-      8)
+      1) frpctl_client_show_menu ;;
+      2) frpctl_client_service_menu ;;
+      3) frpctl_client_lifecycle_menu ;;
+      4) frpctl_client_system_menu ;;
+      5)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-8" >&2 ;;
+      *) echo "ERROR: select 1-5" >&2 ;;
     esac
   done
+}
+
+frpctl_client_show_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_client_show_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_run frp-client status ;;
+      2) frpctl_run frp-client list ;;
+      3) frpctl_run frp-client info ;;
+      4) return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_service_menu() {
+  local choice sid prop value
+  while true; do
+    echo
+    frpctl_print_client_service_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_run frp-client ;;
+      2)
+        sid="$(frpctl_read "Service ID: " "")" || return 1
+        prop="$(frpctl_read "Property (target-host|target-port|ssh-user|name|...): " "")" || return 1
+        value="$(frpctl_read "Value: " "")" || return 1
+        frpctl_invoke frp-client set-service "$sid" "$prop" "$value"
+        ;;
+      3)
+        sid="$(frpctl_read "Service ID: " "")" || return 1
+        frpctl_invoke frp-client enable-service "$sid"
+        ;;
+      4)
+        sid="$(frpctl_read "Service ID: " "")" || return 1
+        frpctl_invoke frp-client disable-service "$sid"
+        ;;
+      5) frpctl_invoke frp-client apply-pending ;;
+      6) frpctl_invoke frp-client discard-pending ;;
+      7) return 0 ;;
+      *) echo "ERROR: select 1-7" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_lifecycle_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_client_lifecycle_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_client_pause ;;
+      2) frpctl_client_resume ;;
+      3) frpctl_client_uninstall; return $? ;;
+      4) return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_system_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_client_system_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_client_update ;;
+      2) frpctl_dispatch doctor || true ;;
+      3) frpctl_dispatch support-bundle || true ;;
+      4) return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_pause() {
+  frpctl_require_client || return 1
+  frpctl_invoke frp-client pause
+}
+
+frpctl_client_resume() {
+  frpctl_require_client || return 1
+  frpctl_invoke frp-client resume
+}
+
+frpctl_find_uninstall_client() {
+  local cand
+  for cand in \
+    "${FRP_CTL_BIN_DIR:-}/uninstall-client.sh" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/uninstall-client.sh" \
+    /usr/local/lib/frp-auto-deploy/uninstall-client.sh \
+    /usr/local/sbin/uninstall-client.sh \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/uninstall-client.sh"; do
+    if [[ -n "$cand" && -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+frpctl_client_uninstall() {
+  local confirm script yes=0 arg
+  frpctl_require_client || return 1
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) yes=1 ;;
+    esac
+  done
+  echo "This removes FRP Auto Deploy from this machine."
+  echo
+  echo "Local client identity and configuration will be removed."
+  echo "Server-side client records and public-port reservations will remain."
+  echo
+  if [[ "$yes" != "1" ]]; then
+    if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
+      confirm="$(frpctl_read "Type UNINSTALL to continue: " "")" || return 1
+      if [[ "$confirm" != "UNINSTALL" ]]; then
+        echo "Uninstall cancelled."
+        return 1
+      fi
+    else
+      echo "ERROR: non-interactive uninstall requires --yes" >&2
+      return 1
+    fi
+  fi
+  if [[ "${FRP_CTL_DRY_RUN:-}" == "1" ]]; then
+    echo "DISPATCH uninstall-client.sh"
+    return 0
+  fi
+  if ! script="$(frpctl_find_uninstall_client)"; then
+    echo "ERROR: uninstall-client.sh not found" >&2
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  if ! bash "$script"; then
+    return 1
+  fi
+  echo "FRP Auto Deploy client removed."
+  # REPL / interactive session cannot continue on a deleted installation.
+  exit 0
 }
 
 frpctl_zt_prompt_client_identification() {
@@ -1439,7 +1614,8 @@ frpctl_known_commands() {
   printf '%s\n' help menu status doctor support-bundle version update clear exit quit q history show
   if [[ "$client" == "1" ]]; then
     printf '%s\n' services manage info client-status client-update \
-      add enable disable apply discard set
+      add enable disable apply discard set \
+      service client system
   fi
   if [[ "$server" == "1" ]]; then
     printf '%s\n' clients client client-info client-set edit-client enroll create-client \
@@ -1902,6 +2078,11 @@ frpctl_dispatch_canonical() {
       ;;
     apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
+    client_pause) frpctl_client_pause ;;
+    client_resume) frpctl_client_resume ;;
+    client_uninstall)
+      frpctl_client_uninstall $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     create_zero_touch) frpctl_require_server || return 1; frpctl_guided_zero_touch ;;
     create_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-create-client $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     create_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enroll-bulk $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
@@ -2229,7 +2410,7 @@ frpctl_dispatch() {
       fi
       frpctl_invoke frp-release-client "$@"
       ;;
-    shell|exec|bash|sh|system)
+    shell|exec|bash|sh)
       frpctl_reject_shell
       ;;
     '!'*|\!*)
@@ -2398,7 +2579,7 @@ frpctl_repl() {
     fi
     frpctl_history_maybe_record "$_FRP_CTL_LINE"
     case "${_FRP_CTL_TOKENS[0]}" in
-      '!'*|shell|exec|bash|sh|system)
+      '!'*|shell|exec|bash|sh)
         frpctl_reject_shell || true
         continue
         ;;
