@@ -264,7 +264,10 @@ class BundleBuilder:
         self.skipped.append("%s (%s)" % (name, reason))
 
     def path(self, abs_path: str) -> Path:
-        return map_path(self.root, abs_path)
+        # Reuse doctor's Paths.p so Darwin installs map /etc/frp → macOS state root.
+        doctor = self._doctor
+        root_s = "" if self.root == Path("/") else str(self.root)
+        return doctor.Paths(root_s).p(abs_path)
 
     def safe_read_text(self, abs_path: str) -> Optional[str]:
         path = self.path(abs_path)
@@ -584,6 +587,26 @@ class BundleBuilder:
         self.add_section("registry-summary")
         self.note_redaction("registry summary excludes identity keys and tokens")
 
+    def _service_summary_entry(self, svc: dict) -> dict:
+        local_ip = svc.get("local_ip") or "127.0.0.1"
+        local_port = svc.get("local_port")
+        target = None
+        if local_port is not None and str(local_port) != "":
+            target = "%s:%s" % (local_ip, local_port)
+        entry: Dict[str, Any] = {
+            "enabled": svc.get("enabled", True),
+            "type": svc.get("type") or svc.get("protocol") or svc.get("preset"),
+            "local_ip": local_ip,
+            "local_port": local_port,
+            "remote_port": svc.get("remote_port"),
+            "name": svc.get("name"),
+            "target": target,
+        }
+        hc = svc.get("health_check")
+        if isinstance(hc, dict) and hc:
+            entry["health_check"] = sanitize_json_value(hc)
+        return entry
+
     def _write_client_summary(self) -> None:
         state, err = self.safe_read_json("/etc/frp/client-state.json")
         if state is None:
@@ -598,21 +621,17 @@ class BundleBuilder:
         if isinstance(services, dict):
             for sid, svc in services.items():
                 if isinstance(svc, dict):
-                    svc_out[str(sid)] = {
-                        "enabled": svc.get("enabled", True),
-                        "type": svc.get("type") or svc.get("protocol"),
-                        "local_ip": svc.get("local_ip"),
-                        "local_port": svc.get("local_port"),
-                        "remote_port": svc.get("remote_port"),
-                        "name": svc.get("name"),
-                    }
+                    svc_out[str(sid)] = self._service_summary_entry(svc)
+        machine_id = state.get("machine_id") or state.get("client_id")
         summary = {
-            "client_id": state.get("client_id") or state.get("machine_id"),
+            "machine_id": machine_id,
+            "client_id": state.get("client_id") or machine_id,
             "label": state.get("label"),
             "hostname": state.get("hostname"),
             "allocator_url": state.get("allocator_url"),
-            "server_addr": state.get("server_addr") or state.get("server"),
-            "transport": state.get("transport"),
+            "frp_server": state.get("frp_server") or state.get("server_addr") or state.get("server"),
+            "frp_server_port": state.get("frp_server_port"),
+            "frp_transport": state.get("frp_transport") or state.get("transport"),
             "services": svc_out,
         }
         # Drop any secret-looking leftovers.
@@ -818,32 +837,72 @@ class BundleBuilder:
         self.stage_json("access-control-summary.json", summary)
         self.add_section("access-control")
 
-    def _write_target_health_optional(self) -> None:
-        """Include Target Health diagnostics only when present on this install."""
-        candidates = [
-            "/etc/frp-auto-deploy/target-health.json",
-            "/var/lib/frp-auto-deploy/target-health.json",
-            "/var/lib/frp-auto-deploy/target-health-status.json",
-        ]
-        helper = self.path("/usr/local/lib/frp-auto-deploy/frp_target_health.py")
-        found_any = False
-        if helper.is_file() and not helper.is_symlink():
-            self.stage_write(
-                "target-health/helper-present.txt",
-                "frp_target_health.py is installed on this host.\n",
-            )
-            found_any = True
-        for rel in candidates:
-            data, err = self.safe_read_json(rel)
-            if data is None:
+    def _health_entries_from_services(
+        self, services: Any, *, source: str, client_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if not isinstance(services, dict):
+            return out
+        for sid, svc in services.items():
+            if not isinstance(svc, dict):
                 continue
-            found_any = True
-            self.stage_json("target-health/%s" % Path(rel).name.replace(".json", ".sanitized.json"), data)
-        if found_any:
+            hc = svc.get("health_check")
+            if not isinstance(hc, dict) or not hc:
+                continue
+            local_ip = svc.get("local_ip") or "127.0.0.1"
+            local_port = svc.get("local_port")
+            target = None
+            if local_port is not None and str(local_port) != "":
+                target = "%s:%s" % (local_ip, local_port)
+            key = str(sid) if client_id is None else "%s/%s" % (client_id, sid)
+            out[key] = {
+                "source": source,
+                "service_id": str(sid),
+                "health_check": sanitize_json_value(hc),
+                "remote_port": svc.get("remote_port"),
+                "target": target,
+                "enabled": svc.get("enabled", True),
+            }
+            if client_id is not None:
+                out[key]["client_id"] = client_id
+        return out
+
+    def _write_target_health_optional(self) -> None:
+        """Build Target Health from services[*].health_check in client/registry state."""
+        services_out: Dict[str, Any] = {}
+
+        state, _err = self.safe_read_json("/etc/frp/client-state.json")
+        if isinstance(state, dict):
+            services_out.update(
+                self._health_entries_from_services(
+                    state.get("services"), source="client-state"
+                )
+            )
+
+        if self.role in ("server", "dual", "partial_server"):
+            registry, _rerr = self.safe_read_json("/var/lib/frp-auto-deploy/registry.json")
+            clients = (registry or {}).get("clients") if isinstance(registry, dict) else None
+            if isinstance(clients, dict):
+                for mid, client in clients.items():
+                    if not isinstance(client, dict):
+                        continue
+                    services_out.update(
+                        self._health_entries_from_services(
+                            client.get("services"),
+                            source="registry",
+                            client_id=str(mid),
+                        )
+                    )
+
+        if services_out:
+            self.stage_json(
+                "target-health/from-state.json",
+                {"services": services_out},
+            )
             self.add_section("target-health")
-            self.note_redaction("target-health sanitized when present")
+            self.note_redaction("target-health built from state health_check fields")
         else:
-            self.skip("target-health", "not installed")
+            self.skip("target-health", "no health_check in state")
 
     def _write_manifest(self) -> None:
         payload = {

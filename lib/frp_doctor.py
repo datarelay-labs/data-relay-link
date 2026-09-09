@@ -1762,6 +1762,51 @@ def check_access_control(report, paths, facts, cfg, registry_state):
 
     check_unit(report, facts, 'frp-access-plugin', 'access_plugin_service', 'frp-access-plugin.service')
 
+    # Plugin readiness: when the unit is active, /healthz must be 200.
+    units = facts.get('units') or {}
+    access_unit = units.get('frp-access-plugin') or {}
+    access_active = str(access_unit.get('active') or '') == 'active'
+    skip_network = bool(os.environ.get('FRP_DOCTOR_SKIP_NETWORK')) or bool(
+        os.environ.get('FRP_DEPLOY_TEST_ROOT')
+    )
+    if access_active and not skip_network:
+        plugin_addr = '127.0.0.1:6101'
+        if isinstance(cfg, dict):
+            plugin_addr = str(cfg.get('access_plugin_addr') or plugin_addr).strip() or plugin_addr
+        health_url = 'http://%s/healthz' % plugin_addr
+        try:
+            import urllib.request
+            with urllib.request.urlopen(health_url, timeout=NETWORK_TIMEOUT) as resp:
+                code = int(getattr(resp, 'status', 0) or resp.getcode())
+            if code == 200:
+                report.add(
+                    'access_plugin_health', PASS,
+                    'access plugin GET /healthz succeeded',
+                    health_url, '', 'runtime',
+                )
+            else:
+                report.add(
+                    'access_plugin_health', FAIL,
+                    'access plugin GET /healthz returned %s' % code,
+                    health_url,
+                    'inspect frp-access-plugin and authoritative Access/Registry state',
+                    'runtime',
+                )
+        except Exception as exc:
+            report.add(
+                'access_plugin_health', FAIL,
+                'access plugin GET /healthz failed',
+                '%s (%s)' % (health_url, exc),
+                'inspect frp-access-plugin and authoritative Access/Registry state',
+                'runtime',
+            )
+    elif access_active and skip_network:
+        report.add(
+            'access_plugin_health', NOT_TESTED,
+            'access plugin /healthz was not tested (network skipped)',
+            '', '', 'runtime',
+        )
+
     log_rel = '/var/log/frp-auto-deploy/access-conn.jsonl'
     if isinstance(cfg, dict):
         configured_log = str(cfg.get('access_conn_log_file') or '').strip()

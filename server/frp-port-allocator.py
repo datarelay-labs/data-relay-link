@@ -903,9 +903,15 @@ class Allocator:
     def registry_lock(self):
         return FileLock(registry_lock_path(self.registry_file))
 
+    def registry_present(self):
+        return Path(self.registry_file).exists()
+
     def load_registry(self):
+        """Load authoritative registry. Missing file is corruption, not empty state."""
         if not Path(self.registry_file).exists():
-            return empty_registry()
+            raise RegistrySchemaError(
+                'registry.json is missing (authoritative registry state required)'
+            )
         try:
             state = load_json(self.registry_file)
         except (OSError, json.JSONDecodeError) as exc:
@@ -2061,6 +2067,17 @@ def make_handler(allocator):
                 if self._handle_short_url_get(path):
                     return
                 if path == '/healthz':
+                    try:
+                        allocator.load_registry()
+                    except RegistrySchemaError as exc:
+                        self.send_json(
+                            503,
+                            {
+                                'status': 'unhealthy',
+                                'error': str(exc),
+                            },
+                        )
+                        return
                     payload = {'status': 'ok'}
                     project_version = read_project_version(
                         os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
@@ -2245,7 +2262,12 @@ def main():
     try:
         allocator.load_registry()
     except RegistrySchemaError as exc:
-        raise SystemExit(f'ERROR: {exc}') from exc
+        # Missing registry: stay up but unhealthy (/healthz=503, mutations fail).
+        # Other schema/corruption errors remain fatal at boot.
+        if not allocator.registry_present():
+            print('ERROR: %s' % exc, flush=True)
+        else:
+            raise SystemExit(f'ERROR: {exc}') from exc
     allocator.cleanup_expired_enrollments()
     host = allocator.cfg.get('listen_host', '0.0.0.0')
     port = cfg_allocator_listen_port(allocator.cfg)

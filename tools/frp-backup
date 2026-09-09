@@ -120,68 +120,8 @@ def _audit_emit(event, **kwargs):
         return
 
 
-def ensure_access_control_file(root: Path) -> None:
-    """Create empty access-control.json when missing (pre-feature installs)."""
-    rel = "var/lib/frp-auto-deploy/access-control.json"
-    path = root / rel
-    if path.exists() or path.is_symlink():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": 1,
-        "access_lists": {},
-        "service_access": {},
-    }
-    fd, tmp = tempfile.mkstemp(prefix="access-control.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-
-
-def ensure_service_profiles_file(root: Path) -> None:
-    """Create empty service-profiles.json when missing (pre-feature installs)."""
-    rel = "var/lib/frp-auto-deploy/service-profiles.json"
-    path = root / rel
-    if path.exists() or path.is_symlink():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": 1,
-        "profiles": {},
-    }
-    fd, tmp = tempfile.mkstemp(prefix="service-profiles.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-
-
-
 def collect_files(root: Path) -> list[tuple[str, Path]]:
     found: dict[str, Path] = {}
-    ensure_access_control_file(root)
-    ensure_service_profiles_file(root)
     for rel in REQUIRED:
         source = safe_source(root, rel, required=True)
         assert source is not None

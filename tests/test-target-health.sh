@@ -297,8 +297,11 @@ item["local_port"] = port  # closed
 assert HC.target_status_label(item) == "UNHEALTHY"
 item.pop("health_check")
 assert HC.target_status_label(item) == "N/A"
-assert HC.tunnel_status_label({"enabled": True, "remote_port": 1}) == "ONLINE"
+assert HC.tunnel_status_label({"enabled": True, "remote_port": 1}) == "UNKNOWN"
+assert HC.tunnel_status_label({"enabled": True, "remote_port": 1}, live_state="online") == "ONLINE"
+assert HC.tunnel_status_label({"enabled": True, "remote_port": 1}, live_state="offline") == "OFFLINE"
 assert HC.tunnel_status_label({"enabled": False, "remote_port": 1}) == "OFFLINE"
+assert HC.tunnel_status_label({"enabled": True}) == "UNKNOWN"
 assert HC.client_status_label("active") == "ONLINE"
 assert HC.client_status_label("inactive") == "OFFLINE"
 assert "DOWN" not in (HC.STATUS_UNKNOWN, HC.client_status_label("weird"))

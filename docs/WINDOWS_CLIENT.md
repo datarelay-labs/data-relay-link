@@ -118,19 +118,23 @@ tools\frp-client.cmd autostart
 | `start` / `stop` | Idempotent; manages only the PID recorded under `logs\frpc.pid` |
 | `info` | Prints `mstsc` / `ssh` / HTTP(S) URLs without secrets |
 | `update` | Replaces `frpc.exe` after SHA256 verify; preserves identity and ports; transactional rollback of managed files + process state |
-| `uninstall` | **LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED** |
-| `autostart` | Stub: reports not configured (Task Scheduler / Service is optional) |
+| `uninstall` | **LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED**; removes the product autostart task |
+| `autostart` | Show / enable / disable the product Scheduled Task (`FRPAutoDeployClient`) |
 
-## Reboot semantics
+## Reboot / autostart
 
-frpc does **not** auto-start after reboot unless you configure optional autostart yourself. After reboot, run `frp-client start`. Enrollment state under `ProgramData` persists.
+Enrollment with enabled services registers a product-owned Scheduled Task
+named **`FRPAutoDeployClient`**. It runs `frp-client start` as **SYSTEM** at
+system boot (ONSTART), so `frpc` comes back without an interactive login.
+Management-only (zero-service) clients do not register the task. Use
+`frp-client autostart` to inspect, enable, or disable it. Enrollment state
+under `ProgramData` persists across reboot.
 
 ## Unsupported / out of scope
 
 - ARM64 Windows packages (amd64 only in this release)
 - Automatic firewall changes
 - Automatic RDP enablement or credential provisioning
-- Guaranteed headless Service install (autostart is optional, not MVP-blocking)
 - Forked Windows-only enrollment APIs
 
 ## Security summary

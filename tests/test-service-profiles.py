@@ -144,6 +144,8 @@ class ServiceProfilesTests(unittest.TestCase):
         self.assertEqual(name, "persist")
 
     def test_mutate_lock_roundtrip(self):
+        PROF.initialize_profiles_state(path=self.path)
+
         def mut(state):
             return PROF.create_profile(
                 state,

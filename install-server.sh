@@ -1674,6 +1674,40 @@ frp_server_health_allocator() {
   frp_wait_allocator_ready "$port"
 }
 
+frp_server_health_access() {
+  # Access plugin readiness: unit active AND GET /healthz == 200.
+  local addr url code
+  if [[ "${FRP_INSTALL_HOOK_HEALTH_FAIL:-}" == "1" ]]; then
+    echo "ERROR: simulated health check failure" >&2
+    return 1
+  fi
+  if frp_server_skip_systemd; then
+    return 0
+  fi
+  frp_wait_unit_active frp-access-plugin || return 1
+  addr="${FRP_ACCESS_PLUGIN_ADDR:-127.0.0.1:6101}"
+  if [[ -r "$(frp_server_fs /etc/frp-auto-deploy/config.json)" ]]; then
+    addr="$(python3 - "$(frp_server_fs /etc/frp-auto-deploy/config.json)" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+try:
+    cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+print(str(cfg.get("access_plugin_addr") or "127.0.0.1:6101").strip())
+PY
+)"
+  fi
+  [[ -n "$addr" ]] || addr="127.0.0.1:6101"
+  url="http://${addr}/healthz"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$url" 2>/dev/null || echo 000)"
+  if [[ "$code" != "200" ]]; then
+    echo "ERROR: access plugin /healthz returned ${code} (expected 200)" >&2
+    return 1
+  fi
+  return 0
+}
+
 frp_server_install_frp_binary() {
   local dest archive url extracted
   dest="$(frp_server_fs /usr/local/bin/frps)"
@@ -2092,6 +2126,12 @@ PY
   if [[ "$need_alloc_restart" == "1" ]] || [[ "$existing_install" != "1" ]]; then
     if ! frp_server_health_allocator "$FRP_ALLOCATOR_LISTEN_PORT"; then
       frp_server_fail_after_mutation HEALTH_CHECK_FAILED "allocator health check failed; previous semantic configuration restored."
+      return 1
+    fi
+  fi
+  if [[ "$need_access_restart" == "1" ]] || [[ "$existing_install" != "1" ]] || [[ "$need_frps_restart" == "1" ]]; then
+    if ! frp_server_health_access; then
+      frp_server_fail_after_mutation HEALTH_CHECK_FAILED "access plugin health check failed; previous semantic configuration restored."
       return 1
     fi
   fi

@@ -4,7 +4,7 @@ See [docs/WINDOWS_CLIENT.md](../docs/WINDOWS_CLIENT.md) for the full user guide.
 
 ## Stable validation
 
-Current stable release: **FRP Auto Deploy v2.3.0** with pinned FRP **0.71.0**.
+Current release (FINAL AUDIT CLOSURE): **FRP Auto Deploy v2.3.0** with pinned FRP **0.71.0**.
 
 | Environment | v2.3.0 validation claim |
 | --- | --- |

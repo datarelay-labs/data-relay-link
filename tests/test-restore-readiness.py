@@ -65,8 +65,8 @@ def main() -> int:
         os.environ["FRP_RESTORE_READY_TIMEOUT"] = "1"
         os.environ["FRP_RESTORE_READY_INTERVAL"] = "0"
 
-        counters = {"is_active": 0, "ss": 0, "healthz": 0}
-        seen = {"url": None, "cafile": None}
+        counters = {"is_active": 0, "ss": 0, "healthz": 0, "access_healthz": 0}
+        seen = {"urls": [], "cafile": None}
         real_subprocess = mod.subprocess
         real_urllib = __import__("urllib.request", fromlist=["request"])
         real_ssl = mod.ssl.create_default_context
@@ -86,8 +86,13 @@ def main() -> int:
             return object()
 
         def fake_urlopen(url, context=None, timeout=5):
+            seen["urls"].append(url)
+            if str(url).startswith("http://") and "/healthz" in str(url):
+                counters["access_healthz"] += 1
+                if counters["access_healthz"] < 2:
+                    raise OSError("access plugin not ready yet")
+                return types.SimpleNamespace(read=lambda: b'{"ok":true}')
             counters["healthz"] += 1
-            seen["url"] = url
             if counters["healthz"] < 3:
                 raise OSError("not ready yet")
             return types.SimpleNamespace(read=lambda: b"ok")
@@ -110,7 +115,9 @@ def main() -> int:
 
         assert counters["ss"] >= 3, counters
         assert counters["healthz"] >= 3, counters
-        assert seen["url"] == "https://127.0.0.1:6099/healthz", seen
+        assert counters["access_healthz"] >= 2, counters
+        assert "https://127.0.0.1:6099/healthz" in seen["urls"], seen
+        assert "http://127.0.0.1:6101/healthz" in seen["urls"], seen
         assert seen["cafile"] == str(root / "etc/frp-auto-deploy/pki/ca.crt"), seen
         print("RESTORE_READINESS_RETRY=PASS")
     return 0

@@ -88,7 +88,34 @@ unit_state() {
 
 frps_state="$(unit_state frps)"
 allocator_state="$(unit_state frp-port-allocator)"
+access_plugin_state="$(unit_state frp-access-plugin)"
 frontend_state="$(unit_state frp-frontend)"
+
+access_plugin_health="unknown"
+if type frp_test_harness_enabled >/dev/null 2>&1 && frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+  access_plugin_health="skipped"
+elif command -v curl >/dev/null 2>&1; then
+  _access_addr="127.0.0.1:6101"
+  if [[ -r "$config_file" ]]; then
+    _access_addr="$(python3 - "$config_file" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+try:
+    cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+print(str(cfg.get("access_plugin_addr") or "127.0.0.1:6101").strip() or "127.0.0.1:6101")
+PY
+)"
+  fi
+  [[ -n "${_access_addr:-}" ]] || _access_addr="127.0.0.1:6101"
+  _code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "http://${_access_addr}/healthz" 2>/dev/null || echo 000)"
+  if [[ "$_code" == "200" ]]; then
+    access_plugin_health="ok"
+  else
+    access_plugin_health="unhealthy(${_code})"
+  fi
+fi
 
 host_role="Server"
 if type frp_detect_host_role >/dev/null 2>&1; then
@@ -332,6 +359,7 @@ Bootstrap host  : ${bootstrap_hostname_display}
 
 frps            : ${frps_state}
 allocator       : ${allocator_state}
+access-plugin   : ${access_plugin_state} (${access_plugin_health})
 frontend        : ${frontend_state}
 Lifecycle       : ${lifecycle}
 EOF
@@ -400,9 +428,13 @@ echo "Clients         : ${clients}"
 echo "Reserved ports  : ${reserved}"
 
 if [[ "$CHECK_ONLY" == "1" ]]; then
-  if [[ "$registry_state" == "ready" && "$public_host_state" == "configured" && "$allocator_url_state" == "configured" ]]; then
-    exit 0
+  if [[ "$registry_state" != "ready" || "$public_host_state" != "configured" || "$allocator_url_state" != "configured" ]]; then
+    exit 1
   fi
-  exit 1
+  # When the access plugin unit is active, /healthz must be healthy.
+  if [[ "$access_plugin_state" == "active" && "$access_plugin_health" == unhealthy* ]]; then
+    exit 1
+  fi
+  exit 0
 fi
 exit 0

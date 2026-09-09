@@ -85,6 +85,8 @@ EOF
 EOF
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/frp-auto-deploy/access-control.json"
+  printf '{"schema_version":1,"profiles":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
   cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
 PROJECT_VERSION=2.0.0
 FRP_VERSION=0.71.0
@@ -96,7 +98,8 @@ EOF
   printf 'old unit\n' >"$tree/etc/systemd/system/frp-port-allocator.service"
   cp "$ROOT/server/frp-frontend.service" "$tree/etc/systemd/system/frp-frontend.service"
   chmod 600 "$tree/etc/frp/server_token" "$tree/var/lib/frp-auto-deploy/registry.json" \
-    "$tree/var/lib/frp-auto-deploy/access-control.json"
+    "$tree/var/lib/frp-auto-deploy/access-control.json" \
+    "$tree/var/lib/frp-auto-deploy/service-profiles.json"
   chmod 600 "$tree/etc/frp-auto-deploy/pki/"*
 }
 

@@ -80,6 +80,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-port-architecture.sh
 python3 tests/test-access-control.py
 ./tests/test-access-control.sh
+./tests/test-authoritative-state-missing.sh
 ./tests/test-target-health.sh
 ./tests/test-support-bundle.sh
 python3 tests/test-service-profiles.py

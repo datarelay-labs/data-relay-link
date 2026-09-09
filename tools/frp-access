@@ -43,7 +43,9 @@ def load_cfg():
 def load_registry(cfg):
     path = ACL.registry_path_from_cfg(cfg)
     if not path.is_file():
-        return {"schema_version": 2, "clients": {}, "reserved": []}
+        raise SystemExit(
+            "ERROR: registry.json is missing (authoritative registry state required)"
+        )
     state = json.loads(path.read_text(encoding="utf-8"))
     if state.get("schema_version") != 2:
         raise SystemExit("ERROR: unsupported registry schema version")

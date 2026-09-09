@@ -12,28 +12,29 @@ does not prove a real VM.
 installed systemd host. It does not install, enroll, update, uninstall, or
 mutate firewall/SELinux.
 
-## Gate classification
+## Gate classification — v2.3.0 FINAL AUDIT CLOSURE
+
+Current project version **2.3.0** / FRP **0.71.0**. Treat field installs as
+final only after the premature GitHub `v2.3.0` tag is recreated or moved onto
+the audit-closure HEAD.
 
 | Item | Classification | Current support claim |
 | --- | --- | --- |
-| Ubuntu 22.04 / 24.04 real VM | REQUIRED_FOR_STABLE (live baseline) | documented PASS |
-| Ubuntu 24.04 x86_64 single-443 (direct public-IP, enterprise-restricted client) | REQUIRED_FOR_STABLE (2.1.0) | PASS (2026-08-29) |
-| Rocky 8 container | REQUIRED_FOR_STABLE (automated) | container PASS |
-| Rocky 9 container | REQUIRED_FOR_STABLE (automated) | container PASS |
-| AlmaLinux 9 container | REQUIRED_FOR_STABLE (automated) | container PASS |
-| Amazon Linux 2023 container | REQUIRED_FOR_STABLE (automated) | container PASS |
-| Amazon Linux 2 container | REQUIRED_FOR_STABLE (automated) | container PASS |
-| Zero-Touch Short URL Real E2E (baseline Linux, Amazon Linux 2023, Rocky Linux 8.10) | REQUIRED_FOR_STABLE (2.1.3) | PASS; see Short URL evidence section |
-| Rocky 9 real VM | RECOMMENDED | NOT_TESTED; do not advertise full VM support |
+| Ubuntu 24 physical host Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| Rocky Linux 8.10 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| Rocky Linux 9.4 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| Amazon Linux 2023 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| macOS Apple Silicon Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| Windows 10 / PowerShell 5.1 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| Amazon Linux 2 | CI / container portability | **Container / CI only** — no live-host Real E2E |
+| PowerShell 7 | CI | **CI validated** unless same-host Real E2E with `pwsh` installed |
+| Rocky 8/9, AlmaLinux 9, AL2023, AL2 container matrix | REQUIRED_FOR_STABLE (automated) | container PASS |
 | Rocky 9 SELinux Enforcing | RECOMMENDED | NOT_TESTED; do not advertise Enforcing support |
-| AlmaLinux 9 real VM | RECOMMENDED | NOT_TESTED |
-| AlmaLinux 9 SELinux Enforcing | RECOMMENDED | NOT_TESTED |
-| Amazon Linux 2023 real VM | RECOMMENDED | NOT_TESTED (fresh-install matrix beyond Short URL / upgrade E2E) |
-| Amazon Linux 2 real VM / systemd 219 / TTY | RECOMMENDED | NOT_TESTED |
-| Native ARM64 systemd | RECOMMENDED | architecture mapping unit-tested only |
-| macOS | OUT_OF_SCOPE_STABLE | not stable supported |
-| Windows | OUT_OF_SCOPE_STABLE | not stable supported |
+| AlmaLinux 9 real VM / SELinux Enforcing | RECOMMENDED | NOT_TESTED |
+| Native ARM64 Linux systemd | RECOMMENDED | architecture mapping unit-tested only |
 | Real OpenSSL 1.0.2 TLS enrollment | RECOMMENDED | AL2 container userspace is not this gate |
+| Ubuntu 24.04 x86_64 single-443 (direct public-IP, enterprise-restricted client) | Historical REQUIRED (2.1.0) | PASS (2026-08-29); see historical section |
+| Zero-Touch Short URL Real E2E (baseline Linux, AL2023, Rocky 8.10) | Historical REQUIRED (2.1.3) | PASS; see historical Short URL section |
 
 ## Result format
 
@@ -51,13 +52,10 @@ PYTHON_VERSION=
 OPENSSL_VERSION=
 PID1=
 
-ROCKY_9_REAL_VM=NOT_TESTED
 ROCKY_9_SELINUX_ENFORCING=NOT_TESTED
 
 ALMA_9_REAL_VM=NOT_TESTED
 ALMA_9_SELINUX_ENFORCING=NOT_TESTED
-
-AMAZON_LINUX_2023_REAL_VM=NOT_TESTED
 
 AMAZON_LINUX_2_REAL_VM=NOT_TESTED
 AMAZON_LINUX_2_SYSTEMD_219_REAL=NOT_TESTED
@@ -101,13 +99,15 @@ release-blocking evidence requires it.
 ## Amazon Linux 2 real gate
 
 Prove systemd 219, Bash 4.2, Python 3.7, OpenSSL 1.0.2k, real PID 1, reboot,
-and TTY. Docker userspace PASS is not this column.
+and TTY. Docker userspace PASS is not this column. For **2.3.0**, Amazon Linux 2
+remains **container/CI portability only** until a live-host Real E2E exists.
 
 ## ARM64
 
 Native host only for `REAL_ARM_SYSTEMD=PASS`: architecture detection, FRP
 arm64 artifact, install, systemd, basic connection, doctor. QEMU userspace
-emulation is not that gate.
+emulation is not that gate. macOS Apple Silicon Real E2E is a separate client
+platform claim (validated for 2.3.0).
 
 ## Real OpenSSL 1.0.2 TLS enrollment
 
@@ -117,7 +117,7 @@ Amazon Linux 2 container only proves userspace parsing compatibility.
 
 Until then: `REAL_OPENSSL_1_0_2_TLS_ENROLLMENT=NOT_TESTED`.
 
-## 2.1.3 Zero-Touch Short URL Real E2E
+## Historical — 2.1.3 Zero-Touch Short URL Real E2E
 
 Authoritative Short URL evidence for stable **2.1.3** lives in
 `docs/ZERO_TOUCH_SHORT_URL.md` (section "v2.1.3 Real E2E evidence").
@@ -145,10 +145,10 @@ EVIDENCE_REUSED_BY_CODE_EQUIVALENCE=YES
 ```
 
 Rocky Linux 8.10 is a **release-validated Short URL Real E2E platform** for
-2.1.3. That is distinct from Rocky 9 real VM / SELinux Enforcing, which remain
+2.1.3. That is distinct from Rocky 9 SELinux Enforcing, which remains
 `RECOMMENDED` / `NOT_TESTED`.
 
-## 2.1.0 real-environment acceptance (2026-08-29)
+## Historical — 2.1.0 real-environment acceptance (2026-08-29)
 
 Field-validated topology only. Do **not** treat this block as covering DNAT,
 SELinux Enforcing, ARM64, or OpenSSL 1.0.2.
@@ -201,7 +201,7 @@ field-validated):
 
 - Firewall DNAT / private FRP-server topology
 - SELinux Enforcing
-- ARM64 host
+- ARM64 Linux host
 - OpenSSL 1.0.2 host
 
 ```text

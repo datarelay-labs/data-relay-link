@@ -34,6 +34,8 @@ EOF
     "$marker" >"$tree/var/lib/frp-auto-deploy/registry.json"
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/frp-auto-deploy/access-control.json"
+  printf '{"schema_version":1,"profiles":{}}\n' \
+    >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
   printf 'nonce-%s\n' "$marker" >"$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
   printf 'ca-key-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.key"
   printf 'ca-cert-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.crt"

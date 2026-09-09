@@ -155,7 +155,19 @@ cat >"$SERVER/var/lib/frp-auto-deploy/registry.json" <<EOF
       "hostname": "client-a",
       "token": "$SECRET_TOKEN",
       "services": {
-        "ssh": {"enabled": true, "local_port": 22, "remote_port": 60022, "type": "tcp"}
+        "ssh": {
+          "enabled": true,
+          "local_ip": "127.0.0.1",
+          "local_port": 22,
+          "remote_port": 60022,
+          "type": "tcp",
+          "health_check": {
+            "type": "tcp",
+            "timeout_seconds": 3,
+            "interval_seconds": 10,
+            "max_failed": 1
+          }
+        }
       }
     }
   },
@@ -269,14 +281,30 @@ mkdir -p \
 write_version "$CLIENT"
 cat >"$CLIENT/etc/frp/client-state.json" <<EOF
 {
+  "machine_id": "client-aabbccddee",
   "client_id": "client-aabb",
   "label": "edge",
   "hostname": "edge-1",
   "allocator_url": "https://203.0.113.10/enroll",
+  "frp_server": "203.0.113.10",
+  "frp_server_port": 7000,
+  "frp_transport": "tcp",
   "token": "$SECRET_TOKEN",
   "mgmt_mac_key": "client-mac-should-not-leak",
   "services": {
-    "ssh": {"enabled": true, "local_port": 22, "type": "tcp"}
+    "ssh": {
+      "enabled": true,
+      "local_ip": "127.0.0.1",
+      "local_port": 22,
+      "remote_port": 60022,
+      "type": "tcp",
+      "health_check": {
+        "type": "tcp",
+        "timeout_seconds": 3,
+        "interval_seconds": 10,
+        "max_failed": 1
+      }
+    }
   }
 }
 EOF
@@ -305,6 +333,30 @@ FRP_DEPLOY_TEST_ROOT="$CLIENT" python3 "$LIB" --output "$ARCHIVE_CLIENT" \
 tar -tzf "$ARCHIVE_CLIENT" >/dev/null || fail "client archive not readable"
 assert_member "$ARCHIVE_CLIENT" "client-summary.json"
 assert_member "$ARCHIVE_CLIENT" "meta.json"
+assert_member "$ARCHIVE_CLIENT" "target-health/from-state.json"
+# Client summary must use real state keys and include services/health.
+python3 - "$ARCHIVE_CLIENT" <<'PY' || fail "client-summary keys/services/health"
+import json, subprocess, sys
+archive = sys.argv[1]
+raw = subprocess.check_output(['tar', '-xOzf', archive, 'client-summary.json'], text=True)
+summary = json.loads(raw)
+assert summary.get('machine_id') == 'client-aabbccddee', summary
+assert summary.get('frp_server') == '203.0.113.10', summary
+assert summary.get('frp_server_port') == 7000, summary
+assert summary.get('frp_transport') == 'tcp', summary
+assert 'server_addr' not in summary, summary
+assert 'transport' not in summary, summary
+svc = (summary.get('services') or {}).get('ssh') or {}
+assert svc.get('remote_port') == 60022, svc
+assert svc.get('target') == '127.0.0.1:22', svc
+assert isinstance(svc.get('health_check'), dict), svc
+assert svc['health_check'].get('type') == 'tcp', svc
+th = json.loads(subprocess.check_output(
+    ['tar', '-xOzf', archive, 'target-health/from-state.json'], text=True
+))
+assert 'ssh' in (th.get('services') or {}), th
+print('ok')
+PY
 assert_absent_in_archive "$ARCHIVE_CLIENT" "$SECRET_TOKEN" "client-token"
 assert_absent_in_archive "$ARCHIVE_CLIENT" "fakeprivatekeymaterial" "client-private-key-body"
 PEM_HDR="$(python3 -c 'print("BEGIN "+"RSA PRIVATE KEY")')"
@@ -320,6 +372,7 @@ assert_unchanged "$WORKDIR/client.before" "$WORKDIR/client.after" "client-fixtur
 pass "CLIENT_BUNDLE_BUILDS"
 pass "CLIENT_SECRETS_ABSENT"
 pass "CLIENT_READ_ONLY"
+pass "CLIENT_STATE_KEYS_AND_HEALTH"
 
 # Default output naming (UTC Z)
 DEFAULT_DIR="$SERVER/var/lib/frp-auto-deploy/support-bundles"
@@ -353,17 +406,99 @@ print('ok')
 PY
 pass "FRPCTL_GRAMMAR"
 
-# Optional target-health: absent on this fixture -> skipped section, not included as content
-if tar -tzf "$ARCHIVE_SERVER" | grep -E '^target-health/' >/dev/null; then
-  fail "target-health content should be absent when feature is not installed"
+# Target health: built from registry/client health_check state (not legacy helper files).
+assert_member "$ARCHIVE_SERVER" "target-health/from-state.json"
+tar -xOzf "$ARCHIVE_SERVER" target-health/from-state.json | grep -q 'health_check' \
+  || fail "server target-health missing health_check"
+tar -xOzf "$ARCHIVE_SERVER" target-health/from-state.json | grep -q "$SECRET_TOKEN" \
+  && fail "token leaked in target-health"
+# Manifest must not claim legacy "not installed" when health_check exists in state.
+if tar -xOzf "$ARCHIVE_SERVER" manifest.json | grep -q 'target-health (not installed)'; then
+  fail "stale target-health not-installed skip when health_check exists"
 fi
-tar -xOzf "$ARCHIVE_SERVER" manifest.json | grep -q 'target-health (not installed)' \
-  || fail "expected target-health skip note in manifest"
-pass "TARGET_HEALTH_OPTIONAL"
+pass "TARGET_HEALTH_FROM_STATE"
 
-# Command surface for Windows (existence only)
+# Command surface for Windows (existence + path helpers + real state keys)
 grep -q "support-bundle" "$ROOT/windows/tools/FrpClient.ps1" \
   || fail "windows FrpClient missing support-bundle"
+grep -q "Get-FrpAllocatorCaPath" "$ROOT/windows/tools/FrpClient.ps1" \
+  || fail "windows support-bundle missing Get-FrpAllocatorCaPath"
+grep -q "Get-FrpIdentityPubPath" "$ROOT/windows/tools/FrpClient.ps1" \
+  || fail "windows support-bundle missing Get-FrpIdentityPubPath"
+grep -q "frp_transport" "$ROOT/windows/tools/FrpClient.ps1" \
+  || fail "windows support-bundle missing frp_transport"
+grep -q "health_check" "$ROOT/windows/tools/FrpClient.ps1" \
+  || fail "windows support-bundle missing health_check"
+grep -q "frpc.toml.sanitized" "$ROOT/windows/tools/FrpClient.ps1" \
+  || fail "windows support-bundle missing sanitized toml"
+grep -qE 'client-identity\.key\.dpapi|DPAPI' "$ROOT/windows/tools/FrpClient.ps1" \
+  || fail "windows support-bundle should document DPAPI omission"
 pass "WINDOWS_COMMAND_SURFACE"
+
+# macOS path mapping: BundleBuilder must reuse doctor macos_map_path (not Linux /etc/frp under root).
+export FRP_TEST_UNAME_S=Darwin
+export FRP_MACOS_STATE_ROOT="$WORKDIR/macos-state"
+export FRP_MACOS_PREFIX="$WORKDIR/macos-prefix"
+MACOS="$WORKDIR/macos-root"
+# Files live at test-root + mapped absolute path (same pattern as test-macos-path-integration).
+mkdir -p \
+  "$MACOS$FRP_MACOS_STATE_ROOT/bin" \
+  "$MACOS/etc/frp"
+cat >"$MACOS$FRP_MACOS_STATE_ROOT/version" <<EOF
+PROJECT_VERSION=${PROJECT_VERSION}
+FRP_VERSION=${FRP_VERSION}
+RELEASE_CHANNEL=dev
+SOURCE_REF=test
+EOF
+cat >"$MACOS$FRP_MACOS_STATE_ROOT/client-state.json" <<EOF
+{
+  "machine_id": "mac-aabb",
+  "frp_server": "203.0.113.10",
+  "frp_server_port": 7000,
+  "frp_transport": "wss",
+  "services": {
+    "ssh": {
+      "enabled": true,
+      "local_ip": "127.0.0.1",
+      "local_port": 22,
+      "remote_port": 60022,
+      "type": "tcp",
+      "health_check": {"type": "tcp", "timeout_seconds": 3, "interval_seconds": 10, "max_failed": 1}
+    }
+  }
+}
+EOF
+# Bait: Linux-style path must NOT be read on Darwin.
+cat >"$MACOS/etc/frp/client-state.json" <<EOF
+{
+  "machine_id": "linux-bait-should-not-be-used",
+  "frp_server": "198.51.100.1",
+  "token": "$SECRET_TOKEN"
+}
+EOF
+: >"$MACOS$FRP_MACOS_STATE_ROOT/bin/frpc"
+OUT_MACOS="$WORKDIR/out-macos"
+mkdir -p "$OUT_MACOS"
+ARCHIVE_MACOS="$OUT_MACOS/macos-bundle.tar.gz"
+FRP_DEPLOY_TEST_ROOT="$MACOS" python3 "$LIB" --output "$ARCHIVE_MACOS" \
+  >"$WORKDIR/macos.out" 2>"$WORKDIR/macos.err" || {
+  cat "$WORKDIR/macos.out" "$WORKDIR/macos.err" >&2
+  fail "macos support-bundle failed"
+}
+python3 - "$ARCHIVE_MACOS" <<'PY' || fail "macos path mapping / summary"
+import json, subprocess, sys
+archive = sys.argv[1]
+raw = subprocess.check_output(['tar', '-xOzf', archive, 'client-summary.json'], text=True)
+summary = json.loads(raw)
+assert summary.get('machine_id') == 'mac-aabb', summary
+assert summary.get('frp_server') == '203.0.113.10', summary
+assert summary.get('frp_transport') == 'wss', summary
+assert 'linux-bait' not in json.dumps(summary), summary
+print('ok')
+PY
+assert_absent_in_archive "$ARCHIVE_MACOS" "$SECRET_TOKEN" "macos-linux-bait-token"
+assert_absent_in_archive "$ARCHIVE_MACOS" "linux-bait-should-not-be-used" "macos-linux-bait-id"
+pass "MACOS_PATH_MAPPING"
+unset FRP_TEST_UNAME_S FRP_MACOS_STATE_ROOT FRP_MACOS_PREFIX || true
 
 echo "ALL SUPPORT BUNDLE TESTS PASSED"

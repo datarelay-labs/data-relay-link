@@ -717,8 +717,9 @@ def load_server_registry(root=None):
     path = Path(cfg['registry_file'])
     if root and not str(path).startswith(str(root)):
         path = Path(str(root) + str(path))
-    state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {
-        'schema_version': 2,
-        'clients': {},
-    }
+    if not path.exists():
+        raise FileNotFoundError(
+            'registry.json is missing (authoritative registry state required)'
+        )
+    state = json.loads(path.read_text(encoding='utf-8'))
     return cfg, path, state

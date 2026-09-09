@@ -18,3 +18,5 @@ if ! diff -u SHA256SUMS "$tmp"; then
   exit 1
 fi
 echo "SHA256SUMS=PASS"
+# Cross-check release-manifest artifact hashes against SHA256SUMS and file bytes.
+./scripts/verify-release-manifest-artifacts.sh
