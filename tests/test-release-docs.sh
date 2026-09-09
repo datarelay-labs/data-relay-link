@@ -10,7 +10,7 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 
 # shellcheck disable=SC1091
 . "$ROOT/VERSION"
-[[ "$PROJECT_VERSION" == "2.2.1" ]] || fail "VERSION project is $PROJECT_VERSION"
+[[ "$PROJECT_VERSION" == "2.3.0" ]] || fail "VERSION project is $PROJECT_VERSION"
 [[ "$FRP_VERSION" == "0.71.0" ]] || fail "VERSION FRP is $FRP_VERSION"
 pass "VERSION_FILE"
 

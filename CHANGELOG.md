@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+## 2.3.0 — 2026-09-09
+
+Feature-complete product release on pinned FRP **0.71.0**. Does not move or
+retag published **v2.2.1** or earlier tags. Feature Freeze remains active after
+this release.
+
+### Access Control Pack
+
+- Named reusable Access Lists (IPv4/IPv6 CIDR)
+- Service modes: `PUBLIC` (default) and `ALLOWLIST`
+- Optional temporary sources with absolute expiry (`expires_at` / TTL)
+- Fail-closed authorization when policy or registry is missing
+- Unmapped proxy deny for ALLOWLIST enforcement
+- Bounded connection ALLOW/DENY access log
+- `frpctl access ...` interactive menu and scriptable CLI
+- FRP 0.71.0 NewUserConn plugin enforcement (loopback-only)
+
+### Target Health Check
+
+- TCP and HTTP FRP health checks as a thin product wrapper
+- Distinct `CLIENT` / `TUNNEL` / `TARGET` status reporting
+
+### Support Bundle
+
+- Sanitized diagnostic archive for support/troubleshooting
+- Secrets and private keys are excluded from the bundle
+
+### Service Profiles
+
+- Reusable server-owned service creation templates
+- Profile edits do not live-inherit into already-created services
+- New services created after a profile edit reflect the updated template
+
+### Platform / lifecycle improvements
+
+- Windows Access Control `host_id` mapping alignment
+- Windows Real E2E improvements (including release cleanup after uninstall)
+- macOS Apple Silicon full Real E2E coverage
+- Service release / client sync E2E correctness
+- Canonical repository moved to `xdr-labs/frp-auto-deploy`
+
+### Compatibility and scope notes
+
+- Server remains **Linux only**; Windows and macOS are **client platforms**
+- Amazon Linux 2 is **portability/CI validated**, not current Real-host
+  qualification
+- Intended operating scale remains approximately **1–50 clients**
+- Already enrolled 2.2.x clients remain compatible during a server-first
+  upgrade window. Do not upgrade clients ahead of the server. FRP remains
+  **0.71.0**.
+
 ## 2.2.1 — 2026-09-08
 
 Maintenance / hardening release on pinned FRP **0.71.0**. Does not move or

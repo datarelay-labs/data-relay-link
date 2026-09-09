@@ -56,18 +56,18 @@ Implementation lives behind optional `bootstrap_hostname` (Option B); `zt1`
 fallback remains when unset. `public_hostname` stays the published-service
 access alias and is not the bootstrap TLS hostname.
 
-## Preparing the 2.2.1 immutable tag
+## Preparing the 2.3.0 immutable tag
 
 Do **not** tag a tree whose `PROJECT_VERSION` does not match the intended tag.
 `./scripts/validate-release-tag.sh` rejects that mismatch automatically.
-Do **not** move or retag published **v2.2.0**.
+Do **not** move or retag published **v2.2.1**, **v2.2.0**, or earlier tags.
 
-This tree prepares **2.2.1**. A dedicated release commit must, in order:
+This tree prepares **2.3.0**. A dedicated release commit must, in order:
 
-1. Set `PROJECT_VERSION=2.2.1` in `VERSION` and `lib/frp-common.sh` default
-2. Set `release-manifest.json` `channel=stable` and `git_ref=v2.2.1`
+1. Set `PROJECT_VERSION=2.3.0` in `VERSION` and `lib/frp-common.sh` default
+2. Set `release-manifest.json` `channel=stable` and `git_ref=v2.3.0`
 3. Rebuild bundles and regenerate `SHA256SUMS`
 4. Run all automated gates in this checklist
-5. Only then create the immutable `v2.2.1` tag (operator step; not automated here)
+5. Only then create the immutable `v2.3.0` tag (operator step; not automated here)
 
-Do not move frozen tags such as `v2.2.0`, `v2.1.0`, `v2.1.1`, or `v2.1.2` after publication.
+Do not move frozen tags such as `v2.2.1`, `v2.2.0`, `v2.1.0`, `v2.1.1`, or `v2.1.2` after publication.

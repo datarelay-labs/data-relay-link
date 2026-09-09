@@ -10,7 +10,7 @@ FRP Auto Deploy helps you securely reach servers and services behind NAT or fire
 - Immutable client identity
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
-- Named Access Lists / temporary TTL / connection access log (main feature; not yet in published stable)
+- Named Access Lists / temporary TTL / connection access log
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
 - One primary operator interface: `sudo frpctl`
@@ -23,21 +23,20 @@ Documentation: **https://frp.xdr.ooo**
 
 | Item | Current |
 | --- | --- |
-| FRP Auto Deploy | **v2.2.1** |
+| FRP Auto Deploy | **v2.3.0** |
 | Pinned upstream FRP | **v0.71.0** |
-| Stable install source | immutable `v2.2.1` tag |
-| Qualified candidate | `2140be5b6342c3651c16a458f8ea1bc9b577d992` |
-| Release commit | `19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f` |
-| Release qualification | **Double Full Real E2E PASS / PASS** on the same exact candidate HEAD |
-| Candidate/release tree | **tree-identical** |
+| Stable install source | immutable `v2.3.0` tag |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
 
-Current project version: **2.2.1**
+Current project version: **2.3.0**
 Current pinned FRP version: **v0.71.0**
 
-`v2.2.0` remains an immutable historical release. `v2.2.1` is the **current stable release** and keeps FRP pinned at `0.71.0`. Stable field installs use the immutable `v2.2.1` tag. Following mutable `main` is explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
+`v2.2.1` and earlier tags remain immutable historical releases. `v2.3.0` is the
+**current stable release** and keeps FRP pinned at `0.71.0`. Stable field
+installs use the immutable `v2.3.0` tag. Following mutable `main` is explicit
+opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
 
 On development builds, use release channel, source ref, and verified bundle SHA256 to identify the exact build.
 
@@ -82,11 +81,11 @@ The canonical source is now [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md). 
 
 ---
 
-## Supported client platforms — v2.2.1
+## Supported client platforms — v2.3.0
 
 Real-host validation and container/CI portability are deliberately reported separately.
 
-| Platform | v2.2.1 validation claim |
+| Platform | v2.3.0 validation claim |
 | --- | --- |
 | **Ubuntu 24 physical host** | **Real E2E validated** |
 | **Rocky Linux 8.10** | **Real E2E validated** |
@@ -103,7 +102,7 @@ The FRP Auto Deploy **server remains Linux-based**. macOS and Windows are client
 
 ### What the final Real E2E covered
 
-Across applicable platforms, the v2.2.1 release path validated the actual product lifecycle, including:
+Across applicable platforms, the v2.3.0 release path validated the actual product lifecycle, including:
 
 - install and Zero-Touch enrollment
 - persistent `CLIENT ID`
@@ -118,6 +117,10 @@ Across applicable platforms, the v2.2.1 release path validated the actual produc
 - backup/restore
 - Manual Group MVP
 - Public Hostname behavior
+- Access Control Pack
+- Target Health Check
+- Support Bundle
+- Service Profiles
 
 Amazon Linux 2 and PowerShell 7 remain intentionally narrower claims as shown in the table above.
 
@@ -186,7 +189,7 @@ For normal field installation, use the immutable stable tag:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.2.1/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.3.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
@@ -440,7 +443,7 @@ IP fallback is preserved. FRP Auto Deploy does not automatically manage DNS-prov
 
 ## Manual Group MVP
 
-v2.2.1 includes the lightweight Group model intended for a few to a few dozen clients:
+v2.3.0 includes the lightweight Group model intended for a few to a few dozen clients:
 
 - Manual Group CRUD
 - immutable Group ID
@@ -455,7 +458,7 @@ Dynamic Group, nested hierarchy, broad destructive fleet operations, canary roll
 
 ## Access Control Pack
 
-On current feature work (not yet published in immutable `v2.2.1`):
+Included in published stable `v2.3.0`:
 
 - Named reusable Access Lists (IPv4/IPv6 CIDR)
 - Service modes: `PUBLIC` (default) and `ALLOWLIST`
@@ -542,4 +545,4 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 ## Product definition in one sentence
 
-> FRP Auto Deploy v2.2.1 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.
+> FRP Auto Deploy v2.3.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.

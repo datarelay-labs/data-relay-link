@@ -8,7 +8,7 @@ fi
 FRP_COMMON_LOADED=1
 
 # Defaults match VERSION. A sibling VERSION file overrides project/FRP versions.
-PROJECT_VERSION="${PROJECT_VERSION:-2.2.1}"
+PROJECT_VERSION="${PROJECT_VERSION:-2.3.0}"
 FRP_VERSION="${FRP_VERSION:-0.71.0}"
 # FRP 0.71.0 pkg/util/net/websocket.go FrpWebsocketPath. Not configurable.
 FRP_WEBSOCKET_PATH="${FRP_WEBSOCKET_PATH:-/~!frp}"
