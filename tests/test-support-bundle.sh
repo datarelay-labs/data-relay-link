@@ -397,11 +397,19 @@ assert r.get('status') == 'ok' and r.get('action') == 'support_bundle', r
 assert '--output' in (r.get('passthrough') or [])
 r2 = g.match(g.tokenize('support-bundle'), 'client')
 assert r2.get('status') == 'ok' and r2.get('action') == 'support_bundle', r2
+# Client-only hosts expose maintenance under `system` (legacy root alias still matches).
+r3 = g.match(g.tokenize('system support-bundle --output /tmp/y.tar.gz'), 'client')
+assert r3.get('status') == 'ok' and r3.get('action') == 'support_bundle', r3
+assert '--output' in (r3.get('passthrough') or [])
 for role in ('server', 'client', 'both'):
     help_txt = g.help_text([], role)
     assert 'support-bundle' in help_txt, (role, help_txt)
     concise = g._concise_root(role)
-    assert 'support-bundle' in concise, (role, concise)
+    if role == 'client':
+        assert 'system' in concise, (role, concise)
+        assert 'support-bundle' not in concise, (role, concise)
+    else:
+        assert 'support-bundle' in concise, (role, concise)
 print('ok')
 PY
 pass "FRPCTL_GRAMMAR"
