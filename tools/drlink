@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export FRP_CTL_CMD_NAME="drlink"
+export FRP_CTL_PROMPT="drlink> "
+exec "${_HERE}/frpctl" "$@"

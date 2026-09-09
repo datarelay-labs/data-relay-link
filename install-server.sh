@@ -63,7 +63,8 @@ for f in \
   "$BASE_DIR/tools/frp-support-bundle" \
   "$BASE_DIR/tools/frp-update" \
   "$BASE_DIR/tools/frp-upstream" \
-  "$BASE_DIR/tools/frpctl"; do
+  "$BASE_DIR/tools/frpctl" \
+  "$BASE_DIR/tools/drlink"; do
   [[ -f "$f" ]] || { echo "ERROR: missing project file: $f" >&2; exit 1; }
 done
 
@@ -158,7 +159,7 @@ frp_pki_dir() {
 }
 
 frp_server_install_manifest_files() {
-  local lib_dir="$1" sbin_dir="$2" rel mode src
+  local lib_dir="$1" sbin_dir="$2" bin_dir="$3" rel mode src
   while IFS=: read -r rel mode src; do
     case "$rel" in
       usr/local/lib/frp-auto-deploy/*)
@@ -166,6 +167,9 @@ frp_server_install_manifest_files() {
         ;;
       usr/local/sbin/*)
         install -m "$mode" "$BASE_DIR/$src" "${sbin_dir}/$(basename "$rel")"
+        ;;
+      usr/local/bin/*)
+        install -m "$mode" "$BASE_DIR/$src" "${bin_dir}/$(basename "$rel")"
         ;;
     esac
   done < <(frp_server_upgrade_destinations "$BASE_DIR")
@@ -838,7 +842,7 @@ resolve_server_settings() {
   local detected_internal="${DETECTED_INTERNAL_IP:-}"
 
   echo
-  echo "FRP Auto Deploy Server Setup"
+  echo "Data Relay Link Server Setup"
   echo "============================"
   echo
 
@@ -873,7 +877,7 @@ resolve_server_settings() {
       echo
       echo "Press Enter to use the public IP only."
       echo
-      echo "FRP Auto Deploy does not create or manage DNS records."
+      echo "Data Relay Link does not create or manage DNS records."
       prompt "Public DNS hostname [optional]" "" FRP_PUBLIC_HOSTNAME
     fi
   fi
@@ -1839,7 +1843,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_frontend sbin_dir
+  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_frontend sbin_dir bin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
@@ -1859,6 +1863,7 @@ frp_server_main() {
   unit_egress="$(frp_server_fs /etc/systemd/system/frp-egress-gateway.service)"
   unit_frontend="$(frp_server_fs /etc/systemd/system/frp-frontend.service)"
   sbin_dir="$(frp_server_fs /usr/local/sbin)"
+  bin_dir="$(frp_server_fs /usr/local/bin)"
 
   local existing_install=0
   if [[ -f "$(frp_server_config_path)" || -s "$token_file" || -f "$registry_file" ]]; then
@@ -1915,7 +1920,7 @@ frp_server_main() {
     return 1
   fi
 
-  mkdir -p "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" \
+  mkdir -p "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" "$bin_dir" \
     "$(dirname "$unit_frps")"
   frp_server_ensure_sandbox_dirs
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir"
@@ -2077,7 +2082,7 @@ if changed:
 PY
   fi
 
-  frp_server_install_manifest_files "$lib_dir" "$sbin_dir"
+  frp_server_install_manifest_files "$lib_dir" "$sbin_dir" "$bin_dir"
   install -m 0644 "$BASE_DIR/server/frps.service" "$unit_frps"
   frp_write_compatible_systemd_unit \
     "$BASE_DIR/server/frp-port-allocator.service" \
@@ -2261,7 +2266,7 @@ PY
   cat <<EOF2
 
 ============================================================
- FRP Auto Deploy server installation complete
+ Data Relay Link server installation complete
 ============================================================
 
 Project version   : ${PROJECT_VERSION}
@@ -2302,20 +2307,20 @@ EOF2
   frp_print_nat_summary
   cat <<EOF2
 Create a client enrollment:
-  sudo frpctl create-client
+  sudo drlink create-client
   sudo frp-create-client
 
 Everyday command (remember this one):
-  sudo frpctl
+  sudo drlink
   Then type help inside the CLI.
 
 Check schema v2 deployment readiness:
-  sudo frpctl status
+  sudo drlink status
   sudo frp-server-status
   sudo frp-server-status --check
 
 Update FRP to the tested version:
-  sudo frpctl update
+  sudo drlink update
   sudo frp-update
 
 List clients:

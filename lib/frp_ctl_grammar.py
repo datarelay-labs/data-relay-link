@@ -922,7 +922,7 @@ def _concise_root(role):
         ("help", "Detailed help"),
         ("menu", "Guided menu"),
         ("history", "Session command history"),
-        ("exit", "Leave frpctl"),
+        ("exit", "Leave drlink"),
     ]
     if not server:
         hide = {"create", "revoke", "purge", "release", "restore", "access"}
@@ -1850,7 +1850,7 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "help": "Detailed help",
         "menu": "Guided menu",
         "history": "Session command history",
-        "exit": "Leave frpctl",
+        "exit": "Leave drlink",
         "clear": "Clear the screen",
         "status": "Host status shortcut",
         "version": "Installed versions shortcut",
@@ -1859,8 +1859,8 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "disable": "Disable a local service",
         "apply": "Apply pending local changes",
         "discard": "Discard pending local changes",
-        "quit": "Leave frpctl",
-        "q": "Leave frpctl",
+        "quit": "Leave drlink",
+        "q": "Leave drlink",
     }
     if not server:
         verb_map.pop("access", None)

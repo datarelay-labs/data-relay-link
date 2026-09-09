@@ -167,6 +167,7 @@ frp_u_stop_owned_frpc
 frp_u_rm_file "$(frp_u_path /etc/systemd/system/frpc.service)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
+frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 

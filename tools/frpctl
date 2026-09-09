@@ -5,6 +5,10 @@
 set -euo pipefail
 
 _FRPCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRP_CTL_CMD_NAME="${FRP_CTL_CMD_NAME:-$(basename "${BASH_SOURCE[0]}")}"
+FRP_CTL_PRODUCT_NAME="${FRP_CTL_PRODUCT_NAME:-Data Relay Link}"
+FRP_CTL_PRODUCT_FAMILY="${FRP_CTL_PRODUCT_FAMILY:-Data Relay Link Management}"
+FRP_CTL_PROMPT="${FRP_CTL_PROMPT:-${FRP_CTL_CMD_NAME}> }"
 _FRP_CTL_SESSION_HIST=()
 _FRP_CTL_RC=0
 if [[ -f "${_FRPCTL_DIR}/../lib/frp-doctor-common.sh" ]]; then
@@ -184,7 +188,7 @@ frpctl_require_install() {
   if frpctl_is_client || frpctl_is_server; then
     return 0
   fi
-  echo "ERROR: no FRP Auto Deploy installation was found on this host." >&2
+  echo "ERROR: no ${FRP_CTL_PRODUCT_NAME} installation was found on this host." >&2
   echo "Install the server or client bootstrap first." >&2
   return 1
 }
@@ -209,7 +213,7 @@ frpctl_find_cmd() {
     fi
   done
   echo "ERROR: command not found: ${name}" >&2
-  echo "This host does not have that frp-auto-deploy command installed." >&2
+  echo "This host does not have that ${FRP_CTL_PRODUCT_FAMILY} command installed." >&2
   return 1
 }
 
@@ -431,13 +435,13 @@ PY
 }
 
 frpctl_usage() {
-  cat <<'EOF'
-Usage: frpctl [command] [args]
+  cat <<EOF
+Usage: ${FRP_CTL_CMD_NAME} [command] [args]
 
-frpctl is the everyday frp-auto-deploy command. For normal operation,
+${FRP_CTL_CMD_NAME} is the everyday Data Relay Link command. For normal operation,
 this is the only command you need to remember:
 
-    sudo frpctl
+    sudo ${FRP_CTL_CMD_NAME}
 
 With no arguments and a TTY, that starts the persistent management CLI.
 Type '?' for context help, or 'help' for full syntax. Press Tab to complete
@@ -466,7 +470,7 @@ EOF
 }
 
 frpctl_header() {
-  echo "FRP Auto Deploy"
+  echo "${FRP_CTL_PRODUCT_NAME}"
   echo "==============="
   echo
   echo "Role            : $(frpctl_role_label)"
@@ -562,7 +566,7 @@ frpctl_try_read() {
       return 1
     fi
   else
-    echo "ERROR: no TTY for interactive menu; pass a command such as: frpctl status" >&2
+    echo "ERROR: no TTY for interactive menu; pass a command such as: ${FRP_CTL_CMD_NAME} status" >&2
     return 1
   fi
   printf '%s' "$value"
@@ -1015,7 +1019,7 @@ frpctl_manage_one_client() {
   local mid="$1" action sid label note tag
   while true; do
     echo
-    echo "FRP Auto Deploy — Client Management"
+    echo "${FRP_CTL_PRODUCT_NAME} — Client Management"
     echo "==================================="
     echo
     frpctl_run frp-client-info "$mid" || return 1
@@ -1095,7 +1099,7 @@ frpctl_manage_clients() {
   root="${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}"
   libdir="${_FRPCTL_DIR}/../lib"
   echo
-  echo "FRP Auto Deploy — Client Management"
+  echo "${FRP_CTL_PRODUCT_NAME} — Client Management"
   echo "==================================="
   echo
   python3 - "$cfg" "$root" "$libdir" <<'PY'
@@ -1364,7 +1368,7 @@ Navigation
   Tab                   Show/complete next tokens (first press)
   history               This session only
   clear                 Clear the screen
-  exit, quit            Exit frpctl
+  exit, quit            Exit ${FRP_CTL_CMD_NAME}
 EOF
 }
 
@@ -1379,7 +1383,7 @@ frpctl_repl_help() {
     return 0
   fi
   if [[ "$client" == "1" && "$server" == "1" ]]; then
-    echo "FRP Auto Deploy — Commands"
+    echo "${FRP_CTL_PRODUCT_NAME} — Commands"
     echo "=========================="
     echo
     echo "This host has both an FRP client and an FRP server installed."
@@ -1392,11 +1396,11 @@ frpctl_repl_help() {
     echo "---------------"
     echo
   elif [[ "$client" == "1" ]]; then
-    echo "FRP Auto Deploy — Client Commands"
+    echo "${FRP_CTL_PRODUCT_NAME} — Client Commands"
     echo "================================="
     echo
   elif [[ "$server" == "1" ]]; then
-    echo "FRP Auto Deploy — Server Commands"
+    echo "${FRP_CTL_PRODUCT_NAME} — Server Commands"
     echo "================================="
     echo
   fi
@@ -1759,7 +1763,7 @@ frpctl_unknown_command() {
 
 frpctl_reject_shell() {
   echo "ERROR: arbitrary shell execution is not allowed." >&2
-  echo "frpctl is not a general-purpose shell. Type 'help' for commands." >&2
+  echo "${FRP_CTL_CMD_NAME} is not a general-purpose shell. Type 'help' for commands." >&2
   if [[ "${FRP_CTL_REPL:-}" == "1" ]]; then
     return 0
   fi
@@ -2240,7 +2244,7 @@ frpctl_dispatch() {
         if [[ "$cmd" == "client" ]]; then
           frpctl_usage_error "client <name>"
         else
-          frpctl_usage_error "frpctl client-info <client>"
+          frpctl_usage_error "${FRP_CTL_CMD_NAME} client-info <client>"
         fi
         return $?
       fi
@@ -2252,7 +2256,7 @@ frpctl_dispatch() {
         if [[ "${FRP_CTL_REPL:-}" == "1" ]]; then
           frpctl_usage_error "client-set <client> [--label NAME] [--note TEXT]"
         else
-          frpctl_usage_error "frpctl client-set <client> [--label NAME] [--note TEXT]"
+          frpctl_usage_error "${FRP_CTL_CMD_NAME} client-set <client> [--label NAME] [--note TEXT]"
         fi
         return $?
       fi
@@ -2264,7 +2268,7 @@ frpctl_dispatch() {
         if [[ "$cmd" == "revoke" ]]; then
           frpctl_usage_error "revoke <name>"
         else
-          frpctl_usage_error "frpctl revoke-client <client>"
+          frpctl_usage_error "${FRP_CTL_CMD_NAME} revoke-client <client>"
         fi
         return $?
       fi
@@ -2276,7 +2280,7 @@ frpctl_dispatch() {
         if [[ "${FRP_CTL_REPL:-}" == "1" ]]; then
           frpctl_usage_error "release-service <client> <service-id>"
         else
-          frpctl_usage_error "frpctl release-service <client> <service-id>"
+          frpctl_usage_error "${FRP_CTL_CMD_NAME} release-service <client> <service-id>"
         fi
         return $?
       fi
@@ -2288,7 +2292,7 @@ frpctl_dispatch() {
         if [[ "${FRP_CTL_REPL:-}" == "1" ]]; then
           frpctl_usage_error "release-client <client>"
         else
-          frpctl_usage_error "frpctl release-client <client>"
+          frpctl_usage_error "${FRP_CTL_CMD_NAME} release-client <client>"
         fi
         return $?
       fi
@@ -2353,8 +2357,8 @@ frpctl_repl_sigint() {
 }
 
 frpctl_repl_banner() {
-  echo "FRP Auto Deploy CLI"
-  echo "==================="
+  echo "${FRP_CTL_PRODUCT_NAME}"
+  echo "================="
   echo
   echo "Role            : $(frpctl_role_label)"
   echo "Project version : $(frpctl_project_version)"
@@ -2375,7 +2379,7 @@ frpctl_repl_read_line() {
   _FRP_CTL_LINE=""
   frpctl_input_init
   if [[ -n "${FRP_CTL_TEST_INPUT:-}" ]]; then
-    printf 'frpctl> '
+    printf '%s' "$FRP_CTL_PROMPT"
     if ! IFS= read -r _FRP_CTL_LINE <&9; then
       return 1
     fi
@@ -2383,17 +2387,17 @@ frpctl_repl_read_line() {
     return 0
   fi
   if [[ ! -t 0 ]]; then
-    echo "ERROR: interactive frpctl requires a TTY." >&2
-    echo "Use: frpctl <command>" >&2
+    echo "ERROR: interactive ${FRP_CTL_CMD_NAME} requires a TTY." >&2
+    echo "Use: ${FRP_CTL_CMD_NAME} <command>" >&2
     return 1
   fi
   if [[ "${_FRP_CTL_BOUND_TAB:-}" == "1" ]]; then
-    if ! IFS= read -e -r -p "frpctl> " _FRP_CTL_LINE; then
+    if ! IFS= read -e -r -p "$FRP_CTL_PROMPT" _FRP_CTL_LINE; then
       return 1
     fi
   else
     # No readline: Tab is a literal character, not filesystem completion.
-    printf 'frpctl> '
+    printf '%s' "$FRP_CTL_PROMPT"
     if ! IFS= read -r _FRP_CTL_LINE; then
       return 1
     fi
@@ -2405,8 +2409,8 @@ frpctl_repl() {
   local rc
   frpctl_require_install || return 1
   if [[ -z "${FRP_CTL_TEST_INPUT:-}" && ! -t 0 ]]; then
-    echo "ERROR: interactive frpctl requires a TTY." >&2
-    echo "Use: frpctl <command>" >&2
+    echo "ERROR: interactive ${FRP_CTL_CMD_NAME} requires a TTY." >&2
+    echo "Use: ${FRP_CTL_CMD_NAME} <command>" >&2
     return 1
   fi
 

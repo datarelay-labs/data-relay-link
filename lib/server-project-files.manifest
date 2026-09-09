@@ -76,6 +76,7 @@ project usr/local/sbin/frp-support-bundle 0755 tools/frp-support-bundle python
 project usr/local/sbin/frp-update 0755 tools/frp-update bash
 project usr/local/sbin/frp-upstream 0755 tools/frp-upstream bash
 project usr/local/sbin/frpctl 0755 tools/frpctl bash
+project usr/local/bin/drlink 0755 tools/drlink bash
 generated etc/frp-auto-deploy/config.json - - none
 generated etc/frp/frps.toml - - none
 generated etc/frp-auto-deploy/frontend.conf - - none

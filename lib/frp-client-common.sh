@@ -4181,6 +4181,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
+    "usr/local/bin/drlink:0755:tools/drlink" \
     "usr/local/bin/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
@@ -4272,6 +4273,7 @@ frp_client_upgrade_validate_staged() {
     }
   done < <(frp_client_upgrade_destinations)
   bash -n "${staged}/usr/local/bin/frp-client" || return 1
+  bash -n "${staged}/usr/local/bin/drlink" || return 1
   bash -n "${staged}/usr/local/bin/frpctl" || return 1
   bash -n "${staged}/usr/local/bin/frp-update" || return 1
   bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-client-common.sh" || return 1
@@ -4288,6 +4290,10 @@ frp_client_upgrade_validate_staged() {
     "${staged}/usr/local/lib/frp-auto-deploy/"*.pyc 2>/dev/null || true
   [[ -x "${staged}/usr/local/bin/frp-client" ]] || {
     echo "ERROR: staged frp-client is not executable" >&2
+    return 1
+  }
+  [[ -x "${staged}/usr/local/bin/drlink" ]] || {
+    echo "ERROR: staged drlink is not executable" >&2
     return 1
   }
   [[ -x "${staged}/usr/local/bin/frpctl" ]] || {
@@ -4506,6 +4512,7 @@ frp_client_upgrade_verify() {
     }
   done < <(frp_client_upgrade_destinations)
   [[ -x "$(frp_client_path /usr/local/bin/frp-client)" ]] || return 1
+  [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]] || return 1
   [[ -x "$(frp_client_path /usr/local/bin/frpctl)" ]] || return 1
   frp_load_client_state "$(frp_client_state_path)" || return 1
   if [[ -f "$(frp_client_toml_path)" ]]; then

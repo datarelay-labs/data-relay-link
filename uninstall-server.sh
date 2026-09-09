@@ -397,6 +397,7 @@ else
     frp_u_rm_file "$(frp_u_path /usr/local/sbin/${tool})"
   done
   frp_u_rm_file "$(frp_u_path /usr/local/sbin/frpctl)"
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
   libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
     for f in frp-port-allocator.py frp-access-plugin.py frp-egress-gateway.py frp_access_control.py frp_egress_control.py frp_pki.py frp_frontend.py frp_client_registry.py \
@@ -418,6 +419,7 @@ else
 fi
 # Dual-role: keep /usr/local/bin/frpctl (client). Manifest only lists sbin.
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frps)"
+frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
 frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/frontend.conf)"
 
 libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"

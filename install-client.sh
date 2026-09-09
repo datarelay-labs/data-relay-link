@@ -301,7 +301,7 @@ for item in services:
     print()
 print('For normal operation, this is the only command you need to remember:')
 print()
-print('  sudo frpctl')
+print('  sudo drlink')
 print()
 print('Then type help inside the CLI.')
 print()
@@ -309,9 +309,9 @@ print('Useful commands')
 print('---------------')
 print()
 print('Everyday CLI / status / update:')
-print('  sudo frpctl')
-print('  sudo frpctl status')
-print('  sudo frpctl update')
+print('  sudo drlink')
+print('  sudo drlink status')
+print('  sudo drlink update')
 print()
 print('Advanced direct commands (still supported):')
 print('  sudo frp-client')
@@ -340,7 +340,7 @@ frp_client_install_service_definition() {
   else
     cat >/etc/systemd/system/frpc.service <<'EOF2'
 [Unit]
-Description=FRP Client
+Description=Data Relay Link Client
 After=network-online.target
 Wants=network-online.target
 
@@ -373,7 +373,7 @@ frp_client_service_start() {
 frp_client_existing_install_message() {
   if frp_zero_touch_active; then
     echo "This client is already installed." >&2
-    echo "Use sudo frpctl update or sudo frp-client manage." >&2
+    echo "Use sudo drlink update or sudo frp-client manage." >&2
     return 0
   fi
   echo "ERROR: this host already has an FRP client installed." >&2
@@ -382,7 +382,7 @@ frp_client_existing_install_message() {
   echo "require an Enrollment Code." >&2
   echo >&2
   echo "Upgrade in place with:" >&2
-  echo "  sudo frpctl update" >&2
+  echo "  sudo drlink update" >&2
   echo >&2
   echo "or, from the bootstrap bundle:" >&2
   echo "  curl -fsSL https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/v${PROJECT_VERSION}/dist/bootstrap-client.sh | sudo bash -s -- --upgrade" >&2
@@ -438,7 +438,7 @@ frp_client_main() {
   fi
   if frp_client_has_partial_install && [[ "$FRP_RESUME_PENDING" != "1" ]]; then
     echo "ERROR: a partial FRP client installation was found." >&2
-    echo "Repair it with: sudo frpctl update" >&2
+    echo "Repair it with: sudo drlink update" >&2
     echo "or uninstall locally and enroll again." >&2
     echo "Do not re-run first-install bootstrap on a partial client." >&2
     frp_emit_failure_class RECOVERY_REQUIRED
@@ -739,7 +739,7 @@ Usage: install-client.sh [--upgrade] [--source DIR] [--check]
   --source    Source tree for --upgrade (default: this installer tree)
   --check     With --upgrade, report versions without changing files
 
-An already-installed client is not re-enrolled. Use --upgrade / frpctl update
+An already-installed client is not re-enrolled. Use --upgrade / drlink update
 for software updates. An Enrollment Code is not required for a software update.
 EOF
 }

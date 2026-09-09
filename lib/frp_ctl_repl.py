@@ -61,7 +61,7 @@ class LineEditor:
         self.local_services = payload.get("local_services") or []
         self._matches = []
         self._last_display_key = None
-        self.prompt = "frpctl> "
+        self.prompt = os.environ.get("FRP_CTL_PROMPT") or "drlink> "
 
     def completer(self, text, state):
         if state == 0:
@@ -307,7 +307,7 @@ def main(argv=None):
         print("READLINE_OK")
         print("READLINE_BACKEND=%s" % readline_backend())
         return 0
-    frpctl_bin = os.environ.get("FRPCTL_BIN") or "frpctl"
+    frpctl_bin = os.environ.get("FRPCTL_BIN") or "drlink"
     if "--frpctl" in argv:
         idx = argv.index("--frpctl")
         if idx + 1 < len(argv):
