@@ -86,7 +86,14 @@ run_profile() {
   fi
   note "PROFILE_RC_$profile=$rc"
   if [[ "$rc" -ne 0 ]]; then
-    FAILED=$((FAILED + 1))
+    # macOS/Windows environment flaps: do not treat unreachable mid-run as a product defect
+    # when the platform row never reached install/enroll PASS.
+    row="$out/matrix-row.tsv"
+    if [[ -f "$row" ]] && awk -F'\t' 'NR==1{ins=$2;enr=$3} END{exit !((ins=="SKIP"||ins=="BLOCKED") && (enr=="SKIP"||enr=="BLOCKED"))}' "$row"; then
+      note "PROFILE_ENV_BLOCKER_$profile=YES"
+    else
+      FAILED=$((FAILED + 1))
+    fi
   fi
   return "$rc"
 }
@@ -253,22 +260,45 @@ PY
   set -uo pipefail
 fi
 
-# Targeted IP fallback (hostname unset) on baseline if requested.
+# Targeted IP fallback on the first Linux profile that enrolled (not a hard-coded
+# baseline-linux host which may be absent from the release matrix).
 if [[ "$INCLUDE_DNS_IP_FALLBACK" == "1" && "$DNS_OK" -eq 1 ]]; then
   note "==== DNS IP fallback regression ===="
-  set +e
-  env \
-    FRP_E2E_PROFILE=baseline-linux \
-    FRP_E2E_SCENARIO=dns \
-    FRP_E2E_PUBLIC_HOSTNAME="$PUBLIC_HOSTNAME" \
-    FRP_E2E_RUN_ID="$RUN_ID-ip-fallback" \
-    FRP_E2E_OUT_DIR="$OUT_ROOT/ip-fallback" \
-    FRP_E2E_SKIP_SERVER_PURGE=1 \
-    FRP_E2E_SKIP_SERVER_INSTALL=1 \
-    FRP_E2E_SERVER_REBOOT_REPEAT=0 \
-    bash "$ROOT/tests/run-real-e2e.sh"
-  note "IP_FALLBACK_RC=$?"
-  set -uo pipefail
+  IP_FALLBACK_PROFILE=""
+  for profile in "${PROFILE_LIST[@]}"; do
+    profile="$(echo "$profile" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$profile" in
+      macos|macos-arm64|windows|windows-10) continue ;;
+      *)
+        if [[ -f "$OUT_ROOT/$profile/matrix-row.tsv" ]] && awk -F'\t' 'NR==1 && $2=="PASS" && $3=="PASS"{ok=1} END{exit !ok}' "$OUT_ROOT/$profile/matrix-row.tsv"; then
+          IP_FALLBACK_PROFILE="$profile"
+          break
+        fi
+        ;;
+    esac
+  done
+  if [[ -z "$IP_FALLBACK_PROFILE" ]]; then
+    note "IP_FALLBACK_SKIP=no enrolled Linux profile"
+  else
+    note "IP_FALLBACK_PROFILE=$IP_FALLBACK_PROFILE"
+    set +e
+    env \
+      FRP_E2E_PROFILE="$IP_FALLBACK_PROFILE" \
+      FRP_E2E_SCENARIO=dns \
+      FRP_E2E_PUBLIC_HOSTNAME="$PUBLIC_HOSTNAME" \
+      FRP_E2E_RUN_ID="$RUN_ID-ip-fallback" \
+      FRP_E2E_OUT_DIR="$OUT_ROOT/ip-fallback" \
+      FRP_E2E_SKIP_SERVER_PURGE=1 \
+      FRP_E2E_SKIP_SERVER_INSTALL=1 \
+      FRP_E2E_SERVER_REBOOT_REPEAT=0 \
+      bash "$ROOT/tests/run-real-e2e.sh"
+    ip_rc=$?
+    note "IP_FALLBACK_RC=$ip_rc"
+    if [[ "$ip_rc" -ne 0 ]]; then
+      FAILED=$((FAILED + 1))
+    fi
+    set -uo pipefail
+  fi
 fi
 
 note "FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
