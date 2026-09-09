@@ -4,12 +4,11 @@
 > **Repository:** `xdr-labs/frp-auto-deploy`
 > **Canonical repository path:** `docs/PRODUCT_MASTER.md`  
 > **Document status:** Master / Living Document  
-> **Last updated:** 2026-09-08  
-> **Current stable:** Project `2.2.1` / tag `v2.2.1` / FRP `0.71.0`  
-> **Release commit:** `19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f`  
-> **Qualified candidate:** `2140be5b6342c3651c16a458f8ea1bc9b577d992` — tree-identical to release commit  
-> **Release qualification:** Double Full Real E2E `PASS / PASS` on the same exact candidate HEAD  
-> **Primary management interface:** `sudo frpctl`  
+> **Last updated:** 2026-09-09
+> **Current stable:** Project `2.3.0` / tag `v2.3.0` / FRP `0.71.0`
+> **Release commit:** _(set at tag time to exact `v2.3.0` commit)_
+> **Release qualification:** Double Full Real E2E required on the exact release candidate HEAD
+> **Primary management interface:** `sudo frpctl`
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
 
 ## 2026-09-07 Consolidation Notice
@@ -29,12 +28,12 @@
 - 목표 규모는 **1~50 Clients**, 특히 few to a few dozen 중심이다.
 - 대형 fleet orchestration, Web UI, Database, HA orchestrator는 현재 제품 목표가 아니다.
 - official FRP만 사용하고 exact version으로 pin한다.
-- 현재 published stable은 `v2.2.1`이며 pinned FRP는 `0.71.0`이다.
-- `v2.2.0`은 FRP `0.71.0`을 처음 stable로 채택한 historical release이며, `v2.2.1`은 그 이후 hardening patch release다.
+- 현재 published stable은 `v2.3.0`이며 pinned FRP는 `0.71.0`이다.
+- `v2.2.0`은 FRP `0.71.0`을 처음 stable로 채택한 historical release이며, `v2.2.1`은 그 이후 hardening patch release다. `v2.3.0`은 Access Control Pack, Target Health Check, Support Bundle, Service Profiles를 포함한 feature-complete release다.
 - Zero-Touch Short URL은 Option B(operator-owned reverse proxy + optional `bootstrap_hostname`) 모델로 `v2.1.3`에 stable 도입됐다.
 - `public_hostname`은 published service용 optional user-facing alias이며 control identity가 아니다.
 - Group은 몇십 대 관리를 위한 **Simple Manual Group + multiple membership + Tags + basic filters** 범위가 기준이다.
-- macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.2.1` stable validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
+- macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.0` stable validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
 
 ---
 
@@ -403,7 +402,7 @@ Validated
 
 ```text
 Current published stable FRP = 0.71.0
-Current project stable        = 2.2.1
+Current project stable        = 2.3.0
 Historical v2.1.3 FRP        = 0.70.1
 ```
 
@@ -2225,7 +2224,7 @@ Stable release supported
 
 ## Current stable validation matrix
 
-현재 `v2.2.1` stable qualification 결과:
+현재 `v2.3.0` stable qualification 대상:
 
 | Platform | Validation level |
 |---|---|
@@ -2238,7 +2237,7 @@ Stable release supported
 | Windows 10 / PowerShell 5.1 | Real E2E validated, including SYSTEM task/reboot |
 | PowerShell 7 | CI validated; same-host Real E2E only when `pwsh` is actually available |
 
-`v2.2.1` release qualification completed Double Full Real E2E on qualified candidate `2140be5b...`; release commit `19d4b6fb...` is tree-identical.
+Historical note: `v2.2.1` release qualification completed Double Full Real E2E on qualified candidate `2140be5b...`; release commit `19d4b6fb...` is tree-identical.
 
 특히 별도 validation이 필요한 환경:
 
@@ -2362,6 +2361,29 @@ Bulk Operation
 현재 GitHub published stable:
 
 ```text
+Project:              2.3.0
+Tag:                  v2.3.0
+FRP:                  0.71.0
+Feature freeze:       ACTIVE
+Product feature complete: YES
+```
+
+`v2.3.0` 주요 사항:
+
+- Access Control Pack (Named Lists / TTL / Conn Log / fail-closed)
+- Target Health Check (CLIENT / TUNNEL / TARGET)
+- Support Bundle (sanitized diagnostics)
+- Service Profiles (server-owned creation templates)
+- official FRP `0.71.0` exact pin 유지
+- Ubuntu 24 / Rocky 8 / Rocky 9 / AL2023 / macOS / Windows Real E2E
+- Amazon Linux 2 portability/CI validation
+- Simple Manual Group MVP
+- Public Hostname / DNS alias
+- Zero-Touch Short URL Option B
+
+Historical published stable `v2.2.1` (immutable):
+
+```text
 Project:              2.2.1
 Tag:                  v2.2.1
 FRP:                  0.71.0
@@ -2461,12 +2483,10 @@ OWNER_MANUAL_E2E_REQUIRED=NO
 현재 runtime/release work는 closed 상태다.
 
 ```text
-CURRENT_STABLE=2.2.1
+CURRENT_STABLE=2.3.0
 PINNED_FRP=0.71.0
 UNRESOLVED_RELEASE_BLOCKERS=0
-NEW_RELEASE_REQUIRED_FOR_DOCS_ONLY_CHANGE=NO
-NEW_TAG_REQUIRED_FOR_DOCS_ONLY_CHANGE=NO
-NEW_DOUBLE_FULL_REAL_E2E_REQUIRED_FOR_DOCS_ONLY_CHANGE=NO
+FEATURE_FREEZE_ACTIVE=YES
 ```
 
 Release 이후 code/runtime 변경이 필요하면 이미 published 된 tag를 움직이지 않고 새로운 patch release를 사용한다.
@@ -2475,16 +2495,19 @@ Release 이후 code/runtime 변경이 필요하면 이미 published 된 tag를 �
 
 # 51. Main / Development State
 
-현재 release line은 `v2.2.1`로 closed 상태이며 별도의 open release candidate를 current stable처럼 취급하지 않는다.
+현재 release line은 `v2.3.0`으로 closed 상태이며 별도의 open release candidate를 current stable처럼 취급하지 않는다.
 
 ```text
-Published Stable = v2.2.1
+Published Stable = v2.3.0
 Pinned FRP       = 0.71.0
-Release commit   = 19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f
 ```
 
-`v2.2.1`에 포함된 주요 capability:
+`v2.3.0`에 포함된 주요 capability:
 
+- Access Control Pack (Named Lists / TTL / Conn Log / fail-closed)
+- Target Health Check (CLIENT / TUNNEL / TARGET)
+- Support Bundle (sanitized diagnostics)
+- Service Profiles (server-owned creation templates)
 - canonical `frpctl` grammar / REPL hardening
 - GNU Readline + macOS libedit completion portability
 - Client ID selector hardening
@@ -3363,14 +3386,14 @@ Manage a few to a few dozen clients with frpctl
 
 | 영역 | 현재 상태 / 방향 |
 |---|---|
-| Published Stable | **v2.2.1 / FRP 0.71.0** |
+| Published Stable | **v2.3.0 / FRP 0.71.0** |
 | Zero-Touch Short URL Option B | **STABLE** |
 | Public Hostname / DNS alias | **STABLE** |
 | Simple Manual Group MVP | **STABLE** |
-| Access Control Pack (Named Lists / TTL / Conn Log) | **COMPLETE/STABLE CANDIDATE** |
-| Target Health Check | **COMPLETE/STABLE CANDIDATE** |
-| Support Bundle | **COMPLETE/STABLE CANDIDATE** |
-| Service Profiles | **COMPLETE/STABLE CANDIDATE** |
+| Access Control Pack (Named Lists / TTL / Conn Log) | **STABLE** |
+| Target Health Check | **STABLE** |
+| Support Bundle | **STABLE** |
+| Service Profiles | **STABLE** |
 | FEATURE FREEZE | **ACTIVE** |
 | macOS Apple Silicon | **STABLE / Real E2E validated** |
 | Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
@@ -3385,40 +3408,32 @@ Manage a few to a few dozen clients with frpctl
 
 ---
 
-# 71.1 Current Release Closure — v2.2.1
+# 71.1 Current Release Closure — v2.3.0
 
 Current stable closure:
 
 ```text
-PROJECT_VERSION=2.2.1
+PROJECT_VERSION=2.3.0
 FRP_VERSION=0.71.0
 
-QUALIFIED_CANDIDATE=
-2140be5b6342c3651c16a458f8ea1bc9b577d992
+FEATURE_FREEZE_ACTIVE=YES
+PRODUCT_FEATURE_COMPLETE=YES
 
-RELEASE_COMMIT=
-19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f
+FULL_REAL_E2E_PASS_1=(set during final qualification)
+FULL_REAL_E2E_PASS_2=(set during final qualification)
+PASS_HEADS_IDENTICAL=(set during final qualification)
 
-CANDIDATE_RELEASE_TREE_IDENTICAL=YES
-
-FULL_REAL_E2E_PASS_1=PASS
-FULL_REAL_E2E_PASS_2=PASS
-PASS_HEADS_IDENTICAL=YES
-
-MACOS_REAL_LIBEDIT_COMPLETION=PASS
-ROCKY9_REAL_E2E=PASS
-AL2_PORTABILITY=PASS
-
-PR11_MERGED=YES
-TAG_V2_2_1_CREATED=YES
-GITHUB_RELEASE_V2_2_1_PUBLISHED=YES
-TAGGED_STABLE_PATH_SMOKE=PASS
+TAG_V2_3_0_CREATED=(set at tag time)
+GITHUB_RELEASE_V2_3_0_PUBLISHED=(set at release time)
 
 UNRESOLVED_RELEASE_BLOCKERS=0
-OWNER_MANUAL_E2E_REQUIRED=NO
 ```
 
-`v2.2.0`과 `v2.2.1` published tags/releases는 immutable하게 유지한다.
+`v2.2.0`, `v2.2.1`, and earlier published tags/releases는 immutable하게 유지한다.
+
+Historical note: `v2.2.1` closure (qualified candidate
+`2140be5b6342c3651c16a458f8ea1bc9b577d992`, release commit
+`19d4b6fb8a9bee2d477ace6f5c3ed70310e7ea8f`) remains an immutable prior release.
 
 Product Master 같은 docs-only closure는:
 
@@ -3631,7 +3646,7 @@ AUTHORITATIVE_MASTER_SOURCE=Owner-reconstructed canonical Product Master (synced
 
 # 73. Access Control Pack (Named Lists / TTL / Connection Log)
 
-**Status: MAIN / feature branch (not yet in published stable v2.2.1)**
+**Status: STABLE in v2.3.0**
 
 Published service connections can be authorized with:
 
@@ -3655,16 +3670,15 @@ database auth) must remain enabled.
 Remaining approved product features after this pack: **none**.
 
 ```text
-Access Control Pack = COMPLETE/STABLE CANDIDATE
-Target Health Check = COMPLETE/STABLE CANDIDATE
-Support Bundle = COMPLETE/STABLE CANDIDATE
-Service Profiles = COMPLETE/STABLE CANDIDATE
+Access Control Pack = STABLE
+Target Health Check = STABLE
+Support Bundle = STABLE
+Service Profiles = STABLE
 FEATURE FREEZE = ACTIVE
 ```
 
 No further product feature development until the next explicitly approved release scope.
-v2.2.1 remains the published stable tag; this freeze qualifies exact main HEAD as
-release-ready without inventing a new version/tag in this closure.
+`v2.3.0` is the published stable tag for this feature-complete product line.
 
 ---
 

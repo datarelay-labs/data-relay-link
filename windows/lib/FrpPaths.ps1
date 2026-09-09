@@ -76,7 +76,7 @@ function Get-FrpProjectVersion {
         }
     } catch { }
     # Packaged fallback must track canonical VERSION (do not hardcode stale releases).
-    return '2.2.1'
+    return '2.3.0'
 }
 
 function Get-FrpUpstreamVersion {
