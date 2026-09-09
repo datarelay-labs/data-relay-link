@@ -196,12 +196,43 @@ frp_release_channel() {
   printf 'stable'
 }
 
-frp_release_git_ref() {
-  if [[ "$(frp_release_channel)" == "dev" ]]; then
+frp_is_commit_source_ref() {
+  local ref="${1:-}"
+  [[ "$ref" =~ ^[0-9a-fA-F]{7,40}$ ]]
+}
+
+frp_channel_default_source_ref() {
+  local channel="${1:-}"
+  if [[ -z "$channel" ]]; then
+    channel="$(frp_release_channel)"
+  fi
+  if [[ "$channel" == "dev" ]]; then
     printf 'main'
   else
     printf 'v%s' "${PROJECT_VERSION}"
   fi
+}
+
+frp_release_git_ref() {
+  local ref ch
+  # Explicit install/update pin wins.
+  if [[ -n "${FRP_SOURCE_REF:-}" ]]; then
+    printf '%s' "$FRP_SOURCE_REF"
+    return 0
+  fi
+  # Explicit channel opt-in uses the release-line identity (main / vX.Y.Z).
+  if [[ -n "${FRP_RELEASE_CHANNEL:-}" ]]; then
+    ch="$(frp_normalize_release_channel "$FRP_RELEASE_CHANNEL")"
+    frp_channel_default_source_ref "$ch"
+    return 0
+  fi
+  # Prefer the persisted install provenance (may be a commit SHA).
+  ref="$(frp_read_kv_file "$(frp_version_state_file)" SOURCE_REF)"
+  if [[ -n "$ref" ]]; then
+    printf '%s' "$ref"
+    return 0
+  fi
+  frp_channel_default_source_ref "$(frp_release_channel)"
 }
 
 frp_github_raw_url() {
@@ -293,6 +324,14 @@ frp_is_official_main_installer_url() {
   [[ "$url" == "https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/main/dist/bootstrap-client.sh" ]]
 }
 
+frp_is_official_client_installer_url() {
+  local url="${1:-}"
+  local prefix
+  prefix="https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/"
+  [[ "$url" == "${prefix}"*/dist/bootstrap-client.sh ]] || \
+    [[ "$url" == "${prefix}"*/dist/bootstrap-client.ps1 ]]
+}
+
 frp_validate_release_source_metadata() {
   # Validate VERSION + release-manifest.json agreement.
   # Prints: project_version<TAB>channel<TAB>git_ref
@@ -337,7 +376,10 @@ expected_git_ref = "main" if channel == "dev" else "v%s" % project
 if git_ref != expected_git_ref:
     sys.stderr.write("ERROR: release metadata channel/ref disagreement\n")
     raise SystemExit(1)
-if expected_ref and git_ref != expected_ref:
+# Commit/PR pins identify the download path; release-manifest keeps the
+# release-line identity (main / vX.Y.Z). Do not treat that as a mismatch.
+_commit_ref = bool(re.fullmatch(r"[0-9a-fA-F]{7,40}", expected_ref or ""))
+if expected_ref and git_ref != expected_ref and not _commit_ref:
     sys.stderr.write("ERROR: release metadata source ref mismatch\n")
     raise SystemExit(1)
 if expected_channel and channel != expected_channel:
@@ -544,7 +586,7 @@ frp_atomic_install() {
 
 frp_write_version_file() {
   local dest="$1"
-  local dir tmp channel source_ref bundle existing
+  local dir tmp channel source_ref bundle existing existing_ref
   dir="$(dirname "$dest")"
   mkdir -p "$dir"
   if [[ -n "${FRP_RELEASE_CHANNEL:-}" ]]; then
@@ -557,10 +599,21 @@ frp_write_version_file() {
       channel="$(frp_release_channel)"
     fi
   fi
-  if [[ "$channel" == "dev" ]]; then
-    source_ref="main"
+  if [[ -n "${FRP_SOURCE_REF:-}" ]]; then
+    source_ref="$FRP_SOURCE_REF"
+    # Commit/PR installs are development provenance, not a stable tag claim.
+    if frp_is_commit_source_ref "$source_ref" && [[ -z "${FRP_RELEASE_CHANNEL:-}" ]]; then
+      channel="dev"
+    fi
+  elif [[ "${FRP_VERSION_REQUIRE_VERIFIED_BUNDLE:-}" == "1" ]]; then
+    source_ref="$(frp_channel_default_source_ref "$channel")"
   else
-    source_ref="v${PROJECT_VERSION}"
+    existing_ref="$(frp_read_kv_file "$dest" SOURCE_REF)"
+    if [[ -n "$existing_ref" ]]; then
+      source_ref="$existing_ref"
+    else
+      source_ref="$(frp_channel_default_source_ref "$channel")"
+    fi
   fi
   bundle="${FRP_BUNDLE_SHA256:-}"
   if [[ "${FRP_VERSION_REQUIRE_VERIFIED_BUNDLE:-}" == "1" ]]; then

@@ -191,7 +191,7 @@ unset _frp_own
 
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   # CLIENT_ONLY: always remove on client uninstall.
-  for f in frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist; do
+  for f in frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist uninstall-client.sh; do
     frp_u_rm_file "${libdir}/${f}"
   done
   # SHARED with server: remove only when server role is absent.

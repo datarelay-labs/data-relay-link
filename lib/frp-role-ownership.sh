@@ -16,7 +16,7 @@ FRP_ROLE_SERVER_PRESERVE_IF_CLIENT=' frp-common.sh frp_mgmt_auth.py frp_health_c
 FRP_ROLE_CLIENT_PRESERVE_IF_SERVER=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py frp_service_id.py frp-role-ownership.sh '
 
 # Always removed by client uninstall.
-FRP_ROLE_CLIENT_ONLY_LIB_BASENAMES=' frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist '
+FRP_ROLE_CLIENT_ONLY_LIB_BASENAMES=' frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist uninstall-client.sh '
 
 frp_role_server_should_preserve_lib() {
   local base="$1"

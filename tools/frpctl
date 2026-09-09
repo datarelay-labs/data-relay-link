@@ -503,21 +503,21 @@ Type '?' for context help, or 'help' for full syntax. Press Tab to complete
 a unique match or list next-token candidates. Type 'menu'
 for the guided numbered menu.
 
-Canonical grammar:
-  <verb> <resource> [target] [property] [value]
+Commands are grouped by resource. On servers:
 
-  show status | show version | show clients | show client ID
-  set client ID label|note VALUE
-  set client ID tag KEY VALUE
-  unset client ID label|note|tag [KEY]
-  create zero-touch | create enrollment | create backup
-  revoke client ID | release client ID | release service ID SID
-  access | access list | access menu
-  update project [--check] | update frp [--check]
-  doctor | support-bundle | help | menu | history | exit
+  show | client | enrollment | group | profile | access | server | system
 
-status and version remain shortcuts. Older flat commands (clients,
-client-set, enroll, ...) still work for scripts. See 'help legacy'.
+Examples:
+  show status | show version | show health | show clients
+  client set ID label|note VALUE
+  enrollment zero-touch | enrollment list
+  group list | profile list
+  server show | server installer URL
+  system update | system doctor | system support-bundle
+  access | help | menu | history | exit
+
+Legacy verb forms (set/create/revoke/doctor/...) still work for scripts.
+See 'help legacy'.
 
 Official upstream FRP binaries are frps (server) and frpc (client).
 This project does not fork FRP.
@@ -977,11 +977,13 @@ frpctl_client_resume() {
 
 frpctl_find_uninstall_client() {
   local cand
+  # Prefer the packaged install path so offline uninstall works after normal enroll.
   for cand in \
+    "$(frpctl_path /usr/local/lib/frp-auto-deploy/uninstall-client.sh)" \
     "${FRP_CTL_BIN_DIR:-}/uninstall-client.sh" \
-    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/uninstall-client.sh" \
     /usr/local/lib/frp-auto-deploy/uninstall-client.sh \
     /usr/local/sbin/uninstall-client.sh \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/uninstall-client.sh" \
     "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/uninstall-client.sh"; do
     if [[ -n "$cand" && -f "$cand" ]]; then
       printf '%s' "$cand"
@@ -2638,10 +2640,22 @@ frpctl_dispatch_canonical() {
       echo
       ;;
     show_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollments ;;
+    show_enrollment)
+      frpctl_require_server || return 1
+      frpctl_show_enrollment "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("id",""))' "$result")"
+      ;;
     show_audit) frpctl_require_server || return 1; frpctl_audit_tail ;;
     show_upstream) frpctl_require_server || return 1; frpctl_run frp-upstream $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     show_services) frpctl_require_client || return 1; frpctl_invoke frp-client list ;;
     show_info) frpctl_require_client || return 1; frpctl_invoke frp-client info ;;
+    server_show)
+      frpctl_require_server || return 1
+      frpctl_server_show
+      ;;
+    server_reconfigure)
+      frpctl_require_server || return 1
+      frpctl_server_reconfigure
+      ;;
     set_client)
       frpctl_require_server || return 1
       frpctl_set_client_from_canon "$result"
@@ -2815,6 +2829,218 @@ frpctl_dispatch_canonical() {
   _FRP_CTL_RC=$?
   set -e
   return 0
+}
+
+frpctl_server_show() {
+  local cfg
+  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  if [[ ! -f "$cfg" ]]; then
+    echo "ERROR: server config.json is missing." >&2
+    return 1
+  fi
+  python3 - "$cfg" <<'PY'
+import json, sys
+from pathlib import Path
+
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(cfg, dict):
+    raise SystemExit("ERROR: server config.json is invalid")
+
+def text(value, default="-"):
+    s = str(value or "").strip()
+    return s if s else default
+
+public_ip = text(cfg.get("public_ip") or cfg.get("public_host"))
+public_hostname = text(cfg.get("public_hostname"))
+allocator = text(cfg.get("allocator_public_url"))
+bootstrap = text(cfg.get("bootstrap_hostname"))
+installer = text(cfg.get("client_installer_url"))
+mode = text(cfg.get("deployment_mode") or "direct").lower().replace("-", "").replace("_", "")
+if mode in ("single443", "enterprise", "enterprisesingle443"):
+    mode = "single443"
+else:
+    mode = "direct"
+control = cfg.get("frp_control_public_port")
+if control in (None, ""):
+    control = cfg.get("control_port")
+control = text(control)
+port_start = cfg.get("port_start")
+port_end = cfg.get("port_end")
+if port_start not in (None, "") and port_end not in (None, ""):
+    service_range = "%s-%s" % (port_start, port_end)
+else:
+    service_range = "-"
+
+print("Server public configuration")
+print("===========================")
+print()
+print("Public IP            : %s" % public_ip)
+print("Public hostname      : %s" % public_hostname)
+print("Allocator URL        : %s" % allocator)
+print("Bootstrap hostname   : %s" % bootstrap)
+print("Client installer URL : %s" % installer)
+print("Deployment mode      : %s" % mode)
+print("Control port         : %s" % control)
+print("Service port range   : %s" % service_range)
+PY
+}
+
+frpctl_server_reconfigure() {
+  local cfg reg_path pki_dir pki_py reconfig_py alt path
+  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  reg_path="$(frpctl_path /var/lib/frp-auto-deploy/registry.json)"
+  if [[ ! -f "$reg_path" && -f "$cfg" ]]; then
+    alt="$(python3 - "$cfg" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+try:
+    cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+print(str(cfg.get("registry_file") or "").strip())
+PY
+)"
+    if [[ -n "$alt" ]]; then
+      if [[ "$alt" == /* ]]; then
+        reg_path="$(frpctl_path "$alt")"
+      else
+        reg_path="$alt"
+      fi
+    fi
+  fi
+  pki_dir="$(frpctl_path /etc/frp-auto-deploy/pki)"
+  pki_py=""
+  if path="$(frpctl_lib_candidate frp_pki.py 2>/dev/null)"; then
+    pki_py="$path"
+  elif [[ -f "${_FRPCTL_DIR}/../lib/frp_pki.py" ]]; then
+    pki_py="$(cd "${_FRPCTL_DIR}/../lib" && pwd)/frp_pki.py"
+  elif [[ -f /usr/local/lib/frp-auto-deploy/frp_pki.py ]]; then
+    pki_py=/usr/local/lib/frp-auto-deploy/frp_pki.py
+  fi
+  reconfig_py=""
+  if path="$(frpctl_lib_candidate frp_server_reconfigure.py 2>/dev/null)"; then
+    reconfig_py="$path"
+  elif [[ -f "${_FRPCTL_DIR}/../lib/frp_server_reconfigure.py" ]]; then
+    reconfig_py="$(cd "${_FRPCTL_DIR}/../lib" && pwd)/frp_server_reconfigure.py"
+  elif [[ -f /usr/local/lib/frp-auto-deploy/frp_server_reconfigure.py ]]; then
+    reconfig_py=/usr/local/lib/frp-auto-deploy/frp_server_reconfigure.py
+  fi
+  if [[ ! -f "$cfg" ]]; then
+    echo "ERROR: server config.json is missing." >&2
+    return 1
+  fi
+  if [[ -z "$reconfig_py" || ! -f "$reconfig_py" ]]; then
+    echo "ERROR: frp_server_reconfigure.py not found" >&2
+    return 1
+  fi
+  python3 "$reconfig_py" \
+    --config "$cfg" \
+    --registry "$reg_path" \
+    --pki-dir "$pki_dir" \
+    --pki-py "$pki_py" \
+    --test-root "${FRP_CTL_TEST_ROOT:-}"
+}
+
+frpctl_show_enrollment() {
+  local eid="$1" cfg
+  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  if [[ -z "$eid" ]]; then
+    echo "ERROR: enrollment id is required." >&2
+    return 1
+  fi
+  if [[ ! -f "$cfg" ]]; then
+    echo "ERROR: server config.json is missing." >&2
+    return 1
+  fi
+  python3 - "$cfg" "$eid" <<'PY'
+import json, sys, time, unicodedata
+from pathlib import Path
+
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+want = str(sys.argv[2] or "").strip().lower()
+root = Path(__import__("os").environ.get("FRP_CTL_TEST_ROOT")
+            or __import__("os").environ.get("FRP_DEPLOY_TEST_ROOT")
+            or "")
+
+def remap(path):
+    path = Path(path)
+    if root and not str(path).startswith(str(root)):
+        return Path(str(root) + str(path))
+    return path
+
+def safe(value, default="-"):
+    text = str(value or "")
+    cleaned = "".join(
+        " " if unicodedata.category(ch).startswith("C") else ch for ch in text
+    ).strip()
+    return cleaned or default
+
+def parse_epoch(value):
+    if value in (None, ""):
+        return 0, True
+    try:
+        return int(value), True
+    except (TypeError, ValueError):
+        return 0, False
+
+def state_of(record, now):
+    if record.get("revoked_at"):
+        return "revoked"
+    if record.get("completed_at") or record.get("used_at"):
+        return "completed"
+    expires, valid = parse_epoch(record.get("expires_at"))
+    if not valid:
+        return "invalid"
+    if expires and expires < now:
+        return "expired"
+    if record.get("bound_machine_id"):
+        return "bound"
+    return "pending"
+
+enrollments = remap(cfg.get("enrollments_dir") or "/var/lib/frp-auto-deploy/enrollments")
+bootstrap = remap(
+    cfg.get("bootstrap_dir")
+    or str(Path(cfg.get("enrollments_dir") or "/var/lib/frp-auto-deploy/enrollments").parent / "bootstrap")
+)
+now = int(time.time())
+found = None
+kind = None
+for directory, label in ((bootstrap, "zero-touch"), (enrollments, "manual")):
+    if not directory.is_dir():
+        continue
+    for path in directory.glob("*.json"):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        rid = str(rec.get("id") or "").strip().lower()
+        if rid == want:
+            found, kind = rec, label
+            break
+    if found is not None:
+        break
+
+if found is None:
+    print("ERROR: enrollment %s not found." % want, file=sys.stderr)
+    raise SystemExit(1)
+
+# Never print secrets (enroll_secret, ticket, tokens, keys).
+print("Enrollment")
+print("==========")
+print()
+print("ID      : %s" % safe(found.get("id")))
+print("Type    : %s" % kind)
+print("Label   : %s" % safe(found.get("label")))
+print("State   : %s" % state_of(found, now))
+print("Created : %s" % safe(found.get("created_at")))
+print("Expires : %s" % safe(found.get("expires_at_iso") or found.get("expires_at")))
+if found.get("bound_machine_id"):
+    print("Bound   : %s" % safe(found.get("bound_machine_id")))
+if found.get("hostname"):
+    print("Host    : %s" % safe(found.get("hostname")))
+PY
 }
 
 frpctl_set_client_from_canon() {

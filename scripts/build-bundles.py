@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import base64
 import json
+import os
+import subprocess
 from pathlib import Path
 
 root=Path(__file__).resolve().parents[1]
@@ -19,6 +21,89 @@ def bundle_payload(rel):
             meta.pop('sha256', None)
     return (json.dumps(import_data, indent=2, sort_keys=False) + '\n').encode('utf-8')
 
+def read_project_version():
+    values = {}
+    for line in (root / 'VERSION').read_text(encoding='utf-8').splitlines():
+        if '=' in line:
+            key, value = line.split('=', 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    return values.get('PROJECT_VERSION', '0.0.0')
+
+def detect_build_provenance():
+    """Return (channel, source_ref) for this working tree build.
+
+    Exact tag vPROJECT_VERSION → stable / that tag.
+    Otherwise → development / immutable commit SHA (never claim a stable tag).
+    """
+    project = read_project_version()
+    expected_tag = 'v%s' % project
+    override_ref = (os.environ.get('FRP_BUILD_SOURCE_REF') or '').strip()
+    override_channel = (os.environ.get('FRP_BUILD_RELEASE_CHANNEL') or '').strip().lower()
+    if override_ref:
+        channel = override_channel or (
+            'stable' if override_ref == expected_tag else 'dev'
+        )
+        if channel in ('development', 'main'):
+            channel = 'dev'
+        if channel not in ('dev', 'stable'):
+            channel = 'dev'
+        return channel, override_ref
+    try:
+        exact = subprocess.check_output(
+            ['git', '-C', str(root), 'describe', '--tags', '--exact-match', 'HEAD'],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        exact = ''
+    if exact == expected_tag:
+        return 'stable', expected_tag
+    try:
+        sha = subprocess.check_output(
+            ['git', '-C', str(root), 'rev-parse', 'HEAD'],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        # Fallback: release-manifest line identity when git is unavailable.
+        try:
+            data = json.loads((root / 'release-manifest.json').read_text(encoding='utf-8'))
+            channel = str(data.get('channel') or 'stable').strip().lower()
+            ref = str(data.get('git_ref') or expected_tag).strip()
+            if channel in ('development', 'main'):
+                channel = 'dev'
+            if channel not in ('dev', 'stable'):
+                channel = 'stable'
+            return channel, ref
+        except Exception:
+            return 'stable', expected_tag
+    return 'dev', sha
+
+def provenance_preamble(channel, source_ref):
+    # Shell-safe single-quoted embeds (refs are hex / vX.Y.Z / main).
+    def sh_quote(value):
+        return "'" + value.replace("'", "'\"'\"'") + "'"
+    return [
+        '# Bundle provenance stamped at build time.',
+        'if [[ -z "${FRP_SOURCE_REF:-}" ]]; then',
+        '  export FRP_SOURCE_REF=%s' % sh_quote(source_ref),
+        'fi',
+        'if [[ -z "${FRP_RELEASE_CHANNEL:-}" ]]; then',
+        '  export FRP_RELEASE_CHANNEL=%s' % sh_quote(channel),
+        'fi',
+        '# Prefer hashing the on-disk bootstrap when not piped via stdin.',
+        'if [[ -z "${FRP_BUNDLE_SHA256:-}" ]]; then',
+        '  _frp_self="${BASH_SOURCE[0]:-}"',
+        '  if [[ -n "$_frp_self" && -f "$_frp_self" ]]; then',
+        '    FRP_BUNDLE_SHA256="$(sha256sum "$_frp_self" 2>/dev/null | awk \'{print $1}\')"',
+        '    export FRP_BUNDLE_SHA256',
+        '  fi',
+        '  unset _frp_self',
+        'fi',
+    ]
+
+BUILD_CHANNEL, BUILD_SOURCE_REF = detect_build_provenance()
+
 files=[
  'VERSION',
  'release-manifest.json',
@@ -36,6 +121,7 @@ files=[
  'lib/frp-role-ownership.sh',
  'lib/frp_control_locks.py',
  'lib/frp_server_config.py',
+ 'lib/frp_server_reconfigure.py',
  'lib/frp_zero_touch.py',
  'lib/server-project-files.manifest',
  'lib/frp-doctor-common.sh',
@@ -81,7 +167,9 @@ files=[
  'tools/frpctl',
 ]
 
-lines=['#!/usr/bin/env bash','set -euo pipefail','TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT']
+lines=['#!/usr/bin/env bash','set -euo pipefail']
+lines.extend(provenance_preamble(BUILD_CHANNEL, BUILD_SOURCE_REF))
+lines.extend(['TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT'])
 for rel in files:
     data=base64.b64encode(bundle_payload(rel)).decode()
     parent=str(Path(rel).parent)
@@ -122,10 +210,13 @@ client_files=[
 client_lines=[
  '#!/usr/bin/env bash',
  'set -euo pipefail',
+]
+client_lines.extend(provenance_preamble(BUILD_CHANNEL, BUILD_SOURCE_REF))
+client_lines.extend([
  '_frp_b64d() { base64 --decode 2>/dev/null || base64 -D; }',
  'TMP="$(mktemp -d)"',
  'trap \'rm -rf "$TMP"\' EXIT',
-]
+])
 for rel in client_files:
     data=base64.b64encode(bundle_payload(rel)).decode()
     parent=str(Path(rel).parent)
@@ -151,6 +242,9 @@ ps_lines = [
     '#Requires -Version 5.1',
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
+    # Provenance for Windows enroll (mirrors bash bootstrap stamps).
+    f"if (-not $env:FRP_SOURCE_REF) {{ $env:FRP_SOURCE_REF = '{BUILD_SOURCE_REF}' }}",
+    f"if (-not $env:FRP_RELEASE_CHANNEL) {{ $env:FRP_RELEASE_CHANNEL = '{BUILD_CHANNEL}' }}",
     "$tmp = Join-Path $env:TEMP ('frp-win-bundle-' + [guid]::NewGuid().ToString('N'))",
     'New-Item -ItemType Directory -Force -Path $tmp | Out-Null',
     'try {',
@@ -183,4 +277,7 @@ ps_lines.extend([
 for src,dst in [('uninstall-client.sh','uninstall-client.sh'),('uninstall-server.sh','uninstall-server.sh')]:
     (dist/dst).write_bytes((root/src).read_bytes())
     (dist/dst).chmod(0o755)
-print('Built dist/bootstrap-server.sh, bootstrap-client.sh, and bootstrap-client.ps1')
+print(
+    'Built dist/bootstrap-server.sh, bootstrap-client.sh, and bootstrap-client.ps1'
+    f' (channel={BUILD_CHANNEL} source_ref={BUILD_SOURCE_REF})'
+)

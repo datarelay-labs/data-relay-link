@@ -92,23 +92,27 @@ write_server_tree "$BOTH"
 
 # --- Single match
 export FRP_CTL_TEST_ROOT="$SERVER"
-[[ "$(cands sta)" == "status" ]] || fail "sta -> status"
-[[ "$(cands doc)" == "doctor" ]] || fail "doc -> doctor"
-[[ "$(frpctl_complete_line sta)" == "status " ]] || fail "sta complete line"
-[[ "$(cands upd)" == "update" ]] || fail "upd -> update"
-[[ "$(cands ver)" == "version" ]] || fail "ver -> version"
+[[ "$(cands sho)" == "show" ]] || fail "sho -> show"
+[[ "$(cands sys)" == "system" ]] || fail "sys -> system"
+[[ "$(cands enr)" == "enrollment" ]] || fail "enr -> enrollment"
+[[ "$(frpctl_complete_line sho)" == "show " ]] || fail "sho complete line"
 [[ "$(cands hel)" == "help" ]] || fail "hel -> help"
 [[ "$(cands exi)" == "exit" ]] || fail "exi -> exit"
+# Hidden legacy aliases must not dominate Tab discovery
+if echo "$(cands "")" | has_line doctor; then fail "doctor must be hidden from server root Tab"; fi
+if echo "$(cands "")" | has_line create; then fail "create must be hidden from server root Tab"; fi
+if echo "$(cands doc)" | has_line doctor; then fail "doc must not offer hidden doctor"; fi
 pass "FRPCTL_TAB_SINGLE_MATCH"
 
 # --- Multiple matches keep input when common prefix equals the typed prefix
-re_out="$(cands re)"
-echo "$re_out" | has_line release || fail "re missing release"
-echo "$re_out" | has_line revoke || fail "re missing revoke"
-echo "$re_out" | has_line restore || fail "re missing restore"
-if echo "$re_out" | has_line release-client; then fail "legacy release-client in tab"; fi
-[[ "$(frpctl_complete_line re)" == "re" ]] || fail "re should keep typed prefix"
-[[ "$(frpctl_complete_line release)" == "release " ]] || fail "release unique complete"
+# Root no longer lists legacy revoke/release/restore; exercise a live category prefix.
+s_out="$(cands s)"
+echo "$s_out" | has_line show || fail "s missing show"
+echo "$s_out" | has_line server || fail "s missing server"
+echo "$s_out" | has_line system || fail "s missing system"
+if echo "$s_out" | has_line support-bundle; then fail "legacy support-bundle in tab"; fi
+[[ "$(frpctl_complete_line s)" == "s" ]] || fail "s should keep typed prefix"
+[[ "$(frpctl_complete_line show)" == "show " ]] || fail "show unique complete"
 pass "FRPCTL_TAB_MULTIPLE_MATCHES"
 pass "FRPCTL_TAB_VERB"
 
@@ -174,11 +178,18 @@ pass "FRPCTL_TAB_SERVICE_NAMESPACE"
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"
-echo "$all_server" | has_line create || fail "server list create"
-echo "$all_server" | has_line doctor || fail "server list doctor"
 echo "$all_server" | has_line show || fail "server list show"
-echo "$all_server" | has_line revoke || fail "server list revoke"
-echo "$all_server" | has_line set || fail "server list set"
+echo "$all_server" | has_line client || fail "server list client"
+echo "$all_server" | has_line enrollment || fail "server list enrollment"
+echo "$all_server" | has_line group || fail "server list group"
+echo "$all_server" | has_line profile || fail "server list profile"
+echo "$all_server" | has_line access || fail "server list access"
+echo "$all_server" | has_line server || fail "server list server"
+echo "$all_server" | has_line system || fail "server list system"
+if echo "$all_server" | has_line create; then fail "server offered create as primary"; fi
+if echo "$all_server" | has_line doctor; then fail "server offered doctor as primary"; fi
+if echo "$all_server" | has_line set; then fail "server offered set as primary"; fi
+if echo "$all_server" | has_line status; then fail "server offered status as primary"; fi
 if echo "$all_server" | has_line services; then fail "server offered services"; fi
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
@@ -193,10 +204,14 @@ echo "$all_both" | has_line show || fail "dual missing show"
 echo "$all_both" | has_line service || fail "dual missing service"
 echo "$all_both" | has_line client || fail "dual missing client"
 echo "$all_both" | has_line system || fail "dual missing system"
-echo "$all_both" | has_line create || fail "dual missing create"
-echo "$all_both" | has_line set || fail "dual missing set"
-echo "$all_both" | has_line add || fail "dual missing add (server group)"
-echo "$all_both" | has_line doctor || fail "dual missing doctor"
+echo "$all_both" | has_line enrollment || fail "dual missing enrollment"
+echo "$all_both" | has_line group || fail "dual missing group"
+echo "$all_both" | has_line profile || fail "dual missing profile"
+echo "$all_both" | has_line server || fail "dual missing server"
+echo "$all_both" | has_line access || fail "dual missing access"
+if echo "$all_both" | has_line create; then fail "dual offered create as primary"; fi
+if echo "$all_both" | has_line doctor; then fail "dual offered doctor as primary"; fi
+if echo "$all_both" | has_line set; then fail "dual offered set as primary"; fi
 if echo "$all_both" | has_line apply; then fail "dual offered legacy apply at root"; fi
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"
@@ -231,8 +246,12 @@ if echo "$names" | has_line oci-e2e-renamed; then fail "label completed as ident
 if echo "$names" | has_line dp-os-upgrade; then fail "hostname completed as identity"; fi
 if echo "$names" | has_line other-client; then fail "hostname completed as identity"; fi
 [[ "$(cands "set client aa")" == "aabbccdd" ]] || fail "set client aa"
-[[ "$(cands "client aa")" == "aabbccdd" ]] || fail "legacy client aa"
+[[ "$(cands "client set aa")" == "aabbccdd" ]] || fail "client set aa"
 [[ "$(cands "revoke-client aa")" == "aabbccdd" ]] || fail "legacy revoke names"
+cli_ns="$(cands "client ")"
+echo "$cli_ns" | has_line set || fail "client ns missing set"
+echo "$cli_ns" | has_line release || fail "client ns missing release"
+echo "$cli_ns" | has_line revoke || fail "client ns missing revoke"
 pass "FRPCTL_TAB_CLIENT_NAME"
 pass "FRPCTL_TAB_CLIENT_CANONICAL_NAME"
 pass "FRPCTL_TAB_NO_DUPLICATE_CLIENT_IDENTITY"
@@ -281,7 +300,9 @@ pass "NO_SECRET_SELECTOR_COMPLETION"
 [[ -z "$(cands sh)" ]] || fail "sh must not complete"
 [[ -z "$(cands exec)" ]] || fail "exec must not complete"
 [[ -z "$(cands '!ls')" ]] || fail "!ls must not complete"
-[[ -z "$(cands system)" ]] || fail "system must not complete"
+# system is a real maintenance namespace on server/dual hosts
+export FRP_CTL_TEST_ROOT="$SERVER"
+[[ "$(cands system)" == "system" ]] || fail "system should complete on server"
 [[ "$(cands exi)" == "exit" ]] || fail "exi should still complete exit"
 if grep -nE '(^|[[:space:]])eval |bash -c |sh -c |system\(' "$ROOT/tools/frpctl"; then
   fail "frpctl uses unsafe dispatch/completion"
@@ -584,7 +605,7 @@ if not wait_prompt():
 
 # --- Unique match completes inline ---
 before = len(buf)
-os.write(fd, b"statu")
+os.write(fd, b"sho")
 read_more(0.4)
 os.write(fd, b"\t")
 read_more(0.8)
@@ -592,15 +613,15 @@ unique_chunk = bytes(buf[before:])
 vis_u = visible(unique_chunk)
 if b"Missing resource" in unique_chunk or b"Unknown command" in unique_chunk:
     fail_pty("PTY: unique tab dispatched a command", unique_chunk)
-if b"status" not in vis_u and b"statu" in vis_u:
+if b"show" not in vis_u and b"sho" in vis_u:
     # some terminals only echo completed text after redraw; Enter will prove it
     pass
-os.write(fd, b"\r")
+os.write(fd, b"version\r")
 if not wait_prompt():
     fail_pty("PTY: no prompt after unique completion", bytes(buf[before:]))
 after_unique = bytes(buf[before:])
-if b"DISPATCH frp-server-status" not in after_unique:
-    fail_pty("PTY: unique tab did not complete status", after_unique)
+if b"Project version" not in after_unique and b"Role" not in after_unique:
+    fail_pty("PTY: unique tab did not complete show version", after_unique)
 print("TAB_UNIQUE_COMPLETES_INLINE")
 print("TAB_UNIQUE_INLINE")
 
@@ -611,8 +632,10 @@ os.write(fd, b"\t")
 read_more(1.0)
 root = bytes(buf[before:])
 vis = visible(root)
-if b"show" not in vis or b"set" not in vis:
+if b"show" not in vis or b"enrollment" not in vis or b"system" not in vis:
     fail_pty("PTY: root tab missing candidates", root)
+if b"Change configuration" in vis or b"Create zero-touch" in vis:
+    fail_pty("PTY: root tab offered legacy set/create", root)
 if b"Missing resource" in root or b"Unknown command" in root:
     fail_pty("PTY: root tab dispatched", root)
 if CLEAR_RE.search(root):
@@ -687,7 +710,7 @@ os.write(fd, b"\t")
 read_more(1.0)
 show_chunk = bytes(buf[before:])
 vis_show = visible(show_chunk)
-for token in (b"status", b"version", b"clients", b"client", b"enrollments"):
+for token in (b"status", b"version", b"health", b"clients", b"client", b"enrollments"):
     if token not in vis_show:
         fail_pty("PTY: show tab missing %s" % token.decode(), show_chunk)
 print("TAB_SHOW_CANDIDATES_FIRST_PRESS")
@@ -755,15 +778,15 @@ read_more(0.5)
 os.write(fd, b"\x15")
 read_more(0.3)
 before = len(buf)
-os.write(fd, b"statu")
+os.write(fd, b"sho")
 read_more(0.3)
 os.write(fd, b"\t")
 read_more(0.8)
-os.write(fd, b"\r")
+os.write(fd, b"version\r")
 if not wait_prompt():
     fail_pty("PTY: no prompt after history+tab", bytes(buf[before:]))
-if b"DISPATCH frp-server-status" not in bytes(buf[before:]):
-    fail_pty("PTY: tab after history did not complete status", bytes(buf[before:]))
+if b"Project version" not in bytes(buf[before:]) and b"Role" not in bytes(buf[before:]):
+    fail_pty("PTY: tab after history did not complete show version", bytes(buf[before:]))
 print("TAB_HISTORY_COMPATIBLE")
 print("TAB_HISTORY_RECALL_COMPATIBLE")
 

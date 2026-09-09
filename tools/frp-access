@@ -183,8 +183,17 @@ def cmd_show(cfg, args):
             print("%-22s %s" % (label, port if port is not None else "-"))
 
 
+def _print_cidr_normalization(raw_source: str, canonical: str) -> None:
+    raw = str(raw_source or "").strip()
+    canon = str(canonical or "").strip()
+    if raw and canon and raw != canon:
+        print("Input      : %s" % raw)
+        print("Normalized : %s" % canon)
+
+
 def cmd_add_source(cfg, args):
     lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+    raw_source = str(args.source or "").strip()
 
     def mut(state):
         return ACL.add_source_entry(
@@ -199,7 +208,10 @@ def cmd_add_source(cfg, args):
         entry = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
-    print("Added source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+    print("Added source %s" % (entry.get("name"),))
+    _print_cidr_normalization(raw_source, entry.get("cidr") or "")
+    if not (raw_source and entry.get("cidr") and raw_source != entry.get("cidr")):
+        print("CIDR       : %s" % entry.get("cidr"))
     if entry.get("expires_at"):
         print("Expires at  : %s" % entry.get("expires_at"))
 
@@ -219,6 +231,7 @@ def cmd_remove_source(cfg, args):
 
 def cmd_replace_source(cfg, args):
     lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+    raw_source = str(args.new_source or "").strip()
 
     def mut(state):
         return ACL.replace_source_entry(
@@ -234,7 +247,10 @@ def cmd_replace_source(cfg, args):
         entry = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
-    print("Replaced source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+    print("Replaced source %s" % (entry.get("name"),))
+    _print_cidr_normalization(raw_source, entry.get("cidr") or "")
+    if not (raw_source and entry.get("cidr") and raw_source != entry.get("cidr")):
+        print("CIDR       : %s" % entry.get("cidr"))
     if entry.get("expires_at"):
         print("Expires at  : %s" % entry.get("expires_at"))
 
@@ -411,15 +427,35 @@ def cmd_show_service(cfg, args):
             )
 
 
+def validate_single_source_ip(value: str) -> str:
+    """Require a single IP for policy test preview (reject CIDR/networks)."""
+    text = str(value or "").strip()
+    if not text:
+        raise SystemExit("ERROR: source IP is required")
+    if "/" in text:
+        raise SystemExit(
+            "ERROR: enter a single source IP, not a CIDR.\n"
+            "Example:\n"
+            "  10.10.10.25"
+        )
+    try:
+        import ipaddress
+
+        return str(ipaddress.ip_address(text))
+    except ValueError as exc:
+        raise SystemExit("ERROR: invalid source IP: %s" % text) from exc
+
+
 def cmd_test(cfg, args):
     registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
+    source_ip = validate_single_source_ip(args.source)
     state = ACL.load_access_state(cfg=cfg)
     verdict = ACL.authorize(
         state,
         registry,
         client_id=mid,
         service_id=sid,
-        source_ip=args.source,
+        source_ip=source_ip,
     )
     binding = ACL.get_service_binding(state, mid, sid)
     list_name = "-"
@@ -448,16 +484,7 @@ def cmd_test(cfg, args):
                 break
         print()
     print("Decision      : %s" % verdict.get("decision"))
-    if verdict.get("decision") != ACL.DECISION_ALLOW or verdict.get("reason") != ACL.REASON_PUBLIC:
-        if verdict.get("decision") == ACL.DECISION_DENY or verdict.get("reason") not in (
-            ACL.REASON_PUBLIC,
-            ACL.REASON_CIDR_MATCH,
-        ):
-            print("Reason        : %s" % verdict.get("reason"))
-        elif verdict.get("reason") == ACL.REASON_CIDR_MATCH:
-            pass
-        else:
-            print("Reason        : %s" % verdict.get("reason"))
+    print("Reason        : %s" % verdict.get("reason"))
 
 
 def cmd_log(cfg, args):
@@ -507,6 +534,36 @@ def _short_client_id(mid: str, mids: list[str], n: int = 8) -> str:
     return text
 
 
+def _is_menu_back(choice: str) -> bool:
+    text = str(choice or "").strip().lower()
+    return text in ("b", "back", "q", "")
+
+
+def _pick_numbered(prompt_title: str, rows, freeform_prompt: str):
+    """Numbered picker. Out-of-range digits stay in the picker; non-numeric free-form OK."""
+    if not rows:
+        return input("%s: " % freeform_prompt).strip()
+    while True:
+        print()
+        print(prompt_title)
+        print()
+        for idx, label in enumerate(rows, start=1):
+            print("%d) %s" % (idx, label[0]))
+        print()
+        choice = input("Select: ").strip()
+        if _is_menu_back(choice):
+            return None
+        if choice.isdigit():
+            n = int(choice)
+            if 1 <= n <= len(rows):
+                return rows[n - 1][1]
+            print("ERROR: select 1-%d" % len(rows), file=sys.stderr)
+            continue
+        if choice:
+            return choice
+        print("ERROR: select 1-%d" % len(rows), file=sys.stderr)
+
+
 def pick_client(cfg) -> str:
     """Numbered local client picker. Returns CLIENT ID selector or typed value."""
     reg = load_registry(cfg)
@@ -515,24 +572,14 @@ def pick_client(cfg) -> str:
         return input("Client: ").strip()
     items = [(str(mid), client) for mid, client in clients.items() if isinstance(client, dict)]
     mids = [mid for mid, _ in items]
-    print()
-    print("Select client:")
-    print()
     rows = []
     for mid, client in sorted(items, key=lambda pair: pair[0]):
         cid = _short_client_id(mid, mids)
         label = str(client.get("label") or "-").strip() or "-"
         host = str(client.get("hostname") or "-").strip() or "-"
-        rows.append((cid, mid, label, host))
-    for idx, (cid, _mid, label, host) in enumerate(rows, start=1):
-        print("%d) %-10s %-12s %s" % (idx, cid, label, host))
-    print()
-    choice = input("Select: ").strip()
-    if choice.isdigit():
-        n = int(choice)
-        if 1 <= n <= len(rows):
-            return rows[n - 1][0]
-    return choice
+        display = "%-10s %-12s %s" % (cid, label, host)
+        rows.append((display, cid))
+    return _pick_numbered("Select client:", rows, "Client")
 
 
 def pick_service(cfg, client_sel: str) -> str:
@@ -558,23 +605,13 @@ def pick_service(cfg, client_sel: str) -> str:
     services = (client or {}).get("services") or {} if isinstance(client, dict) else {}
     if not isinstance(services, dict) or not services:
         return input("Service ID: ").strip()
-    print()
-    print("Select service:")
-    print()
     rows = []
     for sid, item in sorted(services.items(), key=lambda pair: str(pair[0])):
         rec = item if isinstance(item, dict) else {}
         port = rec.get("remote_port") or "-"
-        rows.append((str(sid), port))
-    for idx, (sid, port) in enumerate(rows, start=1):
-        print("%d) %-12s %s" % (idx, sid, port))
-    print()
-    choice = input("Select: ").strip()
-    if choice.isdigit():
-        n = int(choice)
-        if 1 <= n <= len(rows):
-            return rows[n - 1][0]
-    return choice
+        display = "%-12s %s" % (sid, port)
+        rows.append((display, str(sid)))
+    return _pick_numbered("Select service:", rows, "Service ID")
 
 
 def pick_access_list(cfg) -> str:
@@ -582,22 +619,135 @@ def pick_access_list(cfg) -> str:
     lists = state.get("access_lists") or {}
     if not isinstance(lists, dict) or not lists:
         return input("Access list: ").strip()
-    print()
-    print("Select Access List:")
-    print()
     rows = []
     for lid, lst in sorted(lists.items(), key=lambda pair: str((pair[1] or {}).get("name") or pair[0])):
         name = str((lst or {}).get("name") or lid)
-        rows.append((str(lid), name))
-    for idx, (lid, name) in enumerate(rows, start=1):
-        print("%d) %s" % (idx, name))
+        rows.append((name, name))
+    return _pick_numbered("Select Access List:", rows, "Access list")
+
+
+def _print_test_context(cfg, client_sel: str, service_id: str) -> None:
+    registry, mid, _client, sid, svc = resolve_service(cfg, client_sel, service_id)
+    state = ACL.load_access_state(cfg=cfg)
+    binding = ACL.get_service_binding(state, mid, sid)
+    list_name = "-"
+    if binding.get("access_list_id"):
+        lst = (state.get("access_lists") or {}).get(binding["access_list_id"]) or {}
+        list_name = lst.get("name") or binding["access_list_id"]
     print()
-    choice = input("Select: ").strip()
-    if choice.isdigit():
-        n = int(choice)
-        if 1 <= n <= len(rows):
-            return rows[n - 1][1]
-    return choice
+    print("Testing access policy")
+    print()
+    print("Client       : %s" % short_client(registry, mid))
+    print("Service      : %s" % sid)
+    print("Public port  : %s" % (svc.get("remote_port") if svc else "-"))
+    print("Access mode  : %s" % binding.get("access_mode"))
+    print("Access list  : %s" % list_name)
+    print()
+
+
+def _prompt_source_ip() -> str:
+    while True:
+        source = input("Source IP: ").strip()
+        try:
+            return validate_single_source_ip(source)
+        except SystemExit as exc:
+            msg = exc.code if isinstance(exc.code, str) else "ERROR: invalid source IP"
+            print(msg, file=sys.stderr)
+
+
+def interactive_manage_sources(cfg):
+    sel = pick_access_list(cfg)
+    if not sel:
+        return
+    state = ACL.load_access_state(cfg=cfg)
+    lid, _lst = ACL.resolve_access_list(state, sel)
+    while True:
+        cmd_show(cfg, argparse.Namespace(list=lid))
+        print()
+        print("Allowed Sources")
+        print("===============")
+        print()
+        print("1) Add source")
+        print("2) Edit source")
+        print("3) Remove source")
+        print("4) Add temporary source")
+        print("5) Remove expired sources")
+        print("6) Back")
+        choice = input("Select: ").strip()
+        if choice in ("6",) or _is_menu_back(choice):
+            return
+        used = ACL.list_services_using(state, lid)
+        if choice in ("1", "2", "3", "4", "5") and used:
+            registry = load_registry(cfg)
+            print()
+            print_shared_list_impact(registry, used)
+            print()
+            confirm = input("Continue? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                continue
+        try:
+            if choice == "1":
+                name = input("Name: ").strip()
+                source = input("CIDR/IP: ").strip()
+                cmd_add_source(
+                    cfg,
+                    argparse.Namespace(list=lid, name=name, source=source, ttl=None, yes=True),
+                )
+            elif choice == "4":
+                name = input("Name: ").strip()
+                source = input("CIDR/IP: ").strip()
+                ttl = input("TTL (e.g. 4h): ").strip()
+                cmd_add_source(
+                    cfg,
+                    argparse.Namespace(list=lid, name=name, source=source, ttl=ttl, yes=True),
+                )
+            elif choice == "3":
+                source = input("Source (name/CIDR/id): ").strip()
+                cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source, yes=True))
+            elif choice == "5":
+                cmd_remove_expired(cfg, argparse.Namespace(list=lid, yes=True))
+            elif choice == "2":
+                source = input("Existing source (name/CIDR/id): ").strip()
+                name = input("New name: ").strip()
+                cidr = input("New CIDR/IP: ").strip()
+                ttl = input("TTL (blank=permanent): ").strip() or None
+                cmd_replace_source(
+                    cfg,
+                    argparse.Namespace(
+                        list=lid,
+                        source=source,
+                        name=name,
+                        new_source=cidr,
+                        ttl=ttl,
+                        yes=True,
+                    ),
+                )
+            else:
+                print("Unknown selection")
+        except (ACL.AccessError, SystemExit) as exc:
+            if isinstance(exc, SystemExit):
+                code = exc.code
+                if code not in (0, None):
+                    print(exc if isinstance(code, str) else ("ERROR" if code else ""), file=sys.stderr)
+            else:
+                print("ERROR: %s" % exc, file=sys.stderr)
+        state = ACL.load_access_state(cfg=cfg)
+
+
+def interactive_edit_list_info(cfg):
+    sel = pick_access_list(cfg)
+    if not sel:
+        return
+    name = input("New name (blank=keep): ").strip() or None
+    desc = input("Description (blank keeps current; '-' clears): ").strip()
+    if desc == "":
+        desc = None
+    elif desc == "-":
+        desc = ""
+    cmd_edit_info(
+        cfg,
+        argparse.Namespace(list=sel, name=name, description=desc, yes=False),
+    )
 
 
 def interactive_menu(cfg):
@@ -608,16 +758,17 @@ def interactive_menu(cfg):
         print()
         print("1) List access lists")
         print("2) Create access list")
-        print("3) Edit access list")
-        print("4) Delete access list")
-        print("5) Assign access list to service")
-        print("6) Set service PUBLIC")
-        print("7) Show service access")
-        print("8) Test source IP")
-        print("9) Recent access log")
-        print("10) Back")
+        print("3) Manage allowed sources")
+        print("4) Edit access list information")
+        print("5) Delete access list")
+        print("6) Assign access list to service")
+        print("7) Set service PUBLIC")
+        print("8) Show service access")
+        print("9) Test source IP")
+        print("10) Recent access log")
+        print("11) Back")
         choice = input("Select: ").strip()
-        if choice in ("10", "q", "Q", ""):
+        if choice in ("11",) or _is_menu_back(choice):
             return
         try:
             if choice == "1":
@@ -627,31 +778,57 @@ def interactive_menu(cfg):
                 desc = input("Description (optional): ").strip()
                 cmd_create(cfg, argparse.Namespace(name=name, description=desc))
             elif choice == "3":
-                interactive_edit_list(cfg)
+                interactive_manage_sources(cfg)
             elif choice == "4":
-                sel = pick_access_list(cfg)
-                cmd_delete(cfg, argparse.Namespace(list=sel))
+                interactive_edit_list_info(cfg)
             elif choice == "5":
-                client = pick_client(cfg)
-                service = pick_service(cfg, client)
-                lst = pick_access_list(cfg)
-                cmd_assign(cfg, argparse.Namespace(client=client, service=service, list=lst))
+                sel = pick_access_list(cfg)
+                if sel:
+                    cmd_delete(cfg, argparse.Namespace(list=sel))
             elif choice == "6":
                 client = pick_client(cfg)
+                if not client:
+                    continue
                 service = pick_service(cfg, client)
-                cmd_public(cfg, argparse.Namespace(client=client, service=service))
+                if not service:
+                    continue
+                lst = pick_access_list(cfg)
+                if not lst:
+                    continue
+                cmd_assign(cfg, argparse.Namespace(client=client, service=service, list=lst))
             elif choice == "7":
                 client = pick_client(cfg)
+                if not client:
+                    continue
                 service = pick_service(cfg, client)
-                cmd_show_service(cfg, argparse.Namespace(client=client, service=service))
+                if not service:
+                    continue
+                cmd_public(cfg, argparse.Namespace(client=client, service=service))
             elif choice == "8":
                 client = pick_client(cfg)
+                if not client:
+                    continue
                 service = pick_service(cfg, client)
-                source = input("Source IP: ").strip()
-                cmd_test(cfg, argparse.Namespace(client=client, service=service, source=source))
+                if not service:
+                    continue
+                cmd_show_service(cfg, argparse.Namespace(client=client, service=service))
             elif choice == "9":
                 client = pick_client(cfg)
+                if not client:
+                    continue
                 service = pick_service(cfg, client)
+                if not service:
+                    continue
+                _print_test_context(cfg, client, service)
+                source = _prompt_source_ip()
+                cmd_test(cfg, argparse.Namespace(client=client, service=service, source=source))
+            elif choice == "10":
+                client = pick_client(cfg)
+                if not client:
+                    continue
+                service = pick_service(cfg, client)
+                if not service:
+                    continue
                 cmd_log(
                     cfg,
                     argparse.Namespace(client=client, service=service, limit=50, allow=False, deny=False),
@@ -665,84 +842,6 @@ def interactive_menu(cfg):
                     print(exc if isinstance(code, str) else ("ERROR" if code else ""), file=sys.stderr)
             else:
                 print("ERROR: %s" % exc, file=sys.stderr)
-
-
-def interactive_edit_list(cfg):
-    sel = pick_access_list(cfg)
-    state = ACL.load_access_state(cfg=cfg)
-    lid, lst = ACL.resolve_access_list(state, sel)
-    while True:
-        cmd_show(cfg, argparse.Namespace(list=lid))
-        print()
-        print("Actions")
-        print("=======")
-        print("1) Add source")
-        print("2) Edit source")
-        print("3) Remove source")
-        print("4) Add temporary source")
-        print("5) Edit list information")
-        print("6) Remove expired entries")
-        print("7) Back")
-        choice = input("Select: ").strip()
-        if choice in ("7", "q", "Q", ""):
-            return
-        used = ACL.list_services_using(state, lid)
-        if choice in ("1", "2", "3", "4", "5", "6") and used:
-            registry = load_registry(cfg)
-            print()
-            print_shared_list_impact(registry, used)
-            print()
-            confirm = input("Continue? [y/N]: ").strip().lower()
-            if confirm not in ("y", "yes"):
-                continue
-        if choice == "1":
-            name = input("Name: ").strip()
-            source = input("CIDR/IP: ").strip()
-            cmd_add_source(
-                cfg,
-                argparse.Namespace(list=lid, name=name, source=source, ttl=None, yes=True),
-            )
-        elif choice == "4":
-            name = input("Name: ").strip()
-            source = input("CIDR/IP: ").strip()
-            ttl = input("TTL (e.g. 4h): ").strip()
-            cmd_add_source(
-                cfg,
-                argparse.Namespace(list=lid, name=name, source=source, ttl=ttl, yes=True),
-            )
-        elif choice == "3":
-            source = input("Source (name/CIDR/id): ").strip()
-            cmd_remove_source(cfg, argparse.Namespace(list=lid, source=source, yes=True))
-        elif choice == "5":
-            name = input("New name (blank=keep): ").strip() or None
-            desc = input("Description (blank keeps current; '-' clears): ").strip()
-            if desc == "":
-                desc = None
-            elif desc == "-":
-                desc = ""
-            cmd_edit_info(
-                cfg,
-                argparse.Namespace(list=lid, name=name, description=desc, yes=True),
-            )
-        elif choice == "6":
-            cmd_remove_expired(cfg, argparse.Namespace(list=lid, yes=True))
-        elif choice == "2":
-            source = input("Existing source (name/CIDR/id): ").strip()
-            name = input("New name: ").strip()
-            cidr = input("New CIDR/IP: ").strip()
-            ttl = input("TTL (blank=permanent): ").strip() or None
-            cmd_replace_source(
-                cfg,
-                argparse.Namespace(
-                    list=lid,
-                    source=source,
-                    name=name,
-                    new_source=cidr,
-                    ttl=ttl,
-                    yes=True,
-                ),
-            )
-        state = ACL.load_access_state(cfg=cfg)
 
 
 def build_parser():

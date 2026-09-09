@@ -28,6 +28,7 @@ for f in \
   "$BASE_DIR/lib/frp_project_files.py" \
   "$BASE_DIR/lib/frp_control_locks.py" \
   "$BASE_DIR/lib/frp_server_config.py" \
+  "$BASE_DIR/lib/frp_server_reconfigure.py" \
   "$BASE_DIR/lib/server-project-files.manifest" \
   "$BASE_DIR/lib/frp-doctor-common.sh" \
   "$BASE_DIR/lib/frp_doctor.py" \
@@ -791,9 +792,28 @@ resolve_server_settings() {
   FRP_INTERNAL_IP="${FRP_INTERNAL_IP:-}"
   FRP_PORT_START="${FRP_PORT_START:-${EXISTING_PORT_START:-}}"
   FRP_PORT_END="${FRP_PORT_END:-${EXISTING_PORT_END:-}}"
-  CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
+  # Recompute defaults from effective SOURCE_REF (may be a commit SHA pin).
+  DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
+  DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
+  if [[ -n "${FRP_CLIENT_INSTALLER_URL:-}" ]]; then
+    CLIENT_INSTALLER_URL="$FRP_CLIENT_INSTALLER_URL"
+  elif [[ -n "${EXISTING_CLIENT_INSTALLER_URL:-}" ]] && \
+       ! frp_is_official_client_installer_url "$EXISTING_CLIENT_INSTALLER_URL"; then
+    # Administrator override (non-official URL) wins.
+    CLIENT_INSTALLER_URL="$EXISTING_CLIENT_INSTALLER_URL"
+  else
+    # Empty or previous official auto-default → follow current source ref.
+    CLIENT_INSTALLER_URL="$DEFAULT_CLIENT_INSTALLER_URL"
+  fi
   frp_migrate_legacy_client_installer_url
-  WINDOWS_CLIENT_INSTALLER_URL="${FRP_WINDOWS_CLIENT_INSTALLER_URL:-${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL}}"
+  if [[ -n "${FRP_WINDOWS_CLIENT_INSTALLER_URL:-}" ]]; then
+    WINDOWS_CLIENT_INSTALLER_URL="$FRP_WINDOWS_CLIENT_INSTALLER_URL"
+  elif [[ -n "${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-}" ]] && \
+       ! frp_is_official_client_installer_url "$EXISTING_WINDOWS_CLIENT_INSTALLER_URL"; then
+    WINDOWS_CLIENT_INSTALLER_URL="$EXISTING_WINDOWS_CLIENT_INSTALLER_URL"
+  else
+    WINDOWS_CLIENT_INSTALLER_URL="$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL"
+  fi
   if ! frp_validate_https_url "$CLIENT_INSTALLER_URL"; then
     echo "ERROR: client_installer_url must be a valid https:// URL" >&2
     exit 1

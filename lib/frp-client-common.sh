@@ -4391,6 +4391,14 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
   install -m 0644 "${source}/lib/frp_service_id.py" "${libdir}/frp_service_id.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
+  if [[ -f "${source}/uninstall-client.sh" ]]; then
+    install -m 0755 "${source}/uninstall-client.sh" "${libdir}/uninstall-client.sh"
+  elif [[ -f "${source}/dist/uninstall-client.sh" ]]; then
+    install -m 0755 "${source}/dist/uninstall-client.sh" "${libdir}/uninstall-client.sh"
+  else
+    echo "ERROR: missing ${source}/uninstall-client.sh" >&2
+    return 1
+  fi
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${bindir}/frpctl"
   install -m 0755 "${source}/tools/frp-support-bundle" "${bindir}/frp-support-bundle"
@@ -4419,6 +4427,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp_service_id.py:0644:lib/frp_service_id.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
+    "usr/local/lib/frp-auto-deploy/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
@@ -5151,8 +5160,13 @@ frp_client_fetch_and_upgrade() {
   else
     channel="$(frp_release_channel)"
   fi
+  installed_ref="$(frp_client_installed_source_ref)"
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     source_ref="$FRP_EXPECTED_SOURCE_REF"
+  elif [[ -n "$installed_ref" && "$installed_ref" != "unknown" ]] && \
+       frp_is_commit_source_ref "$installed_ref"; then
+    # Keep PR/commit installs pinned to the same immutable source ref.
+    source_ref="$installed_ref"
   elif [[ "$channel" == "dev" ]]; then
     source_ref="main"
   else

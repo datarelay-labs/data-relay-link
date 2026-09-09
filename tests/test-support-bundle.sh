@@ -405,11 +405,9 @@ for role in ('server', 'client', 'both'):
     help_txt = g.help_text([], role)
     assert 'support-bundle' in help_txt, (role, help_txt)
     concise = g._concise_root(role)
-    if role == 'client':
-        assert 'system' in concise, (role, concise)
-        assert 'support-bundle' not in concise, (role, concise)
-    else:
-        assert 'support-bundle' in concise, (role, concise)
+    # Category-first roots expose maintenance under `system`.
+    assert 'system' in concise, (role, concise)
+    assert 'support-bundle' not in concise, (role, concise)
 print('ok')
 PY
 pass "FRPCTL_GRAMMAR"
