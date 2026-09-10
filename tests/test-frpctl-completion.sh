@@ -599,12 +599,12 @@ print("TAB_ROOT_CANDIDATES_FIRST_PRESS")
 
 # second Tab on same empty line must not duplicate the candidate block
 before_rep = len(buf)
-show_count = count_substr(bytes(buf), b"View status and configuration")
+status_count = count_substr(bytes(buf), b"Host status")
 os.write(fd, b"\t")
 read_more(0.8)
 after_rep = bytes(buf[before_rep:])
-show_count2 = count_substr(bytes(buf), b"View status and configuration")
-if show_count2 > show_count:
+status_count2 = count_substr(bytes(buf), b"Host status")
+if status_count2 > status_count:
     fail_pty("PTY: repeated root tab duplicated candidates", after_rep)
 print("TAB_NO_DUPLICATE_LIST_ON_REPEAT")
 
