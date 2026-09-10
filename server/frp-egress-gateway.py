@@ -4,6 +4,11 @@
 Agentless clients use HTTP_PROXY / HTTPS_PROXY. Policy is evaluated from
 egress-control.json (separate from inbound Access Control). Default DENY,
 fail-closed. Application TLS is never terminated.
+
+v1 model (intentionally small/strict):
+- HTTP: absolute-form http:// URI only; one request per connection
+- HTTPS: CONNECT hostname:port with TLS ClientHello SNI binding on port 443
+- No TLS interception, chunked request bodies, Expect:100-continue, or SOCKS
 """
 from __future__ import annotations
 
@@ -25,11 +30,16 @@ ROOT = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
 MAX_REQUEST_LINE = 8192
 MAX_HEADER_BYTES = 65536
 MAX_HEADERS = 100
+MAX_CONTENT_LENGTH = 64 * 1024 * 1024
 CONNECT_TIMEOUT = 10.0
 IDLE_TIMEOUT = 120.0
 CLIENT_HEADER_TIMEOUT = 30.0
+CLIENT_BODY_TIMEOUT = 60.0
+CLIENT_HELLO_TIMEOUT = 10.0
+MAX_CLIENT_HELLO = 16384
 DEFAULT_MAX_CONCURRENT = 256
 RELAY_BUF = 65536
+RELAY_MAX_BUFFER = 256 * 1024
 
 
 def _load_module(name: str, rel: str):
@@ -69,11 +79,7 @@ def default_resolve(hostname: str) -> list[str]:
 
 
 def default_connect(ip: str, port: int, hostname: str, timeout: float) -> socket.socket:
-    """Connect to an already-validated IP. Sets TLS SNI-friendly TCP only.
-
-    hostname is unused for the TCP connect (rebinding-safe) but retained for
-    callers that need to preserve Host semantics at the HTTP layer.
-    """
+    """Connect to an already-validated IP. TCP only — no TLS termination."""
     del hostname  # TCP path must not re-resolve
     addr = (ip, port)
     family = socket.AF_INET6 if ":" in ip else socket.AF_INET
@@ -154,15 +160,7 @@ class GatewayState:
             return self._active
 
 
-def _peer_ip(handler) -> str:
-    try:
-        addr = handler.client_address[0]
-        return str(addr)
-    except Exception:
-        return ""
-
-
-def _send_simple(handler, code: int, reason: str, body: bytes = b"") -> None:
+def _send_simple_sock(sock: socket.socket, code: int, reason: str, body: bytes = b"") -> None:
     try:
         header = (
             "HTTP/1.1 %d %s\r\n"
@@ -173,9 +171,22 @@ def _send_simple(handler, code: int, reason: str, body: bytes = b"") -> None:
             "\r\n"
             % (code, reason, len(body))
         ).encode("ascii", errors="strict")
-        handler.request.sendall(header + body)
+        sock.sendall(header + body)
     except OSError:
         pass
+
+
+def _header_value_safe(value: str) -> bool:
+    """Reject CR/LF/NUL/C0 (except HTAB)/DEL/C1 controls in header values."""
+    for ch in value:
+        o = ord(ch)
+        if o == 0 or o == 0x7F:
+            return False
+        if o < 0x20 and ch != "\t":
+            return False
+        if 0x80 <= o <= 0x9F:
+            return False
+    return True
 
 
 def _read_until_double_crlf(sock: socket.socket, limit: int) -> bytes:
@@ -196,13 +207,16 @@ def _read_until_double_crlf(sock: socket.socket, limit: int) -> bytes:
 def _parse_request(raw: bytes) -> tuple[str, str, str, dict[str, str], bytes]:
     if not raw or b"\r\n\r\n" not in raw:
         raise EG.EgressError("incomplete request")
-    if b"\x00" in raw:
+    if b"\x00" in raw.split(b"\r\n\r\n", 1)[0]:
         raise EG.EgressError("NUL in request")
     head, rest = raw.split(b"\r\n\r\n", 1)
     try:
         text = head.decode("ascii")
     except UnicodeDecodeError as exc:
         raise EG.EgressError("non-ASCII request headers") from exc
+    if "\n" in text.replace("\r\n", ""):
+        # Bare LF / obs-fold ambiguity — fail closed.
+        raise EG.EgressError("bare LF in headers")
     lines = text.split("\r\n")
     if not lines or len(lines) > MAX_HEADERS + 1:
         raise EG.EgressError("too many headers")
@@ -219,56 +233,155 @@ def _parse_request(raw: bytes) -> tuple[str, str, str, dict[str, str], bytes]:
         raise EG.EgressError("invalid method")
     headers: dict[str, str] = {}
     for line in lines[1:]:
-        if not line or ":" not in line:
+        if not line:
+            raise EG.EgressError("malformed header")
+        # obs-fold / multiline continuation starts with SP/HTAB.
+        if line[0] in (" ", "\t"):
+            raise EG.EgressError("folded header not allowed")
+        if ":" not in line:
             raise EG.EgressError("malformed header")
         name, value = line.split(":", 1)
         if name.lower() != name.strip().lower() or any(ch.isspace() for ch in name):
             raise EG.EgressError("malformed header name")
+        if not _header_value_safe(value):
+            raise EG.EgressError("unsafe header value")
         key = name.strip().lower()
         if key in headers:
-            # Duplicate Host / conflicting representation — fail closed for security-sensitive headers.
-            if key in ("host", "content-length", "transfer-encoding"):
+            if key in ("host", "content-length", "transfer-encoding", "expect", "connection"):
                 raise EG.EgressError("duplicate sensitive header: %s" % key)
         headers[key] = value.lstrip(" ")
+        if not _header_value_safe(headers[key]):
+            raise EG.EgressError("unsafe header value")
     return method.upper(), target, version, headers, rest
 
 
+def _parse_content_length(headers: dict[str, str]) -> Optional[int]:
+    """Validate Content-Length / Transfer-Encoding before any upstream I/O.
+
+    v1: Transfer-Encoding (including chunked) is rejected. Exactly one CL when body
+    framing is present. Returns None when no body is declared (length 0).
+    """
+    te = headers.get("transfer-encoding")
+    cl = headers.get("content-length")
+    if te is not None:
+        raise EG.EgressError("Transfer-Encoding not supported")
+    if cl is None:
+        return None
+    text = cl.strip()
+    if not text or not text.isdigit() or text != str(int(text)):
+        # Reject negatives, plus signs, whitespace forms, non-decimal.
+        if text.startswith("-") or not text.isdigit():
+            raise EG.EgressError("invalid Content-Length")
+        raise EG.EgressError("invalid Content-Length")
+    try:
+        value = int(text, 10)
+    except ValueError as exc:
+        raise EG.EgressError("invalid Content-Length") from exc
+    if value < 0:
+        raise EG.EgressError("negative Content-Length")
+    if value > MAX_CONTENT_LENGTH:
+        raise EG.EgressError("Content-Length too large")
+    return value
+
+
+def _expect_100_continue(headers: dict[str, str]) -> bool:
+    expect = headers.get("expect")
+    if expect is None:
+        return False
+    return expect.strip().lower() == "100-continue"
+
+
 def _absolute_uri_authority(target: str, headers: dict[str, str]) -> tuple[str, int, str]:
-    """Return (hostname, port, path_query) for absolute-form HTTP proxy requests."""
-    if not target.startswith("http://") and not target.startswith("https://"):
-        raise EG.EgressError("proxy requests must use absolute-form URI")
-    parts = urlsplit(target)
-    if parts.username is not None or parts.password is not None:
-        raise EG.EgressError("userinfo is not allowed in URI")
-    if not parts.hostname:
-        raise EG.EgressError("missing hostname in URI")
-    if "@" in (parts.netloc or ""):
-        raise EG.EgressError("userinfo is not allowed in URI")
-    host_header = headers.get("host")
-    if not host_header:
-        raise EG.EgressError("missing Host header")
+    """Return (hostname, port, path_query) for absolute-form HTTP proxy requests.
 
-    default_port = 443 if parts.scheme == "https" else 80
-    uri_port = parts.port if parts.port is not None else default_port
-    uri_host, _ = EG.canonicalize_hostname(parts.hostname, allow_wildcard=False)
-    uri_port = EG.validate_port(uri_port)
+    v1 supports http:// only. Absolute-form https:// is rejected (use CONNECT).
+    """
+    lower = target.lower()
+    if lower.startswith("https://"):
+        raise EG.EgressError("absolute-form https URI not supported; use CONNECT")
+    if not lower.startswith("http://"):
+        raise EG.EgressError("proxy requests must use absolute-form http URI")
+    try:
+        parts = urlsplit(target)
+        if parts.username is not None or parts.password is not None:
+            raise EG.EgressError("userinfo is not allowed in URI")
+        if not parts.hostname:
+            raise EG.EgressError("missing hostname in URI")
+        if "@" in (parts.netloc or ""):
+            raise EG.EgressError("userinfo is not allowed in URI")
+        host_header = headers.get("host")
+        if not host_header:
+            raise EG.EgressError("missing Host header")
 
-    # Host header must agree with URI authority (hostname + effective port).
-    if ":" in host_header and not host_header.startswith("["):
-        hdr_host, hdr_port = EG.parse_authority_host_port(host_header, default_port=uri_port)
-    elif host_header.startswith("["):
-        hdr_host, hdr_port = EG.parse_authority_host_port(host_header, default_port=uri_port)
-    else:
-        hdr_host, _ = EG.canonicalize_hostname(host_header, allow_wildcard=False)
-        hdr_port = uri_port
+        default_port = 80
+        try:
+            uri_port = parts.port if parts.port is not None else default_port
+        except ValueError as exc:
+            raise EG.EgressError("malformed URI port") from exc
+        uri_host, _ = EG.canonicalize_hostname(parts.hostname, allow_wildcard=False)
+        uri_port = EG.validate_port(uri_port)
 
-    if hdr_host != uri_host or int(hdr_port) != int(uri_port):
-        raise EG.EgressError("URI authority and Host header disagree")
+        if ":" in host_header and not host_header.startswith("["):
+            hdr_host, hdr_port = EG.parse_authority_host_port(host_header, default_port=uri_port)
+        elif host_header.startswith("["):
+            hdr_host, hdr_port = EG.parse_authority_host_port(host_header, default_port=uri_port)
+        else:
+            hdr_host, _ = EG.canonicalize_hostname(host_header, allow_wildcard=False)
+            hdr_port = uri_port
 
-    path = parts.path or "/"
-    if parts.query:
-        path = path + "?" + parts.query
-    return uri_host, uri_port, path
+        if hdr_host != uri_host or int(hdr_port) != int(uri_port):
+            raise EG.EgressError("URI authority and Host header disagree")
+
+        path = parts.path or "/"
+        if parts.query:
+            path = path + "?" + parts.query
+        return uri_host, uri_port, path
+    except EG.EgressError:
+        raise
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise EG.EgressError("malformed URI") from exc
+
+
+def _connection_hop_headers(headers: dict[str, str]) -> set[str]:
+    hop = {
+        "proxy-connection",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "proxy-authorization",
+        "proxy-authenticate",
+        "expect",
+    }
+    conn = headers.get("connection")
+    if conn:
+        for token in conn.split(","):
+            name = token.strip().lower()
+            if name:
+                hop.add(name)
+    return hop
+
+
+def _read_exact_body(sock: socket.socket, body_prefix: bytes, content_length: int) -> bytes:
+    """Return exactly content_length body bytes. Reject excess already buffered."""
+    if content_length < 0:
+        raise EG.EgressError("invalid Content-Length")
+    if len(body_prefix) > content_length:
+        raise EG.EgressError("request body exceeds Content-Length")
+    if len(body_prefix) == content_length:
+        return body_prefix
+    sock.settimeout(CLIENT_BODY_TIMEOUT)
+    chunks = [body_prefix]
+    got = len(body_prefix)
+    while got < content_length:
+        chunk = sock.recv(min(RELAY_BUF, content_length - got))
+        if not chunk:
+            raise EG.EgressError("incomplete request body")
+        chunks.append(chunk)
+        got += len(chunk)
+    return b"".join(chunks)
 
 
 def _authorize_and_connect(
@@ -294,7 +407,6 @@ def _authorize_and_connect(
     if decision.get("decision") != EG.DECISION_ALLOW:
         return None, decision
 
-    # DNS once → validate ALL → connect exact IP (rebinding-safe).
     try:
         resolved = gw.resolve_fn(hostname)
         validated = EG.validate_resolved_addresses(resolved)
@@ -335,50 +447,398 @@ def _authorize_and_connect(
     return None, decision
 
 
-def _relay(client: socket.socket, upstream: socket.socket) -> None:
+def _parse_tls_client_hello_sni(buf: bytes) -> tuple[str, Optional[str]]:
+    """Parse buffered TLS bytes for ClientHello SNI.
+
+    Returns:
+      ('incomplete', None) — need more bytes
+      ('ok', sni_or_None) — complete ClientHello; sni may be None if extension absent
+      ('error', reason) — malformed TLS
+    """
+    if len(buf) < 5:
+        return "incomplete", None
+    # Reassemble handshake message from one or more TLS records.
+    pos = 0
+    handshake = bytearray()
+    while True:
+        if len(buf) < pos + 5:
+            return "incomplete", None
+        content_type = buf[pos]
+        # version = buf[pos+1:pos+3]
+        record_len = int.from_bytes(buf[pos + 3 : pos + 5], "big")
+        if record_len > 16384:
+            return "error", "TLS record too large"
+        if len(buf) < pos + 5 + record_len:
+            return "incomplete", None
+        if content_type != 0x16:  # Handshake
+            return "error", "expected TLS handshake record"
+        fragment = buf[pos + 5 : pos + 5 + record_len]
+        pos += 5 + record_len
+        handshake.extend(fragment)
+        if len(handshake) < 4:
+            continue
+        msg_type = handshake[0]
+        msg_len = int.from_bytes(handshake[1:4], "big")
+        if msg_type != 0x01:
+            return "error", "expected ClientHello"
+        if len(handshake) < 4 + msg_len:
+            continue
+        if len(handshake) > 4 + msg_len:
+            # Trailing data inside records beyond one handshake — fail closed.
+            return "error", "extra handshake data"
+        body = bytes(handshake[4 : 4 + msg_len])
+        return _extract_sni_from_client_hello_body(body)
+
+    return "incomplete", None
+
+
+def _extract_sni_from_client_hello_body(body: bytes) -> tuple[str, Optional[str]]:
+    try:
+        if len(body) < 34:
+            return "error", "ClientHello too short"
+        idx = 0
+        # client_version(2) + random(32)
+        idx += 34
+        if idx >= len(body):
+            return "error", "truncated ClientHello"
+        session_id_len = body[idx]
+        idx += 1 + session_id_len
+        if idx + 2 > len(body):
+            return "error", "truncated ClientHello"
+        cipher_len = int.from_bytes(body[idx : idx + 2], "big")
+        idx += 2 + cipher_len
+        if idx >= len(body):
+            return "error", "truncated ClientHello"
+        comp_len = body[idx]
+        idx += 1 + comp_len
+        if idx == len(body):
+            # No extensions
+            return "ok", None
+        if idx + 2 > len(body):
+            return "error", "truncated ClientHello extensions"
+        ext_total = int.from_bytes(body[idx : idx + 2], "big")
+        idx += 2
+        if idx + ext_total > len(body):
+            return "error", "truncated ClientHello extensions"
+        end = idx + ext_total
+        sni_value = None
+        while idx + 4 <= end:
+            ext_type = int.from_bytes(body[idx : idx + 2], "big")
+            ext_len = int.from_bytes(body[idx + 2 : idx + 4], "big")
+            idx += 4
+            if idx + ext_len > end:
+                return "error", "truncated extension"
+            ext_data = body[idx : idx + ext_len]
+            idx += ext_len
+            if ext_type == 0x0000:  # server_name
+                if sni_value is not None:
+                    return "error", "duplicate SNI"
+                if len(ext_data) < 2:
+                    return "error", "invalid SNI"
+                list_len = int.from_bytes(ext_data[0:2], "big")
+                if list_len + 2 != len(ext_data):
+                    return "error", "invalid SNI list length"
+                p = 2
+                found = None
+                while p < len(ext_data):
+                    if p + 3 > len(ext_data):
+                        return "error", "invalid SNI entry"
+                    name_type = ext_data[p]
+                    name_len = int.from_bytes(ext_data[p + 1 : p + 3], "big")
+                    p += 3
+                    if p + name_len > len(ext_data):
+                        return "error", "invalid SNI name"
+                    if name_type == 0:
+                        try:
+                            found = ext_data[p : p + name_len].decode("ascii")
+                        except UnicodeDecodeError:
+                            return "error", "non-ASCII SNI"
+                    p += name_len
+                sni_value = found
+        if idx != end:
+            return "error", "extension length mismatch"
+        return "ok", sni_value
+    except (IndexError, ValueError, TypeError):
+        return "error", "malformed ClientHello"
+
+
+def _read_and_validate_client_hello(
+    client: socket.socket,
+    *,
+    expected_hostname: str,
+    initial: bytes = b"",
+) -> tuple[Optional[bytes], Optional[str], Optional[str]]:
+    """Buffer ClientHello, validate SNI == expected_hostname.
+
+    Returns (raw_bytes, observed_sni, error_reason).
+    On success error_reason is None and raw_bytes must be forwarded unchanged.
+    """
+    client.settimeout(CLIENT_HELLO_TIMEOUT)
+    buf = bytearray(initial)
+    deadline = time.monotonic() + CLIENT_HELLO_TIMEOUT
+    while True:
+        status, detail = _parse_tls_client_hello_sni(bytes(buf))
+        if status == "ok":
+            sni = detail
+            if not sni:
+                return None, None, "missing SNI"
+            try:
+                observed, _ = EG.canonicalize_hostname(sni, allow_wildcard=False)
+            except EG.EgressError:
+                return None, sni, "invalid SNI hostname"
+            if observed != expected_hostname:
+                return None, observed, "SNI mismatch"
+            return bytes(buf), observed, None
+        if status == "error":
+            return None, None, detail or "invalid ClientHello"
+        if len(buf) >= MAX_CLIENT_HELLO:
+            return None, None, "ClientHello too large"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, None, "ClientHello timeout"
+        client.settimeout(min(CLIENT_HELLO_TIMEOUT, max(0.05, remaining)))
+        try:
+            chunk = client.recv(min(4096, MAX_CLIENT_HELLO - len(buf)))
+        except socket.timeout:
+            return None, None, "ClientHello timeout"
+        except OSError:
+            return None, None, "ClientHello read error"
+        if not chunk:
+            return None, None, "ClientHello truncated"
+        buf.extend(chunk)
+
+
+def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None:
+    """Bidirectional relay with backpressure (bounded buffers, writable select)."""
     client.setblocking(False)
     upstream.setblocking(False)
-    sockets = [client, upstream]
+    c2u = bytearray()
+    u2c = bytearray()
+    client_open_r = True
+    upstream_open_r = True
+    client_open_w = True
+    upstream_open_w = True
     last_data = time.monotonic()
+
+    def _close_all():
+        for sock in (client, upstream):
+            try:
+                sock.close()
+            except OSError:
+                pass
+
     try:
         while True:
-            readable, _, errored = select.select(sockets, [], sockets, 1.0)
+            if not client_open_w and not upstream_open_w and not c2u and not u2c:
+                return
+            if not client_open_r and not upstream_open_r and not c2u and not u2c:
+                return
+
+            rlist = []
+            wlist = []
+            if client_open_r and len(c2u) < RELAY_MAX_BUFFER and upstream_open_w:
+                rlist.append(client)
+            if upstream_open_r and len(u2c) < RELAY_MAX_BUFFER and client_open_w:
+                rlist.append(upstream)
+            if c2u and upstream_open_w:
+                wlist.append(upstream)
+            if u2c and client_open_w:
+                wlist.append(client)
+
+            if not rlist and not wlist:
+                return
+
+            readable, writable, errored = select.select(
+                rlist,
+                wlist,
+                list({client, upstream}),
+                1.0,
+            )
             if errored:
-                break
-            if not readable:
+                return
+            if not readable and not writable:
                 if time.monotonic() - last_data > IDLE_TIMEOUT:
-                    break
+                    return
                 continue
+
             for sock in readable:
-                other = upstream if sock is client else client
                 try:
                     data = sock.recv(RELAY_BUF)
+                except BlockingIOError:
+                    continue
                 except OSError:
                     return
                 if not data:
-                    # Half-close
-                    try:
-                        other.shutdown(socket.SHUT_WR)
-                    except OSError:
-                        pass
-                    sockets = [s for s in sockets if s is not sock]
-                    if not sockets or (client not in sockets and upstream not in sockets):
-                        return
-                    if len(sockets) == 1:
-                        # Wait briefly for remaining direction then exit
-                        continue
-                    break
+                    if sock is client:
+                        client_open_r = False
+                        # Flush then half-close upstream write.
+                        if not c2u and upstream_open_w:
+                            try:
+                                upstream.shutdown(socket.SHUT_WR)
+                            except OSError:
+                                pass
+                            upstream_open_w = False
+                    else:
+                        upstream_open_r = False
+                        if not u2c and client_open_w:
+                            try:
+                                client.shutdown(socket.SHUT_WR)
+                            except OSError:
+                                pass
+                            client_open_w = False
+                    continue
                 last_data = time.monotonic()
+                if sock is client:
+                    c2u.extend(data)
+                else:
+                    u2c.extend(data)
+
+            for sock in writable:
+                buf = c2u if sock is upstream else u2c
+                if not buf:
+                    continue
                 try:
-                    other.sendall(data)
+                    sent = sock.send(buf)
+                except BlockingIOError:
+                    continue
                 except OSError:
                     return
+                if sent:
+                    del buf[:sent]
+                    last_data = time.monotonic()
+
+            # Complete half-close after draining direction buffers.
+            if not client_open_r and not c2u and upstream_open_w:
+                try:
+                    upstream.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                upstream_open_w = False
+            if not upstream_open_r and not u2c and client_open_w:
+                try:
+                    client.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                client_open_w = False
+    finally:
+        _close_all()
+
+
+def _relay_upstream_response(client: socket.socket, upstream: socket.socket) -> None:
+    """One-request HTTP model: only forward upstream → client; never client → upstream."""
+    client.setblocking(False)
+    upstream.setblocking(False)
+    u2c = bytearray()
+    upstream_open_r = True
+    client_open_w = True
+    last_data = time.monotonic()
+    try:
+        while True:
+            if not upstream_open_r and not u2c:
+                return
+            rlist = []
+            wlist = []
+            # Detect pipelined second request — read & discard, do not forward.
+            rlist.append(client)
+            if upstream_open_r and len(u2c) < RELAY_MAX_BUFFER and client_open_w:
+                rlist.append(upstream)
+            if u2c and client_open_w:
+                wlist.append(client)
+            readable, writable, errored = select.select(
+                rlist, wlist, [client, upstream], 1.0
+            )
+            if errored:
+                return
+            if not readable and not writable:
+                if time.monotonic() - last_data > IDLE_TIMEOUT:
+                    return
+                continue
+            for sock in readable:
+                if sock is client:
+                    try:
+                        extra = sock.recv(RELAY_BUF)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        return
+                    # Extra client bytes after the single request: drop & close write to upstream.
+                    if extra:
+                        try:
+                            upstream.shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+                    continue
+                try:
+                    data = sock.recv(RELAY_BUF)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    return
+                if not data:
+                    upstream_open_r = False
+                    continue
+                last_data = time.monotonic()
+                u2c.extend(data)
+            for sock in writable:
+                if sock is not client or not u2c:
+                    continue
+                try:
+                    sent = sock.send(u2c)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    return
+                if sent:
+                    del u2c[:sent]
+                    last_data = time.monotonic()
+            if not upstream_open_r and not u2c and client_open_w:
+                try:
+                    client.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                client_open_w = False
+                return
     finally:
         for sock in (client, upstream):
             try:
                 sock.close()
             except OSError:
                 pass
+
+
+def _deny_sni(
+    gw: GatewayState,
+    *,
+    source_ip: str,
+    hostname: str,
+    port: int,
+    reason: str,
+    observed_sni: Optional[str],
+    client: socket.socket,
+    upstream: socket.socket,
+) -> None:
+    state, load_error, cfg = gw.cache.snapshot()
+    del state, load_error
+    event = {
+        "timestamp": EG.utc_now_iso(),
+        "source_ip": source_ip,
+        "hostname": hostname,
+        "port": port,
+        "method": "CONNECT",
+        "decision": EG.DECISION_DENY,
+        "reason": reason,
+    }
+    if observed_sni is not None:
+        event["observed_sni"] = observed_sni
+    EG.emit_conn_log(event, cfg=cfg)
+    try:
+        upstream.close()
+    except OSError:
+        pass
+    try:
+        client.close()
+    except OSError:
+        pass
 
 
 def handle_client(gw: GatewayState, request: socket.socket, client_address) -> None:
@@ -390,134 +850,13 @@ def handle_client(gw: GatewayState, request: socket.socket, client_address) -> N
         return
     gw.bump_active(1)
     try:
-        source_ip = str(client_address[0])
+        _handle_client_inner(gw, request, client_address)
+    except Exception:
+        # Worker must never die from unhandled parse/URI exceptions.
         try:
-            raw = _read_until_double_crlf(request, MAX_HEADER_BYTES)
-            method, target, version, headers, body_prefix = _parse_request(raw)
-        except EG.EgressError:
             _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
-            return
-        except OSError:
-            return
-
-        if method == "CONNECT":
-            try:
-                host, port = EG.parse_authority_host_port(target)
-            except EG.EgressError:
-                state, load_error, cfg = gw.cache.snapshot()
-                EG.emit_conn_log(
-                    {
-                        "timestamp": EG.utc_now_iso(),
-                        "source_ip": source_ip,
-                        "hostname": target,
-                        "port": None,
-                        "method": "CONNECT",
-                        "decision": EG.DECISION_DENY,
-                        "reason": EG.REASON_MALFORMED_REQUEST,
-                    },
-                    cfg=cfg,
-                )
-                _send_simple_sock(request, 400, "Bad Request", b"bad connect\n")
-                return
-            upstream, decision = _authorize_and_connect(
-                gw, source_ip=source_ip, hostname=host, port=port, method="CONNECT"
-            )
-            if upstream is None:
-                code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
-                _send_simple_sock(request, code, "Forbidden" if code == 403 else "Bad Gateway", b"denied\n")
-                return
-            try:
-                request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-            except OSError:
-                upstream.close()
-                return
-            _relay(request, upstream)
-            return
-
-        # HTTP forward proxy methods
-        if method not in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
-            _send_simple_sock(request, 405, "Method Not Allowed", b"method not allowed\n")
-            return
-        try:
-            host, port, path = _absolute_uri_authority(target, headers)
-        except EG.EgressError:
-            state, load_error, cfg = gw.cache.snapshot()
-            EG.emit_conn_log(
-                {
-                    "timestamp": EG.utc_now_iso(),
-                    "source_ip": source_ip,
-                    "hostname": target[:200],
-                    "port": None,
-                    "method": method,
-                    "decision": EG.DECISION_DENY,
-                    "reason": EG.REASON_MALFORMED_REQUEST,
-                },
-                cfg=cfg,
-            )
-            _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
-            return
-
-        upstream, decision = _authorize_and_connect(
-            gw, source_ip=source_ip, hostname=host, port=port, method=method
-        )
-        if upstream is None:
-            code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
-            _send_simple_sock(request, code, "Forbidden" if code == 403 else "Bad Gateway", b"denied\n")
-            return
-
-        # Rebuild request with origin-form target; strip hop-by-hop / proxy-auth.
-        hop_by_hop = {
-            "proxy-connection",
-            "connection",
-            "keep-alive",
-            "te",
-            "trailer",
-            "transfer-encoding",
-            "upgrade",
-            "proxy-authorization",
-            "proxy-authenticate",
-        }
-        out_headers = []
-        for key, value in headers.items():
-            if key in hop_by_hop:
-                continue
-            # Preserve original header casing lightly via title — values already parsed.
-            out_headers.append("%s: %s" % (key, value))
-        if "host" not in headers:
-            out_headers.append("Host: %s" % (host if port in (80, 443) else "%s:%d" % (host, port)))
-        out_headers.append("Connection: close")
-        req = "%s %s %s\r\n%s\r\n\r\n" % (method, path, version, "\r\n".join(out_headers))
-        try:
-            upstream.sendall(req.encode("ascii", errors="strict"))
-            if body_prefix:
-                upstream.sendall(body_prefix)
-            # If Content-Length remains, read remaining body from client.
-            cl = headers.get("content-length")
-            if cl and method not in ("GET", "HEAD"):
-                try:
-                    total = int(cl)
-                except ValueError:
-                    upstream.close()
-                    _send_simple_sock(request, 400, "Bad Request", b"bad content-length\n")
-                    return
-                already = len(body_prefix)
-                remaining = total - already
-                while remaining > 0:
-                    chunk = request.recv(min(RELAY_BUF, remaining))
-                    if not chunk:
-                        break
-                    upstream.sendall(chunk)
-                    remaining -= len(chunk)
-            _relay(request, upstream)
-        except OSError:
-            try:
-                upstream.close()
-            except OSError:
-                pass
-            try:
-                request.close()
-            except OSError:
-                pass
+        except Exception:
+            pass
     finally:
         gw.bump_active(-1)
         gw.release()
@@ -527,19 +866,158 @@ def handle_client(gw: GatewayState, request: socket.socket, client_address) -> N
             pass
 
 
-def _send_simple_sock(sock: socket.socket, code: int, reason: str, body: bytes = b"") -> None:
+def _handle_client_inner(gw: GatewayState, request: socket.socket, client_address) -> None:
+    source_ip = str(client_address[0])
     try:
-        header = (
-            "HTTP/1.1 %d %s\r\n"
-            "Content-Type: text/plain; charset=utf-8\r\n"
-            "Content-Length: %d\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            % (code, reason, len(body))
-        ).encode("ascii")
-        sock.sendall(header + body)
+        raw = _read_until_double_crlf(request, MAX_HEADER_BYTES)
+        method, target, version, headers, body_prefix = _parse_request(raw)
+    except EG.EgressError:
+        _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+        return
     except OSError:
-        pass
+        return
+
+    if method == "CONNECT":
+        try:
+            host, port = EG.parse_authority_host_port(target)
+        except EG.EgressError:
+            state, load_error, cfg = gw.cache.snapshot()
+            del state, load_error
+            EG.emit_conn_log(
+                {
+                    "timestamp": EG.utc_now_iso(),
+                    "source_ip": source_ip,
+                    "hostname": target[:200],
+                    "port": None,
+                    "method": "CONNECT",
+                    "decision": EG.DECISION_DENY,
+                    "reason": EG.REASON_MALFORMED_REQUEST,
+                },
+                cfg=cfg,
+            )
+            _send_simple_sock(request, 400, "Bad Request", b"bad connect\n")
+            return
+        # No request body for CONNECT; leftover bytes are start of TLS (or abuse).
+        upstream, decision = _authorize_and_connect(
+            gw, source_ip=source_ip, hostname=host, port=port, method="CONNECT"
+        )
+        if upstream is None:
+            code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
+            _send_simple_sock(request, code, "Forbidden" if code == 403 else "Bad Gateway", b"denied\n")
+            return
+        try:
+            request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        except OSError:
+            upstream.close()
+            return
+
+        # Port 443: bind TLS SNI to authorized CONNECT hostname (no MITM).
+        if port == 443:
+            raw_hello, observed, err = _read_and_validate_client_hello(
+                request, expected_hostname=host, initial=body_prefix
+            )
+            if err is not None:
+                reason = (
+                    EG.REASON_TLS_SNI_MISMATCH
+                    if err == "SNI mismatch"
+                    else EG.REASON_TLS_CLIENT_HELLO_INVALID
+                )
+                _deny_sni(
+                    gw,
+                    source_ip=source_ip,
+                    hostname=host,
+                    port=port,
+                    reason=reason,
+                    observed_sni=observed,
+                    client=request,
+                    upstream=upstream,
+                )
+                return
+            try:
+                upstream.sendall(raw_hello)
+            except OSError:
+                upstream.close()
+                return
+        elif body_prefix:
+            # Non-443 CONNECT with leftover bytes: forward as tunnel start.
+            try:
+                upstream.sendall(body_prefix)
+            except OSError:
+                upstream.close()
+                return
+
+        _relay_bidirectional(request, upstream)
+        return
+
+    # HTTP forward proxy methods
+    if method not in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        _send_simple_sock(request, 405, "Method Not Allowed", b"method not allowed\n")
+        return
+
+    # Framing validation BEFORE authorize/connect/upstream send.
+    try:
+        if _expect_100_continue(headers):
+            raise EG.EgressError("Expect: 100-continue not supported")
+        content_length = _parse_content_length(headers)
+        host, port, path = _absolute_uri_authority(target, headers)
+        if content_length is None:
+            if body_prefix:
+                raise EG.EgressError("body without Content-Length")
+            body = b""
+        else:
+            body = _read_exact_body(request, body_prefix, content_length)
+    except EG.EgressError:
+        state, load_error, cfg = gw.cache.snapshot()
+        del state, load_error
+        EG.emit_conn_log(
+            {
+                "timestamp": EG.utc_now_iso(),
+                "source_ip": source_ip,
+                "hostname": (target[:200] if target else ""),
+                "port": None,
+                "method": method,
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_MALFORMED_REQUEST,
+            },
+            cfg=cfg,
+        )
+        _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+        return
+
+    upstream, decision = _authorize_and_connect(
+        gw, source_ip=source_ip, hostname=host, port=port, method=method
+    )
+    if upstream is None:
+        code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
+        _send_simple_sock(request, code, "Forbidden" if code == 403 else "Bad Gateway", b"denied\n")
+        return
+
+    hop_by_hop = _connection_hop_headers(headers)
+    out_headers = []
+    for key, value in headers.items():
+        if key in hop_by_hop:
+            continue
+        out_headers.append("%s: %s" % (key, value))
+    if "host" not in headers:
+        out_headers.append(
+            "Host: %s" % (host if port == 80 else "%s:%d" % (host, port))
+        )
+    out_headers.append("Connection: close")
+    req = "%s %s %s\r\n%s\r\n\r\n" % (method, path, version, "\r\n".join(out_headers))
+    try:
+        upstream.sendall(req.encode("ascii", errors="strict"))
+        if body:
+            upstream.sendall(body)
+        _relay_upstream_response(request, upstream)
+    except OSError:
+        try:
+            upstream.close()
+        except OSError:
+            pass
+        try:
+            request.close()
+        except OSError:
+            pass
 
 
 class ThreadedTCPServer(socketserver.ThreadingTCPServer):
@@ -568,7 +1046,6 @@ def serve(
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
 ):
     cache = PolicyCache(config_path)
-    # Prefer CLI/explicit bind; else config.
     host, port = EG.listen_bind(cache.cfg)
     if bind_host is not None:
         host = bind_host
@@ -583,8 +1060,6 @@ def serve(
     server = ThreadedTCPServer((host, port), gw)
 
     def health_thread():
-        # Lightweight loopback health endpoint on same process via separate socket is avoided;
-        # systemd uses process liveness. Optional /healthz via Unix is not required for v1.
         while not gw.shutting_down:
             cache.reload(force=False)
             time.sleep(2)

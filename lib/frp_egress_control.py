@@ -47,6 +47,8 @@ REASON_UNSAFE_DESTINATION = "UNSAFE_DESTINATION"
 REASON_DNS_FAILURE = "DNS_FAILURE"
 REASON_DNS_UNSAFE = "DNS_UNSAFE"
 REASON_MALFORMED_REQUEST = "MALFORMED_REQUEST"
+REASON_TLS_SNI_MISMATCH = "TLS_SNI_MISMATCH"
+REASON_TLS_CLIENT_HELLO_INVALID = "TLS_CLIENT_HELLO_INVALID"
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DESCRIPTION_MAX_LEN = 1024
@@ -61,6 +63,7 @@ _BLOCKED_NETWORKS = tuple(
     for n in (
         "0.0.0.0/8",
         "10.0.0.0/8",
+        "100.64.0.0/10",  # RFC6598 Shared Address Space / CGNAT (not is_private)
         "127.0.0.0/8",
         "169.254.0.0/16",
         "172.16.0.0/12",
@@ -949,6 +952,10 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
                 "decision": event.get("decision"),
                 "reason": event.get("reason"),
             }
+            # Optional safe SNI audit field (hostname only — never raw ClientHello).
+            observed_sni = event.get("observed_sni")
+            if observed_sni is not None:
+                record["observed_sni"] = str(observed_sni)[:253]
             line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
             if not path.exists():
                 path.write_text(line, encoding="utf-8")
