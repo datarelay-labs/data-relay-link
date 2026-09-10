@@ -815,7 +815,7 @@ scenario_dns_only() {
   ACCESS_HOST="$PUBLIC_HOSTNAME"
   scenario_dns_checks
   # Configuration change to a second hostname that also resolves (sslip alternate form not required).
-  run_server dns-change-unset "sudo /usr/local/bin/drlink unset server hostname || sudo /usr/local/sbin/frp-server-set hostname --unset" || fail_stop
+  run_server dns-change-unset "sudo /usr/local/bin/drlink unset server hostname || sudo /usr/local/lib/drlink/frp-server-set hostname --unset" || fail_stop
   ACCESS_HOST="$SERVER_IP"
   wait_external_ssh dns-ip-fallback "$EXT_TRIES" "$EXT_DELAY" "$SERVER_IP" "$SSH_PUBLIC_PORT" "$TUNNEL_SSH_USER" || fail_stop
   run_server dns-change-reset "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
