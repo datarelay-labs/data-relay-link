@@ -138,12 +138,17 @@ spec = importlib.util.spec_from_file_location('grammar', sys.argv[1])
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)
 groups = ['grp_11111111']
+assert 'group' in g.completion_candidates('', 'server', [], {}, [], groups=groups)
 assert 'groups' in g.completion_candidates('show ', 'server', [], {}, [], groups=groups)
 assert 'groups' in g.completion_candidates('show client aaaaaaaa ', 'server', ['aaaaaaaa'], {}, [], groups=groups)
 assert 'grp_11111111' in g.completion_candidates(
     'add client aaaaaaaa group ', 'server', ['aaaaaaaa'], {}, [], groups=groups
 )
-assert 'remove' in g.canonical_verbs('server')
+assert 'grp_11111111' in g.completion_candidates(
+    'group add-member ', 'server', ['aaaaaaaa'], {}, [], groups=groups
+)
+assert 'group' in g.canonical_verbs('server')
+assert 'remove-member' in g.completion_candidates('group ', 'server', [], {}, [], groups=groups)
 PY
 
 python3 - "$ROOT/lib/frp_client_registry.py" <<'PY'
