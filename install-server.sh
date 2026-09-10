@@ -74,13 +74,25 @@ done
 
 DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
 DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
-# Historical owner/repo, concatenated only to recognize the obsolete project URL.
+# Historical owner/repo, concatenated only to recognize obsolete project URLs.
 LEGACY_CLIENT_INSTALLER_OWNER='RickLee-kr'
 LEGACY_CLIENT_INSTALLER_REPO='frp-auto-deploy'
+# Former GitHub product identity before datarelay-labs/data-relay-link.
+FORMER_CLIENT_INSTALLER_OWNER='xdr-labs'
+FORMER_CLIENT_INSTALLER_REPO='frp-auto-deploy'
 
 frp_legacy_client_installer_url() {
   printf 'https://raw.githubusercontent.com/%s/%s/main/dist/bootstrap-client.sh' \
     "$LEGACY_CLIENT_INSTALLER_OWNER" "$LEGACY_CLIENT_INSTALLER_REPO"
+}
+
+frp_is_former_product_installer_url() {
+  local url="${1:-}"
+  case "$url" in
+    https://raw.githubusercontent.com/${FORMER_CLIENT_INSTALLER_OWNER}/${FORMER_CLIENT_INSTALLER_REPO}/*) return 0 ;;
+    https://github.com/${FORMER_CLIENT_INSTALLER_OWNER}/${FORMER_CLIENT_INSTALLER_REPO}/*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 frp_migrate_legacy_client_installer_url() {
@@ -88,6 +100,12 @@ frp_migrate_legacy_client_installer_url() {
   legacy="$(frp_legacy_client_installer_url)"
   if [[ "${CLIENT_INSTALLER_URL:-}" == "$legacy" ]]; then
     CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
+  fi
+  if frp_is_former_product_installer_url "${CLIENT_INSTALLER_URL:-}"; then
+    CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
+  fi
+  if frp_is_former_product_installer_url "${WINDOWS_CLIENT_INSTALLER_URL:-}"; then
+    WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
   fi
   if [[ -z "${FRP_CLIENT_INSTALLER_URL:-}" ]] && \
      [[ "$(frp_release_channel)" == "stable" ]] && \
@@ -802,6 +820,9 @@ resolve_server_settings() {
   CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
   frp_migrate_legacy_client_installer_url
   WINDOWS_CLIENT_INSTALLER_URL="${FRP_WINDOWS_CLIENT_INSTALLER_URL:-${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL}}"
+  if frp_is_former_product_installer_url "${WINDOWS_CLIENT_INSTALLER_URL:-}"; then
+    WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
+  fi
   if ! frp_validate_https_url "$CLIENT_INSTALLER_URL"; then
     echo "ERROR: client_installer_url must be a valid https:// URL" >&2
     exit 1
