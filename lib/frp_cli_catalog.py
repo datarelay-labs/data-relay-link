@@ -130,6 +130,71 @@ def _arg(name, complete=C_NONE, required=True):
     return {"name": name, "complete": complete, "required": bool(required)}
 
 
+def _flag(name, arity=1, choices=(), hidden=False, required=False):
+    """Describe one option flag.
+
+    ``arity`` is ``0`` for boolean switches (no value) and ``1`` for flags that
+    consume the next token as a value (AUDIT-014).
+    """
+    return {
+        "name": str(name),
+        "arity": 0 if int(arity) == 0 else 1,
+        "choices": tuple(choices) if choices else (),
+        "hidden": bool(hidden),
+        "required": bool(required),
+    }
+
+
+def _normalize_flags(flags):
+    """Accept ``_flag(...)`` dicts or legacy bare ``"--name"`` strings."""
+    out = []
+    for item in flags or ():
+        if isinstance(item, dict):
+            out.append(
+                _flag(
+                    item["name"],
+                    arity=item.get("arity", 1),
+                    choices=item.get("choices") or (),
+                    hidden=item.get("hidden", False),
+                    required=item.get("required", False),
+                )
+            )
+            continue
+        name = str(item)
+        # Historical bare strings: treat known switches as arity-0.
+        arity = 0 if name in _BOOLEAN_FLAG_NAMES else 1
+        out.append(_flag(name, arity=arity))
+    return tuple(out)
+
+
+# Boolean switches historically listed as bare strings in flag tuples.
+_BOOLEAN_FLAG_NAMES = frozenset(
+    {
+        "--one-line",
+        "--ssh",
+        "--yes",
+        "--check",
+        "--json",
+        "--verbose",
+        "--quiet",
+        "--allow",
+        "--deny",
+        "--enable",
+        "--disabled",
+    }
+)
+
+
+def flag_names(flags, *, include_hidden=False):
+    """Return advertised (or all) flag names from a command's flag metadata."""
+    names = []
+    for flag in _normalize_flags(flags):
+        if flag["hidden"] and not include_hidden:
+            continue
+        names.append(flag["name"])
+    return names
+
+
 def _cmd(
     path,
     roles,
@@ -143,12 +208,16 @@ def _cmd(
     internal=None,
     aliases=(),
     destructive=False,
+    hidden=False,
 ):
     """Describe one canonical command.
 
     ``tail`` is ``None`` for a strict command (no tokens beyond ``args``),
     ``"flags"`` when trailing option flags are forwarded, and ``"any"`` when
     the remainder is an opaque passthrough.
+
+    ``hidden=True`` keeps the command parseable (compat alias) but excludes it
+    from Tab / help / menu / parity discovery surfaces.
     """
     return {
         "path": tuple(path),
@@ -158,11 +227,12 @@ def _cmd(
         "detail": detail,
         "examples": tuple(examples),
         "args": tuple(args),
-        "flags": tuple(flags),
+        "flags": _normalize_flags(flags),
         "tail": tail,
         "internal": internal,
         "aliases": tuple(tuple(a) for a in aliases),
         "destructive": bool(destructive),
+        "hidden": bool(hidden),
     }
 
 
@@ -525,9 +595,15 @@ COMMANDS = (
         "server",
         "Inventory",
         "Change a group name or description",
-        examples=("group set edge description 'Edge sites'",),
-        args=(_arg("name|description", GROUP_PROPS),),
-        tail="any",
+        examples=(
+            "group set edge name edge-sites",
+            "group set edge description 'Edge sites'",
+        ),
+        args=(
+            _arg("<GROUP>", C_GROUP),
+            _arg("name|description", GROUP_PROPS),
+            _arg("<value>"),
+        ),
         internal=("set", "group"),
         aliases=(("set", "group"),),
     ),
@@ -535,11 +611,12 @@ COMMANDS = (
         ("group", "rename"),
         "server",
         "Inventory",
-        "Rename a group",
+        "Rename a group (compatibility alias for 'group set … name')",
         examples=("group rename edge edge-sites",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<name>")),
         internal=("rename", "group"),
         aliases=(("rename", "group"),),
+        hidden=True,
     ),
     _cmd(
         ("group", "delete"),
@@ -555,22 +632,40 @@ COMMANDS = (
         destructive=True,
     ),
     _cmd(
-        ("group", "add-member"),
+        ("group", "add-client"),
         "server",
         "Inventory",
         "Add a client to a group",
-        examples=("group add-member edge 24cd7856",),
+        examples=("group add-client edge 24cd7856",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
         aliases=(("add", "client"),),
+    ),
+    _cmd(
+        ("group", "remove-client"),
+        "server",
+        "Inventory",
+        "Remove a client from a group",
+        examples=("group remove-client edge 24cd7856",),
+        args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
+        aliases=(("remove", "client"),),
+    ),
+    _cmd(
+        ("group", "add-member"),
+        "server",
+        "Inventory",
+        "Add a client to a group (compatibility alias for 'group add-client')",
+        examples=("group add-member edge 24cd7856",),
+        args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
+        hidden=True,
     ),
     _cmd(
         ("group", "remove-member"),
         "server",
         "Inventory",
-        "Remove a client from a group",
+        "Remove a client from a group (compatibility alias for 'group remove-client')",
         examples=("group remove-member edge 24cd7856",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
-        aliases=(("remove", "client"),),
+        hidden=True,
     ),
     # --- service profiles -------------------------------------------------
     _cmd(
@@ -809,8 +904,8 @@ COMMANDS = (
         "Safe workflow:\n"
         "  1. egress create <name>\n"
         "  2. egress add-source <name> <CIDR>\n"
-        "  3. egress add-destination <name> <FQDN> <PORT>\n"
-        "  4. egress show <name>\n"
+        "  3. egress add-destination <name> <FQDN> <PORT> --protocol https\n"
+        "  4. egress test <SOURCE-IP> <FQDN> <PORT>\n"
         "  5. egress enable <name>",
         examples=('egress create vendor-api --description "Vendor API"',),
         args=(_arg("<name>"),),
@@ -824,9 +919,22 @@ COMMANDS = (
         "server",
         "Policy",
         "Change egress profile metadata",
-        examples=("egress set vendor-api --name partner-api",),
-        args=(_arg("<PROFILE>", C_EGRESS),),
-        flags=("--name", "--description"),
+        detail="Canonical form sets one property at a time. Hidden "
+        "compatibility flags --name / --description remain accepted.",
+        examples=(
+            "egress set vendor-api name partner-api",
+            "egress set vendor-api description 'Partner API'",
+        ),
+        args=(
+            _arg("<PROFILE>", C_EGRESS),
+            _arg("name|description", ("name", "description")),
+            _arg("<value>"),
+        ),
+        flags=(
+            _flag("--name", arity=1, hidden=True),
+            _flag("--description", arity=1, hidden=True),
+        ),
+        # Allow either property args or hidden --name/--description flags.
         tail="flags",
         internal=("set", "egress-profile"),
         aliases=(("set", "egress-profile"), ("egress-profile", "set")),
@@ -835,9 +943,17 @@ COMMANDS = (
         ("egress", "add-destination"),
         "server",
         "Policy",
-        "Allow one destination FQDN and port",
-        examples=("egress add-destination vendor-api api.example.com 443",),
+        "Allow one destination FQDN, port, and protocol",
+        detail="Require an explicit --protocol http|https. HTTP destinations "
+        "accept absolute-form proxy requests only; HTTPS destinations require "
+        "CONNECT plus ClientHello SNI binding on every https port.",
+        examples=(
+            "egress add-destination vendor-api api.example.com 443 --protocol https",
+            "egress add-destination vendor-api archive.example.com 80 --protocol http",
+        ),
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<FQDN>"), _arg("<PORT>")),
+        flags=(_flag("--protocol", arity=1, choices=("http", "https"), required=True),),
+        tail="flags",
         aliases=(("add", "egress-profile"),),
     ),
     _cmd(
@@ -916,6 +1032,39 @@ COMMANDS = (
         examples=("egress test 10.0.0.5 api.example.com 443",),
         args=(_arg("<SOURCE-IP>"), _arg("<HOST>"), _arg("<PORT>")),
         tail="any",
+    ),
+    _cmd(
+        ("egress", "export"),
+        "server",
+        "Policy",
+        "Export one egress profile to JSON",
+        detail="Portable profile document for review/vendor updates. Import never auto-enables.",
+        examples=("egress export vendor-api --output /tmp/vendor.json",),
+        args=(_arg("<PROFILE>", C_EGRESS),),
+        flags=(_flag("--output", arity=1),),
+        tail="flags",
+    ),
+    _cmd(
+        ("egress", "import"),
+        "server",
+        "Policy",
+        "Import profile JSON (always DISABLED; never auto-enable)",
+        detail="Validate schema/protocol/PSL/duplicates, show diff, leave profile disabled for explicit egress enable.",
+        examples=(
+            "egress import /tmp/vendor.json",
+            "egress import /tmp/vendor.json vendor-api",
+        ),
+        args=(_arg("<FILE>", C_PATH), _arg("<PROFILE>", C_EGRESS, required=False)),
+        tail="flags",
+    ),
+    _cmd(
+        ("egress", "diff"),
+        "server",
+        "Policy",
+        "Diff a profile against an import candidate file",
+        detail="Compare live profile to a candidate without applying changes.",
+        examples=("egress diff vendor-api /tmp/vendor.json",),
+        args=(_arg("<PROFILE>", C_EGRESS), _arg("<FILE>", C_PATH)),
     ),
     # --- server -----------------------------------------------------------
     _cmd(
@@ -1156,6 +1305,8 @@ def subcommands(root, role):
         path = cmd["path"]
         if len(path) < 2 or path[0] != root:
             continue
+        if cmd.get("hidden"):
+            continue
         if not role_allows(cmd["roles"], role):
             continue
         if path[1] in seen:
@@ -1186,7 +1337,8 @@ def usage_line(cmd):
     for arg in cmd["args"]:
         name = arg["name"]
         parts.append(name if arg["required"] else "[%s]" % name)
-    if cmd["tail"] == "flags" and cmd["flags"]:
+    shown = flag_names(cmd["flags"])
+    if cmd["tail"] == "flags" and shown:
         parts.append("[options]")
     elif cmd["tail"] == "any":
         parts.append("...")
@@ -1253,9 +1405,46 @@ def _rw_server_unset(rest):
     return ["unset", "server"] + list(rest)
 
 
+def _rw_egress_set(rest):
+    # Canonical: PROFILE name|description VALUE → flag form for frp-egress.
+    if (
+        len(rest) >= 3
+        and rest[1] in ("name", "description")
+        and not str(rest[0]).startswith("-")
+        and not str(rest[1]).startswith("-")
+    ):
+        return [
+            "set",
+            "egress-profile",
+            rest[0],
+            "--%s" % rest[1],
+            rest[2],
+        ] + list(rest[3:])
+    return ["set", "egress-profile"] + list(rest)
+
+
 def _rw_egress_add_destination(rest):
-    if len(rest) >= 3:
-        return ["add", "egress-profile", rest[0], "destination", rest[1], rest[2]]
+    # Keep trailing flags (e.g. --protocol) after host/port.
+    flags = []
+    values = []
+    idx = 0
+    while idx < len(rest):
+        tok = rest[idx]
+        if str(tok).startswith("-"):
+            flags.append(tok)
+            idx += 1
+            if idx < len(rest) and not str(rest[idx]).startswith("-"):
+                flags.append(rest[idx])
+                idx += 1
+            continue
+        values.append(tok)
+        idx += 1
+    if len(values) >= 3:
+        return (
+            ["add", "egress-profile", values[0], "destination", values[1], values[2]]
+            + values[3:]
+            + flags
+        )
     return ["add", "egress-profile"] + list(rest) + ["destination"]
 
 
@@ -1277,10 +1466,13 @@ def _rw_egress_remove(kind):
 REWRITES = {
     ("client", "release"): _rw_client_release,
     ("enrollment", "purge"): _rw_enrollment_purge,
+    ("group", "add-client"): _rw_group_member("add"),
+    ("group", "remove-client"): _rw_group_member("remove"),
     ("group", "add-member"): _rw_group_member("add"),
     ("group", "remove-member"): _rw_group_member("remove"),
     ("server", "set"): _rw_server_set,
     ("server", "unset"): _rw_server_unset,
+    ("egress", "set"): _rw_egress_set,
     ("egress", "add-destination"): _rw_egress_add_destination,
     ("egress", "add-source"): _rw_egress_add_source,
     ("egress", "remove-destination"): _rw_egress_remove("destination"),
@@ -1328,7 +1520,7 @@ def to_internal(tokens):
 
 
 def strict_error(tokens):
-    """Reject unexpected trailing arguments (CLI-016).
+    """Reject unexpected trailing arguments and flag arity mistakes (CLI-016 / AUDIT-014).
 
     Returns an error message, or ``None`` when the token list is acceptable.
     """
@@ -1348,14 +1540,39 @@ def strict_error(tokens):
         if idx < len(rest):
             return "unexpected argument: %s" % rest[idx]
         return None
-    # Trailing option flags are forwarded and validated by the backend tool;
-    # only stray positional arguments are rejected here.
+    # Trailing option flags: enforce arity for catalog-known flags; reject
+    # stray positionals. Unknown flags stay forwarded to the backend tool.
+    known = {flag["name"]: flag for flag in cmd["flags"]}
+    seen_flags = set()
     while idx < len(rest):
-        if not rest[idx].startswith("-"):
-            return "unexpected argument: %s" % rest[idx]
-        idx += 1
-        if idx < len(rest) and not rest[idx].startswith("-"):
+        tok = rest[idx]
+        if not tok.startswith("-"):
+            return "unexpected argument: %s" % tok
+        flag = known.get(tok)
+        if flag is None:
             idx += 1
+            if idx < len(rest) and not rest[idx].startswith("-"):
+                idx += 1
+            continue
+        if flag["arity"] == 0:
+            if idx + 1 < len(rest) and not rest[idx + 1].startswith("-"):
+                return "flag %s does not take a value" % tok
+            seen_flags.add(tok)
+            idx += 1
+            continue
+        if idx + 1 >= len(rest) or rest[idx + 1].startswith("-"):
+            return "missing value for %s" % tok
+        value = rest[idx + 1]
+        if flag["choices"] and value not in flag["choices"]:
+            return "invalid value for %s: expected %s" % (
+                tok,
+                "|".join(flag["choices"]),
+            )
+        seen_flags.add(tok)
+        idx += 2
+    for flag in cmd["flags"]:
+        if flag.get("required") and flag["name"] not in seen_flags:
+            return "missing required flag: %s" % flag["name"]
     return None
 
 
@@ -1436,6 +1653,8 @@ def resource_help(root, role):
     for cmd in COMMANDS:
         if cmd["path"][0] != root or len(cmd["path"]) < 2:
             continue
+        if cmd.get("hidden"):
+            continue
         if not role_allows(cmd["roles"], role):
             continue
         lines.append("  %s" % usage_line(cmd))
@@ -1445,7 +1664,10 @@ def resource_help(root, role):
     destructive = [
         " ".join(cmd["path"])
         for cmd in COMMANDS
-        if cmd["path"][0] == root and cmd["destructive"] and role_allows(cmd["roles"], role)
+        if cmd["path"][0] == root
+        and cmd["destructive"]
+        and not cmd.get("hidden")
+        and role_allows(cmd["roles"], role)
     ]
     if destructive:
         lines.extend(["", "Destructive:", "  " + ", ".join(destructive)])
@@ -1468,8 +1690,18 @@ def command_help(cmd):
                 rows.append((arg["name"], "required" if arg["required"] else "optional"))
         lines.extend(["", "Arguments:"])
         lines.extend(_fmt_rows(rows))
-    if cmd["flags"]:
-        lines.extend(["", "Options:", "  " + " ".join(cmd["flags"])])
+    shown_flags = [flag for flag in cmd["flags"] if not flag.get("hidden")]
+    if shown_flags:
+        rows = []
+        for flag in shown_flags:
+            if flag["arity"] == 0:
+                rows.append((flag["name"], "boolean switch"))
+            elif flag["choices"]:
+                rows.append((flag["name"], "one of: %s" % ", ".join(flag["choices"])))
+            else:
+                rows.append((flag["name"], "value"))
+        lines.extend(["", "Options:"])
+        lines.extend(_fmt_rows(rows))
     if cmd["examples"]:
         lines.extend(["", "Examples:"])
         for item in cmd["examples"]:
@@ -1515,7 +1747,8 @@ WORKFLOWS = (
         (
             "egress create vendor-api",
             "egress add-source vendor-api 10.0.0.0/24",
-            "egress add-destination vendor-api api.example.com 443",
+            "egress add-destination vendor-api api.example.com 443 --protocol https",
+            "egress test 10.0.0.5 api.example.com 443",
             "egress enable vendor-api",
         ),
         "A new egress profile is created disabled. Default policy is DENY.",
@@ -1587,5 +1820,42 @@ def legacy_help(role):
 def parity_paths(role):
     """Canonical command paths that discovery surfaces must expose."""
     return [
-        " ".join(cmd["path"]) for cmd in COMMANDS if role_allows(cmd["roles"], role)
+        " ".join(cmd["path"])
+        for cmd in COMMANDS
+        if role_allows(cmd["roles"], role) and not cmd.get("hidden")
     ]
+
+
+def suggestion_roots(role):
+    """Root tokens used for 'Did you mean' suggestions (canonical first)."""
+    return list(roots_for_role(role))
+
+
+def shell_usage_lines(role):
+    """Compact usage bullets for ``drlink --help`` / unknown-command recovery."""
+    lines = [
+        "Canonical grammar:",
+        "  <resource> <action> [target] [options]",
+        "",
+    ]
+    for root, summary in root_rows(role):
+        actions = [name for name, _desc in subcommands(root, role)]
+        if not actions:
+            lines.append("  %s" % root)
+            continue
+        if len(actions) <= 4:
+            lines.append("  %s %s" % (root, " | ".join(actions)))
+        else:
+            lines.append(
+                "  %s %s | ..."
+                % (root, " | ".join(actions[:4]))
+            )
+        _ = summary
+    lines.extend(
+        [
+            "",
+            "Older verb-first commands (show clients, set client, enroll, ...)",
+            "still run for scripts. See 'help legacy'.",
+        ]
+    )
+    return lines

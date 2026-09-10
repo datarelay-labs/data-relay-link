@@ -471,6 +471,33 @@ PY
 }
 
 frpctl_usage() {
+  local role usage_body catalog_py catalog_dir=""
+  role="$(frpctl_role_token)"
+  usage_body=""
+  if catalog_py="$(frpctl_lib_candidate frp_cli_catalog.py)"; then
+    catalog_dir="$(dirname "$catalog_py")"
+    usage_body="$(
+      python3 - "$catalog_dir" "$role" <<'PY' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1])
+import frp_cli_catalog as catalog
+print("\n".join(catalog.shell_usage_lines(sys.argv[2])))
+PY
+    )"
+  fi
+  if [[ -z "$usage_body" ]]; then
+    usage_body="$(cat <<EOF
+Canonical grammar:
+  <resource> <action> [target] [options]
+
+  status | version | doctor | support bundle
+  client list | group list | egress list | ...
+  help | help workflows | help legacy | menu | history | exit
+
+Older verb-first commands still run for scripts. See 'help legacy'.
+EOF
+)"
+  fi
   cat <<EOF
 Usage: ${FRP_CTL_CMD_NAME} [command] [args]
 
@@ -484,27 +511,7 @@ Type '?' for context help, or 'help' for full syntax. Press Tab to complete
 a unique match or list next-token candidates. Type 'menu'
 for the guided numbered menu.
 
-Canonical grammar:
-  <resource> <action> [target] [options]
-
-  status | version | doctor | support bundle
-  zero-touch create
-  enrollment list | enrollment create | enrollment revoke ID
-  client list | client show ID | client set ID label VALUE
-  client unset ID label|note|tag [KEY]
-  client revoke ID | client release ID [SERVICE-ID]
-  service list | service add | service set ID PROP VALUE | service apply
-  group list | group create NAME | group add-member GROUP CLIENT
-  service-profile list | service-profile create NAME ...
-  access list | access assign CLIENT SERVICE LIST | access menu
-  egress list | egress create NAME | egress enable NAME
-  server set public-hostname FQDN | server upstream | server audit
-  backup create [PATH] | backup restore PATH
-  update project [--check] | update engine [--check]
-  help | help workflows | help legacy | menu | history | exit
-
-Older verb-first commands (show clients, set client, enroll, frp-update,
-...) still run for scripts. See 'help legacy'.
+${usage_body}
 
 Official upstream FRP binaries are frps (server) and frpc (client).
 This project does not fork FRP.
@@ -1491,25 +1498,29 @@ PY
 }
 
 frpctl_known_commands() {
-  local client=0 server=0
-  frpctl_is_client && client=1
-  frpctl_is_server && server=1
-  # Canonical roots first, then compatibility aliases. Used only for the
-  # "Did you mean:" suggestion list.
-  printf '%s\n' status version client update doctor support help menu history clear exit quit q \
-    support-bundle show
-  if [[ "$client" == "1" ]]; then
-    printf '%s\n' service services manage info client-status client-update \
-      add enable disable apply discard set
+  local role catalog_py catalog_dir=""
+  role="$(frpctl_role_token)"
+  # Canonical roots from the catalog, then a small set of compatibility
+  # aliases so "Did you mean" still helps muscle-memory typos.
+  if catalog_py="$(frpctl_lib_candidate frp_cli_catalog.py)"; then
+    catalog_dir="$(dirname "$catalog_py")"
+    python3 - "$catalog_dir" "$role" <<'PY' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1])
+import frp_cli_catalog as catalog
+role = sys.argv[2]
+for name in catalog.suggestion_roots(role):
+    print(name)
+for name in (
+    "quit", "q", "show", "set", "unset", "create", "add", "remove",
+    "delete", "rename", "enable", "disable", "apply", "discard",
+    "clients", "enroll", "support-bundle", "server-status",
+):
+    print(name)
+PY
+    return 0
   fi
-  if [[ "$server" == "1" ]]; then
-    printf '%s\n' zero-touch enrollment group service-profile access egress server backup \
-      clients client-info client-set edit-client enroll create-client \
-      enroll-bulk enrollments enrollment-revoke enrollment-purge \
-      revoke revoke-client release-service release-client \
-      restore project-update frp-update upstream audit \
-      server-status server-update set unset create release purge add remove delete rename profile
-  fi
+  printf '%s\n' status version client doctor help menu exit quit q show
 }
 
 frpctl_completable_commands() {
@@ -2041,7 +2052,8 @@ frpctl_dispatch_canonical() {
       frpctl_invoke frp-egress add-destination \
         "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
         "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("host",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("port",""))' "$result")"
+        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("port",""))' "$result")" \
+        $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
       ;;
     add_egress_source)
       frpctl_require_server || return 1

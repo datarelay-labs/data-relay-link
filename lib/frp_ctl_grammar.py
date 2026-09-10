@@ -1423,10 +1423,28 @@ def _match_set(tokens, role, names=None):
             return incomplete(
                 "Missing egress profile selector.",
                 [
-                    "set egress-profile <PROFILE> --name NAME",
-                    "set egress-profile <PROFILE> --description TEXT",
+                    "set egress-profile <PROFILE> name <VALUE>",
+                    "set egress-profile <PROFILE> description <VALUE>",
                 ],
             )
+        # Canonical property form.
+        if len(tokens) >= 4 and tokens[3] in ("name", "description"):
+            if len(tokens) < 5:
+                return incomplete(
+                    "Missing value.",
+                    ["set egress-profile <PROFILE> %s <value>" % tokens[3]],
+                )
+            if len(tokens) > 5:
+                return {
+                    "status": "error",
+                    "message": "Too many arguments. Quote values that contain spaces.",
+                }
+            return {
+                "status": "ok",
+                "action": "set_egress_profile",
+                "profile": tokens[2],
+                "passthrough": ["--%s" % tokens[3], tokens[4]],
+            }
         return {
             "status": "ok",
             "action": "set_egress_profile",
@@ -1784,17 +1802,29 @@ def _match_add(tokens, role, names=None):
             )
         kind = tokens[3]
         if kind == "destination":
-            if len(tokens) != 6:
+            if len(tokens) < 6:
                 return incomplete(
                     "Missing destination host/port.",
-                    ["add egress-profile <PROFILE> destination <FQDN> <PORT>"],
+                    ["add egress-profile <PROFILE> destination <FQDN> <PORT> [--protocol http|https]"],
                 )
+            # Allow trailing option flags after host/port (e.g. --protocol).
+            idx = 6
+            while idx < len(tokens):
+                if not str(tokens[idx]).startswith("-"):
+                    return incomplete(
+                        "Unexpected arguments.",
+                        ["add egress-profile <PROFILE> destination <FQDN> <PORT> [--protocol http|https]"],
+                    )
+                idx += 1
+                if idx < len(tokens) and not str(tokens[idx]).startswith("-"):
+                    idx += 1
             return {
                 "status": "ok",
                 "action": "add_egress_destination",
                 "profile": tokens[2],
                 "host": tokens[4],
                 "port": tokens[5],
+                "passthrough": tokens[6:],
             }
         if kind == "source":
             if len(tokens) != 5:
@@ -2255,10 +2285,12 @@ def _catalog_candidates(filled, prefix, role, names, services, local_services, g
         if pool is not None:
             return _filter(pool, prefix)
         if cmd["flags"] and prefix.startswith("-"):
-            return _filter(list(cmd["flags"]), prefix)
+            return _filter(
+                CATALOG.flag_names(cmd["flags"], include_hidden=True), prefix
+            )
         return []
     if cmd["flags"]:
-        return _filter(list(cmd["flags"]), prefix)
+        return _filter(CATALOG.flag_names(cmd["flags"], include_hidden=True), prefix)
     return []
 
 
