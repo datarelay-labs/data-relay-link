@@ -71,6 +71,23 @@ EOF
   chmod 0755 "$dest"
 }
 
+write_dummy_frpc() {
+  local dest="$1" version="$2" verify_rc="${3:-0}"
+  mkdir -p "$(dirname "$dest")"
+  cat >"$dest" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  echo "frpc version ${version}"
+  exit 0
+fi
+if [[ "\${1:-}" == "verify" ]]; then
+  exit ${verify_rc}
+fi
+exit 0
+EOF
+  chmod 0755 "$dest"
+}
+
 write_registry() {
   local dest="$1"
   mkdir -p "$(dirname "$dest")"
@@ -461,6 +478,54 @@ else
   fail "help should work without harness marker"
 fi
 pass "test hooks require harness marker"
+
+# --- CASE K: dual-role host updates both binaries ---
+setup_dual_tree() {
+  local tree="$1" installed_ver="${2:-0.70.0}"
+  setup_tree "$tree" "$installed_ver"
+  write_dummy_frpc "$tree/usr/local/bin/frpc" "$installed_ver"
+  cat >"$tree/etc/frp/frpc.toml" <<'EOF'
+serverAddr = "203.0.113.10"
+serverPort = 443
+auth.method = "token"
+auth.token = "test-update-token-do-not-use"
+EOF
+  chmod 600 "$tree/etc/frp/frpc.toml"
+  cat >"$tree/etc/frp/client-state.json" <<'EOF'
+{"machine_id":"machine-dual","hostname":"dual-host","services":{}}
+EOF
+  chmod 600 "$tree/etc/frp/client-state.json"
+}
+
+K="$WORKDIR/case-k"
+setup_dual_tree "$K" "0.70.0"
+write_dummy_frps "$WORKDIR/frps-0.71.0-dual" "0.71.0"
+write_dummy_frpc "$WORKDIR/frpc-0.71.0-dual" "0.71.0"
+K_OUT="$WORKDIR/case-k.out"
+if ! env \
+  FRP_UPDATE_TEST_HARNESS=1 \
+  FRP_UPDATE_TEST_MARKER="$MARKER" \
+  FRP_DEPLOY_TEST_ROOT="$K" \
+  FRP_UPDATE_ROOT="$K" \
+  FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
+  FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0-dual" \
+  FRP_UPDATE_HOOK_NEW_BINARY_FRPC="$WORKDIR/frpc-0.71.0-dual" \
+  "$UPDATE" >"$K_OUT"; then
+  fail "CASE K dual-role update failed"
+fi
+grep -q "Update role : both" "$K_OUT" || fail "CASE K missing both role"
+grep -q "FRP update completed successfully" "$K_OUT" || fail "CASE K success message"
+[[ "$(frp_parse_binary_version "$K/usr/local/bin/frps")" == "0.71.0" ]] || fail "CASE K frps version"
+[[ "$(frp_parse_binary_version "$K/usr/local/bin/frpc")" == "0.71.0" ]] || fail "CASE K frpc version"
+python3 - "$K/var/lib/drlink/backups" <<'PY' || fail "CASE K backup missing both binaries"
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+found = {p.name for p in root.rglob("*") if p.is_file()}
+if "frps" not in found or "frpc" not in found:
+    raise SystemExit(1)
+PY
+pass "CASE K dual-role update"
 
 echo
 echo "UPDATE_REGRESSION_TESTS=PASS"

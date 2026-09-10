@@ -265,6 +265,11 @@ def _test_before_registry_write(path):
     return None
 
 
+def _test_enrollment_failure_point(point):
+    """Production no-op. Unit tests may raise to inject AFTER_* failures."""
+    return None
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
@@ -674,6 +679,49 @@ def require_registry_v2(state):
     return state
 
 
+def _load_infrastructure_ports():
+    candidates = [
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_infrastructure_ports.py',
+        Path('/usr/local/lib/drlink/frp_infrastructure_ports.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_infrastructure_ports.py')
+        candidates.insert(0, Path(root) / 'lib' / 'frp_infrastructure_ports.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_infrastructure_ports', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+INFRA = _load_infrastructure_ports()
+
+
+def infrastructure_protected_ports(cfg):
+    """Canonical infrastructure ports that must never be allocated as services."""
+    if INFRA is not None:
+        return set(INFRA.infrastructure_ports(cfg))
+    protected = set()
+    for port in (
+        cfg_allocator_listen_port(cfg) if cfg else None,
+        cfg_frp_control_listen_port(cfg) if cfg else None,
+        coerce_port((cfg or {}).get('listen_port')) if cfg else None,
+        coerce_port((cfg or {}).get('egress_listen_port')) if cfg else None,
+    ):
+        if port is not None:
+            protected.add(port)
+    if cfg:
+        addr = str(cfg.get('access_plugin_addr') or '127.0.0.1:6101').strip()
+        if ':' in addr:
+            port = coerce_port(addr.rsplit(':', 1)[-1])
+            if port is not None:
+                protected.add(port)
+    return protected
+
+
 def validate_registry_invariants(state, cfg=None):
     """Fail closed on severe registry corruption. Do not silently repair."""
     state = require_registry_v2(state)
@@ -688,10 +736,7 @@ def validate_registry_invariants(state, cfg=None):
         except (TypeError, ValueError):
             port_start = None
             port_end = None
-        for key in ('allocator_listen_port', 'frp_control_listen_port', 'listen_port'):
-            port = coerce_port(cfg.get(key))
-            if port is not None:
-                protected.add(port)
+        protected = infrastructure_protected_ports(cfg)
     for item in state.get('reserved') or []:
         port = coerce_port(item)
         if port is not None:
@@ -930,15 +975,7 @@ class Allocator:
         return used_ports_from_state(state)
 
     def protected_ports(self):
-        protected = set()
-        for port in (
-            cfg_allocator_listen_port(self.cfg),
-            cfg_frp_control_listen_port(self.cfg),
-            coerce_port(self.cfg.get('listen_port')),
-        ):
-            if port is not None:
-                protected.add(port)
-        return protected
+        return infrastructure_protected_ports(self.cfg)
 
     def allocate_port(self, used):
         protected = self.protected_ports()
@@ -1843,11 +1880,44 @@ class Allocator:
                         client['services'] = updated
                         self.save_registry(state)
 
+                        def _rollback_enrollment_attempt():
+                            if previous_client is None:
+                                clients.pop(machine_id, None)
+                            else:
+                                clients[machine_id] = previous_client
+                            self.save_registry(state)
+                            if (
+                                previous_enrollment is not None
+                                and enroll_path is not None
+                            ):
+                                self.save_enrollment(enroll_path, previous_enrollment)
+
+                        try:
+                            _test_enrollment_failure_point('AFTER_REGISTRY_COMMIT')
+                        except Exception:
+                            _rollback_enrollment_attempt()
+                            raise
+
                         if record is not None and enroll_path is not None:
                             record['bound_machine_id'] = machine_id
                             record['used_at'] = record.get('used_at') or now_iso
                             record['last_used_at'] = now_iso
-                            self.save_enrollment(enroll_path, record)
+                            try:
+                                self.save_enrollment(enroll_path, record)
+                            except Exception:
+                                # Fail closed: never leave registry enrolled while
+                                # the enrollment record remains unused/unbound.
+                                _rollback_enrollment_attempt()
+                                raise
+                            try:
+                                _test_enrollment_failure_point(
+                                    'AFTER_ENROLLMENT_RECORD_COMMIT'
+                                )
+                            except Exception:
+                                # Enrollment record already committed with registry.
+                                # Leave recoverable committed generation; do not
+                                # resurrect an unused enrollment code.
+                                raise
                             completed = self.complete_bootstrap_for_enrollment(
                                 record.get('id') or enrollment_id, machine_id
                             )
@@ -1855,16 +1925,17 @@ class Allocator:
                                 # Fail closed: never report enrollment success while the
                                 # bootstrap ticket remains reusable. Roll back registry
                                 # and enrollment mutations from this attempt.
-                                if previous_client is None:
-                                    clients.pop(machine_id, None)
-                                else:
-                                    clients[machine_id] = previous_client
-                                self.save_registry(state)
-                                if previous_enrollment is not None:
-                                    self.save_enrollment(enroll_path, previous_enrollment)
+                                _rollback_enrollment_attempt()
                                 raise OSError(
                                     'failed to consume bootstrap ticket after enrollment'
                                 )
+                            try:
+                                _test_enrollment_failure_point('AFTER_BOOTSTRAP_CONSUME')
+                            except Exception:
+                                # Bootstrap already consumed; leave recoverable committed
+                                # generation (registry + enrollment bound). Do not resurrect
+                                # an unused enrollment code after bootstrap was spent.
+                                raise
                         response_mac_key = None
         except RegistrySchemaError as exc:
             print('allocator registry error: %s' % exc, flush=True)

@@ -184,7 +184,7 @@ PY
 frp_doctor_collect_facts() {
   local facts_file="$1"
   local root py_ver openssl_ver systemd_ver kernel arch os_name os_id
-  local frps_a frps_e alloc_a alloc_e access_a access_e frpc_a frpc_e frontend_a frontend_e
+  local frps_a frps_e alloc_a alloc_e access_a access_e egress_a egress_e frpc_a frpc_e frontend_a frontend_e
   local clock_status clock_detail disk_mb macos_ver service_manager os_family
   local systemd_usable=0 skip_net=0 expect_root=1 have_systemctl=0
   root="$(frp_doctor_root)"
@@ -233,12 +233,14 @@ frp_doctor_collect_facts() {
     read -r frps_a frps_e <<<"$(frp_doctor_unit_state drlink-server)"
     read -r alloc_a alloc_e <<<"$(frp_doctor_unit_state drlink-allocator)"
     read -r access_a access_e <<<"$(frp_doctor_unit_state drlink-access)"
+    read -r egress_a egress_e <<<"$(frp_doctor_unit_state drlink-egress)"
     read -r frpc_a frpc_e <<<"$(frp_doctor_unit_state drlink-client)"
     read -r frontend_a frontend_e <<<"$(frp_doctor_unit_state drlink-frontend)"
   else
     frps_a=unknown; frps_e=unknown
     alloc_a=unknown; alloc_e=unknown
     access_a=unknown; access_e=unknown
+    egress_a=unknown; egress_e=unknown
     frpc_a=unknown; frpc_e=unknown
     frontend_a=unknown; frontend_e=unknown
   fi
@@ -259,8 +261,8 @@ frp_doctor_collect_facts() {
 
   python3 - "$facts_file" \
     "$expect_root" "$systemd_usable" "$have_systemctl" "$skip_net" \
-    "$frps_a" "$frps_e" "$alloc_a" "$alloc_e" "$access_a" "$access_e" "$frpc_a" "$frpc_e" \
-    "$frontend_a" "$frontend_e" \
+    "$frps_a" "$frps_e" "$alloc_a" "$alloc_e" "$access_a" "$access_e" "$egress_a" "$egress_e" \
+    "$frpc_a" "$frpc_e" "$frontend_a" "$frontend_e" \
     "$clock_status" "$clock_detail" \
     "$os_name" "$os_id" "$kernel" "$arch" "$BASH_VERSION" "$py_ver" "$openssl_ver" "$systemd_ver" \
     "$disk_mb" "${macos_ver}" "${service_manager}" "${os_family}" <<'PY'
@@ -268,10 +270,10 @@ import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 expect_root, systemd_usable, have_systemctl, skip_net = (sys.argv[i] == "1" for i in range(2, 6))
-(frps_a, frps_e, alloc_a, alloc_e, access_a, access_e, frpc_a, frpc_e, frontend_a, frontend_e,
- clock_status, clock_detail, os_name, os_id, kernel, arch,
+(frps_a, frps_e, alloc_a, alloc_e, access_a, access_e, egress_a, egress_e, frpc_a, frpc_e,
+ frontend_a, frontend_e, clock_status, clock_detail, os_name, os_id, kernel, arch,
  bash, py_ver, openssl_ver, systemd_ver, disk_mb, macos_ver, service_manager,
- os_family) = sys.argv[6:30]
+ os_family) = sys.argv[6:32]
 avail = int(disk_mb) if disk_mb.isdigit() else None
 facts = {
     "expect_root_owner": expect_root,
@@ -282,6 +284,7 @@ facts = {
         "frps": {"active": frps_a, "enabled": frps_e},
         "drlink-allocator": {"active": alloc_a, "enabled": alloc_e},
         "drlink-access": {"active": access_a, "enabled": access_e},
+        "drlink-egress": {"active": egress_a, "enabled": egress_e},
         "frpc": {"active": frpc_a, "enabled": frpc_e},
         "drlink-frontend": {"active": frontend_a, "enabled": frontend_e},
     },

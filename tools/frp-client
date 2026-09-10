@@ -396,12 +396,12 @@ state = json.loads(path.read_text(encoding='utf-8'))
 item = state['services'][sid]
 currently = item.get('enabled', True) is not False
 if currently:
-    enabled_count = sum(1 for rec in state['services'].values() if rec.get('enabled', True) is not False)
-    if enabled_count <= 1:
-        raise SystemExit('ERROR: at least one enabled service is required.')
     item['enabled'] = False
     print(f"Service {sid} will be disabled.")
     print('The server-side public port reservation will remain.')
+    remaining = sum(1 for rec in state['services'].values() if rec.get('enabled', True) is not False)
+    if remaining == 0:
+        print('Management-only mode: no enabled services remain after apply.')
 else:
     item['enabled'] = True
     print(f"Service {sid} will be re-enabled.")
@@ -438,11 +438,7 @@ frp_apply_candidate() {
     echo "No pending changes."
     return 0
   fi
-  if [[ "$(frp_count_enabled_services "$candidate")" == "0" ]]; then
-    echo "ERROR: at least one enabled service is required." >&2
-    return 1
-  fi
-
+  # Zero enabled services is a legitimate management-only client state.
   echo
   frp_state_diff "$current" "$candidate" || true
   frp_ux_print_apply_summary "$current" "$candidate"
@@ -781,7 +777,19 @@ PY
     return 1
   fi
 
-  if ! frp_client_restart; then
+  local enabled_count
+  enabled_count="$(python3 - "$candidate" <<'PY'
+import json, sys
+from pathlib import Path
+state = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+print(sum(1 for rec in (state.get('services') or {}).values() if rec.get('enabled', True) is not False))
+PY
+)"
+  if [[ "$enabled_count" -eq 0 ]]; then
+    if ! frp_client_stop; then
+      restore_needed=1
+    fi
+  elif ! frp_client_restart; then
     restore_needed=1
   else
     PROXY_NAMES=()
@@ -1016,11 +1024,11 @@ if enable:
     item['enabled'] = True
     print('Service %s will be enabled. Run apply to make it live.' % sid)
 elif currently:
-    enabled_count = sum(1 for rec in state['services'].values() if rec.get('enabled', True) is not False)
-    if enabled_count <= 1:
-        raise SystemExit('ERROR: at least one enabled service is required.')
     item['enabled'] = False
     print('Service %s will be disabled. The public reservation remains until release service.' % sid)
+    remaining = sum(1 for rec in state['services'].values() if rec.get('enabled', True) is not False)
+    if remaining == 0:
+        print('Management-only mode: no enabled services remain after apply.')
 else:
     print('Service %s is already disabled in the pending state.' % sid)
 path.write_text(json.dumps(state, indent=2, sort_keys=True) + '\n', encoding='utf-8')

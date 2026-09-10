@@ -93,28 +93,60 @@ frontend_state="$(unit_state drlink-frontend)"
 egress_state="$(unit_state drlink-egress)"
 
 access_plugin_health="unknown"
+allocator_health="unknown"
+egress_health="unknown"
 if type frp_test_harness_enabled >/dev/null 2>&1 && frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
-  access_plugin_health="skipped"
+  access_plugin_health="${FRP_STATUS_ACCESS_HEALTH:-skipped}"
+  allocator_health="${FRP_STATUS_ALLOCATOR_HEALTH:-skipped}"
+  egress_health="${FRP_STATUS_EGRESS_HEALTH:-skipped}"
+  [[ "${FRP_STATUS_SERVER_STATE:-}" != "" ]] && frps_state="$FRP_STATUS_SERVER_STATE"
+  [[ "${FRP_STATUS_ALLOCATOR_STATE:-}" != "" ]] && allocator_state="$FRP_STATUS_ALLOCATOR_STATE"
+  [[ "${FRP_STATUS_ACCESS_STATE:-}" != "" ]] && access_plugin_state="$FRP_STATUS_ACCESS_STATE"
+  [[ "${FRP_STATUS_EGRESS_STATE:-}" != "" ]] && egress_state="$FRP_STATUS_EGRESS_STATE"
+  [[ "${FRP_STATUS_FRONTEND_STATE:-}" != "" ]] && frontend_state="$FRP_STATUS_FRONTEND_STATE"
 elif command -v curl >/dev/null 2>&1; then
   _access_addr="127.0.0.1:6101"
+  _allocator_port="6099"
+  _egress_port="6102"
   if [[ -r "$config_file" ]]; then
-    _access_addr="$(python3 - "$config_file" <<'PY' 2>/dev/null || true
-import json, sys
+    eval "$(python3 - "$config_file" <<'PY' 2>/dev/null || true
+import json, shlex, sys
 from pathlib import Path
 try:
     cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 except Exception:
     raise SystemExit(0)
-print(str(cfg.get("access_plugin_addr") or "127.0.0.1:6101").strip() or "127.0.0.1:6101")
+addr = str(cfg.get("access_plugin_addr") or "127.0.0.1:6101").strip() or "127.0.0.1:6101"
+print("access_addr=" + shlex.quote(addr))
+aport = cfg.get("allocator_listen_port", cfg.get("listen_port", 6099))
+print("allocator_port=" + shlex.quote(str(aport)))
+eport = cfg.get("egress_listen_port", 6102)
+print("egress_port=" + shlex.quote(str(eport)))
 PY
 )"
+    [[ -n "${access_addr:-}" ]] && _access_addr="$access_addr"
+    [[ -n "${allocator_port:-}" ]] && _allocator_port="$allocator_port"
+    [[ -n "${egress_port:-}" ]] && _egress_port="$egress_port"
   fi
-  [[ -n "${_access_addr:-}" ]] || _access_addr="127.0.0.1:6101"
   _code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "http://${_access_addr}/healthz" 2>/dev/null || echo 000)"
   if [[ "$_code" == "200" ]]; then
     access_plugin_health="ok"
   else
     access_plugin_health="unhealthy(${_code})"
+  fi
+  _acode="$(curl -skS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "https://127.0.0.1:${_allocator_port}/healthz" 2>/dev/null || echo 000)"
+  if [[ "$_acode" == "200" ]]; then
+    allocator_health="ok"
+  else
+    allocator_health="unhealthy(${_acode})"
+  fi
+  # Egress has no /healthz; treat listening TCP as healthy when unit is active.
+  if command -v ss >/dev/null 2>&1 && ss -lntn 2>/dev/null | grep -qE ":${_egress_port}\\b"; then
+    egress_health="ok"
+  elif command -v ss >/dev/null 2>&1; then
+    egress_health="unhealthy(not-listening)"
+  else
+    egress_health="unknown"
   fi
 fi
 
@@ -430,12 +462,55 @@ echo "Clients         : ${clients}"
 echo "Reserved ports  : ${reserved}"
 
 if [[ "$CHECK_ONLY" == "1" ]]; then
+  # Runtime readiness for server role: config + critical units + health probes.
   if [[ "$registry_state" != "ready" || "$public_host_state" != "configured" || "$allocator_url_state" != "configured" ]]; then
     exit 1
   fi
-  # When the access plugin unit is active, /healthz must be healthy.
-  if [[ "$access_plugin_state" == "active" && "$access_plugin_health" == unhealthy* ]]; then
+  if [[ "$lifecycle" == "RECOVERY_REQUIRED" ]]; then
+    echo "ERROR: unresolved server lifecycle transaction pending" >&2
     exit 1
+  fi
+  # When systemd is skipped (unit tests), injected FRP_STATUS_* overrides apply.
+  if [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" != "1" ]] || [[ -n "${FRP_STATUS_SERVER_STATE:-}${FRP_STATUS_ALLOCATOR_STATE:-}${FRP_STATUS_ACCESS_STATE:-}${FRP_STATUS_EGRESS_STATE:-}${FRP_STATUS_FRONTEND_STATE:-}" ]]; then
+    if [[ "$frps_state" != "active" ]]; then
+      echo "ERROR: drlink-server is not active (${frps_state})" >&2
+      exit 1
+    fi
+    if [[ "$allocator_state" != "active" ]]; then
+      echo "ERROR: drlink-allocator is not active (${allocator_state})" >&2
+      exit 1
+    fi
+    if [[ "$allocator_health" == unhealthy* ]]; then
+      echo "ERROR: allocator /healthz is unhealthy (${allocator_health})" >&2
+      exit 1
+    fi
+    if [[ "$access_plugin_state" != "active" ]]; then
+      echo "ERROR: drlink-access is not active (${access_plugin_state})" >&2
+      exit 1
+    fi
+    if [[ "$access_plugin_health" == unhealthy* ]]; then
+      echo "ERROR: access plugin /healthz is unhealthy (${access_plugin_health})" >&2
+      exit 1
+    fi
+    if [[ "$egress_state" != "active" ]]; then
+      echo "ERROR: drlink-egress is not active (${egress_state})" >&2
+      exit 1
+    fi
+    if [[ "$egress_health" == unhealthy* ]]; then
+      echo "ERROR: Controlled Egress listener is unhealthy (${egress_health})" >&2
+      exit 1
+    fi
+    if [[ "${deployment_mode:-}" == "single443" ]]; then
+      if [[ "$frontend_state" != "active" ]]; then
+        echo "ERROR: drlink-frontend is not active (${frontend_state})" >&2
+        exit 1
+      fi
+    fi
+  else
+    # Legacy harness path: when access is active, health must still pass.
+    if [[ "$access_plugin_state" == "active" && "$access_plugin_health" == unhealthy* ]]; then
+      exit 1
+    fi
   fi
   exit 0
 fi

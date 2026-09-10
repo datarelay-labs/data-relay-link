@@ -392,7 +392,7 @@ Controlled Egress is a **separate policy plane** from inbound Access Control.
 
 Authoritative state: `/var/lib/drlink/egress-control.json`
 Connection log: `/var/log/drlink/egress-conn.jsonl`
-Daemon: `drlink-egress.service` (default listen `0.0.0.0:6080`)
+Daemon: `drlink-egress.service` (default listen `0.0.0.0:6102`)
 
 Security contract:
 

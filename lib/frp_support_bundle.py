@@ -331,6 +331,7 @@ class BundleBuilder:
             self._write_processes()
             self._write_disk()
             self._write_access_control()
+            self._write_egress_control()
             self._write_target_health_optional()
             self._write_manifest()
             return self.stage
@@ -418,16 +419,17 @@ class BundleBuilder:
     def _write_service_status(self) -> None:
         lines: List[str] = []
         units = [
-            "frps",
+            "drlink-server",
             "drlink-allocator",
             "drlink-access",
+            "drlink-egress",
             "drlink-frontend",
-            "frpc",
+            "drlink-client",
         ]
         if shutil.which("systemctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
             for unit in units:
                 unit_path = self.path("/etc/systemd/system/%s.service" % unit)
-                if not unit_path.is_file() and unit not in ("frps", "frpc"):
+                if not unit_path.is_file():
                     continue
                 lines.append("=== systemctl status %s ===" % unit)
                 rc, out, err = run_cmd(
@@ -443,6 +445,10 @@ class BundleBuilder:
             lines.append(redact_text(out.strip() or err.strip() or ("exit=%s" % rc)))
         else:
             lines.append("service status probes skipped (no usable systemd/launchd in this environment)")
+            for unit in units:
+                unit_path = self.path("/etc/systemd/system/%s.service" % unit)
+                if unit_path.is_file():
+                    lines.append("=== %s (unit file present; status probe skipped) ===" % unit)
         # Windows stub marker for fixture/portability.
         if sys.platform.startswith("win"):
             lines.append("Windows service status is collected by the Windows client stub when available.")
@@ -837,6 +843,61 @@ class BundleBuilder:
         self.stage_json("access-control-summary.json", summary)
         self.add_section("access-control")
 
+    def _write_egress_control(self) -> None:
+        data, err = self.safe_read_json("/var/lib/drlink/egress-control.json")
+        if data is None:
+            self.skip("egress-control", err or "not present")
+            return
+        profiles = (data or {}).get("egress_profiles") or {}
+        enabled_count = 0
+        if isinstance(profiles, dict):
+            enabled_count = sum(
+                1 for entry in profiles.values()
+                if isinstance(entry, dict) and entry.get("enabled", True) is not False
+            )
+        listener = None
+        cfg, _cfg_err = self.safe_read_json("/etc/drlink/config.json")
+        if isinstance(cfg, dict):
+            host = str(cfg.get("egress_listen_addr") or "0.0.0.0").strip() or "0.0.0.0"
+            port = cfg.get("egress_listen_port")
+            if port is not None:
+                listener = "%s:%s" % (host, port)
+        unit_state = "unknown"
+        if shutil.which("systemctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
+            rc, out, _err = run_cmd(
+                ["systemctl", "show", "drlink-egress", "-p", "ActiveState", "-p", "UnitFileState"],
+                timeout=8,
+            )
+            if rc == 0:
+                unit_state = out.strip() or "unknown"
+        events: List[Dict[str, Any]] = []
+        log_path = self.path("/var/log/drlink/egress-conn.jsonl")
+        if log_path.is_file() and not log_path.is_symlink():
+            try:
+                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                for line in lines[-20:]:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(item, dict):
+                        events.append(sanitize_json_value(item))
+            except OSError:
+                pass
+        summary = {
+            "schema_version": (data or {}).get("schema_version"),
+            "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+            "enabled_profile_count": enabled_count,
+            "listener": listener,
+            "service_status": redact_text(unit_state),
+            "recent_conn_events": events,
+        }
+        self.stage_json("egress-control-summary.json", summary)
+        self.add_section("egress-control")
+
     def _health_entries_from_services(
         self, services: Any, *, source: str, client_id: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -989,7 +1050,7 @@ def create_support_bundle(root: Path, output: Path, *, secure_parent: bool) -> D
 
 def default_output_path(root: Path) -> Path:
     stamp = now_utc_stamp()
-    name = "frp-support-%s-%s.tar.gz" % (safe_hostname(), stamp)
+    name = "drlink-support-%s-%s.tar.gz" % (safe_hostname(), stamp)
     return root / "var/lib/drlink/support-bundles" / name
 
 
@@ -1023,7 +1084,7 @@ def print_summary(result: Dict[str, Any]) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="frp-support-bundle",
+        prog="drlink-support-bundle",
         description="Create a sanitized read-only Data Relay Link support bundle.",
     )
     parser.add_argument(

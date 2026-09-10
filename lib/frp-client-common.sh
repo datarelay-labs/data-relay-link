@@ -2068,13 +2068,38 @@ frp_client_runtime_unit() {
   printf '%s\n' 'drlink-client'
 }
 
-frp_client_recent_runtime_logs() {
-  local lines="${1:-400}"
+frp_client_journal_cursor() {
+  # Capture a generation boundary before restart. Empty on unsupported platforms.
   if frp_is_darwin; then
-    frp_macos_recent_logs "$lines" 2>/dev/null || true
+    date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true
     return 0
   fi
-  journalctl -u "$(frp_client_runtime_unit)" -n "$lines" --no-pager 2>/dev/null || true
+  journalctl -u "$(frp_client_runtime_unit)" -n 0 --show-cursor --no-pager 2>/dev/null \
+    | sed -n 's/^-- cursor: //p' | tail -n1 || true
+}
+
+frp_client_recent_runtime_logs() {
+  local lines="${1:-400}"
+  local since_cursor="${2:-}"
+  if frp_is_darwin; then
+    # macOS: filter by optional ISO timestamp generation boundary when provided.
+    if [[ -n "$since_cursor" ]]; then
+      frp_macos_recent_logs "$lines" 2>/dev/null | awk -v since="$since_cursor" '
+        BEGIN { show=0 }
+        {
+          # Lines often start with a timestamp; once we pass "since", show all.
+          if (index($0, since) || show) { show=1; print }
+        }' || true
+    else
+      frp_macos_recent_logs "$lines" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  if [[ -n "$since_cursor" ]]; then
+    journalctl -u "$(frp_client_runtime_unit)" --after-cursor "$since_cursor" -n "$lines" --no-pager 2>/dev/null || true
+  else
+    journalctl -u "$(frp_client_runtime_unit)" -n "$lines" --no-pager 2>/dev/null || true
+  fi
 }
 
 wait_for_proxies() {
@@ -2082,8 +2107,20 @@ wait_for_proxies() {
   # Polls the canonical client unit journal (drlink-client), not the legacy
   # frpc unit name. Uses short backoff so brief startup delay does not fail
   # Zero-Touch, while genuine failure still returns non-zero within ~45s.
+  #
+  # Only evidence AFTER the optional generation cursor (FRP_PROXY_WAIT_CURSOR
+  # or first argument --since-cursor=...) may satisfy readiness.
   local logs proxy missing
-  local -a names=("$@")
+  local -a names=()
+  local since_cursor="${FRP_PROXY_WAIT_CURSOR:-}"
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == --since-cursor=* ]]; then
+      since_cursor="${arg#--since-cursor=}"
+      continue
+    fi
+    names+=("$arg")
+  done
   local attempt=0
   local max_attempts="${FRP_PROXY_WAIT_MAX_ATTEMPTS:-24}"
   local sleep_s="${FRP_PROXY_WAIT_SLEEP_S:-1}"
@@ -2093,7 +2130,7 @@ wait_for_proxies() {
     if (( sleep_s > 0 )); then
       sleep "$sleep_s"
     fi
-    logs="$(frp_client_recent_runtime_logs 400)"
+    logs="$(frp_client_recent_runtime_logs 400 "$since_cursor")"
     if ! grep -q 'login to server success' <<<"$logs"; then
       if (( sleep_s < max_sleep )) && (( attempt % 3 == 0 )); then
         sleep_s=$((sleep_s + 1))
@@ -3989,6 +4026,24 @@ frp_client_verify_config() {
   fi
 }
 
+frp_client_stop() {
+  frp_client_hook_log stop
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    mkdir -p "$(dirname "$(frp_path /var/lib/drlink/update-actions.log)")"
+    echo "stop drlink-client" >>"$(frp_path /var/lib/drlink/update-actions.log)"
+    return 0
+  fi
+  if frp_is_darwin; then
+    frp_macos_launchd_set_enabled disable || return 1
+    if frp_macos_launchd_running; then
+      frp_macos_launchd_kickstart || true
+    fi
+  else
+    systemctl disable drlink-client >/dev/null 2>&1 || true
+    systemctl stop drlink-client >/dev/null 2>&1 || true
+  fi
+}
+
 frp_client_restart() {
   frp_client_hook_log restart
   if [[ "${FRP_CLIENT_HOOK_RESTART_FAIL:-}" == "1" ]]; then
@@ -3996,6 +4051,10 @@ frp_client_restart() {
     echo "ERROR: simulated service restart failure" >&2
     return 1
   fi
+  # Capture journal generation boundary before restart so readiness waits
+  # never accept stale success lines from the previous process generation.
+  FRP_PROXY_WAIT_CURSOR="$(frp_client_journal_cursor 2>/dev/null || true)"
+  export FRP_PROXY_WAIT_CURSOR
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     return 0
   fi

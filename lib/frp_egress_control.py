@@ -22,8 +22,10 @@ from typing import Any, Optional
 EGRESS_SCHEMA_VERSION = 1
 DEFAULT_EGRESS_PATH = "/var/lib/drlink/egress-control.json"
 DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
+from frp_infrastructure_ports import DEFAULT_EGRESS_LISTEN_PORT
+
 DEFAULT_LISTEN_ADDR = "0.0.0.0"
-DEFAULT_LISTEN_PORT = 6080
+DEFAULT_LISTEN_PORT = DEFAULT_EGRESS_LISTEN_PORT  # 6102 — outside published pool 6000-6098
 
 PROFILE_ID_PREFIX = "egp_"
 PROFILE_ID_HEX_LEN = 12

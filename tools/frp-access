@@ -31,6 +31,18 @@ def load_mod(name: str, rel: str):
 
 ACL = load_mod("frp_access_control", "frp_access_control.py")
 CREG = load_mod("frp_client_registry", "frp_client_registry.py")
+LOCKS = load_mod("frp_control_locks", "frp_control_locks.py")
+
+
+def control_root() -> Path:
+    root = ROOT or "/"
+    return Path(root)
+
+
+def with_control_state_lock(fn):
+    """Serialize cross-authority access mutations under control-state.lock."""
+    with LOCKS.acquire_control_state_lock(control_root()):
+        return fn()
 
 
 def load_cfg():
@@ -313,7 +325,7 @@ def cmd_assign(cfg, args):
         return lst
 
     try:
-        lst = ACL.mutate_access_state(mut, cfg=cfg)
+        lst = with_control_state_lock(lambda: ACL.mutate_access_state(mut, cfg=cfg))
     except ACL.AccessError as exc:
         # Interactive empty-allowlist UX
         msg = str(exc)
@@ -341,7 +353,7 @@ def cmd_public(cfg, args):
         ACL.set_service_binding(state, mid, sid, ACL.MODE_PUBLIC, None)
         return True
 
-    ACL.mutate_access_state(mut, cfg=cfg)
+    with_control_state_lock(lambda: ACL.mutate_access_state(mut, cfg=cfg))
     print("Set %s:%s to PUBLIC (port %s)" % (
         short_client(registry, mid), sid, svc.get("remote_port"),
     ))

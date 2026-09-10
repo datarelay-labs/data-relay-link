@@ -2103,22 +2103,108 @@ def check_egress_control(report, paths, facts, cfg):
             'fix egress_listen_addr / egress_listen_port in config.json',
             'state',
         )
+        return
 
+    infra = None
+    for candidate in [
+        Path(__file__).resolve().parent / 'frp_infrastructure_ports.py',
+        Path('/usr/local/lib/drlink/frp_infrastructure_ports.py'),
+    ] + ([Path(root) / 'usr/local/lib/drlink/frp_infrastructure_ports.py'] if root else []):
+        if candidate.is_file():
+            try:
+                spec = importlib.util.spec_from_file_location('frp_infrastructure_ports', str(candidate))
+                infra = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(infra)
+                break
+            except Exception:
+                pass
+    if infra is not None:
+        try:
+            registry_path = paths.p('/var/lib/drlink/registry.json')
+            registry = {}
+            if registry_path.is_file():
+                registry = json.loads(registry_path.read_text(encoding='utf-8'))
+            infra.assert_egress_not_owned_by_service(cfg if isinstance(cfg, dict) else None, registry)
+            colliding = infra.infrastructure_ports_in_service_range(cfg if isinstance(cfg, dict) else None)
+            if colliding:
+                report.add(
+                    'EGRESS_PORT_COLLISION', FAIL,
+                    'infrastructure egress port collides with service range',
+                    ', '.join(str(p) for p in sorted(colliding)),
+                    'change egress_listen_port or service port range',
+                    'state',
+                )
+            else:
+                report.add(
+                    'EGRESS_PORT_COLLISION', PASS,
+                    'egress listen port does not collide with service range',
+                    '', '', 'state',
+                )
+        except Exception as exc:
+            report.add(
+                'EGRESS_PORT_COLLISION', FAIL,
+                'egress port collision check failed',
+                str(exc),
+                'inspect egress_listen_port and registry allocations',
+                'state',
+            )
+
+    conn_rel = '/var/log/drlink/egress-conn.jsonl'
+    if isinstance(cfg, dict):
+        configured = str(cfg.get('egress_conn_log_file') or '').strip()
+        if configured.startswith('/'):
+            conn_rel = configured
+    if paths.is_file(conn_rel):
+        report.add('EGRESS_CONN_LOG', PASS, 'egress connection log path exists', conn_rel, '', 'state')
+    else:
+        report.add(
+            'EGRESS_CONN_LOG', WARN,
+            'egress connection log path is missing',
+            conn_rel,
+            're-run the server installer or create the log directory',
+            'state',
+        )
+
+    unit_active = 'unknown'
+    unit_enabled = 'unknown'
     try:
         import subprocess
         proc = subprocess.run(
             ['systemctl', 'is-active', 'drlink-egress'],
             capture_output=True, text=True, timeout=5,
         )
-        unit_state = (proc.stdout or '').strip() or 'unknown'
+        unit_active = (proc.stdout or '').strip() or 'unknown'
+        proc = subprocess.run(
+            ['systemctl', 'is-enabled', 'drlink-egress'],
+            capture_output=True, text=True, timeout=5,
+        )
+        unit_enabled = (proc.stdout or '').strip() or 'unknown'
     except Exception:
-        unit_state = 'unknown'
-    if unit_state == 'active':
-        report.add('EGRESS_UNIT', PASS, 'drlink-egress is active', unit_state, '', 'runtime')
-    elif unit_state == 'failed':
-        report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_state, 'systemctl status drlink-egress', 'runtime')
+        pass
+    if unit_enabled in ('enabled', 'static', 'linked'):
+        report.add('EGRESS_UNIT_ENABLED', PASS, 'drlink-egress is enabled', unit_enabled, '', 'runtime')
+    elif unit_enabled == 'disabled':
+        report.add(
+            'EGRESS_UNIT_ENABLED', WARN,
+            'drlink-egress is disabled',
+            unit_enabled,
+            'systemctl enable drlink-egress',
+            'runtime',
+        )
     else:
-        report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_state, 'systemctl status drlink-egress', 'runtime')
+        report.add(
+            'EGRESS_UNIT_ENABLED', INFO,
+            'drlink-egress enable state is unknown',
+            unit_enabled,
+            '',
+            'runtime',
+        )
+    if unit_active == 'active':
+        report.add('EGRESS_UNIT', PASS, 'drlink-egress is active', unit_active, '', 'runtime')
+    elif unit_active == 'failed':
+        report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_active, 'systemctl status drlink-egress', 'runtime')
+    else:
+        report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'systemctl status drlink-egress', 'runtime')
 
     for issue in eg.doctor_issues(state):
         cls = str(issue.get('class') or 'EGRESS_CONFIG_ERROR')

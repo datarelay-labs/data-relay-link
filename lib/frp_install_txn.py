@@ -27,6 +27,7 @@ UNIT_NAMES = (
     'drlink-server.service',
     'drlink-allocator.service',
     'drlink-access.service',
+    'drlink-egress.service',
     'drlink-frontend.service',
 )
 

@@ -670,6 +670,53 @@ class EgressAdversarialTests(EgressProxyFunctionalTests):
         self.assertTrue(resp.startswith(b"HTTP/1.1 400"), resp[:80])
         self.assertEqual(len(self.connect_calls), 0)
 
+    def test_header_name_space_reject(self):
+        payload = (
+            b"GET http://allowed.test/ HTTP/1.1\r\n"
+            b"Host: allowed.test\r\n"
+            b"X Bad Name: value\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        )
+        resp = self._raw(payload)
+        self.assertTrue(resp.startswith(b"HTTP/1.1 400"), resp[:80])
+        self.assertEqual(len(self.connect_calls), 0)
+
+    def test_header_name_colon_reject(self):
+        payload = (
+            b"GET http://allowed.test/ HTTP/1.1\r\n"
+            b"Host: allowed.test\r\n"
+            b"Bad@Name: value\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        )
+        resp = self._raw(payload)
+        self.assertTrue(resp.startswith(b"HTTP/1.1 400"), resp[:80])
+        self.assertEqual(len(self.connect_calls), 0)
+
+    def test_header_name_control_reject(self):
+        payload = (
+            b"GET http://allowed.test/ HTTP/1.1\r\n"
+            b"Host: allowed.test\r\n"
+            b"X\x01Bad: value\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        )
+        resp = self._raw(payload)
+        self.assertTrue(resp.startswith(b"HTTP/1.1 400"), resp[:80])
+        self.assertEqual(len(self.connect_calls), 0)
+
+    def test_header_name_valid_token_passes(self):
+        payload = (
+            b"GET http://allowed.test/ HTTP/1.1\r\n"
+            b"Host: allowed.test\r\n"
+            b"X-Valid_Name.1: ok\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        )
+        resp = self._raw(payload)
+        self.assertIn(b"200", resp.split(b"\r\n", 1)[0])
+
     def test_connection_named_header_stripped(self):
         """CONNECTION_NAMED_HEADER_STRIPPED — Connection: X-Internal strips that header."""
         payload = (

@@ -12,9 +12,10 @@
 #   protected-prefix persistent protected directory prefix
 # validate: python | bash | none
 #
-# Lock order for operations that take both locks:
+# Lock order for operations that take multiple locks:
 #   1. server-lifecycle.lock
-#   2. registry.lock
+#   2. control-state.lock
+#   3. registry.lock
 
 project usr/local/lib/drlink/frp-port-allocator.py 0700 server/frp-port-allocator.py python
 project usr/local/lib/drlink/frp-access-plugin.py 0700 server/frp-access-plugin.py python

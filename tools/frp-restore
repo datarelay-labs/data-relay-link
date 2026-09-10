@@ -365,11 +365,105 @@ def _load_module(name, filename):
     )
     for path in candidates:
         if path.is_file():
+            lib_dir = str(path.parent)
+            if lib_dir not in sys.path:
+                sys.path.insert(0, lib_dir)
             spec = importlib.util.spec_from_file_location(name, str(path))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
     return None
+
+
+def _load_allocator_validator():
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parent.parent / "server" / "frp-port-allocator.py",
+        Path("/usr/local/lib/drlink/frp-port-allocator.py"),
+    )
+    for path in candidates:
+        if path.is_file():
+            lib_dir = str(here.parent.parent / "lib")
+            if lib_dir not in sys.path:
+                sys.path.insert(0, lib_dir)
+            installed = str(Path("/usr/local/lib/drlink"))
+            if installed not in sys.path:
+                sys.path.insert(0, installed)
+            spec = importlib.util.spec_from_file_location("frp_port_allocator", str(path))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
+def validate_staged_control_payload(extracted: Path) -> None:
+    """Semantic preflight on staged backup payload before replacing live files."""
+    payload = extracted / "payload"
+    cfg_path = payload / "etc/drlink/config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RestoreError("staged config.json is invalid") from exc
+    if not isinstance(cfg, dict):
+        raise RestoreError("staged config.json must be an object")
+
+    allocator = _load_allocator_validator()
+    acl = _load_module("frp_access_control", "frp_access_control.py")
+    egress = _load_module("frp_egress_control", "frp_egress_control.py")
+    profiles = _load_module("frp_service_profiles", "frp_service_profiles.py")
+    infra = _load_module("frp_infrastructure_ports", "frp_infrastructure_ports.py")
+
+    rel_paths = {
+        "registry": "var/lib/drlink/registry.json",
+        "access": "var/lib/drlink/access-control.json",
+        "egress": "var/lib/drlink/egress-control.json",
+        "profiles": "var/lib/drlink/service-profiles.json",
+    }
+    staged: dict[str, dict] = {}
+    for key, rel in rel_paths.items():
+        path = payload / rel
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RestoreError("staged %s is invalid" % rel) from exc
+        if not isinstance(value, dict):
+            raise RestoreError("staged %s must be an object" % rel)
+        staged[key] = value
+
+    if allocator is not None:
+        try:
+            allocator.validate_registry_invariants(staged["registry"], cfg)
+        except Exception as exc:
+            raise RestoreError("staged registry failed invariant checks: %s" % exc) from exc
+    elif staged["registry"].get("schema_version") != 2:
+        raise RestoreError("staged registry schema is invalid")
+
+    if acl is not None:
+        try:
+            acl.validate_access_state(staged["access"])
+        except Exception as exc:
+            raise RestoreError("staged access-control.json is invalid: %s" % exc) from exc
+    if egress is not None:
+        try:
+            egress.validate_egress_state(staged["egress"])
+        except Exception as exc:
+            raise RestoreError("staged egress-control.json is invalid: %s" % exc) from exc
+    if profiles is not None:
+        try:
+            profiles.validate_profiles_state(staged["profiles"])
+        except Exception as exc:
+            raise RestoreError("staged service-profiles.json is invalid: %s" % exc) from exc
+    if infra is not None:
+        try:
+            infra.assert_egress_not_owned_by_service(cfg, staged["registry"])
+        except Exception as exc:
+            raise RestoreError("staged infrastructure port collision: %s" % exc) from exc
+        colliding = infra.infrastructure_ports_in_service_range(cfg)
+        if colliding:
+            raise RestoreError(
+                "staged infrastructure ports collide with service range: %s"
+                % ", ".join(str(p) for p in sorted(colliding))
+            )
 
 
 def _audit_emit(event, **kwargs):
@@ -471,7 +565,12 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         raise RestoreError("restored CA certificate is missing")
     if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
         return
-    units = ["drlink-server.service", "drlink-allocator.service", "drlink-access.service"]
+    units = [
+        "drlink-server.service",
+        "drlink-allocator.service",
+        "drlink-access.service",
+        "drlink-egress.service",
+    ]
     frontend = (root / "etc/drlink/frontend.conf").is_file()
     if frontend:
         units.append("drlink-frontend.service")
@@ -575,6 +674,7 @@ def validate_to_temp(archive: Path, parent: Path | None = None) -> tuple[tempfil
     temp = tempfile.TemporaryDirectory(prefix="frp-restore-", dir=str(parent) if parent else None)
     extracted = Path(temp.name)
     extract_and_validate(archive, extracted)
+    validate_staged_control_payload(extracted)
     return temp, extracted
 
 

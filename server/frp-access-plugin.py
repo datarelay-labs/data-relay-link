@@ -65,7 +65,9 @@ def _load_registry_validator():
 
 
 _require_registry_v2, _validate_registry_invariants = _load_registry_validator()
-del _validate_registry_invariants  # reserved for allocator; Access uses schema only
+
+ACCESS_MAX_CONCURRENT = int(os.environ.get("FRP_ACCESS_MAX_CONCURRENT", "32"))
+_ACCESS_REQUEST_SLOTS = threading.BoundedSemaphore(ACCESS_MAX_CONCURRENT)
 
 
 class PolicyCache:
@@ -111,10 +113,9 @@ class PolicyCache:
                     return
                 self.access_state = ACL.load_access_state(path=self.access_path, cfg=self.cfg)
                 raw_registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
-                # Structural schema validation only (schema_version + clients map).
-                # Full port-ownership invariants belong to the allocator; Access
-                # Plugin needs a valid mapping structure to authorize proxies.
-                self.registry = _require_registry_v2(raw_registry)
+                # Same canonical invariants as the allocator — never accept a
+                # registry the control plane would reject.
+                self.registry = _validate_registry_invariants(raw_registry, self.cfg)
                 ACL.validate_access_state(self.access_state)
                 self.access_mtime = access_m
                 self.registry_mtime = reg_m
@@ -142,14 +143,34 @@ def make_handler(cache: PolicyCache, plugin_path: str):
             sys.stderr.write("[drlink-access] %s - %s\n" % (self.address_string(), fmt % args))
 
         def _read_json(self):
-            length = int(self.headers.get("Content-Length") or "0")
+            raw_len = self.headers.get("Content-Length") or "0"
+            try:
+                length = int(raw_len)
+            except (TypeError, ValueError):
+                return None
             if length < 0 or length > 1_048_576:
                 return None
-            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                raw = self.rfile.read(length) if length else b"{}"
+            except Exception:
+                return None
             try:
                 return json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 return None
+
+        def _with_slot(self, fn):
+            acquired = _ACCESS_REQUEST_SLOTS.acquire(blocking=False)
+            if not acquired:
+                self._send_json(
+                    503,
+                    {"reject": True, "reject_reason": "server busy", "unchange": True},
+                )
+                return None
+            try:
+                return fn()
+            finally:
+                _ACCESS_REQUEST_SLOTS.release()
 
         def _send_json(self, code: int, payload: dict):
             body = json.dumps(payload).encode("utf-8")
@@ -161,90 +182,96 @@ def make_handler(cache: PolicyCache, plugin_path: str):
             self.wfile.write(body)
 
         def do_GET(self):
-            parsed = urlparse(self.path)
-            if parsed.path in ("/healthz", "/health"):
-                access_state, registry, load_error, _cfg = cache.snapshot()
-                ok = load_error is None
-                self._send_json(
-                    200 if ok else 503,
-                    {
-                        "ok": ok,
-                        "error": load_error,
-                        "lists": len(access_state.get("access_lists") or {}),
-                        "clients": len((registry.get("clients") or {})),
-                    },
-                )
-                return
-            self._send_json(404, {"ok": False, "error": "not found"})
+            def _handle():
+                parsed = urlparse(self.path)
+                if parsed.path in ("/healthz", "/health"):
+                    access_state, registry, load_error, _cfg = cache.snapshot()
+                    ok = load_error is None
+                    self._send_json(
+                        200 if ok else 503,
+                        {
+                            "ok": ok,
+                            "error": load_error,
+                            "lists": len(access_state.get("access_lists") or {}),
+                            "clients": len((registry.get("clients") or {})),
+                        },
+                    )
+                    return
+                self._send_json(404, {"ok": False, "error": "not found"})
+
+            self._with_slot(_handle)
 
         def do_POST(self):
-            parsed = urlparse(self.path)
-            if parsed.path.rstrip("/") != plugin_path.rstrip("/"):
-                self._send_json(404, {"reject": True, "reject_reason": "not found"})
-                return
-            query = parse_qs(parsed.query)
-            op = (query.get("op") or [""])[0]
-            req = self._read_json()
-            if not isinstance(req, dict):
-                self._send_json(
-                    200,
-                    {"reject": True, "reject_reason": "malformed request", "unchange": True},
-                )
-                return
-            op = op or str(req.get("op") or "")
-            if op != "NewUserConn":
-                # Only NewUserConn is registered; ignore others safely.
-                self._send_json(200, {"reject": False, "unchange": True})
-                return
-            content = req.get("content")
-            if not isinstance(content, dict):
-                self._send_json(
-                    200,
-                    {"reject": True, "reject_reason": "malformed content", "unchange": True},
-                )
-                return
+            def _handle():
+                parsed = urlparse(self.path)
+                if parsed.path.rstrip("/") != plugin_path.rstrip("/"):
+                    self._send_json(404, {"reject": True, "reject_reason": "not found"})
+                    return
+                query = parse_qs(parsed.query)
+                op = (query.get("op") or [""])[0]
+                req = self._read_json()
+                if not isinstance(req, dict):
+                    self._send_json(
+                        200,
+                        {"reject": True, "reject_reason": "malformed request", "unchange": True},
+                    )
+                    return
+                op = op or str(req.get("op") or "")
+                if op != "NewUserConn":
+                    # Only NewUserConn is registered; ignore others safely.
+                    self._send_json(200, {"reject": False, "unchange": True})
+                    return
+                content = req.get("content")
+                if not isinstance(content, dict):
+                    self._send_json(
+                        200,
+                        {"reject": True, "reject_reason": "malformed content", "unchange": True},
+                    )
+                    return
 
-            access_state, registry, load_error, cfg = cache.snapshot()
-            proxy_name = str(content.get("proxy_name") or "")
-            remote_addr = str(content.get("remote_addr") or "")
+                access_state, registry, load_error, cfg = cache.snapshot()
+                proxy_name = str(content.get("proxy_name") or "")
+                remote_addr = str(content.get("remote_addr") or "")
 
-            if load_error is not None:
-                # Fail closed when authoritative policy cannot be loaded.
-                event = {
-                    "timestamp": ACL.utc_now_iso(),
-                    "proxy_name": proxy_name,
-                    "source_ip": remote_addr,
-                    "access_mode": ACL.MODE_ALLOWLIST,
-                    "decision": ACL.DECISION_DENY,
-                    "reason": ACL.REASON_AUTHORIZATION_ERROR,
-                }
-                ACL.emit_conn_log(event, cfg=cfg)
-                self._send_json(
-                    200,
-                    {
-                        "reject": True,
-                        "reject_reason": "authorization unavailable",
-                        "unchange": True,
-                    },
-                )
-                return
+                if load_error is not None:
+                    # Fail closed when authoritative policy cannot be loaded.
+                    event = {
+                        "timestamp": ACL.utc_now_iso(),
+                        "proxy_name": proxy_name,
+                        "source_ip": remote_addr,
+                        "access_mode": ACL.MODE_ALLOWLIST,
+                        "decision": ACL.DECISION_DENY,
+                        "reason": ACL.REASON_AUTHORIZATION_ERROR,
+                    }
+                    ACL.emit_conn_log(event, cfg=cfg)
+                    self._send_json(
+                        200,
+                        {
+                            "reject": True,
+                            "reject_reason": "authorization unavailable",
+                            "unchange": True,
+                        },
+                    )
+                    return
 
-            verdict = ACL.authorize(
-                access_state,
-                registry,
-                proxy_name=proxy_name,
-                source_ip=remote_addr,
-            )
-            # Logging must not affect allow/deny.
-            ACL.emit_conn_log(verdict, cfg=cfg)
-            if verdict.get("decision") == ACL.DECISION_ALLOW:
-                self._send_json(200, {"reject": False, "unchange": True})
-            else:
-                reason = str(verdict.get("reason") or "denied")
-                self._send_json(
-                    200,
-                    {"reject": True, "reject_reason": reason, "unchange": True},
+                verdict = ACL.authorize(
+                    access_state,
+                    registry,
+                    proxy_name=proxy_name,
+                    source_ip=remote_addr,
                 )
+                # Logging must not affect allow/deny.
+                ACL.emit_conn_log(verdict, cfg=cfg)
+                if verdict.get("decision") == ACL.DECISION_ALLOW:
+                    self._send_json(200, {"reject": False, "unchange": True})
+                else:
+                    reason = str(verdict.get("reason") or "denied")
+                    self._send_json(
+                        200,
+                        {"reject": True, "reject_reason": reason, "unchange": True},
+                    )
+
+            self._with_slot(_handle)
 
     return Handler
 

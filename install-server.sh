@@ -1094,6 +1094,19 @@ PY
     echo "ERROR: FRP control listen port must be outside the FRP service port range" >&2
     exit 1
   fi
+  FRP_EGRESS_LISTEN_PORT="${FRP_EGRESS_LISTEN_PORT:-6102}"
+  if ! frp_valid_tcp_port "$FRP_EGRESS_LISTEN_PORT"; then
+    echo "ERROR: FRP_EGRESS_LISTEN_PORT must be an integer TCP port between 1 and 65535" >&2
+    exit 1
+  fi
+  if (( 10#$FRP_EGRESS_LISTEN_PORT >= 10#$FRP_PORT_START && 10#$FRP_EGRESS_LISTEN_PORT <= 10#$FRP_PORT_END )); then
+    echo "ERROR: Controlled Egress listen port must be outside the FRP service port range" >&2
+    exit 1
+  fi
+  if (( 10#$FRP_EGRESS_LISTEN_PORT == 10#$FRP_CONTROL_LISTEN_PORT || 10#$FRP_EGRESS_LISTEN_PORT == 10#$FRP_ALLOCATOR_LISTEN_PORT )); then
+    echo "ERROR: Controlled Egress listen port collides with another infrastructure listener" >&2
+    exit 1
+  fi
   if frp_mode_is_single443; then
     if (( 10#$FRP_CONTROL_LISTEN_PORT == 10#$FRP_CONTROL_PUBLIC_PORT )); then
       echo "ERROR: FRP control backend port cannot be the public frontend port ${FRP_CONTROL_PUBLIC_PORT}" >&2
@@ -1167,7 +1180,7 @@ cfg = {
     'access_conn_log_file': '/var/log/drlink/access-conn.jsonl',
     'egress_conn_log_file': '/var/log/drlink/egress-conn.jsonl',
     'egress_listen_addr': '0.0.0.0',
-    'egress_listen_port': 6080,
+    'egress_listen_port': int(os.environ.get('FRP_EGRESS_LISTEN_PORT') or '6102'),
     'access_plugin_addr': '127.0.0.1:6101',
     'access_plugin_path': '/access-auth',
     'client_installer_url': sys.argv[10],
@@ -2082,7 +2095,7 @@ defaults = {
     "egress_control_file": "/var/lib/drlink/egress-control.json",
     "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
     "egress_listen_addr": "0.0.0.0",
-    "egress_listen_port": 6080,
+    "egress_listen_port": 6102,
 }
 for key, value in defaults.items():
     if key not in cfg or cfg.get(key) in (None, ""):

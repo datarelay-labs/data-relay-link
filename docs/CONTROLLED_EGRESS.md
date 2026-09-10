@@ -3,7 +3,7 @@
 > **Product:** Data Relay  
 > **Pillar:** Agentless Controlled Egress  
 > **CLI:** `sudo drlink`  
-> **Default proxy port:** `6080`
+> **Default proxy port:** `6102`
 
 ## What it is
 
@@ -12,8 +12,8 @@ Controlled Egress lets hosts on a closed or restricted network reach **only** ex
 Protected hosts do **not** install Data Relay, frpc, or any agent. They only set a standard proxy:
 
 ```bash
-export HTTP_PROXY=http://datarelay.example.com:6080
-export HTTPS_PROXY=http://datarelay.example.com:6080
+export HTTP_PROXY=http://datarelay.example.com:6102
+export HTTPS_PROXY=http://datarelay.example.com:6102
 ```
 
 HTTPS traffic uses `CONNECT`. Application TLS stays end-to-end between the client and the destination. Data Relay does **not** decrypt TLS in v1.
@@ -21,7 +21,7 @@ HTTPS traffic uses `CONNECT`. Application TLS stays end-to-end between the clien
 ## Quick start
 
 1. Install / update the Data Relay server (existing `install-server.sh` / project update).
-2. On the firewall, allow closed-network hosts to reach `DATA_RELAY_IP:6080` only. Do **not** open general Internet egress from those hosts.
+2. On the firewall, allow closed-network hosts to reach `DATA_RELAY_IP:6102` only. Do **not** open general Internet egress from those hosts.
 3. Create an Egress Profile:
 
 ```text
@@ -43,7 +43,7 @@ Data Relay never modifies customer firewalls, Security Groups, UFW, iptables, or
 Example customer policy:
 
 ```text
-ALLOW closed-network → DATA_RELAY_IP:6080
+ALLOW closed-network → DATA_RELAY_IP:6102
 DENY  closed-network → Internet:any
 ```
 

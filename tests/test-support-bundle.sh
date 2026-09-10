@@ -193,6 +193,22 @@ cat >"$SERVER/var/lib/drlink/access-control.json" <<'EOF'
   "service_access": {}
 }
 EOF
+cat >"$SERVER/var/lib/drlink/egress-control.json" <<'EOF'
+{
+  "schema_version": 1,
+  "egress_profiles": {
+    "prof_000000000001": {
+      "name": "ubuntu-update",
+      "enabled": true,
+      "sources": [],
+      "destinations": []
+    }
+  }
+}
+EOF
+mkdir -p "$SERVER/var/log/drlink"
+printf '{"decision":"ALLOW","hostname":"security.ubuntu.com","source_ip":"10.0.0.1"}\n' \
+  >"$SERVER/var/log/drlink/egress-conn.jsonl"
 # Enrollment-looking secret in a log line
 printf 'Enrollment Code: %s\n' "$ENROLL" >"$SERVER/var/log/drlink/audit.jsonl"
 # Path traversal bait: symlink outside tree
@@ -202,6 +218,7 @@ ln -s "$WORKDIR/outside/secret.txt" "$SERVER/etc/drlink/evil-link"
 # Unit markers for role detection
 echo '[Unit]' >"$SERVER/etc/systemd/system/drlink-server.service"
 echo '[Unit]' >"$SERVER/etc/systemd/system/drlink-allocator.service"
+echo '[Unit]' >"$SERVER/etc/systemd/system/drlink-egress.service"
 : >"$SERVER/usr/local/bin/frps"
 : >"$SERVER/usr/local/lib/drlink/frp-create-client"
 : >"$SERVER/usr/local/sbin/frp-create-client"
@@ -229,6 +246,7 @@ assert_member "$ARCHIVE_SERVER" "doctor.txt"
 assert_member "$ARCHIVE_SERVER" "product-config.sanitized.json"
 assert_member "$ARCHIVE_SERVER" "registry-summary.json"
 assert_member "$ARCHIVE_SERVER" "access-control-summary.json"
+assert_member "$ARCHIVE_SERVER" "egress-control-summary.json"
 assert_member "$ARCHIVE_SERVER" "versions.txt"
 assert_member "$ARCHIVE_SERVER" "os-info.txt"
 
@@ -259,6 +277,14 @@ tar -xOzf "$ARCHIVE_SERVER" registry-summary.json | grep -q 'lab-client' \
   || fail "registry summary missing client label"
 tar -xOzf "$ARCHIVE_SERVER" registry-summary.json | grep -q "$SECRET_TOKEN" \
   && fail "token leaked in registry summary"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q '"profile_count": 1' \
+  || fail "egress summary missing profile count"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q '"enabled_profile_count": 1' \
+  || fail "egress summary missing enabled profile count"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q "$SECRET_TOKEN" \
+  && fail "token leaked in egress summary"
+tar -xOzf "$ARCHIVE_SERVER" service-status.txt | grep -q 'drlink-egress' \
+  || fail "service status missing drlink-egress unit"
 
 snapshot_tree "$SERVER" "$WORKDIR/server.after"
 assert_unchanged "$WORKDIR/server.before" "$WORKDIR/server.after" "server-fixture"
@@ -388,9 +414,9 @@ FRP_DEPLOY_TEST_ROOT="$SERVER" python3 "$LIB" >"$WORKDIR/default.out" 2>"$WORKDI
   cat "$WORKDIR/default.out" "$WORKDIR/default.err" >&2
   fail "default output failed"
 }
-DEFAULT_ARCHIVE="$(find "$DEFAULT_DIR" -maxdepth 1 -type f -name 'frp-support-*.tar.gz' | head -n 1)"
+DEFAULT_ARCHIVE="$(find "$DEFAULT_DIR" -maxdepth 1 -type f -name 'drlink-support-*.tar.gz' | head -n 1)"
 [[ -n "$DEFAULT_ARCHIVE" ]] || fail "default archive not created"
-basename "$DEFAULT_ARCHIVE" | grep -E '^frp-support-.+-[0-9]{8}T[0-9]{6}Z\.tar\.gz$' >/dev/null \
+basename "$DEFAULT_ARCHIVE" | grep -E '^drlink-support-.+-[0-9]{8}T[0-9]{6}Z\.tar\.gz$' >/dev/null \
   || fail "default archive name not UTC Z stamped"
 pass "DEFAULT_UTC_Z_NAMING"
 
@@ -400,16 +426,20 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location('g', sys.argv[1])
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)
+# Compatibility alias still works.
 r = g.match(g.tokenize('support-bundle --output /tmp/x.tar.gz'), 'server')
 assert r.get('status') == 'ok' and r.get('action') == 'support_bundle', r
 assert '--output' in (r.get('passthrough') or [])
 r2 = g.match(g.tokenize('support-bundle'), 'client')
 assert r2.get('status') == 'ok' and r2.get('action') == 'support_bundle', r2
+# Canonical resource-first form.
+r3 = g.match(g.tokenize('support bundle --output /tmp/x.tar.gz'), 'server')
+assert r3.get('status') == 'ok' and r3.get('action') == 'support_bundle', r3
 for role in ('server', 'client', 'both'):
     help_txt = g.help_text([], role)
-    assert 'support-bundle' in help_txt, (role, help_txt)
+    assert 'support' in help_txt, (role, help_txt)
     concise = g._concise_root(role)
-    assert 'support-bundle' in concise, (role, concise)
+    assert 'support' in concise, (role, concise)
 print('ok')
 PY
 pass "FRPCTL_GRAMMAR"

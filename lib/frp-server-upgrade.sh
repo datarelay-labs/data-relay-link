@@ -155,17 +155,48 @@ PY
 }
 
 frp_server_upgrade_preserved_digest() {
-  frp_server_upgrade_tree_digest \
-    "$(frp_server_fs /usr/local/bin/frps)" \
-    "$(frp_server_fs /etc/frp/frps.toml)" \
-    "$(frp_server_fs /etc/frp/server_token)" \
-    "$(frp_server_fs /etc/drlink/config.json)" \
-    "$(frp_server_fs /etc/drlink/pki)" \
-    "$(frp_server_fs /var/lib/drlink/registry.json)" \
-    "$(frp_server_fs /var/lib/drlink/access-control.json)" \
-    "$(frp_server_fs /var/lib/drlink/enrollments)" \
-    "$(frp_server_fs /var/lib/drlink/bootstrap)" \
+  # Include every manifest "protected" path under /var/lib/drlink plus
+  # runtime binaries/config that must survive project-update. Deriving the
+  # state-file set from the manifest keeps newly added protected resources
+  # covered automatically.
+  local -a paths=(
+    "$(frp_server_fs /usr/local/bin/frps)"
+    "$(frp_server_fs /etc/frp/frps.toml)"
+    "$(frp_server_fs /etc/frp/server_token)"
+    "$(frp_server_fs /etc/drlink/config.json)"
+    "$(frp_server_fs /etc/drlink/pki)"
+    "$(frp_server_fs /var/lib/drlink/enrollments)"
+    "$(frp_server_fs /var/lib/drlink/bootstrap)"
     "$(frp_server_fs /var/lib/drlink/nginx-ownership)"
+  )
+  local manifest_mod=""
+  if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_project_files.py" ]]; then
+    manifest_mod="$BASE_DIR/lib/frp_project_files.py"
+  elif [[ -f "$(frp_server_fs /usr/local/lib/drlink/frp_project_files.py)" ]]; then
+    manifest_mod="$(frp_server_fs /usr/local/lib/drlink/frp_project_files.py)"
+  fi
+  if [[ -n "$manifest_mod" ]]; then
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      paths+=("$(frp_server_fs "/$rel")")
+    done < <(python3 - "$manifest_mod" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("frp_project_files", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+for rel in mod.protected_exact():
+    print(rel)
+PY
+)
+  else
+    paths+=(
+      "$(frp_server_fs /var/lib/drlink/registry.json)"
+      "$(frp_server_fs /var/lib/drlink/access-control.json)"
+      "$(frp_server_fs /var/lib/drlink/egress-control.json)"
+      "$(frp_server_fs /var/lib/drlink/service-profiles.json)"
+    )
+  fi
+  frp_server_upgrade_tree_digest "${paths[@]}"
 }
 
 frp_server_upgrade_allocator_port() {
@@ -435,6 +466,35 @@ frp_server_upgrade_rollback() {
   return 0
 }
 
+frp_server_upgrade_precheck_egress_port() {
+  # Fail closed before mutation if Egress listen is owned by a published service.
+  local cfg_file registry_file
+  cfg_file="$(frp_server_fs /etc/drlink/config.json)"
+  registry_file="$(frp_server_fs /var/lib/drlink/registry.json)"
+  [[ -f "$cfg_file" && -f "$registry_file" ]] || return 0
+  local infra_mod=""
+  if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_infrastructure_ports.py" ]]; then
+    infra_mod="$BASE_DIR/lib/frp_infrastructure_ports.py"
+  else
+    infra_mod="$(frp_server_fs /usr/local/lib/drlink/frp_infrastructure_ports.py)"
+  fi
+  [[ -f "$infra_mod" ]] || return 0
+  python3 - "$cfg_file" "$registry_file" "$infra_mod" <<'PY'
+import importlib.util, json, sys
+from pathlib import Path
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+registry = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+spec = importlib.util.spec_from_file_location("frp_infrastructure_ports", sys.argv[3])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+try:
+    mod.assert_egress_not_owned_by_service(cfg, registry)
+except Exception as exc:
+    print("ERROR: %s" % exc, file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 frp_server_upgrade_ensure_egress() {
   # Bootstrap Controlled Egress state/unit on upgrades from pre-egress installs.
   local egress_file cfg_file unit_file
@@ -470,7 +530,7 @@ defaults = {
     "egress_control_file": "/var/lib/drlink/egress-control.json",
     "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
     "egress_listen_addr": "0.0.0.0",
-    "egress_listen_port": 6080,
+    "egress_listen_port": 6102,
 }
 for key, value in defaults.items():
     if key not in cfg or cfg.get(key) in (None, ""):
@@ -609,6 +669,13 @@ frp_server_apply_project_upgrade() {
     echo "Update                    : not needed"
     echo "State mutation             : NO"
     return 0
+  fi
+
+  # Before mutation: refuse if Egress listen is owned by a published service.
+  if ! frp_server_upgrade_precheck_egress_port; then
+    echo "State mutation             : NO"
+    frp_emit_failure_class EGRESS_PORT_COLLISION
+    return 1
   fi
 
   # Before mutation: adopt legacy shared marker into the server path when

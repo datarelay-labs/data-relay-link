@@ -668,6 +668,8 @@ frp_client_main() {
       exit 1
     }
     echo "Starting FRP client ..."
+    FRP_PROXY_WAIT_CURSOR="$(frp_client_journal_cursor 2>/dev/null || true)"
+    export FRP_PROXY_WAIT_CURSOR
     frp_client_service_reload || {
       frp_emit_failure_class SYSTEMD_RELOAD_FAILED
       exit 1

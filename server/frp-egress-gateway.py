@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
 import socket
 import socketserver
@@ -176,6 +177,20 @@ def _send_simple_sock(sock: socket.socket, code: int, reason: str, body: bytes =
         pass
 
 
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def _header_name_valid(name: str) -> bool:
+    """Validate header field-names as RFC 7230 tokens (tchar) before upstream I/O."""
+    if not name:
+        return False
+    for ch in name:
+        o = ord(ch)
+        if o <= 0x1F or o == 0x7F or ch in " \t:" or o >= 0x80:
+            return False
+    return bool(_HEADER_NAME_RE.match(name))
+
+
 def _header_value_safe(value: str) -> bool:
     """Reject CR/LF/NUL/C0 (except HTAB)/DEL/C1 controls in header values."""
     for ch in value:
@@ -241,7 +256,7 @@ def _parse_request(raw: bytes) -> tuple[str, str, str, dict[str, str], bytes]:
         if ":" not in line:
             raise EG.EgressError("malformed header")
         name, value = line.split(":", 1)
-        if name.lower() != name.strip().lower() or any(ch.isspace() for ch in name):
+        if not _header_name_valid(name.strip()):
             raise EG.EgressError("malformed header name")
         if not _header_value_safe(value):
             raise EG.EgressError("unsafe header value")

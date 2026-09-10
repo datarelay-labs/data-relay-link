@@ -347,11 +347,6 @@ function Set-FrpDraftServiceEnabled {
     if ($Enable) {
         $item['enabled'] = $true
     } elseif ($currentlyEnabled) {
-        $enabledCount = 0
-        foreach ($k in $map.Keys) { if ($map[$k]['enabled'] -ne $false) { $enabledCount++ } }
-        if ($enabledCount -le 1) {
-            throw 'ERROR: at least one enabled service is required.'
-        }
         $item['enabled'] = $false
     }
     $map[$sid] = $item

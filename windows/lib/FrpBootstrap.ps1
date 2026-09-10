@@ -545,12 +545,6 @@ function Invoke-FrpClientApplyDraftLocked {
     }
 
     $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
-    $enabledCount = 0
-    foreach ($sid in $draftMap.Keys) { if ($draftMap[$sid]['enabled'] -ne $false) { $enabledCount++ } }
-    if ($enabledCount -le 0) {
-        Write-Host 'ERROR: at least one enabled service is required.'
-        return 1
-    }
 
     if ($changeClass -eq 'local') {
         return (Invoke-FrpApplyLocalMetadata -Current $current -DraftMap $draftMap)
