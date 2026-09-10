@@ -22,10 +22,10 @@ Data Relay Link helps you securely reach servers behind NAT or firewalls **and**
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
 - Named Access Lists / temporary TTL / connection access log
-- Agentless Controlled Egress profiles (FQDN + source CIDR, default DENY)
+- Agentless Controlled Egress profiles (FQDN + port + protocol http|https, source CIDR, default DENY, listen **6102**)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
-- One primary operator interface: `sudo drlink`
+- One primary operator interface: `sudo drlink` (resource-first CLI)
 
 Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)
 Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)
@@ -353,28 +353,36 @@ sudo drlink
 Typical server operations:
 
 ```text
-show status
-show version
-show clients
-show client <CLIENT-ID>
-show enrollments
-show groups
-show audit
+status
+version
+client list
+client show <CLIENT-ID>
+enrollment list
+group list
+server audit
 
-create enrollment
-create backup
+enrollment create
+backup create
 
-set client <CLIENT-ID> label branch-a
-set client <CLIENT-ID> tag site seoul
+client set <CLIENT-ID> label branch-a
+client set <CLIENT-ID> tag site seoul
 
-revoke client <CLIENT-ID>
-release service <CLIENT-ID> <SERVICE-ID>
-release client <CLIENT-ID>
+egress list
+egress create vendor-api
+egress add-source vendor-api 10.0.0.0/24
+egress add-destination vendor-api api.example.com 443 --protocol https
+egress enable vendor-api
+
+client revoke <CLIENT-ID>
+client release <CLIENT-ID> <SERVICE-ID>
 
 doctor
 update project --check
-update frp --check
+update engine --check
 ```
+
+Older verb-first forms (`show clients`, `set client`, …) still work as
+compatibility aliases. Prefer the resource-first forms above.
 
 The canonical client identity is immutable `CLIENT ID`. Label, hostname, note, tags, and groups are metadata and do not replace identity.
 

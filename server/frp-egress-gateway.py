@@ -216,11 +216,6 @@ class DnsResolver:
                         self._pos.pop(k, None)
             ev.set()
 
-        # Keep result briefly for waiters racing the pop.
-        time.sleep(0.001)
-        with self._lock:
-            self._inflight_result.pop(host, None)
-
         if err is not None:
             raise err
         return list(validated or [])
@@ -1276,6 +1271,27 @@ def _deny_sni(
 def handle_client(gw: GatewayState, request: socket.socket, client_address) -> None:
     # Concurrency is bounded in ThreadedTCPServer.process_request before the
     # worker thread is created. Do not re-acquire gw._sem here (deadlock).
+    source_ip = str(client_address[0])
+    if not gw.try_acquire_source(source_ip):
+        _state, _err, cfg, _snap = gw.cache.snapshot()
+        EG.emit_conn_log(
+            {
+                "timestamp": EG.utc_now_iso(),
+                "source_ip": source_ip,
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_RESOURCE_LIMIT,
+                "outcome": EG.AUDIT_RESOURCE_LIMIT,
+            },
+            cfg=cfg,
+        )
+        try:
+            _send_simple_sock(request, 503, "Service Unavailable", b"source limit\n")
+        finally:
+            try:
+                request.close()
+            except OSError:
+                pass
+        return
     gw.bump_active(1)
     try:
         _handle_client_inner(gw, request, client_address)
@@ -1287,6 +1303,7 @@ def handle_client(gw: GatewayState, request: socket.socket, client_address) -> N
             pass
     finally:
         gw.bump_active(-1)
+        gw.release_source(source_ip)
         try:
             request.close()
         except OSError:
@@ -1295,6 +1312,7 @@ def handle_client(gw: GatewayState, request: socket.socket, client_address) -> N
 
 def _handle_client_inner(gw: GatewayState, request: socket.socket, client_address) -> None:
     source_ip = str(client_address[0])
+    connection_id, _ = _new_ids()
     try:
         raw = _read_until_double_crlf(request, MAX_HEADER_BYTES)
         method, target, version, headers, body_prefix = _parse_request(raw)
@@ -1309,10 +1327,11 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             host, port = EG.parse_authority_host_port(target)
         except EG.EgressError:
             state, load_error, cfg, _snap = gw.cache.snapshot()
-            del state, load_error
+            del state, load_error, _snap
             EG.emit_conn_log(
                 {
                     "timestamp": EG.utc_now_iso(),
+                    "connection_id": connection_id,
                     "source_ip": source_ip,
                     "hostname": target[:200],
                     "port": None,
@@ -1332,10 +1351,17 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             port=port,
             method="CONNECT",
             protocol=EG.PROTOCOL_HTTPS,
+            connection_id=connection_id,
         )
         if upstream is None:
-            code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
-            _send_simple_sock(request, code, "Forbidden" if code == 403 else "Bad Gateway", b"denied\n")
+            reason = decision.get("reason")
+            if reason == EG.REASON_RESOURCE_LIMIT:
+                code, label = 503, "Service Unavailable"
+            elif reason in (EG.REASON_DNS_FAILURE, EG.REASON_CONNECT_FAILURE):
+                code, label = 502, "Bad Gateway"
+            else:
+                code, label = 403, "Forbidden"
+            _send_simple_sock(request, code, label, b"denied\n")
             return
         try:
             request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -1369,7 +1395,25 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             upstream.close()
             return
 
-        _relay_bidirectional(request, upstream)
+        session_id = _new_ids()[1]
+        session = {
+            "session_id": session_id,
+            "connection_id": connection_id,
+            "source_ip": source_ip,
+            "hostname": host,
+            "port": port,
+            "protocol": EG.PROTOCOL_HTTPS,
+            "method": "CONNECT",
+            "profile_id": decision.get("profile_id"),
+            "policy_generation": int(decision.get("policy_generation") or 0),
+            "start_time": time.time(),
+        }
+        gw.register_session(session)
+        try:
+            _state, _err, cfg, _snap = gw.cache.snapshot()
+            _relay_bidirectional(request, upstream, gw=gw, session=session, cfg=cfg)
+        finally:
+            gw.unregister_session(session_id)
         return
 
     # HTTP forward proxy methods
@@ -1386,21 +1430,50 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         if content_length is None:
             if body_prefix:
                 raise EG.EgressError("body without Content-Length")
-            body = b""
-        else:
-            body = _read_exact_body(request, body_prefix, content_length)
+            content_length = 0
+        elif len(body_prefix) > content_length:
+            raise EG.EgressError("request body exceeds Content-Length")
     except EG.EgressError:
         state, load_error, cfg, _snap = gw.cache.snapshot()
-        del state, load_error
+        del state, load_error, _snap
         EG.emit_conn_log(
             {
                 "timestamp": EG.utc_now_iso(),
+                "connection_id": connection_id,
                 "source_ip": source_ip,
                 "hostname": (target[:200] if target else ""),
                 "port": None,
                 "method": method,
                 "decision": EG.DECISION_DENY,
                 "reason": EG.REASON_MALFORMED_REQUEST,
+                "outcome": EG.AUDIT_POLICY_DENY,
+            },
+            cfg=cfg,
+        )
+        _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+        return
+
+    # Receive the exact body BEFORE DNS/connect so incomplete bodies never
+    # create upstream I/O (fail closed / one-request framing).
+    try:
+        if content_length:
+            body = _read_exact_body(request, body_prefix, content_length)
+        else:
+            body = b""
+    except EG.EgressError:
+        state, load_error, cfg, _snap = gw.cache.snapshot()
+        del state, load_error, _snap
+        EG.emit_conn_log(
+            {
+                "timestamp": EG.utc_now_iso(),
+                "connection_id": connection_id,
+                "source_ip": source_ip,
+                "hostname": host,
+                "port": port,
+                "method": method,
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_MALFORMED_REQUEST,
+                "outcome": EG.AUDIT_POLICY_DENY,
             },
             cfg=cfg,
         )
@@ -1414,10 +1487,17 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         port=port,
         method=method,
         protocol=EG.PROTOCOL_HTTP,
+        connection_id=connection_id,
     )
     if upstream is None:
-        code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
-        _send_simple_sock(request, code, "Forbidden" if code == 403 else "Bad Gateway", b"denied\n")
+        reason = decision.get("reason")
+        if reason == EG.REASON_RESOURCE_LIMIT:
+            code, label = 503, "Service Unavailable"
+        elif reason in (EG.REASON_DNS_FAILURE, EG.REASON_CONNECT_FAILURE):
+            code, label = 502, "Bad Gateway"
+        else:
+            code, label = 403, "Forbidden"
+        _send_simple_sock(request, code, label, b"denied\n")
         return
 
     hop_by_hop = _connection_hop_headers(headers)
@@ -1434,9 +1514,23 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
     req = "%s %s %s\r\n%s\r\n\r\n" % (method, path, version, "\r\n".join(out_headers))
     try:
         upstream.sendall(req.encode("ascii", errors="strict"))
-        if body:
-            upstream.sendall(body)
+        # Stream body in bounded chunks to avoid holding a second full copy
+        # on the send path (body was already received for incomplete reject).
+        offset = 0
+        while offset < len(body):
+            chunk = body[offset : offset + STREAM_BUF]
+            upstream.sendall(chunk)
+            offset += len(chunk)
         _relay_upstream_response(request, upstream)
+    except EG.EgressError:
+        try:
+            upstream.close()
+        except OSError:
+            pass
+        try:
+            _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+        except Exception:
+            pass
     except OSError:
         try:
             upstream.close()
@@ -1466,6 +1560,21 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         except (OSError, AttributeError):
             pass
         if not self._slot_sem.acquire(blocking=False):
+            try:
+                # Best-effort RESOURCE_LIMIT audit (no secrets).
+                _state, _err, cfg, _snap = self.gw.cache.snapshot()
+                EG.emit_conn_log(
+                    {
+                        "timestamp": EG.utc_now_iso(),
+                        "source_ip": str(client_address[0]),
+                        "decision": EG.DECISION_DENY,
+                        "reason": EG.REASON_RESOURCE_LIMIT,
+                        "outcome": EG.AUDIT_RESOURCE_LIMIT,
+                    },
+                    cfg=cfg,
+                )
+            except Exception:
+                pass
             try:
                 _send_simple_sock(request, 503, "Service Unavailable", b"server busy\n")
             except Exception:
@@ -1507,6 +1616,32 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         super().server_bind()
 
 
+def _write_effective_config(host: str, port: int, gw: GatewayState) -> None:
+    """Least-privilege runtime snapshot — no CA/token/secrets."""
+    try:
+        path = EG._rooted("/run/drlink/egress-effective.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        snap = gw.cache.engine.snapshot()
+        doc = {
+            "listen_addr": host,
+            "listen_port": port,
+            "max_concurrent": gw.max_concurrent,
+            "per_source_limit": gw.per_source_limit,
+            "dns_pending_limit": gw.dns_pending_limit,
+            "egress_control_file": str(gw.cache.path or ""),
+            "policy_generation": gw.cache.engine.generation,
+            "policy_healthy": bool(snap and snap.healthy),
+            "written_at": EG.utc_now_iso(),
+        }
+        path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except Exception:
+        return
+
+
 def serve(
     config_path: Path,
     *,
@@ -1515,6 +1650,7 @@ def serve(
     resolve_fn=default_resolve,
     connect_fn=default_connect,
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+    per_source_limit: int = DEFAULT_PER_SOURCE_LIMIT,
 ):
     cache = PolicyCache(config_path)
     host, port = EG.listen_bind(cache.cfg)
@@ -1522,23 +1658,30 @@ def serve(
         host = bind_host
     if bind_port is not None:
         port = bind_port
+    if host in ("0.0.0.0", "::"):
+        sys.stderr.write(
+            "[drlink-egress] WARN: listening on %s (prefer an internal address)\n" % host
+        )
     gw = GatewayState(
         cache,
         resolve_fn=resolve_fn,
         connect_fn=connect_fn,
         max_concurrent=max_concurrent,
+        per_source_limit=per_source_limit,
     )
     server = ThreadedTCPServer((host, port), gw)
+    _write_effective_config(host, port, gw)
 
     def health_thread():
         while not gw.shutting_down:
             cache.reload(force=False)
+            _write_effective_config(host, port, gw)
             time.sleep(2)
 
     threading.Thread(target=health_thread, name="egress-policy-reload", daemon=True).start()
     sys.stderr.write(
-        "[drlink-egress] listening on %s:%d policy=%s\n"
-        % (host, port, cache.path)
+        "[drlink-egress] listening on %s:%d policy=%s generation=%s\n"
+        % (host, port, cache.path, cache.engine.generation)
     )
     try:
         server.serve_forever(poll_interval=0.5)

@@ -1653,7 +1653,34 @@ frp_server_ensure_sandbox_dirs() {
   mkdir -p "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
   if [[ ${EUID} -eq 0 ]]; then
+    # Dedicated non-root egress account (AL2-compatible useradd).
+    if ! getent passwd drlink-egress >/dev/null 2>&1; then
+      useradd --system --home-dir /var/lib/drlink --shell /sbin/nologin \
+        --comment "Data Relay Link Controlled Egress" drlink-egress 2>/dev/null \
+        || useradd -r -d /var/lib/drlink -s /sbin/nologin drlink-egress 2>/dev/null \
+        || true
+    fi
+    # Default: secrets stay root-only. Egress gets the minimum paths below.
     chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" 2>/dev/null || true
+    chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+    if getent group drlink-egress >/dev/null 2>&1; then
+      # Traverse-only on project/state dirs; no listing of sibling secrets.
+      chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+      chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+      # Non-secret listen/path pointers only (token/CA live under /etc/frp + pki).
+      if [[ -f "$etc_proj/config.json" ]]; then
+        chown root:drlink-egress "$etc_proj/config.json" 2>/dev/null || true
+        chmod 640 "$etc_proj/config.json" 2>/dev/null || true
+      fi
+      # Authoritative egress policy + connection audit log.
+      if [[ -f "$var_lib/egress-control.json" ]]; then
+        chown root:drlink-egress "$var_lib/egress-control.json" 2>/dev/null || true
+        chmod 660 "$var_lib/egress-control.json" 2>/dev/null || true
+      fi
+      touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
+      chown root:drlink-egress "$var_log/egress-conn.jsonl" 2>/dev/null || true
+      chmod 660 "$var_log/egress-conn.jsonl" 2>/dev/null || true
+    fi
   fi
 }
 

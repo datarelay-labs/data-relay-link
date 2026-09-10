@@ -2096,6 +2096,22 @@ def check_egress_control(report, paths, facts, cfg):
             '',
             'runtime',
         )
+        if host in ('0.0.0.0', '::', '*'):
+            report.add(
+                'EGRESS_LISTEN_BIND', WARN,
+                'Controlled Egress listens on all interfaces',
+                host,
+                'prefer an internal/trusted egress_listen_addr (e.g. management LAN)',
+                'runtime',
+            )
+        else:
+            report.add(
+                'EGRESS_LISTEN_BIND', PASS,
+                'Controlled Egress listen address is scoped',
+                host,
+                '',
+                'runtime',
+            )
     except Exception as exc:
         report.add(
             'EGRESS_CONFIG_ERROR', FAIL,

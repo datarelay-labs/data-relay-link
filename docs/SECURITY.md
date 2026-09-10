@@ -392,20 +392,29 @@ Controlled Egress is a **separate policy plane** from inbound Access Control.
 
 Authoritative state: `/var/lib/drlink/egress-control.json`
 Connection log: `/var/log/drlink/egress-conn.jsonl`
-Daemon: `drlink-egress.service` (default listen `0.0.0.0:6102`)
+Daemon: `drlink-egress.service` (default listen `0.0.0.0:6102`, outside published pool `6000–6098`)
 
 Security contract:
 
 - Default DENY; missing/corrupt/invalid policy fails closed
 - Primary caller authorization is source IP/CIDR (no agent on protected hosts)
-- Destinations are FQDN + port (exact or strict `*.suffix`); IP literals denied by default
+- Destinations are FQDN + port + **required protocol** `http|https`
+  - `http`: absolute-form proxy requests only
+  - `https`: `CONNECT` + TLS ClientHello SNI binding; ECH denied; no TLS interception
+- Wildcard hosts are checked against a **pinned Public Suffix List**
+  (`lib/frp_public_suffix.py`, `lib/data/public_suffix_list.dat`); bare public-suffix wildcards are rejected
+- IP literals denied by default
 - Server-side DNS; every resolved candidate IP is validated before connect
 - Reject loopback, RFC1918, link-local, ULA, metadata (`169.254.169.254`), multicast/reserved
 - Resolve once → validate → connect to that exact IP (rebinding-safe)
+- Policy reload Option B: gateway reloads policy on file mtime change; new authorizations always use current policy (no stale-while-revalidate for allow decisions)
 - Do not log Proxy-Authorization, cookies, bodies, or TLS payloads
 - Egress failure must not take down inbound `frps`; inbound Access Control remains independent
+- Service unit currently runs as `User=root` with systemd hardening; dedicated non-root is not default in this line
 
-See `docs/CONTROLLED_EGRESS.md`.
+Windows Update over the proxy is possible with an explicit destination set. **Delivery Optimization peer traffic is out of Controlled Egress scope** — keep DO disabled or use WSUS/managed update paths on closed hosts.
+
+Operator CLI (resource-first): `drlink egress list` / `egress status` / safe create→source→destination+protocol→test→enable. See `docs/CONTROLLED_EGRESS.md`.
 
 ## 18. Mixed product versions
 
