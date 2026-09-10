@@ -34,7 +34,7 @@ EOF
     "$marker" >"$tree/var/lib/drlink/registry.json"
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/drlink/access-control.json"
-  printf '{"schema_version":1,"egress_profiles":{}}\n' \
+  printf '{"schema_version":2,"egress_profiles":{}}\n' \
     >"$tree/var/lib/drlink/egress-control.json"
   printf '{"schema_version":1,"profiles":{}}\n' \
     >"$tree/var/lib/drlink/service-profiles.json"

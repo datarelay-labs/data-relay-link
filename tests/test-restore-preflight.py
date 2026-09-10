@@ -60,7 +60,7 @@ def write_min_payload(payload: Path) -> None:
         encoding="utf-8",
     )
     (payload / "var/lib/drlink/egress-control.json").write_text(
-        json.dumps({"schema_version": 1, "egress_profiles": {}}) + "\n",
+        json.dumps({"schema_version": 2, "egress_profiles": {}}) + "\n",
         encoding="utf-8",
     )
     (payload / "var/lib/drlink/service-profiles.json").write_text(

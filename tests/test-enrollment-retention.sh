@@ -36,7 +36,7 @@ root = Path(sys.argv[1])
     json.dumps({'schema_version': 1, 'profiles': {}}) + '\n'
 )
 (root / 'var/lib/drlink/egress-control.json').write_text(
-    json.dumps({'schema_version': 1, 'egress_profiles': {}}) + '\n'
+    json.dumps({'schema_version': 2, 'egress_profiles': {}}) + '\n'
 )
 (root / 'etc/drlink/version').write_text(
     'PROJECT_VERSION=2.2.1\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=main\n'

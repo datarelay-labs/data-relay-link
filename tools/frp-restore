@@ -445,7 +445,11 @@ def validate_staged_control_payload(extracted: Path) -> None:
             raise RestoreError("staged access-control.json is invalid: %s" % exc) from exc
     if egress is not None:
         try:
-            egress.validate_egress_state(staged["egress"])
+            # Restore candidates may still be schema v1 (pre-protocol). Migrate
+            # deterministically before semantic validation; ambiguous ports fail closed.
+            migrated = egress._parse_egress_state(staged["egress"], migrate=True)
+            egress.validate_egress_state(migrated)
+            staged["egress"] = migrated
         except Exception as exc:
             raise RestoreError("staged egress-control.json is invalid: %s" % exc) from exc
     if profiles is not None:
