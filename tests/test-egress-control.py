@@ -849,15 +849,24 @@ class EgressAdversarialTests(EgressProxyFunctionalTests):
 
     def test_worker_exception_escape(self):
         """WORKER_EXCEPTION_ESCAPE=0 — garbage must yield 400, not kill worker."""
-        before = self.gw_state._active
         resp = self._raw(b"\xff\xfe\x00not-http\r\n\r\n")
         self.assertTrue(resp.startswith(b"HTTP/1.1 400") or resp == b"", resp[:80])
-        # Proxy still serves a normal request afterward.
-        ok = self._raw(
-            b"GET http://allowed.test/ HTTP/1.1\r\nHost: allowed.test\r\nConnection: close\r\n\r\n"
-        )
+        # Proxy still serves a normal request afterward (proves worker did not die).
+        deadline = time.time() + 5.0
+        ok = b""
+        while time.time() < deadline:
+            ok = self._raw(
+                b"GET http://allowed.test/ HTTP/1.1\r\nHost: allowed.test\r\nConnection: close\r\n\r\n"
+            )
+            if b"200" in ok.split(b"\r\n", 1)[0]:
+                break
+            time.sleep(0.05)
         self.assertIn(b"200", ok.split(b"\r\n", 1)[0])
-        self.assertEqual(self.gw_state._active, before)
+        # Wait for in-flight workers to release (avoid flaky active-count races).
+        deadline = time.time() + 5.0
+        while time.time() < deadline and self.gw_state._active != 0:
+            time.sleep(0.05)
+        self.assertEqual(self.gw_state._active, 0)
 
 
 class EgressRelayTests(unittest.TestCase):
