@@ -31,6 +31,26 @@ PY
   [[ "$mode" == "$expected" ]] || fail "mode $path wanted $expected got $mode"
 }
 
+assert_project_state_dir_mode() {
+  local path="$1"
+  python3 - "$path" <<'PY' || fail "project/state dir mode $path"
+import grp, os, stat, sys
+path = sys.argv[1]
+st = os.stat(path)
+mode = stat.S_IMODE(st.st_mode)
+try:
+    group = grp.getgrgid(st.st_gid).gr_name
+except KeyError:
+    group = str(st.st_gid)
+if mode == 0o700:
+    raise SystemExit(0)
+if mode == 0o710 and group == "drlink-egress":
+    raise SystemExit(0)
+print(f"wanted 0o700 or 0o710:drlink-egress got {oct(mode)} group={group}", file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+
 write_dummy_frps() {
   local dest="$1"
   mkdir -p "$(dirname "$dest")"
@@ -198,13 +218,16 @@ fi
 [[ -d "$TREE/var/lib/drlink" ]] || fail "var/lib not created"
 [[ -d "$TREE/etc/drlink" ]] || fail "etc project dir missing"
 [[ -d "$TREE/etc/frp" ]] || fail "etc/frp missing"
-assert_mode "$TREE/var/log/drlink" "0o700"
-assert_mode "$TREE/var/lib/drlink" "0o700"
-assert_mode "$TREE/etc/drlink" "0o700"
+assert_project_state_dir_mode "$TREE/var/log/drlink"
+assert_project_state_dir_mode "$TREE/var/lib/drlink"
+assert_project_state_dir_mode "$TREE/etc/drlink"
 assert_mode "$TREE/etc/frp" "0o700"
 if [[ ${EUID} -eq 0 ]]; then
   owner="$(stat -c '%U:%G' "$TREE/var/log/drlink")"
-  [[ "$owner" == "root:root" ]] || fail "log dir owner $owner"
+  case "$owner" in
+    root:root|root:drlink-egress) ;;
+    *) fail "log dir owner $owner" ;;
+  esac
 fi
 grep -q '^ProtectSystem=strict$' "$ROOT/server/drlink-allocator.service" \
   || fail "allocator ProtectSystem weakened"

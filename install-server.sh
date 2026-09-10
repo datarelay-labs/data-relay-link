@@ -1660,26 +1660,38 @@ frp_server_ensure_sandbox_dirs() {
         || useradd -r -d /var/lib/drlink -s /sbin/nologin drlink-egress 2>/dev/null \
         || true
     fi
-    # Default: secrets stay root-only. Egress gets the minimum paths below.
-    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" 2>/dev/null || true
+    # Keep secret directories mode 0700. Grant egress the minimum ACL/xattr surface
+    # when setfacl is available; otherwise fall back to group-execute (0710) on
+    # the non-PKI project/state dirs only (/etc/frp stays root-only 0700).
+    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
     chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
-    if getent group drlink-egress >/dev/null 2>&1; then
-      # Traverse-only on project/state dirs; no listing of sibling secrets.
-      chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
-      chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
-      # Non-secret listen/path pointers only (token/CA live under /etc/frp + pki).
-      if [[ -f "$etc_proj/config.json" ]]; then
-        chown root:drlink-egress "$etc_proj/config.json" 2>/dev/null || true
-        chmod 640 "$etc_proj/config.json" 2>/dev/null || true
+    if getent passwd drlink-egress >/dev/null 2>&1; then
+      if command -v setfacl >/dev/null 2>&1; then
+        setfacl -m u:drlink-egress:--x "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+        if [[ -f "$etc_proj/config.json" ]]; then
+          setfacl -m u:drlink-egress:r-- "$etc_proj/config.json" 2>/dev/null || true
+        fi
+        if [[ -f "$var_lib/egress-control.json" ]]; then
+          setfacl -m u:drlink-egress:rw- "$var_lib/egress-control.json" 2>/dev/null || true
+        fi
+        touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
+        setfacl -m u:drlink-egress:rw- "$var_log/egress-conn.jsonl" 2>/dev/null || true
+      elif getent group drlink-egress >/dev/null 2>&1; then
+        # Fallback without ACL tools: traverse-only group bit (not on /etc/frp).
+        chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+        chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+        if [[ -f "$etc_proj/config.json" ]]; then
+          chown root:drlink-egress "$etc_proj/config.json" 2>/dev/null || true
+          chmod 640 "$etc_proj/config.json" 2>/dev/null || true
+        fi
+        if [[ -f "$var_lib/egress-control.json" ]]; then
+          chown root:drlink-egress "$var_lib/egress-control.json" 2>/dev/null || true
+          chmod 660 "$var_lib/egress-control.json" 2>/dev/null || true
+        fi
+        touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
+        chown root:drlink-egress "$var_log/egress-conn.jsonl" 2>/dev/null || true
+        chmod 660 "$var_log/egress-conn.jsonl" 2>/dev/null || true
       fi
-      # Authoritative egress policy + connection audit log.
-      if [[ -f "$var_lib/egress-control.json" ]]; then
-        chown root:drlink-egress "$var_lib/egress-control.json" 2>/dev/null || true
-        chmod 660 "$var_lib/egress-control.json" 2>/dev/null || true
-      fi
-      touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
-      chown root:drlink-egress "$var_log/egress-conn.jsonl" 2>/dev/null || true
-      chmod 660 "$var_log/egress-conn.jsonl" 2>/dev/null || true
     fi
   fi
 }

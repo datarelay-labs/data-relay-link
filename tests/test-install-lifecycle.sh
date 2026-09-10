@@ -30,6 +30,28 @@ PY
   [[ "$mode" == "$expected" ]] || fail "mode $path wanted $expected got $mode"
 }
 
+# Project/state dirs stay 0700 with ACL when available; without setfacl the
+# installer falls back to 0710 + group drlink-egress for traverse-only access.
+assert_project_state_dir_mode() {
+  local path="$1"
+  python3 - "$path" <<'PY' || fail "project/state dir mode $path"
+import grp, os, stat, sys
+path = sys.argv[1]
+st = os.stat(path)
+mode = stat.S_IMODE(st.st_mode)
+try:
+    group = grp.getgrgid(st.st_gid).gr_name
+except KeyError:
+    group = str(st.st_gid)
+if mode == 0o700:
+    raise SystemExit(0)
+if mode == 0o710 and group == "drlink-egress":
+    raise SystemExit(0)
+print(f"wanted 0o700 or 0o710:drlink-egress got {oct(mode)} group={group}", file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+
 assert_no_leak() {
   local log="$1"
   if grep -E 'BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY|test-frp-token-do-not-use|enroll-secret-|server_token_value' "$log" >/dev/null 2>&1; then
@@ -235,9 +257,9 @@ assert cfg.get('listen_host')=='0.0.0.0'
 PY
 [[ ! -f "$SRV/var/lib/drlink/server-update-pending.json" ]] || fail "stale txn marker after success"
 [[ -d "$SRV/var/log/drlink" ]] || fail "fresh install missing /var/log/drlink"
-assert_mode "$SRV/var/log/drlink" "0o700"
-assert_mode "$SRV/var/lib/drlink" "0o700"
-assert_mode "$SRV/etc/drlink" "0o700"
+assert_project_state_dir_mode "$SRV/var/log/drlink"
+assert_project_state_dir_mode "$SRV/var/lib/drlink"
+assert_project_state_dir_mode "$SRV/etc/drlink"
 assert_mode "$SRV/etc/frp" "0o700"
 pass "SERVER_FRESH_INSTALL"
 pass "DIRECT_MODE_REGRESSION"
