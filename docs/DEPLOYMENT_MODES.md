@@ -2,7 +2,7 @@
 
 `Data Relay Link` supports two server deployment modes. Direct mode is the
 default and matches 2.0.0. Enterprise single-443 is optional. Project version
-**2.3.0** (FINAL AUDIT CLOSURE; recreate/move the `v2.3.0` tag on final HEAD).
+**2.3.1** (v2.3.0 remains historical/untouched).
 
 Published service ports stay **TCP/6000-6098** (1:1) in both modes.
 

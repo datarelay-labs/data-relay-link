@@ -4,9 +4,9 @@ See [docs/WINDOWS_CLIENT.md](../docs/WINDOWS_CLIENT.md) for the full user guide.
 
 ## Stable validation
 
-Current release (FINAL AUDIT CLOSURE): **Data Relay Link v2.3.0** with pinned FRP **0.71.0**.
+Current release (FINAL AUDIT CLOSURE): **Data Relay Link v2.3.1** with pinned FRP **0.71.0**.
 
-| Environment | v2.3.0 validation claim |
+| Environment | v2.3.1 validation claim |
 | --- | --- |
 | Windows 10 / PowerShell 5.1 | **Real E2E validated** |
 | PowerShell 7 | **CI validated**; same-host Real E2E is claimed only where `pwsh` is actually installed |

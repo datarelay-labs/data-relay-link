@@ -34,26 +34,24 @@ Inbound relay engine (implementation dependency): [`fatedier/frp`](https://githu
 
 ---
 
-## Current release — v2.3.0 FINAL AUDIT CLOSURE
+## Current release — v2.3.1
 
 | Item | Current |
 | --- | --- |
-| Data Relay Link | **v2.3.0** |
+| Data Relay Link | **v2.3.1** |
 | Pinned upstream FRP | **v0.71.0** |
-| Intended install source | immutable `v2.3.0` tag (recreate/move on final audit HEAD) |
+| Intended install source | immutable `v2.3.1` tag |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
 
-Current project version: **2.3.0**
+Current project version: **2.3.1**
 Current pinned FRP version: **v0.71.0**
 
 `v2.2.1` and earlier tags remain immutable historical releases. This tree
-prepares **v2.3.0 FINAL AUDIT CLOSURE** with FRP pinned at `0.71.0`. A
-premature GitHub `v2.3.0` tag/release already exists; after this PR lands,
-recreate or move that tag onto the final audit-closure HEAD before treating
-field installs as final. Following mutable `main` is explicit opt-in only,
-for example `FRP_RELEASE_CHANNEL=dev`.
+prepares **v2.3.1** with FRP pinned at `0.71.0`. Historical `v2.3.0` remains
+untouched and must not be moved or recreated. Following mutable `main` is
+explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
 
 On development builds, use release channel, source ref, and verified bundle SHA256 to identify the exact build.
 
@@ -66,15 +64,15 @@ The post-**v2.2.1** documentation restoration phase
 **PASS**. That work restored [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md)
 without moving the immutable `v2.2.1` tag or changing runtime artifacts. It is
 historical context only; current product version and platform claims are under
-**v2.3.0 FINAL AUDIT CLOSURE** above.
+**v2.3.1** above.
 
 ---
 
-## Supported client platforms — v2.3.0
+## Supported client platforms — v2.3.1
 
 Real-host validation and container/CI portability are deliberately reported separately.
 
-| Platform | v2.3.0 validation claim |
+| Platform | v2.3.1 validation claim |
 | --- | --- |
 | **Ubuntu 24 physical host** | **Real E2E validated** |
 | **Rocky Linux 8.10** | **Real E2E validated** |
@@ -91,7 +89,7 @@ The Data Relay Link **server remains Linux-based**. macOS and Windows are client
 
 ### What the final Real E2E covered
 
-Across applicable platforms, the v2.3.0 release path validated the actual product lifecycle, including:
+Across applicable platforms, the v2.3.1 release path validated the actual product lifecycle, including:
 
 - install and Zero-Touch enrollment
 - persistent `CLIENT ID`
@@ -178,7 +176,7 @@ For normal field installation, use the immutable stable tag:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.3.0/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.3.1/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
@@ -534,4 +532,4 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 ## Product definition in one sentence
 
-> Data Relay Link v2.3.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.
+> Data Relay Link v2.3.1 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.

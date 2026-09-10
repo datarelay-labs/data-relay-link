@@ -2063,29 +2063,55 @@ for item in services:
 PY
 }
 
+frp_client_runtime_unit() {
+  # Canonical Linux systemd unit after Data Relay Link rename (was: frpc).
+  printf '%s\n' 'drlink-client'
+}
+
+frp_client_recent_runtime_logs() {
+  local lines="${1:-400}"
+  if frp_is_darwin; then
+    frp_macos_recent_logs "$lines" 2>/dev/null || true
+    return 0
+  fi
+  journalctl -u "$(frp_client_runtime_unit)" -n "$lines" --no-pager 2>/dev/null || true
+}
+
 wait_for_proxies() {
+  # Bounded readiness wait for frpc proxy publication.
+  # Polls the canonical client unit journal (drlink-client), not the legacy
+  # frpc unit name. Uses short backoff so brief startup delay does not fail
+  # Zero-Touch, while genuine failure still returns non-zero within ~45s.
   local logs proxy missing
   local -a names=("$@")
-  local i
-  for i in {1..20}; do
-    sleep 1
-    if frp_is_darwin; then
-      logs="$(frp_macos_recent_logs 400 2>/dev/null || true)"
-    else
-      logs="$(journalctl -u frpc -n 400 --no-pager 2>/dev/null || true)"
+  local attempt=0
+  local max_attempts="${FRP_PROXY_WAIT_MAX_ATTEMPTS:-24}"
+  local sleep_s="${FRP_PROXY_WAIT_SLEEP_S:-1}"
+  local max_sleep="${FRP_PROXY_WAIT_MAX_SLEEP_S:-3}"
+  while (( attempt < max_attempts )); do
+    attempt=$((attempt + 1))
+    if (( sleep_s > 0 )); then
+      sleep "$sleep_s"
     fi
+    logs="$(frp_client_recent_runtime_logs 400)"
     if ! grep -q 'login to server success' <<<"$logs"; then
+      if (( sleep_s < max_sleep )) && (( attempt % 3 == 0 )); then
+        sleep_s=$((sleep_s + 1))
+      fi
       continue
     fi
     missing=""
     for proxy in "${names[@]}"; do
-      if ! grep -F "[${proxy}] start proxy success" <<<"$logs"; then
+      if ! grep -Fq "[${proxy}] start proxy success" <<<"$logs"; then
         missing="$proxy"
         break
       fi
     done
     if [[ -z "$missing" ]]; then
       return 0
+    fi
+    if (( sleep_s < max_sleep )) && (( attempt % 3 == 0 )); then
+      sleep_s=$((sleep_s + 1))
     fi
   done
   return 1

@@ -33,30 +33,58 @@ echo "SOURCE_A_IP=$SOURCE_A_IP SOURCE_B_IP=$SOURCE_B_IP"
 SERVER_IP="$(sshx "$SERVER" 'curl -4 -fsS --max-time 8 https://ifconfig.me')"
 SERVER_IP="${SERVER_IP//[$'\r\n']/}"
 
-# Resolve AL2023 client + ssh service (stable from inventory)
-read -r CLIENT_ID SERVICE_ID PUBLIC_PORT < <(sshx "$SERVER" "sudo python3 - <<'PY'
-import json
+# Resolve target client + ssh service from inventory (prefer configured client).
+# Harness must not hard-require AL2023; use FRP_ACCESS_E2E_CLIENT_ID / label /
+# hostname hints when set, otherwise any enrolled client with an SSH service.
+read -r CLIENT_ID SERVICE_ID PUBLIC_PORT < <(sshx "$SERVER" "sudo CLIENT_HINT='${FRP_ACCESS_E2E_CLIENT_ID:-}' CLIENT_HOST_HINT='${FRP_ACCESS_E2E_CLIENT_HOST_HINT:-}' CLIENT_LABEL_HINT='${FRP_ACCESS_E2E_CLIENT_LABEL_HINT:-}' python3 - <<'PY'
+import json, os
 from pathlib import Path
 reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
+hint_id=(os.environ.get('CLIENT_HINT') or '').strip().lower()
+hint_host=(os.environ.get('CLIENT_HOST_HINT') or '').strip().lower()
+hint_label=(os.environ.get('CLIENT_LABEL_HINT') or '').strip().lower()
+
+def score(mid, c):
+  label=str((c or {}).get('label') or '').lower()
+  host=str((c or {}).get('hostname') or '').lower()
+  s=0
+  if hint_id and (mid.lower()==hint_id or mid.lower().startswith(hint_id)):
+    s += 100
+  if hint_label and hint_label in label:
+    s += 50
+  if hint_host and (hint_host in host or host.startswith(hint_host)):
+    s += 40
+  # Soft preference for common lab labels when no explicit hint is set.
+  if not hint_id and not hint_label and not hint_host:
+    for token in ('al2023', 'al2', 'aws', 'rocky', 'e2e'):
+      if token in label or token in host:
+        s += 5
+        break
+  return s
+
+def pick_service(services):
+  if not isinstance(services, dict):
+    return None
+  if 'e2e-acl' in services and isinstance(services.get('e2e-acl'), dict):
+    svc=services['e2e-acl']
+    return 'e2e-acl', svc.get('remote_port')
+  for sid,svc in services.items():
+    if isinstance(svc,dict) and svc.get('enabled',True) and int(svc.get('local_port') or 0)==22:
+      return sid, svc.get('remote_port')
+  return None
+
+ranked=[]
 for mid,c in (reg.get('clients') or {}).items():
-  label=str((c or {}).get('label') or '')
-  host=str((c or {}).get('hostname') or '')
-  if 'al2' in label.lower() or 'al2023' in label.lower() or host.startswith('ip-10-0-19-146'):
-    services=c.get('services') or {}
-    # Prefer dedicated e2e-acl service when present.
-    if 'e2e-acl' in services and isinstance(services.get('e2e-acl'), dict):
-      svc=services['e2e-acl']
-      print(mid, 'e2e-acl', svc.get('remote_port')); raise SystemExit
-    # Prefer dedicated e2e-acl service when present.
-    if 'e2e-acl' in services and isinstance(services.get('e2e-acl'), dict):
-      svc=services['e2e-acl']
-      print(mid, 'e2e-acl', svc.get('remote_port')); raise SystemExit
-    for sid,svc in services.items():
-      if isinstance(svc,dict) and svc.get('enabled',True) and int(svc.get('local_port') or 0)==22:
-        print(mid, sid, svc.get('remote_port')); raise SystemExit
+  ranked.append((score(mid,c), mid, c))
+ranked.sort(key=lambda t: (-t[0], t[1]))
+for _, mid, c in ranked:
+  picked=pick_service((c or {}).get('services') or {})
+  if picked:
+    sid, port = picked
+    print(mid, sid, port); raise SystemExit
 print('NOTFOUND','','')
 PY")
-[[ "$CLIENT_ID" != "NOTFOUND" && -n "$PUBLIC_PORT" ]] || blocker "AL2023 ssh service not found"
+[[ "$CLIENT_ID" != "NOTFOUND" && -n "$PUBLIC_PORT" ]] || blocker "no enrolled client ssh service found in inventory"
 echo "CLIENT_ID=$CLIENT_ID SERVICE_ID=$SERVICE_ID PUBLIC_PORT=$PUBLIC_PORT SERVER_IP=$SERVER_IP"
 
 probe(){

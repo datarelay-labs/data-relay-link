@@ -1,12 +1,11 @@
 # Template formula for a future community/private tap only.
 # This is NOT official Homebrew core support and is not published as a tap yet.
-# Fill sha256 from the immutable v2.3.0 release tarball when that tag is final.
-# Formula filename retained for packaging path stability; product is Data Relay Link.
-class FrpAutoDeploy < Formula
+# Fill sha256 from the immutable v2.3.1 release tarball when that tag is final.
+class DataRelayLink < Formula
   desc "Data Relay Link client for Apple Silicon macOS"
   homepage "https://github.com/datarelay-labs/data-relay-link"
-  url "https://github.com/datarelay-labs/data-relay-link/archive/refs/tags/v2.3.0.tar.gz"
-  version "2.3.0"
+  url "https://github.com/datarelay-labs/data-relay-link/archive/refs/tags/v2.3.1.tar.gz"
+  version "2.3.1"
   sha256 "REPLACE_AT_TAG_TIME_WITH_RELEASE_TARBALL_SHA256"
   license "MIT"
 
@@ -34,7 +33,7 @@ class FrpAutoDeploy < Formula
   end
 
   test do
-    assert_match "PROJECT_VERSION=2.3.0", (libexec/"VERSION").read
+    assert_match "PROJECT_VERSION=2.3.1", (libexec/"VERSION").read
     assert_predicate bin/"drlink", :executable?
   end
 end

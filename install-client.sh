@@ -685,11 +685,7 @@ frp_client_main() {
     done < <(proxy_names_from_services "$HOST_ID")
     if ! wait_for_proxies "${PROXY_NAMES[@]}"; then
       echo "ERROR: frpc did not register every requested proxy successfully" >&2
-      if frp_is_darwin; then
-        frp_macos_recent_logs 80 >&2 || true
-      else
-        journalctl -u frpc -n 80 --no-pager >&2 || true
-      fi
+      frp_client_recent_runtime_logs 80 >&2 || true
       frp_emit_failure_class HEALTH_CHECK_FAILED
       exit 1
     fi

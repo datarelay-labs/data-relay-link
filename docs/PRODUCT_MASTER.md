@@ -5,8 +5,8 @@
 > **Canonical repository path:** `docs/PRODUCT_MASTER.md`
 > **Document status:** Master / Living Document
 > **Last updated:** 2026-09-09
-> **Current release:** Project `2.3.0` / FRP `0.71.0` — **FINAL AUDIT CLOSURE** (recreate/move premature `v2.3.0` tag on final HEAD)
-> **Release commit:** _(set when the final `v2.3.0` tag is moved/recreated)_
+> **Current release:** Project `2.3.1` / FRP `0.71.0` — release candidate (historical `v2.3.0` untouched)
+> **Release commit:** _(set when the `v2.3.1` tag is created)_
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
 > **Primary management interface:** `sudo drlink`
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen

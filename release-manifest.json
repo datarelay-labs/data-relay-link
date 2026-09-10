@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "project_version": "2.3.0",
+  "project_version": "2.3.1",
   "frp_version": "0.71.0",
   "channel": "stable",
-  "git_ref": "v2.3.0",
+  "git_ref": "v2.3.1",
   "owner": "datarelay-labs",
   "repo": "data-relay-link",
   "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link",
@@ -19,7 +19,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.1 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
@@ -33,17 +33,17 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "a876dec3d68fd992dd1ffd2a3076507e19c13db023256f81b012ecd59e7f0c13"
+      "sha256": "1a3e6b8cde08e18ad82d4f6df1a65bc593b699930dace16a693c57d1ab68bdbc"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "e163d1051c6880702792dc81f0bc06b0f3fb1aeba48d7a977aa12eb7e916099c"
+      "sha256": "8c0d3a7bdaef7c43b1b756b814f3415653512bfe78aaa33a76fbddcfbbbb0726"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "b773e2760c2086064a8d36b49db6ff45070b986a85964484858dd91497609861"
+      "sha256": "39df868966fe70154ac99426a277ca2a55945f23da0744331348cdf5cbfb8d08"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",

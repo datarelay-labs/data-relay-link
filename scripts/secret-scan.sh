@@ -43,12 +43,14 @@ fi
 # Tests may mention the stale string only when asserting it must be absent.
 if git grep -nF 'xdr-labs/frp-auto-deploy' \
   -- ':!scripts/secret-scan.sh' ':!CHANGELOG.md' \
-  ':!tests/test-user-facing-branding.sh' ':!tests/test-create-client.sh' >/dev/null; then
+  ':!tests/test-user-facing-branding.sh' ':!tests/test-create-client.sh' \
+  ':!tests/test-server-install-config.sh' >/dev/null; then
   fail "stale repository URL xdr-labs/frp-auto-deploy is tracked"
 fi
 if git grep -nF 'frp.xdr.ooo' \
   -- ':!scripts/secret-scan.sh' ':!CHANGELOG.md' \
-  ':!tests/test-user-facing-branding.sh' ':!tests/test-create-client.sh' >/dev/null; then
+  ':!tests/test-user-facing-branding.sh' ':!tests/test-create-client.sh' \
+  ':!tests/test-server-install-config.sh' >/dev/null; then
   fail "stale documentation domain frp.xdr.ooo is tracked"
 fi
 

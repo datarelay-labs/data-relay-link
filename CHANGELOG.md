@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 2.3.1 — 2026-09-10
+
+Patch release on pinned FRP **0.71.0**. Does **not** move, delete, or recreate
+published **v2.3.0**.
+
+- Repository identity: `datarelay-labs/data-relay-link` with primary CLI `drlink`
+- Fix Zero-Touch client install false `HEALTH_CHECK_FAILED` caused by polling the
+  legacy `frpc` systemd unit after rename to `drlink-client` (bounded retry/backoff)
+- Ensure successful client install finishes with `drlink` on PATH and no PATH `frpctl`
+- Homebrew formula renamed to `packaging/homebrew/Formula/data-relay-link.rb`
+- Access Control Real E2E harness no longer hard-requires an AL2023 inventory client
+
 ## 2.3.0 — 2026-09-09
 
 Feature-complete product release on pinned FRP **0.71.0**. Does not move or

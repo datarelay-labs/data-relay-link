@@ -89,6 +89,7 @@ python3 tests/test-service-profiles.py
 ./tests/test-service-profiles.sh
 ./tests/test-user-facing-branding.sh
 ./tests/test-legacy-identity-migration.sh
+./tests/test-client-proxy-health-wait.sh
 ./tests/test-ca-bootstrap.sh
 ./tests/test-allocator-process-cleanup.sh
 ./tests/test-pki-https.py
