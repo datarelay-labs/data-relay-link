@@ -1,9 +1,9 @@
 # Data Relay Link — Product Master Document
 
-> **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap  
-> **Repository:** `xdr-labs/frp-auto-deploy`
-> **Canonical repository path:** `docs/PRODUCT_MASTER.md`  
-> **Document status:** Master / Living Document  
+> **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap
+> **Repository:** `datarelay-labs/data-relay-link`
+> **Canonical repository path:** `docs/PRODUCT_MASTER.md`
+> **Document status:** Master / Living Document
 > **Last updated:** 2026-09-09
 > **Current release:** Project `2.3.0` / FRP `0.71.0` — **FINAL AUDIT CLOSURE** (recreate/move premature `v2.3.0` tag on final HEAD)
 > **Release commit:** _(set when the final `v2.3.0` tag is moved/recreated)_
@@ -74,9 +74,11 @@ README, CLI Reference, Security 문서, Deployment Mode 문서 등 세부 문서
 
 ## 2.1 제품명
 
-**Data Relay**
+**Data Relay Link**
 
-Legacy / technical identity (repository path and upstream internals): **Data Relay Link / FRP**
+Product family: **Data Relay**
+Primary CLI: `drlink`
+Upstream inbound relay engine: official `fatedier/frp` (not the product identity)
 
 Broad source rename is deferred for internals. Operators use `sudo drlink`.
 
@@ -3129,126 +3131,126 @@ Impact:
 
 ## 2026-08 — Official FRP Layer
 
-**Decision**  
+**Decision**
 FRP를 fork하지 않고 official binary 위에 운영 layer를 제공한다.
 
-**Reason**  
+**Reason**
 Upstream 호환성과 유지보수성을 유지한다.
 
 ---
 
 ## 2026-08 — CLI First
 
-**Decision**  
+**Decision**
 Web UI/DB보다 `sudo drlink`을 제품 중심 interface로 유지한다.
 
 ---
 
 ## 2026-08 — CLIENT ID First
 
-**Decision**  
+**Decision**
 hostname/IP 대신 immutable CLIENT ID를 canonical identity로 사용한다.
 
 ---
 
 ## 2026-08 — Zero-Touch + Manual Enrollment
 
-**Decision**  
+**Decision**
 Zero-Touch를 기본 UX로 제공하되 Manual Enrollment도 유지한다.
 
 ---
 
 ## 2026-08 — Multi-Service Client / LAN Gateway
 
-**Decision**  
+**Decision**
 한 Client는 여러 TCP service를 publish할 수 있고 Client가 접근 가능한 LAN target도 service로 제공할 수 있다.
 
 ---
 
 ## 2026-08 — Enterprise single-443
 
-**Decision**  
+**Decision**
 기업 firewall 환경을 위해 HTTPS enrollment와 FRP WSS control을 single TCP/443 mode로 제공할 수 있다.
 
 ---
 
 ## 2026-09 — Few-to-Few-Dozen Product Scale
 
-**Decision**  
+**Decision**
 현실적인 target을 1~50 Clients로 명확히 한다.
 
-**Impact**  
+**Impact**
 Fleet orchestration, nested groups, broad bulk mutation, canary framework는 현재 scope가 아니다.
 
 ---
 
 ## 2026-09 — Public Hostname as Optional User-Facing Alias
 
-**Decision**  
+**Decision**
 Public IP는 infrastructure/control primary이며 `public_hostname`은 published-service용 optional alias다.
 
 ---
 
 ## 2026-09 — Simple Group Scope
 
-**Decision**  
+**Decision**
 Manual Group + multiple membership + Tags + basic filters를 current Group scope로 한다.
 
 ---
 
 ## 2026-09 — Zero-Touch Short URL Option B
 
-**Decision**  
+**Decision**
 `v2.1.3`에서 optional `bootstrap_hostname` + operator-owned reverse proxy 기반 Short URL을 stable로 채택한다.
 
-**Impact**  
+**Impact**
 DNS/TLS/reverse proxy lifecycle은 operator-owned이며 private CA management trust를 유지한다.
 
 ---
 
 ## 2026-09 — Windows Bootstrap Hash-Before-Execute
 
-**Decision**  
+**Decision**
 Windows production Zero-Touch에서 `irm | iex`를 사용하지 않는다.
 
-**Impact**  
+**Impact**
 Short URL UX에서도 download → SHA256 verify → `powershell.exe -File` 순서를 지킨다.
 
 ---
 
 ## 2026-09 — Double Full Real E2E Release Gate
 
-**Decision**  
+**Decision**
 최종 candidate는 동일 exact HEAD에서 전체 Real E2E를 2회 통과해야 한다.
 
-**Impact**  
+**Impact**
 중간 code change 발생 시 pass counter를 0으로 reset한다.
 
 ---
 
 ## 2026-09 — FRP 0.71.0 Stable Adoption
 
-**Decision**  
+**Decision**
 `v2.2.0`에서 official FRP `0.71.0`을 exact pin으로 stable 채택했고, `v2.2.1`에서도 동일 pin을 유지한다. 향후 bump는 별도 compatibility qualification을 요구한다.
 
 ---
 
 ## 2026-09 — Single Canonical Product Master
 
-**Decision**  
+**Decision**
 앞으로 Product Master는 repository의 `docs/PRODUCT_MASTER.md` 하나만 canonical living document로 관리한다.
 
-**Reason**  
+**Reason**
 복수 파생본으로 인한 상태 drift와 문서 corruption을 방지한다.
 
 ---
 
 ## 2026-09 — v2.2.1 Post-v2.2.0 Hardening Release
 
-**Decision**  
+**Decision**
 이미 published 된 `v2.2.0`을 rewrite/retag하지 않고 hardening 변경을 `v2.2.1` patch release로 제공한다.
 
-**Impact**  
+**Impact**
 `v2.2.1`은 FRP `0.71.0` pin을 유지하며 macOS libedit completion, FRP compatibility gate fail-closed, public metadata/docs hardening 및 correctness fixes를 포함한다. Double Full Real E2E를 동일 exact candidate HEAD에서 통과했다.
 
 ---
@@ -3391,9 +3393,9 @@ Manage a few to a few dozen clients with frpctl
 
 그리고 이 프로젝트가 앞으로 기능을 추가하면서 반드시 유지해야 할 가장 중요한 제품 원칙은:
 
-> **Simple to deploy.  
-> Simple to understand.  
-> Safe to operate.  
+> **Simple to deploy.
+> Simple to understand.
+> Safe to operate.
 > Lightweight by design.**
 
 이다.

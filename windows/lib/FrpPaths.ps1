@@ -22,10 +22,10 @@ function Get-FrpWindowsRoot {
         return $env:FRP_WINDOWS_ROOT.Trim().TrimEnd('\', '/')
     }
     if (-not (Test-FrpIsWindowsHost)) {
-        $fallback = '/tmp/frp-auto-deploy-windows-test'
+        $fallback = '/tmp/drlink-windows-test'
         return $fallback
     }
-    return (Join-Path $env:ProgramData 'frp-auto-deploy')
+    return (Join-Path $env:ProgramData 'drlink')
 }
 
 function Get-FrpBinDir { Join-Path (Get-FrpWindowsRoot) 'bin' }

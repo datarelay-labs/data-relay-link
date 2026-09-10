@@ -1,11 +1,17 @@
 # Data Relay Link
 
-**Data Relay Labs / Data Relay — secure connectivity for isolated networks.**
+**Data Relay Labs — secure connectivity for restricted and isolated environments.**
 
-Data Relay provides:
+Data Relay Link provides secure connectivity through:
 
-- **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access on official FRP
+- **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access
 - **Controlled Egress** (outbound) — agentless HTTP/HTTPS forward proxy for approved destinations only
+
+Primary CLI: `sudo drlink`
+
+Documentation: **https://link.datarelay.run**
+
+Repository: **https://github.com/datarelay-labs/data-relay-link**
 
 Data Relay Link helps you securely reach servers behind NAT or firewalls **and** allow closed networks to reach only the Internet destinations they need — without a full VPN, RMM platform, SWG/SASE stack, or custom FRP fork.
 
@@ -21,9 +27,10 @@ Data Relay Link helps you securely reach servers behind NAT or firewalls **and**
 - Linux, macOS, and Windows client support according to the validation matrix below
 - One primary operator interface: `sudo drlink`
 
-Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)  
-Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)  
-Documentation: **https://frp.xdr.ooo**
+Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)
+Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)
+
+Inbound relay engine (implementation dependency): [`fatedier/frp`](https://github.com/fatedier/frp) **0.71.0**
 
 ---
 
@@ -106,7 +113,7 @@ Across applicable platforms, the v2.3.0 release path validated the actual produc
 
 Amazon Linux 2 and PowerShell 7 remain intentionally narrower claims as shown in the table above.
 
-See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) and the full documentation at https://frp.xdr.ooo/reference/platforms.
+See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) and the full documentation at https://link.datarelay.run/reference/platforms.
 
 ---
 
@@ -171,7 +178,7 @@ For normal field installation, use the immutable stable tag:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.3.0/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.3.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
@@ -512,9 +519,9 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 | Topic | Link |
 | --- | --- |
-| Full documentation | **https://frp.xdr.ooo** |
-| Supported platforms | https://frp.xdr.ooo/reference/platforms |
-| Quick Start | https://frp.xdr.ooo/getting-started/quickstart |
+| Full documentation | **https://link.datarelay.run** |
+| Supported platforms | https://link.datarelay.run/reference/platforms |
+| Quick Start | https://link.datarelay.run/getting-started/quickstart |
 | CLI Reference | [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
 | Deployment modes | [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md) |
 | Security | [`docs/SECURITY.md`](docs/SECURITY.md) |

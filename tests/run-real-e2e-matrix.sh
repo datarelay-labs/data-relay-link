@@ -123,7 +123,7 @@ done
 if [[ "$INCLUDE_FLEET" == "1" && "$first_linux" -eq 0 ]]; then
   note "==== FLEET simultaneous enrollment checks ===="
   set +e
-  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/sbin/frpctl show clients' \
+  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/bin/drlink show clients' \
     | tee "$OUT_ROOT/fleet-clients.txt"
   python3 - "$OUT_ROOT/fleet-clients.txt" "$OUT_ROOT/fleet-assert.log" <<'PY'
 import re, sys
@@ -165,7 +165,7 @@ print(json.dumps({mid[:8]: ((c.get('services') or {}).get('ssh') or {}).get('rem
     fi
     sleep 5
   done
-  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/sbin/frpctl show clients; sudo /usr/local/sbin/frpctl doctor' \
+  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/bin/drlink show clients; sudo /usr/local/bin/drlink doctor' \
     | tee "$OUT_ROOT/fleet-after-reboot.txt"
   set -uo pipefail
 
@@ -243,13 +243,13 @@ PY
   note "==== FLEET backup/restore ===="
   set +e
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    'sudo /usr/local/sbin/frpctl create backup /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \
+    'sudo /usr/local/bin/drlink create backup /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \
     | tee "$OUT_ROOT/fleet-backup.txt"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo /usr/local/sbin/frpctl set server hostname '$PUBLIC_HOSTNAME' || true; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print(c.get('public_hostname'))\"" \
+    "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME' || true; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print(c.get('public_hostname'))\"" \
     | tee "$OUT_ROOT/fleet-hostname-before-restore.txt"
   # Mutate then restore.
-  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/sbin/frpctl set client $(sudo python3 -c "import json; print(next(iter(json.load(open(\"/var/lib/drlink/registry.json\"))[\"clients\"])))") label fleet-mutated' || true
+  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/bin/drlink set client $(sudo python3 -c "import json; print(next(iter(json.load(open(\"/var/lib/drlink/registry.json\"))[\"clients\"])))") label fleet-mutated' || true
   cat "$ROOT/tools/frp-restore" | ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo tee /tmp/frp-restore >/dev/null && sudo chmod 755 /tmp/frp-restore'
   cat "$ROOT/tools/frp-backup" | ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo tee /tmp/frp-backup >/dev/null && sudo chmod 755 /tmp/frp-backup'
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo python3 /tmp/frp-restore /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \

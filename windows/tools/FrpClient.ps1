@@ -43,7 +43,7 @@ function Import-FrpWindowsModules {
         [void]$roots.Add((Join-Path $env:FRP_WINDOWS_ROOT 'lib'))
     }
     if ($env:ProgramData) {
-        [void]$roots.Add((Join-Path $env:ProgramData 'frp-auto-deploy\lib'))
+        [void]$roots.Add((Join-Path $env:ProgramData 'drlink\lib'))
     }
 
     $libDir = $null
@@ -410,7 +410,7 @@ function Invoke-FrpClientSupportBundle {
     $sections = New-Object System.Collections.Generic.List[string]
     try {
         $meta = @{
-            format = 'frp-auto-deploy-support-bundle-windows'
+            format = 'data-relay-link-support-bundle-windows'
             created_at = (Get-Date).ToUniversalTime().ToString('o')
             hostname = $hostName
             role = 'client'

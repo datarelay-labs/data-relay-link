@@ -131,5 +131,26 @@ assert_not_contains "$ROOT/tools/frp-create-client" "FRP Server:"
 # Explicit allowlist: internal backend filename and historical migration helpers may mention frpctl.
 # This test fails closed on operator-facing docs/runtime above.
 
+# Repository / docs identity regression after GitHub transfer+rename.
+for f in "$ROOT/README.md" "$ROOT/GITHUB_SETUP.md" "$ROOT/release-manifest.json" "$ROOT/lib/frp-common.sh"; do
+  [[ -f "$f" ]] || fail "missing identity file: $f"
+  grep -q 'datarelay-labs' "$f" || fail "$f missing datarelay-labs"
+  grep -q 'data-relay-link' "$f" || fail "$f missing data-relay-link"
+done
+grep -q 'Data Relay Link' "$ROOT/README.md" || fail "README missing Data Relay Link"
+grep -q 'drlink' "$ROOT/README.md" || fail "README missing drlink"
+grep -q 'link.datarelay.run' "$ROOT/README.md" || fail "README missing public docs URL"
+assert_not_contains "$ROOT/README.md" 'xdr-labs/frp-auto-deploy|frp\.xdr\.ooo|FRP Auto Deploy'
+assert_not_contains "$ROOT/GITHUB_SETUP.md" 'xdr-labs/frp-auto-deploy|frp\.xdr\.ooo'
+assert_not_contains "$ROOT/release-manifest.json" 'xdr-labs|"frp-auto-deploy"'
+# Defaults must not point at the former product repository.
+if grep -nE 'FRP_GITHUB_OWNER=.*xdr-labs|DRLINK_GITHUB_OWNER=.*xdr-labs|:-xdr-labs' "$ROOT/lib/frp-common.sh"; then
+  fail "frp-common still defaults GitHub owner to xdr-labs"
+fi
+if grep -nE 'FRP_GITHUB_REPO=.*frp-auto-deploy|DRLINK_GITHUB_REPO=.*frp-auto-deploy|:-frp-auto-deploy' "$ROOT/lib/frp-common.sh"; then
+  fail "frp-common still defaults GitHub repo to frp-auto-deploy"
+fi
+
 echo "USER_FACING_BRANDING_TEST=PASS"
 echo "USER_FACING_LEGACY_PRODUCT_REFERENCES=0"
+echo "REPOSITORY_IDENTITY=datarelay-labs/data-relay-link"

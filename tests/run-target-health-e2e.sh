@@ -38,7 +38,8 @@ for f in \
   lib/frp-client-common.sh \
   lib/frp_ctl_grammar.py \
   tools/frp-client \
-  tools/frpctl
+  tools/frpctl \
+  tools/drlink
 do
   scp -o BatchMode=yes -o ConnectTimeout=15 "$ROOT/$f" "$CLIENT_HOST:$TMP_SYNC/$(basename "$f")"
 done
@@ -46,7 +47,9 @@ sshx "$CLIENT_HOST" "sudo install -m 0644 $TMP_SYNC/frp_health_check.py /usr/loc
 sudo install -m 0644 $TMP_SYNC/frp-client-common.sh /usr/local/lib/drlink/frp-client-common.sh
 sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
 sudo install -m 0755 $TMP_SYNC/frp-client /usr/local/bin/frp-client
-sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/bin/frpctl
+sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP_SYNC/drlink /usr/local/bin/drlink
+sudo rm -f /usr/local/sbin/frpctl /usr/local/bin/frpctl
 sudo rm -rf $TMP_SYNC"
 
 TMP_SRV=/tmp/frp-health-srv-$$
@@ -85,7 +88,7 @@ REMOTE
 echo "=== add/configure health TCP service ==="
 sshx "$CLIENT_HOST" "bash -s" <<REMOTE
 set -euo pipefail
-sudo /usr/local/bin/frpctl discard >/dev/null 2>&1 || true
+sudo /usr/local/bin/drlink discard >/dev/null 2>&1 || true
 EXISTS=\$(sudo python3 - <<'PY'
 import json
 from pathlib import Path
@@ -97,9 +100,9 @@ PY
 if [[ "\$EXISTS" != "yes" ]]; then
   sudo /usr/local/bin/frp-client add-service --preset custom --id '${SVC_ID}' --name 'E2E Health' --target-host 127.0.0.1 --target-port ${BACKEND_PORT}
 fi
-sudo /usr/local/bin/frpctl set service '${SVC_ID}' target-port ${BACKEND_PORT} || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' target-port ${BACKEND_PORT}
-sudo /usr/local/bin/frpctl set service '${SVC_ID}' health-type tcp || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' health-type tcp
-sudo /usr/local/bin/frpctl apply || sudo /usr/local/bin/frp-client apply-pending
+sudo /usr/local/bin/drlink set service '${SVC_ID}' target-port ${BACKEND_PORT} || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' target-port ${BACKEND_PORT}
+sudo /usr/local/bin/drlink set service '${SVC_ID}' health-type tcp || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' health-type tcp
+sudo /usr/local/bin/drlink apply || sudo /usr/local/bin/frp-client apply-pending
 REMOTE
 
 echo "=== verify frpc.toml healthCheck ==="
@@ -108,7 +111,7 @@ sshx "$CLIENT_HOST" "sudo grep -A20 'name = \".*-$SVC_ID\"' /etc/frp/frpc.toml |
 pass "frpc.toml has healthCheck tcp"
 
 echo "=== TARGET healthy while backend up ==="
-STATUS_OUT="$(sshx "$CLIENT_HOST" "sudo /usr/local/bin/frpctl show services || sudo /usr/local/bin/frp-client list")"
+STATUS_OUT="$(sshx "$CLIENT_HOST" "sudo /usr/local/bin/drlink show services || sudo /usr/local/bin/frp-client list")"
 echo "$STATUS_OUT" | tee "$OUT_DIR/show-services-healthy.txt"
 echo "$STATUS_OUT" | grep -A20 "$SVC_ID" | grep -Eq 'TARGET[[:space:]]*:[[:space:]]*HEALTHY' \
   || fail "TARGET not HEALTHY with backend up"
@@ -117,7 +120,7 @@ pass "TARGET HEALTHY"
 echo "=== stop backend -> TARGET unhealthy ==="
 remote_stop_pidfile "$CLIENT_HOST" "$TCP_PID"
 sleep 1
-STATUS_DOWN="$(sshx "$CLIENT_HOST" "sudo /usr/local/bin/frpctl show services || sudo /usr/local/bin/frp-client list")"
+STATUS_DOWN="$(sshx "$CLIENT_HOST" "sudo /usr/local/bin/drlink show services || sudo /usr/local/bin/frp-client list")"
 echo "$STATUS_DOWN" | tee "$OUT_DIR/show-services-unhealthy.txt"
 echo "$STATUS_DOWN" | grep -A20 "$SVC_ID" | grep -Eq 'TARGET[[:space:]]*:[[:space:]]*UNHEALTHY' \
   || fail "TARGET not UNHEALTHY with backend down"
@@ -132,7 +135,7 @@ echo \$! > ${TCP_PID}
 sleep 1
 python3 -c "import socket; s=socket.create_connection(('127.0.0.1',${BACKEND_PORT}),2); s.close()"
 REMOTE
-STATUS_UP="$(sshx "$CLIENT_HOST" "sudo /usr/local/bin/frpctl show services || sudo /usr/local/bin/frp-client list")"
+STATUS_UP="$(sshx "$CLIENT_HOST" "sudo /usr/local/bin/drlink show services || sudo /usr/local/bin/frp-client list")"
 echo "$STATUS_UP" | tee "$OUT_DIR/show-services-restored.txt"
 echo "$STATUS_UP" | grep -A20 "$SVC_ID" | grep -Eq 'TARGET[[:space:]]*:[[:space:]]*HEALTHY' \
   || fail "TARGET not HEALTHY after restore"
@@ -157,10 +160,10 @@ PY
 nohup python3 /tmp/frp-e2e-health-http.py >/tmp/frp-e2e-health-http.log 2>&1 &
 echo \$! > ${HTTP_PID}
 sleep 1
-sudo /usr/local/bin/frpctl set service '${SVC_ID}' target-port ${HTTP_PORT} || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' target-port ${HTTP_PORT}
-sudo /usr/local/bin/frpctl set service '${SVC_ID}' health-type http || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' health-type http
-sudo /usr/local/bin/frpctl set service '${SVC_ID}' health-path /health || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' health-path /health
-sudo /usr/local/bin/frpctl apply || sudo /usr/local/bin/frp-client apply-pending
+sudo /usr/local/bin/drlink set service '${SVC_ID}' target-port ${HTTP_PORT} || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' target-port ${HTTP_PORT}
+sudo /usr/local/bin/drlink set service '${SVC_ID}' health-type http || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' health-type http
+sudo /usr/local/bin/drlink set service '${SVC_ID}' health-path /health || sudo /usr/local/bin/frp-client set-service '${SVC_ID}' health-path /health
+sudo /usr/local/bin/drlink apply || sudo /usr/local/bin/frp-client apply-pending
 sudo grep -A25 'name = ".*-${SVC_ID}"' /etc/frp/frpc.toml | grep -q 'healthCheck.type = "http"'
 sudo grep -A25 'name = ".*-${SVC_ID}"' /etc/frp/frpc.toml | grep -q 'healthCheck.path = "/health"'
 REMOTE
@@ -169,9 +172,9 @@ pass "HTTP healthCheck rendered"
 echo "=== disable/enable preserves health config ==="
 sshx "$CLIENT_HOST" "bash -s" <<REMOTE
 set -euo pipefail
-sudo /usr/local/bin/frpctl disable service '${SVC_ID}' || sudo /usr/local/bin/frp-client disable-service '${SVC_ID}'
-sudo /usr/local/bin/frpctl enable service '${SVC_ID}' || sudo /usr/local/bin/frp-client enable-service '${SVC_ID}'
-sudo /usr/local/bin/frpctl apply || sudo /usr/local/bin/frp-client apply-pending
+sudo /usr/local/bin/drlink disable service '${SVC_ID}' || sudo /usr/local/bin/frp-client disable-service '${SVC_ID}'
+sudo /usr/local/bin/drlink enable service '${SVC_ID}' || sudo /usr/local/bin/frp-client enable-service '${SVC_ID}'
+sudo /usr/local/bin/drlink apply || sudo /usr/local/bin/frp-client apply-pending
 sudo python3 - <<'PY'
 import json
 from pathlib import Path

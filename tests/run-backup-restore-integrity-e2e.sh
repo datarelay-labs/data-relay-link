@@ -25,7 +25,8 @@ for f in \
   lib/frp_client_registry.py \
   tools/frp-backup \
   tools/frp-restore \
-  tools/frpctl
+  tools/frpctl \
+  tools/drlink
 do
   scp -o BatchMode=yes -o ConnectTimeout=15 "$ROOT/$f" "$SERVER:$TMP/$(basename "$f")"
 done
@@ -34,7 +35,9 @@ sudo install -m 0644 $TMP/frp_service_profiles.py /usr/local/lib/drlink/frp_serv
 sudo install -m 0644 $TMP/frp_client_registry.py /usr/local/lib/drlink/frp_client_registry.py
 sudo install -m 0755 $TMP/frp-backup /usr/local/sbin/frp-backup
 sudo install -m 0755 $TMP/frp-restore /usr/local/sbin/frp-restore
-sudo install -m 0755 $TMP/frpctl /usr/local/sbin/frpctl
+sudo install -m 0755 $TMP/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP/drlink /usr/local/bin/drlink
+sudo rm -f /usr/local/sbin/frpctl /usr/local/bin/frpctl
 sudo rm -rf $TMP"
 
 sshx "$SERVER" 'sudo test -f /var/lib/drlink/access-control.json' || blocker "ACL file missing before test"
@@ -46,14 +49,14 @@ BAK_DIR="/var/lib/drlink/backups"
 sshx "$SERVER" "sudo mkdir -p $BAK_DIR && sudo rm -f $BAK_OK"
 
 echo "=== normal backup PASS ==="
-sshx "$SERVER" "sudo frpctl create backup $BAK_OK" | tee "$OUT_DIR/backup-ok.txt"
+sshx "$SERVER" "sudo drlink create backup $BAK_OK" | tee "$OUT_DIR/backup-ok.txt"
 sshx "$SERVER" "sudo test -s $BAK_OK" || fail "normal backup archive missing"
 pass NORMAL_BACKUP
 
 echo "=== backup fails when ACL missing ==="
 sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json /var/lib/drlink/access-control.json.bak-integrity"
 set +e
-sshx "$SERVER" "sudo frpctl create backup $BAK_DIR/e2e-integrity-missing-acl.tar.gz" >"$OUT_DIR/backup-missing-acl.txt" 2>&1
+sshx "$SERVER" "sudo drlink create backup $BAK_DIR/e2e-integrity-missing-acl.tar.gz" >"$OUT_DIR/backup-missing-acl.txt" 2>&1
 rc=$?
 set -e
 sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json.bak-integrity /var/lib/drlink/access-control.json"
@@ -66,7 +69,7 @@ pass BACKUP_MISSING_ACL_FAIL
 echo "=== backup fails when registry missing ==="
 sshx "$SERVER" "sudo mv /var/lib/drlink/registry.json /var/lib/drlink/registry.json.bak-integrity"
 set +e
-sshx "$SERVER" "sudo frpctl create backup $BAK_DIR/e2e-integrity-missing-reg.tar.gz" >"$OUT_DIR/backup-missing-reg.txt" 2>&1
+sshx "$SERVER" "sudo drlink create backup $BAK_DIR/e2e-integrity-missing-reg.tar.gz" >"$OUT_DIR/backup-missing-reg.txt" 2>&1
 rc=$?
 set -e
 sshx "$SERVER" "sudo mv /var/lib/drlink/registry.json.bak-integrity /var/lib/drlink/registry.json"
@@ -86,7 +89,7 @@ work = Path(tempfile.mkdtemp(prefix='frp-e2e-craft-'))
 try:
     with tarfile.open(src, 'r:gz') as tin:
         tin.extractall(work)
-    acl = work / 'payload' / 'var' / 'lib' / 'frp-auto-deploy' / 'access-control.json'
+    acl = work / 'payload' / 'var' / 'lib' / 'drlink' / 'access-control.json'
     if acl.exists():
         acl.unlink()
     man_path = work / 'manifest.json'

@@ -69,7 +69,7 @@ cfg = {
   "port_end": 6098,
   "listen_port": 6099,
   "allocator_public_url": "https://203.0.113.10/enroll",
-  "client_installer_url": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh",
+  "client_installer_url": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.1.1/dist/bootstrap-client.sh",
   "tls_ca_cert": str(tree / "etc/drlink/pki/ca.crt"),
   "enrollments_dir": str(tree / "var/lib/drlink/enrollments"),
   "bootstrap_dir": str(tree / "var/lib/drlink/bootstrap"),

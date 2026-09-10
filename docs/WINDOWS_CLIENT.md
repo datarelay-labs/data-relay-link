@@ -19,7 +19,7 @@ C:\ProgramData\drlink\
   version
 ```
 
-For non-Windows test hosts (pwsh on Linux CI), set `FRP_WINDOWS_ROOT` (default `/tmp/frp-auto-deploy-windows-test`).
+For non-Windows test hosts (pwsh on Linux CI), set `FRP_WINDOWS_ROOT` (default `/tmp/drlink-windows-test`).
 
 ## Zero-touch enrollment
 

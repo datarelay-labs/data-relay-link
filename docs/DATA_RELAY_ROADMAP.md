@@ -2,9 +2,10 @@
 
 > **Document role:** Product Direction + Scope + Architecture Principles + Development Roadmap
 > **Status:** Implementation in progress on `feature/data-relay-controlled-egress`
-> **Product identity:** **Data Relay**
-> **Legacy technical identity:** Data Relay Link
-> **Primary interface:** `sudo drlink` (until a separate naming migration is explicitly approved)
+> **Product identity:** **Data Relay Link**
+> **Repository:** `datarelay-labs/data-relay-link`
+> **Primary interface:** `sudo drlink` / `drlink>`
+> **Public documentation:** https://link.datarelay.run
 > **Design principle:** **Do not connect entire networks. Relay only the connections that are actually needed.**
 > **Operator guide:** `docs/CONTROLLED_EGRESS.md`
 
@@ -73,7 +74,7 @@ Data Relay
             └── built-in agentless HTTP/HTTPS forward proxy
 ```
 
-The existing repository/package/CLI names do **not** need to be renamed immediately. A broad source-code rename should be a separate controlled migration after the new product direction is implemented and validated.
+The existing repository/package/CLI identity is now **Data Relay Link** / `drlink` at `datarelay-labs/data-relay-link`. Upstream FRP engine names (`frpc`/`frps`/`fatedier/frp`) remain as implementation details.
 
 ---
 
@@ -407,7 +408,7 @@ Do not log credentials, application payloads, sensitive URL query strings, or TL
 
 ## 9.9 Health / Doctor
 
-`frpctl doctor` or an equivalent egress-specific doctor path should verify:
+`drlink doctor` or an equivalent egress-specific doctor path should verify:
 
 - gateway service state
 - policy readability
@@ -460,7 +461,7 @@ A large vendor-maintained destination catalog is not required for v1.
 
 # 11. Proposed CLI Experience
 
-The CLI should remain simple and consistent with the existing `frpctl` operational model.
+The CLI should remain simple and consistent with the existing `drlink` operational model.
 
 Illustrative UX:
 

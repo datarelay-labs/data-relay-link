@@ -4,9 +4,9 @@
   "frp_version": "0.71.0",
   "channel": "stable",
   "git_ref": "v2.3.0",
-  "owner": "xdr-labs",
-  "repo": "frp-auto-deploy",
-  "https_raw_base": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy",
+  "owner": "datarelay-labs",
+  "repo": "data-relay-link",
+  "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link",
   "signing": false,
   "checksum_file": "SHA256SUMS",
   "supported_frp_versions": {
@@ -19,7 +19,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
@@ -33,17 +33,17 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "48fa79526dda6bdbd59ca22d7f7f70520ac1c6b420ef3c22c75e8cc9f493b398"
+      "sha256": "a876dec3d68fd992dd1ffd2a3076507e19c13db023256f81b012ecd59e7f0c13"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "4caba7377280274ab4ad62ebb832fc933a4913494c734e464f968bcee23eebc5"
+      "sha256": "e163d1051c6880702792dc81f0bc06b0f3fb1aeba48d7a977aa12eb7e916099c"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "8dfe7ced8893747ab7477fb94c7eb8312d7bf01195fc9aeffbb43bf2c0918f4c"
+      "sha256": "c1c2b55366783ea3dfd9a2b4bbc7f99e626cedf4cb24b5b7cf67a534ab2e4476"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",

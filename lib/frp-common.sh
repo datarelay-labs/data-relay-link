@@ -24,9 +24,14 @@ if [[ -f "${_FRP_COMMON_DIR}/../VERSION" ]]; then
   . "${_FRP_COMMON_DIR}/../VERSION"
 fi
 
-FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-xdr-labs}"
-FRP_GITHUB_REPO="${FRP_GITHUB_REPO:-frp-auto-deploy}"
-FRP_GITHUB_RAW_HOST="${FRP_GITHUB_RAW_HOST:-raw.githubusercontent.com}"
+# Canonical Data Relay Link repository identity (product/project, not upstream FRP).
+DRLINK_GITHUB_OWNER="${DRLINK_GITHUB_OWNER:-datarelay-labs}"
+DRLINK_GITHUB_REPO="${DRLINK_GITHUB_REPO:-data-relay-link}"
+DRLINK_GITHUB_RAW_HOST="${DRLINK_GITHUB_RAW_HOST:-raw.githubusercontent.com}"
+# Internal aliases: prefer DRLINK_*; accept explicit FRP_GITHUB_* overrides for tests/tools.
+FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-$DRLINK_GITHUB_OWNER}"
+FRP_GITHUB_REPO="${FRP_GITHUB_REPO:-$DRLINK_GITHUB_REPO}"
+FRP_GITHUB_RAW_HOST="${FRP_GITHUB_RAW_HOST:-$DRLINK_GITHUB_RAW_HOST}"
 
 frp_os() {
   local raw="${FRP_TEST_UNAME_S:-}"
@@ -449,6 +454,16 @@ frp_export_drlink_env_aliases() {
   if [[ -n "$v" ]]; then export FRP_SSH_USER="$v"; fi
   v="${DRLINK_ZERO_TOUCH:-}"
   if [[ -n "$v" ]]; then export FRP_ZERO_TOUCH="$v"; fi
+  v="${DRLINK_RELEASE_CHANNEL:-}"
+  if [[ -n "$v" ]]; then export FRP_RELEASE_CHANNEL="$v"; fi
+  v="${DRLINK_RELEASE_MANIFEST:-}"
+  if [[ -n "$v" ]]; then export FRP_RELEASE_MANIFEST="$v"; fi
+  v="${DRLINK_GITHUB_OWNER:-}"
+  if [[ -n "$v" ]]; then export FRP_GITHUB_OWNER="$v"; fi
+  v="${DRLINK_GITHUB_REPO:-}"
+  if [[ -n "$v" ]]; then export FRP_GITHUB_REPO="$v"; fi
+  v="${DRLINK_GITHUB_RAW_HOST:-}"
+  if [[ -n "$v" ]]; then export FRP_GITHUB_RAW_HOST="$v"; fi
   return 0
 }
 
@@ -958,7 +973,7 @@ frp_upstream_latest() {
   python3 - <<'PY'
 import json, sys, urllib.request
 url = "https://api.github.com/repos/fatedier/frp/releases/latest"
-req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "frp-auto-deploy"})
+req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "data-relay-link"})
 try:
     with urllib.request.urlopen(req, timeout=3) as resp:
         data = json.loads(resp.read().decode())

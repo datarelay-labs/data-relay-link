@@ -58,7 +58,7 @@ function Get-FrpTestHostExe {
 }
 
 $hostExe = Get-FrpTestHostExe
-Write-Host ("=== frp-auto-deploy Windows client tests (host={0} PS={1}) ===" -f $hostExe, $PSVersionTable.PSVersion)
+Write-Host ("=== Data Relay Link Windows client tests (host={0} PS={1}) ===" -f $hostExe, $PSVersionTable.PSVersion)
 foreach ($t in $tests) {
     $path = Join-Path $root $t
     Write-Host ""

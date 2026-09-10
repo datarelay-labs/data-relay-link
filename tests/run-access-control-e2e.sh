@@ -90,6 +90,7 @@ for f in \
   server/drlink-access.service \
   tools/frp-access \
   tools/frpctl \
+  tools/drlink \
   lib/frp_ctl_grammar.py \
   tools/frp-release-service \
   tools/frp-client-info
@@ -100,7 +101,9 @@ sshx "$SERVER" "sudo install -m 0644 $TMP_SYNC/frp_access_control.py /usr/local/
 sudo install -m 0700 $TMP_SYNC/frp-access-plugin.py /usr/local/lib/drlink/frp-access-plugin.py
 sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
 sudo install -m 0755 $TMP_SYNC/frp-access /usr/local/sbin/frp-access
-sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/sbin/frpctl
+sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP_SYNC/drlink /usr/local/bin/drlink
+sudo rm -f /usr/local/sbin/frpctl /usr/local/bin/frpctl
 sudo install -m 0755 $TMP_SYNC/frp-release-service /usr/local/sbin/frp-release-service
 sudo install -m 0755 $TMP_SYNC/frp-client-info /usr/local/sbin/frp-client-info
 sudo install -m 0644 $TMP_SYNC/drlink-access.service /etc/systemd/system/drlink-access.service
@@ -331,10 +334,10 @@ pass MISSING_REGISTRY_RECOVERY
 
 # disable/enable on client
 echo "=== disable/enable ==="
-sshx "$CLIENT_HOST" "sudo frpctl disable service ${SERVICE_ID}; sudo frpctl apply" \
+sshx "$CLIENT_HOST" "sudo drlink disable service ${SERVICE_ID}; sudo drlink apply" \
   || sshx "$CLIENT_HOST" "sudo frp-client disable-service ${SERVICE_ID}; sudo frp-client apply"
 sleep 3
-sshx "$CLIENT_HOST" "sudo frpctl enable service ${SERVICE_ID}; sudo frpctl apply" \
+sshx "$CLIENT_HOST" "sudo drlink enable service ${SERVICE_ID}; sudo drlink apply" \
   || sshx "$CLIENT_HOST" "sudo frp-client enable-service ${SERVICE_ID}; sudo frp-client apply"
 sleep 3
 NEW_PORT="$(sshx "$SERVER" "sudo python3 -c \"import json;from pathlib import Path;r=json.loads(Path('/var/lib/drlink/registry.json').read_text());print(r['clients']['$CLIENT_ID']['services']['$SERVICE_ID']['remote_port'])\"")"
@@ -377,10 +380,10 @@ pass PUBLIC_RESTORE
 
 # Release dedicated e2e-acl service when used; otherwise keep production ssh.
 if [[ "$SERVICE_ID" == "e2e-acl" ]]; then
-  sshx "$CLIENT_HOST" "sudo frpctl disable service ${SERVICE_ID}; sudo frpctl apply" || true
+  sshx "$CLIENT_HOST" "sudo drlink disable service ${SERVICE_ID}; sudo drlink apply" || true
   sleep 2
   sshx "$SERVER" "printf 'RELEASE\n' | sudo frp-release-service ${CLIENT_ID} ${SERVICE_ID}" || true
-  sshx "$CLIENT_HOST" "sudo frpctl apply" || true
+  sshx "$CLIENT_HOST" "sudo drlink apply" || true
 fi
 sshx "$SERVER" "sudo frp-access delete 'E2E-Allow'" || true
 # list gone; binding should be gone after release or public

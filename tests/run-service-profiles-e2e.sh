@@ -29,13 +29,15 @@ deploy_file "$SERVER" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/drlink/
 deploy_file "$SERVER" "$ROOT/lib/frp_health_check.py" /usr/local/lib/drlink/frp_health_check.py 644
 deploy_file "$SERVER" "$ROOT/tools/frp-profile" /usr/local/sbin/frp-profile 755
 deploy_file "$SERVER" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/drlink/frp_ctl_grammar.py 644
-deploy_file "$SERVER" "$ROOT/tools/frpctl" /usr/local/sbin/frpctl 755
+deploy_file "$SERVER" "$ROOT/tools/frpctl" /usr/local/lib/drlink/frpctl 755
+deploy_file "$SERVER" "$ROOT/tools/drlink" /usr/local/bin/drlink 755
 deploy_file "$SERVER" "$ROOT/server/frp-port-allocator.py" /usr/local/lib/drlink/frp-port-allocator.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/drlink/frp_service_profiles.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_health_check.py" /usr/local/lib/drlink/frp_health_check.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/tools/frp-client" /usr/local/sbin/frp-client 755
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/drlink/frp_ctl_grammar.py 644
-deploy_file "$CLIENT_HOST" "$ROOT/tools/frpctl" /usr/local/sbin/frpctl 755
+deploy_file "$CLIENT_HOST" "$ROOT/tools/frpctl" /usr/local/lib/drlink/frpctl 755
+deploy_file "$CLIENT_HOST" "$ROOT/tools/drlink" /usr/local/bin/drlink 755
 
 # Ensure empty profiles file exists on server.
 sshx "$SERVER" 'sudo python3 - <<'\''PY'\''
@@ -125,10 +127,10 @@ SERVICE_ID="e2eprofssh$$"
 SERVICE_ID2="e2eprofssh2$$"
 
 # Cleanup leftovers from prior runs.
-sshx "$SERVER" "sudo frpctl delete profile '$PROFILE_NAME' >/dev/null 2>&1 || true"
-sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+sshx "$SERVER" "sudo drlink delete profile '$PROFILE_NAME' >/dev/null 2>&1 || true"
+sshx "$CLIENT_HOST" "sudo drlink discard >/dev/null 2>&1 || true"
 
-sshx "$SERVER" "sudo frpctl create profile '$PROFILE_NAME' --preset ssh --target-host 127.0.0.1 --target-port 22 --ssh-user ubuntu --description e2e" \
+sshx "$SERVER" "sudo drlink create profile '$PROFILE_NAME' --preset ssh --target-host 127.0.0.1 --target-port 22 --ssh-user ubuntu --description e2e" \
   | tee "$OUT_DIR/01-create-profile.log" \
   | grep -q 'Created profile prof_' || fail "create profile"
 pass "create SSH profile"
@@ -153,9 +155,9 @@ echo "CLIENT_ID=$CLIENT_ID"
 
 # Drop prior fixed-id leftovers and this run's ids if present.
 for sid in e2eprofssh e2eprofssh2 "$SERVICE_ID" "$SERVICE_ID2"; do
-  sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$sid' >/dev/null 2>&1 || true"
+  sshx "$SERVER" "printf 'RELEASE\n' | sudo drlink release service --force '$CLIENT_ID' '$sid' >/dev/null 2>&1 || true"
 done
-sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+sshx "$CLIENT_HOST" "sudo drlink discard >/dev/null 2>&1 || true"
 # Keep client.toml aligned if a prior run left stale proxies after a failed apply.
 sshx "$CLIENT_HOST" 'sudo bash -s' <<'EOF' >/dev/null || true
 set -euo pipefail
@@ -185,10 +187,10 @@ fi
 EOF
 
 # Seed draft on client from profile, then apply.
-sshx "$CLIENT_HOST" "sudo frpctl add service --profile '$PROFILE_NAME' --id '$SERVICE_ID' --name E2EProfileSSH" \
+sshx "$CLIENT_HOST" "sudo drlink add service --profile '$PROFILE_NAME' --id '$SERVICE_ID' --name E2EProfileSSH" \
   | tee "$OUT_DIR/02-add-service.log" \
   | grep -qi 'Pending service' || fail "add service --profile"
-sshx "$CLIENT_HOST" "sudo frpctl apply" | tee "$OUT_DIR/03-apply.log" || fail "apply"
+sshx "$CLIENT_HOST" "sudo drlink apply" | tee "$OUT_DIR/03-apply.log" || fail "apply"
 pass "apply profile-seeded SSH service"
 
 # Fetch public port and verify SSH banner.
@@ -229,7 +231,7 @@ st=json.loads(Path('/etc/frp/client-state.json').read_text())
 svc=(st.get('services') or {}).get('$SERVICE_ID') or {}
 print('%s:%s' % (svc.get('local_ip'), svc.get('local_port')))
 PY")"
-sshx "$SERVER" "sudo frpctl set profile '$PROFILE_NAME' target-port 2222" | tee "$OUT_DIR/05-edit-profile.log" || fail "edit profile"
+sshx "$SERVER" "sudo drlink set profile '$PROFILE_NAME' target-port 2222" | tee "$OUT_DIR/05-edit-profile.log" || fail "edit profile"
 NEW_TARGET="$(sshx "$CLIENT_HOST" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
@@ -241,7 +243,7 @@ PY")"
 pass "profile edit leaves existing service unchanged"
 
 # New service from edited profile gets new defaults.
-sshx "$CLIENT_HOST" "sudo frpctl add service --profile '$PROFILE_NAME' --id '$SERVICE_ID2' --name E2EProfileSSH2" >/dev/null
+sshx "$CLIENT_HOST" "sudo drlink add service --profile '$PROFILE_NAME' --id '$SERVICE_ID2' --name E2EProfileSSH2" >/dev/null
 sshx "$CLIENT_HOST" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
@@ -250,11 +252,11 @@ svc=(draft.get('services') or {}).get('$SERVICE_ID2') or {}
 assert int(svc.get('local_port') or 0)==2222, svc
 print('NEW_DEFAULTS_OK')
 PY" | grep -q NEW_DEFAULTS_OK || fail "new service did not pick updated profile defaults"
-sshx "$CLIENT_HOST" "sudo frpctl discard" >/dev/null || true
+sshx "$CLIENT_HOST" "sudo drlink discard" >/dev/null || true
 pass "new service gets updated profile defaults"
 
 # Delete profile; existing live service remains.
-sshx "$SERVER" "sudo frpctl delete profile '$PROFILE_NAME'" | tee "$OUT_DIR/06-delete-profile.log" || fail "delete profile"
+sshx "$SERVER" "sudo drlink delete profile '$PROFILE_NAME'" | tee "$OUT_DIR/06-delete-profile.log" || fail "delete profile"
 STILL="$(sshx "$SERVER" "sudo python3 - <<PY
 import json
 from pathlib import Path
@@ -267,9 +269,9 @@ PY")"
 pass "delete profile leaves existing service"
 
 # Cleanup live e2e service to avoid port clutter.
-sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$SERVICE_ID' >/dev/null 2>&1 || true"
-sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$SERVICE_ID2' >/dev/null 2>&1 || true"
-sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+sshx "$SERVER" "printf 'RELEASE\n' | sudo drlink release service --force '$CLIENT_ID' '$SERVICE_ID' >/dev/null 2>&1 || true"
+sshx "$SERVER" "printf 'RELEASE\n' | sudo drlink release service --force '$CLIENT_ID' '$SERVICE_ID2' >/dev/null 2>&1 || true"
+sshx "$CLIENT_HOST" "sudo drlink discard >/dev/null 2>&1 || true"
 
 echo "TARGETED_REAL_E2E=PASS" >"$OUT_DIR/result.env"
 echo "SERVICE_PROFILES_REAL_E2E=PASS"

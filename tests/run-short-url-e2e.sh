@@ -10,7 +10,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5)
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/short-url-e2e-$RUN_ID}"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.sh"
+INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${HEAD_SHA}/dist/bootstrap-client.sh"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.txt"
 : >"$SUMMARY"
@@ -170,7 +170,7 @@ pass "STOCK_OS_TRUST_HEALTHZ"
 # Configure bootstrap hostname + installer URL on server.
 # Tools update config.json without restarting services; allocator reloads on
 # mtime change, and we still bounce it so E2E never races a stale process.
-ssh_server "sudo /usr/local/sbin/frpctl set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
+ssh_server "sudo /usr/local/bin/drlink set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
   >"$OUT_DIR/set-bootstrap.log" 2>&1 || fail "set bootstrap-hostname"
 ssh_server "sudo /usr/local/sbin/frp-set-client-installer-url '$INSTALLER_URL'" \
   >"$OUT_DIR/set-installer.log" 2>&1 || fail "set installer url"
@@ -230,9 +230,9 @@ pass "SHORT_URL_ENROLL"
 
 # Verify server sees the client.
 SHOW="$OUT_DIR/show-client.out"
-ssh_server "sudo /usr/local/sbin/frpctl show clients" >"$SHOW" 2>&1 || { cat "$SHOW"; fail "show clients"; }
-ssh_server "sudo /usr/local/sbin/frpctl show client '$CLIENT_LABEL'" >>"$SHOW" 2>&1 \
-  || ssh_server "sudo /usr/local/sbin/frpctl show client \$(sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));print(next(cid for cid,c in (d.get('clients') or {}).items() if (c.get('label') or '')=='$CLIENT_LABEL'))\")" >>"$SHOW" 2>&1 \
+ssh_server "sudo /usr/local/bin/drlink show clients" >"$SHOW" 2>&1 || { cat "$SHOW"; fail "show clients"; }
+ssh_server "sudo /usr/local/bin/drlink show client '$CLIENT_LABEL'" >>"$SHOW" 2>&1 \
+  || ssh_server "sudo /usr/local/bin/drlink show client \$(sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));print(next(cid for cid,c in (d.get('clients') or {}).items() if (c.get('label') or '')=='$CLIENT_LABEL'))\")" >>"$SHOW" 2>&1 \
   || { cat "$SHOW"; fail "show client"; }
 grep -qi "$CLIENT_LABEL" "$SHOW" || fail "client label missing"
 grep -qiE '6000|6001|6002|ssh' "$SHOW" || fail "ssh service/port missing"
@@ -290,7 +290,7 @@ pass "REBOOT_RECONNECT"
 # Cert failure fails closed: untrusted host must not enroll.
 BAD_HOST="untrusted-bootstrap.invalid"
 # Ensure zt1 fallback still works after cert failure path.
-ssh_server "sudo /usr/local/sbin/frpctl unset server bootstrap-hostname" >/dev/null
+ssh_server "sudo /usr/local/bin/drlink unset server bootstrap-hostname" >/dev/null
 FALLBACK_OUT="$OUT_DIR/zt1-fallback.out"
 ssh_server "sudo /usr/local/sbin/frp-create-client --one-line --client-name '${CLIENT_LABEL}-zt1' --note 'zt1-fallback'" \
   >"$FALLBACK_OUT" 2>&1 || { cat "$FALLBACK_OUT"; fail "zt1 create"; }

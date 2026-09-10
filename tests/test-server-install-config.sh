@@ -217,8 +217,8 @@ legacy_owner='RickLee-kr'
 legacy_repo='frp-auto-deploy'
 LEGACY_INSTALLER_URL="https://raw.githubusercontent.com/${legacy_owner}/${legacy_repo}/main/dist/bootstrap-client.sh"
 # Stable releases must pin an immutable tag/commit URL, never mutable main.
-CANONICAL_INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v${PROJECT_VERSION}/dist/bootstrap-client.sh"
-OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh'
+CANONICAL_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.sh"
+OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh'
 
 # Known obsolete project installer URL is migrated on a safe installer rerun.
 EXISTING_LEGACY="$WORKDIR/legacy-installer-url.json"

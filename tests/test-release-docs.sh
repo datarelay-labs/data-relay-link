@@ -140,8 +140,8 @@ if grep -nE 'datarelay-labs/frp-auto-deploy' \
   README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md docs/FRP_UPGRADE.md docs/PRODUCT_MASTER.md GITHUB_SETUP.md; then
   fail "stable docs still reference old repository owner datarelay-labs"
 fi
-grep -qF 'xdr-labs/frp-auto-deploy' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
-  fail "docs missing canonical xdr-labs repository"
+grep -qF 'datarelay-labs/data-relay-link' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
+  fail "docs missing canonical datarelay-labs/data-relay-link repository"
 grep -q 'FRP_RELEASE_CHANNEL=dev' README.md || fail "README missing opt-in dev channel note"
 grep -q 'one-time verified bridge' README.md || fail "README missing legacy client bridge"
 grep -q 'one-time verified bridge' docs/FRP_UPGRADE.md || fail "upgrade doc missing legacy bridge"

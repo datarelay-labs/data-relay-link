@@ -28,7 +28,7 @@ cfg.write_text(json.dumps({
   "frp_control_listen_port": 443,
   "allocator_public_url": "https://203.0.113.10:9443/enroll",
   "tls_ca_cert": sys.argv[3],
-  "client_installer_url": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh",
+  "client_installer_url": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh",
   "enrollments_dir": str(enroll),
 }, indent=2) + "\n")
 PY
@@ -55,12 +55,18 @@ sudo_line="$(grep 'sudo env FRP_ALLOCATOR_URL=' "$OUT")"
 if grep -F "$code" <<<"$sudo_line" >/dev/null; then
   fail "enrollment code leaked into sudo command"
 fi
-grep -q 'xdr-labs/frp-auto-deploy' "$OUT" || fail "canonical repository URL"
+grep -q 'datarelay-labs/data-relay-link' "$OUT" || fail "canonical repository URL"
 if grep -F 'RickLee-kr' "$OUT" >/dev/null; then
   fail "stale repository owner in frp-create-client output"
 fi
-if grep -F 'datarelay-labs' "$OUT" >/dev/null; then
-  fail "stale repository owner datarelay-labs in frp-create-client output"
+if grep -F 'xdr-labs' "$OUT" >/dev/null; then
+  fail "stale repository owner xdr-labs in frp-create-client output"
+fi
+if grep -F 'frp-auto-deploy' "$OUT" >/dev/null; then
+  fail "stale repository name frp-auto-deploy in frp-create-client output"
+fi
+if grep -F 'frp.xdr.ooo' "$OUT" >/dev/null; then
+  fail "stale docs domain in frp-create-client output"
 fi
 pass "CASE D generated client command"
 

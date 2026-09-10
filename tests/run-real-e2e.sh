@@ -371,7 +371,7 @@ server_install_env() {
     "FRP_PORT_START=6000"
     "FRP_PORT_END=6098"
     "FRP_ALLOCATOR_PUBLIC_URL=https://$SERVER_IP:6099/enroll"
-    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/$HEAD_SHA/dist/bootstrap-client.sh"
+    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/data-relay-link/$HEAD_SHA/dist/bootstrap-client.sh"
   )
   if [[ -n "$PUBLIC_HOSTNAME" ]]; then
     env+=("FRP_PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME")
@@ -502,7 +502,7 @@ discover_client_identity_macos() {
 }
 
 pin_windows_installer_url() {
-  local url="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.ps1"
+  local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${HEAD_SHA}/dist/bootstrap-client.ps1"
   run_server win-pin-installer "sudo python3 - <<'PY'
 import json
 from pathlib import Path
@@ -520,7 +520,7 @@ systemctl is-active drlink-allocator"
 scenario_windows_full() {
   # Minimal Real E2E for Windows client: enroll + published SSH + uninstall.
   # Full Linux service/reboot/backup matrix is not portable to Windows OpenSSH/cmd.
-  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/bin/drlink show status 2>/dev/null || true" || fail_stop
   run_client 02-client-before 'powershell.exe -NoProfile -Command "$env:COMPUTERNAME; $PSVersionTable.PSVersion.ToString(); ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"' || fail_stop
 
   pin_windows_installer_url || fail_stop
@@ -536,7 +536,7 @@ scenario_windows_full() {
   run_client 08-zero-touch-run "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc" || fail_stop
   redact "$OUT_DIR/08-zero-touch-run.log"
   discover_client_identity_windows || fail_stop
-  run_server 09-server-enrollment "sudo /usr/local/sbin/frpctl show clients; echo ====; sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server 09-server-enrollment "sudo /usr/local/bin/drlink show clients; echo ====; sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
   wait_external_ssh 09b-external-ssh || fail_stop
   MATRIX_ENROLL=PASS
 
@@ -565,15 +565,15 @@ PY" || fail_stop
   run_client 52-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\ProgramData\\drlink\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\drlink') { exit 1 }; Write-Output UNINSTALL_OK\"" || fail_stop
   # Local uninstall preserves server reservations by design; release so matrix fleet
   # DNS does not probe a dead Windows proxy after the profile completes.
-  run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/sbin/frpctl release client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/bin/drlink release client '$CLIENT_MID_PREFIX'" || fail_stop
   MATRIX_UNINSTALL=PASS
 }
 
 scenario_macos_full() {
   # Minimal Real E2E for macOS Apple Silicon: bash ZT enroll + SSH/HTTP + uninstall.
   local state_root='/Library/Application Support/drlink'
-  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
-  run_client 02-client-before 'sw_vers; uname -m; sudo -n true; sudo /usr/local/bin/frpctl show status 2>/dev/null || true' || fail_stop
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/bin/drlink show status 2>/dev/null || true" || fail_stop
+  run_client 02-client-before 'sw_vers; uname -m; sudo -n true; sudo /usr/local/bin/drlink show status 2>/dev/null || true' || fail_stop
 
   run_local 04-client-uninstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'sudo bash -s --' < '$ROOT/dist/uninstall-client.sh'" || fail_stop
   run_client 04b-client-clean "test ! -d '$state_root' && echo CLEAN" || fail_stop
@@ -585,11 +585,11 @@ scenario_macos_full() {
   run_local 08-zero-touch-run bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'bash -s' < '$OUT_DIR/07-zero-touch-command.sh'" || fail_stop
   redact "$OUT_DIR/08-zero-touch-run.log"
   discover_client_identity_macos || fail_stop
-  run_server 09-server-enrollment "sudo /usr/local/sbin/frpctl show clients; echo ====; sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server 09-server-enrollment "sudo /usr/local/bin/drlink show clients; echo ====; sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
   wait_external_ssh 09b-external-ssh || fail_stop
   MATRIX_ENROLL=PASS
 
-  run_client 10-client-doctor "sudo /usr/local/bin/frpctl doctor" || fail_stop
+  run_client 10-client-doctor "sudo /usr/local/bin/drlink doctor" || fail_stop
   run_server 11-proxy-mapped "sudo python3 - <<'PY'
 import json, sys
 sys.path.insert(0, '/usr/local/lib/drlink')
@@ -609,7 +609,7 @@ print('PROXY_MAPPED_OK')
 PY" || fail_stop
 
   run_client 12-http-fixtures 'mkdir -p /tmp/frp-e2e-http && printf "macos-web\n" >/tmp/frp-e2e-http/index.html; nohup python3 -m http.server 18080 --bind 127.0.0.1 -d /tmp/frp-e2e-http >/tmp/frp-http.log 2>&1 </dev/null & sleep 1; curl -fsS http://127.0.0.1:18080' || fail_stop
-  run_client 13-http-add 'sudo /usr/local/bin/frp-client add-service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/frpctl show services' || fail_stop
+  run_client 13-http-add 'sudo /usr/local/bin/frp-client add-service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services' || fail_stop
   local http_port
   http_port="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
     "sudo python3 -c \"import json; d=json.load(open('$state_root/client-state.json')); print(((d.get('services') or {}).get('web') or {}).get('remote_port') or '')\"" | tr -d '\r\n')"
@@ -622,7 +622,7 @@ PY" || fail_stop
 
   run_local 52-client-uninstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'sudo bash -s --' < '$ROOT/dist/uninstall-client.sh'" || fail_stop
   run_client 52b-client-gone "test ! -d '$state_root' && echo LOCAL_GONE" || fail_stop
-  run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/sbin/frpctl release client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/bin/drlink release client '$CLIENT_MID_PREFIX'" || fail_stop
   MATRIX_UNINSTALL=PASS
 }
 
@@ -645,9 +645,9 @@ scenario_dns_checks() {
     record dns-skipped SKIP 0 0
     return 0
   fi
-  run_server dns-01-doctor-hostname "sudo /usr/local/sbin/frpctl doctor | tee /tmp/frp-dns-doctor.txt; grep -E 'public_hostname_dn' /tmp/frp-dns-doctor.txt | grep -E 'PASS|WARN'" || fail_stop
-  run_server dns-02-status "sudo /usr/local/sbin/frpctl show status | tee /tmp/frp-dns-status.txt; grep -F '$PUBLIC_HOSTNAME' /tmp/frp-dns-status.txt" || fail_stop
-  run_client dns-03-access-info "sudo /usr/local/bin/frpctl show services; echo ====; sudo python3 - <<'PY'
+  run_server dns-01-doctor-hostname "sudo /usr/local/bin/drlink doctor | tee /tmp/frp-dns-doctor.txt; grep -E 'public_hostname_dn' /tmp/frp-dns-doctor.txt | grep -E 'PASS|WARN'" || fail_stop
+  run_server dns-02-status "sudo /usr/local/bin/drlink show status | tee /tmp/frp-dns-status.txt; grep -F '$PUBLIC_HOSTNAME' /tmp/frp-dns-status.txt" || fail_stop
+  run_client dns-03-access-info "sudo /usr/local/bin/drlink show services; echo ====; sudo python3 - <<'PY'
 from pathlib import Path
 text = Path('/etc/frp/access-info.txt').read_text(encoding='utf-8', errors='replace')
 print(text)
@@ -661,8 +661,8 @@ PY" || fail_stop
 }
 
 scenario_install() {
-  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
-  run_client 02-client-before "hostname; cat /etc/os-release 2>/dev/null || true; uname -a; getenforce 2>/dev/null || true; sudo systemctl --no-pager --full status drlink-client 2>/dev/null || true; sudo /usr/local/bin/frpctl show status 2>/dev/null || true" || fail_stop
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/bin/drlink show status 2>/dev/null || true" || fail_stop
+  run_client 02-client-before "hostname; cat /etc/os-release 2>/dev/null || true; uname -a; getenforce 2>/dev/null || true; sudo systemctl --no-pager --full status drlink-client 2>/dev/null || true; sudo /usr/local/bin/drlink show status 2>/dev/null || true" || fail_stop
 
   if [[ "$SKIP_SERVER_PURGE" != "1" ]]; then
     run_local 03-server-purge bash -lc "ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo bash -s -- --purge --yes' < '$ROOT/dist/uninstall-server.sh'" || fail_stop
@@ -680,20 +680,20 @@ scenario_install() {
     record 05-server-install SKIP 0 0
     MATRIX_INSTALL=PASS
   fi
-  run_server 06-server-doctor "sudo /usr/local/sbin/frpctl show status; echo ====; sudo /usr/local/sbin/frpctl doctor" || fail_stop
+  run_server 06-server-doctor "sudo /usr/local/bin/drlink show status; echo ====; sudo /usr/local/bin/drlink doctor" || fail_stop
 
   create_zero_touch "$OUT_DIR/07-zero-touch-create.log" "$OUT_DIR/07-zero-touch-command.sh" 07-zero-touch-create "automated-real-e2e-$PROFILE" || fail_stop
   run_local 08-zero-touch-run bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'bash -s' < '$OUT_DIR/07-zero-touch-command.sh'" || fail_stop
   redact "$OUT_DIR/08-zero-touch-run.log"
   discover_client_identity || fail_stop
-  run_server 09-server-enrollment "sudo /usr/local/sbin/frpctl show clients; echo ====; sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server 09-server-enrollment "sudo /usr/local/bin/drlink show clients; echo ====; sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
   wait_external_ssh 09b-external-ssh || fail_stop
   MATRIX_ENROLL=PASS
 }
 
 scenario_services() {
   run_client 10-http-fixtures "rm -rf /tmp/frp-e2e-http-a /tmp/frp-e2e-http-b; mkdir -p /tmp/frp-e2e-http-a /tmp/frp-e2e-http-b; printf 'web-a\n' >/tmp/frp-e2e-http-a/index.html; printf 'web-b\n' >/tmp/frp-e2e-http-b/index.html; nohup python3 -m http.server 18080 --bind 127.0.0.1 -d /tmp/frp-e2e-http-a >/tmp/frp-http-a.log 2>&1 </dev/null & nohup python3 -m http.server 18081 --bind 127.0.0.1 -d /tmp/frp-e2e-http-b >/tmp/frp-http-b.log 2>&1 </dev/null & sleep 1; curl -fsS http://127.0.0.1:18080; echo ====; curl -fsS http://127.0.0.1:18081" || fail_stop
-  run_client 11-http-add "sudo /usr/local/bin/frp-client add-service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/frpctl show services" || fail_stop
+  run_client 11-http-add "sudo /usr/local/bin/frp-client add-service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
   # Discover HTTP port from client state (not hardcoded 6001 when other clients exist).
   local http_port
   http_port="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
@@ -701,14 +701,14 @@ scenario_services() {
   [[ -n "$http_port" ]] || fail_stop
   note "HTTP_PUBLIC_PORT=$http_port"
   run_server 12-http-external "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 13-http-edit "sudo /usr/local/bin/frp-client set-service web target-port 18081 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/frpctl show services" || fail_stop
+  run_client 13-http-edit "sudo /usr/local/bin/frp-client set-service web target-port 18081 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 14-http-external-edited "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 15-http-disable "sudo /usr/local/bin/frp-client disable-service web && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/frpctl show services" || fail_stop
+  run_client 15-http-disable "sudo /usr/local/bin/frp-client disable-service web && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 16-http-disabled "! curl -fsS --max-time 5 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 17-http-enable "sudo /usr/local/bin/frp-client enable-service web && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/frpctl show services" || fail_stop
+  run_client 17-http-enable "sudo /usr/local/bin/frp-client enable-service web && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 18-http-reenabled "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
   run_client 19-http-disable-again "sudo /usr/local/bin/frp-client disable-service web && sudo /usr/local/bin/frp-client apply-pending >/dev/null" || fail_stop
-  run_server 20-release "printf 'RELEASE\n' | sudo /usr/local/sbin/frpctl release service '$CLIENT_MID_PREFIX' web" || fail_stop
+  run_server 20-release "printf 'RELEASE\n' | sudo /usr/local/bin/drlink release service '$CLIENT_MID_PREFIX' web" || fail_stop
   run_server 21-http-released "! curl -fsS --max-time 5 'http://127.0.0.1:$http_port'" || fail_stop
 
   python_remote "$SERVER_ALIAS" 22-server-after-release <<PY || fail_stop
@@ -733,7 +733,7 @@ PY
 
   # Server release does not mutate client-state.json; explicit sync reconciles.
   run_client 23-client-sync "sudo /usr/local/bin/frp-client sync" || fail_stop
-  run_client 23b-client-show-services "sudo /usr/local/bin/frpctl show services" || fail_stop
+  run_client 23b-client-show-services "sudo /usr/local/bin/drlink show services" || fail_stop
   python_remote "$CLIENT_ALIAS" 24-client-state-assert <<'PY' || fail_stop
 import json
 from pathlib import Path
@@ -762,7 +762,7 @@ scenario_reboots() {
     run_local "34-server-reboot-$i" bash -lc "ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo reboot' || true"
     wait_host "$SERVER_ALIAS" "35-server-reconnect-$i" || fail_stop
     wait_external_ssh "36-server-reboot-ssh-$i" || fail_stop
-    run_server "37-server-registry-after-reboot-$i" "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'; sudo /usr/local/sbin/frpctl doctor" || fail_stop
+    run_server "37-server-registry-after-reboot-$i" "sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'; sudo /usr/local/bin/drlink doctor" || fail_stop
   done
   MATRIX_REBOOT=PASS
 }
@@ -770,33 +770,33 @@ scenario_reboots() {
 scenario_backup_repeat() {
   local i
   for i in $(seq 1 "$BACKUP_REPEAT"); do
-    run_server "40-backup-$i" "sudo /usr/local/sbin/frpctl create backup /var/lib/drlink/backups/real-e2e-backup-$i.tar.gz" || fail_stop
-    run_server "41-mutate-$i" "sudo /usr/local/sbin/frpctl set client '$CLIENT_MID_PREFIX' label mutated-label-$i && sudo /usr/local/sbin/frpctl set client '$CLIENT_MID_PREFIX' note 'mutated note $i' && sudo /usr/local/sbin/frpctl set client '$CLIENT_MID_PREFIX' tag env e2e$i && sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+    run_server "40-backup-$i" "sudo /usr/local/bin/drlink create backup /var/lib/drlink/backups/real-e2e-backup-$i.tar.gz" || fail_stop
+    run_server "41-mutate-$i" "sudo /usr/local/bin/drlink set client '$CLIENT_MID_PREFIX' label mutated-label-$i && sudo /usr/local/bin/drlink set client '$CLIENT_MID_PREFIX' note 'mutated note $i' && sudo /usr/local/bin/drlink set client '$CLIENT_MID_PREFIX' tag env e2e$i && sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
     run_local "42-restore-$i" bash -lc "cat '$ROOT/tools/frp-restore' | ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo tee /tmp/frp-restore >/dev/null && sudo chmod 755 /tmp/frp-restore'; cat '$ROOT/tools/frp-backup' | ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo tee /tmp/frp-backup >/dev/null && sudo chmod 755 /tmp/frp-backup'; ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo python3 /tmp/frp-restore /var/lib/drlink/backups/real-e2e-backup-$i.tar.gz'" || fail_stop
-    run_server "43-restore-verify-$i" "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'; echo ====; sudo /usr/local/sbin/frpctl doctor; echo ====; sudo test ! -f /var/lib/drlink/server-update-pending.json && sudo test ! -f /var/lib/drlink/client-update-pending.json && echo PENDING_MARKER_CLEARED=YES; echo ====; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" || fail_stop
+    run_server "43-restore-verify-$i" "sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'; echo ====; sudo /usr/local/bin/drlink doctor; echo ====; sudo test ! -f /var/lib/drlink/server-update-pending.json && sudo test ! -f /var/lib/drlink/client-update-pending.json && echo PENDING_MARKER_CLEARED=YES; echo ====; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" || fail_stop
     wait_external_ssh "44-restore-ssh-$i" || fail_stop
   done
 }
 
 scenario_uninstall_reinstall() {
-  run_server 50-pre-uninstall-server "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
-  run_client 51-pre-uninstall-client "sudo /usr/local/bin/frpctl show services; sudo /usr/local/bin/frpctl show status" || fail_stop
+  run_server 50-pre-uninstall-server "sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_client 51-pre-uninstall-client "sudo /usr/local/bin/drlink show services; sudo /usr/local/bin/drlink show status" || fail_stop
   run_local 52-client-uninstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'sudo bash -s --' < '$ROOT/dist/uninstall-client.sh'" || fail_stop
   run_client 53-post-uninstall-local "echo frpc=\$(systemctl is-active drlink-client 2>/dev/null || echo inactive); ls /etc/frp 2>/dev/null || echo NO_ETC_FRP; ls /usr/local/bin/frp* 2>/dev/null || echo NO_FRP_BIN; test ! -f /etc/frp/client-state.json && echo CLIENT_STATE_GONE=YES || echo CLIENT_STATE_GONE=NO; ps -eo comm= | grep -E '^(frpc|frp-client)\$' || echo NO_FRP_PROCESS" || fail_stop
-  run_server 54-post-uninstall-server "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server 54-post-uninstall-server "sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
 
   create_zero_touch "$OUT_DIR/55-zero-touch-create.log" "$OUT_DIR/55-zero-touch-command.sh" 55-zero-touch-create "uninstall-reinstall-$PROFILE" || fail_stop
   run_local 56-reinstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'bash -s' < '$OUT_DIR/55-zero-touch-command.sh'" || fail_stop
   redact "$OUT_DIR/56-reinstall.log"
   discover_client_identity || fail_stop
-  run_client 57-post-reinstall "sudo /usr/local/bin/frpctl show services; sudo /usr/local/bin/frpctl show status" || fail_stop
-  run_server 58-post-reinstall-server "sudo /usr/local/sbin/frpctl show clients; sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_client 57-post-reinstall "sudo /usr/local/bin/drlink show services; sudo /usr/local/bin/drlink show status" || fail_stop
+  run_server 58-post-reinstall-server "sudo /usr/local/bin/drlink show clients; sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
   wait_external_ssh 59-reinstall-ssh || fail_stop
   MATRIX_UNINSTALL=PASS
 }
 
 scenario_groups_probe() {
-  run_server 60-groups-probe "sudo /usr/local/sbin/frpctl show groups || true"
+  run_server 60-groups-probe "sudo /usr/local/bin/drlink show groups || true"
 }
 
 scenario_dns_only() {
@@ -811,17 +811,17 @@ scenario_dns_only() {
     discover_client_identity || { scenario_install; }
   fi
   # Ensure hostname configured (install may have set it; also exercise runtime set).
-  run_server dns-set "sudo /usr/local/sbin/frpctl set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
+  run_server dns-set "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
   ACCESS_HOST="$PUBLIC_HOSTNAME"
   scenario_dns_checks
   # Configuration change to a second hostname that also resolves (sslip alternate form not required).
-  run_server dns-change-unset "sudo /usr/local/sbin/frpctl unset server hostname || sudo /usr/local/sbin/frp-server-set hostname --unset" || fail_stop
+  run_server dns-change-unset "sudo /usr/local/bin/drlink unset server hostname || sudo /usr/local/sbin/frp-server-set hostname --unset" || fail_stop
   ACCESS_HOST="$SERVER_IP"
   wait_external_ssh dns-ip-fallback "$EXT_TRIES" "$EXT_DELAY" "$SERVER_IP" "$SSH_PUBLIC_PORT" "$TUNNEL_SSH_USER" || fail_stop
-  run_server dns-change-reset "sudo /usr/local/sbin/frpctl set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
+  run_server dns-change-reset "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
   ACCESS_HOST="$PUBLIC_HOSTNAME"
   wait_external_ssh dns-after-reset "$EXT_TRIES" "$EXT_DELAY" "$PUBLIC_HOSTNAME" "$SSH_PUBLIC_PORT" "$TUNNEL_SSH_USER" || fail_stop
-  run_server dns-ports-unchanged "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
+  run_server dns-ports-unchanged "sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop
   MATRIX_DNS=PASS
 }
 
