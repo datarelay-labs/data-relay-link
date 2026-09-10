@@ -23,7 +23,7 @@ cat >"$TMP/etc/drlink/config.json" <<EOF
   "egress_control_file": "/var/lib/drlink/egress-control.json",
   "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
   "egress_listen_addr": "0.0.0.0",
-  "egress_listen_port": 6080
+  "egress_listen_port": 6102
 }
 EOF
 
@@ -47,6 +47,9 @@ EGRESS="$TMP/usr/local/sbin/frp-egress"
 "$EGRESS" add-destination ubuntu-update security.ubuntu.com 443
 "$EGRESS" add-destination ubuntu-update archive.ubuntu.com 443
 "$EGRESS" add-source ubuntu-update 203.0.113.10/32
+# Create is DISABLED by default — must enable before ALLOW.
+! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443
+"$EGRESS" enable ubuntu-update
 "$EGRESS" show ubuntu-update | grep -q security.ubuntu.com
 "$EGRESS" test 203.0.113.10 security.ubuntu.com 443
 ! "$EGRESS" test 203.0.113.10 evil.example.com 443

@@ -642,7 +642,7 @@ def create_profile(
     name: str,
     *,
     description: str = "",
-    enabled: bool = True,
+    enabled: bool,
 ) -> tuple[str, dict]:
     name = validate_profile_name(name)
     desc = str(description or "")

@@ -317,7 +317,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         EG.save_egress_state(EG.empty_egress_state(), path=state_path)
 
         def mut(state):
-            pid, _ = EG.create_profile(state, "test")
+            pid, _ = EG.create_profile(state, "test", enabled=True)
             EG.add_source(state, pid, "127.0.0.1/32")
             EG.add_destination(state, pid, "allowed.test", 80)
             EG.add_destination(state, pid, "allowed.test", 443)
@@ -936,7 +936,7 @@ class EgressRelayTests(unittest.TestCase):
         EG.save_egress_state(EG.empty_egress_state(), path=state_path)
 
         def mut(state):
-            pid, _ = EG.create_profile(state, "test")
+            pid, _ = EG.create_profile(state, "test", enabled=True)
             EG.add_source(state, pid, "127.0.0.1/32")
             EG.add_destination(state, pid, "allowed.test", 80)
             EG.add_destination(state, pid, "allowed.test", 443)

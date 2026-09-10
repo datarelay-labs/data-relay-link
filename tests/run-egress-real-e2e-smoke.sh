@@ -68,7 +68,7 @@ state=eg.empty_egress_state()
 eg.save_egress_state(state, path=path)
 
 def mut(st):
-    pid,_=eg.create_profile(st, '${PROFILE}')
+    pid,_=eg.create_profile(st, '${PROFILE}', enabled=True)
     # Allow client NAT/public IP and common private ranges for smoke; tighten in real ops.
     for cidr in ('0.0.0.0/0',):
         eg.add_source(st, pid, cidr)

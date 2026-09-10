@@ -205,7 +205,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "egress_control_file": "/var/lib/drlink/egress-control.json",
     "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
     "egress_listen_addr": "0.0.0.0",
-    "egress_listen_port": 6080,
+    "egress_listen_port": 6102,
     "access_conn_log_file": "/var/log/drlink/access-conn.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",

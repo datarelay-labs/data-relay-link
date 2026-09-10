@@ -300,8 +300,8 @@ Controlled Egress must work **without installing Data Relay/FRP client software 
 The expected client-side configuration is only a standard proxy setting, for example:
 
 ```text
-HTTP_PROXY=http://datarelay.example.com:6080
-HTTPS_PROXY=http://datarelay.example.com:6080
+HTTP_PROXY=http://datarelay.example.com:6102
+HTTPS_PROXY=http://datarelay.example.com:6102
 ```
 
 The protected application/server then uses standard HTTP proxy behavior and HTTPS `CONNECT` tunneling.
@@ -633,7 +633,7 @@ Typical model:
 
 ```text
 Firewall:
-ALLOW Closed-Network → Data-Relay-Server:6080
+ALLOW Closed-Network → Data-Relay-Server:6102
 DENY  Closed-Network → Internet:any
 ```
 

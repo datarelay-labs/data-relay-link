@@ -66,7 +66,7 @@ EOF
   "egress_control_file": "/var/lib/drlink/egress-control.json",
   "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
   "egress_listen_addr": "0.0.0.0",
-  "egress_listen_port": 6080
+  "egress_listen_port": 6102
 }
 EOF
   printf 'events {}\nhttp {\n  server {\n    listen 443 ssl;\n  }\n}\n' \
@@ -216,7 +216,7 @@ required = {
     "egress_control_file": "/var/lib/drlink/egress-control.json",
     "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
     "egress_listen_addr": "0.0.0.0",
-    "egress_listen_port": 6080,
+    "egress_listen_port": 6102,
 }
 for key, value in required.items():
     if cfg.get(key) != value:

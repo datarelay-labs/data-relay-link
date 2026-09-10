@@ -116,11 +116,14 @@ def cmd_show(cfg, args):
 def cmd_create(cfg, args):
     try:
         def mut(state):
+            # Safe default: create DISABLED. Explicit --enable is the only way to
+            # start active; incomplete policies must never widen egress.
+            enabled = bool(getattr(args, "enable", False))
             return EG.create_profile(
                 state,
                 args.name,
                 description=args.description or "",
-                enabled=not args.disabled,
+                enabled=enabled,
             )
 
         pid, record = EG.mutate_egress_state(mut, cfg=cfg)
@@ -331,10 +334,19 @@ def build_parser():
     p.add_argument("selector")
     p.set_defaults(func=cmd_show)
 
-    p = sub.add_parser("create", help="Create an egress profile")
+    p = sub.add_parser("create", help="Create a DISABLED egress profile")
     p.add_argument("name")
     p.add_argument("--description", default="")
-    p.add_argument("--disabled", action="store_true")
+    p.add_argument(
+        "--enable",
+        action="store_true",
+        help="Create already enabled (not recommended; prefer enable after sources/destinations)",
+    )
+    p.add_argument(
+        "--disabled",
+        action="store_true",
+        help=argparse.SUPPRESS,  # compatibility no-op; create is already disabled
+    )
     p.set_defaults(func=cmd_create)
 
     p = sub.add_parser("set", help="Update egress profile metadata")

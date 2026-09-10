@@ -12,7 +12,10 @@ fail() {
 
 assert_not_contains() {
   local path="$1" pattern="$2"
-  if rg -n "$pattern" "$path" >/dev/null 2>&1; then
+  if ! command -v grep >/dev/null 2>&1; then
+    fail "grep is required for branding assertions"
+  fi
+  if grep -nE "$pattern" "$path" >/dev/null 2>&1; then
     fail "$path contains forbidden branding pattern: $pattern"
   fi
 }

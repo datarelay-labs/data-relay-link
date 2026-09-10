@@ -29,7 +29,7 @@ eg=importlib.util.module_from_spec(spec); spec.loader.exec_module(eg)
 path=root/'var/lib/drlink/egress-control.json'
 eg.save_egress_state(eg.empty_egress_state(), path=path)
 def mut(st):
-    pid,_=eg.create_profile(st,'smoke')
+    pid,_=eg.create_profile(st,'smoke', enabled=True)
     eg.add_source(st,pid,'0.0.0.0/0')
     eg.add_destination(st,pid,'example.com',80)
     eg.add_destination(st,pid,'example.com',443)
