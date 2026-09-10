@@ -145,10 +145,16 @@ assert 'grp_11111111' in g.completion_candidates(
     'add client aaaaaaaa group ', 'server', ['aaaaaaaa'], {}, [], groups=groups
 )
 assert 'grp_11111111' in g.completion_candidates(
+    'group add-client ', 'server', ['aaaaaaaa'], {}, [], groups=groups
+)
+# Hidden compatibility alias still completes inventory after the action token.
+assert 'grp_11111111' in g.completion_candidates(
     'group add-member ', 'server', ['aaaaaaaa'], {}, [], groups=groups
 )
 assert 'group' in g.canonical_verbs('server')
-assert 'remove-member' in g.completion_candidates('group ', 'server', [], {}, [], groups=groups)
+actions = g.completion_candidates('group ', 'server', [], {}, [], groups=groups)
+assert 'add-client' in actions and 'remove-client' in actions
+assert 'add-member' not in actions and 'remove-member' not in actions and 'rename' not in actions
 PY
 
 python3 - "$ROOT/lib/frp_client_registry.py" <<'PY'
