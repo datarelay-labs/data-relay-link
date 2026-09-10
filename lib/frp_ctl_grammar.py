@@ -1,12 +1,47 @@
 #!/usr/bin/env python3
-"""Safe frpctl tokenizer, command-tree help, and context-aware completion.
+"""Safe drlink tokenizer, command-tree help, and context-aware completion.
+
+The canonical grammar is resource-first (``<resource> <action> ...``) and is
+described once in :mod:`frp_cli_catalog`. This module tokenizes, resolves a
+canonical command against that catalog, rewrites it into the internal
+verb-first form that the dispatcher already understands, and renders help,
+context help, and Tab completion from the same catalog.
 
 No eval, no glob, no variable expansion, no command substitution.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
+
+
+def _load_catalog():
+    """Import the command catalog whether installed, vendored, or path-loaded."""
+    try:
+        import frp_cli_catalog as catalog  # noqa: WPS433
+    except ImportError:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        try:
+            import frp_cli_catalog as catalog  # noqa: WPS433
+        except ImportError:
+            import importlib.util
+
+            path = os.path.join(here, "frp_cli_catalog.py")
+            spec = importlib.util.spec_from_file_location("frp_cli_catalog", path)
+            catalog = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(catalog)
+            sys.modules["frp_cli_catalog"] = catalog
+    return catalog
+
+
+CATALOG = _load_catalog()
+
+# Roots that also exist as historical flat commands. When the second token is
+# not a canonical action, the old flat meaning wins so scripts keep working.
+FALLTHROUGH_ROOTS = frozenset({"client", "backup", "access", "egress", "update"})
 
 UNQUOTED_META = set("$`;|&><*?(){}[]")
 LEGACY_COMMANDS = {
@@ -139,28 +174,8 @@ def _role_parts(role):
 
 
 def canonical_verbs(role):
-    client, server = _role_parts(role)
-    verbs = [
-        "show",
-        "help",
-        "menu",
-        "history",
-        "clear",
-        "exit",
-        "doctor",
-        "support-bundle",
-        "status",
-        "version",
-        "update",
-    ]
-    if server:
-        verbs.extend([
-            "set", "unset", "create", "revoke", "purge", "release",
-            "restore", "add", "remove", "delete", "rename", "access",
-        ])
-    if client:
-        verbs.extend(["add", "enable", "disable", "apply", "discard", "set"])
-    return sorted(set(verbs))
+    """Canonical root resources for this host role (catalog order)."""
+    return CATALOG.roots_for_role(role)
 
 
 def _show_resources(role):
@@ -265,6 +280,11 @@ def help_text(tokens, role):
     verb = tokens[0]
     if verb == "legacy":
         return _legacy_help(role)
+    if verb in ("workflow", "workflows"):
+        return CATALOG.workflow_help(role)
+    catalog_topic = _catalog_help_topic(tokens, role)
+    if catalog_topic is not None:
+        return catalog_topic
     if verb == "show":
         return _show_help(tokens[1:], role)
     if verb == "set":
@@ -319,7 +339,27 @@ def help_text(tokens, role):
     return "\n".join(lines) + "\n"
 
 
+def _catalog_help_topic(tokens, role):
+    """Catalog-driven 'help <topic>' for canonical resources and commands."""
+    if not tokens:
+        return None
+    root = canonical_root(tokens[0])
+    probe = [root] + list(tokens[1:])
+    cmd = CATALOG.find(probe)
+    if cmd is not None and len(cmd["path"]) == len(probe):
+        return CATALOG.command_help(cmd)
+    if len(probe) == 1 and CATALOG.canonical_actions(root):
+        text = CATALOG.resource_help(root, role)
+        if text is not None:
+            return text
+    return None
+
+
 def _root_help(role):
+    return CATALOG.root_help(role)
+
+
+def _root_help_legacy(role):
     client, server = _role_parts(role)
     lines = [
         "Data Relay Link CLI",
@@ -643,19 +683,7 @@ def _verb_help(verb, role):
 
 
 def _legacy_help(role):
-    return (
-        "Compatibility aliases\n"
-        "=====================\n\n"
-        "These older commands still work for scripts. Tab completion and\n"
-        "canonical help hide them.\n\n"
-        "  clients, client, client-info, client-set, edit-client\n"
-        "  enroll, create-client, enroll-bulk, enrollments, enrollment-revoke\n"
-        "  revoke ID, revoke-client, release-service, release-client\n"
-        "  project-update, frp-update, server-update, client-update\n"
-        "  backup, restore PATH, upstream, audit\n"
-        "  services, manage, info, client-status, server-status\n"
-        "  status, version, update\n"
-    )
+    return CATALOG.legacy_help(role)
 
 
 def _fmt_available(rows):
@@ -666,12 +694,49 @@ def _fmt_available(rows):
     return "\n".join(parts) + "\n"
 
 
+def _catalog_context_help(tokens, role, names=None, clients=None):
+    """Catalog-driven '?' help for the canonical resource-first grammar."""
+    if not tokens:
+        return None
+    root = canonical_root(tokens[0])
+    actions = CATALOG.canonical_actions(root)
+    if not actions:
+        return None
+    rows = CATALOG.subcommands(root, role)
+    if len(tokens) == 1:
+        if not rows:
+            return None
+        return _fmt_available(rows)
+    if tokens[1] not in actions:
+        if root in FALLTHROUGH_ROOTS:
+            return None
+        if not rows:
+            return None
+        return _fmt_available(rows)
+    probe = [root] + list(tokens[1:])
+    cmd = CATALOG.find(probe)
+    if cmd is None or not CATALOG.role_allows(cmd["roles"], role):
+        return None
+    index = len(probe) - len(cmd["path"])
+    if index < len(cmd["args"]):
+        arg = cmd["args"][index]
+        complete = arg["complete"]
+        if complete == CATALOG.C_CLIENT:
+            return _context_client_list(names, clients)
+        if isinstance(complete, (list, tuple)):
+            return _fmt_available([(item, "") for item in complete])
+    return CATALOG.command_help(cmd)
+
+
 def context_help(tokens, role, names=None, clients=None):
     """Enter-submitted '?' help. Tab must never call this."""
     client, server = _role_parts(role)
     tokens = [t for t in (tokens or []) if t != "?"]
     if not tokens:
         return _concise_root(role)
+    catalog_text = _catalog_context_help(tokens, role, names=names, clients=clients)
+    if catalog_text is not None:
+        return catalog_text
     verb = tokens[0]
     if verb == "show":
         if len(tokens) == 1:
@@ -905,6 +970,10 @@ def _context_client_list(names, clients):
 
 
 def _concise_root(role):
+    return CATALOG.concise_root(role)
+
+
+def _concise_root_legacy(role):
     client, server = _role_parts(role)
     rows = [
         ("show", "View status and configuration"),
@@ -948,6 +1017,83 @@ def _concise_root(role):
     return _fmt_available([(n, d) for n, d in rows])
 
 
+def canonical_root(token):
+    """Normalize a root token, resolving hidden resource aliases."""
+    if token == "profile":
+        return "service-profile"
+    if token == "egress-profile":
+        return "egress"
+    return token
+
+
+def canonical_tokens(tokens):
+    """Return the canonical token list, or None when this is not canonical.
+
+    A root that also exists as a historical flat command only becomes
+    canonical when the second token is a known action for that resource.
+    """
+    if not tokens:
+        return None
+    root = canonical_root(tokens[0])
+    actions = CATALOG.canonical_actions(root)
+    if not actions:
+        cmd = CATALOG.find([root])
+        if cmd is None or len(cmd["path"]) != 1:
+            return None
+        return [root] + list(tokens[1:])
+    if len(tokens) < 2 or tokens[1] not in actions:
+        return None
+    return [root] + list(tokens[1:])
+
+
+def _canonical_result(tokens, role):
+    """Resolve a canonical resource-first command.
+
+    Returns ``(internal_tokens, error_result)``. ``internal_tokens`` is None
+    when the caller should keep the original verb-first interpretation.
+    """
+    canon = canonical_tokens(tokens)
+    if canon is None:
+        root = canonical_root(tokens[0])
+        actions = CATALOG.canonical_actions(root)
+        if not actions or root in FALLTHROUGH_ROOTS:
+            return None, None
+        rows = CATALOG.subcommands(root, role)
+        if not rows:
+            if CATALOG.subcommands(root, "both"):
+                return None, {"status": "role", "need": "other", "command": root}
+            return None, None
+        if len(tokens) == 1:
+            return None, incomplete(
+                "Missing action.",
+                ["%s <action> ..." % root],
+                [name for name, _desc in rows],
+                tip="%s ?" % root,
+            )
+        return None, incomplete(
+            "Unknown %s action." % root,
+            ["%s <action> ..." % root],
+            [name for name, _desc in rows],
+            tip="%s ?" % root,
+        )
+    cmd = CATALOG.find(canon)
+    if cmd is None:
+        return None, None
+    if not CATALOG.role_allows(cmd["roles"], role):
+        return None, {
+            "status": "role",
+            "need": cmd["roles"],
+            "command": " ".join(cmd["path"]),
+        }
+    problem = CATALOG.strict_error(canon)
+    if problem:
+        return None, {"status": "error", "message": problem}
+    internal = CATALOG.to_internal(canon)
+    if internal is None:
+        return None, None
+    return internal, None
+
+
 def match(tokens, role, names=None, clients=None):
     if not tokens:
         return {"status": "empty"}
@@ -961,7 +1107,14 @@ def match(tokens, role, names=None, clients=None):
     verb = tokens[0]
     if verb.startswith("!") or verb in SHELL_REJECT:
         return {"status": "shell"}
-    if verb in LEGACY_COMMANDS:
+    internal, problem = _canonical_result(tokens, role)
+    if problem is not None:
+        return problem
+    rewritten = internal is not None
+    if rewritten:
+        tokens = internal
+        verb = tokens[0]
+    if not rewritten and verb in LEGACY_COMMANDS:
         return {"status": "legacy"}
     client, server = _role_parts(role)
     handlers = {
@@ -995,6 +1148,7 @@ def match(tokens, role, names=None, clients=None):
         "quit": lambda toks, role, names=None: {"status": "ok", "action": "exit"},
         "q": lambda toks, role, names=None: {"status": "ok", "action": "exit"},
         "status": lambda toks, role, names=None: {"status": "ok", "action": "show_status", "passthrough": toks[1:]},
+        "server-status": lambda toks, role, names=None: {"status": "ok", "action": "show_server_status", "passthrough": toks[1:]},
         "version": lambda toks, role, names=None: {"status": "ok", "action": "show_version"},
     }
     fn = handlers.get(verb)
@@ -1818,9 +1972,49 @@ def completion_candidates(line, role, names, services, local_services, trailing=
         prefix = tokens[0]
         return [v for v in canonical_verbs(role) if v.startswith(prefix)]
     verb = tokens[0]
+    filled = tokens if trailing else tokens[:-1]
+    hit = _catalog_candidates(
+        filled,
+        _current_prefix(tokens, trailing),
+        role,
+        names,
+        services,
+        local_services,
+        groups or [],
+    )
+    if hit is not None:
+        return hit
     if verb in LEGACY_COMMANDS:
         return _legacy_completion(tokens, trailing, role, names, services)
     return _canonical_completion(tokens, trailing, role, names, services, local_services, groups or [])
+
+
+def _catalog_desc_map(filled, role):
+    """Tab descriptions for the canonical grammar. None means 'not canonical'."""
+    if not filled:
+        rows = CATALOG.root_rows(role)
+        return ({name: desc for name, desc in rows}, "verbs") if rows else None
+    root = canonical_root(filled[0])
+    actions = CATALOG.canonical_actions(root)
+    if not actions:
+        return None
+    if len(filled) == 1:
+        rows = CATALOG.subcommands(root, role)
+        return ({name: desc for name, desc in rows}, "named") if rows else None
+    if filled[1] not in actions:
+        return None
+    probe = [root] + list(filled[1:])
+    cmd = CATALOG.find(probe)
+    if cmd is None or not CATALOG.role_allows(cmd["roles"], role):
+        return None
+    index = len(probe) - len(cmd["path"])
+    if index < len(cmd["args"]):
+        complete = cmd["args"][index]["complete"]
+        if complete == CATALOG.C_CLIENT:
+            return {}, "clients"
+        if isinstance(complete, (list, tuple)):
+            return {item: "" for item in complete}, "named"
+    return {}, "plain"
 
 
 def _tab_desc_map(line, role, names=None, clients=None):
@@ -1834,6 +2028,9 @@ def _tab_desc_map(line, role, names=None, clients=None):
     trailing = bool(line) and line[-1:] in " \t"
     filled = tokens if trailing else tokens[:-1]
     client, server = _role_parts(role)
+    catalog_rows = _catalog_desc_map(filled, role)
+    if catalog_rows is not None:
+        return catalog_rows
     verb_map = {
         "show": "View status and configuration",
         "set": "Change configuration",
@@ -2015,18 +2212,78 @@ def _filter(items, prefix):
     return [item for item in items if item.startswith(prefix)]
 
 
+def _inventory(names, services, local_services, groups):
+    return {
+        CATALOG.C_CLIENT: list(names or []),
+        CATALOG.C_GROUP: list(groups or []),
+        CATALOG.C_LOCAL_SERVICE: list(local_services or []),
+    }
+
+
+def _catalog_candidates(filled, prefix, role, names, services, local_services, groups):
+    """Catalog-driven Tab candidates. None means 'not a canonical command'."""
+    if not filled:
+        return None
+    root = canonical_root(filled[0])
+    actions = CATALOG.canonical_actions(root)
+    if not actions:
+        return None
+    allowed = [name for name, _desc in CATALOG.subcommands(root, role)]
+    if len(filled) == 1:
+        hits = _filter(allowed, prefix)
+        if hits:
+            return hits
+        # A root that is also a historical flat command (e.g. `client <ID>`)
+        # keeps completing its old operand when no action matches.
+        return None if root in FALLTHROUGH_ROOTS else []
+    if filled[1] not in actions:
+        return None if root in FALLTHROUGH_ROOTS else []
+    probe = [root] + list(filled[1:])
+    cmd = CATALOG.find(probe)
+    if cmd is None or not CATALOG.role_allows(cmd["roles"], role):
+        return None if root in FALLTHROUGH_ROOTS else []
+    index = len(probe) - len(cmd["path"])
+    if index < len(cmd["args"]):
+        arg = cmd["args"][index]
+        complete = arg["complete"]
+        if isinstance(complete, (list, tuple)):
+            return _filter(list(complete), prefix)
+        if complete == CATALOG.C_CLIENT_SERVICE:
+            selector = _selector_before(cmd, probe, CATALOG.C_CLIENT)
+            return _filter((services or {}).get(selector, []), prefix)
+        pool = _inventory(names, services, local_services, groups).get(complete)
+        if pool is not None:
+            return _filter(pool, prefix)
+        if cmd["flags"] and prefix.startswith("-"):
+            return _filter(list(cmd["flags"]), prefix)
+        return []
+    if cmd["flags"]:
+        return _filter(list(cmd["flags"]), prefix)
+    return []
+
+
+def _selector_before(cmd, probe, kind):
+    base = len(cmd["path"])
+    for offset, arg in enumerate(cmd["args"]):
+        if arg["complete"] == kind and base + offset < len(probe):
+            return probe[base + offset]
+    return ""
+
+
 def _canonical_completion(tokens, trailing, role, names, services, local_services, groups):
     client, server = _role_parts(role)
     prefix = _current_prefix(tokens, trailing)
     filled = tokens if trailing else tokens[:-1]
     if not filled:
         return _filter(canonical_verbs(role), prefix)
+    catalog_hit = _catalog_candidates(
+        filled, prefix, role, names, services, local_services, groups
+    )
+    if catalog_hit is not None:
+        return catalog_hit
     verb = filled[0]
     if verb == "help":
-        topics = [
-            "show", "set", "unset", "create", "add", "remove", "delete",
-            "rename", "update", "revoke", "purge", "release", "legacy",
-        ]
+        topics = list(canonical_verbs(role)) + ["workflows", "legacy"]
         if len(filled) == 1:
             return _filter(topics, prefix)
         if filled[1] == "show" and len(filled) == 2:

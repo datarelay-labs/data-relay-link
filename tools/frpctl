@@ -307,7 +307,8 @@ frpctl_grammar_py() {
     printf '%s' "$path"
     return 0
   fi
-  echo "ERROR: missing frp_ctl_grammar.py" >&2
+  echo "ERROR: the ${FRP_CTL_PRODUCT_NAME} CLI backend is incomplete (command grammar module not found)." >&2
+  echo "Reinstall or run: ${FRP_CTL_CMD_NAME} update project" >&2
   return 1
 }
 
@@ -336,7 +337,13 @@ frpctl_role_token() {
 }
 
 frpctl_grammar_payload() {
-  python3 - "$(frpctl_role_token)" "$(frpctl_path /etc/drlink/config.json)" \
+  # Cache within a REPL/session; inventory is read-only and cheap to reuse.
+  if [[ -n "${FRP_CTL_GRAMMAR_PAYLOAD:-}" ]]; then
+    printf '%s' "$FRP_CTL_GRAMMAR_PAYLOAD"
+    return 0
+  fi
+  local built=""
+  built="$(python3 - "$(frpctl_role_token)" "$(frpctl_path /etc/drlink/config.json)" \
     "${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}" "$(frpctl_path /etc/frp/client-state.json)" <<'PY'
 import json, sys
 from pathlib import Path
@@ -357,9 +364,15 @@ def unique_short(mid, mids, n=8):
         length += 1
     return text
 
-if server_role and not cfg.is_file():
+def _is_file(path):
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+if server_role and not _is_file(cfg):
     inventory_warning = True
-if cfg.is_file():
+if _is_file(cfg):
     try:
         data = json.loads(cfg.read_text(encoding="utf-8"))
         reg_raw = str((data or {}).get("registry_file") or "")
@@ -368,7 +381,7 @@ if cfg.is_file():
         reg = Path(reg_raw)
         if root and reg_raw and not str(reg).startswith(root):
             reg = Path(root + str(reg))
-        if reg_raw and reg.is_file():
+        if reg_raw and _is_file(reg):
             state = json.loads(reg.read_text(encoding="utf-8"))
             raw_clients = (state or {}).get("clients") or {}
             if not isinstance(raw_clients, dict):
@@ -412,9 +425,9 @@ if cfg.is_file():
     except Exception:
         inventory_warning = True
 st = Path(state_path)
-if client_role and not st.is_file():
+if client_role and not _is_file(st):
     inventory_warning = True
-if st.is_file():
+if _is_file(st):
     try:
         data = json.loads(st.read_text(encoding="utf-8"))
         raw_services = (data or {}).get("services") or {}
@@ -434,6 +447,10 @@ json.dump({
     "inventory_warning": inventory_warning,
 }, sys.stdout)
 PY
+)" || return 1
+  FRP_CTL_GRAMMAR_PAYLOAD="$built"
+  export FRP_CTL_GRAMMAR_PAYLOAD
+  printf '%s' "$built"
 }
 
 frpctl_grammar_call() {
@@ -468,20 +485,26 @@ a unique match or list next-token candidates. Type 'menu'
 for the guided numbered menu.
 
 Canonical grammar:
-  <verb> <resource> [target] [property] [value]
+  <resource> <action> [target] [options]
 
-  show status | show version | show clients | show client ID
-  set client ID label|note VALUE
-  set client ID tag KEY VALUE
-  unset client ID label|note|tag [KEY]
-  create zero-touch | create enrollment | create backup
-  revoke client ID | release client ID | release service ID SID
-  access | access list | access menu
-  update project [--check] | update frp [--check]
-  doctor | support-bundle | help | menu | history | exit
+  status | version | doctor | support bundle
+  zero-touch create
+  enrollment list | enrollment create | enrollment revoke ID
+  client list | client show ID | client set ID label VALUE
+  client unset ID label|note|tag [KEY]
+  client revoke ID | client release ID [SERVICE-ID]
+  service list | service add | service set ID PROP VALUE | service apply
+  group list | group create NAME | group add-member GROUP CLIENT
+  service-profile list | service-profile create NAME ...
+  access list | access assign CLIENT SERVICE LIST | access menu
+  egress list | egress create NAME | egress enable NAME
+  server set public-hostname FQDN | server upstream | server audit
+  backup create [PATH] | backup restore PATH
+  update project [--check] | update engine [--check]
+  help | help workflows | help legacy | menu | history | exit
 
-status and version remain shortcuts. Older flat commands (clients,
-client-set, enroll, ...) still work for scripts. See 'help legacy'.
+Older verb-first commands (show clients, set client, enroll, frp-update,
+...) still run for scripts. See 'help legacy'.
 
 Official upstream FRP binaries are frps (server) and frpc (client).
 This project does not fork FRP.
@@ -511,29 +534,29 @@ frpctl_print_version() {
 }
 
 frpctl_print_client_menu() {
-  echo "1) Show status"
-  echo "2) Show services"
-  echo "3) Show connection information"
-  echo "4) Manage services"
-  echo "5) Update project"
-  echo "6) Doctor"
-  echo "7) Help"
+  echo "1) Status                     (status)"
+  echo "2) Service list               (service list)"
+  echo "3) Connection information     (client info)"
+  echo "4) Manage services            (service add / service set / service apply)"
+  echo "5) Update project             (update project)"
+  echo "6) Doctor                     (doctor)"
+  echo "7) Commands and workflows     (help / help workflows)"
   echo "8) Exit"
 }
 
 frpctl_print_server_menu() {
-  echo "1) Show status"
-  echo "2) Manage clients"
-  echo "3) Create enrollment"
-  echo "4) Create enrollments"
-  echo "5) Show enrollments"
-  echo "6) Create backup / Restore backup"
-  echo "7) Access Control"
-  echo "8) Update project"
-  echo "9) Update FRP"
-  echo "10) Doctor"
-  echo "11) Show audit"
-  echo "12) Help"
+  echo "1) Status                     (status)"
+  echo "2) Manage clients             (client list / client show / client set)"
+  echo "3) Create enrollment          (zero-touch create / enrollment create)"
+  echo "4) Create enrollments in bulk (enrollment bulk)"
+  echo "5) Enrollment list            (enrollment list)"
+  echo "6) Backup / Restore           (backup create / backup restore)"
+  echo "7) Access Control             (access ...)"
+  echo "8) Update project             (update project)"
+  echo "9) Update FRP engine          (update engine)"
+  echo "10) Doctor                    (doctor)"
+  echo "11) Audit                     (server audit)"
+  echo "12) Commands and workflows    (help / help workflows)"
   echo "13) Exit"
 }
 
@@ -544,7 +567,7 @@ frpctl_print_both_menu() {
   echo "2) Server operations"
   echo "3) Status (both)"
   echo "4) System diagnostics"
-  echo "5) Help"
+  echo "5) Commands and workflows"
   echo "6) Exit"
 }
 
@@ -622,7 +645,7 @@ frpctl_client_menu() {
       4) frpctl_run frp-client ;;
       5) frpctl_client_update ;;
       6) frpctl_dispatch doctor || true ;;
-      7) frpctl_repl_help ;;
+      7) frpctl_menu_commands ;;
       8)
         echo "Exit."
         return 0
@@ -1248,7 +1271,7 @@ frpctl_server_menu() {
       9) frpctl_run frp-update ;;
       10) frpctl_dispatch doctor || true ;;
       11) frpctl_audit_tail ;;
-      12) frpctl_usage ;;
+      12) frpctl_menu_commands ;;
       13)
         echo "Exit."
         return 0
@@ -1274,7 +1297,7 @@ frpctl_both_menu() {
       2) frpctl_server_menu ;;
       3) frpctl_status_both ;;
       4) frpctl_dispatch doctor || true ;;
-      5) frpctl_usage ;;
+      5) frpctl_menu_commands ;;
       6)
         echo "Exit."
         return 0
@@ -1382,12 +1405,14 @@ frpctl_help_navigation() {
 Navigation
   menu                  Open guided menu
   help                  Detailed help
-  help <verb>           Command-specific help
+  help <resource>       Resource-specific help
+  help workflows        End-to-end examples
+  help legacy           Compatibility aliases
   ?                     Context-sensitive help
   Tab                   Show/complete next tokens (first press)
   history               This session only
   clear                 Clear the screen
-  exit, quit            Exit ${FRP_CTL_CMD_NAME}
+  exit, quit            Leave the Data Relay Link CLI
 EOF
 }
 
@@ -1431,6 +1456,16 @@ frpctl_repl_help() {
   echo
 }
 
+# Guided-menu command discovery. Rendered from the canonical command
+# catalog so the menu and the CLI can never drift apart (CLI-011).
+frpctl_menu_commands() {
+  echo
+  frpctl_grammar_call help '{"tokens":[]}'
+  echo
+  frpctl_grammar_call help '{"tokens":["workflows"]}'
+  echo
+}
+
 frpctl_clear_screen() {
   if command -v clear >/dev/null 2>&1; then
     command clear
@@ -1459,17 +1494,21 @@ frpctl_known_commands() {
   local client=0 server=0
   frpctl_is_client && client=1
   frpctl_is_server && server=1
-  printf '%s\n' help menu status doctor support-bundle version update clear exit quit q history show
+  # Canonical roots first, then compatibility aliases. Used only for the
+  # "Did you mean:" suggestion list.
+  printf '%s\n' status version client update doctor support help menu history clear exit quit q \
+    support-bundle show
   if [[ "$client" == "1" ]]; then
-    printf '%s\n' services manage info client-status client-update \
+    printf '%s\n' service services manage info client-status client-update \
       add enable disable apply discard set
   fi
   if [[ "$server" == "1" ]]; then
-    printf '%s\n' clients client client-info client-set edit-client enroll create-client \
+    printf '%s\n' zero-touch enrollment group service-profile access egress server backup \
+      clients client-info client-set edit-client enroll create-client \
       enroll-bulk enrollments enrollment-revoke enrollment-purge \
       revoke revoke-client release-service release-client \
-      backup restore project-update frp-update upstream audit \
-      server-status server-update set unset create release purge add remove delete rename access
+      restore project-update frp-update upstream audit \
+      server-status server-update set unset create release purge add remove delete rename profile
   fi
 }
 
@@ -1731,37 +1770,56 @@ PY
 
 frpctl_suggest() {
   local unknown="$1"
-  local cmd dist
-  local -a suggestions=()
+  local ranked=""
   [[ -n "$unknown" ]] || return 0
-  while IFS= read -r cmd; do
-    [[ -n "$cmd" ]] || continue
-    [[ "$cmd" != "?" ]] || continue
-    if [[ ${#unknown} -ge 3 && "$cmd" == "$unknown"* ]]; then
-      suggestions+=("$cmd")
-      continue
-    fi
-    if [[ ${#cmd} -ge 3 && "$unknown" == "$cmd"* ]]; then
-      suggestions+=("$cmd")
-      continue
-    fi
-    dist="$(frpctl_edit_distance "$unknown" "$cmd" 2>/dev/null || echo 99)"
-    if [[ "$dist" =~ ^[0-9]+$ ]] && [[ "$dist" -ge 1 && "$dist" -le 2 ]]; then
-      suggestions+=("$cmd")
-    fi
-  done < <(frpctl_known_commands | sort -u)
-  if [[ ${#suggestions[@]} -eq 0 ]]; then
+  # One Python process ranks all candidates (prefix + edit distance ≤ 2).
+  # Script comes from FD 3 so stdin can carry the command list.
+  ranked="$(
+    frpctl_known_commands | sort -u | python3 /dev/fd/3 "$unknown" 3<<'PY'
+import sys
+unknown = sys.argv[1]
+cmds = [line.strip() for line in sys.stdin.read().splitlines() if line.strip() and line.strip() != "?"]
+
+def distance(a, b):
+    if a == b:
+        return 0
+    if not a or not b:
+        return max(len(a), len(b))
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            ins, delete, sub = cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + (ca != cb)
+            cur.append(min(ins, delete, sub))
+        prev = cur
+    return prev[-1]
+
+seen = set()
+for cmd in cmds:
+    if cmd in seen:
+        continue
+    keep = False
+    if len(unknown) >= 3 and cmd.startswith(unknown):
+        keep = True
+    elif len(cmd) >= 3 and unknown.startswith(cmd):
+        keep = True
+    else:
+        d = distance(unknown, cmd)
+        if 1 <= d <= 2:
+            keep = True
+    if keep:
+        seen.add(cmd)
+        print(cmd)
+PY
+  )" || true
+  if [[ -z "$ranked" ]]; then
     return 0
   fi
   echo "Did you mean:"
-  local seen="" s
-  for s in "${suggestions[@]}"; do
-    case " $seen " in
-      *" $s "*) continue ;;
-    esac
+  while IFS= read -r s; do
+    [[ -n "$s" ]] || continue
     echo "  $s"
-    seen="${seen} ${s}"
-  done
+  done <<<"$ranked"
   echo
 }
 
@@ -1834,6 +1892,10 @@ frpctl_dispatch_canonical() {
   set +e
   case "$action" in
     show_status) frpctl_status $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    show_server_status)
+      frpctl_require_server || return 1
+      frpctl_run frp-server-status $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     show_version) echo; frpctl_print_version; echo ;;
     show_clients) frpctl_require_server || return 1; frpctl_invoke frp-clients $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     show_groups) frpctl_require_server || return 1; frpctl_invoke frp-groups ;;
@@ -1953,15 +2015,19 @@ frpctl_dispatch_canonical() {
         $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
       ;;
     create_egress_profile)
+      # CLI-008: a new egress profile is always created disabled so an
+      # incomplete policy can never widen outbound access.
       frpctl_require_server || return 1
       if [[ -n "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")" ]]; then
         frpctl_invoke frp-egress create \
           "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          --disabled \
           --description \
           "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")"
       else
         frpctl_invoke frp-egress create \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")"
+          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          --disabled
       fi
       ;;
     set_egress_profile)
@@ -2387,6 +2453,8 @@ frpctl_repl_banner() {
   echo "Bundle SHA256   : $(frpctl_bundle_sha256)"
   echo
   echo "Type '?' for a short command list, or 'help' for full syntax."
+  echo "Commands read <resource> <action>, for example: client list"
+  echo "Type 'help workflows' for end-to-end examples."
   echo "Press Tab to complete a unique match or list next-token candidates."
   echo "On a server, Tab completes CLIENT IDs and service IDs."
   echo "Type 'menu' for the guided menu."

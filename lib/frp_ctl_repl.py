@@ -59,6 +59,7 @@ class LineEditor:
         self.clients = payload.get("clients") or []
         self.services = payload.get("services") or {}
         self.local_services = payload.get("local_services") or []
+        self.groups = payload.get("groups") or []
         self._matches = []
         self._last_display_key = None
         self.prompt = os.environ.get("FRP_CTL_PROMPT") or "drlink> "
@@ -74,6 +75,7 @@ class LineEditor:
                 self.services,
                 self.local_services,
                 trailing=trailing,
+                groups=self.groups,
             )
             # Unique -> replace current word (append space). Longer common
             # prefix -> extend only. Fully ambiguous -> return candidates so
@@ -124,6 +126,7 @@ class LineEditor:
             self.services,
             self.local_services,
             trailing=bool(line) and line[-1:] in " \t",
+            groups=self.groups,
         )
         if preferred:
             rank = {name: idx for idx, name in enumerate(preferred)}
@@ -289,7 +292,9 @@ def run_repl(frpctl_bin, payload):
         try:
             proc = subprocess.run([frpctl_bin] + tokens, env=env, check=False)
         except OSError as exc:
-            sys.stderr.write("ERROR: could not run frpctl: %s\n" % exc)
+            sys.stderr.write(
+                "ERROR: could not run the Data Relay Link CLI backend: %s\n" % exc
+            )
             continue
         if proc.returncode not in (0, 130) and tokens[0] not in ("?", "help"):
             print()

@@ -129,6 +129,14 @@ def cmd_create(cfg, args):
     print("Created egress profile %s" % pid)
     print("Name     : %s" % record["name"])
     print("Enabled  : %s" % ("yes" if record["enabled"] else "no"))
+    if not record["enabled"]:
+        print("")
+        print("The profile is disabled. Default egress policy stays DENY.")
+        print("Next steps:")
+        print("  egress add-source %s <CIDR>" % record["name"])
+        print("  egress add-destination %s <FQDN> <PORT>" % record["name"])
+        print("  egress show %s" % record["name"])
+        print("  egress enable %s" % record["name"])
     audit(
         "egress.profile.created",
         profile_id=pid,

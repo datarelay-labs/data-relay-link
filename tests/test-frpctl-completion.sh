@@ -102,13 +102,14 @@ export FRP_CTL_TEST_ROOT="$SERVER"
 pass "FRPCTL_TAB_SINGLE_MATCH"
 
 # --- Multiple matches keep input when common prefix equals the typed prefix
-re_out="$(cands re)"
-echo "$re_out" | has_line release || fail "re missing release"
-echo "$re_out" | has_line revoke || fail "re missing revoke"
-echo "$re_out" | has_line restore || fail "re missing restore"
-if echo "$re_out" | has_line release-client; then fail "legacy release-client in tab"; fi
-[[ "$(frpctl_complete_line re)" == "re" ]] || fail "re should keep typed prefix"
-[[ "$(frpctl_complete_line release)" == "release " ]] || fail "release unique complete"
+# Canonical roots are resource-first. Prefix "h" hits help + history with
+# common prefix equal to the typed token.
+h_out="$(cands h)"
+echo "$h_out" | has_line help || fail "h missing help"
+echo "$h_out" | has_line history || fail "h missing history"
+if echo "$h_out" | has_line help-legacy; then fail "unexpected help-legacy in tab"; fi
+[[ "$(frpctl_complete_line h)" == "h" ]] || fail "h should keep typed prefix"
+[[ "$(frpctl_complete_line history)" == "history " ]] || fail "history unique complete"
 pass "FRPCTL_TAB_MULTIPLE_MATCHES"
 pass "FRPCTL_TAB_VERB"
 
@@ -119,17 +120,16 @@ pass "FRPCTL_TAB_NO_MATCH"
 
 # --- Client role commands
 export FRP_CTL_TEST_ROOT="$CLIENT"
-[[ "$(cands sho)" == "show" ]] || fail "sho -> show"
+[[ "$(cands ser)" == "service" ]] || fail "ser -> service"
 all_client="$(cands "")"
-echo "$all_client" | has_line show || fail "client list show"
-echo "$all_client" | has_line add || fail "client list add"
-echo "$all_client" | has_line apply || fail "client list apply"
+echo "$all_client" | has_line service || fail "client list service"
+echo "$all_client" | has_line client || fail "client list client"
 echo "$all_client" | has_line status || fail "client list status"
 echo "$all_client" | has_line doctor || fail "client list doctor"
 if echo "$all_client" | has_line enroll; then fail "client offered enroll"; fi
 if echo "$all_client" | has_line clients; then fail "client offered clients"; fi
-if echo "$all_client" | has_line revoke; then fail "client offered revoke"; fi
-if echo "$all_client" | has_line create; then fail "client offered create"; fi
+if echo "$all_client" | has_line enrollment; then fail "client offered enrollment"; fi
+if echo "$all_client" | has_line egress; then fail "client offered egress"; fi
 pass "FRPCTL_TAB_CLIENT_ROLE_COMMANDS"
 pass "FRPCTL_TAB_SERVER_COMMAND_NOT_ON_CLIENT"
 
@@ -143,12 +143,12 @@ pass "FRPCTL_TAB_SET_SERVICE_HEALTH"
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"
-echo "$all_server" | has_line create || fail "server list create"
+echo "$all_server" | has_line enrollment || fail "server list enrollment"
 echo "$all_server" | has_line doctor || fail "server list doctor"
-echo "$all_server" | has_line show || fail "server list show"
-echo "$all_server" | has_line revoke || fail "server list revoke"
-echo "$all_server" | has_line set || fail "server list set"
-if echo "$all_server" | has_line services; then fail "server offered services"; fi
+echo "$all_server" | has_line client || fail "server list client"
+echo "$all_server" | has_line egress || fail "server list egress"
+echo "$all_server" | has_line access || fail "server list access"
+if echo "$all_server" | has_line service; then fail "server offered local service root"; fi
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
 if echo "$all_server" | has_line clients; then fail "legacy clients in tab"; fi
@@ -158,11 +158,10 @@ pass "FRPCTL_TAB_CLIENT_COMMAND_NOT_ON_SERVER"
 # --- Dual-role union
 export FRP_CTL_TEST_ROOT="$BOTH"
 all_both="$(cands "")"
-echo "$all_both" | has_line show || fail "dual missing show"
-echo "$all_both" | has_line add || fail "dual missing add"
-echo "$all_both" | has_line create || fail "dual missing create"
-echo "$all_both" | has_line set || fail "dual missing set"
-echo "$all_both" | has_line apply || fail "dual missing apply"
+echo "$all_both" | has_line client || fail "dual missing client"
+echo "$all_both" | has_line service || fail "dual missing service"
+echo "$all_both" | has_line enrollment || fail "dual missing enrollment"
+echo "$all_both" | has_line egress || fail "dual missing egress"
 echo "$all_both" | has_line doctor || fail "dual missing doctor"
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"

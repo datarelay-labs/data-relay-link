@@ -13,6 +13,8 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 chmod +x "$ROOT/tools/frpctl" "$ROOT/tools/frp-client"
 
 CTL="$ROOT/tools/frpctl"
+export FRP_CTL_FORCE_DRLINK=1
+export FRP_CTL_CMD_NAME=drlink
 export FRP_CTL_BIN_DIR="$ROOT/tools"
 export FRP_CLIENT_LIB="$ROOT/lib/frp-client-common.sh"
 export FRP_SKIP_SYSTEMD=1
@@ -86,7 +88,7 @@ EOF
 }
 
 prompt_count() {
-  grep -c '^frpctl>' "$1"
+  grep -cE '^(frpctl|drlink)>' "$1"
 }
 
 run_repl() {
@@ -114,18 +116,18 @@ write_server_tree "$BOTH"
 # --- Help / unknown (direct mode)
 "$CTL" help >"$WORKDIR/help.out"
 grep -q 'only command you need to remember' "$WORKDIR/help.out" || fail "help remember line"
-grep -q 'sudo frpctl' "$WORKDIR/help.out" || fail "help sudo frpctl"
+grep -qE 'sudo (drlink|frpctl)' "$WORKDIR/help.out" || fail "help sudo drlink"
 grep -q 'frps' "$WORKDIR/help.out" || fail "help mentions frps"
 grep -q 'frpc' "$WORKDIR/help.out" || fail "help mentions frpc"
 grep -q 'doctor' "$WORKDIR/help.out" || fail "help doctor"
 grep -q 'persistent management CLI' "$WORKDIR/help.out" || fail "help persistent CLI"
 "$CTL" --help >"$WORKDIR/help2.out"
-grep -q 'Usage: frpctl' "$WORKDIR/help2.out" || fail "--help usage"
+grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/help2.out" || fail "--help usage"
 if "$CTL" definitely-not-a-command >"$WORKDIR/unknown.out" 2>"$WORKDIR/unknown.err"; then
   fail "unknown command should fail"
 fi
 grep -q 'unknown command' "$WORKDIR/unknown.err" || fail "unknown error"
-grep -q 'Usage: frpctl' "$WORKDIR/unknown.err" || fail "unknown usage"
+grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/unknown.err" || fail "unknown usage"
 pass "FRPCTL_HELP"
 pass "FRPCTL_UNKNOWN_COMMAND_RECOVERY"
 
@@ -258,7 +260,7 @@ grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDI
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
 grep -q 'Data Relay Link Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
 grep -q 'Data Relay Link — Client Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
-grep -q 'services' "$WORKDIR/client-repl.out" || fail "client help services"
+grep -qE 'service|client' "$WORKDIR/client-repl.out" || fail "client help service"
 pass "FRPCTL_REPL_START_CLIENT"
 pass "FRPCTL_REPL_HELP"
 pass "FRPCTL_REPL_VERSION"
@@ -266,8 +268,8 @@ pass "FRPCTL_REPL_STATUS"
 pass "FRPCTL_REPL_EXIT"
 
 run_repl "$CLIENT" "$WORKDIR/client-qhelp.out" '?' exit || fail "client ? help"
-grep -q 'show' "$WORKDIR/client-qhelp.out" || fail "question mark help show"
-grep -q 'set' "$WORKDIR/client-qhelp.out" || fail "question mark help set"
+grep -qE 'service|client' "$WORKDIR/client-qhelp.out" || fail "question mark help service"
+grep -qE 'status|update|doctor' "$WORKDIR/client-qhelp.out" || fail "question mark help ops"
 if grep -q 'Grammar: <verb>' "$WORKDIR/client-qhelp.out"; then
   fail "root ? dumped full syntax tree"
 fi
@@ -331,7 +333,7 @@ pass "FRPCTL_REPL_SERVER_CLIENT_INFO"
 pass "FRPCTL_REPL_SERVER_ENROLL_DISPATCH"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/guided-enroll.out" menu 3 1 zt-ssh-client "" aella "" 12 exit \
+run_repl "$SERVER" "$WORKDIR/guided-enroll.out" menu 3 1 zt-ssh-client "" aella "" 13 exit \
   || fail "guided enroll zero-touch"
 grep -q 'Create enrollment' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
 grep -q 'Zero-touch SSH' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
@@ -341,7 +343,7 @@ grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-
   || fail "guided enroll did not dispatch zero-touch"
 pass "FRPCTL_GUIDED_ENROLL_ZERO_TOUCH"
 
-run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 3 2 12 exit || fail "guided enroll manual"
+run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 3 2 13 exit || fail "guided enroll manual"
 grep -q 'DISPATCH frp-create-client' "$WORKDIR/guided-enroll-manual.out" \
   || fail "guided enroll manual dispatch"
 if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/guided-enroll-manual.out"; then
