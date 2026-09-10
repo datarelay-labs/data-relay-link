@@ -107,15 +107,240 @@ def default_connect(ip: str, port: int, hostname: str, timeout: float) -> socket
     return sock
 
 
+class DnsResolver:
+    """Bounded DNS with coalescing and validated-only caches.
+
+    Security order is preserved by callers:
+      resolve ALL → validate ALL → if ANY unsafe DENY ALL → connect only to validated IPs.
+
+    Never serves stale-while-revalidate for authorization decisions.
+    """
+
+    def __init__(
+        self,
+        *,
+        resolve_fn: Callable[[str], list[str]],
+        pending_limit: int = DEFAULT_DNS_PENDING_LIMIT,
+        timeout: float = DNS_TIMEOUT,
+        positive_ttl: float = DNS_POSITIVE_TTL,
+        negative_ttl: float = DNS_NEGATIVE_TTL,
+    ):
+        self.resolve_fn = resolve_fn
+        self.pending_limit = int(pending_limit)
+        self.timeout = float(timeout)
+        self.positive_ttl = float(positive_ttl)
+        self.negative_ttl = float(negative_ttl)
+        self._lock = threading.Lock()
+        self._pending = 0
+        self._inflight: dict[str, threading.Event] = {}
+        self._inflight_result: dict[str, object] = {}
+        self._pos: dict[str, tuple[float, list[str]]] = {}  # host -> (expires, validated ips)
+        self._neg: dict[str, tuple[float, str]] = {}  # host -> (expires, reason)
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return self._pending
+
+    @property
+    def positive_cache_size(self) -> int:
+        with self._lock:
+            return len(self._pos)
+
+    @property
+    def negative_cache_size(self) -> int:
+        with self._lock:
+            return len(self._neg)
+
+    def resolve_validated(self, hostname: str) -> list[str]:
+        host = str(hostname).lower().strip()
+        now = time.monotonic()
+        leader = False
+        ev = None
+        with self._lock:
+            neg = self._neg.get(host)
+            if neg and neg[0] > now:
+                raise EG.EgressError(neg[1])
+            if neg and neg[0] <= now:
+                self._neg.pop(host, None)
+            pos = self._pos.get(host)
+            if pos and pos[0] > now:
+                return list(pos[1])
+            if pos and pos[0] <= now:
+                self._pos.pop(host, None)
+
+            if host in self._inflight:
+                ev = self._inflight[host]
+                leader = False
+            else:
+                if self._pending >= self.pending_limit:
+                    raise EG.EgressError("DNS pending limit reached")
+                ev = threading.Event()
+                self._inflight[host] = ev
+                self._pending += 1
+                leader = True
+
+        if not leader:
+            if not ev.wait(timeout=self.timeout + 1.0):
+                raise EG.EgressError("DNS resolution timeout")
+            with self._lock:
+                result = self._inflight_result.get(host)
+            if isinstance(result, Exception):
+                raise result
+            if not isinstance(result, list):
+                raise EG.EgressError("DNS resolution failed")
+            return list(result)
+
+        err = None
+        validated = None
+        try:
+            raw = self._resolve_with_timeout(host)
+            validated = EG.validate_resolved_addresses(raw)
+        except Exception as exc:
+            err = exc
+
+        with self._lock:
+            self._pending = max(0, self._pending - 1)
+            self._inflight.pop(host, None)
+            if err is not None:
+                self._inflight_result[host] = err
+                self._neg[host] = (time.monotonic() + self.negative_ttl, str(err))
+                if len(self._neg) > 256:
+                    for k, _ in sorted(self._neg.items(), key=lambda kv: kv[1][0])[:64]:
+                        self._neg.pop(k, None)
+            else:
+                self._inflight_result[host] = list(validated or [])
+                self._pos[host] = (time.monotonic() + self.positive_ttl, list(validated or []))
+                if len(self._pos) > 512:
+                    for k, _ in sorted(self._pos.items(), key=lambda kv: kv[1][0])[:64]:
+                        self._pos.pop(k, None)
+            ev.set()
+
+        # Keep result briefly for waiters racing the pop.
+        time.sleep(0.001)
+        with self._lock:
+            self._inflight_result.pop(host, None)
+
+        if err is not None:
+            raise err
+        return list(validated or [])
+
+    def _resolve_with_timeout(self, hostname: str) -> list[str]:
+        box: dict = {}
+
+        def worker():
+            try:
+                box["ok"] = self.resolve_fn(hostname)
+            except Exception as exc:
+                box["err"] = exc
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=self.timeout)
+        if t.is_alive():
+            raise EG.EgressError("DNS resolution timeout")
+        if "err" in box:
+            raise box["err"]
+        return list(box.get("ok") or [])
+
+
+def happy_eyeballs_connect(
+    connect_fn: Callable[..., socket.socket],
+    validated_ips: list[str],
+    port: int,
+    hostname: str,
+    *,
+    total_timeout: float = CONNECT_TIMEOUT,
+    stagger: float = HAPPY_EYEBALLS_DELAY,
+) -> socket.socket:
+    """Race validated IPv6/IPv4 candidates only. First success wins; losers closed."""
+    if not validated_ips:
+        raise OSError("no validated addresses")
+    v6 = [ip for ip in validated_ips if ":" in ip]
+    v4 = [ip for ip in validated_ips if ":" not in ip]
+    ordered = []
+    # Prefer one v6 then one v4, then remaining (classic HE-ish).
+    while v6 or v4:
+        if v6:
+            ordered.append(v6.pop(0))
+        if v4:
+            ordered.append(v4.pop(0))
+
+    winner: dict = {}
+    lock = threading.Lock()
+    stop = threading.Event()
+    threads = []
+
+    def attempt(ip: str, delay: float):
+        if delay > 0 and stop.wait(delay):
+            return
+        if stop.is_set():
+            return
+        sock = None
+        try:
+            remaining = max(0.05, total_timeout - delay)
+            sock = connect_fn(ip, port, hostname, remaining)
+            with lock:
+                if "sock" not in winner and not stop.is_set():
+                    winner["sock"] = sock
+                    sock = None
+                    stop.set()
+        except OSError as exc:
+            with lock:
+                winner.setdefault("errors", []).append(exc)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    deadline = time.monotonic() + total_timeout
+    for idx, ip in enumerate(ordered):
+        delay = idx * stagger
+        if time.monotonic() + delay >= deadline:
+            break
+        t = threading.Thread(target=attempt, args=(ip, delay), daemon=True)
+        threads.append(t)
+        t.start()
+
+    # Wait until winner or all done / total timeout.
+    end = time.monotonic() + total_timeout
+    while time.monotonic() < end:
+        with lock:
+            if "sock" in winner:
+                break
+        if all(not t.is_alive() for t in threads):
+            break
+        time.sleep(0.01)
+    stop.set()
+    for t in threads:
+        t.join(timeout=0.2)
+    with lock:
+        if "sock" in winner:
+            return winner["sock"]
+        errs = winner.get("errors") or []
+    if errs:
+        raise errs[-1]
+    raise OSError("connect failed")
+
+
 class PolicyCache:
+    """Policy load plane: validate → compile snapshot → generation.
+
+    Invalid reload enters unhealthy fail-closed (all authorize DENY). Last-good
+    snapshot is retained for doctor/diagnostics only and is NOT used for live
+    authorization while unhealthy.
+    """
+
     def __init__(self, config_path: Path):
         self.config_path = config_path
         self.lock = threading.RLock()
         self.mtime = None
-        self.state = EG.empty_egress_state()
         self.path = None
         self.cfg = {}
         self.load_error = "not loaded"
+        self.engine = EG.PolicyEngine()
         self.reload(force=True)
 
     def reload(self, force: bool = False) -> None:
@@ -125,21 +350,29 @@ class PolicyCache:
                 self.path = EG.egress_control_path(self.cfg)
                 mtime = self.path.stat().st_mtime if self.path.exists() else None
                 if not force and mtime == self.mtime and self.load_error is None:
-                    return
+                    snap = self.engine.snapshot()
+                    if snap is not None and snap.healthy:
+                        return
                 if not self.path.exists():
                     self.mtime = mtime
                     self.load_error = "%s missing" % self.path.name
+                    self.engine.mark_unhealthy(self.load_error)
                     return
-                self.state = EG.load_egress_state(path=self.path, cfg=self.cfg)
+                snap = self.engine.load_from_path(self.path, cfg=self.cfg)
                 self.mtime = mtime
-                self.load_error = None
+                self.load_error = None if snap.healthy else (snap.load_error or "unhealthy")
             except Exception as exc:
                 self.load_error = str(exc)
+                self.engine.mark_unhealthy(str(exc))
 
     def snapshot(self):
+        """Return (state_or_None, load_error, cfg, policy_snapshot)."""
         with self.lock:
             self.reload(force=False)
-            return dict(self.state), self.load_error, dict(self.cfg)
+            snap = self.engine.snapshot()
+            if snap is None or not snap.healthy:
+                return None, (self.load_error or "policy unhealthy"), dict(self.cfg), snap
+            return dict(snap.state), None, dict(self.cfg), snap
 
 
 class GatewayState:
@@ -150,15 +383,26 @@ class GatewayState:
         resolve_fn: Callable[[str], list[str]] = default_resolve,
         connect_fn: Callable[..., socket.socket] = default_connect,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+        per_source_limit: int = DEFAULT_PER_SOURCE_LIMIT,
+        dns_pending_limit: int = DEFAULT_DNS_PENDING_LIMIT,
     ):
         self.cache = cache
         self.resolve_fn = resolve_fn
         self.connect_fn = connect_fn
         self.max_concurrent = max_concurrent
+        self.per_source_limit = per_source_limit
+        self.dns_pending_limit = dns_pending_limit
         self._sem = threading.BoundedSemaphore(max_concurrent)
         self._active = 0
         self._lock = threading.Lock()
         self.shutting_down = False
+        self._per_source: dict[str, int] = {}
+        self._sessions: dict[str, dict] = {}
+        self.dns = DnsResolver(
+            resolve_fn=resolve_fn,
+            pending_limit=dns_pending_limit,
+            timeout=DNS_TIMEOUT,
+        )
 
     def try_acquire(self) -> bool:
         if self.shutting_down:
@@ -172,6 +416,37 @@ class GatewayState:
         with self._lock:
             self._active += delta
             return self._active
+
+    def try_acquire_source(self, source_ip: str) -> bool:
+        with self._lock:
+            cur = int(self._per_source.get(source_ip, 0))
+            if cur >= int(self.per_source_limit):
+                return False
+            self._per_source[source_ip] = cur + 1
+            return True
+
+    def release_source(self, source_ip: str) -> None:
+        with self._lock:
+            cur = int(self._per_source.get(source_ip, 0))
+            if cur <= 1:
+                self._per_source.pop(source_ip, None)
+            else:
+                self._per_source[source_ip] = cur - 1
+
+    def register_session(self, session: dict) -> None:
+        with self._lock:
+            self._sessions[session["session_id"]] = session
+
+    def unregister_session(self, session_id: str) -> None:
+        with self._lock:
+            self._sessions.pop(session_id, None)
+
+    def update_session_generation(self, session_id: str, generation: int) -> None:
+        with self._lock:
+            sess = self._sessions.get(session_id)
+            if sess is not None:
+                sess["policy_generation"] = int(generation)
+
 
 
 def _send_simple_sock(sock: socket.socket, code: int, reason: str, body: bytes = b"") -> None:
@@ -393,7 +668,11 @@ def _connection_hop_headers(headers: dict[str, str]) -> set[str]:
 
 
 def _read_exact_body(sock: socket.socket, body_prefix: bytes, content_length: int) -> bytes:
-    """Return exactly content_length body bytes. Reject excess already buffered."""
+    """Return exactly content_length body bytes. Reject excess already buffered.
+
+    Prefer _stream_request_body for large uploads — this helper remains for
+    small framing checks and unit-test compatibility.
+    """
     if content_length < 0:
         raise EG.EgressError("invalid Content-Length")
     if len(body_prefix) > content_length:
@@ -404,12 +683,47 @@ def _read_exact_body(sock: socket.socket, body_prefix: bytes, content_length: in
     chunks = [body_prefix]
     got = len(body_prefix)
     while got < content_length:
-        chunk = sock.recv(min(RELAY_BUF, content_length - got))
+        chunk = sock.recv(min(STREAM_BUF, content_length - got))
         if not chunk:
             raise EG.EgressError("incomplete request body")
         chunks.append(chunk)
         got += len(chunk)
     return b"".join(chunks)
+
+
+def _stream_request_body(
+    client: socket.socket,
+    upstream: socket.socket,
+    body_prefix: bytes,
+    content_length: int,
+) -> None:
+    """Stream exactly content_length bytes client→upstream with a bounded buffer.
+
+    Never forwards beyond Content-Length. Excess bytes already buffered with
+    headers are rejected before any upstream body I/O.
+    """
+    if content_length < 0:
+        raise EG.EgressError("invalid Content-Length")
+    if len(body_prefix) > content_length:
+        raise EG.EgressError("request body exceeds Content-Length")
+    remaining = content_length
+    if body_prefix:
+        upstream.sendall(body_prefix)
+        remaining -= len(body_prefix)
+    client.settimeout(CLIENT_BODY_TIMEOUT)
+    while remaining > 0:
+        chunk = client.recv(min(STREAM_BUF, remaining))
+        if not chunk:
+            raise EG.EgressError("incomplete request body")
+        if len(chunk) > remaining:
+            raise EG.EgressError("request body exceeds Content-Length")
+        upstream.sendall(chunk)
+        remaining -= len(chunk)
+
+
+def _new_ids() -> tuple[str, str]:
+    import secrets
+    return secrets.token_hex(8), secrets.token_hex(8)
 
 
 def _authorize_and_connect(
@@ -420,37 +734,55 @@ def _authorize_and_connect(
     port: int,
     method: str,
     protocol: str,
+    connection_id: Optional[str] = None,
 ) -> tuple[Optional[socket.socket], dict]:
-    state, load_error, cfg = gw.cache.snapshot()
-    decision = EG.authorize_request(
-        state,
-        source_ip=source_ip,
-        hostname=hostname,
-        port=port,
-        protocol=protocol,
-        load_error=load_error,
-        method=method,
-    )
+    state, load_error, cfg, snap = gw.cache.snapshot()
+    if snap is not None:
+        decision = EG.authorize_against_snapshot(
+            snap,
+            source_ip=source_ip,
+            hostname=hostname,
+            port=port,
+            protocol=protocol,
+            method=method,
+        )
+    else:
+        decision = EG.authorize_request(
+            state,
+            source_ip=source_ip,
+            hostname=hostname,
+            port=port,
+            protocol=protocol,
+            load_error=load_error,
+            method=method,
+        )
     decision["method"] = method
     decision["timestamp"] = EG.utc_now_iso()
-    EG.emit_conn_log(decision, cfg=cfg)
-
+    if connection_id:
+        decision["connection_id"] = connection_id
     if decision.get("decision") != EG.DECISION_ALLOW:
+        decision["outcome"] = EG.AUDIT_POLICY_DENY
+        EG.emit_conn_log(decision, cfg=cfg)
         return None, decision
 
     try:
-        resolved = gw.resolve_fn(hostname)
-        validated = EG.validate_resolved_addresses(resolved)
+        validated = gw.dns.resolve_validated(hostname)
     except EG.EgressError as exc:
         decision = dict(decision)
         decision["decision"] = EG.DECISION_DENY
         msg = str(exc).lower()
-        if "unsafe" in msg:
+        if "pending limit" in msg:
+            decision["reason"] = EG.REASON_RESOURCE_LIMIT
+            decision["outcome"] = EG.AUDIT_RESOURCE_LIMIT
+        elif "unsafe" in msg:
             decision["reason"] = EG.REASON_DNS_UNSAFE
-        elif "dns" in msg or "resolution" in msg or "no addresses" in msg:
+            decision["outcome"] = EG.AUDIT_DNS_UNSAFE
+        elif "dns" in msg or "resolution" in msg or "no addresses" in msg or "timeout" in msg:
             decision["reason"] = EG.REASON_DNS_FAILURE
+            decision["outcome"] = EG.AUDIT_DNS_FAILURE
         else:
             decision["reason"] = EG.REASON_UNSAFE_DESTINATION
+            decision["outcome"] = EG.AUDIT_DNS_UNSAFE
         decision["timestamp"] = EG.utc_now_iso()
         EG.emit_conn_log(decision, cfg=cfg)
         return None, decision
@@ -458,24 +790,26 @@ def _authorize_and_connect(
         decision = dict(decision)
         decision["decision"] = EG.DECISION_DENY
         decision["reason"] = EG.REASON_DNS_FAILURE
+        decision["outcome"] = EG.AUDIT_DNS_FAILURE
         decision["timestamp"] = EG.utc_now_iso()
         EG.emit_conn_log(decision, cfg=cfg)
         return None, decision
 
-    last_exc = None
-    for ip in validated:
-        try:
-            sock = gw.connect_fn(ip, port, hostname, CONNECT_TIMEOUT)
-            return sock, decision
-        except OSError as exc:
-            last_exc = exc
-            continue
-    decision = dict(decision)
-    decision["decision"] = EG.DECISION_DENY
-    decision["reason"] = EG.REASON_DNS_FAILURE if last_exc else EG.REASON_UNSAFE_DESTINATION
-    decision["timestamp"] = EG.utc_now_iso()
-    EG.emit_conn_log(decision, cfg=cfg)
-    return None, decision
+    try:
+        sock = happy_eyeballs_connect(
+            gw.connect_fn, validated, port, hostname, total_timeout=CONNECT_TIMEOUT
+        )
+        decision["outcome"] = EG.AUDIT_CONNECTED
+        EG.emit_conn_log(decision, cfg=cfg)
+        return sock, decision
+    except OSError:
+        decision = dict(decision)
+        decision["decision"] = EG.DECISION_DENY
+        decision["reason"] = EG.REASON_CONNECT_FAILURE
+        decision["outcome"] = EG.AUDIT_CONNECT_FAILURE
+        decision["timestamp"] = EG.utc_now_iso()
+        EG.emit_conn_log(decision, cfg=cfg)
+        return None, decision
 
 
 def _parse_tls_client_hello_sni(buf: bytes) -> tuple[str, Optional[str]]:
@@ -561,6 +895,10 @@ def _extract_sni_from_client_hello_body(body: bytes) -> tuple[str, Optional[str]
                 return "error", "truncated extension"
             ext_data = body[idx : idx + ext_len]
             idx += ext_len
+            if ext_type == TLS_EXT_ENCRYPTED_CLIENT_HELLO:
+                # RFC 9849 Encrypted ClientHello — destination identity cannot
+                # be verified under strict HTTPS policy without interception.
+                return "error", "ECH present"
             if ext_type == 0x0000:  # server_name
                 if sni_value is not None:
                     return "error", "duplicate SNI"
@@ -639,8 +977,38 @@ def _read_and_validate_client_hello(
         buf.extend(chunk)
 
 
-def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None:
-    """Bidirectional relay with backpressure (bounded buffers, writable select)."""
+def _session_still_authorized(gw: GatewayState, session: dict) -> bool:
+    """Option B: re-authorize against current compiled snapshot only."""
+    _state, _err, _cfg, snap = gw.cache.snapshot()
+    decision = EG.authorize_against_snapshot(
+        snap,
+        source_ip=session["source_ip"],
+        hostname=session["hostname"],
+        port=int(session["port"]),
+        protocol=session["protocol"],
+        method=session.get("method") or "CONNECT",
+    )
+    if decision.get("decision") == EG.DECISION_ALLOW:
+        gen = decision.get("policy_generation")
+        if gen is not None:
+            gw.update_session_generation(session["session_id"], int(gen))
+            session["policy_generation"] = int(gen)
+        return True
+    return False
+
+
+def _relay_bidirectional(
+    client: socket.socket,
+    upstream: socket.socket,
+    *,
+    gw: Optional[GatewayState] = None,
+    session: Optional[dict] = None,
+    cfg: Optional[dict] = None,
+) -> str:
+    """Bidirectional relay with backpressure and Option B revalidation.
+
+    Returns an audit outcome token.
+    """
     client.setblocking(False)
     upstream.setblocking(False)
     c2u = bytearray()
@@ -650,6 +1018,8 @@ def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None
     client_open_w = True
     upstream_open_w = True
     last_data = time.monotonic()
+    last_revalidate = time.monotonic()
+    outcome = EG.AUDIT_CLIENT_CLOSED
 
     def _close_all():
         for sock in (client, upstream):
@@ -660,10 +1030,40 @@ def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None
 
     try:
         while True:
+            if gw is not None and session is not None:
+                now = time.monotonic()
+                if now - last_revalidate >= SESSION_REVALIDATE_INTERVAL:
+                    last_revalidate = now
+                    snap = gw.cache.engine.snapshot()
+                    cur_gen = int(snap.generation) if snap is not None else -1
+                    if cur_gen != int(session.get("policy_generation") or -1):
+                        if not _session_still_authorized(gw, session):
+                            outcome = EG.AUDIT_POLICY_REVOKED
+                            if cfg is not None:
+                                EG.emit_conn_log(
+                                    {
+                                        "timestamp": EG.utc_now_iso(),
+                                        "connection_id": session.get("connection_id"),
+                                        "session_id": session.get("session_id"),
+                                        "source_ip": session.get("source_ip"),
+                                        "hostname": session.get("hostname"),
+                                        "port": session.get("port"),
+                                        "protocol": session.get("protocol"),
+                                        "method": session.get("method"),
+                                        "profile_id": session.get("profile_id"),
+                                        "decision": EG.DECISION_DENY,
+                                        "reason": EG.REASON_POLICY_REVOKED,
+                                        "outcome": EG.AUDIT_POLICY_REVOKED,
+                                        "policy_generation": cur_gen,
+                                    },
+                                    cfg=cfg,
+                                )
+                            return outcome
+
             if not client_open_w and not upstream_open_w and not c2u and not u2c:
-                return
+                return outcome
             if not client_open_r and not upstream_open_r and not c2u and not u2c:
-                return
+                return outcome
 
             rlist = []
             wlist = []
@@ -677,7 +1077,7 @@ def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None
                 wlist.append(client)
 
             if not rlist and not wlist:
-                return
+                return outcome
 
             readable, writable, errored = select.select(
                 rlist,
@@ -686,10 +1086,11 @@ def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None
                 1.0,
             )
             if errored:
-                return
+                return outcome
             if not readable and not writable:
                 if time.monotonic() - last_data > IDLE_TIMEOUT:
-                    return
+                    outcome = EG.AUDIT_IDLE_TIMEOUT
+                    return outcome
                 continue
 
             for sock in readable:
@@ -698,7 +1099,7 @@ def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None
                 except BlockingIOError:
                     continue
                 except OSError:
-                    return
+                    return outcome
                 if not data:
                     if sock is client:
                         client_open_r = False
@@ -733,7 +1134,7 @@ def _relay_bidirectional(client: socket.socket, upstream: socket.socket) -> None
                 except BlockingIOError:
                     continue
                 except OSError:
-                    return
+                    return outcome
                 if sent:
                     del buf[:sent]
                     last_data = time.monotonic()
@@ -848,8 +1249,8 @@ def _deny_sni(
     client: socket.socket,
     upstream: socket.socket,
 ) -> None:
-    state, load_error, cfg = gw.cache.snapshot()
-    del state, load_error
+    state, load_error, cfg, _snap = gw.cache.snapshot()
+    del state, load_error, _snap
     event = {
         "timestamp": EG.utc_now_iso(),
         "source_ip": source_ip,
@@ -907,7 +1308,7 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         try:
             host, port = EG.parse_authority_host_port(target)
         except EG.EgressError:
-            state, load_error, cfg = gw.cache.snapshot()
+            state, load_error, cfg, _snap = gw.cache.snapshot()
             del state, load_error
             EG.emit_conn_log(
                 {
@@ -989,7 +1390,7 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         else:
             body = _read_exact_body(request, body_prefix, content_length)
     except EG.EgressError:
-        state, load_error, cfg = gw.cache.snapshot()
+        state, load_error, cfg, _snap = gw.cache.snapshot()
         del state, load_error
         EG.emit_conn_log(
             {

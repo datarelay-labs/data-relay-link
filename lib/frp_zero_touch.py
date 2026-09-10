@@ -119,41 +119,77 @@ def short_url_windows_command(hostname, ticket):
 
 def sha256sums_url_for_installer(installer_url):
     installer = str(installer_url or '').strip()
-    suffix = '/dist/bootstrap-client.ps1'
-    if not installer.endswith(suffix):
-        raise ValueError(
-            'Windows installer URL must end with /dist/bootstrap-client.ps1'
-        )
-    sums_url = installer[:-len(suffix)] + '/SHA256SUMS'
-    if not sums_url.lower().startswith('https://'):
-        raise ValueError('SHA256SUMS URL must be HTTPS')
-    return sums_url
+    if not installer.lower().startswith('https://'):
+        raise ValueError('installer URL must be HTTPS')
+    for suffix in ('/dist/bootstrap-client.ps1', '/dist/bootstrap-client.sh'):
+        if installer.endswith(suffix):
+            return installer[: -len(suffix)] + '/SHA256SUMS'
+    # Non-release layouts (tests / custom mirrors): SHA256SUMS beside the installer.
+    if '/' not in installer[8:]:
+        raise ValueError('installer URL path is incomplete')
+    parent = installer.rsplit('/', 1)[0]
+    return parent + '/SHA256SUMS'
+
+
+def linux_installer_sum_names(installer_url):
+    """Return candidate SHA256SUMS pathnames for the Linux installer artifact."""
+    installer = str(installer_url or '').strip()
+    if installer.endswith('/dist/bootstrap-client.sh'):
+        return ('dist/bootstrap-client.sh',)
+    name = installer.rsplit('/', 1)[-1]
+    if not name:
+        raise ValueError('Linux installer URL must include a filename')
+    if name == 'bootstrap-client.sh':
+        return ('dist/bootstrap-client.sh', 'bootstrap-client.sh')
+    return (name,)
 
 
 def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installer_url):
     """Return a small generic bootstrap script that reuses the zt1 installer path.
 
-    Contains only locator/trust/ticket data required to continue through the
-    existing redeem + enroll flow. Enrollment profile stays server-side.
+    Downloads installer + SHA256SUMS, verifies the exact expected hash, then
+    executes. Same-origin HTTPS checksum integrity — not signed authentication.
     """
     package = encode_zero_touch_package(allocator_url, ca_sha256, ticket)
     installer = str(installer_url or '').strip()
     if not installer.lower().startswith('https://'):
         raise ValueError('installer URL must be HTTPS')
+    sums_url = sha256sums_url_for_installer(installer)
+    expected_names = linux_installer_sum_names(installer)
+    names_csv = ','.join(expected_names)
     lines = [
         '#!/bin/bash',
         '# Data Relay Link — Zero-Touch short URL bootstrap',
         '# Generic entry script. Enrollment profile remains server-side.',
+        '# Integrity: download SHA256SUMS + installer, verify, then execute.',
+        '# Not a cryptographic signature — same-origin HTTPS checksum only.',
         'set -euo pipefail',
         'if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then',
         '  echo "ERROR: re-run as: curl -fsSL <bootstrap-url> | sudo bash" >&2',
         '  exit 1',
         'fi',
-        'INSTALLER=%s' % shell_quote(installer),
+        'INSTALLER_URL=%s' % shell_quote(installer),
+        'SUMS_URL=%s' % shell_quote(sums_url),
+        'EXPECTED_NAMES=%s' % shell_quote(names_csv),
         'PACKAGE=%s' % shell_quote(package),
+        'WORKDIR="$(mktemp -d /tmp/drlink-bootstrap.XXXXXX)"',
+        'cleanup() { rm -rf "$WORKDIR"; }',
+        'trap cleanup EXIT',
+        'umask 077',
+        'SUMS_FILE="$WORKDIR/SHA256SUMS"',
+        'INSTALLER_FILE="$WORKDIR/bootstrap-client.sh"',
+        'curl -fsSL --proto "=https" --tlsv1.2 "$SUMS_URL" -o "$SUMS_FILE"',
+        'curl -fsSL --proto "=https" --tlsv1.2 "$INSTALLER_URL" -o "$INSTALLER_FILE"',
+        'WANT="$(awk -v names="$EXPECTED_NAMES" \'BEGIN{split(names,a,","); for(i in a) ok[a[i]]=1; c=0} ($2 in ok){print tolower($1); c++} END{if(c!=1) exit 1}\' "$SUMS_FILE")"',
+        'GOT="$(sha256sum "$INSTALLER_FILE" | awk \'{print tolower($1)}\')"',
+        'if [[ "$GOT" != "$WANT" ]]; then',
+        '  echo "ERROR: installer SHA256 mismatch (integrity check failed)" >&2',
+        '  exit 1',
+        'fi',
+        'chmod 0700 "$INSTALLER_FILE"',
         '# Stock OS trust for the publicly trusted installer URL only.',
         '# Allocator/Private-CA trust comes from the opaque package pin.',
-        'curl -fsSL --proto "=https" --tlsv1.2 "$INSTALLER" | bash -s -- "$PACKAGE"',
+        'bash "$INSTALLER_FILE" "$PACKAGE"',
         '',
     ]
     return '\n'.join(lines)
