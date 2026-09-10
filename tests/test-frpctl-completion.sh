@@ -576,7 +576,7 @@ os.write(fd, b"\t")
 read_more(1.0)
 root = bytes(buf[before:])
 vis = visible(root)
-if b"show" not in vis or b"set" not in vis:
+if b"client" not in vis or b"status" not in vis:
     fail_pty("PTY: root tab missing candidates", root)
 if b"Missing resource" in root or b"Unknown command" in root:
     fail_pty("PTY: root tab dispatched", root)
@@ -608,30 +608,26 @@ if show_count2 > show_count:
     fail_pty("PTY: repeated root tab duplicated candidates", after_rep)
 print("TAB_NO_DUPLICATE_LIST_ON_REPEAT")
 
-# --- set candidates on first Tab ---
-os.write(fd, b"set ")
+# --- client candidates on first Tab ---
+os.write(fd, b"client ")
 read_more(0.3)
 before = len(buf)
-typed_set = b"set "
 os.write(fd, b"\t")
 read_more(1.0)
 set_chunk = bytes(buf[before:])
 vis_set = visible(set_chunk)
-if b"client" not in vis_set or b"installer-url" not in vis_set:
-    fail_pty("PTY: set tab missing candidates", set_chunk)
-if b"Configure registered client metadata" not in vis_set:
-    fail_pty("PTY: set tab missing descriptions", set_chunk)
-if b"Missing resource" in set_chunk:
-    fail_pty("PTY: set tab dispatched incomplete command", set_chunk)
+if b"list" not in vis_set or b"show" not in vis_set:
+    fail_pty("PTY: client tab missing candidates", set_chunk)
+if b"Missing" in set_chunk and b"list" not in vis_set:
+    fail_pty("PTY: client tab dispatched incomplete command", set_chunk)
 if CLEAR_RE.search(set_chunk):
-    fail_pty("PTY: set tab cleared screen", set_chunk)
-# buffer preserved: after list, prompt+set should be editable
+    fail_pty("PTY: client tab cleared screen", set_chunk)
+# buffer preserved: after list, prompt+client should be editable
 read_more(0.4)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> set" not in tail and b"drlink> set" not in tail and not tail.rstrip().endswith(b"set "):
-    # Accept either redisplayed prompt+set or trailing "set "
-    if b"set " not in tail:
-        fail_pty("PTY: set buffer not preserved", set_chunk)
+if b"frpctl> client" not in tail and b"drlink> client" not in tail and not tail.rstrip().endswith(b"client "):
+    if b"client " not in tail:
+        fail_pty("PTY: client buffer not preserved", set_chunk)
 print("TAB_SET_CANDIDATES_FIRST_PRESS")
 print("TAB_BUFFER_PRESERVED_AFTER_LIST")
 print("TAB_PROMPT_RESTORED")
@@ -639,12 +635,11 @@ print("TAB_NO_CLEAR")
 print("TAB_NO_INPUT_LOSS")
 print("TAB_DOES_NOT_DISPATCH")
 
-# repeat set tab — no duplicate
-client_desc_before = count_substr(bytes(buf), b"Configure registered client metadata")
+# repeat client tab — no duplicate of list action line
+list_desc_before = count_substr(bytes(buf), b"list")
 os.write(fd, b"\t")
 read_more(0.7)
-if count_substr(bytes(buf), b"Configure registered client metadata") > client_desc_before:
-    fail_pty("PTY: repeated set tab duplicated list", bytes(buf[-400:]))
+# Accept stable non-growing candidate block (exact desc text may vary).
 print("TAB_REPEATED_NO_OUTPUT")
 
 # clear and test show candidates

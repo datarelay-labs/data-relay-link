@@ -430,8 +430,8 @@ set +e
 notty_rc=$?
 set -e
 [[ "$notty_rc" -ne 0 ]] || fail "no-tty interactive should fail"
-grep -q 'interactive frpctl requires a TTY' "$WORKDIR/notty.err" || fail "no-tty message"
-grep -q 'Use: frpctl <command>' "$WORKDIR/notty.err" || fail "no-tty hint"
+grep -qE "interactive (frpctl|drlink) requires a TTY" "$WORKDIR/notty.err" || fail "no-tty message"
+grep -qE "Use: (frpctl|drlink) <command>" "$WORKDIR/notty.err" || fail "no-tty hint"
 pass "FRPCTL_NO_TTY_INTERACTIVE_FAILS_CLEANLY"
 
 "$CTL" status </dev/null >"$WORKDIR/notty-status.out"
