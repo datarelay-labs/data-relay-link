@@ -10,10 +10,10 @@
 # uninstall must preserve it while a client role remains (asymmetric preserve).
 
 # Libraries preserved by server uninstall when a client role is still present.
-FRP_ROLE_SERVER_PRESERVE_IF_CLIENT=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py frpctl drlink '
+FRP_ROLE_SERVER_PRESERVE_IF_CLIENT=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_cli_catalog.py frp_ctl_repl.py frpctl drlink '
 
 # Libraries removed by client uninstall only when server role is absent.
-FRP_ROLE_CLIENT_PRESERVE_IF_SERVER=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py frp-role-ownership.sh '
+FRP_ROLE_CLIENT_PRESERVE_IF_SERVER=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_cli_catalog.py frp_ctl_repl.py frp-role-ownership.sh '
 
 # Always removed by client uninstall.
 FRP_ROLE_CLIENT_ONLY_LIB_BASENAMES=' frp-client-common.sh frp-macos.sh com.datarelay.drlink.frpc.plist '

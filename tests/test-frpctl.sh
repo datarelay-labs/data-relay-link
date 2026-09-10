@@ -115,14 +115,21 @@ write_server_tree "$BOTH"
 
 # --- Help / unknown (direct mode)
 "$CTL" help >"$WORKDIR/help.out"
-grep -q 'only command you need to remember' "$WORKDIR/help.out" || fail "help remember line"
-grep -qE 'sudo (drlink|frpctl)' "$WORKDIR/help.out" || fail "help sudo drlink"
-grep -q 'frps' "$WORKDIR/help.out" || fail "help mentions frps"
-grep -q 'frpc' "$WORKDIR/help.out" || fail "help mentions frpc"
+grep -q 'Grammar: <resource> <action>' "$WORKDIR/help.out" || fail "help grammar line"
+grep -qE 'status[[:space:]]+Host status' "$WORKDIR/help.out" || fail "help status resource"
 grep -q 'doctor' "$WORKDIR/help.out" || fail "help doctor"
-grep -q 'persistent management CLI' "$WORKDIR/help.out" || fail "help persistent CLI"
+grep -qE 'Tab|help workflows|Navigation' "$WORKDIR/help.out" || fail "help discovery hint"
+# Role-aware root help: server tree includes egress
+export FRP_CTL_TEST_ROOT="$SERVER"
+export FRP_DEPLOY_TEST_ROOT="$SERVER"
+"$CTL" help >"$WORKDIR/help-server.out"
+grep -q 'egress' "$WORKDIR/help-server.out" || fail "server help egress resource"
+unset FRP_CTL_TEST_ROOT FRP_DEPLOY_TEST_ROOT
 "$CTL" --help >"$WORKDIR/help2.out"
 grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/help2.out" || fail "--help usage"
+grep -q 'only command you need to remember' "$WORKDIR/help2.out" || fail "--help remember line"
+grep -q 'frps' "$WORKDIR/help2.out" || fail "--help mentions frps"
+grep -q 'frpc' "$WORKDIR/help2.out" || fail "--help mentions frpc"
 if "$CTL" definitely-not-a-command >"$WORKDIR/unknown.out" 2>"$WORKDIR/unknown.err"; then
   fail "unknown command should fail"
 fi
@@ -728,10 +735,15 @@ pass "LEGACY_TAG_KEY_EQUALS_VALUE_COMPAT"
 unset FRP_CTL_DRY_RUN
 
 run_repl "$SERVER" "$WORKDIR/ctx-root.out" "?" exit || fail "root ?"
-grep -q 'show' "$WORKDIR/ctx-root.out" || fail "root ? show"
-grep -q 'set' "$WORKDIR/ctx-root.out" || fail "root ? set"
+grep -qE 'client[[:space:]]+Registered clients|^\s+client\s' "$WORKDIR/ctx-root.out" || fail "root ? client"
+grep -qE 'status[[:space:]]+Host status|^\s+status\s' "$WORKDIR/ctx-root.out" || fail "root ? status"
+grep -q 'egress' "$WORKDIR/ctx-root.out" || fail "root ? egress"
 if grep -q 'Grammar: <verb>' "$WORKDIR/ctx-root.out"; then
   fail "root ? dumped full syntax tree"
+fi
+# Canonical root ? must not advertise verb-first discovery as primary.
+if grep -qE '^\s+show\s+|^Available:.*\n\s+show\s' "$WORKDIR/ctx-root.out"; then
+  fail "root ? still lists verb-first show as primary"
 fi
 pass "CONTEXT_HELP_ROOT"
 pass "ROOT_HELP_SIMPLIFIED"

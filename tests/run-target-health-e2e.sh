@@ -37,6 +37,7 @@ for f in \
   lib/frp_health_check.py \
   lib/frp-client-common.sh \
   lib/frp_ctl_grammar.py \
+  lib/frp_cli_catalog.py \
   tools/frp-client \
   tools/frpctl \
   tools/drlink
@@ -46,6 +47,7 @@ done
 sshx "$CLIENT_HOST" "sudo install -m 0644 $TMP_SYNC/frp_health_check.py /usr/local/lib/drlink/frp_health_check.py
 sudo install -m 0644 $TMP_SYNC/frp-client-common.sh /usr/local/lib/drlink/frp-client-common.sh
 sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_SYNC/frp_cli_catalog.py /usr/local/lib/drlink/frp_cli_catalog.py
 sudo install -m 0755 $TMP_SYNC/frp-client /usr/local/bin/frp-client
 sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/lib/drlink/frpctl
 sudo install -m 0755 $TMP_SYNC/drlink /usr/local/bin/drlink

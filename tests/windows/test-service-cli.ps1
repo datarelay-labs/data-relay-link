@@ -54,8 +54,8 @@ try {
     & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath disable-service rdp 2>&1 | Out-String | Out-Null
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'disable rdp succeeds while web is still enabled'
     $webDisableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath disable-service web 2>&1 | Out-String
-    Assert-FrpTrue ($LASTEXITCODE -ne 0) 'cannot disable the last enabled service'
-    Assert-FrpTrue ($webDisableOut -match 'at least one enabled service') 'last-enabled-service guard message'
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'last enabled service may be disabled (management-only)'
+    Assert-FrpTrue ($webDisableOut -match 'disabled') 'disable last service message'
 
     $discardOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath discard 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'discard exits 0'

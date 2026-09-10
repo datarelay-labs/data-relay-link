@@ -36,6 +36,7 @@ deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/dr
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_health_check.py" /usr/local/lib/drlink/frp_health_check.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/tools/frp-client" /usr/local/sbin/frp-client 755
 deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/drlink/frp_ctl_grammar.py 644
+deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_cli_catalog.py" /usr/local/lib/drlink/frp_cli_catalog.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/tools/frpctl" /usr/local/lib/drlink/frpctl 755
 deploy_file "$CLIENT_HOST" "$ROOT/tools/drlink" /usr/local/bin/drlink 755
 

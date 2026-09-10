@@ -120,6 +120,7 @@ for f in \
   tools/frpctl \
   tools/drlink \
   lib/frp_ctl_grammar.py \
+  lib/frp_cli_catalog.py \
   tools/frp-release-service \
   tools/frp-client-info
  do
@@ -128,6 +129,7 @@ done
 sshx "$SERVER" "sudo install -m 0644 $TMP_SYNC/frp_access_control.py /usr/local/lib/drlink/frp_access_control.py
 sudo install -m 0700 $TMP_SYNC/frp-access-plugin.py /usr/local/lib/drlink/frp-access-plugin.py
 sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_SYNC/frp_cli_catalog.py /usr/local/lib/drlink/frp_cli_catalog.py
 sudo install -m 0755 $TMP_SYNC/frp-access /usr/local/sbin/frp-access
 sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/lib/drlink/frpctl
 sudo install -m 0755 $TMP_SYNC/drlink /usr/local/bin/drlink

@@ -2137,10 +2137,9 @@ frpctl_dispatch_canonical() {
       ;;
     help)
       extra_args="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")"
-      if [[ "${FRP_CTL_REPL:-}" == "1" || -n "$extra_args" ]]; then
-        # shellcheck disable=SC2086
-        frpctl_repl_help $extra_args
-      else
+      # Always render from the command catalog so shell and REPL help stay aligned.
+      # shellcheck disable=SC2086
+      if ! frpctl_repl_help $extra_args; then
         frpctl_usage
       fi
       ;;

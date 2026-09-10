@@ -513,7 +513,7 @@ if grep -q 'Enrollment Code' "$WORKDIR/enable.out"; then
 fi
 pass "re-enable reuses the same public port"
 
-# Last enabled service cannot be disabled
+# Management-only: disabling all services is allowed; reservations stay
 CAND="$WORKDIR/cand-last.json"
 python3 - "$STATE" "$CAND" <<'PY'
 import json,sys
@@ -524,17 +524,34 @@ d['services']['grafana']['enabled']=False
 Path(sys.argv[2]).write_text(json.dumps(d, indent=2, sort_keys=True)+'\n')
 PY
 export FRP_CLIENT_CANDIDATE="$CAND"
-if "$ROOT/tools/frp-client" apply >"$WORKDIR/last.out" 2>"$WORKDIR/last.err"; then
-  fail "disabling last services should fail"
-fi
-grep -q 'at least one enabled service is required' "$WORKDIR/last.err" || fail "last-service error"
-python3 - "$STATE" <<'PY' || fail "last disable mutated state"
+"$ROOT/tools/frp-client" apply >"$WORKDIR/last.out" 2>"$WORKDIR/last.err" || fail "management-only apply failed"
+grep -qi 'management-only' "$WORKDIR/last.out" || fail "management-only message missing"
+python3 - "$STATE" "$TREE/etc/frp/frpc.toml" <<'PY' || fail "management-only state"
 import json,sys
 from pathlib import Path
 d=json.loads(Path(sys.argv[1]).read_text())
-assert d['services']['ssh']['enabled'] is True
+toml=Path(sys.argv[2]).read_text()
+assert d['services']['ssh']['enabled'] is False
+assert d['services']['grafana']['enabled'] is False
+assert d['services']['ssh']['remote_port']
+assert d['services']['grafana']['remote_port']
+# No enabled proxy stanzas for those services
+assert 'name = "ssh"' not in toml
+assert 'name = "grafana"' not in toml
 PY
-pass "last enabled service cannot be disabled"
+# Re-enable one service from management-only
+CAND="$WORKDIR/cand-from-mgmt.json"
+python3 - "$STATE" "$CAND" <<'PY'
+import json,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+d['services']['ssh']['enabled']=True
+Path(sys.argv[2]).write_text(json.dumps(d, indent=2, sort_keys=True)+'\n')
+PY
+export FRP_CLIENT_CANDIDATE="$CAND"
+"$ROOT/tools/frp-client" apply >"$WORKDIR/from-mgmt.out" 2>"$WORKDIR/from-mgmt.err" || fail "0->1 apply failed"
+grep -q 'ssh' "$TREE/etc/frp/frpc.toml" || fail "ssh proxy missing after re-enable from management-only"
+pass "management-only 1->0 and 0->1 service transitions"
 
 # Invalid signed/auth path: bad enrollment on a legacy client
 CAND="$WORKDIR/cand-bad.json"

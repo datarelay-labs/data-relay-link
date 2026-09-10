@@ -25,6 +25,7 @@ mkdir -p \
 cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_cli_catalog.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/drlink/"
 
 python3 - <<'PY'

@@ -43,6 +43,7 @@ sshx "$SERVER" "sudo rm -rf $TMP_SRV && sudo mkdir -p $TMP_SRV && sudo chmod 777
 for f in \
   lib/frp_support_bundle.py \
   lib/frp_ctl_grammar.py \
+  lib/frp_cli_catalog.py \
   lib/frp_doctor.py \
   tools/frp-support-bundle \
   tools/frpctl \
@@ -52,6 +53,7 @@ do
 done
 sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_support_bundle.py /usr/local/lib/drlink/frp_support_bundle.py
 sudo install -m 0644 $TMP_SRV/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_SRV/frp_cli_catalog.py /usr/local/lib/drlink/frp_cli_catalog.py
 sudo install -m 0644 $TMP_SRV/frp_doctor.py /usr/local/lib/drlink/frp_doctor.py
 sudo install -m 0755 $TMP_SRV/frp-support-bundle /usr/local/sbin/frp-support-bundle
 sudo install -m 0755 $TMP_SRV/frpctl /usr/local/lib/drlink/frpctl
@@ -67,6 +69,7 @@ sshx "$CLIENT" "sudo rm -rf $TMP_CLI && sudo mkdir -p $TMP_CLI && sudo chmod 777
 for f in \
   lib/frp_support_bundle.py \
   lib/frp_ctl_grammar.py \
+  lib/frp_cli_catalog.py \
   lib/frp_doctor.py \
   tools/frp-support-bundle \
   tools/frpctl \
@@ -76,6 +79,7 @@ do
 done
 sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/lib/drlink/frp_support_bundle.py
 sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_CLI/frp_cli_catalog.py /usr/local/lib/drlink/frp_cli_catalog.py
 sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/drlink/frp_doctor.py
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/bin/frp-support-bundle
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/sbin/frp-support-bundle

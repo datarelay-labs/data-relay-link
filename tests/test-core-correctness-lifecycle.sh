@@ -207,7 +207,7 @@ pass "SERVER_PURGE_PRESERVES_CLIENT_ROLE"
 mkdir -p "$TREE/usr/local/lib/drlink" "$TREE/usr/local/bin" \
   "$TREE/etc/frp" "$TREE/etc/drlink"
 for f in frp-common.sh frp_mgmt_auth.py frp-client-common.sh \
-  frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_ctl_repl.py \
+  frp-doctor-common.sh frp_doctor.py frp_ctl_grammar.py frp_cli_catalog.py frp_ctl_repl.py \
   frp-role-ownership.sh frp_project_files.py server-project-files.manifest; do
   cp "$ROOT/lib/$f" "$TREE/usr/local/lib/drlink/" 2>/dev/null \
     || echo "x" >"$TREE/usr/local/lib/drlink/$f"
@@ -226,6 +226,7 @@ FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
   bash "$ROOT/uninstall-server.sh" >/dev/null
 [[ -f "$TREE/usr/local/lib/drlink/frp-doctor-common.sh" ]] || fail "server uninstall removed doctor shared lib"
 [[ -f "$TREE/usr/local/lib/drlink/frp_ctl_grammar.py" ]] || fail "server uninstall removed ctl shared lib"
+[[ -f "$TREE/usr/local/lib/drlink/frp_cli_catalog.py" ]] || fail "server uninstall removed ctl catalog"
 [[ -f "$TREE/usr/local/lib/drlink/frp-client-common.sh" ]] || fail "server uninstall removed client-common"
 [[ -f "$TREE/usr/local/bin/frp-client" ]] || fail "server uninstall removed frp-client"
 [[ ! -f "$TREE/usr/local/lib/drlink/frp-port-allocator.py" ]] || fail "server uninstall left server-only lib"
