@@ -19,7 +19,8 @@
 
 project usr/local/lib/drlink/frp-port-allocator.py 0700 server/frp-port-allocator.py python
 project usr/local/lib/drlink/frp-access-plugin.py 0700 server/frp-access-plugin.py python
-project usr/local/lib/drlink/frp-egress-gateway.py 0700 server/frp-egress-gateway.py python
+# Readable by unprivileged User=drlink-egress (executed via /usr/bin/python3).
+project usr/local/lib/drlink/frp-egress-gateway.py 0644 server/frp-egress-gateway.py python
 project usr/local/lib/drlink/frp_access_control.py 0644 lib/frp_access_control.py python
 project usr/local/lib/drlink/frp_egress_control.py 0644 lib/frp_egress_control.py python
 project usr/local/lib/drlink/frp_service_profiles.py 0644 lib/frp_service_profiles.py python

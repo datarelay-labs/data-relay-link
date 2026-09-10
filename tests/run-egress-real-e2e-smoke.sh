@@ -37,7 +37,7 @@ install -m 0644 /tmp/frp-egress-smoke/frp_public_suffix.py /usr/local/lib/drlink
 install -m 0644 /tmp/frp-egress-smoke/frp_bounded_server.py /usr/local/lib/drlink/frp_bounded_server.py
 install -d -m 0755 /usr/local/lib/drlink/data
 install -m 0644 /tmp/frp-egress-smoke-data/public_suffix_list.dat /usr/local/lib/drlink/data/public_suffix_list.dat
-install -m 0700 /tmp/frp-egress-smoke/frp-egress-gateway.py /usr/local/lib/drlink/frp-egress-gateway.py
+install -m 0644 /tmp/frp-egress-smoke/frp-egress-gateway.py /usr/local/lib/drlink/frp-egress-gateway.py
 install -m 0755 /tmp/frp-egress-smoke/frp-egress /usr/local/sbin/frp-egress
 python3 - <<'PY'
 import importlib.util, json

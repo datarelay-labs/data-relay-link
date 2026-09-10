@@ -117,6 +117,11 @@ for name in (
 client = (root / "lib/frp-client-common.sh").read_text(encoding="utf-8")
 if "frp_cli_catalog.py" not in client:
     raise SystemExit("client packaging missing frp_cli_catalog.py")
+manifest_line = [
+    line for line in manifest.splitlines() if "frp-egress-gateway.py" in line
+]
+if not manifest_line or " 0644 " not in manifest_line[0]:
+    raise SystemExit("frp-egress-gateway.py must be mode 0644 for User=drlink-egress")
 # PSL / machine_id / bounded server are server-side; Windows client is PowerShell-first.
 print("PACKAGING_PARITY=PASS")
 PY
