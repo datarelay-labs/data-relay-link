@@ -120,7 +120,7 @@ grep -q '^RuntimeDirectory=drlink$' "$WORKDIR/allocator-252.service" \
 grep -q '^RuntimeDirectoryMode=0700$' "$WORKDIR/allocator-252.service" \
   || fail "allocator runtime directory mode missing"
 grep -q '^ProtectSystem=strict' "$WORKDIR/allocator-252.service" || fail "modern unit lost strict"
-grep -q '^ReadWritePaths=/var/lib/drlink /var/log/drlink /run/drlink /etc/drlink /etc/frp$' \
+grep -q '^ReadWritePaths=/var/lib/drlink /var/log/drlink /etc/drlink /etc/frp$' \
   "$WORKDIR/allocator-252.service" || fail "allocator writable paths incomplete"
 frp_write_compatible_systemd_unit \
   "$ROOT/server/drlink-frontend.service" \

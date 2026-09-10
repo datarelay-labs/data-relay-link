@@ -18,16 +18,25 @@ sshx "$SERVER_ALIAS" 'hostname; id -u'
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cp "$ROOT/lib/frp_egress_control.py" "$TMP/"
+cp "$ROOT/lib/frp_public_suffix.py" "$TMP/"
+cp "$ROOT/lib/frp_bounded_server.py" "$TMP/"
 cp "$ROOT/server/frp-egress-gateway.py" "$TMP/"
 cp "$ROOT/tools/frp-egress" "$TMP/"
+mkdir -p "$TMP/data"
+cp "$ROOT/lib/data/public_suffix_list.dat" "$TMP/data/"
 
-scpx "$TMP/frp_egress_control.py" "$TMP/frp-egress-gateway.py" "$TMP/frp-egress" \
+scpx "$TMP/frp_egress_control.py" "$TMP/frp_public_suffix.py" "$TMP/frp_bounded_server.py" "$TMP/frp-egress-gateway.py" "$TMP/frp-egress" \
   "${SERVER_ALIAS}:/tmp/frp-egress-smoke/"
+scpx -r "$TMP/data" "${SERVER_ALIAS}:/tmp/frp-egress-smoke-data"
 
 sshx "$SERVER_ALIAS" "sudo bash -s" <<EOF
 set -euo pipefail
 install -d -m 0755 /tmp/frp-egress-smoke
 install -m 0644 /tmp/frp-egress-smoke/frp_egress_control.py /usr/local/lib/drlink/frp_egress_control.py
+install -m 0644 /tmp/frp-egress-smoke/frp_public_suffix.py /usr/local/lib/drlink/frp_public_suffix.py
+install -m 0644 /tmp/frp-egress-smoke/frp_bounded_server.py /usr/local/lib/drlink/frp_bounded_server.py
+install -d -m 0755 /usr/local/lib/drlink/data
+install -m 0644 /tmp/frp-egress-smoke-data/public_suffix_list.dat /usr/local/lib/drlink/data/public_suffix_list.dat
 install -m 0700 /tmp/frp-egress-smoke/frp-egress-gateway.py /usr/local/lib/drlink/frp-egress-gateway.py
 install -m 0755 /tmp/frp-egress-smoke/frp-egress /usr/local/sbin/frp-egress
 python3 - <<'PY'
@@ -43,12 +52,14 @@ cfg=json.loads(cfg_path.read_text())
 cfg.setdefault('egress_control_file','/var/lib/drlink/egress-control.json')
 cfg.setdefault('egress_conn_log_file','/var/log/drlink/egress-conn.jsonl')
 cfg.setdefault('egress_listen_addr','0.0.0.0')
-cfg.setdefault('egress_listen_port', ${PROXY_PORT})
+cfg['egress_listen_port'] = ${PROXY_PORT}
 cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True)+'\\n')
 print('config ready')
 PY
 # Stop previous smoke gateway if any
-pkill -f 'frp-egress-gateway.py --listen-port ${PROXY_PORT}' 2>/dev/null || true
+pkill -f 'frp-egress-gateway.py' 2>/dev/null || true
+sleep 1
+ss -lntp | grep -q ':${PROXY_PORT}' && { echo 'port still busy'; exit 1; } || true
 nohup python3 /usr/local/lib/drlink/frp-egress-gateway.py \
   --config /etc/drlink/config.json \
   --listen-addr 0.0.0.0 --listen-port ${PROXY_PORT} \
