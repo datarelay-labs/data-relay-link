@@ -385,7 +385,7 @@ create_zero_touch() {
   start="$(date +%s)"
   set +e
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo /usr/local/sbin/frp-create-client --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
+    "sudo /usr/local/lib/drlink/frp-create-client --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -413,7 +413,7 @@ create_zero_touch_windows() {
   start="$(date +%s)"
   set +e
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo /usr/local/sbin/frp-create-client --one-line --platform windows --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
+    "sudo /usr/local/lib/drlink/frp-create-client --one-line --platform windows --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
