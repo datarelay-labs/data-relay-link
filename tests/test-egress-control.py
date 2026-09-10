@@ -1417,7 +1417,8 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         sock.close()
 
     def test_http_body_streaming_large(self):
-        size = 2 * 1024 * 1024  # 2MiB — must not require full in-memory buffer on gateway side
+        # Above BODY_MEMORY_THRESHOLD → disk spool; RSS must not hold full body.
+        size = 2 * 1024 * 1024
         body = b"A" * size
         req = (
             b"POST http://allowed.test/upload HTTP/1.1\r\n"
@@ -1426,6 +1427,7 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             b"Connection: close\r\n"
             b"\r\n"
         ) % size + body
+        self.assertGreater(size, self.GW.BODY_MEMORY_THRESHOLD)
         with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=30) as sock:
             sock.sendall(req)
             sock.settimeout(30)
@@ -1440,6 +1442,35 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         self.assertIn(b"POST /upload HTTP/1.1", upstream)
         self.assertIn(b"A" * 1024, upstream)
         self.assertGreaterEqual(len(upstream), size)
+
+    def test_session_terminal_outcome_logged(self):
+        hello = build_client_hello("allowed.test")
+        s = socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5)
+        try:
+            s.sendall(
+                b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n" + hello
+            )
+            s.settimeout(3)
+            first = s.recv(4096)
+            self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
+            s.close()
+            deadline = time.time() + 3.0
+            log = ""
+            while time.time() < deadline:
+                log = self._conn_log()
+                if "CLIENT_CLOSED" in log or "UPSTREAM_CLOSED" in log or "IDLE_TIMEOUT" in log:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(
+                any(tok in log for tok in ("CLIENT_CLOSED", "UPSTREAM_CLOSED", "IDLE_TIMEOUT")),
+                log[-500:],
+            )
+            self.assertIn("session_id", log)
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
 
     def test_per_source_limit_resource_limit(self):
         # Hold two CONNECT tunnels open (limit=2), third must 503.

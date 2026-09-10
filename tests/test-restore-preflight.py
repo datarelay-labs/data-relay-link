@@ -132,6 +132,40 @@ def main() -> int:
         else:
             print("RESTORE_PREFLIGHT_INVALID=FAIL", file=sys.stderr)
             return 1
+
+        # Dangling Access↔registry bindings must fail closed before mutation.
+        dangling = staging / "dangling-payload"
+        shutil.copytree(payload, dangling)
+        access_path = dangling / "var/lib/drlink/access-control.json"
+        access_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "access_lists": {},
+                    "service_access": {
+                        "missing-machine": {
+                            "ssh": {"access_mode": "PUBLIC"},
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        dangling_stage = staging / "dangling-stage"
+        dangling_stage.mkdir(exist_ok=True)
+        dangling_archive = build_archive(dangling_stage, dangling)
+        try:
+            mod.validate_to_temp(dangling_archive)
+        except mod.RestoreError as exc:
+            msg = str(exc).lower()
+            if "cross-reference" not in msg and "dangling" not in msg and "unknown client" not in msg:
+                print("unexpected dangling error: %s" % exc, file=sys.stderr)
+                return 1
+            print("RESTORE_PREFLIGHT_ACCESS_XREF=PASS")
+        else:
+            print("RESTORE_PREFLIGHT_ACCESS_XREF=FAIL", file=sys.stderr)
+            return 1
     return 0
 
 

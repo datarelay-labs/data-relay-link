@@ -443,6 +443,22 @@ def validate_staged_control_payload(extracted: Path) -> None:
             acl.validate_access_state(staged["access"])
         except Exception as exc:
             raise RestoreError("staged access-control.json is invalid: %s" % exc) from exc
+        # Canonical Access↔registry cross-reference (same rules as doctor).
+        try:
+            xref_issues = acl.doctor_issues(staged["access"], staged["registry"])
+        except Exception as exc:
+            raise RestoreError("staged access cross-reference failed: %s" % exc) from exc
+        xref_errors = [
+            issue
+            for issue in (xref_issues or [])
+            if str(issue.get("severity") or "").lower() == "error"
+        ]
+        if xref_errors:
+            first = xref_errors[0]
+            raise RestoreError(
+                "staged access-control.json fails registry cross-reference: %s"
+                % (first.get("message") or first.get("class") or "invalid binding")
+            )
     if egress is not None:
         try:
             # Restore candidates may still be schema v1 (pre-protocol). Migrate

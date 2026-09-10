@@ -1220,6 +1220,18 @@ def validate_registry(state, cfg=None):
                 issues.append('allocated port %s collides with a control port' % port)
     if issues:
         return FAIL, '; '.join(issues[:6]), issues
+    # Canonical Access/FRP proxy-name uniqueness (same as allocator build_proxy_map).
+    try:
+        import importlib.util as _ilu
+        acl_path = Path(__file__).resolve().parent / 'frp_access_control.py'
+        if acl_path.is_file():
+            spec = _ilu.spec_from_file_location('_drlink_acl_doctor', str(acl_path))
+            acl_mod = _ilu.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(acl_mod)
+            acl_mod.validate_proxy_name_uniqueness(state)
+    except Exception as exc:
+        return FAIL, 'proxy name collision: %s' % exc, [str(exc)]
     extra = []
     if outside:
         extra.append('reservations outside current range: %s' % ','.join(str(p) for p in outside[:8]))
@@ -2222,6 +2234,93 @@ def check_egress_control(report, paths, facts, cfg):
         report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_active, 'inspect unit drlink-egress', 'runtime')
     else:
         report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'inspect unit drlink-egress', 'runtime')
+
+    # Least-privilege service identity + runtime effective snapshot (read-only).
+    unit_file = Path('/etc/systemd/system/drlink-egress.service')
+    if root:
+        candidate_unit = Path(root) / 'etc/systemd/system/drlink-egress.service'
+        if candidate_unit.is_file():
+            unit_file = candidate_unit
+        else:
+            src_unit = Path(__file__).resolve().parent.parent / 'server' / 'drlink-egress.service'
+            if src_unit.is_file():
+                unit_file = src_unit
+    if unit_file.is_file():
+        try:
+            unit_text = unit_file.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            unit_text = ''
+        if re.search(r'(?m)^User=drlink-egress\s*$', unit_text):
+            report.add(
+                'EGRESS_SERVICE_USER', PASS,
+                'drlink-egress runs as unprivileged user',
+                'drlink-egress', '', 'runtime',
+            )
+        elif re.search(r'(?m)^User=root\s*$', unit_text) or not re.search(r'(?m)^User=', unit_text):
+            report.add(
+                'EGRESS_SERVICE_USER', WARN,
+                'drlink-egress unit is not configured for User=drlink-egress',
+                '',
+                're-run the server installer to apply non-root egress',
+                'runtime',
+            )
+        else:
+            m = re.search(r'(?m)^User=(\S+)', unit_text)
+            report.add(
+                'EGRESS_SERVICE_USER', INFO,
+                'drlink-egress unit User is set',
+                m.group(1) if m else '',
+                '',
+                'runtime',
+            )
+    effective_rel = '/run/drlink/egress-effective.json'
+    if paths.is_file(effective_rel):
+        try:
+            effective = json.loads(paths.p(effective_rel).read_text(encoding='utf-8'))
+            report.add(
+                'EGRESS_EFFECTIVE_CONFIG', PASS,
+                'egress effective runtime snapshot present',
+                'generation=%s healthy=%s' % (
+                    effective.get('policy_generation'),
+                    effective.get('policy_healthy'),
+                ),
+                '',
+                'runtime',
+            )
+            report.add(
+                'EGRESS_POLICY_GENERATION', INFO,
+                'compiled policy generation',
+                str(effective.get('policy_generation')),
+                '',
+                'runtime',
+            )
+            report.add(
+                'EGRESS_RESOURCE_LIMITS', INFO,
+                'egress concurrency limits',
+                'global=%s per_source=%s dns_pending=%s' % (
+                    effective.get('max_concurrent'),
+                    effective.get('per_source_limit'),
+                    effective.get('dns_pending_limit'),
+                ),
+                '',
+                'runtime',
+            )
+        except Exception as exc:
+            report.add(
+                'EGRESS_EFFECTIVE_CONFIG', WARN,
+                'egress effective runtime snapshot is unreadable',
+                str(exc),
+                '',
+                'runtime',
+            )
+    else:
+        report.add(
+            'EGRESS_EFFECTIVE_CONFIG', INFO,
+            'egress effective runtime snapshot not present yet',
+            effective_rel,
+            'appears after drlink-egress starts',
+            'runtime',
+        )
 
     for issue in eg.doctor_issues(state):
         cls = str(issue.get('class') or 'EGRESS_CONFIG_ERROR')

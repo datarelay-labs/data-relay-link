@@ -22,6 +22,7 @@ import select
 import socket
 import socketserver
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -48,6 +49,7 @@ DNS_POSITIVE_TTL = 30.0
 DNS_NEGATIVE_TTL = 10.0
 HAPPY_EYEBALLS_DELAY = 0.25
 STREAM_BUF = 65536
+BODY_MEMORY_THRESHOLD = 256 * 1024  # larger bodies spool to disk before connect
 RELAY_BUF = 65536
 RELAY_MAX_BUFFER = 256 * 1024
 # RFC 9849 — TLS Encrypted Client Hello (ECH). Extension type encrypted_client_hello=0xfe0d.
@@ -662,28 +664,110 @@ def _connection_hop_headers(headers: dict[str, str]) -> set[str]:
     return hop
 
 
-def _read_exact_body(sock: socket.socket, body_prefix: bytes, content_length: int) -> bytes:
-    """Return exactly content_length body bytes. Reject excess already buffered.
+class _BodySpool:
+    """Exact Content-Length body held in memory or a private tempfile.
 
-    Prefer _stream_request_body for large uploads — this helper remains for
-    small framing checks and unit-test compatibility.
+    Full body is received before DNS/connect (incomplete → no upstream I/O),
+    but RSS stays bounded for large uploads via disk spooling.
     """
+
+    __slots__ = ("_mem", "_path", "size")
+
+    def __init__(self):
+        self._mem: Optional[bytes] = None
+        self._path: Optional[str] = None
+        self.size = 0
+
+    def close(self) -> None:
+        self._mem = None
+        if self._path:
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
+            self._path = None
+
+    def send_to(self, upstream: socket.socket) -> None:
+        if self.size == 0:
+            return
+        if self._mem is not None:
+            offset = 0
+            while offset < len(self._mem):
+                upstream.sendall(self._mem[offset : offset + STREAM_BUF])
+                offset += STREAM_BUF
+            return
+        assert self._path is not None
+        with open(self._path, "rb") as fh:
+            while True:
+                chunk = fh.read(STREAM_BUF)
+                if not chunk:
+                    break
+                upstream.sendall(chunk)
+
+
+def _spool_exact_body(
+    sock: socket.socket, body_prefix: bytes, content_length: int
+) -> _BodySpool:
+    """Receive exactly content_length bytes before any upstream connect."""
     if content_length < 0:
         raise EG.EgressError("invalid Content-Length")
     if len(body_prefix) > content_length:
         raise EG.EgressError("request body exceeds Content-Length")
-    if len(body_prefix) == content_length:
-        return body_prefix
+    spool = _BodySpool()
+    spool.size = content_length
+    if content_length == 0:
+        spool._mem = b""
+        return spool
+    use_disk = content_length > BODY_MEMORY_THRESHOLD
     sock.settimeout(CLIENT_BODY_TIMEOUT)
-    chunks = [body_prefix]
-    got = len(body_prefix)
-    while got < content_length:
-        chunk = sock.recv(min(STREAM_BUF, content_length - got))
-        if not chunk:
-            raise EG.EgressError("incomplete request body")
-        chunks.append(chunk)
-        got += len(chunk)
-    return b"".join(chunks)
+    try:
+        if not use_disk:
+            if len(body_prefix) == content_length:
+                spool._mem = body_prefix
+                return spool
+            chunks = [body_prefix] if body_prefix else []
+            got = len(body_prefix)
+            while got < content_length:
+                chunk = sock.recv(min(STREAM_BUF, content_length - got))
+                if not chunk:
+                    raise EG.EgressError("incomplete request body")
+                chunks.append(chunk)
+                got += len(chunk)
+            spool._mem = b"".join(chunks)
+            return spool
+        fd, path = tempfile.mkstemp(prefix="drlink-egress-body-")
+        spool._path = path
+        with os.fdopen(fd, "wb") as fh:
+            if body_prefix:
+                fh.write(body_prefix)
+            got = len(body_prefix)
+            while got < content_length:
+                chunk = sock.recv(min(STREAM_BUF, content_length - got))
+                if not chunk:
+                    raise EG.EgressError("incomplete request body")
+                fh.write(chunk)
+                got += len(chunk)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return spool
+    except Exception:
+        spool.close()
+        raise
+
+
+def _read_exact_body(sock: socket.socket, body_prefix: bytes, content_length: int) -> bytes:
+    """Compatibility helper: exact body as bytes (small requests / unit tests)."""
+    spool = _spool_exact_body(sock, body_prefix, content_length)
+    try:
+        if spool._mem is not None:
+            return spool._mem
+        assert spool._path is not None
+        with open(spool._path, "rb") as fh:
+            return fh.read()
+    finally:
+        spool.close()
 
 
 def _stream_request_body(
@@ -692,10 +776,9 @@ def _stream_request_body(
     body_prefix: bytes,
     content_length: int,
 ) -> None:
-    """Stream exactly content_length bytes client→upstream with a bounded buffer.
+    """Stream exactly content_length bytes client→upstream (post-connect path).
 
-    Never forwards beyond Content-Length. Excess bytes already buffered with
-    headers are rejected before any upstream body I/O.
+    Prefer _spool_exact_body before connect for incomplete-body fail-closed.
     """
     if content_length < 0:
         raise EG.EgressError("invalid Content-Length")
@@ -1107,6 +1190,8 @@ def _relay_bidirectional(
                             upstream_open_w = False
                     else:
                         upstream_open_r = False
+                        if outcome == EG.AUDIT_CLIENT_CLOSED:
+                            outcome = EG.AUDIT_UPSTREAM_CLOSED
                         if not u2c and client_open_w:
                             try:
                                 client.shutdown(socket.SHUT_WR)
@@ -1417,7 +1502,30 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         gw.register_session(session)
         try:
             _state, _err, cfg, _snap = gw.cache.snapshot()
-            _relay_bidirectional(request, upstream, gw=gw, session=session, cfg=cfg)
+            outcome = _relay_bidirectional(request, upstream, gw=gw, session=session, cfg=cfg)
+            # POLICY_REVOKED already emitted a correlated deny record inside relay.
+            if outcome != EG.AUDIT_POLICY_REVOKED and cfg is not None:
+                EG.emit_conn_log(
+                    {
+                        "timestamp": EG.utc_now_iso(),
+                        "connection_id": connection_id,
+                        "session_id": session_id,
+                        "source_ip": source_ip,
+                        "hostname": host,
+                        "port": port,
+                        "protocol": EG.PROTOCOL_HTTPS,
+                        "method": "CONNECT",
+                        "profile_id": decision.get("profile_id"),
+                        "decision": EG.DECISION_ALLOW,
+                        "reason": decision.get("reason"),
+                        "outcome": outcome,
+                        "policy_generation": session.get("policy_generation"),
+                        "session_duration_ms": int(
+                            max(0.0, (time.time() - float(session["start_time"])) * 1000.0)
+                        ),
+                    },
+                    cfg=cfg,
+                )
         finally:
             gw.unregister_session(session_id)
         return
@@ -1460,12 +1568,11 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         return
 
     # Receive the exact body BEFORE DNS/connect so incomplete bodies never
-    # create upstream I/O (fail closed / one-request framing).
+    # create upstream I/O. Large bodies spool to a private tempfile so RSS
+    # does not scale ~1:1 with Content-Length.
+    spool: Optional[_BodySpool] = None
     try:
-        if content_length:
-            body = _read_exact_body(request, body_prefix, content_length)
-        else:
-            body = b""
+        spool = _spool_exact_body(request, body_prefix, content_length)
     except EG.EgressError:
         state, load_error, cfg, _snap = gw.cache.snapshot()
         del state, load_error, _snap
@@ -1496,6 +1603,8 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         connection_id=connection_id,
     )
     if upstream is None:
+        if spool is not None:
+            spool.close()
         reason = decision.get("reason")
         if reason == EG.REASON_RESOURCE_LIMIT:
             code, label = 503, "Service Unavailable"
@@ -1520,13 +1629,8 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
     req = "%s %s %s\r\n%s\r\n\r\n" % (method, path, version, "\r\n".join(out_headers))
     try:
         upstream.sendall(req.encode("ascii", errors="strict"))
-        # Stream body in bounded chunks to avoid holding a second full copy
-        # on the send path (body was already received for incomplete reject).
-        offset = 0
-        while offset < len(body):
-            chunk = body[offset : offset + STREAM_BUF]
-            upstream.sendall(chunk)
-            offset += len(chunk)
+        assert spool is not None
+        spool.send_to(upstream)
         _relay_upstream_response(request, upstream)
     except EG.EgressError:
         try:
@@ -1546,6 +1650,9 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             request.close()
         except OSError:
             pass
+    finally:
+        if spool is not None:
+            spool.close()
 
 
 class ThreadedTCPServer(socketserver.ThreadingTCPServer):
