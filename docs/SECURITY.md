@@ -410,7 +410,7 @@ Security contract:
 - Policy reload Option B: gateway reloads policy on file mtime change; new authorizations always use current policy (no stale-while-revalidate for allow decisions)
 - Do not log Proxy-Authorization, cookies, bodies, or TLS payloads
 - Egress failure must not take down inbound `frps`; inbound Access Control remains independent
-- Service unit currently runs as `User=root` with systemd hardening; dedicated non-root is not default in this line
+- Service unit runs as dedicated non-root user `drlink-egress` with systemd hardening; registry/enrollment secrets stay root-owned and outside egress write paths
 
 Windows Update over the proxy is possible with an explicit destination set. **Delivery Optimization peer traffic is out of Controlled Egress scope** — keep DO disabled or use WSUS/managed update paths on closed hosts.
 

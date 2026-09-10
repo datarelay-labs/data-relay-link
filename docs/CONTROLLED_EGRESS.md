@@ -84,7 +84,10 @@ Allowlisting Windows Update HTTPS endpoints through Controlled Egress can work w
 
 ## Process identity
 
-`drlink-egress.service` currently runs as `User=root` with systemd hardening (`NoNewPrivileges`, `ProtectSystem=strict`, …). A dedicated non-root service user is **not** the default in this release line.
+`drlink-egress.service` runs as dedicated user `drlink-egress` (non-root) with
+systemd hardening (`NoNewPrivileges`, `ProtectSystem=strict`, …). Parent
+directories are traversed with least privilege; registry/enrollment secrets
+remain root-owned and are not writable by the egress account.
 
 ## Doctor / backup
 
