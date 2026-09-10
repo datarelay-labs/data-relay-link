@@ -35,6 +35,10 @@ project usr/local/lib/drlink/frp_ctl_grammar.py 0644 lib/frp_ctl_grammar.py pyth
 project usr/local/lib/drlink/frp_cli_catalog.py 0644 lib/frp_cli_catalog.py python
 project usr/local/lib/drlink/frp_infrastructure_ports.py 0644 lib/frp_infrastructure_ports.py python
 project usr/local/lib/drlink/frp_ctl_repl.py 0644 lib/frp_ctl_repl.py python
+project usr/local/lib/drlink/frp_machine_id.py 0644 lib/frp_machine_id.py python
+project usr/local/lib/drlink/frp_bounded_server.py 0644 lib/frp_bounded_server.py python
+project usr/local/lib/drlink/frp_public_suffix.py 0644 lib/frp_public_suffix.py python
+project usr/local/lib/drlink/data/public_suffix_list.dat 0644 lib/data/public_suffix_list.dat none
 project usr/local/lib/drlink/frp_install_txn.py 0644 lib/frp_install_txn.py python
 project usr/local/lib/drlink/frp-server-upgrade.sh 0644 lib/frp-server-upgrade.sh bash
 project usr/local/lib/drlink/frp_client_registry.py 0644 lib/frp_client_registry.py python

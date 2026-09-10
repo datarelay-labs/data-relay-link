@@ -70,23 +70,39 @@ class EgressPolicyTests(unittest.TestCase):
             lambda s: EG.add_source(s, pid, "203.0.113.10/32"), cfg=self.cfg
         )
         EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, pid, "security.ubuntu.com", 443), cfg=self.cfg
+            lambda s: EG.add_destination(s, pid, "security.ubuntu.com", 443, protocol="https"), cfg=self.cfg
         )
         state = EG.load_egress_state(cfg=self.cfg)
         allow = EG.authorize_request(
-            state, source_ip="203.0.113.10", hostname="security.ubuntu.com", port=443
+            state,
+            source_ip="203.0.113.10",
+            hostname="security.ubuntu.com",
+            port=443,
+            protocol="https",
         )
         self.assertEqual(allow["decision"], EG.DECISION_ALLOW)
         deny_host = EG.authorize_request(
-            state, source_ip="203.0.113.10", hostname="evil.example.com", port=443
+            state,
+            source_ip="203.0.113.10",
+            hostname="evil.example.com",
+            port=443,
+            protocol="https",
         )
         self.assertEqual(deny_host["decision"], EG.DECISION_DENY)
         deny_port = EG.authorize_request(
-            state, source_ip="203.0.113.10", hostname="security.ubuntu.com", port=80
+            state,
+            source_ip="203.0.113.10",
+            hostname="security.ubuntu.com",
+            port=80,
+            protocol="http",
         )
         self.assertEqual(deny_port["decision"], EG.DECISION_DENY)
         deny_src = EG.authorize_request(
-            state, source_ip="198.51.100.1", hostname="security.ubuntu.com", port=443
+            state,
+            source_ip="198.51.100.1",
+            hostname="security.ubuntu.com",
+            port=443,
+            protocol="https",
         )
         self.assertEqual(deny_src["decision"], EG.DECISION_DENY)
 
@@ -94,11 +110,13 @@ class EgressPolicyTests(unittest.TestCase):
         pid, _ = self._profile(enabled=True)
         EG.mutate_egress_state(lambda s: EG.add_source(s, pid, "10.0.0.0/8"), cfg=self.cfg)
         EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, pid, "example.com", 443), cfg=self.cfg
+            lambda s: EG.add_destination(s, pid, "example.com", 443, protocol="https"), cfg=self.cfg
         )
         EG.mutate_egress_state(lambda s: EG.set_profile_enabled(s, pid, False), cfg=self.cfg)
         state = EG.load_egress_state(cfg=self.cfg)
-        d = EG.authorize_request(state, source_ip="10.1.2.3", hostname="example.com", port=443)
+        d = EG.authorize_request(
+            state, source_ip="10.1.2.3", hostname="example.com", port=443, protocol="https"
+        )
         self.assertEqual(d["decision"], EG.DECISION_DENY)
         self.assertEqual(d["reason"], EG.REASON_PROFILE_DISABLED)
 
@@ -124,13 +142,16 @@ class EgressPolicyTests(unittest.TestCase):
         self.state_path.unlink()
         with self.assertRaises(EG.EgressError):
             EG.load_egress_state(cfg=self.cfg)
-        d = EG.authorize_request(None, source_ip="1.2.3.4", hostname="example.com", port=443)
+        d = EG.authorize_request(
+            None, source_ip="1.2.3.4", hostname="example.com", port=443, protocol="https"
+        )
         self.assertEqual(d["decision"], EG.DECISION_DENY)
         d2 = EG.authorize_request(
             EG.empty_egress_state(),
             source_ip="1.2.3.4",
             hostname="example.com",
             port=443,
+            protocol="https",
             load_error="boom",
         )
         self.assertEqual(d2["decision"], EG.DECISION_DENY)
@@ -139,7 +160,7 @@ class EgressPolicyTests(unittest.TestCase):
         pid, _ = self._profile()
         EG.mutate_egress_state(lambda s: EG.add_source(s, pid, "0.0.0.0/0"), cfg=self.cfg)
         with self.assertRaises(EG.EgressError):
-            EG.mutate_egress_state(lambda s: EG.add_destination(s, pid, "1.2.3.4", 443), cfg=self.cfg)
+            EG.mutate_egress_state(lambda s: EG.add_destination(s, pid, "1.2.3.4", 443, protocol="https"), cfg=self.cfg)
         with self.assertRaises(EG.EgressError):
             EG.parse_authority_host_port("1.2.3.4:443")
 
@@ -310,6 +331,19 @@ class EgressProxyFunctionalTests(unittest.TestCase):
             (ROOT / "lib" / "frp_egress_control.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        (libdir / "frp_public_suffix.py").write_text(
+            (ROOT / "lib" / "frp_public_suffix.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        (libdir / "frp_bounded_server.py").write_text(
+            (ROOT / "lib" / "frp_bounded_server.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        data_dst = libdir / "data"
+        data_dst.mkdir(parents=True, exist_ok=True)
+        (data_dst / "public_suffix_list.dat").write_bytes(
+            (ROOT / "lib" / "data" / "public_suffix_list.dat").read_bytes()
+        )
         cfg_path = self.root / "etc/drlink/config.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         state_path = self.root / "var/lib/drlink/egress-control.json"
@@ -319,8 +353,8 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         def mut(state):
             pid, _ = EG.create_profile(state, "test", enabled=True)
             EG.add_source(state, pid, "127.0.0.1/32")
-            EG.add_destination(state, pid, "allowed.test", 80)
-            EG.add_destination(state, pid, "allowed.test", 443)
+            EG.add_destination(state, pid, "allowed.test", 80, protocol="http")
+            EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
             return pid
 
         EG.mutate_egress_state(mut, path=state_path)
@@ -473,7 +507,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
 
     def test_private_dns_denied(self):
         EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, "test", "private.test", 80),
+            lambda s: EG.add_destination(s, "test", "private.test", 80, protocol="http"),
             path=self.state_path,
         )
         req = (
@@ -488,7 +522,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
 
     def test_mixed_dns_denied(self):
         EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, "test", "mixed.test", 80),
+            lambda s: EG.add_destination(s, "test", "mixed.test", 80, protocol="http"),
             path=self.state_path,
         )
         req = (
@@ -854,7 +888,7 @@ class EgressAdversarialTests(EgressProxyFunctionalTests):
 
     def test_cgnat_dns_blocked(self):
         EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, "test", "cgnat.test", 80),
+            lambda s: EG.add_destination(s, "test", "cgnat.test", 80, protocol="http"),
             path=self.state_path,
         )
         req = (
@@ -929,6 +963,19 @@ class EgressRelayTests(unittest.TestCase):
             (ROOT / "lib" / "frp_egress_control.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        (libdir / "frp_public_suffix.py").write_text(
+            (ROOT / "lib" / "frp_public_suffix.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        (libdir / "frp_bounded_server.py").write_text(
+            (ROOT / "lib" / "frp_bounded_server.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        data_dst = libdir / "data"
+        data_dst.mkdir(parents=True, exist_ok=True)
+        (data_dst / "public_suffix_list.dat").write_bytes(
+            (ROOT / "lib" / "data" / "public_suffix_list.dat").read_bytes()
+        )
         cfg_path = self.root / "etc/drlink/config.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         state_path = self.root / "var/lib/drlink/egress-control.json"
@@ -938,8 +985,8 @@ class EgressRelayTests(unittest.TestCase):
         def mut(state):
             pid, _ = EG.create_profile(state, "test", enabled=True)
             EG.add_source(state, pid, "127.0.0.1/32")
-            EG.add_destination(state, pid, "allowed.test", 80)
-            EG.add_destination(state, pid, "allowed.test", 443)
+            EG.add_destination(state, pid, "allowed.test", 80, protocol="http")
+            EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
             return pid
 
         EG.mutate_egress_state(mut, path=state_path)

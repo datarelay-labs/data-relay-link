@@ -76,8 +76,14 @@ def print_profile(pid, profile):
     else:
         for dest in destinations:
             print(
-                "  - %s:%s  match=%s  (%s)"
-                % (dest.get("host"), dest.get("port"), dest.get("match"), dest.get("id"))
+                "  - %s:%s/%s  match=%s  (%s)"
+                % (
+                    dest.get("host"),
+                    dest.get("port"),
+                    dest.get("protocol") or "?",
+                    dest.get("match"),
+                    dest.get("id"),
+                )
             )
     print("Default       : DENY")
 
@@ -137,7 +143,7 @@ def cmd_create(cfg, args):
         print("The profile is disabled. Default egress policy stays DENY.")
         print("Next steps:")
         print("  egress add-source %s <CIDR>" % record["name"])
-        print("  egress add-destination %s <FQDN> <PORT>" % record["name"])
+        print("  egress add-destination %s <FQDN> <PORT> --protocol http|https" % record["name"])
         print("  egress show %s" % record["name"])
         print("  egress enable %s" % record["name"])
     audit(
@@ -152,12 +158,19 @@ def cmd_set(cfg, args):
     try:
         def mut(state):
             kwargs = {}
+            # Canonical: set <PROFILE> name|description <VALUE>
+            prop = getattr(args, "property", None)
+            value = getattr(args, "value", None)
+            if prop in ("name", "description") and value is not None:
+                kwargs[prop] = value
             if args.name is not None:
                 kwargs["name"] = args.name
             if args.description is not None:
                 kwargs["description"] = args.description
             if not kwargs:
-                raise EG.EgressError("nothing to update (use --name and/or --description)")
+                raise EG.EgressError(
+                    "nothing to update (use: egress set <PROFILE> name|description <VALUE>)"
+                )
             return EG.set_profile_metadata(state, args.selector, **kwargs)
 
         pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
@@ -169,7 +182,11 @@ def cmd_set(cfg, args):
         "egress.profile.updated",
         profile_id=pid,
         profile_name=profile.get("name"),
-        details={"name": args.name, "description": args.description},
+        details={
+            "name": getattr(args, "name", None),
+            "description": getattr(args, "description", None),
+            "property": getattr(args, "property", None),
+        },
     )
 
 
@@ -212,20 +229,37 @@ def cmd_delete(cfg, args):
 def cmd_add_destination(cfg, args):
     try:
         def mut(state):
-            return EG.add_destination(state, args.selector, args.host, args.port)
+            return EG.add_destination(
+                state,
+                args.selector,
+                args.host,
+                args.port,
+                protocol=args.protocol,
+            )
 
         pid, profile, entry = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
     print(
-        "Added destination %s:%s (match=%s) to %s"
-        % (entry.get("host"), entry.get("port"), entry.get("match"), profile.get("name"))
+        "Added destination %s:%s/%s (match=%s) to %s"
+        % (
+            entry.get("host"),
+            entry.get("port"),
+            entry.get("protocol"),
+            entry.get("match"),
+            profile.get("name"),
+        )
     )
     audit(
         "egress.destination.added",
         profile_id=pid,
         profile_name=profile.get("name"),
-        details={"host": entry.get("host"), "port": entry.get("port"), "match": entry.get("match")},
+        details={
+            "host": entry.get("host"),
+            "port": entry.get("port"),
+            "protocol": entry.get("protocol"),
+            "match": entry.get("match"),
+        },
     )
 
 
@@ -285,21 +319,84 @@ def cmd_remove_source(cfg, args):
 
 def cmd_test(cfg, args):
     state = EG.load_egress_state(cfg=cfg)
+    protocol = args.protocol
+    if not protocol:
+        # Infer only for operator convenience in test; policy still requires explicit protocol.
+        if args.port == 80:
+            protocol = "http"
+        elif args.port == 443:
+            protocol = "https"
+        else:
+            fail("--protocol is required for non-80/443 test ports")
     decision = EG.authorize_request(
         state,
         source_ip=args.source_ip,
         hostname=args.host,
         port=args.port,
+        protocol=protocol,
+        method="CONNECT" if protocol == "https" else "GET",
     )
     print("Decision     : %s" % decision.get("decision"))
     print("Reason       : %s" % decision.get("reason"))
     print("Source IP    : %s" % decision.get("source_ip"))
     print("Hostname     : %s" % decision.get("hostname"))
     print("Port         : %s" % decision.get("port"))
+    print("Protocol     : %s" % decision.get("protocol"))
     print("Profile ID   : %s" % (decision.get("profile_id") or "-"))
     print("Profile Name : %s" % (decision.get("profile_name") or "-"))
     if decision.get("decision") != EG.DECISION_ALLOW:
         raise SystemExit(2)
+
+
+def cmd_export(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        doc = EG.export_profile(state, args.selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        Path(args.output).write_text(text, encoding="utf-8")
+        print("Exported %s to %s" % (args.selector, args.output))
+    else:
+        sys.stdout.write(text)
+
+
+def cmd_diff(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        _pid, current = EG.resolve_profile(state, args.selector)
+        raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        candidate = EG.parse_import_document(raw)
+        diff = EG.diff_profiles(current, candidate)
+    except (EG.EgressError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail(str(exc))
+    print(json.dumps(diff, indent=2, sort_keys=True))
+
+
+def cmd_import(cfg, args):
+    try:
+        raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        candidate = EG.parse_import_document(raw)
+
+        def mut(state):
+            return EG.import_profile_into_state(
+                state,
+                candidate,
+                target_selector=args.selector or None,
+            )
+
+        pid, profile, diff = EG.mutate_egress_state(mut, cfg=cfg)
+    except (EG.EgressError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail(str(exc))
+    print("Imported into %s (%s) — left DISABLED" % (pid, profile.get("name")))
+    print(json.dumps(diff, indent=2, sort_keys=True))
+    audit(
+        "egress.profile.imported",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={"diff": diff},
+    )
 
 
 def cmd_status(cfg, _args):
@@ -351,8 +448,16 @@ def build_parser():
 
     p = sub.add_parser("set", help="Update egress profile metadata")
     p.add_argument("selector")
-    p.add_argument("--name", default=None)
-    p.add_argument("--description", default=None)
+    p.add_argument(
+        "property",
+        nargs="?",
+        choices=["name", "description"],
+        default=None,
+        help="Canonical property form: name|description",
+    )
+    p.add_argument("value", nargs="?", default=None, help="New property value")
+    p.add_argument("--name", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--description", default=None, help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_set)
 
     p = sub.add_parser("enable", help="Enable an egress profile")
@@ -367,10 +472,16 @@ def build_parser():
     p.add_argument("selector")
     p.set_defaults(func=cmd_delete)
 
-    p = sub.add_parser("add-destination", help="Add FQDN:port destination")
+    p = sub.add_parser("add-destination", help="Add FQDN:port destination with protocol")
     p.add_argument("selector")
     p.add_argument("host")
     p.add_argument("port", type=int)
+    p.add_argument(
+        "--protocol",
+        required=True,
+        choices=["http", "https"],
+        help="Destination protocol (http absolute-form or https CONNECT+SNI)",
+    )
     p.set_defaults(func=cmd_add_destination)
 
     p = sub.add_parser("remove-destination", help="Remove a destination")
@@ -389,11 +500,32 @@ def build_parser():
     p.add_argument("source")
     p.set_defaults(func=cmd_remove_source)
 
-    p = sub.add_parser("test", help="Test authorize(source, host, port) without connecting")
+    p = sub.add_parser("test", help="Test authorize(source, host, port, protocol) without connecting")
     p.add_argument("source_ip")
     p.add_argument("host")
     p.add_argument("port", type=int)
+    p.add_argument("--protocol", choices=["http", "https"], default=None)
     p.set_defaults(func=cmd_test)
+
+    p = sub.add_parser("export", help="Export one egress profile to JSON")
+    p.add_argument("selector")
+    p.add_argument("--output", "-o", default=None)
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("diff", help="Diff a profile against an import candidate file")
+    p.add_argument("selector")
+    p.add_argument("file")
+    p.set_defaults(func=cmd_diff)
+
+    p = sub.add_parser("import", help="Import profile JSON (always DISABLED; never auto-enable)")
+    p.add_argument("file")
+    p.add_argument(
+        "selector",
+        nargs="?",
+        default=None,
+        help="Optional existing profile to replace destinations/sources into",
+    )
+    p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("status", help="Show egress control status")
     p.set_defaults(func=cmd_status)

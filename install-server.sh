@@ -37,7 +37,12 @@ for f in \
   "$BASE_DIR/lib/frp_doctor.py" \
   "$BASE_DIR/lib/frp_support_bundle.py" \
   "$BASE_DIR/lib/frp_ctl_grammar.py" \
+  "$BASE_DIR/lib/frp_cli_catalog.py" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
+  "$BASE_DIR/lib/frp_machine_id.py" \
+  "$BASE_DIR/lib/frp_bounded_server.py" \
+  "$BASE_DIR/lib/frp_public_suffix.py" \
+  "$BASE_DIR/lib/data/public_suffix_list.dat" \
   "$BASE_DIR/release-manifest.json" \
   "$BASE_DIR/tools/frp-create-client" \
   "$BASE_DIR/tools/frp-enrollments" \

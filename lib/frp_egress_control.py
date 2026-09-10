@@ -15,13 +15,21 @@ import os
 import re
 import secrets
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-EGRESS_SCHEMA_VERSION = 1
+# Schema v2: destinations require explicit protocol=http|https.
+# Legacy v1 (port-only) migrates 80→http, 443→https; other ports fail closed.
+EGRESS_SCHEMA_VERSION = 2
+EGRESS_SCHEMA_VERSION_LEGACY = 1
 DEFAULT_EGRESS_PATH = "/var/lib/drlink/egress-control.json"
 DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
+
+PROTOCOL_HTTP = "http"
+PROTOCOL_HTTPS = "https"
+VALID_PROTOCOLS = frozenset({PROTOCOL_HTTP, PROTOCOL_HTTPS})
 
 def _default_egress_listen_port() -> int:
     """Resolve the canonical default without requiring package imports.
@@ -78,6 +86,28 @@ REASON_DNS_UNSAFE = "DNS_UNSAFE"
 REASON_MALFORMED_REQUEST = "MALFORMED_REQUEST"
 REASON_TLS_SNI_MISMATCH = "TLS_SNI_MISMATCH"
 REASON_TLS_CLIENT_HELLO_INVALID = "TLS_CLIENT_HELLO_INVALID"
+REASON_PROTOCOL_NOT_ALLOWED = "PROTOCOL_NOT_ALLOWED"
+REASON_POLICY_REVOKED = "POLICY_REVOKED"
+REASON_RESOURCE_LIMIT = "RESOURCE_LIMIT"
+REASON_CONNECT_FAILURE = "CONNECT_FAILURE"
+REASON_CLIENT_CLOSED = "CLIENT_CLOSED"
+REASON_UPSTREAM_CLOSED = "UPSTREAM_CLOSED"
+REASON_IDLE_TIMEOUT = "IDLE_TIMEOUT"
+REASON_POLICY_UNHEALTHY = "POLICY_UNHEALTHY"
+
+# Audit outcome vocabulary (connection/session correlated; no payloads/secrets).
+AUDIT_CONNECTED = "CONNECTED"
+AUDIT_POLICY_DENY = "POLICY_DENY"
+AUDIT_DNS_FAILURE = "DNS_FAILURE"
+AUDIT_DNS_UNSAFE = "DNS_UNSAFE"
+AUDIT_CONNECT_FAILURE = "CONNECT_FAILURE"
+AUDIT_TLS_SNI_MISMATCH = "TLS_SNI_MISMATCH"
+AUDIT_TLS_CLIENT_HELLO_INVALID = "TLS_CLIENT_HELLO_INVALID"
+AUDIT_POLICY_REVOKED = "POLICY_REVOKED"
+AUDIT_RESOURCE_LIMIT = "RESOURCE_LIMIT"
+AUDIT_CLIENT_CLOSED = "CLIENT_CLOSED"
+AUDIT_UPSTREAM_CLOSED = "UPSTREAM_CLOSED"
+AUDIT_IDLE_TIMEOUT = "IDLE_TIMEOUT"
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DESCRIPTION_MAX_LEN = 1024
@@ -291,6 +321,73 @@ def _has_control_chars(text: str) -> bool:
     return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
 
 
+def validate_protocol(protocol: Any) -> str:
+    text = str(protocol or "").strip().lower()
+    if text not in VALID_PROTOCOLS:
+        raise EgressError("destination protocol must be http or https (got %r)" % protocol)
+    return text
+
+
+def infer_legacy_protocol(port: int) -> str:
+    """Safe legacy v1 inference only. Ambiguous ports must fail closed."""
+    if port == 80:
+        return PROTOCOL_HTTP
+    if port == 443:
+        return PROTOCOL_HTTPS
+    raise EgressError(
+        "legacy destination port %s requires explicit protocol migration "
+        "(only :80→http and :443→https are auto-migrated)" % port
+    )
+
+
+def _load_psl_module():
+    try:
+        from frp_public_suffix import (  # noqa: WPS433
+            assert_wildcard_public_suffix_safe,
+            is_public_suffix,
+            psl_metadata,
+            load_psl,
+        )
+        return assert_wildcard_public_suffix_safe, is_public_suffix, psl_metadata, load_psl
+    except Exception:
+        import importlib.util
+
+        here = Path(__file__).resolve().parent
+        path = here / "frp_public_suffix.py"
+        if not path.is_file():
+            raise EgressError("Public Suffix List helper missing")
+        spec = importlib.util.spec_from_file_location("frp_public_suffix", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return (
+            mod.assert_wildcard_public_suffix_safe,
+            mod.is_public_suffix,
+            mod.psl_metadata,
+            mod.load_psl,
+        )
+
+
+def validate_wildcard_public_suffix(policy_host: str) -> None:
+    """Reject *.com / *.co.uk / other public-suffix wildcards at policy write/load."""
+    assert_safe, _is_ps, _meta, _load = _load_psl_module()
+    try:
+        _load()
+        assert_safe(policy_host)
+    except FileNotFoundError as exc:
+        raise EgressError(str(exc)) from exc
+    except ValueError as exc:
+        raise EgressError(str(exc)) from exc
+
+
+def public_suffix_info() -> dict:
+    try:
+        _assert, _is_ps, meta, load = _load_psl_module()
+        load()
+        return meta()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def canonicalize_hostname(host: str, *, allow_wildcard: bool = True) -> tuple[str, str]:
     """Return (canonical_ascii_hostname, match_mode).
 
@@ -298,6 +395,9 @@ def canonicalize_hostname(host: str, *, allow_wildcard: bool = True) -> tuple[st
     Wildcard form is strictly '*.label.label' (single leading '*.' only).
     Rejects trailing-dot ambiguity after strip, empty labels, IP literals,
     userinfo, ports, whitespace, and control characters.
+
+    Wildcard apex non-match: *.example.com never matches example.com itself.
+    Public-suffix wildcards (*.com, *.co.uk, …) are rejected when allow_wildcard.
     """
     raw = str(host or "")
     if not raw or _has_control_chars(raw) or any(ch.isspace() for ch in raw):
@@ -327,7 +427,9 @@ def canonicalize_hostname(host: str, *, allow_wildcard: bool = True) -> tuple[st
             raise EgressError("invalid wildcard hostname")
         match_mode = "wildcard"
         ascii_host = _to_idna_ascii(suffix)
-        return "*." + ascii_host, match_mode
+        canon = "*." + ascii_host
+        validate_wildcard_public_suffix(canon)
+        return canon, match_mode
 
     if "*" in text:
         raise EgressError("invalid hostname")
@@ -343,27 +445,6 @@ def canonicalize_hostname(host: str, *, allow_wildcard: bool = True) -> tuple[st
 
     ascii_host = _to_idna_ascii(text)
     return ascii_host, match_mode
-
-
-def _to_idna_ascii(hostname: str) -> str:
-    labels = hostname.split(".")
-    if not labels or any(label == "" for label in labels):
-        raise EgressError("invalid hostname")
-    if len(hostname) > 253:
-        raise EgressError("hostname too long")
-    out = []
-    for label in labels:
-        if len(label) > 63:
-            raise EgressError("invalid hostname label")
-        try:
-            # stdlib codec — no third-party idna dependency
-            encoded = label.encode("idna").decode("ascii").lower()
-        except Exception as exc:
-            raise EgressError("invalid hostname (IDNA): %s" % hostname) from exc
-        if not HOSTNAME_LABEL_RE.match(encoded):
-            raise EgressError("invalid hostname label: %s" % label)
-        out.append(encoded)
-    return ".".join(out)
 
 
 def hostname_matches(request_host: str, policy_host: str, match_mode: str) -> bool:
@@ -386,6 +467,27 @@ def hostname_matches(request_host: str, policy_host: str, match_mode: str) -> bo
             return False
         return req.endswith("." + suffix)
     return False
+
+
+def _to_idna_ascii(hostname: str) -> str:
+    labels = hostname.split(".")
+    if not labels or any(label == "" for label in labels):
+        raise EgressError("invalid hostname")
+    if len(hostname) > 253:
+        raise EgressError("hostname too long")
+    out = []
+    for label in labels:
+        if len(label) > 63:
+            raise EgressError("invalid hostname label")
+        try:
+            # stdlib codec — no third-party idna dependency
+            encoded = label.encode("idna").decode("ascii").lower()
+        except Exception as exc:
+            raise EgressError("invalid hostname (IDNA): %s" % hostname) from exc
+        if not HOSTNAME_LABEL_RE.match(encoded):
+            raise EgressError("invalid hostname label: %s" % label)
+        out.append(encoded)
+    return ".".join(out)
 
 
 def is_unsafe_destination_ip(addr: ipaddress._BaseAddress) -> bool:
@@ -491,19 +593,58 @@ def parse_authority_host_port(authority: str, *, default_port: Optional[int] = N
     return canon, port
 
 
-def _parse_egress_state(raw: object) -> dict:
+def migrate_egress_state_v1_to_v2(raw: dict) -> dict:
+    """Deterministic v1→v2 migration. Ambiguous ports fail closed."""
+    if not isinstance(raw, dict):
+        raise EgressError("egress-control.json must be a JSON object")
+    profiles_in = raw.get("egress_profiles")
+    if not isinstance(profiles_in, dict):
+        raise EgressError("egress_profiles must be an object")
+    profiles_out: dict = {}
+    for pid, profile in profiles_in.items():
+        if not isinstance(profile, dict):
+            raise EgressError("invalid egress profile record: %s" % pid)
+        dests_in = profile.get("destinations")
+        if not isinstance(dests_in, list):
+            raise EgressError("egress profile destinations must be a list: %s" % pid)
+        dests_out = []
+        for dest in dests_in:
+            if not isinstance(dest, dict):
+                raise EgressError("invalid destination entry in %s" % pid)
+            if "protocol" in dest and dest.get("protocol") not in (None, ""):
+                proto = validate_protocol(dest.get("protocol"))
+            else:
+                port = validate_port(dest.get("port"))
+                proto = infer_legacy_protocol(port)
+            entry = dict(dest)
+            entry["protocol"] = proto
+            dests_out.append(entry)
+        new_profile = dict(profile)
+        new_profile["destinations"] = dests_out
+        profiles_out[pid] = new_profile
+    return {
+        "schema_version": EGRESS_SCHEMA_VERSION,
+        "egress_profiles": profiles_out,
+    }
+
+
+def _parse_egress_state(raw: object, *, migrate: bool = True) -> dict:
     if not isinstance(raw, dict):
         raise EgressError("egress-control.json must be a JSON object")
     version = raw.get("schema_version")
-    if version != EGRESS_SCHEMA_VERSION:
-        raise EgressError("unsupported egress-control schema_version: %s" % version)
-    profiles = raw.get("egress_profiles")
-    if not isinstance(profiles, dict):
-        raise EgressError("egress_profiles must be an object")
-    return {
-        "schema_version": EGRESS_SCHEMA_VERSION,
-        "egress_profiles": profiles,
-    }
+    if version == EGRESS_SCHEMA_VERSION:
+        profiles = raw.get("egress_profiles")
+        if not isinstance(profiles, dict):
+            raise EgressError("egress_profiles must be an object")
+        return {
+            "schema_version": EGRESS_SCHEMA_VERSION,
+            "egress_profiles": profiles,
+        }
+    if version == EGRESS_SCHEMA_VERSION_LEGACY:
+        if not migrate:
+            raise EgressError("unsupported egress-control schema_version: %s" % version)
+        return migrate_egress_state_v1_to_v2(raw)
+    raise EgressError("unsupported egress-control schema_version: %s" % version)
 
 
 def validate_egress_state(state: dict) -> None:
@@ -514,6 +655,12 @@ def validate_egress_state(state: dict) -> None:
     profiles = state.get("egress_profiles")
     if not isinstance(profiles, dict):
         raise EgressError("egress_profiles must be an object")
+    # Ensure PSL is available before accepting wildcards.
+    try:
+        validate_wildcard_public_suffix("*.example.com")
+    except EgressError as exc:
+        if "Public Suffix List missing" in str(exc):
+            raise
     names: dict[str, str] = {}
     for pid, profile in profiles.items():
         if not isinstance(pid, str) or not pid.startswith(PROFILE_ID_PREFIX):
@@ -544,28 +691,40 @@ def validate_egress_state(state: dict) -> None:
             if cidr in seen_cidrs:
                 raise EgressError("duplicate source CIDR in %s: %s" % (pid, cidr))
             seen_cidrs.add(cidr)
-        seen_dests: set[tuple[str, int, str]] = set()
+        seen_dests: set[tuple[str, int, str, str]] = set()
         for dest in destinations:
             if not isinstance(dest, dict):
                 raise EgressError("invalid destination entry in %s" % pid)
             host, mode = canonicalize_hostname(dest.get("host") or "", allow_wildcard=True)
             port = validate_port(dest.get("port"))
+            protocol = validate_protocol(dest.get("protocol"))
             stored_mode = str(dest.get("match") or mode).lower()
             if stored_mode not in ("exact", "wildcard"):
                 raise EgressError("invalid destination match mode in %s" % pid)
             if stored_mode != mode:
-                # Policy host form must agree with match mode.
                 if mode == "wildcard" and stored_mode != "wildcard":
                     raise EgressError("wildcard host requires match=wildcard")
                 if mode == "exact" and stored_mode == "wildcard":
                     raise EgressError("exact host cannot use match=wildcard")
-            key = (host, port, stored_mode)
+            key = (host, port, stored_mode, protocol)
             if key in seen_dests:
-                raise EgressError("duplicate destination in %s: %s:%s" % (pid, host, port))
+                raise EgressError(
+                    "duplicate destination in %s: %s:%s/%s" % (pid, host, port, protocol)
+                )
             seen_dests.add(key)
+            # Normalize stored fields for callers that mutate in place after validate.
+            dest["host"] = host
+            dest["port"] = port
+            dest["match"] = stored_mode
+            dest["protocol"] = protocol
 
 
-def load_egress_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
+def load_egress_state(
+    path: Optional[Path] = None,
+    cfg: Optional[dict] = None,
+    *,
+    persist_migration: bool = True,
+) -> dict:
     path = path or egress_control_path(cfg)
     if not path.is_file():
         raise EgressError("egress-control.json is missing: %s" % path)
@@ -573,8 +732,21 @@ def load_egress_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise EgressError("egress-control.json is unreadable or corrupt") from exc
-    state = _parse_egress_state(raw)
+    version = raw.get("schema_version") if isinstance(raw, dict) else None
+    state = _parse_egress_state(raw, migrate=True)
     validate_egress_state(state)
+    if persist_migration and version == EGRESS_SCHEMA_VERSION_LEGACY:
+        with FileLock(egress_lock_path(path)):
+            # Re-read under lock to avoid clobbering concurrent writers.
+            try:
+                raw2 = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                raw2 = raw
+            if isinstance(raw2, dict) and raw2.get("schema_version") == EGRESS_SCHEMA_VERSION_LEGACY:
+                migrated = migrate_egress_state_v1_to_v2(raw2)
+                validate_egress_state(migrated)
+                atomic_write_json(path, migrated)
+                state = migrated
     return state
 
 
@@ -755,22 +927,29 @@ def add_destination(
     selector: str,
     host: str,
     port: Any,
+    *,
+    protocol: Any,
 ) -> tuple[str, dict, dict]:
     pid, profile = resolve_profile(state, selector)
     canon_host, match_mode = canonicalize_hostname(host, allow_wildcard=True)
     port_i = validate_port(port)
+    proto = validate_protocol(protocol)
     for existing in profile.get("destinations") or []:
         if (
             str(existing.get("host") or "").lower() == canon_host
             and int(existing.get("port")) == port_i
             and str(existing.get("match") or "exact") == match_mode
+            and str(existing.get("protocol") or "").lower() == proto
         ):
-            raise EgressError("destination already present: %s:%s" % (canon_host, port_i))
+            raise EgressError(
+                "destination already present: %s:%s/%s" % (canon_host, port_i, proto)
+            )
     entry = {
         "id": _new_id(DEST_ID_PREFIX),
         "host": canon_host,
         "port": port_i,
         "match": match_mode,
+        "protocol": proto,
         "created_at": utc_now_iso(),
     }
     profile.setdefault("destinations", []).append(entry)
@@ -843,7 +1022,14 @@ def source_matches_cidr_list(source_ip: str, sources: list) -> Optional[dict]:
     return None
 
 
-def destination_matches(host: str, port: int, destinations: list) -> Optional[dict]:
+def destination_matches(
+    host: str,
+    port: int,
+    destinations: list,
+    *,
+    protocol: str,
+) -> Optional[dict]:
+    proto = validate_protocol(protocol)
     if not isinstance(destinations, list) or not destinations:
         return None
     for entry in destinations:
@@ -853,6 +1039,11 @@ def destination_matches(host: str, port: int, destinations: list) -> Optional[di
             if int(entry.get("port")) != int(port):
                 continue
         except (TypeError, ValueError):
+            continue
+        try:
+            if validate_protocol(entry.get("protocol")) != proto:
+                continue
+        except EgressError:
             continue
         if hostname_matches(host, entry.get("host") or "", entry.get("match") or "exact"):
             return entry
@@ -865,12 +1056,20 @@ def authorize_request(
     source_ip: str,
     hostname: str,
     port: int,
+    protocol: str,
     load_error: Optional[str] = None,
+    method: Optional[str] = None,
 ) -> dict:
     """Authorize an egress request. Always fail closed.
 
+    protocol must be http|https and must match the wire method semantics:
+      - http: absolute-form HTTP forward-proxy only (CONNECT must be denied
+        even if host:port otherwise matches an http destination)
+      - https: CONNECT + ClientHello SNI binding required at the gateway for
+        ALL https ports (not just 443)
+
     Returns dict with decision, reason, profile_id, profile_name, matched_source,
-    matched_destination.
+    matched_destination, protocol.
     """
     base = {
         "decision": DECISION_DENY,
@@ -882,6 +1081,7 @@ def authorize_request(
         "source_ip": source_ip,
         "hostname": hostname,
         "port": port,
+        "protocol": None,
     }
     if load_error is not None:
         base["reason"] = REASON_POLICY_INVALID
@@ -890,7 +1090,17 @@ def authorize_request(
         base["reason"] = REASON_POLICY_MISSING
         return base
     try:
-        validate_egress_state(state)
+        proto = validate_protocol(protocol)
+        base["protocol"] = proto
+        # Method/protocol binding (fail closed).
+        meth = str(method or "").upper().strip()
+        if meth:
+            if proto == PROTOCOL_HTTP and meth == "CONNECT":
+                base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
+                return base
+            if proto == PROTOCOL_HTTPS and meth != "CONNECT":
+                base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
+                return base
         # Reject IP literal destinations at authorize boundary too.
         try:
             ipaddress.ip_address(str(hostname))
@@ -911,9 +1121,9 @@ def authorize_request(
             base["reason"] = REASON_NO_MATCHING_PROFILE
             return base
 
-        # Evaluate enabled profiles. First full match wins (deterministic by name).
         saw_source_match = False
         saw_disabled_with_match = False
+        saw_protocol_mismatch = False
         for pid, profile in profiles:
             sources = profile.get("sources") or []
             destinations = profile.get("destinations") or []
@@ -921,8 +1131,25 @@ def authorize_request(
             if src is None:
                 continue
             saw_source_match = True
-            dest = destination_matches(host, port_i, destinations)
+            dest = destination_matches(host, port_i, destinations, protocol=proto)
             if dest is None:
+                # Distinguish host:port match with wrong protocol for clearer deny.
+                for candidate in destinations:
+                    if not isinstance(candidate, dict):
+                        continue
+                    try:
+                        if int(candidate.get("port")) != port_i:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                    if hostname_matches(
+                        host, candidate.get("host") or "", candidate.get("match") or "exact"
+                    ):
+                        try:
+                            if validate_protocol(candidate.get("protocol")) != proto:
+                                saw_protocol_mismatch = True
+                        except EgressError:
+                            pass
                 continue
             if not profile.get("enabled", False):
                 saw_disabled_with_match = True
@@ -937,12 +1164,15 @@ def authorize_request(
                 "source_ip": source_ip,
                 "hostname": host,
                 "port": port_i,
+                "protocol": proto,
             }
 
         if saw_disabled_with_match:
             base["reason"] = REASON_PROFILE_DISABLED
         elif not saw_source_match:
             base["reason"] = REASON_SOURCE_NOT_ALLOWED
+        elif saw_protocol_mismatch:
+            base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
         else:
             base["reason"] = REASON_DESTINATION_NOT_ALLOWED
         base["hostname"] = host
@@ -952,6 +1182,8 @@ def authorize_request(
         msg = str(exc)
         if "IP literal" in msg:
             base["reason"] = REASON_IP_LITERAL_DENIED
+        elif "protocol" in msg.lower():
+            base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
         elif "invalid" in msg.lower() or "malformed" in msg.lower():
             base["reason"] = REASON_MALFORMED_REQUEST
         else:
@@ -972,19 +1204,26 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
             _rotate_conn_log(path)
             record = {
                 "timestamp": event.get("timestamp") or utc_now_iso(),
+                "connection_id": event.get("connection_id"),
+                "session_id": event.get("session_id"),
                 "source_ip": event.get("source_ip"),
                 "hostname": event.get("hostname"),
                 "port": event.get("port"),
+                "protocol": event.get("protocol"),
                 "method": event.get("method"),
                 "profile_id": event.get("profile_id"),
                 "profile_name": event.get("profile_name"),
                 "decision": event.get("decision"),
                 "reason": event.get("reason"),
+                "outcome": event.get("outcome"),
+                "policy_generation": event.get("policy_generation"),
             }
             # Optional safe SNI audit field (hostname only — never raw ClientHello).
             observed_sni = event.get("observed_sni")
             if observed_sni is not None:
                 record["observed_sni"] = str(observed_sni)[:253]
+            # Drop None keys for compact logs.
+            record = {k: v for k, v in record.items() if v is not None}
             line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
             if not path.exists():
                 path.write_text(line, encoding="utf-8")
@@ -1013,6 +1252,337 @@ def _rotate_conn_log(path: Path) -> None:
         os.chmod(path, 0o600)
     except OSError:
         return
+
+
+class CompiledDestination:
+    __slots__ = (
+        "host", "port", "protocol", "match", "profile_id",
+        "profile_name", "enabled", "destination_id",
+    )
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        protocol: str,
+        match: str,
+        profile_id: str,
+        profile_name: str,
+        enabled: bool,
+        destination_id: str,
+    ):
+        self.host = host
+        self.port = port
+        self.protocol = protocol
+        self.match = match
+        self.profile_id = profile_id
+        self.profile_name = profile_name
+        self.enabled = enabled
+        self.destination_id = destination_id
+
+
+class PolicySnapshot:
+    """Immutable compiled egress policy.
+
+    Connections authorize only against a PolicySnapshot. When reload fails,
+    PolicyEngine marks unhealthy=True and authorize() fails closed for ALL
+    traffic (stale ALLOW snapshot is not silently kept as the live deny plane).
+    Last-good snapshot may be retained for doctor/diagnostics only.
+
+    Note: plain class (not dataclass) so importlib.spec_from_file_location
+    loaders that omit sys.modules registration still work.
+    """
+
+    __slots__ = (
+        "generation", "schema_version", "healthy", "load_error",
+        "state", "exact_index", "wildcard_rules", "compiled_at",
+    )
+
+    def __init__(
+        self,
+        generation: int,
+        schema_version: int,
+        healthy: bool,
+        load_error: Optional[str],
+        state: dict,
+        exact_index: dict,
+        wildcard_rules: tuple,
+        compiled_at: Optional[str] = None,
+    ):
+        self.generation = generation
+        self.schema_version = schema_version
+        self.healthy = healthy
+        self.load_error = load_error
+        self.state = state
+        self.exact_index = exact_index
+        self.wildcard_rules = wildcard_rules
+        self.compiled_at = compiled_at if compiled_at is not None else utc_now_iso()
+
+
+def compile_policy_snapshot(
+    state: dict,
+    *,
+    generation: int,
+    load_error: Optional[str] = None,
+    healthy: bool = True,
+) -> PolicySnapshot:
+    if load_error is not None or not healthy:
+        return PolicySnapshot(
+            generation=generation,
+            schema_version=int(state.get("schema_version") or EGRESS_SCHEMA_VERSION),
+            healthy=False,
+            load_error=load_error or REASON_POLICY_UNHEALTHY,
+            state={"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}},
+            exact_index={},
+            wildcard_rules=(),
+        )
+    validate_egress_state(state)
+    exact: dict = {}
+    wildcards: list = []
+    for pid, profile in list_profiles(state):
+        enabled = bool(profile.get("enabled"))
+        pname = str(profile.get("name") or "")
+        for dest in profile.get("destinations") or []:
+            if not isinstance(dest, dict):
+                continue
+            compiled = CompiledDestination(
+                host=str(dest.get("host") or ""),
+                port=int(dest.get("port")),
+                protocol=validate_protocol(dest.get("protocol")),
+                match=str(dest.get("match") or "exact"),
+                profile_id=pid,
+                profile_name=pname,
+                enabled=enabled,
+                destination_id=str(dest.get("id") or ""),
+            )
+            if compiled.match == "wildcard":
+                wildcards.append(compiled)
+            else:
+                key = (compiled.host, compiled.port, compiled.protocol)
+                exact.setdefault(key, []).append(compiled)
+    return PolicySnapshot(
+        generation=generation,
+        schema_version=EGRESS_SCHEMA_VERSION,
+        healthy=True,
+        load_error=None,
+        state=json.loads(json.dumps(state)),  # deep copy via JSON
+        exact_index=exact,
+        wildcard_rules=tuple(wildcards),
+    )
+
+
+def authorize_against_snapshot(
+    snapshot: Optional[PolicySnapshot],
+    *,
+    source_ip: str,
+    hostname: str,
+    port: int,
+    protocol: str,
+    method: Optional[str] = None,
+) -> dict:
+    if snapshot is None:
+        return authorize_request(
+            None,
+            source_ip=source_ip,
+            hostname=hostname,
+            port=port,
+            protocol=protocol,
+            method=method,
+            load_error=REASON_POLICY_MISSING,
+        )
+    if not snapshot.healthy:
+        return authorize_request(
+            None,
+            source_ip=source_ip,
+            hostname=hostname,
+            port=port,
+            protocol=protocol,
+            method=method,
+            load_error=snapshot.load_error or REASON_POLICY_UNHEALTHY,
+        )
+    result = authorize_request(
+        snapshot.state,
+        source_ip=source_ip,
+        hostname=hostname,
+        port=port,
+        protocol=protocol,
+        method=method,
+    )
+    result["policy_generation"] = snapshot.generation
+    return result
+
+
+class PolicyEngine:
+    """Load → validate → compile → immutable snapshot → generation bump.
+
+    Invalid reload does NOT keep serving the previous ALLOW snapshot as if the
+    new deny/corrupt policy were active. Instead the engine enters unhealthy
+    fail-closed: all authorize() calls DENY with POLICY_INVALID/UNHEALTHY until
+    a valid policy loads again (new generation).
+    """
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._generation = 0
+        self._snapshot: Optional[PolicySnapshot] = None
+        self._last_good: Optional[PolicySnapshot] = None
+        self._mtime = None
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def snapshot(self) -> Optional[PolicySnapshot]:
+        with self._lock:
+            return self._snapshot
+
+    def last_good(self) -> Optional[PolicySnapshot]:
+        with self._lock:
+            return self._last_good
+
+    def replace_from_state(self, state: dict) -> PolicySnapshot:
+        with self._lock:
+            self._generation += 1
+            snap = compile_policy_snapshot(state, generation=self._generation, healthy=True)
+            self._snapshot = snap
+            self._last_good = snap
+            return snap
+
+    def mark_unhealthy(self, error: str) -> PolicySnapshot:
+        with self._lock:
+            self._generation += 1
+            snap = compile_policy_snapshot(
+                {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}},
+                generation=self._generation,
+                load_error=str(error),
+                healthy=False,
+            )
+            self._snapshot = snap
+            return snap
+
+    def load_from_path(self, path: Path, cfg: Optional[dict] = None) -> PolicySnapshot:
+        try:
+            state = load_egress_state(path=path, cfg=cfg)
+            return self.replace_from_state(state)
+        except Exception as exc:
+            return self.mark_unhealthy(str(exc))
+
+
+def export_profile(state: dict, selector: str) -> dict:
+    """Export one profile as a portable document (no auto-enable on import)."""
+    pid, profile = resolve_profile(state, selector)
+    validate_egress_state(state)
+    doc = {
+        "schema_version": EGRESS_SCHEMA_VERSION,
+        "export_kind": "egress_profile",
+        "exported_at": utc_now_iso(),
+        "profile": json.loads(json.dumps(profile)),
+    }
+    # Exports never force enabled=true on import; stamp intent.
+    doc["profile"]["id"] = pid
+    return doc
+
+
+def parse_import_document(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        raise EgressError("import document must be a JSON object")
+    version = raw.get("schema_version")
+    if version == EGRESS_SCHEMA_VERSION_LEGACY:
+        # Allow wrapping a legacy full state or a single profile-shaped object.
+        raise EgressError("legacy schema v1 import requires migrate via full state load")
+    if version != EGRESS_SCHEMA_VERSION:
+        raise EgressError("unsupported import schema_version: %s" % version)
+    profile = raw.get("profile")
+    if not isinstance(profile, dict):
+        raise EgressError("import document missing profile object")
+    # Validate as a transient one-profile state.
+    pid = str(profile.get("id") or _new_id(PROFILE_ID_PREFIX))
+    candidate = dict(profile)
+    candidate["id"] = pid
+    if "enabled" not in candidate:
+        candidate["enabled"] = False
+    # Import never auto-enables.
+    candidate["enabled"] = False
+    tmp_state = {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {pid: candidate}}
+    validate_egress_state(tmp_state)
+    return candidate
+
+
+def diff_profiles(current: dict, candidate: dict) -> dict:
+    """Structural diff of destinations/sources/metadata (no secrets)."""
+    cur_dests = {
+        (
+            str(d.get("host")),
+            int(d.get("port")),
+            str(d.get("protocol")),
+            str(d.get("match") or "exact"),
+        ): d
+        for d in (current.get("destinations") or [])
+        if isinstance(d, dict)
+    }
+    new_dests = {
+        (
+            str(d.get("host")),
+            int(d.get("port")),
+            str(d.get("protocol")),
+            str(d.get("match") or "exact"),
+        ): d
+        for d in (candidate.get("destinations") or [])
+        if isinstance(d, dict)
+    }
+    cur_srcs = {str(s.get("cidr")) for s in (current.get("sources") or []) if isinstance(s, dict)}
+    new_srcs = {str(s.get("cidr")) for s in (candidate.get("sources") or []) if isinstance(s, dict)}
+    return {
+        "name_current": current.get("name"),
+        "name_candidate": candidate.get("name"),
+        "destinations_added": sorted(
+            ["%s:%s/%s" % (h, p, proto) for (h, p, proto, _m) in (new_dests.keys() - cur_dests.keys())]
+        ),
+        "destinations_removed": sorted(
+            ["%s:%s/%s" % (h, p, proto) for (h, p, proto, _m) in (cur_dests.keys() - new_dests.keys())]
+        ),
+        "sources_added": sorted(new_srcs - cur_srcs),
+        "sources_removed": sorted(cur_srcs - new_srcs),
+        "enabled_current": bool(current.get("enabled")),
+        "enabled_candidate": False,  # import never auto-enables
+    }
+
+
+def import_profile_into_state(
+    state: dict,
+    candidate: dict,
+    *,
+    target_selector: Optional[str] = None,
+) -> tuple[str, dict, dict]:
+    """Merge validated candidate into state. Always leaves profile disabled."""
+    candidate = parse_import_document(
+        {"schema_version": EGRESS_SCHEMA_VERSION, "profile": candidate}
+    )
+    if target_selector:
+        pid, current = resolve_profile(state, target_selector)
+        diff = diff_profiles(current, candidate)
+        current["description"] = str(candidate.get("description") or current.get("description") or "")
+        current["sources"] = list(candidate.get("sources") or [])
+        current["destinations"] = list(candidate.get("destinations") or [])
+        current["enabled"] = False
+        current["updated_at"] = utc_now_iso()
+        return pid, current, diff
+    # Create new profile from candidate name.
+    name = validate_profile_name(candidate.get("name") or "")
+    pid, record = create_profile(state, name, description=candidate.get("description") or "", enabled=False)
+    record["sources"] = list(candidate.get("sources") or [])
+    record["destinations"] = list(candidate.get("destinations") or [])
+    # Re-assign destination/source ids if missing.
+    for src in record["sources"]:
+        if isinstance(src, dict) and not src.get("id"):
+            src["id"] = _new_id(SOURCE_ID_PREFIX)
+    for dest in record["destinations"]:
+        if isinstance(dest, dict) and not dest.get("id"):
+            dest["id"] = _new_id(DEST_ID_PREFIX)
+    record["updated_at"] = utc_now_iso()
+    validate_egress_state(state)
+    return pid, record, diff_profiles({"destinations": [], "sources": [], "enabled": False}, record)
 
 
 def doctor_issues(state: dict) -> list[dict]:

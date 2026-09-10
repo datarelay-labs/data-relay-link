@@ -31,8 +31,8 @@ eg.save_egress_state(eg.empty_egress_state(), path=path)
 def mut(st):
     pid,_=eg.create_profile(st,'smoke', enabled=True)
     eg.add_source(st,pid,'0.0.0.0/0')
-    eg.add_destination(st,pid,'example.com',80)
-    eg.add_destination(st,pid,'example.com',443)
+    eg.add_destination(st,pid,'example.com',80, protocol='http')
+    eg.add_destination(st,pid,'example.com',443, protocol='https')
     return pid
 eg.mutate_egress_state(mut, path=path)
 cfg={

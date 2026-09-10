@@ -14,6 +14,9 @@ mkdir -p \
   "$TMP/usr/local/sbin"
 
 cp "$ROOT/lib/frp_egress_control.py" "$TMP/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_public_suffix.py" "$TMP/usr/local/lib/drlink/"
+mkdir -p "$TMP/usr/local/lib/drlink/data"
+cp "$ROOT/lib/data/public_suffix_list.dat" "$TMP/usr/local/lib/drlink/data/"
 cp "$ROOT/lib/frp_audit.py" "$TMP/usr/local/lib/drlink/" 2>/dev/null || true
 cp "$ROOT/tools/frp-egress" "$TMP/usr/local/sbin/"
 chmod +x "$TMP/usr/local/sbin/frp-egress"
@@ -44,20 +47,20 @@ PY
 EGRESS="$TMP/usr/local/sbin/frp-egress"
 
 "$EGRESS" create ubuntu-update --description "Ubuntu updates"
-"$EGRESS" add-destination ubuntu-update security.ubuntu.com 443
-"$EGRESS" add-destination ubuntu-update archive.ubuntu.com 443
+"$EGRESS" add-destination ubuntu-update security.ubuntu.com 443 --protocol https
+"$EGRESS" add-destination ubuntu-update archive.ubuntu.com 443 --protocol https
 "$EGRESS" add-source ubuntu-update 203.0.113.10/32
 # Create is DISABLED by default — must enable before ALLOW.
-! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443
+! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" enable ubuntu-update
 "$EGRESS" show ubuntu-update | grep -q security.ubuntu.com
-"$EGRESS" test 203.0.113.10 security.ubuntu.com 443
-! "$EGRESS" test 203.0.113.10 evil.example.com 443
-! "$EGRESS" test 198.51.100.1 security.ubuntu.com 443
+"$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
+! "$EGRESS" test 203.0.113.10 evil.example.com 443 --protocol https
+! "$EGRESS" test 198.51.100.1 security.ubuntu.com 443 --protocol https
 "$EGRESS" disable ubuntu-update
-! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443
+! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" enable ubuntu-update
-"$EGRESS" test 203.0.113.10 security.ubuntu.com 443
+"$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" remove-destination ubuntu-update archive.ubuntu.com:443
 "$EGRESS" remove-source ubuntu-update 203.0.113.10/32
 "$EGRESS" delete ubuntu-update
