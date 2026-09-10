@@ -26,6 +26,7 @@ echo "=== tests ==="
 python3 tests/test-allocator.py
 python3 tests/test-bootstrap-ticket.py
 python3 tests/test-enrollment-security.py
+python3 tests/test-enrollment-atomicity.py
 python3 tests/test-mgmt-identity.py
 ./tests/test-client-config.sh
 ./tests/test-client-allocator-url.sh
@@ -56,6 +57,8 @@ python3 tests/test-core-correctness-p1.py
 ./tests/test-client-tags.sh
 ./tests/test-client-groups.sh
 python3 tests/test-client-registry.py
+python3 tests/test-control-state-concurrency.py
+python3 tests/test-restore-preflight.py
 python3 tests/test-restore-readiness.py
 ./tests/test-frp-client.sh
 ./tests/test-release-service-client-state-reconcile.sh
@@ -78,6 +81,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-product-upgrade-policy.sh
 ./tests/test-frpctl-doctor.sh
 ./tests/test-port-architecture.sh
+./tests/test-egress-port-architecture.sh
 python3 tests/test-access-control.py
 ./tests/test-access-control.sh
 python3 tests/test-egress-control.py
