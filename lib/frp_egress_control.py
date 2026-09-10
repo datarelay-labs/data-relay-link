@@ -22,10 +22,37 @@ from typing import Any, Optional
 EGRESS_SCHEMA_VERSION = 1
 DEFAULT_EGRESS_PATH = "/var/lib/drlink/egress-control.json"
 DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
-from frp_infrastructure_ports import DEFAULT_EGRESS_LISTEN_PORT
+
+def _default_egress_listen_port() -> int:
+    """Resolve the canonical default without requiring package imports.
+
+    Installers and tests often load this file via importlib.util.spec_from_file_location,
+    which does not put the sibling lib directory on sys.path.
+    """
+    try:
+        from frp_infrastructure_ports import DEFAULT_EGRESS_LISTEN_PORT as port  # noqa: WPS433
+        return int(port)
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        path = here / "frp_infrastructure_ports.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "frp_infrastructure_ports", str(path)
+            )
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return int(mod.DEFAULT_EGRESS_LISTEN_PORT)
+    except Exception:
+        pass
+    return 6102
+
 
 DEFAULT_LISTEN_ADDR = "0.0.0.0"
-DEFAULT_LISTEN_PORT = DEFAULT_EGRESS_LISTEN_PORT  # 6102 — outside published pool 6000-6098
+DEFAULT_LISTEN_PORT = _default_egress_listen_port()  # 6102 — outside published pool 6000-6098
 
 PROFILE_ID_PREFIX = "egp_"
 PROFILE_ID_HEX_LEN = 12
