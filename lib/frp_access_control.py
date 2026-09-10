@@ -48,6 +48,7 @@ REASON_POLICY_INVALID = "POLICY_INVALID"
 REASON_AUTHORIZATION_ERROR = "AUTHORIZATION_ERROR"
 REASON_EMPTY_ALLOWLIST = "EMPTY_ALLOWLIST"
 REASON_UNMAPPED_PROXY = "UNMAPPED_PROXY"
+REASON_SERVICE_DISABLED = "SERVICE_DISABLED"
 
 EMPTY_ALLOWLIST_MESSAGE = (
     "No allowed sources are configured.\n"
@@ -770,8 +771,13 @@ def parse_remote_addr(remote_addr: str) -> str:
 
 
 def build_proxy_map(registry: dict) -> dict[str, dict]:
-    """Map FRP proxy_name -> {client_id, service_id, public_port, client_label, enabled}."""
+    """Map FRP proxy_name -> {client_id, service_id, public_port, client_label, enabled}.
+
+    Duplicate derived proxy names are a security identity collision — fail closed
+    rather than last-write-wins.
+    """
     mapping = {}
+    collisions = {}
     clients = registry.get("clients") or {}
     if not isinstance(clients, dict):
         return mapping
@@ -788,7 +794,7 @@ def build_proxy_map(registry: dict) -> dict[str, dict]:
                 continue
             sid_s = str(sid).strip().lower()
             name = expected_proxy_name(hostname, mid, sid_s)
-            mapping[name] = {
+            entry = {
                 "client_id": mid,
                 "service_id": sid_s,
                 "public_port": svc.get("remote_port"),
@@ -796,8 +802,28 @@ def build_proxy_map(registry: dict) -> dict[str, dict]:
                 "enabled": bool(svc.get("enabled", True)),
                 "hostname": hostname,
             }
+            if name in mapping or name in collisions:
+                collisions.setdefault(name, [mapping.pop(name, None)]).append(entry)
+                continue
+            mapping[name] = entry
+    if collisions:
+        owners = []
+        for name, entries in sorted(collisions.items()):
+            parts = []
+            for e in entries:
+                if not e:
+                    continue
+                parts.append("%s/%s" % (e.get("client_id"), e.get("service_id")))
+            owners.append("%s => %s" % (name, ", ".join(parts)))
+        raise AccessError(
+            "derived proxy name collision (fail closed): %s" % "; ".join(owners)
+        )
     return mapping
 
+
+def validate_proxy_name_uniqueness(registry: dict) -> None:
+    """Registry invariant: derived FRP proxy names must be unique."""
+    build_proxy_map(registry)
 
 def evaluate_source_against_list(
     access_list: dict,
@@ -904,6 +930,14 @@ def authorize(
             service_id = mapped["service_id"]
             result["public_port"] = mapped.get("public_port")
             result["client_label"] = mapped.get("client_label") or None
+            # Authoritative registry enabled=false must deny even if a stale
+            # frpc still presents the proxy (do not rely on client cleanup).
+            if not mapped.get("enabled", True):
+                result["client_id"] = client_id
+                result["service_id"] = str(service_id).strip().lower()
+                result["decision"] = DECISION_DENY
+                result["reason"] = REASON_SERVICE_DISABLED
+                return result
         if not client_id or not service_id:
             result["reason"] = REASON_POLICY_INVALID
             return result
@@ -914,8 +948,14 @@ def authorize(
         if isinstance(client, dict):
             result["client_label"] = result["client_label"] or client.get("label") or None
             svc = (client.get("services") or {}).get(result["service_id"]) or {}
-            if isinstance(svc, dict) and result["public_port"] is None:
-                result["public_port"] = svc.get("remote_port")
+            if isinstance(svc, dict):
+                if result["public_port"] is None:
+                    result["public_port"] = svc.get("remote_port")
+                # Fail closed when authorizing by client_id/service_id directly.
+                if not bool(svc.get("enabled", True)):
+                    result["decision"] = DECISION_DENY
+                    result["reason"] = REASON_SERVICE_DISABLED
+                    return result
 
         binding = get_service_binding(access_state, client_id, result["service_id"])
         result["access_mode"] = binding["access_mode"]
