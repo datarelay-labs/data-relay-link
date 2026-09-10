@@ -6,8 +6,10 @@ egress-control.json (separate from inbound Access Control). Default DENY,
 fail-closed. Application TLS is never terminated.
 
 v1 model (intentionally small/strict):
-- HTTP: absolute-form http:// URI only; one request per connection
-- HTTPS: CONNECT hostname:port with TLS ClientHello SNI binding on port 443
+- HTTP: absolute-form http:// URI only; one request per connection; protocol=http
+- HTTPS: CONNECT + TLS ClientHello SNI binding for ALL https policy ports
+- ECH (RFC 9849 encrypted_client_hello / 0xfe0d) → DENY (no TLS interception)
+- Policy compile snapshot + generation; Option B session revalidation
 - No TLS interception, chunked request bodies, Expect:100-continue, or SOCKS
 """
 from __future__ import annotations
@@ -39,8 +41,19 @@ CLIENT_BODY_TIMEOUT = 60.0
 CLIENT_HELLO_TIMEOUT = 10.0
 MAX_CLIENT_HELLO = 16384
 DEFAULT_MAX_CONCURRENT = 256
+DEFAULT_PER_SOURCE_LIMIT = 32
+DEFAULT_DNS_PENDING_LIMIT = 64
+DNS_TIMEOUT = 5.0
+DNS_POSITIVE_TTL = 30.0
+DNS_NEGATIVE_TTL = 10.0
+HAPPY_EYEBALLS_DELAY = 0.25
+STREAM_BUF = 65536
 RELAY_BUF = 65536
 RELAY_MAX_BUFFER = 256 * 1024
+# RFC 9849 — TLS Encrypted Client Hello (ECH). Extension type encrypted_client_hello=0xfe0d.
+# Reference: https://www.rfc-editor.org/rfc/rfc9849.html (IANA tls-extensiontype-values).
+TLS_EXT_ENCRYPTED_CLIENT_HELLO = 0xFE0D
+SESSION_REVALIDATE_INTERVAL = 2.0
 
 
 def _load_module(name: str, rel: str):
@@ -406,6 +419,7 @@ def _authorize_and_connect(
     hostname: str,
     port: int,
     method: str,
+    protocol: str,
 ) -> tuple[Optional[socket.socket], dict]:
     state, load_error, cfg = gw.cache.snapshot()
     decision = EG.authorize_request(
@@ -413,7 +427,9 @@ def _authorize_and_connect(
         source_ip=source_ip,
         hostname=hostname,
         port=port,
+        protocol=protocol,
         load_error=load_error,
+        method=method,
     )
     decision["method"] = method
     decision["timestamp"] = EG.utc_now_iso()
@@ -857,12 +873,8 @@ def _deny_sni(
 
 
 def handle_client(gw: GatewayState, request: socket.socket, client_address) -> None:
-    if not gw.try_acquire():
-        try:
-            _send_simple_sock(request, 503, "Service Unavailable", b"too many connections\n")
-        finally:
-            request.close()
-        return
+    # Concurrency is bounded in ThreadedTCPServer.process_request before the
+    # worker thread is created. Do not re-acquire gw._sem here (deadlock).
     gw.bump_active(1)
     try:
         _handle_client_inner(gw, request, client_address)
@@ -874,7 +886,6 @@ def handle_client(gw: GatewayState, request: socket.socket, client_address) -> N
             pass
     finally:
         gw.bump_active(-1)
-        gw.release()
         try:
             request.close()
         except OSError:
@@ -912,9 +923,14 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             )
             _send_simple_sock(request, 400, "Bad Request", b"bad connect\n")
             return
-        # No request body for CONNECT; leftover bytes are start of TLS (or abuse).
+        # HTTPS policy: CONNECT + ClientHello SNI binding on ALL https ports.
         upstream, decision = _authorize_and_connect(
-            gw, source_ip=source_ip, hostname=host, port=port, method="CONNECT"
+            gw,
+            source_ip=source_ip,
+            hostname=host,
+            port=port,
+            method="CONNECT",
+            protocol=EG.PROTOCOL_HTTPS,
         )
         if upstream is None:
             code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
@@ -926,40 +942,31 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             upstream.close()
             return
 
-        # Port 443: bind TLS SNI to authorized CONNECT hostname (no MITM).
-        if port == 443:
-            raw_hello, observed, err = _read_and_validate_client_hello(
-                request, expected_hostname=host, initial=body_prefix
+        raw_hello, observed, err = _read_and_validate_client_hello(
+            request, expected_hostname=host, initial=body_prefix
+        )
+        if err is not None:
+            reason = (
+                EG.REASON_TLS_SNI_MISMATCH
+                if err == "SNI mismatch"
+                else EG.REASON_TLS_CLIENT_HELLO_INVALID
             )
-            if err is not None:
-                reason = (
-                    EG.REASON_TLS_SNI_MISMATCH
-                    if err == "SNI mismatch"
-                    else EG.REASON_TLS_CLIENT_HELLO_INVALID
-                )
-                _deny_sni(
-                    gw,
-                    source_ip=source_ip,
-                    hostname=host,
-                    port=port,
-                    reason=reason,
-                    observed_sni=observed,
-                    client=request,
-                    upstream=upstream,
-                )
-                return
-            try:
-                upstream.sendall(raw_hello)
-            except OSError:
-                upstream.close()
-                return
-        elif body_prefix:
-            # Non-443 CONNECT with leftover bytes: forward as tunnel start.
-            try:
-                upstream.sendall(body_prefix)
-            except OSError:
-                upstream.close()
-                return
+            _deny_sni(
+                gw,
+                source_ip=source_ip,
+                hostname=host,
+                port=port,
+                reason=reason,
+                observed_sni=observed,
+                client=request,
+                upstream=upstream,
+            )
+            return
+        try:
+            upstream.sendall(raw_hello)
+        except OSError:
+            upstream.close()
+            return
 
         _relay_bidirectional(request, upstream)
         return
@@ -1000,7 +1007,12 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         return
 
     upstream, decision = _authorize_and_connect(
-        gw, source_ip=source_ip, hostname=host, port=port, method=method
+        gw,
+        source_ip=source_ip,
+        hostname=host,
+        port=port,
+        method=method,
+        protocol=EG.PROTOCOL_HTTP,
     )
     if upstream is None:
         code = 403 if decision.get("reason") != EG.REASON_DNS_FAILURE else 502
@@ -1041,7 +1053,50 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
 
     def __init__(self, server_address, gw: GatewayState):
         self.gw = gw
+        # Bound worker creation itself (not only handler-body acquire).
+        self.max_concurrent = int(getattr(gw, "max_concurrent", DEFAULT_MAX_CONCURRENT) or DEFAULT_MAX_CONCURRENT)
+        self.request_timeout = float(CLIENT_HEADER_TIMEOUT)
+        self._slot_sem = threading.BoundedSemaphore(self.max_concurrent)
         super().__init__(server_address, None)
+
+    def process_request(self, request, client_address):
+        try:
+            request.settimeout(self.request_timeout)
+        except (OSError, AttributeError):
+            pass
+        if not self._slot_sem.acquire(blocking=False):
+            try:
+                _send_simple_sock(request, 503, "Service Unavailable", b"server busy\n")
+            except Exception:
+                pass
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+
+        def run():
+            try:
+                self.finish_request(request, client_address)
+            except Exception:
+                try:
+                    self.handle_error(request, client_address)
+                finally:
+                    try:
+                        self.shutdown_request(request)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.shutdown_request(request)
+                except Exception:
+                    pass
+            finally:
+                self._slot_sem.release()
+
+        t = threading.Thread(target=run)
+        t.daemon = self.daemon_threads
+        t.start()
 
     def finish_request(self, request, client_address):
         handle_client(self.gw, request, client_address)

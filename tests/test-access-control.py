@@ -316,6 +316,104 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(loaded["access_lists"], {})
 
 
+    def test_disabled_service_fail_closed_public_and_allowlist(self):
+        """AUDIT-004: disabled registry services must DENY regardless of binding."""
+        self.registry["clients"]["machine-aaa"]["services"]["ssh"]["enabled"] = False
+        # PUBLIC binding path
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            client_id="machine-aaa",
+            service_id="ssh",
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_DENY)
+        self.assertEqual(result["reason"], ACL.REASON_SERVICE_DISABLED)
+
+        # ALLOWLIST binding path
+        lid, _ = ACL.create_access_list(self.state, "DeskNet")
+        ACL.add_source_entry(self.state, lid, "desk", "198.51.100.0/24")
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            client_id="machine-aaa",
+            service_id="ssh",
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_DENY)
+        self.assertEqual(result["reason"], ACL.REASON_SERVICE_DISABLED)
+
+        # Stale proxy NewUserConn path via proxy_name
+        proxy = ACL.expected_proxy_name("alpha-host", "machine-aaa", "ssh")
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=proxy,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_DENY)
+        self.assertEqual(result["reason"], ACL.REASON_SERVICE_DISABLED)
+
+        # Re-enable restores PUBLIC allow
+        self.registry["clients"]["machine-aaa"]["services"]["ssh"]["enabled"] = True
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_PUBLIC, None)
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=proxy,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(result["reason"], ACL.REASON_PUBLIC)
+
+        # Re-enable + matching ALLOWLIST
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=proxy,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+
+    def test_proxy_name_collision_fail_closed(self):
+        """AUDIT-009: colliding derived proxy names must not last-write-wins."""
+        # Same hostname + same first 8 machine-id chars + same service id
+        self.registry["clients"]["machineaabb01"] = {
+            "label": "one",
+            "hostname": "same-host",
+            "services": {"ssh": {"remote_port": 6011, "enabled": True}},
+        }
+        self.registry["clients"]["machineaabb02"] = {
+            "label": "two",
+            "hostname": "same-host",
+            "services": {"ssh": {"remote_port": 6012, "enabled": True}},
+        }
+        # Prefixes: machineaabb01[:8]=machinea, machineaabb02[:8]=machinea — collision
+        with self.assertRaises(ACL.AccessError) as ctx:
+            ACL.build_proxy_map(self.registry)
+        self.assertIn("collision", str(ctx.exception).lower())
+
+        # Unique names remain usable
+        ok_reg = {
+            "schema_version": 2,
+            "clients": {
+                "aaaaaaaa0001": {
+                    "hostname": "host-a",
+                    "services": {"ssh": {"remote_port": 6001, "enabled": True}},
+                },
+                "bbbbbbbb0002": {
+                    "hostname": "host-b",
+                    "services": {"ssh": {"remote_port": 6002, "enabled": True}},
+                },
+            },
+        }
+        mapping = ACL.build_proxy_map(ok_reg)
+        self.assertEqual(len(mapping), 2)
+
+
+
 class PolicyCacheFailClosedTests(unittest.TestCase):
     """PolicyCache must fail closed when authoritative files disappear."""
 
@@ -489,7 +587,6 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
-
 
 if __name__ == "__main__":
     unittest.main()

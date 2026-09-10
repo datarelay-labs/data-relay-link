@@ -20,7 +20,8 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -99,6 +100,39 @@ def _load_client_registry():
 
 
 CREG = _load_client_registry()
+
+
+def _load_machine_id():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_machine_id.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_machine_id.py',
+        Path('/usr/local/lib/drlink/frp_machine_id.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_machine_id', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+MID = _load_machine_id()
+
+def _load_bounded():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_bounded_server.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_bounded_server.py',
+        Path('/usr/local/lib/drlink/frp_bounded_server.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_bounded_server', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+BOUNDED = _load_bounded()
+
 
 
 def _load_health_check():
@@ -761,7 +795,10 @@ def validate_registry_invariants(state, cfg=None):
             port = coerce_port(svc.get('remote_port'))
             if port is None:
                 continue
-            if port in seen_ports:
+            # reserved[] is the held-port bookkeeping list and commonly overlaps
+            # active service remote_ports. Collision is only when another
+            # non-reserved owner already claims the port (doctor parity).
+            if port in seen_ports and seen_ports[port][0] != 'reserved':
                 raise RegistrySchemaError('REGISTRY_INVALID: duplicate public port ownership')
             seen_ports[port] = (mid, key)
             if port_start is not None and port_end is not None:
@@ -769,7 +806,36 @@ def validate_registry_invariants(state, cfg=None):
                     raise RegistrySchemaError('REGISTRY_INVALID: allocated port outside configured range')
             if port in protected:
                 raise RegistrySchemaError('REGISTRY_INVALID: allocated port collides with a reserved control port')
+    # Derived FRP proxy names must be unique (hostname + machine_id[:8] + service).
+    # Last-write-wins map assignment would silently mis-authorize.
+    acl = _load_access_control_for_invariants()
+    if acl is not None:
+        try:
+            acl.validate_proxy_name_uniqueness(state)
+        except acl.AccessError as exc:
+            raise RegistrySchemaError('REGISTRY_INVALID: %s' % exc) from exc
     return state
+
+
+_ACL_FOR_INVARIANTS = None
+
+
+def _load_access_control_for_invariants():
+    global _ACL_FOR_INVARIANTS
+    if _ACL_FOR_INVARIANTS is not None:
+        return _ACL_FOR_INVARIANTS
+    for path in (
+        Path(__file__).resolve().parent / 'frp_access_control.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_access_control.py',
+        Path('/usr/local/lib/drlink/frp_access_control.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_access_control', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _ACL_FOR_INVARIANTS = mod
+            return mod
+    return None
 
 
 def used_ports_from_state(state):
@@ -1128,10 +1194,17 @@ class Allocator:
         parsed = parse_bootstrap_ticket(raw_ticket if isinstance(raw_ticket, str) else '')
         machine_id = str(payload.get('machine_id', '') or '').strip()
         hostname = str(payload.get('hostname', '') or '').strip()
-        if not machine_id:
-            return 400, api_error('machine_id is required', 'ZERO_TOUCH_INPUT_INVALID')
-        if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
-            return 400, api_error('invalid machine_id', 'ZERO_TOUCH_INPUT_INVALID')
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                code = 'ZERO_TOUCH_INPUT_INVALID'
+                return 400, api_error(str(exc), code)
+        else:
+            if not machine_id:
+                return 400, api_error('machine_id is required', 'ZERO_TOUCH_INPUT_INVALID')
+            if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
+                return 400, api_error('invalid machine_id', 'ZERO_TOUCH_INPUT_INVALID')
         try:
             hostname = CREG.validate_hostname(hostname)
         except ValueError:
@@ -1633,10 +1706,18 @@ class Allocator:
 
         machine_id = str(payload.get('machine_id', '')).strip()
         hostname = str(payload.get('hostname', '')).strip()
-        if not machine_id:
-            return 400, api_error('machine_id is required', 'AUTH_FAILED')
-        if any(c in machine_id for c in '\r\n/\\'):
-            return 400, api_error('invalid machine_id', 'AUTH_FAILED')
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                return 400, api_error(str(exc), 'AUTH_FAILED')
+        else:
+            if not machine_id:
+                return 400, api_error('machine_id is required', 'AUTH_FAILED')
+            if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
+                return 400, api_error('invalid machine_id', 'AUTH_FAILED')
+            if any(ord(c) < 0x20 or (0x7F <= ord(c) <= 0x9F) for c in machine_id):
+                return 400, api_error('invalid machine_id', 'AUTH_FAILED')
         try:
             hostname = CREG.validate_hostname(hostname)
         except ValueError:
@@ -1997,7 +2078,12 @@ class Allocator:
             or headers.get('X-Client-Id')
             or ''
         ).strip()
-        if not machine_id:
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                return None, str(exc)
+        elif not machine_id:
             return None, 'missing machine id'
         with self.registry_lock():
             state = self.load_registry()
@@ -2119,17 +2205,21 @@ def make_handler(allocator):
             return True
 
         def _with_slot(self, fn):
-            acquired = _REQUEST_SLOTS.acquire(blocking=False)
-            if not acquired:
-                self.send_json(
-                    503,
-                    api_error('server is busy; retry later', 'SERVER_BUSY'),
-                )
-                return
-            try:
-                return fn()
-            finally:
-                _REQUEST_SLOTS.release()
+            # Connection-level bounding is enforced by BoundedThreadingMixIn
+            # before the worker thread starts. A second semaphore here deadlocks.
+            if BOUNDED is None:
+                acquired = _REQUEST_SLOTS.acquire(blocking=False)
+                if not acquired:
+                    self.send_json(
+                        503,
+                        api_error('server is busy; retry later', 'SERVER_BUSY'),
+                    )
+                    return
+                try:
+                    return fn()
+                finally:
+                    _REQUEST_SLOTS.release()
+            return fn()
 
         def do_GET(self):
             def _handle():
@@ -2345,7 +2435,29 @@ def main():
     if port is None:
         raise SystemExit('ERROR: allocator_listen_port is not configured')
     context = allocator_ssl_context(allocator.cfg)
-    server = ThreadingHTTPServer((host, port), make_handler(allocator))
+    handler = make_handler(allocator)
+    if BOUNDED is not None:
+        def _reject(request, _addr):
+            try:
+                body = b'{"ok":false,"error":"server busy"}'
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: %d\r\n"
+                    b"Connection: close\r\n\r\n" % len(body) + body
+                )
+            except OSError:
+                pass
+        class AllocatorServer(BOUNDED.BoundedThreadingMixIn, HTTPServer):
+            max_concurrent = ALLOCATOR_MAX_CONCURRENT
+            request_timeout = float(ALLOCATOR_REQUEST_TIMEOUT_SEC)
+            daemon_threads = True
+            reject_callback = staticmethod(_reject)
+        server = AllocatorServer((host, port), handler)
+    else:
+        class AllocatorServer(ThreadingMixIn, HTTPServer):
+            daemon_threads = True
+        server = AllocatorServer((host, port), handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     print(f'FRP allocator listening on https://{host}:{port}', flush=True)
     server.serve_forever()

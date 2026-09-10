@@ -126,4 +126,54 @@ fi
 grep -qi 'egress' "$WORKDIR/egress-range.err" || fail "egress range message"
 pass "installer rejects egress inside published range"
 
+# Consistency: active defaults must not diverge across modules/docs fixtures.
+python3 - "$ROOT" <<'PY'
+import importlib.util, re, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "infra", root / "lib/frp_infrastructure_ports.py"
+)
+infra = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(infra)
+canonical = infra.DEFAULT_EGRESS_LISTEN_PORT
+assert canonical == 6102, canonical
+
+# Active production defaults must match canonical (not legacy 6080).
+checks = [
+    (root / "lib/frp_egress_control.py", r"DEFAULT_LISTEN_PORT\s*=\s*_default_egress_listen_port\(\)"),
+    (root / "install-server.sh", r"FRP_EGRESS_LISTEN_PORT:-6102"),
+    (root / "lib/frp-server-upgrade.sh", r'"egress_listen_port":\s*6102'),
+]
+for path, pat in checks:
+    text = path.read_text(encoding="utf-8")
+    assert re.search(pat, text), f"missing canonical default in {path}"
+
+# Stale default 6080 must not appear outside intentional collision/legacy fixtures.
+allowed_6080 = {
+    "tests/test-egress-port-architecture.sh",  # explicit collision fixtures
+}
+hits = []
+for path in root.rglob("*"):
+    if not path.is_file() or ".git" in path.parts or "frp_" in path.name and path.suffix == "":
+        continue
+    if any(p.startswith(".") for p in path.parts if p not in (".",)):
+        if ".git" in path.parts or path.parts[0].startswith(".frp"):
+            continue
+    if path.suffix in (".png", ".jpg", ".bin", ".tar", ".gz", ".zip"):
+        continue
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        continue
+    if re.search(r"\b6080\b", text):
+        rel = str(path.relative_to(root))
+        if rel in allowed_6080 or rel.startswith(".frp-compat-stage/"):
+            continue
+        # 16080 etc already excluded by word boundary; report others.
+        hits.append(rel)
+assert not hits, "stale 6080 defaults found: %s" % hits
+print("EGRESS_DEFAULT_PORT_CONSISTENCY=PASS")
+PY
+
 echo "CORE_001_EGRESS_PORT_ARCHITECTURE=PASS"

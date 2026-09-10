@@ -13,9 +13,17 @@ import os
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+
+# Compatibility alias for tests / older call sites.
+ThreadingHTTPServer = type(
+    "ThreadingHTTPServer",
+    (ThreadingMixIn, HTTPServer),
+    {"daemon_threads": True},
+)
 
 ROOT = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
 
@@ -40,6 +48,10 @@ def _load_module(name: str, rel: str):
 
 
 ACL = _load_module("frp_access_control", "frp_access_control.py")
+try:
+    _BOUNDED = _load_module("frp_bounded_server", "frp_bounded_server.py")
+except SystemExit:
+    _BOUNDED = None
 
 
 def _load_registry_validator():
@@ -160,17 +172,10 @@ def make_handler(cache: PolicyCache, plugin_path: str):
                 return None
 
         def _with_slot(self, fn):
-            acquired = _ACCESS_REQUEST_SLOTS.acquire(blocking=False)
-            if not acquired:
-                self._send_json(
-                    503,
-                    {"reject": True, "reject_reason": "server busy", "unchange": True},
-                )
-                return None
-            try:
-                return fn()
-            finally:
-                _ACCESS_REQUEST_SLOTS.release()
+            # Connection-level bounding is enforced by BoundedThreadingMixIn in
+            # process_request (before the worker thread is created). Do not
+            # acquire a second semaphore here — that would deadlock under load.
+            return fn()
 
         def _send_json(self, code: int, payload: dict):
             body = json.dumps(payload).encode("utf-8")
@@ -309,7 +314,35 @@ def main():
     port = int(port_s)
 
     cache = PolicyCache(config_path)
-    server = ThreadingHTTPServer((host, port), make_handler(cache, plugin_path))
+    handler = make_handler(cache, plugin_path)
+    if _BOUNDED is not None:
+        def _reject(request, _client_address):
+            try:
+                body = b'{"reject":true,"reject_reason":"server busy","unchange":true}'
+                response = (
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: %d\r\n"
+                    b"Connection: close\r\n\r\n"
+                    % len(body)
+                    + body
+                )
+                request.sendall(response)
+            except OSError:
+                pass
+
+        class AccessServer(_BOUNDED.BoundedThreadingMixIn, HTTPServer):
+            max_concurrent = ACCESS_MAX_CONCURRENT
+            request_timeout = 30.0
+            daemon_threads = True
+            reject_callback = staticmethod(_reject)
+
+        server = AccessServer((host, port), handler)
+    else:
+        class AccessServer(ThreadingMixIn, HTTPServer):
+            daemon_threads = True
+
+        server = AccessServer((host, port), handler)
     print("drlink-access listening on http://%s:%s%s" % (host, port, plugin_path), flush=True)
     try:
         server.serve_forever(poll_interval=0.5)

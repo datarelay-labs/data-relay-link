@@ -104,10 +104,11 @@ if type frp_test_harness_enabled >/dev/null 2>&1 && frp_test_harness_enabled && 
   [[ "${FRP_STATUS_ACCESS_STATE:-}" != "" ]] && access_plugin_state="$FRP_STATUS_ACCESS_STATE"
   [[ "${FRP_STATUS_EGRESS_STATE:-}" != "" ]] && egress_state="$FRP_STATUS_EGRESS_STATE"
   [[ "${FRP_STATUS_FRONTEND_STATE:-}" != "" ]] && frontend_state="$FRP_STATUS_FRONTEND_STATE"
-elif command -v curl >/dev/null 2>&1; then
+else
   _access_addr="127.0.0.1:6101"
   _allocator_port="6099"
   _egress_port="6102"
+  _egress_addr="127.0.0.1"
   if [[ -r "$config_file" ]]; then
     eval "$(python3 - "$config_file" <<'PY' 2>/dev/null || true
 import json, shlex, sys
@@ -122,31 +123,70 @@ aport = cfg.get("allocator_listen_port", cfg.get("listen_port", 6099))
 print("allocator_port=" + shlex.quote(str(aport)))
 eport = cfg.get("egress_listen_port", 6102)
 print("egress_port=" + shlex.quote(str(eport)))
+eaddr = str(cfg.get("egress_listen_addr") or "127.0.0.1").strip() or "127.0.0.1"
+if eaddr in ("0.0.0.0", "::"):
+    eaddr = "127.0.0.1"
+print("egress_addr=" + shlex.quote(eaddr))
 PY
 )"
     [[ -n "${access_addr:-}" ]] && _access_addr="$access_addr"
     [[ -n "${allocator_port:-}" ]] && _allocator_port="$allocator_port"
     [[ -n "${egress_port:-}" ]] && _egress_port="$egress_port"
+    [[ -n "${egress_addr:-}" ]] && _egress_addr="$egress_addr"
   fi
-  _code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "http://${_access_addr}/healthz" 2>/dev/null || echo 000)"
+  # Prefer curl when present; otherwise use stdlib HTTPS/HTTP probes so
+  # --check never treats "tool missing" as readiness success.
+  if command -v curl >/dev/null 2>&1; then
+    _code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "http://${_access_addr}/healthz" 2>/dev/null || echo 000)"
+    _acode="$(curl -skS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "https://127.0.0.1:${_allocator_port}/healthz" 2>/dev/null || echo 000)"
+  else
+    _code="$(python3 - "$_access_addr" <<'PY' 2>/dev/null || echo 000
+import socket, sys
+addr = sys.argv[1]
+host, port = addr.rsplit(":", 1)
+s = socket.create_connection((host, int(port)), timeout=2)
+s.sendall(b"GET /healthz HTTP/1.1\r\nHost: health\r\nConnection: close\r\n\r\n")
+data = s.recv(64).decode("latin1", "ignore")
+s.close()
+print("200" if data.startswith("HTTP/1.") and " 200 " in data[:20] else "000")
+PY
+)"
+    _acode="$(python3 - "$_allocator_port" <<'PY' 2>/dev/null || echo 000
+import socket, ssl, sys
+port = int(sys.argv[1])
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+raw = socket.create_connection(("127.0.0.1", port), timeout=2)
+s = ctx.wrap_socket(raw, server_hostname="127.0.0.1")
+s.sendall(b"GET /healthz HTTP/1.1\r\nHost: health\r\nConnection: close\r\n\r\n")
+data = s.recv(64).decode("latin1", "ignore")
+s.close()
+print("200" if data.startswith("HTTP/1.") and " 200 " in data[:20] else "000")
+PY
+)"
+  fi
   if [[ "$_code" == "200" ]]; then
     access_plugin_health="ok"
   else
     access_plugin_health="unhealthy(${_code})"
   fi
-  _acode="$(curl -skS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "https://127.0.0.1:${_allocator_port}/healthz" 2>/dev/null || echo 000)"
   if [[ "$_acode" == "200" ]]; then
     allocator_health="ok"
   else
     allocator_health="unhealthy(${_acode})"
   fi
-  # Egress has no /healthz; treat listening TCP as healthy when unit is active.
-  if command -v ss >/dev/null 2>&1 && ss -lntn 2>/dev/null | grep -qE ":${_egress_port}\\b"; then
+  # Egress: prefer TCP connect to configured listen address/port (stdlib).
+  if python3 - "$_egress_addr" "$_egress_port" <<'PY' 2>/dev/null
+import socket, sys
+host, port = sys.argv[1], int(sys.argv[2])
+s = socket.create_connection((host, port), timeout=2)
+s.close()
+PY
+  then
     egress_health="ok"
-  elif command -v ss >/dev/null 2>&1; then
-    egress_health="unhealthy(not-listening)"
   else
-    egress_health="unknown"
+    egress_health="unhealthy(not-listening)"
   fi
 fi
 
@@ -480,24 +520,24 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
       echo "ERROR: drlink-allocator is not active (${allocator_state})" >&2
       exit 1
     fi
-    if [[ "$allocator_health" == unhealthy* ]]; then
-      echo "ERROR: allocator /healthz is unhealthy (${allocator_health})" >&2
+    if [[ "$allocator_health" == unhealthy* || "$allocator_health" == "unknown" ]]; then
+      echo "ERROR: allocator /healthz is not ready (${allocator_health})" >&2
       exit 1
     fi
     if [[ "$access_plugin_state" != "active" ]]; then
       echo "ERROR: drlink-access is not active (${access_plugin_state})" >&2
       exit 1
     fi
-    if [[ "$access_plugin_health" == unhealthy* ]]; then
-      echo "ERROR: access plugin /healthz is unhealthy (${access_plugin_health})" >&2
+    if [[ "$access_plugin_health" == unhealthy* || "$access_plugin_health" == "unknown" ]]; then
+      echo "ERROR: access plugin /healthz is not ready (${access_plugin_health})" >&2
       exit 1
     fi
     if [[ "$egress_state" != "active" ]]; then
       echo "ERROR: drlink-egress is not active (${egress_state})" >&2
       exit 1
     fi
-    if [[ "$egress_health" == unhealthy* ]]; then
-      echo "ERROR: Controlled Egress listener is unhealthy (${egress_health})" >&2
+    if [[ "$egress_health" == unhealthy* || "$egress_health" == "unknown" ]]; then
+      echo "ERROR: Controlled Egress listener is not ready (${egress_health})" >&2
       exit 1
     fi
     if [[ "${deployment_mode:-}" == "single443" ]]; then
@@ -508,7 +548,7 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
     fi
   else
     # Legacy harness path: when access is active, health must still pass.
-    if [[ "$access_plugin_state" == "active" && "$access_plugin_health" == unhealthy* ]]; then
+    if [[ "$access_plugin_state" == "active" && ( "$access_plugin_health" == unhealthy* || "$access_plugin_health" == "unknown" ) ]]; then
       exit 1
     fi
   fi

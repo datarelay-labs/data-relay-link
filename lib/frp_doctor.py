@@ -2070,6 +2070,7 @@ def check_egress_control(report, paths, facts, cfg):
         state = eg.load_egress_state(
             path=egress_path,
             cfg=cfg if isinstance(cfg, dict) else None,
+            persist_migration=False,  # doctor is read-only
         )
         report.add(
             'EGRESS_CONFIG_ERROR', PASS,
@@ -2081,7 +2082,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_CONFIG_ERROR', FAIL,
             'EGRESS_CONFIG_ERROR: egress-control.json is invalid (fail-closed)',
             str(exc),
-            'restore egress-control.json from backup or recreate with drlink create egress-profile',
+            'restore egress-control.json from backup or recreate with drlink egress create',
             'state',
         )
         return
@@ -2188,7 +2189,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_UNIT_ENABLED', WARN,
             'drlink-egress is disabled',
             unit_enabled,
-            'systemctl enable drlink-egress',
+            'enable unit drlink-egress (read-only doctor will not change units)',
             'runtime',
         )
     else:
@@ -2202,9 +2203,9 @@ def check_egress_control(report, paths, facts, cfg):
     if unit_active == 'active':
         report.add('EGRESS_UNIT', PASS, 'drlink-egress is active', unit_active, '', 'runtime')
     elif unit_active == 'failed':
-        report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_active, 'systemctl status drlink-egress', 'runtime')
+        report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_active, 'inspect unit drlink-egress', 'runtime')
     else:
-        report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'systemctl status drlink-egress', 'runtime')
+        report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'inspect unit drlink-egress', 'runtime')
 
     for issue in eg.doctor_issues(state):
         cls = str(issue.get('class') or 'EGRESS_CONFIG_ERROR')
@@ -2215,7 +2216,7 @@ def check_egress_control(report, paths, facts, cfg):
             status,
             '%s: %s' % (cls, issue.get('message') or 'issue'),
             '',
-            'inspect Controlled Egress with drlink show egress-profiles',
+            'inspect Controlled Egress with drlink egress list',
             'state',
         )
 
