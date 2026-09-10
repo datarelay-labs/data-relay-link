@@ -1666,31 +1666,42 @@ frp_server_ensure_sandbox_dirs() {
     chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
     chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
     if getent passwd drlink-egress >/dev/null 2>&1; then
+      acl_ok=0
       if command -v setfacl >/dev/null 2>&1; then
-        setfacl -m u:drlink-egress:--x "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
-        if [[ -f "$etc_proj/config.json" ]]; then
-          setfacl -m u:drlink-egress:r-- "$etc_proj/config.json" 2>/dev/null || true
+        if setfacl -m u:drlink-egress:--x "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null; then
+          acl_ok=1
+          # Named-user ACL widens displayed group bits (often 0710) while owning
+          # group stays root. Do not chmod afterward — that clears the ACL mask.
+          if [[ -f "$etc_proj/config.json" ]]; then
+            setfacl -m u:drlink-egress:r-- "$etc_proj/config.json" 2>/dev/null || true
+          fi
+          if [[ -f "$var_lib/egress-control.json" ]]; then
+            setfacl -m u:drlink-egress:rw- "$var_lib/egress-control.json" 2>/dev/null || true
+          fi
+          touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
+          setfacl -m u:drlink-egress:rw- "$var_log/egress-conn.jsonl" 2>/dev/null || true
         fi
-        if [[ -f "$var_lib/egress-control.json" ]]; then
-          setfacl -m u:drlink-egress:rw- "$var_lib/egress-control.json" 2>/dev/null || true
+      fi
+      if [[ "$acl_ok" -ne 1 ]] && getent group drlink-egress >/dev/null 2>&1; then
+        # Fallback without working ACL: traverse-only group bit (not on /etc/frp).
+        # Only apply 0710 when group ownership actually changes — never leave
+        # group-execute on root:root directories.
+        if chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null; then
+          chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+          if [[ -f "$etc_proj/config.json" ]]; then
+            chown root:drlink-egress "$etc_proj/config.json" 2>/dev/null || true
+            chmod 640 "$etc_proj/config.json" 2>/dev/null || true
+          fi
+          if [[ -f "$var_lib/egress-control.json" ]]; then
+            chown root:drlink-egress "$var_lib/egress-control.json" 2>/dev/null || true
+            chmod 660 "$var_lib/egress-control.json" 2>/dev/null || true
+          fi
+          touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
+          chown root:drlink-egress "$var_log/egress-conn.jsonl" 2>/dev/null || true
+          chmod 660 "$var_log/egress-conn.jsonl" 2>/dev/null || true
+        else
+          chmod 700 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
         fi
-        touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
-        setfacl -m u:drlink-egress:rw- "$var_log/egress-conn.jsonl" 2>/dev/null || true
-      elif getent group drlink-egress >/dev/null 2>&1; then
-        # Fallback without ACL tools: traverse-only group bit (not on /etc/frp).
-        chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
-        chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
-        if [[ -f "$etc_proj/config.json" ]]; then
-          chown root:drlink-egress "$etc_proj/config.json" 2>/dev/null || true
-          chmod 640 "$etc_proj/config.json" 2>/dev/null || true
-        fi
-        if [[ -f "$var_lib/egress-control.json" ]]; then
-          chown root:drlink-egress "$var_lib/egress-control.json" 2>/dev/null || true
-          chmod 660 "$var_lib/egress-control.json" 2>/dev/null || true
-        fi
-        touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
-        chown root:drlink-egress "$var_log/egress-conn.jsonl" 2>/dev/null || true
-        chmod 660 "$var_log/egress-conn.jsonl" 2>/dev/null || true
       fi
     fi
   fi

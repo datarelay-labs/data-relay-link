@@ -32,10 +32,11 @@ PY
 
 # Project/state dirs stay 0700 with ACL when available; without setfacl the
 # installer falls back to 0710 + group drlink-egress for traverse-only access.
+# With ACL, Linux may display 0710 while owning group remains root.
 assert_project_state_dir_mode() {
   local path="$1"
   python3 - "$path" <<'PY' || fail "project/state dir mode $path"
-import grp, os, stat, sys
+import grp, os, stat, subprocess, sys
 path = sys.argv[1]
 st = os.stat(path)
 mode = stat.S_IMODE(st.st_mode)
@@ -47,7 +48,19 @@ if mode == 0o700:
     raise SystemExit(0)
 if mode == 0o710 and group == "drlink-egress":
     raise SystemExit(0)
-print(f"wanted 0o700 or 0o710:drlink-egress got {oct(mode)} group={group}", file=sys.stderr)
+if mode == 0o710:
+    try:
+        out = subprocess.check_output(
+            ["getfacl", "-p", "--absolute-names", path],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        out = ""
+    for line in out.splitlines():
+        if line.startswith("user:drlink-egress:") and "x" in line.split("#", 1)[0]:
+            raise SystemExit(0)
+print(f"wanted 0o700, 0o710:drlink-egress, or ACL user:drlink-egress:x; got {oct(mode)} group={group}", file=sys.stderr)
 raise SystemExit(1)
 PY
 }
