@@ -183,17 +183,27 @@ frp_pki_dir() {
 }
 
 frp_server_install_manifest_files() {
-  local lib_dir="$1" sbin_dir="$2" bin_dir="$3" rel mode src
+  local lib_dir="$1" sbin_dir="$2" bin_dir="$3" rel mode src dest_rel dest_dir dest_path
   while IFS=: read -r rel mode src; do
     case "$rel" in
       usr/local/lib/drlink/*)
-        install -m "$mode" "$BASE_DIR/$src" "${lib_dir}/$(basename "$rel")"
+        dest_rel="${rel#usr/local/lib/drlink/}"
+        dest_path="${lib_dir}/${dest_rel}"
+        dest_dir="$(dirname "$dest_path")"
+        mkdir -p "$dest_dir"
+        install -m "$mode" "$BASE_DIR/$src" "$dest_path"
         ;;
       usr/local/sbin/*)
-        install -m "$mode" "$BASE_DIR/$src" "${sbin_dir}/$(basename "$rel")"
+        dest_rel="${rel#usr/local/sbin/}"
+        dest_path="${sbin_dir}/${dest_rel}"
+        mkdir -p "$(dirname "$dest_path")"
+        install -m "$mode" "$BASE_DIR/$src" "$dest_path"
         ;;
       usr/local/bin/*)
-        install -m "$mode" "$BASE_DIR/$src" "${bin_dir}/$(basename "$rel")"
+        dest_rel="${rel#usr/local/bin/}"
+        dest_path="${bin_dir}/${dest_rel}"
+        mkdir -p "$(dirname "$dest_path")"
+        install -m "$mode" "$BASE_DIR/$src" "$dest_path"
         ;;
     esac
   done < <(frp_server_upgrade_destinations "$BASE_DIR")

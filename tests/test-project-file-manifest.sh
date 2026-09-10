@@ -48,12 +48,19 @@ required = {
     "usr/local/lib/drlink/frp-upstream",
     "usr/local/lib/drlink/frpctl",
     "usr/local/bin/drlink",
+    "usr/local/lib/drlink/data/public_suffix_list.dat",
 }
 missing = sorted(required - managed)
 if missing:
     raise SystemExit("managed set missing %s" % missing)
+# Nested lib paths must not be flattened by basename() during install.
+if "basename \"$rel\"" in install_server or 'basename "$rel"' in install_server:
+    raise SystemExit("install-server.sh still flattens manifest destinations with basename")
+if 'dest_rel="${rel#usr/local/lib/drlink/}"' not in install_server:
+    raise SystemExit("install-server.sh missing nested lib destination handling")
 print("PARITY_OK")
 PY
 pass "PROJECT_FILE_MANIFEST_PARITY"
 pass "P1_MANIFEST_PARITY_GATE"
+pass "NESTED_LIB_PATH_INSTALL"
 echo "PROJECT_FILE_MANIFEST_TEST=PASS"
