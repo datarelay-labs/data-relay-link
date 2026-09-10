@@ -32,6 +32,8 @@ project usr/local/lib/drlink/frp-doctor-common.sh 0644 lib/frp-doctor-common.sh 
 project usr/local/lib/drlink/frp_doctor.py 0644 lib/frp_doctor.py python
 project usr/local/lib/drlink/frp_support_bundle.py 0644 lib/frp_support_bundle.py python
 project usr/local/lib/drlink/frp_ctl_grammar.py 0644 lib/frp_ctl_grammar.py python
+project usr/local/lib/drlink/frp_cli_catalog.py 0644 lib/frp_cli_catalog.py python
+project usr/local/lib/drlink/frp_infrastructure_ports.py 0644 lib/frp_infrastructure_ports.py python
 project usr/local/lib/drlink/frp_ctl_repl.py 0644 lib/frp_ctl_repl.py python
 project usr/local/lib/drlink/frp_install_txn.py 0644 lib/frp_install_txn.py python
 project usr/local/lib/drlink/frp-server-upgrade.sh 0644 lib/frp-server-upgrade.sh bash
