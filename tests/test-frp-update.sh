@@ -176,8 +176,8 @@ setup_tree() {
   mkdir -p \
     "$tree/usr/local/bin" \
     "$tree/etc/frp" \
-    "$tree/etc/frp-auto-deploy" \
-    "$tree/var/lib/frp-auto-deploy"
+    "$tree/etc/drlink" \
+    "$tree/var/lib/drlink"
   write_dummy_frps "$tree/usr/local/bin/frps" "$installed_ver"
   cat >"$tree/etc/frp/frps.toml" <<'EOF'
 bindPort = 443
@@ -195,12 +195,12 @@ EOF
   chmod 600 "$tree/etc/frp/frps.toml"
   printf '%s' "test-update-token-do-not-use" >"$tree/etc/frp/server_token"
   chmod 600 "$tree/etc/frp/server_token"
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.0.0
 FRP_VERSION=0.71.0
 EOF
-  write_registry "$tree/var/lib/frp-auto-deploy/registry.json"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" <<'PY'
+  write_registry "$tree/var/lib/drlink/registry.json"
+  python3 - "$tree/etc/drlink/config.json" <<'PY'
 import json,sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
@@ -211,13 +211,13 @@ Path(sys.argv[1]).write_text(json.dumps({
   "listen_host": "0.0.0.0",
   "listen_port": 6099,
   "allocator_public_url": "https://203.0.113.10:6099/enroll",
-  "registry_file": "/var/lib/frp-auto-deploy/registry.json",
-  "enrollments_dir": "/var/lib/frp-auto-deploy/enrollments",
+  "registry_file": "/var/lib/drlink/registry.json",
+  "enrollments_dir": "/var/lib/drlink/enrollments",
   "token_file": "/etc/frp/server_token",
   "client_installer_url": "",
 }, indent=2, sort_keys=True) + "\n")
 PY
-  chmod 600 "$tree/etc/frp-auto-deploy/config.json"
+  chmod 600 "$tree/etc/drlink/config.json"
 }
 
 run_update() {
@@ -238,7 +238,7 @@ A="$WORKDIR/case-a"
 setup_tree "$A" "0.71.0"
 cp "$A/usr/local/bin/frps" "$WORKDIR/case-a.frps.before"
 cp "$A/etc/frp/server_token" "$WORKDIR/case-a.token.before"
-cp "$A/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/case-a.registry.before"
+cp "$A/var/lib/drlink/registry.json" "$WORKDIR/case-a.registry.before"
 A_OUT="$WORKDIR/case-a.out"
 run_update "$A" >"$A_OUT"
 assert_no_leak "$A_OUT" "test-update-token-do-not-use"
@@ -246,9 +246,9 @@ grep -q "already installed" "$A_OUT" || fail "CASE A message"
 grep -q "TOKEN_PRESERVED=PASS" "$A_OUT" || fail "CASE A token preserved output"
 bytes_equal "$WORKDIR/case-a.frps.before" "$A/usr/local/bin/frps" || fail "CASE A binary changed"
 bytes_equal "$WORKDIR/case-a.token.before" "$A/etc/frp/server_token" || fail "CASE A token changed"
-bytes_equal "$WORKDIR/case-a.registry.before" "$A/var/lib/frp-auto-deploy/registry.json" || fail "CASE A registry changed"
-[[ ! -d "$A/var/lib/frp-auto-deploy/backups" ]] || {
-  if find "$A/var/lib/frp-auto-deploy/backups" -type f | grep -q .; then
+bytes_equal "$WORKDIR/case-a.registry.before" "$A/var/lib/drlink/registry.json" || fail "CASE A registry changed"
+[[ ! -d "$A/var/lib/drlink/backups" ]] || {
+  if find "$A/var/lib/drlink/backups" -type f | grep -q .; then
     fail "CASE A created a backup"
   fi
 }
@@ -259,7 +259,7 @@ B="$WORKDIR/case-b"
 setup_tree "$B" "0.70.0"
 write_dummy_frps "$WORKDIR/frps-0.71.0" "0.71.0"
 cp "$B/etc/frp/server_token" "$WORKDIR/case-b.token.before"
-cp "$B/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/case-b.registry.before"
+cp "$B/var/lib/drlink/registry.json" "$WORKDIR/case-b.registry.before"
 B_OUT="$WORKDIR/case-b.out"
 if ! env \
   FRP_UPDATE_TEST_HARNESS=1 \
@@ -277,8 +277,8 @@ grep -q "TOKEN_PRESERVED=PASS" "$B_OUT" || fail "CASE B TOKEN_PRESERVED"
 grep -q "REGISTRY_PRESERVED=PASS" "$B_OUT" || fail "CASE B REGISTRY_PRESERVED"
 [[ "$(frp_parse_binary_version "$B/usr/local/bin/frps")" == "0.71.0" ]] || fail "CASE B installed version"
 bytes_equal "$WORKDIR/case-b.token.before" "$B/etc/frp/server_token" || fail "CASE B token changed"
-bytes_equal "$WORKDIR/case-b.registry.before" "$B/var/lib/frp-auto-deploy/registry.json" || fail "CASE B registry changed"
-python3 - "$B/var/lib/frp-auto-deploy/registry.json" <<'PY'
+bytes_equal "$WORKDIR/case-b.registry.before" "$B/var/lib/drlink/registry.json" || fail "CASE B registry changed"
+python3 - "$B/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -294,7 +294,7 @@ assert state["reserved"]==[6000,6001]
 assert "ssh_port" not in json.dumps(clients)
 assert "https_port" not in json.dumps(clients)
 PY
-python3 - "$B/var/lib/frp-auto-deploy/backups" <<'PY' || fail "CASE B backup missing"
+python3 - "$B/var/lib/drlink/backups" <<'PY' || fail "CASE B backup missing"
 from pathlib import Path
 import sys
 root=Path(sys.argv[1])
@@ -384,7 +384,7 @@ setup_tree "$F" "0.70.0"
 write_dummy_frps "$WORKDIR/frps-0.71.0-f" "0.71.0"
 cp "$F/usr/local/bin/frps" "$WORKDIR/case-f.frps.before"
 cp "$F/etc/frp/server_token" "$WORKDIR/case-f.token.before"
-cp "$F/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/case-f.registry.before"
+cp "$F/var/lib/drlink/registry.json" "$WORKDIR/case-f.registry.before"
 F_RC=0
 env \
   FRP_UPDATE_TEST_HARNESS=1 \
@@ -400,9 +400,9 @@ grep -q "Rollback completed successfully" "$WORKDIR/case-f.out" || fail "CASE F 
 grep -q "Restored FRP : 0.70.0" "$WORKDIR/case-f.out" || fail "CASE F restored version"
 [[ "$(frp_parse_binary_version "$F/usr/local/bin/frps")" == "0.70.0" ]] || fail "CASE F binary not restored"
 bytes_equal "$WORKDIR/case-f.token.before" "$F/etc/frp/server_token" || fail "CASE F token changed"
-bytes_equal "$WORKDIR/case-f.registry.before" "$F/var/lib/frp-auto-deploy/registry.json" || fail "CASE F registry changed"
+bytes_equal "$WORKDIR/case-f.registry.before" "$F/var/lib/drlink/registry.json" || fail "CASE F registry changed"
 assert_mode "$F/usr/local/bin/frps" "0o755"
-BACKUP_FRPS="$(python3 - "$F/var/lib/frp-auto-deploy/backups" <<'PY'
+BACKUP_FRPS="$(python3 - "$F/var/lib/drlink/backups" <<'PY'
 from pathlib import Path
 import sys
 matches=list(Path(sys.argv[1]).rglob("frps"))
@@ -411,7 +411,7 @@ PY
 )"
 [[ -n "$BACKUP_FRPS" ]] || fail "CASE G backup binary missing"
 assert_mode "$BACKUP_FRPS" "0o755"
-BACKUP_CFG="$(python3 - "$F/var/lib/frp-auto-deploy/backups" <<'PY'
+BACKUP_CFG="$(python3 - "$F/var/lib/drlink/backups" <<'PY'
 from pathlib import Path
 import sys
 matches=list(Path(sys.argv[1]).rglob("frps.toml"))
@@ -420,19 +420,19 @@ PY
 )"
 [[ -n "$BACKUP_CFG" ]] || fail "CASE G backup config missing"
 assert_mode "$BACKUP_CFG" "0o600"
-grep -q "restart frps" "$F/var/lib/frp-auto-deploy/update-actions.log" || fail "CASE G restart not recorded"
+grep -q "restart drlink-server" "$F/var/lib/drlink/update-actions.log" || fail "CASE G restart not recorded"
 pass "CASE F restart/health failure rollback"
 pass "CASE G rollback safety"
 
 # --- CASE J: installer rerun / source regression ---
 grep -q 'migrate_token.py" ensure' "$ROOT/install-server.sh" || fail "CASE J missing token ensure"
 grep -q 'init-registry' "$ROOT/install-server.sh" || fail "CASE J missing registry init"
-grep -q 'frp_write_version_file "$(frp_server_fs /etc/frp-auto-deploy/version)"' "$ROOT/install-server.sh" || fail "CASE J missing version metadata"
+grep -q 'frp_write_version_file "$(frp_server_fs /etc/drlink/version)"' "$ROOT/install-server.sh" || fail "CASE J missing version metadata"
 grep -q 'frp-update' "$ROOT/install-server.sh" || fail "CASE J missing frp-update install"
 grep -q 'lib/frp-common.sh' "$ROOT/install-server.sh" || fail "CASE J missing common lib"
-grep -q "/Library/Application Support/frp-auto-deploy/lib/frp-common.sh" "$UPDATE" \
+grep -q "/Library/Application Support/drlink/lib/frp-common.sh" "$UPDATE" \
   || fail "CASE J missing macOS Application Support frp-common path"
-grep -q "/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh" "$UPDATE" \
+grep -q "/Library/Application Support/drlink/lib/frp-client-common.sh" "$UPDATE" \
   || fail "CASE J missing macOS Application Support frp-client-common path"
 grep -q 'TOKEN_PRESERVED' "$ROOT/install-server.sh" || fail "CASE J missing token preservation reporting"
 if grep -Eiq 'token rotation|rotate.*token|openssl rand.*server_token' "$ROOT/install-server.sh"; then

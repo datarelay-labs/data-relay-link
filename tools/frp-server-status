@@ -13,21 +13,21 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_SCRIPT_DIR}/../lib/frp-common.sh" ]]; then
   # shellcheck source=../lib/frp-common.sh
   . "${_SCRIPT_DIR}/../lib/frp-common.sh"
-elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
+elif [[ -f /usr/local/lib/drlink/frp-common.sh ]]; then
   # shellcheck disable=SC1091
-  . /usr/local/lib/frp-auto-deploy/frp-common.sh
+  . /usr/local/lib/drlink/frp-common.sh
 fi
 
 if type frp_path >/dev/null 2>&1; then
   frps_bin="$(frp_path /usr/local/bin/frps)"
-  version_file="$(frp_path /etc/frp-auto-deploy/version)"
-  config_file="$(frp_path /etc/frp-auto-deploy/config.json)"
-  registry_file="$(frp_path /var/lib/frp-auto-deploy/registry.json)"
+  version_file="$(frp_path /etc/drlink/version)"
+  config_file="$(frp_path /etc/drlink/config.json)"
+  registry_file="$(frp_path /var/lib/drlink/registry.json)"
 else
   frps_bin=/usr/local/bin/frps
-  version_file=/etc/frp-auto-deploy/version
-  config_file=/etc/frp-auto-deploy/config.json
-  registry_file=/var/lib/frp-auto-deploy/registry.json
+  version_file=/etc/drlink/version
+  config_file=/etc/drlink/config.json
+  registry_file=/var/lib/drlink/registry.json
 fi
 
 project_version="unknown"
@@ -86,10 +86,11 @@ unit_state() {
   printf '%s' "$state"
 }
 
-frps_state="$(unit_state frps)"
-allocator_state="$(unit_state frp-port-allocator)"
-access_plugin_state="$(unit_state frp-access-plugin)"
-frontend_state="$(unit_state frp-frontend)"
+frps_state="$(unit_state drlink-server)"
+allocator_state="$(unit_state drlink-allocator)"
+access_plugin_state="$(unit_state drlink-access)"
+frontend_state="$(unit_state drlink-frontend)"
+egress_state="$(unit_state drlink-egress)"
 
 access_plugin_health="unknown"
 if type frp_test_harness_enabled >/dev/null 2>&1 && frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
@@ -326,17 +327,17 @@ if type frp_txn_marker_path >/dev/null 2>&1; then
     _frp_status_pending_report "$(frp_txn_legacy_marker_path)" "legacy"
   fi
 elif type frp_path >/dev/null 2>&1; then
-  _frp_status_pending_report "$(frp_path /var/lib/frp-auto-deploy/server-update-pending.json)" "server"
-  _frp_status_pending_report "$(frp_path /var/lib/frp-auto-deploy/client-update-pending.json)" "client"
-  _frp_status_pending_report "$(frp_path /var/lib/frp-auto-deploy/update-pending.json)" "legacy"
+  _frp_status_pending_report "$(frp_path /var/lib/drlink/server-update-pending.json)" "server"
+  _frp_status_pending_report "$(frp_path /var/lib/drlink/client-update-pending.json)" "client"
+  _frp_status_pending_report "$(frp_path /var/lib/drlink/update-pending.json)" "legacy"
 else
-  _frp_status_pending_report /var/lib/frp-auto-deploy/server-update-pending.json "server"
-  _frp_status_pending_report /var/lib/frp-auto-deploy/client-update-pending.json "client"
-  _frp_status_pending_report /var/lib/frp-auto-deploy/update-pending.json "legacy"
+  _frp_status_pending_report /var/lib/drlink/server-update-pending.json "server"
+  _frp_status_pending_report /var/lib/drlink/client-update-pending.json "client"
+  _frp_status_pending_report /var/lib/drlink/update-pending.json "legacy"
 fi
 
 cat <<EOF
-FRP Auto Deploy
+Data Relay Link
 ===============
 
 Role            : ${host_role}
@@ -357,10 +358,11 @@ Public IP       : ${public_ip_display:-missing}
 Public hostname : ${public_hostname_display}
 Bootstrap host  : ${bootstrap_hostname_display}
 
-frps            : ${frps_state}
-allocator       : ${allocator_state}
-access-plugin   : ${access_plugin_state} (${access_plugin_health})
-frontend        : ${frontend_state}
+drlink-server   : ${frps_state}
+drlink-allocator: ${allocator_state}
+drlink-access   : ${access_plugin_state} (${access_plugin_health})
+drlink-egress   : ${egress_state}
+drlink-frontend : ${frontend_state}
 Lifecycle       : ${lifecycle}
 EOF
 

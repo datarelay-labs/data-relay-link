@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Repeatable Real E2E for FRP Auto Deploy.
+# Repeatable Real E2E for Data Relay Link.
 # Controller-driven bash/SSH (+ PowerShell remote for Windows when available).
 # Does not change firewalls/DNS providers. Does not target the controller host.
 set -uo pipefail
@@ -443,13 +443,13 @@ discover_client_identity_windows() {
   start="$(date +%s)"
   set +e
   CLIENT_MID="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
-    "powershell.exe -NoProfile -Command \"\$j=Get-Content 'C:\\ProgramData\\frp-auto-deploy\\state\\client-state.json' -Raw | ConvertFrom-Json; Write-Output ([string]\$j.machine_id)\"" \
+    "powershell.exe -NoProfile -Command \"\$j=Get-Content 'C:\\ProgramData\\drlink\\state\\client-state.json' -Raw | ConvertFrom-Json; Write-Output ([string]\$j.machine_id)\"" \
     2>"$OUT_DIR/discover-mid.err" | tr -d '\r' | tr -d '\n')"
   rc=$?
   if [[ "$rc" -eq 0 && -n "$CLIENT_MID" ]]; then
     CLIENT_MID_PREFIX="${CLIENT_MID:0:8}"
     SSH_PUBLIC_PORT="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
-      "powershell.exe -NoProfile -Command \"\$j=Get-Content 'C:\\ProgramData\\frp-auto-deploy\\state\\client-state.json' -Raw | ConvertFrom-Json; Write-Output ([string]\$j.services.ssh.remote_port)\"" \
+      "powershell.exe -NoProfile -Command \"\$j=Get-Content 'C:\\ProgramData\\drlink\\state\\client-state.json' -Raw | ConvertFrom-Json; Write-Output ([string]\$j.services.ssh.remote_port)\"" \
       2>>"$OUT_DIR/discover-mid.err" | tr -d '\r' | tr -d '\n')"
     rc=$?
   fi
@@ -471,7 +471,7 @@ discover_client_identity_windows() {
 
 discover_client_identity_macos() {
   local start rc=0
-  local state_json='/Library/Application Support/frp-auto-deploy/client-state.json'
+  local state_json='/Library/Application Support/drlink/client-state.json'
   start="$(date +%s)"
   set +e
   CLIENT_MID="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
@@ -506,26 +506,26 @@ pin_windows_installer_url() {
   run_server win-pin-installer "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-p = Path('/etc/frp-auto-deploy/config.json')
+p = Path('/etc/drlink/config.json')
 c = json.loads(p.read_text(encoding='utf-8'))
 c['windows_client_installer_url'] = '$url'
 p.write_text(json.dumps(c, indent=2) + '\n', encoding='utf-8')
 print(c['windows_client_installer_url'])
 PY
-sudo systemctl restart frp-port-allocator
+sudo systemctl restart drlink-allocator
 sleep 1
-systemctl is-active frp-port-allocator"
+systemctl is-active drlink-allocator"
 }
 
 scenario_windows_full() {
   # Minimal Real E2E for Windows client: enroll + published SSH + uninstall.
   # Full Linux service/reboot/backup matrix is not portable to Windows OpenSSH/cmd.
-  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status frps 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
   run_client 02-client-before 'powershell.exe -NoProfile -Command "$env:COMPUTERNAME; $PSVersionTable.PSVersion.ToString(); ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"' || fail_stop
 
   pin_windows_installer_url || fail_stop
 
-  run_client 04-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd') { & 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\frp-auto-deploy') { exit 1 }; Write-Output UNINSTALL_OK } else { Write-Output NO_INSTALL }\"" || fail_stop
+  run_client 04-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path 'C:\\ProgramData\\drlink\\tools\\frp-client.cmd') { & 'C:\\ProgramData\\drlink\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\drlink') { exit 1 }; Write-Output UNINSTALL_OK } else { Write-Output NO_INSTALL }\"" || fail_stop
   record 03-server-purge SKIP 0 0
   record 05-server-install SKIP 0 0
   MATRIX_INSTALL=PASS
@@ -540,14 +540,14 @@ scenario_windows_full() {
   wait_external_ssh 09b-external-ssh || fail_stop
   MATRIX_ENROLL=PASS
 
-  run_client 10-client-info "powershell.exe -NoProfile -Command \"& 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' info\"" || fail_stop
+  run_client 10-client-info "powershell.exe -NoProfile -Command \"& 'C:\\ProgramData\\drlink\\tools\\frp-client.cmd' info\"" || fail_stop
   run_server 11-proxy-mapped "sudo python3 - <<'PY'
 import json, sys
-sys.path.insert(0, '/usr/local/lib/frp-auto-deploy')
+sys.path.insert(0, '/usr/local/lib/drlink')
 from frp_access_control import authorize, expected_proxy_name
 from pathlib import Path
-reg = json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
-acl = json.loads(Path('/var/lib/frp-auto-deploy/access-control.json').read_text())
+reg = json.loads(Path('/var/lib/drlink/registry.json').read_text())
+acl = json.loads(Path('/var/lib/drlink/access-control.json').read_text())
 mid = '$CLIENT_MID'
 client = (reg.get('clients') or {}).get(mid) or {}
 host = str(client.get('hostname') or '')
@@ -562,7 +562,7 @@ PY" || fail_stop
   MATRIX_REBOOT=SKIP
   MATRIX_DNS=SKIP
 
-  run_client 52-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\ProgramData\\frp-auto-deploy\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\frp-auto-deploy') { exit 1 }; Write-Output UNINSTALL_OK\"" || fail_stop
+  run_client 52-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\ProgramData\\drlink\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\drlink') { exit 1 }; Write-Output UNINSTALL_OK\"" || fail_stop
   # Local uninstall preserves server reservations by design; release so matrix fleet
   # DNS does not probe a dead Windows proxy after the profile completes.
   run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/sbin/frpctl release client '$CLIENT_MID_PREFIX'" || fail_stop
@@ -571,8 +571,8 @@ PY" || fail_stop
 
 scenario_macos_full() {
   # Minimal Real E2E for macOS Apple Silicon: bash ZT enroll + SSH/HTTP + uninstall.
-  local state_root='/Library/Application Support/frp-auto-deploy'
-  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status frps 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
+  local state_root='/Library/Application Support/drlink'
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
   run_client 02-client-before 'sw_vers; uname -m; sudo -n true; sudo /usr/local/bin/frpctl show status 2>/dev/null || true' || fail_stop
 
   run_local 04-client-uninstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'sudo bash -s --' < '$ROOT/dist/uninstall-client.sh'" || fail_stop
@@ -592,11 +592,11 @@ scenario_macos_full() {
   run_client 10-client-doctor "sudo /usr/local/bin/frpctl doctor" || fail_stop
   run_server 11-proxy-mapped "sudo python3 - <<'PY'
 import json, sys
-sys.path.insert(0, '/usr/local/lib/frp-auto-deploy')
+sys.path.insert(0, '/usr/local/lib/drlink')
 from frp_access_control import authorize, expected_proxy_name
 from pathlib import Path
-reg = json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
-acl = json.loads(Path('/var/lib/frp-auto-deploy/access-control.json').read_text())
+reg = json.loads(Path('/var/lib/drlink/registry.json').read_text())
+acl = json.loads(Path('/var/lib/drlink/access-control.json').read_text())
 mid = '$CLIENT_MID'
 client = (reg.get('clients') or {}).get(mid) or {}
 host = str(client.get('hostname') or '')
@@ -661,8 +661,8 @@ PY" || fail_stop
 }
 
 scenario_install() {
-  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status frps 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
-  run_client 02-client-before "hostname; cat /etc/os-release 2>/dev/null || true; uname -a; getenforce 2>/dev/null || true; sudo systemctl --no-pager --full status frpc 2>/dev/null || true; sudo /usr/local/bin/frpctl show status 2>/dev/null || true" || fail_stop
+  run_server 01-server-before "hostname; cat /etc/os-release; uname -a; sudo systemctl --no-pager --full status drlink-server 2>/dev/null || true; sudo /usr/local/sbin/frpctl show status 2>/dev/null || true" || fail_stop
+  run_client 02-client-before "hostname; cat /etc/os-release 2>/dev/null || true; uname -a; getenforce 2>/dev/null || true; sudo systemctl --no-pager --full status drlink-client 2>/dev/null || true; sudo /usr/local/bin/frpctl show status 2>/dev/null || true" || fail_stop
 
   if [[ "$SKIP_SERVER_PURGE" != "1" ]]; then
     run_local 03-server-purge bash -lc "ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo bash -s -- --purge --yes' < '$ROOT/dist/uninstall-server.sh'" || fail_stop
@@ -715,7 +715,7 @@ scenario_services() {
 import json
 from pathlib import Path
 
-d = json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text(encoding='utf-8'))
+d = json.loads(Path('/var/lib/drlink/registry.json').read_text(encoding='utf-8'))
 prefix = '$CLIENT_MID_PREFIX'
 match = None
 for mid, client in (d.get('clients') or {}).items():
@@ -770,10 +770,10 @@ scenario_reboots() {
 scenario_backup_repeat() {
   local i
   for i in $(seq 1 "$BACKUP_REPEAT"); do
-    run_server "40-backup-$i" "sudo /usr/local/sbin/frpctl create backup /var/lib/frp-auto-deploy/backups/real-e2e-backup-$i.tar.gz" || fail_stop
+    run_server "40-backup-$i" "sudo /usr/local/sbin/frpctl create backup /var/lib/drlink/backups/real-e2e-backup-$i.tar.gz" || fail_stop
     run_server "41-mutate-$i" "sudo /usr/local/sbin/frpctl set client '$CLIENT_MID_PREFIX' label mutated-label-$i && sudo /usr/local/sbin/frpctl set client '$CLIENT_MID_PREFIX' note 'mutated note $i' && sudo /usr/local/sbin/frpctl set client '$CLIENT_MID_PREFIX' tag env e2e$i && sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
-    run_local "42-restore-$i" bash -lc "cat '$ROOT/tools/frp-restore' | ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo tee /tmp/frp-restore >/dev/null && sudo chmod 755 /tmp/frp-restore'; cat '$ROOT/tools/frp-backup' | ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo tee /tmp/frp-backup >/dev/null && sudo chmod 755 /tmp/frp-backup'; ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo python3 /tmp/frp-restore /var/lib/frp-auto-deploy/backups/real-e2e-backup-$i.tar.gz'" || fail_stop
-    run_server "43-restore-verify-$i" "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'; echo ====; sudo /usr/local/sbin/frpctl doctor; echo ====; sudo test ! -f /var/lib/frp-auto-deploy/server-update-pending.json && sudo test ! -f /var/lib/frp-auto-deploy/client-update-pending.json && echo PENDING_MARKER_CLEARED=YES; echo ====; sudo python3 -c \"import json; c=json.load(open('/etc/frp-auto-deploy/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" || fail_stop
+    run_local "42-restore-$i" bash -lc "cat '$ROOT/tools/frp-restore' | ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo tee /tmp/frp-restore >/dev/null && sudo chmod 755 /tmp/frp-restore'; cat '$ROOT/tools/frp-backup' | ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo tee /tmp/frp-backup >/dev/null && sudo chmod 755 /tmp/frp-backup'; ssh ${SSH_OPTS[*]} '$SERVER_ALIAS' 'sudo python3 /tmp/frp-restore /var/lib/drlink/backups/real-e2e-backup-$i.tar.gz'" || fail_stop
+    run_server "43-restore-verify-$i" "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'; echo ====; sudo /usr/local/sbin/frpctl doctor; echo ====; sudo test ! -f /var/lib/drlink/server-update-pending.json && sudo test ! -f /var/lib/drlink/client-update-pending.json && echo PENDING_MARKER_CLEARED=YES; echo ====; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" || fail_stop
     wait_external_ssh "44-restore-ssh-$i" || fail_stop
   done
 }
@@ -782,7 +782,7 @@ scenario_uninstall_reinstall() {
   run_server 50-pre-uninstall-server "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
   run_client 51-pre-uninstall-client "sudo /usr/local/bin/frpctl show services; sudo /usr/local/bin/frpctl show status" || fail_stop
   run_local 52-client-uninstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'sudo bash -s --' < '$ROOT/dist/uninstall-client.sh'" || fail_stop
-  run_client 53-post-uninstall-local "echo frpc=\$(systemctl is-active frpc 2>/dev/null || echo inactive); ls /etc/frp 2>/dev/null || echo NO_ETC_FRP; ls /usr/local/bin/frp* 2>/dev/null || echo NO_FRP_BIN; test ! -f /etc/frp/client-state.json && echo CLIENT_STATE_GONE=YES || echo CLIENT_STATE_GONE=NO; ps -eo comm= | grep -E '^(frpc|frp-client)\$' || echo NO_FRP_PROCESS" || fail_stop
+  run_client 53-post-uninstall-local "echo frpc=\$(systemctl is-active drlink-client 2>/dev/null || echo inactive); ls /etc/frp 2>/dev/null || echo NO_ETC_FRP; ls /usr/local/bin/frp* 2>/dev/null || echo NO_FRP_BIN; test ! -f /etc/frp/client-state.json && echo CLIENT_STATE_GONE=YES || echo CLIENT_STATE_GONE=NO; ps -eo comm= | grep -E '^(frpc|frp-client)\$' || echo NO_FRP_PROCESS" || fail_stop
   run_server 54-post-uninstall-server "sudo /usr/local/sbin/frpctl show client '$CLIENT_MID_PREFIX'" || fail_stop
 
   create_zero_touch "$OUT_DIR/55-zero-touch-create.log" "$OUT_DIR/55-zero-touch-command.sh" 55-zero-touch-create "uninstall-reinstall-$PROFILE" || fail_stop

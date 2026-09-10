@@ -94,7 +94,7 @@ frp_u_client_present() {
 frp_u_project_files_py() {
   local cand
   for cand in \
-    "$(frp_u_path /usr/local/lib/frp-auto-deploy/frp_project_files.py)" \
+    "$(frp_u_path /usr/local/lib/drlink/frp_project_files.py)" \
     "${_HERE}/lib/frp_project_files.py" \
     "${_HERE}/../lib/frp_project_files.py"; do
     if [[ -f "$cand" ]]; then
@@ -107,7 +107,7 @@ frp_u_project_files_py() {
 
 # Canonical SERVER_ONLY / CLIENT_ONLY / SHARED ownership for dual-role uninstall.
 for _frp_own in \
-  "$(frp_u_path /usr/local/lib/frp-auto-deploy/frp-role-ownership.sh)" \
+  "$(frp_u_path /usr/local/lib/drlink/frp-role-ownership.sh)" \
   "${_HERE}/lib/frp-role-ownership.sh" \
   "${_HERE}/../lib/frp-role-ownership.sh"; do
   if [[ -f "$_frp_own" ]]; then
@@ -173,8 +173,8 @@ frp_u_release_control_locks() {
 frp_u_acquire_control_locks() {
   local timeout life_lock reg_lock status deadline
   timeout="${FRP_UNINSTALL_LOCK_TIMEOUT:-30}"
-  life_lock="$(frp_u_path /var/lib/frp-auto-deploy/server-lifecycle.lock)"
-  reg_lock="$(frp_u_path /var/lib/frp-auto-deploy/registry.lock)"
+  life_lock="$(frp_u_path /var/lib/drlink/server-lifecycle.lock)"
+  reg_lock="$(frp_u_path /var/lib/drlink/registry.lock)"
   mkdir -p "$(dirname "$life_lock")" "$(dirname "$reg_lock")"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "ERROR: python3 is required to serialize server uninstall." >&2
@@ -294,7 +294,7 @@ frp_u_unit_active() {
 
 frp_u_stop_product_units() {
   local unit
-  for unit in frp-frontend frp-egress-gateway frp-access-plugin frp-port-allocator frps; do
+  for unit in drlink-frontend drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_unit_exists "$unit" && ! frp_u_unit_active "$unit"; then
       continue
     fi
@@ -316,7 +316,7 @@ frp_u_stop_product_units() {
 
 frp_u_disable_product_units() {
   local unit enabled
-  for unit in frp-frontend frp-egress-gateway frp-access-plugin frp-port-allocator frps; do
+  for unit in drlink-frontend drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_unit_exists "$unit"; then
       continue
     fi
@@ -360,7 +360,7 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
   fi
 fi
 # Never enable, start, or unmask distro nginx.service. Uninstall removes
-# frp-frontend.service only. If this project installed nginx and disabled
+# drlink-frontend.service only. If this project installed nginx and disabled
 # the distro unit, leave nginx.service disabled. Do not restore unknown
 # external nginx configuration.
 
@@ -383,22 +383,34 @@ if py="$(frp_u_project_files_py)"; then
   done
 else
   # Fallback when the helper is already gone (partial uninstall / exotic layout).
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-server.service)"
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-allocator.service)"
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-access.service)"
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-egress.service)"
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-frontend.service)"
+  # Legacy unit names from pre-rename installs.
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frps.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-port-allocator.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-access-plugin.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-egress-gateway.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-frontend.service)"
-  frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/frontend.conf)"
+  frp_u_rm_file "$(frp_u_path /etc/drlink/frontend.conf)"
   frp_u_rm_file "$(frp_u_path /usr/local/bin/frps)"
   for tool in frp-create-client frp-enrollments frp-enrollment-revoke frp-enrollment-purge frp-enroll-bulk \
     frp-clients frp-client-info frp-client-set frp-release-client \
     frp-release-service frp-access frp-egress frp-profile frp-revoke-client frp-set-client-installer-url \
-    frp-server-set frp-server-status frp-update frp-upstream frp-project-update frp-backup frp-restore frp-support-bundle; do
+    frp-server-set frp-server-status frp-update frp-upstream frp-project-update frp-backup frp-restore frp-support-bundle     frp-groups frp-group-set; do
     frp_u_rm_file "$(frp_u_path /usr/local/sbin/${tool})"
+    frp_u_rm_file "$(frp_u_path /usr/local/lib/drlink/${tool})"
   done
   frp_u_rm_file "$(frp_u_path /usr/local/sbin/frpctl)"
-  frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
-  libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
+  # Shared everyday CLI: keep for dual-role client installs.
+  if [[ "$CLIENT_PRESENT" != "1" ]]; then
+    frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
+    frp_u_rm_file "$(frp_u_path /usr/local/lib/drlink/frpctl)"
+  fi
+  libdir="$(frp_u_path /usr/local/lib/drlink)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
     for f in frp-port-allocator.py frp-access-plugin.py frp-egress-gateway.py frp_access_control.py frp_egress_control.py frp_pki.py frp_frontend.py frp_client_registry.py \
       frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
@@ -417,12 +429,14 @@ else
     fi
   fi
 fi
-# Dual-role: keep /usr/local/bin/frpctl (client). Manifest only lists sbin.
+# Dual-role: keep /usr/local/bin/drlink (and internal frpctl) when client remains.
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frps)"
-frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
-frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/frontend.conf)"
+if [[ "$CLIENT_PRESENT" != "1" ]]; then
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
+fi
+frp_u_rm_file "$(frp_u_path /etc/drlink/frontend.conf)"
 
-libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
+libdir="$(frp_u_path /usr/local/lib/drlink)"
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   rmdir "$libdir" 2>/dev/null || true
 elif [[ -L "$libdir" ]]; then
@@ -488,7 +502,7 @@ ${p}"
     fi
   }
 
-  var_lib="$(frp_u_path /var/lib/frp-auto-deploy)"
+  var_lib="$(frp_u_path /var/lib/drlink)"
   # Server-owned pending marker only; never clear client-update-pending.json.
   try_rm_file "${var_lib}/server-update-pending.json"
   legacy_marker="${var_lib}/update-pending.json"
@@ -514,11 +528,11 @@ ${p}"
   else
     try_rm_rf "$(frp_u_path /etc/frp)"
   fi
-  try_rm_rf "$(frp_u_path /etc/frp-auto-deploy/pki)"
-  try_rm_file "$(frp_u_path /etc/frp-auto-deploy/config.json)"
-  if [[ "$CLIENT_PRESENT" != "1" && ! -f "$(frp_u_path /etc/frp-auto-deploy/allocator-ca.crt)" ]]; then
-    try_rm_file "$(frp_u_path /etc/frp-auto-deploy/version)"
-    try_rm_rf "$(frp_u_path /etc/frp-auto-deploy)"
+  try_rm_rf "$(frp_u_path /etc/drlink/pki)"
+  try_rm_file "$(frp_u_path /etc/drlink/config.json)"
+  if [[ "$CLIENT_PRESENT" != "1" && ! -f "$(frp_u_path /etc/drlink/allocator-ca.crt)" ]]; then
+    try_rm_file "$(frp_u_path /etc/drlink/version)"
+    try_rm_rf "$(frp_u_path /etc/drlink)"
   fi
   if [[ "$CLIENT_PRESENT" == "1" ]]; then
     rmdir "$var_lib" 2>/dev/null || true

@@ -126,7 +126,7 @@ python3 - "$ACCESS" <<'PY' || fail "access-info"
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text()
-assert 'FRP Server: 203.0.113.10' in text
+assert 'Data Relay Link Server: 203.0.113.10' in text
 assert 'ssh -p 6002 aella@203.0.113.10' in text
 assert 'http://' not in text.split('grafana',1)[0] or True
 assert '203.0.113.10:6003' in text
@@ -168,13 +168,13 @@ pass "duplicate service id rejected"
 
 # WSS frpc.toml uses the stored allocator CA; TCP remains unchanged.
 WSS_ROOT="$WORKDIR/wss-client"
-mkdir -p "$WSS_ROOT/etc/frp-auto-deploy"
+mkdir -p "$WSS_ROOT/etc/drlink"
 printf '%s\n' '-----BEGIN CERTIFICATE-----' 'MIIBdummy' '-----END CERTIFICATE-----' \
-  >"$WSS_ROOT/etc/frp-auto-deploy/allocator-ca.crt"
+  >"$WSS_ROOT/etc/drlink/allocator-ca.crt"
 export FRP_CLIENT_TEST_ROOT="$WSS_ROOT"
 WSS_TOML="$WORKDIR/frpc-wss.toml"
 render_frpc_toml "$WSS_TOML" "203.0.113.10" "443" "dummy-token" "host-a" "$WORKDIR/services.json" wss
-python3 - "$WSS_TOML" "$WSS_ROOT/etc/frp-auto-deploy/allocator-ca.crt" <<'PY' || fail "wss toml"
+python3 - "$WSS_TOML" "$WSS_ROOT/etc/drlink/allocator-ca.crt" <<'PY' || fail "wss toml"
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text()

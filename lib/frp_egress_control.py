@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Controlled Egress policy plane for Data Relay.
 
-Authoritative state: /var/lib/frp-auto-deploy/egress-control.json
+Authoritative state: /var/lib/drlink/egress-control.json
 
 Separate from inbound Access Control. Default DENY / fail-closed.
 Agentless authorization is source IP/CIDR + FQDN:port allowlists.
@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 EGRESS_SCHEMA_VERSION = 1
-DEFAULT_EGRESS_PATH = "/var/lib/frp-auto-deploy/egress-control.json"
-DEFAULT_CONN_LOG_PATH = "/var/log/frp-auto-deploy/egress-conn.jsonl"
+DEFAULT_EGRESS_PATH = "/var/lib/drlink/egress-control.json"
+DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
 DEFAULT_LISTEN_ADDR = "0.0.0.0"
 DEFAULT_LISTEN_PORT = 6080
 

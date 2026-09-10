@@ -27,21 +27,21 @@ scpx "$TMP/frp_egress_control.py" "$TMP/frp-egress-gateway.py" "$TMP/frp-egress"
 sshx "$SERVER_ALIAS" "sudo bash -s" <<EOF
 set -euo pipefail
 install -d -m 0755 /tmp/frp-egress-smoke
-install -m 0644 /tmp/frp-egress-smoke/frp_egress_control.py /usr/local/lib/frp-auto-deploy/frp_egress_control.py
-install -m 0700 /tmp/frp-egress-smoke/frp-egress-gateway.py /usr/local/lib/frp-auto-deploy/frp-egress-gateway.py
+install -m 0644 /tmp/frp-egress-smoke/frp_egress_control.py /usr/local/lib/drlink/frp_egress_control.py
+install -m 0700 /tmp/frp-egress-smoke/frp-egress-gateway.py /usr/local/lib/drlink/frp-egress-gateway.py
 install -m 0755 /tmp/frp-egress-smoke/frp-egress /usr/local/sbin/frp-egress
 python3 - <<'PY'
 import importlib.util, json
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('eg','/usr/local/lib/frp-auto-deploy/frp_egress_control.py')
+spec=importlib.util.spec_from_file_location('eg','/usr/local/lib/drlink/frp_egress_control.py')
 eg=importlib.util.module_from_spec(spec); spec.loader.exec_module(eg)
-path=Path('/var/lib/frp-auto-deploy/egress-control.json')
+path=Path('/var/lib/drlink/egress-control.json')
 if not path.is_file():
     eg.save_egress_state(eg.empty_egress_state(), path=path)
-cfg_path=Path('/etc/frp-auto-deploy/config.json')
+cfg_path=Path('/etc/drlink/config.json')
 cfg=json.loads(cfg_path.read_text())
-cfg.setdefault('egress_control_file','/var/lib/frp-auto-deploy/egress-control.json')
-cfg.setdefault('egress_conn_log_file','/var/log/frp-auto-deploy/egress-conn.jsonl')
+cfg.setdefault('egress_control_file','/var/lib/drlink/egress-control.json')
+cfg.setdefault('egress_conn_log_file','/var/log/drlink/egress-conn.jsonl')
 cfg.setdefault('egress_listen_addr','0.0.0.0')
 cfg.setdefault('egress_listen_port', ${PROXY_PORT})
 cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True)+'\\n')
@@ -49,8 +49,8 @@ print('config ready')
 PY
 # Stop previous smoke gateway if any
 pkill -f 'frp-egress-gateway.py --listen-port ${PROXY_PORT}' 2>/dev/null || true
-nohup python3 /usr/local/lib/frp-auto-deploy/frp-egress-gateway.py \
-  --config /etc/frp-auto-deploy/config.json \
+nohup python3 /usr/local/lib/drlink/frp-egress-gateway.py \
+  --config /etc/drlink/config.json \
   --listen-addr 0.0.0.0 --listen-port ${PROXY_PORT} \
   >/tmp/frp-egress-smoke.log 2>&1 &
 echo \$! >/tmp/frp-egress-smoke.pid
@@ -61,9 +61,9 @@ ss -lnt | grep -q ':${PROXY_PORT}' || { echo 'gateway not listening'; cat /tmp/f
 python3 - <<'PY'
 import importlib.util, json, socket
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('eg','/usr/local/lib/frp-auto-deploy/frp_egress_control.py')
+spec=importlib.util.spec_from_file_location('eg','/usr/local/lib/drlink/frp_egress_control.py')
 eg=importlib.util.module_from_spec(spec); spec.loader.exec_module(eg)
-path=Path('/var/lib/frp-auto-deploy/egress-control.json')
+path=Path('/var/lib/drlink/egress-control.json')
 state=eg.empty_egress_state()
 eg.save_egress_state(state, path=path)
 
@@ -114,15 +114,15 @@ sshx "$SERVER_ALIAS" "sudo bash -s" <<EOF
 set -euo pipefail
 kill \$(cat /tmp/frp-egress-smoke.pid) 2>/dev/null || true
 sleep 1
-nohup python3 /usr/local/lib/frp-auto-deploy/frp-egress-gateway.py \
-  --config /etc/frp-auto-deploy/config.json \
+nohup python3 /usr/local/lib/drlink/frp-egress-gateway.py \
+  --config /etc/drlink/config.json \
   --listen-addr 0.0.0.0 --listen-port ${PROXY_PORT} \
   >/tmp/frp-egress-smoke.log 2>&1 &
 echo \$! >/tmp/frp-egress-smoke.pid
 sleep 1
 ss -lnt | grep -q ':${PROXY_PORT}'
 # inbound FRP still up
-systemctl is-active frps >/dev/null
+systemctl is-active drlink-server >/dev/null
 EOF
 
 sshx "$CLIENT_ALIAS" "HTTP_PROXY=http://${SERVER_IP}:${PROXY_PORT} HTTPS_PROXY=http://${SERVER_IP}:${PROXY_PORT} curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://example.com/" | grep -q 200

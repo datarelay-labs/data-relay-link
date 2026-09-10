@@ -96,7 +96,7 @@ unset FRP_TEST_CMD_PATH FRP_TEST_SYSTEMD_RUNTIME_DIR
 export FRP_TEST_SYSTEMD_VERSION=219
 frp_systemd_supports_service_hardening && fail "219 should not keep strict hardening"
 frp_write_compatible_systemd_unit \
-  "$ROOT/server/frp-port-allocator.service" \
+  "$ROOT/server/drlink-allocator.service" \
   "$WORKDIR/allocator-219.service"
 if grep -q '^ProtectSystem=' "$WORKDIR/allocator-219.service"; then
   fail "old systemd unit still has ProtectSystem"
@@ -113,27 +113,27 @@ unset FRP_TEST_SYSTEMD_VERSION
 export FRP_TEST_SYSTEMD_VERSION=252
 frp_systemd_supports_service_hardening || fail "252 should keep hardening"
 frp_write_compatible_systemd_unit \
-  "$ROOT/server/frp-port-allocator.service" \
+  "$ROOT/server/drlink-allocator.service" \
   "$WORKDIR/allocator-252.service"
-grep -q '^RuntimeDirectory=frp-auto-deploy$' "$WORKDIR/allocator-252.service" \
+grep -q '^RuntimeDirectory=drlink$' "$WORKDIR/allocator-252.service" \
   || fail "allocator runtime directory missing"
 grep -q '^RuntimeDirectoryMode=0700$' "$WORKDIR/allocator-252.service" \
   || fail "allocator runtime directory mode missing"
 grep -q '^ProtectSystem=strict' "$WORKDIR/allocator-252.service" || fail "modern unit lost strict"
-grep -q '^ReadWritePaths=/var/lib/frp-auto-deploy /var/log/frp-auto-deploy /run/frp-auto-deploy /etc/frp-auto-deploy /etc/frp$' \
+grep -q '^ReadWritePaths=/var/lib/drlink /var/log/drlink /run/drlink /etc/drlink /etc/frp$' \
   "$WORKDIR/allocator-252.service" || fail "allocator writable paths incomplete"
 frp_write_compatible_systemd_unit \
-  "$ROOT/server/frp-frontend.service" \
+  "$ROOT/server/drlink-frontend.service" \
   "$WORKDIR/frontend-252.service"
 grep -q '^ProtectSystem=strict' "$WORKDIR/frontend-252.service" || fail "frontend modern unit lost strict"
 export FRP_TEST_SYSTEMD_VERSION=219
 frp_write_compatible_systemd_unit \
-  "$ROOT/server/frp-frontend.service" \
+  "$ROOT/server/drlink-frontend.service" \
   "$WORKDIR/frontend-219.service"
 if grep -q '^ProtectSystem=' "$WORKDIR/frontend-219.service"; then
   fail "old systemd frontend unit still has ProtectSystem"
 fi
-grep -q '^RuntimeDirectory=frp-auto-deploy' "$WORKDIR/frontend-219.service" \
+grep -q '^RuntimeDirectory=drlink' "$WORKDIR/frontend-219.service" \
   || fail "frontend unit lost RuntimeDirectory on old systemd"
 unset FRP_TEST_SYSTEMD_VERSION
 pass "SYSTEMD_OLD_UNIT_COMPAT"
@@ -301,7 +301,7 @@ if '--purge' not in text or 'PURGE_CONFIRMATION_REQUIRED' not in text:
 PY
 grep -q "Configuration, token, and registry were preserved" "$ROOT/uninstall-server.sh" \
   || fail "server preserve message"
-grep -qF 'if [[ ! -f /etc/frp-auto-deploy/config.json ]]' "$ROOT/uninstall-client.sh" \
+grep -qF 'if [[ ! -f /etc/drlink/config.json ]]' "$ROOT/uninstall-client.sh" \
   || fail "client uninstall dual-role guard"
 grep -q 'command -v systemctl' "$ROOT/uninstall-server.sh" || fail "server uninstall systemd guard"
 if grep -nE 'systemctl[[:space:]]+(enable|start|unmask)[[:space:]].*nginx' "$ROOT/uninstall-server.sh"; then

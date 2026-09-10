@@ -24,10 +24,10 @@ PROTECTED_PREFIXES = protected_prefixes()
 SNAPSHOT_RELS = tuple(snapshot_rels())
 
 UNIT_NAMES = (
-    'frps.service',
-    'frp-port-allocator.service',
-    'frp-access-plugin.service',
-    'frp-frontend.service',
+    'drlink-server.service',
+    'drlink-allocator.service',
+    'drlink-access.service',
+    'drlink-frontend.service',
 )
 
 

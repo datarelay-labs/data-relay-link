@@ -49,9 +49,9 @@ for f in \
 do
   scp -o BatchMode=yes -o ConnectTimeout=12 "$ROOT/$f" "$SERVER:$TMP_SRV/$(basename "$f")"
 done
-sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_support_bundle.py /usr/local/lib/frp-auto-deploy/frp_support_bundle.py
-sudo install -m 0644 $TMP_SRV/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
-sudo install -m 0644 $TMP_SRV/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
+sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_support_bundle.py /usr/local/lib/drlink/frp_support_bundle.py
+sudo install -m 0644 $TMP_SRV/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_SRV/frp_doctor.py /usr/local/lib/drlink/frp_doctor.py
 sudo install -m 0755 $TMP_SRV/frp-support-bundle /usr/local/sbin/frp-support-bundle
 sudo install -m 0755 $TMP_SRV/frpctl /usr/local/sbin/frpctl
 sudo rm -rf $TMP_SRV
@@ -70,9 +70,9 @@ for f in \
 do
   scp -o BatchMode=yes -o ConnectTimeout=12 "$ROOT/$f" "$CLIENT:$TMP_CLI/$(basename "$f")"
 done
-sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/lib/frp-auto-deploy/frp_support_bundle.py
-sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
-sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
+sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/lib/drlink/frp_support_bundle.py
+sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/drlink/frp_doctor.py
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/bin/frp-support-bundle
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/sbin/frp-support-bundle
 sudo install -m 0755 $TMP_CLI/frpctl /usr/local/bin/frpctl

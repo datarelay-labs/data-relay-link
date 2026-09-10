@@ -38,10 +38,10 @@ def _load_module(name: str, rel: str):
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / "lib" / rel,
-        Path("/usr/local/lib/frp-auto-deploy") / rel,
+        Path("/usr/local/lib/drlink") / rel,
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / "usr/local/lib/frp-auto-deploy" / rel)
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/drlink" / rel)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(name, str(path))
@@ -591,7 +591,7 @@ def serve(
 
     threading.Thread(target=health_thread, name="egress-policy-reload", daemon=True).start()
     sys.stderr.write(
-        "[frp-egress-gateway] listening on %s:%d policy=%s\n"
+        "[drlink-egress] listening on %s:%d policy=%s\n"
         % (host, port, cache.path)
     )
     try:
@@ -608,7 +608,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Data Relay Controlled Egress gateway")
     parser.add_argument(
         "--config",
-        default="/etc/frp-auto-deploy/config.json",
+        default="/etc/drlink/config.json",
         help="path to config.json",
     )
     parser.add_argument("--listen-addr", default=None)

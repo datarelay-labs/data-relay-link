@@ -23,7 +23,7 @@ need() {
 # --- Guidance text ----------------------------------------------------------
 frp_ux_print_all_guidance >"$WORKDIR/guide.out"
 need "$WORKDIR/guide.out" 'Enrollment Code' 'enrollment heading'
-need "$WORKDIR/guide.out" 'sudo frp-create-client' 'enrollment source command'
+need "$WORKDIR/guide.out" 'sudo drlink create enrollment' 'enrollment source command'
 need "$WORKDIR/guide.out" 'short-lived' 'short-lived enrollment'
 need "$WORKDIR/guide.out" 'not stored' 'code not stored'
 need "$WORKDIR/guide.out" 'not the FRP token' 'not the FRP token'
@@ -44,7 +44,7 @@ need "$WORKDIR/guide.out" 'does NOT create an operating-system account' 'ssh use
 need "$WORKDIR/guide.out" 'without terminating TLS' 'https passthrough'
 need "$WORKDIR/guide.out" 'Custom TCP' 'custom tcp type'
 need "$WORKDIR/guide.out" 'SSH is optional' 'ssh optional'
-need "$WORKDIR/guide.out" 'assigned automatically by the FRP server' 'auto public port'
+need "$WORKDIR/guide.out" 'assigned automatically by the Data Relay Link server' 'auto public port'
 need "$WORKDIR/guide.out" 'one or more services' 'multiple services'
 pass "guided field explanations"
 
@@ -164,15 +164,15 @@ cat >"$WORKDIR/done-services.json" <<'EOF'
 [{"id":"ssh","name":"SSH","preset":"ssh","local_ip":"127.0.0.1","local_port":22,"remote_port":6002,"ssh_user":"aella"}]
 EOF
 print_complete "203.0.113.10" "$WORKDIR/done-services.json" >"$WORKDIR/complete.out"
-need "$WORKDIR/complete.out" 'FRP Installation Complete' 'complete header'
-need "$WORKDIR/complete.out" 'Your FRP client is running successfully' 'success line'
+need "$WORKDIR/complete.out" 'Data Relay Link Installation Complete' 'complete header'
+need "$WORKDIR/complete.out" 'Your Data Relay Link client is running successfully' 'success line'
 need "$WORKDIR/complete.out" 'Local target : 127.0.0.1:22' 'complete target'
 need "$WORKDIR/complete.out" 'Public port  : 6002' 'complete public'
 need "$WORKDIR/complete.out" 'ssh -p 6002 aella@203.0.113.10' 'complete ssh'
 need "$WORKDIR/complete.out" 'sudo drlink' 'complete drlink'
-need "$WORKDIR/complete.out" 'sudo frp-client' 'complete manage'
-need "$WORKDIR/complete.out" 'sudo frp-client status' 'complete status'
-need "$WORKDIR/complete.out" 'sudo frp-client info' 'complete info'
+need "$WORKDIR/complete.out" 'sudo drlink' 'complete manage'
+need "$WORKDIR/complete.out" 'sudo drlink status' 'complete status'
+need "$WORKDIR/complete.out" 'sudo drlink show info' 'complete info'
 pass "installation complete screen"
 
 # --- Apply summary ---------------------------------------------------------
@@ -196,7 +196,7 @@ frp_ux_print_apply_summary "$WORKDIR/cur.json" "$WORKDIR/cand.json" >"$WORKDIR/a
 need "$WORKDIR/apply.out" 'Ready to apply' 'apply heading'
 need "$WORKDIR/apply.out" '+ grafana' 'pending add'
 need "$WORKDIR/apply.out" 'public port: assigned automatically' 'apply auto port'
-need "$WORKDIR/apply.out" 'will restart the FRP client' 'restart warning'
+need "$WORKDIR/apply.out" 'will restart the Data Relay Link client' 'restart warning'
 pass "apply confirmation summary"
 
 python3 - "$WORKDIR" <<'PY'

@@ -94,33 +94,33 @@ chmod +x "$MOCK"
 seed() {
   local tree="$1"
   mkdir -p \
-    "$tree/etc/frp-auto-deploy/pki" \
+    "$tree/etc/drlink/pki" \
     "$tree/etc/frp" \
-    "$tree/var/lib/frp-auto-deploy" \
+    "$tree/var/lib/drlink" \
     "$tree/usr/local/sbin" \
     "$tree/usr/local/bin" \
-    "$tree/usr/local/lib/frp-auto-deploy" \
+    "$tree/usr/local/lib/drlink" \
     "$tree/etc/systemd/system"
-  printf '{"deployment_mode":"direct"}\n' >"$tree/etc/frp-auto-deploy/config.json"
+  printf '{"deployment_mode":"direct"}\n' >"$tree/etc/drlink/config.json"
   printf 'token-secret\n' >"$tree/etc/frp/server_token"
   printf '{"schema_version":2,"clients":{},"reserved":[6001]}\n' \
-    >"$tree/var/lib/frp-auto-deploy/registry.json"
-  printf 'ca-key\n' >"$tree/etc/frp-auto-deploy/pki/ca.key"
-  printf 'ca-crt\n' >"$tree/etc/frp-auto-deploy/pki/ca.crt"
-  printf 'srv-key\n' >"$tree/etc/frp-auto-deploy/pki/server.key"
-  printf 'srv-crt\n' >"$tree/etc/frp-auto-deploy/pki/server.crt"
+    >"$tree/var/lib/drlink/registry.json"
+  printf 'ca-key\n' >"$tree/etc/drlink/pki/ca.key"
+  printf 'ca-crt\n' >"$tree/etc/drlink/pki/ca.crt"
+  printf 'srv-key\n' >"$tree/etc/drlink/pki/server.key"
+  printf 'srv-crt\n' >"$tree/etc/drlink/pki/server.crt"
   printf 'bindPort = 443\n' >"$tree/etc/frp/frps.toml"
-  printf 'PROJECT_VERSION=2.1.3\n' >"$tree/etc/frp-auto-deploy/version"
+  printf 'PROJECT_VERSION=2.1.3\n' >"$tree/etc/drlink/version"
   printf '#!/bin/true\n' >"$tree/usr/local/sbin/frpctl"
   chmod +x "$tree/usr/local/sbin/frpctl"
-  printf '[Unit]\nDescription=frps\n' >"$tree/etc/systemd/system/frps.service"
+  printf '[Unit]\nDescription=frps\n' >"$tree/etc/systemd/system/drlink-server.service"
 }
 
 assert_state_present() {
   local tree="$1"
   [[ -f "$tree/etc/frp/server_token" ]] || fail "token missing"
-  [[ -f "$tree/etc/frp-auto-deploy/pki/ca.key" ]] || fail "CA missing"
-  [[ -f "$tree/var/lib/frp-auto-deploy/registry.json" ]] || fail "registry missing"
+  [[ -f "$tree/etc/drlink/pki/ca.key" ]] || fail "CA missing"
+  [[ -f "$tree/var/lib/drlink/registry.json" ]] || fail "registry missing"
 }
 
 # 1. normal inactive uninstall
@@ -201,7 +201,7 @@ mkdir -p "$UNIT"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
 export FRP_MOCK_UNIT_DIR="$UNIT"
 export FRP_UNINSTALL_LOCK_TIMEOUT=1
-LOCK="$TREE/var/lib/frp-auto-deploy/registry.lock"
+LOCK="$TREE/var/lib/drlink/registry.lock"
 : >"$LOCK"
 python3 - "$LOCK" <<'PY' &
 import fcntl
@@ -269,8 +269,8 @@ if ! "$ROOT/uninstall-server.sh" --purge --yes >"$WORKDIR/purgeok.out" 2>"$WORKD
   fail "purge success: $(cat "$WORKDIR/purgeok.err")"
 fi
 [[ ! -f "$TREE/etc/frp/server_token" ]] || fail "purge left token"
-[[ ! -f "$TREE/etc/frp-auto-deploy/pki/ca.key" ]] || fail "purge left CA"
-[[ ! -f "$TREE/var/lib/frp-auto-deploy/registry.json" ]] || fail "purge left registry"
+[[ ! -f "$TREE/etc/drlink/pki/ca.key" ]] || fail "purge left CA"
+[[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "purge left registry"
 pass "PURGE_SUCCESS"
 
 # 11. dual-role server uninstall preserves client
@@ -278,9 +278,9 @@ TREE="$WORKDIR/dual"
 seed "$TREE"
 printf '{"schema_version":1,"machine_id":"aabb"}\n' >"$TREE/etc/frp/client-state.json"
 printf '#!/bin/true\n' >"$TREE/usr/local/bin/frp-client"
-printf '#!/bin/true\n' >"$TREE/usr/local/bin/frpctl"
-chmod +x "$TREE/usr/local/bin/frp-client" "$TREE/usr/local/bin/frpctl"
-printf 'shared\n' >"$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
+printf '#!/bin/true\n' >"$TREE/usr/local/bin/drlink"
+chmod +x "$TREE/usr/local/bin/frp-client" "$TREE/usr/local/bin/drlink"
+printf 'shared\n' >"$TREE/usr/local/lib/drlink/frp-common.sh"
 UNIT="$WORKDIR/units-dual"
 mkdir -p "$UNIT"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
@@ -289,8 +289,8 @@ if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/dual.out" 2>"$WORKDIR/dual.err"; the
   fail "dual-role uninstall: $(cat "$WORKDIR/dual.err")"
 fi
 [[ -f "$TREE/etc/frp/client-state.json" ]] || fail "dual-role removed client state"
-[[ -x "$TREE/usr/local/bin/frpctl" ]] || fail "dual-role removed client frpctl"
-[[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh" ]] || fail "dual-role removed shared lib"
+[[ -x "$TREE/usr/local/bin/drlink" ]] || fail "dual-role removed client frpctl"
+[[ -f "$TREE/usr/local/lib/drlink/frp-common.sh" ]] || fail "dual-role removed shared lib"
 pass "DUAL_ROLE_SERVER_UNINSTALL"
 
 # 12. second uninstall remains safe

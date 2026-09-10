@@ -6,19 +6,19 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 TREE="$WORK/tree"
 mkdir -p \
-  "$TREE/etc/frp-auto-deploy/pki" \
-  "$TREE/var/lib/frp-auto-deploy/enrollments" \
-  "$TREE/var/lib/frp-auto-deploy/bootstrap"
+  "$TREE/etc/drlink/pki" \
+  "$TREE/var/lib/drlink/enrollments" \
+  "$TREE/var/lib/drlink/bootstrap"
 
-python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/frp-auto-deploy/pki" --public-host example.test >/dev/null
+python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/drlink/pki" --public-host example.test >/dev/null
 python3 - "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-(root / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
-  'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-  'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
-  'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
+(root / 'etc/drlink/config.json').write_text(json.dumps({
+  'enrollments_dir': '/var/lib/drlink/enrollments',
+  'bootstrap_dir': '/var/lib/drlink/bootstrap',
+  'tls_ca_cert': '/etc/drlink/pki/ca.crt',
   'allocator_public_url': 'https://example.test/enroll',
   'client_installer_url': 'https://example.test/bootstrap-client.sh',
 }) + '\n')
@@ -58,7 +58,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 eid = sys.argv[2]
-path = root / 'var/lib/frp-auto-deploy/enrollments' / (eid + '.json')
+path = root / 'var/lib/drlink/enrollments' / (eid + '.json')
 rec = json.loads(path.read_text())
 rec['used_at'] = '2026-08-30T01:00:00Z'
 rec['bound_machine_id'] = 'aabbccddeeff0011'
@@ -74,7 +74,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 eid = 'aaaaaaaaaaaaaaaa'
-path = root / 'var/lib/frp-auto-deploy/enrollments' / (eid + '.json')
+path = root / 'var/lib/drlink/enrollments' / (eid + '.json')
 now = int(time.time())
 rec = {
   'id': eid,
@@ -100,7 +100,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 eid = 'bbbbbbbbbbbbbbbb'
-path = root / 'var/lib/frp-auto-deploy/enrollments' / (eid + '.json')
+path = root / 'var/lib/drlink/enrollments' / (eid + '.json')
 now = int(time.time())
 rec = {
   'id': eid,
@@ -164,7 +164,7 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = sys.argv[2]
-rec = json.loads((root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')).read_text())
+rec = json.loads((root / 'var/lib/drlink/bootstrap' / (tid + '.json')).read_text())
 print(rec['enrollment_id'])
 PY
 )"
@@ -177,7 +177,7 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = sys.argv[2]
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 rec = json.loads(path.read_text())
 rec['bound_machine_id'] = 'machinebound0001'
 rec['completed_at'] = None
@@ -193,7 +193,7 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = sys.argv[2]
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 rec = json.loads(path.read_text())
 rec['completed_at'] = '2026-08-30T02:00:00Z'
 path.write_text(json.dumps(rec, indent=2) + '\n')
@@ -208,7 +208,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = 'cccccccccccccccc'
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 now = int(time.time())
 rec = {
   'schema': 1,
@@ -225,7 +225,7 @@ rec = {
 }
 path.write_text(json.dumps(rec, indent=2) + '\n')
 # paired enrollment (must be omitted from listing as duplicate)
-ep = root / 'var/lib/frp-auto-deploy/enrollments' / 'dddddddddddddddd.json'
+ep = root / 'var/lib/drlink/enrollments' / 'dddddddddddddddd.json'
 ep.write_text(json.dumps({
   'id': 'dddddddddddddddd',
   'secret': 'shouldneverappear0000000000000000000000000000000000000000000000',
@@ -246,7 +246,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = 'eeeeeeeeeeeeeeee'
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 now = int(time.time())
 rec = {
   'schema': 1,

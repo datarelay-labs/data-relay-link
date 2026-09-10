@@ -320,7 +320,7 @@ function Complete-FrpZeroTouchPostEnroll {
         Write-Host 'Management-only enrollment: no public services; skipping frpc start.'
         Set-FrpInstallStatus -Status 'management_only'
         Write-Host ''
-        Write-Host 'Enrollment complete (management-only). Use frp-client info for details.'
+        Write-Host 'Enrollment complete (management-only). Use drlink show info for details.'
         Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
         return 0
     }
@@ -354,7 +354,7 @@ function Complete-FrpZeroTouchPostEnroll {
 
     Set-FrpInstallStatus -Status 'installed'
     Write-Host ''
-    Write-Host 'Enrollment complete. Use frp-client info for connection details.'
+    Write-Host 'Enrollment complete. Use drlink show info for connection details.'
     Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
     return 0
 }
@@ -511,7 +511,7 @@ function Invoke-FrpClientApplyDraft {
     .SYNOPSIS
       Apply pending draft service changes: identity-auth request to the
       allocator, merge allocated ports, regenerate frpc.toml + client-state.json,
-      restart frpc if it was running. Existing FRP token is reused (identity
+      restart drlink-client if it was running. Existing FRP token is reused (identity
       auth never rotates it). On local activation failure: restore local files
       and compensate the server reservation (Unix-equivalent transaction).
     #>
@@ -795,7 +795,7 @@ function Invoke-FrpApplyReconcileRuntime {
         Write-Host 'ERROR: simulated service restart failure'
         Write-Host 'FAILURE_CLASS=FRPC_RESTART_FAILED'
         Write-Host 'RECOVERY_REQUIRED=YES'
-        throw 'ERROR: failed to restart frpc after server reconciliation.'
+        throw 'ERROR: failed to restart drlink-client after server reconciliation.'
     }
     $state = Read-FrpClientState
     $map = ConvertTo-FrpServiceMap -Services $state.services
@@ -1121,13 +1121,13 @@ function Invoke-FrpZeroTouch {
             }
             if (Test-FrpIsInstallComplete) {
                 Write-Host 'ERROR: this machine is already enrolled.'
-                Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: frp-client start'
+                Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: start the Data Relay Link client service'
                 Write-Host 'To replace this install, uninstall locally first (server reservations are preserved).'
                 return 2
             }
             # Legacy enrolled installs without install_status: treat as complete / refuse re-ticket
             Write-Host 'ERROR: this machine is already enrolled.'
-            Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: frp-client start'
+            Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: start the Data Relay Link client service'
             Write-Host 'To replace this install, uninstall locally first (server reservations are preserved).'
             return 2
         }

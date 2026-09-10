@@ -13,8 +13,8 @@ frp_client_source_lib() {
   for cand in \
     "$here/lib/frp-client-common.sh" \
     "$here/../lib/frp-client-common.sh" \
-    /usr/local/lib/frp-auto-deploy/frp-client-common.sh \
-    '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh'
+    /usr/local/lib/drlink/frp-client-common.sh \
+    '/Library/Application Support/drlink/lib/frp-client-common.sh'
   do
     if [[ -f "$cand" ]]; then
       # shellcheck source=lib/frp-client-common.sh
@@ -97,7 +97,7 @@ PY
 
 frp_require_root() {
   if [[ ${EUID} -ne 0 && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-    echo "ERROR: run as root, e.g. sudo frp-client" >&2
+    echo "ERROR: run as root, e.g. sudo drlink" >&2
     exit 1
   fi
 }
@@ -121,9 +121,9 @@ frp_client_update_cmd() {
         ;;
       -h|--help)
         cat <<'EOF'
-Usage: frp-client update [--source DIR] [--check]
+Usage: drlink update [--source DIR] [--check]
 
-Upgrade this client's frp-auto-deploy management tools.
+Upgrade this client's Data Relay Link management tools.
 
   --source DIR   use a local source tree instead of downloading the bundle
   --check        report installed/target versions without changing files
@@ -133,13 +133,13 @@ does not regenerate management identity, and does not rewrite client
 state, frpc.toml, or public port assignments. The official frpc binary
 is left unchanged when it is already the tested version.
 
-The recommended command is: sudo frpctl update
+The recommended command is: sudo drlink update
 EOF
         return 0
         ;;
       *)
         echo "ERROR: unknown option: $1" >&2
-        echo "Usage: frp-client update [--source DIR] [--check]" >&2
+        echo "Usage: drlink update [--source DIR] [--check]" >&2
         return 2
         ;;
     esac
@@ -183,7 +183,7 @@ HC = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(HC)
 client_label = HC.client_status_label(active)
 allocator = 'configured' if data.get('allocator_url') else 'missing'
-print('FRP Client')
+print('Data Relay Link Client')
 print('==========')
 print()
 print(f"Role            : Client")
@@ -191,7 +191,7 @@ print(f"Project version : {project_version}")
 print(f"Release channel : {release_channel}")
 print(f"Source ref      : {source_ref}")
 print(f"Hostname        : {data.get('hostname', '')}")
-print(f"FRP server      : {data.get('frp_server', '')}:{data.get('frp_server_port', '')}")
+print(f"Data Relay Link server : {data.get('frp_server', '')}:{data.get('frp_server_port', '')}")
 print(f"Allocator       : {allocator}")
 print(f"Management identity : {sys.argv[5]}")
 print(f"FRP version     : {tested}")
@@ -455,7 +455,7 @@ frp_apply_candidate() {
       echo "Authentication: existing client identity"
     elif [[ "$ident_status" == corrupt ]]; then
       echo "ERROR: this client's management identity is unusable." >&2
-      echo "Create a new Enrollment Code on the FRP server with sudo frp-create-client," >&2
+      echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink create enrollment," >&2
       echo "then re-enroll this client. Do not overwrite the damaged identity file automatically." >&2
       return 1
     else
@@ -866,7 +866,7 @@ import json,sys
 from pathlib import Path
 data=json.loads(Path(sys.argv[1]).read_text())
 print()
-print('FRP Client Management')
+print('Data Relay Link Client Management')
 print('=====================')
 print()
 print(f"Client: {data.get('hostname','')}")
@@ -921,7 +921,7 @@ PY
 }
 
 frp_client_draft_path() {
-  printf '%s' "$(frp_client_path /var/lib/frp-auto-deploy/client-draft.json)"
+  printf '%s' "$(frp_client_path /var/lib/drlink/client-draft.json)"
 }
 
 frp_client_ensure_pending() {
@@ -1053,8 +1053,8 @@ def load_module(name, filename):
         candidates.append(base / filename)
         candidates.append(base.parent / "lib" / filename)
     if root:
-        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy" / filename)
-    candidates.append(Path("/usr/local/lib/frp-auto-deploy") / filename)
+        candidates.append(Path(root) / "usr/local/lib/drlink" / filename)
+    candidates.append(Path("/usr/local/lib/drlink") / filename)
     # Source checkout when tools/frp-client is used directly.
     candidates.append(Path(__file__).resolve().parent.parent / "lib" / filename if False else Path("."))
     here = Path(sys.argv[0]).resolve() if sys.argv[0] else Path.cwd()
@@ -1081,7 +1081,7 @@ def rooted(path):
     return path
 
 
-cfg_path = rooted("/etc/frp-auto-deploy/config.json")
+cfg_path = rooted("/etc/drlink/config.json")
 cfg = None
 if cfg_path.is_file():
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -1125,7 +1125,7 @@ req.add_header("X-Machine-Id", machine_id)
 
 ctx = ssl.create_default_context()
 ca = os.environ.get("FRP_ALLOCATOR_CA", "")
-ca_path = Path(ca) if ca else rooted("/etc/frp-auto-deploy/allocator-ca.crt")
+ca_path = Path(ca) if ca else rooted("/etc/drlink/allocator-ca.crt")
 if ca_path.is_file():
     ctx.load_verify_locations(cafile=str(ca_path))
 try:
@@ -1174,8 +1174,8 @@ def load_prof():
         candidates.append(base.parent / "lib" / "frp_service_profiles.py")
     root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "") or os.environ.get("FRP_CLIENT_TEST_ROOT", "")
     if root:
-        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_service_profiles.py")
-    candidates.append(Path("/usr/local/lib/frp-auto-deploy/frp_service_profiles.py"))
+        candidates.append(Path(root) / "usr/local/lib/drlink/frp_service_profiles.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_service_profiles.py"))
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location("frp_service_profiles", str(path))
@@ -1203,8 +1203,8 @@ if src:
     candidates.append(Path(src) / "lib" / "frp_audit.py")
 root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
 if root:
-    candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_audit.py")
-candidates.append(Path("/usr/local/lib/frp-auto-deploy/frp_audit.py"))
+    candidates.append(Path(root) / "usr/local/lib/drlink/frp_audit.py")
+candidates.append(Path("/usr/local/lib/drlink/frp_audit.py"))
 for path in candidates:
     if path.is_file():
         spec = importlib.util.spec_from_file_location("frp_audit", str(path))
@@ -1389,7 +1389,7 @@ Usage: frp-client [status|info|list|sync|update]
   info        Show connection information (read-only)
   list        List configured services (read-only)
   sync        Reconcile local services against server releases
-  update      Upgrade frp-auto-deploy management tools without re-enrolling
+  update      Upgrade Data Relay Link management tools without re-enrolling
 
 An Enrollment Code is required only to enroll this client or to
 recover its management identity. Ordinary later changes are
@@ -1398,7 +1398,7 @@ new Enrollment Code. A software update does not require an
 Enrollment Code. Read-only commands (status/info/list) do not
 contact the allocator. Use sync (or apply) to reconcile releases.
 
-For everyday use, prefer: sudo frpctl
+For everyday use, prefer: sudo drlink
 EOF
       ;;
     *)

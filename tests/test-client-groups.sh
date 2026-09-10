@@ -6,13 +6,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy" "$TREE/var/log/frp-auto-deploy"
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink" "$TREE/var/log/drlink"
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 export FRP_CTL_TEST_ROOT="$TREE"
 export FRP_CTL_BIN_DIR="$ROOT/tools"
-REG="$TREE/var/lib/frp-auto-deploy/registry.json"
+REG="$TREE/var/lib/drlink/registry.json"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$REG" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$REG" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = map(Path, sys.argv[1:])
@@ -125,12 +125,12 @@ grep -q 'create group' "$WORKDIR/help-create"
 grep -q 'add client' "$WORKDIR/help-add"
 grep -q 'remove client' "$WORKDIR/help-remove"
 
-grep -q '"event":"group.created"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.description_changed"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.member_added"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.member_removed"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.deleted"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
+grep -q '"event":"group.created"' "$TREE/var/log/drlink/audit.jsonl"
+grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.description_changed"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.member_added"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.member_removed"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.deleted"' "$TREE/var/log/drlink/audit.jsonl"
 
 python3 - "$ROOT/lib/frp_ctl_grammar.py" <<'PY'
 import importlib.util, sys

@@ -66,14 +66,14 @@ export FRP_CLIENT_TEST_ROOT="$TREE"
 # Correct fingerprint bootstrap.
 export FRP_ALLOCATOR_CA_SHA256="$CA_FP"
 frp_bootstrap_allocator_ca "$URL" || fail "correct fingerprint bootstrap"
-[[ -f "$TREE/etc/frp-auto-deploy/allocator-ca.crt" ]] || fail "trusted CA not installed"
-mode="$(python3 - "$TREE/etc/frp-auto-deploy/allocator-ca.crt" <<'PY'
+[[ -f "$TREE/etc/drlink/allocator-ca.crt" ]] || fail "trusted CA not installed"
+mode="$(python3 - "$TREE/etc/drlink/allocator-ca.crt" <<'PY'
 import os,stat,sys
 print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))
 PY
 )"
 [[ "$mode" == "0o644" ]] || fail "trusted CA mode"
-got="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/frp-auto-deploy/allocator-ca.crt")"
+got="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/drlink/allocator-ca.crt")"
 [[ "$got" == "$CA_FP" ]] || fail "installed fingerprint"
 pass "correct CA fingerprint bootstrap succeeds"
 pass "trusted CA file installed atomically"
@@ -88,7 +88,7 @@ if frp_bootstrap_allocator_ca "$URL" 2>"$WORKDIR/mismatch.err"; then
   fail "wrong fingerprint should fail"
 fi
 grep -qi 'mismatch' "$WORKDIR/mismatch.err" || fail "mismatch error"
-if [[ -e "$BAD_TREE/etc/frp-auto-deploy/allocator-ca.crt" ]]; then
+if [[ -e "$BAD_TREE/etc/drlink/allocator-ca.crt" ]]; then
   fail "mismatch wrote trusted CA"
 fi
 pass "wrong fingerprint fails closed"
@@ -109,7 +109,7 @@ if frp_bootstrap_allocator_ca "$URL" 2>"$WORKDIR/malformed.err"; then
   fail "malformed CA should fail"
 fi
 grep -qi 'not a valid X.509' "$WORKDIR/malformed.err" || fail "malformed X.509 error"
-if [[ -e "$WORKDIR/malformed-client/etc/frp-auto-deploy/allocator-ca.crt" ]]; then
+if [[ -e "$WORKDIR/malformed-client/etc/drlink/allocator-ca.crt" ]]; then
   fail "malformed CA installed"
 fi
 pass "malformed certificate fails"
@@ -132,7 +132,7 @@ if frp_bootstrap_allocator_ca "$URL" 2>"$WORKDIR/garbage.err"; then
   fail "garbage PEM should fail"
 fi
 grep -qi 'not a valid X.509' "$WORKDIR/garbage.err" || fail "garbage X.509 error"
-if [[ -e "$WORKDIR/garbage-client/etc/frp-auto-deploy/allocator-ca.crt" ]]; then
+if [[ -e "$WORKDIR/garbage-client/etc/drlink/allocator-ca.crt" ]]; then
   fail "garbage CA installed"
 fi
 pass "base64 garbage wrapped as certificate is rejected"
@@ -180,7 +180,7 @@ if frp_bootstrap_allocator_ca "$URL" 2>"$WORKDIR/tamper.err"; then
   fail "tampered CA should fail"
 fi
 grep -qi 'not a valid X.509\|fingerprint mismatch' "$WORKDIR/tamper.err" || fail "tamper error"
-if [[ -e "$WORKDIR/tamper-client/etc/frp-auto-deploy/allocator-ca.crt" ]]; then
+if [[ -e "$WORKDIR/tamper-client/etc/drlink/allocator-ca.crt" ]]; then
   fail "tampered CA installed"
 fi
 pass "modified/tampered CA fails"
@@ -232,7 +232,7 @@ grep -qi 'not a valid X.509' "$WORKDIR/download-garbage.err" || fail "downloaded
 if grep -q ENROLL_CONTACTED "$FRP_FAKE_CURL_LOG"; then
   fail "garbage CA contacted /enroll"
 fi
-if [[ -e "$WORKDIR/download-garbage/etc/frp-auto-deploy/allocator-ca.crt" ]]; then
+if [[ -e "$WORKDIR/download-garbage/etc/drlink/allocator-ca.crt" ]]; then
   fail "downloaded garbage CA installed"
 fi
 pass "downloaded garbage CA is rejected before /enroll"
@@ -243,7 +243,7 @@ unset FRP_ALLOCATOR_CA_SHA256
 export FRP_ALLOCATOR_CA_FILE="$ALLOC_ROOT/pki/ca.crt"
 export FRP_ALLOCATOR_CA_SHA256="$CA_FP"
 frp_bootstrap_allocator_ca "$URL" || fail "pre-provisioned valid CA"
-got="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$WORKDIR/preprov/etc/frp-auto-deploy/allocator-ca.crt")"
+got="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$WORKDIR/preprov/etc/drlink/allocator-ca.crt")"
 [[ "$got" == "$CA_FP" ]] || fail "pre-provisioned fingerprint"
 pass "pre-provisioned valid CA is installed"
 
@@ -255,7 +255,7 @@ if frp_bootstrap_allocator_ca "$URL" 2>"$WORKDIR/preprov-bad-fp.err"; then
   fail "pre-provisioned wrong fingerprint should fail"
 fi
 grep -qi 'mismatch' "$WORKDIR/preprov-bad-fp.err" || fail "pre-provisioned mismatch error"
-if [[ -e "$WORKDIR/preprov-bad-fp/etc/frp-auto-deploy/allocator-ca.crt" ]]; then
+if [[ -e "$WORKDIR/preprov-bad-fp/etc/drlink/allocator-ca.crt" ]]; then
   fail "pre-provisioned mismatch wrote trusted CA"
 fi
 pass "pre-provisioned CA requires fingerprint match"
@@ -264,12 +264,12 @@ pass "pre-provisioned CA requires fingerprint match"
 export FRP_CLIENT_TEST_ROOT="$TREE"
 unset FRP_ALLOCATOR_CA_FILE
 export FRP_ALLOCATOR_CA_SHA256="$CA_FP"
-before="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TREE/etc/frp-auto-deploy/allocator-ca.crt")"
+before="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TREE/etc/drlink/allocator-ca.crt")"
 : >"$FRP_FAKE_CURL_LOG"
 PATH="$FAKEBIN:$PATH"
 frp_bootstrap_allocator_ca "$URL" || { PATH="$ORIG_PATH"; fail "existing trusted CA reuse"; }
 PATH="$ORIG_PATH"
-after="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TREE/etc/frp-auto-deploy/allocator-ca.crt")"
+after="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TREE/etc/drlink/allocator-ca.crt")"
 [[ "$before" == "$after" ]] || fail "existing trusted CA replaced"
 if grep -q '/ca.crt' "$FRP_FAKE_CURL_LOG"; then
   fail "existing trusted CA triggered download"
@@ -282,7 +282,7 @@ if frp_bootstrap_allocator_ca "$URL" 2>"$WORKDIR/existing-mismatch.err"; then
   fail "existing CA wrong fingerprint should fail"
 fi
 grep -qi 'mismatch' "$WORKDIR/existing-mismatch.err" || fail "existing mismatch error"
-after2="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TREE/etc/frp-auto-deploy/allocator-ca.crt")"
+after2="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TREE/etc/drlink/allocator-ca.crt")"
 [[ "$before" == "$after2" ]] || fail "mismatch replaced existing trusted CA"
 pass "existing trusted CA fingerprint is verified"
 

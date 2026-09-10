@@ -48,16 +48,16 @@ pass "ZERO_TOUCH_PACKAGE_ROUNDTRIP"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments" \
-  "$TREE/var/lib/frp-auto-deploy/bootstrap"
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments" \
+  "$TREE/var/lib/drlink/bootstrap"
 
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout "$TREE/etc/frp-auto-deploy/pki/ca.key" \
-  -out "$TREE/etc/frp-auto-deploy/pki/ca.crt" \
+  -keyout "$TREE/etc/drlink/pki/ca.key" \
+  -out "$TREE/etc/drlink/pki/ca.crt" \
   -days 1 -subj "/CN=frp-test-ca" >/dev/null 2>&1 \
   || fail "openssl ca"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 tree = Path(sys.argv[2])
@@ -70,13 +70,13 @@ cfg = {
   "listen_port": 6099,
   "allocator_public_url": "https://203.0.113.10/enroll",
   "client_installer_url": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh",
-  "tls_ca_cert": str(tree / "etc/frp-auto-deploy/pki/ca.crt"),
-  "enrollments_dir": str(tree / "var/lib/frp-auto-deploy/enrollments"),
-  "bootstrap_dir": str(tree / "var/lib/frp-auto-deploy/bootstrap"),
-  "registry_file": str(tree / "var/lib/frp-auto-deploy/registry.json"),
+  "tls_ca_cert": str(tree / "etc/drlink/pki/ca.crt"),
+  "enrollments_dir": str(tree / "var/lib/drlink/enrollments"),
+  "bootstrap_dir": str(tree / "var/lib/drlink/bootstrap"),
+  "registry_file": str(tree / "var/lib/drlink/registry.json"),
 }
 Path(sys.argv[1]).write_text(json.dumps(cfg, indent=2) + "\n")
-(tree / "var/lib/frp-auto-deploy/registry.json").write_text(
+(tree / "var/lib/drlink/registry.json").write_text(
   json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n"
 )
 PY

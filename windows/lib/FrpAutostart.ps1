@@ -53,7 +53,7 @@ function New-FrpAutostartTaskXml {
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>FRP Auto Deploy client runtime autostart (product-owned). Starts frpc at boot as SYSTEM.</Description>
+    <Description>Data Relay Link client runtime autostart (product-owned). Starts frpc at boot as SYSTEM.</Description>
   </RegistrationInfo>
   <Triggers>
     <BootTrigger>

@@ -1,10 +1,10 @@
 # Data Relay — Product Direction & Roadmap
 
-> **Document role:** Product Direction + Scope + Architecture Principles + Development Roadmap  
-> **Status:** Implementation in progress on `feature/data-relay-controlled-egress`  
-> **Product identity:** **Data Relay**  
-> **Legacy technical identity:** FRP Auto Deploy  
-> **Primary interface:** `sudo frpctl` (until a separate naming migration is explicitly approved)  
+> **Document role:** Product Direction + Scope + Architecture Principles + Development Roadmap
+> **Status:** Implementation in progress on `feature/data-relay-controlled-egress`
+> **Product identity:** **Data Relay**
+> **Legacy technical identity:** Data Relay Link
+> **Primary interface:** `sudo drlink` (until a separate naming migration is explicitly approved)
 > **Design principle:** **Do not connect entire networks. Relay only the connections that are actually needed.**
 > **Operator guide:** `docs/CONTROLLED_EGRESS.md`
 
@@ -12,7 +12,7 @@
 
 # 1. Why the Product Direction Changes
 
-FRP Auto Deploy started as a lightweight deployment and operations layer for official `fatedier/frp`.
+Data Relay Link started as a lightweight deployment and operations layer for official `fatedier/frp`.
 
 Its original problem was primarily **outside → inside** connectivity:
 
@@ -59,7 +59,7 @@ Therefore the product direction expands from **FRP deployment automation** to **
 
 **Data Relay**
 
-`FRP Auto Deploy` becomes a legacy/technical identity rather than the full product definition.
+`Data Relay Link` becomes a legacy/technical identity rather than the full product definition.
 
 FRP remains an important transport engine for inbound remote access, but it is no longer the product identity itself.
 
@@ -465,16 +465,16 @@ The CLI should remain simple and consistent with the existing `frpctl` operation
 Illustrative UX:
 
 ```text
-frpctl> create egress-profile ubuntu-update
-frpctl> add egress-profile ubuntu-update destination security.ubuntu.com 443
-frpctl> add egress-profile ubuntu-update destination archive.ubuntu.com 443
-frpctl> add egress-profile ubuntu-update source 203.0.113.10/32
+drlink> create egress-profile ubuntu-update
+drlink> add egress-profile ubuntu-update destination security.ubuntu.com 443
+drlink> add egress-profile ubuntu-update destination archive.ubuntu.com 443
+drlink> add egress-profile ubuntu-update source 203.0.113.10/32
 
-frpctl> show egress-profiles
-frpctl> show egress-profile ubuntu-update
-frpctl> disable egress-profile ubuntu-update
-frpctl> enable egress-profile ubuntu-update
-frpctl> delete egress-profile ubuntu-update
+drlink> show egress-profiles
+drlink> show egress-profile ubuntu-update
+drlink> disable egress-profile ubuntu-update
+drlink> enable egress-profile ubuntu-update
+drlink> delete egress-profile ubuntu-update
 ```
 
 Exact grammar should follow the canonical parser and existing CLI conventions after implementation audit.
@@ -711,7 +711,7 @@ The intended position is:
 
 Core message:
 
-> **Inbound: expose only the internal services you need.**  
+> **Inbound: expose only the internal services you need.**
 > **Outbound: allow only the Internet services you need.**
 
 Or more simply:
@@ -1092,8 +1092,8 @@ The core product statement is:
 
 And the operating principle remains:
 
-> **Simple to deploy.**  
-> **Simple to understand.**  
-> **Safe to operate.**  
+> **Simple to deploy.**
+> **Simple to understand.**
+> **Safe to operate.**
 > **Lightweight by design.**
 

@@ -46,7 +46,7 @@ frp_server_systemctl() {
   case "${1:-}" in
     is-active)
       local unit="${3:-}"
-      if [[ "$unit" == "frp-port-allocator" ]]; then
+      if [[ "$unit" == "drlink-allocator" ]]; then
         IS_ACTIVE_CALLS=$((IS_ACTIVE_CALLS + 1))
         if [[ "$DIE_AFTER_ACTIVE_CALLS" -gt 0 && "$IS_ACTIVE_CALLS" -gt "$DIE_AFTER_ACTIVE_CALLS" ]]; then
           ALLOC_ACTIVE=0
@@ -162,7 +162,7 @@ export FRP_ALLOCATOR_READY_INTERVAL_SEC=0.1
 set +e
 frp_wait_allocator_ready 6099 >"$WORKDIR/diag.out" 2>"$WORKDIR/diag.err"
 set -e
-grep -q 'MOCK-SYSTEMCTL-STATUS frp-port-allocator' "$WORKDIR/diag.err" || fail "missing systemctl status"
+grep -q 'MOCK-SYSTEMCTL-STATUS drlink-allocator' "$WORKDIR/diag.err" || fail "missing systemctl status"
 grep -q 'MOCK-JOURNALCTL' "$WORKDIR/diag.err" || fail "missing journalctl"
 if grep -qiE 'server_token|auth.token|BEGIN .*PRIVATE KEY|enrollment' "$WORKDIR/diag.out" "$WORKDIR/diag.err"; then
   fail "diagnostics leaked secret-like text"
@@ -174,7 +174,7 @@ if grep -nE '^[[:space:]]*sleep[[:space:]]+2[[:space:]]*$' "$ROOT/install-server
   fail "install-server.sh still has a fixed sleep 2"
 fi
 grep -q 'frp_wait_allocator_ready' "$ROOT/install-server.sh" || fail "missing wait helper"
-grep -q 'frp_wait_unit_active frps' "$ROOT/install-server.sh" || fail "missing frps active wait"
+grep -q 'frp_wait_unit_active drlink-server' "$ROOT/install-server.sh" || fail "missing frps active wait"
 pass "NO_FIXED_TWO_SECOND_ASSUMPTION"
 
 echo

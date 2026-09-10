@@ -35,10 +35,10 @@ class EgressPolicyTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
-        self.state_path = self.root / "var/lib/frp-auto-deploy/egress-control.json"
+        self.state_path = self.root / "var/lib/drlink/egress-control.json"
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         EG.save_egress_state(EG.empty_egress_state(), path=self.state_path)
-        self.cfg = {"egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json"}
+        self.cfg = {"egress_control_file": "/var/lib/drlink/egress-control.json"}
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -184,15 +184,15 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         if "frp_egress_gateway" in sys.modules:
             del sys.modules["frp_egress_gateway"]
         # Force reload of EG path in gateway by ensuring FRP_DEPLOY_TEST_ROOT libs exist
-        libdir = self.root / "usr/local/lib/frp-auto-deploy"
+        libdir = self.root / "usr/local/lib/drlink"
         libdir.mkdir(parents=True, exist_ok=True)
         (libdir / "frp_egress_control.py").write_text(
             (ROOT / "lib" / "frp_egress_control.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-        cfg_path = self.root / "etc/frp-auto-deploy/config.json"
+        cfg_path = self.root / "etc/drlink/config.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path = self.root / "var/lib/frp-auto-deploy/egress-control.json"
+        state_path = self.root / "var/lib/drlink/egress-control.json"
         state_path.parent.mkdir(parents=True, exist_ok=True)
         EG.save_egress_state(EG.empty_egress_state(), path=state_path)
 
@@ -205,8 +205,8 @@ class EgressProxyFunctionalTests(unittest.TestCase):
 
         EG.mutate_egress_state(mut, path=state_path)
         cfg = {
-            "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
-            "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+            "egress_control_file": "/var/lib/drlink/egress-control.json",
+            "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
             "egress_listen_addr": "127.0.0.1",
             "egress_listen_port": 0,
         }
@@ -368,7 +368,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
 
     def test_private_dns_denied(self):
         # Authorize would need destination policy — add temporarily via mutate
-        state_path = self.root / "var/lib/frp-auto-deploy/egress-control.json"
+        state_path = self.root / "var/lib/drlink/egress-control.json"
         EG.mutate_egress_state(
             lambda s: EG.add_destination(s, "test", "private.test", 80),
             path=state_path,
@@ -383,7 +383,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         self.assertTrue(resp.startswith(b"HTTP/1.1 403") or resp.startswith(b"HTTP/1.1 502"), resp[:80])
 
     def test_mixed_dns_denied(self):
-        state_path = self.root / "var/lib/frp-auto-deploy/egress-control.json"
+        state_path = self.root / "var/lib/drlink/egress-control.json"
         EG.mutate_egress_state(
             lambda s: EG.add_destination(s, "test", "mixed.test", 80),
             path=state_path,

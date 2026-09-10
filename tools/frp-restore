@@ -20,36 +20,36 @@ from pathlib import Path
 FORMAT = "frp-auto-deploy-server-backup"
 SCHEMA_VERSION = 1
 REQUIRED = {
-    "etc/frp-auto-deploy/config.json",
-    "etc/frp-auto-deploy/version",
-    "etc/frp-auto-deploy/pki/ca.key",
-    "etc/frp-auto-deploy/pki/ca.crt",
-    "etc/frp-auto-deploy/pki/server.key",
-    "etc/frp-auto-deploy/pki/server.crt",
+    "etc/drlink/config.json",
+    "etc/drlink/version",
+    "etc/drlink/pki/ca.key",
+    "etc/drlink/pki/ca.crt",
+    "etc/drlink/pki/server.key",
+    "etc/drlink/pki/server.crt",
     "etc/frp/frps.toml",
     "etc/frp/server_token",
-    "var/lib/frp-auto-deploy/registry.json",
-    "var/lib/frp-auto-deploy/access-control.json",
-    "var/lib/frp-auto-deploy/egress-control.json",
-    "var/lib/frp-auto-deploy/service-profiles.json",
+    "var/lib/drlink/registry.json",
+    "var/lib/drlink/access-control.json",
+    "var/lib/drlink/egress-control.json",
+    "var/lib/drlink/service-profiles.json",
 }
 OPTIONAL_EXACT = {
-    "etc/frp-auto-deploy/frontend.conf",
-    "var/lib/frp-auto-deploy/mgmt-nonces.json",
-    "var/lib/frp-auto-deploy/nginx-ownership",
-    "var/log/frp-auto-deploy/audit.jsonl",
-    "var/log/frp-auto-deploy/access-conn.jsonl",
-    "var/log/frp-auto-deploy/egress-conn.jsonl",
+    "etc/drlink/frontend.conf",
+    "var/lib/drlink/mgmt-nonces.json",
+    "var/lib/drlink/nginx-ownership",
+    "var/log/drlink/audit.jsonl",
+    "var/log/drlink/access-conn.jsonl",
+    "var/log/drlink/egress-conn.jsonl",
 }
 TREE_PREFIXES = (
-    "etc/frp-auto-deploy/pki/",
-    "var/lib/frp-auto-deploy/enrollments/",
-    "var/lib/frp-auto-deploy/bootstrap/",
+    "etc/drlink/pki/",
+    "var/lib/drlink/enrollments/",
+    "var/lib/drlink/bootstrap/",
 )
 TREE_ROOTS = tuple(prefix.rstrip("/") for prefix in TREE_PREFIXES)
-AUDIT_ROTATED_PREFIX = "var/log/frp-auto-deploy/audit.jsonl."
-ACCESS_CONN_ROTATED_PREFIX = "var/log/frp-auto-deploy/access-conn.jsonl."
-EGRESS_CONN_ROTATED_PREFIX = "var/log/frp-auto-deploy/egress-conn.jsonl."
+AUDIT_ROTATED_PREFIX = "var/log/drlink/audit.jsonl."
+ACCESS_CONN_ROTATED_PREFIX = "var/log/drlink/access-conn.jsonl."
+EGRESS_CONN_ROTATED_PREFIX = "var/log/drlink/egress-conn.jsonl."
 
 
 class RestoreError(RuntimeError):
@@ -88,7 +88,7 @@ def allowed_path(rel: str) -> bool:
 def allowed_directory(rel: str) -> bool:
     prefix = rel.rstrip("/") + "/"
     candidates = REQUIRED | OPTIONAL_EXACT | set(TREE_ROOTS) | {
-        "var/log/frp-auto-deploy",
+        "var/log/drlink",
     }
     return any(candidate == rel or candidate.startswith(prefix) for candidate in candidates)
 
@@ -100,7 +100,7 @@ def validate_rel(rel: str) -> None:
 
 
 def read_installed_project_version(root: Path) -> str:
-    path = root / "etc/frp-auto-deploy/version"
+    path = root / "etc/drlink/version"
     if not path.is_file():
         return ""
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -229,11 +229,11 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         raise RestoreError("checksum manifest does not match the backup manifest")
 
     for rel in (
-        "etc/frp-auto-deploy/config.json",
-        "var/lib/frp-auto-deploy/registry.json",
-        "var/lib/frp-auto-deploy/access-control.json",
-        "var/lib/frp-auto-deploy/egress-control.json",
-        "var/lib/frp-auto-deploy/service-profiles.json",
+        "etc/drlink/config.json",
+        "var/lib/drlink/registry.json",
+        "var/lib/drlink/access-control.json",
+        "var/lib/drlink/egress-control.json",
+        "var/lib/drlink/service-profiles.json",
     ):
         try:
             value = json.loads((destination / "payload" / rel).read_text(encoding="utf-8"))
@@ -247,7 +247,7 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
 
 
 def fixed_mode(rel: str) -> int:
-    if rel == "etc/frp-auto-deploy/version" or rel.endswith(".crt"):
+    if rel == "etc/drlink/version" or rel.endswith(".crt"):
         return 0o644
     return 0o600
 
@@ -342,7 +342,7 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
             raise RestoreError("simulated restore failure")
 
     # Restore rotated audit companions declared in the backup payload.
-    audit_payload_dir = payload / "var/log/frp-auto-deploy"
+    audit_payload_dir = payload / "var/log/drlink"
     if audit_payload_dir.is_dir():
         for pattern in ("audit.jsonl.*", "access-conn.jsonl.*", "egress-conn.jsonl.*"):
             for source in sorted(audit_payload_dir.glob(pattern)):
@@ -361,7 +361,7 @@ def _load_module(name, filename):
     here = Path(__file__).resolve()
     candidates = (
         here.parent.parent / "lib" / filename,
-        Path("/usr/local/lib/frp-auto-deploy") / filename,
+        Path("/usr/local/lib/drlink") / filename,
     )
     for path in candidates:
         if path.is_file():
@@ -383,7 +383,7 @@ def _audit_emit(event, **kwargs):
 
 def _write_txn(root: Path, snapshot: Path | None = None) -> None:
     # Restore is a server-role operation; use the server marker path.
-    marker = root / "var/lib/frp-auto-deploy/server-update-pending.json"
+    marker = root / "var/lib/drlink/server-update-pending.json"
     marker.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "schema_version": 2,
@@ -401,11 +401,11 @@ def _write_txn(root: Path, snapshot: Path | None = None) -> None:
 
 
 def _clear_txn(root: Path) -> None:
-    marker = root / "var/lib/frp-auto-deploy/server-update-pending.json"
+    marker = root / "var/lib/drlink/server-update-pending.json"
     if marker.is_file():
         marker.unlink()
     # Clear legacy shared marker only when it is unambiguously a server restore.
-    legacy = root / "var/lib/frp-auto-deploy/update-pending.json"
+    legacy = root / "var/lib/drlink/update-pending.json"
     if legacy.is_file():
         try:
             data = json.loads(legacy.read_text(encoding="utf-8"))
@@ -446,11 +446,11 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         raise RestoreError("simulated post-restore health failure")
     if in_rollback and os.environ.get("FRP_RESTORE_HOOK_ROLLBACK_HEALTH_FAIL") == "1":
         raise RestoreError("simulated rollback health failure")
-    registry_path = root / "var/lib/frp-auto-deploy/registry.json"
-    config_path = root / "etc/frp-auto-deploy/config.json"
+    registry_path = root / "var/lib/drlink/registry.json"
+    config_path = root / "etc/drlink/config.json"
     toml_path = root / "etc/frp/frps.toml"
     token_path = root / "etc/frp/server_token"
-    ca_path = root / "etc/frp-auto-deploy/pki/ca.crt"
+    ca_path = root / "etc/drlink/pki/ca.crt"
     try:
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -471,10 +471,10 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         raise RestoreError("restored CA certificate is missing")
     if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
         return
-    units = ["frps.service", "frp-port-allocator.service", "frp-access-plugin.service"]
-    frontend = (root / "etc/frp-auto-deploy/frontend.conf").is_file()
+    units = ["drlink-server.service", "drlink-allocator.service", "drlink-access.service"]
+    frontend = (root / "etc/drlink/frontend.conf").is_file()
     if frontend:
-        units.append("frp-frontend.service")
+        units.append("drlink-frontend.service")
     for unit in units:
         def unit_active() -> bool:
             active = subprocess.run(
@@ -527,7 +527,7 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         host = str(config.get("public_host") or "")
         port = int(config.get("frp_control_public_port") or 443)
         if host:
-            py = Path("/usr/local/lib/frp-auto-deploy/frp_frontend.py")
+            py = Path("/usr/local/lib/drlink/frp_frontend.py")
             if not py.is_file():
                 py = Path(__file__).resolve().parent.parent / "lib" / "frp_frontend.py"
             if py.is_file():
@@ -556,11 +556,19 @@ def restart_services(root: Path, allow_hook: bool = True) -> None:
         return
     if allow_hook and os.environ.get("FRP_RESTORE_HOOK_RESTART_FAIL") == "1":
         raise RestoreError("simulated service restart failure")
-    units = ["frps.service", "frp-port-allocator.service", "frp-access-plugin.service"]
-    if (root / "etc/frp-auto-deploy/frontend.conf").is_file():
-        units.append("frp-frontend.service")
+    units = [
+        "drlink-server.service",
+        "drlink-allocator.service",
+        "drlink-access.service",
+        "drlink-egress.service",
+    ]
+    if (root / "etc/drlink/frontend.conf").is_file():
+        units.append("drlink-frontend.service")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "restart", *units], check=True)
+    # Dual-role hosts: restart client after the server stack so frpc does not
+    # exit permanently while control plane ports are briefly unavailable.
+    subprocess.run(["systemctl", "restart", "drlink-client.service"], check=False)
 
 
 def validate_to_temp(archive: Path, parent: Path | None = None) -> tuple[tempfile.TemporaryDirectory, Path]:
@@ -571,7 +579,7 @@ def validate_to_temp(archive: Path, parent: Path | None = None) -> tuple[tempfil
 
 
 def make_snapshot(root: Path) -> Path:
-    backup_dir = root / "var/lib/frp-auto-deploy/backups"
+    backup_dir = root / "var/lib/drlink/backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(backup_dir, 0o700)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

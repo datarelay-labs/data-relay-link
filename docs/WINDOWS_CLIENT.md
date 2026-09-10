@@ -2,14 +2,14 @@
 
 Supported OS: **Windows 10 / 11 / Server 2019+** (amd64), Windows PowerShell **5.1** or PowerShell **7+**.
 
-This client reuses the existing frp-auto-deploy allocator protocol (bootstrap redeem, enroll, CA pin, PBKDF2 token wrap, ECDSA management identity). It does **not** introduce a Windows-only enrollment API.
+This client reuses the existing Data Relay Link allocator protocol (bootstrap redeem, enroll, CA pin, PBKDF2 token wrap, ECDSA management identity). It does **not** introduce a Windows-only enrollment API.
 
 FRP pin: **0.71.0** Windows amd64 (`frp_0.71.0_windows_amd64.zip`).
 
 ## Install layout
 
 ```text
-C:\ProgramData\frp-auto-deploy\
+C:\ProgramData\drlink\
   bin\frpc.exe
   config\frpc.toml
   state\client-state.json, client-id, client-identity.*

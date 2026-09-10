@@ -61,8 +61,8 @@ def _load_doctor():
     here = Path(__file__).resolve().parent
     candidates = (
         here / "frp_doctor.py",
-        Path("/usr/local/lib/frp-auto-deploy/frp_doctor.py"),
-        Path("/Library/Application Support/frp-auto-deploy/lib/frp_doctor.py"),
+        Path("/usr/local/lib/drlink/frp_doctor.py"),
+        Path("/Library/Application Support/drlink/lib/frp_doctor.py"),
     )
     for path in candidates:
         if path.is_file():
@@ -340,7 +340,7 @@ class BundleBuilder:
             raise
 
     def _write_meta(self, role_info: dict) -> None:
-        identity = read_identity(self.path("/etc/frp-auto-deploy/version"))
+        identity = read_identity(self.path("/etc/drlink/version"))
         payload = {
             "format": FORMAT,
             "schema_version": SCHEMA_VERSION,
@@ -370,7 +370,7 @@ class BundleBuilder:
         self.add_section("meta")
 
     def _write_versions(self) -> None:
-        identity = read_identity(self.path("/etc/frp-auto-deploy/version"))
+        identity = read_identity(self.path("/etc/drlink/version"))
         lines = [
             "PROJECT_VERSION=%s" % identity.get("project_version", "unknown"),
             "FRP_VERSION=%s" % identity.get("frp_version", "unknown"),
@@ -419,9 +419,9 @@ class BundleBuilder:
         lines: List[str] = []
         units = [
             "frps",
-            "frp-port-allocator",
-            "frp-access-plugin",
-            "frp-frontend",
+            "drlink-allocator",
+            "drlink-access",
+            "drlink-frontend",
             "frpc",
         ]
         if shutil.which("systemctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
@@ -437,7 +437,7 @@ class BundleBuilder:
                 lines.append(out.strip() or err.strip() or ("exit=%s" % rc))
                 lines.append("")
         elif sys.platform == "darwin" or os.environ.get("FRP_TEST_UNAME_S") == "Darwin":
-            label = os.environ.get("FRP_MACOS_LAUNCHD_LABEL") or "com.datarelay.frp-auto-deploy.frpc"
+            label = os.environ.get("FRP_MACOS_LAUNCHD_LABEL") or "com.datarelay.drlink.frpc"
             lines.append("=== launchctl print system/%s ===" % label)
             rc, out, err = run_cmd(["launchctl", "print", "system/%s" % label], timeout=8)
             lines.append(redact_text(out.strip() or err.strip() or ("exit=%s" % rc)))
@@ -518,7 +518,7 @@ class BundleBuilder:
             self.stage_write("doctor.json.error.txt", "doctor json failed: %s\n" % redact_text(exc))
 
     def _write_product_config(self) -> None:
-        data, err = self.safe_read_json("/etc/frp-auto-deploy/config.json")
+        data, err = self.safe_read_json("/etc/drlink/config.json")
         if data is None:
             self.skip("product-config", err or "missing")
             return
@@ -563,7 +563,7 @@ class BundleBuilder:
         }
 
     def _write_registry_summary(self) -> None:
-        data, err = self.safe_read_json("/var/lib/frp-auto-deploy/registry.json")
+        data, err = self.safe_read_json("/var/lib/drlink/registry.json")
         if data is None:
             if self.role in ("server", "dual", "partial_server"):
                 self.skip("registry-summary", err or "missing")
@@ -662,7 +662,7 @@ class BundleBuilder:
         return "\n".join(lines) + "\n"
 
     def _write_generated_config(self) -> None:
-        for rel in ("/etc/frp/frps.toml", "/etc/frp/frpc.toml", "/etc/frp-auto-deploy/frontend.conf"):
+        for rel in ("/etc/frp/frps.toml", "/etc/frp/frpc.toml", "/etc/drlink/frontend.conf"):
             text = self.safe_read_text(rel)
             if text is None:
                 continue
@@ -675,9 +675,9 @@ class BundleBuilder:
 
     def _write_certs_public_only(self) -> None:
         for rel in (
-            "/etc/frp-auto-deploy/pki/ca.crt",
-            "/etc/frp-auto-deploy/pki/server.crt",
-            "/etc/frp-auto-deploy/allocator-ca.crt",
+            "/etc/drlink/pki/ca.crt",
+            "/etc/drlink/pki/server.crt",
+            "/etc/drlink/allocator-ca.crt",
             "/etc/frp/allocator-ca.crt",
             "/etc/frp/client-identity.pub",
         ):
@@ -696,8 +696,8 @@ class BundleBuilder:
         # Explicitly record omitted private material.
         omitted = []
         for rel in (
-            "/etc/frp-auto-deploy/pki/ca.key",
-            "/etc/frp-auto-deploy/pki/server.key",
+            "/etc/drlink/pki/ca.key",
+            "/etc/drlink/pki/server.key",
             "/etc/frp/client-identity.key",
             "/etc/frp/server_token",
         ):
@@ -715,7 +715,7 @@ class BundleBuilder:
     def _write_logs(self) -> None:
         lines: List[str] = []
         if shutil.which("journalctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
-            for unit in ("frps", "frp-port-allocator", "frp-access-plugin", "frpc", "frp-frontend"):
+            for unit in ("frps", "drlink-allocator", "drlink-access", "frpc", "drlink-frontend"):
                 rc, out, err = run_cmd(
                     ["journalctl", "-u", unit, "-n", "80", "--no-pager", "-o", "short-iso"],
                     timeout=12,
@@ -725,7 +725,7 @@ class BundleBuilder:
                     lines.append(out.rstrip())
                     lines.append("")
         # Local product logs (sanitized); never include raw bootstrap tickets.
-        log_dir = self.path("/var/log/frp-auto-deploy")
+        log_dir = self.path("/var/log/drlink")
         if log_dir.is_dir() and not log_dir.is_symlink():
             for name in ("audit.jsonl", "access-conn.jsonl"):
                 path = log_dir / name
@@ -781,7 +781,7 @@ class BundleBuilder:
                 continue
             filtered = []
             for line in out.splitlines():
-                if re.search(r"\b(frps|frpc|frp-port-allocator|frp-access|frp-frontend)\b", line):
+                if re.search(r"\b(frps|frpc|drlink-allocator|frp-access|drlink-frontend)\b", line):
                     filtered.append(redact_text(line))
             chunks.append("$ %s | grep frp*" % " ".join(args))
             chunks.extend(filtered or ["(no matching FRP processes)"])
@@ -793,9 +793,9 @@ class BundleBuilder:
     def _write_disk(self) -> None:
         chunks: List[str] = []
         targets = [
-            str(self.path("/var/lib/frp-auto-deploy")),
+            str(self.path("/var/lib/drlink")),
             str(self.path("/etc/frp")),
-            str(self.path("/etc/frp-auto-deploy")),
+            str(self.path("/etc/drlink")),
             str(self.root),
         ]
         if shutil.which("df"):
@@ -810,7 +810,7 @@ class BundleBuilder:
         self.add_section("disk")
 
     def _write_access_control(self) -> None:
-        data, err = self.safe_read_json("/var/lib/frp-auto-deploy/access-control.json")
+        data, err = self.safe_read_json("/var/lib/drlink/access-control.json")
         if data is None:
             self.skip("access-control", err or "not present")
             return
@@ -880,7 +880,7 @@ class BundleBuilder:
             )
 
         if self.role in ("server", "dual", "partial_server"):
-            registry, _rerr = self.safe_read_json("/var/lib/frp-auto-deploy/registry.json")
+            registry, _rerr = self.safe_read_json("/var/lib/drlink/registry.json")
             clients = (registry or {}).get("clients") if isinstance(registry, dict) else None
             if isinstance(clients, dict):
                 for mid, client in clients.items():
@@ -990,7 +990,7 @@ def create_support_bundle(root: Path, output: Path, *, secure_parent: bool) -> D
 def default_output_path(root: Path) -> Path:
     stamp = now_utc_stamp()
     name = "frp-support-%s-%s.tar.gz" % (safe_hostname(), stamp)
-    return root / "var/lib/frp-auto-deploy/support-bundles" / name
+    return root / "var/lib/drlink/support-bundles" / name
 
 
 def print_summary(result: Dict[str, Any]) -> None:
@@ -1024,13 +1024,13 @@ def print_summary(result: Dict[str, Any]) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="frp-support-bundle",
-        description="Create a sanitized read-only FRP Auto Deploy support bundle.",
+        description="Create a sanitized read-only Data Relay Link support bundle.",
     )
     parser.add_argument(
         "--output",
         "-o",
         metavar="PATH",
-        help="Output .tar.gz path (default: /var/lib/frp-auto-deploy/support-bundles/...)",
+        help="Output .tar.gz path (default: /var/lib/drlink/support-bundles/...)",
     )
     parser.add_argument(
         "--root",

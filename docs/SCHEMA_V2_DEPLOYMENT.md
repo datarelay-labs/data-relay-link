@@ -15,9 +15,9 @@ This procedure is for an existing server that still has a v1 registry, or for a 
 On the FRP server:
 
 ```bash
-sudo frpctl status
-sudo frp-server-status
-sudo frp-server-status --check
+sudo drlink status
+sudo drlink status
+sudo drlink status --check
 ```
 
 Read:
@@ -42,17 +42,17 @@ If the output shows schema `1` / `incompatible`, continue with the backup and re
 Create a timestamped backup **before** any registry change. Do not print registry contents to the terminal.
 
 ```bash
-sudo install -d -m 700 /var/lib/frp-auto-deploy/backups
+sudo install -d -m 700 /var/lib/drlink/backups
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 sudo install -m 600 /etc/frp/server_token \
-  "/var/lib/frp-auto-deploy/backups/server_token.${STAMP}"
-sudo install -m 600 /etc/frp-auto-deploy/config.json \
-  "/var/lib/frp-auto-deploy/backups/config.json.${STAMP}"
-if [[ -f /var/lib/frp-auto-deploy/registry.json ]]; then
-  sudo install -m 600 /var/lib/frp-auto-deploy/registry.json \
-    "/var/lib/frp-auto-deploy/backups/registry.json.pre-schema-v2-${STAMP}"
+  "/var/lib/drlink/backups/server_token.${STAMP}"
+sudo install -m 600 /etc/drlink/config.json \
+  "/var/lib/drlink/backups/config.json.${STAMP}"
+if [[ -f /var/lib/drlink/registry.json ]]; then
+  sudo install -m 600 /var/lib/drlink/registry.json \
+    "/var/lib/drlink/backups/registry.json.pre-schema-v2-${STAMP}"
 fi
-sudo ls -l /var/lib/frp-auto-deploy/backups
+sudo ls -l /var/lib/drlink/backups
 ```
 
 Keep those backups. Never delete them as part of this procedure.
@@ -66,7 +66,7 @@ Confirm the token backup exists, then leave `/etc/frp/server_token` in place.
 ```bash
 sudo python3 - <<'PY'
 from pathlib import Path
-p = Path('/var/lib/frp-auto-deploy/registry.json')
+p = Path('/var/lib/drlink/registry.json')
 print('exists', p.exists())
 if p.exists():
     import json
@@ -88,7 +88,7 @@ Existing v1 client allocations are not imported. Plan to re-enroll each Linux cl
 On each old client, stop or uninstall `frpc` so previously published ports are no longer in use:
 
 ```bash
-sudo systemctl stop frpc
+sudo systemctl stop drlink-client
 ```
 
 or use the client uninstall helper. Server-side port reservations in the v1 registry will be discarded in the next step; live listeners are still scanned and reserved during server install.
@@ -100,16 +100,16 @@ or use the client uninstall helper. Server-side port reservations in the v1 regi
 Stop the allocator first so it cannot rewrite the old file:
 
 ```bash
-sudo systemctl stop frp-port-allocator
-sudo mv /var/lib/frp-auto-deploy/registry.json \
-  /var/lib/frp-auto-deploy/backups/registry.json.moved-$(date -u +%Y%m%dT%H%M%SZ)
+sudo systemctl stop drlink-allocator
+sudo mv /var/lib/drlink/registry.json \
+  /var/lib/drlink/backups/registry.json.moved-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
 Do not `rm` the only copy. The `mv` destination should be under `backups/` with mode `600`:
 
 ```bash
-sudo chmod 600 /var/lib/frp-auto-deploy/backups/registry.json.moved-*
-sudo chown root:root /var/lib/frp-auto-deploy/backups/registry.json.moved-*
+sudo chmod 600 /var/lib/drlink/backups/registry.json.moved-*
+sudo chown root:root /var/lib/drlink/backups/registry.json.moved-*
 ```
 
 A later server bootstrap/install with no registry present creates:
@@ -130,7 +130,7 @@ The installer **fails closed** if a v1 or unknown registry is still in place. It
 
 ## 6. Apply the current server bootstrap
 
-From the project documentation, install or re-run the current server bootstrap. Deployment-specific values (public host, allocator URL) are entered at install time or supplied as environment variables. They are stored only in `/etc/frp-auto-deploy/config.json`.
+From the project documentation, install or re-run the current server bootstrap. Deployment-specific values (public host, allocator URL) are entered at install time or supplied as environment variables. They are stored only in `/etc/drlink/config.json`.
 
 Non-interactive example (replace the documentation addresses):
 
@@ -151,11 +151,11 @@ Re-running the installer reuses existing runtime config when present. It preserv
 ## 7. Verify frps and the allocator
 
 ```bash
-sudo frp-server-status --check
-sudo systemctl status frps --no-pager
-sudo systemctl status frp-port-allocator --no-pager
+sudo drlink status --check
+sudo systemctl status drlink-server --no-pager
+sudo systemctl status drlink-allocator --no-pager
 # Post-install on the server (CA file already exists after install-server.sh):
-curl -fsS --cacert /etc/frp-auto-deploy/pki/ca.crt https://127.0.0.1:6099/healthz
+curl -fsS --cacert /etc/drlink/pki/ca.crt https://127.0.0.1:6099/healthz
 ```
 
 Expected:
@@ -174,7 +174,7 @@ allocator       : active
 ## 8. Create an enrollment
 
 ```bash
-sudo frp-create-client
+sudo drlink create enrollment
 ```
 
 The command prints an enrollment code and a client install one-liner that sets `FRP_ALLOCATOR_URL` via `sudo env`. The enrollment secret is not placed on the command line; the client installer asks for it interactively.

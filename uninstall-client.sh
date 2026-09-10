@@ -10,7 +10,7 @@ _frp_u_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _frp_u_macos in \
   "${_frp_u_here}/lib/frp-macos.sh" \
   "${_frp_u_here}/frp-macos.sh" \
-  '/Library/Application Support/frp-auto-deploy/lib/frp-macos.sh'; do
+  '/Library/Application Support/drlink/lib/frp-macos.sh'; do
   if [[ -f "$_frp_u_macos" ]]; then
     frp_is_darwin() { [[ "${FRP_TEST_UNAME_S:-$(uname -s)}" == Darwin ]]; }
     frp_command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -158,22 +158,22 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
     fi
     frp_macos_launchd_bootout
   elif command -v systemctl >/dev/null 2>&1; then
-    systemctl stop frpc 2>/dev/null || true
-    systemctl disable frpc 2>/dev/null || true
+    systemctl stop drlink-client 2>/dev/null || true
+    systemctl disable drlink-client 2>/dev/null || true
   fi
 fi
 frp_u_stop_owned_frpc
 
-frp_u_rm_file "$(frp_u_path /etc/systemd/system/frpc.service)"
+frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-client.service)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 
-libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
+libdir="$(frp_u_path /usr/local/lib/drlink)"
 SERVER_PRESENT=0
-if [[ -f "$(frp_u_path /etc/frp-auto-deploy/config.json)" ]]; then
+if [[ -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
   SERVER_PRESENT=1
 fi
 
@@ -192,7 +192,7 @@ unset _frp_own
 
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   # CLIENT_ONLY: always remove on client uninstall.
-  for f in frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist; do
+  for f in frp-client-common.sh frp-macos.sh com.datarelay.drlink.frpc.plist; do
     frp_u_rm_file "${libdir}/${f}"
   done
   # SHARED with server: remove only when server role is absent.
@@ -234,10 +234,10 @@ if [[ -d "$etc_frp" ]]; then
   fi
 fi
 
-frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/allocator-ca.crt)"
+frp_u_rm_file "$(frp_u_path /etc/drlink/allocator-ca.crt)"
 # Client role owns client-update-pending.json only. Never remove the server marker.
-frp_u_rm_file "$(frp_u_path /var/lib/frp-auto-deploy/client-update-pending.json)"
-legacy_marker="$(frp_u_path /var/lib/frp-auto-deploy/update-pending.json)"
+frp_u_rm_file "$(frp_u_path /var/lib/drlink/client-update-pending.json)"
+legacy_marker="$(frp_u_path /var/lib/drlink/update-pending.json)"
 if [[ -f "$legacy_marker" ]]; then
   legacy_op="$(python3 - "$legacy_marker" <<'PY'
 import json, sys
@@ -253,13 +253,13 @@ PY
     frp_u_rm_file "$legacy_marker"
   fi
 fi
-frp_u_rm_file "$(frp_u_path /var/lib/frp-auto-deploy/client-draft.json)"
-frp_u_safe_rm_rf "$(frp_u_path /var/lib/frp-auto-deploy/client-upgrades)"
+frp_u_rm_file "$(frp_u_path /var/lib/drlink/client-draft.json)"
+frp_u_safe_rm_rf "$(frp_u_path /var/lib/drlink/client-upgrades)"
 
-# Dual-role guard: if [[ ! -f /etc/frp-auto-deploy/config.json ]]
-if [[ ! -f "$(frp_u_path /etc/frp-auto-deploy/config.json)" ]]; then
-  frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/version)"
-  rmdir "$(frp_u_path /etc/frp-auto-deploy)" 2>/dev/null || true
+# Dual-role guard: if [[ ! -f /etc/drlink/config.json ]]
+if [[ ! -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
+  frp_u_rm_file "$(frp_u_path /etc/drlink/version)"
+  rmdir "$(frp_u_path /etc/drlink)" 2>/dev/null || true
 fi
 
 if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin && command -v systemctl >/dev/null 2>&1; then

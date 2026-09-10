@@ -72,14 +72,14 @@ Do **not** map Docker, LXD, or QEMU TCG to `REAL_VM=PASS`.
 On a throwaway VM only:
 
 1. Fresh install (server and/or client bootstrap)
-2. `systemctl is-enabled` / `is-active` for `frps`, `frp-port-allocator`, `frpc` as applicable
+2. `systemctl is-enabled` / `is-active` for `frps`, `drlink-allocator`, `frpc` as applicable
 3. Reboot; confirm units and `frpctl status`
-4. `sudo frpctl doctor` (read-only)
+4. `sudo drlink doctor` (read-only)
 5. Zero-touch **or** manual enrollment
 6. Publish a service; connect with the **public** host and **public** service port
    (`ssh -p <public-port> <user>@<public-host>`)
 7. Disable and re-enable; confirm the same public port
-8. `sudo frpctl update`
+8. `sudo drlink update`
 9. Uninstall only on the test host (`uninstall-client.sh` does not release server ports;
    server uninstall preserves state; purge requires `--purge --yes`)
 

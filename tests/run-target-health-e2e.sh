@@ -42,9 +42,9 @@ for f in \
 do
   scp -o BatchMode=yes -o ConnectTimeout=15 "$ROOT/$f" "$CLIENT_HOST:$TMP_SYNC/$(basename "$f")"
 done
-sshx "$CLIENT_HOST" "sudo install -m 0644 $TMP_SYNC/frp_health_check.py /usr/local/lib/frp-auto-deploy/frp_health_check.py
-sudo install -m 0644 $TMP_SYNC/frp-client-common.sh /usr/local/lib/frp-auto-deploy/frp-client-common.sh
-sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
+sshx "$CLIENT_HOST" "sudo install -m 0644 $TMP_SYNC/frp_health_check.py /usr/local/lib/drlink/frp_health_check.py
+sudo install -m 0644 $TMP_SYNC/frp-client-common.sh /usr/local/lib/drlink/frp-client-common.sh
+sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
 sudo install -m 0755 $TMP_SYNC/frp-client /usr/local/bin/frp-client
 sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/bin/frpctl
 sudo rm -rf $TMP_SYNC"
@@ -54,9 +54,9 @@ sshx "$SERVER" "sudo rm -rf $TMP_SRV && sudo mkdir -p $TMP_SRV && sudo chmod 777
 for f in lib/frp_health_check.py server/frp-port-allocator.py; do
   scp -o BatchMode=yes -o ConnectTimeout=15 "$ROOT/$f" "$SERVER:$TMP_SRV/$(basename "$f")"
 done
-sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_health_check.py /usr/local/lib/frp-auto-deploy/frp_health_check.py
-sudo install -m 0700 $TMP_SRV/frp-port-allocator.py /usr/local/lib/frp-auto-deploy/frp-port-allocator.py
-sudo systemctl restart frp-port-allocator || true
+sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_health_check.py /usr/local/lib/drlink/frp_health_check.py
+sudo install -m 0700 $TMP_SRV/frp-port-allocator.py /usr/local/lib/drlink/frp-port-allocator.py
+sudo systemctl restart drlink-allocator || true
 sudo rm -rf $TMP_SRV"
 
 echo "=== start local TCP backend on client ==="

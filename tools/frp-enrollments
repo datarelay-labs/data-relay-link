@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = Path(ROOT + '/etc/frp-auto-deploy/config.json')
+CONFIG = Path(ROOT + '/etc/drlink/config.json')
 
 
 def remap(path):
@@ -170,7 +170,7 @@ def main(argv=None):
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_enrollment_lifecycle.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py'),
+            Path('/usr/local/lib/drlink/frp_enrollment_lifecycle.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_enrollment_lifecycle', str(path))

@@ -12,8 +12,8 @@ sha() { sha256sum "$1" | awk '{print $1}'; }
 
 write_runtime_fixture() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy" "$tree/usr/local/bin" \
-    "$tree/usr/local/lib/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink" "$tree/usr/local/bin" \
+    "$tree/usr/local/lib/drlink"
   cat >"$tree/usr/local/bin/frpc" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = verify ]; then exit 0; fi
@@ -74,12 +74,12 @@ remotePort = 6003
 EOF
   chmod 0600 "$tree/etc/frp/frpc.toml"
   printf 'Public SSH: 203.0.113.10:6003\n' >"$tree/etc/frp/access-info.txt"
-  printf '%s\n' 'test allocator CA certificate bytes' >"$tree/etc/frp-auto-deploy/allocator-ca.crt"
+  printf '%s\n' 'test allocator CA certificate bytes' >"$tree/etc/drlink/allocator-ca.crt"
   python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
     "$tree/etc/frp/client-identity.key" "$tree/etc/frp/client-identity.pub"
   printf '%064d\n' 0 >"$tree/etc/frp/client-identity.mac"
   chmod 0600 "$tree/etc/frp/client-identity.key" "$tree/etc/frp/client-identity.mac"
-  chmod 0644 "$tree/etc/frp/client-identity.pub" "$tree/etc/frp-auto-deploy/allocator-ca.crt"
+  chmod 0644 "$tree/etc/frp/client-identity.pub" "$tree/etc/drlink/allocator-ca.crt"
 }
 
 snapshot_preserved_state() {
@@ -96,7 +96,7 @@ files = [
     "etc/frp/client-identity.key",
     "etc/frp/client-identity.pub",
     "etc/frp/client-identity.mac",
-    "etc/frp-auto-deploy/allocator-ca.crt",
+    "etc/drlink/allocator-ca.crt",
     "usr/local/bin/frpc",
 ]
 state = json.loads((root / "etc/frp/client-state.json").read_text())
@@ -146,7 +146,7 @@ PY
 
 assert_management_unchanged() {
   local tree="$1" before="$2"
-  [[ "$(sha "$tree/usr/local/bin/frpctl")" == "$before" ]] || fail "live management tool changed"
+  [[ "$(sha "$tree/usr/local/bin/drlink")" == "$before" ]] || fail "live management tool changed"
 }
 
 # Build two same-version bundles outside the source tree. Bundle B has a distinct
@@ -186,10 +186,10 @@ write_runtime_fixture "$CLIENT"
 FRP_CLIENT_TEST_ROOT="$CLIENT" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   FRP_RELEASE_CHANNEL=dev FRP_BUNDLE_SHA256="$A_SHA" \
   bash "$BUNDLE_A" --upgrade >"$WORKDIR/initial-install.out"
-[[ -x "$CLIENT/usr/local/bin/frpctl" ]] || fail "installed frpctl missing"
-grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/frp-auto-deploy/version" || fail "initial dev channel"
-grep -q 'SOURCE_REF=main' "$CLIENT/etc/frp-auto-deploy/version" || fail "initial dev ref"
-grep -q "BUNDLE_SHA256=$A_SHA" "$CLIENT/etc/frp-auto-deploy/version" || fail "initial bundle identity"
+[[ -x "$CLIENT/usr/local/bin/drlink" ]] || fail "installed frpctl missing"
+grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/drlink/version" || fail "initial dev channel"
+grep -q 'SOURCE_REF=main' "$CLIENT/etc/drlink/version" || fail "initial dev ref"
+grep -q "BUNDLE_SHA256=$A_SHA" "$CLIENT/etc/drlink/version" || fail "initial bundle identity"
 pass "INSTALLED_METADATA_AVAILABLE"
 
 # curl replacement preserves production HTTPS validation while serving a local,
@@ -226,7 +226,7 @@ chmod 0755 "$MOCKBIN/curl"
 export PATH="$MOCKBIN:$CLIENT/usr/local/bin:/usr/bin:/bin"
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 export FRP_CTL_TEST_ROOT="$CLIENT"
-export FRP_CLIENT_LIB="$CLIENT/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
+export FRP_CLIENT_LIB="$CLIENT/usr/local/lib/drlink/frp-client-common.sh"
 export FRP_SKIP_SYSTEMD=1
 export FRP_SKIP_DOWNLOAD=1
 export FRP_CLIENT_UPDATE_URL="https://updates.example.test/main/dist/bootstrap-client.sh"
@@ -239,8 +239,8 @@ unset FRP_RELEASE_CHANNEL FRP_CLIENT_UPDATE_SHA256 FRP_RELEASE_SHA256SUMS_FILE |
 : >"$FRP_CLIENT_HOOK_LOG"
 
 snapshot_preserved_state "$CLIENT" "$WORKDIR/runtime.before"
-CHECK_TOOL_SHA="$(sha "$CLIENT/usr/local/bin/frpctl")"
-"$CLIENT/usr/local/bin/frpctl" update --check >"$WORKDIR/check.out" 2>"$WORKDIR/check.err"
+CHECK_TOOL_SHA="$(sha "$CLIENT/usr/local/bin/drlink")"
+"$CLIENT/usr/local/bin/drlink" update --check >"$WORKDIR/check.out" 2>"$WORKDIR/check.err"
 grep -q 'Update                    : available' "$WORKDIR/check.out" || fail "same-version build not available"
 grep -q 'Installed project version :' "$WORKDIR/check.out" || fail "check missing installed version"
 grep -q 'Target project version    :' "$WORKDIR/check.out" || fail "check missing target version"
@@ -258,12 +258,12 @@ fi
 pass "SAME_VERSION_DIFFERENT_BUILD"
 pass "CHECK_ONLY_READONLY"
 
-"$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/update.out" 2>"$WORKDIR/update.err"
+"$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/update.out" 2>"$WORKDIR/update.err"
 assert_preserved_state "$CLIENT" "$WORKDIR/runtime.before"
-grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/frp-auto-deploy/version" || fail "dev channel changed"
-grep -q 'SOURCE_REF=main' "$CLIENT/etc/frp-auto-deploy/version" || fail "dev source ref changed"
-grep -q "BUNDLE_SHA256=$B_SHA" "$CLIENT/etc/frp-auto-deploy/version" || fail "verified build identity not persisted"
-grep -q 'P2.20 same-version remote build marker' "$CLIENT/usr/local/bin/frpctl" || fail "remote management tool not applied"
+grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/drlink/version" || fail "dev channel changed"
+grep -q 'SOURCE_REF=main' "$CLIENT/etc/drlink/version" || fail "dev source ref changed"
+grep -q "BUNDLE_SHA256=$B_SHA" "$CLIENT/etc/drlink/version" || fail "verified build identity not persisted"
+grep -q 'P2.20 same-version remote build marker' "$CLIENT/usr/local/lib/drlink/frpctl" || fail "remote management tool not applied"
 grep -q '/main/SHA256SUMS' "$MOCK_CURL_LOG" || fail "remote metadata not fetched"
 grep -q '/main/dist/bootstrap-client.sh' "$MOCK_CURL_LOG" || fail "remote artifact not fetched"
 if grep -Eq '^(enroll|bootstrap_redeem|restart)$' "$FRP_CLIENT_HOOK_LOG"; then
@@ -272,7 +272,7 @@ fi
 pass "REMOTE_INSTALLED_CLIENT_UPDATE"
 pass "DEV_MAIN_UPDATE"
 pass "SHA256_VALID"
-"$CLIENT/usr/local/bin/frpctl" update --check >"$WORKDIR/same-build-check.out" 2>"$WORKDIR/same-build-check.err"
+"$CLIENT/usr/local/bin/drlink" update --check >"$WORKDIR/same-build-check.out" 2>"$WORKDIR/same-build-check.err"
 grep -q "Installed bundle SHA256   : ${B_SHA}" "$WORKDIR/same-build-check.out" || fail "same-build installed sha"
 grep -q "Target bundle SHA256      : ${B_SHA}" "$WORKDIR/same-build-check.out" || fail "same-build target sha"
 grep -q 'Update                    : not needed' "$WORKDIR/same-build-check.out" || fail "same verified build should be not needed"
@@ -291,8 +291,8 @@ pass "BUILD_INFO_PERSISTENCE"
 # A stable installed client resolves both artifact and metadata at vPROJECT_VERSION.
 # shellcheck source=../VERSION
 . "$ROOT/VERSION"
-cp "$CLIENT/etc/frp-auto-deploy/version" "$WORKDIR/dev-version"
-python3 - "$CLIENT/etc/frp-auto-deploy/version" "$PROJECT_VERSION" <<'PY'
+cp "$CLIENT/etc/drlink/version" "$WORKDIR/dev-version"
+python3 - "$CLIENT/etc/drlink/version" "$PROJECT_VERSION" <<'PY'
 import sys
 from pathlib import Path
 p = Path(sys.argv[1])
@@ -304,13 +304,13 @@ PY
 unset FRP_CLIENT_UPDATE_URL FRP_CLIENT_UPDATE_METADATA_URL
 # Load a fresh installed process so defaults are derived from persisted stable state.
 stable_urls="$(
-  FRP_CLIENT_LIB="$CLIENT/usr/local/lib/frp-auto-deploy/frp-client-common.sh" \
+  FRP_CLIENT_LIB="$CLIENT/usr/local/lib/drlink/frp-client-common.sh" \
     bash -c '. "$FRP_CLIENT_LIB"; printf "%s\n%s\n" "$FRP_CLIENT_UPDATE_URL" "$FRP_CLIENT_UPDATE_METADATA_URL"'
 )"
 grep -q "/v${PROJECT_VERSION}/dist/bootstrap-client.sh" <<<"$stable_urls" || fail "stable artifact URL mutable"
 grep -q "/v${PROJECT_VERSION}/SHA256SUMS" <<<"$stable_urls" || fail "stable metadata URL mutable"
 : >"$MOCK_CURL_LOG"
-if "$CLIENT/usr/local/bin/frpctl" update --check >"$WORKDIR/stable-check.out" 2>"$WORKDIR/stable-check.err"; then
+if "$CLIENT/usr/local/bin/drlink" update --check >"$WORKDIR/stable-check.out" 2>"$WORKDIR/stable-check.err"; then
   fail "stable expected channel must not accept a dev candidate"
 fi
 grep -q "/v${PROJECT_VERSION}/SHA256SUMS" "$MOCK_CURL_LOG" || fail "stable metadata was not fetched from tag"
@@ -319,16 +319,16 @@ grep -Eqi 'channel mismatch|source ref mismatch|WRONG_METADATA' \
   "$WORKDIR/stable-check.out" "$WORKDIR/stable-check.err" ||
   fail "stable/dev candidate mismatch not reported"
 assert_preserved_state "$CLIENT" "$WORKDIR/runtime.before"
-cp "$WORKDIR/dev-version" "$CLIENT/etc/frp-auto-deploy/version"
+cp "$WORKDIR/dev-version" "$CLIENT/etc/drlink/version"
 export FRP_CLIENT_UPDATE_URL="https://updates.example.test/main/dist/bootstrap-client.sh"
 export FRP_CLIENT_UPDATE_METADATA_URL="https://updates.example.test/main/SHA256SUMS"
 pass "STABLE_IMMUTABLE_UPDATE"
 
 # Integrity failures occur before any live replacement.
-LIVE_SHA="$(sha "$CLIENT/usr/local/bin/frpctl")"
+LIVE_SHA="$(sha "$CLIENT/usr/local/bin/drlink")"
 cp "$REMOTE/bootstrap-client.sh" "$WORKDIR/valid-bundle"
 printf '\n# tampered\n' >>"$REMOTE/bootstrap-client.sh"
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/tamper.out" 2>"$WORKDIR/tamper.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/tamper.out" 2>"$WORKDIR/tamper.err"; then
   fail "tampered artifact accepted"
 fi
 grep -q 'INTEGRITY_FAILED' "$WORKDIR/tamper.out" "$WORKDIR/tamper.err" || fail "tamper failure class"
@@ -337,7 +337,7 @@ pass "TAMPERED_ARTIFACT"
 
 cp "$WORKDIR/valid-bundle" "$REMOTE/bootstrap-client.sh"
 printf '%s  dist/bootstrap-client.sh\n' "$A_SHA" >"$REMOTE/SHA256SUMS"
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/wrong-metadata.out" 2>"$WORKDIR/wrong-metadata.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/wrong-metadata.out" 2>"$WORKDIR/wrong-metadata.err"; then
   fail "wrong metadata accepted"
 fi
 grep -q 'SHA256 checksum mismatch' "$WORKDIR/wrong-metadata.err" || fail "wrong metadata mismatch message"
@@ -346,7 +346,7 @@ pass "SHA256_MISMATCH"
 pass "WRONG_METADATA_REJECTED"
 
 printf '%s  dist/bootstrap-client.sh\n' 'not-a-sha256' >"$REMOTE/SHA256SUMS"
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/malformed-sha.out" 2>"$WORKDIR/malformed-sha.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/malformed-sha.out" 2>"$WORKDIR/malformed-sha.err"; then
   fail "malformed SHA256 accepted"
 fi
 grep -q 'malformed SHA256' "$WORKDIR/malformed-sha.err" || fail "malformed SHA256 message"
@@ -354,7 +354,7 @@ assert_management_unchanged "$CLIENT" "$LIVE_SHA"
 pass "MALFORMED_SHA256_REJECTED"
 
 rm -f "$REMOTE/SHA256SUMS"
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/missing-metadata.out" 2>"$WORKDIR/missing-metadata.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/missing-metadata.out" 2>"$WORKDIR/missing-metadata.err"; then
   fail "missing metadata accepted"
 fi
 grep -q 'INTEGRITY_FAILED' "$WORKDIR/missing-metadata.out" "$WORKDIR/missing-metadata.err" || fail "missing metadata failure class"
@@ -362,7 +362,7 @@ assert_management_unchanged "$CLIENT" "$LIVE_SHA"
 pass "MISSING_METADATA_REJECTED"
 
 export FRP_CLIENT_UPDATE_URL="http://updates.example.test/main/dist/bootstrap-client.sh"
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/http.out" 2>"$WORKDIR/http.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/http.out" 2>"$WORKDIR/http.err"; then
   fail "HTTP artifact URL accepted"
 fi
 grep -qi 'valid HTTPS URL' "$WORKDIR/http.err" || fail "HTTP rejection message"
@@ -370,7 +370,7 @@ assert_management_unchanged "$CLIENT" "$LIVE_SHA"
 pass "HTTP_REJECTED"
 
 export FRP_CLIENT_UPDATE_URL="https:///main/dist/bootstrap-client.sh"
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/malformed-url.out" 2>"$WORKDIR/malformed-url.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/malformed-url.out" 2>"$WORKDIR/malformed-url.err"; then
   fail "malformed artifact URL accepted"
 fi
 grep -qi 'valid HTTPS URL' "$WORKDIR/malformed-url.err" || fail "malformed URL rejection message"
@@ -380,7 +380,7 @@ pass "MALFORMED_URL_REJECTED"
 export FRP_CLIENT_UPDATE_URL="https://updates.example.test/main/dist/bootstrap-client.sh"
 printf '%s  dist/bootstrap-client.sh\n' "$B_SHA" >"$REMOTE/SHA256SUMS"
 export MOCK_CURL_FAIL_ARTIFACT=1
-if "$CLIENT/usr/local/bin/frpctl" update >"$WORKDIR/download.out" 2>"$WORKDIR/download.err"; then
+if "$CLIENT/usr/local/bin/drlink" update >"$WORKDIR/download.out" 2>"$WORKDIR/download.err"; then
   fail "artifact download failure accepted"
 fi
 unset MOCK_CURL_FAIL_ARTIFACT

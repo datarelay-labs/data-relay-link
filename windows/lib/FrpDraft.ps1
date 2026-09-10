@@ -329,7 +329,7 @@ function Set-FrpDraftServiceEnabled {
     .SYNOPSIS
       Enable/disable a pending service. Disabling preserves the public port
       reservation locally (remote_port is untouched); the server-side release
-      is a separate operation (frpctl release service). At least one enabled
+      is a separate operation (drlink release service). At least one enabled
       service must remain. Re-enabling reuses the same remote_port on apply.
     #>
     param(

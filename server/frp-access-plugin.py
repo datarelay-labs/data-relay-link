@@ -26,10 +26,10 @@ def _load_module(name: str, rel: str):
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / "lib" / rel,
-        Path("/usr/local/lib/frp-auto-deploy") / rel,
+        Path("/usr/local/lib/drlink") / rel,
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / "usr/local/lib/frp-auto-deploy" / rel)
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/drlink" / rel)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(name, str(path))
@@ -49,10 +49,10 @@ def _load_registry_validator():
     here = Path(__file__).resolve()
     candidates = [
         here.parent / "frp-port-allocator.py",
-        Path("/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"),
+        Path("/usr/local/lib/drlink/frp-port-allocator.py"),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / "usr/local/lib/frp-auto-deploy/frp-port-allocator.py")
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/drlink/frp-port-allocator.py")
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(
@@ -139,7 +139,7 @@ def make_handler(cache: PolicyCache, plugin_path: str):
 
         def log_message(self, fmt, *args):
             # Keep journal noise low; authorization events go to access-conn.jsonl.
-            sys.stderr.write("[frp-access-plugin] %s - %s\n" % (self.address_string(), fmt % args))
+            sys.stderr.write("[drlink-access] %s - %s\n" % (self.address_string(), fmt % args))
 
         def _read_json(self):
             length = int(self.headers.get("Content-Length") or "0")
@@ -250,10 +250,10 @@ def make_handler(cache: PolicyCache, plugin_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FRP Auto Deploy NewUserConn access plugin")
+    parser = argparse.ArgumentParser(description="Data Relay Link Access Control Plugin (NewUserConn)")
     parser.add_argument(
         "--config",
-        default="/etc/frp-auto-deploy/config.json",
+        default="/etc/drlink/config.json",
         help="server config.json path",
     )
     parser.add_argument("--addr", default="", help="override listen addr host:port")
@@ -283,7 +283,7 @@ def main():
 
     cache = PolicyCache(config_path)
     server = ThreadingHTTPServer((host, port), make_handler(cache, plugin_path))
-    print("frp-access-plugin listening on http://%s:%s%s" % (host, port, plugin_path), flush=True)
+    print("drlink-access listening on http://%s:%s%s" % (host, port, plugin_path), flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

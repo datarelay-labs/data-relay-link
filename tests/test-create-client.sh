@@ -10,13 +10,13 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments"
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments"
 python3 "$ROOT/lib/frp_pki.py" ensure \
-  --pki-dir "$TREE/etc/frp-auto-deploy/pki" \
+  --pki-dir "$TREE/etc/drlink/pki" \
   --public-host 203.0.113.10 >/dev/null
-CA_FP="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/frp-auto-deploy/pki/ca.crt")"
+CA_FP="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/drlink/pki/ca.crt")"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE/var/lib/frp-auto-deploy/enrollments" "$TREE/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$TREE/var/lib/drlink/enrollments" "$TREE/etc/drlink/pki/ca.crt" <<'PY'
 import json, sys
 from pathlib import Path
 cfg = Path(sys.argv[1])
@@ -37,7 +37,7 @@ OUT="$WORKDIR/create.out"
 FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$ROOT/tools/frp-create-client" >"$OUT"
 grep -q 'Enrollment Code:' "$OUT" || fail "enrollment header"
 grep -qE '^[0-9a-f]{16}\.[0-9a-f]{64}$' "$OUT" || fail "enrollment code format"
-grep -q 'FRP Server: 203.0.113.10:8443' "$OUT" || fail "public FRP endpoint"
+grep -q 'Data Relay Link Server: 203.0.113.10:8443' "$OUT" || fail "public FRP endpoint"
 if grep -q '203.0.113.10:443' "$OUT"; then
   fail "internal listen port leaked as client-facing FRP endpoint"
 fi
@@ -65,7 +65,7 @@ fi
 pass "CASE D generated client command"
 
 # Shell-sensitive allocator URL is quoted so bash does not execute extra commands.
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])

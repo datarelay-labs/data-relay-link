@@ -24,10 +24,10 @@ def _load(name, rel):
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     candidates = [
         here.parent.parent / 'lib' / rel,
-        Path('/usr/local/lib/frp-auto-deploy') / rel,
+        Path('/usr/local/lib/drlink') / rel,
     ]
     if root:
-        candidates.insert(1, Path(root) / 'usr/local/lib/frp-auto-deploy' / rel)
+        candidates.insert(1, Path(root) / 'usr/local/lib/drlink' / rel)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(name, str(path))

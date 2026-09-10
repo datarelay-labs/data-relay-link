@@ -21,7 +21,7 @@ mkdir -p "$HOME"
 
 write_client_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink"
   python3 - "$tree/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -42,7 +42,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     },
 }, indent=2, sort_keys=True) + "\n")
 PY
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.4.0
 FRP_VERSION=0.71.0
 EOF
@@ -50,8 +50,8 @@ EOF
 
 write_server_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" "$tree/var/lib/frp-auto-deploy/registry.json" <<'PY'
+  mkdir -p "$tree/etc/drlink" "$tree/var/lib/drlink"
+  python3 - "$tree/etc/drlink/config.json" "$tree/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = Path(sys.argv[1]), Path(sys.argv[2])
@@ -62,7 +62,7 @@ cfg.write_text(json.dumps({
     "port_end": 6098,
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:6099/enroll",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+    "registry_file": "/var/lib/drlink/registry.json",
 }, indent=2, sort_keys=True) + "\n")
 reg.write_text(json.dumps({
     "schema_version": 2,
@@ -79,7 +79,7 @@ reg.write_text(json.dumps({
     },
 }, indent=2, sort_keys=True) + "\n")
 PY
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.4.0
 FRP_VERSION=0.71.0
 EOF
@@ -133,7 +133,7 @@ pass "FRPCTL_UNKNOWN_COMMAND_RECOVERY"
 export FRP_CTL_TEST_ROOT="$CLIENT"
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 "$CTL" status >"$WORKDIR/client-status.out"
-grep -q 'FRP Client' "$WORKDIR/client-status.out" || fail "client status header"
+grep -q 'Data Relay Link Client' "$WORKDIR/client-status.out" || fail "client status header"
 grep -q 'Hostname        : ctl-client' "$WORKDIR/client-status.out" || fail "client status hostname"
 pass "FRPCTL_CLIENT_STATUS"
 
@@ -156,7 +156,7 @@ pass "FRPCTL_CLIENT_UPDATE_FRP"
 if "$CTL" clients >"$WORKDIR/client-clients.out" 2>"$WORKDIR/client-clients.err"; then
   fail "client host should reject server clients command"
 fi
-grep -q 'installed FRP server' "$WORKDIR/client-clients.err" || fail "client reject server command"
+grep -q 'installed Data Relay Link server' "$WORKDIR/client-clients.err" || fail "client reject server command"
 
 # --- Direct server role
 unset FRP_CLIENT_TEST_ROOT
@@ -256,7 +256,7 @@ grep -q 'Project version : 1.4.0' "$WORKDIR/client-repl.out" || fail "client rep
 grep -q 'FRP version     : 0.71.0' "$WORKDIR/client-repl.out" || fail "client repl frp version"
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
-grep -q 'FRP Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
+grep -q 'Data Relay Link Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
 grep -q 'Data Relay Link — Client Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
 grep -q 'services' "$WORKDIR/client-repl.out" || fail "client help services"
 pass "FRPCTL_REPL_START_CLIENT"
@@ -416,7 +416,7 @@ grep -q 'Data Relay Link' "$WORKDIR/quit.out" || fail "quit banner"
 pass "FRPCTL_REPL_QUIT"
 
 run_repl "$CLIENT" "$WORKDIR/eof.out" status || fail "eof exit"
-grep -q 'FRP Client' "$WORKDIR/eof.out" || fail "eof ran status"
+grep -q 'Data Relay Link Client' "$WORKDIR/eof.out" || fail "eof ran status"
 pass "FRPCTL_REPL_EOF_EXIT"
 
 # --- No TTY
@@ -433,7 +433,7 @@ grep -q 'Use: frpctl <command>' "$WORKDIR/notty.err" || fail "no-tty hint"
 pass "FRPCTL_NO_TTY_INTERACTIVE_FAILS_CLEANLY"
 
 "$CTL" status </dev/null >"$WORKDIR/notty-status.out"
-grep -q 'FRP Client' "$WORKDIR/notty-status.out" || fail "no-tty direct status"
+grep -q 'Data Relay Link Client' "$WORKDIR/notty-status.out" || fail "no-tty direct status"
 pass "FRPCTL_NO_TTY_DIRECT_MODE"
 pass "FRPCTL_NO_TTY_HANDLING"
 
@@ -595,7 +595,7 @@ pass "GUIDED_MENU_TAGS"
 pass "GUIDED_MENU_UPDATED"
 
 # --- Canonical CLIENT ID selector (real tools, not dry-run)
-python3 - "$SERVER/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$SERVER/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])

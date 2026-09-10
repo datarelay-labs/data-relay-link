@@ -1,7 +1,30 @@
 #!/usr/bin/env bash
+# Canonical Data Relay Link operator CLI.
+# Internal dispatcher remains tools/frpctl (not installed on PATH).
 set -euo pipefail
 
-_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export FRP_CTL_CMD_NAME="drlink"
 export FRP_CTL_PROMPT="drlink> "
-exec "${_HERE}/frpctl" "$@"
+export FRP_CTL_PRODUCT_NAME="${FRP_CTL_PRODUCT_NAME:-Data Relay Link}"
+export FRP_CTL_PRODUCT_FAMILY="${FRP_CTL_PRODUCT_FAMILY:-Data Relay Link Management}"
+
+_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_ROOT="${FRP_CTL_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-}}}}"
+_BACKEND=""
+
+if [[ -f "${_HERE}/frpctl" ]]; then
+  _BACKEND="${_HERE}/frpctl"
+elif [[ -n "${_ROOT}" && -f "${_ROOT}/usr/local/lib/drlink/frpctl" ]]; then
+  _BACKEND="${_ROOT}/usr/local/lib/drlink/frpctl"
+elif [[ -f /usr/local/lib/drlink/frpctl ]]; then
+  _BACKEND=/usr/local/lib/drlink/frpctl
+elif [[ -f '/Library/Application Support/drlink/lib/frpctl' ]]; then
+  _BACKEND='/Library/Application Support/drlink/lib/frpctl'
+fi
+
+if [[ -z "${_BACKEND}" ]]; then
+  echo "ERROR: Data Relay Link CLI backend is missing (expected frpctl under lib/drlink)." >&2
+  exit 1
+fi
+
+exec bash "${_BACKEND}" "$@"

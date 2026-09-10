@@ -16,16 +16,16 @@ export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
 
 mkdir -p \
-  "$TREE/etc/frp-auto-deploy" \
+  "$TREE/etc/drlink" \
   "$TREE/etc/frp" \
-  "$TREE/var/lib/frp-auto-deploy" \
-  "$TREE/var/log/frp-auto-deploy" \
-  "$TREE/usr/local/lib/frp-auto-deploy"
+  "$TREE/var/lib/drlink" \
+  "$TREE/var/log/drlink" \
+  "$TREE/usr/local/lib/drlink"
 
-cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/drlink/"
 
 python3 - <<'PY'
 import importlib.util
@@ -37,13 +37,13 @@ root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 cfg = {
     "public_host": "203.0.113.10",
     "public_ip": "203.0.113.10",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
-    "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
-    "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
+    "registry_file": "/var/lib/drlink/registry.json",
+    "access_control_file": "/var/lib/drlink/access-control.json",
+    "access_conn_log_file": "/var/log/drlink/access-conn.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
 }
-(root / "etc/frp-auto-deploy/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+(root / "etc/drlink/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 registry = {
     "schema_version": 2,
     "clients": {
@@ -55,18 +55,18 @@ registry = {
     },
     "reserved": [6001],
 }
-(root / "var/lib/frp-auto-deploy/registry.json").write_text(
+(root / "var/lib/drlink/registry.json").write_text(
     json.dumps(registry, indent=2) + "\n", encoding="utf-8"
 )
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
 acl.save_access_state(
     acl.empty_access_state(),
-    path=root / "var/lib/frp-auto-deploy/access-control.json",
+    path=root / "var/lib/drlink/access-control.json",
 )
 PY
 
@@ -133,11 +133,11 @@ from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 state = acl.load_access_state(path=path)
 lid, _ = acl.resolve_access_list(state, "Office")
 past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -189,11 +189,11 @@ from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 state = acl.load_access_state(path=path)
 lid, _ = acl.resolve_access_list(state, "Office")
 past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -247,7 +247,7 @@ assert 'ops = ["NewUserConn"]' in text
 assert "access_control_file" in text
 assert "access_conn_log_file" in text
 assert "access_plugin_addr" in text
-assert "frp-access-plugin" in text
+assert "drlink-access" in text
 print("ok")
 PY
 pass "install-server.sh embeds access plugin wiring"

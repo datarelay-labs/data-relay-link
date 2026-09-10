@@ -7,21 +7,21 @@ trap 'rm -rf "$TMP"' EXIT
 
 export FRP_DEPLOY_TEST_ROOT="$TMP"
 mkdir -p \
-  "$TMP/etc/frp-auto-deploy" \
-  "$TMP/var/lib/frp-auto-deploy" \
-  "$TMP/var/log/frp-auto-deploy" \
-  "$TMP/usr/local/lib/frp-auto-deploy" \
+  "$TMP/etc/drlink" \
+  "$TMP/var/lib/drlink" \
+  "$TMP/var/log/drlink" \
+  "$TMP/usr/local/lib/drlink" \
   "$TMP/usr/local/sbin"
 
-cp "$ROOT/lib/frp_egress_control.py" "$TMP/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_audit.py" "$TMP/usr/local/lib/frp-auto-deploy/" 2>/dev/null || true
+cp "$ROOT/lib/frp_egress_control.py" "$TMP/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_audit.py" "$TMP/usr/local/lib/drlink/" 2>/dev/null || true
 cp "$ROOT/tools/frp-egress" "$TMP/usr/local/sbin/"
 chmod +x "$TMP/usr/local/sbin/frp-egress"
 
-cat >"$TMP/etc/frp-auto-deploy/config.json" <<EOF
+cat >"$TMP/etc/drlink/config.json" <<EOF
 {
-  "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
-  "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+  "egress_control_file": "/var/lib/drlink/egress-control.json",
+  "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
   "egress_listen_addr": "0.0.0.0",
   "egress_listen_port": 6080
 }
@@ -32,11 +32,11 @@ import importlib.util, os, json
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
-    "eg", root / "usr/local/lib/frp-auto-deploy/frp_egress_control.py"
+    "eg", root / "usr/local/lib/drlink/frp_egress_control.py"
 )
 eg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(eg)
-path = root / "var/lib/frp-auto-deploy/egress-control.json"
+path = root / "var/lib/drlink/egress-control.json"
 eg.save_egress_state(eg.empty_egress_state(), path=path)
 print(path)
 PY

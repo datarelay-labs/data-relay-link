@@ -37,7 +37,7 @@ SERVER_IP="${SERVER_IP//[$'\r\n']/}"
 read -r CLIENT_ID SERVICE_ID PUBLIC_PORT < <(sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 for mid,c in (reg.get('clients') or {}).items():
   label=str((c or {}).get('label') or '')
   host=str((c or {}).get('hostname') or '')
@@ -87,7 +87,7 @@ sshx "$SERVER" "sudo rm -rf $TMP_SYNC && sudo mkdir -p $TMP_SYNC && sudo chmod 7
 for f in \
   lib/frp_access_control.py \
   server/frp-access-plugin.py \
-  server/frp-access-plugin.service \
+  server/drlink-access.service \
   tools/frp-access \
   tools/frpctl \
   lib/frp_ctl_grammar.py \
@@ -96,28 +96,28 @@ for f in \
  do
   scp -o BatchMode=yes -o ConnectTimeout=15 "$ROOT/$f" "$SERVER:$TMP_SYNC/$(basename "$f")"
 done
-sshx "$SERVER" "sudo install -m 0644 $TMP_SYNC/frp_access_control.py /usr/local/lib/frp-auto-deploy/frp_access_control.py
-sudo install -m 0700 $TMP_SYNC/frp-access-plugin.py /usr/local/lib/frp-auto-deploy/frp-access-plugin.py
-sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
+sshx "$SERVER" "sudo install -m 0644 $TMP_SYNC/frp_access_control.py /usr/local/lib/drlink/frp_access_control.py
+sudo install -m 0700 $TMP_SYNC/frp-access-plugin.py /usr/local/lib/drlink/frp-access-plugin.py
+sudo install -m 0644 $TMP_SYNC/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
 sudo install -m 0755 $TMP_SYNC/frp-access /usr/local/sbin/frp-access
 sudo install -m 0755 $TMP_SYNC/frpctl /usr/local/sbin/frpctl
 sudo install -m 0755 $TMP_SYNC/frp-release-service /usr/local/sbin/frp-release-service
 sudo install -m 0755 $TMP_SYNC/frp-client-info /usr/local/sbin/frp-client-info
-sudo install -m 0644 $TMP_SYNC/frp-access-plugin.service /etc/systemd/system/frp-access-plugin.service
+sudo install -m 0644 $TMP_SYNC/drlink-access.service /etc/systemd/system/drlink-access.service
 sudo python3 - <<'PY'
 import json, importlib.util
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/frp-auto-deploy/frp_access_control.py')
+spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/drlink/frp_access_control.py')
 acl=importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
-path=Path('/var/lib/frp-auto-deploy/access-control.json')
+path=Path('/var/lib/drlink/access-control.json')
 if not path.exists():
   acl.save_access_state(acl.empty_access_state(), path=path)
-cfgp=Path('/etc/frp-auto-deploy/config.json')
+cfgp=Path('/etc/drlink/config.json')
 cfg=json.loads(cfgp.read_text())
 changed=False
 for k,v in {
-  'access_control_file':'/var/lib/frp-auto-deploy/access-control.json',
-  'access_conn_log_file':'/var/log/frp-auto-deploy/access-conn.jsonl',
+  'access_control_file':'/var/lib/drlink/access-control.json',
+  'access_conn_log_file':'/var/log/drlink/access-conn.jsonl',
   'access_plugin_addr':'127.0.0.1:6101',
   'access_plugin_path':'/access-auth',
 }.items():
@@ -139,14 +139,14 @@ ops = [\"NewUserConn\"]
 print('wired')
 PY
 sudo systemctl daemon-reload
-sudo systemctl enable --now frp-access-plugin
-sudo systemctl restart frp-access-plugin
+sudo systemctl enable --now drlink-access
+sudo systemctl restart drlink-access
 sleep 1
 curl -fsS http://127.0.0.1:6101/healthz
-sudo systemctl restart frps
+sudo systemctl restart drlink-server
 sleep 2
-systemctl is-active frp-access-plugin
-systemctl is-active frps"
+systemctl is-active drlink-access
+systemctl is-active drlink-server"
 
 # PUBLIC baseline
 echo "=== PUBLIC ==="
@@ -187,13 +187,13 @@ echo "=== UNMAPPED_PROXY fail-closed ==="
 ORIG_HOST="$(sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 print(reg['clients']['$CLIENT_ID'].get('hostname') or '')
 PY")"
 sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-path=Path('/var/lib/frp-auto-deploy/registry.json')
+path=Path('/var/lib/drlink/registry.json')
 reg=json.loads(path.read_text())
 client=reg['clients']['$CLIENT_ID']
 client['hostname']='drift-unmapped-e2e'
@@ -207,7 +207,7 @@ if probe "$SOURCE_A_HOST"; then
   sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-path=Path('/var/lib/frp-auto-deploy/registry.json')
+path=Path('/var/lib/drlink/registry.json')
 reg=json.loads(path.read_text())
 reg['clients']['$CLIENT_ID']['hostname']='$ORIG_HOST'
 path.write_text(json.dumps(reg, indent=2, sort_keys=True)+'\n')
@@ -218,7 +218,7 @@ pass UNMAPPED_PROXY_DENY
 sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-path=Path('/var/lib/frp-auto-deploy/registry.json')
+path=Path('/var/lib/drlink/registry.json')
 reg=json.loads(path.read_text())
 reg['clients']['$CLIENT_ID']['hostname']='$ORIG_HOST'
 path.write_text(json.dumps(reg, indent=2, sort_keys=True)+'\n')
@@ -232,11 +232,11 @@ pass UNMAPPED_PROXY_RESTORE
 sshx "$SERVER" "sudo python3 - <<'PY'
 import importlib.util, json
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/frp-auto-deploy/frp_access_control.py')
+spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/drlink/frp_access_control.py')
 acl=importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
-cfg=json.loads(Path('/etc/frp-auto-deploy/config.json').read_text())
+cfg=json.loads(Path('/etc/drlink/config.json').read_text())
 state=acl.load_access_state(cfg=cfg)
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 v=acl.authorize(state, reg, proxy_name='totally-unmapped-proxy', source_ip='${SOURCE_A_IP}')
 assert v['decision']=='DENY', v
 assert v['reason']=='UNMAPPED_PROXY', v
@@ -263,9 +263,9 @@ sshx "$SERVER" "sudo python3 - <<'PY'
 import importlib.util, json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/frp-auto-deploy/frp_access_control.py')
+spec=importlib.util.spec_from_file_location('acl','/usr/local/lib/drlink/frp_access_control.py')
 acl=importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
-path=Path('/var/lib/frp-auto-deploy/access-control.json')
+path=Path('/var/lib/drlink/access-control.json')
 state=acl.load_access_state(path=path)
 lid,_=acl.resolve_access_list(state,'E2E-Allow')
 past=(datetime.now(timezone.utc)-timedelta(hours=2)).replace(microsecond=0).isoformat().replace('+00:00','Z')
@@ -285,16 +285,16 @@ pass EXPIRED_CLEANUP_ALLOWLIST
 
 # Missing access-control.json => health 503 + connection DENY; restore recovers.
 echo "=== missing access policy fail-closed ==="
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json /var/lib/frp-auto-deploy/access-control.json.bak-e2e"
+sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json /var/lib/drlink/access-control.json.bak-e2e"
 sleep 1
 CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
 [[ "$CODE" == "503" ]] || fail "healthz expected 503 when policy missing (got $CODE)"
 if probe "$SOURCE_A_HOST"; then
-  sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json.bak-e2e /var/lib/frp-auto-deploy/access-control.json"
+  sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json.bak-e2e /var/lib/drlink/access-control.json"
   fail "missing policy must DENY"
 fi
 pass MISSING_POLICY_DENY
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json.bak-e2e /var/lib/frp-auto-deploy/access-control.json"
+sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json.bak-e2e /var/lib/drlink/access-control.json"
 sleep 1
 CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
 [[ "$CODE" == "200" ]] || fail "healthz expected 200 after policy restore (got $CODE)"
@@ -306,18 +306,18 @@ pass MISSING_POLICY_RECOVERY
 
 # Missing registry => health 503 + connection DENY; restore recovers.
 echo "=== missing registry fail-closed ==="
-sshx "$SERVER" "sudo cp -a /var/lib/frp-auto-deploy/registry.json /var/lib/frp-auto-deploy/registry.json.bak-e2e
-sudo mv /var/lib/frp-auto-deploy/registry.json /var/lib/frp-auto-deploy/registry.json.gone-e2e"
+sshx "$SERVER" "sudo cp -a /var/lib/drlink/registry.json /var/lib/drlink/registry.json.bak-e2e
+sudo mv /var/lib/drlink/registry.json /var/lib/drlink/registry.json.gone-e2e"
 sleep 1
 CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health-reg.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
 [[ "$CODE" == "503" ]] || fail "healthz expected 503 when registry missing (got $CODE)"
 if probe "$SOURCE_A_HOST"; then
-  sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/registry.json.gone-e2e /var/lib/frp-auto-deploy/registry.json"
+  sshx "$SERVER" "sudo mv /var/lib/drlink/registry.json.gone-e2e /var/lib/drlink/registry.json"
   fail "missing registry must DENY"
 fi
 pass MISSING_REGISTRY_DENY
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/registry.json.gone-e2e /var/lib/frp-auto-deploy/registry.json
-sudo rm -f /var/lib/frp-auto-deploy/registry.json.bak-e2e"
+sshx "$SERVER" "sudo mv /var/lib/drlink/registry.json.gone-e2e /var/lib/drlink/registry.json
+sudo rm -f /var/lib/drlink/registry.json.bak-e2e"
 sleep 2
 CODE="$(sshx "$SERVER" 'curl -s -o /tmp/ac-health-reg2.json -w %{http_code} http://127.0.0.1:6101/healthz || true')"
 [[ "$CODE" == "200" ]] || fail "healthz expected 200 after registry restore (got $CODE)"
@@ -337,7 +337,7 @@ sleep 3
 sshx "$CLIENT_HOST" "sudo frpctl enable service ${SERVICE_ID}; sudo frpctl apply" \
   || sshx "$CLIENT_HOST" "sudo frp-client enable-service ${SERVICE_ID}; sudo frp-client apply"
 sleep 3
-NEW_PORT="$(sshx "$SERVER" "sudo python3 -c \"import json;from pathlib import Path;r=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text());print(r['clients']['$CLIENT_ID']['services']['$SERVICE_ID']['remote_port'])\"")"
+NEW_PORT="$(sshx "$SERVER" "sudo python3 -c \"import json;from pathlib import Path;r=json.loads(Path('/var/lib/drlink/registry.json').read_text());print(r['clients']['$CLIENT_ID']['services']['$SERVICE_ID']['remote_port'])\"")"
 [[ "$NEW_PORT" == "$PUBLIC_PORT" ]] || fail "port changed"
 probe "$SOURCE_A_HOST" || fail "A after enable"
 if probe "$SOURCE_B_HOST"; then fail "B after enable"; else pass DISABLE_ENABLE; fi
@@ -347,9 +347,9 @@ echo "=== server reboot ==="
 sshx "$SERVER" 'sudo reboot' || true
 for i in $(seq 1 40); do
   sleep 5
-  if sshx "$SERVER" 'systemctl is-active frp-access-plugin && systemctl is-active frps' >/dev/null 2>&1; then break; fi
+  if sshx "$SERVER" 'systemctl is-active drlink-access && systemctl is-active drlink-server' >/dev/null 2>&1; then break; fi
 done
-sshx "$SERVER" 'systemctl is-active frp-access-plugin && systemctl is-active frps && curl -fsS http://127.0.0.1:6101/healthz' || fail "units after reboot"
+sshx "$SERVER" 'systemctl is-active drlink-access && systemctl is-active drlink-server && curl -fsS http://127.0.0.1:6101/healthz' || fail "units after reboot"
 # Wait until published proxy is listening again (client republish after frps restart).
 for i in $(seq 1 36); do
   if sshx "$SERVER" "ss -lnt | grep -q ':${PUBLIC_PORT} '" >/dev/null 2>&1; then
@@ -385,7 +385,7 @@ fi
 sshx "$SERVER" "sudo frp-access delete 'E2E-Allow'" || true
 # list gone; binding should be gone after release or public
 if [[ "$SERVICE_ID" == "e2e-acl" ]]; then
-  if sshx "$SERVER" "sudo python3 -c \"import json;from pathlib import Path;r=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text());import sys;sys.exit(0 if 'e2e-acl' in (r['clients']['${CLIENT_ID}'].get('services') or {}) else 1)\""; then
+  if sshx "$SERVER" "sudo python3 -c \"import json;from pathlib import Path;r=json.loads(Path('/var/lib/drlink/registry.json').read_text());import sys;sys.exit(0 if 'e2e-acl' in (r['clients']['${CLIENT_ID}'].get('services') or {}) else 1)\""; then
     fail "service still present after release"
   fi
 else

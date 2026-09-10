@@ -8,12 +8,12 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 TREE="$WORKDIR/client-root"
-mkdir -p "$TREE/etc/frp" "$TREE/etc/frp-auto-deploy" "$TREE/usr/local/lib/frp-auto-deploy"
-cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
-cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
-cp "$ROOT/lib/frp_health_check.py" "$TREE/usr/local/lib/frp-auto-deploy/frp_health_check.py"
+mkdir -p "$TREE/etc/frp" "$TREE/etc/drlink" "$TREE/usr/local/lib/drlink"
+cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/drlink/frp-client-common.sh"
+cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/drlink/frp-common.sh"
+cp "$ROOT/lib/frp_health_check.py" "$TREE/usr/local/lib/drlink/frp_health_check.py"
 if [[ -f "$ROOT/lib/frp-macos.sh" ]]; then
-  cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-macos.sh"
+  cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/drlink/frp-macos.sh"
 fi
 
 write_state() {
@@ -74,7 +74,7 @@ PY
 
 run_reconcile() {
   FRP_CLIENT_TEST_ROOT="$TREE" \
-    FRP_CLIENT_LIB="$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh" \
+    FRP_CLIENT_LIB="$TREE/usr/local/lib/drlink/frp-client-common.sh" \
     FRP_CLIENT_RECONCILE_REGISTRY_IDS="$1" \
     bash -c 'source "$FRP_CLIENT_LIB"; frp_client_reconcile_released_services'
 }

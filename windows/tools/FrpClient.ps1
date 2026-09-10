@@ -73,7 +73,7 @@ try { Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue | Out
 
 function Show-FrpClientHelp {
     @'
-frp-client (Windows)
+drlink client (Windows)
 
   start             Start frpc from existing config (no re-enroll)
   stop              Stop project-managed frpc
@@ -90,7 +90,7 @@ frp-client (Windows)
   apply             Send pending draft changes to the server (identity auth)
   discard           Discard pending draft changes
   sync              Reconcile local services against server releases
-                       (alias: reconcile; after frpctl release service)
+                       (alias: reconcile; after drlink release service)
   update            Update frpc.exe (preserve identity/ports); -Check for dry run
   uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
   doctor            Basic local checks
@@ -106,7 +106,7 @@ do not need it.
 
 Adding, editing, enabling, or disabling a service only edits a local pending
 draft (client-draft.json). Run `apply` to authenticate with this client's
-management identity and make the change live. `frpctl release service` on
+management identity and make the change live. `drlink release service` on
 the server is the only way to release a public port reservation; then run
 `sync` on this client to drop the released service and avoid ghost proxies.
 '@ | Write-Host
@@ -125,7 +125,7 @@ function Show-FrpClientInfo {
     }
     $preferred = ''
     if ($alias -and $alias -ne $server) { $preferred = $alias }
-    Write-Host ("FRP Server: {0}" -f $server)
+    Write-Host ("Data Relay Link Server: {0}" -f $server)
     Write-Host ("Transport: {0}" -f $state.frp_transport)
     Write-Host ("Machine ID: {0}" -f $state.machine_id)
     Write-Host ''

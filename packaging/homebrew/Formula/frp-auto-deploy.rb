@@ -16,7 +16,7 @@ class FrpAutoDeploy < Formula
   def install
     libexec.install "install-client.sh", "uninstall-client.sh", "VERSION",
                     "release-manifest.json", "lib", "tools", "client"
-    %w[frpctl frp-client].each do |name|
+    %w[drlink frp-client].each do |name|
       (bin/name).write <<~SH
         #!/bin/bash
         exec "#{libexec}/tools/#{name}" "$@"

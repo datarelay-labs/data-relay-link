@@ -142,7 +142,7 @@ def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installe
         raise ValueError('installer URL must be HTTPS')
     lines = [
         '#!/bin/bash',
-        '# FRP Auto Deploy — Zero-Touch short URL bootstrap',
+        '# Data Relay Link — Zero-Touch short URL bootstrap',
         '# Generic entry script. Enrollment profile remains server-side.',
         'set -euo pipefail',
         'if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then',
@@ -178,7 +178,7 @@ def render_short_url_windows_bootstrap_script(
     sums_url = sha256sums_url_for_installer(installer)
     lines = [
         '#Requires -Version 5.1',
-        "# FRP Auto Deploy - Windows Zero-Touch short URL bootstrap",
+        "# Data Relay Link - Windows Zero-Touch short URL bootstrap",
         "$ErrorActionPreference = 'Stop'",
         "$ProgressPreference = 'SilentlyContinue'",
         "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",

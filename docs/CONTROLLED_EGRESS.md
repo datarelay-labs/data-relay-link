@@ -72,7 +72,7 @@ Inbound Access Control (`access-control.json`) and Egress Control (`egress-contr
 ## Doctor / backup
 
 - `drlink doctor` checks egress policy validity, listen configuration, and gateway unit state (read-only).
-- Server backup/restore includes `var/lib/frp-auto-deploy/egress-control.json`.
+- Server backup/restore includes `var/lib/drlink/egress-control.json`.
 
 ## Verified client patterns
 

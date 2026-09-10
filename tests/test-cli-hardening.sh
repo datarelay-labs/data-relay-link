@@ -7,16 +7,16 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORK/enrollment"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy/enrollments" "$TREE/var/lib/frp-auto-deploy/bootstrap"
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink/enrollments" "$TREE/var/lib/drlink/bootstrap"
 python3 - "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-(root / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
-    'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-    'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
+(root / 'etc/drlink/config.json').write_text(json.dumps({
+    'enrollments_dir': '/var/lib/drlink/enrollments',
+    'bootstrap_dir': '/var/lib/drlink/bootstrap',
 }) + '\n', encoding='utf-8')
-(root / 'var/lib/frp-auto-deploy/enrollments/0011223344556677.json').write_text(json.dumps({
+(root / 'var/lib/drlink/enrollments/0011223344556677.json').write_text(json.dumps({
     'id': '0011223344556677',
     'secret': 'TEST_SECRET_SHOULD_NOT_APPEAR',
     'created_at': '2026-08-30T00:00:00Z\x1b[31m\r',
@@ -41,9 +41,9 @@ pass MALFORMED_ENROLLMENT_SAFE
 pass TERMINAL_CONTROL_CHAR_SAFE
 
 CTLROOT="$WORK/client"
-mkdir -p "$CTLROOT/etc/frp" "$CTLROOT/etc/frp-auto-deploy" "$CTLROOT/usr/local/bin"
+mkdir -p "$CTLROOT/etc/frp" "$CTLROOT/etc/drlink" "$CTLROOT/usr/local/bin"
 printf '{"services":{}}\n' >"$CTLROOT/etc/frp/client-state.json"
-printf 'PROJECT_VERSION=2.1.0\n' >"$CTLROOT/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\n' >"$CTLROOT/etc/drlink/version"
 unset FRP_DEPLOY_TEST_ROOT
 export FRP_CTL_TEST_ROOT="$CTLROOT"
 "$ROOT/tools/frpctl" version >"$WORK/version-unknown.out"
@@ -55,12 +55,12 @@ EOF
 chmod +x "$CTLROOT/usr/local/bin/frpc"
 "$ROOT/tools/frpctl" version >"$WORK/version-binary.out"
 grep -q '^FRP version     : 0.69.9$' "$WORK/version-binary.out" || fail "binary version fallback"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$CTLROOT/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$CTLROOT/etc/drlink/version"
 printf '#!/usr/bin/env bash\nprintf "9.9.9\\n"\n' >"$CTLROOT/usr/local/bin/frpc"
 chmod +x "$CTLROOT/usr/local/bin/frpc"
 "$ROOT/tools/frpctl" version >"$WORK/version-meta.out"
 grep -q '^FRP version     : 0.71.0$' "$WORK/version-meta.out" || fail "metadata precedence"
-printf 'PROJECT_VERSION=2.1.0\n' >"$CTLROOT/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\n' >"$CTLROOT/etc/drlink/version"
 printf '#!/usr/bin/env bash\nprintf "0.69.9\\033[31m\\n"\n' >"$CTLROOT/usr/local/bin/frpc"
 chmod +x "$CTLROOT/usr/local/bin/frpc"
 "$ROOT/tools/frpctl" version >"$WORK/version-unsafe.out"

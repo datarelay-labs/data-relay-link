@@ -20,10 +20,10 @@ def load_creg():
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_client_registry.py')
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_client_registry.py')
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_client_registry', str(path))
@@ -117,7 +117,7 @@ parser.add_argument('query', help='label, unique hostname, or machine-id prefix'
 parser.add_argument('--force', action='store_true', help='skip interactive confirmation')
 args = parser.parse_args()
 
-cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads(Path(ROOT + '/etc/drlink/config.json').read_text())
 path = Path(cfg['registry_file'])
 if ROOT and not str(path).startswith(ROOT):
     path = Path(ROOT + str(path))
@@ -175,12 +175,12 @@ try:
 finally:
     unlock_registry(lock_fd)
 print('Revoked.')
-print('Create a new Enrollment Code with sudo frp-create-client, then re-enroll the client.')
+print('Create a new Enrollment Code with sudo drlink create enrollment, then re-enroll the client.')
 try:
     here = Path(__file__).resolve()
     for path in (
         here.parent.parent / 'lib' / 'frp_audit.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+        Path('/usr/local/lib/drlink/frp_audit.py'),
     ):
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_audit', str(path))

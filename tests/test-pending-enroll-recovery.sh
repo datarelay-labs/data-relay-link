@@ -109,32 +109,32 @@ SSH_USER="$(id -un)"
 
 # Server-side tree used only by frp-create-client to mint tickets.
 LIVE_TREE="$WORKDIR/live-server"
-mkdir -p "$LIVE_TREE/etc/frp-auto-deploy" "$LIVE_TREE/var/lib/frp-auto-deploy" "$LIVE_TREE/etc/frp"
-cp -a "$ALLOC_ROOT/pki" "$LIVE_TREE/etc/frp-auto-deploy/pki"
+mkdir -p "$LIVE_TREE/etc/drlink" "$LIVE_TREE/var/lib/drlink" "$LIVE_TREE/etc/frp"
+cp -a "$ALLOC_ROOT/pki" "$LIVE_TREE/etc/drlink/pki"
 python3 - "$LIVE_TREE" "$ALLOC_PORT" <<'PY'
 import json, sys
 from pathlib import Path
 tree = Path(sys.argv[1])
 port = int(sys.argv[2])
-(tree / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
+(tree / 'etc/drlink/config.json').write_text(json.dumps({
     'public_host': '203.0.113.10',
     'public_ip': '203.0.113.10',
     'frp_control_public_port': 8443,
     'frp_control_listen_port': 443,
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
-    'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
-    'tls_server_cert': '/etc/frp-auto-deploy/pki/server.crt',
-    'tls_server_key': '/etc/frp-auto-deploy/pki/server.key',
+    'tls_ca_cert': '/etc/drlink/pki/ca.crt',
+    'tls_server_cert': '/etc/drlink/pki/server.crt',
+    'tls_server_key': '/etc/drlink/pki/server.key',
     'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
-    'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-    'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
-    'registry_file': '/var/lib/frp-auto-deploy/registry.json',
+    'enrollments_dir': '/var/lib/drlink/enrollments',
+    'bootstrap_dir': '/var/lib/drlink/bootstrap',
+    'registry_file': '/var/lib/drlink/registry.json',
     'token_file': '/etc/frp/server_token',
 }, indent=2) + '\n')
 PY
-ln -sfn "$ALLOC_ROOT/enrollments" "$LIVE_TREE/var/lib/frp-auto-deploy/enrollments"
-ln -sfn "$ALLOC_ROOT/bootstrap" "$LIVE_TREE/var/lib/frp-auto-deploy/bootstrap"
-ln -sfn "$ALLOC_ROOT/registry.json" "$LIVE_TREE/var/lib/frp-auto-deploy/registry.json"
+ln -sfn "$ALLOC_ROOT/enrollments" "$LIVE_TREE/var/lib/drlink/enrollments"
+ln -sfn "$ALLOC_ROOT/bootstrap" "$LIVE_TREE/var/lib/drlink/bootstrap"
+ln -sfn "$ALLOC_ROOT/registry.json" "$LIVE_TREE/var/lib/drlink/registry.json"
 ln -sfn "$ALLOC_ROOT/server_token" "$LIVE_TREE/etc/frp/server_token"
 
 issue_ticket() {
@@ -147,7 +147,7 @@ run_client() {
   # run_client TREE TICKET MACHINE_ID OUT [EXTRA_ENV...]
   local tree="$1" ticket="$2" machine="$3" out="$4"
   shift 4
-  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/drlink"
   make_frpc "$tree/usr/local/bin/frpc"
   (
     export FRP_CLIENT_TEST_ROOT="$tree"

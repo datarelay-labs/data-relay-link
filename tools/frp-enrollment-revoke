@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = Path(ROOT + '/etc/frp-auto-deploy/config.json')
+CONFIG = Path(ROOT + '/etc/drlink/config.json')
 
 # Fault-injection hooks for regression tests (unset in production).
 HOOK_FAIL_BEFORE_ENROLLMENT = 'FRP_REVOKE_HOOK_FAIL_BEFORE_ENROLLMENT'
@@ -177,7 +177,7 @@ def main(argv=None):
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))

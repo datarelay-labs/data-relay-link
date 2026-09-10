@@ -30,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 
 function Show-FrpInstallHelp {
     @'
-frp-auto-deploy Windows client installer
+Data Relay Link Windows client installer
 
 Zero-touch:
   .\install-client.ps1 -ZeroTouch -AllocatorUrl https://HOST/enroll `

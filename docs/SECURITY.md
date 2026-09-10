@@ -1,6 +1,6 @@
 # Security architecture
 
-This document describes the security model of `frp-auto-deploy` **2.3.0**.
+This document describes the security model of `Data Relay Link` **2.3.0**.
 It is not a certification, audit report, or guarantee against a compromised
 root account.
 
@@ -42,10 +42,10 @@ with a persistent ECDSA P-256 identity.
 The server installer creates a project-managed private CA:
 
 ```text
-/etc/frp-auto-deploy/pki/ca.key     # secret
-/etc/frp-auto-deploy/pki/ca.crt     # public certificate
-/etc/frp-auto-deploy/pki/server.key # secret
-/etc/frp-auto-deploy/pki/server.crt # public certificate
+/etc/drlink/pki/ca.key     # secret
+/etc/drlink/pki/ca.crt     # public certificate
+/etc/drlink/pki/server.key # secret
+/etc/drlink/pki/server.crt # public certificate
 ```
 
 The allocator presents `server.crt`. Clients verify it with the pinned CA.
@@ -61,7 +61,7 @@ allocator URL **without** using a `--cacert` file that does not exist yet.
 It parses the body as X.509 and checks the SHA256 fingerprint of the
 **canonical DER** encoding against `FRP_ALLOCATOR_CA_SHA256`. That hash is the
 **CA** certificate, not the nginx/allocator leaf. On success it stores
-`/etc/frp-auto-deploy/allocator-ca.crt`. Later allocator calls use
+`/etc/drlink/allocator-ca.crt`. Later allocator calls use
 verified HTTPS (`curl --cacert` with that stored CA). This is not TOFU and not
 self-verification of a file against itself.
 
@@ -71,7 +71,7 @@ separate trust domains (see below).
 
 ## 5. Enrollment Code
 
-A short-lived secret created on the server (`sudo frp-create-client`).
+A short-lived secret created on the server (`sudo drlink create enrollment`).
 
 - Default TTL: 10 minutes
 - Bound to the first machine (`machine-id`) that uses it
@@ -92,7 +92,7 @@ A short-lived secret created on the server (`sudo frp-create-client`).
 - The enrollment secret is not sent in the HTTPS request body
 - The FRP token is returned encrypted (AES-256-CBC / PBKDF2) over verified HTTPS
 - Server storage: root-owned mode-0600 JSON under
-  `/var/lib/frp-auto-deploy/enrollments/*.json` (secret field stored as issued;
+  `/var/lib/drlink/enrollments/*.json` (secret field stored as issued;
   not hashed or wrapped at rest in the current release)
 
 Needed again only to enroll a new client, recover a lost local identity, or
@@ -242,21 +242,21 @@ Disable is not release.
 | Item | Typical path |
 | --- | --- |
 | FRP server token | `/etc/frp/server_token` |
-| Enrollment Code secret | `/var/lib/frp-auto-deploy/enrollments/*.json` (root-owned `0600`; secret stored as issued, not hashed/wrapped) |
-| Bootstrap Ticket while valid | `/var/lib/frp-auto-deploy/bootstrap/` (hashed at rest) |
+| Enrollment Code secret | `/var/lib/drlink/enrollments/*.json` (root-owned `0600`; secret stored as issued, not hashed/wrapped) |
+| Bootstrap Ticket while valid | `/var/lib/drlink/bootstrap/` (hashed at rest) |
 | Client management private key | `/etc/frp/client-identity.key` |
 | Management MAC secret | `/etc/frp/client-identity.mac` (server copy on the client record) |
-| CA private key | `/etc/frp-auto-deploy/pki/ca.key` |
-| TLS server private key | `/etc/frp-auto-deploy/pki/server.key` |
+| CA private key | `/etc/drlink/pki/ca.key` |
+| TLS server private key | `/etc/drlink/pki/server.key` |
 | Generated `frps.toml` / `frpc.toml` | contain the FRP token |
 
 **Public / non-secret metadata**
 
 | Item | Typical path |
 | --- | --- |
-| CA certificate | `/etc/frp-auto-deploy/pki/ca.crt` |
+| CA certificate | `/etc/drlink/pki/ca.crt` |
 | CA SHA256 fingerprint | printed by `frp-create-client` |
-| Server certificate | `/etc/frp-auto-deploy/pki/server.crt` |
+| Server certificate | `/etc/drlink/pki/server.crt` |
 | Management public key | `/etc/frp/client-identity.pub` |
 | Service ID, public service port, public hostname (optional DNS alias) | `frp-client-info`, `access-info.txt` |
 | Client desired state (no secrets) | `/etc/frp/client-state.json` |
@@ -270,20 +270,20 @@ document to edit.
 | Path | Mode |
 | --- | --- |
 | `/etc/frp/server_token` | `0600` |
-| `/etc/frp-auto-deploy/pki/` | `0700` |
-| `/etc/frp-auto-deploy/pki/ca.key` | `0600` |
-| `/etc/frp-auto-deploy/pki/ca.crt` | `0644` |
-| `/etc/frp-auto-deploy/pki/server.key` | `0600` |
-| `/etc/frp-auto-deploy/pki/server.crt` | `0644` |
+| `/etc/drlink/pki/` | `0700` |
+| `/etc/drlink/pki/ca.key` | `0600` |
+| `/etc/drlink/pki/ca.crt` | `0644` |
+| `/etc/drlink/pki/server.key` | `0600` |
+| `/etc/drlink/pki/server.crt` | `0644` |
 | `/etc/frp/client-identity.key` | `0600` |
 | `/etc/frp/client-identity.mac` | `0600` |
 | `/etc/frp/client-state.json` | `0600` |
 | `/etc/frp/frpc.toml` | `0600` |
 | `/etc/frp/frps.toml` | `0600` |
-| `/var/lib/frp-auto-deploy/registry.json` | `0600` |
-| `/etc/frp-auto-deploy/allocator-ca.crt` | `0644` |
+| `/var/lib/drlink/registry.json` | `0600` |
+| `/etc/drlink/allocator-ca.crt` | `0644` |
 | `/etc/frp/access-info.txt` | `0644` |
-| `/etc/frp-auto-deploy/version` | `0644` |
+| `/etc/drlink/version` | `0644` |
 
 Do not manually edit the registry, `client-state.json`, `frpc.toml`, or
 identity files unless performing advanced recovery.
@@ -336,10 +336,10 @@ from root.
 **Server backup (minimum)**
 
 ```text
-/etc/frp-auto-deploy/pki/
+/etc/drlink/pki/
 /etc/frp/server_token
-/etc/frp-auto-deploy/config.json
-/var/lib/frp-auto-deploy/registry.json
+/etc/drlink/config.json
+/var/lib/drlink/registry.json
 ```
 
 Also consider enrollments, bootstrap tickets, and `mgmt-nonces.json`. Store
@@ -380,7 +380,7 @@ frontend itself. Unmapped or drifted published-service proxy names fail
 closed (DENY); they must never fall back to PUBLIC.
 
 Connection authorization events are written to a bounded local log
-(`/var/log/frp-auto-deploy/access-conn.jsonl`). Enrollment tickets, FRP
+(`/var/log/drlink/access-conn.jsonl`). Enrollment tickets, FRP
 tokens, CA keys, and passwords are not logged.
 
 If an upstream device SNATs clients, allowlists must use the source address
@@ -390,9 +390,9 @@ observed by `frps`.
 
 Controlled Egress is a **separate policy plane** from inbound Access Control.
 
-Authoritative state: `/var/lib/frp-auto-deploy/egress-control.json`  
-Connection log: `/var/log/frp-auto-deploy/egress-conn.jsonl`  
-Daemon: `frp-egress-gateway.service` (default listen `0.0.0.0:6080`)
+Authoritative state: `/var/lib/drlink/egress-control.json`
+Connection log: `/var/log/drlink/egress-conn.jsonl`
+Daemon: `drlink-egress.service` (default listen `0.0.0.0:6080`)
 
 Security contract:
 

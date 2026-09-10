@@ -15,7 +15,7 @@ FRP_CTL_SOURCED=1
 
 write_client_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink"
   python3 - "$tree/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -32,8 +32,8 @@ PY
 
 write_server_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" "$tree/var/lib/frp-auto-deploy/registry.json" <<'PY'
+  mkdir -p "$tree/etc/drlink" "$tree/var/lib/drlink"
+  python3 - "$tree/etc/drlink/config.json" "$tree/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = Path(sys.argv[1]), Path(sys.argv[2])
@@ -44,7 +44,7 @@ cfg.write_text(json.dumps({
     "port_end": 6098,
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:6099/enroll",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+    "registry_file": "/var/lib/drlink/registry.json",
 }, indent=2, sort_keys=True) + "\n")
 reg.write_text(json.dumps({
     "schema_version": 2,
@@ -309,7 +309,7 @@ pass "TAG_COMPLETION"
 pass "CONTEXT_TAB_COMPLETION"
 
 # Label rename must not change CLIENT ID completion.
-python3 - "$SERVER/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$SERVER/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
@@ -453,7 +453,7 @@ pass "FRPCTL_DOWN_ARROW_HISTORY"
 pass "UP_DOWN_HISTORY"
 
 # Restore a plain label, then PTY-test first-Tab discovery UX.
-python3 - "$SERVER/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$SERVER/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])

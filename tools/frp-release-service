@@ -14,10 +14,10 @@ def load_creg():
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_client_registry.py')
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_client_registry.py')
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_client_registry', str(path))
@@ -106,7 +106,7 @@ def ensure_releasable(service, force=False):
         )
 
 
-cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads(Path(ROOT + '/etc/drlink/config.json').read_text())
 path = Path(cfg['registry_file'])
 if ROOT and not str(path).startswith(ROOT):
     path = Path(ROOT + str(path))
@@ -165,10 +165,10 @@ try:
     here = Path(__file__).resolve()
     acl_candidates = [
         here.parent.parent / 'lib' / 'frp_access_control.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_access_control.py'),
+        Path('/usr/local/lib/drlink/frp_access_control.py'),
     ]
     if ROOT:
-        acl_candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_access_control.py')
+        acl_candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_access_control.py')
     acl = None
     for acl_path in acl_candidates:
         if not acl_path.is_file():
@@ -192,7 +192,7 @@ try:
     here = Path(__file__).resolve()
     for audit_path in (
         here.parent.parent / 'lib' / 'frp_audit.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+        Path('/usr/local/lib/drlink/frp_audit.py'),
     ):
         if audit_path.is_file():
             spec = importlib.util.spec_from_file_location('frp_audit', str(audit_path))

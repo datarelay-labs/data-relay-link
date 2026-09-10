@@ -142,21 +142,21 @@ pass "STABLE_IMMUTABLE"
 persist="$(mktemp -d)"
 trap 'rm -rf "$FRP_CLIENT_TEST_ROOT" "$persist"' EXIT
 export FRP_DEPLOY_TEST_ROOT="$persist"
-mkdir -p "$persist/etc/frp-auto-deploy"
+mkdir -p "$persist/etc/drlink"
 unset FRP_RELEASE_CHANNEL || true
 export FRP_RELEASE_CHANNEL=dev
 export FRP_BUNDLE_SHA256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-frp_write_version_file "$persist/etc/frp-auto-deploy/version"
-grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/frp-auto-deploy/version" || fail "dev channel not written"
-grep -q 'SOURCE_REF=main' "$persist/etc/frp-auto-deploy/version" || fail "dev source ref"
+frp_write_version_file "$persist/etc/drlink/version"
+grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/drlink/version" || fail "dev channel not written"
+grep -q 'SOURCE_REF=main' "$persist/etc/drlink/version" || fail "dev source ref"
 grep -q 'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-  "$persist/etc/frp-auto-deploy/version" || fail "bundle sha not written"
+  "$persist/etc/drlink/version" || fail "bundle sha not written"
 unset FRP_RELEASE_CHANNEL FRP_BUNDLE_SHA256 || true
-frp_write_version_file "$persist/etc/frp-auto-deploy/version"
-grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/frp-auto-deploy/version" || fail "dev channel lost on re-run"
-grep -q 'SOURCE_REF=main' "$persist/etc/frp-auto-deploy/version" || fail "dev source ref lost"
+frp_write_version_file "$persist/etc/drlink/version"
+grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/drlink/version" || fail "dev channel lost on re-run"
+grep -q 'SOURCE_REF=main' "$persist/etc/drlink/version" || fail "dev source ref lost"
 grep -q 'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-  "$persist/etc/frp-auto-deploy/version" || fail "bundle sha lost"
+  "$persist/etc/drlink/version" || fail "bundle sha lost"
 [[ "$(frp_release_channel)" == "dev" ]] || fail "persisted channel not used for URLs"
 case "$(frp_default_client_installer_url)" in
   */main/dist/bootstrap-client.sh) ;;
@@ -170,11 +170,11 @@ pass "BUILD_IDENTITY"
 unset FRP_RELEASE_CHANNEL || true
 stable_tree="$(mktemp -d)"
 export FRP_DEPLOY_TEST_ROOT="$stable_tree"
-mkdir -p "$stable_tree/etc/frp-auto-deploy"
+mkdir -p "$stable_tree/etc/drlink"
 export FRP_RELEASE_CHANNEL=stable
-frp_write_version_file "$stable_tree/etc/frp-auto-deploy/version"
-grep -q 'RELEASE_CHANNEL=stable' "$stable_tree/etc/frp-auto-deploy/version" || fail "stable channel"
-grep -q "SOURCE_REF=v${PROJECT_VERSION}" "$stable_tree/etc/frp-auto-deploy/version" || fail "stable source ref"
+frp_write_version_file "$stable_tree/etc/drlink/version"
+grep -q 'RELEASE_CHANNEL=stable' "$stable_tree/etc/drlink/version" || fail "stable channel"
+grep -q "SOURCE_REF=v${PROJECT_VERSION}" "$stable_tree/etc/drlink/version" || fail "stable source ref"
 unset FRP_RELEASE_CHANNEL || true
 [[ "$(frp_release_channel)" == "stable" ]] || fail "stable persistence"
 case "$(frp_default_client_installer_url)" in

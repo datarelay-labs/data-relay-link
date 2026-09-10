@@ -10,9 +10,9 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy"
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 cfg_path, reg_path = Path(sys.argv[1]), Path(sys.argv[2])
@@ -82,7 +82,7 @@ reg_path.write_text(json.dumps({
   },
 }, indent=2, sort_keys=True)+"\n")
 PY
-chmod 600 "$TREE/var/lib/frp-auto-deploy/registry.json"
+chmod 600 "$TREE/var/lib/drlink/registry.json"
 
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 
@@ -118,15 +118,15 @@ if grep -q '6004' "$WORKDIR/info-svc.out"; then
 fi
 pass "frp-client-info generic"
 
-cp "$TREE/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/registry.before"
+cp "$TREE/var/lib/drlink/registry.json" "$WORKDIR/registry.before"
 printf 'nope\n' | python3 "$ROOT/tools/frp-release-client" client-b >"$WORKDIR/cancel.out" 2>"$WORKDIR/cancel.err" && fail "cancel should fail"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/registry.before" <<'PY'
+python3 - "$TREE/var/lib/drlink/registry.json" "$WORKDIR/registry.before" <<'PY'
 import sys
 from pathlib import Path
 assert Path(sys.argv[1]).read_bytes() == Path(sys.argv[2]).read_bytes()
 PY
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-client" client-b >"$WORKDIR/release.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "release did not drop client-b"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "release did not drop client-b"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -139,14 +139,14 @@ grep -q 'http: 6005' "$WORKDIR/release.out" || fail "release listed service port
 pass "frp-release-client generic"
 
 printf 'nope\n' | python3 "$ROOT/tools/frp-release-service" dev-dp-mirror grafana >"$WORKDIR/svc-cancel.out" 2>"$WORKDIR/svc-cancel.err" && fail "service release cancel should fail"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "cancel mutated grafana"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "cancel mutated grafana"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
 assert 'grafana' in state['clients']['aabbccdd']['services']
 PY
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-service" dev-dp-mirror grafana >"$WORKDIR/svc-release.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "service release"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "service release"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -159,7 +159,7 @@ grep -q 'service grafana' "$WORKDIR/svc-release.out" || fail "service release ou
 pass "frp-release-service generic"
 
 # Last-service release must keep the Client record (management-only zero-service).
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
@@ -178,7 +178,7 @@ state['clients']['lastsvc001']={
 p.write_text(json.dumps(state, indent=2, sort_keys=True)+'\n')
 PY
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-service" lastsvc001 ssh >"$WORKDIR/last-svc.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "last service release deleted client"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "last service release deleted client"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -196,7 +196,7 @@ pass "frp-release-service keeps client after last service"
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-client" lastsvc001 --force >/dev/null
 
 printf 'REVOKE\n' | python3 "$ROOT/tools/frp-revoke-client" dev-dp-mirror >"$WORKDIR/revoke.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "revoke"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "revoke"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -214,7 +214,7 @@ fi
 pass "frp-revoke-client keeps reservations"
 
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-client" dev-dp-mirror --force >"$WORKDIR/revoke-release.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "release after revoke"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "release after revoke"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -223,7 +223,7 @@ PY
 pass "admin release still works after revoke"
 
 # Restore a client so status still has one remaining host (client-b was already released).
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
@@ -248,7 +248,7 @@ python3 "$ROOT/tools/frp-clients" >"$WORKDIR/legacy-clients.out"
 grep -q 'legacy / unspecified' "$WORKDIR/legacy-clients.out" || fail "legacy SSH user display"
 python3 "$ROOT/tools/frp-client-info" legacy-ssh services >"$WORKDIR/legacy-info.out"
 grep -q 'legacy / unspecified' "$WORKDIR/legacy-info.out" || fail "legacy SSH info display"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "list mutated legacy record"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "list mutated legacy record"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -258,16 +258,16 @@ assert state['clients']['aabbccdd']['services']['ssh']['remote_port']==6002
 assert state['clients']['legacy00aa']['services']['ssh']['remote_port']==6010
 assert 'ssh_user' not in state['clients']['legacy00aa']['services']['ssh']
 PY
-cp "$TREE/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/legacy.before"
+cp "$TREE/var/lib/drlink/registry.json" "$WORKDIR/legacy.before"
 printf 'nope\n' | python3 "$ROOT/tools/frp-release-client" legacy-ssh \
   >"$WORKDIR/legacy-cancel.out" 2>"$WORKDIR/legacy-cancel.err" && fail "legacy cancel should fail"
-cmp -s "$TREE/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/legacy.before" ||
+cmp -s "$TREE/var/lib/drlink/registry.json" "$WORKDIR/legacy.before" ||
   fail "cancelled legacy release mutated registry"
 pass "legacy SSH readable without auto-release"
 
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-service" legacy-ssh ssh \
   >"$WORKDIR/legacy-svc-release.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "explicit legacy service release"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "explicit legacy service release"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())
@@ -284,7 +284,7 @@ assert all(
 PY
 pass "legacy explicit service release reclaims port"
 
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
@@ -299,7 +299,7 @@ p.write_text(json.dumps(state, indent=2, sort_keys=True)+'\n')
 PY
 printf 'RELEASE\n' | python3 "$ROOT/tools/frp-release-client" legacy-ssh --force \
   >"$WORKDIR/legacy-force-release.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "forced legacy client release"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "forced legacy client release"
 import json,sys
 from pathlib import Path
 state=json.loads(Path(sys.argv[1]).read_text())

@@ -161,7 +161,7 @@ EOF
 seed_absent_units() {
   local state="$1"
   mkdir -p "$state"
-  for unit in frps.service frp-port-allocator.service frp-frontend.service nginx.service; do
+  for unit in drlink-server.service drlink-allocator.service drlink-frontend.service nginx.service; do
     echo not-found >"${state}/${unit}.load"
     echo not-found >"${state}/${unit}.enabled"
     echo inactive >"${state}/${unit}.active"
@@ -188,28 +188,28 @@ unset FRP_SERVER_CONFIG FRP_PKI_DIR FRP_PUBLIC_HOSTNAME || true
 # 1-3. Fresh install creates sandbox dirs with secure mode even if missing.
 TREE="$WORKDIR/fresh"
 mkdir -p "$TREE"
-# Intentionally do not pre-create /var/log/frp-auto-deploy.
+# Intentionally do not pre-create /var/log/drlink.
 export FRP_SERVER_TEST_ROOT="$TREE"
 if ! frp_server_main >"$WORKDIR/fresh.out" 2>"$WORKDIR/fresh.err"; then
   cat "$WORKDIR/fresh.out" "$WORKDIR/fresh.err" >&2
   fail "fresh install"
 fi
-[[ -d "$TREE/var/log/frp-auto-deploy" ]] || fail "log dir not created"
-[[ -d "$TREE/var/lib/frp-auto-deploy" ]] || fail "var/lib not created"
-[[ -d "$TREE/etc/frp-auto-deploy" ]] || fail "etc project dir missing"
+[[ -d "$TREE/var/log/drlink" ]] || fail "log dir not created"
+[[ -d "$TREE/var/lib/drlink" ]] || fail "var/lib not created"
+[[ -d "$TREE/etc/drlink" ]] || fail "etc project dir missing"
 [[ -d "$TREE/etc/frp" ]] || fail "etc/frp missing"
-assert_mode "$TREE/var/log/frp-auto-deploy" "0o700"
-assert_mode "$TREE/var/lib/frp-auto-deploy" "0o700"
-assert_mode "$TREE/etc/frp-auto-deploy" "0o700"
+assert_mode "$TREE/var/log/drlink" "0o700"
+assert_mode "$TREE/var/lib/drlink" "0o700"
+assert_mode "$TREE/etc/drlink" "0o700"
 assert_mode "$TREE/etc/frp" "0o700"
 if [[ ${EUID} -eq 0 ]]; then
-  owner="$(stat -c '%U:%G' "$TREE/var/log/frp-auto-deploy")"
+  owner="$(stat -c '%U:%G' "$TREE/var/log/drlink")"
   [[ "$owner" == "root:root" ]] || fail "log dir owner $owner"
 fi
-grep -q '^ProtectSystem=strict$' "$ROOT/server/frp-port-allocator.service" \
+grep -q '^ProtectSystem=strict$' "$ROOT/server/drlink-allocator.service" \
   || fail "allocator ProtectSystem weakened"
-grep -q 'ReadWritePaths=/var/lib/frp-auto-deploy /var/log/frp-auto-deploy' \
-  "$ROOT/server/frp-port-allocator.service" || fail "allocator ReadWritePaths weakened"
+grep -q 'ReadWritePaths=/var/lib/drlink /var/log/drlink' \
+  "$ROOT/server/drlink-allocator.service" || fail "allocator ReadWritePaths weakened"
 pass "FRESH_INSTALL_SANDBOX_DIRS"
 pass "LOG_DIR_CREATED_WHEN_MISSING"
 pass "SANDBOX_DIR_MODES"
@@ -236,19 +236,19 @@ fi
 if grep -q 'RECOVERY_REQUIRED=YES' "$WORKDIR/start-fail.out" "$WORKDIR/start-fail.err"; then
   fail "successful rollback set RECOVERY_REQUIRED"
 fi
-[[ ! -f "$FAIL/var/lib/frp-auto-deploy/server-update-pending.json" ]] \
+[[ ! -f "$FAIL/var/lib/drlink/server-update-pending.json" ]] \
   || fail "successful rollback left pending marker"
-[[ ! -f "$FAIL/etc/systemd/system/frps.service" ]] || fail "frps unit remained"
-[[ ! -f "$FAIL/etc/systemd/system/frp-port-allocator.service" ]] || fail "allocator unit remained"
-[[ ! -f "$FAIL/etc/systemd/system/frp-frontend.service" ]] || fail "frontend unit remained"
-if grep -E '^stop (frps|frp-port-allocator|frp-frontend)(\.service)?$' "$WORKDIR/sys-absent.log"; then
+[[ ! -f "$FAIL/etc/systemd/system/drlink-server.service" ]] || fail "frps unit remained"
+[[ ! -f "$FAIL/etc/systemd/system/drlink-allocator.service" ]] || fail "allocator unit remained"
+[[ ! -f "$FAIL/etc/systemd/system/drlink-frontend.service" ]] || fail "frontend unit remained"
+if grep -E '^stop (frps|drlink-allocator|drlink-frontend)(\.service)?$' "$WORKDIR/sys-absent.log"; then
   fail "rollback stopped a previously absent unit: $(cat "$WORKDIR/sys-absent.log")"
 fi
 python3 - "$STATE" <<'PY' || fail "product unit left active after rollback"
 from pathlib import Path
 import sys
 state = Path(sys.argv[1])
-for unit in ("frps.service", "frp-port-allocator.service", "frp-frontend.service"):
+for unit in ("drlink-server.service", "drlink-allocator.service", "drlink-frontend.service"):
     active = (state / (unit + ".active")).read_text(encoding="utf-8").strip()
     if active == "active":
         raise SystemExit(unit)
@@ -277,7 +277,7 @@ grep -q 'RECOVERY_REQUIRED=YES' "$WORKDIR/genuine.out" "$WORKDIR/genuine.err" \
   || fail "genuine rollback missing recovery"
 grep -q 'PENDING_MARKER_CLEARED=NO' "$WORKDIR/genuine.out" "$WORKDIR/genuine.err" \
   || fail "genuine rollback cleared marker flag"
-[[ -f "$GEN/var/lib/frp-auto-deploy/server-update-pending.json" ]] \
+[[ -f "$GEN/var/lib/drlink/server-update-pending.json" ]] \
   || fail "genuine rollback missing pending file"
 pass "GENUINE_ROLLBACK_KEEPS_PENDING"
 
@@ -300,9 +300,9 @@ def seed(name, load, enabled, active, extra=None):
     state = root / name
     state.mkdir(parents=True, exist_ok=True)
     for unit in (
-        "frps.service",
-        "frp-port-allocator.service",
-        "frp-frontend.service",
+        "drlink-server.service",
+        "drlink-allocator.service",
+        "drlink-frontend.service",
         "nginx.service",
     ):
         (state / (unit + ".load")).write_text(load + "\n", encoding="utf-8")
@@ -319,7 +319,7 @@ meta_active = {
         "skipped": False,
         "units": [
             {
-                "unit": "frps.service",
+                "unit": "drlink-server.service",
                 "existed": True,
                 "load_state": "loaded",
                 "enabled": "enabled",
@@ -332,7 +332,7 @@ meta_active = {
 seed("existing-active", "loaded", "enabled", "inactive")
 if not frp_install_txn.apply_service_states(meta_active, skip=False):
     raise SystemExit("active restore failed")
-events = (Path(os.environ["FRP_MOCK_SYSTEMCTL_STATE"]) / "frps.service.events").read_text(encoding="utf-8")
+events = (Path(os.environ["FRP_MOCK_SYSTEMCTL_STATE"]) / "drlink-server.service.events").read_text(encoding="utf-8")
 if "enable" not in events or "restart" not in events:
     raise SystemExit("active unit did not enable+restart: %s" % events)
 if not frp_install_txn.verify_service_states(meta_active, skip=False):
@@ -343,7 +343,7 @@ meta_inactive = {
         "skipped": False,
         "units": [
             {
-                "unit": "frps.service",
+                "unit": "drlink-server.service",
                 "existed": True,
                 "load_state": "loaded",
                 "enabled": "disabled",
@@ -356,7 +356,7 @@ meta_inactive = {
 seed("existing-inactive", "loaded", "enabled", "active")
 if not frp_install_txn.apply_service_states(meta_inactive, skip=False):
     raise SystemExit("inactive restore failed")
-events = (Path(os.environ["FRP_MOCK_SYSTEMCTL_STATE"]) / "frps.service.events").read_text(encoding="utf-8")
+events = (Path(os.environ["FRP_MOCK_SYSTEMCTL_STATE"]) / "drlink-server.service.events").read_text(encoding="utf-8")
 if "disable" not in events or "stop" not in events:
     raise SystemExit("inactive unit did not disable+stop: %s" % events)
 if not frp_install_txn.verify_service_states(meta_inactive, skip=False):
@@ -368,7 +368,7 @@ meta_absent = {
         "skipped": False,
         "units": [
             {
-                "unit": "frp-port-allocator.service",
+                "unit": "drlink-allocator.service",
                 "existed": False,
                 "load_state": "not-found",
                 "enabled": "not-found",
@@ -381,7 +381,7 @@ meta_absent = {
 seed("compat-absent", "not-found", "not-found", "inactive")
 if not frp_install_txn.apply_service_states(meta_absent, skip=False):
     raise SystemExit("absent inactive restore failed")
-events_path = Path(os.environ["FRP_MOCK_SYSTEMCTL_STATE"]) / "frp-port-allocator.service.events"
+events_path = Path(os.environ["FRP_MOCK_SYSTEMCTL_STATE"]) / "drlink-allocator.service.events"
 events = events_path.read_text(encoding="utf-8") if events_path.is_file() else ""
 if "stop" in events.split():
     raise SystemExit("absent unit invoked stop: %s" % events)
@@ -392,7 +392,7 @@ meta_old = {
         "skipped": False,
         "units": [
             {
-                "unit": "frps.service",
+                "unit": "drlink-server.service",
                 "enabled": "not-found",
                 "active": "inactive",
             }
@@ -417,12 +417,12 @@ pass "ABSENT_INACTIVE_DOES_NOT_FAIL_STOP"
 
 # Dual-role: client files survive a failed server install rollback.
 DUAL="$WORKDIR/dual"
-mkdir -p "$DUAL/etc/frp" "$DUAL/usr/local/bin" "$DUAL/usr/local/lib/frp-auto-deploy"
+mkdir -p "$DUAL/etc/frp" "$DUAL/usr/local/bin" "$DUAL/usr/local/lib/drlink"
 printf '{"schema_version":1,"machine_id":"aabbccddeeff0011"}\n' >"$DUAL/etc/frp/client-state.json"
-printf '#!/bin/true\n' >"$DUAL/usr/local/bin/frpctl"
+printf '#!/bin/true\n' >"$DUAL/usr/local/bin/drlink"
 printf '#!/bin/true\n' >"$DUAL/usr/local/bin/frp-client"
-chmod +x "$DUAL/usr/local/bin/frpctl" "$DUAL/usr/local/bin/frp-client"
-printf 'shared\n' >"$DUAL/usr/local/lib/frp-auto-deploy/frp-common.sh"
+chmod +x "$DUAL/usr/local/bin/drlink" "$DUAL/usr/local/bin/frp-client"
+printf 'shared\n' >"$DUAL/usr/local/lib/drlink/frp-common.sh"
 seed_absent_units "$WORKDIR/state-dual"
 export FRP_SERVER_TEST_ROOT="$DUAL"
 export FRP_INSTALL_HOOK_START_FAIL=1
@@ -434,7 +434,7 @@ if frp_server_main >"$WORKDIR/dual.out" 2>"$WORKDIR/dual.err"; then
 fi
 unset FRP_INSTALL_HOOK_START_FAIL FRP_INSTALL_TXN_HOOK_SYSTEMCTL
 [[ -f "$DUAL/etc/frp/client-state.json" ]] || fail "rollback removed client state"
-[[ -x "$DUAL/usr/local/bin/frpctl" ]] || fail "rollback removed client frpctl"
+[[ -x "$DUAL/usr/local/bin/drlink" ]] || fail "rollback removed client frpctl"
 pass "DUAL_ROLE_ROLLBACK_PRESERVES_CLIENT"
 
 # Bash 4.2 (Amazon Linux 2) + set -u rejects empty "${arr[@]}".

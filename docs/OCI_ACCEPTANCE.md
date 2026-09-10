@@ -7,14 +7,14 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 ## Existing server upgrade
 
 1. Record registry, labels, notes, tags, ports, CA fingerprint, token digest, installer URL.
-2. `sudo frpctl project-update`
+2. `sudo drlink project-update`
 3. Confirm registry/labels/notes/tags/ports/CA/token/mode retained.
-4. `sudo frpctl doctor`
+4. `sudo drlink doctor`
 
 ## Existing client update
 
 1. Record identity files, public ports, SSH reachability.
-2. `sudo frpctl update` on the client
+2. `sudo drlink update` on the client
 3. Identity, ports, SSH still work. No re-enrollment.
 
 ## New client
@@ -46,7 +46,7 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 
 ## Backup / Restore
 
-1. `sudo frpctl backup`
+1. `sudo drlink backup`
 2. Record state, change metadata
 3. Restore from that backup
 4. Exact expected state; `doctor` PASS

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Named Access Lists, TTL entries, and connection authorization for FRP Auto Deploy.
+"""Named Access Lists, TTL entries, and connection authorization for Data Relay Link.
 
-Authoritative state lives in /var/lib/frp-auto-deploy/access-control.json.
+Authoritative state lives in /var/lib/drlink/access-control.json.
 Runtime authorization is evaluated by the NewUserConn plugin using an
 in-memory cache derived from that file plus registry.json proxy mapping.
 
@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 ACCESS_SCHEMA_VERSION = 1
-DEFAULT_ACCESS_PATH = "/var/lib/frp-auto-deploy/access-control.json"
-DEFAULT_CONN_LOG_PATH = "/var/log/frp-auto-deploy/access-conn.jsonl"
+DEFAULT_ACCESS_PATH = "/var/lib/drlink/access-control.json"
+DEFAULT_CONN_LOG_PATH = "/var/log/drlink/access-conn.jsonl"
 DEFAULT_PLUGIN_ADDR = "127.0.0.1:6101"
 DEFAULT_PLUGIN_PATH = "/access-auth"
 ACCESS_LIST_ID_PREFIX = "acl_"

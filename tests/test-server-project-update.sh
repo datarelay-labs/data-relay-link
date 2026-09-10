@@ -28,10 +28,10 @@ setup_tree() {
   local tree="$1"
   rm -rf "$tree"
   mkdir -p \
-    "$tree/etc/frp-auto-deploy/pki" "$tree/etc/frp" \
-    "$tree/var/lib/frp-auto-deploy/enrollments/client-a" \
-    "$tree/var/lib/frp-auto-deploy/bootstrap/client-a" \
-    "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy" \
+    "$tree/etc/drlink/pki" "$tree/etc/frp" \
+    "$tree/var/lib/drlink/enrollments/client-a" \
+    "$tree/var/lib/drlink/bootstrap/client-a" \
+    "$tree/usr/local/bin" "$tree/usr/local/lib/drlink" \
     "$tree/usr/local/sbin" "$tree/etc/systemd/system"
   cat >"$tree/usr/local/bin/frps" <<'EOF'
 #!/usr/bin/env bash
@@ -40,18 +40,18 @@ exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frps"
   printf 'server-token-preserve\n' >"$tree/etc/frp/server_token"
-  printf 'ca-preserve\n' >"$tree/etc/frp-auto-deploy/pki/ca.crt"
-  printf 'ca-key-preserve\n' >"$tree/etc/frp-auto-deploy/pki/ca.key"
-  printf 'server-cert-preserve\n' >"$tree/etc/frp-auto-deploy/pki/server.crt"
-  printf 'server-key-preserve\n' >"$tree/etc/frp-auto-deploy/pki/server.key"
-  printf 'enrollment-preserve\n' >"$tree/var/lib/frp-auto-deploy/enrollments/client-a/state"
-  printf 'bootstrap-preserve\n' >"$tree/var/lib/frp-auto-deploy/bootstrap/client-a/state"
+  printf 'ca-preserve\n' >"$tree/etc/drlink/pki/ca.crt"
+  printf 'ca-key-preserve\n' >"$tree/etc/drlink/pki/ca.key"
+  printf 'server-cert-preserve\n' >"$tree/etc/drlink/pki/server.crt"
+  printf 'server-key-preserve\n' >"$tree/etc/drlink/pki/server.key"
+  printf 'enrollment-preserve\n' >"$tree/var/lib/drlink/enrollments/client-a/state"
+  printf 'bootstrap-preserve\n' >"$tree/var/lib/drlink/bootstrap/client-a/state"
   cat >"$tree/etc/frp/frps.toml" <<'EOF'
 bindPort = 7000
 auth.tokenSource.file.path = "/etc/frp/server_token"
 allowPorts = [{ start = 6000, end = 6098 }]
 EOF
-  cat >"$tree/etc/frp-auto-deploy/config.json" <<'EOF'
+  cat >"$tree/etc/drlink/config.json" <<'EOF'
 {
   "public_host": "server.example",
   "deployment_mode": "single443",
@@ -62,12 +62,16 @@ EOF
   "allocator_public_url": "https://server.example/enroll",
   "port_start": 6000,
   "port_end": 6098,
-  "client_installer_url": "https://updates.example/client.sh"
+  "client_installer_url": "https://updates.example/client.sh",
+  "egress_control_file": "/var/lib/drlink/egress-control.json",
+  "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+  "egress_listen_addr": "0.0.0.0",
+  "egress_listen_port": 6080
 }
 EOF
   printf 'events {}\nhttp {\n  server {\n    listen 443 ssl;\n  }\n}\n' \
-    >"$tree/etc/frp-auto-deploy/frontend.conf"
-  cat >"$tree/var/lib/frp-auto-deploy/registry.json" <<'EOF'
+    >"$tree/etc/drlink/frontend.conf"
+  cat >"$tree/var/lib/drlink/registry.json" <<'EOF'
 {
   "schema_version": 2,
   "reserved": [6000, 6001],
@@ -84,23 +88,35 @@ EOF
 }
 EOF
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/access-control.json"
+    >"$tree/var/lib/drlink/access-control.json"
   printf '{"schema_version":1,"profiles":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+    >"$tree/var/lib/drlink/service-profiles.json"
+  # Current-product fixtures already have Controlled Egress state so project
+  # update preserves config.json. Pre-egress bootstrap is covered separately.
+  python3 - "$tree/var/lib/drlink/egress-control.json" "$ROOT/lib/frp_egress_control.py" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.save_egress_state(mod.empty_egress_state(), path=path)
+PY
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=2.0.0
 FRP_VERSION=0.71.0
 RELEASE_CHANNEL=stable
 SOURCE_REF=v2.1.1
 BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 EOF
-  printf 'old allocator\n' >"$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
-  printf 'old unit\n' >"$tree/etc/systemd/system/frp-port-allocator.service"
-  cp "$ROOT/server/frp-frontend.service" "$tree/etc/systemd/system/frp-frontend.service"
-  chmod 600 "$tree/etc/frp/server_token" "$tree/var/lib/frp-auto-deploy/registry.json" \
-    "$tree/var/lib/frp-auto-deploy/access-control.json" \
-    "$tree/var/lib/frp-auto-deploy/service-profiles.json"
-  chmod 600 "$tree/etc/frp-auto-deploy/pki/"*
+  printf 'old allocator\n' >"$tree/usr/local/lib/drlink/frp-port-allocator.py"
+  printf 'old unit\n' >"$tree/etc/systemd/system/drlink-allocator.service"
+  cp "$ROOT/server/drlink-frontend.service" "$tree/etc/systemd/system/drlink-frontend.service"
+  chmod 600 "$tree/etc/frp/server_token" "$tree/var/lib/drlink/registry.json" \
+    "$tree/var/lib/drlink/access-control.json" \
+    "$tree/var/lib/drlink/service-profiles.json" \
+    "$tree/var/lib/drlink/egress-control.json"
+  chmod 600 "$tree/etc/drlink/pki/"*
 }
 
 state_digest() {
@@ -111,11 +127,11 @@ from pathlib import Path
 root = Path(sys.argv[1])
 paths = [
     "usr/local/bin/frps", "etc/frp/frps.toml", "etc/frp/server_token",
-    "etc/frp-auto-deploy/config.json", "etc/frp-auto-deploy/pki",
-    "var/lib/frp-auto-deploy/registry.json",
-    "var/lib/frp-auto-deploy/access-control.json",
-    "var/lib/frp-auto-deploy/enrollments",
-    "var/lib/frp-auto-deploy/bootstrap",
+    "etc/drlink/config.json", "etc/drlink/pki",
+    "var/lib/drlink/registry.json",
+    "var/lib/drlink/access-control.json",
+    "var/lib/drlink/enrollments",
+    "var/lib/drlink/bootstrap",
 ]
 h = hashlib.sha256()
 for rel in paths:
@@ -141,12 +157,12 @@ run_local() {
 CHECK="$WORKDIR/check"
 setup_tree "$CHECK"
 CHECK_BEFORE="$(state_digest "$CHECK")"
-VERSION_BEFORE="$(sha "$CHECK/etc/frp-auto-deploy/version")"
+VERSION_BEFORE="$(sha "$CHECK/etc/drlink/version")"
 run_local "$CHECK" --check >"$WORKDIR/check.out"
 grep -q 'State mutation             : NO' "$WORKDIR/check.out" || fail "check-only report"
 [[ "$(state_digest "$CHECK")" == "$CHECK_BEFORE" ]] || fail "check-only changed protected state"
-[[ "$(sha "$CHECK/etc/frp-auto-deploy/version")" == "$VERSION_BEFORE" ]] || fail "check-only changed version"
-[[ ! -d "$CHECK/var/lib/frp-auto-deploy/backups" ]] || fail "check-only created backup"
+[[ "$(sha "$CHECK/etc/drlink/version")" == "$VERSION_BEFORE" ]] || fail "check-only changed version"
+[[ ! -d "$CHECK/var/lib/drlink/backups" ]] || fail "check-only created backup"
 pass "CHECK_ONLY_NO_MUTATION"
 
 # Successful local update installs management files and preserves all server state.
@@ -158,18 +174,68 @@ grep -q 'Server project update completed successfully' "$WORKDIR/ok.out" || fail
 grep -q 'FRP binary      : unchanged' "$WORKDIR/ok.out" || fail "FRP unchanged report"
 grep -q 'Client re-enroll: NOT REQUIRED' "$WORKDIR/ok.out" || fail "re-enrollment report"
 [[ "$(state_digest "$OK")" == "$OK_BEFORE" ]] || fail "server state changed"
-cmp "$ROOT/tools/frp-project-update" "$OK/usr/local/sbin/frp-project-update" >/dev/null ||
+cmp "$ROOT/tools/frp-project-update" "$OK/usr/local/lib/drlink/frp-project-update" >/dev/null ||
   fail "project updater not installed"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$OK/etc/frp-auto-deploy/version" ||
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$OK/etc/drlink/version" ||
   fail "project version not updated"
-grep -q 'FRP_VERSION=0.71.0' "$OK/etc/frp-auto-deploy/version" || fail "FRP metadata changed"
+grep -q 'FRP_VERSION=0.71.0' "$OK/etc/drlink/version" || fail "FRP metadata changed"
 pass "STATE_REGISTRY_TOKEN_CA_PRESERVED"
 pass "NO_CLIENT_REENROLLMENT"
+
+# Pre-egress installs must bootstrap Controlled Egress without losing identity state.
+PRE_EGRESS="$WORKDIR/pre-egress"
+setup_tree "$PRE_EGRESS"
+python3 - "$PRE_EGRESS/etc/drlink/config.json" <<'PY'
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+cfg = json.loads(p.read_text(encoding="utf-8"))
+for key in (
+    "egress_control_file",
+    "egress_conn_log_file",
+    "egress_listen_addr",
+    "egress_listen_port",
+):
+    cfg.pop(key, None)
+p.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+rm -f "$PRE_EGRESS/var/lib/drlink/egress-control.json"
+PRE_REG_BEFORE="$(sha "$PRE_EGRESS/var/lib/drlink/registry.json")"
+PRE_TOKEN_BEFORE="$(sha "$PRE_EGRESS/etc/frp/server_token")"
+PRE_CA_BEFORE="$(sha "$PRE_EGRESS/etc/drlink/pki/ca.crt")"
+run_local "$PRE_EGRESS" >"$WORKDIR/pre-egress.out"
+grep -q 'Server project update completed successfully' "$WORKDIR/pre-egress.out" ||
+  fail "pre-egress success report"
+[[ -f "$PRE_EGRESS/var/lib/drlink/egress-control.json" ]] ||
+  fail "pre-egress did not create egress-control.json"
+python3 - "$PRE_EGRESS/etc/drlink/config.json" <<'PY'
+import json, sys
+from pathlib import Path
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+required = {
+    "egress_control_file": "/var/lib/drlink/egress-control.json",
+    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+    "egress_listen_addr": "0.0.0.0",
+    "egress_listen_port": 6080,
+}
+for key, value in required.items():
+    if cfg.get(key) != value:
+        raise SystemExit(f"missing or wrong {key}: {cfg.get(key)!r}")
+if cfg.get("public_host") != "server.example":
+    raise SystemExit("public_host changed")
+PY
+[[ "$(sha "$PRE_EGRESS/var/lib/drlink/registry.json")" == "$PRE_REG_BEFORE" ]] ||
+  fail "pre-egress changed registry"
+[[ "$(sha "$PRE_EGRESS/etc/frp/server_token")" == "$PRE_TOKEN_BEFORE" ]] ||
+  fail "pre-egress changed token"
+[[ "$(sha "$PRE_EGRESS/etc/drlink/pki/ca.crt")" == "$PRE_CA_BEFORE" ]] ||
+  fail "pre-egress changed CA"
+pass "PRE_EGRESS_BOOTSTRAPS_CONTROLLED_EGRESS"
 
 # A Direct deployment must not gain or start the single-443 frontend unit.
 DIRECT="$WORKDIR/direct"
 setup_tree "$DIRECT"
-python3 - "$DIRECT/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$DIRECT/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
@@ -180,12 +246,12 @@ d["allocator_public_port"] = 6099
 d["allocator_public_url"] = "https://server.example:6099/enroll"
 p.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n")
 PY
-rm -f "$DIRECT/etc/systemd/system/frp-frontend.service" \
-  "$DIRECT/etc/frp-auto-deploy/frontend.conf"
+rm -f "$DIRECT/etc/systemd/system/drlink-frontend.service" \
+  "$DIRECT/etc/drlink/frontend.conf"
 run_local "$DIRECT" >"$WORKDIR/direct.out"
-[[ ! -f "$DIRECT/etc/systemd/system/frp-frontend.service" ]] ||
+[[ ! -f "$DIRECT/etc/systemd/system/drlink-frontend.service" ]] ||
   fail "direct mode gained frontend unit"
-grep -q '"deployment_mode": "direct"' "$DIRECT/etc/frp-auto-deploy/config.json" ||
+grep -q '"deployment_mode": "direct"' "$DIRECT/etc/drlink/config.json" ||
   fail "direct mode changed"
 pass "DEPLOYMENT_MODE_PRESERVED"
 
@@ -193,7 +259,7 @@ pass "DEPLOYMENT_MODE_PRESERVED"
 for phase in validate install verify; do
   tree="$WORKDIR/rollback-$phase"
   setup_tree "$tree"
-  cp "$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py" "$WORKDIR/$phase.before"
+  cp "$tree/usr/local/lib/drlink/frp-port-allocator.py" "$WORKDIR/$phase.before"
   before="$(state_digest "$tree")"
   if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$tree" FRP_SERVER_UPGRADE_HOOK_FAIL="$phase" \
     "$UPDATE" --source "$ROOT" >"$WORKDIR/$phase.out" 2>"$WORKDIR/$phase.err"; then
@@ -206,7 +272,7 @@ for phase in validate install verify; do
     grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/$phase.out" ||
       fail "$phase rollback marker"
   fi
-  cmp "$WORKDIR/$phase.before" "$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py" >/dev/null ||
+  cmp "$WORKDIR/$phase.before" "$tree/usr/local/lib/drlink/frp-port-allocator.py" >/dev/null ||
     fail "$phase did not restore project file"
   [[ "$(state_digest "$tree")" == "$before" ]] || fail "$phase changed protected state"
 done
@@ -375,8 +441,8 @@ fi
 grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/unbound.out" "$WORKDIR/unbound.err" || fail "unbound rollback"
 grep -q 'LIVE_PROJECT_FILES_RESTORED=YES' "$WORKDIR/unbound.out" "$WORKDIR/unbound.err" || fail "unbound files restored"
 grep -q 'PENDING_MARKER_CLEARED=YES' "$WORKDIR/unbound.out" "$WORKDIR/unbound.err" || fail "unbound marker cleared"
-[[ ! -f "$UNBOUND/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "unbound left pending marker"
-cmp "$UNBOUND/usr/local/lib/frp-auto-deploy/frp-port-allocator.py" \
+[[ ! -f "$UNBOUND/var/lib/drlink/server-update-pending.json" ]] || fail "unbound left pending marker"
+cmp "$UNBOUND/usr/local/lib/drlink/frp-port-allocator.py" \
   <(printf 'old allocator\n') >/dev/null || fail "unbound did not restore first replaced file"
 pass "UNEXPECTED_POST_MUTATION_ABORT"
 pass "ROLLBACK_FILE_RESTORE"
@@ -392,7 +458,7 @@ fi
 grep -q 'UPGRADE_ROLLBACK=FAIL' "$WORKDIR/healthfail.out" "$WORKDIR/healthfail.err" || fail "health rollback fail marker"
 grep -q 'RECOVERY_REQUIRED=YES' "$WORKDIR/healthfail.out" "$WORKDIR/healthfail.err" || fail "health recovery required"
 grep -q 'PENDING_MARKER_CLEARED=NO' "$WORKDIR/healthfail.out" "$WORKDIR/healthfail.err" || fail "health pending preserved"
-[[ -f "$HEALTHFAIL/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "health pending missing"
+[[ -f "$HEALTHFAIL/var/lib/drlink/server-update-pending.json" ]] || fail "health pending missing"
 if grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/healthfail.out" "$WORKDIR/healthfail.err"; then
   fail "false rollback PASS"
 fi
@@ -408,7 +474,7 @@ if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$SYSROLL" FRP_S
   fail "rollback-systemd should fail"
 fi
 grep -q 'UPGRADE_ROLLBACK=FAIL' "$WORKDIR/sysroll.out" "$WORKDIR/sysroll.err" || fail "systemd rollback fail"
-[[ -f "$SYSROLL/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "systemd pending missing"
+[[ -f "$SYSROLL/var/lib/drlink/server-update-pending.json" ]] || fail "systemd pending missing"
 pass "ROLLBACK_SYSTEMD_FAILURE"
 
 # Transaction schema v2 records snapshot + release identity.
@@ -419,7 +485,7 @@ if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$TXN" FRP_SERVE
   "$UPDATE" --source "$ROOT" >"$WORKDIR/txn.out" 2>"$WORKDIR/txn.err"; then
   fail "txn fixture should fail after writing marker"
 fi
-python3 - "$TXN/var/lib/frp-auto-deploy/server-update-pending.json" "$TREE_CHANNEL" "$TREE_REF" <<'PY'
+python3 - "$TXN/var/lib/drlink/server-update-pending.json" "$TREE_CHANNEL" "$TREE_REF" <<'PY'
 import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
@@ -441,7 +507,7 @@ pass "TRANSACTION_RELEASE_IDENTITY"
 SCHEMA1="$WORKDIR/schema1"
 setup_tree "$SCHEMA1"
 printf '{"operation":"project-update","phase":"commit","previous_version":"2.1.0","candidate_version":"2.1.0"}\n' \
-  >"$SCHEMA1/var/lib/frp-auto-deploy/update-pending.json"
+  >"$SCHEMA1/var/lib/drlink/update-pending.json"
 # Keep persisted channel so --source can recover after schema-1 compat.
 if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$SCHEMA1" "$UPDATE" --source "$ROOT" --check \
   >"$WORKDIR/schema1.out" 2>"$WORKDIR/schema1.err"; then
@@ -453,8 +519,8 @@ pass "SCHEMA1_PENDING_COMPAT"
 
 UNKNOWN="$WORKDIR/unknown"
 setup_tree "$UNKNOWN"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$UNKNOWN/etc/frp-auto-deploy/version"
-rm -f "$UNKNOWN/var/lib/frp-auto-deploy/update-pending.json"
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$UNKNOWN/etc/drlink/version"
+rm -f "$UNKNOWN/var/lib/drlink/update-pending.json"
 if env -u FRP_RELEASE_CHANNEL FRP_SERVER_TEST_ROOT="$UNKNOWN" \
   "$UPDATE" --source "$ROOT" --check >"$WORKDIR/unknown.out" 2>"$WORKDIR/unknown.err"; then
   fail "unknown channel should refuse"
@@ -468,9 +534,9 @@ pass "UNKNOWN_CHANNEL_NO_SILENT_STABLE_FALLBACK"
 
 PENDDEV="$WORKDIR/penddev"
 setup_tree "$PENDDEV"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$PENDDEV/etc/frp-auto-deploy/version"
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$PENDDEV/etc/drlink/version"
 printf '{"schema_version":2,"operation":"project-update","phase":"commit","release_channel":"dev","source_ref":"main","previous_version":"2.1.0","candidate_version":"2.1.3"}\n' \
-  >"$PENDDEV/var/lib/frp-auto-deploy/update-pending.json"
+  >"$PENDDEV/var/lib/drlink/update-pending.json"
 # Pending channel=dev requires a matching --source tree even when the RC working tree is stable.
 PEND_SRC="$ROOT"
 if [[ "$TREE_CHANNEL" != "dev" ]]; then
@@ -496,8 +562,8 @@ pass "PENDING_DEV_RETRY_STAYS_DEV"
 # Real OCI partial-state fixture: unknown version metadata + schema-1 pending + mixed files.
 OCI="$WORKDIR/oci"
 setup_tree "$OCI"
-printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$OCI/etc/frp-auto-deploy/version"
-python3 - "$OCI/var/lib/frp-auto-deploy/registry.json" <<'PY'
+printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$OCI/etc/drlink/version"
+python3 - "$OCI/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
@@ -515,12 +581,12 @@ d["reserved"] = [6000]
 p.write_text(json.dumps(d, indent=2) + "\n")
 PY
 printf '{"operation":"project-update","phase":"commit","previous_version":"2.1.0","candidate_version":"2.1.0"}\n' \
-  >"$OCI/var/lib/frp-auto-deploy/update-pending.json"
+  >"$OCI/var/lib/drlink/update-pending.json"
 cp "$ROOT/tools/frpctl" "$OCI/usr/local/sbin/frpctl"
-printf 'partial-old\n' >"$OCI/usr/local/sbin/frp-backup"
+printf 'partial-old\n' >"$OCI/usr/local/lib/drlink/frp-backup"
 TOKEN_SHA="$(sha "$OCI/etc/frp/server_token")"
-REG_SHA="$(sha "$OCI/var/lib/frp-auto-deploy/registry.json")"
-CA_SHA="$(sha "$OCI/etc/frp-auto-deploy/pki/ca.crt")"
+REG_SHA="$(sha "$OCI/var/lib/drlink/registry.json")"
+CA_SHA="$(sha "$OCI/etc/drlink/pki/ca.crt")"
 if env -u FRP_RELEASE_CHANNEL FRP_SERVER_TEST_ROOT="$OCI" \
   "$UPDATE" --source "$ROOT" --check >"$WORKDIR/oci-check.out" 2>"$WORKDIR/oci-check.err"; then
   fail "OCI unknown+pending schema1 --check must fail closed"
@@ -530,14 +596,14 @@ pass "REAL_OCI_PARTIAL_STATE_FIXTURE"
 env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$OCI" \
   "$UPDATE" --source "$ROOT" >"$WORKDIR/oci.out" 2>"$WORKDIR/oci.err" || fail "OCI recovery"
 grep -q 'Server project update completed successfully' "$WORKDIR/oci.out" || fail "OCI success"
-[[ ! -f "$OCI/var/lib/frp-auto-deploy/update-pending.json" ]] || fail "OCI pending remains"
-grep -q "RELEASE_CHANNEL=${TREE_CHANNEL}" "$OCI/etc/frp-auto-deploy/version" || fail "OCI channel"
-grep -q "SOURCE_REF=${TREE_REF}" "$OCI/etc/frp-auto-deploy/version" || fail "OCI source ref"
-cmp "$ROOT/tools/frp-backup" "$OCI/usr/local/sbin/frp-backup" >/dev/null || fail "OCI backup tool not reconciled"
+[[ ! -f "$OCI/var/lib/drlink/update-pending.json" ]] || fail "OCI pending remains"
+grep -q "RELEASE_CHANNEL=${TREE_CHANNEL}" "$OCI/etc/drlink/version" || fail "OCI channel"
+grep -q "SOURCE_REF=${TREE_REF}" "$OCI/etc/drlink/version" || fail "OCI source ref"
+cmp "$ROOT/tools/frp-backup" "$OCI/usr/local/lib/drlink/frp-backup" >/dev/null || fail "OCI backup tool not reconciled"
 [[ "$(sha "$OCI/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "OCI token changed"
-[[ "$(sha "$OCI/var/lib/frp-auto-deploy/registry.json")" == "$REG_SHA" ]] || fail "OCI registry changed"
-[[ "$(sha "$OCI/etc/frp-auto-deploy/pki/ca.crt")" == "$CA_SHA" ]] || fail "OCI CA changed"
-python3 - "$OCI/var/lib/frp-auto-deploy/registry.json" <<'PY'
+[[ "$(sha "$OCI/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "OCI registry changed"
+[[ "$(sha "$OCI/etc/drlink/pki/ca.crt")" == "$CA_SHA" ]] || fail "OCI CA changed"
+python3 - "$OCI/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 d = json.loads(Path(sys.argv[1]).read_text())
@@ -554,13 +620,13 @@ pass "PARTIAL_STATE_RECOVERY"
 PENDCHECK="$WORKDIR/pendcheck"
 setup_tree "$PENDCHECK"
 printf '{"schema_version":2,"operation":"project-update","phase":"commit","release_channel":"stable","source_ref":"v2.1.1"}\n' \
-  >"$PENDCHECK/var/lib/frp-auto-deploy/server-update-pending.json"
+  >"$PENDCHECK/var/lib/drlink/server-update-pending.json"
 BEFORE_PEND="$(state_digest "$PENDCHECK")"
-BEFORE_MARK="$(sha "$PENDCHECK/var/lib/frp-auto-deploy/server-update-pending.json")"
+BEFORE_MARK="$(sha "$PENDCHECK/var/lib/drlink/server-update-pending.json")"
 env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$PENDCHECK" "$UPDATE" --source "$ROOT" --check \
   >"$WORKDIR/pendcheck.out" || fail "pending --check"
 [[ "$(state_digest "$PENDCHECK")" == "$BEFORE_PEND" ]] || fail "pending --check mutated"
-[[ "$(sha "$PENDCHECK/var/lib/frp-auto-deploy/server-update-pending.json")" == "$BEFORE_MARK" ]] ||
+[[ "$(sha "$PENDCHECK/var/lib/drlink/server-update-pending.json")" == "$BEFORE_MARK" ]] ||
   fail "pending --check wrote marker"
 pass "CHECK_ONLY_PENDING_READONLY"
 
@@ -579,7 +645,7 @@ write_identity() {
     if [[ -n "$sha" ]]; then
       printf 'BUNDLE_SHA256=%s\n' "$sha"
     fi
-  } >"$tree/etc/frp-auto-deploy/version"
+  } >"$tree/etc/drlink/version"
 }
 
 run_verified() {
@@ -587,7 +653,7 @@ run_verified() {
   shift
   # Working-tree source is channel=dev; explicit expected channel must match.
   env FRP_SERVER_TEST_ROOT="$tree" FRP_BUNDLE_SHA256="$OCI_CANDIDATE_SHA" \
-    FRP_AUDIT_LOG="$tree/var/log/frp-auto-deploy/audit.jsonl" \
+    FRP_AUDIT_LOG="$tree/var/log/drlink/audit.jsonl" \
     FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
     "$UPDATE" --source "$ROOT" "$@"
 }
@@ -610,7 +676,7 @@ DIFF="$WORKDIR/same-diff"
 setup_tree "$DIFF"
 write_identity "$DIFF" "$PROJECT_VERSION" stable "v${PROJECT_VERSION}" "$OCI_INSTALLED_SHA"
 DIFF_BEFORE="$(state_digest "$DIFF")"
-DIFF_VER="$(sha "$DIFF/etc/frp-auto-deploy/version")"
+DIFF_VER="$(sha "$DIFF/etc/drlink/version")"
 FRP_BEFORE="$(sha "$DIFF/usr/local/bin/frps")"
 run_verified "$DIFF" --check >"$WORKDIR/diff-check.out" || fail "different-build --check"
 grep -q "Installed bundle SHA256   : ${OCI_INSTALLED_SHA}" "$WORKDIR/diff-check.out" || fail "oci installed sha"
@@ -622,8 +688,8 @@ grep -q "Target source ref         : ${TREE_REF}" "$WORKDIR/diff-check.out" || f
 grep -q 'Update                    : available' "$WORKDIR/diff-check.out" || fail "different build should be available"
 grep -q 'State mutation             : NO' "$WORKDIR/diff-check.out" || fail "different-build check mutation"
 [[ "$(state_digest "$DIFF")" == "$DIFF_BEFORE" ]] || fail "different-build --check mutated state"
-[[ "$(sha "$DIFF/etc/frp-auto-deploy/version")" == "$DIFF_VER" ]] || fail "different-build --check mutated version"
-[[ ! -d "$DIFF/var/lib/frp-auto-deploy/backups" ]] || fail "different-build --check created backup"
+[[ "$(sha "$DIFF/etc/drlink/version")" == "$DIFF_VER" ]] || fail "different-build --check mutated version"
+[[ ! -d "$DIFF/var/lib/drlink/backups" ]] || fail "different-build --check created backup"
 [[ "$(sha "$DIFF/usr/local/bin/frps")" == "$FRP_BEFORE" ]] || fail "check changed frps"
 pass "SERVER_SAME_VERSION_DIFFERENT_BUILD"
 pass "SERVER_CHECK_DIFFERENT_BUILD_AVAILABLE"
@@ -647,20 +713,20 @@ setup_tree "$REFRESH"
 write_identity "$REFRESH" "$PROJECT_VERSION" stable "v${PROJECT_VERSION}" "$OCI_INSTALLED_SHA"
 REFRESH_STATE="$(state_digest "$REFRESH")"
 REFRESH_FRP="$(sha "$REFRESH/usr/local/bin/frps")"
-mkdir -p "$REFRESH/var/log/frp-auto-deploy"
+mkdir -p "$REFRESH/var/log/drlink"
 run_verified "$REFRESH" >"$WORKDIR/refresh.out" || fail "oci actual refresh"
 grep -q 'Server project update completed successfully' "$WORKDIR/refresh.out" || fail "oci refresh success"
 grep -q 'Same-version update : refreshed management files' "$WORKDIR/refresh.out" || fail "oci same-version refresh line"
-grep -q "BUNDLE_SHA256=${OCI_CANDIDATE_SHA}" "$REFRESH/etc/frp-auto-deploy/version" || fail "verified sha not persisted"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$REFRESH/etc/frp-auto-deploy/version" || fail "project version lost"
-grep -q 'FRP_VERSION=0.71.0' "$REFRESH/etc/frp-auto-deploy/version" || fail "frp version changed"
-grep -q "RELEASE_CHANNEL=${TREE_CHANNEL}" "$REFRESH/etc/frp-auto-deploy/version" || fail "channel not preserved"
-grep -q "SOURCE_REF=${TREE_REF}" "$REFRESH/etc/frp-auto-deploy/version" || fail "source ref not preserved"
+grep -q "BUNDLE_SHA256=${OCI_CANDIDATE_SHA}" "$REFRESH/etc/drlink/version" || fail "verified sha not persisted"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$REFRESH/etc/drlink/version" || fail "project version lost"
+grep -q 'FRP_VERSION=0.71.0' "$REFRESH/etc/drlink/version" || fail "frp version changed"
+grep -q "RELEASE_CHANNEL=${TREE_CHANNEL}" "$REFRESH/etc/drlink/version" || fail "channel not preserved"
+grep -q "SOURCE_REF=${TREE_REF}" "$REFRESH/etc/drlink/version" || fail "source ref not preserved"
 [[ "$(state_digest "$REFRESH")" == "$REFRESH_STATE" ]] || fail "oci refresh changed protected state"
 [[ "$(sha "$REFRESH/usr/local/bin/frps")" == "$REFRESH_FRP" ]] || fail "oci refresh changed frps"
-grep -q 'project_update.completed' "$REFRESH/var/log/frp-auto-deploy/audit.jsonl" || fail "refresh missing audit"
-[[ -d "$REFRESH/var/lib/frp-auto-deploy/backups" ]] || fail "refresh missing snapshot"
-BACKUP_COUNT="$(find "$REFRESH/var/lib/frp-auto-deploy/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+grep -q 'project_update.completed' "$REFRESH/var/log/drlink/audit.jsonl" || fail "refresh missing audit"
+[[ -d "$REFRESH/var/lib/drlink/backups" ]] || fail "refresh missing snapshot"
+BACKUP_COUNT="$(find "$REFRESH/var/lib/drlink/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)"
 pass "SERVER_ACTUAL_DIFFERENT_BUILD_REFRESH"
 pass "SERVER_BUILD_SHA_PERSISTENCE"
 pass "SERVER_STABLE_CHANNEL_PRESERVED"
@@ -673,8 +739,8 @@ run_verified "$REFRESH" --check >"$WORKDIR/refresh-check2.out" || fail "second -
 grep -q 'Update                    : not needed' "$WORKDIR/refresh-check2.out" || fail "second check should be not needed"
 grep -q 'State mutation             : NO' "$WORKDIR/refresh-check2.out" || fail "second check mutation"
 
-AUDIT_BEFORE="$(sha "$REFRESH/var/log/frp-auto-deploy/audit.jsonl")"
-VER_BEFORE="$(sha "$REFRESH/etc/frp-auto-deploy/version")"
+AUDIT_BEFORE="$(sha "$REFRESH/var/log/drlink/audit.jsonl")"
+VER_BEFORE="$(sha "$REFRESH/etc/drlink/version")"
 run_verified "$REFRESH" >"$WORKDIR/refresh2.out" || fail "second actual"
 grep -q 'Update                    : not needed' "$WORKDIR/refresh2.out" || fail "second actual should be not needed"
 grep -q 'State mutation             : NO' "$WORKDIR/refresh2.out" || fail "second actual mutation flag"
@@ -684,11 +750,11 @@ fi
 if grep -q 'Same-version update : refreshed management files' "$WORKDIR/refresh2.out"; then
   fail "second actual refreshed"
 fi
-[[ "$(sha "$REFRESH/etc/frp-auto-deploy/version")" == "$VER_BEFORE" ]] || fail "second actual rewrote version"
-[[ "$(sha "$REFRESH/var/log/frp-auto-deploy/audit.jsonl")" == "$AUDIT_BEFORE" ]] || fail "second actual wrote audit"
-[[ "$(find "$REFRESH/var/lib/frp-auto-deploy/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" == "$BACKUP_COUNT" ]] ||
+[[ "$(sha "$REFRESH/etc/drlink/version")" == "$VER_BEFORE" ]] || fail "second actual rewrote version"
+[[ "$(sha "$REFRESH/var/log/drlink/audit.jsonl")" == "$AUDIT_BEFORE" ]] || fail "second actual wrote audit"
+[[ "$(find "$REFRESH/var/lib/drlink/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" == "$BACKUP_COUNT" ]] ||
   fail "second actual created snapshot"
-[[ ! -f "$REFRESH/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "second actual left txn marker"
+[[ ! -f "$REFRESH/var/lib/drlink/server-update-pending.json" ]] || fail "second actual left txn marker"
 pass "SERVER_ACTUAL_SAME_BUILD_NO_MUTATION"
 
 echo "SERVER_PROJECT_UPDATE_TESTS=PASS"

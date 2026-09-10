@@ -18,36 +18,36 @@ from pathlib import Path
 FORMAT = "frp-auto-deploy-server-backup"
 SCHEMA_VERSION = 1
 REQUIRED = (
-    "etc/frp-auto-deploy/config.json",
-    "etc/frp-auto-deploy/version",
-    "etc/frp-auto-deploy/pki/ca.key",
-    "etc/frp-auto-deploy/pki/ca.crt",
-    "etc/frp-auto-deploy/pki/server.key",
-    "etc/frp-auto-deploy/pki/server.crt",
+    "etc/drlink/config.json",
+    "etc/drlink/version",
+    "etc/drlink/pki/ca.key",
+    "etc/drlink/pki/ca.crt",
+    "etc/drlink/pki/server.key",
+    "etc/drlink/pki/server.crt",
     "etc/frp/frps.toml",
     "etc/frp/server_token",
-    "var/lib/frp-auto-deploy/registry.json",
-    "var/lib/frp-auto-deploy/access-control.json",
-    "var/lib/frp-auto-deploy/egress-control.json",
-    "var/lib/frp-auto-deploy/service-profiles.json",
+    "var/lib/drlink/registry.json",
+    "var/lib/drlink/access-control.json",
+    "var/lib/drlink/egress-control.json",
+    "var/lib/drlink/service-profiles.json",
 )
 OPTIONAL_FILES = (
-    "etc/frp-auto-deploy/frontend.conf",
-    "var/lib/frp-auto-deploy/mgmt-nonces.json",
-    "var/lib/frp-auto-deploy/nginx-ownership",
-    "var/log/frp-auto-deploy/audit.jsonl",
-    "var/log/frp-auto-deploy/access-conn.jsonl",
-    "var/log/frp-auto-deploy/egress-conn.jsonl",
+    "etc/drlink/frontend.conf",
+    "var/lib/drlink/mgmt-nonces.json",
+    "var/lib/drlink/nginx-ownership",
+    "var/log/drlink/audit.jsonl",
+    "var/log/drlink/access-conn.jsonl",
+    "var/log/drlink/egress-conn.jsonl",
 )
 OPTIONAL_TREES = (
-    "etc/frp-auto-deploy/pki",
-    "var/lib/frp-auto-deploy/enrollments",
-    "var/lib/frp-auto-deploy/bootstrap",
+    "etc/drlink/pki",
+    "var/lib/drlink/enrollments",
+    "var/lib/drlink/bootstrap",
 )
 # Rotated audit companions (audit.jsonl.1 .. audit.jsonl.N).
-AUDIT_ROTATED_GLOB = "var/log/frp-auto-deploy/audit.jsonl.*"
-ACCESS_CONN_ROTATED_GLOB = "var/log/frp-auto-deploy/access-conn.jsonl.*"
-EGRESS_CONN_ROTATED_GLOB = "var/log/frp-auto-deploy/egress-conn.jsonl.*"
+AUDIT_ROTATED_GLOB = "var/log/drlink/audit.jsonl.*"
+ACCESS_CONN_ROTATED_GLOB = "var/log/drlink/access-conn.jsonl.*"
+EGRESS_CONN_ROTATED_GLOB = "var/log/drlink/egress-conn.jsonl.*"
 
 
 def fail(message: str) -> "NoReturn":
@@ -94,7 +94,7 @@ def _load_locks():
     here = Path(__file__).resolve()
     candidates = (
         here.parent.parent / "lib" / "frp_control_locks.py",
-        Path("/usr/local/lib/frp-auto-deploy/frp_control_locks.py"),
+        Path("/usr/local/lib/drlink/frp_control_locks.py"),
     )
     for path in candidates:
         if path.is_file():
@@ -110,7 +110,7 @@ def _audit_emit(event, **kwargs):
         here = Path(__file__).resolve()
         candidates = (
             here.parent.parent / "lib" / "frp_audit.py",
-            Path("/usr/local/lib/frp-auto-deploy/frp_audit.py"),
+            Path("/usr/local/lib/drlink/frp_audit.py"),
         )
         for path in candidates:
             if path.is_file():
@@ -150,7 +150,7 @@ def collect_files(root: Path) -> list[tuple[str, Path]]:
             elif not source.is_dir():
                 fail(f"unsupported control-state entry: /{child_rel}")
     # Include rotated audit logs with secure permissions preserved.
-    audit_dir = root / "var/log/frp-auto-deploy"
+    audit_dir = root / "var/log/drlink"
     if audit_dir.is_dir() and not audit_dir.is_symlink():
         for source in sorted(audit_dir.glob("audit.jsonl.*")):
             if source.is_symlink() or not source.is_file():
@@ -277,7 +277,7 @@ def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]], *, se
             os.chmod(target, mode)
             entries.append({"path": rel, "sha256": sha256(target), "mode": mode})
 
-        identity = read_identity(root / "etc/frp-auto-deploy/version")
+        identity = read_identity(root / "etc/drlink/version")
         manifest = {
             "format": FORMAT,
             "schema_version": SCHEMA_VERSION,
@@ -330,7 +330,7 @@ def main() -> int:
         fail("run with sudo")
     root = Path(test_root or "/")
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    default = root / f"var/lib/frp-auto-deploy/backups/server-backup-{now}.tar.gz"
+    default = root / f"var/lib/drlink/backups/server-backup-{now}.tar.gz"
     if len(sys.argv) == 2:
         output = _validate_user_path(sys.argv[1], what="backup output path")
         parent = output.parent

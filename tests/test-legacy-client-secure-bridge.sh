@@ -15,8 +15,8 @@ sha() { sha256sum "$1" | awk '{print $1}'; }
 
 write_runtime_fixture() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy" "$tree/usr/local/bin" \
-    "$tree/usr/local/lib/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink" "$tree/usr/local/bin" \
+    "$tree/usr/local/lib/drlink"
   cat >"$tree/usr/local/bin/frpc" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = verify ]; then exit 0; fi
@@ -67,18 +67,18 @@ remotePort = 6000
 EOF
   chmod 0600 "$tree/etc/frp/frpc.toml"
   printf 'Public SSH: 203.0.113.10:6000\n' >"$tree/etc/frp/access-info.txt"
-  printf '%s\n' 'test allocator CA certificate bytes' >"$tree/etc/frp-auto-deploy/allocator-ca.crt"
+  printf '%s\n' 'test allocator CA certificate bytes' >"$tree/etc/drlink/allocator-ca.crt"
   python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
     "$tree/etc/frp/client-identity.key" "$tree/etc/frp/client-identity.pub"
   printf '%064d\n' 0 >"$tree/etc/frp/client-identity.mac"
   chmod 0600 "$tree/etc/frp/client-identity.key" "$tree/etc/frp/client-identity.mac"
-  chmod 0644 "$tree/etc/frp/client-identity.pub" "$tree/etc/frp-auto-deploy/allocator-ca.crt"
+  chmod 0644 "$tree/etc/frp/client-identity.pub" "$tree/etc/drlink/allocator-ca.crt"
 }
 
 write_version() {
   local tree="$1"
-  cat >"$tree/etc/frp-auto-deploy/version"
-  chmod 0644 "$tree/etc/frp-auto-deploy/version"
+  cat >"$tree/etc/drlink/version"
+  chmod 0644 "$tree/etc/drlink/version"
 }
 
 snapshot_preserved_state() {
@@ -94,7 +94,7 @@ files = [
     "etc/frp/client-identity.key",
     "etc/frp/client-identity.pub",
     "etc/frp/client-identity.mac",
-    "etc/frp-auto-deploy/allocator-ca.crt",
+    "etc/drlink/allocator-ca.crt",
     "usr/local/bin/frpc",
 ]
 state = json.loads((root / "etc/frp/client-state.json").read_text())
@@ -103,8 +103,8 @@ result = {
         rel: hashlib.sha256((root / rel).read_bytes()).hexdigest()
         for rel in files
     },
-    "version": (root / "etc/frp-auto-deploy/version").read_text()
-    if (root / "etc/frp-auto-deploy/version").is_file() else "",
+    "version": (root / "etc/drlink/version").read_text()
+    if (root / "etc/drlink/version").is_file() else "",
     "machine_id": state["machine_id"],
     "hostname": state["hostname"],
     "allocator_url": state["allocator_url"],
@@ -142,15 +142,15 @@ import json, sys
 from pathlib import Path
 root, snapshot = Path(sys.argv[1]), Path(sys.argv[2])
 before = json.loads(snapshot.read_text())
-current = (root / "etc/frp-auto-deploy/version").read_text() \
-    if (root / "etc/frp-auto-deploy/version").is_file() else ""
+current = (root / "etc/drlink/version").read_text() \
+    if (root / "etc/drlink/version").is_file() else ""
 assert current == before["version"], "version file mutated"
 PY
 }
 
 install_old_tools() {
   local tree="$1"
-  mkdir -p "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy"
+  mkdir -p "$tree/usr/local/bin" "$tree/usr/local/lib/drlink"
   cat >"$tree/usr/local/bin/frpctl" <<'EOF'
 #!/bin/sh
 echo old-frpctl
@@ -162,7 +162,7 @@ echo old-frp-client
 exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frpctl" "$tree/usr/local/bin/frp-client"
-  echo old >"$tree/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
+  echo old >"$tree/usr/local/lib/drlink/frp-client-common.sh"
 }
 
 extract_bundle_file() {
@@ -406,11 +406,11 @@ if ! FRP_CLIENT_TEST_ROOT="$DEV_TREE" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   fail "verified dev/main bridge"
 fi
 assert_preserved_state "$DEV_TREE" "$WORKDIR/dev-bridge.before"
-grep -q 'RELEASE_CHANNEL=dev' "$DEV_TREE/etc/frp-auto-deploy/version" || fail "dev bridge channel"
-grep -q 'SOURCE_REF=main' "$DEV_TREE/etc/frp-auto-deploy/version" || fail "dev bridge ref"
-grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$DEV_TREE/etc/frp-auto-deploy/version" || fail "dev bridge sha"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$DEV_TREE/etc/frp-auto-deploy/version" || fail "dev bridge version"
-grep -q "FRP_VERSION=${FRP_VERSION}" "$DEV_TREE/etc/frp-auto-deploy/version" || fail "dev bridge frp"
+grep -q 'RELEASE_CHANNEL=dev' "$DEV_TREE/etc/drlink/version" || fail "dev bridge channel"
+grep -q 'SOURCE_REF=main' "$DEV_TREE/etc/drlink/version" || fail "dev bridge ref"
+grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$DEV_TREE/etc/drlink/version" || fail "dev bridge sha"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$DEV_TREE/etc/drlink/version" || fail "dev bridge version"
+grep -q "FRP_VERSION=${FRP_VERSION}" "$DEV_TREE/etc/drlink/version" || fail "dev bridge frp"
 if grep -Eq '^(enroll|bootstrap_redeem|restart)$' "$FRP_CLIENT_HOOK_LOG"; then
   fail "dev bridge contacted allocator or restarted"
 fi
@@ -459,9 +459,9 @@ if ! FRP_CLIENT_TEST_ROOT="$STABLE_TREE" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 
   fail "verified stable bridge"
 fi
 assert_preserved_state "$STABLE_TREE" "$WORKDIR/stable-bridge.before"
-grep -q 'RELEASE_CHANNEL=stable' "$STABLE_TREE/etc/frp-auto-deploy/version" || fail "stable bridge channel"
-grep -q "SOURCE_REF=v${PROJECT_VERSION}" "$STABLE_TREE/etc/frp-auto-deploy/version" || fail "stable bridge ref"
-grep -q "BUNDLE_SHA256=$STABLE_SHA" "$STABLE_TREE/etc/frp-auto-deploy/version" || fail "stable bridge sha"
+grep -q 'RELEASE_CHANNEL=stable' "$STABLE_TREE/etc/drlink/version" || fail "stable bridge channel"
+grep -q "SOURCE_REF=v${PROJECT_VERSION}" "$STABLE_TREE/etc/drlink/version" || fail "stable bridge ref"
+grep -q "BUNDLE_SHA256=$STABLE_SHA" "$STABLE_TREE/etc/drlink/version" || fail "stable bridge sha"
 pass "LEGACY_STABLE_BRIDGE"
 pass "STABLE_STAYS_STABLE"
 
@@ -499,7 +499,7 @@ grep -q 'LEGACY_CLIENT_SECURE_BRIDGE_REQUIRED' "$WORKDIR/bug-auto.out" "$WORKDIR
   fail "bug state fail-closed class"
 assert_preserved_state "$BUG" "$WORKDIR/bug.before"
 assert_version_unchanged "$BUG" "$WORKDIR/bug.before"
-grep -q 'RELEASE_CHANNEL=stable' "$BUG/etc/frp-auto-deploy/version" || fail "bug state auto-changed channel"
+grep -q 'RELEASE_CHANNEL=stable' "$BUG/etc/drlink/version" || fail "bug state auto-changed channel"
 pass "BUG_STATE_STABLE_V210_UNKNOWN_SHA"
 
 if ! FRP_CLIENT_TEST_ROOT="$BUG" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
@@ -510,9 +510,9 @@ if ! FRP_CLIENT_TEST_ROOT="$BUG" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   fail "explicit verified dev recovery"
 fi
 assert_preserved_state "$BUG" "$WORKDIR/bug.before"
-grep -q 'RELEASE_CHANNEL=dev' "$BUG/etc/frp-auto-deploy/version" || fail "recovery channel"
-grep -q 'SOURCE_REF=main' "$BUG/etc/frp-auto-deploy/version" || fail "recovery ref"
-grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$BUG/etc/frp-auto-deploy/version" || fail "recovery sha"
+grep -q 'RELEASE_CHANNEL=dev' "$BUG/etc/drlink/version" || fail "recovery channel"
+grep -q 'SOURCE_REF=main' "$BUG/etc/drlink/version" || fail "recovery ref"
+grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$BUG/etc/drlink/version" || fail "recovery sha"
 if grep -Eq '^(enroll|bootstrap_redeem|restart)$' "$FRP_CLIENT_HOOK_LOG"; then
   fail "recovery contacted allocator or restarted"
 fi
@@ -520,8 +520,8 @@ pass "BUG_STATE_EXPLICIT_DEV_RECOVERY"
 
 # Environment disappearance must not erase persisted identity.
 unset FRP_RELEASE_CHANNEL FRP_EXPECTED_SOURCE_REF FRP_BUNDLE_SHA256 FRP_BUNDLE_FILE || true
-grep -q 'RELEASE_CHANNEL=dev' "$BUG/etc/frp-auto-deploy/version" || fail "identity lost after env unset"
-grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$BUG/etc/frp-auto-deploy/version" || fail "sha lost after env unset"
+grep -q 'RELEASE_CHANNEL=dev' "$BUG/etc/drlink/version" || fail "identity lost after env unset"
+grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$BUG/etc/drlink/version" || fail "sha lost after env unset"
 
 # ---------------------------------------------------------------------------
 # Same-version build identity + --check contract
@@ -544,7 +544,7 @@ if ! FRP_CLIENT_TEST_ROOT="$MODERN" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   fail "modern fixture tool install"
 fi
 snapshot_preserved_state "$MODERN" "$WORKDIR/modern.before"
-CHECK_TOOL_SHA="$(sha "$MODERN/usr/local/bin/frpctl")"
+CHECK_TOOL_SHA="$(sha "$MODERN/usr/local/bin/drlink")"
 export FRP_CLIENT_TEST_ROOT="$MODERN"
 export FRP_CTL_TEST_ROOT="$MODERN"
 export FRP_CLIENT_LIB="$ROOT/lib/frp-client-common.sh"
@@ -568,7 +568,7 @@ grep -q 'Target bundle SHA256      : unknown' "$WORKDIR/modern-check.out" || fai
 grep -q 'Update                    : available' "$WORKDIR/modern-check.out" || fail "unknown/different target available"
 grep -q 'State mutation           : NO' "$WORKDIR/modern-check.out" || fail "check mutation line"
 assert_preserved_state "$MODERN" "$WORKDIR/modern.before"
-[[ "$(sha "$MODERN/usr/local/bin/frpctl")" == "$CHECK_TOOL_SHA" ]] || fail "check replaced tools"
+[[ "$(sha "$MODERN/usr/local/bin/drlink")" == "$CHECK_TOOL_SHA" ]] || fail "check replaced tools"
 if grep -Eq '^(enroll|bootstrap_redeem|restart)$' "$FRP_CLIENT_HOOK_LOG"; then
   fail "modern check contacted allocator or restarted"
 fi
@@ -585,12 +585,12 @@ if ! FRP_CLIENT_TEST_ROOT="$MODERN" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   fail "same-version different build"
 fi
 assert_preserved_state "$MODERN" "$WORKDIR/modern.before"
-grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$MODERN/etc/frp-auto-deploy/version" || fail "different build sha not persisted"
-grep -q 'RELEASE_CHANNEL=dev' "$MODERN/etc/frp-auto-deploy/version" || fail "dev changed on different build"
+grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$MODERN/etc/drlink/version" || fail "different build sha not persisted"
+grep -q 'RELEASE_CHANNEL=dev' "$MODERN/etc/drlink/version" || fail "dev changed on different build"
 pass "SAME_VERSION_DIFFERENT_BUILD"
 
 snapshot_preserved_state "$MODERN" "$WORKDIR/same.before"
-SAME_TOOL="$(sha "$MODERN/usr/local/bin/frpctl")"
+SAME_TOOL="$(sha "$MODERN/usr/local/bin/drlink")"
 if ! FRP_CLIENT_TEST_ROOT="$MODERN" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   FRP_RELEASE_CHANNEL=dev FRP_EXPECTED_SOURCE_REF=main \
   FRP_BUNDLE_SHA256="$DEV_BUNDLE_SHA" FRP_BUNDLE_FILE="$DEV_BUNDLE" \
@@ -601,7 +601,7 @@ grep -q "Installed bundle SHA256   : ${DEV_BUNDLE_SHA}" "$WORKDIR/same-check.out
 grep -q "Target bundle SHA256      : ${DEV_BUNDLE_SHA}" "$WORKDIR/same-check.out" || fail "same-build target sha"
 grep -q 'Update                    : not needed' "$WORKDIR/same-check.out" || fail "same-build should be not needed"
 assert_preserved_state "$MODERN" "$WORKDIR/same.before"
-[[ "$(sha "$MODERN/usr/local/bin/frpctl")" == "$SAME_TOOL" ]] || fail "same-build check mutated tools"
+[[ "$(sha "$MODERN/usr/local/bin/drlink")" == "$SAME_TOOL" ]] || fail "same-build check mutated tools"
 
 if ! FRP_CLIENT_TEST_ROOT="$MODERN" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   FRP_RELEASE_CHANNEL=dev FRP_EXPECTED_SOURCE_REF=main \
@@ -611,7 +611,7 @@ if ! FRP_CLIENT_TEST_ROOT="$MODERN" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
 fi
 grep -q 'Update                    : not needed' "$WORKDIR/same-up.out" || fail "same-build apply not needed"
 assert_preserved_state "$MODERN" "$WORKDIR/same.before"
-[[ "$(sha "$MODERN/usr/local/bin/frpctl")" == "$SAME_TOOL" ]] || fail "same-build apply mutated tools"
+[[ "$(sha "$MODERN/usr/local/bin/drlink")" == "$SAME_TOOL" ]] || fail "same-build apply mutated tools"
 pass "SAME_VERSION_SAME_BUILD"
 
 if grep -E 'bridge-update-token-secret|BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY' \

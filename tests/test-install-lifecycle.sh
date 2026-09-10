@@ -213,19 +213,19 @@ assert_no_leak "$WORKDIR/fresh-server.err"
 [[ -s "$SRV/etc/frp/server_token" ]] || fail "token missing"
 assert_mode "$SRV/etc/frp/server_token" "0o600"
 assert_mode "$SRV/etc/frp/frps.toml" "0o600"
-assert_mode "$SRV/var/lib/frp-auto-deploy/registry.json" "0o600"
-assert_mode "$SRV/etc/frp-auto-deploy/pki/ca.key" "0o600"
-assert_mode "$SRV/etc/frp-auto-deploy/pki/server.key" "0o600"
-[[ -f "$SRV/etc/frp-auto-deploy/pki/ca.crt" ]] || fail "CA missing"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$SRV/etc/frp-auto-deploy/version" || fail "server version"
-grep -q 'FRP_VERSION=0.71.0' "$SRV/etc/frp-auto-deploy/version" || fail "server FRP version"
+assert_mode "$SRV/var/lib/drlink/registry.json" "0o600"
+assert_mode "$SRV/etc/drlink/pki/ca.key" "0o600"
+assert_mode "$SRV/etc/drlink/pki/server.key" "0o600"
+[[ -f "$SRV/etc/drlink/pki/ca.crt" ]] || fail "CA missing"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$SRV/etc/drlink/version" || fail "server version"
+grep -q 'FRP_VERSION=0.71.0' "$SRV/etc/drlink/version" || fail "server FRP version"
 grep -q 'transport.tls.force = true' "$SRV/etc/frp/frps.toml" || fail "direct tls.force"
 grep -q 'bindPort = 443' "$SRV/etc/frp/frps.toml" || fail "direct bindPort"
 if grep -q 'bindAddr' "$SRV/etc/frp/frps.toml"; then
   fail "direct mode should not set bindAddr"
 fi
-[[ ! -f "$SRV/etc/frp-auto-deploy/frontend.conf" ]] || fail "direct mode wrote frontend.conf"
-python3 - "$SRV/etc/frp-auto-deploy/config.json" <<'PY' || fail "direct config mode"
+[[ ! -f "$SRV/etc/drlink/frontend.conf" ]] || fail "direct mode wrote frontend.conf"
+python3 - "$SRV/etc/drlink/config.json" <<'PY' || fail "direct config mode"
 import json,sys
 from pathlib import Path
 cfg=json.loads(Path(sys.argv[1]).read_text())
@@ -233,11 +233,11 @@ assert cfg.get('deployment_mode')=='direct'
 assert cfg.get('frp_transport')=='tcp'
 assert cfg.get('listen_host')=='0.0.0.0'
 PY
-[[ ! -f "$SRV/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "stale txn marker after success"
-[[ -d "$SRV/var/log/frp-auto-deploy" ]] || fail "fresh install missing /var/log/frp-auto-deploy"
-assert_mode "$SRV/var/log/frp-auto-deploy" "0o700"
-assert_mode "$SRV/var/lib/frp-auto-deploy" "0o700"
-assert_mode "$SRV/etc/frp-auto-deploy" "0o700"
+[[ ! -f "$SRV/var/lib/drlink/server-update-pending.json" ]] || fail "stale txn marker after success"
+[[ -d "$SRV/var/log/drlink" ]] || fail "fresh install missing /var/log/drlink"
+assert_mode "$SRV/var/log/drlink" "0o700"
+assert_mode "$SRV/var/lib/drlink" "0o700"
+assert_mode "$SRV/etc/drlink" "0o700"
 assert_mode "$SRV/etc/frp" "0o700"
 pass "SERVER_FRESH_INSTALL"
 pass "DIRECT_MODE_REGRESSION"
@@ -245,7 +245,7 @@ pass "TEMP_FILE_SECURITY"
 pass "UPDATE_TRANSACTION_CLEANUP"
 pass "FILE_PERMISSION_REGRESSION"
 
-CA_FP="$(python3 - "$SRV/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+CA_FP="$(python3 - "$SRV/etc/drlink/pki/ca.crt" <<'PY'
 import hashlib, subprocess, sys, tempfile
 from pathlib import Path
 src = Path(sys.argv[1])
@@ -257,8 +257,8 @@ Path(der.name).unlink()
 PY
 )"
 TOKEN_SHA="$(frp_file_sha256 "$SRV/etc/frp/server_token")"
-REG_SHA="$(frp_file_sha256 "$SRV/var/lib/frp-auto-deploy/registry.json")"
-python3 - "$SRV/var/lib/frp-auto-deploy/registry.json" <<'PY'
+REG_SHA="$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")"
+python3 - "$SRV/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 state = json.loads(Path(sys.argv[1]).read_text())
@@ -269,8 +269,8 @@ state.setdefault("clients", {})["machine-a"] = {
 }
 Path(sys.argv[1]).write_text(json.dumps(state, indent=2) + "\n")
 PY
-chmod 600 "$SRV/var/lib/frp-auto-deploy/registry.json"
-REG_SHA="$(frp_file_sha256 "$SRV/var/lib/frp-auto-deploy/registry.json")"
+chmod 600 "$SRV/var/lib/drlink/registry.json"
+REG_SHA="$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")"
 
 # Reinstall must preserve CA/token/registry and skip unnecessary restart.
 cp "$WORKDIR/fresh-server.out" "$WORKDIR/before-reinstall.out"
@@ -278,7 +278,7 @@ if ! frp_server_main >"$WORKDIR/reinstall-server.out" 2>"$WORKDIR/reinstall-serv
   cat "$WORKDIR/reinstall-server.out" "$WORKDIR/reinstall-server.err" >&2
   fail "server reinstall"
 fi
-CA_FP2="$(python3 - "$SRV/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+CA_FP2="$(python3 - "$SRV/etc/drlink/pki/ca.crt" <<'PY'
 import hashlib, subprocess, sys, tempfile
 from pathlib import Path
 src = Path(sys.argv[1])
@@ -291,11 +291,11 @@ PY
 )"
 [[ "$CA_FP" == "$CA_FP2" ]] || fail "CA rotated on reinstall"
 [[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "token rotated on reinstall"
-[[ "$(frp_file_sha256 "$SRV/var/lib/frp-auto-deploy/registry.json")" == "$REG_SHA" ]] || fail "registry rewritten on reinstall"
+[[ "$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "registry rewritten on reinstall"
 grep -q 'Existing allocator CA preserved' "$WORKDIR/reinstall-server.out" || fail "CA preserved message"
-if grep -q 'restart frps' "$SRV/var/lib/frp-auto-deploy/install-actions.log"; then
+if grep -q 'restart drlink-server' "$SRV/var/lib/drlink/install-actions.log"; then
   # first install records restart; reinstall of same binary/config should not add another after the last success
-  restart_n="$(grep -c 'restart frps' "$SRV/var/lib/frp-auto-deploy/install-actions.log" || true)"
+  restart_n="$(grep -c 'restart drlink-server' "$SRV/var/lib/drlink/install-actions.log" || true)"
   [[ "$restart_n" -le 2 ]] || fail "too many frps restarts: $restart_n"
 fi
 pass "SERVER_REINSTALL_IDEMPOTENT"
@@ -322,10 +322,10 @@ grep -q 'bindAddr = "127.0.0.1"' "$S443/etc/frp/frps.toml" || fail "s443 bindAdd
 grep -q 'bindPort = 7000' "$S443/etc/frp/frps.toml" || fail "s443 bindPort"
 grep -q 'proxyBindAddr = "0.0.0.0"' "$S443/etc/frp/frps.toml" || fail "s443 proxyBind"
 grep -q 'transport.tls.force = false' "$S443/etc/frp/frps.toml" || fail "s443 tls.force"
-[[ -f "$S443/etc/frp-auto-deploy/frontend.conf" ]] || fail "s443 frontend.conf"
-[[ -f "$S443/etc/systemd/system/frp-frontend.service" ]] || fail "s443 frontend unit"
-grep -q 'location = "/~!frp"' "$S443/etc/frp-auto-deploy/frontend.conf" || fail "s443 websocket path"
-python3 - "$S443/etc/frp-auto-deploy/config.json" <<'PY' || fail "s443 config"
+[[ -f "$S443/etc/drlink/frontend.conf" ]] || fail "s443 frontend.conf"
+[[ -f "$S443/etc/systemd/system/drlink-frontend.service" ]] || fail "s443 frontend unit"
+grep -q 'location = "/~!frp"' "$S443/etc/drlink/frontend.conf" || fail "s443 websocket path"
+python3 - "$S443/etc/drlink/config.json" <<'PY' || fail "s443 config"
 import json,sys
 from pathlib import Path
 cfg=json.loads(Path(sys.argv[1]).read_text())
@@ -339,26 +339,26 @@ assert cfg['allocator_listen_port']==6099
 assert cfg['allocator_public_url']=='https://203.0.113.10/enroll'
 PY
 grep -q 'Deployment mode   : single443' "$WORKDIR/s443.out" || fail "s443 summary mode"
-grep -q 'healthz|enroll|bootstrap/redeem|i/' "$S443/etc/frp-auto-deploy/frontend.conf" \
+grep -q 'healthz|enroll|bootstrap/redeem|i/' "$S443/etc/drlink/frontend.conf" \
   || fail "s443 allocator path allowlist"
-grep -q 'return 404;' "$S443/etc/frp-auto-deploy/frontend.conf" || fail "s443 default 404"
-grep -q 'proxy_ssl_verify on' "$S443/etc/frp-auto-deploy/frontend.conf" || fail "s443 proxy_ssl_verify"
-grep -q 'proxy_ssl_name localhost;' "$S443/etc/frp-auto-deploy/frontend.conf" || fail "s443 proxy_ssl_name localhost"
-if grep -q 'proxy_ssl_name 203.0.113.10;' "$S443/etc/frp-auto-deploy/frontend.conf"; then
+grep -q 'return 404;' "$S443/etc/drlink/frontend.conf" || fail "s443 default 404"
+grep -q 'proxy_ssl_verify on' "$S443/etc/drlink/frontend.conf" || fail "s443 proxy_ssl_verify"
+grep -q 'proxy_ssl_name localhost;' "$S443/etc/drlink/frontend.conf" || fail "s443 proxy_ssl_name localhost"
+if grep -q 'proxy_ssl_name 203.0.113.10;' "$S443/etc/drlink/frontend.conf"; then
   fail "s443 proxy_ssl_name used public IP"
 fi
-if grep -q 'proxy_ssl_verify off' "$S443/etc/frp-auto-deploy/frontend.conf"; then
+if grep -q 'proxy_ssl_verify off' "$S443/etc/drlink/frontend.conf"; then
   fail "s443 proxy_ssl_verify off"
 fi
-grep -q 'stop nginx.service' "$S443/var/lib/frp-auto-deploy/install-actions.log" \
+grep -q 'stop nginx.service' "$S443/var/lib/drlink/install-actions.log" \
   || fail "s443 did not stop distro nginx.service after fresh package install"
-grep -q 'disable nginx.service' "$S443/var/lib/frp-auto-deploy/install-actions.log" \
+grep -q 'disable nginx.service' "$S443/var/lib/drlink/install-actions.log" \
   || fail "s443 did not disable distro nginx.service after fresh package install"
-[[ -f "$S443/var/lib/frp-auto-deploy/nginx-ownership" ]] || fail "s443 nginx ownership marker"
-grep -q 'NGINX_PACKAGE_INSTALLED_BY_PROJECT=1' "$S443/var/lib/frp-auto-deploy/nginx-ownership" \
+[[ -f "$S443/var/lib/drlink/nginx-ownership" ]] || fail "s443 nginx ownership marker"
+grep -q 'NGINX_PACKAGE_INSTALLED_BY_PROJECT=1' "$S443/var/lib/drlink/nginx-ownership" \
   || fail "s443 ownership installed-by-project"
-assert_mode "$S443/etc/frp-auto-deploy/pki/ca.key" "0o600"
-assert_mode "$S443/etc/frp-auto-deploy/pki/server.key" "0o600"
+assert_mode "$S443/etc/drlink/pki/ca.key" "0o600"
+assert_mode "$S443/etc/drlink/pki/server.key" "0o600"
 pass "SERVER_SINGLE443_INSTALL"
 pass "SINGLE443_CA_PIN"
 pass "SINGLE443_FRONTEND_CONFIG"
@@ -382,12 +382,12 @@ if ! frp_server_main >"$WORKDIR/nginx-b.out" 2>"$WORKDIR/nginx-b.err"; then
   cat "$WORKDIR/nginx-b.out" "$WORKDIR/nginx-b.err" >&2
   fail "single443 with preexisting disabled nginx"
 fi
-if grep -q 'stop nginx.service' "$NGX_B/var/lib/frp-auto-deploy/install-actions.log"; then
+if grep -q 'stop nginx.service' "$NGX_B/var/lib/drlink/install-actions.log"; then
   fail "preexisting disabled nginx.service was stopped"
 fi
-grep -q 'NGINX_PACKAGE_PREEXISTING=1' "$NGX_B/var/lib/frp-auto-deploy/nginx-ownership" \
+grep -q 'NGINX_PACKAGE_PREEXISTING=1' "$NGX_B/var/lib/drlink/nginx-ownership" \
   || fail "preexisting disabled ownership"
-grep -q 'NGINX_PACKAGE_INSTALLED_BY_PROJECT=0' "$NGX_B/var/lib/frp-auto-deploy/nginx-ownership" \
+grep -q 'NGINX_PACKAGE_INSTALLED_BY_PROJECT=0' "$NGX_B/var/lib/drlink/nginx-ownership" \
   || fail "preexisting disabled marked as project-installed"
 pass "NGINX_PREEXISTING_DISABLED_PRESERVED"
 unset FRP_INSTALL_HOOK_NGINX_PACKAGE_INSTALLED FRP_INSTALL_HOOK_NGINX_SERVICE_ACTIVE \
@@ -408,9 +408,9 @@ if ! frp_server_main >"$WORKDIR/s443-re.out" 2>"$WORKDIR/s443-re.err"; then
   cat "$WORKDIR/s443-re.out" "$WORKDIR/s443-re.err" >&2
   fail "single443 reinstall"
 fi
-grep -q 'proxy_ssl_name localhost;' "$S443/etc/frp-auto-deploy/frontend.conf" \
+grep -q 'proxy_ssl_name localhost;' "$S443/etc/drlink/frontend.conf" \
   || fail "reinstall lost localhost backend identity"
-[[ -f "$S443/etc/systemd/system/frp-frontend.service" ]] || fail "reinstall dropped frontend unit"
+[[ -f "$S443/etc/systemd/system/drlink-frontend.service" ]] || fail "reinstall dropped frontend unit"
 pass "NGINX_SINGLE443_REINSTALL_IDEMPOTENT"
 unset FRP_INSTALL_HOOK_NGINX_PACKAGE_INSTALLED FRP_INSTALL_HOOK_NGINX_SERVICE_ACTIVE \
   FRP_INSTALL_HOOK_NGINX_SERVICE_ENABLED || true
@@ -438,7 +438,7 @@ if ! frp_server_main >"$WORKDIR/switch-yes.out" 2>"$WORKDIR/switch-yes.err"; the
   cat "$WORKDIR/switch-yes.out" "$WORKDIR/switch-yes.err" >&2
   fail "confirmed mode switch"
 fi
-[[ "$(python3 - "$SWITCH/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+[[ "$(python3 - "$SWITCH/etc/drlink/pki/ca.crt" <<'PY'
 import hashlib, subprocess, sys, tempfile
 from pathlib import Path
 src = Path(sys.argv[1])
@@ -450,16 +450,16 @@ Path(der.name).unlink()
 PY
 )" == "$CA_FP" ]] || fail "mode switch rotated CA"
 [[ "$(frp_file_sha256 "$SWITCH/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "mode switch rotated token"
-[[ "$(frp_file_sha256 "$SWITCH/var/lib/frp-auto-deploy/registry.json")" == "$REG_SHA" ]] || fail "mode switch rewrote registry"
+[[ "$(frp_file_sha256 "$SWITCH/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "mode switch rewrote registry"
 grep -q 'bindAddr = "127.0.0.1"' "$SWITCH/etc/frp/frps.toml" || fail "switch bindAddr"
 grep -q 'bindPort = 7000' "$SWITCH/etc/frp/frps.toml" || fail "switch bindPort"
-[[ -f "$SWITCH/etc/systemd/system/frp-frontend.service" ]] || fail "switch frontend unit"
+[[ -f "$SWITCH/etc/systemd/system/drlink-frontend.service" ]] || fail "switch frontend unit"
 pass "SINGLE443_MODE_SWITCH_GUARD"
 
 # Pre-2.1 config.json without deployment_mode is still Direct → single443.
 LEGACY19="$WORKDIR/server-legacy-19"
 cp -a "$SRV" "$LEGACY19"
-python3 - "$LEGACY19/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$LEGACY19/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -492,7 +492,7 @@ if ! frp_server_main >"$WORKDIR/legacy-yes.out" 2>"$WORKDIR/legacy-yes.err"; the
   cat "$WORKDIR/legacy-yes.out" "$WORKDIR/legacy-yes.err" >&2
   fail "confirmed legacy mode switch"
 fi
-python3 - "$LEGACY19/etc/frp-auto-deploy/config.json" <<'PY' || fail "legacy switch config"
+python3 - "$LEGACY19/etc/drlink/config.json" <<'PY' || fail "legacy switch config"
 import json, sys
 from pathlib import Path
 cfg = json.loads(Path(sys.argv[1]).read_text())
@@ -510,8 +510,8 @@ PY
 grep -q 'bindAddr = "127.0.0.1"' "$LEGACY19/etc/frp/frps.toml" || fail "legacy switch bindAddr"
 grep -q 'bindPort = 7000' "$LEGACY19/etc/frp/frps.toml" || fail "legacy switch bindPort"
 [[ "$(frp_file_sha256 "$LEGACY19/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "legacy switch rotated token"
-[[ "$(frp_file_sha256 "$LEGACY19/var/lib/frp-auto-deploy/registry.json")" == "$REG_SHA" ]] || fail "legacy switch rewrote registry"
-[[ "$(python3 - "$LEGACY19/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+[[ "$(frp_file_sha256 "$LEGACY19/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "legacy switch rewrote registry"
+[[ "$(python3 - "$LEGACY19/etc/drlink/pki/ca.crt" <<'PY'
 import hashlib, subprocess, sys, tempfile
 from pathlib import Path
 src = Path(sys.argv[1])
@@ -578,7 +578,7 @@ grep -q 'stop/reconfigure the existing nginx service before switching modes' "$W
 grep -q 'existing Direct deployment was not modified' "$WORKDIR/nginx-c.err" \
   || fail "preexisting nginx preserve message"
 grep -q 'bindPort = 443' "$NGX_C/etc/frp/frps.toml" || fail "preexisting nginx rewrote Direct toml"
-[[ ! -f "$NGX_C/etc/frp-auto-deploy/frontend.conf" ]] || fail "preexisting nginx wrote frontend.conf"
+[[ ! -f "$NGX_C/etc/drlink/frontend.conf" ]] || fail "preexisting nginx wrote frontend.conf"
 pass "NGINX_PREEXISTING_ACTIVE_SERVICE_GUARD"
 
 # Failed cutover (frontend start) must restore previous frps.toml.
@@ -625,13 +625,13 @@ grep -q 'FAILURE_CLASS=HEALTH_CHECK_FAILED' "$WORKDIR/s443-px.out" "$WORKDIR/s44
 grep -q 'bindPort = 443' "$PX/etc/frp/frps.toml" || fail "proxy-fail rollback did not restore Direct toml"
 [[ "$(frp_file_sha256 "$PX/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "proxy-fail rollback rotated token"
 # Version must not be committed on failed install
-if [[ -f "$PX/etc/frp-auto-deploy/version" ]]; then
-  if grep -q "^${PROJECT_VERSION}$" "$PX/etc/frp-auto-deploy/version" 2>/dev/null; then
+if [[ -f "$PX/etc/drlink/version" ]]; then
+  if grep -q "^${PROJECT_VERSION}$" "$PX/etc/drlink/version" 2>/dev/null; then
     # Fresh Direct tree may already have version; ensure txn cleared / no false success
     :
   fi
 fi
-grep -q 'FRP Auto Deploy server installation complete' "$WORKDIR/s443-px.out" \
+grep -q 'Data Relay Link server installation complete' "$WORKDIR/s443-px.out" \
   && fail "false success after frontend proxy fail"
 pass "FRONTEND_INSTALL_E2E_GATE"
 pass "SINGLE443_FRONTEND_PROXY_FAIL_ROLLBACK"
@@ -642,10 +642,10 @@ if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/s443-un.out" 2>"$WORKDIR/s443-un.err
   cat "$WORKDIR/s443-un.out" "$WORKDIR/s443-un.err" >&2
   fail "single443 uninstall"
 fi
-[[ ! -f "$SWITCH/etc/systemd/system/frp-frontend.service" ]] || fail "frontend unit left after uninstall"
-[[ ! -f "$SWITCH/etc/frp-auto-deploy/frontend.conf" ]] || fail "frontend.conf left after uninstall"
+[[ ! -f "$SWITCH/etc/systemd/system/drlink-frontend.service" ]] || fail "frontend unit left after uninstall"
+[[ ! -f "$SWITCH/etc/drlink/frontend.conf" ]] || fail "frontend.conf left after uninstall"
 [[ -s "$SWITCH/etc/frp/server_token" ]] || fail "single443 uninstall dropped token"
-[[ -f "$SWITCH/etc/frp-auto-deploy/pki/ca.key" ]] || fail "single443 uninstall dropped CA"
+[[ -f "$SWITCH/etc/drlink/pki/ca.key" ]] || fail "single443 uninstall dropped CA"
 if grep -nE '(^|[[:space:]])(apt-get|apt|dnf|yum)[[:space:]]+(remove|purge)([[:space:]]|$)' "$ROOT/uninstall-server.sh"; then
   fail "uninstall removes packages"
 fi
@@ -685,11 +685,11 @@ grep -q 'FAILURE_CLASS=SERVICE_START_FAILED' "$WORKDIR/start-fail.out" "$WORKDIR
 if grep -q 'UPGRADE_ROLLBACK=FAIL' "$WORKDIR/start-fail.out" "$WORKDIR/start-fail.err"; then
   fail "fresh start-fail rollback reported FAIL"
 fi
-[[ ! -f "$FAILTREE/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "start-fail left pending marker"
-[[ ! -f "$FAILTREE/etc/systemd/system/frps.service" ]] || fail "start-fail left frps unit"
-[[ ! -f "$FAILTREE/etc/systemd/system/frp-port-allocator.service" ]] || fail "start-fail left allocator unit"
-if [[ -f "$FAILTREE/etc/frp-auto-deploy/version" ]]; then
-  if grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$FAILTREE/etc/frp-auto-deploy/version"; then
+[[ ! -f "$FAILTREE/var/lib/drlink/server-update-pending.json" ]] || fail "start-fail left pending marker"
+[[ ! -f "$FAILTREE/etc/systemd/system/drlink-server.service" ]] || fail "start-fail left frps unit"
+[[ ! -f "$FAILTREE/etc/systemd/system/drlink-allocator.service" ]] || fail "start-fail left allocator unit"
+if [[ -f "$FAILTREE/etc/drlink/version" ]]; then
+  if grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$FAILTREE/etc/drlink/version"; then
     fail "version committed after start failure"
   fi
 fi
@@ -749,13 +749,13 @@ pass "DEPENDENCY_INSTALL_FAILURE"
 
 # Interrupted install: marker present, retry succeeds.
 export FRP_SERVER_TEST_ROOT="$SRV"
-mkdir -p "$SRV/var/lib/frp-auto-deploy"
-echo '{"operation":"install","phase":"systemd-apply"}' >"$SRV/var/lib/frp-auto-deploy/server-update-pending.json"
+mkdir -p "$SRV/var/lib/drlink"
+echo '{"operation":"install","phase":"systemd-apply"}' >"$SRV/var/lib/drlink/server-update-pending.json"
 if ! frp_server_main >"$WORKDIR/interrupt-install.out" 2>"$WORKDIR/interrupt-install.err"; then
   cat "$WORKDIR/interrupt-install.out" "$WORKDIR/interrupt-install.err" >&2
   fail "interrupted install retry"
 fi
-[[ ! -f "$SRV/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "marker left after retry"
+[[ ! -f "$SRV/var/lib/drlink/server-update-pending.json" ]] || fail "marker left after retry"
 [[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "token changed on interrupted retry"
 pass "INTERRUPTED_INSTALL_RECOVERY"
 
@@ -769,8 +769,8 @@ if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/suninst.out" 2>"$WORKDIR/suninst.err
 fi
 [[ ! -x "$SRV/usr/local/bin/frps" ]] || fail "frps still present"
 [[ -s "$SRV/etc/frp/server_token" ]] || fail "token not preserved"
-[[ -f "$SRV/etc/frp-auto-deploy/pki/ca.key" ]] || fail "CA not preserved"
-[[ -f "$SRV/var/lib/frp-auto-deploy/registry.json" ]] || fail "registry not preserved"
+[[ -f "$SRV/etc/drlink/pki/ca.key" ]] || fail "CA not preserved"
+[[ -f "$SRV/var/lib/drlink/registry.json" ]] || fail "registry not preserved"
 grep -q 'Configuration, token, and registry were preserved' "$WORKDIR/suninst.out" || fail "preserve message"
 pass "SERVER_UNINSTALL_PRESERVES_STATE"
 
@@ -786,7 +786,7 @@ if ! frp_server_main >"$WORKDIR/re-after.out" 2>"$WORKDIR/re-after.err"; then
   cat "$WORKDIR/re-after.out" "$WORKDIR/re-after.err" >&2
   fail "reinstall after uninstall"
 fi
-CA_FP3="$(python3 - "$SRV/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+CA_FP3="$(python3 - "$SRV/etc/drlink/pki/ca.crt" <<'PY'
 import hashlib, subprocess, sys, tempfile
 from pathlib import Path
 src = Path(sys.argv[1])
@@ -799,7 +799,7 @@ PY
 )"
 [[ "$CA_FP" == "$CA_FP3" ]] || fail "CA changed after uninstall/reinstall"
 [[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "token changed after uninstall/reinstall"
-[[ "$(frp_file_sha256 "$SRV/var/lib/frp-auto-deploy/registry.json")" == "$REG_SHA" ]] || fail "registry changed after uninstall/reinstall"
+[[ "$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "registry changed after uninstall/reinstall"
 pass "SERVER_REINSTALL_AFTER_UNINSTALL"
 
 # Purge without --yes refused
@@ -819,14 +819,14 @@ if ! "$ROOT/uninstall-server.sh" --purge --yes >"$WORKDIR/purge.out" 2>"$WORKDIR
   fail "explicit purge"
 fi
 [[ ! -e "$PURGE_TREE/etc/frp/server_token" ]] || fail "purge left token"
-[[ ! -e "$PURGE_TREE/etc/frp-auto-deploy/pki/ca.key" ]] || fail "purge left CA"
-[[ ! -e "$PURGE_TREE/var/lib/frp-auto-deploy/registry.json" ]] || fail "purge left registry"
+[[ ! -e "$PURGE_TREE/etc/drlink/pki/ca.key" ]] || fail "purge left CA"
+[[ ! -e "$PURGE_TREE/var/lib/drlink/registry.json" ]] || fail "purge left registry"
 pass "SERVER_PURGE_COMPLETE"
 
 PARTIAL="$WORKDIR/purge-partial"
 cp -a "$SRV" "$PARTIAL"
 export FRP_UNINSTALL_TEST_ROOT="$PARTIAL"
-export FRP_UNINSTALL_HOOK_PURGE_FAIL_PATH="$PARTIAL/var/lib/frp-auto-deploy/registry.json"
+export FRP_UNINSTALL_HOOK_PURGE_FAIL_PATH="$PARTIAL/var/lib/drlink/registry.json"
 if "$ROOT/uninstall-server.sh" --purge --yes >"$WORKDIR/purge-part.out" 2>"$WORKDIR/purge-part.err"; then
   fail "partial purge should fail"
 fi
@@ -853,12 +853,12 @@ pass "CLIENT_UNINSTALL_SYMLINK_REFUSED"
 # Client uninstall
 # ---------------------------------------------------------------------------
 CL="$WORKDIR/client"
-mkdir -p "$CL/etc/frp" "$CL/etc/frp-auto-deploy" "$CL/usr/local/bin" \
-  "$CL/usr/local/lib/frp-auto-deploy" "$CL/etc/systemd/system"
+mkdir -p "$CL/etc/frp" "$CL/etc/drlink" "$CL/usr/local/bin" \
+  "$CL/usr/local/lib/drlink" "$CL/etc/systemd/system"
 write_dummy_frpc "$CL/usr/local/bin/frpc"
 echo 'old' >"$CL/usr/local/bin/frp-client"
-echo 'old' >"$CL/usr/local/bin/frpctl"
-echo 'lib' >"$CL/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
+echo 'old' >"$CL/usr/local/bin/drlink"
+echo 'lib' >"$CL/usr/local/lib/drlink/frp-client-common.sh"
 cat >"$CL/etc/frp/client-state.json" <<'EOF'
 {"schema_version":1,"allocator_url":"https://203.0.113.10:6099/enroll","services":{"ssh":{"remote_port":6003}}}
 EOF
@@ -870,9 +870,9 @@ chmod 600 "$CL/etc/frp/client-identity.key"
 echo pub >"$CL/etc/frp/client-identity.pub"
 echo mac >"$CL/etc/frp/client-identity.mac"
 chmod 600 "$CL/etc/frp/client-identity.mac"
-echo ca >"$CL/etc/frp-auto-deploy/allocator-ca.crt"
-echo 'PROJECT_VERSION=1.9.1' >"$CL/etc/frp-auto-deploy/version"
-touch "$CL/etc/systemd/system/frpc.service"
+echo ca >"$CL/etc/drlink/allocator-ca.crt"
+echo 'PROJECT_VERSION=1.9.1' >"$CL/etc/drlink/version"
+touch "$CL/etc/systemd/system/drlink-client.service"
 # mock release API detector
 : >"$WORKDIR/curl-wrap.log"
 export FRP_UNINSTALL_TEST_ROOT="$CL"
@@ -883,7 +883,7 @@ fi
 [[ ! -e "$CL/usr/local/bin/frpc" ]] || fail "frpc remains"
 [[ ! -e "$CL/etc/frp/client-state.json" ]] || fail "state remains"
 [[ ! -e "$CL/etc/frp/client-identity.key" ]] || fail "identity remains"
-[[ ! -e "$CL/etc/frp-auto-deploy/allocator-ca.crt" ]] || fail "client CA remains"
+[[ ! -e "$CL/etc/drlink/allocator-ca.crt" ]] || fail "client CA remains"
 grep -q 'Server-side reservations remain' "$WORKDIR/cu.out" || fail "reservation warning"
 grep -q 'does not contact the server' "$WORKDIR/cu.out" || fail "no-server-call message"
 if grep -E 'curl|https://' "$WORKDIR/cu.out" "$WORKDIR/cu.err" | grep -v 'intentionally' >/dev/null; then
@@ -896,16 +896,16 @@ pass "CLIENT_UNINSTALL_IDEMPOTENT"
 
 # Dual-role: client uninstall must not delete server token
 DUAL="$WORKDIR/dual"
-mkdir -p "$DUAL/etc/frp" "$DUAL/etc/frp-auto-deploy" "$DUAL/usr/local/bin"
+mkdir -p "$DUAL/etc/frp" "$DUAL/etc/drlink" "$DUAL/usr/local/bin"
 echo server-token >"$DUAL/etc/frp/server_token"
 chmod 600 "$DUAL/etc/frp/server_token"
 echo 'bindPort=443' >"$DUAL/etc/frp/frps.toml"
-echo '{"public_host":"203.0.113.10"}' >"$DUAL/etc/frp-auto-deploy/config.json"
+echo '{"public_host":"203.0.113.10"}' >"$DUAL/etc/drlink/config.json"
 echo '{"schema_version":1}' >"$DUAL/etc/frp/client-state.json"
 export FRP_UNINSTALL_TEST_ROOT="$DUAL"
 "$ROOT/uninstall-client.sh" >"$WORKDIR/dual.out" 2>"$WORKDIR/dual.err" || fail "dual-role client uninstall"
 [[ -f "$DUAL/etc/frp/server_token" ]] || fail "dual-role deleted server token"
-[[ -f "$DUAL/etc/frp-auto-deploy/config.json" ]] || fail "dual-role deleted server config"
+[[ -f "$DUAL/etc/drlink/config.json" ]] || fail "dual-role deleted server config"
 [[ ! -f "$DUAL/etc/frp/client-state.json" ]] || fail "dual-role left client state"
 
 # ---------------------------------------------------------------------------
@@ -921,7 +921,7 @@ export FRP_CLIENT_TEST_ROOT="$EXIST"
 if frp_client_main >"$WORKDIR/rerun.out" 2>"$WORKDIR/rerun.err"; then
   fail "existing client installer should refuse"
 fi
-grep -q 'already has an FRP client installed' "$WORKDIR/rerun.err" || fail "refuse message"
+grep -q 'already has a Data Relay Link client installed' "$WORKDIR/rerun.err" || fail "refuse message"
 grep -q 'sudo drlink update' "$WORKDIR/rerun.err" || fail "directs to update"
 pass "CLIENT_REINSTALL_SAFE"
 
@@ -929,15 +929,15 @@ pass "CLIENT_REINSTALL_SAFE"
 # Project update 1.7.0 -> current, 1.9.1 -> current, same-version
 # ---------------------------------------------------------------------------
 UP="$WORKDIR/client-170"
-mkdir -p "$UP/etc/frp" "$UP/etc/frp-auto-deploy" "$UP/usr/local/bin" "$UP/usr/local/lib/frp-auto-deploy"
+mkdir -p "$UP/etc/frp" "$UP/etc/drlink" "$UP/usr/local/bin" "$UP/usr/local/lib/drlink"
 write_dummy_frpc "$UP/usr/local/bin/frpc"
 cat >"$UP/usr/local/bin/frp-client" <<'EOF'
 #!/bin/sh
 echo old-client
 EOF
 chmod 0755 "$UP/usr/local/bin/frp-client"
-echo old >"$UP/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
-echo old >"$UP/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py"
+echo old >"$UP/usr/local/lib/drlink/frp-client-common.sh"
+echo old >"$UP/usr/local/lib/drlink/frp_mgmt_auth.py"
 python3 - "$UP/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -961,18 +961,18 @@ auth.token = "test-frp-token-do-not-use"
 EOF
 chmod 600 "$UP/etc/frp/frpc.toml"
 echo access >"$UP/etc/frp/access-info.txt"
-echo ca-170 >"$UP/etc/frp-auto-deploy/allocator-ca.crt"
+echo ca-170 >"$UP/etc/drlink/allocator-ca.crt"
 python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
   "$UP/etc/frp/client-identity.key" "$UP/etc/frp/client-identity.pub"
 chmod 600 "$UP/etc/frp/client-identity.key"
 echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"$UP/etc/frp/client-identity.mac"
 chmod 600 "$UP/etc/frp/client-identity.mac"
-cat >"$UP/etc/frp-auto-deploy/version" <<'EOF'
+cat >"$UP/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.7.0
 FRP_VERSION=0.71.0
 EOF
 STATE_BEFORE="$(frp_file_sha256 "$UP/etc/frp/client-state.json")"
-CA_BEFORE="$(frp_file_sha256 "$UP/etc/frp-auto-deploy/allocator-ca.crt")"
+CA_BEFORE="$(frp_file_sha256 "$UP/etc/drlink/allocator-ca.crt")"
 KEY_BEFORE="$(frp_file_sha256 "$UP/etc/frp/client-identity.key")"
 export FRP_CLIENT_TEST_ROOT="$UP"
 export FRP_CLIENT_LIB="$ROOT/lib/frp-client-common.sh"
@@ -984,10 +984,10 @@ grep -q "1.7.0 -> ${PROJECT_VERSION}" "$WORKDIR/up170.out" || fail "version tran
 grep -q 'Enrollment Code : NOT REQUIRED' "$WORKDIR/up170.out" || fail "no enrollment"
 grep -q 'frpc restarted  : NO' "$WORKDIR/up170.out" || fail "no frpc restart"
 [[ "$(frp_file_sha256 "$UP/etc/frp/client-state.json")" == "$STATE_BEFORE" ]] || fail "state changed"
-[[ "$(frp_file_sha256 "$UP/etc/frp-auto-deploy/allocator-ca.crt")" == "$CA_BEFORE" ]] || fail "client CA changed"
+[[ "$(frp_file_sha256 "$UP/etc/drlink/allocator-ca.crt")" == "$CA_BEFORE" ]] || fail "client CA changed"
 [[ "$(frp_file_sha256 "$UP/etc/frp/client-identity.key")" == "$KEY_BEFORE" ]] || fail "identity changed"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$UP/etc/frp-auto-deploy/version" || fail "version not ${PROJECT_VERSION}"
-[[ ! -f "$UP/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "txn marker left"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$UP/etc/drlink/version" || fail "version not ${PROJECT_VERSION}"
+[[ ! -f "$UP/var/lib/drlink/server-update-pending.json" ]] || fail "txn marker left"
 pass "PROJECT_UPDATE_ATOMIC"
 pass "CLIENT_CA_PRESERVED"
 pass "CLIENT_IDENTITY_PRESERVED"
@@ -1003,27 +1003,27 @@ pass "SAME_VERSION_UPDATE_IDEMPOTENT"
 
 # 1.9.1 -> current (2.0.0) preserves identity, CA, state, and ports
 UP191="$WORKDIR/client-191"
-mkdir -p "$UP191/etc/frp" "$UP191/etc/frp-auto-deploy" "$UP191/usr/local/bin" "$UP191/usr/local/lib/frp-auto-deploy"
+mkdir -p "$UP191/etc/frp" "$UP191/etc/drlink" "$UP191/usr/local/bin" "$UP191/usr/local/lib/drlink"
 write_dummy_frpc "$UP191/usr/local/bin/frpc"
 cat >"$UP191/usr/local/bin/frp-client" <<'EOF'
 #!/bin/sh
 echo old-client-191
 EOF
 chmod 0755 "$UP191/usr/local/bin/frp-client"
-echo old191 >"$UP191/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
+echo old191 >"$UP191/usr/local/lib/drlink/frp-client-common.sh"
 cp -a "$UP/etc/frp/client-state.json" "$UP191/etc/frp/client-state.json"
 cp -a "$UP/etc/frp/frpc.toml" "$UP191/etc/frp/frpc.toml"
 cp -a "$UP/etc/frp/access-info.txt" "$UP191/etc/frp/access-info.txt"
-cp -a "$UP/etc/frp-auto-deploy/allocator-ca.crt" "$UP191/etc/frp-auto-deploy/allocator-ca.crt"
+cp -a "$UP/etc/drlink/allocator-ca.crt" "$UP191/etc/drlink/allocator-ca.crt"
 cp -a "$UP/etc/frp/client-identity.key" "$UP191/etc/frp/client-identity.key"
 cp -a "$UP/etc/frp/client-identity.pub" "$UP191/etc/frp/client-identity.pub"
 cp -a "$UP/etc/frp/client-identity.mac" "$UP191/etc/frp/client-identity.mac"
-cat >"$UP191/etc/frp-auto-deploy/version" <<'EOF'
+cat >"$UP191/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.9.1
 FRP_VERSION=0.71.0
 EOF
 STATE191="$(frp_file_sha256 "$UP191/etc/frp/client-state.json")"
-CA191="$(frp_file_sha256 "$UP191/etc/frp-auto-deploy/allocator-ca.crt")"
+CA191="$(frp_file_sha256 "$UP191/etc/drlink/allocator-ca.crt")"
 KEY191="$(frp_file_sha256 "$UP191/etc/frp/client-identity.key")"
 export FRP_CLIENT_TEST_ROOT="$UP191"
 if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/up191.out" 2>"$WORKDIR/up191.err"; then
@@ -1032,13 +1032,13 @@ if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/up191.out" 2>"$
 fi
 grep -q "1.9.1 -> ${PROJECT_VERSION}" "$WORKDIR/up191.out" || fail "version transition 1.9.1"
 [[ "$(frp_file_sha256 "$UP191/etc/frp/client-state.json")" == "$STATE191" ]] || fail "1.9.1 state changed"
-[[ "$(frp_file_sha256 "$UP191/etc/frp-auto-deploy/allocator-ca.crt")" == "$CA191" ]] || fail "1.9.1 client CA changed"
+[[ "$(frp_file_sha256 "$UP191/etc/drlink/allocator-ca.crt")" == "$CA191" ]] || fail "1.9.1 client CA changed"
 [[ "$(frp_file_sha256 "$UP191/etc/frp/client-identity.key")" == "$KEY191" ]] || fail "1.9.1 identity changed"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$UP191/etc/frp-auto-deploy/version" || fail "1.9.1 version not ${PROJECT_VERSION}"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$UP191/etc/drlink/version" || fail "1.9.1 version not ${PROJECT_VERSION}"
 pass "PROJECT_UPDATE_1_9_1_TO_CURRENT"
 
 # Downgrade refused
-python3 - "$UP/etc/frp-auto-deploy/version" <<'PY'
+python3 - "$UP/etc/drlink/version" <<'PY'
 import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text("PROJECT_VERSION=9.9.9\nFRP_VERSION=0.71.0\n")
@@ -1048,7 +1048,7 @@ if "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/down.out" 2>"$WOR
   fail "downgrade should be refused"
 fi
 grep -q 'FAILURE_CLASS=DOWNGRADE_REFUSED' "$WORKDIR/down.out" "$WORKDIR/down.err" || fail "downgrade class"
-cat >"$UP/etc/frp-auto-deploy/version" <<EOF
+cat >"$UP/etc/drlink/version" <<EOF
 PROJECT_VERSION=${PROJECT_VERSION}
 FRP_VERSION=0.71.0
 EOF
@@ -1063,16 +1063,16 @@ UPDATE="$ROOT/tools/frp-update"
 
 setup_update_tree() {
   local tree="$1" ver="$2"
-  mkdir -p "$tree/usr/local/bin" "$tree/etc/frp" "$tree/etc/frp-auto-deploy" \
-    "$tree/var/lib/frp-auto-deploy"
+  mkdir -p "$tree/usr/local/bin" "$tree/etc/frp" "$tree/etc/drlink" \
+    "$tree/var/lib/drlink"
   write_dummy_frps "$tree/usr/local/bin/frps" "$ver"
   echo 'bindPort = 443' >"$tree/etc/frp/frps.toml"
   chmod 600 "$tree/etc/frp/frps.toml"
   echo 'test-update-token-do-not-use' >"$tree/etc/frp/server_token"
   chmod 600 "$tree/etc/frp/server_token"
-  echo '{"schema_version":2,"reserved":[6000],"clients":{}}' >"$tree/var/lib/frp-auto-deploy/registry.json"
-  chmod 600 "$tree/var/lib/frp-auto-deploy/registry.json"
-  cat >"$tree/etc/frp-auto-deploy/version" <<EOF
+  echo '{"schema_version":2,"reserved":[6000],"clients":{}}' >"$tree/var/lib/drlink/registry.json"
+  chmod 600 "$tree/var/lib/drlink/registry.json"
+  cat >"$tree/etc/drlink/version" <<EOF
 PROJECT_VERSION=${PROJECT_VERSION}
 FRP_VERSION=0.71.0
 EOF
@@ -1134,9 +1134,9 @@ pass "ROLLBACK_FAILURE_REPORTED"
 
 INTU="$WORKDIR/upd-int"
 setup_update_tree "$INTU" "0.70.0"
-mkdir -p "$INTU/var/lib/frp-auto-deploy"
+mkdir -p "$INTU/var/lib/drlink"
 echo '{"operation":"update","phase":"commit","previous_version":"0.70.0","candidate_version":"0.71.0"}' \
-  >"$INTU/var/lib/frp-auto-deploy/server-update-pending.json"
+  >"$INTU/var/lib/drlink/server-update-pending.json"
 # Next successful same-version (already current after we put 0.71.0? tree is 0.70.0)
 # Leave marker; running update to 0.71.0 should complete and clear marker.
 write_dummy_frps "$WORKDIR/frps-int" "0.71.0"
@@ -1151,16 +1151,16 @@ if ! env \
   cat "$WORKDIR/intu.out" "$WORKDIR/intu.err" >&2
   fail "interrupted update retry"
 fi
-[[ ! -f "$INTU/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "interrupted update left marker"
+[[ ! -f "$INTU/var/lib/drlink/server-update-pending.json" ]] || fail "interrupted update left marker"
 pass "INTERRUPTED_UPDATE_RECOVERY"
 
 # Backup retention
 BR="$WORKDIR/upd-backup"
 setup_update_tree "$BR" "0.70.0"
-mkdir -p "$BR/var/lib/frp-auto-deploy/backups"
+mkdir -p "$BR/var/lib/drlink/backups"
 for i in 1 2 3 4 5 6 7; do
-  mkdir -p "$BR/var/lib/frp-auto-deploy/backups/2020010${i}T000000Z-0.69.0"
-  write_dummy_frps "$BR/var/lib/frp-auto-deploy/backups/2020010${i}T000000Z-0.69.0/frps" "0.69.0"
+  mkdir -p "$BR/var/lib/drlink/backups/2020010${i}T000000Z-0.69.0"
+  write_dummy_frps "$BR/var/lib/drlink/backups/2020010${i}T000000Z-0.69.0/frps" "0.69.0"
 done
 write_dummy_frps "$WORKDIR/frps-br" "0.71.0"
 env \
@@ -1171,7 +1171,7 @@ env \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
   FRP_UPDATE_HOOK_NEW_BINARY="$WORKDIR/frps-br" \
   "$UPDATE" >/dev/null
-backup_n="$(python3 - "$BR/var/lib/frp-auto-deploy/backups" <<'PY'
+backup_n="$(python3 - "$BR/var/lib/drlink/backups" <<'PY'
 from pathlib import Path
 import sys
 print(len([p for p in Path(sys.argv[1]).iterdir() if p.is_dir()]))

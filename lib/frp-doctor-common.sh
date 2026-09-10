@@ -12,9 +12,9 @@ if [[ -z "${FRP_COMMON_LOADED:-}" ]]; then
   if [[ -f "${_FRP_DOCTOR_DIR}/frp-common.sh" ]]; then
     # shellcheck source=frp-common.sh
     . "${_FRP_DOCTOR_DIR}/frp-common.sh"
-  elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
+  elif [[ -f /usr/local/lib/drlink/frp-common.sh ]]; then
     # shellcheck disable=SC1091
-    . /usr/local/lib/frp-auto-deploy/frp-common.sh
+    . /usr/local/lib/drlink/frp-common.sh
   fi
 fi
 
@@ -33,7 +33,7 @@ frp_doctor_py() {
   libdir="$(frp_doctor_lib_dir)"
   for cand in \
     "${libdir}/frp_doctor.py" \
-    /usr/local/lib/frp-auto-deploy/frp_doctor.py
+    /usr/local/lib/drlink/frp_doctor.py
   do
     if [[ -f "$cand" ]]; then
       printf '%s' "$cand"
@@ -230,11 +230,11 @@ frp_doctor_collect_facts() {
 
   if type frp_doctor_systemd_usable >/dev/null 2>&1 && frp_doctor_systemd_usable; then
     systemd_usable=1
-    read -r frps_a frps_e <<<"$(frp_doctor_unit_state frps)"
-    read -r alloc_a alloc_e <<<"$(frp_doctor_unit_state frp-port-allocator)"
-    read -r access_a access_e <<<"$(frp_doctor_unit_state frp-access-plugin)"
-    read -r frpc_a frpc_e <<<"$(frp_doctor_unit_state frpc)"
-    read -r frontend_a frontend_e <<<"$(frp_doctor_unit_state frp-frontend)"
+    read -r frps_a frps_e <<<"$(frp_doctor_unit_state drlink-server)"
+    read -r alloc_a alloc_e <<<"$(frp_doctor_unit_state drlink-allocator)"
+    read -r access_a access_e <<<"$(frp_doctor_unit_state drlink-access)"
+    read -r frpc_a frpc_e <<<"$(frp_doctor_unit_state drlink-client)"
+    read -r frontend_a frontend_e <<<"$(frp_doctor_unit_state drlink-frontend)"
   else
     frps_a=unknown; frps_e=unknown
     alloc_a=unknown; alloc_e=unknown
@@ -252,7 +252,7 @@ frp_doctor_collect_facts() {
   fi
 
   IFS=$'\t' read -r clock_status clock_detail <<<"$(frp_doctor_clock_status)"
-  disk_mb="$(frp_doctor_disk_mb "$(frp_doctor_fs /var/lib/frp-auto-deploy)")"
+  disk_mb="$(frp_doctor_disk_mb "$(frp_doctor_fs /var/lib/drlink)")"
   if [[ -z "$disk_mb" ]]; then
     disk_mb="$(frp_doctor_disk_mb "$(frp_doctor_fs /etc/frp)")"
   fi
@@ -280,10 +280,10 @@ facts = {
     "skip_network": skip_net,
     "units": {
         "frps": {"active": frps_a, "enabled": frps_e},
-        "frp-port-allocator": {"active": alloc_a, "enabled": alloc_e},
-        "frp-access-plugin": {"active": access_a, "enabled": access_e},
+        "drlink-allocator": {"active": alloc_a, "enabled": alloc_e},
+        "drlink-access": {"active": access_a, "enabled": access_e},
         "frpc": {"active": frpc_a, "enabled": frpc_e},
-        "frp-frontend": {"active": frontend_a, "enabled": frontend_e},
+        "drlink-frontend": {"active": frontend_a, "enabled": frontend_e},
     },
     "clock": {"status": clock_status, "detail": clock_detail},
     "platform": {
@@ -299,7 +299,7 @@ facts = {
         "service_manager": service_manager,
         "macos_version": macos_ver,
     },
-    "disk": {"path": "/var/lib/frp-auto-deploy", "avail_mb": avail},
+    "disk": {"path": "/var/lib/drlink", "avail_mb": avail},
     "listeners": {},
     "journal": {},
     "network": {},
@@ -309,7 +309,7 @@ PY
 
   # Local listen probes for configured server ports. Read-only TCP connect.
   local cfg listen_frp listen_alloc listen_frontend
-  cfg="$(frp_doctor_fs /etc/frp-auto-deploy/config.json)"
+  cfg="$(frp_doctor_fs /etc/drlink/config.json)"
   if [[ -f "$cfg" ]]; then
     eval "$(python3 - "$cfg" <<'PY'
 import json, sys
@@ -378,9 +378,9 @@ PY
 
   if [[ "${FRP_DOCTOR_VERBOSE:-}" == "1" ]] && frp_doctor_systemd_usable; then
     local jfrps jalloc jfrpc
-    jfrps="$(frp_doctor_journal frps)"
-    jalloc="$(frp_doctor_journal frp-port-allocator)"
-    jfrpc="$(frp_doctor_journal frpc)"
+    jfrps="$(frp_doctor_journal drlink-server)"
+    jalloc="$(frp_doctor_journal drlink-allocator)"
+    jfrpc="$(frp_doctor_journal drlink-client)"
     python3 - "$facts_file" "$jfrps" "$jalloc" "$jfrpc" <<'PY'
 import json, sys
 from pathlib import Path
@@ -388,7 +388,7 @@ path = Path(sys.argv[1])
 facts = json.loads(path.read_text(encoding='utf-8'))
 facts['journal'] = {
     'frps': sys.argv[2],
-    'frp-port-allocator': sys.argv[3],
+    'drlink-allocator': sys.argv[3],
     'frpc': sys.argv[4],
 }
 path.write_text(json.dumps(facts) + '\n', encoding='utf-8')
@@ -398,7 +398,7 @@ PY
 
 frp_doctor_usage() {
   cat <<'EOF'
-Usage: frpctl doctor [--json] [--verbose] [--quiet]
+Usage: drlink doctor [--json] [--verbose] [--quiet]
 
 Run read-only health and consistency checks. Doctor does not restart
 services, rewrite config, consume a management nonce, release ports,

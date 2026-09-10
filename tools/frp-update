@@ -5,12 +5,12 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_SCRIPT_DIR}/../lib/frp-common.sh" ]]; then
   # shellcheck source=../lib/frp-common.sh
   . "${_SCRIPT_DIR}/../lib/frp-common.sh"
-elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
+elif [[ -f /usr/local/lib/drlink/frp-common.sh ]]; then
   # shellcheck disable=SC1091
-  . /usr/local/lib/frp-auto-deploy/frp-common.sh
-elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh' ]]; then
+  . /usr/local/lib/drlink/frp-common.sh
+elif [[ -f '/Library/Application Support/drlink/lib/frp-common.sh' ]]; then
   # shellcheck disable=SC1091
-  . '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh'
+  . '/Library/Application Support/drlink/lib/frp-common.sh'
 else
   echo "ERROR: missing lib/frp-common.sh" >&2
   exit 1
@@ -21,14 +21,14 @@ usage() {
 Usage: frp-update [--check]
 
 Upgrade the local FRP binary (frps on server, frpc on client) to the version
-tested by frp-auto-deploy. If the new binary fails health checks, the previous
+tested by Data Relay Link. If the new binary fails health checks, the previous
 binary is restored automatically.
 
   --check, --dry-run   report current/target versions without changing anything
   -h, --help           show this help
 
 Upstream latest FRP releases are not installed. This command only installs the
-tested/pinned FRP version from this frp-auto-deploy release.
+tested/pinned FRP version from this Data Relay Link release.
 EOF
 }
 
@@ -58,9 +58,9 @@ FRPS_CONFIG="$(frp_path /etc/frp/frps.toml)"
 FRPC_CONFIG="$(frp_path /etc/frp/frpc.toml)"
 CLIENT_STATE="$(frp_path /etc/frp/client-state.json)"
 TOKEN_FILE="$(frp_path /etc/frp/server_token)"
-REGISTRY_FILE="$(frp_path /var/lib/frp-auto-deploy/registry.json)"
-BACKUP_ROOT="$(frp_path /var/lib/frp-auto-deploy/backups)"
-VERSION_FILE="$(frp_path /etc/frp-auto-deploy/version)"
+REGISTRY_FILE="$(frp_path /var/lib/drlink/registry.json)"
+BACKUP_ROOT="$(frp_path /var/lib/drlink/backups)"
+VERSION_FILE="$(frp_path /etc/drlink/version)"
 SKIP_SYSTEMD=0
 if frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
   SKIP_SYSTEMD=1
@@ -114,8 +114,8 @@ report_preservation() {
 
 restart_frps() {
   if [[ "$SKIP_SYSTEMD" == "1" ]]; then
-    mkdir -p "$(dirname "$(frp_path /var/lib/frp-auto-deploy/update-actions.log)")"
-    echo "restart frps" >>"$(frp_path /var/lib/frp-auto-deploy/update-actions.log)"
+    mkdir -p "$(dirname "$(frp_path /var/lib/drlink/update-actions.log)")"
+    echo "restart drlink-server" >>"$(frp_path /var/lib/drlink/update-actions.log)"
     if frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_RESTART_FAIL:-}" == "1" ]]; then
       echo "ERROR: simulated restart failure" >&2
       return 1
@@ -126,7 +126,7 @@ restart_frps() {
     fi
     return 0
   fi
-  systemctl restart frps
+  systemctl restart drlink-server
 }
 
 health_check() {
@@ -155,18 +155,18 @@ health_check() {
       echo "ERROR: frpc is not active" >&2
       return 1
     fi
-    systemctl is-active --quiet frpc || {
+    systemctl is-active --quiet drlink-client || {
       echo "ERROR: frpc is not active" >&2
       return 1
     }
     return 0
   fi
-  systemctl is-active --quiet frps || {
+  systemctl is-active --quiet drlink-server || {
     echo "ERROR: frps is not active" >&2
     return 1
   }
   sleep 1
-  systemctl is-active --quiet frps || {
+  systemctl is-active --quiet drlink-server || {
     echo "ERROR: frps did not stay active" >&2
     return 1
   }
@@ -399,8 +399,8 @@ validate_new_binary() {
 restart_frp_unit() {
   if [[ "${UPDATE_ROLE:-server}" == "client" ]]; then
     if [[ "$SKIP_SYSTEMD" == "1" ]]; then
-      mkdir -p "$(dirname "$(frp_path /var/lib/frp-auto-deploy/update-actions.log)")"
-      echo "restart frpc" >>"$(frp_path /var/lib/frp-auto-deploy/update-actions.log)"
+      mkdir -p "$(dirname "$(frp_path /var/lib/drlink/update-actions.log)")"
+      echo "restart drlink-client" >>"$(frp_path /var/lib/drlink/update-actions.log)"
       if frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_RESTART_FAIL:-}" == "1" ]]; then
         echo "ERROR: simulated restart failure" >&2
         return 1
@@ -420,7 +420,7 @@ restart_frp_unit() {
       fi
       return 0
     fi
-    systemctl restart frpc
+    systemctl restart drlink-client
     return
   fi
   restart_frps
@@ -443,12 +443,12 @@ export FRP_TXN_ROLE
 
 # Serialize against other lifecycle mutations for the same role.
 if [[ "$UPDATE_ROLE" == "client" ]]; then
-  if [[ -f /usr/local/lib/frp-auto-deploy/frp-client-common.sh ]]; then
+  if [[ -f /usr/local/lib/drlink/frp-client-common.sh ]]; then
     # shellcheck disable=SC1091
-    . /usr/local/lib/frp-auto-deploy/frp-client-common.sh
-  elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh' ]]; then
+    . /usr/local/lib/drlink/frp-client-common.sh
+  elif [[ -f '/Library/Application Support/drlink/lib/frp-client-common.sh' ]]; then
     # shellcheck disable=SC1091
-    . '/Library/Application Support/frp-auto-deploy/lib/frp-client-common.sh'
+    . '/Library/Application Support/drlink/lib/frp-client-common.sh'
   elif [[ -f "${_SCRIPT_DIR}/../lib/frp-client-common.sh" ]]; then
     # shellcheck disable=SC1091
     . "${_SCRIPT_DIR}/../lib/frp-client-common.sh"
@@ -458,7 +458,7 @@ if [[ "$UPDATE_ROLE" == "client" ]]; then
     trap 'frp_release_client_lock; cleanup' EXIT
   fi
 else
-  _frp_update_server_lock="$(frp_path /var/lib/frp-auto-deploy/server-lifecycle.lock)"
+  _frp_update_server_lock="$(frp_path /var/lib/drlink/server-lifecycle.lock)"
   mkdir -p "$(dirname "$_frp_update_server_lock")"
   if command -v flock >/dev/null 2>&1 && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" != "1" || -z "${FRP_DEPLOY_TEST_ROOT:-}${FRP_UPDATE_ROOT:-}" ]]; then
     exec {FRP_UPDATE_LOCK_FD}>>"$_frp_update_server_lock"

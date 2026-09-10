@@ -87,7 +87,7 @@ def _load_client_registry():
     candidates = [
         Path(__file__).resolve().parent / 'frp_client_registry.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     for path in candidates:
         if path.is_file():
@@ -105,11 +105,11 @@ def _load_health_check():
     candidates = [
         Path(__file__).resolve().parent / 'frp_health_check.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_health_check.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_health_check.py'),
+        Path('/usr/local/lib/drlink/frp_health_check.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_health_check.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_health_check.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_health_check.py')
     for path in candidates:
         if path.is_file():
@@ -127,11 +127,11 @@ def _load_enrollment_lifecycle():
     candidates = [
         Path(__file__).resolve().parent / 'frp_enrollment_lifecycle.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_enrollment_lifecycle.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py'),
+        Path('/usr/local/lib/drlink/frp_enrollment_lifecycle.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_enrollment_lifecycle.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_enrollment_lifecycle.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_enrollment_lifecycle.py')
     for path in candidates:
         if path.is_file():
@@ -148,11 +148,11 @@ ELC = _load_enrollment_lifecycle()
 def _load_zero_touch():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_zero_touch.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_zero_touch.py'),
+        Path('/usr/local/lib/drlink/frp_zero_touch.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_zero_touch.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_zero_touch.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_zero_touch.py')
     for path in candidates:
         if path.is_file():
@@ -169,11 +169,11 @@ ZT = _load_zero_touch()
 def _load_pki():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_pki.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_pki.py'),
+        Path('/usr/local/lib/drlink/frp_pki.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_pki.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_pki.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_pki.py')
     for path in candidates:
         if path.is_file():
@@ -313,10 +313,10 @@ def read_project_version(root=''):
     """Return installed PROJECT_VERSION for health/compatibility checks."""
     candidates = []
     if root:
-        candidates.append(Path(root) / 'etc/frp-auto-deploy/version')
+        candidates.append(Path(root) / 'etc/drlink/version')
     candidates.extend(
         [
-            Path('/etc/frp-auto-deploy/version'),
+            Path('/etc/drlink/version'),
             Path(__file__).resolve().parent.parent / 'VERSION',
         ]
     )
@@ -395,7 +395,7 @@ def bootstrap_dir_from_cfg(cfg):
     enrollments = str((cfg or {}).get('enrollments_dir') or '').strip()
     if enrollments:
         return Path(enrollments).resolve().parent / 'bootstrap'
-    return Path('/var/lib/frp-auto-deploy/bootstrap')
+    return Path('/var/lib/drlink/bootstrap')
 
 
 def ensure_secret_dir(path, mode=0o700):
@@ -1959,7 +1959,7 @@ class Allocator:
 
 def make_handler(allocator):
     class Handler(BaseHTTPRequestHandler):
-        server_version = 'frp-auto-deploy/1.2'
+        server_version = 'drlink/1.2'
         timeout = ALLOCATOR_REQUEST_TIMEOUT_SEC
         protocol_version = 'HTTP/1.1'
 

@@ -147,7 +147,7 @@ PY
   set +e
   # Snapshot ports before reboot.
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo python3 -c \"import json; d=json.load(open('/var/lib/frp-auto-deploy/registry.json'));
+    "sudo python3 -c \"import json; d=json.load(open('/var/lib/drlink/registry.json'));
 print(json.dumps({mid[:8]: ((c.get('services') or {}).get('ssh') or {}).get('remote_port') for mid,c in (d.get('clients') or {}).items()}))\"" \
     | tee "$OUT_ROOT/fleet-ports-before-reboot.json"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo reboot' || true
@@ -179,7 +179,7 @@ from pathlib import Path
 out, alias, host, key = sys.argv[1:5]
 raw = subprocess.check_output(
     ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", alias,
-     "sudo python3 -c \"import json; print(json.dumps(json.load(open('/var/lib/frp-auto-deploy/registry.json'))))\""],
+     "sudo python3 -c \"import json; print(json.dumps(json.load(open('/var/lib/drlink/registry.json'))))\""],
     text=True,
 )
 reg = json.loads(raw)
@@ -243,19 +243,19 @@ PY
   note "==== FLEET backup/restore ===="
   set +e
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    'sudo /usr/local/sbin/frpctl create backup /var/lib/frp-auto-deploy/backups/matrix-fleet-backup.tar.gz' \
+    'sudo /usr/local/sbin/frpctl create backup /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \
     | tee "$OUT_ROOT/fleet-backup.txt"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo /usr/local/sbin/frpctl set server hostname '$PUBLIC_HOSTNAME' || true; sudo python3 -c \"import json; c=json.load(open('/etc/frp-auto-deploy/config.json')); print(c.get('public_hostname'))\"" \
+    "sudo /usr/local/sbin/frpctl set server hostname '$PUBLIC_HOSTNAME' || true; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print(c.get('public_hostname'))\"" \
     | tee "$OUT_ROOT/fleet-hostname-before-restore.txt"
   # Mutate then restore.
-  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/sbin/frpctl set client $(sudo python3 -c "import json; print(next(iter(json.load(open(\"/var/lib/frp-auto-deploy/registry.json\"))[\"clients\"])))") label fleet-mutated' || true
+  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/sbin/frpctl set client $(sudo python3 -c "import json; print(next(iter(json.load(open(\"/var/lib/drlink/registry.json\"))[\"clients\"])))") label fleet-mutated' || true
   cat "$ROOT/tools/frp-restore" | ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo tee /tmp/frp-restore >/dev/null && sudo chmod 755 /tmp/frp-restore'
   cat "$ROOT/tools/frp-backup" | ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo tee /tmp/frp-backup >/dev/null && sudo chmod 755 /tmp/frp-backup'
-  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo python3 /tmp/frp-restore /var/lib/frp-auto-deploy/backups/matrix-fleet-backup.tar.gz' \
+  ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo python3 /tmp/frp-restore /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \
     | tee "$OUT_ROOT/fleet-restore.txt"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo python3 -c \"import json; c=json.load(open('/etc/frp-auto-deploy/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" \
+    "sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" \
     | tee "$OUT_ROOT/fleet-hostname-after-restore.txt"
   set -uo pipefail
 fi

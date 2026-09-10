@@ -23,12 +23,12 @@ def load_module():
 
 def seed_tree(root: Path) -> None:
     for rel in (
-        "etc/frp-auto-deploy/pki",
+        "etc/drlink/pki",
         "etc/frp",
-        "var/lib/frp-auto-deploy",
+        "var/lib/drlink",
     ):
         (root / rel).mkdir(parents=True, exist_ok=True)
-    (root / "etc/frp-auto-deploy/config.json").write_text(
+    (root / "etc/drlink/config.json").write_text(
         json.dumps(
             {
                 "public_host": "203.0.113.10",
@@ -40,17 +40,17 @@ def seed_tree(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / "var/lib/frp-auto-deploy/registry.json").write_text(
+    (root / "var/lib/drlink/registry.json").write_text(
         json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n",
         encoding="utf-8",
     )
-    (root / "var/lib/frp-auto-deploy/access-control.json").write_text(
+    (root / "var/lib/drlink/access-control.json").write_text(
         json.dumps({"schema_version": 1, "access_lists": {}, "service_access": {}}) + "\n",
         encoding="utf-8",
     )
     (root / "etc/frp/frps.toml").write_text('bindPort = 443\n', encoding="utf-8")
     (root / "etc/frp/server_token").write_text("token\n", encoding="utf-8")
-    (root / "etc/frp-auto-deploy/pki/ca.crt").write_text("ca\n", encoding="utf-8")
+    (root / "etc/drlink/pki/ca.crt").write_text("ca\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -118,7 +118,7 @@ def main() -> int:
         assert counters["access_healthz"] >= 2, counters
         assert "https://127.0.0.1:6099/healthz" in seen["urls"], seen
         assert "http://127.0.0.1:6101/healthz" in seen["urls"], seen
-        assert seen["cafile"] == str(root / "etc/frp-auto-deploy/pki/ca.crt"), seen
+        assert seen["cafile"] == str(root / "etc/drlink/pki/ca.crt"), seen
         print("RESTORE_READINESS_RETRY=PASS")
     return 0
 

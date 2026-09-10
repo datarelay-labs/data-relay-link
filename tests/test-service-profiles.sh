@@ -18,21 +18,21 @@ export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
 
 mkdir -p \
-  "$TREE/etc/frp-auto-deploy" \
+  "$TREE/etc/drlink" \
   "$TREE/etc/frp" \
-  "$TREE/var/lib/frp-auto-deploy" \
-  "$TREE/var/log/frp-auto-deploy" \
-  "$TREE/usr/local/lib/frp-auto-deploy" \
+  "$TREE/var/lib/drlink" \
+  "$TREE/var/log/drlink" \
+  "$TREE/usr/local/lib/drlink" \
   "$TREE/usr/local/sbin"
 
-cp "$ROOT/lib/frp_service_profiles.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_audit.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_doctor.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp-doctor-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/frp_service_profiles.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_audit.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_doctor.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp-doctor-common.sh" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/tools/frp-profile" "$TREE/usr/local/sbin/"
 cp "$ROOT/tools/frpctl" "$TREE/usr/local/sbin/"
 cp "$ROOT/tools/frp-client" "$TREE/usr/local/sbin/"
@@ -49,18 +49,18 @@ root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 cfg = {
     "public_host": "203.0.113.10",
     "public_ip": "203.0.113.10",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
-    "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
-    "service_profiles_file": "/var/lib/frp-auto-deploy/service-profiles.json",
+    "registry_file": "/var/lib/drlink/registry.json",
+    "access_control_file": "/var/lib/drlink/access-control.json",
+    "service_profiles_file": "/var/lib/drlink/service-profiles.json",
 }
-(root / "etc/frp-auto-deploy/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-(root / "var/lib/frp-auto-deploy/registry.json").write_text(
+(root / "etc/drlink/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+(root / "var/lib/drlink/registry.json").write_text(
     json.dumps({"schema_version": 2, "clients": {}, "reserved": [], "groups": {}}, indent=2) + "\n",
     encoding="utf-8",
 )
 spec = importlib.util.spec_from_file_location(
     "frp_service_profiles",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_service_profiles.py"),
+    str(root / "usr/local/lib/drlink/frp_service_profiles.py"),
 )
 prof = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prof)
@@ -118,7 +118,7 @@ grep -q '(none)' "$WORKDIR/list.out" || fail "empty profiles"
 
 "$CTL" create profile office-ssh --preset ssh --target-host 127.0.0.1 --target-port 22 --ssh-user ubuntu --description 'desk' >"$WORKDIR/create.out"
 grep -q 'Created profile prof_' "$WORKDIR/create.out" || fail "create profile id"
-PROFILE_ID="$(python3 -c 'import json,re; from pathlib import Path; import os; p=Path(os.environ["FRP_DEPLOY_TEST_ROOT"])/"var/lib/frp-auto-deploy/service-profiles.json"; d=json.loads(p.read_text()); print(next(iter(d["profiles"])))')"
+PROFILE_ID="$(python3 -c 'import json,re; from pathlib import Path; import os; p=Path(os.environ["FRP_DEPLOY_TEST_ROOT"])/"var/lib/drlink/service-profiles.json"; d=json.loads(p.read_text()); print(next(iter(d["profiles"])))')"
 [[ "$PROFILE_ID" == prof_* ]] || fail "profile id format"
 
 "$CTL" show profile office-ssh >"$WORKDIR/show.out"
@@ -134,7 +134,7 @@ ORIG_ID="$PROFILE_ID"
 "$CTL" set profile office-ssh target-port 2222 >"$WORKDIR/set.out"
 "$CTL" show profile office-ssh >"$WORKDIR/show2.out"
 grep -q '127.0.0.1:2222' "$WORKDIR/show2.out" || fail "edited target port"
-NEW_ID="$(python3 -c 'import json,os; from pathlib import Path; d=json.loads((Path(os.environ["FRP_DEPLOY_TEST_ROOT"])/"var/lib/frp-auto-deploy/service-profiles.json").read_text()); print(next(iter(d["profiles"])))')"
+NEW_ID="$(python3 -c 'import json,os; from pathlib import Path; d=json.loads((Path(os.environ["FRP_DEPLOY_TEST_ROOT"])/"var/lib/drlink/service-profiles.json").read_text()); print(next(iter(d["profiles"])))')"
 [[ "$NEW_ID" == "$ORIG_ID" ]] || fail "profile id mutated"
 
 # Health fields accepted when provided
@@ -151,7 +151,7 @@ python3 - <<'PY' || fail "draft payload from profile"
 import json, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-draft = json.loads((root / "var/lib/frp-auto-deploy/client-draft.json").read_text())
+draft = json.loads((root / "var/lib/drlink/client-draft.json").read_text())
 svc = draft["services"]["sshdesk"]
 assert svc["preset"] == "ssh"
 assert svc["local_ip"] == "127.0.0.1"
@@ -166,7 +166,7 @@ python3 - <<'PY'
 import json, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-draft = json.loads((root / "var/lib/frp-auto-deploy/client-draft.json").read_text())
+draft = json.loads((root / "var/lib/drlink/client-draft.json").read_text())
 (root / "snapshot-svc.json").write_text(json.dumps(draft["services"]["sshdesk"], sort_keys=True))
 PY
 "$CTL" set profile office-ssh target-host 10.0.0.9 >/dev/null
@@ -174,7 +174,7 @@ python3 - <<'PY' || fail "profile edit mutated existing draft service"
 import json, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-draft = json.loads((root / "var/lib/frp-auto-deploy/client-draft.json").read_text())
+draft = json.loads((root / "var/lib/drlink/client-draft.json").read_text())
 before = json.loads((root / "snapshot-svc.json").read_text())
 assert draft["services"]["sshdesk"] == before
 print("ok")
@@ -186,7 +186,7 @@ python3 - <<'PY' || fail "new service should use updated profile defaults"
 import json, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-draft = json.loads((root / "var/lib/frp-auto-deploy/client-draft.json").read_text())
+draft = json.loads((root / "var/lib/drlink/client-draft.json").read_text())
 assert draft["services"]["sshdesk"]["local_ip"] == "127.0.0.1"
 assert draft["services"]["sshnew"]["local_ip"] == "10.0.0.9"
 assert int(draft["services"]["sshnew"]["local_port"]) == 2222
@@ -200,9 +200,9 @@ python3 - <<'PY' || fail "delete profile removed draft services"
 import json, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-draft = json.loads((root / "var/lib/frp-auto-deploy/client-draft.json").read_text())
+draft = json.loads((root / "var/lib/drlink/client-draft.json").read_text())
 assert "sshdesk" in draft["services"] and "sshnew" in draft["services"]
-profiles = json.loads((root / "var/lib/frp-auto-deploy/service-profiles.json").read_text())
+profiles = json.loads((root / "var/lib/drlink/service-profiles.json").read_text())
 assert "office-ssh" not in [p.get("name") for p in profiles["profiles"].values()]
 print("ok")
 PY
@@ -213,7 +213,7 @@ python3 - <<'PY' || fail "audit events missing"
 import os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-log = root / "var/log/frp-auto-deploy/audit.jsonl"
+log = root / "var/log/drlink/audit.jsonl"
 text = log.read_text(encoding="utf-8") if log.is_file() else ""
 for event in ("profile.created", "profile.updated", "profile.deleted", "profile.applied_to_draft"):
     assert event in text, event
@@ -226,7 +226,7 @@ python3 - <<'PY' || fail "backup missing profiles fails"
 import os, sys, types
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-profiles = root / "var/lib/frp-auto-deploy/service-profiles.json"
+profiles = root / "var/lib/drlink/service-profiles.json"
 profiles.unlink()
 path = Path(os.environ["FRP_SOURCE_ROOT"]) / "tools/frp-backup"
 mod = types.ModuleType("frp_backup")
@@ -253,9 +253,9 @@ doc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(doc)
 tree = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 paths = doc.Paths(str(tree))
-cfg = json.loads((tree / "etc/frp-auto-deploy/config.json").read_text())
+cfg = json.loads((tree / "etc/drlink/config.json").read_text())
 # Restore a valid empty store after the missing-profiles backup check.
-profiles = tree / "var/lib/frp-auto-deploy/service-profiles.json"
+profiles = tree / "var/lib/drlink/service-profiles.json"
 profiles.write_text('{"schema_version":1,"profiles":{}}\n', encoding="utf-8")
 report = doc.Report()
 doc.check_service_profiles(report, paths, {}, cfg)

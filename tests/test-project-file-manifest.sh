@@ -37,15 +37,17 @@ if "server-project-files.manifest" not in (root / "scripts" / "build-bundles.py"
     raise SystemExit("bundle builder missing canonical manifest")
 
 required = {
-    "usr/local/lib/frp-auto-deploy/frp_audit.py",
-    "usr/local/lib/frp-auto-deploy/frp_support_bundle.py",
-    "usr/local/sbin/frp-enrollments",
-    "usr/local/sbin/frp-enrollment-revoke",
-    "usr/local/sbin/frp-enroll-bulk",
-    "usr/local/sbin/frp-backup",
-    "usr/local/sbin/frp-restore",
-    "usr/local/sbin/frp-support-bundle",
-    "usr/local/sbin/frp-upstream",
+    "usr/local/lib/drlink/frp_audit.py",
+    "usr/local/lib/drlink/frp_support_bundle.py",
+    "usr/local/lib/drlink/frp-enrollments",
+    "usr/local/lib/drlink/frp-enrollment-revoke",
+    "usr/local/lib/drlink/frp-enroll-bulk",
+    "usr/local/lib/drlink/frp-backup",
+    "usr/local/lib/drlink/frp-restore",
+    "usr/local/lib/drlink/frp-support-bundle",
+    "usr/local/lib/drlink/frp-upstream",
+    "usr/local/lib/drlink/frpctl",
+    "usr/local/bin/drlink",
 }
 missing = sorted(required - managed)
 if missing:

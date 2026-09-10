@@ -30,7 +30,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-LIFECYCLE_LOCK_REL = "var/lib/frp-auto-deploy/server-lifecycle.lock"
+LIFECYCLE_LOCK_REL = "var/lib/drlink/server-lifecycle.lock"
 DEFAULT_TIMEOUT_SEC = 30
 
 
@@ -83,12 +83,12 @@ def lifecycle_lock_path(root):
     return Path(root) / LIFECYCLE_LOCK_REL
 
 
-def registry_lock_path(root, registry_rel="var/lib/frp-auto-deploy/registry.json"):
+def registry_lock_path(root, registry_rel="var/lib/drlink/registry.json"):
     return (Path(root) / registry_rel).resolve().parent / "registry.lock"
 
 
 @contextmanager
-def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/lib/frp-auto-deploy/registry.json"):
+def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/lib/drlink/registry.json"):
     """Acquire lifecycle then registry. Same order as documented above."""
     with ExclusiveFileLock(lifecycle_lock_path(root), timeout=timeout) as life:
         with ExclusiveFileLock(registry_lock_path(root, registry_rel), timeout=timeout) as reg:

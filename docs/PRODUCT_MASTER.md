@@ -39,7 +39,7 @@
 
 # 1. 문서의 목적
 
-이 문서는 **FRP Auto Deploy 프로젝트의 최상위 제품 기준 문서**다.
+이 문서는 **Data Relay Link 프로젝트의 최상위 제품 기준 문서**다.
 
 다음 질문에 대한 최종 답은 이 문서를 기준으로 한다.
 
@@ -76,7 +76,7 @@ README, CLI Reference, Security 문서, Deployment Mode 문서 등 세부 문서
 
 **Data Relay**
 
-Legacy / technical identity (repository path and upstream internals): **frp-auto-deploy / FRP**
+Legacy / technical identity (repository path and upstream internals): **Data Relay Link / FRP**
 
 Broad source rename is deferred for internals. Operators use `sudo drlink`.
 
@@ -94,7 +94,7 @@ Data Relay
 
 > **필요한 연결만 안전하게 열어주는 폐쇄망/제한망용 경량 연결 게이트웨이**
 
-FRP Auto Deploy라는 기술 명칭은 공식 `fatedier/frp`를 수정하거나 fork하지 않고 그 위에 구축하는:
+Data Relay Link라는 기술 명칭은 공식 `fatedier/frp`를 수정하거나 fork하지 않고 그 위에 구축하는:
 
 > **Lightweight FRP Deployment & Operations Layer**
 
@@ -108,7 +108,7 @@ FRP Auto Deploy라는 기술 명칭은 공식 `fatedier/frp`를 수정하거나 
 
 Outbound Controlled Egress는 보호 호스트에 agent를 설치하지 않고 `HTTP_PROXY` / `HTTPS_PROXY`만으로 승인된 FQDN만 허용한다. 상세는 `docs/CONTROLLED_EGRESS.md`, `docs/DATA_RELAY_ROADMAP.md`.
 
-FRP 자체가 터널링 엔진이라면 FRP Auto Deploy(inbound 운영 계층)는 그 위에서 다음을 담당한다.
+FRP 자체가 터널링 엔진이라면 Data Relay Link(inbound 운영 계층)는 그 위에서 다음을 담당한다.
 
 - 설치
 - 초기 등록
@@ -133,7 +133,7 @@ Official FRP
 =
 Tunnel Engine
 
-FRP Auto Deploy
+Data Relay Link
 =
 Deployment
 + Enrollment
@@ -149,7 +149,7 @@ Deployment
 
 ## 2.3 Target Operating Scale — 2026-09-04 Current Direction
 
-FRP Auto Deploy는 수백~수천 대를 운영하는 Fleet Management 제품을 목표로 하지 않는다.
+Data Relay Link는 수백~수천 대를 운영하는 Fleet Management 제품을 목표로 하지 않는다.
 
 현실적인 target 규모는 다음과 같다.
 
@@ -225,7 +225,7 @@ NAT / Port Forwarding
 
 # 4. 제품이 제공하는 해결 방식
 
-FRP Auto Deploy는 공인 IP를 가진 하나의 FRP Server와 방화벽 뒤 Client 사이에 outbound tunnel을 생성한다.
+Data Relay Link는 공인 IP를 가진 하나의 FRP Server와 방화벽 뒤 Client 사이에 outbound tunnel을 생성한다.
 
 ```text
                      Internet
@@ -233,7 +233,7 @@ FRP Auto Deploy는 공인 IP를 가진 하나의 FRP Server와 방화벽 뒤 Cli
                          │
                          ▼
                 ┌────────────────┐
-                │ FRP Auto Deploy│
+                │ Data Relay Link│
                 │     Server     │
                 │   Public IP    │
                 └───────┬────────┘
@@ -273,7 +273,7 @@ Client는 Server로 outbound connection을 생성한다.
 운영자는 이후 대부분의 작업을:
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 에서 수행한다.
@@ -320,7 +320,7 @@ powershell.exe -File
 
 # 6. Product Principles
 
-FRP Auto Deploy의 모든 기능은 다음 원칙을 따라야 한다.
+Data Relay Link의 모든 기능은 다음 원칙을 따라야 한다.
 
 ## 6.1 Lightweight First
 
@@ -347,7 +347,7 @@ CLI
 제품의 기본 관리 인터페이스는:
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 이다.
@@ -397,7 +397,7 @@ fatedier/frp
     ↓
 official frps / frpc
     ↓
-FRP Auto Deploy management layer
+Data Relay Link management layer
 ```
 
 FRP 버전을 자동으로 최신 버전으로 따라가지 않는다.
@@ -669,7 +669,7 @@ HTTP application을 TCP 그대로 전달한다.
 
 HTTPS 역시 TCP passthrough다.
 
-Application TLS를 FRP Auto Deploy가 종료하지 않는다.
+Application TLS를 Data Relay Link가 종료하지 않는다.
 
 ---
 
@@ -895,7 +895,7 @@ ZERO_TOUCH_SHORT_URL_TRUST_MODEL
 의미:
 
 - operator가 DNS, public certificate, reverse proxy를 관리한다.
-- FRP Auto Deploy는 `bootstrap_hostname`을 소비한다.
+- Data Relay Link는 `bootstrap_hostname`을 소비한다.
 - private CA 기반 management trust는 유지한다.
 - `GET /i/<ticket>` 자체는 ticket을 consume/bind하지 않으며, 실제 binding은 secure redeem 단계에서 수행한다.
 - `bootstrap_hostname`이 없으면 transitional fallback을 유지한다.
@@ -1014,7 +1014,7 @@ Internet
 Firewall / NAT
    | DNAT
 10.10.10.10
-FRP Auto Deploy Server
+Data Relay Link Server
 ```
 
 권장 방식은 service port의 의미를 유지하기 위해 1:1 port mapping을 사용하는 것이다.
@@ -1029,13 +1029,13 @@ Public 6001 -> Internal 6001
 Public 16001 -> Internal 6001
 ```
 
-FRP Auto Deploy의 persistent public-port reservation과 실제 Internet endpoint의 의미가 달라질 수 있으므로 현재 product model에서는 권장하지 않는다.
+Data Relay Link의 persistent public-port reservation과 실제 Internet endpoint의 의미가 달라질 수 있으므로 현재 product model에서는 권장하지 않는다.
 
 ---
 
 # 17. Network Responsibility Boundary
 
-FRP Auto Deploy가 자동으로 변경하지 않는 것:
+Data Relay Link가 자동으로 변경하지 않는 것:
 
 - OCI Security List
 - AWS Security Group
@@ -1052,7 +1052,7 @@ FRP Auto Deploy가 자동으로 변경하지 않는 것:
 
 ## 17.1 DNS Provider Responsibility
 
-FRP Auto Deploy는 DNS Provider가 아니다. 다음을 자동 수행하지 않는다.
+Data Relay Link는 DNS Provider가 아니다. 다음을 자동 수행하지 않는다.
 
 ```text
 Route53 API
@@ -1062,7 +1062,7 @@ DDNS lifecycle
 ACME / Let's Encrypt lifecycle
 ```
 
-관리자가 외부 DNS에서 필요한 record를 구성하고 FRP Auto Deploy는 hostname을 **소비하고 표시**한다.
+관리자가 외부 DNS에서 필요한 record를 구성하고 Data Relay Link는 hostname을 **소비하고 표시**한다.
 
 ## 17.2 bootstrap_hostname과 public_hostname은 다르다
 
@@ -1123,7 +1123,7 @@ ssh -p 6000 admin@203.0.113.10
 
 ## 17.5 Hairpin NAT / Split DNS
 
-같은 내부 LAN에서 public hostname을 사용해 같은 firewall의 public IP로 되돌아가는 접속은 firewall의 hairpin NAT 지원 여부에 영향을 받을 수 있다. 이는 FRP Auto Deploy 자체 bug로 보지 않는다.
+같은 내부 LAN에서 public hostname을 사용해 같은 firewall의 public IP로 되돌아가는 접속은 firewall의 hairpin NAT 지원 여부에 영향을 받을 수 있다. 이는 Data Relay Link 자체 bug로 보지 않는다.
 
 필요 시:
 
@@ -1172,7 +1172,7 @@ release service 24cd7856 ssh
 ## Persistent REPL
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 로 persistent CLI에 진입한다.
@@ -1298,7 +1298,7 @@ http://access.example.com:6001
 http://203.0.113.10:6001          # fallback
 ```
 
-HTTPS는 TCP passthrough이므로 target Web Server certificate가 해당 hostname을 cover해야 정상적인 browser certificate validation이 가능하다. FRP Auto Deploy가 application TLS certificate lifecycle을 자동 관리하지 않는다.
+HTTPS는 TCP passthrough이므로 target Web Server certificate가 해당 hostname을 cover해야 정상적인 browser certificate validation이 가능하다. Data Relay Link가 application TLS certificate lifecycle을 자동 관리하지 않는다.
 
 ---
 
@@ -2278,7 +2278,7 @@ OCI Free Tier
 +
 Reserved Public IP
 +
-FRP Auto Deploy Server
+Data Relay Link Server
 ```
 
 장점:
@@ -2296,7 +2296,7 @@ FRP Auto Deploy Server
 - public IP
 - routing
 
-은 FRP Auto Deploy가 자동 관리하지 않는다.
+은 Data Relay Link가 자동 관리하지 않는다.
 
 OCI deployment는 제품의 reference environment이지 제품 자체의 필수 구성요소는 아니다.
 
@@ -2315,7 +2315,7 @@ OCI deployment는 제품의 reference environment이지 제품 자체의 필수 
 관리자가 대부분의 일상 작업을:
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 하나로 수행할 수 있다.
@@ -3140,7 +3140,7 @@ Upstream 호환성과 유지보수성을 유지한다.
 ## 2026-08 — CLI First
 
 **Decision**  
-Web UI/DB보다 `sudo frpctl`을 제품 중심 interface로 유지한다.
+Web UI/DB보다 `sudo drlink`을 제품 중심 interface로 유지한다.
 
 ---
 
@@ -3272,7 +3272,7 @@ Dynamic Group, broad Safe Fleet Operations, Controlled Rollout, Web UI/DB/HA 등
 
 # 69. 제품의 장기 모습
 
-FRP Auto Deploy의 목표는 거대한 Remote Management Platform이 아니다.
+Data Relay Link의 목표는 거대한 Remote Management Platform이 아니다.
 
 장기적인 모습은 다음과 같다.
 
@@ -3281,7 +3281,7 @@ FRP Auto Deploy의 목표는 거대한 Remote Management Platform이 아니다.
                        │
                        ▼
              ┌───────────────────┐
-             │ FRP Auto Deploy   │
+             │ Data Relay Link   │
              │ Server            │
              └─────────┬─────────┘
                        │
@@ -3295,7 +3295,7 @@ FRP Auto Deploy의 목표는 거대한 Remote Management Platform이 아니다.
 Management
 ────────────────────────────────────
 
-sudo frpctl
+sudo drlink
 
 Clients
 Services
@@ -3329,7 +3329,7 @@ doctor clients --group production
 
 # 70. 최종 Product Vision
 
-FRP Auto Deploy가 궁극적으로 제공해야 하는 경험은 다음과 같다.
+Data Relay Link가 궁극적으로 제공해야 하는 경험은 다음과 같다.
 
 기존 방식:
 
@@ -3344,7 +3344,7 @@ Manual Port Tracking
 Manual Client Tracking
 ```
 
-FRP Auto Deploy:
+Data Relay Link:
 
 ```text
 Install Server Once
@@ -3536,7 +3536,7 @@ https://access.example.com:6002
 
 IP fallback is always preserved.
 
-FRP Auto Deploy does not own:
+Data Relay Link does not own:
 
 ```text
 DNS provider records
@@ -3587,7 +3587,7 @@ Group은 대형 fleet framework가 아니라 few-to-few-dozen clients를 정리�
 
 새 기능 또는 코드 변경을 검토할 때 마지막으로 항상 다음 질문을 한다.
 
-> **“이 변경이 FRP Auto Deploy를 방화벽 뒤 여러 서버를 쉽고 안전하게 연결하고 관리하는 더 좋은 lightweight 제품으로 만드는가?”**
+> **“이 변경이 Data Relay Link를 방화벽 뒤 여러 서버를 쉽고 안전하게 연결하고 관리하는 더 좋은 lightweight 제품으로 만드는가?”**
 
 YES라면 이 문서의 Architecture Guardrail과 Security Model을 만족하는지 확인한 뒤 개발한다.
 
@@ -3612,7 +3612,7 @@ NO라면 제품 범위에 추가하지 않는다.
    - 일부 신규 상태 정보 포함
    - 다수 섹션 누락 / Markdown corruption 확인
 
-2. `FRP Auto Deploy — Product Master Document v2026-09-04 (1)`
+2. `Data Relay Link — Product Master Document v2026-09-04 (1)`
    - 3,728 lines
    - SHA-256 `324f74446e65da751b96e9b1ce035b9be627e35557c9aa80188ae8cd0099077e`
    - 완전한 2026-09-04 authoritative baseline

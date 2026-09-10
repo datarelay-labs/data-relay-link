@@ -21,8 +21,8 @@ _FRP_UPGRADE_ERRTRACE_WAS=0
 _frp_project_files_py() {
   if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_project_files.py" ]]; then
     printf '%s' "$BASE_DIR/lib/frp_project_files.py"
-  elif [[ -f /usr/local/lib/frp-auto-deploy/frp_project_files.py ]]; then
-    printf '%s' /usr/local/lib/frp-auto-deploy/frp_project_files.py
+  elif [[ -f /usr/local/lib/drlink/frp_project_files.py ]]; then
+    printf '%s' /usr/local/lib/drlink/frp_project_files.py
   else
     local here
     here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +44,7 @@ frp_server_upgrade_destinations() {
 }
 
 frp_server_upgrade_is_single443() {
-  python3 - "$(frp_server_fs /etc/frp-auto-deploy/config.json)" <<'PY'
+  python3 - "$(frp_server_fs /etc/drlink/config.json)" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -59,8 +59,8 @@ PY
 frp_load_installed_server_runtime() {
   # Persisted installed-server configuration. Distinct from installer input globals.
   local config version_file line
-  config="$(frp_server_fs /etc/frp-auto-deploy/config.json)"
-  version_file="$(frp_server_fs /etc/frp-auto-deploy/version)"
+  config="$(frp_server_fs /etc/drlink/config.json)"
+  version_file="$(frp_server_fs /etc/drlink/version)"
   [[ -f "$config" ]] || {
     echo "ERROR: installed server configuration is missing" >&2
     return 1
@@ -159,13 +159,13 @@ frp_server_upgrade_preserved_digest() {
     "$(frp_server_fs /usr/local/bin/frps)" \
     "$(frp_server_fs /etc/frp/frps.toml)" \
     "$(frp_server_fs /etc/frp/server_token)" \
-    "$(frp_server_fs /etc/frp-auto-deploy/config.json)" \
-    "$(frp_server_fs /etc/frp-auto-deploy/pki)" \
-    "$(frp_server_fs /var/lib/frp-auto-deploy/registry.json)" \
-    "$(frp_server_fs /var/lib/frp-auto-deploy/access-control.json)" \
-    "$(frp_server_fs /var/lib/frp-auto-deploy/enrollments)" \
-    "$(frp_server_fs /var/lib/frp-auto-deploy/bootstrap)" \
-    "$(frp_server_fs /var/lib/frp-auto-deploy/nginx-ownership)"
+    "$(frp_server_fs /etc/drlink/config.json)" \
+    "$(frp_server_fs /etc/drlink/pki)" \
+    "$(frp_server_fs /var/lib/drlink/registry.json)" \
+    "$(frp_server_fs /var/lib/drlink/access-control.json)" \
+    "$(frp_server_fs /var/lib/drlink/enrollments)" \
+    "$(frp_server_fs /var/lib/drlink/bootstrap)" \
+    "$(frp_server_fs /var/lib/drlink/nginx-ownership)"
 }
 
 frp_server_upgrade_allocator_port() {
@@ -173,7 +173,7 @@ frp_server_upgrade_allocator_port() {
     printf '%s' "$FRP_ALLOCATOR_LISTEN_PORT"
     return 0
   fi
-  python3 - "$(frp_server_fs /etc/frp-auto-deploy/config.json)" <<'PY'
+  python3 - "$(frp_server_fs /etc/drlink/config.json)" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -369,18 +369,18 @@ frp_server_upgrade_restore_snapshot_files() {
   if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_install_txn.py" ]]; then
     py="$BASE_DIR/lib/frp_install_txn.py"
   else
-    py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_install_txn.py)"
+    py="$(frp_server_fs /usr/local/lib/drlink/frp_install_txn.py)"
   fi
   python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" || return 1
   if frp_server_skip_systemd || frp_server_test_mode; then
     return 0
   fi
   frp_server_systemctl daemon-reload || true
-  frp_server_restart_unit frp-access-plugin || return 1
-  frp_server_restart_unit frps || return 1
-  frp_server_restart_unit frp-port-allocator || return 1
+  frp_server_restart_unit drlink-access || return 1
+  frp_server_restart_unit drlink-server || return 1
+  frp_server_restart_unit drlink-allocator || return 1
   if frp_server_upgrade_is_single443; then
-    frp_server_restart_unit frp-frontend || return 1
+    frp_server_restart_unit drlink-frontend || return 1
   fi
   return 0
 }
@@ -438,15 +438,15 @@ frp_server_upgrade_rollback() {
 frp_server_upgrade_ensure_egress() {
   # Bootstrap Controlled Egress state/unit on upgrades from pre-egress installs.
   local egress_file cfg_file unit_file
-  egress_file="$(frp_server_fs /var/lib/frp-auto-deploy/egress-control.json)"
-  cfg_file="$(frp_server_fs /etc/frp-auto-deploy/config.json)"
-  unit_file="$(frp_server_fs /etc/systemd/system/frp-egress-gateway.service)"
+  egress_file="$(frp_server_fs /var/lib/drlink/egress-control.json)"
+  cfg_file="$(frp_server_fs /etc/drlink/config.json)"
+  unit_file="$(frp_server_fs /etc/systemd/system/drlink-egress.service)"
   if [[ ! -f "$egress_file" ]]; then
     local mod=""
     if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_egress_control.py" ]]; then
       mod="$BASE_DIR/lib/frp_egress_control.py"
     else
-      mod="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_egress_control.py)"
+      mod="$(frp_server_fs /usr/local/lib/drlink/frp_egress_control.py)"
     fi
     python3 - "$egress_file" "$mod" <<'PY' || return 1
 import importlib.util, sys
@@ -467,8 +467,8 @@ path = Path(sys.argv[1])
 cfg = json.loads(path.read_text(encoding="utf-8"))
 changed = False
 defaults = {
-    "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
-    "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+    "egress_control_file": "/var/lib/drlink/egress-control.json",
+    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6080,
 }
@@ -495,9 +495,9 @@ if changed:
 PY
   fi
   if [[ -f "$unit_file" ]] && ! frp_server_skip_systemd && ! frp_server_test_mode; then
-    frp_server_systemctl enable frp-egress-gateway >/dev/null || return 1
+    frp_server_systemctl enable drlink-egress >/dev/null || return 1
   elif [[ -f "$unit_file" ]]; then
-    frp_server_record_action "enable frp-egress-gateway"
+    frp_server_record_action "enable drlink-egress"
   fi
   return 0
 }
@@ -525,11 +525,13 @@ frp_server_apply_project_upgrade() {
     echo "ERROR: run with sudo" >&2
     return 1
   fi
-  [[ -f "$(frp_server_fs /etc/frp-auto-deploy/config.json)" ]] &&
+  # Upgrade from pre-rename installs must migrate paths before presence checks.
+  frp_migrate_legacy_product_paths || return 1
+  [[ -f "$(frp_server_fs /etc/drlink/config.json)" ]] &&
   [[ -s "$(frp_server_fs /etc/frp/server_token)" ]] &&
-  [[ -f "$(frp_server_fs /var/lib/frp-auto-deploy/registry.json)" ]] &&
-  [[ -f "$(frp_server_fs /etc/frp-auto-deploy/pki/ca.crt)" ]] || {
-    echo "ERROR: no complete existing FRP server installation was found" >&2
+  [[ -f "$(frp_server_fs /var/lib/drlink/registry.json)" ]] &&
+  [[ -f "$(frp_server_fs /etc/drlink/pki/ca.crt)" ]] || {
+    echo "ERROR: no complete existing Data Relay Link server installation was found" >&2
     return 1
   }
 
@@ -545,7 +547,7 @@ frp_server_apply_project_upgrade() {
   target="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $1}')"
   target_channel="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $2}')"
   target_ref="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $3}')"
-  version_file="$(frp_server_fs /etc/frp-auto-deploy/version)"
+  version_file="$(frp_server_fs /etc/drlink/version)"
   previous="$(frp_read_kv_file "$version_file" PROJECT_VERSION)"
   previous="${previous:-legacy / unknown}"
   installed_channel="$(frp_server_display_or_unknown "${FRP_INSTALLED_RELEASE_CHANNEL:-}")"
@@ -616,27 +618,27 @@ frp_server_apply_project_upgrade() {
   frp_acquire_server_lock || return 1
   trap 'frp_release_server_lock; rm -rf "'"$staged"'"' RETURN
   preserved_before="$(frp_server_upgrade_preserved_digest)"
-  backups="$(frp_server_fs /var/lib/frp-auto-deploy/backups)"
+  backups="$(frp_server_fs /var/lib/drlink/backups)"
   snapshot="${backups}/project-update-$(date -u +%Y%m%dT%H%M%SZ)"
   FRP_INSTALL_SNAPSHOT="$snapshot"
   frp_server_create_snapshot "$snapshot" || return 1
   frp_prune_backup_dirs "$backups" "$FRP_SERVER_UPGRADE_BACKUP_KEEP"
 
-  frp_server_upgrade_changed "$staged" etc/systemd/system/frps.service && restart_frps=1
-  frp_server_upgrade_changed "$staged" etc/systemd/system/frp-port-allocator.service && restart_alloc=1
-  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp-port-allocator.py && restart_alloc=1
+  frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-server.service && restart_frps=1
+  frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-allocator.service && restart_alloc=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp-port-allocator.py && restart_alloc=1
   # Any Python module imported by the allocator must be listed in FRP_ALLOCATOR_RUNTIME_HELPERS.
   for rel in "${FRP_ALLOCATOR_RUNTIME_HELPERS[@]}"; do
-    frp_server_upgrade_changed "$staged" "usr/local/lib/frp-auto-deploy/${rel}" && restart_alloc=1
+    frp_server_upgrade_changed "$staged" "usr/local/lib/drlink/${rel}" && restart_alloc=1
   done
-  frp_server_upgrade_changed "$staged" etc/systemd/system/frp-access-plugin.service && restart_access=1
-  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp-access-plugin.py && restart_access=1
-  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp_access_control.py && restart_access=1
-  frp_server_upgrade_changed "$staged" etc/systemd/system/frp-egress-gateway.service && restart_egress=1
-  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp-egress-gateway.py && restart_egress=1
-  frp_server_upgrade_changed "$staged" usr/local/lib/frp-auto-deploy/frp_egress_control.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-access.service && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp-access-plugin.py && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_access_control.py && restart_access=1
+  frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-egress.service && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp-egress-gateway.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_control.py && restart_egress=1
   if frp_server_upgrade_is_single443; then
-    frp_server_upgrade_changed "$staged" etc/systemd/system/frp-frontend.service && restart_frontend=1
+    frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-frontend.service && restart_frontend=1
   fi
 
   if [[ "$-" == *E* ]]; then
@@ -661,12 +663,23 @@ frp_server_apply_project_upgrade() {
     frp_emit_failure_class FILE_COMMIT_FAILED
     return 1
   fi
+  # Project file install must not mutate protected runtime state.
+  if [[ "$(frp_server_upgrade_preserved_digest)" != "$preserved_before" ]]; then
+    echo "ERROR: protected server state changed during project file install" >&2
+    frp_server_upgrade_rollback "$snapshot"
+    frp_emit_failure_class STATE_PRESERVATION_FAILED
+    return 1
+  fi
   if ! frp_server_upgrade_ensure_egress; then
     frp_server_upgrade_rollback "$snapshot"
     frp_emit_failure_class FILE_COMMIT_FAILED
     return 1
   fi
   restart_egress=1
+  # Controlled Egress bootstrap may intentionally add default keys to
+  # config.json and create egress-control.json on pre-egress upgrades.
+  # Re-baseline after that deliberate migration step.
+  preserved_before="$(frp_server_upgrade_preserved_digest)"
   if ! frp_server_upgrade_post_mutation_guard; then
     frp_server_upgrade_rollback "$snapshot"
     frp_emit_failure_class FILE_COMMIT_FAILED
@@ -695,24 +708,24 @@ frp_server_apply_project_upgrade() {
     fi
   fi
   if [[ "$restart_access" == "1" ]]; then
-    frp_server_restart_unit frp-access-plugin || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_restart_unit drlink-access || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_access || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_egress" == "1" ]]; then
-    frp_server_restart_unit frp-egress-gateway || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_restart_unit drlink-egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_frps" == "1" ]]; then
-    frp_server_restart_unit frps || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_restart_unit drlink-server || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_frps || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_alloc" == "1" ]]; then
-    frp_server_restart_unit frp-port-allocator || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_restart_unit drlink-allocator || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_allocator "$(frp_server_upgrade_allocator_port)" ||
       { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_frontend" == "1" ]]; then
-    frp_server_restart_unit frp-frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_restart_unit drlink-frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
   if [[ "$restart_frps" != "1" ]]; then
@@ -744,6 +757,7 @@ frp_server_apply_project_upgrade() {
   _FRP_UPGRADE_MUTATION_STARTED=0
   frp_txn_clear server
   FRP_INSTALL_SNAPSHOT=""
+  frp_migrate_legacy_systemd_units || true
   frp_audit_emit project_update.completed
   echo "Server project update completed successfully."
   echo "Project version : ${previous} -> ${target}"

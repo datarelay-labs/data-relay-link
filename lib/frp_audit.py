@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AUDIT_SCHEMA = 1
-DEFAULT_AUDIT_PATH = "/var/log/frp-auto-deploy/audit.jsonl"
+DEFAULT_AUDIT_PATH = "/var/log/drlink/audit.jsonl"
 MAX_RECORD_BYTES = 16_384
 SECRET_KEY_RE = re.compile(
     r"(ticket|secret|token|password|passwd|private.?key|mac_key|enrollment.?code|"
@@ -172,8 +172,8 @@ def discover_audit_path(caller_file=None):
         candidates.append(here.parent.parent / "lib" / "frp-auto-deploy" / "frp_audit.py")
     root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
     if root:
-        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_audit.py")
-    candidates.append(Path("/usr/local/lib/frp-auto-deploy/frp_audit.py"))
+        candidates.append(Path(root) / "usr/local/lib/drlink/frp_audit.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_audit.py"))
     here = Path(__file__).resolve()
     candidates.append(here)
     for path in candidates:

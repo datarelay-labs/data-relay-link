@@ -712,7 +712,7 @@ def atomic_write_json(path, data, mode=0o600):
 def load_server_registry(root=None):
     if root is None:
         root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-    cfg_path = Path(str(root) + '/etc/frp-auto-deploy/config.json')
+    cfg_path = Path(str(root) + '/etc/drlink/config.json')
     cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
     path = Path(cfg['registry_file'])
     if root and not str(path).startswith(str(root)):

@@ -24,7 +24,7 @@ Operator reverse proxy (Caddy / nginx / LB)
    |
    | private / loopback upstream
    v
-FRP Auto Deploy allocator
+Data Relay Link allocator
    |
    +-- GET  /i/<opaque>          generic bootstrap script (no ticket consume)
    +-- GET  /ca.crt              Private CA certificate (existing)
@@ -35,20 +35,20 @@ after enrollment:
 
 Client
    |
-   | existing FRP Auto Deploy Private CA
+   | existing Data Relay Link Private CA
    v
 Management plane
 ```
 
-FRP Auto Deploy does **not** issue, renew, or store the public bootstrap
+Data Relay Link does **not** issue, renew, or store the public bootstrap
 certificate. The operator owns DNS, public TLS, and the reverse proxy.
 
 ## Configuration
 
 ```bash
-sudo frpctl set server bootstrap-hostname bootstrap.example.com
-sudo frpctl unset server bootstrap-hostname
-sudo frpctl show server
+sudo drlink set server bootstrap-hostname bootstrap.example.com
+sudo drlink unset server bootstrap-hostname
+sudo drlink show server
 ```
 
 `bootstrap_hostname` is separate from `public_hostname`:
@@ -68,7 +68,7 @@ ports, configure NAT, invoke ACME, or restart FRP services.
 3. Renew the public certificate
 4. Proxy only the required allocator paths (see below)
 
-## FRP Auto Deploy responsibilities
+## Data Relay Link responsibilities
 
 1. Serve `GET /i/<opaque-ticket>`
 2. Validate tickets without consuming them on GET
@@ -163,7 +163,7 @@ server {
 
 If the operator enables Caddy access logging, `/i/<ticket>` **must** be excluded
 or redacted. The complete short URL is a short-lived credential; raw URI logging
-at the operator edge defeats allocator-side redaction. FRP Auto Deploy does not
+at the operator edge defeats allocator-side redaction. Data Relay Link does not
 manage the reverse proxy — access-log policy remains an operator responsibility.
 
 ```caddy

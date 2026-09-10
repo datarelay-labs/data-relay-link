@@ -173,7 +173,7 @@ def dns_record_guidance(hostname, public_ip):
         '  Name  : %s' % hostname,
         '  Value : %s' % ip,
         '',
-        'DNS records are managed outside FRP Auto Deploy.',
+        'DNS records are managed outside Data Relay Link.',
         '',
         'The Public IP remains available while DNS propagates.',
     ]
@@ -349,4 +349,4 @@ def deploy_root():
 def config_path(root=None):
     if root is None:
         root = deploy_root()
-    return Path(root + '/etc/frp-auto-deploy/config.json')
+    return Path(root + '/etc/drlink/config.json')

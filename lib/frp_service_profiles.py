@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Server-owned Service Profiles (creation templates only).
 
-Authoritative state lives in /var/lib/frp-auto-deploy/service-profiles.json.
+Authoritative state lives in /var/lib/drlink/service-profiles.json.
 
 Profiles seed client service drafts. They never store remote_port, CLIENT ID,
 Service ID, or ACL assignments. Editing or deleting a profile must not mutate
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 PROFILES_SCHEMA_VERSION = 1
-DEFAULT_PROFILES_PATH = "/var/lib/frp-auto-deploy/service-profiles.json"
+DEFAULT_PROFILES_PATH = "/var/lib/drlink/service-profiles.json"
 PROFILE_ID_PREFIX = "prof_"
 PROFILE_ID_HEX_LEN = 12
 PROFILE_ID_RE = re.compile(r"^prof_[0-9a-f]{12}$")
@@ -140,12 +140,12 @@ def _load_health_module():
     candidates = []
     root = deploy_root()
     if root:
-        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_health_check.py")
+        candidates.append(Path(root) / "usr/local/lib/drlink/frp_health_check.py")
     here = Path(__file__).resolve().parent
     candidates.extend(
         [
             here / "frp_health_check.py",
-            Path("/usr/local/lib/frp-auto-deploy/frp_health_check.py"),
+            Path("/usr/local/lib/drlink/frp_health_check.py"),
         ]
     )
     for path in candidates:

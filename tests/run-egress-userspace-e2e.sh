@@ -14,19 +14,19 @@ scp "${SSH[@]}" "$ROOT/server/frp-egress-gateway.py" "$SERVER:/tmp/frp-egress-us
 ssh "${SSH[@]}" "$SERVER" bash -s <<'REMOTE'
 set -euo pipefail
 export FRP_DEPLOY_TEST_ROOT=/tmp/frp-egress-user-smoke
-mkdir -p "$FRP_DEPLOY_TEST_ROOT/usr/local/lib/frp-auto-deploy" \
-  "$FRP_DEPLOY_TEST_ROOT/etc/frp-auto-deploy" \
-  "$FRP_DEPLOY_TEST_ROOT/var/lib/frp-auto-deploy" \
-  "$FRP_DEPLOY_TEST_ROOT/var/log/frp-auto-deploy"
+mkdir -p "$FRP_DEPLOY_TEST_ROOT/usr/local/lib/drlink" \
+  "$FRP_DEPLOY_TEST_ROOT/etc/drlink" \
+  "$FRP_DEPLOY_TEST_ROOT/var/lib/drlink" \
+  "$FRP_DEPLOY_TEST_ROOT/var/log/drlink"
 cp /tmp/frp-egress-user-smoke/lib/frp_egress_control.py \
-  "$FRP_DEPLOY_TEST_ROOT/usr/local/lib/frp-auto-deploy/"
+  "$FRP_DEPLOY_TEST_ROOT/usr/local/lib/drlink/"
 python3 - <<'PY'
 import importlib.util, json, os
 from pathlib import Path
 root=Path(os.environ['FRP_DEPLOY_TEST_ROOT'])
-spec=importlib.util.spec_from_file_location('eg', root/'usr/local/lib/frp-auto-deploy/frp_egress_control.py')
+spec=importlib.util.spec_from_file_location('eg', root/'usr/local/lib/drlink/frp_egress_control.py')
 eg=importlib.util.module_from_spec(spec); spec.loader.exec_module(eg)
-path=root/'var/lib/frp-auto-deploy/egress-control.json'
+path=root/'var/lib/drlink/egress-control.json'
 eg.save_egress_state(eg.empty_egress_state(), path=path)
 def mut(st):
     pid,_=eg.create_profile(st,'smoke')
@@ -36,18 +36,18 @@ def mut(st):
     return pid
 eg.mutate_egress_state(mut, path=path)
 cfg={
- 'egress_control_file':'/var/lib/frp-auto-deploy/egress-control.json',
- 'egress_conn_log_file':'/var/log/frp-auto-deploy/egress-conn.jsonl',
+ 'egress_control_file':'/var/lib/drlink/egress-control.json',
+ 'egress_conn_log_file':'/var/log/drlink/egress-conn.jsonl',
  'egress_listen_addr':'0.0.0.0',
  'egress_listen_port':16080,
 }
-(root/'etc/frp-auto-deploy/config.json').write_text(json.dumps(cfg,indent=2)+'\n')
+(root/'etc/drlink/config.json').write_text(json.dumps(cfg,indent=2)+'\n')
 print('ready')
 PY
 pkill -f 'frp-egress-gateway.py --listen-port 16080' 2>/dev/null || true
 nohup env FRP_DEPLOY_TEST_ROOT=/tmp/frp-egress-user-smoke \
   python3 /tmp/frp-egress-user-smoke/server/frp-egress-gateway.py \
-  --config /etc/frp-auto-deploy/config.json \
+  --config /etc/drlink/config.json \
   --listen-addr 0.0.0.0 --listen-port 16080 \
   >/tmp/frp-egress-user-smoke/gateway.log 2>&1 &
 echo $! >/tmp/frp-egress-user-smoke/gateway.pid
@@ -83,13 +83,13 @@ kill "$(cat /tmp/frp-egress-user-smoke/gateway.pid)" 2>/dev/null || true
 sleep 1
 nohup env FRP_DEPLOY_TEST_ROOT=/tmp/frp-egress-user-smoke \
   python3 /tmp/frp-egress-user-smoke/server/frp-egress-gateway.py \
-  --config /etc/frp-auto-deploy/config.json \
+  --config /etc/drlink/config.json \
   --listen-addr 0.0.0.0 --listen-port 16080 \
   >/tmp/frp-egress-user-smoke/gateway.log 2>&1 &
 echo $! >/tmp/frp-egress-user-smoke/gateway.pid
 sleep 1
 ss -lntn | grep ':16080'
-systemctl is-active frps || true
+systemctl is-active drlink-server || true
 REMOTE2
 
 code=$(ssh "${SSH[@]}" "$CLIENT" "HTTP_PROXY=http://${SERVER_IP}:16080 HTTPS_PROXY=http://${SERVER_IP}:16080 curl -sS -o /dev/null -w '%{http_code}' --max-time 25 https://example.com/")

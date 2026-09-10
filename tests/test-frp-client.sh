@@ -105,7 +105,7 @@ SECRET='enroll-secret-abcdef0123456789abcdef0123456789ab'
 write_enrollment "$ALLOC_ROOT/enrollments" "$EID" "$SECRET"
 
 TREE="$WORKDIR/client"
-mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin" "$TREE/usr/local/lib/frp-auto-deploy"
+mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin" "$TREE/usr/local/lib/drlink"
 make_frpc "$TREE/usr/local/bin/frpc"
 
 export FRP_CLIENT_TEST_ROOT="$TREE"
@@ -177,18 +177,19 @@ file_mac=Path(sys.argv[3]).read_text().strip()
 assert file_mac==client.get('mgmt_mac_key')
 PY
 [[ -x "$TREE/usr/local/bin/frp-client" ]] || fail "frp-client not installed"
-[[ -x "$TREE/usr/local/bin/frpctl" ]] || fail "frpctl not installed"
-[[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh" ]] || fail "client lib not installed"
-[[ -f "$TREE/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" ]] || fail "mgmt auth helper not installed"
-[[ -f "$TREE/etc/frp-auto-deploy/version" ]] || fail "client version file missing"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$TREE/etc/frp-auto-deploy/version" || fail "client project version"
-grep -q 'FRP_VERSION=0.71.0' "$TREE/etc/frp-auto-deploy/version" || fail "client FRP version"
-[[ -f "$TREE/etc/frp-auto-deploy/allocator-ca.crt" ]] || fail "trusted CA missing"
+[[ -x "$TREE/usr/local/bin/drlink" ]] || fail "drlink not installed"
+[[ -x "$TREE/usr/local/lib/drlink/frpctl" ]] || fail "internal frpctl not installed"
+[[ -f "$TREE/usr/local/lib/drlink/frp-client-common.sh" ]] || fail "client lib not installed"
+[[ -f "$TREE/usr/local/lib/drlink/frp_mgmt_auth.py" ]] || fail "mgmt auth helper not installed"
+[[ -f "$TREE/etc/drlink/version" ]] || fail "client version file missing"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$TREE/etc/drlink/version" || fail "client project version"
+grep -q 'FRP_VERSION=0.71.0' "$TREE/etc/drlink/version" || fail "client FRP version"
+[[ -f "$TREE/etc/drlink/allocator-ca.crt" ]] || fail "trusted CA missing"
 grep -q 'serverPort = 8443' "$TREE/etc/frp/frpc.toml" || fail "frpc must use public control port"
 if grep -q 'serverPort = 443' "$TREE/etc/frp/frpc.toml"; then
   fail "frpc used internal listen port"
 fi
-ca_mode="$(python3 - "$TREE/etc/frp-auto-deploy/allocator-ca.crt" <<'PY'
+ca_mode="$(python3 - "$TREE/etc/drlink/allocator-ca.crt" <<'PY'
 import os,stat,sys
 print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))
 PY
@@ -250,11 +251,11 @@ grep -q "Project version : ${PROJECT_VERSION}" "$WORKDIR/status.out" || fail "st
 grep -q 'Hostname        : dp-example' "$WORKDIR/status.out" || fail "status hostname"
 grep -q 'Management identity : enrolled' "$WORKDIR/status.out" || fail "status identity"
 grep -q 'ssh' "$WORKDIR/status.out" || fail "status ssh"
-grep -q 'FRP Server: 203.0.113.10' "$WORKDIR/info.out" || fail "info server"
+grep -q 'Data Relay Link Server: 203.0.113.10' "$WORKDIR/info.out" || fail "info server"
 grep -q 'ssh -p 18200 aella@203.0.113.10' "$WORKDIR/info.out" || fail "info ssh connect"
 : >"$HOOK"
 FRP_CLIENT_TEST_MENU=1 "$ROOT/tools/frp-client" >"$WORKDIR/menu.out"
-grep -q 'FRP Client Management' "$WORKDIR/menu.out" || fail "menu header"
+grep -q 'Data Relay Link Client Management' "$WORKDIR/menu.out" || fail "menu header"
 grep -q '1) Add service' "$WORKDIR/menu.out" || fail "menu add"
 if grep -qx enroll "$HOOK"; then fail "menu contacted allocator"; fi
 if grep -qx restart "$HOOK"; then fail "menu restarted frpc"; fi
@@ -442,7 +443,7 @@ grep -q 'Display name: Grafana -> Dash' "$WORKDIR/mixed-pending.out" || fail "mi
 grep -q 'Target: 10.10.20.30:3000 -> 10.10.20.31:3000' "$WORKDIR/mixed-pending.out" || fail "mixed pending target"
 grep -q 'Display name: Grafana -> Dash' "$WORKDIR/mixed-summary.out" || fail "mixed summary name"
 grep -q 'Target: 10.10.20.30:3000 -> 10.10.20.31:3000' "$WORKDIR/mixed-summary.out" || fail "mixed summary target"
-grep -q 'will restart the FRP client' "$WORKDIR/mixed-summary.out" || fail "mixed is runtime"
+grep -q 'will restart the Data Relay Link client' "$WORKDIR/mixed-summary.out" || fail "mixed is runtime"
 "$ROOT/tools/frp-client" apply >"$WORKDIR/mixed.out"
 if ! grep -qx enroll "$HOOK"; then fail "mixed did not enroll"; fi
 if ! grep -qx restart "$HOOK"; then fail "mixed did not restart"; fi
@@ -746,7 +747,7 @@ export FRP_SERVICES_JSON='[{"id":"ssh","name":"SSH","protocol":"tcp","local_ip":
 if frp_client_main >"$WORKDIR/reinstall.out" 2>"$WORKDIR/reinstall.err"; then
   fail "installer should refuse an existing client"
 fi
-grep -q 'already has an FRP client installed' "$WORKDIR/reinstall.err" || fail "existing-install refusal message"
+grep -q 'already has a Data Relay Link client installed' "$WORKDIR/reinstall.err" || fail "existing-install refusal message"
 grep -q 'drlink update' "$WORKDIR/reinstall.err" || fail "existing-install should point at upgrade"
 fp_after="$(python3 "$ROOT/lib/frp_mgmt_auth.py" fingerprint "$TREE/etc/frp/client-identity.pub")"
 [[ "$fp_before" == "$fp_after" ]] || fail "refused reinstall rotated identity"
@@ -907,7 +908,7 @@ grep -q 'case-insensitive' "$WORKDIR/recover.err" "$WORKDIR/recover.out" || fail
 grep -q 'ERROR: select 1-8' "$WORKDIR/recover.err" "$WORKDIR/recover.out" || fail "invalid menu not recovered"
 grep -q 'invalid service number' "$WORKDIR/recover.err" "$WORKDIR/recover.out" || fail "invalid service number not recovered"
 grep -q 'invalid local_port' "$WORKDIR/recover.err" "$WORKDIR/recover.out" || fail "invalid port not recovered"
-grep -q 'FRP Client Management' "$WORKDIR/recover.out" || fail "menu did not continue"
+grep -q 'Data Relay Link Client Management' "$WORKDIR/recover.out" || fail "menu did not continue"
 python3 - "$STATE" <<'PY' || fail "recovery corrupted state"
 import json,sys
 from pathlib import Path

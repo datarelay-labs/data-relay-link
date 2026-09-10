@@ -322,7 +322,7 @@ def help_text(tokens, role):
 def _root_help(role):
     client, server = _role_parts(role)
     lines = [
-        "FRP Auto Deploy CLI",
+        "Data Relay Link CLI",
         "===================",
         "",
         "Grammar: <verb> <resource> [target] [property] [value]",
@@ -771,7 +771,7 @@ def context_help(tokens, role, names=None, clients=None):
                     "  set server bootstrap-hostname <fqdn>\n\n"
                     "Purpose:\n"
                     "  Set the publicly trusted Zero-Touch short URL hostname.\n"
-                    "  FRP Auto Deploy does not create DNS or issue certificates.\n"
+                    "  Data Relay Link does not create DNS or issue certificates.\n"
                     "  Operator terminates public TLS on a reverse proxy.\n\n"
                     "Example:\n"
                     "  set server bootstrap-hostname bootstrap.example.com\n\n"

@@ -10,8 +10,8 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy"
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink"
+python3 - "$TREE/etc/drlink/config.json" "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 cfg_path, reg_path = Path(sys.argv[1]), Path(sys.argv[2])
@@ -74,7 +74,7 @@ reg_path.write_text(json.dumps({
   },
 }, indent=2)+"\n")
 PY
-chmod 600 "$TREE/var/lib/frp-auto-deploy/registry.json"
+chmod 600 "$TREE/var/lib/drlink/registry.json"
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 
 python3 "$ROOT/tools/frp-clients" >"$WORKDIR/list.out"
@@ -106,7 +106,7 @@ pass "DUPLICATE_HOSTNAME_SAFE"
 
 python3 "$ROOT/tools/frp-client-set" aabbccdd --label seoul-groupware --note "Seoul office groupware server" \
   >"$WORKDIR/set.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "client-set mutated identity"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "client-set mutated identity"
 import json,sys
 from pathlib import Path
 c=json.loads(Path(sys.argv[1]).read_text())['clients']['aabbccdd00112233445566778899aa']

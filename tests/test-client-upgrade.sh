@@ -78,12 +78,12 @@ write_client_fixture() {
   local tree="$1"
   local with_identity="${2:-1}"
   local with_version="${3:-0}"
-  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy" \
-    "$tree/etc/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/drlink" \
+    "$tree/etc/drlink"
   write_dummy_frpc "$tree/usr/local/bin/frpc"
   write_old_tool "$tree/usr/local/bin/frp-client" "client"
-  write_old_tool "$tree/usr/local/lib/frp-auto-deploy/frp-client-common.sh" "common"
-  cat >"$tree/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" <<'EOF'
+  write_old_tool "$tree/usr/local/lib/drlink/frp-client-common.sh" "common"
+  cat >"$tree/usr/local/lib/drlink/frp_mgmt_auth.py" <<'EOF'
 print("old-auth")
 EOF
   python3 - "$tree/etc/frp/client-state.json" <<'PY'
@@ -127,19 +127,19 @@ remotePort = 6003
 EOF
   chmod 600 "$tree/etc/frp/frpc.toml"
   cat >"$tree/etc/frp/access-info.txt" <<'EOF'
-FRP Server: 203.0.113.10
+Data Relay Link Server: 203.0.113.10
 
 ssh
   Public : 203.0.113.10:6003
 EOF
   chmod 644 "$tree/etc/frp/access-info.txt"
-  mkdir -p "$tree/etc/frp-auto-deploy"
-  cat >"$tree/etc/frp-auto-deploy/allocator-ca.crt" <<'EOF'
+  mkdir -p "$tree/etc/drlink"
+  cat >"$tree/etc/drlink/allocator-ca.crt" <<'EOF'
 -----BEGIN CERTIFICATE-----
 MIIBkTCB+wIJAKFAKESECRET_o2p3q4r5s6t7u8v9w0x1
 -----END CERTIFICATE-----
 EOF
-  chmod 644 "$tree/etc/frp-auto-deploy/allocator-ca.crt"
+  chmod 644 "$tree/etc/drlink/allocator-ca.crt"
   if [[ "$with_identity" == "1" ]]; then
     python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
       "$tree/etc/frp/client-identity.key" "$tree/etc/frp/client-identity.pub"
@@ -152,11 +152,11 @@ PY
     chmod 600 "$tree/etc/frp/client-identity.mac"
   fi
   if [[ "$with_version" == "1" ]]; then
-    cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+    cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.1.0
 FRP_VERSION=0.71.0
 EOF
-    chmod 644 "$tree/etc/frp-auto-deploy/version"
+    chmod 644 "$tree/etc/drlink/version"
   fi
 }
 
@@ -174,7 +174,7 @@ files = [
     'etc/frp/client-identity.key',
     'etc/frp/client-identity.pub',
     'etc/frp/client-identity.mac',
-    'etc/frp-auto-deploy/allocator-ca.crt',
+    'etc/drlink/allocator-ca.crt',
     'usr/local/bin/frpc',
 ]
 data = {}
@@ -207,7 +207,7 @@ files = [
     'etc/frp/client-identity.key',
     'etc/frp/client-identity.pub',
     'etc/frp/client-identity.mac',
-    'etc/frp-auto-deploy/allocator-ca.crt',
+    'etc/drlink/allocator-ca.crt',
     'usr/local/bin/frpc',
 ]
 for rel in files:
@@ -251,7 +251,7 @@ pass "LEGACY_NO_VERSION_FILE_HANDLED"
 pass "CLIENT_STATUS_PROJECT_VERSION"
 
 # Server version tracking still uses the shared helper.
-grep -q 'frp_write_version_file "$(frp_server_fs /etc/frp-auto-deploy/version)"' "$ROOT/install-server.sh" || fail "server version helper"
+grep -q 'frp_write_version_file "$(frp_server_fs /etc/drlink/version)"' "$ROOT/install-server.sh" || fail "server version helper"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$ROOT/VERSION" || fail "VERSION file"
 pass "SERVER_VERSION_TRACKING_UNBROKEN"
 
@@ -272,10 +272,11 @@ fi
 assert_runtime_preserved "$ENROLLED" "$WORKDIR/enrolled.before" || fail "enrolled runtime changed"
 assert_no_leak "$WORKDIR/enrolled.out"
 assert_no_leak "$WORKDIR/enrolled.err"
-[[ -f "$ENROLLED/etc/frp-auto-deploy/version" ]] || fail "version file after upgrade"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$ENROLLED/etc/frp-auto-deploy/version" || fail "version migrated"
-assert_mode "$ENROLLED/etc/frp-auto-deploy/version" "0o644"
-[[ -x "$ENROLLED/usr/local/bin/frpctl" ]] || fail "frpctl installed by upgrade"
+[[ -f "$ENROLLED/etc/drlink/version" ]] || fail "version file after upgrade"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$ENROLLED/etc/drlink/version" || fail "version migrated"
+assert_mode "$ENROLLED/etc/drlink/version" "0o644"
+[[ -x "$ENROLLED/usr/local/bin/drlink" ]] || fail "drlink installed by upgrade"
+[[ -x "$ENROLLED/usr/local/lib/drlink/frpctl" ]] || fail "internal frpctl installed by upgrade"
 NEW_CLIENT_SHA="$(file_sha "$ENROLLED/usr/local/bin/frp-client")"
 [[ "$NEW_CLIENT_SHA" != "$OLD_CLIENT_SHA" ]] || fail "old frp-client was not replaced"
 grep -q 'old-client' "$ENROLLED/usr/local/bin/frp-client" && fail "old frp-client content remains"
@@ -349,7 +350,7 @@ if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/legacy.out" 2>"
 fi
 assert_runtime_preserved "$LEGACY" "$WORKDIR/legacy.before" || fail "legacy runtime changed"
 [[ ! -f "$LEGACY/etc/frp/client-identity.key" ]] || fail "legacy upgrade created identity"
-grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$LEGACY/etc/frp-auto-deploy/version" || fail "legacy version migration"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$LEGACY/etc/drlink/version" || fail "legacy version migration"
 grep -q "legacy / unknown -> ${PROJECT_VERSION}" "$WORKDIR/legacy.out" || fail "legacy version transition"
 grep -q 'Enrollment Code : NOT REQUIRED' "$WORKDIR/legacy.out" || fail "legacy upgrade asked for code"
 if grep -qi 'Enrollment Code:' "$WORKDIR/legacy.out"; then fail "legacy upgrade prompted for code"; fi
@@ -385,7 +386,7 @@ ROLL="$WORKDIR/rollback"
 write_client_fixture "$ROLL" 1 1
 snapshot_runtime "$ROLL" "$WORKDIR/roll.before"
 OLD_TOOL_SHA="$(file_sha "$ROLL/usr/local/bin/frp-client")"
-OLD_COMMON_SHA="$(file_sha "$ROLL/usr/local/lib/frp-auto-deploy/frp-client-common.sh")"
+OLD_COMMON_SHA="$(file_sha "$ROLL/usr/local/lib/drlink/frp-client-common.sh")"
 export FRP_CLIENT_TEST_ROOT="$ROLL"
 export FRP_CLIENT_UPGRADE_HOOK_FAIL=validate
 if "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/roll-validate.out" 2>"$WORKDIR/roll-validate.err"; then
@@ -395,7 +396,7 @@ unset FRP_CLIENT_UPGRADE_HOOK_FAIL
 assert_runtime_preserved "$ROLL" "$WORKDIR/roll.before" || fail "validate-fail mutated runtime"
 [[ "$(file_sha "$ROLL/usr/local/bin/frp-client")" == "$OLD_TOOL_SHA" ]] || fail "validate-fail replaced tools"
 grep -q 'UPGRADE_ROLLBACK=NOT_REQUIRED' "$WORKDIR/roll-validate.out" "$WORKDIR/roll-validate.err" || fail "validate pre-mutation marker"
-[[ ! -x "$ROLL/usr/local/bin/frpctl" ]] || fail "validate-fail installed frpctl"
+[[ ! -x "$ROLL/usr/local/bin/drlink" ]] || fail "validate-fail installed drlink"
 
 export FRP_CLIENT_UPGRADE_HOOK_FAIL=install
 if "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/roll-install.out" 2>"$WORKDIR/roll-install.err"; then
@@ -404,9 +405,9 @@ fi
 unset FRP_CLIENT_UPGRADE_HOOK_FAIL
 assert_runtime_preserved "$ROLL" "$WORKDIR/roll.before" || fail "install-fail mutated runtime"
 [[ "$(file_sha "$ROLL/usr/local/bin/frp-client")" == "$OLD_TOOL_SHA" ]] || fail "install-fail left new frp-client"
-[[ "$(file_sha "$ROLL/usr/local/lib/frp-auto-deploy/frp-client-common.sh")" == "$OLD_COMMON_SHA" ]] || fail "install-fail left partial libs"
+[[ "$(file_sha "$ROLL/usr/local/lib/drlink/frp-client-common.sh")" == "$OLD_COMMON_SHA" ]] || fail "install-fail left partial libs"
 grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/roll-install.out" "$WORKDIR/roll-install.err" || fail "install rollback marker"
-[[ ! -x "$ROLL/usr/local/bin/frpctl" ]] || fail "install-fail left frpctl"
+[[ ! -x "$ROLL/usr/local/bin/drlink" ]] || fail "install-fail left drlink"
 assert_no_leak "$WORKDIR/roll-install.out"
 assert_no_leak "$WORKDIR/roll-install.err"
 
@@ -440,16 +441,16 @@ fi
 unset FRP_CLIENT_UPGRADE_HOOK_FAIL FRP_CLIENT_UPGRADE_HOOK_ROLLBACK_FAIL
 grep -q 'UPDATE_ROLLBACK_FAILED' "$WORKDIR/rollback-failure.out" "$WORKDIR/rollback-failure.err" || fail "rollback failure class"
 grep -q 'RECOVERY_REQUIRED' "$WORKDIR/rollback-failure.out" "$WORKDIR/rollback-failure.err" || fail "rollback recovery marker"
-[[ -f "$ROLL_FAIL/var/lib/frp-auto-deploy/client-update-pending.json" ]] || fail "client rollback left no pending marker"
+[[ -f "$ROLL_FAIL/var/lib/drlink/client-update-pending.json" ]] || fail "client rollback left no pending marker"
 
 # Interrupted client-frp-update must not be recovered as a tools backup (would wipe tools).
 FRP_PEND="$WORKDIR/frp-pending-not-tools"
 write_client_fixture "$FRP_PEND" 1 1
 export FRP_CLIENT_TEST_ROOT="$FRP_PEND"
-mkdir -p "$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only"
-printf 'frpc-binary' >"$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only/frpc"
-chmod 0755 "$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only/frpc"
-python3 - "$FRP_PEND/var/lib/frp-auto-deploy/client-update-pending.json" <<'PY'
+mkdir -p "$FRP_PEND/var/lib/drlink/backups/frp-only"
+printf 'frpc-binary' >"$FRP_PEND/var/lib/drlink/backups/frp-only/frpc"
+chmod 0755 "$FRP_PEND/var/lib/drlink/backups/frp-only/frpc"
+python3 - "$FRP_PEND/var/lib/drlink/client-update-pending.json" <<'PY'
 import json,sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
@@ -463,19 +464,19 @@ Path(sys.argv[1]).write_text(json.dumps({
 }))
 PY
 BEFORE_CLIENT="$(file_sha "$FRP_PEND/usr/local/bin/frp-client")"
-BEFORE_COMMON="$(file_sha "$FRP_PEND/usr/local/lib/frp-auto-deploy/frp-client-common.sh")"
+BEFORE_COMMON="$(file_sha "$FRP_PEND/usr/local/lib/drlink/frp-client-common.sh")"
 # frpc shim already reports 0.71.0 via write_dummy_frpc
 "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/frp-pending.out" 2>"$WORKDIR/frp-pending.err" \
   || fail "client-frp-update pending recovery should continue"
 [[ -f "$FRP_PEND/usr/local/bin/frp-client" ]] || fail "frp-client wiped by wrong snapshot recovery"
-[[ -f "$FRP_PEND/usr/local/lib/frp-auto-deploy/frp-client-common.sh" ]] || fail "common lib wiped by wrong snapshot recovery"
-[[ ! -f "$FRP_PEND/var/lib/frp-auto-deploy/client-update-pending.json" ]] || fail "client-frp-update pending not cleared"
+[[ -f "$FRP_PEND/usr/local/lib/drlink/frp-client-common.sh" ]] || fail "common lib wiped by wrong snapshot recovery"
+[[ ! -f "$FRP_PEND/var/lib/drlink/client-update-pending.json" ]] || fail "client-frp-update pending not cleared"
 grep -q 'already reached 0.71.0' "$WORKDIR/frp-pending.out" "$WORKDIR/frp-pending.err" \
   || fail "missing frp-update pending clear message"
 # Direct restore_tools must refuse FRP-only snapshots.
 # shellcheck disable=SC1091
 . "$ROOT/lib/frp-client-common.sh"
-if frp_client_upgrade_restore_tools "$FRP_PEND/var/lib/frp-auto-deploy/backups/frp-only" 2>"$WORKDIR/restore-refuse.err"; then
+if frp_client_upgrade_restore_tools "$FRP_PEND/var/lib/drlink/backups/frp-only" 2>"$WORKDIR/restore-refuse.err"; then
   fail "restore_tools should refuse FRP binary backup"
 fi
 grep -q 'missing manifest' "$WORKDIR/restore-refuse.err" || fail "restore_tools refuse reason"

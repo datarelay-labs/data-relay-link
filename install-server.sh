@@ -6,6 +6,7 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$BASE_DIR/lib/frp-common.sh" ]] || { echo "ERROR: missing project file: $BASE_DIR/lib/frp-common.sh" >&2; exit 1; }
 # shellcheck source=lib/frp-common.sh
 . "$BASE_DIR/lib/frp-common.sh"
+frp_export_drlink_env_aliases
 
 for f in \
   "$BASE_DIR/VERSION" \
@@ -13,11 +14,11 @@ for f in \
   "$BASE_DIR/server/frp-access-plugin.py" \
   "$BASE_DIR/server/frp-egress-gateway.py" \
   "$BASE_DIR/server/migrate_token.py" \
-  "$BASE_DIR/server/frps.service" \
-  "$BASE_DIR/server/frp-port-allocator.service" \
-  "$BASE_DIR/server/frp-access-plugin.service" \
-  "$BASE_DIR/server/frp-egress-gateway.service" \
-  "$BASE_DIR/server/frp-frontend.service" \
+  "$BASE_DIR/server/drlink-server.service" \
+  "$BASE_DIR/server/drlink-allocator.service" \
+  "$BASE_DIR/server/drlink-access.service" \
+  "$BASE_DIR/server/drlink-egress.service" \
+  "$BASE_DIR/server/drlink-frontend.service" \
   "$BASE_DIR/lib/frp_access_control.py" \
   "$BASE_DIR/lib/frp_egress_control.py" \
   "$BASE_DIR/lib/frp_service_profiles.py" \
@@ -112,7 +113,7 @@ frp_server_config_path() {
   if [[ -n "${FRP_SERVER_CONFIG:-}" ]]; then
     printf '%s' "$FRP_SERVER_CONFIG"
   else
-    frp_server_fs /etc/frp-auto-deploy/config.json
+    frp_server_fs /etc/drlink/config.json
   fi
 }
 
@@ -154,7 +155,7 @@ frp_pki_dir() {
   if [[ -n "${FRP_PKI_DIR:-}" ]]; then
     printf '%s' "$FRP_PKI_DIR"
   else
-    frp_server_fs /etc/frp-auto-deploy/pki
+    frp_server_fs /etc/drlink/pki
   fi
 }
 
@@ -162,7 +163,7 @@ frp_server_install_manifest_files() {
   local lib_dir="$1" sbin_dir="$2" bin_dir="$3" rel mode src
   while IFS=: read -r rel mode src; do
     case "$rel" in
-      usr/local/lib/frp-auto-deploy/*)
+      usr/local/lib/drlink/*)
         install -m "$mode" "$BASE_DIR/$src" "${lib_dir}/$(basename "$rel")"
         ;;
       usr/local/sbin/*)
@@ -234,7 +235,7 @@ frp_nginx_bin() {
 }
 
 frp_nginx_ownership_path() {
-  frp_server_fs /var/lib/frp-auto-deploy/nginx-ownership
+  frp_server_fs /var/lib/drlink/nginx-ownership
 }
 
 frp_nginx_package_is_installed() {
@@ -327,7 +328,7 @@ frp_nginx_preflight() {
   frp_mode_is_single443 || return 0
   frp_nginx_snapshot_state
   # Reinstall of project-owned single-443: distro nginx.service is not
-  # frp-frontend.service. Leftover package autostart is cleaned up later.
+  # drlink-frontend.service. Leftover package autostart is cleaned up later.
   if frp_nginx_is_single443_reinstall; then
     return 0
   fi
@@ -371,13 +372,13 @@ frp_nginx_reconcile_distro_unit() {
   FRP_NGINX_DISTRO_DISABLED_BY_PROJECT=0
   if [[ "${FRP_NGINX_PACKAGE_WAS_INSTALLED:-0}" != "1" ]]; then
     # Case A: this install brought in the nginx package. Distro nginx.service
-    # often auto-starts on TCP/80; stop and disable it. Use frp-frontend only.
+    # often auto-starts on TCP/80; stop and disable it. Use drlink-frontend only.
     frp_nginx_stop_disable_distro
     FRP_NGINX_PACKAGE_INSTALLED_BY_PROJECT=1
     FRP_NGINX_DISTRO_DISABLED_BY_PROJECT=1
   elif frp_nginx_is_single443_reinstall; then
     # Case D: leftover distro nginx.service from a previous package autostart
-    # must not keep TCP/80. Do not confuse this unit with frp-frontend.service.
+    # must not keep TCP/80. Do not confuse this unit with drlink-frontend.service.
     if frp_distro_nginx_is_active || frp_distro_nginx_is_enabled; then
       frp_nginx_stop_disable_distro
       FRP_NGINX_DISTRO_DISABLED_BY_PROJECT=1
@@ -441,7 +442,7 @@ frp_frontend_port_preflight() {
     echo "ERROR: existing Direct deployment was not modified." >&2
   fi
   if command -v systemctl >/dev/null 2>&1 && frp_server_systemctl is-active --quiet nginx 2>/dev/null; then
-    echo "ERROR: distro nginx.service is active; stop or rebind it before using frp-frontend.service." >&2
+    echo "ERROR: distro nginx.service is active; stop or rebind it before using drlink-frontend.service." >&2
   fi
   return 1
 }
@@ -629,9 +630,9 @@ frp_wait_allocator_ready() {
   start="$(date +%s)"
 
   while true; do
-    if ! frp_server_systemctl is-active --quiet frp-port-allocator; then
-      echo "ERROR: frp-port-allocator.service stopped before becoming ready" >&2
-      frp_print_unit_diagnostics frp-port-allocator
+    if ! frp_server_systemctl is-active --quiet drlink-allocator; then
+      echo "ERROR: drlink-allocator.service stopped before becoming ready" >&2
+      frp_print_unit_diagnostics drlink-allocator
       return 1
     fi
     if frp_server_curl -fsS --cacert "$ca" "$url" >/dev/null 2>&1; then
@@ -640,7 +641,7 @@ frp_wait_allocator_ready() {
     now="$(date +%s)"
     if (( now - start >= timeout )); then
       echo "ERROR: FRP allocator did not become ready within ${timeout} seconds" >&2
-      frp_print_unit_diagnostics frp-port-allocator
+      frp_print_unit_diagnostics drlink-allocator
       return 1
     fi
     if [[ "$announced" == "0" ]]; then
@@ -1134,16 +1135,16 @@ cfg = {
     'allocator_listen_port': int(sys.argv[8]),
     'listen_port': int(sys.argv[8]),
     'allocator_public_url': sys.argv[9],
-    'registry_file': '/var/lib/frp-auto-deploy/registry.json',
-    'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-    'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
+    'registry_file': '/var/lib/drlink/registry.json',
+    'enrollments_dir': '/var/lib/drlink/enrollments',
+    'bootstrap_dir': '/var/lib/drlink/bootstrap',
     'enrollment_retention_days': 30,
     'token_file': '/etc/frp/server_token',
-    'access_control_file': '/var/lib/frp-auto-deploy/access-control.json',
-    'service_profiles_file': '/var/lib/frp-auto-deploy/service-profiles.json',
-    'egress_control_file': '/var/lib/frp-auto-deploy/egress-control.json',
-    'access_conn_log_file': '/var/log/frp-auto-deploy/access-conn.jsonl',
-    'egress_conn_log_file': '/var/log/frp-auto-deploy/egress-conn.jsonl',
+    'access_control_file': '/var/lib/drlink/access-control.json',
+    'service_profiles_file': '/var/lib/drlink/service-profiles.json',
+    'egress_control_file': '/var/lib/drlink/egress-control.json',
+    'access_conn_log_file': '/var/log/drlink/access-conn.jsonl',
+    'egress_conn_log_file': '/var/log/drlink/egress-conn.jsonl',
     'egress_listen_addr': '0.0.0.0',
     'egress_listen_port': 6080,
     'access_plugin_addr': '127.0.0.1:6101',
@@ -1228,9 +1229,9 @@ EOF2
 write_frontend_config() {
   local dest="$1" pki run_dir log_dir temp_root
   pki="$(frp_pki_dir)"
-  run_dir="$(frp_server_fs /run/frp-auto-deploy)"
-  log_dir="$(frp_server_fs /var/log/frp-auto-deploy)"
-  temp_root="$(frp_server_fs /var/lib/frp-auto-deploy/nginx)"
+  run_dir="$(frp_server_fs /run/drlink)"
+  log_dir="$(frp_server_fs /var/log/drlink)"
+  temp_root="$(frp_server_fs /var/lib/drlink/nginx)"
   mkdir -p "$run_dir" "$log_dir" "$temp_root/body" "$temp_root/proxy" \
     "$temp_root/fastcgi" "$temp_root/uwsgi" "$temp_root/scgi"
   chmod 700 "$run_dir" "$log_dir" "$temp_root"
@@ -1250,7 +1251,7 @@ write_frontend_config() {
 
 write_frontend_unit() {
   local dest="$1" src bin unit
-  src="$BASE_DIR/server/frp-frontend.service"
+  src="$BASE_DIR/server/drlink-frontend.service"
   bin="$(frp_nginx_bin)"
   [[ -n "$bin" ]] || bin=/usr/sbin/nginx
   unit="$(mktemp)"
@@ -1268,14 +1269,14 @@ PY
 
 frp_frontend_validate_config() {
   local conf bin check port py
-  conf="$(frp_server_fs /etc/frp-auto-deploy/frontend.conf)"
+  conf="$(frp_server_fs /etc/drlink/frontend.conf)"
   if [[ ! -f "$conf" ]]; then
     echo "ERROR: nginx frontend configuration is missing" >&2
     return 1
   fi
   py="$BASE_DIR/lib/frp_frontend.py"
   if [[ ! -f "$py" ]]; then
-    py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_frontend.py)"
+    py="$(frp_server_fs /usr/local/lib/drlink/frp_frontend.py)"
   fi
   bin="$(frp_nginx_bin)"
   if [[ -z "$bin" || ! -x "$bin" ]]; then
@@ -1316,7 +1317,7 @@ frp_server_restore_frps_backup() {
 }
 
 frp_server_lock_path() {
-  frp_server_fs /var/lib/frp-auto-deploy/server-lifecycle.lock
+  frp_server_fs /var/lib/drlink/server-lifecycle.lock
 }
 
 frp_acquire_server_lock() {
@@ -1400,7 +1401,7 @@ frp_server_rollback_snapshot() {
   fi
   py="$BASE_DIR/lib/frp_install_txn.py"
   if [[ ! -f "$py" ]]; then
-    py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_install_txn.py)"
+    py="$(frp_server_fs /usr/local/lib/drlink/frp_install_txn.py)"
   fi
   # Bash 4.2 (Amazon Linux 2) treats empty "${arr[@]}" as unbound under set -u.
   if ! frp_server_skip_systemd && ! frp_server_test_mode; then
@@ -1444,7 +1445,7 @@ frp_verify_frontend_proxy_health() {
   fi
   py="$BASE_DIR/lib/frp_frontend.py"
   if [[ ! -f "$py" ]]; then
-    py="$(frp_server_fs /usr/local/lib/frp-auto-deploy/frp_frontend.py)"
+    py="$(frp_server_fs /usr/local/lib/drlink/frp_frontend.py)"
   fi
   ca="${FRP_INSTALLED_CA_CERT:-$(frp_pki_dir)/ca.crt}"
   expected="${CA_FINGERPRINT:-}"
@@ -1468,7 +1469,7 @@ frp_server_health_frontend() {
   if frp_server_skip_systemd; then
     return 0
   fi
-  frp_wait_unit_active frp-frontend
+  frp_wait_unit_active drlink-frontend
 }
 
 frp_ensure_server_pki() {
@@ -1606,10 +1607,10 @@ frp_server_ensure_sandbox_dirs() {
   # starts the allocator/frontend. Missing dirs cause status=226/NAMESPACE.
   local etc_frp etc_proj var_lib var_log run_dir
   etc_frp="$(frp_server_fs /etc/frp)"
-  etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
-  var_lib="$(frp_server_fs /var/lib/frp-auto-deploy)"
-  var_log="$(frp_server_fs /var/log/frp-auto-deploy)"
-  run_dir="$(frp_server_fs /run/frp-auto-deploy)"
+  etc_proj="$(frp_server_fs /etc/drlink)"
+  var_lib="$(frp_server_fs /var/lib/drlink)"
+  var_log="$(frp_server_fs /var/log/drlink)"
+  run_dir="$(frp_server_fs /run/drlink)"
   mkdir -p "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
   if [[ ${EUID} -eq 0 ]]; then
@@ -1623,7 +1624,7 @@ frp_server_skip_systemd() {
 
 frp_server_record_action() {
   local log
-  log="$(frp_server_fs /var/lib/frp-auto-deploy/install-actions.log)"
+  log="$(frp_server_fs /var/lib/drlink/install-actions.log)"
   mkdir -p "$(dirname "$log")"
   printf '%s\n' "$1" >>"$log"
 }
@@ -1631,10 +1632,10 @@ frp_server_record_action() {
 frp_server_enable_units() {
   if frp_server_skip_systemd; then
     if frp_mode_is_single443; then
-      frp_server_record_action "enable frps frp-access-plugin frp-egress-gateway frp-port-allocator frp-frontend"
+      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-allocator drlink-frontend"
     else
-      frp_server_record_action "enable frps frp-access-plugin frp-egress-gateway frp-port-allocator"
-      frp_server_record_action "disable frp-frontend"
+      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-allocator"
+      frp_server_record_action "disable drlink-frontend"
     fi
     if [[ "${FRP_INSTALL_HOOK_ENABLE_FAIL:-}" == "1" ]]; then
       echo "ERROR: simulated systemctl enable failure" >&2
@@ -1643,10 +1644,10 @@ frp_server_enable_units() {
     return 0
   fi
   if frp_mode_is_single443; then
-    frp_server_systemctl enable frps frp-access-plugin frp-egress-gateway frp-port-allocator frp-frontend >/dev/null
+    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-allocator drlink-frontend >/dev/null
   else
-    frp_server_systemctl enable frps frp-access-plugin frp-egress-gateway frp-port-allocator >/dev/null
-    frp_server_systemctl disable --now frp-frontend >/dev/null 2>&1 || true
+    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-allocator >/dev/null
+    frp_server_systemctl disable --now drlink-frontend >/dev/null 2>&1 || true
   fi
 }
 
@@ -1671,7 +1672,7 @@ frp_server_health_frps() {
   if frp_server_skip_systemd; then
     return 0
   fi
-  frp_wait_unit_active frps
+  frp_wait_unit_active drlink-server
 }
 
 frp_server_health_allocator() {
@@ -1696,10 +1697,10 @@ frp_server_health_access() {
   if frp_server_skip_systemd; then
     return 0
   fi
-  frp_wait_unit_active frp-access-plugin || return 1
+  frp_wait_unit_active drlink-access || return 1
   addr="${FRP_ACCESS_PLUGIN_ADDR:-127.0.0.1:6101}"
-  if [[ -r "$(frp_server_fs /etc/frp-auto-deploy/config.json)" ]]; then
-    addr="$(python3 - "$(frp_server_fs /etc/frp-auto-deploy/config.json)" <<'PY' 2>/dev/null || true
+  if [[ -r "$(frp_server_fs /etc/drlink/config.json)" ]]; then
+    addr="$(python3 - "$(frp_server_fs /etc/drlink/config.json)" <<'PY' 2>/dev/null || true
 import json, sys
 from pathlib import Path
 try:
@@ -1729,7 +1730,7 @@ frp_server_health_egress() {
   if frp_server_skip_systemd; then
     return 0
   fi
-  frp_wait_unit_active frp-egress-gateway || return 1
+  frp_wait_unit_active drlink-egress || return 1
   return 0
 }
 
@@ -1802,6 +1803,9 @@ frp_server_main() {
     echo "ERROR: run with sudo" >&2
     return 1
   fi
+  # Identity migration for upgrades from pre-rename legacy product installs.
+  frp_migrate_legacy_product_paths || return 1
+
   # Server install/reinstall owns the server transaction marker only.
   FRP_TXN_ROLE=server
   export FRP_TXN_ROLE
@@ -1846,22 +1850,22 @@ frp_server_main() {
   local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_frontend sbin_dir bin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
-  etc_proj="$(frp_server_fs /etc/frp-auto-deploy)"
-  var_lib="$(frp_server_fs /var/lib/frp-auto-deploy)"
-  version_file="$(frp_server_fs /etc/frp-auto-deploy/version)"
+  etc_proj="$(frp_server_fs /etc/drlink)"
+  var_lib="$(frp_server_fs /var/lib/drlink)"
+  version_file="$(frp_server_fs /etc/drlink/version)"
   token_file="$(frp_server_fs /etc/frp/server_token)"
   frps_toml="$(frp_server_fs /etc/frp/frps.toml)"
-  frontend_conf="$(frp_server_fs /etc/frp-auto-deploy/frontend.conf)"
-  registry_file="$(frp_server_fs /var/lib/frp-auto-deploy/registry.json)"
-  access_control_file="$(frp_server_fs /var/lib/frp-auto-deploy/access-control.json)"
-  egress_control_file="$(frp_server_fs /var/lib/frp-auto-deploy/egress-control.json)"
-  backups_dir="$(frp_server_fs /var/lib/frp-auto-deploy/backups)"
-  lib_dir="$(frp_server_fs /usr/local/lib/frp-auto-deploy)"
-  unit_frps="$(frp_server_fs /etc/systemd/system/frps.service)"
-  unit_alloc="$(frp_server_fs /etc/systemd/system/frp-port-allocator.service)"
-  unit_access="$(frp_server_fs /etc/systemd/system/frp-access-plugin.service)"
-  unit_egress="$(frp_server_fs /etc/systemd/system/frp-egress-gateway.service)"
-  unit_frontend="$(frp_server_fs /etc/systemd/system/frp-frontend.service)"
+  frontend_conf="$(frp_server_fs /etc/drlink/frontend.conf)"
+  registry_file="$(frp_server_fs /var/lib/drlink/registry.json)"
+  access_control_file="$(frp_server_fs /var/lib/drlink/access-control.json)"
+  egress_control_file="$(frp_server_fs /var/lib/drlink/egress-control.json)"
+  backups_dir="$(frp_server_fs /var/lib/drlink/backups)"
+  lib_dir="$(frp_server_fs /usr/local/lib/drlink)"
+  unit_frps="$(frp_server_fs /etc/systemd/system/drlink-server.service)"
+  unit_alloc="$(frp_server_fs /etc/systemd/system/drlink-allocator.service)"
+  unit_access="$(frp_server_fs /etc/systemd/system/drlink-access.service)"
+  unit_egress="$(frp_server_fs /etc/systemd/system/drlink-egress.service)"
+  unit_frontend="$(frp_server_fs /etc/systemd/system/drlink-frontend.service)"
   sbin_dir="$(frp_server_fs /usr/local/sbin)"
   bin_dir="$(frp_server_fs /usr/local/bin)"
 
@@ -1925,7 +1929,7 @@ frp_server_main() {
   frp_server_ensure_sandbox_dirs
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir"
   if [[ ${EUID} -eq 0 ]]; then
-    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$(frp_server_fs /var/log/frp-auto-deploy)" 2>/dev/null || true
+    chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$(frp_server_fs /var/log/drlink)" 2>/dev/null || true
   fi
 
   TOKEN_ACTION=""
@@ -2005,7 +2009,7 @@ PY
   fi
   [[ -f "$access_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "access-control.json is missing"; return 1; }
 
-  service_profiles_file="$(frp_server_fs /var/lib/frp-auto-deploy/service-profiles.json)"
+  service_profiles_file="$(frp_server_fs /var/lib/drlink/service-profiles.json)"
   if [[ ! -f "$service_profiles_file" ]]; then
     if ! python3 - "$service_profiles_file" "$BASE_DIR/lib/frp_service_profiles.py" <<'PY'
 import importlib.util, sys
@@ -2046,16 +2050,16 @@ PY
   [[ -f "$egress_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "egress-control.json is missing"; return 1; }
 
   # Ensure Controlled Egress keys exist on upgrades without rewriting unrelated config.
-  if [[ -f "$(frp_server_fs /etc/frp-auto-deploy/config.json)" ]]; then
-    python3 - "$(frp_server_fs /etc/frp-auto-deploy/config.json)" <<'PY' || true
+  if [[ -f "$(frp_server_fs /etc/drlink/config.json)" ]]; then
+    python3 - "$(frp_server_fs /etc/drlink/config.json)" <<'PY' || true
 import json, sys, tempfile, os
 from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text(encoding="utf-8"))
 changed = False
 defaults = {
-    "egress_control_file": "/var/lib/frp-auto-deploy/egress-control.json",
-    "egress_conn_log_file": "/var/log/frp-auto-deploy/egress-conn.jsonl",
+    "egress_control_file": "/var/lib/drlink/egress-control.json",
+    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6080,
 }
@@ -2083,15 +2087,15 @@ PY
   fi
 
   frp_server_install_manifest_files "$lib_dir" "$sbin_dir" "$bin_dir"
-  install -m 0644 "$BASE_DIR/server/frps.service" "$unit_frps"
+  install -m 0644 "$BASE_DIR/server/drlink-server.service" "$unit_frps"
   frp_write_compatible_systemd_unit \
-    "$BASE_DIR/server/frp-port-allocator.service" \
+    "$BASE_DIR/server/drlink-allocator.service" \
     "$unit_alloc"
   frp_write_compatible_systemd_unit \
-    "$BASE_DIR/server/frp-access-plugin.service" \
+    "$BASE_DIR/server/drlink-access.service" \
     "$unit_access"
   frp_write_compatible_systemd_unit \
-    "$BASE_DIR/server/frp-egress-gateway.service" \
+    "$BASE_DIR/server/drlink-egress.service" \
     "$unit_egress"
   if frp_mode_is_single443; then
     write_frontend_config "$frontend_conf"
@@ -2186,6 +2190,7 @@ PY
     frp_server_fail_after_mutation SYSTEMD_ENABLE_FAILED "systemd enable failed; installation is not complete."
     return 1
   fi
+  frp_migrate_legacy_systemd_units || true
 
   if frp_mode_is_single443; then
     if ! frp_frontend_validate_config; then
@@ -2195,32 +2200,32 @@ PY
   fi
 
   if [[ "$need_access_restart" == "1" ]]; then
-    if ! frp_server_restart_unit frp-access-plugin; then
-      frp_server_fail_after_mutation SERVICE_START_FAILED "frp-access-plugin failed to start; installation is not complete."
+    if ! frp_server_restart_unit drlink-access; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-access failed to start; installation is not complete."
       return 1
     fi
   fi
   if [[ "$need_egress_restart" == "1" ]]; then
-    if ! frp_server_restart_unit frp-egress-gateway; then
-      frp_server_fail_after_mutation SERVICE_START_FAILED "frp-egress-gateway failed to start; installation is not complete."
+    if ! frp_server_restart_unit drlink-egress; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-egress failed to start; installation is not complete."
       return 1
     fi
   fi
   if [[ "$need_frps_restart" == "1" ]]; then
-    if ! frp_server_restart_unit frps; then
+    if ! frp_server_restart_unit drlink-server; then
       frp_server_fail_after_mutation SERVICE_START_FAILED "frps failed to start; installation is not complete."
       return 1
     fi
   fi
   if [[ "$need_alloc_restart" == "1" ]]; then
-    if ! frp_server_restart_unit frp-port-allocator; then
-      frp_server_fail_after_mutation SERVICE_START_FAILED "frp-port-allocator failed to start; previous semantic configuration restored."
+    if ! frp_server_restart_unit drlink-allocator; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-allocator failed to start; previous semantic configuration restored."
       return 1
     fi
   fi
   if [[ "$need_frontend_restart" == "1" ]]; then
-    if ! frp_server_restart_unit frp-frontend; then
-      frp_server_fail_after_mutation SERVICE_START_FAILED "frp-frontend failed to start; previous semantic configuration restored."
+    if ! frp_server_restart_unit drlink-frontend; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-frontend failed to start; previous semantic configuration restored."
       return 1
     fi
   fi
@@ -2257,7 +2262,7 @@ PY
   fi
 
   # Version metadata is written only after a successful install/reinstall.
-  frp_write_version_file "$(frp_server_fs /etc/frp-auto-deploy/version)"
+  frp_write_version_file "$(frp_server_fs /etc/drlink/version)"
   frp_txn_clear server
   frp_prune_backup_dirs "$backups_dir" "$FRP_BACKUP_KEEP"
   frp_server_end_tmp
@@ -2307,8 +2312,7 @@ EOF2
   frp_print_nat_summary
   cat <<EOF2
 Create a client enrollment:
-  sudo drlink create-client
-  sudo frp-create-client
+  sudo drlink create client
 
 Everyday command (remember this one):
   sudo drlink
@@ -2316,15 +2320,12 @@ Everyday command (remember this one):
 
 Check schema v2 deployment readiness:
   sudo drlink status
-  sudo frp-server-status
-  sudo frp-server-status --check
 
-Update FRP to the tested version:
+Update the upstream FRP engine to the tested version:
   sudo drlink update
-  sudo frp-update
 
 List clients:
-  sudo frp-clients
+  sudo drlink show clients
 
 ============================================================
 EOF2

@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Unified operator entry point for frp-auto-deploy.
+# Internal Data Relay Link operator dispatcher (not installed on PATH).
+# Canonical user-facing CLI is /usr/local/bin/drlink.
 # Thin dispatcher over existing commands. Does not reimplement registry or
 # client-state mutations.
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
 _FRPCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRP_CTL_CMD_NAME="${FRP_CTL_CMD_NAME:-$(basename "${BASH_SOURCE[0]}")}"
+# When invoked via tools/drlink, FRP_CTL_CMD_NAME is already set to drlink.
+if [[ -z "${FRP_CTL_CMD_NAME:-}" || "${FRP_CTL_CMD_NAME}" == "frpctl" ]]; then
+  if [[ -x /usr/local/bin/drlink ]] || [[ "${FRP_CTL_FORCE_DRLINK:-}" == "1" ]]; then
+    FRP_CTL_CMD_NAME="drlink"
+  else
+    FRP_CTL_CMD_NAME="$(basename "${BASH_SOURCE[0]}")"
+  fi
+fi
+export FRP_CTL_CMD_NAME
 FRP_CTL_PRODUCT_NAME="${FRP_CTL_PRODUCT_NAME:-Data Relay Link}"
 FRP_CTL_PRODUCT_FAMILY="${FRP_CTL_PRODUCT_FAMILY:-Data Relay Link Management}"
 FRP_CTL_PROMPT="${FRP_CTL_PROMPT:-${FRP_CTL_CMD_NAME}> }"
@@ -15,12 +24,16 @@ _FRP_CTL_RC=0
 if [[ -f "${_FRPCTL_DIR}/../lib/frp-doctor-common.sh" ]]; then
   # shellcheck source=../lib/frp-doctor-common.sh
   . "${_FRPCTL_DIR}/../lib/frp-doctor-common.sh"
-elif [[ -f /usr/local/lib/frp-auto-deploy/frp-doctor-common.sh ]]; then
+elif [[ -f "${_FRPCTL_DIR}/frp-doctor-common.sh" ]]; then
+  # Installed beside libraries at /usr/local/lib/drlink/frpctl
   # shellcheck disable=SC1091
-  . /usr/local/lib/frp-auto-deploy/frp-doctor-common.sh
-elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-doctor-common.sh' ]]; then
+  . "${_FRPCTL_DIR}/frp-doctor-common.sh"
+elif [[ -f /usr/local/lib/drlink/frp-doctor-common.sh ]]; then
   # shellcheck disable=SC1091
-  . '/Library/Application Support/frp-auto-deploy/lib/frp-doctor-common.sh'
+  . /usr/local/lib/drlink/frp-doctor-common.sh
+elif [[ -f '/Library/Application Support/drlink/lib/frp-doctor-common.sh' ]]; then
+  # shellcheck disable=SC1091
+  . '/Library/Application Support/drlink/lib/frp-doctor-common.sh'
 fi
 
 frpctl_path() {
@@ -47,10 +60,10 @@ frpctl_is_client() {
 }
 
 frpctl_is_server() {
-  if [[ -f "$(frpctl_path /etc/frp-auto-deploy/config.json)" ]]; then
+  if [[ -f "$(frpctl_path /etc/drlink/config.json)" ]]; then
     return 0
   fi
-  if [[ -f "$(frpctl_path /etc/frp/server_token)" && -f "$(frpctl_path /var/lib/frp-auto-deploy/registry.json)" ]]; then
+  if [[ -f "$(frpctl_path /etc/frp/server_token)" && -f "$(frpctl_path /var/lib/drlink/registry.json)" ]]; then
     return 0
   fi
   return 1
@@ -66,7 +79,7 @@ frpctl_read_kv() {
 
 frpctl_project_version() {
   local pv
-  pv="$(frpctl_read_kv "$(frpctl_path /etc/frp-auto-deploy/version)" PROJECT_VERSION)"
+  pv="$(frpctl_read_kv "$(frpctl_path /etc/drlink/version)" PROJECT_VERSION)"
   if [[ -z "$pv" ]]; then
     printf '%s' "legacy / unknown"
     return 0
@@ -127,7 +140,7 @@ frpctl_binary_frp_version() {
 
 frpctl_frp_version() {
   local fv
-  fv="$(frpctl_read_kv "$(frpctl_path /etc/frp-auto-deploy/version)" FRP_VERSION)"
+  fv="$(frpctl_read_kv "$(frpctl_path /etc/drlink/version)" FRP_VERSION)"
   if [[ -n "$fv" ]]; then
     printf '%s' "$fv"
     return 0
@@ -142,7 +155,7 @@ frpctl_frp_version() {
 
 frpctl_release_channel() {
   local ch
-  ch="$(frpctl_read_kv "$(frpctl_path /etc/frp-auto-deploy/version)" RELEASE_CHANNEL)"
+  ch="$(frpctl_read_kv "$(frpctl_path /etc/drlink/version)" RELEASE_CHANNEL)"
   if [[ -z "$ch" ]]; then
     printf '%s' "unknown"
     return 0
@@ -152,7 +165,7 @@ frpctl_release_channel() {
 
 frpctl_source_ref() {
   local ref
-  ref="$(frpctl_read_kv "$(frpctl_path /etc/frp-auto-deploy/version)" SOURCE_REF)"
+  ref="$(frpctl_read_kv "$(frpctl_path /etc/drlink/version)" SOURCE_REF)"
   if [[ -z "$ref" ]]; then
     printf '%s' "unknown"
     return 0
@@ -162,7 +175,7 @@ frpctl_source_ref() {
 
 frpctl_bundle_sha256() {
   local sha
-  sha="$(frpctl_read_kv "$(frpctl_path /etc/frp-auto-deploy/version)" BUNDLE_SHA256)"
+  sha="$(frpctl_read_kv "$(frpctl_path /etc/drlink/version)" BUNDLE_SHA256)"
   if [[ -z "$sha" ]]; then
     printf '%s' "unknown"
     return 0
@@ -207,7 +220,12 @@ frpctl_find_cmd() {
     command -v "$name"
     return 0
   fi
-  for cand in "/usr/local/sbin/${name}" "/usr/local/bin/${name}"; do
+  # Canonical install layout keeps management helpers under lib/drlink (not on PATH).
+  # Legacy PATH locations remain as fallbacks for mid-upgrade hosts.
+  for cand in \
+    "/usr/local/lib/drlink/${name}" \
+    "/usr/local/sbin/${name}" \
+    "/usr/local/bin/${name}"; do
     if [[ -x "$cand" ]]; then
       printf '%s' "$cand"
       return 0
@@ -269,12 +287,12 @@ frpctl_lib_candidate() {
   local name="$1" cand mapped=""
   local -a cands=()
   if declare -F frpctl_path >/dev/null 2>&1; then
-    mapped="$(frpctl_path "/usr/local/lib/frp-auto-deploy/${name}")"
+    mapped="$(frpctl_path "/usr/local/lib/drlink/${name}")"
   fi
   cands+=("${_FRPCTL_DIR}/../lib/${name}")
   [[ -n "$mapped" ]] && cands+=("$mapped")
-  cands+=("/usr/local/lib/frp-auto-deploy/${name}")
-  cands+=("/Library/Application Support/frp-auto-deploy/lib/${name}")
+  cands+=("/usr/local/lib/drlink/${name}")
+  cands+=("/Library/Application Support/drlink/lib/${name}")
   for cand in "${cands[@]}"; do
     [[ -n "$cand" && -f "$cand" ]] || continue
     printf '%s' "$cand"
@@ -318,7 +336,7 @@ frpctl_role_token() {
 }
 
 frpctl_grammar_payload() {
-  python3 - "$(frpctl_role_token)" "$(frpctl_path /etc/frp-auto-deploy/config.json)" \
+  python3 - "$(frpctl_role_token)" "$(frpctl_path /etc/drlink/config.json)" \
     "${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}" "$(frpctl_path /etc/frp/client-state.json)" <<'PY'
 import json, sys
 from pathlib import Path
@@ -520,7 +538,7 @@ frpctl_print_server_menu() {
 }
 
 frpctl_print_both_menu() {
-  echo "This host has both an FRP server and an FRP client installed."
+  echo "This host has both a Data Relay Link server and client installed."
   echo
   echo "1) Client operations"
   echo "2) Server operations"
@@ -1096,7 +1114,7 @@ frpctl_manage_one_client() {
 
 frpctl_manage_clients() {
   local cfg root choice mid libdir
-  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  cfg="$(frpctl_path /etc/drlink/config.json)"
   root="${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}"
   libdir="${_FRPCTL_DIR}/../lib"
   echo
@@ -1113,9 +1131,9 @@ root = sys.argv[2]
 libdir = Path(sys.argv[3])
 search = []
 if root:
-    search.append(Path(root) / 'usr/local/lib/frp-auto-deploy/frp_client_registry.py')
+    search.append(Path(root) / 'usr/local/lib/drlink/frp_client_registry.py')
 search.append(libdir / 'frp_client_registry.py')
-search.append(Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'))
+search.append(Path('/usr/local/lib/drlink/frp_client_registry.py'))
 mod = None
 for path in search:
     if path.is_file():
@@ -1158,9 +1176,9 @@ libdir = Path(sys.argv[3])
 choice = sys.argv[4].strip()
 search = []
 if root:
-    search.append(Path(root) / 'usr/local/lib/frp-auto-deploy/frp_client_registry.py')
+    search.append(Path(root) / 'usr/local/lib/drlink/frp_client_registry.py')
 search.append(libdir / 'frp_client_registry.py')
-search.append(Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'))
+search.append(Path('/usr/local/lib/drlink/frp_client_registry.py'))
 mod = None
 for path in search:
     if path.is_file():
@@ -1311,7 +1329,7 @@ frpctl_update() {
   frpctl_is_client && client=1
   frpctl_is_server && server=1
   if [[ "$client" == "1" && "$server" == "1" ]]; then
-    echo "This host has both roles. Updating client management tools, then FRP server binary."
+    echo "This host has both roles. Updating client management tools, then the upstream FRP server binary."
     echo
     frpctl_client_update "$@"
     echo
@@ -1339,14 +1357,14 @@ frpctl_interactive() {
 
 frpctl_require_client() {
   if ! frpctl_is_client; then
-    echo "ERROR: this command is for an installed FRP client." >&2
+    echo "ERROR: this command is for an installed Data Relay Link client." >&2
     return 1
   fi
 }
 
 frpctl_require_server() {
   if ! frpctl_is_server; then
-    echo "ERROR: this command is for an installed FRP server." >&2
+    echo "ERROR: this command is for an installed Data Relay Link server." >&2
     return 1
   fi
 }
@@ -1387,7 +1405,7 @@ frpctl_repl_help() {
     echo "${FRP_CTL_PRODUCT_NAME} — Commands"
     echo "=========================="
     echo
-    echo "This host has both an FRP client and an FRP server installed."
+    echo "This host has both a Data Relay Link client and server installed."
     echo
     echo "Client commands"
     echo "---------------"
@@ -1426,9 +1444,9 @@ frpctl_audit_tail() {
 import os, sys
 from pathlib import Path
 root = sys.argv[1]
-path = Path("/var/log/frp-auto-deploy/audit.jsonl")
+path = Path("/var/log/drlink/audit.jsonl")
 if root:
-    path = Path(root + "/var/log/frp-auto-deploy/audit.jsonl")
+    path = Path(root + "/var/log/drlink/audit.jsonl")
 if not path.is_file():
     print("(no audit log)")
     raise SystemExit(0)
@@ -1462,7 +1480,7 @@ frpctl_completable_commands() {
 # Read-only hostname list from the local registry. Never prints secret fields.
 frpctl_registry_client_names() {
   local cfg root
-  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  cfg="$(frpctl_path /etc/drlink/config.json)"
   root="${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}"
   python3 - "$cfg" "$root" <<'PY' 2>/dev/null || true
 import json, sys
@@ -1522,7 +1540,7 @@ frpctl_registry_service_ids() {
   local query="$1"
   local cfg root
   [[ -n "$query" ]] || return 0
-  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  cfg="$(frpctl_path /etc/drlink/config.json)"
   root="${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}"
   python3 - "$cfg" "$root" "$query" <<'PY' 2>/dev/null || true
 import json, sys
