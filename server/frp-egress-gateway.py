@@ -1251,9 +1251,15 @@ def _deny_sni(
         "source_ip": source_ip,
         "hostname": hostname,
         "port": port,
+        "protocol": EG.PROTOCOL_HTTPS,
         "method": "CONNECT",
         "decision": EG.DECISION_DENY,
         "reason": reason,
+        "outcome": (
+            EG.AUDIT_TLS_SNI_MISMATCH
+            if reason == EG.REASON_TLS_SNI_MISMATCH
+            else EG.AUDIT_TLS_CLIENT_HELLO_INVALID
+        ),
     }
     if observed_sni is not None:
         event["observed_sni"] = observed_sni

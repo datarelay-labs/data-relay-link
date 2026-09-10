@@ -1166,5 +1166,436 @@ class EgressRelayTests(unittest.TestCase):
         self.assertIn(self.payload, data)
 
 
+class EgressHardeningFeatureTests(unittest.TestCase):
+    """Option B, DNS, HE, streaming, ECH, limits, import/export."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
+        libdir = self.root / "usr/local/lib/drlink"
+        libdir.mkdir(parents=True, exist_ok=True)
+        for name in ("frp_egress_control.py", "frp_public_suffix.py", "frp_bounded_server.py"):
+            (libdir / name).write_text((ROOT / "lib" / name).read_text(encoding="utf-8"), encoding="utf-8")
+        data_dst = libdir / "data"
+        data_dst.mkdir(parents=True, exist_ok=True)
+        (data_dst / "public_suffix_list.dat").write_bytes(
+            (ROOT / "lib" / "data" / "public_suffix_list.dat").read_bytes()
+        )
+        self.state_path = self.root / "var/lib/drlink/egress-control.json"
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        EG.save_egress_state(EG.empty_egress_state(), path=self.state_path)
+        self.cfg = {
+            "egress_control_file": "/var/lib/drlink/egress-control.json",
+            "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+            "egress_listen_addr": "127.0.0.1",
+            "egress_listen_port": 0,
+        }
+        cfg_path = self.root / "etc/drlink/config.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(self.cfg, indent=2) + "\n", encoding="utf-8")
+        (self.root / "var/log/drlink").mkdir(parents=True, exist_ok=True)
+        self.cfg_path = cfg_path
+
+        def mut(state):
+            pid, _ = EG.create_profile(state, "test", enabled=True)
+            EG.add_source(state, pid, "127.0.0.1/32")
+            EG.add_destination(state, pid, "allowed.test", 80, protocol="http")
+            EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
+            EG.add_destination(state, pid, "allowed.test", 8443, protocol="https")
+            return pid
+
+        EG.mutate_egress_state(mut, path=self.state_path)
+
+        self.origin = _RecordingOrigin()
+        self.origin.start()
+        origin_port = self.origin.port
+
+        gw_path = ROOT / "server" / "frp-egress-gateway.py"
+        if "frp_egress_gateway_hard" in sys.modules:
+            del sys.modules["frp_egress_gateway_hard"]
+        spec = importlib.util.spec_from_file_location("frp_egress_gateway_hard", gw_path)
+        self.GW = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.GW)
+        # Fast revalidation for Option B tests.
+        self.GW.SESSION_REVALIDATE_INTERVAL = 0.2
+        self.GW.DNS_TIMEOUT = 2.0
+
+        self.resolve_counts = {}
+
+        def resolve2(hostname: str):
+            self.resolve_counts[hostname] = self.resolve_counts.get(hostname, 0) + 1
+            if hostname == "allowed.test":
+                return ["1.2.3.4"]
+            if hostname == "dual.test":
+                return ["2606:4700::1", "1.2.3.4"]
+            if hostname == "mixed.test":
+                return ["1.2.3.4", "10.0.0.1"]
+            if hostname == "slow.test":
+                time.sleep(3.0)
+                return ["1.2.3.4"]
+            raise OSError("nxdomain")
+
+        def connect(ip: str, port: int, hostname: str, timeout: float):
+            if ip in ("10.0.0.1",):
+                raise OSError("should not connect unsafe")
+            if ip == "2606:4700::1":
+                # Simulate unreachable v6.
+                raise OSError("network unreachable")
+            sock = socket.create_connection(("127.0.0.1", origin_port), timeout=timeout)
+            return sock
+
+        cache = self.GW.PolicyCache(cfg_path)
+        self.gw_state = self.GW.GatewayState(
+            cache,
+            resolve_fn=resolve2,
+            connect_fn=connect,
+            max_concurrent=8,
+            per_source_limit=2,
+            dns_pending_limit=2,
+        )
+        self.server = self.GW.ThreadedTCPServer(("127.0.0.1", 0), self.gw_state)
+        self.proxy_port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        try:
+            self.server.shutdown()
+        except Exception:
+            pass
+        try:
+            self.origin.stop()
+        except Exception:
+            pass
+        self.tmp.cleanup()
+        os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
+
+    def _conn_log(self) -> str:
+        path = self.root / "var/log/drlink/egress-conn.jsonl"
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8")
+
+    def test_protocol_http_connect_denied(self):
+        """CONNECT must not use an http-only destination even if host:port match."""
+        # Remove https:80 if any; only http:80 exists for port 80.
+        req = b"CONNECT allowed.test:80 HTTP/1.1\r\nHost: allowed.test:80\r\n\r\n"
+        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5) as sock:
+            sock.sendall(req)
+            data = sock.recv(4096)
+        self.assertTrue(data.startswith(b"HTTP/1.1 403") or data.startswith(b"HTTP/1.1 400"), data[:80])
+
+    def test_ech_clienthello_denied(self):
+        host = b"allowed.test"
+        name_entry = b"\x00" + len(host).to_bytes(2, "big") + host
+        sni_list = len(name_entry).to_bytes(2, "big") + name_entry
+        sni_ext = b"\x00\x00" + len(sni_list).to_bytes(2, "big") + sni_list
+        ech_ext = b"\xfe\x0d" + b"\x00\x04" + b"\x00\x00\x00\x00"
+        exts = sni_ext + ech_ext
+        body = bytearray()
+        body += b"\x03\x03" + b"\x00" * 32 + b"\x00" + b"\x00\x02\x00\x2f" + b"\x01\x00"
+        body += len(exts).to_bytes(2, "big") + exts
+        handshake = b"\x01" + len(body).to_bytes(3, "big") + bytes(body)
+        hello = b"\x16\x03\x01" + len(handshake).to_bytes(2, "big") + handshake
+        # Send headers first, then ClientHello, so body_prefix is empty and the
+        # gateway must read/parse the ECH ClientHello on the tunnel.
+        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5) as sock:
+            sock.sendall(b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n")
+            sock.settimeout(3)
+            first = sock.recv(4096)
+            self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
+            sock.sendall(hello)
+            try:
+                sock.recv(4096)
+            except socket.timeout:
+                pass
+        deadline = time.time() + 2.0
+        while time.time() < deadline and "TLS_CLIENT_HELLO_INVALID" not in self._conn_log():
+            time.sleep(0.05)
+        self.assertIn("TLS_CLIENT_HELLO_INVALID", self._conn_log())
+
+    def test_https_non443_sni_required(self):
+        hello = build_client_hello("allowed.test")
+        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5) as sock:
+            sock.sendall(b"CONNECT allowed.test:8443 HTTP/1.1\r\nHost: allowed.test:8443\r\n\r\n")
+            sock.settimeout(3)
+            first = sock.recv(4096)
+            self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
+            sock.sendall(hello)
+            time.sleep(0.3)
+        deadline = time.time() + 2.0
+        saw = False
+        while time.time() < deadline:
+            if self.origin.total_bytes():
+                saw = True
+                break
+            time.sleep(0.05)
+        self.assertTrue(saw)
+
+    def test_dns_coalesce_and_positive_cache(self):
+        barrier = threading.Barrier(4)
+        errors = []
+
+        def one():
+            try:
+                barrier.wait(timeout=5)
+                ips = self.gw_state.dns.resolve_validated("allowed.test")
+                self.assertEqual(ips, ["1.2.3.4"])
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=one) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        self.assertEqual(errors, [])
+        # Coalesce + cache: resolve_fn should run once (or very few), not 4.
+        self.assertLessEqual(self.resolve_counts.get("allowed.test", 0), 2)
+        # Warm cache hit — no additional resolve.
+        before = self.resolve_counts.get("allowed.test", 0)
+        self.assertEqual(self.gw_state.dns.resolve_validated("allowed.test"), ["1.2.3.4"])
+        self.assertEqual(self.resolve_counts.get("allowed.test", 0), before)
+
+    def test_dns_mixed_unsafe_deny_all(self):
+        with self.assertRaises(Exception) as ctx:
+            self.gw_state.dns.resolve_validated("mixed.test")
+        self.assertIn("unsafe", str(ctx.exception).lower())
+
+    def test_dns_pending_limit(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_resolve(hostname: str):
+            started.set()
+            release.wait(timeout=5)
+            return ["1.2.3.4"]
+
+        dns = self.GW.DnsResolver(resolve_fn=slow_resolve, pending_limit=1, timeout=2.0)
+        errors = []
+
+        def leader():
+            try:
+                dns.resolve_validated("slow.pending")
+            except Exception as exc:
+                errors.append(("leader", exc))
+
+        def waiter():
+            started.wait(timeout=2)
+            try:
+                dns.resolve_validated("other.pending")
+            except Exception as exc:
+                errors.append(("waiter", exc))
+
+        t1 = threading.Thread(target=leader)
+        t2 = threading.Thread(target=waiter)
+        t1.start()
+        t2.start()
+        started.wait(timeout=2)
+        time.sleep(0.05)
+        release.set()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+        self.assertTrue(any("pending limit" in str(e) for _who, e in errors))
+
+    def test_happy_eyeballs_falls_back_to_v4(self):
+        EG.mutate_egress_state(
+            lambda s: EG.add_destination(s, "test", "dual.test", 443, protocol="https"),
+            path=self.state_path,
+        )
+        self.gw_state.cache.reload(force=True)
+        sock, decision = self.GW._authorize_and_connect(
+            self.gw_state,
+            source_ip="127.0.0.1",
+            hostname="dual.test",
+            port=443,
+            method="CONNECT",
+            protocol="https",
+        )
+        self.assertIsNotNone(sock)
+        self.assertEqual(decision.get("decision"), EG.DECISION_ALLOW)
+        sock.close()
+
+    def test_http_body_streaming_large(self):
+        size = 2 * 1024 * 1024  # 2MiB — must not require full in-memory buffer on gateway side
+        body = b"A" * size
+        req = (
+            b"POST http://allowed.test/upload HTTP/1.1\r\n"
+            b"Host: allowed.test\r\n"
+            b"Content-Length: %d\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        ) % size + body
+        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=30) as sock:
+            sock.sendall(req)
+            sock.settimeout(30)
+            data = b""
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        self.assertTrue(data.startswith(b"HTTP/1.1 200"), data[:80])
+        upstream = self.origin.total_bytes()
+        self.assertIn(b"POST /upload HTTP/1.1", upstream)
+        self.assertIn(b"A" * 1024, upstream)
+        self.assertGreaterEqual(len(upstream), size)
+
+    def test_per_source_limit_resource_limit(self):
+        # Hold two CONNECT tunnels open (limit=2), third must 503.
+        hello = build_client_hello("allowed.test")
+        socks = []
+        try:
+            for _ in range(2):
+                s = socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5)
+                s.sendall(
+                    b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n" + hello
+                )
+                s.settimeout(3)
+                first = s.recv(4096)
+                self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
+                socks.append(s)
+            s3 = socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5)
+            s3.sendall(b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n" + hello)
+            s3.settimeout(3)
+            resp = s3.recv(4096)
+            s3.close()
+            self.assertTrue(resp.startswith(b"HTTP/1.1 503"), resp[:80])
+            self.assertIn("RESOURCE_LIMIT", self._conn_log())
+        finally:
+            for s in socks:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+
+    def test_option_b_policy_revoked_closes_session(self):
+        hello = build_client_hello("allowed.test")
+        s = socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5)
+        try:
+            s.sendall(
+                b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n" + hello
+            )
+            s.settimeout(3)
+            first = s.recv(4096)
+            self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
+            # Revoke destination while tunnel is live.
+            EG.mutate_egress_state(
+                lambda st: EG.remove_destination(st, "test", "allowed.test:443"),
+                path=self.state_path,
+            )
+            self.gw_state.cache.reload(force=True)
+            # Wait for revalidation interval and expect peer close.
+            s.settimeout(3)
+            deadline = time.time() + 3.0
+            closed = False
+            while time.time() < deadline:
+                try:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        closed = True
+                        break
+                except socket.timeout:
+                    continue
+            self.assertTrue(closed)
+            self.assertIn("POLICY_REVOKED", self._conn_log())
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+    def test_option_b_unrelated_change_keeps_session(self):
+        hello = build_client_hello("allowed.test")
+        s = socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5)
+        try:
+            s.sendall(
+                b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n" + hello
+            )
+            first = s.recv(4096)
+            self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
+            # Unrelated: add another destination (generation bumps but still authorized).
+            EG.mutate_egress_state(
+                lambda st: EG.add_destination(st, "test", "other.test", 443, protocol="https"),
+                path=self.state_path,
+            )
+            self.gw_state.cache.reload(force=True)
+            time.sleep(0.6)
+            # Connection should still be open (send should succeed or not get immediate close).
+            try:
+                s.sendall(b"\x00")
+                alive = True
+            except OSError:
+                alive = False
+            self.assertTrue(alive)
+            self.assertNotIn("POLICY_REVOKED", self._conn_log())
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+    def test_export_import_diff_no_auto_enable(self):
+        state = EG.load_egress_state(path=self.state_path)
+        doc = EG.export_profile(state, "test")
+        self.assertEqual(doc["schema_version"], EG.EGRESS_SCHEMA_VERSION)
+        candidate = EG.parse_import_document(doc)
+        self.assertFalse(candidate.get("enabled"))
+        # Mutate candidate destination set
+        candidate["destinations"] = list(candidate.get("destinations") or [])[:-1]
+        diff = EG.diff_profiles(state["egress_profiles"][doc["profile"]["id"]], candidate)
+        self.assertTrue(diff["destinations_removed"] or diff["destinations_added"] is not None)
+
+        def mut(st):
+            return EG.import_profile_into_state(st, candidate, target_selector="test")
+
+        pid, profile, _diff = EG.mutate_egress_state(mut, path=self.state_path)
+        self.assertFalse(profile.get("enabled"))
+        self.assertEqual(pid, doc["profile"]["id"])
+
+
+class EgressPublicSuffixTests(unittest.TestCase):
+    def test_reject_public_suffix_wildcards(self):
+        for bad in ("*.com", "*.net", "*.org", "*.co.kr", "*.co.uk"):
+            with self.assertRaises(EG.EgressError):
+                EG.canonicalize_hostname(bad, allow_wildcard=True)
+
+    def test_allow_narrow_wildcard(self):
+        host, mode = EG.canonicalize_hostname("*.ubuntu.com", allow_wildcard=True)
+        self.assertEqual(host, "*.ubuntu.com")
+        self.assertEqual(mode, "wildcard")
+
+
+class EgressSchemaMigrationTests(unittest.TestCase):
+    def test_migrate_80_443_and_fail_closed_custom(self):
+        raw = {
+            "schema_version": 1,
+            "egress_profiles": {
+                "egp_aaaaaaaaaaaa": {
+                    "id": "egp_aaaaaaaaaaaa",
+                    "name": "legacy",
+                    "enabled": False,
+                    "description": "",
+                    "sources": [],
+                    "destinations": [
+                        {"id": "egd_1", "host": "a.example", "port": 80, "match": "exact"},
+                        {"id": "egd_2", "host": "b.example", "port": 443, "match": "exact"},
+                    ],
+                    "created_at": "t",
+                    "updated_at": "t",
+                }
+            },
+        }
+        migrated = EG.migrate_egress_state_v1_to_v2(raw)
+        dests = migrated["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"]
+        self.assertEqual(dests[0]["protocol"], "http")
+        self.assertEqual(dests[1]["protocol"], "https")
+        raw["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"].append(
+            {"id": "egd_3", "host": "c.example", "port": 8443, "match": "exact"}
+        )
+        with self.assertRaises(EG.EgressError):
+            EG.migrate_egress_state_v1_to_v2(raw)
+
+
 if __name__ == "__main__":
     unittest.main()

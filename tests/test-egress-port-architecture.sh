@@ -170,7 +170,17 @@ for path in root.rglob("*"):
         rel = str(path.relative_to(root))
         if rel in allowed_6080 or rel.startswith(".frp-compat-stage/"):
             continue
-        # 16080 etc already excluded by word boundary; report others.
+        # Docs may mention 6080 only as the retired/non-default port.
+        if re.search(r"(?i)(not|never|retired|legacy|old|deprecated).{0,20}\b6080\b|\b6080\b.{0,20}(not|never|retired|legacy|old|deprecated)", text):
+            # Allow if every 6080 occurrence is in a negation/legacy sentence context.
+            bad = False
+            for m in re.finditer(r".{0,40}\b6080\b.{0,40}", text):
+                window = m.group(0).lower()
+                if not any(tok in window for tok in ("not", "never", "retired", "legacy", "old", "deprecated", "collision", "outside")):
+                    bad = True
+                    break
+            if not bad:
+                continue
         hits.append(rel)
 assert not hits, "stale 6080 defaults found: %s" % hits
 print("EGRESS_DEFAULT_PORT_CONSISTENCY=PASS")
