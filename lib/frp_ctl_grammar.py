@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 
@@ -1058,22 +1059,38 @@ def _looks_like_client_action(token):
     text = str(token or "").strip()
     if not text or text.startswith("-"):
         return False
-    if "-" in text:
-        return True
+    # Hyphenated tokens may be either action verbs (release-service) or client
+    # IDs (customer-dp). Prefer the explicit allowlist; unknown hyphen forms
+    # fall through to the legacy client-id shortcut when they are not catalog
+    # actions.
     return text.lower() in _CLIENT_ACTION_LIKE
 
 
-def _client_legacy_selector(tokens):
-    """True when ``client <ID> [view]`` should keep the legacy shortcut."""
+def _client_legacy_selector(tokens, names=None):
+    """True when ``client <ID> [view]`` should keep the legacy shortcut.
+
+    Only known-looking client selectors fall through. Unknown second tokens
+    stay with the canonical parser as terminal syntax errors.
+    """
     if len(tokens) < 2:
         return False
-    second = tokens[1]
+    second = str(tokens[1] or "").strip()
     actions = CATALOG.canonical_actions("client")
     if second in actions or second.startswith("-"):
         return False
     if _looks_like_client_action(second):
         return False
     if len(tokens) > 4:
+        return False
+    known = {str(n).strip().lower() for n in (names or []) if str(n).strip()}
+    looks_id = bool(re.fullmatch(r"[0-9a-fA-F]{6,32}", second))
+    looks_named = second.lower() in known
+    # Allow common short labels/hostnames used in legacy scripts when they
+    # contain a hyphen or look like inventory names (alphanumeric + -._).
+    looks_label = bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", second)) and (
+        "-" in second or "." in second or looks_named or looks_id
+    )
+    if not (looks_id or looks_named or looks_label):
         return False
     if len(tokens) == 3:
         return tokens[2] in ("services", "tags", "groups", "info", "overview")
@@ -1100,7 +1117,7 @@ def canonical_tokens(tokens):
     return [root] + list(tokens[1:])
 
 
-def _canonical_result(tokens, role):
+def _canonical_result(tokens, role, names=None):
     """Resolve a canonical resource-first command.
 
     Returns ``(internal_tokens, error_result)``. ``internal_tokens`` is None
@@ -1121,7 +1138,7 @@ def _canonical_result(tokens, role):
                     [name for name, _desc in rows],
                     tip="drlink help %s" % root,
                 )
-            if _client_legacy_selector(tokens):
+            if _client_legacy_selector(tokens, names=names):
                 return None, None
             rows = CATALOG.subcommands(root, role)
             return None, incomplete(
@@ -1187,7 +1204,7 @@ def match(tokens, role, names=None, clients=None):
     verb = tokens[0]
     if verb.startswith("!") or verb in SHELL_REJECT:
         return {"status": "shell"}
-    internal, problem = _canonical_result(tokens, role)
+    internal, problem = _canonical_result(tokens, role, names=names)
     if problem is not None:
         return problem
     rewritten = internal is not None

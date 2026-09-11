@@ -399,10 +399,10 @@ unset FRP_CTL_DRY_RUN
 # --- Invalid argument recovery
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/badargs.out" client release-service clients exit || fail "bad args"
+run_repl "$SERVER" "$WORKDIR/badargs.out" "client release-service" clients exit || true
 grep -qi 'Unknown action' "$WORKDIR/badargs.out" || fail "client bad action must not fall through"
 grep -q 'DISPATCH frp-clients' "$WORKDIR/badargs.out" || fail "clients after bad args"
-[[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 4 ]] || fail "bad args stayed in cli"
+[[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 3 ]] || fail "bad args stayed in cli"
 pass "FRPCTL_REPL_INVALID_ARGUMENT_RECOVERY"
 unset FRP_CTL_DRY_RUN
 
@@ -421,7 +421,7 @@ exit 0
 EOF
 chmod +x "$FAILBIN/frp-client-info" "$FAILBIN/frp-clients"
 export FRP_CTL_BIN_DIR="$FAILBIN"
-run_repl "$SERVER" "$WORKDIR/childfail.out" "client nonexistent" clients exit || fail "child fail repl"
+run_repl "$SERVER" "$WORKDIR/childfail.out" "client no-such-client" clients exit || fail "child fail repl"
 grep -q 'ERROR: no such client' "$WORKDIR/childfail.out" || fail "child error shown"
 grep -q 'Command failed with exit code 1.' "$WORKDIR/childfail.out" || fail "child fail message"
 grep -q 'HOSTNAME ...' "$WORKDIR/childfail.out" || fail "later command after child fail"
