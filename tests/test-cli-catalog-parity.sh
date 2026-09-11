@@ -127,4 +127,67 @@ print("PACKAGING_PARITY=PASS")
 PY
 pass "PACKAGING_PARITY"
 
+# Post-install teaching must not advertise legacy verb-first forms that
+# confuse operators (create client / show clients / show info).
+python3 - <<'PY' || fail "post-install teaching parity"
+from pathlib import Path
+
+root = Path(".").resolve()
+banned = (
+    "create client",
+    "show clients",
+    "show info",
+)
+files = {
+    "install-server.sh": root / "install-server.sh",
+    "install-client.sh": root / "install-client.sh",
+}
+# Focus on post-install / useful-commands blocks, not historical comments.
+server_text = files["install-server.sh"].read_text(encoding="utf-8")
+client_text = files["install-client.sh"].read_text(encoding="utf-8")
+
+def extract_post_install(text, markers):
+    for start, end in markers:
+        i = text.find(start)
+        if i < 0:
+            continue
+        j = text.find(end, i + len(start)) if end else len(text)
+        if j < 0:
+            j = len(text)
+        return text[i:j]
+    return ""
+
+server_block = extract_post_install(
+    server_text,
+    [
+        ("Everyday management (start here):", "EOF2"),
+        ("Useful checks:", "EOF2"),
+    ],
+)
+client_block = extract_post_install(
+    client_text,
+    [
+        ("Useful commands", "========================================="),
+        ("print('Useful commands')", "print('=========================================')"),
+    ],
+)
+if not server_block:
+    raise SystemExit("install-server.sh post-install block not found")
+if not client_block:
+    raise SystemExit("install-client.sh useful-commands block not found")
+for label, block in (("install-server.sh", server_block), ("install-client.sh", client_block)):
+    lower = block.lower()
+    for needle in banned:
+        if needle in lower:
+            raise SystemExit("%s post-install teaches banned form: %r" % (label, needle))
+# Positive sanity: canonical forms remain present.
+for needle in ("zero-touch create", "client list"):
+    if needle not in server_block:
+        raise SystemExit("install-server.sh post-install missing canonical %r" % needle)
+if "client info" not in client_block:
+    raise SystemExit("install-client.sh useful-commands missing canonical 'client info'")
+print("POST_INSTALL_TEACHING_PARITY=PASS")
+PY
+pass "POST_INSTALL_TEACHING_PARITY"
+
 echo "ALL CLI CATALOG / PACKAGING PARITY TESTS PASSED"

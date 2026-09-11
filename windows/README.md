@@ -37,7 +37,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-client.ps1 -Ze
 ## Lifecycle
 
 ```text
-tools\frp-client.cmd start|stop|status|info|update|uninstall|doctor
+tools\drlink.cmd start|stop|status|info|update|uninstall|doctor
 ```
+
+`tools\frp-client.cmd` remains as a compatibility wrapper for the same operations.
 
 The Windows client reuses the same server enrollment and management model. It does not fork a Windows-only API.

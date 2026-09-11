@@ -89,13 +89,11 @@ MARKER_NOTE = 'Do not delete the pending marker by hand unless recovering from a
 
 def _recovery_for_role(role, kind):
     if kind == 'frp':
-        if role in ('client', 'partial_client'):
-            return 'sudo drlink update frp'
-        return 'sudo drlink frp-update'
+        return 'sudo drlink update engine'
     if role in ('client', 'partial_client'):
         return 'sudo drlink update'
     if role in ('server', 'partial_server', 'dual'):
-        return 'sudo drlink project-update'
+        return 'sudo drlink update project'
     return ''
 
 
@@ -103,19 +101,23 @@ def _recovery_for_operation(operation, role):
     op = str(operation or '').strip()
     extra = '\n%s' % MARKER_NOTE
     if op == 'project-update':
-        return 'sudo drlink project-update' + extra
+        return 'sudo drlink update project' + extra
     if op in ('frp-update',):
-        return 'sudo drlink frp-update' + extra
+        return 'sudo drlink update engine' + extra
     if op in ('client-update',):
         return 'sudo drlink update' + extra
     if op == 'install':
         return 're-run the server installer; do not delete the pending marker' + extra
     if op == 'restore':
-        return 'inspect the pending restore marker and retry sudo drlink restore only after the failure is understood' + extra
+        return (
+            'inspect the pending restore marker and retry '
+            'sudo drlink backup restore <PATH> only after the failure is understood'
+            + extra
+        )
     if op == 'update':
         if role in ('client', 'partial_client', 'dual'):
             return 'sudo drlink update' + extra
-        return 'sudo drlink frp-update' + extra
+        return 'sudo drlink update engine' + extra
     return (
         'inspect the pending transaction marker (server-update-pending.json / '
         'client-update-pending.json / legacy update-pending.json) operation=%s '
@@ -1398,13 +1400,13 @@ def check_versions(report, paths, facts):
         for label, bpath in (('frps', '/usr/local/bin/frps'), ('frpc', '/usr/local/bin/frpc')):
             ver = parse_binary_version(paths, bpath)
             if ver == 'unknown' and not paths.is_file(bpath):
-                report.add('frp_version_%s' % label, FAIL, '%s binary is missing' % label, bpath, 'sudo drlink frp-update', 'installation')
+                report.add('frp_version_%s' % label, FAIL, '%s binary is missing' % label, bpath, 'sudo drlink update engine', 'installation')
             elif ver != pinned:
                 report.add(
                     'frp_version_%s' % label, FAIL,
                     '%s version is not the pinned release' % label,
                     'installed=%s pinned=%s' % (ver, pinned),
-                    'sudo drlink frp-update',
+                    'sudo drlink update engine',
                     'installation',
                 )
             else:
@@ -1998,7 +2000,7 @@ def check_service_profiles(report, paths, facts, cfg):
             'SERVICE_PROFILES_ERROR', FAIL,
             'SERVICE_PROFILES_ERROR: service-profiles.json is invalid',
             str(exc),
-            'restore service-profiles.json from backup or recreate with drlink create profile',
+            'restore service-profiles.json from backup or recreate with drlink service-profile create',
             'state',
         )
         return
@@ -2011,7 +2013,7 @@ def check_service_profiles(report, paths, facts, cfg):
             status,
             '%s: %s' % (cls, issue.get('message') or 'issue'),
             '',
-            'inspect Service Profiles with drlink show profiles',
+            'inspect Service Profiles with drlink service-profile list',
             'state',
         )
 
@@ -2944,7 +2946,7 @@ def check_client(report, paths, facts, skip_network):
             'client_identity', INFO,
             'management identity is not established',
             '',
-            'Create a short-lived Enrollment Code on the server with sudo drlink enroll, then enroll this client.',
+            'Create a short-lived Enrollment Code on the server with sudo drlink enrollment create (or zero-touch create), then enroll this client.',
             'security',
         )
     elif missing_ident:
@@ -2952,7 +2954,7 @@ def check_client(report, paths, facts, skip_network):
             'client_identity', FAIL,
             'management identity files are incomplete',
             'missing %s' % ', '.join(missing_ident),
-            'Do not regenerate identity automatically. Create a new Enrollment Code with sudo drlink enroll and re-enroll this client.',
+            'Do not regenerate identity automatically. Create a new Enrollment Code with sudo drlink enrollment create (or zero-touch create) and re-enroll this client.',
             'security',
         )
     else:
@@ -3069,7 +3071,7 @@ def check_client(report, paths, facts, skip_network):
                 'access_info', WARN,
                 'access-info.txt is missing',
                 'display-only file; state/runtime can still be healthy',
-                'sudo drlink show info regenerates connection text from local client-state when the file is absent',
+                'sudo drlink client info regenerates connection text from local client-state when the file is absent',
                 'state',
             )
         else:

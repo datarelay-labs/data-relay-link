@@ -2,6 +2,12 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 $clientPath = Join-Path $script:RepoRoot 'windows/tools/FrpClient.ps1'
+$drlinkCmd = Join-Path $script:RepoRoot 'windows/tools/drlink.cmd'
+$legacyCmd = Join-Path $script:RepoRoot 'windows/tools/frp-client.cmd'
+Assert-FrpTrue (Test-Path -LiteralPath $drlinkCmd) 'canonical drlink.cmd wrapper exists'
+Assert-FrpTrue (Test-Path -LiteralPath $legacyCmd) 'legacy frp-client.cmd remains for compatibility'
+$drlinkSrc = Get-Content -LiteralPath $drlinkCmd -Raw
+Assert-FrpTrue ($drlinkSrc -match 'frp-client\.cmd') 'drlink.cmd wraps frp-client.cmd'
 $src = Get-Content -LiteralPath $clientPath -Raw
 Assert-FrpTrue ($src -match '(?m)^\s*\. Import-FrpWindowsModules\s*$') 'dot-sources Import-FrpWindowsModules into script scope'
 

@@ -174,7 +174,7 @@ allocator       : active
 ## 8. Create an enrollment
 
 ```bash
-sudo drlink create enrollment
+sudo drlink enrollment create
 ```
 
 The command prints an enrollment code and a client install one-liner that sets `FRP_ALLOCATOR_URL` via `sudo env`. The enrollment secret is not placed on the command line; the client installer asks for it interactively.

@@ -15,7 +15,7 @@ C:\ProgramData\drlink\
   state\client-state.json, client-id, client-identity.*
   certs\allocator-ca.crt
   logs\frpc.log, frpc.pid
-  tools\FrpClient.ps1, frp-client.cmd
+  tools\FrpClient.ps1, drlink.cmd, frp-client.cmd
   version
 ```
 
@@ -103,14 +103,14 @@ A Windows PC can forward LAN targets by setting `local_ip` to a reachable LAN ad
 ## Lifecycle
 
 ```text
-tools\frp-client.cmd start
-tools\frp-client.cmd stop
-tools\frp-client.cmd status
-tools\frp-client.cmd info
-tools\frp-client.cmd update [--check]
-tools\frp-client.cmd uninstall
-tools\frp-client.cmd doctor
-tools\frp-client.cmd autostart
+tools\drlink.cmd start
+tools\drlink.cmd stop
+tools\drlink.cmd status
+tools\drlink.cmd info
+tools\drlink.cmd update [--check]
+tools\drlink.cmd uninstall
+tools\drlink.cmd doctor
+tools\drlink.cmd autostart
 ```
 
 | Command | Behavior |

@@ -60,14 +60,14 @@ export FRP_NEW_SHA256_ARM64=...
 ./scripts/secret-scan.sh
 ```
 
-Install on a server only with `sudo drlink frp-update`, which installs the
+Install on a server only with `sudo drlink update engine`, which installs the
 **pinned** version, never upstream latest.
 
 Informational check:
 
 ```bash
-sudo drlink upstream
-# or: frp-upstream
+sudo drlink server upstream
+# implementation tool: frp-upstream
 ```
 
 ## How to perform OCI E2E
@@ -171,7 +171,7 @@ a verified candidate whose manifest is `dev` / `main`.
 
 ## Server project-update build identity
 
-`sudo drlink project-update --check` is read-only. Availability is not decided
+`sudo drlink update project --check` is read-only. Availability is not decided
 from `PROJECT_VERSION` alone:
 
 - installed version **less than** candidate → update available
@@ -186,6 +186,6 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 
 ## Rollback
 
-- Server FRP binary: `frp-update` restores the previous binary on health failure.
-- Server project tools: use `frp-project-update` rollback / restore from backup.
-- Disaster recovery: `sudo drlink restore <backup>` after a validated backup.
+- Server FRP binary: `drlink update engine` (implementation: `frp-update`) restores the previous binary on health failure.
+- Server project tools: use `drlink update project` rollback / restore from backup (implementation: `frp-project-update`).
+- Disaster recovery: `sudo drlink backup restore <backup>` after a validated backup.

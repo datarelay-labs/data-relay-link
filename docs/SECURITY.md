@@ -71,7 +71,7 @@ separate trust domains (see below).
 
 ## 5. Enrollment Code
 
-A short-lived secret created on the server (`sudo drlink create enrollment`).
+A short-lived secret created on the server (`sudo drlink enrollment create`).
 
 - Default TTL: 10 minutes
 - Bound to the first machine (`machine-id`) that uses it

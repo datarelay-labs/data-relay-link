@@ -46,9 +46,9 @@ certificate. The operator owns DNS, public TLS, and the reverse proxy.
 ## Configuration
 
 ```bash
-sudo drlink set server bootstrap-hostname bootstrap.example.com
-sudo drlink unset server bootstrap-hostname
-sudo drlink show server
+sudo drlink server set bootstrap-hostname bootstrap.example.com
+sudo drlink server unset bootstrap-hostname
+sudo drlink server status
 ```
 
 `bootstrap_hostname` is separate from `public_hostname`:

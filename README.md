@@ -183,8 +183,8 @@ curl -fsSL \
 Then verify:
 
 ```bash
-sudo drlink show version
-sudo drlink show status
+sudo drlink version
+sudo drlink status
 sudo drlink doctor
 ```
 
@@ -242,13 +242,13 @@ sudo drlink
 Then use the guided command:
 
 ```text
-create zero-touch
+zero-touch create
 ```
 
 Or create an explicit SSH profile:
 
 ```bash
-sudo drlink create enrollment \
+sudo drlink enrollment create \
   --one-line \
   --ssh \
   --ssh-user admin \
@@ -491,17 +491,17 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 ## Backup, restore, and updates
 
 ```bash
-sudo drlink create backup
-sudo drlink restore backup <path>
+sudo drlink backup create
+sudo drlink backup restore <path>
 
 sudo drlink update project --check
 sudo drlink update project
 
-sudo drlink show upstream
-sudo drlink update frp --check
+sudo drlink server upstream
+sudo drlink update engine --check
 ```
 
-`show upstream` is informational. Data Relay Link does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
+`server upstream` is informational. Data Relay Link does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
 
 Legacy clients that do not have persisted release identity fail closed on remote update. Use the **one-time verified bridge** documented in [`docs/FRP_UPGRADE.md`](docs/FRP_UPGRADE.md); do not guess or silently switch a legacy install to a release channel.
 

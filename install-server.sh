@@ -2410,21 +2410,22 @@ EOF2
   fi
   frp_print_nat_summary
   cat <<EOF2
-Create a client enrollment:
-  sudo drlink create client
-
-Everyday command (remember this one):
+Everyday management (start here):
   sudo drlink
-  Then type help inside the CLI.
+  Then type help or ? inside the CLI.
 
-Check schema v2 deployment readiness:
+Enroll the first client (Zero-Touch preferred):
+  sudo drlink zero-touch create
+  # or: sudo drlink enrollment create
+
+Useful checks:
   sudo drlink status
+  sudo drlink doctor
+  sudo drlink client list
+  sudo drlink help
 
-Update the upstream FRP engine to the tested version:
-  sudo drlink update
-
-List clients:
-  sudo drlink show clients
+Backup:
+  sudo drlink backup create
 
 ============================================================
 EOF2

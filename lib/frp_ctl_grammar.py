@@ -228,7 +228,7 @@ def incomplete(title, usage_lines, available=None, examples=None, tip=None):
         for item in examples:
             parts.append("  %s" % item)
     if tip:
-        parts.extend(["", "Tip:", "  type: %s" % tip])
+        parts.extend(["", "Try:", "  %s" % tip])
     return {"status": "incomplete", "message": "\n".join(parts)}
 
 
@@ -1065,16 +1065,16 @@ def _canonical_result(tokens, role):
             return None, None
         if len(tokens) == 1:
             return None, incomplete(
-                "Missing action.",
+                "Missing action for %s." % root,
                 ["%s <action> ..." % root],
                 [name for name, _desc in rows],
-                tip="%s ?" % root,
+                tip="drlink help %s" % root,
             )
         return None, incomplete(
-            "Unknown %s action." % root,
+            "Unknown action %r for %s." % (tokens[1], root),
             ["%s <action> ..." % root],
             [name for name, _desc in rows],
-            tip="%s ?" % root,
+            tip="drlink help %s" % root,
         )
     cmd = CATALOG.find(canon)
     if cmd is None:

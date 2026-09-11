@@ -706,8 +706,8 @@ echo '{"operation":"project-update","phase":"commit","failure_class":"HEALTH_CHE
   >"$PROJMARK/var/lib/drlink/server-update-pending.json"
 run_json "$PROJMARK" "$WORKDIR/projmark.json" || true
 [[ "$(check_status "$WORKDIR/projmark.json" pending_server_transaction)" == "FAIL" ]] || fail "project pending"
-grep -q 'drlink project-update' "$WORKDIR/projmark.json" || fail "project-update guidance"
-if grep -q 'sudo drlink update' "$WORKDIR/projmark.json" && ! grep -q 'drlink project-update' "$WORKDIR/projmark.json"; then
+grep -q 'drlink update project' "$WORKDIR/projmark.json" || fail "project-update guidance"
+if grep -qE 'sudo drlink update($|[[:space:]]|--)' "$WORKDIR/projmark.json" && ! grep -q 'drlink update project' "$WORKDIR/projmark.json"; then
   fail "generic update guidance for project-update"
 fi
 [[ -f "$PROJMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted project marker"
@@ -718,7 +718,7 @@ cp -a "$SRV" "$FRPMARK"
 echo '{"operation":"frp-update","phase":"commit"}' \
   >"$FRPMARK/var/lib/drlink/server-update-pending.json"
 run_json "$FRPMARK" "$WORKDIR/frpmark.json" || true
-grep -q 'drlink frp-update' "$WORKDIR/frpmark.json" || fail "frp-update guidance"
+grep -q 'drlink update engine' "$WORKDIR/frpmark.json" || fail "frp-update guidance"
 [[ -f "$FRPMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted frp marker"
 pass "DOCTOR_FRP_UPDATE_GUIDANCE"
 
@@ -737,7 +737,7 @@ cp -a "$CL" "$FV"
 write_dummy_bin "$FV/usr/local/bin/frpc" frpc "0.69.0"
 run_json "$FV" "$WORKDIR/fv.json" || true
 [[ "$(check_status "$WORKDIR/fv.json" frp_version)" == "FAIL" ]] || fail "frp version mismatch"
-grep -q 'drlink update frp' "$WORKDIR/fv.json" || fail "client frp-update guidance"
+grep -q 'drlink update engine' "$WORKDIR/fv.json" || fail "client frp-update guidance"
 pass "FRP_VERSION_MISMATCH"
 
 # Stale lock
