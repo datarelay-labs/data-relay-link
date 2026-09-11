@@ -6,7 +6,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-RuntimeDirectory=drlink
+# Nested under /run/drlink so root services do not fight ownership of the
+# innermost directory (User=drlink-egress vs root).
+RuntimeDirectory=drlink/egress
 RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-egress-gateway.py --config /etc/drlink/config.json
 Restart=always

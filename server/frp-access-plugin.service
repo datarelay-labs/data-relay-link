@@ -6,7 +6,7 @@ Before=drlink-server.service
 
 [Service]
 Type=simple
-RuntimeDirectory=drlink
+RuntimeDirectory=drlink/access
 RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-access-plugin.py --config /etc/drlink/config.json
 Restart=always

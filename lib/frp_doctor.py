@@ -2275,24 +2275,38 @@ def check_egress_control(report, paths, facts, cfg):
                 '',
                 'runtime',
             )
-    effective_rel = '/run/drlink/egress-effective.json'
-    if paths.is_file(effective_rel):
+    # Prefer isolated runtime dir (RuntimeDirectory=drlink/egress); fall back
+    # to the legacy shared /run/drlink path for already-running daemons.
+    effective_candidates = (
+        '/run/drlink/egress/effective.json',
+        '/run/drlink/egress-effective.json',
+    )
+    effective_rel = next((p for p in effective_candidates if paths.is_file(p)), None)
+    if effective_rel:
         try:
             effective = json.loads(paths.p(effective_rel).read_text(encoding='utf-8'))
-            report.add(
-                'EGRESS_EFFECTIVE_CONFIG', PASS,
-                'egress effective runtime snapshot present',
-                'generation=%s healthy=%s' % (
-                    effective.get('policy_generation'),
-                    effective.get('policy_healthy'),
-                ),
-                '',
-                'runtime',
-            )
+            healthy = bool(effective.get('policy_healthy'))
+            generation = effective.get('policy_generation')
+            if healthy:
+                report.add(
+                    'EGRESS_EFFECTIVE_CONFIG', PASS,
+                    'egress effective policy is healthy',
+                    'generation=%s path=%s' % (generation, effective_rel),
+                    '',
+                    'runtime',
+                )
+            else:
+                report.add(
+                    'EGRESS_EFFECTIVE_CONFIG', FAIL,
+                    'egress effective policy is unhealthy (fail-closed)',
+                    'generation=%s path=%s' % (generation, effective_rel),
+                    'fix Controlled Egress policy with: sudo drlink egress list',
+                    'runtime',
+                )
             report.add(
                 'EGRESS_POLICY_GENERATION', INFO,
                 'compiled policy generation',
-                str(effective.get('policy_generation')),
+                str(generation),
                 '',
                 'runtime',
             )
@@ -2315,11 +2329,19 @@ def check_egress_control(report, paths, facts, cfg):
                 '',
                 'runtime',
             )
+    elif unit_active == 'active':
+        report.add(
+            'EGRESS_EFFECTIVE_CONFIG', WARN,
+            'egress unit is active but effective policy snapshot is missing',
+            '/run/drlink/egress/effective.json',
+            'restart drlink-egress or inspect journalctl -u drlink-egress',
+            'runtime',
+        )
     else:
         report.add(
             'EGRESS_EFFECTIVE_CONFIG', INFO,
-            'egress effective runtime snapshot not present yet',
-            effective_rel,
+            'egress effective runtime snapshot not present (unit inactive)',
+            '/run/drlink/egress/effective.json',
             'appears after drlink-egress starts',
             'runtime',
         )

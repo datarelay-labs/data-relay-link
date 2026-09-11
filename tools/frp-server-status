@@ -95,10 +95,16 @@ egress_state="$(unit_state drlink-egress)"
 access_plugin_health="unknown"
 allocator_health="unknown"
 egress_health="unknown"
+egress_policy="unknown"
+egress_generation=""
+_egress_addr="127.0.0.1"
+_egress_port="6102"
 if type frp_test_harness_enabled >/dev/null 2>&1 && frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
   access_plugin_health="${FRP_STATUS_ACCESS_HEALTH:-skipped}"
   allocator_health="${FRP_STATUS_ALLOCATOR_HEALTH:-skipped}"
   egress_health="${FRP_STATUS_EGRESS_HEALTH:-skipped}"
+  egress_policy="${FRP_STATUS_EGRESS_POLICY:-unknown}"
+  egress_generation="${FRP_STATUS_EGRESS_GENERATION:-}"
   [[ "${FRP_STATUS_SERVER_STATE:-}" != "" ]] && frps_state="$FRP_STATUS_SERVER_STATE"
   [[ "${FRP_STATUS_ALLOCATOR_STATE:-}" != "" ]] && allocator_state="$FRP_STATUS_ALLOCATOR_STATE"
   [[ "${FRP_STATUS_ACCESS_STATE:-}" != "" ]] && access_plugin_state="$FRP_STATUS_ACCESS_STATE"
@@ -176,7 +182,37 @@ PY
   else
     allocator_health="unhealthy(${_acode})"
   fi
-  # Egress: prefer TCP connect to configured listen address/port (stdlib).
+  # Egress: TCP listen + authoritative effective policy snapshot.
+  egress_policy="unknown"
+  egress_generation=""
+  _eff=""
+  _run_base="/run/drlink"
+  if type frp_path >/dev/null 2>&1; then
+    _run_base="$(frp_path /run/drlink)"
+  fi
+  for _cand in \
+    "${_run_base}/egress/effective.json" \
+    "${_run_base}/egress-effective.json"
+  do
+    if [[ -r "$_cand" ]]; then
+      _eff="$_cand"
+      break
+    fi
+  done
+  if [[ -n "$_eff" ]]; then
+    eval "$(python3 - "$_eff" <<'PY' 2>/dev/null || true
+import json, shlex, sys
+from pathlib import Path
+try:
+    doc = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+healthy = bool(doc.get("policy_healthy"))
+print("egress_policy=" + shlex.quote("healthy" if healthy else "unhealthy"))
+print("egress_generation=" + shlex.quote(str(doc.get("policy_generation") or "")))
+PY
+)"
+  fi
   if python3 - "$_egress_addr" "$_egress_port" <<'PY' 2>/dev/null
 import socket, sys
 host, port = sys.argv[1], int(sys.argv[2])
@@ -184,7 +220,12 @@ s = socket.create_connection((host, port), timeout=2)
 s.close()
 PY
   then
-    egress_health="ok"
+    if [[ "${egress_policy:-unknown}" == "unhealthy" ]]; then
+      egress_health="degraded(policy-unhealthy)"
+    else
+      egress_health="ok"
+      [[ "${egress_policy:-}" == "healthy" ]] || egress_policy="healthy"
+    fi
   else
     egress_health="unhealthy(not-listening)"
   fi
@@ -433,7 +474,18 @@ Bootstrap host  : ${bootstrap_hostname_display}
 drlink-server   : ${frps_state}
 drlink-allocator: ${allocator_state}
 drlink-access   : ${access_plugin_state} (${access_plugin_health})
-drlink-egress   : ${egress_state}
+drlink-egress   : ${egress_state} (${egress_health})
+Controlled Egress : $(
+  case "${egress_health}" in
+    ok) echo "ACTIVE" ;;
+    degraded*) echo "DEGRADED" ;;
+    unhealthy*) echo "UNHEALTHY" ;;
+    skipped) echo "SKIPPED" ;;
+    *) echo "${egress_state}" ;;
+  esac
+)
+Egress listener : ${_egress_addr:--}:${_egress_port:--}
+Egress policy   : ${egress_policy:-unknown}${egress_generation:+ (generation ${egress_generation})}
 drlink-frontend : ${frontend_state}
 Lifecycle       : ${lifecycle}
 EOF
@@ -536,8 +588,8 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
       echo "ERROR: drlink-egress is not active (${egress_state})" >&2
       exit 1
     fi
-    if [[ "$egress_health" == unhealthy* || "$egress_health" == "unknown" ]]; then
-      echo "ERROR: Controlled Egress listener is not ready (${egress_health})" >&2
+    if [[ "$egress_health" == unhealthy* || "$egress_health" == degraded* || "$egress_health" == "unknown" ]]; then
+      echo "ERROR: Controlled Egress is not healthy (${egress_health}; policy=${egress_policy:-unknown})" >&2
       exit 1
     fi
     if [[ "${deployment_mode:-}" == "single443" ]]; then

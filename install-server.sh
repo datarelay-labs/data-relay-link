@@ -1281,9 +1281,9 @@ write_frontend_config() {
   run_dir="$(frp_server_fs /run/drlink)"
   log_dir="$(frp_server_fs /var/log/drlink)"
   temp_root="$(frp_server_fs /var/lib/drlink/nginx)"
-  mkdir -p "$run_dir" "$log_dir" "$temp_root/body" "$temp_root/proxy" \
+  mkdir -p "$run_dir" "$run_dir/frontend" "$log_dir" "$temp_root/body" "$temp_root/proxy" \
     "$temp_root/fastcgi" "$temp_root/uwsgi" "$temp_root/scgi"
-  chmod 700 "$run_dir" "$log_dir" "$temp_root"
+  chmod 700 "$run_dir" "$run_dir/frontend" "$log_dir" "$temp_root"
   python3 "$BASE_DIR/lib/frp_frontend.py" \
     --dest "$dest" \
     --public-host "$FRP_PUBLIC_HOST" \
@@ -1293,7 +1293,7 @@ write_frontend_config() {
     --ca-cert "${pki}/ca.crt" \
     --server-cert "${pki}/server.crt" \
     --server-key "${pki}/server.key" \
-    --pid-path "${run_dir}/nginx.pid" \
+    --pid-path "${run_dir}/frontend/nginx.pid" \
     --error-log stderr \
     --temp-root "$temp_root"
 }

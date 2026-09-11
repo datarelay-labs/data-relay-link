@@ -7,7 +7,7 @@ Wants=network-online.target drlink-server.service drlink-allocator.service
 Type=simple
 # Runs as root (no User=) so the 0600 project TLS key stays non-world-readable.
 # This unit uses a project-owned config and does not take over distro nginx.service.
-RuntimeDirectory=drlink
+RuntimeDirectory=drlink/frontend
 RuntimeDirectoryMode=0700
 ExecStart=/usr/sbin/nginx -c /etc/drlink/frontend.conf
 ExecReload=/bin/kill -HUP $MAINPID

@@ -95,7 +95,7 @@ def render_nginx_conf(
     ca_cert,
     server_cert,
     server_key,
-    pid_path='/run/drlink/nginx.pid',
+    pid_path='/run/drlink/frontend/nginx.pid',
     error_log='stderr',
     temp_root='/var/lib/drlink/nginx',
     websocket_path=FRP_WEBSOCKET_PATH,
@@ -314,7 +314,7 @@ def main(argv=None):
     parser.add_argument('--server-cert', default='')
     parser.add_argument('--server-key', default='')
     parser.add_argument('--expected-fingerprint', default='')
-    parser.add_argument('--pid-path', default='/run/drlink/nginx.pid')
+    parser.add_argument('--pid-path', default='/run/drlink/frontend/nginx.pid')
     parser.add_argument('--error-log', default='stderr')
     parser.add_argument('--temp-root', default='/var/lib/drlink/nginx')
     args = parser.parse_args(argv)

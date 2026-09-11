@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-RuntimeDirectory=drlink
+RuntimeDirectory=drlink/allocator
 RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-port-allocator.py --config /etc/drlink/config.json
 Restart=always
