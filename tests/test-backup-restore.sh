@@ -300,6 +300,40 @@ grep -q 'previous state was restored' "$WORKDIR/health.stderr" || fail "health r
 pass "RESTORE_HEALTH_GATE"
 pass "RESTORE_HEALTH_FAILURE_ROLLBACK"
 
+# Dual-role client readiness failure must fail closed and restore the client role.
+DUAL="$WORKDIR/dual-tree"
+seed_state "$DUAL" dual
+mkdir -p "$DUAL/etc/systemd/system"
+echo '[Unit]' >"$DUAL/etc/systemd/system/drlink-client.service"
+printf '{"mid":"machine-dual","hostname":"dual-host"}\n' >"$DUAL/etc/frp/client-state.json"
+export FRP_DEPLOY_TEST_ROOT="$DUAL"
+python3 "$ROOT/tools/frp-backup" "$WORKDIR/dual.tar.gz" >/dev/null
+seed_state "$DUAL" dual-mutated
+mkdir -p "$DUAL/etc/systemd/system"
+echo '[Unit]' >"$DUAL/etc/systemd/system/drlink-client.service"
+printf '{"mid":"machine-dual","hostname":"dual-host"}\n' >"$DUAL/etc/frp/client-state.json"
+if FRP_RESTORE_HOOK_CLIENT_READY_FAIL=1 \
+  python3 "$ROOT/tools/frp-restore" "$WORKDIR/dual.tar.gz" \
+  >"$WORKDIR/dual.stdout" 2>"$WORKDIR/dual.stderr"; then
+  fail "dual-role client readiness failure should fail restore"
+fi
+grep -q 'previous state was restored' "$WORKDIR/dual.stderr" || fail "dual-role rollback message"
+grep -q 'token-dual-mutated-super-secret' "$DUAL/etc/frp/server_token" || fail "dual-role token not rolled back"
+[[ -f "$DUAL/etc/systemd/system/drlink-client.service" ]] || fail "dual-role client unit missing after rollback"
+[[ -f "$DUAL/etc/frp/client-state.json" ]] || fail "dual-role client-state missing after rollback"
+pass "DUAL_ROLE_RESTORE_CLIENT_READY_FAIL_ROLLBACK"
+
+if FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL=1 \
+  python3 "$ROOT/tools/frp-restore" "$WORKDIR/dual.tar.gz" \
+  >"$WORKDIR/dual-restart.stdout" 2>"$WORKDIR/dual-restart.stderr"; then
+  fail "dual-role client restart failure should fail restore"
+fi
+grep -q 'previous state was restored' "$WORKDIR/dual-restart.stderr" \
+  || fail "dual-role restart rollback message"
+[[ -f "$DUAL/etc/systemd/system/drlink-client.service" ]] || fail "client unit missing after restart-fail rollback"
+pass "DUAL_ROLE_RESTORE_CLIENT_RESTART_FAIL_ROLLBACK"
+
+export FRP_DEPLOY_TEST_ROOT="$HEALTH"
 if FRP_RESTORE_HOOK_HEALTH_FAIL=1 FRP_RESTORE_HOOK_ROLLBACK_HEALTH_FAIL=1 \
   python3 "$ROOT/tools/frp-restore" "$WORKDIR/health.tar.gz" \
   >"$WORKDIR/rbhealth.stdout" 2>"$WORKDIR/rbhealth.stderr"; then

@@ -321,4 +321,83 @@ grep -q flock-should-not-run "$WORKDIR/noflock.err" && fail "uninstall invoked f
 assert_state_present "$TREE"
 pass "UNINSTALL_WITHOUT_FLOCK_CLI"
 
+# 12. control-state.lock contention (NEW-002)
+TREE="$WORKDIR/ctrl-lock"
+seed "$TREE"
+printf '{"schema_version":2,"egress_profiles":{}}\n' >"$TREE/var/lib/drlink/egress-control.json"
+UNIT="$WORKDIR/units-ctrl-lock"
+mkdir -p "$UNIT"
+export FRP_UNINSTALL_TEST_ROOT="$TREE"
+export FRP_MOCK_UNIT_DIR="$UNIT"
+export FRP_UNINSTALL_LOCK_TIMEOUT=1
+CTRL_LOCK="$TREE/var/lib/drlink/control-state.lock"
+: >"$CTRL_LOCK"
+python3 - "$CTRL_LOCK" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+time.sleep(8)
+PY
+CTRL_PID=$!
+sleep 0.2
+if "$ROOT/uninstall-server.sh" >"$WORKDIR/ctrl-lock.out" 2>"$WORKDIR/ctrl-lock.err"; then
+  kill "$CTRL_PID" 2>/dev/null || true
+  fail "control-state lock contention uninstall succeeded"
+fi
+kill "$CTRL_PID" 2>/dev/null || true
+wait "$CTRL_PID" 2>/dev/null || true
+grep -q 'FAILURE_CLASS=LOCK_CONTENTION' "$WORKDIR/ctrl-lock.err" \
+  || fail "control-state lock class $(cat "$WORKDIR/ctrl-lock.err")"
+assert_state_present "$TREE"
+pass "UNINSTALL_CONTROL_STATE_LOCK_CONTENTION"
+unset FRP_UNINSTALL_LOCK_TIMEOUT
+
+# 13. active control-state mutation cannot race destructive uninstall
+TREE="$WORKDIR/mut-vs-uninst"
+seed "$TREE"
+printf '{"schema_version":2,"egress_profiles":{}}\n' >"$TREE/var/lib/drlink/egress-control.json"
+printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
+  >"$TREE/var/lib/drlink/access-control.json"
+printf '{"schema_version":1,"profiles":{}}\n' >"$TREE/var/lib/drlink/service-profiles.json"
+printf '{"deployment_mode":"direct","egress_control_file":"/var/lib/drlink/egress-control.json"}\n' \
+  >"$TREE/etc/drlink/config.json"
+UNIT="$WORKDIR/units-mut-uninst"
+mkdir -p "$UNIT"
+READY="$WORKDIR/uninst.ready"
+GO="$WORKDIR/uninst.go"
+rm -f "$READY" "$GO"
+export FRP_UNINSTALL_TEST_ROOT="$TREE"
+export FRP_MOCK_UNIT_DIR="$UNIT"
+export FRP_UNINSTALL_LOCK_HOOK_READY="$READY"
+export FRP_UNINSTALL_LOCK_HOOK_GO="$GO"
+export FRP_UNINSTALL_LOCK_HOOK_WAIT=15
+"$ROOT/uninstall-server.sh" >"$WORKDIR/mut-uninst.out" 2>"$WORKDIR/mut-uninst.err" &
+UNINST_PID=$!
+for _ in $(seq 1 80); do
+  [[ -f "$READY" ]] && break
+  sleep 0.05
+done
+[[ -f "$READY" ]] || { kill "$UNINST_PID" 2>/dev/null || true; fail "uninstall lock hook"; }
+BEFORE="$(cat "$TREE/var/lib/drlink/egress-control.json")"
+if FRP_DEPLOY_TEST_ROOT="$TREE" FRP_CONTROL_STATE_LOCK_TIMEOUT=1 \
+  python3 "$ROOT/tools/frp-egress" create raced-profile \
+  >"$WORKDIR/mut-uninst-cli.out" 2>"$WORKDIR/mut-uninst-cli.err"; then
+  kill "$UNINST_PID" 2>/dev/null || true
+  fail "egress mutation succeeded during uninstall lock hold"
+fi
+grep -q 'timed out waiting for control-state lock' "$WORKDIR/mut-uninst-cli.err" \
+  || fail "mutation did not fail-closed on uninstall lock: $(cat "$WORKDIR/mut-uninst-cli.err")"
+[[ "$(cat "$TREE/var/lib/drlink/egress-control.json")" == "$BEFORE" ]] \
+  || fail "egress state mutated during uninstall"
+assert_state_present "$TREE"
+touch "$GO"
+wait "$UNINST_PID" || fail "uninstall after mutation contention: $(cat "$WORKDIR/mut-uninst.err")"
+unset FRP_UNINSTALL_LOCK_HOOK_READY FRP_UNINSTALL_LOCK_HOOK_GO FRP_UNINSTALL_LOCK_HOOK_WAIT
+pass "UNINSTALL_VS_CONTROL_STATE_MUTATION"
+
 echo "SERVER_UNINSTALL_FAIL_CLOSED_TEST=PASS"
+echo "NEW_002_UNINSTALL_CONTROL_STATE_LOCK=PASS"

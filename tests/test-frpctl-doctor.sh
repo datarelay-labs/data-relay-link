@@ -167,6 +167,7 @@ write_server_healthy() {
   write_dummy_bin "$tree/usr/local/sbin/frp-create-client" frp-create-client
   cp "$ROOT/server/frp-port-allocator.py" "$tree/usr/local/lib/drlink/frp-port-allocator.py"
   cp "$ROOT/lib/frp_access_control.py" "$tree/usr/local/lib/drlink/frp_access_control.py"
+  cp "$ROOT/lib/frp_control_locks.py" "$tree/usr/local/lib/drlink/frp_control_locks.py"
   cp "$ROOT/lib/frp_service_profiles.py" "$tree/usr/local/lib/drlink/frp_service_profiles.py"
   write_unit "$tree/etc/systemd/system/drlink-server.service"
   write_unit "$tree/etc/systemd/system/drlink-allocator.service"

@@ -13,6 +13,7 @@ export PYTHONDONTWRITEBYTECODE=1
 mkdir -p "$WORKDIR/etc/drlink" "$WORKDIR/var/lib/drlink" \
   "$WORKDIR/usr/local/lib/drlink" "$WORKDIR/etc/frp"
 cp "$ROOT/lib/frp_access_control.py" "$WORKDIR/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_control_locks.py" "$WORKDIR/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_service_profiles.py" "$WORKDIR/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_client_registry.py" "$WORKDIR/usr/local/lib/drlink/"
 cp "$ROOT/server/frp-port-allocator.py" "$WORKDIR/usr/local/lib/drlink/"

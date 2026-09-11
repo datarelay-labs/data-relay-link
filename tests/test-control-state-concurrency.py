@@ -17,8 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def load(name: str, rel: str):
     path = ROOT / rel
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
     spec = importlib.util.spec_from_file_location(name, str(path))
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 

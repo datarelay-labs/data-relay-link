@@ -331,6 +331,10 @@ class EgressProxyFunctionalTests(unittest.TestCase):
             (ROOT / "lib" / "frp_egress_control.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        (libdir / "frp_control_locks.py").write_text(
+            (ROOT / "lib" / "frp_control_locks.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         (libdir / "frp_public_suffix.py").write_text(
             (ROOT / "lib" / "frp_public_suffix.py").read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -961,6 +965,10 @@ class EgressRelayTests(unittest.TestCase):
         libdir.mkdir(parents=True, exist_ok=True)
         (libdir / "frp_egress_control.py").write_text(
             (ROOT / "lib" / "frp_egress_control.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        (libdir / "frp_control_locks.py").write_text(
+            (ROOT / "lib" / "frp_control_locks.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
         (libdir / "frp_public_suffix.py").write_text(
@@ -1626,6 +1634,175 @@ class EgressSchemaMigrationTests(unittest.TestCase):
         )
         with self.assertRaises(EG.EgressError):
             EG.migrate_egress_state_v1_to_v2(raw)
+
+
+class EgressEntryIdValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
+        self.path = self.root / "var/lib/drlink/egress-control.json"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.cfg = {"egress_control_file": "/var/lib/drlink/egress-control.json"}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
+
+    def _base_profile(self, **overrides):
+        profile = {
+            "id": "egp_aaaaaaaaaaaa",
+            "name": "office",
+            "enabled": False,
+            "description": "",
+            "sources": [
+                {"id": "egs_bbbbbbbbbbbb", "cidr": "203.0.113.10/32"},
+            ],
+            "destinations": [
+                {
+                    "id": "egd_cccccccccccc",
+                    "host": "example.com",
+                    "port": 443,
+                    "match": "exact",
+                    "protocol": "https",
+                }
+            ],
+            "created_at": "t",
+            "updated_at": "t",
+        }
+        profile.update(overrides)
+        return {
+            "schema_version": 2,
+            "egress_profiles": {"egp_aaaaaaaaaaaa": profile},
+        }
+
+    def test_valid_ids_pass(self):
+        EG.validate_egress_state(self._base_profile())
+
+    def _reject(self, state, needle):
+        with self.assertRaises(EG.EgressError) as ctx:
+            EG.validate_egress_state(state)
+        self.assertIn(needle, str(ctx.exception).lower())
+
+    def test_source_missing_id(self):
+        state = self._base_profile()
+        del state["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]["id"]
+        self._reject(state, "missing id")
+
+    def test_destination_missing_id(self):
+        state = self._base_profile()
+        del state["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"][0]["id"]
+        self._reject(state, "missing id")
+
+    def test_source_id_null(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]["id"] = None
+        self._reject(state, "invalid source")
+
+    def test_destination_id_integer(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"][0]["id"] = 12
+        self._reject(state, "invalid destination")
+
+    def test_source_with_destination_prefix(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]["id"] = "egd_bbbbbbbbbbbb"
+        self._reject(state, "malformed source")
+
+    def test_destination_with_source_prefix(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"][0]["id"] = "egs_cccccccccccc"
+        self._reject(state, "malformed destination")
+
+    def test_duplicate_source_id(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"].append(
+            {"id": "egs_bbbbbbbbbbbb", "cidr": "198.51.100.0/24"}
+        )
+        self._reject(state, "duplicate source")
+
+    def test_duplicate_destination_id(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"].append(
+            {
+                "id": "egd_cccccccccccc",
+                "host": "other.example",
+                "port": 80,
+                "match": "exact",
+                "protocol": "http",
+            }
+        )
+        self._reject(state, "duplicate destination")
+
+    def test_truncated_id(self):
+        state = self._base_profile()
+        state["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]["id"] = "egs_abcd"
+        self._reject(state, "malformed source")
+
+    def test_current_schema_corruption_is_not_repaired(self):
+        state = self._base_profile()
+        del state["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]["id"]
+        self.path.write_text(json.dumps(state) + "\n", encoding="utf-8")
+        with self.assertRaises(EG.EgressError):
+            EG.load_egress_state(path=self.path)
+        loaded = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("id", loaded["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0])
+
+    def test_legacy_v1_missing_ids_are_generated(self):
+        raw = {
+            "schema_version": 1,
+            "egress_profiles": {
+                "egp_aaaaaaaaaaaa": {
+                    "id": "egp_aaaaaaaaaaaa",
+                    "name": "legacy",
+                    "enabled": False,
+                    "description": "",
+                    "sources": [{"cidr": "203.0.113.10/32"}],
+                    "destinations": [
+                        {"host": "a.example", "port": 80, "match": "exact"},
+                    ],
+                    "created_at": "t",
+                    "updated_at": "t",
+                }
+            },
+        }
+        migrated = EG.migrate_egress_state_v1_to_v2(raw)
+        EG.validate_egress_state(migrated)
+        src = migrated["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]
+        dest = migrated["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"][0]
+        self.assertTrue(str(src["id"]).startswith("egs_"))
+        self.assertTrue(str(dest["id"]).startswith("egd_"))
+        self.assertEqual(len(src["id"]), 4 + 12)
+        self.assertEqual(dest["protocol"], "http")
+
+    def test_import_regenerates_untrusted_ids(self):
+        imported_src = "egs_dddddddddddd"
+        imported_dst = "egd_eeeeeeeeeeee"
+        doc = {
+            "schema_version": 2,
+            "profile": {
+                "id": "egp_ffffffffffff",
+                "name": "imported",
+                "enabled": True,
+                "description": "",
+                "sources": [{"id": imported_src, "cidr": "203.0.113.8/32"}],
+                "destinations": [
+                    {
+                        "id": imported_dst,
+                        "host": "example.com",
+                        "port": 443,
+                        "match": "exact",
+                        "protocol": "https",
+                    }
+                ],
+            },
+        }
+        candidate = EG.parse_import_document(doc)
+        self.assertNotEqual(candidate["sources"][0]["id"], imported_src)
+        self.assertNotEqual(candidate["destinations"][0]["id"], imported_dst)
+        self.assertTrue(str(candidate["sources"][0]["id"]).startswith("egs_"))
+        self.assertTrue(str(candidate["destinations"][0]["id"]).startswith("egd_"))
+        self.assertFalse(candidate.get("enabled"))
 
 
 if __name__ == "__main__":

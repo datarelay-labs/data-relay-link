@@ -18,6 +18,7 @@ sshx "$SERVER_ALIAS" 'hostname; id -u'
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cp "$ROOT/lib/frp_egress_control.py" "$TMP/"
+cp "$ROOT/lib/frp_control_locks.py" "$TMP/"
 cp "$ROOT/lib/frp_public_suffix.py" "$TMP/"
 cp "$ROOT/lib/frp_bounded_server.py" "$TMP/"
 cp "$ROOT/server/frp-egress-gateway.py" "$TMP/"

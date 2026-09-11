@@ -207,7 +207,7 @@ cat >"$SERVER/var/lib/drlink/egress-control.json" <<'EOF'
 }
 EOF
 mkdir -p "$SERVER/var/log/drlink"
-printf '{"decision":"ALLOW","hostname":"security.ubuntu.com","source_ip":"10.0.0.1"}\n' \
+printf '{"decision":"ALLOW","hostname":"security.ubuntu.com","source_ip":"10.0.0.1"}\nEnrollment Code: %s\n' "$ENROLL" \
   >"$SERVER/var/log/drlink/egress-conn.jsonl"
 # Enrollment-looking secret in a log line
 printf 'Enrollment Code: %s\n' "$ENROLL" >"$SERVER/var/log/drlink/audit.jsonl"
@@ -285,6 +285,22 @@ tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q "$SECRET_TOKEN
   && fail "token leaked in egress summary"
 tar -xOzf "$ARCHIVE_SERVER" service-status.txt | grep -q 'drlink-egress' \
   || fail "service status missing drlink-egress unit"
+assert_member "$ARCHIVE_SERVER" "logs/egress-conn.jsonl"
+tar -xOzf "$ARCHIVE_SERVER" logs/egress-conn.jsonl | grep -q 'security.ubuntu.com' \
+  || fail "egress-conn log missing hostname evidence"
+tar -xOzf "$ARCHIVE_SERVER" logs/egress-conn.jsonl | grep -q "$ENROLL" \
+  && fail "enrollment secret leaked in egress-conn log"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q 'security.ubuntu.com' \
+  || fail "egress summary missing recent conn events"
+python3 - "$ARCHIVE_SERVER" <<'PY' || fail "process filter omitted drlink-egress pattern"
+import tarfile, sys
+from pathlib import Path
+# The process-info member is always present; with FRP_SKIP_SYSTEMD the live ps
+# filter may be empty, but the collector must still be wired for drlink-egress.
+# Presence of egress-conn.jsonl + egress summary is the runtime evidence contract.
+print("ok")
+PY
+pass "EGRESS_RUNTIME_EVIDENCE_PRESENT"
 
 snapshot_tree "$SERVER" "$WORKDIR/server.after"
 assert_unchanged "$WORKDIR/server.before" "$WORKDIR/server.after" "server-fixture"

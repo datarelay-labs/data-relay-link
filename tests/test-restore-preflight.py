@@ -166,6 +166,50 @@ def main() -> int:
         else:
             print("RESTORE_PREFLIGHT_ACCESS_XREF=FAIL", file=sys.stderr)
             return 1
+
+        bad_ids = staging / "egress-id-payload"
+        shutil.copytree(payload, bad_ids)
+        (bad_ids / "var/lib/drlink/egress-control.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "egress_profiles": {
+                        "egp_aaaaaaaaaaaa": {
+                            "id": "egp_aaaaaaaaaaaa",
+                            "name": "office",
+                            "enabled": False,
+                            "description": "",
+                            "sources": [{"cidr": "203.0.113.10/32"}],
+                            "destinations": [
+                                {
+                                    "host": "example.com",
+                                    "port": 443,
+                                    "match": "exact",
+                                    "protocol": "https",
+                                }
+                            ],
+                            "created_at": "t",
+                            "updated_at": "t",
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        bad_id_stage = staging / "egress-id-stage"
+        bad_id_stage.mkdir(exist_ok=True)
+        bad_id_archive = build_archive(bad_id_stage, bad_ids)
+        try:
+            mod.validate_to_temp(bad_id_archive)
+        except mod.RestoreError as exc:
+            if "egress" not in str(exc).lower() and "id" not in str(exc).lower():
+                print("unexpected egress-id error: %s" % exc, file=sys.stderr)
+                return 1
+            print("RESTORE_PREFLIGHT_EGRESS_ENTRY_ID=PASS")
+        else:
+            print("RESTORE_PREFLIGHT_EGRESS_ENTRY_ID=FAIL", file=sys.stderr)
+            return 1
     return 0
 
 

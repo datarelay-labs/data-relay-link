@@ -70,6 +70,10 @@ class EgressCreateSafeDefaultTests(unittest.TestCase):
             (ROOT / "lib/frp_egress_control.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        (libdir / "frp_control_locks.py").write_text(
+            (ROOT / "lib/frp_control_locks.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         sbin = self.root / "usr/local/sbin"
         sbin.mkdir(parents=True, exist_ok=True)
         dest = sbin / "frp-egress"

@@ -14,6 +14,7 @@ mkdir -p \
   "$TMP/usr/local/sbin"
 
 cp "$ROOT/lib/frp_egress_control.py" "$TMP/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_control_locks.py" "$TMP/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_public_suffix.py" "$TMP/usr/local/lib/drlink/"
 mkdir -p "$TMP/usr/local/lib/drlink/data"
 cp "$ROOT/lib/data/public_suffix_list.dat" "$TMP/usr/local/lib/drlink/data/"

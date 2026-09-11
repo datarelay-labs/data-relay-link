@@ -59,6 +59,7 @@ python3 tests/test-core-correctness-p1.py
 ./tests/test-client-groups.sh
 python3 tests/test-client-registry.py
 python3 tests/test-control-state-concurrency.py
+python3 tests/test-control-state-global-lock.py
 python3 tests/test-restore-preflight.py
 python3 tests/test-restore-readiness.py
 ./tests/test-frp-client.sh
@@ -86,6 +87,7 @@ bash ./tests/test-installed-client-update.sh
 python3 tests/test-access-control.py
 ./tests/test-access-control.sh
 python3 tests/test-egress-control.py
+python3 tests/test-egress-create-safe-default.py
 ./tests/test-egress-control.sh
 ./tests/test-authoritative-state-missing.sh
 ./tests/test-target-health.sh
