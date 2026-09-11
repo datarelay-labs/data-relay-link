@@ -2368,12 +2368,21 @@ def _catalog_candidates(filled, prefix, role, names, services, local_services, g
     allowed = [name for name, _desc in CATALOG.subcommands(root, role)]
     if len(filled) == 1:
         hits = _filter(allowed, prefix)
-        if hits:
+        # Legacy ``client <ID>`` shortcut: also offer CLIENT IDs when the
+        # prefix does not uniquely select a canonical action.
+        if root == "client":
+            id_hits = _filter(list(names or []), prefix)
+            merged = sorted(set(hits + id_hits))
+            if merged:
+                return merged
+        elif hits:
             return hits
-        # A root that is also a historical flat command (e.g. `client <ID>`)
-        # keeps completing its old operand when no action matches.
+        # A root that is also a historical flat command keeps completing its
+        # old operand when no action matches.
         return None if root in FALLTHROUGH_ROOTS else []
     if filled[1] not in actions:
+        if root == "client" and _client_legacy_selector([root, filled[1]]):
+            return None  # fall through to legacy operand completion
         return None if root in FALLTHROUGH_ROOTS else []
     probe = [root] + list(filled[1:])
     cmd = CATALOG.find(probe)
