@@ -87,9 +87,12 @@ bash ./tests/test-installed-client-update.sh
 python3 tests/test-access-control.py
 ./tests/test-access-control.sh
 python3 tests/test-egress-control.py
+python3 tests/test-egress-conn-log-traverse-only.py
 python3 tests/test-egress-create-safe-default.py
 python3 tests/test-egress-runtime-permissions.py
 ./tests/test-egress-control.sh
+./tests/test-client-stop-fail-closed.sh
+python3 tests/test-machine-id-validation.py
 ./tests/test-authoritative-state-missing.sh
 ./tests/test-target-health.sh
 ./tests/test-support-bundle.sh
@@ -118,6 +121,7 @@ python3 tests/test-audit-log.py
 ./tests/test-frp-compatibility.sh
 ./tests/test-backup-restore.sh
 ./tests/test-server-uninstall-fail-closed.sh
+./tests/test-orphan-suite-coverage.sh
 
 echo "=== leftover test allocators ==="
 # shellcheck source=lib/frp-test-procs.sh
