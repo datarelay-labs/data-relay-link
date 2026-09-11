@@ -2727,7 +2727,18 @@ frp_client_apply_reconcile_runtime() {
     fi
   fi
   if [[ "$dropped_enabled" == 1 ]]; then
-    if ! frp_client_restart; then
+    # Match apply semantics: zero enabled services → stop (management-only),
+    # otherwise restart. Never re-enable/restart an empty proxy set.
+    local enabled_count
+    enabled_count="$(frp_count_enabled_services "$(frp_client_state_path)" 2>/dev/null || echo 0)"
+    if [[ "${enabled_count:-0}" -eq 0 ]]; then
+      if ! frp_client_stop; then
+        echo "ERROR: failed to stop drlink-client after last enabled service was released." >&2
+        frp_emit_failure_class FRPC_STOP_FAILED
+        echo "RECOVERY_REQUIRED=YES" >&2
+        return 1
+      fi
+    elif ! frp_client_restart; then
       echo "ERROR: failed to restart drlink-client after server reconciliation." >&2
       frp_emit_failure_class FRPC_RESTART_FAILED
       echo "RECOVERY_REQUIRED=YES" >&2
@@ -4026,21 +4037,86 @@ frp_client_verify_config() {
 }
 
 frp_client_stop() {
+  # Fail-closed management-only transition: stop/disable must succeed and be
+  # verified. Callers (apply / reconcile) must not report success if the
+  # previous frpc generation may still be running after zero enabled services.
   frp_client_hook_log stop
+  if [[ "${FRP_CLIENT_HOOK_STOP_FAIL:-}" == "1" ]]; then
+    FRP_CLIENT_HOOK_STOP_FAIL=0
+    echo "ERROR: simulated client stop failure" >&2
+    frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+    return 1
+  fi
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-    mkdir -p "$(dirname "$(frp_path /var/lib/drlink/update-actions.log)")"
-    echo "stop drlink-client" >>"$(frp_path /var/lib/drlink/update-actions.log)"
+    mkdir -p "$(dirname "$(frp_client_path /var/lib/drlink/update-actions.log)")"
+    echo "stop drlink-client" >>"$(frp_client_path /var/lib/drlink/update-actions.log)"
     return 0
   fi
   if frp_is_darwin; then
     frp_macos_launchd_set_enabled disable || return 1
     if frp_macos_launchd_running; then
+      # Kickstart after disable forces unload/stop; verify stopped.
       frp_macos_launchd_kickstart || true
+      local i
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        frp_macos_launchd_running || break
+        sleep 0.2
+      done
+      if frp_macos_launchd_running; then
+        echo "ERROR: macOS Data Relay Link client is still running after stop." >&2
+        frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+        return 1
+      fi
     fi
-  else
-    systemctl disable drlink-client >/dev/null 2>&1 || true
-    systemctl stop drlink-client >/dev/null 2>&1 || true
+    return 0
   fi
+
+  # Disable autostart first so a failed stop cannot leave a unit that will
+  # come back on reboot while local state already says management-only.
+  if ! systemctl disable drlink-client >/dev/null 2>&1; then
+    # Already disabled is OK; anything else is a failure unless unit absent.
+    if systemctl cat drlink-client >/dev/null 2>&1; then
+      local en
+      en="$(systemctl is-enabled drlink-client 2>/dev/null || true)"
+      case "$en" in
+        disabled|static|masked|indirect) ;;
+        *)
+          echo "ERROR: failed to disable drlink-client autostart (state=$en)." >&2
+          frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+          return 1
+          ;;
+      esac
+    fi
+  fi
+  if ! systemctl stop drlink-client >/dev/null 2>&1; then
+    # If already inactive, stop may return non-zero on some systemd versions.
+    if [[ "$(systemctl is-active drlink-client 2>/dev/null || true)" != "inactive" ]]; then
+      echo "ERROR: failed to stop drlink-client." >&2
+      frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+      return 1
+    fi
+  fi
+  # Verify inactive and no product-owned frpc remains under the unit.
+  local i state
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    state="$(systemctl is-active drlink-client 2>/dev/null || true)"
+    [[ "$state" == "inactive" || "$state" == "failed" || "$state" == "dead" ]] && break
+    sleep 0.2
+  done
+  state="$(systemctl is-active drlink-client 2>/dev/null || true)"
+  if [[ "$state" != "inactive" && "$state" != "failed" && "$state" != "dead" ]]; then
+    echo "ERROR: drlink-client is still active after stop (state=$state)." >&2
+    frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+    return 1
+  fi
+  local mainpid
+  mainpid="$(systemctl show -p MainPID --value drlink-client 2>/dev/null || true)"
+  if [[ -n "$mainpid" && "$mainpid" != "0" ]]; then
+    echo "ERROR: drlink-client MainPID=$mainpid remains after stop." >&2
+    frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+    return 1
+  fi
+  return 0
 }
 
 frp_client_restart() {
