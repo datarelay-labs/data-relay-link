@@ -465,8 +465,8 @@ frp_identity_ensure() {
   if [[ "$status" == corrupt ]]; then
     echo "ERROR: this client's management identity is unusable." >&2
     echo "The local identity file exists but cannot be used." >&2
-    echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink create enrollment," >&2
-    echo "move the damaged identity aside, then re-enroll this client." >&2
+    echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink zero-touch create" >&2
+    echo "(or sudo drlink enrollment create), move the damaged identity aside, then re-enroll this client." >&2
     echo "Do not overwrite ${key} automatically." >&2
     return 1
   fi
@@ -945,7 +945,8 @@ Before continuing, you need an Enrollment Code.
 
 Generate one on the Data Relay Link server with:
 
-  sudo drlink create enrollment
+  sudo drlink zero-touch create
+  # or: sudo drlink enrollment create
 
 The Enrollment Code is short-lived. Enter it only here.
 It authorizes this first enrollment (or a later recovery).
@@ -963,7 +964,8 @@ EOF
 frp_ux_enrollment_help() {
   cat <<'EOF'
 Enrollment Code
-  Generated on the Data Relay Link server with: sudo drlink create enrollment
+  Generated on the Data Relay Link server with: sudo drlink zero-touch create
+  (or: sudo drlink enrollment create)
   Short-lived bootstrap/recovery credential. Entered interactively.
   Not stored. Not the FRP token.
   Needed for first enrollment, recovering a lost local identity,
@@ -1164,44 +1166,43 @@ frp_ux_print_all_guidance() {
 }
 
 frp_prompt_service_id() {
-  local default="$1"
-  local -n _frp_sid_out="$2"
+  local default="$1" out_var="$2"
   frp_ux_service_id_help "$default"
   echo
-  _frp_sid_out="$(read_tty "Service ID [${default}]: " "$default")"
+  # Bash 3.2 portable out-param (no nameref).
+  printf -v "$out_var" '%s' "$(read_tty "Service ID [${default}]: " "$default")"
 }
 
 frp_prompt_target_host() {
-  local default="${1:-127.0.0.1}"
-  local -n _frp_host_out="$2"
+  local default="${1:-127.0.0.1}" out_var="$2"
   frp_ux_target_host_help
-  _frp_host_out="$(read_tty "Target host [${default}]: " "$default")"
+  printf -v "$out_var" '%s' "$(read_tty "Target host [${default}]: " "$default")"
 }
 
 frp_prompt_target_port() {
-  local preset="$1" default="${2:-}"
-  local -n _frp_port_out="$3"
+  local preset="$1" default="${2:-}" out_var="$3"
   frp_ux_target_port_help "$preset"
   if [[ -n "$default" ]]; then
-    _frp_port_out="$(read_tty "Target port [${default}]: " "$default")"
+    printf -v "$out_var" '%s' "$(read_tty "Target port [${default}]: " "$default")"
   else
-    _frp_port_out="$(read_tty "Target port: " "")"
+    printf -v "$out_var" '%s' "$(read_tty "Target port: " "")"
   fi
 }
 
 frp_prompt_ssh_user() {
-  local -n _frp_user_out="$1"
+  local out_var="$1"
   local default="${2:-${FRP_SSH_USER:-}}"
-  _frp_user_out=""
+  local _frp_user_tmp=""
   frp_ux_ssh_user_help
-  while [[ -z "$_frp_user_out" ]]; do
+  while [[ -z "$_frp_user_tmp" ]]; do
     if [[ -n "$default" ]]; then
-      _frp_user_out="$(read_tty "SSH user [${default}]: " "$default")"
+      _frp_user_tmp="$(read_tty "SSH user [${default}]: " "$default")"
     else
-      _frp_user_out="$(read_tty "SSH user (required): ")"
+      _frp_user_tmp="$(read_tty "SSH user (required): ")"
     fi
-    [[ -n "$_frp_user_out" ]] || echo "ERROR: SSH user is required." >&2
+    [[ -n "$_frp_user_tmp" ]] || echo "ERROR: SSH user is required." >&2
   done
+  printf -v "$out_var" '%s' "$_frp_user_tmp"
 }
 
 frp_ux_prompt_new_service() {
@@ -1246,16 +1247,14 @@ frp_ux_prompt_new_service() {
         ;;
       5)
         if [[ -n "$dest" ]]; then
-          local -n _frp_payload_back="$dest"
-          _frp_payload_back=""
+          printf -v "$dest" '%s' ""
         fi
         return 0
         ;;
       *) echo "ERROR: select 1-5" >&2; continue ;;
     esac
     if [[ -n "$dest" ]]; then
-      local -n _frp_payload_out="$dest"
-      _frp_payload_out="$_frp_new_payload"
+      printf -v "$dest" '%s' "$_frp_new_payload"
     else
       printf '%s\n' "$_frp_new_payload"
     fi
@@ -4067,8 +4066,9 @@ frp_client_restart() {
     fi
   else
     # Upgrade/recovery restart must not leave historical frpc.service co-running.
+    # Fail closed: do not start/restart the canonical unit if legacy stop fails.
     if declare -F frp_retire_legacy_client_unit >/dev/null 2>&1; then
-      frp_retire_legacy_client_unit || true
+      frp_retire_legacy_client_unit || return 1
     fi
     systemctl enable drlink-client >/dev/null && systemctl restart drlink-client
   fi
