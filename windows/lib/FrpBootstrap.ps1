@@ -692,7 +692,7 @@ function Invoke-FrpClientApplyDraftLocked {
 
         Save-FrpClientState -AllocatorUrl $allocatorUrl -FrpServer $result.FrpServer -FrpServerPort $result.FrpServerPort `
             -Hostname $hostnameValue -MachineId $machineId -HostId $hostId -Services $draftMap -Transport $transport `
-            -InstallStatus 'installed' @saveHostname | Out-Null
+            -InstallStatus $(if ($enabledAny) { 'installed' } else { 'management_only' }) @saveHostname | Out-Null
 
         if ($enabledAny) {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
@@ -707,6 +707,8 @@ function Invoke-FrpClientApplyDraftLocked {
             }
         } else {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
+            # Zero enabled services: management-only — no reboot autostart.
+            Uninstall-FrpAutostartTask | Out-Null
         }
     } catch {
         Write-Host ("ERROR: failed to activate new configuration: {0}" -f $_.Exception.Message)
@@ -804,6 +806,7 @@ function Invoke-FrpApplyReconcileRuntime {
     if (-not $enabledAny) {
         Set-FrpInstallStatus -Status 'management_only'
         Stop-FrpClient | Out-Null
+        Uninstall-FrpAutostartTask | Out-Null
         return
     }
     $wasRunning = (Get-FrpClientStatus).Running
