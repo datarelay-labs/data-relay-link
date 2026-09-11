@@ -431,7 +431,7 @@ def purge_enrollment_row(row, *, audit_emit=None, reason='manual', retention_day
         raise EnrollmentLifecycleError(
             'ERROR: active enrollment cannot be purged.\n'
             'Revoke it first:\n'
-            '  revoke enrollment %s' % row.get('id')
+            '  drlink enrollment revoke %s' % row.get('id')
         )
     if state not in TERMINAL_STATES:
         raise EnrollmentLifecycleError('ERROR: enrollment is not in a terminal state')

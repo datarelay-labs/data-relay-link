@@ -86,7 +86,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Revoke an unused or bound enrollment (manual or zero-touch)'
     )
-    parser.add_argument('id', help='enrollment ID shown by frp-enrollments / show enrollments')
+    parser.add_argument('id', help='enrollment ID shown by drlink enrollment list')
     args = parser.parse_args(argv)
     target_id = args.id.strip().lower()
     if len(target_id) != 16 or any(c not in '0123456789abcdef' for c in target_id):

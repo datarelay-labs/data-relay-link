@@ -451,7 +451,7 @@ frp_apply_candidate() {
       echo "Authentication: existing client identity"
     elif [[ "$ident_status" == corrupt ]]; then
       echo "ERROR: this client's management identity is unusable." >&2
-      echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink create enrollment," >&2
+      echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink enrollment create," >&2
       echo "then re-enroll this client. Do not overwrite the damaged identity file automatically." >&2
       return 1
     else

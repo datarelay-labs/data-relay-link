@@ -76,7 +76,7 @@ def cmd_purge_one(target_id, force, lifecycle, cfg):
         raise SystemExit(
             'ERROR: active enrollment cannot be purged.\n'
             'Revoke it first:\n'
-            '  revoke enrollment %s' % row.get('id')
+            '  drlink enrollment revoke %s' % row.get('id')
         )
     if state not in lifecycle.TERMINAL_STATES:
         raise SystemExit('ERROR: enrollment is not in a terminal state')

@@ -80,6 +80,35 @@ def load_frp_pki():
     )
 
 
+def installed_project_version():
+    """Authoritative project version for installer URL guidance (never hard-code)."""
+    env = str(os.environ.get('PROJECT_VERSION') or '').strip()
+    if env:
+        return env
+    for candidate in (
+        remap('/etc/drlink/version'),
+        Path(__file__).resolve().parent.parent / 'VERSION',
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('PROJECT_VERSION='):
+                value = line.split('=', 1)[1].strip()
+                if value:
+                    return value
+    return '2.3.1'
+
+
+def default_client_installer_url():
+    ver = installed_project_version()
+    return (
+        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
+        'v%s/dist/bootstrap-client.sh' % ver
+    )
+
+
 def load_allocator():
     return load_module(
         'frp_port_allocator',
@@ -240,11 +269,11 @@ def parse_args(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             'examples:\n'
-            '  sudo drlink create enrollment\n'
-            '  sudo drlink create enrollment --one-line --ssh --note client-01\n'
-            '  sudo drlink create enrollment --one-line --ssh --ssh-user aella --note customer-01\n'
-            '  sudo drlink create enrollment --one-line --ssh --client-name seoul-groupware --note "Seoul office"\n'
-            '  sudo drlink create enrollment --one-line --client-name inventory-only\n'
+            '  sudo drlink enrollment create\n'
+            '  sudo drlink enrollment create --one-line --ssh --note client-01\n'
+            '  sudo drlink enrollment create --one-line --ssh --ssh-user aella --note customer-01\n'
+            '  sudo drlink enrollment create --one-line --ssh --client-name seoul-groupware --note "Seoul office"\n'
+            '  sudo drlink enrollment create --one-line --client-name inventory-only\n'
         ),
     )
     p.add_argument('--ttl', type=int, default=600, help='TTL in seconds (default 600)')
@@ -529,8 +558,8 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     print('Expires: %s (%s seconds)' % (record['expires_at_iso'], ttl))
     print()
     print('Track or revoke with the Enrollment ID (not the secret):')
-    print('  show enrollments')
-    print('  revoke enrollment %s' % record['id'])
+    print('  drlink enrollment list')
+    print('  drlink enrollment revoke %s' % record['id'])
     print()
     if public_host and control_public:
         print('Data Relay Link Server: %s:%s' % (public_host, control_public))
@@ -563,7 +592,7 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
         print('Set the client installer URL, then re-run this command:')
         print(
             '  sudo drlink set client-installer-url '
-            'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.1.1/dist/bootstrap-client.sh'
+            '%s' % default_client_installer_url()
         )
         if not allocator:
             print()
@@ -662,12 +691,13 @@ def print_one_line_windows(
         print('This enrolls management identity only; no service or public port is created.')
     print()
     print('The ticket cannot be reused by another machine once bound.')
-    print('After reboot, start the drlink-client service; re-enrollment is not required.')
+    print('After reboot, Data Relay Link starts automatically when a service is enabled.')
+    print('Use: drlink service apply  (or legacy: drlink apply)')
     if tracking_id:
         print()
         print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  show enrollments')
-        print('  revoke enrollment %s' % tracking_id)
+        print('  drlink enrollment list')
+        print('  drlink enrollment revoke %s' % tracking_id)
     print()
 
 
@@ -751,8 +781,8 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     if tracking_id:
         print()
         print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  show enrollments')
-        print('  revoke enrollment %s' % tracking_id)
+        print('  drlink enrollment list')
+        print('  drlink enrollment revoke %s' % tracking_id)
     print()
 
 

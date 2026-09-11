@@ -159,7 +159,7 @@ def main(argv=None):
         print()
         print('Actions:')
         print('  pending/bound:')
-        print('    revoke enrollment <ID>')
+        print('    drlink enrollment revoke <ID>')
         print()
         print('  expired/completed/revoked:')
         print('    purge enrollment <ID>')

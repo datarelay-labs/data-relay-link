@@ -102,7 +102,19 @@ grep -q '(none)' "$WORKDIR/list.out" || fail "empty access list"
 grep -qi 'ALLOW' "$WORKDIR/test-allow.out" || fail "test allow"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-deny.out"
 grep -qi 'DENY' "$WORKDIR/test-deny.out" || fail "test deny"
-"$CTL" access public demo ssh >"$WORKDIR/public.out"
+"$CTL" access public demo ssh --yes >"$WORKDIR/public.out"
+grep -qi 'Exposure' "$WORKDIR/public.out" || fail "public exposure banner"
+grep -qi 'Existing established connections' "$WORKDIR/public.out" || fail "session semantics on public"
+
+# ALLOWLIST → PUBLIC requires --yes in non-interactive mode.
+"$CTL" access assign demo ssh Office >/dev/null
+if "$CTL" access public demo ssh >"$WORKDIR/public-no.out" 2>"$WORKDIR/public-no.err"; then
+  fail "ALLOWLIST→PUBLIC without --yes should fail non-interactive"
+fi
+grep -qi '\-\-yes\|confirmation' "$WORKDIR/public-no.err" "$WORKDIR/public-no.out" \
+  || fail "ALLOWLIST→PUBLIC must mention --yes/confirmation"
+"$CTL" access public demo ssh --yes >"$WORKDIR/public-yes.out"
+grep -qi 'publicly reachable' "$WORKDIR/public-yes.out" || fail "broadening warning shown with --yes"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-public.out"
 grep -qi 'ALLOW' "$WORKDIR/test-public.out" || fail "public allow"
 pass "frpctl access list/create/add-source/assign/test/public"
@@ -214,7 +226,7 @@ if grep -qi '203.0.113.77' "$WORKDIR/exp-only-list.out"; then
 fi
 pass "expired-only cleanup stays ALLOWLIST"
 
-"$CTL" access public demo ssh >/dev/null
+"$CTL" access public demo ssh --yes >/dev/null
 
 export FRP_SERVER_SOURCED=1
 # shellcheck disable=SC1091

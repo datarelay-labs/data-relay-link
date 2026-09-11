@@ -256,6 +256,7 @@ def cmd_add_source(cfg, args):
     print("Added source %s (%s)" % (entry.get("name"), entry.get("cidr")))
     if entry.get("expires_at"):
         print("Expires at  : %s" % entry.get("expires_at"))
+    print_access_session_semantics()
 
 
 def cmd_remove_source(cfg, args):
@@ -269,6 +270,7 @@ def cmd_remove_source(cfg, args):
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Removed source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+    print_access_session_semantics()
 
 
 def cmd_replace_source(cfg, args):
@@ -388,8 +390,46 @@ def cmd_assign(cfg, args):
     ))
 
 
+def confirm_public_broadening(cfg, mid, sid, *, yes=False):
+    """Require acknowledgement when weakening ALLOWLIST → PUBLIC."""
+    state = ACL.load_access_state(cfg=cfg)
+    binding = ACL.get_service_binding(state, mid, sid)
+    if binding.get("access_mode") != ACL.MODE_ALLOWLIST:
+        return False
+    msg = (
+        'This will make service "%s" publicly reachable from any source\n'
+        "that can reach its public port.\n"
+        "\n"
+        "Target authentication such as SSH keys still applies.\n"
+        "\n"
+        "New connections use the new policy immediately.\n"
+        "Existing established connections are not forcibly terminated."
+    ) % sid
+    print(msg)
+    print()
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            "ERROR: switching ALLOWLIST → PUBLIC requires interactive confirmation "
+            "or --yes for automation."
+        )
+    confirm = input("Continue? [y/N]: ").strip().lower()
+    if confirm not in ("y", "yes"):
+        raise SystemExit(0)
+    return True
+
+
+def print_access_session_semantics():
+    print()
+    print("Policy updated.")
+    print("New connections use the new policy immediately.")
+    print("Existing established connections are not forcibly terminated.")
+
+
 def cmd_public(cfg, args):
     registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
+    confirm_public_broadening(cfg, mid, sid, yes=bool(getattr(args, "yes", False)))
 
     def mut(state):
         ACL.set_service_binding(state, mid, sid, ACL.MODE_PUBLIC, None)
@@ -399,6 +439,14 @@ def cmd_public(cfg, args):
     print("Set %s:%s to PUBLIC (port %s)" % (
         short_client(registry, mid), sid, svc.get("remote_port"),
     ))
+    print()
+    print("Exposure      : PUBLIC")
+    print("Source policy : Any source that can reach this public port may attempt a connection")
+    print("Target auth   : SSH/application authentication is still required")
+    print()
+    print("Recommended:")
+    print("  Restrict this service with an Access List if public access is not intended.")
+    print_access_session_semantics()
 
 
 def cmd_show_service(cfg, args):
@@ -584,7 +632,7 @@ def interactive_menu(cfg):
             elif choice == "6":
                 client = input("Client: ").strip()
                 service = input("Service ID: ").strip()
-                cmd_public(cfg, argparse.Namespace(client=client, service=service))
+                cmd_public(cfg, argparse.Namespace(client=client, service=service, yes=True))
             elif choice == "7":
                 client = input("Client: ").strip()
                 service = input("Service ID: ").strip()
@@ -745,6 +793,7 @@ def build_parser():
     p = sub.add_parser("public", help="Set service PUBLIC")
     p.add_argument("client")
     p.add_argument("service")
+    p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("show-service", help="Show service access")
     p.add_argument("client")
