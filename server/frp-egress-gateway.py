@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlsplit
@@ -44,9 +45,11 @@ MAX_CLIENT_HELLO = 16384
 DEFAULT_MAX_CONCURRENT = 256
 DEFAULT_PER_SOURCE_LIMIT = 32
 DEFAULT_DNS_PENDING_LIMIT = 64
+DEFAULT_DNS_WORKERS = 8
 DNS_TIMEOUT = 5.0
 DNS_POSITIVE_TTL = 30.0
 DNS_NEGATIVE_TTL = 10.0
+AUDIT_HOSTNAME_REDACTED = "<invalid-or-redacted>"
 HAPPY_EYEBALLS_DELAY = 0.25
 STREAM_BUF = 65536
 BODY_MEMORY_THRESHOLD = 256 * 1024  # larger bodies spool to disk before connect
@@ -56,6 +59,21 @@ RELAY_MAX_BUFFER = 256 * 1024
 # Reference: https://www.rfc-editor.org/rfc/rfc9849.html (IANA tls-extensiontype-values).
 TLS_EXT_ENCRYPTED_CLIENT_HELLO = 0xFE0D
 SESSION_REVALIDATE_INTERVAL = 2.0
+
+
+def audit_safe_hostname(hostname: Optional[str] = None) -> str:
+    """Return a conn-log-safe hostname; never a raw request-target or URI."""
+    host = str(hostname or "").strip()
+    if not host or host == AUDIT_HOSTNAME_REDACTED:
+        return AUDIT_HOSTNAME_REDACTED
+    # Refuse anything that looks like a URI, userinfo, path, or query.
+    if any(ch in host for ch in ("/", "?", "#", "@", " ", "\t", "\r", "\n", "\\")):
+        return AUDIT_HOSTNAME_REDACTED
+    if "://" in host:
+        return AUDIT_HOSTNAME_REDACTED
+    if len(host) > 253:
+        return AUDIT_HOSTNAME_REDACTED
+    return host
 
 
 def _load_module(name: str, rel: str):
@@ -110,10 +128,17 @@ def default_connect(ip: str, port: int, hostname: str, timeout: float) -> socket
 
 
 class DnsResolver:
-    """Bounded DNS with coalescing and validated-only caches.
+    """Bounded DNS worker pool with coalescing and validated-only caches.
 
     Security order is preserved by callers:
       resolve ALL → validate ALL → if ANY unsafe DENY ALL → connect only to validated IPs.
+
+    Resource model:
+      - at most ``worker_limit`` getaddrinfo workers
+      - at most ``pending_limit`` in-flight hostnames (queued + running)
+      - hostname coalescing so concurrent callers share one job
+      - caller timeout does NOT free pending/worker budget while the worker runs
+        (getaddrinfo is not cancellable)
 
     Never serves stale-while-revalidate for authorization decisions.
     """
@@ -123,17 +148,21 @@ class DnsResolver:
         *,
         resolve_fn: Callable[[str], list[str]],
         pending_limit: int = DEFAULT_DNS_PENDING_LIMIT,
+        worker_limit: int = DEFAULT_DNS_WORKERS,
         timeout: float = DNS_TIMEOUT,
         positive_ttl: float = DNS_POSITIVE_TTL,
         negative_ttl: float = DNS_NEGATIVE_TTL,
     ):
         self.resolve_fn = resolve_fn
-        self.pending_limit = int(pending_limit)
+        self.pending_limit = max(1, int(pending_limit))
+        self.worker_limit = max(1, int(worker_limit))
         self.timeout = float(timeout)
         self.positive_ttl = float(positive_ttl)
         self.negative_ttl = float(negative_ttl)
         self._lock = threading.Lock()
         self._pending = 0
+        self._workers_busy = 0
+        self._queue: deque[str] = deque()
         self._inflight: dict[str, threading.Event] = {}
         self._inflight_result: dict[str, object] = {}
         self._pos: dict[str, tuple[float, list[str]]] = {}  # host -> (expires, validated ips)
@@ -143,6 +172,11 @@ class DnsResolver:
     def pending_count(self) -> int:
         with self._lock:
             return self._pending
+
+    @property
+    def workers_busy(self) -> int:
+        with self._lock:
+            return self._workers_busy
 
     @property
     def positive_cache_size(self) -> int:
@@ -157,8 +191,7 @@ class DnsResolver:
     def resolve_validated(self, hostname: str) -> list[str]:
         host = str(hostname).lower().strip()
         now = time.monotonic()
-        leader = False
-        ev = None
+        ev: Optional[threading.Event] = None
         with self._lock:
             neg = self._neg.get(host)
             if neg and neg[0] > now:
@@ -173,37 +206,62 @@ class DnsResolver:
 
             if host in self._inflight:
                 ev = self._inflight[host]
-                leader = False
             else:
                 if self._pending >= self.pending_limit:
                     raise EG.EgressError("DNS pending limit reached")
                 ev = threading.Event()
                 self._inflight[host] = ev
+                self._inflight_result.pop(host, None)
                 self._pending += 1
-                leader = True
+                self._queue.append(host)
+                self._dispatch_unlocked()
 
-        if not leader:
-            if not ev.wait(timeout=self.timeout + 1.0):
-                raise EG.EgressError("DNS resolution timeout")
-            with self._lock:
-                result = self._inflight_result.get(host)
-            if isinstance(result, Exception):
-                raise result
-            if not isinstance(result, list):
-                raise EG.EgressError("DNS resolution failed")
-            return list(result)
-
-        err = None
-        validated = None
-        try:
-            raw = self._resolve_with_timeout(host)
-            validated = EG.validate_resolved_addresses(raw)
-        except Exception as exc:
-            err = exc
+        assert ev is not None
+        # Caller timeout is independent of worker lifetime: do not release
+        # pending/worker budget here if the Event is not yet set.
+        if not ev.wait(timeout=self.timeout + 1.0):
+            raise EG.EgressError("DNS resolution timeout")
 
         with self._lock:
+            result = self._inflight_result.get(host)
+            # Prefer durable caches once the job has finished and been cleared
+            # from the inflight maps (late waiters / post-completion callers).
+            if result is None:
+                pos = self._pos.get(host)
+                if pos and pos[0] > time.monotonic():
+                    return list(pos[1])
+                neg = self._neg.get(host)
+                if neg and neg[0] > time.monotonic():
+                    raise EG.EgressError(neg[1])
+        if isinstance(result, Exception):
+            raise result
+        if not isinstance(result, list):
+            raise EG.EgressError("DNS resolution failed")
+        return list(result)
+
+    def _dispatch_unlocked(self) -> None:
+        while self._queue and self._workers_busy < self.worker_limit:
+            host = self._queue.popleft()
+            self._workers_busy += 1
+            threading.Thread(
+                target=self._run_job,
+                args=(host,),
+                name=f"drlink-dns-{host[:48]}",
+                daemon=True,
+            ).start()
+
+    def _run_job(self, host: str) -> None:
+        err: Optional[BaseException] = None
+        validated: Optional[list[str]] = None
+        try:
+            raw = self.resolve_fn(host)
+            validated = EG.validate_resolved_addresses(raw)
+        except Exception as exc:  # noqa: BLE001 — surface to waiters fail-closed
+            err = exc
+        with self._lock:
+            self._workers_busy = max(0, self._workers_busy - 1)
             self._pending = max(0, self._pending - 1)
-            self._inflight.pop(host, None)
+            ev = self._inflight.pop(host, None)
             if err is not None:
                 self._inflight_result[host] = err
                 self._neg[host] = (time.monotonic() + self.negative_ttl, str(err))
@@ -211,34 +269,15 @@ class DnsResolver:
                     for k, _ in sorted(self._neg.items(), key=lambda kv: kv[1][0])[:64]:
                         self._neg.pop(k, None)
             else:
-                self._inflight_result[host] = list(validated or [])
-                self._pos[host] = (time.monotonic() + self.positive_ttl, list(validated or []))
+                ips = list(validated or [])
+                self._inflight_result[host] = ips
+                self._pos[host] = (time.monotonic() + self.positive_ttl, ips)
                 if len(self._pos) > 512:
                     for k, _ in sorted(self._pos.items(), key=lambda kv: kv[1][0])[:64]:
                         self._pos.pop(k, None)
-            ev.set()
-
-        if err is not None:
-            raise err
-        return list(validated or [])
-
-    def _resolve_with_timeout(self, hostname: str) -> list[str]:
-        box: dict = {}
-
-        def worker():
-            try:
-                box["ok"] = self.resolve_fn(hostname)
-            except Exception as exc:
-                box["err"] = exc
-
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
-        t.join(timeout=self.timeout)
-        if t.is_alive():
-            raise EG.EgressError("DNS resolution timeout")
-        if "err" in box:
-            raise box["err"]
-        return list(box.get("ok") or [])
+            if ev is not None:
+                ev.set()
+            self._dispatch_unlocked()
 
 
 def happy_eyeballs_connect(
@@ -382,6 +421,7 @@ class GatewayState:
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
         per_source_limit: int = DEFAULT_PER_SOURCE_LIMIT,
         dns_pending_limit: int = DEFAULT_DNS_PENDING_LIMIT,
+        dns_worker_limit: int = DEFAULT_DNS_WORKERS,
     ):
         self.cache = cache
         self.resolve_fn = resolve_fn
@@ -389,6 +429,7 @@ class GatewayState:
         self.max_concurrent = max_concurrent
         self.per_source_limit = per_source_limit
         self.dns_pending_limit = dns_pending_limit
+        self.dns_worker_limit = dns_worker_limit
         self._sem = threading.BoundedSemaphore(max_concurrent)
         self._active = 0
         self._lock = threading.Lock()
@@ -398,6 +439,7 @@ class GatewayState:
         self.dns = DnsResolver(
             resolve_fn=resolve_fn,
             pending_limit=dns_pending_limit,
+            worker_limit=dns_worker_limit,
             timeout=DNS_TIMEOUT,
         )
 
@@ -996,6 +1038,8 @@ def _extract_sni_from_client_hello_body(body: bytes) -> tuple[str, Optional[str]
                     if p + name_len > len(ext_data):
                         return "error", "invalid SNI name"
                     if name_type == 0:
+                        if found is not None:
+                            return "error", "ambiguous SNI"
                         try:
                             found = ext_data[p : p + name_len].decode("ascii")
                         except UnicodeDecodeError:
@@ -1334,20 +1378,16 @@ def _deny_sni(
     event = {
         "timestamp": EG.utc_now_iso(),
         "source_ip": source_ip,
-        "hostname": hostname,
+        "hostname": audit_safe_hostname(hostname),
         "port": port,
         "protocol": EG.PROTOCOL_HTTPS,
         "method": "CONNECT",
         "decision": EG.DECISION_DENY,
         "reason": reason,
-        "outcome": (
-            EG.AUDIT_TLS_SNI_MISMATCH
-            if reason == EG.REASON_TLS_SNI_MISMATCH
-            else EG.AUDIT_TLS_CLIENT_HELLO_INVALID
-        ),
+        "outcome": EG.AUDIT_POST_CONNECT_TLS_IDENTITY_DENY,
     }
     if observed_sni is not None:
-        event["observed_sni"] = observed_sni
+        event["observed_sni"] = audit_safe_hostname(observed_sni)
     EG.emit_conn_log(event, cfg=cfg)
     try:
         upstream.close()
@@ -1424,7 +1464,7 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
                     "timestamp": EG.utc_now_iso(),
                     "connection_id": connection_id,
                     "source_ip": source_ip,
-                    "hostname": target[:200],
+                    "hostname": AUDIT_HOSTNAME_REDACTED,
                     "port": None,
                     "method": "CONNECT",
                     "decision": EG.DECISION_DENY,
@@ -1464,17 +1504,14 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             request, expected_hostname=host, initial=body_prefix
         )
         if err is not None:
-            reason = (
-                EG.REASON_TLS_SNI_MISMATCH
-                if err == "SNI mismatch"
-                else EG.REASON_TLS_CLIENT_HELLO_INVALID
-            )
+            # Post-CONNECT identity failures share one explicit deny reason.
+            # SNI is validated only after HTTP 200 Connection Established.
             _deny_sni(
                 gw,
                 source_ip=source_ip,
                 hostname=host,
                 port=port,
-                reason=reason,
+                reason=EG.REASON_POST_CONNECT_TLS_IDENTITY_DENY,
                 observed_sni=observed,
                 client=request,
                 upstream=upstream,
@@ -1555,7 +1592,7 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
                 "timestamp": EG.utc_now_iso(),
                 "connection_id": connection_id,
                 "source_ip": source_ip,
-                "hostname": (target[:200] if target else ""),
+                "hostname": AUDIT_HOSTNAME_REDACTED,
                 "port": None,
                 "method": method,
                 "decision": EG.DECISION_DENY,
@@ -1741,6 +1778,9 @@ def _write_effective_config(host: str, port: int, gw: GatewayState) -> None:
             "max_concurrent": gw.max_concurrent,
             "per_source_limit": gw.per_source_limit,
             "dns_pending_limit": gw.dns_pending_limit,
+            "dns_worker_limit": gw.dns_worker_limit,
+            "dns_workers_busy": gw.dns.workers_busy,
+            "dns_pending": gw.dns.pending_count,
             "egress_control_file": str(gw.cache.path or ""),
             "policy_generation": gw.cache.engine.generation,
             "policy_healthy": bool(snap and snap.healthy),

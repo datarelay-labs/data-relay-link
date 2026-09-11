@@ -451,6 +451,12 @@ class EgressProxyFunctionalTests(unittest.TestCase):
             time.sleep(0.05)
         return needle in self.origin.total_bytes()
 
+    def _conn_log(self) -> str:
+        path = self.root / "var/log/drlink/egress-conn.jsonl"
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8")
+
     def test_http_get_allow(self):
         req = (
             b"GET http://allowed.test/path HTTP/1.1\r\n"
@@ -932,6 +938,58 @@ class EgressAdversarialTests(EgressProxyFunctionalTests):
                 msg=resp[:80],
             )
 
+    def test_malformed_request_log_redaction(self):
+        """Malformed targets must never land secrets in egress-conn.jsonl."""
+        secrets = (
+            b"SECRETTOKEN",
+            b"SECRETKEY",
+            b"secretuser",
+            b"secretpass",
+        )
+        payloads = (
+            b"CONNECT evil/path?token=SECRETTOKEN HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"GET http://secretuser:secretpass@allowed.test/x?api_key=SECRETKEY HTTP/1.1\r\n"
+            b"Host: allowed.test\r\nConnection: close\r\n\r\n",
+            b"GET http://allowed.test/\x00?token=SECRETTOKEN HTTP/1.1\r\n"
+            b"Host: allowed.test\r\nConnection: close\r\n\r\n",
+            b"CONNECT " + (b"A" * 400) + b"?api_key=SECRETKEY HTTP/1.1\r\nHost: x\r\n\r\n",
+        )
+        for payload in payloads:
+            self._raw(payload)
+        log = self._conn_log()
+        self.assertIn("<invalid-or-redacted>", log)
+        for secret in secrets:
+            self.assertNotIn(secret.decode("ascii"), log)
+        self.assertNotIn("token=", log)
+        self.assertNotIn("api_key=", log)
+        self.assertNotIn("secretuser:secretpass", log)
+        # Support-bundle staging copies conn logs through the same sanitize path.
+        sys.path.insert(0, str(ROOT / "lib"))
+        import frp_support_bundle as SB  # noqa: WPS433
+
+        staged = SB.redact_text(log)
+        for secret in secrets:
+            self.assertNotIn(secret.decode("ascii"), staged)
+        self.assertNotIn("token=", staged)
+        self.assertNotIn("api_key=", staged)
+
+    def test_post_connect_sni_mismatch_reason(self):
+        hello = build_client_hello("blocked.example.com")
+        req = b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n"
+        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5) as sock:
+            sock.sendall(req)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                buf += sock.recv(4096)
+            self.assertTrue(buf.startswith(b"HTTP/1.1 200"))
+            sock.sendall(hello)
+            time.sleep(0.3)
+        self.assertFalse(self._upstream_saw(hello))
+        deadline = time.time() + 2.0
+        while time.time() < deadline and "POST_CONNECT_TLS_IDENTITY_DENY" not in self._conn_log():
+            time.sleep(0.05)
+        self.assertIn("POST_CONNECT_TLS_IDENTITY_DENY", self._conn_log())
+
     def test_worker_exception_escape(self):
         """WORKER_EXCEPTION_ESCAPE=0 — garbage must yield 400, not kill worker."""
         resp = self._raw(b"\xff\xfe\x00not-http\r\n\r\n")
@@ -1318,9 +1376,9 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             except socket.timeout:
                 pass
         deadline = time.time() + 2.0
-        while time.time() < deadline and "TLS_CLIENT_HELLO_INVALID" not in self._conn_log():
+        while time.time() < deadline and "POST_CONNECT_TLS_IDENTITY_DENY" not in self._conn_log():
             time.sleep(0.05)
-        self.assertIn("TLS_CLIENT_HELLO_INVALID", self._conn_log())
+        self.assertIn("POST_CONNECT_TLS_IDENTITY_DENY", self._conn_log())
 
     def test_https_non443_sni_required(self):
         hello = build_client_hello("allowed.test")
@@ -1405,6 +1463,74 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         t1.join(timeout=5)
         t2.join(timeout=5)
         self.assertTrue(any("pending limit" in str(e) for _who, e in errors))
+
+    def test_dns_timeout_keeps_pending_until_worker_finishes(self):
+        release = threading.Event()
+
+        def stuck_resolve(hostname: str):
+            release.wait(timeout=10)
+            return ["1.2.3.4"]
+
+        dns = self.GW.DnsResolver(
+            resolve_fn=stuck_resolve,
+            pending_limit=1,
+            worker_limit=1,
+            timeout=0.2,
+        )
+        with self.assertRaises(Exception) as ctx:
+            dns.resolve_validated("hang.dns")
+        self.assertIn("timeout", str(ctx.exception).lower())
+        self.assertEqual(dns.pending_count, 1)
+        self.assertEqual(dns.workers_busy, 1)
+        with self.assertRaises(Exception) as sat:
+            dns.resolve_validated("other.dns")
+        self.assertIn("pending limit", str(sat.exception).lower())
+        release.set()
+        deadline = time.time() + 3.0
+        while time.time() < deadline and dns.pending_count != 0:
+            time.sleep(0.05)
+        self.assertEqual(dns.pending_count, 0)
+        self.assertEqual(dns.workers_busy, 0)
+        # Recovery after real worker release.
+        ips = dns.resolve_validated("hang.dns")
+        self.assertEqual(ips, ["1.2.3.4"])
+
+    def test_dns_worker_pool_bound(self):
+        gate = threading.Event()
+        started = threading.Event()
+        inflight = {"n": 0}
+        lock = threading.Lock()
+
+        def slow_resolve(hostname: str):
+            with lock:
+                inflight["n"] += 1
+                if inflight["n"] >= 2:
+                    started.set()
+            gate.wait(timeout=5)
+            with lock:
+                inflight["n"] -= 1
+            return ["1.2.3.4"]
+
+        dns = self.GW.DnsResolver(
+            resolve_fn=slow_resolve,
+            pending_limit=8,
+            worker_limit=2,
+            timeout=3.0,
+        )
+        threads = [
+            threading.Thread(target=lambda h=f"h{i}.test": dns.resolve_validated(h))
+            for i in range(4)
+        ]
+        for t in threads:
+            t.start()
+        started.wait(timeout=2)
+        time.sleep(0.1)
+        self.assertLessEqual(dns.workers_busy, 2)
+        self.assertLessEqual(dns.pending_count, 8)
+        gate.set()
+        for t in threads:
+            t.join(timeout=5)
+        self.assertEqual(dns.workers_busy, 0)
 
     def test_happy_eyeballs_falls_back_to_v4(self):
         EG.mutate_egress_state(
