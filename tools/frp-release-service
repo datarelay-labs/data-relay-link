@@ -43,6 +43,7 @@ def load_locks():
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_control_locks', str(path))
             mod = importlib.util.module_from_spec(spec)
+            sys.modules['frp_control_locks'] = mod
             spec.loader.exec_module(mod)
             return mod
     raise SystemExit('ERROR: missing frp_control_locks.py')

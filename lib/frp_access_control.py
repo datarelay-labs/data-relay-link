@@ -11,11 +11,13 @@ ALLOWLIST failures fail closed (DENY).
 from __future__ import annotations
 
 import fcntl
+import importlib.util
 import ipaddress
 import json
 import os
 import re
 import secrets
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -143,6 +145,29 @@ def access_lock_path(path: Path) -> Path:
     return path.parent / (path.name + ".lock")
 
 
+_LOCKS = None
+
+
+def _locks():
+    global _LOCKS
+    if _LOCKS is None:
+        existing = sys.modules.get("frp_control_locks")
+        if existing is not None:
+            _LOCKS = existing
+        else:
+            path = Path(__file__).resolve().parent / "frp_control_locks.py"
+            spec = importlib.util.spec_from_file_location("frp_control_locks", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["frp_control_locks"] = mod
+            spec.loader.exec_module(mod)
+            _LOCKS = mod
+    return _LOCKS
+
+
+def _control_state_mutation_lock(state_path):
+    return _locks().mutation_lock(state_path=state_path)
+
+
 def empty_access_state() -> dict:
     return {
         "schema_version": ACCESS_SCHEMA_VERSION,
@@ -250,18 +275,28 @@ def save_access_state(state: dict, path: Optional[Path] = None, cfg: Optional[di
     state = dict(state)
     state["schema_version"] = ACCESS_SCHEMA_VERSION
     validate_access_state(state)
-    with FileLock(access_lock_path(path)):
-        atomic_write_json(path, state)
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(access_lock_path(path)):
+                atomic_write_json(path, state)
+    except locks.LockTimeout as exc:
+        raise AccessError("timed out waiting for control-state lock") from exc
 
 
 def mutate_access_state(mutator, path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
     path = path or access_control_path(cfg)
-    with FileLock(access_lock_path(path)):
-        state = require_access_state(path=path, cfg=cfg)
-        result = mutator(state)
-        validate_access_state(state)
-        atomic_write_json(path, state)
-        return result if result is not None else state
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(access_lock_path(path)):
+                state = require_access_state(path=path, cfg=cfg)
+                result = mutator(state)
+                validate_access_state(state)
+                atomic_write_json(path, state)
+                return result if result is not None else state
+    except locks.LockTimeout as exc:
+        raise AccessError("timed out waiting for control-state lock") from exc
 
 
 def validate_list_name(name: str) -> str:

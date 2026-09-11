@@ -555,11 +555,27 @@ def _wait_until_ready(check, description: str) -> None:
         time.sleep(_readiness_interval())
 
 
-def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None:
+def installed_client_role(root: Path) -> bool:
+    """True when this host has an installed client unit (dual-role).
+
+    Detected BEFORE restore mutation using the same systemd ownership marker
+    doctor uses for role detection. A server-only host without this unit
+    must remain valid.
+    """
+    return (root / "etc/systemd/system/drlink-client.service").is_file()
+
+
+def verify_restored_control_state(
+    root: Path,
+    in_rollback: bool = False,
+    expect_client_role: bool = False,
+) -> None:
     if os.environ.get("FRP_RESTORE_HOOK_HEALTH_FAIL") == "1" and not in_rollback:
         raise RestoreError("simulated post-restore health failure")
     if in_rollback and os.environ.get("FRP_RESTORE_HOOK_ROLLBACK_HEALTH_FAIL") == "1":
         raise RestoreError("simulated rollback health failure")
+    if expect_client_role and os.environ.get("FRP_RESTORE_HOOK_CLIENT_READY_FAIL") == "1" and not in_rollback:
+        raise RestoreError("drlink-client.service is not active after restore")
     registry_path = root / "var/lib/drlink/registry.json"
     config_path = root / "etc/drlink/config.json"
     toml_path = root / "etc/frp/frps.toml"
@@ -668,13 +684,26 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
                     return result.returncode == 0
 
                 _wait_until_ready(frontend_healthy, "verified frontend proxy health check failed")
+    if expect_client_role:
+        def client_active() -> bool:
+            active = subprocess.run(
+                ["systemctl", "is-active", "drlink-client.service"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return (active.stdout or "").strip() == "active"
+
+        _wait_until_ready(client_active, "drlink-client.service is not active")
 
 
-def restart_services(root: Path, allow_hook: bool = True) -> None:
-    if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
-        return
+def restart_services(root: Path, allow_hook: bool = True, expect_client_role: bool = False) -> None:
     if allow_hook and os.environ.get("FRP_RESTORE_HOOK_RESTART_FAIL") == "1":
         raise RestoreError("simulated service restart failure")
+    if expect_client_role and allow_hook and os.environ.get("FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL") == "1":
+        raise RestoreError("failed to restart drlink-client.service")
+    if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
+        return
     units = [
         "drlink-server.service",
         "drlink-allocator.service",
@@ -685,9 +714,13 @@ def restart_services(root: Path, allow_hook: bool = True) -> None:
         units.append("drlink-frontend.service")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "restart", *units], check=True)
+    if not expect_client_role:
+        return
     # Dual-role hosts: restart client after the server stack so frpc does not
     # exit permanently while control plane ports are briefly unavailable.
-    subprocess.run(["systemctl", "restart", "drlink-client.service"], check=False)
+    result = subprocess.run(["systemctl", "restart", "drlink-client.service"], check=False)
+    if result.returncode != 0:
+        raise RestoreError("failed to restart drlink-client.service")
 
 
 def validate_to_temp(archive: Path, parent: Path | None = None) -> tuple[tempfile.TemporaryDirectory, Path]:
@@ -777,6 +810,7 @@ def main() -> int:
         manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
         assert_same_version_restore(root, manifest)
         timeout = float(os.environ.get("FRP_RESTORE_LOCK_TIMEOUT", "30"))
+        expect_client_role = installed_client_role(root)
         lock_cm = locks.acquire_control_locks(root, timeout=timeout) if locks is not None else None
         if lock_cm is not None:
             lock_cm.__enter__()
@@ -786,13 +820,15 @@ def main() -> int:
             rollback_temp, rollback = validate_to_temp(snapshot)
             try:
                 apply_payload(root, candidate)
-                restart_services(root)
-                verify_restored_control_state(root)
+                restart_services(root, expect_client_role=expect_client_role)
+                verify_restored_control_state(root, expect_client_role=expect_client_role)
             except Exception as restore_exc:
                 try:
                     apply_payload(root, rollback, allow_hook=False)
-                    restart_services(root, allow_hook=False)
-                    verify_restored_control_state(root, in_rollback=True)
+                    restart_services(root, allow_hook=False, expect_client_role=expect_client_role)
+                    verify_restored_control_state(
+                        root, in_rollback=True, expect_client_role=expect_client_role
+                    )
                 except Exception as rollback_exc:
                     print("RESTORE_ROLLBACK_FAILED", file=sys.stderr)
                     print("RECOVERY_REQUIRED", file=sys.stderr)

@@ -721,7 +721,20 @@ class BundleBuilder:
     def _write_logs(self) -> None:
         lines: List[str] = []
         if shutil.which("journalctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
-            for unit in ("frps", "drlink-allocator", "drlink-access", "frpc", "drlink-frontend"):
+            units = (
+                "drlink-server",
+                "drlink-allocator",
+                "drlink-access",
+                "drlink-egress",
+                "drlink-client",
+                "drlink-frontend",
+                "frps",
+                "frpc",
+            )
+            for unit in units:
+                unit_path = self.path("/etc/systemd/system/%s.service" % unit)
+                if unit not in ("frps", "frpc") and not unit_path.is_file():
+                    continue
                 rc, out, err = run_cmd(
                     ["journalctl", "-u", unit, "-n", "80", "--no-pager", "-o", "short-iso"],
                     timeout=12,
@@ -733,7 +746,7 @@ class BundleBuilder:
         # Local product logs (sanitized); never include raw bootstrap tickets.
         log_dir = self.path("/var/log/drlink")
         if log_dir.is_dir() and not log_dir.is_symlink():
-            for name in ("audit.jsonl", "access-conn.jsonl"):
+            for name in ("audit.jsonl", "access-conn.jsonl", "egress-conn.jsonl"):
                 path = log_dir / name
                 if path.is_file() and not path.is_symlink():
                     try:
@@ -787,7 +800,12 @@ class BundleBuilder:
                 continue
             filtered = []
             for line in out.splitlines():
-                if re.search(r"\b(frps|frpc|drlink-allocator|frp-access|drlink-frontend)\b", line):
+                if re.search(
+                    r"\b(frps|frpc|drlink-server|drlink-allocator|drlink-access|"
+                    r"drlink-egress|drlink-client|drlink-frontend|frp-access|"
+                    r"frp-egress-gateway)\b",
+                    line,
+                ):
                     filtered.append(redact_text(line))
             chunks.append("$ %s | grep frp*" % " ".join(args))
             chunks.extend(filtered or ["(no matching FRP processes)"])

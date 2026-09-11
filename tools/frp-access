@@ -22,8 +22,12 @@ def load_mod(name: str, rel: str):
         candidates.insert(1, Path(ROOT) / "usr/local/lib/drlink" / rel)
     for path in candidates:
         if path.is_file():
+            existing = sys.modules.get(name)
+            if existing is not None:
+                return existing
             spec = importlib.util.spec_from_file_location(name, str(path))
             mod = importlib.util.module_from_spec(spec)
+            sys.modules[name] = mod
             spec.loader.exec_module(mod)
             return mod
     raise SystemExit("ERROR: missing %s" % rel)
@@ -94,6 +98,9 @@ def confirm_shared_list_mutation(cfg, list_ref, *, yes=False):
 
     Interactive menu paths pass yes=True after their own prompt to avoid
     double confirmation. Non-interactive shared mutations require --yes.
+
+    The operator prompt happens WITHOUT control-state.lock. Callers must
+    revalidate after acquiring the lock via revalidate_shared_list_mutation.
     """
     state = ACL.load_access_state(cfg=cfg)
     lid, lst = ACL.resolve_access_list(state, list_ref)
@@ -114,6 +121,41 @@ def confirm_shared_list_mutation(cfg, list_ref, *, yes=False):
     if answer not in ("y", "yes"):
         raise SystemExit("Aborted.")
     return lid, lst, used
+
+
+def _shared_impact_fingerprint(used):
+    return tuple(sorted((str(mid), str(sid)) for mid, sid in (used or [])))
+
+
+def revalidate_shared_list_mutation(cfg, list_ref, used_before):
+    """Re-read after control-state.lock; refuse stale confirmation."""
+    state = ACL.load_access_state(cfg=cfg)
+    lid, lst = ACL.resolve_access_list(state, list_ref)
+    used = ACL.list_services_using(state, lid)
+    if _shared_impact_fingerprint(used) != _shared_impact_fingerprint(used_before):
+        raise SystemExit(
+            "ERROR: Access List impact changed while waiting for confirmation; re-run the command."
+        )
+    return lid, lst, used
+
+
+def mutate_access_after_confirm(cfg, list_ref, used_before, mut, expected_lid=None):
+    """Revalidate shared-list impact inside the production control-state write."""
+
+    def wrapped(state):
+        lid, _lst = ACL.resolve_access_list(state, list_ref)
+        if expected_lid is not None and lid != expected_lid:
+            raise SystemExit(
+                "ERROR: Access List identity changed while waiting for confirmation; re-run the command."
+            )
+        used = ACL.list_services_using(state, lid)
+        if _shared_impact_fingerprint(used) != _shared_impact_fingerprint(used_before):
+            raise SystemExit(
+                "ERROR: Access List impact changed while waiting for confirmation; re-run the command."
+            )
+        return mut(state)
+
+    return ACL.mutate_access_state(wrapped, cfg=cfg)
 
 
 def cmd_list(cfg, _args):
@@ -196,7 +238,7 @@ def cmd_show(cfg, args):
 
 
 def cmd_add_source(cfg, args):
-    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+    lid, _lst, used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
 
     def mut(state):
         return ACL.add_source_entry(
@@ -208,7 +250,7 @@ def cmd_add_source(cfg, args):
         )
 
     try:
-        entry = ACL.mutate_access_state(mut, cfg=cfg)
+        entry = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Added source %s (%s)" % (entry.get("name"), entry.get("cidr")))
@@ -217,20 +259,20 @@ def cmd_add_source(cfg, args):
 
 
 def cmd_remove_source(cfg, args):
-    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+    lid, _lst, used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
 
     def mut(state):
         return ACL.remove_source_entry(state, lid, args.source)
 
     try:
-        entry = ACL.mutate_access_state(mut, cfg=cfg)
+        entry = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Removed source %s (%s)" % (entry.get("name"), entry.get("cidr")))
 
 
 def cmd_replace_source(cfg, args):
-    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+    lid, _lst, used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
 
     def mut(state):
         return ACL.replace_source_entry(
@@ -243,7 +285,7 @@ def cmd_replace_source(cfg, args):
         )
 
     try:
-        entry = ACL.mutate_access_state(mut, cfg=cfg)
+        entry = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Replaced source %s (%s)" % (entry.get("name"), entry.get("cidr")))
@@ -265,7 +307,7 @@ def cmd_delete(cfg, args):
 
 
 def cmd_edit_info(cfg, args):
-    lid, _lst, _used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
+    lid, _lst, used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
 
     def mut(state):
         return ACL.update_access_list_info(
@@ -276,7 +318,7 @@ def cmd_edit_info(cfg, args):
         )
 
     try:
-        lst = ACL.mutate_access_state(mut, cfg=cfg)
+        lst = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Updated Access List %s" % lst.get("name"))
@@ -300,7 +342,7 @@ def cmd_remove_expired(cfg, args):
         return ACL.remove_expired_entries(state, lid)
 
     try:
-        removed = ACL.mutate_access_state(mut, cfg=cfg)
+        removed = mutate_access_after_confirm(cfg, lid, ACL.list_services_using(state, lid), mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Removed %d expired entr%s" % (len(removed), "y" if len(removed) == 1 else "ies"))
@@ -325,7 +367,7 @@ def cmd_assign(cfg, args):
         return lst
 
     try:
-        lst = with_control_state_lock(lambda: ACL.mutate_access_state(mut, cfg=cfg))
+        lst = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         # Interactive empty-allowlist UX
         msg = str(exc)
@@ -353,7 +395,7 @@ def cmd_public(cfg, args):
         ACL.set_service_binding(state, mid, sid, ACL.MODE_PUBLIC, None)
         return True
 
-    with_control_state_lock(lambda: ACL.mutate_access_state(mut, cfg=cfg))
+    ACL.mutate_access_state(mut, cfg=cfg)
     print("Set %s:%s to PUBLIC (port %s)" % (
         short_client(registry, mid), sid, svc.get("remote_port"),
     ))

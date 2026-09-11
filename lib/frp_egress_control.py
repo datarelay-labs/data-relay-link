@@ -9,11 +9,13 @@ Agentless authorization is source IP/CIDR + FQDN:port allowlists.
 from __future__ import annotations
 
 import fcntl
+import importlib.util
 import ipaddress
 import json
 import os
 import re
 import secrets
+import sys
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -224,6 +226,29 @@ def egress_lock_path(path: Path) -> Path:
     return path.parent / (path.name + ".lock")
 
 
+_LOCKS = None
+
+
+def _locks():
+    global _LOCKS
+    if _LOCKS is None:
+        existing = sys.modules.get("frp_control_locks")
+        if existing is not None:
+            _LOCKS = existing
+        else:
+            path = Path(__file__).resolve().parent / "frp_control_locks.py"
+            spec = importlib.util.spec_from_file_location("frp_control_locks", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["frp_control_locks"] = mod
+            spec.loader.exec_module(mod)
+            _LOCKS = mod
+    return _LOCKS
+
+
+def _control_state_mutation_lock(state_path):
+    return _locks().mutation_lock(state_path=state_path)
+
+
 def empty_egress_state() -> dict:
     return {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}}
 
@@ -277,6 +302,61 @@ class FileLock:
 
 def _new_id(prefix: str) -> str:
     return prefix + secrets.token_hex(ENTRY_ID_HEX_LEN // 2)
+
+
+_SOURCE_ID_RE = re.compile(r"^%s[0-9a-f]{%d}$" % (re.escape(SOURCE_ID_PREFIX), ENTRY_ID_HEX_LEN))
+_DEST_ID_RE = re.compile(r"^%s[0-9a-f]{%d}$" % (re.escape(DEST_ID_PREFIX), ENTRY_ID_HEX_LEN))
+
+
+def _canonical_entry_id(value, prefix: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise EgressError("invalid %s entry id" % ("source" if prefix == SOURCE_ID_PREFIX else "destination"))
+    if prefix == SOURCE_ID_PREFIX:
+        if not _SOURCE_ID_RE.match(value):
+            raise EgressError("malformed source entry id: %s" % value)
+    elif prefix == DEST_ID_PREFIX:
+        if not _DEST_ID_RE.match(value):
+            raise EgressError("malformed destination entry id: %s" % value)
+    else:
+        raise EgressError("invalid entry id prefix")
+    return value
+
+
+def _is_canonical_entry_id(value, prefix: str) -> bool:
+    try:
+        _canonical_entry_id(value, prefix)
+        return True
+    except EgressError:
+        return False
+
+
+def _ensure_legacy_entry_id(entry: dict, prefix: str, seen: set[str]) -> None:
+    """Preserve valid IDs; generate only on the legacy v1 migration path."""
+    current = entry.get("id")
+    if _is_canonical_entry_id(current, prefix) and current not in seen:
+        seen.add(current)
+        return
+    new_id = _new_id(prefix)
+    while new_id in seen:
+        new_id = _new_id(prefix)
+    entry["id"] = new_id
+    seen.add(new_id)
+
+
+def _regenerate_entry_ids(profile: dict) -> None:
+    """Untrusted/imported identity must not become an unsafe selector."""
+    sources = profile.get("sources") or []
+    dests = profile.get("destinations") or []
+    if isinstance(sources, list):
+        profile["sources"] = [dict(src) if isinstance(src, dict) else src for src in sources]
+        for src in profile["sources"]:
+            if isinstance(src, dict):
+                src["id"] = _new_id(SOURCE_ID_PREFIX)
+    if isinstance(dests, list):
+        profile["destinations"] = [dict(dest) if isinstance(dest, dict) else dest for dest in dests]
+        for dest in profile["destinations"]:
+            if isinstance(dest, dict):
+                dest["id"] = _new_id(DEST_ID_PREFIX)
 
 
 def validate_profile_name(name: str) -> str:
@@ -619,8 +699,23 @@ def migrate_egress_state_v1_to_v2(raw: dict) -> dict:
             entry = dict(dest)
             entry["protocol"] = proto
             dests_out.append(entry)
+        sources_in = profile.get("sources")
+        if sources_in is None:
+            sources_out = []
+        elif not isinstance(sources_in, list):
+            raise EgressError("egress profile sources must be a list: %s" % pid)
+        else:
+            sources_out = [dict(src) if isinstance(src, dict) else src for src in sources_in]
+        seen_src: set[str] = set()
+        for src in sources_out:
+            if isinstance(src, dict):
+                _ensure_legacy_entry_id(src, SOURCE_ID_PREFIX, seen_src)
+        seen_dest: set[str] = set()
+        for dest in dests_out:
+            _ensure_legacy_entry_id(dest, DEST_ID_PREFIX, seen_dest)
         new_profile = dict(profile)
         new_profile["destinations"] = dests_out
+        new_profile["sources"] = sources_out
         profiles_out[pid] = new_profile
     return {
         "schema_version": EGRESS_SCHEMA_VERSION,
@@ -684,17 +779,31 @@ def validate_egress_state(state: dict) -> None:
         if not isinstance(sources, list) or not isinstance(destinations, list):
             raise EgressError("egress profile sources/destinations must be lists: %s" % pid)
         seen_cidrs: set[str] = set()
+        seen_source_ids: set[str] = set()
         for src in sources:
             if not isinstance(src, dict):
                 raise EgressError("invalid source entry in %s" % pid)
+            if "id" not in src:
+                raise EgressError("source entry is missing id in %s" % pid)
+            sid = _canonical_entry_id(src.get("id"), SOURCE_ID_PREFIX)
+            if sid in seen_source_ids:
+                raise EgressError("duplicate source entry id in %s: %s" % (pid, sid))
+            seen_source_ids.add(sid)
             cidr = canonicalize_cidr(src.get("cidr") or "")
             if cidr in seen_cidrs:
                 raise EgressError("duplicate source CIDR in %s: %s" % (pid, cidr))
             seen_cidrs.add(cidr)
         seen_dests: set[tuple[str, int, str, str]] = set()
+        seen_dest_ids: set[str] = set()
         for dest in destinations:
             if not isinstance(dest, dict):
                 raise EgressError("invalid destination entry in %s" % pid)
+            if "id" not in dest:
+                raise EgressError("destination entry is missing id in %s" % pid)
+            did = _canonical_entry_id(dest.get("id"), DEST_ID_PREFIX)
+            if did in seen_dest_ids:
+                raise EgressError("duplicate destination entry id in %s: %s" % (pid, did))
+            seen_dest_ids.add(did)
             host, mode = canonicalize_hostname(dest.get("host") or "", allow_wildcard=True)
             port = validate_port(dest.get("port"))
             protocol = validate_protocol(dest.get("protocol"))
@@ -736,17 +845,22 @@ def load_egress_state(
     state = _parse_egress_state(raw, migrate=True)
     validate_egress_state(state)
     if persist_migration and version == EGRESS_SCHEMA_VERSION_LEGACY:
-        with FileLock(egress_lock_path(path)):
-            # Re-read under lock to avoid clobbering concurrent writers.
-            try:
-                raw2 = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                raw2 = raw
-            if isinstance(raw2, dict) and raw2.get("schema_version") == EGRESS_SCHEMA_VERSION_LEGACY:
-                migrated = migrate_egress_state_v1_to_v2(raw2)
-                validate_egress_state(migrated)
-                atomic_write_json(path, migrated)
-                state = migrated
+        locks = _locks()
+        try:
+            with _control_state_mutation_lock(path):
+                with FileLock(egress_lock_path(path)):
+                    # Re-read under lock to avoid clobbering concurrent writers.
+                    try:
+                        raw2 = json.loads(path.read_text(encoding="utf-8"))
+                    except Exception:
+                        raw2 = raw
+                    if isinstance(raw2, dict) and raw2.get("schema_version") == EGRESS_SCHEMA_VERSION_LEGACY:
+                        migrated = migrate_egress_state_v1_to_v2(raw2)
+                        validate_egress_state(migrated)
+                        atomic_write_json(path, migrated)
+                        state = migrated
+        except locks.LockTimeout as exc:
+            raise EgressError("timed out waiting for control-state lock") from exc
     return state
 
 
@@ -759,28 +873,44 @@ def initialize_egress_state(path: Optional[Path] = None, cfg: Optional[dict] = N
     state = empty_egress_state()
     if path.is_file():
         return load_egress_state(path=path, cfg=cfg)
-    with FileLock(egress_lock_path(path)):
-        if path.is_file():
-            return load_egress_state(path=path, cfg=cfg)
-        atomic_write_json(path, state)
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(egress_lock_path(path)):
+                if path.is_file():
+                    return load_egress_state(path=path, cfg=cfg, persist_migration=False)
+                atomic_write_json(path, state)
+    except locks.LockTimeout as exc:
+        raise EgressError("timed out waiting for control-state lock") from exc
     return state
 
 
 def save_egress_state(state: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
     path = path or egress_control_path(cfg)
     validate_egress_state(state)
-    with FileLock(egress_lock_path(path)):
-        atomic_write_json(path, state)
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(egress_lock_path(path)):
+                atomic_write_json(path, state)
+    except locks.LockTimeout as exc:
+        raise EgressError("timed out waiting for control-state lock") from exc
 
 
 def mutate_egress_state(mutator, path: Optional[Path] = None, cfg: Optional[dict] = None):
     path = path or egress_control_path(cfg)
-    with FileLock(egress_lock_path(path)):
-        state = require_egress_state(path=path, cfg=cfg)
-        result = mutator(state)
-        validate_egress_state(state)
-        atomic_write_json(path, state)
-        return result if result is not None else state
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(egress_lock_path(path)):
+                # persist_migration=False: load may otherwise reacquire FileLock.
+                state = load_egress_state(path=path, cfg=cfg, persist_migration=False)
+                result = mutator(state)
+                validate_egress_state(state)
+                atomic_write_json(path, state)
+                return result if result is not None else state
+    except locks.LockTimeout as exc:
+        raise EgressError("timed out waiting for control-state lock") from exc
 
 
 def resolve_profile(state: dict, selector: str) -> tuple[str, dict]:
@@ -1497,8 +1627,12 @@ def parse_import_document(raw: object) -> dict:
     if not isinstance(profile, dict):
         raise EgressError("import document missing profile object")
     # Validate as a transient one-profile state.
-    pid = str(profile.get("id") or _new_id(PROFILE_ID_PREFIX))
     candidate = dict(profile)
+    # Imported source/destination identity is untrusted; always mint new IDs.
+    _regenerate_entry_ids(candidate)
+    pid = candidate.get("id")
+    if not isinstance(pid, str) or not pid.startswith(PROFILE_ID_PREFIX):
+        pid = _new_id(PROFILE_ID_PREFIX)
     candidate["id"] = pid
     if "enabled" not in candidate:
         candidate["enabled"] = False
@@ -1573,13 +1707,7 @@ def import_profile_into_state(
     pid, record = create_profile(state, name, description=candidate.get("description") or "", enabled=False)
     record["sources"] = list(candidate.get("sources") or [])
     record["destinations"] = list(candidate.get("destinations") or [])
-    # Re-assign destination/source ids if missing.
-    for src in record["sources"]:
-        if isinstance(src, dict) and not src.get("id"):
-            src["id"] = _new_id(SOURCE_ID_PREFIX)
-    for dest in record["destinations"]:
-        if isinstance(dest, dict) and not dest.get("id"):
-            dest["id"] = _new_id(DEST_ID_PREFIX)
+    # parse_import_document already regenerated untrusted entry IDs.
     record["updated_at"] = utc_now_iso()
     validate_egress_state(state)
     return pid, record, diff_profiles({"destinations": [], "sources": [], "enabled": False}, record)
