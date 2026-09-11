@@ -492,6 +492,55 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         self.assertTrue(resp.startswith(b"HTTP/1.1 403"), resp[:80])
         self.assertFalse(self._upstream_saw(b"denied.test"))
 
+    def test_http_deny_before_large_body_spool(self):
+        """Unauthorized sources must not force large body spool before deny."""
+        size = 512 * 1024
+        # Only send headers + tiny prefix; never the huge body.
+        headers = (
+            b"POST http://denied.test/x HTTP/1.1\r\n"
+            b"Host: denied.test\r\n"
+            b"Content-Length: %d\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        ) % size
+        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5) as sock:
+            sock.sendall(headers)
+            sock.settimeout(3)
+            resp = sock.recv(4096)
+        self.assertTrue(resp.startswith(b"HTTP/1.1 403"), resp[:80])
+        self.assertFalse(self._upstream_saw(b"denied.test"))
+        # Proxy must remain responsive after deny without consuming the body.
+        ok = (
+            b"GET http://allowed.test/ HTTP/1.1\r\n"
+            b"Host: allowed.test\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        )
+        resp2 = self._raw(ok)
+        self.assertIn(b"200", resp2.split(b"\r\n", 1)[0])
+
+    def test_dns_inflight_result_does_not_accumulate(self):
+        calls = {"n": 0}
+
+        def resolve(host):
+            calls["n"] += 1
+            return ["198.51.100.%d" % ((calls["n"] % 200) + 1)]
+
+        orig = self.GW.EG.validate_resolved_addresses
+        self.GW.EG.validate_resolved_addresses = lambda ips: list(ips)
+        try:
+            dns = self.GW.DnsResolver(
+                resolve_fn=resolve, pending_limit=64, worker_limit=8, timeout=2.0,
+                positive_ttl=60.0, negative_ttl=60.0,
+            )
+            for i in range(200):
+                dns.resolve_validated("unique-%d.example.test" % i)
+            self.assertEqual(len(dns._inflight_result), 0)
+            self.assertEqual(len(dns._inflight), 0)
+            self.assertLessEqual(dns.positive_cache_size, 512)
+        finally:
+            self.GW.EG.validate_resolved_addresses = orig
+
     def test_connect_allow(self):
         """CONNECT allow with matching SNI; ClientHello forwarded byte-for-byte."""
         req = b"CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n"

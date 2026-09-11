@@ -224,21 +224,20 @@ class DnsResolver:
             raise EG.EgressError("DNS resolution timeout")
 
         with self._lock:
+            # Durable caches are authoritative after the Event fires.
+            pos = self._pos.get(host)
+            if pos and pos[0] > time.monotonic():
+                return list(pos[1])
+            neg = self._neg.get(host)
+            if neg and neg[0] > time.monotonic():
+                raise EG.EgressError(neg[1])
+            # Extremely narrow race: Event set but caches not yet visible.
             result = self._inflight_result.get(host)
-            # Prefer durable caches once the job has finished and been cleared
-            # from the inflight maps (late waiters / post-completion callers).
-            if result is None:
-                pos = self._pos.get(host)
-                if pos and pos[0] > time.monotonic():
-                    return list(pos[1])
-                neg = self._neg.get(host)
-                if neg and neg[0] > time.monotonic():
-                    raise EG.EgressError(neg[1])
-        if isinstance(result, Exception):
-            raise result
-        if not isinstance(result, list):
-            raise EG.EgressError("DNS resolution failed")
-        return list(result)
+            if isinstance(result, Exception):
+                raise result
+            if isinstance(result, list):
+                return list(result)
+        raise EG.EgressError("DNS resolution failed")
 
     def _dispatch_unlocked(self) -> None:
         while self._queue and self._workers_busy < self.worker_limit:
@@ -264,18 +263,20 @@ class DnsResolver:
             self._pending = max(0, self._pending - 1)
             ev = self._inflight.pop(host, None)
             if err is not None:
-                self._inflight_result[host] = err
                 self._neg[host] = (time.monotonic() + self.negative_ttl, str(err))
                 if len(self._neg) > 256:
                     for k, _ in sorted(self._neg.items(), key=lambda kv: kv[1][0])[:64]:
                         self._neg.pop(k, None)
             else:
                 ips = list(validated or [])
-                self._inflight_result[host] = ips
                 self._pos[host] = (time.monotonic() + self.positive_ttl, ips)
                 if len(self._pos) > 512:
                     for k, _ in sorted(self._pos.items(), key=lambda kv: kv[1][0])[:64]:
                         self._pos.pop(k, None)
+            # Never retain _inflight_result after completion — waiters read
+            # durable pos/neg caches once the Event is set. This prevents
+            # unbounded growth across unique hostnames.
+            self._inflight_result.pop(host, None)
             if ev is not None:
                 ev.set()
             self._dispatch_unlocked()
@@ -586,11 +587,14 @@ def _parse_request(raw: bytes) -> tuple[str, str, str, dict[str, str], bytes]:
         if ":" not in line:
             raise EG.EgressError("malformed header")
         name, value = line.split(":", 1)
-        if not _header_name_valid(name.strip()):
+        # Reject "Host : example.com" (whitespace before colon) — do not normalize.
+        if name != name.strip():
+            raise EG.EgressError("whitespace in header name not allowed")
+        if not _header_name_valid(name):
             raise EG.EgressError("malformed header name")
         if not _header_value_safe(value):
             raise EG.EgressError("unsafe header value")
-        key = name.strip().lower()
+        key = name.lower()
         if key in headers:
             if key in ("host", "content-length", "transfer-encoding", "expect", "connection"):
                 raise EG.EgressError("duplicate sensitive header: %s" % key)
@@ -849,7 +853,7 @@ def _new_ids() -> tuple[str, str]:
     return secrets.token_hex(8), secrets.token_hex(8)
 
 
-def _authorize_and_connect(
+def _authorize_policy_only(
     gw: GatewayState,
     *,
     source_ip: str,
@@ -858,7 +862,8 @@ def _authorize_and_connect(
     method: str,
     protocol: str,
     connection_id: Optional[str] = None,
-) -> tuple[Optional[socket.socket], dict]:
+) -> tuple[dict, Optional[dict]]:
+    """Authorize against compiled policy without DNS/connect/body I/O."""
     state, load_error, cfg, snap = gw.cache.snapshot()
     if snap is not None:
         decision = EG.authorize_against_snapshot(
@@ -883,11 +888,44 @@ def _authorize_and_connect(
     decision["timestamp"] = EG.utc_now_iso()
     if connection_id:
         decision["connection_id"] = connection_id
+    return decision, cfg
+
+
+def _authorize_and_connect(
+    gw: GatewayState,
+    *,
+    source_ip: str,
+    hostname: str,
+    port: int,
+    method: str,
+    protocol: str,
+    connection_id: Optional[str] = None,
+) -> tuple[Optional[socket.socket], dict]:
+    decision, cfg = _authorize_policy_only(
+        gw,
+        source_ip=source_ip,
+        hostname=hostname,
+        port=port,
+        method=method,
+        protocol=protocol,
+        connection_id=connection_id,
+    )
     if decision.get("decision") != EG.DECISION_ALLOW:
         decision["outcome"] = EG.AUDIT_POLICY_DENY
         EG.emit_conn_log(decision, cfg=cfg)
         return None, decision
+    return _connect_after_authorize(gw, decision, hostname=hostname, port=port, cfg=cfg)
 
+
+def _connect_after_authorize(
+    gw: GatewayState,
+    decision: dict,
+    *,
+    hostname: str,
+    port: int,
+    cfg: Optional[dict] = None,
+) -> tuple[Optional[socket.socket], dict]:
+    """DNS + connect for an already-ALLOW policy decision."""
     try:
         validated = gw.dns.resolve_validated(hostname)
     except EG.EgressError as exc:
@@ -1607,14 +1645,35 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
         _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
         return
 
-    # Receive the exact body BEFORE DNS/connect so incomplete bodies never
-    # create upstream I/O. Large bodies spool to a private tempfile so RSS
-    # does not scale ~1:1 with Content-Length.
+    # Authorize BEFORE consuming/spooling any remaining body so unauthorized
+    # clients cannot force large disk/memory spool or slow-body DoS.
+    decision, cfg = _authorize_policy_only(
+        gw,
+        source_ip=source_ip,
+        hostname=host,
+        port=port,
+        method=method,
+        protocol=EG.PROTOCOL_HTTP,
+        connection_id=connection_id,
+    )
+    if decision.get("decision") != EG.DECISION_ALLOW:
+        decision["outcome"] = EG.AUDIT_POLICY_DENY
+        EG.emit_conn_log(decision, cfg=cfg)
+        reason = decision.get("reason")
+        if reason == EG.REASON_RESOURCE_LIMIT:
+            code, label = 503, "Service Unavailable"
+        else:
+            code, label = 403, "Forbidden"
+        _send_simple_sock(request, code, label, b"denied\n")
+        return
+
+    # Allowed: receive the exact body BEFORE DNS/connect so incomplete bodies
+    # never create upstream I/O. Large bodies spool to a private tempfile.
     spool: Optional[_BodySpool] = None
     try:
         spool = _spool_exact_body(request, body_prefix, content_length)
     except EG.EgressError:
-        state, load_error, cfg, _snap = gw.cache.snapshot()
+        state, load_error, cfg2, _snap = gw.cache.snapshot()
         del state, load_error, _snap
         EG.emit_conn_log(
             {
@@ -1628,19 +1687,13 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
                 "reason": EG.REASON_MALFORMED_REQUEST,
                 "outcome": EG.AUDIT_POLICY_DENY,
             },
-            cfg=cfg,
+            cfg=cfg2,
         )
         _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
         return
 
-    upstream, decision = _authorize_and_connect(
-        gw,
-        source_ip=source_ip,
-        hostname=host,
-        port=port,
-        method=method,
-        protocol=EG.PROTOCOL_HTTP,
-        connection_id=connection_id,
+    upstream, decision = _connect_after_authorize(
+        gw, decision, hostname=host, port=port, cfg=cfg
     )
     if upstream is None:
         if spool is not None:
@@ -1772,7 +1825,8 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
 def _write_effective_config(host: str, port: int, gw: GatewayState) -> None:
     """Least-privilege runtime snapshot — no CA/token/secrets."""
     try:
-        path = EG._rooted("/run/drlink/egress-effective.json")
+        # Isolated RuntimeDirectory=drlink/egress (not shared /run/drlink).
+        path = EG._rooted("/run/drlink/egress/effective.json")
         path.parent.mkdir(parents=True, exist_ok=True)
         snap = gw.cache.engine.snapshot()
         doc = {

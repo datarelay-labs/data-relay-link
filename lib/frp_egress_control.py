@@ -1490,47 +1490,73 @@ def authorize_request(
 
 
 def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
-    """Best-effort connection log. Never raises. Never logs secrets/payloads."""
+    """Best-effort connection log. Never raises. Never logs secrets/payloads.
+
+    Lock the log inode itself (fcntl on the open FD). Do not create a sidecar
+    ``*.lock`` under the parent directory: production installs make
+    ``/var/log/drlink`` traverse-only for ``drlink-egress`` (``--x`` / ``0710``)
+    while granting write only on the pre-created log file. A sidecar lock
+    ``open(O_CREAT)`` fails with EACCES and previously swallowed all logging.
+    """
     try:
         path = path or conn_log_path(cfg)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lock = path.parent / (path.name + ".lock")
-        with FileLock(lock):
+        # Soft: parent mkdir may fail under traverse-only ACL; log file is
+        # pre-created at install. Rotation may also no-op without dir write.
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        try:
             _rotate_conn_log(path)
-            record = {
-                "timestamp": event.get("timestamp") or utc_now_iso(),
-                "connection_id": event.get("connection_id"),
-                "session_id": event.get("session_id"),
-                "source_ip": event.get("source_ip"),
-                "hostname": event.get("hostname"),
-                "port": event.get("port"),
-                "protocol": event.get("protocol"),
-                "method": event.get("method"),
-                "profile_id": event.get("profile_id"),
-                "profile_name": event.get("profile_name"),
-                "decision": event.get("decision"),
-                "reason": event.get("reason"),
-                "outcome": event.get("outcome"),
-                "policy_generation": event.get("policy_generation"),
-            }
-            # Optional safe SNI audit field (hostname only — never raw ClientHello).
-            observed_sni = event.get("observed_sni")
-            if observed_sni is not None:
-                record["observed_sni"] = str(observed_sni)[:253]
-            # Drop None keys for compact logs.
-            record = {k: v for k, v in record.items() if v is not None}
-            line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-            if not path.exists():
-                path.write_text(line, encoding="utf-8")
-                os.chmod(path, 0o600)
+        except OSError:
+            pass
+        record = {
+            "timestamp": event.get("timestamp") or utc_now_iso(),
+            "connection_id": event.get("connection_id"),
+            "session_id": event.get("session_id"),
+            "source_ip": event.get("source_ip"),
+            "hostname": event.get("hostname"),
+            "port": event.get("port"),
+            "protocol": event.get("protocol"),
+            "method": event.get("method"),
+            "profile_id": event.get("profile_id"),
+            "profile_name": event.get("profile_name"),
+            "decision": event.get("decision"),
+            "reason": event.get("reason"),
+            "outcome": event.get("outcome"),
+            "policy_generation": event.get("policy_generation"),
+        }
+        # Optional safe SNI audit field (hostname only — never raw ClientHello).
+        observed_sni = event.get("observed_sni")
+        if observed_sni is not None:
+            record["observed_sni"] = str(observed_sni)[:253]
+        # Drop None keys for compact logs.
+        record = {k: v for k, v in record.items() if v is not None}
+        line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        # Open for append; create only if missing (may fail without dir write —
+        # install must pre-create the file). Flock the same FD.
+        flags = os.O_WRONLY | os.O_APPEND
+        if not path.exists():
+            flags |= os.O_CREAT
+        fd = os.open(str(path), flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if flags & os.O_CREAT:
+                try:
+                    os.fchmod(fd, 0o600)
+                except OSError:
+                    pass
                 try:
                     reapply_egress_runtime_permissions(conn_log_path=path, parents=False)
                 except OSError:
                     pass
-            else:
-                with path.open("a", encoding="utf-8") as handle:
-                    handle.write(line)
-                    handle.flush()
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
     except Exception:
         return
 

@@ -1057,40 +1057,60 @@ def _rotate_conn_log(path: Path) -> None:
 
 
 def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
-    """Best-effort bounded connection authorization log. Never raises to callers."""
+    """Best-effort bounded connection authorization log. Never raises to callers.
+
+    Flock the log inode (not a sidecar ``*.lock``) so traverse-only log
+    directories remain compatible if the access plugin ever drops privileges.
+    """
     try:
         path = path or conn_log_path(cfg)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lock = path.parent / (path.name + ".lock")
-        with FileLock(lock):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        try:
             _rotate_conn_log(path)
-            record = {
-                "timestamp": event.get("timestamp") or utc_now_iso(),
-                "client_id": event.get("client_id"),
-                "client_label": event.get("client_label"),
-                "service_id": event.get("service_id"),
-                "public_port": event.get("public_port"),
-                "source_ip": event.get("source_ip"),
-                "access_mode": event.get("access_mode"),
-                "access_list_id": event.get("access_list_id"),
-                "access_list_name": event.get("access_list_name"),
-                "matched_entry_id": event.get("matched_entry_id"),
-                "matched_entry_name": event.get("matched_entry_name"),
-                "decision": event.get("decision"),
-                "reason": event.get("reason"),
-                "proxy_name": event.get("proxy_name"),
-            }
-            line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-            if not path.exists():
-                path.touch()
-                os.chmod(path, 0o600)
+        except OSError:
+            pass
+        record = {
+            "timestamp": event.get("timestamp") or utc_now_iso(),
+            "client_id": event.get("client_id"),
+            "client_label": event.get("client_label"),
+            "service_id": event.get("service_id"),
+            "public_port": event.get("public_port"),
+            "source_ip": event.get("source_ip"),
+            "access_mode": event.get("access_mode"),
+            "access_list_id": event.get("access_list_id"),
+            "access_list_name": event.get("access_list_name"),
+            "matched_entry_id": event.get("matched_entry_id"),
+            "matched_entry_name": event.get("matched_entry_name"),
+            "decision": event.get("decision"),
+            "reason": event.get("reason"),
+            "proxy_name": event.get("proxy_name"),
+        }
+        line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        flags = os.O_WRONLY | os.O_APPEND
+        if not path.exists():
+            flags |= os.O_CREAT
+        fd = os.open(str(path), flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if flags & os.O_CREAT:
+                try:
+                    os.fchmod(fd, 0o600)
+                except OSError:
+                    pass
                 try:
                     os.chmod(path.parent, 0o700)
                 except OSError:
                     pass
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
-                handle.flush()
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
     except Exception:
         return
 
