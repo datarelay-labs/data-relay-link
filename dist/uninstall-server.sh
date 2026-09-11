@@ -171,11 +171,12 @@ frp_u_release_control_locks() {
 }
 
 frp_u_acquire_control_locks() {
-  local timeout life_lock reg_lock status deadline
+  local timeout life_lock ctrl_lock reg_lock status deadline
   timeout="${FRP_UNINSTALL_LOCK_TIMEOUT:-30}"
   life_lock="$(frp_u_path /var/lib/drlink/server-lifecycle.lock)"
+  ctrl_lock="$(frp_u_path /var/lib/drlink/control-state.lock)"
   reg_lock="$(frp_u_path /var/lib/drlink/registry.lock)"
-  mkdir -p "$(dirname "$life_lock")" "$(dirname "$reg_lock")"
+  mkdir -p "$(dirname "$life_lock")" "$(dirname "$ctrl_lock")" "$(dirname "$reg_lock")"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "ERROR: python3 is required to serialize server uninstall." >&2
     echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
@@ -185,18 +186,19 @@ frp_u_acquire_control_locks() {
   # the util-linux flock CLI, which Amazon Linux containers may omit.
   FRP_UNINSTALL_LOCK_HOLD="$(mktemp "${TMPDIR:-/tmp}/frp-uninstall-hold.XXXXXX")"
   FRP_UNINSTALL_LOCK_STATUS="$(mktemp "${TMPDIR:-/tmp}/frp-uninstall-status.XXXXXX")"
-  python3 - "$life_lock" "$reg_lock" "$timeout" "$FRP_UNINSTALL_LOCK_HOLD" "$FRP_UNINSTALL_LOCK_STATUS" <<'PY' &
+  python3 - "$life_lock" "$ctrl_lock" "$reg_lock" "$timeout" "$FRP_UNINSTALL_LOCK_HOLD" "$FRP_UNINSTALL_LOCK_STATUS" <<'PY' &
 import fcntl
 import os
 import sys
 import time
 
-life_path, reg_path, timeout_s, hold_path, status_path = (
+life_path, ctrl_path, reg_path, timeout_s, hold_path, status_path = (
     sys.argv[1],
     sys.argv[2],
-    float(sys.argv[3]),
-    sys.argv[4],
+    sys.argv[3],
+    float(sys.argv[4]),
     sys.argv[5],
+    sys.argv[6],
 )
 deadline = time.monotonic() + timeout_s
 
@@ -225,15 +227,20 @@ try:
     parent = os.path.dirname(life_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    parent = os.path.dirname(ctrl_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     parent = os.path.dirname(reg_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
     life_fd = lock_nb(life_path)
+    ctrl_fd = lock_nb(ctrl_path)
     reg_fd = lock_nb(reg_path)
     write_status("LOCKED")
     while os.path.exists(hold_path):
         time.sleep(0.05)
     os.close(reg_fd)
+    os.close(ctrl_fd)
     os.close(life_fd)
 except TimeoutError:
     write_status("TIMEOUT")
@@ -257,12 +264,26 @@ PY
     sleep 0.05
   done
   if [[ "$status" != "LOCKED" ]]; then
-    echo "ERROR: timed out waiting for the server lifecycle lock." >&2
+    echo "ERROR: timed out waiting for the server control locks." >&2
     echo "FAILURE_CLASS=LOCK_CONTENTION" >&2
     frp_u_release_control_locks
     exit 1
   fi
   trap 'frp_u_release_control_locks' EXIT
+  if [[ -n "${FRP_UNINSTALL_LOCK_HOOK_READY:-}" ]]; then
+    printf 'ready\n' >"$FRP_UNINSTALL_LOCK_HOOK_READY"
+    if [[ -n "${FRP_UNINSTALL_LOCK_HOOK_GO:-}" ]]; then
+      local hook_wait start_s
+      hook_wait="${FRP_UNINSTALL_LOCK_HOOK_WAIT:-10}"
+      start_s=$SECONDS
+      while (( SECONDS - start_s < hook_wait )); do
+        if [[ -f "$FRP_UNINSTALL_LOCK_HOOK_GO" ]]; then
+          break
+        fi
+        sleep 0.05
+      done
+    fi
+  fi
 }
 
 frp_u_systemctl() {
