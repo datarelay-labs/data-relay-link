@@ -46,7 +46,21 @@ pass "LEGACY_UNIT_AND_CLI_RETIRE"
 # Dual-role: frpc.service migrates to drlink-client when client-state exists.
 DUAL="$WORK/dual"
 mkdir -p "$DUAL/etc/systemd/system" "$DUAL/etc/frp" "$DUAL/usr/local/bin"
-printf 'old-frpc\n' >"$DUAL/etc/systemd/system/frpc.service"
+cat >"$DUAL/etc/systemd/system/frpc.service" <<'EOF'
+[Unit]
+Description=FRP Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frpc -c /etc/frp/frpc.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
 printf '{}\n' >"$DUAL/etc/frp/client-state.json"
 printf '#!/bin/bash\necho drlink\n' >"$DUAL/usr/local/bin/drlink"
 chmod 0755 "$DUAL/usr/local/bin/drlink"
@@ -54,6 +68,30 @@ FRP_SERVER_SOURCE="$ROOT" FRP_SERVER_TEST_ROOT="$DUAL" frp_migrate_legacy_system
 [[ -f "$DUAL/etc/systemd/system/drlink-client.service" ]] || fail "drlink-client not created"
 [[ ! -f "$DUAL/etc/systemd/system/frpc.service" ]] || fail "frpc remains"
 pass "LEGACY_DUAL_ROLE_CLIENT_UNIT"
+
+# Unrelated administrator frpc.service must be preserved.
+ADMIN="$WORK/admin"
+mkdir -p "$ADMIN/etc/systemd/system" "$ADMIN/usr/local/bin"
+cat >"$ADMIN/etc/systemd/system/frpc.service" <<'EOF'
+[Unit]
+Description=Company Custom FRP Tunnel
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/custom/frpc -c /opt/custom/frpc.ini
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+printf 'new\n' >"$ADMIN/etc/systemd/system/drlink-client.service"
+printf '#!/bin/bash\necho drlink\n' >"$ADMIN/usr/local/bin/drlink"
+chmod 0755 "$ADMIN/usr/local/bin/drlink"
+FRP_SERVER_TEST_ROOT="$ADMIN" frp_migrate_legacy_systemd_units || fail "admin migrate"
+[[ -f "$ADMIN/etc/systemd/system/frpc.service" ]] || fail "admin frpc removed"
+[[ -f "$ADMIN/etc/systemd/system/drlink-client.service" ]] || fail "canonical missing"
+pass "UNRELATED_ADMIN_FRPC_PRESERVED"
 
 # Clean install layout: drlink on PATH, frpctl only as internal backend.
 CLEAN="$WORK/clean"

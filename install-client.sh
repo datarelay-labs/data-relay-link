@@ -335,6 +335,8 @@ frp_client_install_service_definition() {
     frp_macos_launchd_install
     return
   fi
+  # Retire product-owned legacy frpc.service before enabling the canonical unit.
+  frp_retire_legacy_client_unit || true
   local unit_src="${_FRP_INSTALL_CLIENT_DIR}/client/drlink-client.service"
   if [[ -f "$unit_src" ]]; then
     frp_write_compatible_systemd_unit "$unit_src" /etc/systemd/system/drlink-client.service
@@ -367,6 +369,7 @@ frp_client_service_start() {
     frp_macos_launchd_bootout
     frp_macos_launchd_bootstrap || return 1
   else
+    frp_retire_legacy_client_unit || true
     systemctl enable drlink-client >/dev/null && systemctl restart drlink-client
   fi
 }
@@ -610,6 +613,12 @@ frp_client_main() {
 
   if [[ -z "${FRP_ARCH:-}" ]]; then
     frp_detect_architecture || exit 1
+  fi
+
+  # Before restoring /usr/local/bin/frpc: an enabled leftover frpc.service with
+  # Restart=always will respawn as soon as the binary reappears (E2E-001).
+  if ! frp_is_darwin; then
+    frp_retire_legacy_client_unit || true
   fi
 
   if [[ "${FRP_SKIP_DOWNLOAD:-}" != "1" ]]; then

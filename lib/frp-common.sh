@@ -513,9 +513,75 @@ frp_migrate_legacy_product_paths() {
   return 0
 }
 
+# Historical Linux client supervisor before the drlink-client rename.
+# frpc.service is a generic name — only retire units that match product fingerprints.
+frp_legacy_client_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  # Canonical product ExecStart from client/frpc.service (historical + current).
+  case "$exec_line" in
+    */usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|*/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    /usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Client'|'Data Relay Link Client'|'Data Relay Link Client (legacy unit name; use drlink-client)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+frp_client_systemd_unit_root() {
+  local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
+  if [[ -n "$root" ]]; then
+    printf '%s' "$root"
+  fi
+}
+
+# Retire a product-owned historical frpc.service so only drlink-client supervises frpc.
+# Must run before restoring /usr/local/bin/frpc: a leftover enabled legacy unit with
+# Restart=always will immediately respawn once the binary reappears.
+frp_retire_legacy_client_unit() {
+  local root unitdir unit
+  root="$(frp_client_systemd_unit_root)"
+  if [[ -n "$root" ]]; then
+    unitdir="${root}/etc/systemd/system"
+  else
+    unitdir=/etc/systemd/system
+  fi
+  unit="${unitdir}/frpc.service"
+  [[ -f "$unit" ]] || return 0
+  if ! frp_legacy_client_unit_is_product_owned "$unit"; then
+    echo "WARNING: leaving non-product frpc.service in place at ${unit}" >&2
+    return 0
+  fi
+  if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1 \
+    && [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" != "1" ]]; then
+    systemctl stop frpc.service >/dev/null 2>&1 || true
+    systemctl disable frpc.service >/dev/null 2>&1 || true
+  fi
+  rm -f "$unit"
+  if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1 \
+    && [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" != "1" ]]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed frpc.service >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 frp_migrate_legacy_systemd_units() {
   # Stop/disable old product unit names and remove unit files after new ones exist.
-  local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-}}}}"
+  local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
   local unitdir sourcedir
   if [[ -n "$root" ]]; then
     unitdir="${root}/etc/systemd/system"
@@ -537,34 +603,40 @@ frp_migrate_legacy_systemd_units() {
     # Dual-role upgrade: server packages do not ship drlink-client.service, so an
     # existing frpc.service would otherwise remain as a legacy unit forever.
     if [[ "$old" == "frpc" && -f "${unitdir}/frpc.service" && ! -f "${unitdir}/drlink-client.service" ]]; then
-      local client_state
-      if [[ -n "$root" ]]; then
-        client_state="${root}/etc/frp/client-state.json"
-      else
-        client_state=/etc/frp/client-state.json
-      fi
-      if [[ -f "$client_state" ]]; then
-        local unit_src=""
-        for cand in \
-          "${FRP_SERVER_SOURCE:-}/client/drlink-client.service" \
-          "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/client/drlink-client.service" \
-          "/tmp/drlink-src/client/drlink-client.service"; do
-          if [[ -n "$cand" && -f "$cand" ]]; then
-            unit_src="$cand"
-            break
-          fi
-        done
-        if [[ -n "$unit_src" ]]; then
-          cp -a "$unit_src" "${unitdir}/drlink-client.service"
+      if frp_legacy_client_unit_is_product_owned "${unitdir}/frpc.service"; then
+        local client_state
+        if [[ -n "$root" ]]; then
+          client_state="${root}/etc/frp/client-state.json"
         else
-          # Fallback: rewrite Description/name on the existing unit file.
-          sed 's/^Description=.*/Description=Data Relay Link Client/' \
-            "${unitdir}/frpc.service" >"${unitdir}/drlink-client.service"
+          client_state=/etc/frp/client-state.json
         fi
-        chmod 0644 "${unitdir}/drlink-client.service" 2>/dev/null || true
+        if [[ -f "$client_state" ]]; then
+          local unit_src=""
+          for cand in \
+            "${FRP_SERVER_SOURCE:-}/client/drlink-client.service" \
+            "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/client/drlink-client.service" \
+            "/tmp/drlink-src/client/drlink-client.service"; do
+            if [[ -n "$cand" && -f "$cand" ]]; then
+              unit_src="$cand"
+              break
+            fi
+          done
+          if [[ -n "$unit_src" ]]; then
+            cp -a "$unit_src" "${unitdir}/drlink-client.service"
+          else
+            # Fallback: rewrite Description/name on the existing unit file.
+            sed 's/^Description=.*/Description=Data Relay Link Client/' \
+              "${unitdir}/frpc.service" >"${unitdir}/drlink-client.service"
+          fi
+          chmod 0644 "${unitdir}/drlink-client.service" 2>/dev/null || true
+        fi
       fi
     fi
     if [[ -f "${unitdir}/${new}.service" && -f "${unitdir}/${old}.service" ]]; then
+      if [[ "$old" == "frpc" ]] && ! frp_legacy_client_unit_is_product_owned "${unitdir}/frpc.service"; then
+        echo "WARNING: leaving non-product frpc.service in place at ${unitdir}/frpc.service" >&2
+        continue
+      fi
       if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now "$old" >/dev/null 2>&1 || true
         systemctl enable "$new" >/dev/null 2>&1 || true

@@ -4066,6 +4066,10 @@ frp_client_restart() {
       frp_macos_launchd_bootstrap || return 1
     fi
   else
+    # Upgrade/recovery restart must not leave historical frpc.service co-running.
+    if declare -F frp_retire_legacy_client_unit >/dev/null 2>&1; then
+      frp_retire_legacy_client_unit || true
+    fi
     systemctl enable drlink-client >/dev/null && systemctl restart drlink-client
   fi
 }

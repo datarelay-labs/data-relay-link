@@ -149,6 +149,51 @@ echo 'Server-side reservations remain.'
 echo 'Use an explicit server release command if ports should be freed.'
 echo
 
+frp_u_legacy_client_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  case "$exec_line" in
+    */usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|*/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    /usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Client'|'Data Relay Link Client'|'Data Relay Link Client (legacy unit name; use drlink-client)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+frp_u_retire_legacy_client_unit() {
+  local unit
+  unit="$(frp_u_path /etc/systemd/system/frpc.service)"
+  [[ -f "$unit" ]] || return 0
+  if ! frp_u_legacy_client_unit_is_product_owned "$unit"; then
+    echo "WARNING: leaving non-product frpc.service in place at ${unit}" >&2
+    return 0
+  fi
+  if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1 && ! frp_u_is_darwin; then
+    systemctl stop frpc.service 2>/dev/null || true
+    systemctl disable frpc.service 2>/dev/null || true
+  fi
+  frp_u_rm_file "$unit"
+  if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1 && ! frp_u_is_darwin; then
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl reset-failed frpc.service 2>/dev/null || true
+  fi
+  return 0
+}
+
 if [[ "$SKIP_SYSTEMD" != "1" ]]; then
   if frp_u_is_darwin; then
     if ! frp_macos_launchd_set_enabled disable; then
@@ -162,9 +207,15 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
     systemctl disable drlink-client 2>/dev/null || true
   fi
 fi
+# Historical product supervisor must not survive uninstall and respawn on reboot.
+frp_u_retire_legacy_client_unit
 frp_u_stop_owned_frpc
 
 frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-client.service)"
+if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1 && ! frp_u_is_darwin; then
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed drlink-client.service 2>/dev/null || true
+fi
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
