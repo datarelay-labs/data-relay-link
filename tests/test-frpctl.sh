@@ -780,7 +780,7 @@ pass "SHOW_CLIENT_MISSING_TARGET_HELP"
 run_repl "$SERVER" "$WORKDIR/miss-set.out" "set" exit || fail "set missing"
 grep -q 'Missing resource.' "$WORKDIR/miss-set.out" || fail "set missing title"
 grep -q 'client' "$WORKDIR/miss-set.out" || fail "set missing lists client"
-grep -q 'type: set ?' "$WORKDIR/miss-set.out" || fail "set missing tip"
+grep -q 'drlink help set' "$WORKDIR/miss-set.out" || fail "set missing tip"
 pass "SET_CLIENT_MISSING_TARGET_HELP"
 
 echo "FRPCTL_TESTS=PASS"

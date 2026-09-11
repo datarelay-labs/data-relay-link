@@ -246,7 +246,7 @@ def _safe_names(names):
     return sorted(out, key=str.lower)
 
 
-def missing_client_help(usage_lines, names=None, tip="show client ?"):
+def missing_client_help(usage_lines, names=None, tip="drlink help show"):
     """Enter-submitted incomplete client target. Tab must not call this."""
     parts = ["Missing client.", ""]
     available = _safe_names(names)
@@ -1232,7 +1232,7 @@ def _match_show(tokens, role, names=None):
                     "show client <ID> tags",
                 ],
                 names,
-                tip="show client ?",
+                tip="drlink help show",
             )
         view = tokens[3] if len(tokens) > 3 else "overview"
         if view in ("info",):
@@ -1261,7 +1261,7 @@ def _match_set(tokens, role, names=None):
     client, server = _role_parts(role)
     avail = _set_resources(role)
     if len(tokens) == 1:
-        return incomplete("Missing resource.", ["set <resource> ..."], avail, tip="set ?")
+        return incomplete("Missing resource.", ["set <resource> ..."], avail, tip="drlink help set")
     resource = tokens[1]
     if resource == "client":
         if not server:
@@ -1274,7 +1274,7 @@ def _match_set(tokens, role, names=None):
                     "set client <ID> tag <key> <value>",
                 ],
                 names,
-                tip="set client ?",
+                tip="drlink help set",
             )
         if len(tokens) < 4:
             return incomplete(
@@ -1302,7 +1302,7 @@ def _match_set(tokens, role, names=None):
                 return incomplete(
                     "Missing tag key.",
                     ["set client <ID> tag <key> <value>"],
-                    tip="set client %s tag ?" % tokens[2],
+                    tip="drlink help set",
                 )
             if len(tokens) == 5 and "=" in tokens[4]:
                 value = tokens[4]
@@ -1469,7 +1469,7 @@ def _match_set(tokens, role, names=None):
                     "set server bootstrap-hostname <fqdn>",
                 ],
                 server_settings,
-                tip="set server ?",
+                tip="drlink help set",
             )
         if tokens[2] not in server_settings:
             return incomplete(
@@ -1484,7 +1484,7 @@ def _match_set(tokens, role, names=None):
             return incomplete(
                 "Missing hostname.",
                 ["set server %s <fqdn>" % tokens[2]],
-                tip="set server %s ?" % tokens[2],
+                tip="drlink help set",
             )
         if len(tokens) > 4:
             return {
@@ -1522,7 +1522,7 @@ def _match_unset(tokens, role, names=None):
                 "Missing server setting.",
                 ["unset server hostname", "unset server bootstrap-hostname"],
                 ["hostname", "bootstrap-hostname"],
-                tip="unset server ?",
+                tip="drlink help unset",
             )
         if tokens[2] not in ("hostname", "bootstrap-hostname"):
             return incomplete(
@@ -1552,7 +1552,7 @@ def _match_unset(tokens, role, names=None):
                 "unset client <ID> tag <key>",
             ],
             names,
-                tip="unset client ?",
+                tip="drlink help unset",
         )
     if len(tokens) < 4:
         return incomplete(
@@ -1591,7 +1591,7 @@ def _match_create(tokens, role, names=None):
             return incomplete(
                 "Unexpected arguments.",
                 ["create zero-touch"],
-                tip="create zero-touch ?",
+                tip="drlink help create",
             )
         return {"status": "ok", "action": "create_zero_touch"}
     if resource == "enrollment":
@@ -1665,7 +1665,7 @@ def _match_revoke(tokens, role, names=None):
             return missing_client_help(
                 ["revoke client <ID>"],
                 names,
-                tip="revoke client ?",
+                tip="drlink help revoke",
             )
         return {"status": "ok", "action": "revoke_client", "client": tokens[2], "passthrough": tokens[3:]}
     if tokens[1] == "enrollment":
@@ -1726,7 +1726,7 @@ def _match_release(tokens, role, names=None):
             return missing_client_help(
                 ["release client <ID>"],
                 names,
-                tip="release client ?",
+                tip="drlink help release",
             )
         return {"status": "ok", "action": "release_client", "client": tokens[2], "passthrough": tokens[3:]}
     if tokens[1] == "service":
@@ -1734,7 +1734,7 @@ def _match_release(tokens, role, names=None):
             return missing_client_help(
                 ["release service <ID> <service-id>"],
                 names,
-                tip="release service ?",
+                tip="drlink help release",
             )
         if len(tokens) < 4:
             return incomplete("Missing service ID.", ["release service <ID> <service-id>"])
