@@ -177,6 +177,11 @@ pass "INSTALL_TIME_RETIRE"
 # Source contract: install retires legacy before starting the canonical unit.
 grep -q 'frp_retire_legacy_client_unit' "$ROOT/install-client.sh" || fail "install missing retire"
 grep -n 'frp_retire_legacy_client_unit' "$ROOT/install-client.sh" | head -1 | grep -q . || fail "install retire site"
+# Fail-closed: retire failures must not be swallowed with || true before canonical start.
+if grep -nE 'frp_retire_legacy_client_unit[[:space:]]*\|\|[[:space:]]*true' \
+  "$ROOT/install-client.sh" "$ROOT/lib/frp-client-common.sh" >/dev/null; then
+  fail "retire failures must not be swallowed with || true"
+fi
 # Ensure binary restore follows the first retire call site in the main path.
 python3 - "$ROOT/install-client.sh" <<'PY' || fail "install order"
 from pathlib import Path
@@ -186,8 +191,256 @@ retire = text.find("frp_retire_legacy_client_unit")
 binary = text.find('frp_atomic_install "$extracted" "$(frp_client_path /usr/local/bin/frpc)"')
 if retire < 0 or binary < 0 or retire > binary:
     raise SystemExit("retire must precede frpc binary restore")
+# Canonical start must follow a hard fail path (|| return 1 / || exit 1), not || true.
+for needle in (
+    "frp_retire_legacy_client_unit || return 1",
+    "frp_retire_legacy_client_unit || exit 1",
+):
+    if needle not in text:
+        raise SystemExit(f"missing fail-closed retire site: {needle}")
 print("ORDER_OK")
 PY
 pass "INSTALL_RETIRE_BEFORE_BINARY"
 
+# ---------------------------------------------------------------------------
+# Fail-closed retirement with mocked systemctl (P1 lifecycle hardening)
+# ---------------------------------------------------------------------------
+MOCK="$WORK/mock-systemctl"
+cat >"$MOCK" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${FRP_MOCK_SYSTEMCTL_LOG:-}"
+if [[ -n "$log" ]]; then
+  printf '%s\n' "$*" >>"$log"
+fi
+cmd="${1:-}"
+shift || true
+unit=""
+for arg in "$@"; do
+  case "$arg" in
+    -p|--value|MainPID|LoadState) continue ;;
+    *.service|frpc|drlink-client) unit="$arg" ;;
+  esac
+done
+[[ "$unit" == *.service ]] || unit="${unit}.service"
+state_dir="${FRP_MOCK_UNIT_DIR:-}"
+fail_stop="${FRP_MOCK_STOP_FAIL:-0}"
+still_active="${FRP_MOCK_STILL_ACTIVE:-0}"
+keep_mainpid="${FRP_MOCK_KEEP_MAINPID:-0}"
+case "$cmd" in
+  is-active)
+    if [[ -f "${state_dir}/${unit}.active" ]]; then
+      echo active
+      exit 0
+    fi
+    echo inactive
+    exit 3
+    ;;
+  show)
+    if [[ "$*" == *MainPID* ]]; then
+      if [[ -f "${state_dir}/${unit}.mainpid" ]]; then
+        cat "${state_dir}/${unit}.mainpid"
+      else
+        echo 0
+      fi
+      exit 0
+    fi
+    echo loaded
+    exit 0
+    ;;
+  stop)
+    if [[ "$fail_stop" == "1" ]]; then
+      exit 1
+    fi
+    if [[ "$still_active" != "1" && -n "$state_dir" ]]; then
+      rm -f "${state_dir}/${unit}.active"
+      : >"${state_dir}/${unit}.loaded"
+    fi
+    if [[ "$keep_mainpid" != "1" && -n "$state_dir" ]]; then
+      rm -f "${state_dir}/${unit}.mainpid"
+    fi
+    exit 0
+    ;;
+  disable)
+    rm -f "${state_dir}/${unit}.enabled" 2>/dev/null || true
+    exit 0
+    ;;
+  is-enabled)
+    if [[ -f "${state_dir}/${unit}.enabled" ]]; then
+      echo enabled
+      exit 0
+    fi
+    echo disabled
+    exit 1
+    ;;
+  enable|restart)
+    # Canonical supervisor start — must not run when legacy retire fails.
+    printf 'canonical-start:%s\n' "$*" >>"${FRP_MOCK_CANONICAL_START_LOG:-/dev/null}"
+    : >"${state_dir:-/tmp}/${unit}.active"
+    exit 0
+    ;;
+  daemon-reload|reset-failed)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+chmod +x "$MOCK"
+
+owns_hook_yes() { return 0; }
+owns_hook_no() { return 1; }
+
+# Simulate the install gate: retire must succeed before canonical start is attempted.
+simulate_install_start_gate() {
+  local tree="$1" start_log="$2"
+  : >"$start_log"
+  export FRP_CLIENT_TEST_ROOT="$tree"
+  export FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL="$MOCK"
+  export FRP_MOCK_CANONICAL_START_LOG="$start_log"
+  if ! frp_retire_legacy_client_unit; then
+    return 1
+  fi
+  # Only reached when retirement succeeded — mirrors frp_client_service_start.
+  frp_legacy_retire_systemctl enable drlink-client >/dev/null
+  frp_legacy_retire_systemctl restart drlink-client >/dev/null
+  return 0
+}
+
+# 1. active product-owned legacy unit → stop succeeds → migration PASS
+FC1="$WORK/fc-stop-ok"
+mkdir -p "$FC1/etc/systemd/system"
+write_product_legacy_unit "$FC1/etc/systemd/system/frpc.service"
+write_canonical_unit "$FC1/etc/systemd/system/drlink-client.service"
+UNIT1="$WORK/units-fc1"
+mkdir -p "$UNIT1"
+: >"$UNIT1/frpc.service.active"
+: >"$UNIT1/frpc.service.loaded"
+: >"$UNIT1/frpc.service.enabled"
+printf '4242\n' >"$UNIT1/frpc.service.mainpid"
+export FRP_MOCK_UNIT_DIR="$UNIT1"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/fc1.log"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_MOCK_STILL_ACTIVE=0
+export FRP_MOCK_KEEP_MAINPID=0
+unset FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC || true
+START1="$WORK/fc1.start"
+if ! simulate_install_start_gate "$FC1" "$START1"; then
+  fail "active stop-success retire failed"
+fi
+[[ ! -f "$FC1/etc/systemd/system/frpc.service" ]] || fail "fc1 legacy unit remains"
+[[ -f "$FC1/etc/systemd/system/drlink-client.service" ]] || fail "fc1 canonical missing"
+grep -q 'canonical-start:' "$START1" || fail "fc1 canonical start not reached"
+pass "ACTIVE_STOP_SUCCESS"
+
+# 2. active product-owned legacy unit → stop fails → install FAILS before canonical start
+FC2="$WORK/fc-stop-fail"
+mkdir -p "$FC2/etc/systemd/system"
+write_product_legacy_unit "$FC2/etc/systemd/system/frpc.service"
+write_canonical_unit "$FC2/etc/systemd/system/drlink-client.service"
+UNIT2="$WORK/units-fc2"
+mkdir -p "$UNIT2"
+: >"$UNIT2/frpc.service.active"
+: >"$UNIT2/frpc.service.loaded"
+: >"$UNIT2/frpc.service.enabled"
+printf '4243\n' >"$UNIT2/frpc.service.mainpid"
+export FRP_MOCK_UNIT_DIR="$UNIT2"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/fc2.log"
+export FRP_MOCK_STOP_FAIL=1
+START2="$WORK/fc2.start"
+if simulate_install_start_gate "$FC2" "$START2" 2>"$WORK/fc2.err"; then
+  fail "stop-failure retire unexpectedly succeeded"
+fi
+grep -q 'LEGACY_UNIT_STOP_FAILED' "$WORK/fc2.err" || fail "fc2 missing stop failure class"
+[[ -f "$FC2/etc/systemd/system/frpc.service" ]] || fail "fc2 legacy unit removed on stop failure"
+if grep -q 'canonical-start:' "$START2" 2>/dev/null; then
+  fail "fc2 canonical start must be blocked"
+fi
+pass "ACTIVE_STOP_FAILURE_BLOCKS_CANONICAL"
+pass "CANONICAL_START_BLOCKED_ON_LEGACY_STOP_FAILURE"
+
+# 3. stop returns success but legacy MainPID remains → install FAILS
+FC3="$WORK/fc-mainpid"
+mkdir -p "$FC3/etc/systemd/system"
+write_product_legacy_unit "$FC3/etc/systemd/system/frpc.service"
+write_canonical_unit "$FC3/etc/systemd/system/drlink-client.service"
+UNIT3="$WORK/units-fc3"
+mkdir -p "$UNIT3"
+: >"$UNIT3/frpc.service.active"
+: >"$UNIT3/frpc.service.loaded"
+: >"$UNIT3/frpc.service.enabled"
+printf '4244\n' >"$UNIT3/frpc.service.mainpid"
+export FRP_MOCK_UNIT_DIR="$UNIT3"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/fc3.log"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_MOCK_STILL_ACTIVE=0
+export FRP_MOCK_KEEP_MAINPID=1
+export FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC=owns_hook_yes
+START3="$WORK/fc3.start"
+if simulate_install_start_gate "$FC3" "$START3" 2>"$WORK/fc3.err"; then
+  fail "mainpid-remains retire unexpectedly succeeded"
+fi
+grep -q 'LEGACY_UNIT_PROCESS_REMAINS' "$WORK/fc3.err" || fail "fc3 missing process remains class"
+[[ -f "$FC3/etc/systemd/system/frpc.service" ]] || fail "fc3 legacy unit removed while MainPID remains"
+if grep -q 'canonical-start:' "$START3" 2>/dev/null; then
+  fail "fc3 canonical start must be blocked"
+fi
+unset FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC || true
+pass "STOP_OK_MAINPID_REMAINS_BLOCKS_CANONICAL"
+
+# 4. inactive product-owned unit → safe removal PASS
+FC4="$WORK/fc-inactive"
+mkdir -p "$FC4/etc/systemd/system"
+write_product_legacy_unit "$FC4/etc/systemd/system/frpc.service"
+write_canonical_unit "$FC4/etc/systemd/system/drlink-client.service"
+UNIT4="$WORK/units-fc4"
+mkdir -p "$UNIT4"
+: >"$UNIT4/frpc.service.loaded"
+: >"$UNIT4/frpc.service.enabled"
+export FRP_MOCK_UNIT_DIR="$UNIT4"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/fc4.log"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_MOCK_KEEP_MAINPID=0
+export FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC=owns_hook_no
+START4="$WORK/fc4.start"
+if ! simulate_install_start_gate "$FC4" "$START4"; then
+  fail "inactive retire failed"
+fi
+[[ ! -f "$FC4/etc/systemd/system/frpc.service" ]] || fail "fc4 legacy remains"
+grep -q 'canonical-start:' "$START4" || fail "fc4 canonical start missing"
+# Idempotent second pass
+export FRP_CLIENT_TEST_ROOT="$FC4"
+export FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL="$MOCK"
+frp_retire_legacy_client_unit || fail "fc4 idempotent retire"
+unset FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC || true
+pass "INACTIVE_SAFE_REMOVAL"
+
+# 5. unrelated admin frpc.service → untouched PASS
+FC5="$WORK/fc-admin"
+mkdir -p "$FC5/etc/systemd/system"
+write_admin_unit "$FC5/etc/systemd/system/frpc.service"
+write_canonical_unit "$FC5/etc/systemd/system/drlink-client.service"
+UNIT5="$WORK/units-fc5"
+mkdir -p "$UNIT5"
+: >"$UNIT5/frpc.service.active"
+: >"$UNIT5/frpc.service.loaded"
+: >"$UNIT5/frpc.service.enabled"
+export FRP_MOCK_UNIT_DIR="$UNIT5"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/fc5.log"
+: >"$WORK/fc5.log"
+START5="$WORK/fc5.start"
+if ! simulate_install_start_gate "$FC5" "$START5" 2>"$WORK/fc5.err"; then
+  fail "admin preserve retire failed"
+fi
+[[ -f "$FC5/etc/systemd/system/frpc.service" ]] || fail "fc5 admin unit removed"
+grep -q 'non-product frpc.service' "$WORK/fc5.err" || fail "fc5 missing admin warn"
+# Must not stop/disable an unrelated admin unit.
+if grep -E '^(stop|disable)( |$)' "$WORK/fc5.log" >/dev/null 2>&1; then
+  fail "fc5 touched admin unit via systemctl"
+fi
+grep -q 'canonical-start:' "$START5" || fail "fc5 canonical start missing"
+pass "UNRELATED_ADMIN_FRPC_SERVICE_PRESERVED"
+
+pass "LEGACY_RETIRE_FAIL_CLOSED"
 echo "LEGACY_FRPC_UNIT_MIGRATION_TEST=PASS"

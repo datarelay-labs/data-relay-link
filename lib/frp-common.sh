@@ -548,11 +548,76 @@ frp_client_systemd_unit_root() {
   fi
 }
 
+# Optional FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL replaces systemctl for fail-closed tests.
+frp_legacy_retire_systemctl() {
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL:-}" ]]; then
+    "${FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL}" "$@"
+    return $?
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl "$@"
+}
+
+frp_legacy_retire_use_systemd() {
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "$(frp_client_systemd_unit_root)" ]]; then
+    return 1
+  fi
+  [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" != "1" ]] \
+    && command -v systemctl >/dev/null 2>&1
+}
+
+frp_legacy_unit_is_active() {
+  local st
+  st="$(frp_legacy_retire_systemctl is-active frpc.service 2>/dev/null || true)"
+  [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
+}
+
+# True when MainPID (or hook) still represents a live product-owned frpc process.
+frp_legacy_unit_owns_product_frpc() {
+  local main_pid="" exe=""
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC:-}" ]]; then
+    "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC}"
+    return $?
+  fi
+  main_pid="$(frp_legacy_retire_systemctl show -p MainPID --value frpc.service 2>/dev/null || true)"
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! kill -0 "$main_pid" 2>/dev/null; then
+    return 1
+  fi
+  if [[ -e "/proc/${main_pid}/exe" ]]; then
+    exe="$(readlink -f "/proc/${main_pid}/exe" 2>/dev/null || true)"
+    case "$exe" in
+      /usr/local/bin/frpc|/usr/local/bin/frpc\ \(deleted\)) return 0 ;;
+    esac
+    return 1
+  fi
+  # Fallback when /proc is unavailable: treat a live MainPID as still owning.
+  return 0
+}
+
+frp_legacy_retire_fail() {
+  local class="$1" msg="$2"
+  echo "ERROR: ${msg}" >&2
+  if declare -F frp_emit_failure_class >/dev/null 2>&1; then
+    frp_emit_failure_class "$class"
+  else
+    echo "FAILURE_CLASS=${class}" >&2
+  fi
+  return 1
+}
+
 # Retire a product-owned historical frpc.service so only drlink-client supervises frpc.
 # Must run before restoring /usr/local/bin/frpc: a leftover enabled legacy unit with
 # Restart=always will immediately respawn once the binary reappears.
+#
+# Fail-closed for an active product-owned unit: stop → verify inactive → verify the
+# legacy MainPID no longer owns product frpc → disable → remove unit → daemon-reload.
+# Do not proceed to start drlink-client when stop/verification fails.
 frp_retire_legacy_client_unit() {
-  local root unitdir unit
+  local root unitdir unit attempt max_attempts=3 enabled=""
   root="$(frp_client_systemd_unit_root)"
   if [[ -n "$root" ]]; then
     unitdir="${root}/etc/systemd/system"
@@ -565,16 +630,55 @@ frp_retire_legacy_client_unit() {
     echo "WARNING: leaving non-product frpc.service in place at ${unit}" >&2
     return 0
   fi
-  if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1 \
-    && [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" != "1" ]]; then
-    systemctl stop frpc.service >/dev/null 2>&1 || true
-    systemctl disable frpc.service >/dev/null 2>&1 || true
+
+  if frp_legacy_retire_use_systemd; then
+    if frp_legacy_unit_is_active || frp_legacy_unit_owns_product_frpc; then
+      attempt=1
+      while (( attempt <= max_attempts )); do
+        if frp_legacy_retire_systemctl stop frpc.service >/dev/null 2>&1; then
+          break
+        fi
+        if (( attempt == max_attempts )); then
+          frp_legacy_retire_fail LEGACY_UNIT_STOP_FAILED \
+            "failed to stop product-owned legacy frpc.service; refusing to start drlink-client"
+          return 1
+        fi
+        sleep 0.2
+        attempt=$((attempt + 1))
+      done
+      if frp_legacy_unit_is_active; then
+        frp_legacy_retire_fail LEGACY_UNIT_STILL_ACTIVE \
+          "product-owned legacy frpc.service remains active after stop; refusing to start drlink-client"
+        return 1
+      fi
+      if frp_legacy_unit_owns_product_frpc; then
+        frp_legacy_retire_fail LEGACY_UNIT_PROCESS_REMAINS \
+          "product-owned legacy frpc.service MainPID still owns frpc after stop; refusing to start drlink-client"
+        return 1
+      fi
+    fi
+
+    if ! frp_legacy_retire_systemctl disable frpc.service >/dev/null 2>&1; then
+      enabled="$(frp_legacy_retire_systemctl is-enabled frpc.service 2>/dev/null || true)"
+      case "$enabled" in
+        enabled|enabled-runtime|linked|linked-runtime)
+          frp_legacy_retire_fail LEGACY_UNIT_DISABLE_FAILED \
+            "failed to disable product-owned legacy frpc.service; refusing to start drlink-client"
+          return 1
+          ;;
+      esac
+    fi
   fi
+
   rm -f "$unit"
-  if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1 \
-    && [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" != "1" ]]; then
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl reset-failed frpc.service >/dev/null 2>&1 || true
+
+  if frp_legacy_retire_use_systemd; then
+    if ! frp_legacy_retire_systemctl daemon-reload >/dev/null 2>&1; then
+      frp_legacy_retire_fail LEGACY_UNIT_RELOAD_FAILED \
+        "daemon-reload failed after removing legacy frpc.service; refusing to start drlink-client"
+      return 1
+    fi
+    frp_legacy_retire_systemctl reset-failed frpc.service >/dev/null 2>&1 || true
   fi
   return 0
 }
