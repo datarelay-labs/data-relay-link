@@ -249,11 +249,33 @@ frpctl_run() {
     else
       printf 'DISPATCH %s\n' "$name"
     fi
+    # Exact argv boundary proof (tab-separated JSON array).
+    python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1], *sys.argv[2:]], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
   "$bin" "$@"
   rc=$?
   return "$rc"
+}
+
+# Load grammar passthrough tokens into global argv array _frpctl_pt (NUL-safe).
+frpctl_load_passthrough() {
+  # $1 = grammar JSON result
+  # sets global array _frpctl_pt
+  local result="$1"
+  local arg
+  _frpctl_pt=()
+  while IFS= read -r -d '' arg || [[ -n "$arg" ]]; do
+    _frpctl_pt+=("$arg")
+  done < <(python3 -c '
+import json,sys
+for a in json.loads(sys.argv[1]).get("passthrough") or []:
+    sys.stdout.buffer.write(str(a).encode("utf-8") + b"\0")
+' "$result")
+}
+
+frpctl_json_get() {
+  python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get(sys.argv[2],""); print("" if v is None else v)' "$1" "$2"
 }
 
 frpctl_exec() {
@@ -269,6 +291,7 @@ frpctl_exec() {
     else
       printf 'DISPATCH %s\n' "$name"
     fi
+    python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1], *sys.argv[2:]], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
   exec "$bin" "$@"
@@ -540,7 +563,45 @@ frpctl_print_version() {
   echo "Bundle SHA256   : $(frpctl_bundle_sha256)"
 }
 
+frpctl_print_catalog_overview() {
+  local role="${1:-}"
+  local catalog_py catalog_dir=""
+  [[ -n "$role" ]] || role="$(frpctl_role_token)"
+  if ! catalog_py="$(frpctl_lib_candidate frp_cli_catalog.py)"; then
+    return 0
+  fi
+  catalog_dir="$(dirname "$catalog_py")"
+  python3 - "$catalog_dir" "$role" <<'PY' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1])
+import frp_cli_catalog as catalog
+
+role = sys.argv[2]
+by_category = {}
+for name, roles, category, summary in catalog.ROOTS:
+    if not catalog.role_allows(roles, role):
+        continue
+    if name == "client" and not catalog._root_has_commands("client", role):
+        continue
+    by_category.setdefault(category, []).append((name, summary))
+print("Command categories")
+print("==================")
+for category in catalog.CATEGORY_ORDER:
+    rows = by_category.get(category)
+    if not rows:
+        continue
+    print()
+    print(category)
+    for line in catalog._fmt_rows(rows):
+        print(line)
+print()
+print("Shortcuts")
+print("=========")
+PY
+}
+
 frpctl_print_client_menu() {
+  frpctl_print_catalog_overview client
   echo "1) Status                     (status)"
   echo "2) Service list               (service list)"
   echo "3) Connection information     (client info)"
@@ -552,6 +613,7 @@ frpctl_print_client_menu() {
 }
 
 frpctl_print_server_menu() {
+  frpctl_print_catalog_overview server
   echo "1) Status                     (status)"
   echo "2) Manage clients             (client list / client show / client set)"
   echo "3) Create enrollment          (zero-touch create / enrollment create)"
@@ -564,7 +626,11 @@ frpctl_print_server_menu() {
   echo "10) Doctor                    (doctor)"
   echo "11) Audit                     (server audit)"
   echo "12) Commands and workflows    (help / help workflows)"
-  echo "13) Exit"
+  echo "13) Controlled Egress         (egress ...)"
+  echo "14) Groups                    (group list / group create)"
+  echo "15) Service profiles          (service-profile list / create)"
+  echo "16) Support bundle            (support bundle)"
+  echo "17) Exit"
 }
 
 frpctl_print_both_menu() {
@@ -1279,11 +1345,15 @@ frpctl_server_menu() {
       10) frpctl_dispatch doctor || true ;;
       11) frpctl_audit_tail ;;
       12) frpctl_menu_commands ;;
-      13)
+      13) frpctl_invoke frp-egress list ;;
+      14) frpctl_invoke frp-groups ;;
+      15) frpctl_invoke frp-profile list ;;
+      16) frpctl_run frp-support-bundle ;;
+      17)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-13" >&2 ;;
+      *) echo "ERROR: select 1-17" >&2 ;;
     esac
   done
 }
@@ -1884,8 +1954,12 @@ frpctl_dispatch_canonical() {
       return 0
       ;;
     incomplete)
-      frpctl_print_grammar_help "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("message",""))' "$result")"
-      return 0
+      frpctl_print_grammar_help "$(frpctl_json_get "$result" message)"
+      if [[ "${FRP_CTL_REPL:-}" == "1" ]]; then
+        return 0
+      fi
+      _FRP_CTL_RC=2
+      return
       ;;
     error)
       echo "ERROR: $(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("message",""))' "$result")" >&2
@@ -1898,37 +1972,44 @@ frpctl_dispatch_canonical() {
       return 1
       ;;
   esac
-  action="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("action",""))' "$result")"
+  action="$(frpctl_json_get "$result" action)"
   _FRP_CTL_CANON="$result"
   set +e
   case "$action" in
-    show_status) frpctl_status $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    show_status)
+      frpctl_load_passthrough "$result"
+      frpctl_status "${_frpctl_pt[@]}"
+      ;;
     show_server_status)
       frpctl_require_server || return 1
-      frpctl_run frp-server-status $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frpctl_run frp-server-status "${_frpctl_pt[@]}"
       ;;
     show_version) echo; frpctl_print_version; echo ;;
-    show_clients) frpctl_require_server || return 1; frpctl_invoke frp-clients $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    show_clients)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-clients "${_frpctl_pt[@]}"
+      ;;
     show_groups) frpctl_require_server || return 1; frpctl_invoke frp-groups ;;
     show_group)
       frpctl_require_server || return 1
-      frpctl_invoke frp-groups "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
+      frpctl_invoke frp-groups "$(frpctl_json_get "$result" group)"
       ;;
     show_profiles) frpctl_require_server || return 1; frpctl_invoke frp-profile list ;;
     show_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-profile show "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      frpctl_invoke frp-profile show "$(frpctl_json_get "$result" profile)"
       ;;
     show_egress_profiles) frpctl_require_server || return 1; frpctl_invoke frp-egress list ;;
     show_egress_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress show "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      frpctl_invoke frp-egress show "$(frpctl_json_get "$result" profile)"
       ;;
     show_client)
       frpctl_require_server || return 1
-      frpctl_invoke frp-client-info \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("view") or "overview")' "$result")"
+      view="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("view") or "overview")' "$result")"
+      frpctl_invoke frp-client-info "$(frpctl_json_get "$result" client)" "$view"
       ;;
     context_help)
       echo
@@ -1937,7 +2018,11 @@ frpctl_dispatch_canonical() {
       ;;
     show_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollments ;;
     show_audit) frpctl_require_server || return 1; frpctl_audit_tail ;;
-    show_upstream) frpctl_require_server || return 1; frpctl_run frp-upstream $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    show_upstream)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_run frp-upstream "${_frpctl_pt[@]}"
+      ;;
     show_services) frpctl_require_client || return 1; frpctl_invoke frp-client list ;;
     show_info) frpctl_require_client || return 1; frpctl_invoke frp-client info ;;
     set_client)
@@ -1947,16 +2032,16 @@ frpctl_dispatch_canonical() {
     set_group)
       frpctl_require_server || return 1
       frpctl_invoke frp-group-set set \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("property",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
+        "$(frpctl_json_get "$result" group)" \
+        "$(frpctl_json_get "$result" property)" \
+        "$(frpctl_json_get "$result" value)"
       ;;
     set_profile)
       frpctl_require_server || return 1
       frpctl_invoke frp-profile set \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("property",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
+        "$(frpctl_json_get "$result" profile)" \
+        "$(frpctl_json_get "$result" property)" \
+        "$(frpctl_json_get "$result" value)"
       ;;
     unset_client)
       frpctl_require_server || return 1
@@ -1964,11 +2049,11 @@ frpctl_dispatch_canonical() {
       ;;
     set_installer_url)
       frpctl_require_server || return 1
-      frpctl_invoke frp-set-client-installer-url "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
+      frpctl_invoke frp-set-client-installer-url "$(frpctl_json_get "$result" value)"
       ;;
     set_server_hostname)
       frpctl_require_server || return 1
-      frpctl_invoke frp-server-set hostname "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
+      frpctl_invoke frp-server-set hostname "$(frpctl_json_get "$result" value)"
       ;;
     unset_server_hostname)
       frpctl_require_server || return 1
@@ -1976,7 +2061,7 @@ frpctl_dispatch_canonical() {
       ;;
     set_server_bootstrap_hostname)
       frpctl_require_server || return 1
-      frpctl_invoke frp-server-set bootstrap-hostname "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("value",""))' "$result")"
+      frpctl_invoke frp-server-set bootstrap-hostname "$(frpctl_json_get "$result" value)"
       ;;
     unset_server_bootstrap_hostname)
       frpctl_require_server || return 1
@@ -1985,173 +2070,209 @@ frpctl_dispatch_canonical() {
     set_service)
       frpctl_require_client || return 1
       frpctl_invoke frp-client set-service \
-        "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("service",""))' "$result")" \
-        "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("property",""))' "$result")" \
-        "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("value",""))' "$result")"
+        "$(frpctl_json_get "$result" service)" \
+        "$(frpctl_json_get "$result" property)" \
+        "$(frpctl_json_get "$result" value)"
       ;;
     add_service)
       frpctl_require_client || return 1
-      frpctl_invoke frp-client add-service $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-client add-service "${_frpctl_pt[@]}"
       ;;
     enable_service)
       frpctl_require_client || return 1
-      frpctl_invoke frp-client enable-service "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("service",""))' "$result")"
+      frpctl_invoke frp-client enable-service "$(frpctl_json_get "$result" service)"
       ;;
     disable_service)
       frpctl_require_client || return 1
-      frpctl_invoke frp-client disable-service "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("service",""))' "$result")"
+      frpctl_invoke frp-client disable-service "$(frpctl_json_get "$result" service)"
       ;;
     apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
     create_zero_touch) frpctl_require_server || return 1; frpctl_guided_zero_touch ;;
-    create_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-create-client $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
-    create_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enroll-bulk $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
-    create_backup) frpctl_require_server || return 1; frpctl_run frp-backup $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    create_enrollment)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-create-client "${_frpctl_pt[@]}"
+      ;;
+    create_enrollments)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-enroll-bulk "${_frpctl_pt[@]}"
+      ;;
+    create_backup)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_run frp-backup "${_frpctl_pt[@]}"
+      ;;
     create_group)
       frpctl_require_server || return 1
-      if [[ -n "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")" ]]; then
+      if [[ -n "$(frpctl_json_get "$result" description)" ]]; then
         frpctl_invoke frp-group-set create \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          "$(frpctl_json_get "$result" name)" \
           --description \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")"
+          "$(frpctl_json_get "$result" description)"
       else
         frpctl_invoke frp-group-set create \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")"
+          "$(frpctl_json_get "$result" name)"
       fi
       ;;
     create_profile)
       frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
       frpctl_invoke frp-profile create \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
-        $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+        "$(frpctl_json_get "$result" name)" \
+        "${_frpctl_pt[@]}"
       ;;
     create_egress_profile)
       # CLI-008: a new egress profile is always created disabled so an
       # incomplete policy can never widen outbound access.
       frpctl_require_server || return 1
-      if [[ -n "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")" ]]; then
+      if [[ -n "$(frpctl_json_get "$result" description)" ]]; then
         frpctl_invoke frp-egress create \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          "$(frpctl_json_get "$result" name)" \
           --disabled \
           --description \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("description",""))' "$result")"
+          "$(frpctl_json_get "$result" description)"
       else
         frpctl_invoke frp-egress create \
-          "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("name",""))' "$result")" \
+          "$(frpctl_json_get "$result" name)" \
           --disabled
       fi
       ;;
     set_egress_profile)
       frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
       frpctl_invoke frp-egress set \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
-        $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+        "$(frpctl_json_get "$result" profile)" \
+        "${_frpctl_pt[@]}"
       ;;
     add_egress_destination)
       frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
       frpctl_invoke frp-egress add-destination \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("host",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("port",""))' "$result")" \
-        $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+        "$(frpctl_json_get "$result" profile)" \
+        "$(frpctl_json_get "$result" host)" \
+        "$(frpctl_json_get "$result" port)" \
+        "${_frpctl_pt[@]}"
       ;;
     add_egress_source)
       frpctl_require_server || return 1
       frpctl_invoke frp-egress add-source \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("cidr",""))' "$result")"
+        "$(frpctl_json_get "$result" profile)" \
+        "$(frpctl_json_get "$result" cidr)"
       ;;
     remove_egress_destination)
       frpctl_require_server || return 1
       frpctl_invoke frp-egress remove-destination \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("destination",""))' "$result")"
+        "$(frpctl_json_get "$result" profile)" \
+        "$(frpctl_json_get "$result" destination)"
       ;;
     remove_egress_source)
       frpctl_require_server || return 1
       frpctl_invoke frp-egress remove-source \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("source",""))' "$result")"
+        "$(frpctl_json_get "$result" profile)" \
+        "$(frpctl_json_get "$result" source)"
       ;;
     enable_egress_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress enable "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      frpctl_invoke frp-egress enable "$(frpctl_json_get "$result" profile)"
       ;;
     disable_egress_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress disable "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      frpctl_invoke frp-egress disable "$(frpctl_json_get "$result" profile)"
       ;;
     delete_egress_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")"
+      frpctl_invoke frp-egress delete "$(frpctl_json_get "$result" profile)"
       ;;
-    delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")" ;;
-    delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$result")" ;;
+    delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(frpctl_json_get "$result" group)" ;;
+    delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(frpctl_json_get "$result" profile)" ;;
     add_group_member)
       frpctl_require_server || return 1
       frpctl_invoke frp-group-set add-member \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
+        "$(frpctl_json_get "$result" client)" \
+        "$(frpctl_json_get "$result" group)"
       ;;
     remove_group_member)
       frpctl_require_server || return 1
       frpctl_invoke frp-group-set remove-member \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" \
-        "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("group",""))' "$result")"
+        "$(frpctl_json_get "$result" client)" \
+        "$(frpctl_json_get "$result" group)"
       ;;
-    revoke_client) frpctl_require_server || return 1; frpctl_invoke frp-revoke-client "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
-    revoke_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-revoke "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("id",""))' "$result")" ;;
-    purge_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollment "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("id",""))' "$result")" ;;
-    purge_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollments --older-than "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("older_than",""))' "$result")" ;;
-    release_client) frpctl_require_server || return 1; frpctl_invoke frp-release-client "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
-    release_service) frpctl_require_server || return 1; frpctl_invoke frp-release-service "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("client",""))' "$result")" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("service",""))' "$result")" $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
-    update_default) frpctl_update $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
+    revoke_client)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-revoke-client "$(frpctl_json_get "$result" client)" "${_frpctl_pt[@]}"
+      ;;
+    revoke_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-revoke "$(frpctl_json_get "$result" id)" ;;
+    purge_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollment "$(frpctl_json_get "$result" id)" ;;
+    purge_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollments --older-than "$(frpctl_json_get "$result" older_than)" ;;
+    release_client)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-release-client "$(frpctl_json_get "$result" client)" "${_frpctl_pt[@]}"
+      ;;
+    release_service)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-release-service "$(frpctl_json_get "$result" client)" "$(frpctl_json_get "$result" service)" "${_frpctl_pt[@]}"
+      ;;
+    update_default)
+      frpctl_load_passthrough "$result"
+      frpctl_update "${_frpctl_pt[@]}"
+      ;;
     update_project)
-      extra_args="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")"
+      frpctl_load_passthrough "$result"
+      _frp_up_rc=0
       if frpctl_is_client; then
-        # shellcheck disable=SC2086
-        frpctl_client_update $extra_args
+        frpctl_client_update "${_frpctl_pt[@]}" || _frp_up_rc=$?
       fi
       if frpctl_is_server; then
-        # shellcheck disable=SC2086
-        frpctl_run frp-project-update $extra_args
+        frpctl_run frp-project-update "${_frpctl_pt[@]}" || _frp_up_rc=$?
       fi
       if ! frpctl_is_client && ! frpctl_is_server; then
-        return 1
+        false
+      else
+        # Preserve the first failing update status; trailing `if` tests must not
+        # mask a non-zero client/server update as success.
+        [[ "${_frp_up_rc}" -eq 0 ]]
       fi
       ;;
     update_frp)
       if ! frpctl_is_server && ! frpctl_is_client; then
         frpctl_require_install || return 1
       fi
-      frpctl_run frp-update $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frpctl_run frp-update "${_frpctl_pt[@]}"
       ;;
-    restore_backup) frpctl_require_server || return 1; frpctl_run frp-restore "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("path",""))' "$result")" ;;
+    restore_backup) frpctl_require_server || return 1; frpctl_run frp-restore "$(frpctl_json_get "$result" path)" ;;
     doctor)
       if ! type frp_doctor_main >/dev/null 2>&1; then
         echo "ERROR: doctor diagnostics are not installed on this host." >&2
         return 2
       fi
-      frp_doctor_main $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frp_doctor_main "${_frpctl_pt[@]}"
       ;;
     support_bundle)
-      frpctl_run frp-support-bundle $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frpctl_run frp-support-bundle "${_frpctl_pt[@]}"
       ;;
     access_cmd)
       frpctl_require_server || return 1
-      # shellcheck disable=SC2046,SC2086
-      frpctl_invoke frp-access $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-access "${_frpctl_pt[@]}"
       ;;
     egress_cmd)
       frpctl_require_server || return 1
-      # shellcheck disable=SC2046,SC2086
-      frpctl_invoke frp-egress $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      frpctl_load_passthrough "$result"
+      frpctl_invoke frp-egress "${_frpctl_pt[@]}"
       ;;
     help)
-      extra_args="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")"
+      frpctl_load_passthrough "$result"
       # Always render from the command catalog so shell and REPL help stay aligned.
-      # shellcheck disable=SC2086
-      if ! frpctl_repl_help $extra_args; then
+      if ! frpctl_repl_help "${_frpctl_pt[@]}"; then
         frpctl_usage
       fi
       ;;
@@ -2173,6 +2294,7 @@ frpctl_dispatch_canonical() {
   set -e
   return 0
 }
+
 
 frpctl_set_client_from_canon() {
   local spec="$1" client prop value
@@ -2592,6 +2714,11 @@ frpctl_repl() {
 frpctl_main() {
   local cmd="${1:-}"
   case "$cmd" in
+    --print-grammar-payload)
+      unset FRP_CTL_GRAMMAR_PAYLOAD
+      frpctl_grammar_payload
+      printf '\n'
+      ;;
     '')
       frpctl_repl
       ;;

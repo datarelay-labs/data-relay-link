@@ -541,6 +541,32 @@ frp_legacy_client_unit_is_product_owned() {
   esac
 }
 
+frp_legacy_server_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  # Canonical product ExecStart from server/frps.service (historical + current).
+  case "$exec_line" in
+    */usr/local/bin/frps\ -c\ /etc/frp/frps.toml|*/usr/local/bin/frps\ -c\ /etc/frp/frps.toml\ *) ;;
+    /usr/local/bin/frps\ -c\ /etc/frp/frps.toml|/usr/local/bin/frps\ -c\ /etc/frp/frps.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Server'|'Data Relay Link Server'|'Data Relay Link Server (legacy unit name; use drlink-server)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 frp_client_systemd_unit_root() {
   local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
   if [[ -n "$root" ]]; then
@@ -739,6 +765,10 @@ frp_migrate_legacy_systemd_units() {
     if [[ -f "${unitdir}/${new}.service" && -f "${unitdir}/${old}.service" ]]; then
       if [[ "$old" == "frpc" ]] && ! frp_legacy_client_unit_is_product_owned "${unitdir}/frpc.service"; then
         echo "WARNING: leaving non-product frpc.service in place at ${unitdir}/frpc.service" >&2
+        continue
+      fi
+      if [[ "$old" == "frps" ]] && ! frp_legacy_server_unit_is_product_owned "${unitdir}/frps.service"; then
+        echo "WARNING: leaving non-product frps.service in place at ${unitdir}/frps.service" >&2
         continue
       fi
       if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1; then

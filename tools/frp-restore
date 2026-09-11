@@ -375,6 +375,46 @@ def _load_module(name, filename):
     return None
 
 
+def _reapply_egress_permissions_after_restore(root: Path) -> None:
+    """Restore drops ACLs on replace; re-grant egress the runtime read surface."""
+    eg = _load_module("frp_egress_control", "frp_egress_control.py")
+    if eg is None:
+        return
+    config = root / "etc/drlink/config.json"
+    control = root / "var/lib/drlink/egress-control.json"
+    conn_log = root / "var/log/drlink/egress-conn.jsonl"
+    # Prefer paths from restored config when present.
+    if config.is_file():
+        try:
+            cfg = json.loads(config.read_text(encoding="utf-8"))
+            if isinstance(cfg, dict):
+                raw = cfg.get("egress_control_file")
+                if raw:
+                    control = Path(str(raw))
+                    if not str(control).startswith(str(root)):
+                        # Under test roots, map absolute product paths into the tree.
+                        test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+                        if test_root and str(control).startswith("/"):
+                            control = Path(test_root + str(control))
+                raw_log = cfg.get("egress_conn_log_file")
+                if raw_log:
+                    conn_log = Path(str(raw_log))
+                    test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+                    if test_root and str(conn_log).startswith("/") and not str(conn_log).startswith(str(root)):
+                        conn_log = Path(test_root + str(conn_log))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    try:
+        eg.reapply_egress_runtime_permissions(
+            config_path=config if config.is_file() else None,
+            control_path=control if control.is_file() else None,
+            conn_log_path=conn_log,
+            parents=True,
+        )
+    except Exception:
+        return
+
+
 def _load_allocator_validator():
     here = Path(__file__).resolve()
     candidates = (
@@ -805,26 +845,30 @@ def main() -> int:
     candidate_temp = None
     rollback_temp = None
     locks = _load_module("frp_control_locks", "frp_control_locks.py")
+    if locks is None:
+        error("frp_control_locks.py is unavailable; refusing unlocked restore")
+        return 1
     try:
         candidate_temp, candidate = validate_to_temp(archive)
         manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
         assert_same_version_restore(root, manifest)
         timeout = float(os.environ.get("FRP_RESTORE_LOCK_TIMEOUT", "30"))
         expect_client_role = installed_client_role(root)
-        lock_cm = locks.acquire_control_locks(root, timeout=timeout) if locks is not None else None
-        if lock_cm is not None:
-            lock_cm.__enter__()
+        lock_cm = locks.acquire_control_locks(root, timeout=timeout)
+        lock_cm.__enter__()
         try:
             snapshot = make_snapshot(root)
             _write_txn(root, snapshot)
             rollback_temp, rollback = validate_to_temp(snapshot)
             try:
                 apply_payload(root, candidate)
+                _reapply_egress_permissions_after_restore(root)
                 restart_services(root, expect_client_role=expect_client_role)
                 verify_restored_control_state(root, expect_client_role=expect_client_role)
             except Exception as restore_exc:
                 try:
                     apply_payload(root, rollback, allow_hook=False)
+                    _reapply_egress_permissions_after_restore(root)
                     restart_services(root, allow_hook=False, expect_client_role=expect_client_role)
                     verify_restored_control_state(
                         root, in_rollback=True, expect_client_role=expect_client_role
@@ -841,8 +885,7 @@ def main() -> int:
                 raise RestoreError(f"restore failed; previous state was restored: {restore_exc}")
             _clear_txn(root)
         finally:
-            if lock_cm is not None:
-                lock_cm.__exit__(None, None, None)
+            lock_cm.__exit__(None, None, None)
         print("WARNING: the restored backup contained private keys, authentication tokens, and enrollment secrets.")
         print(f"Restore completed. Pre-restore snapshot: {snapshot}")
         _audit_emit("restore.completed", details={"snapshot": snapshot.name})

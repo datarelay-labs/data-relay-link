@@ -23,7 +23,21 @@ mkdir -p \
 printf 'cfg\n' >"$TREE/etc/frp-auto-deploy/config.json"
 printf 'reg\n' >"$TREE/var/lib/frp-auto-deploy/registry.json"
 printf 'lib\n' >"$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
-printf 'old-unit\n' >"$TREE/etc/systemd/system/frps.service"
+cat >"$TREE/etc/systemd/system/frps.service" <<'EOF'
+[Unit]
+Description=FRP Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
 printf 'old-cli\n' >"$TREE/usr/local/bin/frpctl"
 printf '#!/bin/bash\necho drlink\n' >"$TREE/usr/local/bin/drlink"
 chmod 0755 "$TREE/usr/local/bin/drlink"
@@ -92,6 +106,44 @@ FRP_SERVER_TEST_ROOT="$ADMIN" frp_migrate_legacy_systemd_units || fail "admin mi
 [[ -f "$ADMIN/etc/systemd/system/frpc.service" ]] || fail "admin frpc removed"
 [[ -f "$ADMIN/etc/systemd/system/drlink-client.service" ]] || fail "canonical missing"
 pass "UNRELATED_ADMIN_FRPC_PRESERVED"
+
+# Unrelated administrator frps.service must be preserved when drlink-server exists.
+ADMIN_S="$WORK/admin-server"
+mkdir -p "$ADMIN_S/etc/systemd/system" "$ADMIN_S/usr/local/bin"
+cat >"$ADMIN_S/etc/systemd/system/frps.service" <<'EOF'
+[Unit]
+Description=Company Custom FRP Server
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/custom/frps -c /opt/custom/frps.ini
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+printf 'new\n' >"$ADMIN_S/etc/systemd/system/drlink-server.service"
+printf '#!/bin/bash\necho drlink\n' >"$ADMIN_S/usr/local/bin/drlink"
+chmod 0755 "$ADMIN_S/usr/local/bin/drlink"
+FRP_SERVER_TEST_ROOT="$ADMIN_S" frp_migrate_legacy_systemd_units 2>"$WORK/admin-s.err" \
+  || fail "admin server migrate"
+[[ -f "$ADMIN_S/etc/systemd/system/frps.service" ]] || fail "admin frps removed"
+[[ -f "$ADMIN_S/etc/systemd/system/drlink-server.service" ]] || fail "canonical server missing"
+grep -q 'non-product frps.service' "$WORK/admin-s.err" || fail "missing admin frps warn"
+# Ownership fingerprints for server legacy unit
+PROD_S="$WORK/prod-frps.service"
+cat >"$PROD_S" <<'EOF'
+[Unit]
+Description=Data Relay Link Server (legacy unit name; use drlink-server)
+
+[Service]
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.toml
+EOF
+frp_legacy_server_unit_is_product_owned "$PROD_S" || fail "product frps not owned"
+frp_legacy_server_unit_is_product_owned "$ADMIN_S/etc/systemd/system/frps.service" \
+  && fail "admin frps incorrectly owned"
+pass "UNRELATED_ADMIN_FRPS_PRESERVED"
 
 # Clean install layout: drlink on PATH, frpctl only as internal backend.
 CLEAN="$WORK/clean"

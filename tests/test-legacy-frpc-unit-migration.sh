@@ -292,6 +292,12 @@ chmod +x "$MOCK"
 owns_hook_yes() { return 0; }
 owns_hook_no() { return 1; }
 
+OWNS_YES="$WORK/owns-yes.sh"
+OWNS_NO="$WORK/owns-no.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$OWNS_YES"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$OWNS_NO"
+chmod +x "$OWNS_YES" "$OWNS_NO"
+
 # Simulate the install gate: retire must succeed before canonical start is attempted.
 simulate_install_start_gate() {
   local tree="$1" start_log="$2"
@@ -443,4 +449,125 @@ grep -q 'canonical-start:' "$START5" || fail "fc5 canonical start missing"
 pass "UNRELATED_ADMIN_FRPC_SERVICE_PRESERVED"
 
 pass "LEGACY_RETIRE_FAIL_CLOSED"
+
+# ---------------------------------------------------------------------------
+# Canonical drlink-client uninstall fail-closed (mirrors legacy retire tests)
+# ---------------------------------------------------------------------------
+CANON_MOCK="$WORK/canon-mock-systemctl"
+cp "$MOCK" "$CANON_MOCK"
+chmod +x "$CANON_MOCK"
+
+# C1. active canonical → stop succeeds → uninstall removes unit + binary
+C1="$WORK/canon-stop-ok"
+mkdir -p "$C1/etc/systemd/system" "$C1/usr/local/bin" "$C1/etc/frp"
+write_canonical_unit "$C1/etc/systemd/system/drlink-client.service"
+printf 'bin\n' >"$C1/usr/local/bin/frpc"
+printf '{"schema_version":1}\n' >"$C1/etc/frp/client-state.json"
+UNIT_C1="$WORK/units-c1"
+mkdir -p "$UNIT_C1"
+: >"$UNIT_C1/drlink-client.service.active"
+: >"$UNIT_C1/drlink-client.service.loaded"
+: >"$UNIT_C1/drlink-client.service.enabled"
+printf '5252\n' >"$UNIT_C1/drlink-client.service.mainpid"
+export FRP_UNINSTALL_TEST_ROOT="$C1"
+export FRP_UNINSTALL_HOOK_SYSTEMCTL="$CANON_MOCK"
+unset FRP_UNINSTALL_HOOK_SKIP_SYSTEMD || true
+export FRP_MOCK_UNIT_DIR="$UNIT_C1"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/c1.log"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_MOCK_STILL_ACTIVE=0
+export FRP_MOCK_KEEP_MAINPID=0
+export FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC="$OWNS_NO"
+if ! "$ROOT/uninstall-client.sh" >"$WORK/c1.out" 2>"$WORK/c1.err"; then
+  cat "$WORK/c1.out" "$WORK/c1.err" >&2
+  fail "canonical stop-success uninstall failed"
+fi
+[[ ! -e "$C1/etc/systemd/system/drlink-client.service" ]] || fail "c1 canonical unit remains"
+[[ ! -e "$C1/usr/local/bin/frpc" ]] || fail "c1 binary remains"
+pass "CANONICAL_ACTIVE_STOP_SUCCESS"
+
+# C2. active canonical → stop fails → uninstall FAILS before binary removal
+C2="$WORK/canon-stop-fail"
+mkdir -p "$C2/etc/systemd/system" "$C2/usr/local/bin" "$C2/etc/frp"
+write_canonical_unit "$C2/etc/systemd/system/drlink-client.service"
+printf 'bin\n' >"$C2/usr/local/bin/frpc"
+printf '{"schema_version":1}\n' >"$C2/etc/frp/client-state.json"
+UNIT_C2="$WORK/units-c2"
+mkdir -p "$UNIT_C2"
+: >"$UNIT_C2/drlink-client.service.active"
+: >"$UNIT_C2/drlink-client.service.loaded"
+: >"$UNIT_C2/drlink-client.service.enabled"
+printf '5253\n' >"$UNIT_C2/drlink-client.service.mainpid"
+export FRP_UNINSTALL_TEST_ROOT="$C2"
+export FRP_MOCK_UNIT_DIR="$UNIT_C2"
+export FRP_MOCK_STOP_FAIL=1
+if "$ROOT/uninstall-client.sh" >"$WORK/c2.out" 2>"$WORK/c2.err"; then
+  fail "canonical stop-failure uninstall unexpectedly succeeded"
+fi
+grep -q 'CLIENT_UNIT_STOP_FAILED' "$WORK/c2.err" || fail "c2 missing stop failure class"
+[[ -f "$C2/etc/systemd/system/drlink-client.service" ]] || fail "c2 unit removed on stop failure"
+[[ -f "$C2/usr/local/bin/frpc" ]] || fail "c2 binary removed on stop failure"
+pass "CANONICAL_STOP_FAILURE_BLOCKS_UNINSTALL"
+
+# C3. stop ok but MainPID still owns product frpc → FAIL
+C3="$WORK/canon-mainpid"
+mkdir -p "$C3/etc/systemd/system" "$C3/usr/local/bin" "$C3/etc/frp"
+write_canonical_unit "$C3/etc/systemd/system/drlink-client.service"
+printf 'bin\n' >"$C3/usr/local/bin/frpc"
+printf '{"schema_version":1}\n' >"$C3/etc/frp/client-state.json"
+UNIT_C3="$WORK/units-c3"
+mkdir -p "$UNIT_C3"
+: >"$UNIT_C3/drlink-client.service.active"
+: >"$UNIT_C3/drlink-client.service.loaded"
+: >"$UNIT_C3/drlink-client.service.enabled"
+printf '5254\n' >"$UNIT_C3/drlink-client.service.mainpid"
+export FRP_UNINSTALL_TEST_ROOT="$C3"
+export FRP_MOCK_UNIT_DIR="$UNIT_C3"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_MOCK_STILL_ACTIVE=0
+export FRP_MOCK_KEEP_MAINPID=1
+export FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC="$OWNS_YES"
+if "$ROOT/uninstall-client.sh" >"$WORK/c3.out" 2>"$WORK/c3.err"; then
+  fail "canonical mainpid-remains uninstall unexpectedly succeeded"
+fi
+grep -q 'CLIENT_UNIT_PROCESS_REMAINS' "$WORK/c3.err" || fail "c3 missing process remains class"
+[[ -f "$C3/etc/systemd/system/drlink-client.service" ]] || fail "c3 unit removed while MainPID remains"
+[[ -f "$C3/usr/local/bin/frpc" ]] || fail "c3 binary removed while MainPID remains"
+unset FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC || true
+pass "CANONICAL_MAINPID_REMAINS_BLOCKS_UNINSTALL"
+
+# C4. admin frpc preserved while canonical uninstall succeeds
+C4="$WORK/canon-admin"
+mkdir -p "$C4/etc/systemd/system" "$C4/usr/local/bin" "$C4/etc/frp"
+write_admin_unit "$C4/etc/systemd/system/frpc.service"
+write_canonical_unit "$C4/etc/systemd/system/drlink-client.service"
+printf 'bin\n' >"$C4/usr/local/bin/frpc"
+printf '{"schema_version":1}\n' >"$C4/etc/frp/client-state.json"
+UNIT_C4="$WORK/units-c4"
+mkdir -p "$UNIT_C4"
+: >"$UNIT_C4/drlink-client.service.loaded"
+: >"$UNIT_C4/drlink-client.service.enabled"
+: >"$UNIT_C4/frpc.service.active"
+: >"$UNIT_C4/frpc.service.loaded"
+: >"$UNIT_C4/frpc.service.enabled"
+export FRP_UNINSTALL_TEST_ROOT="$C4"
+export FRP_MOCK_UNIT_DIR="$UNIT_C4"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORK/c4.log"
+: >"$WORK/c4.log"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC="$OWNS_NO"
+if ! "$ROOT/uninstall-client.sh" >"$WORK/c4.out" 2>"$WORK/c4.err"; then
+  fail "canonical+admin uninstall failed"
+fi
+[[ -f "$C4/etc/systemd/system/frpc.service" ]] || fail "c4 admin frpc removed"
+[[ ! -e "$C4/etc/systemd/system/drlink-client.service" ]] || fail "c4 canonical remains"
+grep -q 'non-product frpc.service' "$WORK/c4.err" || fail "c4 missing admin warn"
+if grep -E '^(stop|disable)( |$).*frpc' "$WORK/c4.log" >/dev/null 2>&1; then
+  fail "c4 touched admin frpc via systemctl"
+fi
+unset FRP_UNINSTALL_HOOK_SYSTEMCTL || true
+unset FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC || true
+pass "CANONICAL_UNINSTALL_PRESERVES_ADMIN_FRPC"
+
+pass "CANONICAL_UNINSTALL_FAIL_CLOSED"
 echo "LEGACY_FRPC_UNIT_MIGRATION_TEST=PASS"

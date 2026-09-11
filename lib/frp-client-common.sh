@@ -257,7 +257,7 @@ frp_bootstrap_allocator_ca() {
 
   if [[ -z "$expected" ]]; then
     echo "ERROR: allocator CA SHA256 fingerprint is required for first enrollment" >&2
-    echo "Set FRP_ALLOCATOR_CA_SHA256 from frp-create-client, or supply FRP_ALLOCATOR_CA_FILE." >&2
+    echo "Set FRP_ALLOCATOR_CA_SHA256 from sudo drlink enrollment create, or supply FRP_ALLOCATOR_CA_FILE." >&2
     return 1
   fi
   expected="$(frp_normalize_ca_fingerprint "$expected")" || {

@@ -313,9 +313,62 @@ frp_u_unit_active() {
   [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
 }
 
+# Historical frps.service must match product ExecStart/Description fingerprints.
+frp_u_legacy_server_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  case "$exec_line" in
+    */usr/local/bin/frps\ -c\ /etc/frp/frps.toml|*/usr/local/bin/frps\ -c\ /etc/frp/frps.toml\ *) ;;
+    /usr/local/bin/frps\ -c\ /etc/frp/frps.toml|/usr/local/bin/frps\ -c\ /etc/frp/frps.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Server'|'Data Relay Link Server'|'Data Relay Link Server (legacy unit name; use drlink-server)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+frp_u_should_manage_unit() {
+  local unit="$1"
+  local unit_file
+  if [[ "$unit" != "frps" ]]; then
+    return 0
+  fi
+  unit_file="$(frp_u_path /etc/systemd/system/frps.service)"
+  if [[ -f "$unit_file" ]] && frp_u_legacy_server_unit_is_product_owned "$unit_file"; then
+    return 0
+  fi
+  return 1
+}
+
+frp_u_rm_legacy_frps_unit_if_owned() {
+  local unit_file
+  unit_file="$(frp_u_path /etc/systemd/system/frps.service)"
+  [[ -f "$unit_file" ]] || return 0
+  if frp_u_legacy_server_unit_is_product_owned "$unit_file"; then
+    frp_u_rm_file "$unit_file"
+  else
+    echo "WARNING: leaving non-product frps.service in place at ${unit_file}" >&2
+  fi
+}
+
 frp_u_stop_product_units() {
   local unit
   for unit in drlink-frontend drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+    if ! frp_u_should_manage_unit "$unit"; then
+      continue
+    fi
     if ! frp_u_unit_exists "$unit" && ! frp_u_unit_active "$unit"; then
       continue
     fi
@@ -338,6 +391,9 @@ frp_u_stop_product_units() {
 frp_u_disable_product_units() {
   local unit enabled
   for unit in drlink-frontend drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+    if ! frp_u_should_manage_unit "$unit"; then
+      continue
+    fi
     if ! frp_u_unit_exists "$unit"; then
       continue
     fi
@@ -402,6 +458,8 @@ if py="$(frp_u_project_files_py)"; then
     fi
     frp_u_rm_file "$(frp_u_path "/${rel}")"
   done
+  # Legacy unit name is not in the managed manifest; retire only when product-owned.
+  frp_u_rm_legacy_frps_unit_if_owned
 else
   # Fallback when the helper is already gone (partial uninstall / exotic layout).
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-server.service)"
@@ -410,7 +468,7 @@ else
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-egress.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-frontend.service)"
   # Legacy unit names from pre-rename installs.
-  frp_u_rm_file "$(frp_u_path /etc/systemd/system/frps.service)"
+  frp_u_rm_legacy_frps_unit_if_owned
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-port-allocator.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-access-plugin.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/frp-egress-gateway.service)"

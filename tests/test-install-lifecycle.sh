@@ -957,7 +957,7 @@ if frp_client_main >"$WORKDIR/rerun.out" 2>"$WORKDIR/rerun.err"; then
   fail "existing client installer should refuse"
 fi
 grep -q 'already has a Data Relay Link client installed' "$WORKDIR/rerun.err" || fail "refuse message"
-grep -q 'sudo drlink update' "$WORKDIR/rerun.err" || fail "directs to update"
+grep -q 'sudo drlink update project' "$WORKDIR/rerun.err" || fail "directs to update"
 pass "CLIENT_REINSTALL_SAFE"
 
 # ---------------------------------------------------------------------------

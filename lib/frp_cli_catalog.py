@@ -1137,7 +1137,7 @@ COMMANDS = (
         args=(_arg("<path>", C_PATH, required=False),),
         tail="flags",
         internal=("create", "backup"),
-        aliases=(("create", "backup"), ("backup",)),
+        aliases=(("create", "backup"),),
     ),
     _cmd(
         ("backup", "restore"),

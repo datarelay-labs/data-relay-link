@@ -38,6 +38,8 @@ MAX_HEADERS = 100
 MAX_CONTENT_LENGTH = 64 * 1024 * 1024
 CONNECT_TIMEOUT = 10.0
 IDLE_TIMEOUT = 120.0
+HAPPY_EYEBALLS_DELAY = 0.25
+MAX_CONNECT_CANDIDATES = 8
 CLIENT_HEADER_TIMEOUT = 30.0
 CLIENT_BODY_TIMEOUT = 60.0
 CLIENT_HELLO_TIMEOUT = 10.0
@@ -50,7 +52,6 @@ DNS_TIMEOUT = 5.0
 DNS_POSITIVE_TTL = 30.0
 DNS_NEGATIVE_TTL = 10.0
 AUDIT_HOSTNAME_REDACTED = "<invalid-or-redacted>"
-HAPPY_EYEBALLS_DELAY = 0.25
 STREAM_BUF = 65536
 BODY_MEMORY_THRESHOLD = 256 * 1024  # larger bodies spool to disk before connect
 RELAY_BUF = 65536
@@ -301,6 +302,8 @@ def happy_eyeballs_connect(
             ordered.append(v6.pop(0))
         if v4:
             ordered.append(v4.pop(0))
+    # Cap fan-out after full DNS validation; do not weaken validate-all semantics.
+    ordered = ordered[:MAX_CONNECT_CANDIDATES]
 
     winner: dict = {}
     lock = threading.Lock()

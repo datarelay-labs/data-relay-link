@@ -554,6 +554,29 @@ if changed:
                 pass
 PY
   fi
+  # Re-apply egress readability after any 0600 rewrite of config/policy.
+  local eg_mod=""
+  if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_egress_control.py" ]]; then
+    eg_mod="$BASE_DIR/lib/frp_egress_control.py"
+  else
+    eg_mod="$(frp_server_fs /usr/local/lib/drlink/frp_egress_control.py)"
+  fi
+  if [[ -f "$eg_mod" ]]; then
+    python3 - "$eg_mod" "$cfg_file" "$egress_file" <<'PY' || true
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+cfg = Path(sys.argv[2])
+control = Path(sys.argv[3])
+mod.reapply_egress_runtime_permissions(
+    config_path=cfg if cfg.is_file() else None,
+    control_path=control if control.is_file() else None,
+    parents=True,
+)
+PY
+  fi
   if [[ -f "$unit_file" ]] && ! frp_server_skip_systemd && ! frp_server_test_mode; then
     frp_server_systemctl enable drlink-egress >/dev/null || return 1
   elif [[ -f "$unit_file" ]]; then

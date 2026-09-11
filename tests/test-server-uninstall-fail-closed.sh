@@ -128,7 +128,7 @@ TREE="$WORKDIR/inactive"
 seed "$TREE"
 UNIT="$WORKDIR/units-inactive"
 mkdir -p "$UNIT"
-: >"$UNIT/frps.loaded"
+: >"$UNIT/drlink-server.loaded"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
 export FRP_UNINSTALL_HOOK_SYSTEMCTL="$MOCK"
 export FRP_MOCK_UNIT_DIR="$UNIT"
@@ -152,8 +152,8 @@ TREE="$WORKDIR/stopfail"
 seed "$TREE"
 UNIT="$WORKDIR/units-stopfail"
 mkdir -p "$UNIT"
-: >"$UNIT/frps.active"
-: >"$UNIT/frps.loaded"
+: >"$UNIT/drlink-server.active"
+: >"$UNIT/drlink-server.loaded"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
 export FRP_MOCK_UNIT_DIR="$UNIT"
 export FRP_MOCK_STOP_FAIL=1
@@ -180,8 +180,8 @@ TREE="$WORKDIR/disablefail"
 seed "$TREE"
 UNIT="$WORKDIR/units-disable"
 mkdir -p "$UNIT"
-: >"$UNIT/frps.loaded"
-: >"$UNIT/frps.enabled"
+: >"$UNIT/drlink-server.loaded"
+: >"$UNIT/drlink-server.enabled"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
 export FRP_MOCK_UNIT_DIR="$UNIT"
 export FRP_MOCK_DISABLE_FAIL=1
@@ -231,8 +231,8 @@ TREE="$WORKDIR/purgefail"
 seed "$TREE"
 UNIT="$WORKDIR/units-purgefail"
 mkdir -p "$UNIT"
-: >"$UNIT/frps.active"
-: >"$UNIT/frps.loaded"
+: >"$UNIT/drlink-server.active"
+: >"$UNIT/drlink-server.loaded"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
 export FRP_MOCK_UNIT_DIR="$UNIT"
 export FRP_MOCK_STOP_FAIL=1
@@ -398,6 +398,46 @@ touch "$GO"
 wait "$UNINST_PID" || fail "uninstall after mutation contention: $(cat "$WORKDIR/mut-uninst.err")"
 unset FRP_UNINSTALL_LOCK_HOOK_READY FRP_UNINSTALL_LOCK_HOOK_GO FRP_UNINSTALL_LOCK_HOOK_WAIT
 pass "UNINSTALL_VS_CONTROL_STATE_MUTATION"
+
+# Unrelated admin frps.service must remain enabled/running/untouched.
+TREE="$WORKDIR/admin-frps"
+seed "$TREE"
+cat >"$TREE/etc/systemd/system/frps.service" <<'EOF'
+[Unit]
+Description=Company Custom FRP Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/custom/frps -c /opt/custom/frps.ini
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+UNIT="$WORKDIR/units-admin-frps"
+mkdir -p "$UNIT"
+: >"$UNIT/frps.active"
+: >"$UNIT/frps.loaded"
+: >"$UNIT/frps.enabled"
+: >"$UNIT/drlink-server.loaded"
+export FRP_UNINSTALL_TEST_ROOT="$TREE"
+export FRP_MOCK_UNIT_DIR="$UNIT"
+export FRP_MOCK_SYSTEMCTL_LOG="$WORKDIR/admin-frps.log"
+: >"$WORKDIR/admin-frps.log"
+export FRP_MOCK_STOP_FAIL=0
+export FRP_MOCK_DISABLE_FAIL=0
+if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/admin-frps.out" 2>"$WORKDIR/admin-frps.err"; then
+  fail "admin frps uninstall: $(cat "$WORKDIR/admin-frps.err")"
+fi
+[[ -f "$TREE/etc/systemd/system/frps.service" ]] || fail "admin frps.service removed"
+grep -q 'non-product frps.service' "$WORKDIR/admin-frps.err" || fail "missing admin frps warn"
+if grep -E '^(stop|disable)( |$).*frps' "$WORKDIR/admin-frps.log" >/dev/null 2>&1; then
+  fail "admin frps touched via systemctl"
+fi
+[[ -f "$UNIT/frps.active" ]] || fail "admin frps mock active cleared"
+[[ -f "$UNIT/frps.enabled" ]] || fail "admin frps mock enabled cleared"
+pass "UNRELATED_ADMIN_FRPS_PRESERVED"
 
 echo "SERVER_UNINSTALL_FAIL_CLOSED_TEST=PASS"
 echo "NEW_002_UNINSTALL_CONTROL_STATE_LOCK=PASS"

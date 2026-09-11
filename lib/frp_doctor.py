@@ -91,7 +91,7 @@ def _recovery_for_role(role, kind):
     if kind == 'frp':
         return 'sudo drlink update engine'
     if role in ('client', 'partial_client'):
-        return 'sudo drlink update'
+        return 'sudo drlink update project'
     if role in ('server', 'partial_server', 'dual'):
         return 'sudo drlink update project'
     return ''
@@ -105,7 +105,7 @@ def _recovery_for_operation(operation, role):
     if op in ('frp-update',):
         return 'sudo drlink update engine' + extra
     if op in ('client-update',):
-        return 'sudo drlink update' + extra
+        return 'sudo drlink update project' + extra
     if op == 'install':
         return 're-run the server installer; do not delete the pending marker' + extra
     if op == 'restore':
@@ -116,7 +116,7 @@ def _recovery_for_operation(operation, role):
         )
     if op == 'update':
         if role in ('client', 'partial_client', 'dual'):
-            return 'sudo drlink update' + extra
+            return 'sudo drlink update project' + extra
         return 'sudo drlink update engine' + extra
     return (
         'inspect the pending transaction marker (server-update-pending.json / '
@@ -3367,7 +3367,7 @@ def run_doctor(root, facts, fmt='human', quiet=False, verbose=False, skip_networ
         role_info['reason'],
         'server_signals=%s client_signals=%s' % (role_info['server_signals'], role_info['client_signals']),
         {
-            'partial_client': 'complete the client install or run sudo drlink update; do not re-enroll over a damaged identity',
+            'partial_client': 'complete the client install or run sudo drlink update project; do not re-enroll over a damaged identity',
             'partial_server': 're-run the server installer to complete missing components',
             'ambiguous': 'inspect leftover server and client files before taking further action',
             'uninstalled': 'install the server or client bootstrap first',

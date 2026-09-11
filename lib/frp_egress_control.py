@@ -255,7 +255,164 @@ def empty_egress_state() -> dict:
     return {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}}
 
 
+def _egress_uid_gid():
+    """Return (uid, gid) for drlink-egress when the account exists."""
+    try:
+        import pwd
+        import grp
+    except ImportError:
+        return None, None
+    try:
+        uid = pwd.getpwnam("drlink-egress").pw_uid
+    except KeyError:
+        return None, None
+    try:
+        gid = grp.getgrnam("drlink-egress").gr_gid
+    except KeyError:
+        gid = None
+    return uid, gid
+
+
+def _setfacl_user(path: Path, perms: str) -> bool:
+    """Apply a named-user ACL for drlink-egress. Returns True on success."""
+    try:
+        import subprocess
+    except ImportError:
+        return False
+    try:
+        proc = subprocess.run(
+            ["setfacl", "-m", "u:drlink-egress:%s" % perms, str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return proc.returncode == 0
+    except OSError:
+        return False
+
+
+def reapply_egress_runtime_permissions(
+    *,
+    config_path: Optional[Path] = None,
+    control_path: Optional[Path] = None,
+    conn_log_path: Optional[Path] = None,
+    parents: bool = True,
+) -> None:
+    """Re-grant drlink-egress the minimum read/write surface after inode replace.
+
+    Mirrors install-server.sh frp_server_ensure_sandbox_dirs file grants:
+    prefer named-user ACL; else root:drlink-egress with 0640/0660.
+    Never widens CA keys, FRP token, or enrollment secrets.
+    """
+    if os.geteuid() != 0:
+        return
+    uid, gid = _egress_uid_gid()
+    if uid is None:
+        return
+
+    etc_proj = Path("/etc/drlink")
+    var_lib = Path("/var/lib/drlink")
+    var_log = Path("/var/log/drlink")
+    run_dir = Path("/run/drlink")
+    test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT") or os.environ.get("FRP_SERVER_TEST_ROOT") or ""
+    if test_root:
+        root = Path(test_root)
+        etc_proj = root / "etc/drlink"
+        var_lib = root / "var/lib/drlink"
+        var_log = root / "var/log/drlink"
+        run_dir = root / "run/drlink"
+
+    if config_path is None:
+        config_path = etc_proj / "config.json"
+    else:
+        config_path = Path(config_path)
+    if control_path is None:
+        control_path = var_lib / "egress-control.json"
+    else:
+        control_path = Path(control_path)
+    if conn_log_path is None:
+        conn_log_path = var_log / "egress-conn.jsonl"
+    else:
+        conn_log_path = Path(conn_log_path)
+
+    parent_dirs = []
+    if parents:
+        for directory in (etc_proj, var_lib, var_log, run_dir):
+            if directory.is_dir():
+                parent_dirs.append(directory)
+
+    def _acl_grant_file(path: Path, perms: str) -> bool:
+        try:
+            os.chown(path, 0, 0)
+        except OSError:
+            pass
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return _setfacl_user(path, perms)
+
+    acl_ok = False
+    # Probe ACL support on a real path (parent or target file).
+    probe = None
+    if parent_dirs:
+        probe = parent_dirs[0]
+    elif control_path.is_file():
+        probe = control_path
+    elif config_path.is_file():
+        probe = config_path
+    elif conn_log_path.is_file():
+        probe = conn_log_path
+    if probe is not None and _setfacl_user(probe, "--x" if probe in parent_dirs else "r--"):
+        if probe in parent_dirs:
+            for directory in parent_dirs:
+                if directory is not probe:
+                    _setfacl_user(directory, "--x")
+        if config_path.is_file():
+            _acl_grant_file(config_path, "r--")
+        if control_path.is_file():
+            _acl_grant_file(control_path, "rw-")
+        if conn_log_path.parent.is_dir():
+            try:
+                conn_log_path.touch(exist_ok=True)
+            except OSError:
+                pass
+            if conn_log_path.is_file():
+                _acl_grant_file(conn_log_path, "rw-")
+        return
+
+    if gid is None:
+        return
+    # Group fallback when setfacl is unavailable.
+    for directory in parent_dirs:
+        try:
+            os.chown(directory, 0, gid)
+            os.chmod(directory, 0o710)
+        except OSError:
+            pass
+    if config_path.is_file():
+        try:
+            os.chown(config_path, 0, gid)
+            os.chmod(config_path, 0o640)
+        except OSError:
+            pass
+    if control_path.is_file():
+        try:
+            os.chown(control_path, 0, gid)
+            os.chmod(control_path, 0o660)
+        except OSError:
+            pass
+    if conn_log_path.parent.is_dir():
+        try:
+            conn_log_path.touch(exist_ok=True)
+            os.chown(conn_log_path, 0, gid)
+            os.chmod(conn_log_path, 0o660)
+        except OSError:
+            pass
+
+
 def atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
@@ -266,8 +423,14 @@ def atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
+        # Inode replacement drops ACLs/group mode. Re-grant egress access for
+        # the runtime policy file without widening secret material.
         try:
-            os.chmod(path.parent, 0o700)
+            if path.name == "egress-control.json" or str(path).endswith("/egress-control.json"):
+                reapply_egress_runtime_permissions(control_path=path, parents=True)
+            else:
+                # Do not chmod parent to 0700 — that clears group-x / ACL mask.
+                pass
         except OSError:
             pass
     finally:
@@ -1360,6 +1523,10 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
             if not path.exists():
                 path.write_text(line, encoding="utf-8")
                 os.chmod(path, 0o600)
+                try:
+                    reapply_egress_runtime_permissions(conn_log_path=path, parents=False)
+                except OSError:
+                    pass
             else:
                 with path.open("a", encoding="utf-8") as handle:
                     handle.write(line)
@@ -1382,6 +1549,10 @@ def _rotate_conn_log(path: Path) -> None:
                     os.replace(src, dst)
         path.write_text("", encoding="utf-8")
         os.chmod(path, 0o600)
+        try:
+            reapply_egress_runtime_permissions(conn_log_path=path, parents=False)
+        except OSError:
+            pass
     except OSError:
         return
 

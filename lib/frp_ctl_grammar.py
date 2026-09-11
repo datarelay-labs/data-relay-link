@@ -41,7 +41,7 @@ CATALOG = _load_catalog()
 
 # Roots that also exist as historical flat commands. When the second token is
 # not a canonical action, the old flat meaning wins so scripts keep working.
-FALLTHROUGH_ROOTS = frozenset({"client", "backup", "access", "egress", "update"})
+FALLTHROUGH_ROOTS = frozenset({"client", "access", "egress"})
 
 UNQUOTED_META = set("$`;|&><*?(){}[]")
 LEGACY_COMMANDS = {
@@ -1070,6 +1070,12 @@ def _canonical_result(tokens, role):
                 [name for name, _desc in rows],
                 tip="drlink help %s" % root,
             )
+        # Flag-leading forms (e.g. `update --check`) keep the verb-handler path.
+        if tokens[1].startswith("-"):
+            return None, None
+        # Compatibility synonym kept for scripts: `update frp` == `update engine`.
+        if root == "update" and tokens[1] == "frp":
+            return None, None
         return None, incomplete(
             "Unknown action %r for %s." % (tokens[1], root),
             ["%s <action> ..." % root],
@@ -1751,17 +1757,27 @@ def _match_release(tokens, role, names=None):
 def _match_update(tokens, role, names=None):
     client_role, server = _role_parts(role)
     if len(tokens) == 1:
-        return {"status": "ok", "action": "update_default"}
+        return incomplete(
+            "Missing update target.",
+            ["update project [--check]", "update engine [--check]"],
+            ["project", "engine"],
+            tip="drlink help update",
+        )
     resource = tokens[1]
-    if resource in ("project", "frp") or resource.startswith("-"):
+    if resource in ("project", "frp", "engine") or resource.startswith("-"):
         if resource.startswith("-"):
             return {"status": "ok", "action": "update_default", "passthrough": tokens[1:]}
         action = "update_project" if resource == "project" else "update_frp"
-        if resource == "frp" and not server and not client_role:
-            return {"status": "role", "need": "client or server", "command": "update frp"}
+        if resource in ("frp", "engine") and not server and not client_role:
+            return {"status": "role", "need": "client or server", "command": "update engine"}
         return {"status": "ok", "action": action, "passthrough": tokens[2:]}
-    avail = ["project", "frp"]
-    return incomplete("Unknown update target.", ["update project [--check]", "update frp [--check]"], avail)
+    avail = ["project", "engine"]
+    return incomplete(
+        "Unknown update target.",
+        ["update project [--check]", "update engine [--check]"],
+        avail,
+        tip="drlink help update",
+    )
 
 
 def _match_restore(tokens, role, names=None):
@@ -2417,8 +2433,8 @@ def _canonical_completion(tokens, trailing, role, names, services, local_service
         return []
     if verb == "update":
         if len(filled) == 1:
-            return _filter(["project", "frp", "--check"], prefix)
-        if filled[1] in ("project", "frp"):
+            return _filter(["project", "engine", "frp", "--check"], prefix)
+        if filled[1] in ("project", "frp", "engine"):
             return _filter(["--check"], prefix)
         return []
     if verb == "restore":

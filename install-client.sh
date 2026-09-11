@@ -313,7 +313,7 @@ print('Everyday CLI / status / doctor / update:')
 print('  sudo drlink')
 print('  sudo drlink status')
 print('  sudo drlink doctor')
-print('  sudo drlink update')
+print('  sudo drlink update project')
 print()
 print('Local client details:')
 print('  sudo drlink client info')
@@ -377,7 +377,7 @@ frp_client_service_start() {
 frp_client_existing_install_message() {
   if frp_zero_touch_active; then
     echo "This client is already installed." >&2
-    echo "Use sudo drlink update or sudo drlink manage." >&2
+    echo "Use sudo drlink update project or sudo drlink manage." >&2
     return 0
   fi
   echo "ERROR: this host already has a Data Relay Link client installed." >&2
@@ -386,7 +386,7 @@ frp_client_existing_install_message() {
   echo "require an Enrollment Code." >&2
   echo >&2
   echo "Upgrade in place with:" >&2
-  echo "  sudo drlink update" >&2
+  echo "  sudo drlink update project" >&2
   echo >&2
   echo "or, from the bootstrap bundle:" >&2
   echo "  curl -fsSL https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/v${PROJECT_VERSION}/dist/bootstrap-client.sh | sudo bash -s -- --upgrade" >&2
@@ -442,7 +442,7 @@ frp_client_main() {
   fi
   if frp_client_has_partial_install && [[ "$FRP_RESUME_PENDING" != "1" ]]; then
     echo "ERROR: a partial FRP client installation was found." >&2
-    echo "Repair it with: sudo drlink update" >&2
+    echo "Repair it with: sudo drlink update project" >&2
     echo "or uninstall locally and enroll again." >&2
     echo "Do not re-run first-install bootstrap on a partial client." >&2
     frp_emit_failure_class RECOVERY_REQUIRED
@@ -748,7 +748,7 @@ Usage: install-client.sh [--upgrade] [--source DIR] [--check]
   --source    Source tree for --upgrade (default: this installer tree)
   --check     With --upgrade, report versions without changing files
 
-An already-installed client is not re-enrolled. Use --upgrade / drlink update
+An already-installed client is not re-enrolled. Use --upgrade / drlink update project
 for software updates. An Enrollment Code is not required for a software update.
 EOF
 }

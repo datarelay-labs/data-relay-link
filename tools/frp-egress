@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -336,16 +337,45 @@ def cmd_test(cfg, args):
         protocol=protocol,
         method="CONNECT" if protocol == "https" else "GET",
     )
-    print("Decision     : %s" % decision.get("decision"))
+    policy = decision.get("decision")
+    print("Policy       : %s" % policy)
     print("Reason       : %s" % decision.get("reason"))
     print("Source IP    : %s" % decision.get("source_ip"))
     print("Hostname     : %s" % decision.get("hostname"))
     print("Port         : %s" % decision.get("port"))
-    print("Protocol     : %s" % decision.get("protocol"))
+    print("Protocol     : %s" % (decision.get("protocol") or protocol))
     print("Profile ID   : %s" % (decision.get("profile_id") or "-"))
     print("Profile Name : %s" % (decision.get("profile_name") or "-"))
-    if decision.get("decision") != EG.DECISION_ALLOW:
+    if policy != EG.DECISION_ALLOW:
+        print("DNS          : skipped (policy deny)")
+        print("Resolved     : -")
+        print("Final        : DENY")
         raise SystemExit(2)
+
+    try:
+        results = socket.getaddrinfo(args.host, None, type=socket.SOCK_STREAM)
+        seen = set()
+        raw = []
+        for _family, _type, _proto, _canon, sockaddr in results:
+            ip = sockaddr[0]
+            if ip in seen:
+                continue
+            seen.add(ip)
+            raw.append(ip)
+        print("DNS          : ok (%d address(es))" % len(raw))
+        validated = EG.validate_resolved_addresses(raw)
+        print("Resolved     : %s" % (", ".join(validated) if validated else "-"))
+        print("Final        : ALLOW")
+    except EG.EgressError as exc:
+        print("DNS          : deny (%s)" % exc)
+        print("Resolved     : -")
+        print("Final        : DENY")
+        raise SystemExit(2) from None
+    except OSError as exc:
+        print("DNS          : fail (%s)" % exc)
+        print("Resolved     : -")
+        print("Final        : DENY")
+        raise SystemExit(2) from None
 
 
 def cmd_export(cfg, args):

@@ -224,6 +224,77 @@ def _looks_secret(grammar, line):
         return False
 
 
+_MUTATING_VERBS = frozenset(
+    {
+        "create",
+        "delete",
+        "set",
+        "add",
+        "remove",
+        "rename",
+        "release",
+        "revoke",
+        "enable",
+        "disable",
+        "purge",
+        "import",
+    }
+)
+_MUTATING_ROOTS = frozenset(
+    {
+        "group",
+        "client",
+        "service",
+        "service-profile",
+        "egress",
+        "enrollment",
+        "access",
+    }
+)
+
+
+def _should_refresh_inventory(tokens):
+    if not tokens:
+        return False
+    root = tokens[0]
+    if root in _MUTATING_VERBS or root in _MUTATING_ROOTS:
+        return True
+    return False
+
+
+def _refresh_editor_inventory(editor, frpctl_bin):
+    """Reload completion inventory after a successful mutating command."""
+    env = os.environ.copy()
+    env.pop("FRP_CTL_GRAMMAR_PAYLOAD", None)
+    env.pop("FRP_CTL_SOURCED", None)
+    try:
+        proc = subprocess.run(
+            [frpctl_bin, "--print-grammar-payload"],
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+    except OSError:
+        return
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return
+    try:
+        payload = json.loads(proc.stdout)
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    editor.payload = payload
+    editor.role = payload.get("role") or editor.role
+    editor.names = payload.get("names") or []
+    editor.clients = payload.get("clients") or []
+    editor.services = payload.get("services") or {}
+    editor.local_services = payload.get("local_services") or []
+    editor.groups = payload.get("groups") or []
+
+
 def run_repl(frpctl_bin, payload):
     grammar = _load_grammar()
     editor = LineEditor(payload)
@@ -296,6 +367,8 @@ def run_repl(frpctl_bin, payload):
                 "ERROR: could not run the Data Relay Link CLI backend: %s\n" % exc
             )
             continue
+        if proc.returncode == 0 and _should_refresh_inventory(tokens):
+            _refresh_editor_inventory(editor, frpctl_bin)
         if proc.returncode not in (0, 130) and tokens[0] not in ("?", "help"):
             print()
             print("Command failed with exit code %s." % proc.returncode)

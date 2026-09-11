@@ -50,8 +50,10 @@ def _load_module(name: str, rel: str):
 ACL = _load_module("frp_access_control", "frp_access_control.py")
 try:
     _BOUNDED = _load_module("frp_bounded_server", "frp_bounded_server.py")
-except SystemExit:
+    _BOUNDED_LOAD_ERROR = None
+except SystemExit as exc:
     _BOUNDED = None
+    _BOUNDED_LOAD_ERROR = str(exc) or "ERROR: missing frp_bounded_server.py"
 
 
 def _load_registry_validator():
@@ -315,34 +317,33 @@ def main():
 
     cache = PolicyCache(config_path)
     handler = make_handler(cache, plugin_path)
-    if _BOUNDED is not None:
-        def _reject(request, _client_address):
-            try:
-                body = b'{"reject":true,"reject_reason":"server busy","unchange":true}'
-                response = (
-                    b"HTTP/1.1 503 Service Unavailable\r\n"
-                    b"Content-Type: application/json\r\n"
-                    b"Content-Length: %d\r\n"
-                    b"Connection: close\r\n\r\n"
-                    % len(body)
-                    + body
-                )
-                request.sendall(response)
-            except OSError:
-                pass
+    if _BOUNDED is None:
+        raise SystemExit(
+            _BOUNDED_LOAD_ERROR or "ERROR: missing frp_bounded_server.py; refusing unbounded server"
+        )
 
-        class AccessServer(_BOUNDED.BoundedThreadingMixIn, HTTPServer):
-            max_concurrent = ACCESS_MAX_CONCURRENT
-            request_timeout = 30.0
-            daemon_threads = True
-            reject_callback = staticmethod(_reject)
+    def _reject(request, _client_address):
+        try:
+            body = b'{"reject":true,"reject_reason":"server busy","unchange":true}'
+            response = (
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: %d\r\n"
+                b"Connection: close\r\n\r\n"
+                % len(body)
+                + body
+            )
+            request.sendall(response)
+        except OSError:
+            pass
 
-        server = AccessServer((host, port), handler)
-    else:
-        class AccessServer(ThreadingMixIn, HTTPServer):
-            daemon_threads = True
+    class AccessServer(_BOUNDED.BoundedThreadingMixIn, HTTPServer):
+        max_concurrent = ACCESS_MAX_CONCURRENT
+        request_timeout = 30.0
+        daemon_threads = True
+        reject_callback = staticmethod(_reject)
 
-        server = AccessServer((host, port), handler)
+    server = AccessServer((host, port), handler)
     print("drlink-access listening on http://%s:%s%s" % (host, port, plugin_path), flush=True)
     try:
         server.serve_forever(poll_interval=0.5)

@@ -88,6 +88,7 @@ python3 tests/test-access-control.py
 ./tests/test-access-control.sh
 python3 tests/test-egress-control.py
 python3 tests/test-egress-create-safe-default.py
+python3 tests/test-egress-runtime-permissions.py
 ./tests/test-egress-control.sh
 ./tests/test-authoritative-state-missing.sh
 ./tests/test-target-health.sh

@@ -140,7 +140,9 @@ frp_u_stop_owned_frpc() {
 }
 
 SKIP_SYSTEMD=0
-if [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" || -n "${FRP_CLIENT_TEST_ROOT:-}" || "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+if [[ "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+  SKIP_SYSTEMD=1
+elif [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}${FRP_CLIENT_TEST_ROOT:-}" && -z "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
   SKIP_SYSTEMD=1
 fi
 
@@ -183,19 +185,29 @@ frp_u_legacy_systemctl() {
   systemctl "$@"
 }
 
-frp_u_legacy_unit_is_active() {
-  local st
-  st="$(frp_u_legacy_systemctl is-active frpc.service 2>/dev/null || true)"
+frp_u_use_systemd() {
+  [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin \
+    && { [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] || command -v systemctl >/dev/null 2>&1; }
+}
+
+frp_u_unit_is_active() {
+  local unit="$1" st
+  st="$(frp_u_legacy_systemctl is-active "$unit" 2>/dev/null || true)"
   [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
 }
 
-frp_u_legacy_unit_owns_product_frpc() {
+frp_u_legacy_unit_is_active() {
+  frp_u_unit_is_active frpc.service
+}
+
+frp_u_unit_owns_product_frpc() {
+  local unit="$1"
   local main_pid="" exe=""
   if [[ -n "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC:-}" ]]; then
     "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC}"
     return $?
   fi
-  main_pid="$(frp_u_legacy_systemctl show -p MainPID --value frpc.service 2>/dev/null || true)"
+  main_pid="$(frp_u_legacy_systemctl show -p MainPID --value "$unit" 2>/dev/null || true)"
   [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   if ! kill -0 "$main_pid" 2>/dev/null; then
     return 1
@@ -210,63 +222,83 @@ frp_u_legacy_unit_owns_product_frpc() {
   return 0
 }
 
-frp_u_retire_legacy_client_unit() {
-  local unit attempt max_attempts=3 enabled=""
-  unit="$(frp_u_path /etc/systemd/system/frpc.service)"
-  [[ -f "$unit" ]] || return 0
-  if ! frp_u_legacy_client_unit_is_product_owned "$unit"; then
-    echo "WARNING: leaving non-product frpc.service in place at ${unit}" >&2
-    return 0
-  fi
-  if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin \
-    && { [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] || command -v systemctl >/dev/null 2>&1; }; then
-    if frp_u_legacy_unit_is_active || frp_u_legacy_unit_owns_product_frpc; then
+frp_u_legacy_unit_owns_product_frpc() {
+  frp_u_unit_owns_product_frpc frpc.service
+}
+
+frp_u_retire_unit_fail_closed() {
+  local unit="$1"
+  local unit_file="$2"
+  local label="$3"
+  local class_prefix="${4:-CLIENT_UNIT}"
+  local attempt max_attempts=3 enabled=""
+  [[ -f "$unit_file" ]] || return 0
+  if frp_u_use_systemd; then
+    if frp_u_unit_is_active "$unit" || frp_u_unit_owns_product_frpc "$unit"; then
       attempt=1
       while (( attempt <= max_attempts )); do
-        if frp_u_legacy_systemctl stop frpc.service >/dev/null 2>&1; then
+        if frp_u_legacy_systemctl stop "$unit" >/dev/null 2>&1; then
           break
         fi
         if (( attempt == max_attempts )); then
-          echo "ERROR: failed to stop product-owned legacy frpc.service" >&2
-          echo "FAILURE_CLASS=LEGACY_UNIT_STOP_FAILED" >&2
+          echo "ERROR: failed to stop ${label}" >&2
+          echo "FAILURE_CLASS=${class_prefix}_STOP_FAILED" >&2
           return 1
         fi
         sleep 0.2
         attempt=$((attempt + 1))
       done
-      if frp_u_legacy_unit_is_active; then
-        echo "ERROR: product-owned legacy frpc.service remains active after stop" >&2
-        echo "FAILURE_CLASS=LEGACY_UNIT_STILL_ACTIVE" >&2
+      if frp_u_unit_is_active "$unit"; then
+        echo "ERROR: ${label} remains active after stop" >&2
+        echo "FAILURE_CLASS=${class_prefix}_STILL_ACTIVE" >&2
         return 1
       fi
-      if frp_u_legacy_unit_owns_product_frpc; then
-        echo "ERROR: product-owned legacy frpc.service MainPID still owns frpc after stop" >&2
-        echo "FAILURE_CLASS=LEGACY_UNIT_PROCESS_REMAINS" >&2
+      if frp_u_unit_owns_product_frpc "$unit"; then
+        echo "ERROR: ${label} MainPID still owns frpc after stop" >&2
+        echo "FAILURE_CLASS=${class_prefix}_PROCESS_REMAINS" >&2
         return 1
       fi
     fi
-    if ! frp_u_legacy_systemctl disable frpc.service >/dev/null 2>&1; then
-      enabled="$(frp_u_legacy_systemctl is-enabled frpc.service 2>/dev/null || true)"
+    if ! frp_u_legacy_systemctl disable "$unit" >/dev/null 2>&1; then
+      enabled="$(frp_u_legacy_systemctl is-enabled "$unit" 2>/dev/null || true)"
       case "$enabled" in
         enabled|enabled-runtime|linked|linked-runtime)
-          echo "ERROR: failed to disable product-owned legacy frpc.service" >&2
-          echo "FAILURE_CLASS=LEGACY_UNIT_DISABLE_FAILED" >&2
+          echo "ERROR: failed to disable ${label}" >&2
+          echo "FAILURE_CLASS=${class_prefix}_DISABLE_FAILED" >&2
           return 1
           ;;
       esac
     fi
   fi
-  frp_u_rm_file "$unit"
-  if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin \
-    && { [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] || command -v systemctl >/dev/null 2>&1; }; then
+  frp_u_rm_file "$unit_file"
+  if frp_u_use_systemd; then
     if ! frp_u_legacy_systemctl daemon-reload >/dev/null 2>&1; then
-      echo "ERROR: daemon-reload failed after removing legacy frpc.service" >&2
-      echo "FAILURE_CLASS=LEGACY_UNIT_RELOAD_FAILED" >&2
+      echo "ERROR: daemon-reload failed after removing ${label}" >&2
+      echo "FAILURE_CLASS=${class_prefix}_RELOAD_FAILED" >&2
       return 1
     fi
-    frp_u_legacy_systemctl reset-failed frpc.service >/dev/null 2>&1 || true
+    frp_u_legacy_systemctl reset-failed "$unit" >/dev/null 2>&1 || true
   fi
   return 0
+}
+
+frp_u_retire_canonical_client_unit() {
+  local unit unit_file
+  unit=drlink-client.service
+  unit_file="$(frp_u_path /etc/systemd/system/drlink-client.service)"
+  frp_u_retire_unit_fail_closed "$unit" "$unit_file" "product-owned drlink-client.service" "CLIENT_UNIT"
+}
+
+frp_u_retire_legacy_client_unit() {
+  local unit unit_file
+  unit=frpc.service
+  unit_file="$(frp_u_path /etc/systemd/system/frpc.service)"
+  [[ -f "$unit_file" ]] || return 0
+  if ! frp_u_legacy_client_unit_is_product_owned "$unit_file"; then
+    echo "WARNING: leaving non-product frpc.service in place at ${unit_file}" >&2
+    return 0
+  fi
+  frp_u_retire_unit_fail_closed "$unit" "$unit_file" "product-owned legacy frpc.service" "LEGACY_UNIT"
 }
 
 if [[ "$SKIP_SYSTEMD" != "1" ]]; then
@@ -277,10 +309,11 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
       exit 1
     fi
     frp_macos_launchd_bootout
-  elif command -v systemctl >/dev/null 2>&1; then
-    systemctl stop drlink-client 2>/dev/null || true
-    systemctl disable drlink-client 2>/dev/null || true
   fi
+fi
+# Canonical supervisor must stop fail-closed before binary/config removal.
+if ! frp_u_retire_canonical_client_unit; then
+  exit 1
 fi
 # Historical product supervisor must not survive uninstall and respawn on reboot.
 if ! frp_u_retire_legacy_client_unit; then
@@ -288,11 +321,6 @@ if ! frp_u_retire_legacy_client_unit; then
 fi
 frp_u_stop_owned_frpc
 
-frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-client.service)"
-if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1 && ! frp_u_is_darwin; then
-  systemctl daemon-reload 2>/dev/null || true
-  systemctl reset-failed drlink-client.service 2>/dev/null || true
-fi
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
@@ -390,9 +418,13 @@ if [[ ! -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
   rmdir "$(frp_u_path /etc/drlink)" 2>/dev/null || true
 fi
 
-if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin && command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload
-  systemctl reset-failed 2>/dev/null || true
+if frp_u_use_systemd; then
+  if ! frp_u_legacy_systemctl daemon-reload >/dev/null 2>&1; then
+    echo "ERROR: daemon-reload failed after client uninstall" >&2
+    echo "FAILURE_CLASS=CLIENT_UNIT_RELOAD_FAILED" >&2
+    exit 1
+  fi
+  frp_u_legacy_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
 echo 'FRP client removed locally. The central port reservation is intentionally preserved.'

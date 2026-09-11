@@ -55,12 +55,21 @@ EGRESS="$TMP/usr/local/sbin/frp-egress"
 ! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" enable ubuntu-update
 "$EGRESS" show ubuntu-update | grep -q security.ubuntu.com
-"$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
+"$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https | grep -q 'Final        : ALLOW'
 ! "$EGRESS" test 203.0.113.10 evil.example.com 443 --protocol https
 ! "$EGRESS" test 198.51.100.1 security.ubuntu.com 443 --protocol https
 "$EGRESS" disable ubuntu-update
-! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
+out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https 2>&1 || true)"
+grep -q 'Policy       : DENY' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Final        : DENY' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Protocol     : https' <<<"$out" || { echo "$out"; exit 1; }
 "$EGRESS" enable ubuntu-update
+# DNS unsafe parity: ALLOW policy + private resolution must Final DENY.
+"$EGRESS" add-destination ubuntu-update localhost 443 --protocol https
+out="$("$EGRESS" test 203.0.113.10 localhost 443 --protocol https 2>&1 || true)"
+grep -q 'Policy       : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Final        : DENY' <<<"$out" || { echo "$out"; exit 1; }
+"$EGRESS" remove-destination ubuntu-update localhost:443
 "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" remove-destination ubuntu-update archive.ubuntu.com:443
 "$EGRESS" remove-source ubuntu-update 203.0.113.10/32

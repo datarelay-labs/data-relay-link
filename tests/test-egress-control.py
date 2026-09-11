@@ -1550,6 +1550,27 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         self.assertEqual(decision.get("decision"), EG.DECISION_ALLOW)
         sock.close()
 
+    def test_happy_eyeballs_caps_connect_candidates(self):
+        attempted = []
+
+        def connect_fn(ip, port, hostname, timeout):
+            del port, hostname, timeout
+            attempted.append(ip)
+            raise OSError("refused")
+
+        ips = ["2001:db8::%d" % i for i in range(6)] + ["203.0.113.%d" % i for i in range(6)]
+        with self.assertRaises(OSError):
+            self.GW.happy_eyeballs_connect(
+                connect_fn,
+                ips,
+                443,
+                "many.test",
+                total_timeout=0.5,
+                stagger=0.0,
+            )
+        self.assertEqual(len(attempted), self.GW.MAX_CONNECT_CANDIDATES)
+        self.assertEqual(self.GW.MAX_CONNECT_CANDIDATES, 8)
+
     def test_http_body_streaming_large(self):
         # Above BODY_MEMORY_THRESHOLD → disk spool; RSS must not hold full body.
         size = 2 * 1024 * 1024

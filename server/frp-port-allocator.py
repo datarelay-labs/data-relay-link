@@ -21,7 +21,6 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from socketserver import ThreadingMixIn
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -132,6 +131,9 @@ def _load_bounded():
     return None
 
 BOUNDED = _load_bounded()
+BOUNDED_LOAD_ERROR = (
+    None if BOUNDED is not None else "ERROR: missing frp_bounded_server.py; refusing unbounded server"
+)
 
 
 
@@ -2436,28 +2438,25 @@ def main():
         raise SystemExit('ERROR: allocator_listen_port is not configured')
     context = allocator_ssl_context(allocator.cfg)
     handler = make_handler(allocator)
-    if BOUNDED is not None:
-        def _reject(request, _addr):
-            try:
-                body = b'{"ok":false,"error":"server busy"}'
-                request.sendall(
-                    b"HTTP/1.1 503 Service Unavailable\r\n"
-                    b"Content-Type: application/json\r\n"
-                    b"Content-Length: %d\r\n"
-                    b"Connection: close\r\n\r\n" % len(body) + body
-                )
-            except OSError:
-                pass
-        class AllocatorServer(BOUNDED.BoundedThreadingMixIn, HTTPServer):
-            max_concurrent = ALLOCATOR_MAX_CONCURRENT
-            request_timeout = float(ALLOCATOR_REQUEST_TIMEOUT_SEC)
-            daemon_threads = True
-            reject_callback = staticmethod(_reject)
-        server = AllocatorServer((host, port), handler)
-    else:
-        class AllocatorServer(ThreadingMixIn, HTTPServer):
-            daemon_threads = True
-        server = AllocatorServer((host, port), handler)
+    if BOUNDED is None:
+        raise SystemExit(BOUNDED_LOAD_ERROR)
+    def _reject(request, _addr):
+        try:
+            body = b'{"ok":false,"error":"server busy"}'
+            request.sendall(
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: %d\r\n"
+                b"Connection: close\r\n\r\n" % len(body) + body
+            )
+        except OSError:
+            pass
+    class AllocatorServer(BOUNDED.BoundedThreadingMixIn, HTTPServer):
+        max_concurrent = ALLOCATOR_MAX_CONCURRENT
+        request_timeout = float(ALLOCATOR_REQUEST_TIMEOUT_SEC)
+        daemon_threads = True
+        reject_callback = staticmethod(_reject)
+    server = AllocatorServer((host, port), handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     print(f'FRP allocator listening on https://{host}:{port}', flush=True)
     server.serve_forever()
