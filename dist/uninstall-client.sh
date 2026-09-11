@@ -174,22 +174,97 @@ frp_u_legacy_client_unit_is_product_owned() {
   esac
 }
 
+frp_u_legacy_systemctl() {
+  if [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
+    "${FRP_UNINSTALL_HOOK_SYSTEMCTL}" "$@"
+    return $?
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl "$@"
+}
+
+frp_u_legacy_unit_is_active() {
+  local st
+  st="$(frp_u_legacy_systemctl is-active frpc.service 2>/dev/null || true)"
+  [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
+}
+
+frp_u_legacy_unit_owns_product_frpc() {
+  local main_pid="" exe=""
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC:-}" ]]; then
+    "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC}"
+    return $?
+  fi
+  main_pid="$(frp_u_legacy_systemctl show -p MainPID --value frpc.service 2>/dev/null || true)"
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! kill -0 "$main_pid" 2>/dev/null; then
+    return 1
+  fi
+  if [[ -e "/proc/${main_pid}/exe" ]]; then
+    exe="$(readlink -f "/proc/${main_pid}/exe" 2>/dev/null || true)"
+    case "$exe" in
+      /usr/local/bin/frpc|/usr/local/bin/frpc\ \(deleted\)) return 0 ;;
+    esac
+    return 1
+  fi
+  return 0
+}
+
 frp_u_retire_legacy_client_unit() {
-  local unit
+  local unit attempt max_attempts=3 enabled=""
   unit="$(frp_u_path /etc/systemd/system/frpc.service)"
   [[ -f "$unit" ]] || return 0
   if ! frp_u_legacy_client_unit_is_product_owned "$unit"; then
     echo "WARNING: leaving non-product frpc.service in place at ${unit}" >&2
     return 0
   fi
-  if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1 && ! frp_u_is_darwin; then
-    systemctl stop frpc.service 2>/dev/null || true
-    systemctl disable frpc.service 2>/dev/null || true
+  if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin \
+    && { [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] || command -v systemctl >/dev/null 2>&1; }; then
+    if frp_u_legacy_unit_is_active || frp_u_legacy_unit_owns_product_frpc; then
+      attempt=1
+      while (( attempt <= max_attempts )); do
+        if frp_u_legacy_systemctl stop frpc.service >/dev/null 2>&1; then
+          break
+        fi
+        if (( attempt == max_attempts )); then
+          echo "ERROR: failed to stop product-owned legacy frpc.service" >&2
+          echo "FAILURE_CLASS=LEGACY_UNIT_STOP_FAILED" >&2
+          return 1
+        fi
+        sleep 0.2
+        attempt=$((attempt + 1))
+      done
+      if frp_u_legacy_unit_is_active; then
+        echo "ERROR: product-owned legacy frpc.service remains active after stop" >&2
+        echo "FAILURE_CLASS=LEGACY_UNIT_STILL_ACTIVE" >&2
+        return 1
+      fi
+      if frp_u_legacy_unit_owns_product_frpc; then
+        echo "ERROR: product-owned legacy frpc.service MainPID still owns frpc after stop" >&2
+        echo "FAILURE_CLASS=LEGACY_UNIT_PROCESS_REMAINS" >&2
+        return 1
+      fi
+    fi
+    if ! frp_u_legacy_systemctl disable frpc.service >/dev/null 2>&1; then
+      enabled="$(frp_u_legacy_systemctl is-enabled frpc.service 2>/dev/null || true)"
+      case "$enabled" in
+        enabled|enabled-runtime|linked|linked-runtime)
+          echo "ERROR: failed to disable product-owned legacy frpc.service" >&2
+          echo "FAILURE_CLASS=LEGACY_UNIT_DISABLE_FAILED" >&2
+          return 1
+          ;;
+      esac
+    fi
   fi
   frp_u_rm_file "$unit"
-  if [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl >/dev/null 2>&1 && ! frp_u_is_darwin; then
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl reset-failed frpc.service 2>/dev/null || true
+  if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin \
+    && { [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] || command -v systemctl >/dev/null 2>&1; }; then
+    if ! frp_u_legacy_systemctl daemon-reload >/dev/null 2>&1; then
+      echo "ERROR: daemon-reload failed after removing legacy frpc.service" >&2
+      echo "FAILURE_CLASS=LEGACY_UNIT_RELOAD_FAILED" >&2
+      return 1
+    fi
+    frp_u_legacy_systemctl reset-failed frpc.service >/dev/null 2>&1 || true
   fi
   return 0
 }
@@ -208,7 +283,9 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
   fi
 fi
 # Historical product supervisor must not survive uninstall and respawn on reboot.
-frp_u_retire_legacy_client_unit
+if ! frp_u_retire_legacy_client_unit; then
+  exit 1
+fi
 frp_u_stop_owned_frpc
 
 frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-client.service)"
