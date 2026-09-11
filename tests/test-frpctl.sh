@@ -399,9 +399,8 @@ unset FRP_CTL_DRY_RUN
 # --- Invalid argument recovery
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/badargs.out" client "release-service dp-os-upgrade" clients exit || fail "bad args"
-grep -q 'ERROR: usage: client <name>' "$WORKDIR/badargs.out" || fail "client usage"
-grep -q 'ERROR: usage: release-service <client> <service-id>' "$WORKDIR/badargs.out" || fail "release-service usage"
+run_repl "$SERVER" "$WORKDIR/badargs.out" client release-service clients exit || fail "bad args"
+grep -qi 'Unknown action' "$WORKDIR/badargs.out" || fail "client bad action must not fall through"
 grep -q 'DISPATCH frp-clients' "$WORKDIR/badargs.out" || fail "clients after bad args"
 [[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 4 ]] || fail "bad args stayed in cli"
 pass "FRPCTL_REPL_INVALID_ARGUMENT_RECOVERY"

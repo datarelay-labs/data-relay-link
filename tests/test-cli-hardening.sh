@@ -104,6 +104,32 @@ PY
 pass TAB_PROMPT_RESTORE_SAFE
 pass TAB_NO_REPEAT_SPAM
 
+python3 - "$ROOT" <<'PY' || fail "client bad action canonical guard"
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'lib'))
+import frp_ctl_grammar as g
+result = g.match(['client', 'release-service'], 'server', names=['24cd7856'])
+assert result.get('status') == 'incomplete', result
+assert 'Unknown action' in result.get('message', ''), result
+legacy = g.match(['client', '24cd7856'], 'server', names=['24cd7856'])
+assert legacy.get('status') == 'legacy', legacy
+PY
+pass CLIENT_BAD_ACTION_NO_FALLTHROUGH
+
+python3 - "$ROOT" <<'PY' || fail "repl refresh inventory triggers"
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'lib'))
+import frp_ctl_repl as repl
+assert repl._should_refresh_inventory(['restore', 'backup', '/tmp/x.tar'])
+assert repl._should_refresh_inventory(['update', 'project'])
+assert repl._should_refresh_inventory(['backup', 'create'])
+assert not repl._should_refresh_inventory(['status'])
+assert not repl._should_refresh_inventory(['help'])
+PY
+pass REPL_REFRESH_AFTER_MUTATIONS
+
 before_client="$(sha256sum "$ROOT/dist/bootstrap-client.sh" | awk '{print $1}')"
 before_server="$(sha256sum "$ROOT/dist/bootstrap-server.sh" | awk '{print $1}')"
 "$ROOT/scripts/build-bundles.sh" >/dev/null

@@ -27,7 +27,25 @@ def load_creg():
     raise SystemExit('ERROR: missing frp_client_registry.py')
 
 
+def load_acl():
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / 'lib' / 'frp_access_control.py',
+        Path('/usr/local/lib/drlink/frp_access_control.py'),
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_access_control.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_access_control', str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
 CREG = load_creg()
+ACL = load_acl()
 
 
 parser = argparse.ArgumentParser(description='List registered clients')
@@ -77,15 +95,20 @@ def require_v2(state):
             )
 
 
-def client_state(services, snapshot):
-    states = []
-    for _sid, svc in services:
-        states.append(CREG.passive_port_state(svc.get('remote_port'), snapshot))
-    if 'online' in states:
-        return 'online'
-    if states and all(state == 'offline' for state in states):
-        return 'offline'
-    return 'unknown'
+def access_summary(access_state, mid, client):
+    if ACL is None:
+        return '-'
+    public = 0
+    restricted = 0
+    for sid, _svc in CREG.enabled_services(client):
+        binding = ACL.get_service_binding(access_state, mid, sid)
+        if binding.get('access_mode') == ACL.MODE_ALLOWLIST:
+            restricted += 1
+        else:
+            public += 1
+    if public == 0 and restricted == 0:
+        return '0 PUBLIC / 0 RESTRICTED'
+    return '%d PUBLIC / %d RESTRICTED' % (public, restricted)
 
 
 cfg = json.loads(CFG.read_text())
@@ -101,6 +124,15 @@ except (OSError, json.JSONDecodeError) as exc:
     print('ERROR: unable to read registry.json: %s' % exc, file=sys.stderr)
     raise SystemExit(1)
 require_v2(state)
+
+access_state = {}
+if ACL is not None:
+    try:
+        access_path = ACL.access_control_path(cfg)
+        if access_path.exists():
+            access_state = ACL.load_access_state(cfg=cfg)
+    except Exception:
+        access_state = {}
 
 public_ip = CREG.sanitize_display(cfg.get('public_ip') or cfg.get('public_host') or '', 253)
 public_hostname = CREG.sanitize_display(cfg.get('public_hostname') or '', 253)
@@ -134,9 +166,9 @@ print('==================')
 print()
 print(
     f'{"#":<3} {"CLIENT ID":<10} {"LABEL":<12} {"HOSTNAME":<14} '
-    f'{"SERVICES":<8} {"STATE":<8} {"MGMT":<10} SSH'
+    f'{"SERVICES":<8} {"ACCESS":<22} {"STATE":<10} {"MGMT":<10} SSH'
 )
-print('-' * 104)
+print('-' * 128)
 
 if not clients:
     print('(none)')
@@ -147,7 +179,8 @@ for idx, (mid, client) in enumerate(clients, start=1):
     label = CREG.sanitize_display(client.get('label') or '-', 12)
     hostname = CREG.sanitize_display(client.get('hostname') or '-', 14)
     short_id = CREG.sanitize_display(CREG.unique_short_id(mid, all_mids), 10)
-    state_txt = client_state(services, listener_snapshot)
+    state_txt = CREG.inventory_online_status(client, listener_snapshot)
+    access_txt = CREG.sanitize_display(access_summary(access_state, mid, client), 22)
     mgmt = CREG.mgmt_status(client)
     ssh_txt = '-'
     _sid, ssh = CREG.first_ssh_service(client)
@@ -161,7 +194,7 @@ for idx, (mid, client) in enumerate(clients, start=1):
         ssh_txt = CREG.sanitize_display(ssh_txt, 48)
     print(
         f'{idx:<3} {short_id:<10} {label:<12} {hostname:<14} '
-        f'{str(len(services)):<8} {state_txt:<8} {mgmt:<10} {ssh_txt}'
+        f'{str(len(services)):<8} {access_txt:<22} {state_txt:<10} {mgmt:<10} {ssh_txt}'
     )
 
 print()

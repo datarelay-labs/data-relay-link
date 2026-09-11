@@ -130,7 +130,7 @@ def access_column(service_id):
     try:
         access_path = ACL.access_control_path(cfg)
         if not access_path.exists():
-            return 'ERROR'
+            return 'PUBLIC'
         access_state = ACL.require_access_state(path=access_path, cfg=cfg)
         binding = ACL.get_service_binding(access_state, mid, service_id)
         if binding.get('access_mode') != ACL.MODE_ALLOWLIST:
@@ -149,6 +149,7 @@ def print_services():
     if not services:
         print('(no services)')
         return
+    public_services = []
     for sid, svc in sorted(
         services.items(),
         key=lambda kv: (kv[1].get('remote_port') or 0, kv[0]) if isinstance(kv[1], dict) else (0, kv[0]),
@@ -165,9 +166,14 @@ def print_services():
         sid_txt = CREG.sanitize_display(sid, 10)
         target = '%s:%s' % (local_ip, local_port)
         public = '%s:%s' % (access_host or 'host', remote_port)
+        access = access_column(sid)
         print('%-10s %-6s %-14s %-22s %-14s %s' % (
-            sid_txt, protocol, target[:14], public[:22], access_column(sid)[:14], enabled_flag,
+            sid_txt, protocol, target[:14], public[:22], access[:14], enabled_flag,
         ))
+        if access == 'PUBLIC':
+            public_services.append(sid)
+    if public_services and ACL is not None:
+        ACL.print_public_exposure_notice(heading=True)
     ssh_sid, ssh = CREG.first_ssh_service(client)
     if ssh:
         print()

@@ -41,7 +41,35 @@ CATALOG = _load_catalog()
 
 # Roots that also exist as historical flat commands. When the second token is
 # not a canonical action, the old flat meaning wins so scripts keep working.
-FALLTHROUGH_ROOTS = frozenset({"client", "access", "egress"})
+FALLTHROUGH_ROOTS = frozenset({"access", "egress"})
+
+_CLIENT_ACTION_LIKE = frozenset(
+    {
+        "create",
+        "delete",
+        "add",
+        "remove",
+        "update",
+        "restore",
+        "backup",
+        "release-service",
+        "release-client",
+        "client-set",
+        "edit-client",
+        "client-info",
+        "revoke",
+        "purge",
+        "enroll",
+        "create-client",
+        "manage",
+        "services",
+        "info",
+        "status",
+        "show",
+        "set",
+        "unset",
+    }
+)
 
 UNQUOTED_META = set("$`;|&><*?(){}[]")
 LEGACY_COMMANDS = {
@@ -380,7 +408,7 @@ def _root_help_legacy(role):
                 "  show client <ID>",
                 "  show client <ID> services",
                 "  show client <ID> tags",
-                "  show enrollments",
+                "  enrollment list",
                 "  show audit",
                 "  show upstream",
             ]
@@ -438,12 +466,12 @@ def _root_help_legacy(role):
     if server:
         lines.extend(
             [
-                "  create zero-touch",
-                "  create enrollment [--ssh --ssh-user USER --label NAME]",
-                "  create enrollments --count N",
-                "  create backup",
-                "  revoke enrollment <id>",
-                "  purge enrollment <id>",
+                "  zero-touch create",
+                "  enrollment create [--ssh --ssh-user USER --label NAME]",
+                "  enrollment bulk --count N",
+                "  backup create",
+                "  enrollment revoke <id>",
+                "  enrollment purge <id>",
                 "  purge enrollments --older-than <days>",
                 "  revoke client <ID>",
                 "  release service <ID> <service-id>",
@@ -608,17 +636,17 @@ def _create_help(role):
         "  create profile <name> --preset ssh|http|https|custom\n"
         "                 --target-host HOST --target-port PORT\n"
         "                 [--description TEXT] [--ssh-user USER]\n"
-        "  create zero-touch\n"
-        "  create enrollment\n"
-        "  create enrollments --count N\n"
-        "  create enrollments --csv FILE\n"
-        "  create backup [path]\n\n"
+        "  zero-touch create\n"
+        "  enrollment create\n"
+        "  enrollment bulk --count N\n"
+        "  enrollment bulk --csv FILE\n"
+        "  backup create [path]\n\n"
         "Recommended:\n"
-        "  create zero-touch\n\n"
+        "  zero-touch create\n\n"
         "Descriptions:\n\n"
-        "zero-touch\n"
+        "zero-touch create\n"
         "  Generate a one-line Zero-touch client installation command.\n\n"
-        "enrollment\n"
+        "enrollment create\n"
         "  Generate a Manual Enrollment Code.\n"
     )
 
@@ -636,10 +664,10 @@ def _verb_help(verb, role):
     mapping = {
         "revoke": (
             "Revoke\n======\n\nUsage:\n"
-            "  revoke client <ID>\n"
-            "  revoke enrollment <id>\n\n"
-            "revoke client removes management identity and keeps port reservations.\n"
-            "revoke enrollment prevents a pending or bound enrollment credential from being used.\n"
+            "  client revoke <ID>\n"
+            "  enrollment revoke <id>\n\n"
+            "client revoke removes management identity and keeps port reservations.\n"
+            "enrollment revoke prevents a pending or bound enrollment credential from being used.\n"
         ),
         "purge": (
             "Purge\n=====\n\nUsage:\n"
@@ -746,7 +774,7 @@ def context_help(tokens, role, names=None, clients=None):
                     [
                         ("clients", "Registered client table"),
                         ("client", "One client (overview, services, or tags)"),
-                        ("enrollments", "Issued enrollment credentials"),
+                        ("enrollment", "Enrollment credentials (list/create/revoke)"),
                         ("audit", "Recent audit events"),
                         ("upstream", "FRP upstream check"),
                     ]
@@ -893,18 +921,18 @@ def context_help(tokens, role, names=None, clients=None):
                 "Manual Enrollment Code\n"
                 "======================\n\n"
                 "Usage:\n"
-                "  create enrollment\n"
-                "  create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]\n\n"
+                "  enrollment create\n"
+                "  enrollment create [--one-line] [--ssh --ssh-user USER --label NAME]\n\n"
                 "Generate a Manual Enrollment Code for interactive client install.\n"
-                "For everyday onboarding prefer: create zero-touch\n"
+                "For everyday onboarding prefer: zero-touch create\n"
             )
         if len(tokens) >= 2 and tokens[1] == "enrollments":
             return (
                 "Bulk enrollment\n"
                 "===============\n\n"
                 "Usage:\n"
-                "  create enrollments --count N\n"
-                "  create enrollments --csv FILE\n"
+                "  enrollment bulk --count N\n"
+                "  enrollment bulk --csv FILE\n"
             )
         if len(tokens) >= 2 and tokens[1] == "backup":
             return "Usage:\n  create backup [path]\n"
@@ -1026,6 +1054,32 @@ def canonical_root(token):
     return token
 
 
+def _looks_like_client_action(token):
+    text = str(token or "").strip()
+    if not text or text.startswith("-"):
+        return False
+    if "-" in text:
+        return True
+    return text.lower() in _CLIENT_ACTION_LIKE
+
+
+def _client_legacy_selector(tokens):
+    """True when ``client <ID> [view]`` should keep the legacy shortcut."""
+    if len(tokens) < 2:
+        return False
+    second = tokens[1]
+    actions = CATALOG.canonical_actions("client")
+    if second in actions or second.startswith("-"):
+        return False
+    if _looks_like_client_action(second):
+        return False
+    if len(tokens) > 4:
+        return False
+    if len(tokens) == 3:
+        return tokens[2] in ("services", "tags", "groups", "info", "overview")
+    return len(tokens) == 2
+
+
 def canonical_tokens(tokens):
     """Return the canonical token list, or None when this is not canonical.
 
@@ -1056,6 +1110,26 @@ def _canonical_result(tokens, role):
     if canon is None:
         root = canonical_root(tokens[0])
         actions = CATALOG.canonical_actions(root)
+        if root == "client" and len(tokens) >= 2 and actions:
+            if tokens[1].startswith("-"):
+                return None, None
+            if _looks_like_client_action(tokens[1]):
+                rows = CATALOG.subcommands(root, role)
+                return None, incomplete(
+                    "Unknown action %r for %s." % (tokens[1], root),
+                    ["%s <action> ..." % root],
+                    [name for name, _desc in rows],
+                    tip="drlink help %s" % root,
+                )
+            if _client_legacy_selector(tokens):
+                return None, None
+            rows = CATALOG.subcommands(root, role)
+            return None, incomplete(
+                "Unknown action %r for %s." % (tokens[1], root),
+                ["%s <action> ..." % root],
+                [name for name, _desc in rows],
+                tip="drlink help %s" % root,
+            )
         if not actions or root in FALLTHROUGH_ROOTS:
             return None, None
         rows = CATALOG.subcommands(root, role)
@@ -1663,7 +1737,7 @@ def _match_revoke(tokens, role, names=None):
     if len(tokens) == 1:
         return incomplete(
             "Missing resource.",
-            ["revoke client <ID>", "revoke enrollment <ID>"],
+            ["client revoke <ID>", "enrollment revoke <ID>"],
             ["client", "enrollment"],
         )
     if tokens[1] == "client":
@@ -1676,7 +1750,7 @@ def _match_revoke(tokens, role, names=None):
         return {"status": "ok", "action": "revoke_client", "client": tokens[2], "passthrough": tokens[3:]}
     if tokens[1] == "enrollment":
         if len(tokens) < 3:
-            return incomplete("Missing enrollment id.", ["revoke enrollment <ID>"])
+            return incomplete("Missing enrollment id.", ["enrollment revoke <ID>"])
         return {"status": "ok", "action": "revoke_enrollment", "id": tokens[2]}
     # Compatibility: `revoke <client>` without the resource word.
     return {

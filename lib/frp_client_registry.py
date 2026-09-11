@@ -203,6 +203,27 @@ def passive_port_state(port, snapshot=None):
     return 'online' if port in ports else 'offline'
 
 
+def inventory_online_status(client, snapshot=None):
+    """Aggregate enabled-service reachability for server client list."""
+    services = enabled_services(client)
+    if not services:
+        return 'MGMT-ONLY'
+    states = [passive_port_state(svc.get('remote_port'), snapshot) for _sid, svc in services]
+    if all(state == 'unknown' for state in states):
+        return 'UNKNOWN'
+    online = sum(1 for state in states if state == 'online')
+    offline = sum(1 for state in states if state == 'offline')
+    if online == len(services) and offline == 0:
+        return 'ONLINE'
+    if offline == len(services) and online == 0:
+        return 'OFFLINE'
+    if online > 0 and offline > 0:
+        return 'PARTIAL'
+    if online > 0:
+        return 'PARTIAL'
+    return 'OFFLINE'
+
+
 def validate_label(value, required=False):
     text = '' if value is None else str(value).strip()
     if not text:

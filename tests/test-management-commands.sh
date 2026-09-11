@@ -94,6 +94,9 @@ grep -q 'ssh:6002' "$OUT" || fail "clients ssh summary"
 grep -q 'grafana:6003' "$OUT" || fail "clients grafana summary"
 grep -q 'api:6004 (reserved)' "$OUT" || fail "clients reserved service"
 grep -q 'http:6005' "$OUT" || fail "clients http summary"
+grep -q 'ACCESS' "$OUT" || fail "clients ACCESS column"
+grep -q 'PUBLIC /' "$OUT" || fail "clients ACCESS summary"
+grep -qE 'ONLINE|OFFLINE|PARTIAL|MGMT-ONLY|UNKNOWN' "$OUT" || fail "clients STATE label"
 if grep -qE 'ssh_port|https_port' "$OUT"; then
   fail "clients leaked legacy fields"
 fi
@@ -113,6 +116,7 @@ grep -q '127.0.0.1:22' "$WORKDIR/info-svc.out" || fail "info ssh target"
 grep -q '203.0.113.10:6002' "$WORKDIR/info-svc.out" || fail "info ssh public"
 grep -q 'ssh -p 6002 aella@203.0.113.10' "$WORKDIR/info-svc.out" || fail "info ssh connect"
 grep -q '127.0.0.1:3000' "$WORKDIR/info-svc.out" || fail "info grafana target"
+grep -qi 'Exposure' "$WORKDIR/info-svc.out" || fail "info PUBLIC exposure banner"
 if grep -q '6004' "$WORKDIR/info-svc.out"; then
   fail "info should omit disabled service"
 fi

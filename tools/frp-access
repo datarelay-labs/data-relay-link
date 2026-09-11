@@ -440,12 +440,7 @@ def cmd_public(cfg, args):
         short_client(registry, mid), sid, svc.get("remote_port"),
     ))
     print()
-    print("Exposure      : PUBLIC")
-    print("Source policy : Any source that can reach this public port may attempt a connection")
-    print("Target auth   : SSH/application authentication is still required")
-    print()
-    print("Recommended:")
-    print("  Restrict this service with an Access List if public access is not intended.")
+    ACL.print_public_exposure_notice()
     print_access_session_semantics()
 
 

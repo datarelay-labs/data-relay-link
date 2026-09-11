@@ -1039,15 +1039,17 @@ frpctl_guided_zero_touch_linux() {
   echo
   echo "1) SSH only"
   echo "2) Configure services"
-  echo "3) Back"
+  echo "3) Connect this machine only (management-only; no published services)"
+  echo "4) Back"
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
     1) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_ssh ;;
     2) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_services ;;
-    3|"") return 0 ;;
+    3) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_management ;;
+    4|"") return 0 ;;
     *)
-      echo "ERROR: select 1-3" >&2
+      echo "ERROR: select 1-4" >&2
       return 1
       ;;
   esac

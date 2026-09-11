@@ -835,6 +835,9 @@ PY
   rm -rf "$work"
   unset enroll_secret token FRP_CLIENT_OPERATION_ID
   echo "Applied pending changes."
+  if [[ "$enabled_count" -gt 0 ]]; then
+    frp_print_public_exposure_notice || true
+  fi
   echo "LOCAL_ROLLBACK=N/A"
   echo "SERVER_ROLLBACK=N/A"
 }

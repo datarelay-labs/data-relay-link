@@ -86,16 +86,17 @@ pass "ZERO_TOUCH_SECRET_NOT_COMPLETED"
 
 # --- help create ---
 help_create="$(frpctl_grammar_call help '{"tokens":["create"]}')"
-echo "$help_create" | grep -q 'create zero-touch' || fail "help create missing zero-touch"
-echo "$help_create" | grep -q 'create enrollment' || fail "help create missing enrollment"
+echo "$help_create" | grep -qE 'zero-touch create|create zero-touch' || fail "help create missing zero-touch"
+echo "$help_create" | grep -q 'enrollment create' || fail "help create missing enrollment"
 echo "$help_create" | grep -q 'Recommended:' || fail "help create missing Recommended"
-echo "$help_create" | grep -A1 'Recommended:' | grep -q 'create zero-touch' \
+echo "$help_create" | grep -A1 'Recommended:' | grep -qE 'zero-touch create|create zero-touch' \
   || fail "help create Recommended is not zero-touch"
 echo "$help_create" | grep -q 'Generate a one-line Zero-touch' || fail "help create zero-touch description"
 echo "$help_create" | grep -q 'Manual Enrollment Code' || fail "help create enrollment description"
 root_help="$(frpctl_grammar_call help '{"tokens":[]}')"
 echo "$root_help" | grep -qE 'zero-touch|create zero-touch' || fail "root help missing zero-touch"
-echo "$root_help" | grep -qE 'enrollment|create enrollment' || fail "root help missing enrollment"
+echo "$root_help" | grep -qE 'enrollment create|enrollment list|^  enrollment[[:space:]]' \
+  || fail "root help missing enrollment"
 pass "CREATE_ZERO_TOUCH_HELP"
 
 # --- context help ---
@@ -139,20 +140,29 @@ grep -q 'DISPATCH frp-create-client --platform windows --one-line --rdp --rdp-po
   "$WORKDIR/zt-rdp.out" || fail "Windows RDP dispatch"
 pass "ZERO_TOUCH_WINDOWS_RDP_GUIDED"
 
-# --- Guided menu intentionally hides management-only ---
-run_repl "$SERVER" "$WORKDIR/zt-no-mgmt.out" \
-  "create zero-touch" 1 3 exit \
+# --- Guided menu exposes management-only briefly (goal first) ---
+run_repl "$SERVER" "$WORKDIR/zt-mgmt-menu.out" \
+  "create zero-touch" 1 4 exit \
   || fail "zero-touch back option"
-grep -q '1) SSH only' "$WORKDIR/zt-no-mgmt.out" || fail "ssh only option missing"
-grep -q '2) Configure services' "$WORKDIR/zt-no-mgmt.out" || fail "configure services option missing"
-grep -q '3) Back' "$WORKDIR/zt-no-mgmt.out" || fail "back option missing"
-if grep -q 'Management only' "$WORKDIR/zt-no-mgmt.out"; then
-  fail "management only must not appear in guided menu"
-fi
-if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/zt-no-mgmt.out"; then
+grep -q '1) SSH only' "$WORKDIR/zt-mgmt-menu.out" || fail "ssh only option missing"
+grep -q '2) Configure services' "$WORKDIR/zt-mgmt-menu.out" || fail "configure services option missing"
+grep -q 'Connect this machine only' "$WORKDIR/zt-mgmt-menu.out" || fail "management-only option missing"
+grep -q '4) Back' "$WORKDIR/zt-mgmt-menu.out" || fail "back option missing"
+if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/zt-mgmt-menu.out"; then
   fail "Back unexpectedly dispatched zero-touch enrollment"
 fi
-pass "ZERO_TOUCH_MANAGEMENT_ONLY_HIDDEN"
+run_repl "$SERVER" "$WORKDIR/zt-mgmt-dispatch.out" \
+  "create zero-touch" 1 3 mgmt-client "inventory only" exit \
+  || fail "management-only guided dispatch"
+grep -q 'DISPATCH frp-create-client' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only dispatch missing"
+grep -qF -- '--client-name mgmt-client' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only client-name"
+grep -qF -- '--note inventory only' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only note"
+grep -qF -- '--one-line' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only one-line"
+pass "ZERO_TOUCH_MANAGEMENT_ONLY_DISCOVERABLE"
 
 # --- Guided: multi-service SSH+HTTP ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-http.out" \

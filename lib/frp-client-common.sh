@@ -415,6 +415,32 @@ frp_health_check_py() {
   return 1
 }
 
+frp_access_control_py() {
+  local cand libdir here
+  libdir="$(frp_client_lib_dir)"
+  for cand in \
+    "${libdir}/frp_access_control.py" \
+    "${FRP_CLIENT_LIB:-}/frp_access_control.py"
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for cand in \
+    "$here/frp_access_control.py" \
+    "$here/../lib/frp_access_control.py" \
+    /usr/local/lib/drlink/frp_access_control.py
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
 frp_identity_status() {
   local key pub mac macval
   key="$(frp_client_identity_key_path)"
@@ -1304,6 +1330,19 @@ frp_ux_print_apply_summary() {
   frp_state_diff_engine summary "$1" "$2"
 }
 
+frp_print_public_exposure_notice() {
+  local acl_py
+  acl_py="$(frp_access_control_py 2>/dev/null || true)"
+  [[ -n "$acl_py" && -f "$acl_py" ]] || return 0
+  python3 - "$acl_py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('frp_access_control', sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.print_public_exposure_notice(heading=True)
+PY
+}
+
 frp_atomic_write_text() {
   local dest="$1" mode="$2"
   python3 - "$dest" "$mode" <<'PY'
@@ -2019,6 +2058,27 @@ for item in services:
         else:
             lines.append(f'    {host_port(server, remote_port)}')
     lines.append('')
+has_enabled = any(item.get('enabled', True) is not False for item in services)
+# Default inbound exposure is PUBLIC unless Access Control restricts it on the
+# server. Client-side access-info cannot know server allowlists, so only warn
+# when enabled services exist (operators must confirm with drlink access show).
+if has_enabled:
+    lines.extend([
+        'Public exposure',
+        '===============',
+        '',
+        'Default exposure for published services is PUBLIC unless an Access List',
+        'is assigned on the Data Relay Link server.',
+        '',
+        'Exposure      : PUBLIC (unless restricted by Access Control on the server)',
+        'Source policy : Any source that can reach a public port may attempt a connection',
+        'Target auth   : SSH/application authentication is still required',
+        '',
+        'Recommended:',
+        '  Restrict services with an Access List if public access is not intended.',
+        '  On the server: drlink access show-service <client> <service>',
+        '',
+    ])
 path = Path(dest)
 path.parent.mkdir(parents=True, exist_ok=True)
 import os, tempfile

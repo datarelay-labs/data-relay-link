@@ -58,6 +58,29 @@ EMPTY_ALLOWLIST_MESSAGE = (
     "Use Disable if you intend to stop publishing the service."
 )
 
+PUBLIC_EXPOSURE_LINES = (
+    "Exposure      : PUBLIC",
+    "Source policy : Any source that can reach this public port may attempt a connection",
+    "Target auth   : SSH/application authentication is still required",
+    "",
+    "Recommended:",
+    "  Restrict this service with an Access List if public access is not intended.",
+)
+
+
+def print_public_exposure_notice(*, service_id=None, heading=False):
+    """Operator-facing PUBLIC exposure summary (no secrets)."""
+    if heading:
+        print()
+        print("Public exposure")
+        print("===============")
+        print()
+    if service_id:
+        print("Service %s is publicly reachable." % service_id)
+        print()
+    for line in PUBLIC_EXPOSURE_LINES:
+        print(line)
+
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 ENTRY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 TTL_RE = re.compile(r"^(\d+)([smhd])$", re.IGNORECASE)

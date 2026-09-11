@@ -238,6 +238,8 @@ _MUTATING_VERBS = frozenset(
         "disable",
         "purge",
         "import",
+        "restore",
+        "update",
     }
 )
 _MUTATING_ROOTS = frozenset(
@@ -249,6 +251,7 @@ _MUTATING_ROOTS = frozenset(
         "egress",
         "enrollment",
         "access",
+        "backup",
     }
 )
 
