@@ -115,7 +115,7 @@ frp_systemd_supports_service_hardening || fail "252 should keep hardening"
 frp_write_compatible_systemd_unit \
   "$ROOT/server/drlink-allocator.service" \
   "$WORKDIR/allocator-252.service"
-grep -q '^RuntimeDirectory=drlink$' "$WORKDIR/allocator-252.service" \
+grep -q '^RuntimeDirectory=drlink/allocator$' "$WORKDIR/allocator-252.service" \
   || fail "allocator runtime directory missing"
 grep -q '^RuntimeDirectoryMode=0700$' "$WORKDIR/allocator-252.service" \
   || fail "allocator runtime directory mode missing"
@@ -133,7 +133,7 @@ frp_write_compatible_systemd_unit \
 if grep -q '^ProtectSystem=' "$WORKDIR/frontend-219.service"; then
   fail "old systemd frontend unit still has ProtectSystem"
 fi
-grep -q '^RuntimeDirectory=drlink' "$WORKDIR/frontend-219.service" \
+grep -q '^RuntimeDirectory=drlink/frontend' "$WORKDIR/frontend-219.service" \
   || fail "frontend unit lost RuntimeDirectory on old systemd"
 unset FRP_TEST_SYSTEMD_VERSION
 pass "SYSTEMD_OLD_UNIT_COMPAT"
