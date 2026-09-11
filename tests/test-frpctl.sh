@@ -853,6 +853,18 @@ grep -qi 'Missing' "$WORKDIR/inc-repl.out" || fail "incomplete REPL guidance"
 pass "CLI_INCOMPLETE_DIRECT_EXIT_NONZERO"
 pass "CLI_INCOMPLETE_REPL_STAYS_USABLE"
 
+# Empty passthrough under set -u (Bash 4.2/AL2 + macOS Bash 3.2).
+set +e
+"$CTL" help >"$WORKDIR/empty-pt-help.out" 2>"$WORKDIR/empty-pt-help.err"
+rc=$?
+set -e
+[[ "$rc" -eq 0 ]] || fail "help with empty passthrough rc=$rc"
+if grep -q 'unbound variable' "$WORKDIR/empty-pt-help.out" "$WORKDIR/empty-pt-help.err"; then
+  fail "empty passthrough unbound variable"
+fi
+grep -qiE 'status|backup|update|help' "$WORKDIR/empty-pt-help.out" || fail "help empty-pt produced no catalog"
+pass "CLI_EMPTY_PASSTHROUGH_SET_U"
+
 # Bare roots must discover, not mutate.
 export FRP_CTL_DRY_RUN=1
 set +e

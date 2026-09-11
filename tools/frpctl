@@ -4,6 +4,9 @@
 # Thin dispatcher over existing commands. Does not reimplement registry or
 # client-state mutations.
 set -euo pipefail
+
+# Global passthrough argv; always initialized for set -u.
+_frpctl_pt=()
 export PYTHONDONTWRITEBYTECODE=1
 
 _FRPCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -250,7 +253,7 @@ frpctl_run() {
       printf 'DISPATCH %s\n' "$name"
     fi
     # Exact argv boundary proof (tab-separated JSON array).
-    python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1], *sys.argv[2:]], ensure_ascii=False))' "$name" "$@"
+    python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1]]+sys.argv[2:], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
   "$bin" "$@"
@@ -274,6 +277,17 @@ for a in json.loads(sys.argv[1]).get("passthrough") or []:
 ' "$result")
 }
 
+# Run COMMAND [fixed-args...] then append _frpctl_pt.
+# Bash 4.2 / 3.2 + set -u treat "${empty[@]}" as an unbound-variable error;
+# length-gated expansion matches frpctl_client_update and avoids AL2/macOS failures.
+frpctl_with_pt() {
+  if ((${#_frpctl_pt[@]} > 0)); then
+    "$@" "${_frpctl_pt[@]}"
+  else
+    "$@"
+  fi
+}
+
 frpctl_json_get() {
   python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get(sys.argv[2],""); print("" if v is None else v)' "$1" "$2"
 }
@@ -291,7 +305,7 @@ frpctl_exec() {
     else
       printf 'DISPATCH %s\n' "$name"
     fi
-    python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1], *sys.argv[2:]], ensure_ascii=False))' "$name" "$@"
+    python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1]]+sys.argv[2:], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
   exec "$bin" "$@"
@@ -1978,18 +1992,18 @@ frpctl_dispatch_canonical() {
   case "$action" in
     show_status)
       frpctl_load_passthrough "$result"
-      frpctl_status "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_status
       ;;
     show_server_status)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_run frp-server-status "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_run frp-server-status
       ;;
     show_version) echo; frpctl_print_version; echo ;;
     show_clients)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-clients "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-clients
       ;;
     show_groups) frpctl_require_server || return 1; frpctl_invoke frp-groups ;;
     show_group)
@@ -2021,7 +2035,7 @@ frpctl_dispatch_canonical() {
     show_upstream)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_run frp-upstream "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_run frp-upstream
       ;;
     show_services) frpctl_require_client || return 1; frpctl_invoke frp-client list ;;
     show_info) frpctl_require_client || return 1; frpctl_invoke frp-client info ;;
@@ -2077,7 +2091,7 @@ frpctl_dispatch_canonical() {
     add_service)
       frpctl_require_client || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-client add-service "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-client add-service
       ;;
     enable_service)
       frpctl_require_client || return 1
@@ -2093,17 +2107,17 @@ frpctl_dispatch_canonical() {
     create_enrollment)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-create-client "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-create-client
       ;;
     create_enrollments)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-enroll-bulk "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-enroll-bulk
       ;;
     create_backup)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_run frp-backup "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_run frp-backup
       ;;
     create_group)
       frpctl_require_server || return 1
@@ -2120,9 +2134,8 @@ frpctl_dispatch_canonical() {
     create_profile)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-profile create \
-        "$(frpctl_json_get "$result" name)" \
-        "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-profile create \
+        "$(frpctl_json_get "$result" name)"
       ;;
     create_egress_profile)
       # CLI-008: a new egress profile is always created disabled so an
@@ -2143,18 +2156,16 @@ frpctl_dispatch_canonical() {
     set_egress_profile)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-egress set \
-        "$(frpctl_json_get "$result" profile)" \
-        "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-egress set \
+        "$(frpctl_json_get "$result" profile)"
       ;;
     add_egress_destination)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-egress add-destination \
+      frpctl_with_pt frpctl_invoke frp-egress add-destination \
         "$(frpctl_json_get "$result" profile)" \
         "$(frpctl_json_get "$result" host)" \
-        "$(frpctl_json_get "$result" port)" \
-        "${_frpctl_pt[@]}"
+        "$(frpctl_json_get "$result" port)"
       ;;
     add_egress_source)
       frpctl_require_server || return 1
@@ -2203,7 +2214,7 @@ frpctl_dispatch_canonical() {
     revoke_client)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-revoke-client "$(frpctl_json_get "$result" client)" "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-revoke-client "$(frpctl_json_get "$result" client)"
       ;;
     revoke_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-revoke "$(frpctl_json_get "$result" id)" ;;
     purge_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollment "$(frpctl_json_get "$result" id)" ;;
@@ -2211,25 +2222,25 @@ frpctl_dispatch_canonical() {
     release_client)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-release-client "$(frpctl_json_get "$result" client)" "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-release-client "$(frpctl_json_get "$result" client)"
       ;;
     release_service)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-release-service "$(frpctl_json_get "$result" client)" "$(frpctl_json_get "$result" service)" "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-release-service "$(frpctl_json_get "$result" client)" "$(frpctl_json_get "$result" service)"
       ;;
     update_default)
       frpctl_load_passthrough "$result"
-      frpctl_update "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_update
       ;;
     update_project)
       frpctl_load_passthrough "$result"
       _frp_up_rc=0
       if frpctl_is_client; then
-        frpctl_client_update "${_frpctl_pt[@]}" || _frp_up_rc=$?
+        frpctl_with_pt frpctl_client_update || _frp_up_rc=$?
       fi
       if frpctl_is_server; then
-        frpctl_run frp-project-update "${_frpctl_pt[@]}" || _frp_up_rc=$?
+        frpctl_with_pt frpctl_run frp-project-update || _frp_up_rc=$?
       fi
       if ! frpctl_is_client && ! frpctl_is_server; then
         false
@@ -2244,7 +2255,7 @@ frpctl_dispatch_canonical() {
         frpctl_require_install || return 1
       fi
       frpctl_load_passthrough "$result"
-      frpctl_run frp-update "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_run frp-update
       ;;
     restore_backup) frpctl_require_server || return 1; frpctl_run frp-restore "$(frpctl_json_get "$result" path)" ;;
     doctor)
@@ -2253,26 +2264,26 @@ frpctl_dispatch_canonical() {
         return 2
       fi
       frpctl_load_passthrough "$result"
-      frp_doctor_main "${_frpctl_pt[@]}"
+      frpctl_with_pt frp_doctor_main
       ;;
     support_bundle)
       frpctl_load_passthrough "$result"
-      frpctl_run frp-support-bundle "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_run frp-support-bundle
       ;;
     access_cmd)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-access "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-access
       ;;
     egress_cmd)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_invoke frp-egress "${_frpctl_pt[@]}"
+      frpctl_with_pt frpctl_invoke frp-egress
       ;;
     help)
       frpctl_load_passthrough "$result"
       # Always render from the command catalog so shell and REPL help stay aligned.
-      if ! frpctl_repl_help "${_frpctl_pt[@]}"; then
+      if ! frpctl_with_pt frpctl_repl_help; then
         frpctl_usage
       fi
       ;;
