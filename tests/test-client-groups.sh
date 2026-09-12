@@ -118,12 +118,17 @@ cp "$WORKDIR/good" "$REG"
 "$CTL" add client cccccccc group safer-group
 "$CTL" remove client cccccccc group safer-group
 "$CTL" delete group safer-group
+# Verb-first help topics redirect to resource-first guidance (not full topic pages).
 "$CTL" help create >"$WORKDIR/help-create"
 "$CTL" help add >"$WORKDIR/help-add"
 "$CTL" help remove >"$WORKDIR/help-remove"
-grep -q 'create group' "$WORKDIR/help-create"
-grep -q 'add client' "$WORKDIR/help-add"
-grep -q 'remove client' "$WORKDIR/help-remove"
+grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-create"
+grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-add"
+grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-remove"
+"$CTL" help group >"$WORKDIR/help-group"
+grep -Eqi 'group (create|list|show|delete)|create.*group' "$WORKDIR/help-group"
+"$CTL" help legacy >"$WORKDIR/help-legacy"
+grep -Eqi 'create group|add client|remove client' "$WORKDIR/help-legacy"
 
 grep -q '"event":"group.created"' "$TREE/var/log/drlink/audit.jsonl"
 grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/drlink/audit.jsonl"
