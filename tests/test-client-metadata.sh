@@ -85,7 +85,7 @@ grep -q 'aabbccdd' "$WORKDIR/list.out" || fail "list short id unlabeled"
 grep -q 'busan-backup' "$WORKDIR/list.out" || fail "list labeled client"
 grep -q 'ubuntu' "$WORKDIR/list.out" || fail "list hostname"
 grep -q 'Use CLIENT ID in client commands.' "$WORKDIR/list.out" || fail "list CLIENT ID help"
-grep -q 'show client aabbccdd' "$WORKDIR/list.out" || grep -q 'show client ddeeff00' "$WORKDIR/list.out" \
+grep -q 'client show aabbccdd' "$WORKDIR/list.out" || grep -q 'client show ddeeff00' "$WORKDIR/list.out" \
   || fail "list CLIENT ID example"
 pass "CLIENT_LIST_UX"
 
