@@ -84,15 +84,15 @@ if echo "$create_cands" | grep -qiE 'ticket|secret|bootstrap|token|password'; th
 fi
 pass "ZERO_TOUCH_SECRET_NOT_COMPLETED"
 
-# --- help create ---
+# --- help create (verb-first topic redirects; details live under resource help) ---
 help_create="$(frpctl_grammar_call help '{"tokens":["create"]}')"
-echo "$help_create" | grep -qE 'zero-touch create|create zero-touch' || fail "help create missing zero-touch"
-echo "$help_create" | grep -q 'enrollment create' || fail "help create missing enrollment"
-echo "$help_create" | grep -q 'Recommended:' || fail "help create missing Recommended"
-echo "$help_create" | grep -A1 'Recommended:' | grep -qE 'zero-touch create|create zero-touch' \
-  || fail "help create Recommended is not zero-touch"
-echo "$help_create" | grep -q 'Generate a one-line Zero-touch' || fail "help create zero-touch description"
-echo "$help_create" | grep -q 'Manual Enrollment Code' || fail "help create enrollment description"
+echo "$help_create" | grep -qiE 'resource-first|help legacy|Compatibility topic' \
+  || fail "help create should redirect to resource-first guidance"
+help_zt="$(frpctl_grammar_call help '{"tokens":["zero-touch"]}')"
+echo "$help_zt" | grep -qE 'zero-touch create|Create' || fail "help zero-touch missing create action"
+help_legacy="$(frpctl_grammar_call help '{"tokens":["legacy"]}')"
+echo "$help_legacy" | grep -qE 'create zero-touch|zero-touch create' \
+  || fail "help legacy missing create zero-touch alias"
 root_help="$(frpctl_grammar_call help '{"tokens":[]}')"
 echo "$root_help" | grep -qE 'zero-touch|create zero-touch' || fail "root help missing zero-touch"
 echo "$root_help" | grep -qE 'enrollment create|enrollment list|^  enrollment[[:space:]]' \
