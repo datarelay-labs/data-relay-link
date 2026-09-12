@@ -63,7 +63,9 @@ Pinned allocator CA verification and hostname/IP SAN checks both apply on the .N
 
 ### Updates, PID, secrets
 
-- `frp-client update` snapshots managed files and process state; failure restores binary, metadata, config, and prior running/stopped state (`RECOVERY_REQUIRED=YES` if rollback itself fails).
+- `drlink update engine` (and legacy bare `update`) refreshes pinned `frpc.exe` with SHA256 verify; failure restores binary, metadata, config, and prior running/stopped state (`RECOVERY_REQUIRED=YES` if rollback itself fails).
+- `drlink update project` does **not** download a project artifact in this release. On an installed client, re-run the canonical Windows installer to refresh management tools (identity/ports preserved). Developers/CI may set `FRP_WINDOWS_PROJECT_SRC` to a `windows/` tree.
+- Check modes are distinct: `update project -Check` (project only), `update engine -Check` (engine Would download), `update --check` (combined).
 - Stop kills only a PID whose recorded exe matches the managed `frpc.exe`.
 - Secret ACL application is fail-closed on Windows.
 

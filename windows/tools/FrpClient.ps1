@@ -178,9 +178,14 @@ REMOTE ACCESS
   service discard        Discard pending draft changes
 
 OPERATE
-  update project         Update Data Relay Link management tools/scripts
-  update engine          Update pinned/tested frpc.exe (not latest upstream)
-  update --check         Show project + engine update status
+  update project [--check]
+                         Check project tools status. Applying a project update
+                         on an installed client means re-running the canonical
+                         Windows installer (identity/ports preserved). Developers
+                         may set FRP_WINDOWS_PROJECT_SRC to a windows/ tree.
+  update engine [--check]
+                         Check or update pinned/tested frpc.exe (not latest upstream)
+  update --check         Combined project + engine status (not an apply)
   doctor                 Basic local checks
   support-bundle         Create a sanitized diagnostic zip (-Output <path>)
   uninstall              Remove local software (SERVER RESERVATIONS PRESERVED)
@@ -350,19 +355,68 @@ function Install-FrpProjectManagementFiles {
     }
 }
 
+function Test-FrpIsInstalledProductTree {
+    param([Parameter(Mandatory = $true)][string]$CandidateRoot)
+    try {
+        $productRoot = [System.IO.Path]::GetFullPath((Get-FrpWindowsRoot).TrimEnd('\', '/'))
+        $cand = [System.IO.Path]::GetFullPath($CandidateRoot.TrimEnd('\', '/'))
+        return ($cand -eq $productRoot)
+    } catch {
+        return $false
+    }
+}
+
 function Resolve-FrpProjectSourceRoot {
-    if ($env:FRP_WINDOWS_PROJECT_SRC -and (Test-Path -LiteralPath $env:FRP_WINDOWS_PROJECT_SRC)) {
-        return $env:FRP_WINDOWS_PROJECT_SRC.TrimEnd('\', '/')
+    # Production installed clients do not ship a downloadable project artifact
+    # pipeline in v2.3.1. Only an explicit source tree (or a distinct repo
+    # checkout) may refresh management files; never copy the installed tree onto itself.
+    if ($env:FRP_WINDOWS_PROJECT_SRC) {
+        if (-not (Test-Path -LiteralPath $env:FRP_WINDOWS_PROJECT_SRC)) {
+            return $null
+        }
+        $explicit = $env:FRP_WINDOWS_PROJECT_SRC.TrimEnd('\', '/')
+        if (Test-FrpIsInstalledProductTree -CandidateRoot $explicit) {
+            return $null
+        }
+        return $explicit
     }
     if ($script:FrpWindowsSrcRoot -and (Test-Path -LiteralPath $script:FrpWindowsSrcRoot)) {
-        return $script:FrpWindowsSrcRoot.TrimEnd('\', '/')
+        $srcRoot = $script:FrpWindowsSrcRoot.TrimEnd('\', '/')
+        if (-not (Test-FrpIsInstalledProductTree -CandidateRoot $srcRoot)) {
+            return $srcRoot
+        }
     }
     # Repo layout when running from a checkout: windows/tools/FrpClient.ps1
     $candidate = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
     if (Test-Path -LiteralPath (Join-Path $candidate 'tools/FrpClient.ps1')) {
-        return $candidate
+        if (Test-FrpIsInstalledProductTree -CandidateRoot $candidate) {
+            return $null
+        }
+        $hasInstaller = Test-Path -LiteralPath (Join-Path $candidate 'install-client.ps1')
+        $hasVersion = Test-Path -LiteralPath (Join-Path $candidate '..\VERSION')
+        if ($hasInstaller -or $hasVersion) {
+            return $candidate
+        }
     }
     return $null
+}
+
+function Write-FrpProjectUpdateCheck {
+    param([string]$InstalledProject)
+    Write-Host 'Data Relay Link project:'
+    Write-Host ("  installed : {0}" -f $InstalledProject)
+    Write-Host '  apply path : re-run the Windows client installer (supported)'
+    Write-Host '  note       : no in-place project artifact download in this release'
+    Write-Host '  developers : set FRP_WINDOWS_PROJECT_SRC to a windows/ tree (tools + lib)'
+}
+
+function Write-FrpEngineUpdateCheck {
+    param([string]$Url, [string]$Sha256)
+    Write-Host 'FRP engine (project-pinned/tested only):'
+    Write-Host ("  Would download: {0}" -f $Url)
+    Write-Host ("  Expected SHA256: {0}" -f $Sha256)
+    Write-Host '  note      : Does not install latest upstream FRP — only the pinned release.'
+    Write-Host 'Identity, ports, and frpc.toml token would be preserved.'
 }
 
 function Invoke-FrpClientUpdate {
@@ -371,37 +425,35 @@ function Invoke-FrpClientUpdate {
     if (-not $mode) { $mode = 'engine' }
 
     $installedProject = Get-FrpProjectVersion
-    $targetProject = $installedProject
-    if ($env:PROJECT_VERSION) { $targetProject = $env:PROJECT_VERSION.Trim() }
     $engineUrl = $DownloadUrl
     if (-not $engineUrl) { $engineUrl = Get-FrpWindowsAmd64Url }
     $engineSha = $ExpectedSha256
     if (-not $engineSha) { $engineSha = Get-FrpWindowsAmd64Sha256 }
 
-    if ($CheckOnly -or $mode -eq 'both-check') {
-        Write-Host 'Data Relay Link project:'
-        Write-Host ("  installed : {0}" -f $installedProject)
-        Write-Host ("  target    : {0}" -f $targetProject)
-        if ($installedProject -eq $targetProject) {
-            Write-Host '  update available : no (same version)'
-        } else {
-            Write-Host '  update available : maybe (set FRP_WINDOWS_PROJECT_SRC or re-run installer)'
-        }
+    # Distinct -Check semantics:
+    #   update --check           -> both-check (project + engine)
+    #   update project -Check    -> project only
+    #   update engine -Check     -> engine only (Would download)
+    if ($mode -eq 'both-check') {
+        Write-FrpProjectUpdateCheck -InstalledProject $installedProject
         Write-Host ''
-        Write-Host 'FRP engine (project-pinned/tested only):'
-        Write-Host ("  download  : {0}" -f $engineUrl)
-        Write-Host ("  sha256    : {0}" -f $engineSha)
-        Write-Host '  note      : Does not install latest upstream FRP — only the pinned release.'
+        Write-FrpEngineUpdateCheck -Url $engineUrl -Sha256 $engineSha
         Write-Host 'Identity, ports, services, CA trust, and management state are preserved.'
         return 0
     }
 
     if ($mode -eq 'project') {
+        if ($CheckOnly) {
+            Write-FrpProjectUpdateCheck -InstalledProject $installedProject
+            Write-Host 'Identity, ports, services, CA trust, and management state are preserved.'
+            return 0
+        }
         $src = Resolve-FrpProjectSourceRoot
         if (-not $src) {
-            Write-Host 'ERROR: cannot locate Data Relay Link Windows project source.'
-            Write-Host 'Set FRP_WINDOWS_PROJECT_SRC to a windows/ tree (tools + lib), or re-run the client installer.'
-            Write-Host 'FAILURE_CLASS=PROJECT_UPDATE_SOURCE_MISSING'
+            Write-Host 'ERROR: Windows project auto-update from an installed client is not supported in this release.'
+            Write-Host 'Supported path: re-run the canonical Windows client installer (identity and ports are preserved).'
+            Write-Host 'Developers/CI: set FRP_WINDOWS_PROJECT_SRC to a windows/ tree containing tools/ and lib/.'
+            Write-Host 'FAILURE_CLASS=PROJECT_UPDATE_USE_INSTALLER'
             return 1
         }
         if (-not (Enter-FrpClientLock)) { return 1 }
@@ -419,13 +471,11 @@ function Invoke-FrpClientUpdate {
         }
     }
 
-    # Engine update (frpc.exe)
+    # Engine update (frpc.exe) — mode engine (also bare `update`)
     $url = $engineUrl
     $sha = $engineSha
     if ($CheckOnly) {
-        Write-Host ("Would download: {0}" -f $url)
-        Write-Host ("Expected SHA256: {0}" -f $sha)
-        Write-Host 'Identity, ports, and frpc.toml token would be preserved.'
+        Write-FrpEngineUpdateCheck -Url $url -Sha256 $sha
         return 0
     }
     if (-not (Enter-FrpClientLock)) { return 1 }
