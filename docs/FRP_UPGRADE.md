@@ -1,6 +1,6 @@
 # Future upstream FRP upgrades
 
-frp-auto-deploy pins a **tested** FRP version. It never installs GitHub
+Data Relay Link pins a **tested** FRP version. It never installs GitHub
 `latest` automatically.
 
 Current pin: see `VERSION` (`FRP_VERSION`) and `lib/frp-common.sh`
@@ -60,14 +60,14 @@ export FRP_NEW_SHA256_ARM64=...
 ./scripts/secret-scan.sh
 ```
 
-Install on a server only with `sudo frpctl frp-update`, which installs the
+Install on a server only with `sudo drlink update engine`, which installs the
 **pinned** version, never upstream latest.
 
 Informational check:
 
 ```bash
-sudo frpctl upstream
-# or: frp-upstream
+sudo drlink server upstream
+# implementation tool: frp-upstream
 ```
 
 ## How to perform OCI E2E
@@ -80,7 +80,7 @@ operator cycle PASSes.
 Follow `docs/RELEASE_CHECKLIST.md` and `docs/RELEASE_VALIDATION.md`.
 Do not move or rewrite the frozen `v2.1.0` or `v2.1.1` tags.
 
-## Product upgrade (FRP Auto Deploy)
+## Product upgrade (Data Relay Link)
 
 Product upgrade is separate from upstream FRP binary upgrade.
 
@@ -150,7 +150,7 @@ One-time verified bridge (development line: `channel=dev`,
 
 ```bash
 COMMIT=<immutable-commit-sha>
-BASE="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${COMMIT}"
+BASE="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${COMMIT}"
 curl -fsSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 curl -fsSL "${BASE}/dist/bootstrap-client.sh" -o bootstrap-client.sh
 expected="$(awk '$2=="dist/bootstrap-client.sh" {print $1; exit}' SHA256SUMS)"
@@ -160,7 +160,7 @@ sudo env FRP_RELEASE_CHANNEL=dev FRP_EXPECTED_SOURCE_REF=main \
   FRP_BUNDLE_SHA256="$actual" bash bootstrap-client.sh --upgrade
 ```
 
-`sudo frpctl update --check` is read-only. If it reports
+`sudo drlink update --check` is read-only. If it reports
 `LEGACY_CLIENT_SECURE_BRIDGE_REQUIRED` or `Legacy secure bridge required`,
 do not mutate the host until the procedure above succeeds.
 
@@ -171,7 +171,7 @@ a verified candidate whose manifest is `dev` / `main`.
 
 ## Server project-update build identity
 
-`sudo frpctl project-update --check` is read-only. Availability is not decided
+`sudo drlink update project --check` is read-only. Availability is not decided
 from `PROJECT_VERSION` alone:
 
 - installed version **less than** candidate → update available
@@ -186,6 +186,6 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 
 ## Rollback
 
-- Server FRP binary: `frp-update` restores the previous binary on health failure.
-- Server project tools: use `frp-project-update` rollback / restore from backup.
-- Disaster recovery: `sudo frpctl restore <backup>` after a validated backup.
+- Server FRP binary: `drlink update engine` (implementation: `frp-update`) restores the previous binary on health failure.
+- Server project tools: use `drlink update project` rollback / restore from backup (implementation: `frp-project-update`).
+- Disaster recovery: `sudo drlink backup restore <backup>` after a validated backup.

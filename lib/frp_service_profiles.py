@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Server-owned Service Profiles (creation templates only).
 
-Authoritative state lives in /var/lib/frp-auto-deploy/service-profiles.json.
+Authoritative state lives in /var/lib/drlink/service-profiles.json.
 
 Profiles seed client service drafts. They never store remote_port, CLIENT ID,
 Service ID, or ACL assignments. Editing or deleting a profile must not mutate
@@ -15,13 +15,14 @@ import json
 import os
 import re
 import secrets
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 PROFILES_SCHEMA_VERSION = 1
-DEFAULT_PROFILES_PATH = "/var/lib/frp-auto-deploy/service-profiles.json"
+DEFAULT_PROFILES_PATH = "/var/lib/drlink/service-profiles.json"
 PROFILE_ID_PREFIX = "prof_"
 PROFILE_ID_HEX_LEN = 12
 PROFILE_ID_RE = re.compile(r"^prof_[0-9a-f]{12}$")
@@ -85,6 +86,29 @@ def profiles_lock_path(path: Path) -> Path:
     return path.parent / (path.name + ".lock")
 
 
+_LOCKS = None
+
+
+def _locks():
+    global _LOCKS
+    if _LOCKS is None:
+        existing = sys.modules.get("frp_control_locks")
+        if existing is not None:
+            _LOCKS = existing
+        else:
+            path = Path(__file__).resolve().parent / "frp_control_locks.py"
+            spec = importlib.util.spec_from_file_location("frp_control_locks", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["frp_control_locks"] = mod
+            spec.loader.exec_module(mod)
+            _LOCKS = mod
+    return _LOCKS
+
+
+def _control_state_mutation_lock(state_path):
+    return _locks().mutation_lock(state_path=state_path)
+
+
 def empty_profiles_state() -> dict:
     return {"schema_version": PROFILES_SCHEMA_VERSION, "profiles": {}}
 
@@ -100,10 +124,9 @@ def atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
-        try:
-            os.chmod(path.parent, 0o700)
-        except OSError:
-            pass
+        # Do NOT chmod shared parent (/var/lib/drlink): that clears ACL mask /
+        # group+x needed by drlink-egress. File writers own only their inode.
+        pass
     finally:
         if os.path.exists(tmp):
             try:
@@ -140,12 +163,12 @@ def _load_health_module():
     candidates = []
     root = deploy_root()
     if root:
-        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_health_check.py")
+        candidates.append(Path(root) / "usr/local/lib/drlink/frp_health_check.py")
     here = Path(__file__).resolve().parent
     candidates.extend(
         [
             here / "frp_health_check.py",
-            Path("/usr/local/lib/frp-auto-deploy/frp_health_check.py"),
+            Path("/usr/local/lib/drlink/frp_health_check.py"),
         ]
     )
     for path in candidates:
@@ -340,18 +363,28 @@ def save_profiles_state(state: dict, path: Optional[Path] = None, cfg: Optional[
     state = dict(state)
     state["schema_version"] = PROFILES_SCHEMA_VERSION
     validate_profiles_state(state)
-    with FileLock(profiles_lock_path(path)):
-        atomic_write_json(path, state)
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(profiles_lock_path(path)):
+                atomic_write_json(path, state)
+    except locks.LockTimeout as exc:
+        raise ProfileError("timed out waiting for control-state lock") from exc
 
 
 def mutate_profiles_state(mutator, path: Optional[Path] = None, cfg: Optional[dict] = None):
     path = path or service_profiles_path(cfg)
-    with FileLock(profiles_lock_path(path)):
-        state = require_profiles_state(path=path, cfg=cfg)
-        result = mutator(state)
-        validate_profiles_state(state)
-        atomic_write_json(path, state)
-        return result if result is not None else state
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(profiles_lock_path(path)):
+                state = require_profiles_state(path=path, cfg=cfg)
+                result = mutator(state)
+                validate_profiles_state(state)
+                atomic_write_json(path, state)
+                return result if result is not None else state
+    except locks.LockTimeout as exc:
+        raise ProfileError("timed out waiting for control-state lock") from exc
 
 
 def validate_profiles_state(state: dict) -> None:

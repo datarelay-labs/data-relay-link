@@ -6,8 +6,8 @@ if [[ -n "${FRP_MACOS_LOADED:-}" ]]; then
 fi
 FRP_MACOS_LOADED=1
 
-FRP_MACOS_LAUNCHD_LABEL="${FRP_MACOS_LAUNCHD_LABEL:-com.datarelay.frp-auto-deploy.frpc}"
-FRP_MACOS_STATE_ROOT_DEFAULT='/Library/Application Support/frp-auto-deploy'
+FRP_MACOS_LAUNCHD_LABEL="${FRP_MACOS_LAUNCHD_LABEL:-com.datarelay.drlink.frpc}"
+FRP_MACOS_STATE_ROOT_DEFAULT='/Library/Application Support/drlink'
 FRP_MACOS_LAUNCHDAEMON_DIR='/Library/LaunchDaemons'
 FRP_MACOS_MIN_PRODUCT_VERSION="${FRP_MACOS_MIN_PRODUCT_VERSION:-11}"
 
@@ -45,14 +45,14 @@ frp_macos_map_path() {
   if ! frp_is_darwin; then printf '%s' "$p"; return 0; fi
   state="$(frp_macos_state_root)"
   case "$p" in
-    /etc/frp|/etc/frp-auto-deploy) printf '%s' "$state"; return ;;
+    /etc/frp|/etc/drlink) printf '%s' "$state"; return ;;
     /etc/frp/*) printf '%s/%s' "$state" "${p#/etc/frp/}"; return ;;
-    /etc/frp-auto-deploy/*) printf '%s/%s' "$state" "${p#/etc/frp-auto-deploy/}"; return ;;
-    /var/lib/frp-auto-deploy) printf '%s/state' "$state"; return ;;
-    /var/lib/frp-auto-deploy/*) printf '%s/state/%s' "$state" "${p#/var/lib/frp-auto-deploy/}"; return ;;
-    /etc/systemd/system/frpc.service) frp_macos_plist_path; return ;;
-    /usr/local/lib/frp-auto-deploy) printf '%s/lib' "$state"; return ;;
-    /usr/local/lib/frp-auto-deploy/*) printf '%s/lib/%s' "$state" "${p#/usr/local/lib/frp-auto-deploy/}"; return ;;
+    /etc/drlink/*) printf '%s/%s' "$state" "${p#/etc/drlink/}"; return ;;
+    /var/lib/drlink) printf '%s/state' "$state"; return ;;
+    /var/lib/drlink/*) printf '%s/state/%s' "$state" "${p#/var/lib/drlink/}"; return ;;
+    /etc/systemd/system/drlink-client.service) frp_macos_plist_path; return ;;
+    /usr/local/lib/drlink) printf '%s/lib' "$state"; return ;;
+    /usr/local/lib/drlink/*) printf '%s/lib/%s' "$state" "${p#/usr/local/lib/drlink/}"; return ;;
     /usr/local/bin/frpc) printf '%s/bin/frpc' "$state"; return ;;
   esac
   prefix="$(frp_macos_brew_prefix)"
@@ -162,7 +162,7 @@ frp_macos_launchd_template() {
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   for candidate in "${FRP_MACOS_PLIST_TEMPLATE:-}" \
     "${here}/../client/${FRP_MACOS_LAUNCHD_LABEL}.plist" \
-    "$(frp_macos_fs "/usr/local/lib/frp-auto-deploy/${FRP_MACOS_LAUNCHD_LABEL}.plist")"; do
+    "$(frp_macos_fs "/usr/local/lib/drlink/${FRP_MACOS_LAUNCHD_LABEL}.plist")"; do
     [[ -n "$candidate" && -f "$candidate" ]] && { printf '%s' "$candidate"; return; }
   done
   return 1
@@ -206,20 +206,20 @@ PY
 
 frp_macos_launchd_install() {
   local dest
-  dest="$(frp_macos_fs /etc/systemd/system/frpc.service)"
+  dest="$(frp_macos_fs /etc/systemd/system/drlink-client.service)"
   frp_require_safe_write_path "$dest" && frp_macos_render_plist "$dest"
 }
 
 frp_macos_launchd_bootout() {
   frp_launchd_usable || return 0
   frp_invoke launchctl bootout "system/${FRP_MACOS_LAUNCHD_LABEL}" >/dev/null 2>&1 ||
-    frp_invoke launchctl unload -w "$(frp_macos_fs /etc/systemd/system/frpc.service)" >/dev/null 2>&1 || true
+    frp_invoke launchctl unload -w "$(frp_macos_fs /etc/systemd/system/drlink-client.service)" >/dev/null 2>&1 || true
 }
 
 frp_macos_launchd_bootstrap() {
   local plist
   frp_launchd_usable || return 0
-  plist="$(frp_macos_fs /etc/systemd/system/frpc.service)"
+  plist="$(frp_macos_fs /etc/systemd/system/drlink-client.service)"
   if frp_invoke launchctl bootstrap system "$plist" >/dev/null 2>&1; then
     return 0
   fi

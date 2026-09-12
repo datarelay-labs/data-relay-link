@@ -10,7 +10,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5)
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/short-url-e2e-$RUN_ID}"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.sh"
+INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${HEAD_SHA}/dist/bootstrap-client.sh"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.txt"
 : >"$SUMMARY"
@@ -170,11 +170,11 @@ pass "STOCK_OS_TRUST_HEALTHZ"
 # Configure bootstrap hostname + installer URL on server.
 # Tools update config.json without restarting services; allocator reloads on
 # mtime change, and we still bounce it so E2E never races a stale process.
-ssh_server "sudo /usr/local/sbin/frpctl set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
+ssh_server "sudo /usr/local/bin/drlink set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
   >"$OUT_DIR/set-bootstrap.log" 2>&1 || fail "set bootstrap-hostname"
 ssh_server "sudo /usr/local/sbin/frp-set-client-installer-url '$INSTALLER_URL'" \
   >"$OUT_DIR/set-installer.log" 2>&1 || fail "set installer url"
-ssh_server 'sudo systemctl daemon-reload; sudo systemctl restart frp-port-allocator' \
+ssh_server 'sudo systemctl daemon-reload; sudo systemctl restart drlink-allocator' \
   >"$OUT_DIR/restart-allocator.log" 2>&1 || fail "restart allocator after config"
 for _ in $(seq 1 30); do
   if ssh_server 'curl -fsSk https://127.0.0.1:6099/healthz >/dev/null 2>&1'; then
@@ -218,10 +218,10 @@ pass "SHORT_URL_COMMAND_PRINTED"
 # Use pipefail so a failed curl cannot look like success.
 ssh_client "sudo bash -o pipefail -lc $(printf '%q' "$CMD")" >"$OUT_DIR/client-enroll.log" 2>&1 \
   || { cat "$OUT_DIR/client-enroll.log"; fail "short URL client enroll"; }
-if ! grep -qiE 'enrollment complete|Zero-touch setup complete|FRP client ready|FRP client setup complete|setup complete' \
+if ! grep -qiE 'enrollment complete|Zero-touch setup complete|FRP client ready|Data Relay Link client setup complete|setup complete' \
   "$OUT_DIR/client-enroll.log"; then
   # Accept active frpc + client-state as success when installer wording differs.
-  if ! ssh_client 'sudo test -f /etc/frp/client-state.json && systemctl is-active frpc'; then
+  if ! ssh_client 'sudo test -f /etc/frp/client-state.json && systemctl is-active drlink-client'; then
     cat "$OUT_DIR/client-enroll.log"
     fail "short URL enroll did not produce client state"
   fi
@@ -230,9 +230,9 @@ pass "SHORT_URL_ENROLL"
 
 # Verify server sees the client.
 SHOW="$OUT_DIR/show-client.out"
-ssh_server "sudo /usr/local/sbin/frpctl show clients" >"$SHOW" 2>&1 || { cat "$SHOW"; fail "show clients"; }
-ssh_server "sudo /usr/local/sbin/frpctl show client '$CLIENT_LABEL'" >>"$SHOW" 2>&1 \
-  || ssh_server "sudo /usr/local/sbin/frpctl show client \$(sudo python3 -c \"import json;d=json.load(open('/var/lib/frp-auto-deploy/registry.json'));print(next(cid for cid,c in (d.get('clients') or {}).items() if (c.get('label') or '')=='$CLIENT_LABEL'))\")" >>"$SHOW" 2>&1 \
+ssh_server "sudo /usr/local/bin/drlink show clients" >"$SHOW" 2>&1 || { cat "$SHOW"; fail "show clients"; }
+ssh_server "sudo /usr/local/bin/drlink show client '$CLIENT_LABEL'" >>"$SHOW" 2>&1 \
+  || ssh_server "sudo /usr/local/bin/drlink show client \$(sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));print(next(cid for cid,c in (d.get('clients') or {}).items() if (c.get('label') or '')=='$CLIENT_LABEL'))\")" >>"$SHOW" 2>&1 \
   || { cat "$SHOW"; fail "show client"; }
 grep -qi "$CLIENT_LABEL" "$SHOW" || fail "client label missing"
 grep -qiE '6000|6001|6002|ssh' "$SHOW" || fail "ssh service/port missing"
@@ -245,7 +245,7 @@ m = re.search(r'\b([0-9a-f]{32})\b', text)
 print(m.group(1) if m else '')
 PY
 )"
-[[ -n "$CLIENT_MID" ]] || CLIENT_MID="$(ssh_server "sudo python3 -c \"import json;d=json.load(open('/var/lib/frp-auto-deploy/registry.json'));print(next(iter(d.get('clients') or {})))\"")"
+[[ -n "$CLIENT_MID" ]] || CLIENT_MID="$(ssh_server "sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));print(next(iter(d.get('clients') or {})))\"")"
 note "CLIENT_MID=$CLIENT_MID"
 [[ -n "$CLIENT_MID" ]] || fail "CLIENT ID missing"
 pass "CLIENT_ID"
@@ -278,19 +278,19 @@ done
 [[ "$up" == "1" ]] || fail "client SSH did not return after reboot"
 # Give frpc a moment after sshd is back.
 for _ in $(seq 1 24); do
-  if ssh_client 'systemctl is-active frpc' >/dev/null 2>&1; then
+  if ssh_client 'systemctl is-active drlink-client' >/dev/null 2>&1; then
     break
   fi
   sleep 5
 done
-ssh_client 'systemctl is-active frpc' >"$OUT_DIR/frpc-active.log" 2>&1 \
+ssh_client 'systemctl is-active drlink-client' >"$OUT_DIR/frpc-active.log" 2>&1 \
   || { cat "$OUT_DIR/frpc-active.log"; fail "frpc inactive after reboot"; }
 pass "REBOOT_RECONNECT"
 
 # Cert failure fails closed: untrusted host must not enroll.
 BAD_HOST="untrusted-bootstrap.invalid"
 # Ensure zt1 fallback still works after cert failure path.
-ssh_server "sudo /usr/local/sbin/frpctl unset server bootstrap-hostname" >/dev/null
+ssh_server "sudo /usr/local/bin/drlink unset server bootstrap-hostname" >/dev/null
 FALLBACK_OUT="$OUT_DIR/zt1-fallback.out"
 ssh_server "sudo /usr/local/sbin/frp-create-client --one-line --client-name '${CLIENT_LABEL}-zt1' --note 'zt1-fallback'" \
   >"$FALLBACK_OUT" 2>&1 || { cat "$FALLBACK_OUT"; fail "zt1 create"; }

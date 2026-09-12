@@ -4,16 +4,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 TREE="$WORK/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments" "$TREE/var/lib/frp-auto-deploy/bootstrap"
-python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/frp-auto-deploy/pki" --public-host example.test >/dev/null
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments" "$TREE/var/lib/drlink/bootstrap"
+python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/drlink/pki" --public-host example.test >/dev/null
 python3 - "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 root=Path(sys.argv[1])
-(root/'etc/frp-auto-deploy/config.json').write_text(json.dumps({
-  'enrollments_dir':'/var/lib/frp-auto-deploy/enrollments',
-  'bootstrap_dir':'/var/lib/frp-auto-deploy/bootstrap',
-  'tls_ca_cert':'/etc/frp-auto-deploy/pki/ca.crt',
+(root/'etc/drlink/config.json').write_text(json.dumps({
+  'enrollments_dir':'/var/lib/drlink/enrollments',
+  'bootstrap_dir':'/var/lib/drlink/bootstrap',
+  'tls_ca_cert':'/etc/drlink/pki/ca.crt',
   'allocator_public_url':'https://example.test/enroll',
   'client_installer_url':'https://example.test/bootstrap-client.sh',
 })+'\n')
@@ -43,7 +43,7 @@ python3 "$ROOT/tools/frp-enrollment-revoke" "$ID" >"$WORK/revoke.out"
 python3 "$ROOT/tools/frp-enrollments" >"$WORK/revoked.out"
 grep -qE "${ID}[[:space:]]+zero-touch.*revoked" "$WORK/revoked.out"
 ! grep -Fq "$SECRET" "$WORK/revoked.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/bootstrap/$ID.json" <<'PY'
+python3 - "$TREE/var/lib/drlink/bootstrap/$ID.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1]))
 assert r.get('revoked_at')

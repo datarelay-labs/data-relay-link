@@ -10,13 +10,13 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments"
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments"
 python3 "$ROOT/lib/frp_pki.py" ensure \
-  --pki-dir "$TREE/etc/frp-auto-deploy/pki" \
+  --pki-dir "$TREE/etc/drlink/pki" \
   --public-host 203.0.113.10 >/dev/null
-CA_FP="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/frp-auto-deploy/pki/ca.crt")"
+CA_FP="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/drlink/pki/ca.crt")"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE/var/lib/frp-auto-deploy/enrollments" "$TREE/etc/frp-auto-deploy/pki/ca.crt" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$TREE/var/lib/drlink/enrollments" "$TREE/etc/drlink/pki/ca.crt" <<'PY'
 import json, sys
 from pathlib import Path
 cfg = Path(sys.argv[1])
@@ -28,7 +28,7 @@ cfg.write_text(json.dumps({
   "frp_control_listen_port": 443,
   "allocator_public_url": "https://203.0.113.10:9443/enroll",
   "tls_ca_cert": sys.argv[3],
-  "client_installer_url": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh",
+  "client_installer_url": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh",
   "enrollments_dir": str(enroll),
 }, indent=2) + "\n")
 PY
@@ -37,7 +37,7 @@ OUT="$WORKDIR/create.out"
 FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$ROOT/tools/frp-create-client" >"$OUT"
 grep -q 'Enrollment Code:' "$OUT" || fail "enrollment header"
 grep -qE '^[0-9a-f]{16}\.[0-9a-f]{64}$' "$OUT" || fail "enrollment code format"
-grep -q 'FRP Server: 203.0.113.10:8443' "$OUT" || fail "public FRP endpoint"
+grep -q 'Data Relay Link Server: 203.0.113.10:8443' "$OUT" || fail "public FRP endpoint"
 if grep -q '203.0.113.10:443' "$OUT"; then
   fail "internal listen port leaked as client-facing FRP endpoint"
 fi
@@ -55,17 +55,23 @@ sudo_line="$(grep 'sudo env FRP_ALLOCATOR_URL=' "$OUT")"
 if grep -F "$code" <<<"$sudo_line" >/dev/null; then
   fail "enrollment code leaked into sudo command"
 fi
-grep -q 'xdr-labs/frp-auto-deploy' "$OUT" || fail "canonical repository URL"
+grep -q 'datarelay-labs/data-relay-link' "$OUT" || fail "canonical repository URL"
 if grep -F 'RickLee-kr' "$OUT" >/dev/null; then
   fail "stale repository owner in frp-create-client output"
 fi
-if grep -F 'datarelay-labs' "$OUT" >/dev/null; then
-  fail "stale repository owner datarelay-labs in frp-create-client output"
+if grep -F 'xdr-labs' "$OUT" >/dev/null; then
+  fail "stale repository owner xdr-labs in frp-create-client output"
+fi
+if grep -F 'frp-auto-deploy' "$OUT" >/dev/null; then
+  fail "stale repository name frp-auto-deploy in frp-create-client output"
+fi
+if grep -F 'frp.xdr.ooo' "$OUT" >/dev/null; then
+  fail "stale docs domain in frp-create-client output"
 fi
 pass "CASE D generated client command"
 
 # Shell-sensitive allocator URL is quoted so bash does not execute extra commands.
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])

@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = Path(ROOT + '/etc/frp-auto-deploy/config.json')
+CONFIG = Path(ROOT + '/etc/drlink/config.json')
 
 
 def load_create_client():
@@ -58,7 +58,7 @@ def _audit_emit(event, **kwargs):
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))
@@ -103,7 +103,7 @@ def main(argv=None):
     cfg = json.loads(CONFIG.read_text(encoding='utf-8'))
     allocator_url = str(cfg.get('allocator_public_url') or '').strip()
     installer = str(cfg.get('client_installer_url') or '').strip()
-    ca_path = remap(cfg.get('tls_ca_cert') or '/etc/frp-auto-deploy/pki/ca.crt')
+    ca_path = remap(cfg.get('tls_ca_cert') or '/etc/drlink/pki/ca.crt')
     ca_fp = create.fingerprint_from_cert(ca_path)
     if not allocator_url.lower().startswith('https://') or not installer or not ca_fp:
         raise SystemExit('ERROR: secure allocator URL, installer URL, and CA fingerprint are required')
@@ -145,8 +145,9 @@ def main(argv=None):
         validated.append((label, ssh_user, note, services))
 
     labels = [item[0] for item in validated if item[0]]
-    if len(labels) != len(set(labels)):
-        raise SystemExit('ERROR: duplicate labels in this batch')
+    lowered = [str(x).strip().lower() for x in labels]
+    if len(lowered) != len(set(lowered)):
+        raise SystemExit('ERROR: duplicate labels in this batch (case-insensitive)')
 
     if not sys.stdout.isatty():
         print(

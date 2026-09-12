@@ -1,21 +1,19 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  frp-client lifecycle tool for Windows (start/stop/status/info/update/uninstall/doctor/support-bundle/autostart).
+  drlink client lifecycle tool for Windows.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet(
-        'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'support-bundle', 'autostart', 'help',
-        'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service',
-        'apply', 'discard', 'sync', 'reconcile'
-    )]
     [string]$Command = 'help',
 
-    [Parameter(Position = 1)][string]$Id,
-    [Parameter(Position = 2)][string]$Property,
-    [Parameter(Position = 3)][string]$Value,
+    [Parameter(Position = 1)]
+    [string]$SubCommand,
+
+    [Parameter(Position = 2)][string]$Id,
+    [Parameter(Position = 3)][string]$Property,
+    [Parameter(Position = 4)][string]$Value,
 
     [switch]$Check,
     [switch]$Force,
@@ -36,6 +34,109 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# --- Canonical resource-first grammar (legacy verb-first remains as aliases) ---
+$script:FrpUpdateMode = 'engine'  # engine | project | both-check
+$normalized = $false
+$fromServiceResource = $false
+switch -Regex ($Command.ToLowerInvariant()) {
+    '^status$' {
+        $Command = 'status'
+        $normalized = $true
+    }
+    '^client$' {
+        if ([string]::IsNullOrWhiteSpace($SubCommand) -or $SubCommand.ToLowerInvariant() -eq 'info') {
+            $Command = 'info'
+            $normalized = $true
+        } else {
+            Write-Host ("ERROR: unknown client command: {0}" -f $SubCommand)
+            Write-Host 'Next: drlink client info'
+            exit 1
+        }
+    }
+    '^service$' {
+        $fromServiceResource = $true
+        $sub = if ($SubCommand) { $SubCommand.ToLowerInvariant() } else { '' }
+        switch ($sub) {
+            'list' { $Command = 'list'; $normalized = $true }
+            'add' { $Command = 'add-service'; $normalized = $true }
+            'set' { $Command = 'set-service'; $normalized = $true }
+            'enable' { $Command = 'enable-service'; $normalized = $true }
+            'disable' { $Command = 'disable-service'; $normalized = $true }
+            'apply' { $Command = 'apply'; $normalized = $true }
+            'discard' { $Command = 'discard'; $normalized = $true }
+            default {
+                Write-Host ("ERROR: unknown service command: {0}" -f $SubCommand)
+                Write-Host 'Next: drlink service list | add | set | enable | disable | apply | discard'
+                exit 1
+            }
+        }
+    }
+    '^update$' {
+        $sub = if ($SubCommand) { $SubCommand.ToLowerInvariant() } else { '' }
+        if ($sub -eq 'project') {
+            $script:FrpUpdateMode = 'project'
+            $Command = 'update'
+            $normalized = $true
+        } elseif ($sub -eq 'engine') {
+            $script:FrpUpdateMode = 'engine'
+            $Command = 'update'
+            $normalized = $true
+        } elseif ($Check -or $sub -eq '--check' -or $sub -eq 'check') {
+            $script:FrpUpdateMode = 'both-check'
+            $Command = 'update'
+            $Check = $true
+            $normalized = $true
+        } elseif ([string]::IsNullOrWhiteSpace($sub)) {
+            # Bare `update` remains legacy engine update for compatibility.
+            $script:FrpUpdateMode = 'engine'
+            $Command = 'update'
+            $normalized = $true
+        } else {
+            Write-Host ("ERROR: unknown update command: {0}" -f $SubCommand)
+            Write-Host 'Next: drlink update project | update engine | update --check'
+            exit 1
+        }
+    }
+    '^support$' {
+        $sub = if ($SubCommand) { $SubCommand.ToLowerInvariant() } else { '' }
+        if ($sub -eq 'bundle' -or [string]::IsNullOrWhiteSpace($sub)) {
+            $Command = 'support-bundle'
+            $normalized = $true
+        } else {
+            Write-Host ("ERROR: unknown support command: {0}" -f $SubCommand)
+            Write-Host 'Next: drlink support bundle'
+            exit 1
+        }
+    }
+}
+
+# Legacy verb-first used Position 1 as <id>. Resource-first uses Position 1 as
+# the subcommand, so remap when the caller did not use `service …`.
+if (-not $fromServiceResource -and $Command -in @('set-service', 'enable-service', 'disable-service')) {
+    if (-not [string]::IsNullOrWhiteSpace($SubCommand)) {
+        if ($Command -eq 'set-service') {
+            $Value = $Property
+            $Property = $Id
+            $Id = $SubCommand
+        } else {
+            $Id = $SubCommand
+        }
+        $SubCommand = $null
+    }
+}
+
+# Legacy aliases: add-service → keep; client info already handled; map bare verbs.
+$legacyAllowed = @(
+    'start', 'stop', 'status', 'info', 'update', 'uninstall', 'doctor', 'support-bundle', 'autostart', 'help',
+    'list', 'add-service', 'add', 'set-service', 'enable-service', 'disable-service',
+    'apply', 'discard', 'sync', 'reconcile'
+)
+if (-not $normalized -and $Command -notin $legacyAllowed) {
+    Write-Host ("ERROR: unknown command: {0}" -f $Command)
+    Write-Host 'Run: drlink help'
+    exit 1
+}
+
 function Import-FrpWindowsModules {
     $roots = New-Object System.Collections.ArrayList
     [void]$roots.Add((Join-Path $PSScriptRoot '..\lib'))
@@ -43,7 +144,7 @@ function Import-FrpWindowsModules {
         [void]$roots.Add((Join-Path $env:FRP_WINDOWS_ROOT 'lib'))
     }
     if ($env:ProgramData) {
-        [void]$roots.Add((Join-Path $env:ProgramData 'frp-auto-deploy\lib'))
+        [void]$roots.Add((Join-Path $env:ProgramData 'drlink\lib'))
     }
 
     $libDir = $null
@@ -73,42 +174,39 @@ try { Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue | Out
 
 function Show-FrpClientHelp {
     @'
-frp-client (Windows)
+drlink (Windows client)
 
-  start             Start frpc from existing config (no re-enroll)
-  stop              Stop project-managed frpc
-  status            Running / enrolled summary
-  info              Connection details (RDP/SSH/HTTP)
-  list              List configured services (read-only)
-  add-service       Add a pending service to the draft (alias: add)
-                       -Preset ssh|http|https|custom -Id <id> -Name <name>
-                       -TargetHost <ip> -TargetPort <port> [-SshUser <user>]
-  set-service       Edit a pending service: <id> <property> <value>
-                       properties: name, target-host, target-port, ssh-user
-  enable-service    Enable a pending service: <id> (reuses same public port)
-  disable-service   Disable a pending service: <id> (public port preserved)
-  apply             Send pending draft changes to the server (identity auth)
-  discard           Discard pending draft changes
-  sync              Reconcile local services against server releases
-                       (alias: reconcile; after frpctl release service)
-  update            Update frpc.exe (preserve identity/ports); -Check for dry run
-  uninstall         Remove local software (SERVER RESERVATIONS PRESERVED)
-  doctor            Basic local checks
-  support-bundle    Create a sanitized local diagnostic zip (-Output <path>)
-  autostart         Show/enable/disable the startup autostart task
-                       (-Enable / -Disable; no args shows current status)
+REMOTE ACCESS
+  status                 Running / enrolled summary
+  client info            Connection details (RDP/SSH/HTTP)
 
-Autostart registers a product-owned Scheduled Task (FRPAutoDeployClient)
-that runs `frp-client start` as SYSTEM at system boot, so frpc survives a
-reboot without an interactive login. Zero-touch install registers it
-automatically for clients with public services; management-only clients
-do not need it.
+  service list           List configured services
+  service add            Add a pending service (-Preset … -Id … -TargetPort …)
+  service set            Edit pending service: <id> <property> <value>
+  service enable <id>    Enable a pending service
+  service disable <id>   Disable a pending service
+  service apply          Send pending draft to the server
+  service discard        Discard pending draft changes
 
-Adding, editing, enabling, or disabling a service only edits a local pending
-draft (client-draft.json). Run `apply` to authenticate with this client's
-management identity and make the change live. `frpctl release service` on
-the server is the only way to release a public port reservation; then run
-`sync` on this client to drop the released service and avoid ghost proxies.
+OPERATE
+  update project [--check]
+                         Check project tools status. Applying a project update
+                         on an installed client means re-running the canonical
+                         Windows installer (identity/ports preserved). Developers
+                         may set FRP_WINDOWS_PROJECT_SRC to a windows/ tree.
+  update engine [--check]
+                         Check or update pinned/tested frpc.exe (not latest upstream)
+  update --check         Combined project + engine status (not an apply)
+  doctor                 Basic local checks
+  support bundle         Create a sanitized diagnostic zip (-Output <path>)
+  uninstall              Remove local software (SERVER RESERVATIONS PRESERVED)
+
+Autostart: when services are enabled, a product Scheduled Task starts frpc at
+boot. Management-only clients (zero enabled services) do not autostart frpc.
+
+Adding/editing/enabling/disabling only edits a local draft. Run:
+  drlink service apply
+to authenticate with this client's management identity and make changes live.
 '@ | Write-Host
 }
 
@@ -125,7 +223,7 @@ function Show-FrpClientInfo {
     }
     $preferred = ''
     if ($alias -and $alias -ne $server) { $preferred = $alias }
-    Write-Host ("FRP Server: {0}" -f $server)
+    Write-Host ("Data Relay Link Server: {0}" -f $server)
     Write-Host ("Transport: {0}" -f $state.frp_transport)
     Write-Host ("Machine ID: {0}" -f $state.machine_id)
     Write-Host ''
@@ -231,16 +329,164 @@ function Show-FrpClientInfo {
     return 0
 }
 
+function Install-FrpProjectManagementFiles {
+    param([Parameter(Mandatory = $true)][string]$SrcRoot)
+    Initialize-FrpDirectories
+    $srcClient = Join-Path $SrcRoot 'tools/FrpClient.ps1'
+    $srcCmd = Join-Path $SrcRoot 'tools/frp-client.cmd'
+    $srcDrlink = Join-Path $SrcRoot 'tools/drlink.cmd'
+    $srcAuto = Join-Path $SrcRoot 'tools/frp-autostart.cmd'
+    if (-not (Test-Path -LiteralPath $srcClient)) {
+        throw ("ERROR: project source missing FrpClient.ps1 under {0}" -f $SrcRoot)
+    }
+    Copy-Item -LiteralPath $srcClient -Destination (Join-Path (Get-FrpToolsDir) 'FrpClient.ps1') -Force
+    if (Test-Path -LiteralPath $srcCmd) {
+        Copy-Item -LiteralPath $srcCmd -Destination (Join-Path (Get-FrpToolsDir) 'frp-client.cmd') -Force
+    }
+    if (Test-Path -LiteralPath $srcDrlink) {
+        Copy-Item -LiteralPath $srcDrlink -Destination (Join-Path (Get-FrpToolsDir) 'drlink.cmd') -Force
+    }
+    if (Test-Path -LiteralPath $srcAuto) {
+        Copy-Item -LiteralPath $srcAuto -Destination (Join-Path (Get-FrpToolsDir) 'frp-autostart.cmd') -Force
+    }
+    $srcLib = Join-Path $SrcRoot 'lib'
+    if (Test-Path -LiteralPath $srcLib) {
+        $destLib = Get-FrpLibDir
+        Get-ChildItem -LiteralPath $srcLib -Filter '*.ps1' -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destLib $_.Name) -Force
+        }
+    }
+    # Preserve identity/ports: do not rewrite client-state or frpc.toml.
+    $verSrc = Join-Path $SrcRoot '..\VERSION'
+    if (-not (Test-Path -LiteralPath $verSrc)) {
+        $verSrc = Join-Path $SrcRoot 'VERSION'
+    }
+    if (Test-Path -LiteralPath $verSrc) {
+        Copy-Item -LiteralPath $verSrc -Destination (Get-FrpVersionPath) -Force
+    }
+}
+
+function Test-FrpIsInstalledProductTree {
+    param([Parameter(Mandatory = $true)][string]$CandidateRoot)
+    try {
+        $productRoot = [System.IO.Path]::GetFullPath((Get-FrpWindowsRoot).TrimEnd('\', '/'))
+        $cand = [System.IO.Path]::GetFullPath($CandidateRoot.TrimEnd('\', '/'))
+        return ($cand -eq $productRoot)
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-FrpProjectSourceRoot {
+    # Production installed clients do not ship a downloadable project artifact
+    # pipeline in v2.3.1. Only an explicit source tree (or a distinct repo
+    # checkout) may refresh management files; never copy the installed tree onto itself.
+    if ($env:FRP_WINDOWS_PROJECT_SRC) {
+        if (-not (Test-Path -LiteralPath $env:FRP_WINDOWS_PROJECT_SRC)) {
+            return $null
+        }
+        $explicit = $env:FRP_WINDOWS_PROJECT_SRC.TrimEnd('\', '/')
+        if (Test-FrpIsInstalledProductTree -CandidateRoot $explicit) {
+            return $null
+        }
+        return $explicit
+    }
+    if ($script:FrpWindowsSrcRoot -and (Test-Path -LiteralPath $script:FrpWindowsSrcRoot)) {
+        $srcRoot = $script:FrpWindowsSrcRoot.TrimEnd('\', '/')
+        if (-not (Test-FrpIsInstalledProductTree -CandidateRoot $srcRoot)) {
+            return $srcRoot
+        }
+    }
+    # Repo layout when running from a checkout: windows/tools/FrpClient.ps1
+    $candidate = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    if (Test-Path -LiteralPath (Join-Path $candidate 'tools/FrpClient.ps1')) {
+        if (Test-FrpIsInstalledProductTree -CandidateRoot $candidate) {
+            return $null
+        }
+        $hasInstaller = Test-Path -LiteralPath (Join-Path $candidate 'install-client.ps1')
+        $hasVersion = Test-Path -LiteralPath (Join-Path $candidate '..\VERSION')
+        if ($hasInstaller -or $hasVersion) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Write-FrpProjectUpdateCheck {
+    param([string]$InstalledProject)
+    Write-Host 'Data Relay Link project:'
+    Write-Host ("  installed : {0}" -f $InstalledProject)
+    Write-Host '  apply path : re-run the Windows client installer (supported)'
+    Write-Host '  note       : no in-place project artifact download in this release'
+    Write-Host '  developers : set FRP_WINDOWS_PROJECT_SRC to a windows/ tree (tools + lib)'
+}
+
+function Write-FrpEngineUpdateCheck {
+    param([string]$Url, [string]$Sha256)
+    Write-Host 'FRP engine (project-pinned/tested only):'
+    Write-Host ("  Would download: {0}" -f $Url)
+    Write-Host ("  Expected SHA256: {0}" -f $Sha256)
+    Write-Host '  note      : Does not install latest upstream FRP — only the pinned release.'
+    Write-Host 'Identity, ports, and frpc.toml token would be preserved.'
+}
+
 function Invoke-FrpClientUpdate {
     param([switch]$CheckOnly)
-    $url = $DownloadUrl
-    if (-not $url) { $url = Get-FrpWindowsAmd64Url }
-    $sha = $ExpectedSha256
-    if (-not $sha) { $sha = Get-FrpWindowsAmd64Sha256 }
+    $mode = $script:FrpUpdateMode
+    if (-not $mode) { $mode = 'engine' }
+
+    $installedProject = Get-FrpProjectVersion
+    $engineUrl = $DownloadUrl
+    if (-not $engineUrl) { $engineUrl = Get-FrpWindowsAmd64Url }
+    $engineSha = $ExpectedSha256
+    if (-not $engineSha) { $engineSha = Get-FrpWindowsAmd64Sha256 }
+
+    # Distinct -Check semantics:
+    #   update --check           -> both-check (project + engine)
+    #   update project -Check    -> project only
+    #   update engine -Check     -> engine only (Would download)
+    if ($mode -eq 'both-check') {
+        Write-FrpProjectUpdateCheck -InstalledProject $installedProject
+        Write-Host ''
+        Write-FrpEngineUpdateCheck -Url $engineUrl -Sha256 $engineSha
+        Write-Host 'Identity, ports, services, CA trust, and management state are preserved.'
+        return 0
+    }
+
+    if ($mode -eq 'project') {
+        if ($CheckOnly) {
+            Write-FrpProjectUpdateCheck -InstalledProject $installedProject
+            Write-Host 'Identity, ports, services, CA trust, and management state are preserved.'
+            return 0
+        }
+        $src = Resolve-FrpProjectSourceRoot
+        if (-not $src) {
+            Write-Host 'ERROR: Windows project auto-update from an installed client is not supported in this release.'
+            Write-Host 'Supported path: re-run the canonical Windows client installer (identity and ports are preserved).'
+            Write-Host 'Developers/CI: set FRP_WINDOWS_PROJECT_SRC to a windows/ tree containing tools/ and lib/.'
+            Write-Host 'FAILURE_CLASS=PROJECT_UPDATE_USE_INSTALLER'
+            return 1
+        }
+        if (-not (Enter-FrpClientLock)) { return 1 }
+        try {
+            Install-FrpProjectManagementFiles -SrcRoot $src
+            Write-Host ("Project update complete from {0}" -f $src)
+            Write-Host 'Identity, ports, services, and CA trust were preserved.'
+            Write-Host 'Restart this PowerShell session (or re-run drlink) to load updated CLI modules.'
+            return 0
+        } catch {
+            Write-Host ("ERROR: project update failed: {0}" -f $_.Exception.Message)
+            return 1
+        } finally {
+            Exit-FrpClientLock
+        }
+    }
+
+    # Engine update (frpc.exe) — mode engine (also bare `update`)
+    $url = $engineUrl
+    $sha = $engineSha
     if ($CheckOnly) {
-        Write-Host ("Would download: {0}" -f $url)
-        Write-Host ("Expected SHA256: {0}" -f $sha)
-        Write-Host 'Identity, ports, and frpc.toml token would be preserved.'
+        Write-FrpEngineUpdateCheck -Url $url -Sha256 $sha
         return 0
     }
     if (-not (Enter-FrpClientLock)) { return 1 }
@@ -281,7 +527,7 @@ function Invoke-FrpClientUpdate {
             }
             Start-FrpClient | Out-Null
         }
-        Write-Host 'Update complete (identity and port reservations preserved).'
+        Write-Host 'FRP engine update complete (identity and port reservations preserved).'
         return 0
     } catch {
         Write-Host ("ERROR: update failed: {0}" -f $_.Exception.Message)
@@ -330,7 +576,11 @@ function Invoke-FrpClientUninstall {
 function Invoke-FrpClientUninstallLocked {
     Write-Host 'LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED'
     Write-Host 'This removes local frpc binaries, config, state, and tools.'
-    Write-Host 'Public port reservations on the server remain until an administrator revokes them.'
+    Write-Host 'Server-side public port reservations are preserved.'
+    Write-Host 'To return one reservation:'
+    Write-Host '  drlink client release <CLIENT-ID> <SERVICE-ID>'
+    Write-Host 'To remove all server-side reservations and the client registry record:'
+    Write-Host '  drlink client release <CLIENT-ID>'
     try {
         Stop-FrpClient | Out-Null
     } catch {
@@ -405,12 +655,14 @@ function Invoke-FrpClientSupportBundle {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         $OutputPath = Join-Path $dir ("frp-support-{0}-{1}.zip" -f $hostName, $stamp)
     }
-    $stage = Join-Path $env:TEMP ("frp-support-" + [guid]::NewGuid().ToString('N'))
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $root }
+    $stage = Join-Path $tempRoot ("frp-support-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     $sections = New-Object System.Collections.Generic.List[string]
     try {
         $meta = @{
-            format = 'frp-auto-deploy-support-bundle-windows'
+            format = 'data-relay-link-support-bundle-windows'
             created_at = (Get-Date).ToUniversalTime().ToString('o')
             hostname = $hostName
             role = 'client'

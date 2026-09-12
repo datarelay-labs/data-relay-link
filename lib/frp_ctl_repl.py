@@ -59,9 +59,10 @@ class LineEditor:
         self.clients = payload.get("clients") or []
         self.services = payload.get("services") or {}
         self.local_services = payload.get("local_services") or []
+        self.groups = payload.get("groups") or []
         self._matches = []
         self._last_display_key = None
-        self.prompt = "frpctl> "
+        self.prompt = os.environ.get("FRP_CTL_PROMPT") or "drlink> "
 
     def completer(self, text, state):
         if state == 0:
@@ -74,6 +75,7 @@ class LineEditor:
                 self.services,
                 self.local_services,
                 trailing=trailing,
+                groups=self.groups,
             )
             # Unique -> replace current word (append space). Longer common
             # prefix -> extend only. Fully ambiguous -> return candidates so
@@ -124,6 +126,7 @@ class LineEditor:
             self.services,
             self.local_services,
             trailing=bool(line) and line[-1:] in " \t",
+            groups=self.groups,
         )
         if preferred:
             rank = {name: idx for idx, name in enumerate(preferred)}
@@ -221,6 +224,80 @@ def _looks_secret(grammar, line):
         return False
 
 
+_MUTATING_VERBS = frozenset(
+    {
+        "create",
+        "delete",
+        "set",
+        "add",
+        "remove",
+        "rename",
+        "release",
+        "revoke",
+        "enable",
+        "disable",
+        "purge",
+        "import",
+        "restore",
+        "update",
+    }
+)
+_MUTATING_ROOTS = frozenset(
+    {
+        "group",
+        "client",
+        "service",
+        "service-profile",
+        "egress",
+        "enrollment",
+        "access",
+        "backup",
+    }
+)
+
+
+def _should_refresh_inventory(tokens):
+    if not tokens:
+        return False
+    root = tokens[0]
+    if root in _MUTATING_VERBS or root in _MUTATING_ROOTS:
+        return True
+    return False
+
+
+def _refresh_editor_inventory(editor, frpctl_bin):
+    """Reload completion inventory after a successful mutating command."""
+    env = os.environ.copy()
+    env.pop("FRP_CTL_GRAMMAR_PAYLOAD", None)
+    env.pop("FRP_CTL_SOURCED", None)
+    try:
+        proc = subprocess.run(
+            [frpctl_bin, "--print-grammar-payload"],
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+    except OSError:
+        return
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return
+    try:
+        payload = json.loads(proc.stdout)
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    editor.payload = payload
+    editor.role = payload.get("role") or editor.role
+    editor.names = payload.get("names") or []
+    editor.clients = payload.get("clients") or []
+    editor.services = payload.get("services") or {}
+    editor.local_services = payload.get("local_services") or []
+    editor.groups = payload.get("groups") or []
+
+
 def run_repl(frpctl_bin, payload):
     grammar = _load_grammar()
     editor = LineEditor(payload)
@@ -289,8 +366,12 @@ def run_repl(frpctl_bin, payload):
         try:
             proc = subprocess.run([frpctl_bin] + tokens, env=env, check=False)
         except OSError as exc:
-            sys.stderr.write("ERROR: could not run frpctl: %s\n" % exc)
+            sys.stderr.write(
+                "ERROR: could not run the Data Relay Link CLI backend: %s\n" % exc
+            )
             continue
+        if proc.returncode == 0 and _should_refresh_inventory(tokens):
+            _refresh_editor_inventory(editor, frpctl_bin)
         if proc.returncode not in (0, 130) and tokens[0] not in ("?", "help"):
             print()
             print("Command failed with exit code %s." % proc.returncode)
@@ -307,7 +388,7 @@ def main(argv=None):
         print("READLINE_OK")
         print("READLINE_BACKEND=%s" % readline_backend())
         return 0
-    frpctl_bin = os.environ.get("FRPCTL_BIN") or "frpctl"
+    frpctl_bin = os.environ.get("FRPCTL_BIN") or "drlink"
     if "--frpctl" in argv:
         idx = argv.index("--frpctl")
         if idx + 1 < len(argv):

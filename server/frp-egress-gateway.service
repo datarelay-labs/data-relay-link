@@ -1,0 +1,29 @@
+[Unit]
+Description=Data Relay Link Controlled Egress Gateway
+After=network-online.target
+Wants=network-online.target
+# Isolated from inbound FRP: failure must not stop drlink-server.
+
+[Service]
+Type=simple
+RuntimeDirectory=drlink/egress
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-egress-gateway.py --config /etc/drlink/config.json
+Restart=always
+RestartSec=2
+User=drlink-egress
+Group=drlink-egress
+# Hardening below requires systemd 232+. The installer strips these lines on
+# older systemd (Amazon Linux 2 is 219) rather than failing unit load.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Least privilege: writable service log dir + runtime only. Policy/config are
+# read-only. Shared /var/log/drlink stays traverse-only (not writable).
+ReadWritePaths=/var/log/drlink/egress /run/drlink/egress
+ReadOnlyPaths=/etc/drlink/config.json /var/lib/drlink/egress-control.json
+# Outbound TCP to approved Internet destinations.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

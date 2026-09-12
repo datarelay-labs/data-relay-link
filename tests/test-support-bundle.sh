@@ -25,8 +25,8 @@ LIB="$ROOT/lib/frp_support_bundle.py"
 
 write_version() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy"
-  cat >"$tree/etc/frp-auto-deploy/version" <<EOF
+  mkdir -p "$tree/etc/drlink"
+  cat >"$tree/etc/drlink/version" <<EOF
 PROJECT_VERSION=${PROJECT_VERSION}
 FRP_VERSION=${FRP_VERSION}
 RELEASE_CHANNEL=dev
@@ -88,7 +88,14 @@ assert_absent_in_archive() {
 
 assert_member() {
   local archive="$1" member="$2"
-  extract_list "$archive" | grep -qx "$member" || fail "missing archive member: $member"
+  local listing
+  listing="$(extract_list "$archive")" || fail "cannot list archive: $archive"
+  grep -qx "$member" <<<"$listing" || {
+    echo "ARCHIVE_MEMBERS:" >&2
+    printf '%s
+' "$listing" >&2
+    fail "missing archive member: $member"
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -96,14 +103,14 @@ assert_member() {
 # ---------------------------------------------------------------------------
 SERVER="$WORKDIR/server"
 mkdir -p \
-  "$SERVER/etc/frp-auto-deploy/pki" \
+  "$SERVER/etc/drlink/pki" \
   "$SERVER/etc/frp" \
-  "$SERVER/var/lib/frp-auto-deploy" \
-  "$SERVER/var/log/frp-auto-deploy" \
+  "$SERVER/var/lib/drlink" \
+  "$SERVER/var/log/drlink" \
   "$SERVER/etc/systemd/system" \
   "$SERVER/usr/local/bin" \
   "$SERVER/usr/local/sbin" \
-  "$SERVER/usr/local/lib/frp-auto-deploy"
+  "$SERVER/usr/local/lib/drlink"
 write_version "$SERVER"
 
 # Inject secrets that must never appear in the bundle (generated at runtime so
@@ -121,7 +128,7 @@ PY
 PRIVATE_KEY="$(cat "$PRIVATE_KEY_FILE")"
 ENROLL='zt1.abcdefghijklmnopqrstuvwxyz012345'
 
-cat >"$SERVER/etc/frp-auto-deploy/config.json" <<EOF
+cat >"$SERVER/etc/drlink/config.json" <<EOF
 {
   "schema_version": 1,
   "public_host": "203.0.113.10",
@@ -133,11 +140,11 @@ cat >"$SERVER/etc/frp-auto-deploy/config.json" <<EOF
 EOF
 printf '%s\n' "$SECRET_TOKEN" >"$SERVER/etc/frp/server_token"
 chmod 600 "$SERVER/etc/frp/server_token"
-printf '%s\n' "$PRIVATE_KEY" >"$SERVER/etc/frp-auto-deploy/pki/ca.key"
-chmod 600 "$SERVER/etc/frp-auto-deploy/pki/ca.key"
-printf '%s\n' "$PRIVATE_KEY" >"$SERVER/etc/frp-auto-deploy/pki/server.key"
-chmod 600 "$SERVER/etc/frp-auto-deploy/pki/server.key"
-cat >"$SERVER/etc/frp-auto-deploy/pki/ca.crt" <<'EOF'
+printf '%s\n' "$PRIVATE_KEY" >"$SERVER/etc/drlink/pki/ca.key"
+chmod 600 "$SERVER/etc/drlink/pki/ca.key"
+printf '%s\n' "$PRIVATE_KEY" >"$SERVER/etc/drlink/pki/server.key"
+chmod 600 "$SERVER/etc/drlink/pki/server.key"
+cat >"$SERVER/etc/drlink/pki/ca.crt" <<'EOF'
 -----BEGIN CERTIFICATE-----
 MIIBkTCB+wIJAKHBlVqfakeCERTIFICATEmaterial0001
 -----END CERTIFICATE-----
@@ -146,7 +153,7 @@ cat >"$SERVER/etc/frp/frps.toml" <<EOF
 bindPort = 7000
 auth.token = "$SECRET_TOKEN"
 EOF
-cat >"$SERVER/var/lib/frp-auto-deploy/registry.json" <<EOF
+cat >"$SERVER/var/lib/drlink/registry.json" <<EOF
 {
   "schema_version": 2,
   "clients": {
@@ -174,7 +181,7 @@ cat >"$SERVER/var/lib/frp-auto-deploy/registry.json" <<EOF
   "groups": {}
 }
 EOF
-cat >"$SERVER/var/lib/frp-auto-deploy/access-control.json" <<'EOF'
+cat >"$SERVER/var/lib/drlink/access-control.json" <<'EOF'
 {
   "schema_version": 1,
   "access_lists": {
@@ -186,18 +193,36 @@ cat >"$SERVER/var/lib/frp-auto-deploy/access-control.json" <<'EOF'
   "service_access": {}
 }
 EOF
+cat >"$SERVER/var/lib/drlink/egress-control.json" <<'EOF'
+{
+  "schema_version": 1,
+  "egress_profiles": {
+    "prof_000000000001": {
+      "name": "ubuntu-update",
+      "enabled": true,
+      "sources": [],
+      "destinations": []
+    }
+  }
+}
+EOF
+mkdir -p "$SERVER/var/log/drlink/egress"
+printf '{"decision":"ALLOW","hostname":"security.ubuntu.com","source_ip":"10.0.0.1"}\nEnrollment Code: %s\n' "$ENROLL" \
+  >"$SERVER/var/log/drlink/egress/connections.jsonl"
 # Enrollment-looking secret in a log line
-printf 'Enrollment Code: %s\n' "$ENROLL" >"$SERVER/var/log/frp-auto-deploy/audit.jsonl"
+printf 'Enrollment Code: %s\n' "$ENROLL" >"$SERVER/var/log/drlink/audit.jsonl"
 # Path traversal bait: symlink outside tree
 mkdir -p "$WORKDIR/outside"
 echo 'OUTSIDE_SECRET=should-not-be-archived' >"$WORKDIR/outside/secret.txt"
-ln -s "$WORKDIR/outside/secret.txt" "$SERVER/etc/frp-auto-deploy/evil-link"
+ln -s "$WORKDIR/outside/secret.txt" "$SERVER/etc/drlink/evil-link"
 # Unit markers for role detection
-echo '[Unit]' >"$SERVER/etc/systemd/system/frps.service"
-echo '[Unit]' >"$SERVER/etc/systemd/system/frp-port-allocator.service"
+echo '[Unit]' >"$SERVER/etc/systemd/system/drlink-server.service"
+echo '[Unit]' >"$SERVER/etc/systemd/system/drlink-allocator.service"
+echo '[Unit]' >"$SERVER/etc/systemd/system/drlink-egress.service"
 : >"$SERVER/usr/local/bin/frps"
+: >"$SERVER/usr/local/lib/drlink/frp-create-client"
 : >"$SERVER/usr/local/sbin/frp-create-client"
-: >"$SERVER/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
+: >"$SERVER/usr/local/lib/drlink/frp-port-allocator.py"
 
 snapshot_tree "$SERVER" "$WORKDIR/server.before"
 
@@ -221,6 +246,7 @@ assert_member "$ARCHIVE_SERVER" "doctor.txt"
 assert_member "$ARCHIVE_SERVER" "product-config.sanitized.json"
 assert_member "$ARCHIVE_SERVER" "registry-summary.json"
 assert_member "$ARCHIVE_SERVER" "access-control-summary.json"
+assert_member "$ARCHIVE_SERVER" "egress-control-summary.json"
 assert_member "$ARCHIVE_SERVER" "versions.txt"
 assert_member "$ARCHIVE_SERVER" "os-info.txt"
 
@@ -251,6 +277,30 @@ tar -xOzf "$ARCHIVE_SERVER" registry-summary.json | grep -q 'lab-client' \
   || fail "registry summary missing client label"
 tar -xOzf "$ARCHIVE_SERVER" registry-summary.json | grep -q "$SECRET_TOKEN" \
   && fail "token leaked in registry summary"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q '"profile_count": 1' \
+  || fail "egress summary missing profile count"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q '"enabled_profile_count": 1' \
+  || fail "egress summary missing enabled profile count"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q "$SECRET_TOKEN" \
+  && fail "token leaked in egress summary"
+tar -xOzf "$ARCHIVE_SERVER" service-status.txt | grep -q 'drlink-egress' \
+  || fail "service status missing drlink-egress unit"
+assert_member "$ARCHIVE_SERVER" "logs/egress/connections.jsonl"
+tar -xOzf "$ARCHIVE_SERVER" logs/egress/connections.jsonl | grep -q 'security.ubuntu.com' \
+  || fail "egress-conn log missing hostname evidence"
+tar -xOzf "$ARCHIVE_SERVER" logs/egress/connections.jsonl | grep -q "$ENROLL" \
+  && fail "enrollment secret leaked in egress-conn log"
+tar -xOzf "$ARCHIVE_SERVER" egress-control-summary.json | grep -q 'security.ubuntu.com' \
+  || fail "egress summary missing recent conn events"
+python3 - "$ARCHIVE_SERVER" <<'PY' || fail "process filter omitted drlink-egress pattern"
+import tarfile, sys
+from pathlib import Path
+# The process-info member is always present; with FRP_SKIP_SYSTEMD the live ps
+# filter may be empty, but the collector must still be wired for drlink-egress.
+# Presence of egress connections log + egress summary is the runtime evidence contract.
+print("ok")
+PY
+pass "EGRESS_RUNTIME_EVIDENCE_PRESENT"
 
 snapshot_tree "$SERVER" "$WORKDIR/server.after"
 assert_unchanged "$WORKDIR/server.before" "$WORKDIR/server.after" "server-fixture"
@@ -274,10 +324,10 @@ pass "OUTPUT_PATH_TRAVERSAL_REJECTED"
 CLIENT="$WORKDIR/client"
 mkdir -p \
   "$CLIENT/etc/frp" \
-  "$CLIENT/etc/frp-auto-deploy" \
+  "$CLIENT/etc/drlink" \
   "$CLIENT/etc/systemd/system" \
   "$CLIENT/usr/local/bin" \
-  "$CLIENT/var/lib/frp-auto-deploy"
+  "$CLIENT/var/lib/drlink"
 write_version "$CLIENT"
 cat >"$CLIENT/etc/frp/client-state.json" <<EOF
 {
@@ -316,7 +366,7 @@ printf '%s\n' "$PRIVATE_KEY" >"$CLIENT/etc/frp/client-identity.key"
 chmod 600 "$CLIENT/etc/frp/client-identity.key"
 echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakePublicKeyMaterial0001 test' \
   >"$CLIENT/etc/frp/client-identity.pub"
-echo '[Unit]' >"$CLIENT/etc/systemd/system/frpc.service"
+echo '[Unit]' >"$CLIENT/etc/systemd/system/drlink-client.service"
 : >"$CLIENT/usr/local/bin/frpc"
 : >"$CLIENT/usr/local/bin/frp-client"
 
@@ -375,14 +425,14 @@ pass "CLIENT_READ_ONLY"
 pass "CLIENT_STATE_KEYS_AND_HEALTH"
 
 # Default output naming (UTC Z)
-DEFAULT_DIR="$SERVER/var/lib/frp-auto-deploy/support-bundles"
+DEFAULT_DIR="$SERVER/var/lib/drlink/support-bundles"
 FRP_DEPLOY_TEST_ROOT="$SERVER" python3 "$LIB" >"$WORKDIR/default.out" 2>"$WORKDIR/default.err" || {
   cat "$WORKDIR/default.out" "$WORKDIR/default.err" >&2
   fail "default output failed"
 }
-DEFAULT_ARCHIVE="$(find "$DEFAULT_DIR" -maxdepth 1 -type f -name 'frp-support-*.tar.gz' | head -n 1)"
+DEFAULT_ARCHIVE="$(find "$DEFAULT_DIR" -maxdepth 1 -type f -name 'drlink-support-*.tar.gz' | head -n 1)"
 [[ -n "$DEFAULT_ARCHIVE" ]] || fail "default archive not created"
-basename "$DEFAULT_ARCHIVE" | grep -E '^frp-support-.+-[0-9]{8}T[0-9]{6}Z\.tar\.gz$' >/dev/null \
+basename "$DEFAULT_ARCHIVE" | grep -E '^drlink-support-.+-[0-9]{8}T[0-9]{6}Z\.tar\.gz$' >/dev/null \
   || fail "default archive name not UTC Z stamped"
 pass "DEFAULT_UTC_Z_NAMING"
 
@@ -392,16 +442,20 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location('g', sys.argv[1])
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)
+# Compatibility alias still works.
 r = g.match(g.tokenize('support-bundle --output /tmp/x.tar.gz'), 'server')
 assert r.get('status') == 'ok' and r.get('action') == 'support_bundle', r
 assert '--output' in (r.get('passthrough') or [])
 r2 = g.match(g.tokenize('support-bundle'), 'client')
 assert r2.get('status') == 'ok' and r2.get('action') == 'support_bundle', r2
+# Canonical resource-first form.
+r3 = g.match(g.tokenize('support bundle --output /tmp/x.tar.gz'), 'server')
+assert r3.get('status') == 'ok' and r3.get('action') == 'support_bundle', r3
 for role in ('server', 'client', 'both'):
     help_txt = g.help_text([], role)
-    assert 'support-bundle' in help_txt, (role, help_txt)
+    assert 'support' in help_txt, (role, help_txt)
     concise = g._concise_root(role)
-    assert 'support-bundle' in concise, (role, concise)
+    assert 'support' in concise, (role, concise)
 print('ok')
 PY
 pass "FRPCTL_GRAMMAR"

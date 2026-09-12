@@ -4,6 +4,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -14,10 +15,10 @@ def load_creg():
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_client_registry.py')
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_client_registry.py')
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_client_registry', str(path))
@@ -28,6 +29,31 @@ def load_creg():
 
 
 CREG = load_creg()
+
+
+def load_locks():
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / 'lib' / 'frp_control_locks.py',
+        Path('/usr/local/lib/drlink/frp_control_locks.py'),
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_control_locks.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_control_locks', str(path))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules['frp_control_locks'] = mod
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit('ERROR: missing frp_control_locks.py')
+
+
+LOCKS = load_locks()
+
+
+def control_root():
+    return Path(ROOT or '/')
 
 
 def lock_registry(path):
@@ -106,14 +132,16 @@ def ensure_releasable(service, force=False):
         )
 
 
-cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads(Path(ROOT + '/etc/drlink/config.json').read_text())
 path = Path(cfg['registry_file'])
 if ROOT and not str(path).startswith(ROOT):
     path = Path(ROOT + str(path))
 state = json.loads(path.read_text())
 require_v2(state)
 
-mid, client = CREG.resolve_client_or_exit(state, args.query)
+# Capture immutable CLIENT ID before confirmation; never re-resolve label/hostname.
+confirmed_mid, client = CREG.resolve_client_or_exit(state, args.query)
+mid = confirmed_mid
 
 sid = str(args.service_id).strip().lower()
 services = client.get('services') or {}
@@ -134,65 +162,82 @@ answer = input('Type RELEASE to continue: ')
 if answer != 'RELEASE':
     raise SystemExit('Cancelled')
 
-lock_fd = lock_registry(path)
-try:
-    state = json.loads(path.read_text())
-    require_v2(state)
-    mid, client = CREG.resolve_client_or_exit(state, args.query)
-    services = client.get('services') or {}
-    if not isinstance(services, dict) or sid not in services:
-        raise SystemExit(f'ERROR: service {sid} was not found on this client')
-    svc = services[sid]
-    if not isinstance(svc, dict):
-        raise SystemExit(f'ERROR: service {sid} was not found on this client')
-    port = svc.get('remote_port')
-    # Re-check under the registry lock to close the TOCTOU window.
-    if port:
-        # Re-check passively under the registry lock to close the TOCTOU window.
-        ensure_releasable(svc, args.force)
-    services.pop(sid)
-    # Keep the Client record even when no services remain. A zero-service
-    # management-only Client is valid; only `release client` removes it.
-    client['services'] = services
-    state['clients'][mid] = client
-    atomic_write_json(path, state)
-finally:
-    unlock_registry(lock_fd)
-
-# Access Control binding cleanup is required after registry release.
 acl_cleanup_error = None
-try:
-    here = Path(__file__).resolve()
-    acl_candidates = [
-        here.parent.parent / 'lib' / 'frp_access_control.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_access_control.py'),
-    ]
-    if ROOT:
-        acl_candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_access_control.py')
-    acl = None
-    for acl_path in acl_candidates:
-        if not acl_path.is_file():
-            continue
-        spec = importlib.util.spec_from_file_location('frp_access_control', str(acl_path))
-        acl = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(acl)
-        break
-    if acl is None:
-        raise RuntimeError('frp_access_control.py is unavailable')
-    access_path = acl.access_control_path(cfg)
-    if access_path.is_file():
-        def _clear(state, _mid=mid, _sid=sid):
-            acl.clear_service_binding(state, _mid, _sid)
+with LOCKS.acquire_control_state_lock(control_root()):
+    lock_fd = lock_registry(path)
+    try:
+        state = json.loads(path.read_text())
+        require_v2(state)
+        clients = state.get('clients') or {}
+        if confirmed_mid not in clients or not isinstance(clients.get(confirmed_mid), dict):
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
+        mid = confirmed_mid
+        client = clients[mid]
+        services = client.get('services') or {}
+        if not isinstance(services, dict) or sid not in services:
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
+        svc = services[sid]
+        if not isinstance(svc, dict):
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
+        port = svc.get('remote_port')
+        # Re-check under the registry lock to close the TOCTOU window.
+        if port:
+            ensure_releasable(svc, args.force)
+        services.pop(sid)
+        # Keep the Client record even when no services remain. A zero-service
+        # management-only Client is valid; only `release client` removes it.
+        client['services'] = services
+        state['clients'][mid] = client
+        atomic_write_json(path, state)
+    finally:
+        unlock_registry(lock_fd)
 
-        acl.mutate_access_state(_clear, path=access_path, cfg=cfg)
-except Exception as exc:
-    acl_cleanup_error = str(exc)
+    # Access Control binding cleanup is required after registry release.
+    # Lock order already held: control-state → registry (released) → ACL
+    # per-resource lock taken inside mutate_access_state (never reverse).
+    try:
+        if os.environ.get('FRP_TEST_FAIL_ACL_CLEANUP') == '1':
+            raise RuntimeError('injected ACL cleanup failure')
+        here = Path(__file__).resolve()
+        acl_candidates = [
+            here.parent.parent / 'lib' / 'frp_access_control.py',
+            Path('/usr/local/lib/drlink/frp_access_control.py'),
+        ]
+        if ROOT:
+            acl_candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_access_control.py')
+        acl = None
+        for acl_path in acl_candidates:
+            if not acl_path.is_file():
+                continue
+            spec = importlib.util.spec_from_file_location('frp_access_control', str(acl_path))
+            acl = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(acl)
+            break
+        if acl is None:
+            raise RuntimeError('frp_access_control.py is unavailable')
+        access_path = acl.access_control_path(cfg)
+        if access_path.is_file():
+            def _clear(state, _mid=mid, _sid=sid):
+                acl.clear_service_binding(state, _mid, _sid)
+
+            acl.mutate_access_state(_clear, path=access_path, cfg=cfg)
+    except Exception as exc:
+        acl_cleanup_error = str(exc)
 
 try:
     here = Path(__file__).resolve()
     for audit_path in (
         here.parent.parent / 'lib' / 'frp_audit.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+        Path('/usr/local/lib/drlink/frp_audit.py'),
     ):
         if audit_path.is_file():
             spec = importlib.util.spec_from_file_location('frp_audit', str(audit_path))

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = Path(ROOT + '/etc/frp-auto-deploy/config.json')
+CONFIG = Path(ROOT + '/etc/drlink/config.json')
 PURGE_ENV = 'FRP_ENROLLMENT_PURGE_YES'
 
 
@@ -24,7 +24,7 @@ def load_lifecycle():
     here = Path(__file__).resolve()
     for path in (
         here.parent.parent / 'lib' / 'frp_enrollment_lifecycle.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py'),
+        Path('/usr/local/lib/drlink/frp_enrollment_lifecycle.py'),
     ):
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_enrollment_lifecycle', str(path))
@@ -76,7 +76,7 @@ def cmd_purge_one(target_id, force, lifecycle, cfg):
         raise SystemExit(
             'ERROR: active enrollment cannot be purged.\n'
             'Revoke it first:\n'
-            '  revoke enrollment %s' % row.get('id')
+            '  drlink enrollment revoke %s' % row.get('id')
         )
     if state not in lifecycle.TERMINAL_STATES:
         raise SystemExit('ERROR: enrollment is not in a terminal state')

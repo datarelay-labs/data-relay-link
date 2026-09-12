@@ -13,30 +13,30 @@ ALLOC_PID=""
 frp_test_arm_cleanup
 
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" \
+mkdir -p "$TREE/etc/drlink/pki" \
   "$TREE/etc/frp" \
-  "$TREE/var/lib/frp-auto-deploy/enrollments" \
-  "$TREE/var/lib/frp-auto-deploy/bootstrap" \
-  "$TREE/usr/local/lib/frp-auto-deploy" \
-  "$TREE/var/log/frp-auto-deploy"
+  "$TREE/var/lib/drlink/enrollments" \
+  "$TREE/var/lib/drlink/bootstrap" \
+  "$TREE/usr/local/lib/drlink" \
+  "$TREE/var/log/drlink"
 echo 'token-test' >"$TREE/etc/frp/server_token"
 
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout "$TREE/etc/frp-auto-deploy/pki/ca.key" \
-  -out "$TREE/etc/frp-auto-deploy/pki/ca.crt" \
+  -keyout "$TREE/etc/drlink/pki/ca.key" \
+  -out "$TREE/etc/drlink/pki/ca.crt" \
   -days 1 -subj "/CN=frp-test-ca" >/dev/null 2>&1 \
   || fail "openssl ca"
-cp "$TREE/etc/frp-auto-deploy/pki/ca.crt" "$TREE/etc/frp-auto-deploy/pki/server.crt"
-cp "$TREE/etc/frp-auto-deploy/pki/ca.key" "$TREE/etc/frp-auto-deploy/pki/server.key"
+cp "$TREE/etc/drlink/pki/ca.crt" "$TREE/etc/drlink/pki/server.crt"
+cp "$TREE/etc/drlink/pki/ca.key" "$TREE/etc/drlink/pki/server.key"
 
-cp "$ROOT/lib/frp_zero_touch.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_pki.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_mgmt_auth.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_server_config.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_control_locks.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_audit.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/server/frp-port-allocator.py" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/frp_zero_touch.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_pki.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_mgmt_auth.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_server_config.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_control_locks.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_audit.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/server/frp-port-allocator.py" "$TREE/usr/local/lib/drlink/"
 
 FRP_TEST_ALLOC_PORT="$(python3 - <<'P'
 import socket
@@ -48,7 +48,7 @@ P
 )"
 export FRP_TEST_ALLOC_PORT
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE" "$FRP_TEST_ALLOC_PORT" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$TREE" "$FRP_TEST_ALLOC_PORT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -66,33 +66,33 @@ cfg = {
     "allocator_listen_port": port,
     "allocator_public_url": "https://203.0.113.10:%s/enroll" % port,
     "client_installer_url": (
-        "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/"
+        "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/"
         "v2.1.2/dist/bootstrap-client.sh"
     ),
     "windows_client_installer_url": (
-        "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/"
+        "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/"
         "v2.1.2/dist/bootstrap-client.ps1"
     ),
-    "tls_ca_cert": str(tree / "etc/frp-auto-deploy/pki/ca.crt"),
-    "tls_server_cert": str(tree / "etc/frp-auto-deploy/pki/server.crt"),
-    "tls_server_key": str(tree / "etc/frp-auto-deploy/pki/server.key"),
-    "enrollments_dir": str(tree / "var/lib/frp-auto-deploy/enrollments"),
-    "bootstrap_dir": str(tree / "var/lib/frp-auto-deploy/bootstrap"),
-    "registry_file": str(tree / "var/lib/frp-auto-deploy/registry.json"),
+    "tls_ca_cert": str(tree / "etc/drlink/pki/ca.crt"),
+    "tls_server_cert": str(tree / "etc/drlink/pki/server.crt"),
+    "tls_server_key": str(tree / "etc/drlink/pki/server.key"),
+    "enrollments_dir": str(tree / "var/lib/drlink/enrollments"),
+    "bootstrap_dir": str(tree / "var/lib/drlink/bootstrap"),
+    "registry_file": str(tree / "var/lib/drlink/registry.json"),
     "token_file": str(tree / "etc/frp/server_token"),
 }
 Path(sys.argv[1]).write_text(json.dumps(cfg, indent=2) + "\n")
-(tree / "var/lib/frp-auto-deploy/registry.json").write_text(
+(tree / "var/lib/drlink/registry.json").write_text(
     json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n"
 )
 PY
 
 export FRP_DEPLOY_TEST_ROOT="$TREE"
-export FRP_AUDIT_LOG="$TREE/var/log/frp-auto-deploy/audit.jsonl"
+export FRP_AUDIT_LOG="$TREE/var/log/drlink/audit.jsonl"
 
 python3 "$ROOT/tools/frp-server-set" bootstrap-hostname bootstrap.example.com \
   >"$WORKDIR/set-boot.out" || fail "set bootstrap-hostname"
-grep -q 'bootstrap.example.com' "$TREE/etc/frp-auto-deploy/config.json" \
+grep -q 'bootstrap.example.com' "$TREE/etc/drlink/config.json" \
   || fail "bootstrap_hostname not persisted"
 grep -q 'Bootstrap hostname set' "$WORKDIR/set-boot.out" || fail "set message"
 if grep -qiE 'certbot|dns provider|open firewall|configure nat|invoke acme|automatic acme' \
@@ -170,11 +170,11 @@ print(m.group(1))
 PY
 )"
 TICKET_ID="$(printf '%s' "$TICKET" | cut -d. -f2)"
-TICKET_FILE="$TREE/var/lib/frp-auto-deploy/bootstrap/${TICKET_ID}.json"
+TICKET_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET_ID}.json"
 [[ -f "$TICKET_FILE" ]] || fail "ticket file missing"
 
 ALLOC_LOG="$WORKDIR/alloc.log"
-python3 "$ROOT/server/frp-port-allocator.py" --config "$TREE/etc/frp-auto-deploy/config.json" \
+python3 "$ROOT/server/frp-port-allocator.py" --config "$TREE/etc/drlink/config.json" \
   >"$ALLOC_LOG" 2>&1 &
 ALLOC_PID=$!
 
@@ -220,7 +220,7 @@ assert d.get('bound_machine_id') in (None, ''), d
 print('ok')
 PY
 grep -q 'zt1\.' "$SCRIPT1" || fail "script missing zt1 package"
-grep -q 'FRP Auto Deploy' "$SCRIPT1" || fail "script header"
+grep -q 'Data Relay Link' "$SCRIPT1" || fail "script header"
 if grep -qiE 'curl -k|curl --insecure|wget --no-check-certificate' "$SCRIPT1"; then
   fail "short URL script contains insecure TLS"
 fi
@@ -348,7 +348,7 @@ print(m.group(1))
 PY
 )"
 TICKET2_ID="$(printf '%s' "$TICKET2" | cut -d. -f2)"
-TICKET2_FILE="$TREE/var/lib/frp-auto-deploy/bootstrap/${TICKET2_ID}.json"
+TICKET2_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET2_ID}.json"
 python3 - "$TICKET2_FILE" <<'PY'
 import json
 import sys
@@ -377,7 +377,7 @@ print(m.group(1))
 PY
 )"
 TICKET3_ID="$(printf '%s' "$TICKET3" | cut -d. -f2)"
-TICKET3_FILE="$TREE/var/lib/frp-auto-deploy/bootstrap/${TICKET3_ID}.json"
+TICKET3_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET3_ID}.json"
 python3 - "$TICKET3" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "complete redeem"
 import json
 import ssl
@@ -443,7 +443,7 @@ PY
 pass "SINGLE_USE"
 
 python3 "$ROOT/tools/frp-server-set" hostname access.example.com >/dev/null
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY' || fail "hostname fields distinct"
+python3 - "$TREE/etc/drlink/config.json" <<'PY' || fail "hostname fields distinct"
 import json
 import sys
 cfg = json.load(open(sys.argv[1]))
@@ -456,7 +456,7 @@ pass "PUBLIC_HOSTNAME_SEMANTICS_UNCHANGED"
 # Config edits on disk must apply to GET /i/ without restarting the allocator.
 # (frpctl set / installer-url tools do not restart services.)
 NEW_INSTALLER='https://example.test/bootstrap-client-reloaded.sh'
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$NEW_INSTALLER" <<'PY' || fail "mutate installer url"
+python3 - "$TREE/etc/drlink/config.json" "$NEW_INSTALLER" <<'PY' || fail "mutate installer url"
 import json
 import sys
 import time

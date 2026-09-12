@@ -263,7 +263,7 @@ def write_openssl_config(path, dns, ips, ca=False):
         'x509_extensions = v3_ca' if ca else 'req_extensions = v3_server',
         '',
         '[req_dn]',
-        'CN = FRP Auto Deploy CA' if ca else 'CN = FRP Auto Deploy allocator',
+        'CN = Data Relay Link CA' if ca else 'CN = Data Relay Link allocator',
         '',
         '[v3_ca]',
         'basicConstraints = critical,CA:TRUE',
@@ -345,7 +345,7 @@ def _genrsa(path):
 def generate_ca(paths, workdir):
     openssl = openssl_bin()
     cfg = Path(workdir) / 'ca.cnf'
-    write_openssl_config(cfg, ['FRP Auto Deploy CA'], [], ca=True)
+    write_openssl_config(cfg, ['Data Relay Link CA'], [], ca=True)
     _genrsa(paths['ca_key'])
     _run([
         openssl, 'req', '-new', '-x509',
@@ -463,7 +463,7 @@ def atomic_install_trusted_ca(src_pem_path, dest_path, expected_fingerprint=None
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='FRP Auto Deploy allocator PKI')
+    parser = argparse.ArgumentParser(description='Data Relay Link allocator PKI')
     sub = parser.add_subparsers(dest='cmd', required=True)
 
     p_ensure = sub.add_parser('ensure')

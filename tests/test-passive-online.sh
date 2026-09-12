@@ -24,7 +24,11 @@ assert creg.passive_port_state(6003, snapshot) == 'offline'
 assert creg.passive_port_state(6002, (set(), False)) == 'unknown'
 PY
 
-if rg -n 'connect_ex' \
+if ! command -v grep >/dev/null 2>&1; then
+  echo "FAIL: grep is required for this test" >&2
+  exit 1
+fi
+if grep -nE 'connect_ex' \
   "$ROOT/tools/frp-clients" "$ROOT/tools/frp-release-client" \
   "$ROOT/tools/frp-release-service" "$ROOT/lib/frp-common.sh" \
   "$ROOT/lib/frp-doctor-common.sh" >/dev/null; then

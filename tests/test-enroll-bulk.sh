@@ -4,16 +4,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 TREE="$WORK/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments" "$TREE/var/lib/frp-auto-deploy/bootstrap"
-python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/frp-auto-deploy/pki" --public-host example.test >/dev/null
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments" "$TREE/var/lib/drlink/bootstrap"
+python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/drlink/pki" --public-host example.test >/dev/null
 python3 - "$TREE" <<'PY'
 import json,sys
 from pathlib import Path
 r=Path(sys.argv[1])
-(r/'etc/frp-auto-deploy/config.json').write_text(json.dumps({
- 'enrollments_dir':'/var/lib/frp-auto-deploy/enrollments',
- 'bootstrap_dir':'/var/lib/frp-auto-deploy/bootstrap',
- 'tls_ca_cert':'/etc/frp-auto-deploy/pki/ca.crt',
+(r/'etc/drlink/config.json').write_text(json.dumps({
+ 'enrollments_dir':'/var/lib/drlink/enrollments',
+ 'bootstrap_dir':'/var/lib/drlink/bootstrap',
+ 'tls_ca_cert':'/etc/drlink/pki/ca.crt',
  'allocator_public_url':'https://example.test/enroll',
  'client_installer_url':'https://example.test/bootstrap-client.sh',
 })+'\n')
@@ -27,7 +27,7 @@ ssh-node,aella,remote shell
 inventory-only,,no service
 CSV
 python3 "$ROOT/tools/frp-enroll-bulk" --csv "$WORK/input.csv" >"$WORK/input.out" 2>"$WORK/input.err"
-python3 - "$WORK/count.csv" "$WORK/input.out" "$TREE/var/lib/frp-auto-deploy/bootstrap" <<'PY'
+python3 - "$WORK/count.csv" "$WORK/input.out" "$TREE/var/lib/drlink/bootstrap" <<'PY'
 import csv,json,re,sys
 from pathlib import Path
 rows=[]
@@ -67,25 +67,25 @@ label,ssh_user,note
 good-one,aella,ok
 BAD LABEL!!,aella,no
 CSV
-BEFORE_TICKETS="$(find "$TREE/var/lib/frp-auto-deploy/bootstrap" -name '*.json' | wc -l)"
+BEFORE_TICKETS="$(find "$TREE/var/lib/drlink/bootstrap" -name '*.json' | wc -l)"
 if python3 "$ROOT/tools/frp-enroll-bulk" --csv "$BAD" >"$WORK/bad.out" 2>"$WORK/bad.err"; then
   echo "FAIL bad row accepted" >&2
   exit 1
 fi
-AFTER_TICKETS="$(find "$TREE/var/lib/frp-auto-deploy/bootstrap" -name '*.json' | wc -l)"
+AFTER_TICKETS="$(find "$TREE/var/lib/drlink/bootstrap" -name '*.json' | wc -l)"
 [[ "$AFTER_TICKETS" -eq "$BEFORE_TICKETS" ]] || { echo "FAIL bad row issued tickets" >&2; exit 1; }
 echo "PASS BULK_PREVALIDATE_ALL"
 echo "PASS BULK_BAD_ROW_ZERO_ISSUED"
 
 # Mid-batch failure rolls back only this batch.
-EXISTING="$(ls "$TREE/var/lib/frp-auto-deploy/bootstrap"/*.json | wc -l)"
+EXISTING="$(ls "$TREE/var/lib/drlink/bootstrap"/*.json | wc -l)"
 if FRP_ENROLL_BULK_HOOK_FAIL_AFTER=1 \
   python3 "$ROOT/tools/frp-enroll-bulk" --count 3 --label-prefix mid \
   >"$WORK/mid.out" 2>"$WORK/mid.err"; then
   echo "FAIL mid-batch succeeded" >&2
   exit 1
 fi
-AFTER_MID="$(ls "$TREE/var/lib/frp-auto-deploy/bootstrap"/*.json | wc -l)"
+AFTER_MID="$(ls "$TREE/var/lib/drlink/bootstrap"/*.json | wc -l)"
 [[ "$AFTER_MID" -eq "$EXISTING" ]] || { echo "FAIL mid-batch left tickets" >&2; exit 1; }
 echo "PASS BULK_MID_FAILURE_ROLLBACK"
 echo "PASS BULK_EXISTING_RECORDS_PRESERVED"

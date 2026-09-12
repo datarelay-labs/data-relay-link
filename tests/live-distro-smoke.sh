@@ -98,8 +98,8 @@ else
   echo "BIND_X=no"
 fi
 
-if [[ -f /etc/frp-auto-deploy/version ]]; then
-  awk -F= '/^(PROJECT_VERSION|FRP_VERSION)=/ {print}' /etc/frp-auto-deploy/version
+if [[ -f /etc/drlink/version ]]; then
+  awk -F= '/^(PROJECT_VERSION|FRP_VERSION)=/ {print}' /etc/drlink/version
 else
   echo "PROJECT_VERSION=missing"
   echo "FRP_VERSION=missing"
@@ -149,7 +149,7 @@ unit_probe() {
 HOST_ROLE=uninstalled
 SERVER_PRESENT=no
 CLIENT_PRESENT=no
-if unit_present frp-port-allocator || [[ -f /etc/frp-auto-deploy/config.json ]]; then
+if unit_present drlink-allocator || [[ -f /etc/drlink/config.json ]]; then
   SERVER_PRESENT=yes
 fi
 if unit_present frpc || [[ -f /etc/frp/client-state.json ]]; then
@@ -166,10 +166,10 @@ echo "HOST_ROLE=${HOST_ROLE}"
 
 if [[ "$SERVER_PRESENT" == yes ]]; then
   unit_probe frps required
-  unit_probe frp-port-allocator required
+  unit_probe drlink-allocator required
 else
   unit_probe frps optional
-  unit_probe frp-port-allocator optional
+  unit_probe drlink-allocator optional
 fi
 if [[ "$CLIENT_PRESENT" == yes ]]; then
   unit_probe frpc required
@@ -178,7 +178,7 @@ else
 fi
 
 if have systemctl; then
-  for unit in frps frp-port-allocator frpc; do
+  for unit in frps drlink-allocator frpc; do
     if unit_present "$unit"; then
       echo "----- systemctl cat ${unit} -----"
       systemctl cat "$unit" 2>/dev/null | grep -viE 'token|secret|private.?key|mac.?key' || true
@@ -190,7 +190,7 @@ if have systemctl; then
     fi
   done
   if [[ "$SERVER_PRESENT" == yes ]]; then
-    if journalctl -u frp-port-allocator -n 30 --no-pager >"$WORKDIR/alloc-j.log" 2>/dev/null; then
+    if journalctl -u drlink-allocator -n 30 --no-pager >"$WORKDIR/alloc-j.log" 2>/dev/null; then
       if grep -Ei 'unknown lvalue|Failed to load|cannot be started' "$WORKDIR/alloc-j.log" >/dev/null; then
         echo "ALLOCATOR_JOURNAL_DIAGNOSTIC=present"
         grep -Ei 'unknown lvalue|Failed to load|cannot be started|error' "$WORKDIR/alloc-j.log" | head -20
@@ -231,11 +231,11 @@ file_meta() {
 
 if [[ "$SERVER_PRESENT" == yes ]]; then
   HEALTHZ_PORT=""
-  if [[ -r /etc/frp-auto-deploy/config.json ]] && have python3; then
+  if [[ -r /etc/drlink/config.json ]] && have python3; then
     HEALTHZ_PORT="$(python3 - <<'PY'
 import json
 from pathlib import Path
-p = Path("/etc/frp-auto-deploy/config.json")
+p = Path("/etc/drlink/config.json")
 try:
     cfg = json.loads(p.read_text(encoding="utf-8"))
     port = cfg.get("allocator_listen_port") or cfg.get("listen_port")
@@ -245,7 +245,7 @@ except Exception:
 PY
 )"
   fi
-  CA_FILE="/etc/frp-auto-deploy/pki/ca.crt"
+  CA_FILE="/etc/drlink/pki/ca.crt"
   if [[ -z "$HEALTHZ_PORT" ]]; then
     echo "HEALTHZ=NOT_TESTED"
     not_tested "allocator_healthz (listen port unknown)"
@@ -287,17 +287,17 @@ file_meta /etc/frp/frps.toml FRPS_TOML secret
 file_meta /etc/frp/frpc.toml FRPC_TOML secret
 file_meta /etc/frp/client-state.json CLIENT_STATE secret
 file_meta /etc/frp/client-identity.key CLIENT_IDENTITY secret
-file_meta /etc/frp-auto-deploy/pki/ca.crt SERVER_CA cert
-file_meta /etc/frp-auto-deploy/pki/ca.key SERVER_CA_KEY secret
-file_meta /etc/frp-auto-deploy/pki/server.key SERVER_TLS_KEY secret
-file_meta /etc/frp-auto-deploy/allocator-ca.crt ALLOCATOR_CA cert
-file_meta /var/lib/frp-auto-deploy/registry.json REGISTRY secret
+file_meta /etc/drlink/pki/ca.crt SERVER_CA cert
+file_meta /etc/drlink/pki/ca.key SERVER_CA_KEY secret
+file_meta /etc/drlink/pki/server.key SERVER_TLS_KEY secret
+file_meta /etc/drlink/allocator-ca.crt ALLOCATOR_CA cert
+file_meta /var/lib/drlink/registry.json REGISTRY secret
 
-if [[ -f /var/lib/frp-auto-deploy/registry.json ]] && have python3; then
+if [[ -f /var/lib/drlink/registry.json ]] && have python3; then
   python3 - <<'PY'
 import json
 from pathlib import Path
-p = Path("/var/lib/frp-auto-deploy/registry.json")
+p = Path("/var/lib/drlink/registry.json")
 try:
     d = json.loads(p.read_text(encoding="utf-8"))
 except Exception:

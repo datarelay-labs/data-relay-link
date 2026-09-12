@@ -2,6 +2,12 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 $clientPath = Join-Path $script:RepoRoot 'windows/tools/FrpClient.ps1'
+$drlinkCmd = Join-Path $script:RepoRoot 'windows/tools/drlink.cmd'
+$legacyCmd = Join-Path $script:RepoRoot 'windows/tools/frp-client.cmd'
+Assert-FrpTrue (Test-Path -LiteralPath $drlinkCmd) 'canonical drlink.cmd wrapper exists'
+Assert-FrpTrue (Test-Path -LiteralPath $legacyCmd) 'legacy frp-client.cmd remains for compatibility'
+$drlinkSrc = Get-Content -LiteralPath $drlinkCmd -Raw
+Assert-FrpTrue ($drlinkSrc -match 'frp-client\.cmd') 'drlink.cmd wraps frp-client.cmd'
 $src = Get-Content -LiteralPath $clientPath -Raw
 Assert-FrpTrue ($src -match '(?m)^\s*\. Import-FrpWindowsModules\s*$') 'dot-sources Import-FrpWindowsModules into script scope'
 
@@ -30,6 +36,7 @@ try {
         Assert-FrpTrue ($statusOut -notmatch 'is not recognized') "$label status has module functions"
 
         $checkOut = & $exe -NoProfile -ExecutionPolicy Bypass -File $clientPath -Command update -Check 2>&1 | Out-String
+        Assert-FrpTrue ($checkOut -match 'Data Relay Link project') "$label update -Check shows project section"
         Assert-FrpTrue ($checkOut -match 'Would download:') "$label update -Check binds to script switch"
         Assert-FrpTrue ($checkOut -match 'preserved') "$label update -Check is dry-run"
         Assert-FrpTrue ($checkOut -notmatch 'is not recognized') "$label update -Check has Get-FrpWindowsAmd64Url"

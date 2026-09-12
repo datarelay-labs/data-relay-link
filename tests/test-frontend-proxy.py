@@ -244,30 +244,30 @@ def test_live_frontend_proxy():
 def write_single443_tree(tree, pki_host='203.0.113.10'):
     tree = Path(tree)
     for rel in (
-        'etc/frp', 'etc/frp-auto-deploy', 'var/lib/frp-auto-deploy',
-        'usr/local/bin', 'usr/local/lib/frp-auto-deploy', 'etc/systemd/system',
+        'etc/frp', 'etc/drlink', 'var/lib/drlink',
+        'usr/local/bin', 'usr/local/lib/drlink', 'etc/systemd/system',
     ):
         (tree / rel).mkdir(parents=True, exist_ok=True)
-    (tree / 'etc/frp-auto-deploy/version').write_text('PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n')
+    (tree / 'etc/drlink/version').write_text('PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n')
     frps = tree / 'usr/local/bin/frps'
     frps.write_text('#!/bin/sh\necho "frps version 0.71.0"\n')
     os.chmod(frps, 0o755)
-    shutil.copy(str(ROOT / 'server' / 'frp-port-allocator.py'), str(tree / 'usr/local/lib/frp-auto-deploy/frp-port-allocator.py'))
-    (tree / 'etc/systemd/system/frps.service').write_text('[Unit]\nDescription=fixture\n')
-    (tree / 'etc/systemd/system/frp-port-allocator.service').write_text('[Unit]\nDescription=fixture\n')
-    (tree / 'etc/systemd/system/frp-frontend.service').write_text('[Unit]\nDescription=fixture\n')
+    shutil.copy(str(ROOT / 'server' / 'frp-port-allocator.py'), str(tree / 'usr/local/lib/drlink/frp-port-allocator.py'))
+    (tree / 'etc/systemd/system/drlink-server.service').write_text('[Unit]\nDescription=fixture\n')
+    (tree / 'etc/systemd/system/drlink-allocator.service').write_text('[Unit]\nDescription=fixture\n')
+    (tree / 'etc/systemd/system/drlink-frontend.service').write_text('[Unit]\nDescription=fixture\n')
     (tree / 'etc/frp/server_token').write_text('test-frp-token-do-not-use\n')
     os.chmod(str(tree / 'etc/frp/server_token'), 0o600)
     (tree / 'etc/frp/frps.toml').write_text('bindAddr = "127.0.0.1"\nbindPort = 7000\n')
     os.chmod(str(tree / 'etc/frp/frps.toml'), 0o600)
-    pki = frp_pki.ensure_pki(str(tree / 'etc/frp-auto-deploy/pki'), pki_host)
-    conf, _ = render_conf(str(tree / 'etc/frp-auto-deploy'), pki_host, 443, 6099, {
-        'ca_crt': '/etc/frp-auto-deploy/pki/ca.crt',
-        'server_crt': '/etc/frp-auto-deploy/pki/server.crt',
-        'server_key': '/etc/frp-auto-deploy/pki/server.key',
+    pki = frp_pki.ensure_pki(str(tree / 'etc/drlink/pki'), pki_host)
+    conf, _ = render_conf(str(tree / 'etc/drlink'), pki_host, 443, 6099, {
+        'ca_crt': '/etc/drlink/pki/ca.crt',
+        'server_crt': '/etc/drlink/pki/server.crt',
+        'server_key': '/etc/drlink/pki/server.key',
     })
-    (tree / 'etc/frp-auto-deploy/frontend.conf').write_text(conf)
-    os.chmod(str(tree / 'etc/frp-auto-deploy/frontend.conf'), 0o600)
+    (tree / 'etc/drlink/frontend.conf').write_text(conf)
+    os.chmod(str(tree / 'etc/drlink/frontend.conf'), 0o600)
     cfg = {
         'public_host': pki_host,
         'public_ip': pki_host,
@@ -284,18 +284,18 @@ def write_single443_tree(tree, pki_host='203.0.113.10'):
         'allocator_listen_port': 6099,
         'listen_port': 6099,
         'allocator_public_url': 'https://%s/enroll' % pki_host,
-        'registry_file': '/var/lib/frp-auto-deploy/registry.json',
+        'registry_file': '/var/lib/drlink/registry.json',
         'token_file': '/etc/frp/server_token',
-        'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
-        'tls_server_cert': '/etc/frp-auto-deploy/pki/server.crt',
-        'tls_server_key': '/etc/frp-auto-deploy/pki/server.key',
+        'tls_ca_cert': '/etc/drlink/pki/ca.crt',
+        'tls_server_cert': '/etc/drlink/pki/server.crt',
+        'tls_server_key': '/etc/drlink/pki/server.key',
     }
-    (tree / 'etc/frp-auto-deploy/config.json').write_text(json.dumps(cfg, indent=2, sort_keys=True) + '\n')
-    os.chmod(str(tree / 'etc/frp-auto-deploy/config.json'), 0o600)
-    (tree / 'var/lib/frp-auto-deploy/registry.json').write_text(json.dumps({
+    (tree / 'etc/drlink/config.json').write_text(json.dumps(cfg, indent=2, sort_keys=True) + '\n')
+    os.chmod(str(tree / 'etc/drlink/config.json'), 0o600)
+    (tree / 'var/lib/drlink/registry.json').write_text(json.dumps({
         'schema_version': 2, 'reserved': [], 'clients': {},
     }) + '\n')
-    os.chmod(str(tree / 'var/lib/frp-auto-deploy/registry.json'), 0o600)
+    os.chmod(str(tree / 'var/lib/drlink/registry.json'), 0o600)
     return pki
 
 

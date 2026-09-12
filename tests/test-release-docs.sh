@@ -10,7 +10,7 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 
 # shellcheck disable=SC1091
 . "$ROOT/VERSION"
-[[ "$PROJECT_VERSION" == "2.3.0" ]] || fail "VERSION project is $PROJECT_VERSION"
+[[ "$PROJECT_VERSION" == "2.3.1" ]] || fail "VERSION project is $PROJECT_VERSION"
 [[ "$FRP_VERSION" == "0.71.0" ]] || fail "VERSION FRP is $FRP_VERSION"
 pass "VERSION_FILE"
 
@@ -113,13 +113,21 @@ fi
 pass "NO_TLS_VERIFY_DISABLE"
 pass "NO_CURL_K_PRODUCTION_FLOW"
 
-# During FINAL AUDIT CLOSURE, docs may describe 2.3.0 as prepared until the
-# immutable tag is moved/recreated on final HEAD. Do not require premature
+# During v2.3.1 release closure, docs may describe the candidate as prepared
+# until the immutable tag is created. Do not require premature
 # "current stable release" wording, and do not ban preparation language.
-if grep -qF 'FINAL AUDIT CLOSURE' README.md || grep -qF 'current stable release' README.md; then
+if grep -qF 'FINAL AUDIT CLOSURE' README.md || grep -qF 'current stable release' README.md \
+  || grep -qF 'Current release — v2.3.1' README.md || grep -qF 'Prepared release — v2.3.1' README.md; then
   :
 else
-  fail "README missing FINAL AUDIT CLOSURE or current stable release wording"
+  fail "README missing release closure, prepared release, or current stable release wording"
+fi
+# Pre-tag safety: if the immutable tag URL is advertised as the install command,
+# README must also warn that the tag may not exist yet (avoid silent 404 hazard).
+if grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md; then
+  if ! grep -qiE 'until.*(tag|v2\.3\.1).*exist|tag pending|after.*tag.*(publish|creat)|would 404' README.md; then
+    fail "README advertises v${PROJECT_VERSION} install URL without pre-tag sequencing warning"
+  fi
 fi
 if grep -nE 'v2\.1\.1 is not tagged|not a tagged stable release until|not created until real-environment' README.md CHANGELOG.md docs/*.md; then
   fail "docs still say v2.1.1 is untagged"
@@ -131,7 +139,7 @@ grep -qE '^## 2\.1\.1 — ' CHANGELOG.md || fail "CHANGELOG missing 2.1.1 headin
 grep -qE '^## 2\.1\.0 — ' CHANGELOG.md || fail "CHANGELOG missing historical 2.1.0 heading"
 pass "VERSION_STABLE_WORDING"
 
-grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md || fail "README missing immutable server bootstrap URL"
+grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md || fail "README missing intended immutable server bootstrap URL"
 if grep -nE 'raw.githubusercontent.com/(datarelay-labs|xdr-labs)/frp-auto-deploy/main/dist/bootstrap-(server|client)\.sh' \
   README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md GITHUB_SETUP.md; then
   fail "stable docs still point bootstrap installs at mutable main"
@@ -140,8 +148,8 @@ if grep -nE 'datarelay-labs/frp-auto-deploy' \
   README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md docs/FRP_UPGRADE.md docs/PRODUCT_MASTER.md GITHUB_SETUP.md; then
   fail "stable docs still reference old repository owner datarelay-labs"
 fi
-grep -qF 'xdr-labs/frp-auto-deploy' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
-  fail "docs missing canonical xdr-labs repository"
+grep -qF 'datarelay-labs/data-relay-link' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
+  fail "docs missing canonical datarelay-labs/data-relay-link repository"
 grep -q 'FRP_RELEASE_CHANNEL=dev' README.md || fail "README missing opt-in dev channel note"
 grep -q 'one-time verified bridge' README.md || fail "README missing legacy client bridge"
 grep -q 'one-time verified bridge' docs/FRP_UPGRADE.md || fail "upgrade doc missing legacy bridge"

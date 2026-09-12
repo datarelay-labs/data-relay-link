@@ -431,7 +431,7 @@ def purge_enrollment_row(row, *, audit_emit=None, reason='manual', retention_day
         raise EnrollmentLifecycleError(
             'ERROR: active enrollment cannot be purged.\n'
             'Revoke it first:\n'
-            '  revoke enrollment %s' % row.get('id')
+            '  drlink enrollment revoke %s' % row.get('id')
         )
     if state not in TERMINAL_STATES:
         raise EnrollmentLifecycleError('ERROR: enrollment is not in a terminal state')
@@ -676,7 +676,7 @@ def load_audit_emit():
         here = Path(__file__).resolve()
         for path in (
             here.parent / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))

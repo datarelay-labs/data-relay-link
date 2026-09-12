@@ -43,19 +43,24 @@ sshx "$SERVER" "sudo rm -rf $TMP_SRV && sudo mkdir -p $TMP_SRV && sudo chmod 777
 for f in \
   lib/frp_support_bundle.py \
   lib/frp_ctl_grammar.py \
+  lib/frp_cli_catalog.py \
   lib/frp_doctor.py \
   tools/frp-support-bundle \
-  tools/frpctl
+  tools/frpctl \
+  tools/drlink
 do
   scp -o BatchMode=yes -o ConnectTimeout=12 "$ROOT/$f" "$SERVER:$TMP_SRV/$(basename "$f")"
 done
-sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_support_bundle.py /usr/local/lib/frp-auto-deploy/frp_support_bundle.py
-sudo install -m 0644 $TMP_SRV/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
-sudo install -m 0644 $TMP_SRV/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
+sshx "$SERVER" "sudo install -m 0644 $TMP_SRV/frp_support_bundle.py /usr/local/lib/drlink/frp_support_bundle.py
+sudo install -m 0644 $TMP_SRV/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_SRV/frp_cli_catalog.py /usr/local/lib/drlink/frp_cli_catalog.py
+sudo install -m 0644 $TMP_SRV/frp_doctor.py /usr/local/lib/drlink/frp_doctor.py
 sudo install -m 0755 $TMP_SRV/frp-support-bundle /usr/local/sbin/frp-support-bundle
-sudo install -m 0755 $TMP_SRV/frpctl /usr/local/sbin/frpctl
+sudo install -m 0755 $TMP_SRV/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP_SRV/drlink /usr/local/bin/drlink
+sudo rm -f /usr/local/sbin/frpctl /usr/local/bin/frpctl
 sudo rm -rf $TMP_SRV
-sudo frpctl help 2>/dev/null | grep -q support-bundle
+sudo drlink help 2>/dev/null | grep -q support-bundle
 sudo test -x /usr/local/sbin/frp-support-bundle"
 
 echo "=== sync support-bundle feature onto client ==="
@@ -64,29 +69,34 @@ sshx "$CLIENT" "sudo rm -rf $TMP_CLI && sudo mkdir -p $TMP_CLI && sudo chmod 777
 for f in \
   lib/frp_support_bundle.py \
   lib/frp_ctl_grammar.py \
+  lib/frp_cli_catalog.py \
   lib/frp_doctor.py \
   tools/frp-support-bundle \
-  tools/frpctl
+  tools/frpctl \
+  tools/drlink
 do
   scp -o BatchMode=yes -o ConnectTimeout=12 "$ROOT/$f" "$CLIENT:$TMP_CLI/$(basename "$f")"
 done
-sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/lib/frp-auto-deploy/frp_support_bundle.py
-sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py
-sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/frp-auto-deploy/frp_doctor.py
+sshx "$CLIENT" "sudo install -m 0644 $TMP_CLI/frp_support_bundle.py /usr/local/lib/drlink/frp_support_bundle.py
+sudo install -m 0644 $TMP_CLI/frp_ctl_grammar.py /usr/local/lib/drlink/frp_ctl_grammar.py
+sudo install -m 0644 $TMP_CLI/frp_cli_catalog.py /usr/local/lib/drlink/frp_cli_catalog.py
+sudo install -m 0644 $TMP_CLI/frp_doctor.py /usr/local/lib/drlink/frp_doctor.py
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/bin/frp-support-bundle
 sudo install -m 0755 $TMP_CLI/frp-support-bundle /usr/local/sbin/frp-support-bundle
-sudo install -m 0755 $TMP_CLI/frpctl /usr/local/bin/frpctl
+sudo install -m 0755 $TMP_CLI/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP_CLI/drlink /usr/local/bin/drlink
 # sudo secure_path often prefers sbin; keep both entrypoints in sync.
-sudo install -m 0755 $TMP_CLI/frpctl /usr/local/sbin/frpctl
+sudo install -m 0755 $TMP_CLI/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP_CLI/drlink /usr/local/bin/drlink
 sudo rm -rf $TMP_CLI
-sudo frpctl help 2>/dev/null | grep -q support-bundle
+sudo drlink help 2>/dev/null | grep -q support-bundle
 sudo test -x /usr/local/bin/frp-support-bundle"
 pass "REMOTE_FEATURE_SYNC"
 
 run_remote_bundle() {
   local host="$1" label="$2"
   local remote_path="/tmp/frp-support-e2e-${label}.tar.gz"
-  sshx "$host" "sudo frpctl support-bundle --output ${remote_path} && sudo chmod a+r ${remote_path}" \
+  sshx "$host" "sudo drlink support-bundle --output ${remote_path} && sudo chmod a+r ${remote_path}" \
     | tee "$OUT_DIR/${label}.create.log"
   sshx "$host" "test -f ${remote_path} && tar -tzf ${remote_path} | head"
   # shellcheck disable=SC2029

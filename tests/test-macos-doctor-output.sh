@@ -61,7 +61,7 @@ mod.check_host_facts(report, {
         'os': 'macOS 14.6.1', 'os_id': 'macos', 'os_family': 'darwin',
         'arch': 'arm64', 'macos_version': '14.6.1', 'service_manager': 'launchd',
     },
-    'disk': {'avail_mb': 4096, 'path': '/var/lib/frp-auto-deploy'},
+    'disk': {'avail_mb': 4096, 'path': '/var/lib/drlink'},
     'clock': {},
 })
 ids = {c['id']: c for c in report.checks}
@@ -147,7 +147,7 @@ PY
 pass "LINUX_DISTRO_SUPPORT_UNCHANGED"
 
 # ---------------------------------------------------------------------------
-# Runtime labels: launchd on Darwin, frpc.service on Linux.
+# Runtime labels: launchd on Darwin, drlink-client.service on Linux.
 # ---------------------------------------------------------------------------
 python3 - "$ROOT/lib/frp_doctor.py" <<'PY' || fail "darwin launchd runtime label"
 import importlib.util, os, sys
@@ -161,22 +161,22 @@ facts = {
     'platform': {'os_id': 'macos', 'os_family': 'darwin', 'service_manager': 'launchd'},
 }
 report = mod.Report()
-mod.check_unit(report, facts, 'frpc', 'frpc_service', 'frpc.service')
+mod.check_unit(report, facts, 'frpc', 'frpc_service', 'drlink-client.service')
 item = report.checks[0]
 assert item['status'] == mod.PASS
-assert 'launchd job com.datarelay.frp-auto-deploy.frpc is active' == item['message']
-assert 'frpc.service' not in item['message']
+assert 'launchd job com.datarelay.drlink.frpc is active' == item['message']
+assert 'drlink-client.service' not in item['message']
 assert 'systemctl' not in (item.get('recommendation') or '')
 
 report_fail = mod.Report()
 facts_fail = dict(facts)
 facts_fail['units'] = {'frpc': {'active': 'inactive', 'enabled': 'enabled'}}
-mod.check_unit(report_fail, facts_fail, 'frpc', 'frpc_service', 'frpc.service')
+mod.check_unit(report_fail, facts_fail, 'frpc', 'frpc_service', 'drlink-client.service')
 item_f = report_fail.checks[0]
 assert item_f['status'] == mod.FAIL
-assert 'launchd job com.datarelay.frp-auto-deploy.frpc is not active' == item_f['message']
-assert 'frpc.service' not in item_f['message']
-assert 'launchctl print system/com.datarelay.frp-auto-deploy.frpc' in item_f['recommendation']
+assert 'launchd job com.datarelay.drlink.frpc is not active' == item_f['message']
+assert 'drlink-client.service' not in item_f['message']
+assert 'launchctl print system/com.datarelay.drlink.frpc' in item_f['recommendation']
 assert 'systemctl' not in item_f['recommendation']
 
 human_report = mod.Report()
@@ -189,19 +189,19 @@ mod.check_host_facts(human_report, {
     },
     'disk': {'avail_mb': 4096, 'path': '/x'}, 'clock': {},
 })
-mod.check_unit(human_report, facts, 'frpc', 'frpc_service', 'frpc.service')
+mod.check_unit(human_report, facts, 'frpc', 'frpc_service', 'drlink-client.service')
 text = mod.render_human(human_report)
-assert 'frpc.service' not in text
+assert 'drlink-client.service' not in text
 assert 'container matrix' not in text
 assert 'uncertified rather than broken' not in text
-assert 'launchd job com.datarelay.frp-auto-deploy.frpc' in text
+assert 'launchd job com.datarelay.drlink.frpc' in text
 assert 'macos_support' in text
 assert 'distro_support' not in text
 print('darwin_launchd_label_ok')
 PY
 pass "DARWIN_LAUNCHD_RUNTIME_LABEL"
 
-python3 - "$ROOT/lib/frp_doctor.py" <<'PY' || fail "linux frpc.service runtime label"
+python3 - "$ROOT/lib/frp_doctor.py" <<'PY' || fail "linux drlink-client.service runtime label"
 import importlib.util, os, sys
 os.environ['FRP_TEST_UNAME_S'] = 'Linux'
 spec = importlib.util.spec_from_file_location('frp_doctor', sys.argv[1])
@@ -213,20 +213,20 @@ facts = {
     'platform': {'os_id': 'ubuntu'},
 }
 report = mod.Report()
-mod.check_unit(report, facts, 'frpc', 'frpc_service', 'frpc.service')
+mod.check_unit(report, facts, 'frpc', 'frpc_service', 'drlink-client.service')
 item = report.checks[0]
 assert item['status'] == mod.PASS
-assert item['message'] == 'frpc.service is active'
+assert item['message'] == 'drlink-client.service is active'
 assert 'launchd' not in item['message']
 
 report_fail = mod.Report()
 facts_fail = dict(facts)
 facts_fail['units'] = {'frpc': {'active': 'inactive', 'enabled': 'enabled'}}
-mod.check_unit(report_fail, facts_fail, 'frpc', 'frpc_service', 'frpc.service')
+mod.check_unit(report_fail, facts_fail, 'frpc', 'frpc_service', 'drlink-client.service')
 item_f = report_fail.checks[0]
 assert item_f['status'] == mod.FAIL
-assert item_f['message'] == 'frpc.service is not active'
-assert 'systemctl status frpc' in item_f['recommendation']
+assert item_f['message'] == 'drlink-client.service is not active'
+assert 'systemctl status drlink-client' in item_f['recommendation']
 assert 'launchctl' not in item_f['recommendation']
 print('linux_frpc_service_label_ok')
 PY
@@ -282,7 +282,7 @@ pass "DARWIN_FACTS_NO_LINUX_OS_RELEASE"
 # Full doctor CLI on a Darwin-mapped client fixture.
 # ---------------------------------------------------------------------------
 TREE="$WORKDIR/client"
-STATE="$TREE/Library/Application Support/frp-auto-deploy"
+STATE="$TREE/Library/Application Support/drlink"
 mkdir -p "$STATE/bin" "$STATE/lib" "$STATE/state" "$STATE/logs" \
   "$TREE/usr/local/bin" \
   "$TREE/Library/LaunchDaemons"
@@ -303,7 +303,7 @@ exit 0
 EOF
   chmod 0755 "$bin"
 done
-echo 'fixture' >"$TREE/Library/LaunchDaemons/com.datarelay.frp-auto-deploy.frpc.plist"
+echo 'fixture' >"$TREE/Library/LaunchDaemons/com.datarelay.drlink.frpc.plist"
 python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
   "$STATE/client-identity.key" "$STATE/client-identity.pub"
 chmod 600 "$STATE/client-identity.key"
@@ -349,7 +349,7 @@ remotePort = 6001
 EOF
 chmod 600 "$STATE/frpc.toml"
 cat >"$STATE/access-info.txt" <<'EOF'
-FRP Server: 203.0.113.10:8443
+Data Relay Link Server: 203.0.113.10:8443
 EOF
 
 chmod +x "$ROOT/tools/frpctl"
@@ -363,7 +363,7 @@ export FRP_DOCTOR_PY="$ROOT/lib/frp_doctor.py"
 export FRP_CTL_TEST_ROOT="$TREE"
 export FRP_CLIENT_TEST_ROOT="$TREE"
 export FRP_DEPLOY_TEST_ROOT="$TREE"
-export FRP_MACOS_STATE_ROOT='/Library/Application Support/frp-auto-deploy'
+export FRP_MACOS_STATE_ROOT='/Library/Application Support/drlink'
 export PATH="$MOCKBIN:$PATH"
 export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
@@ -389,8 +389,8 @@ assert 'uncertified rather than broken' not in text
 assert 'supported systemd Linux' not in text
 assert ids.get('macos_support', {}).get('status') == 'PASS', ids.get('macos_support')
 frpc = ids.get('frpc_service') or {}
-assert 'launchd job com.datarelay.frp-auto-deploy.frpc' in (frpc.get('message') or ''), frpc
-assert 'frpc.service' not in (frpc.get('message') or '')
+assert 'launchd job com.datarelay.drlink.frpc' in (frpc.get('message') or ''), frpc
+assert 'drlink-client.service' not in (frpc.get('message') or '')
 assert 'systemctl' not in (frpc.get('recommendation') or '')
 warns = [c for c in data.get('checks') or [] if c.get('status') == 'WARN']
 fails = [c for c in data.get('checks') or [] if c.get('status') == 'FAIL']
@@ -403,10 +403,10 @@ if frpc.get('status') == 'PASS' and ids.get('macos_support', {}).get('status') =
 print('json_ok overall=%s frpc=%s' % (data.get('overall'), frpc.get('status')))
 PY
 
-grep -F 'frpc.service' "$WORKDIR/darwin.human" && fail "human doctor mentioned frpc.service"
+grep -F 'drlink-client.service' "$WORKDIR/darwin.human" && fail "human doctor mentioned drlink-client.service"
 grep -F 'container matrix' "$WORKDIR/darwin.human" && fail "human doctor mentioned Linux container matrix"
 grep -F 'uncertified rather than broken' "$WORKDIR/darwin.human" && fail "human doctor used Linux uncertified wording"
-grep -F 'launchd job com.datarelay.frp-auto-deploy.frpc' "$WORKDIR/darwin.human" || fail "human doctor missing launchd job"
+grep -F 'launchd job com.datarelay.drlink.frpc' "$WORKDIR/darwin.human" || fail "human doctor missing launchd job"
 grep -F 'macos_support' "$WORKDIR/darwin.human" || fail "human doctor missing macos_support"
 grep -F 'distro_support' "$WORKDIR/darwin.human" && fail "human doctor emitted distro_support"
 [[ "$human_rc" -eq 0 || "$human_rc" -eq 1 ]] || fail "human doctor exit $human_rc"

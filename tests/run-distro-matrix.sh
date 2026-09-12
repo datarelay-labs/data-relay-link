@@ -262,7 +262,7 @@ frp_matrix_summary() {
   local failed_list=""
   echo
   echo "============================================================"
-  echo " FRP Auto Deploy — Docker Compatibility Matrix"
+  echo " Data Relay Link — Docker Compatibility Matrix"
   echo "============================================================"
   echo
   printf '%-20s %-20s %s\n' "Distribution" "Image" "Result"

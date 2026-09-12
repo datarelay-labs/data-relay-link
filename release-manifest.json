@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "project_version": "2.3.0",
+  "project_version": "2.3.1",
   "frp_version": "0.71.0",
   "channel": "stable",
-  "git_ref": "v2.3.0",
-  "owner": "xdr-labs",
-  "repo": "frp-auto-deploy",
-  "https_raw_base": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy",
+  "git_ref": "v2.3.1",
+  "owner": "datarelay-labs",
+  "repo": "data-relay-link",
+  "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link",
   "signing": false,
   "checksum_file": "SHA256SUMS",
   "supported_frp_versions": {
@@ -19,7 +19,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.1 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
@@ -33,27 +33,27 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "31b11879bf0c429b2c56abdc8fe996c05c82fda5f84463be9c5fd9a747860faf"
+      "sha256": "7f6e2b12b552ce28d8d54cd5e2fb4a1e003bee4458b1a8c1d7a717eb41a9372d"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "f1f203c289b7b9c326741a49b5992e61f1cab609313f25be9af9f8300ddc9135"
+      "sha256": "84418ebf94d9cb90bc9602a416e932cd1e4da07c00ef003be601688d89655cab"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "c067222bd9397cd88c32a90e9d41bb9feab20b1ca3726586de8938decf7d1555"
+      "sha256": "87a53bbd2941712ae722a25fb6c26b257d3060b1b8274baa9f70eb0d07779a2e"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",
       "url_path": "dist/uninstall-client.sh",
-      "sha256": "d6d27de2a03a018acaed4a54c639ded5bda6a965f1e016c1f88f993f5c477e37"
+      "sha256": "7545a0b531dae74a6a83379d5014fe01749d853b65dcb1856480f057e873d2c9"
     },
     "uninstall-server.sh": {
       "path": "dist/uninstall-server.sh",
       "url_path": "dist/uninstall-server.sh",
-      "sha256": "2bcbc4a20561e803054160a7cb6767b23a386b54cc87de1cf11eb8e79c169cc3"
+      "sha256": "6b9fc41bd3d72619ca266f2fa0124413b949f7791aa782b814d95957ef7f75be"
     }
   }
 }

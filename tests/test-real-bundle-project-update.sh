@@ -17,9 +17,9 @@ pass "REAL_BUNDLE_BUILT"
 setup_tree() {
   local tree="$1"
   mkdir -p \
-    "$tree/etc/frp-auto-deploy/pki" "$tree/etc/frp" \
-    "$tree/var/lib/frp-auto-deploy" \
-    "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy" \
+    "$tree/etc/drlink/pki" "$tree/etc/frp" \
+    "$tree/var/lib/drlink" \
+    "$tree/usr/local/bin" "$tree/usr/local/lib/drlink" \
     "$tree/usr/local/sbin" "$tree/etc/systemd/system"
   cat >"$tree/usr/local/bin/frps" <<'EOF'
 #!/usr/bin/env bash
@@ -28,9 +28,9 @@ exit 0
 EOF
   chmod 0755 "$tree/usr/local/bin/frps"
   printf 'token\n' >"$tree/etc/frp/server_token"
-  printf 'ca\n' >"$tree/etc/frp-auto-deploy/pki/ca.crt"
+  printf 'ca\n' >"$tree/etc/drlink/pki/ca.crt"
   printf 'bindPort = 7000\n' >"$tree/etc/frp/frps.toml"
-  cat >"$tree/etc/frp-auto-deploy/config.json" <<'EOF'
+  cat >"$tree/etc/drlink/config.json" <<'EOF'
 {
   "public_host": "server.example",
   "deployment_mode": "single443",
@@ -41,8 +41,8 @@ EOF
 }
 EOF
   printf '{"schema_version":2,"reserved":[6000],"clients":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/registry.json"
-  cat >"$tree/etc/frp-auto-deploy/version" <<EOF
+    >"$tree/var/lib/drlink/registry.json"
+  cat >"$tree/etc/drlink/version" <<EOF
 PROJECT_VERSION=2.0.0
 FRP_VERSION=0.71.0
 RELEASE_CHANNEL=stable
@@ -90,9 +90,9 @@ EOF
 chmod 0755 "$MOCK/curl"
 REMOTE="$WORKDIR/remote"
 setup_tree "$REMOTE"
-mkdir -p "$REMOTE/usr/local/sbin" "$REMOTE/usr/local/lib/frp-auto-deploy"
+mkdir -p "$REMOTE/usr/local/sbin" "$REMOTE/usr/local/lib/drlink"
 cp "$ROOT/tools/frp-project-update" "$REMOTE/usr/local/sbin/frp-project-update"
-cp "$ROOT/lib/frp-common.sh" "$REMOTE/usr/local/lib/frp-auto-deploy/frp-common.sh"
+cp "$ROOT/lib/frp-common.sh" "$REMOTE/usr/local/lib/drlink/frp-common.sh"
 BEFORE2="$(find "$REMOTE" -type f -exec sha256sum {} + | sort)"
 env PATH="$MOCK:$PATH" FRP_TEST_FIXTURE="$FIX" FRP_SERVER_TEST_ROOT="$REMOTE" \
   FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \

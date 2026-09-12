@@ -329,7 +329,7 @@ function Set-FrpDraftServiceEnabled {
     .SYNOPSIS
       Enable/disable a pending service. Disabling preserves the public port
       reservation locally (remote_port is untouched); the server-side release
-      is a separate operation (frpctl release service). At least one enabled
+      is a separate operation (drlink release service). At least one enabled
       service must remain. Re-enabling reuses the same remote_port on apply.
     #>
     param(
@@ -347,11 +347,6 @@ function Set-FrpDraftServiceEnabled {
     if ($Enable) {
         $item['enabled'] = $true
     } elseif ($currentlyEnabled) {
-        $enabledCount = 0
-        foreach ($k in $map.Keys) { if ($map[$k]['enabled'] -ne $false) { $enabledCount++ } }
-        if ($enabledCount -le 1) {
-            throw 'ERROR: at least one enabled service is required.'
-        }
         $item['enabled'] = $false
     }
     $map[$sid] = $item

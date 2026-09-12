@@ -202,7 +202,7 @@ function Start-FrpClient {
         CurrentDirectory = [System.IO.Path]::GetDirectoryName($frpc)
     }
     if ($null -eq $created -or [int]$created.ReturnValue -ne 0 -or [int]$created.ProcessId -le 0) {
-        throw ('ERROR: failed to start frpc (Win32_Process.Create rc={0})' -f $(if ($created) { $created.ReturnValue } else { 'null' }))
+        throw ('ERROR: failed to start drlink-client (Win32_Process.Create rc={0})' -f $(if ($created) { $created.ReturnValue } else { 'null' }))
     }
     $procId = [int]$created.ProcessId
     Write-FrpPidFile -ProcessId $procId -ExePath $frpc
@@ -237,7 +237,7 @@ function Stop-FrpClient {
     try {
         Stop-Process -Id $pidVal -Force -ErrorAction Stop
     } catch {
-        throw ("ERROR: failed to stop frpc pid {0}" -f $pidVal)
+        throw ("ERROR: failed to stop drlink-client pid {0}" -f $pidVal)
     }
     Clear-FrpPidFile
     Write-Host ("frpc stopped (pid {0})" -f $pidVal)

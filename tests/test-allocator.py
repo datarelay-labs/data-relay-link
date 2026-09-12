@@ -690,7 +690,7 @@ def case_unreadable_host_version_fallback():
     real_is_file = Path.is_file
 
     def fake_is_file(self, *args, **kwargs):
-        if str(self) == '/etc/frp-auto-deploy/version':
+        if str(self) == '/etc/drlink/version':
             raise PermissionError(13, 'Permission denied', str(self))
         return real_is_file(self, *args, **kwargs)
 

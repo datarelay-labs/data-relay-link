@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = ROOT + '/etc/frp-auto-deploy/config.json'
+CONFIG = ROOT + '/etc/drlink/config.json'
 
 
 def iso(ts):
@@ -62,7 +62,7 @@ def load_module(name, rel_lib, installed):
         Path(installed),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy' / Path(rel_lib).name)
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink' / Path(rel_lib).name)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(name, str(path))
@@ -76,7 +76,36 @@ def load_frp_pki():
     return load_module(
         'frp_pki',
         'lib/frp_pki.py',
-        '/usr/local/lib/frp-auto-deploy/frp_pki.py',
+        '/usr/local/lib/drlink/frp_pki.py',
+    )
+
+
+def installed_project_version():
+    """Authoritative project version for installer URL guidance (never hard-code)."""
+    env = str(os.environ.get('PROJECT_VERSION') or '').strip()
+    if env:
+        return env
+    for candidate in (
+        remap('/etc/drlink/version'),
+        Path(__file__).resolve().parent.parent / 'VERSION',
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('PROJECT_VERSION='):
+                value = line.split('=', 1)[1].strip()
+                if value:
+                    return value
+    return '2.3.1'
+
+
+def default_client_installer_url():
+    ver = installed_project_version()
+    return (
+        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
+        'v%s/dist/bootstrap-client.sh' % ver
     )
 
 
@@ -84,7 +113,7 @@ def load_allocator():
     return load_module(
         'frp_port_allocator',
         'server/frp-port-allocator.py',
-        '/usr/local/lib/frp-auto-deploy/frp-port-allocator.py',
+        '/usr/local/lib/drlink/frp-port-allocator.py',
     )
 
 
@@ -92,7 +121,7 @@ def load_enrollment_lifecycle():
     return load_module(
         'frp_enrollment_lifecycle',
         'lib/frp_enrollment_lifecycle.py',
-        '/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py',
+        '/usr/local/lib/drlink/frp_enrollment_lifecycle.py',
     )
 
 
@@ -139,7 +168,7 @@ def load_zero_touch():
     return load_module(
         'frp_zero_touch',
         'lib/frp_zero_touch.py',
-        '/usr/local/lib/frp-auto-deploy/frp_zero_touch.py',
+        '/usr/local/lib/drlink/frp_zero_touch.py',
     )
 
 
@@ -236,15 +265,15 @@ _TEST_INPUT_LINES = None
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
-        description='Create a short-lived FRP client enrollment code',
+        description='Create a short-lived Data Relay Link client enrollment code',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             'examples:\n'
-            '  sudo frp-create-client\n'
-            '  sudo frp-create-client --one-line --ssh --note client-01\n'
-            '  sudo frp-create-client --one-line --ssh --ssh-user aella --note customer-01\n'
-            '  sudo frp-create-client --one-line --ssh --client-name seoul-groupware --note "Seoul office"\n'
-            '  sudo frp-create-client --one-line --client-name inventory-only\n'
+            '  sudo drlink enrollment create\n'
+            '  sudo drlink enrollment create --one-line --ssh --note client-01\n'
+            '  sudo drlink enrollment create --one-line --ssh --ssh-user aella --note customer-01\n'
+            '  sudo drlink enrollment create --one-line --ssh --client-name seoul-groupware --note "Seoul office"\n'
+            '  sudo drlink enrollment create --one-line --client-name inventory-only\n'
         ),
     )
     p.add_argument('--ttl', type=int, default=600, help='TTL in seconds (default 600)')
@@ -529,13 +558,13 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     print('Expires: %s (%s seconds)' % (record['expires_at_iso'], ttl))
     print()
     print('Track or revoke with the Enrollment ID (not the secret):')
-    print('  show enrollments')
-    print('  revoke enrollment %s' % record['id'])
+    print('  drlink enrollment list')
+    print('  drlink enrollment revoke %s' % record['id'])
     print()
     if public_host and control_public:
-        print('FRP Server: %s:%s' % (public_host, control_public))
+        print('Data Relay Link Server: %s:%s' % (public_host, control_public))
     elif public_host:
-        print('FRP Server: %s' % public_host)
+        print('Data Relay Link Server: %s' % public_host)
     if allocator:
         print('Allocator: %s' % allocator)
     if ca_fp:
@@ -562,8 +591,8 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     else:
         print('Set the client installer URL, then re-run this command:')
         print(
-            '  sudo frp-set-client-installer-url '
-            'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh'
+            '  sudo drlink set client-installer-url '
+            '%s' % default_client_installer_url()
         )
         if not allocator:
             print()
@@ -649,7 +678,7 @@ def print_one_line_windows(
     if note:
         print('Note: %s' % note)
     if public_host and control_public:
-        print('FRP Server: %s:%s' % (public_host, control_public))
+        print('Data Relay Link Server: %s:%s' % (public_host, control_public))
     if rdp_port:
         print('RDP local target: 127.0.0.1:%s' % int(rdp_port))
     if bootstrap_host and '?platform=windows' in command:
@@ -662,12 +691,13 @@ def print_one_line_windows(
         print('This enrolls management identity only; no service or public port is created.')
     print()
     print('The ticket cannot be reused by another machine once bound.')
-    print('After reboot, run frp-client start; re-enrollment is not required.')
+    print('After reboot, Data Relay Link starts automatically when a service is enabled.')
+    print('Use: drlink service apply  (or legacy: drlink apply)')
     if tracking_id:
         print()
         print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  show enrollments')
-        print('  revoke enrollment %s' % tracking_id)
+        print('  drlink enrollment list')
+        print('  drlink enrollment revoke %s' % tracking_id)
     print()
 
 
@@ -737,12 +767,12 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     if note:
         print('Note: %s' % note)
     if public_host and control_public:
-        print('FRP Server: %s:%s' % (public_host, control_public))
+        print('Data Relay Link Server: %s:%s' % (public_host, control_public))
     if bootstrap_host and '/i/' in command:
         print('Bootstrap host: %s' % bootstrap_host)
     print()
     print('Send that single line to the remote user. They paste it and press Enter.')
-    print('No Enrollment Code prompt or FRP configuration is required.')
+    print('No Enrollment Code prompt or extra configuration is required.')
     if management_only:
         print('This enrolls management identity only; no service or public port is created.')
     print()
@@ -751,8 +781,8 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     if tracking_id:
         print()
         print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  show enrollments')
-        print('  revoke enrollment %s' % tracking_id)
+        print('  drlink enrollment list')
+        print('  drlink enrollment revoke %s' % tracking_id)
     print()
 
 
@@ -802,7 +832,7 @@ def main(argv=None):
     public_host = cfg_public_host(cfg)
     control_public = cfg_frp_control_public_port(cfg)
     allocator = str(cfg.get('allocator_public_url', '') or '').strip()
-    ca_path = remap(str(cfg.get('tls_ca_cert') or '/etc/frp-auto-deploy/pki/ca.crt'))
+    ca_path = remap(str(cfg.get('tls_ca_cert') or '/etc/drlink/pki/ca.crt'))
     ca_fp = fingerprint_from_cert(ca_path) if ca_path.is_file() else ''
     if platform == 'windows':
         installer = str(cfg.get('windows_client_installer_url', '') or '').strip()
@@ -837,7 +867,7 @@ def main(argv=None):
             here = Path(__file__).resolve()
             for path in (
                 here.parent.parent / 'lib' / 'frp_audit.py',
-                Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+                Path('/usr/local/lib/drlink/frp_audit.py'),
             ):
                 if path.is_file():
                     spec = importlib.util.spec_from_file_location('frp_audit', str(path))
@@ -863,7 +893,7 @@ def main(argv=None):
             )
         fail(
             'client installer URL is not configured; '
-            'run sudo frp-set-client-installer-url before --one-line'
+            'run sudo drlink set client-installer-url before --one-line'
         )
     if not allocator:
         fail('allocator public URL is not configured; cannot generate a zero-touch command')
@@ -952,7 +982,7 @@ def main(argv=None):
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))

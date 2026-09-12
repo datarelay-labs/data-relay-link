@@ -173,7 +173,7 @@ def dns_record_guidance(hostname, public_ip):
         '  Name  : %s' % hostname,
         '  Value : %s' % ip,
         '',
-        'DNS records are managed outside FRP Auto Deploy.',
+        'DNS records are managed outside Data Relay Link.',
         '',
         'The Public IP remains available while DNS propagates.',
     ]
@@ -296,6 +296,27 @@ def load_config(path):
     return data
 
 
+def _reapply_config_egress_permissions(path):
+    """Preserve drlink-egress readability after config.json inode replacement."""
+    try:
+        here = Path(__file__).resolve().parent
+        candidates = [
+            here / 'frp_egress_control.py',
+            Path('/usr/local/lib/drlink/frp_egress_control.py'),
+        ]
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('frp_egress_control', str(candidate))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.reapply_egress_runtime_permissions(config_path=Path(path), parents=True)
+            return
+    except Exception:
+        return
+
+
 def atomic_write_config(path, cfg):
     path = Path(path)
     payload = json.dumps(cfg, indent=2, sort_keys=True) + '\n'
@@ -308,6 +329,8 @@ def atomic_write_config(path, cfg):
             os.fsync(handle.fileno())
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        if path.name == 'config.json':
+            _reapply_config_egress_permissions(path)
     finally:
         if os.path.exists(tmp):
             try:
@@ -349,4 +372,4 @@ def deploy_root():
 def config_path(root=None):
     if root is None:
         root = deploy_root()
-    return Path(root + '/etc/frp-auto-deploy/config.json')
+    return Path(root + '/etc/drlink/config.json')

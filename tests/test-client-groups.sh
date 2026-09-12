@@ -6,13 +6,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy" "$TREE/var/log/frp-auto-deploy"
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink" "$TREE/var/log/drlink"
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 export FRP_CTL_TEST_ROOT="$TREE"
 export FRP_CTL_BIN_DIR="$ROOT/tools"
-REG="$TREE/var/lib/frp-auto-deploy/registry.json"
+REG="$TREE/var/lib/drlink/registry.json"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$REG" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$REG" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = map(Path, sys.argv[1:])
@@ -118,19 +118,24 @@ cp "$WORKDIR/good" "$REG"
 "$CTL" add client cccccccc group safer-group
 "$CTL" remove client cccccccc group safer-group
 "$CTL" delete group safer-group
+# Verb-first help topics redirect to resource-first guidance (not full topic pages).
 "$CTL" help create >"$WORKDIR/help-create"
 "$CTL" help add >"$WORKDIR/help-add"
 "$CTL" help remove >"$WORKDIR/help-remove"
-grep -q 'create group' "$WORKDIR/help-create"
-grep -q 'add client' "$WORKDIR/help-add"
-grep -q 'remove client' "$WORKDIR/help-remove"
+grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-create"
+grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-add"
+grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-remove"
+"$CTL" help group >"$WORKDIR/help-group"
+grep -Eqi 'group (create|list|show|delete)|create.*group' "$WORKDIR/help-group"
+"$CTL" help legacy >"$WORKDIR/help-legacy"
+grep -Eqi 'create group|add client|remove client' "$WORKDIR/help-legacy"
 
-grep -q '"event":"group.created"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.description_changed"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.member_added"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.member_removed"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
-grep -q '"event":"group.deleted"' "$TREE/var/log/frp-auto-deploy/audit.jsonl"
+grep -q '"event":"group.created"' "$TREE/var/log/drlink/audit.jsonl"
+grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.description_changed"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.member_added"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.member_removed"' "$TREE/var/log/drlink/audit.jsonl"
+grep -q '"event":"group.deleted"' "$TREE/var/log/drlink/audit.jsonl"
 
 python3 - "$ROOT/lib/frp_ctl_grammar.py" <<'PY'
 import importlib.util, sys
@@ -138,12 +143,23 @@ spec = importlib.util.spec_from_file_location('grammar', sys.argv[1])
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)
 groups = ['grp_11111111']
+assert 'group' in g.completion_candidates('', 'server', [], {}, [], groups=groups)
 assert 'groups' in g.completion_candidates('show ', 'server', [], {}, [], groups=groups)
 assert 'groups' in g.completion_candidates('show client aaaaaaaa ', 'server', ['aaaaaaaa'], {}, [], groups=groups)
 assert 'grp_11111111' in g.completion_candidates(
     'add client aaaaaaaa group ', 'server', ['aaaaaaaa'], {}, [], groups=groups
 )
-assert 'remove' in g.canonical_verbs('server')
+assert 'grp_11111111' in g.completion_candidates(
+    'group add-client ', 'server', ['aaaaaaaa'], {}, [], groups=groups
+)
+# Hidden compatibility alias still completes inventory after the action token.
+assert 'grp_11111111' in g.completion_candidates(
+    'group add-member ', 'server', ['aaaaaaaa'], {}, [], groups=groups
+)
+assert 'group' in g.canonical_verbs('server')
+actions = g.completion_candidates('group ', 'server', [], {}, [], groups=groups)
+assert 'add-client' in actions and 'remove-client' in actions
+assert 'add-member' not in actions and 'remove-member' not in actions and 'rename' not in actions
 PY
 
 python3 - "$ROOT/lib/frp_client_registry.py" <<'PY'

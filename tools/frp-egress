@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Manage Data Relay Controlled Egress profiles (agentless outbound policy)."""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+ROOT = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+
+
+def load_mod(name: str, rel: str):
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / "lib" / rel,
+        Path("/usr/local/lib/drlink") / rel,
+    ]
+    if ROOT:
+        candidates.insert(1, Path(ROOT) / "usr/local/lib/drlink" / rel)
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(name, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit("ERROR: missing %s" % rel)
+
+
+EG = load_mod("frp_egress_control", "frp_egress_control.py")
+
+
+def load_cfg():
+    path = Path(ROOT + "/etc/drlink/config.json")
+    if not path.is_file():
+        raise SystemExit("ERROR: missing /etc/drlink/config.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def audit(event, **fields):
+    try:
+        module = load_mod("frp_audit", "frp_audit.py")
+    except SystemExit:
+        return
+    try:
+        module.emit(event, **fields)
+    except Exception:
+        pass
+
+
+def fail(message):
+    raise SystemExit("ERROR: %s" % message)
+
+
+def confirm_enabled_profile_mutation(cfg, selector, *, yes: bool = False) -> None:
+    """Interactive safety gate for mutations on an ENABLED egress profile."""
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        _pid, profile = EG.resolve_profile(state, selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    if not profile.get("enabled"):
+        return
+    name = profile.get("name") or selector
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        fail(
+            'Profile "%s" is ENABLED; this change takes effect immediately. '
+            "Re-run with --yes to confirm non-interactively." % name
+        )
+    print('Profile "%s" is ENABLED.' % name)
+    print("This change takes effect immediately.")
+    answer = input("Continue? [y/N]: ").strip().lower()
+    if answer not in ("y", "yes"):
+        raise SystemExit("Cancelled")
+
+
+def print_profile(pid, profile):
+    print("Profile ID    : %s" % pid)
+    print("Name          : %s" % (profile.get("name") or "-"))
+    print("Description   : %s" % (profile.get("description") or "-"))
+    print("Enabled       : %s" % ("yes" if profile.get("enabled") else "no"))
+    print("Created       : %s" % (profile.get("created_at") or "-"))
+    print("Updated       : %s" % (profile.get("updated_at") or "-"))
+    sources = profile.get("sources") or []
+    print("Sources (%d):" % len(sources))
+    if not sources:
+        print("  (none)")
+    else:
+        for src in sources:
+            label = src.get("name") or "-"
+            print("  - %s  %s  (%s)" % (src.get("cidr"), label, src.get("id")))
+    destinations = profile.get("destinations") or []
+    print("Destinations (%d):" % len(destinations))
+    if not destinations:
+        print("  (none)")
+    else:
+        for dest in destinations:
+            print(
+                "  - %s:%s/%s  match=%s  (%s)"
+                % (
+                    dest.get("host"),
+                    dest.get("port"),
+                    dest.get("protocol") or "?",
+                    dest.get("match"),
+                    dest.get("id"),
+                )
+            )
+    print("Default       : DENY")
+
+
+def cmd_list(cfg, _args):
+    state = EG.load_egress_state(cfg=cfg)
+    print("%-18s %-24s %-8s %-8s %-8s %s" % ("PROFILE ID", "NAME", "ENABLED", "SOURCES", "DESTS", "DESCRIPTION"))
+    print("-" * 90)
+    rows = EG.list_profiles(state)
+    if not rows:
+        print("(none)")
+        return
+    for pid, profile in rows:
+        print(
+            "%-18s %-24s %-8s %-8s %-8s %s"
+            % (
+                pid,
+                (profile.get("name") or "-")[:24],
+                "yes" if profile.get("enabled") else "no",
+                str(len(profile.get("sources") or [])),
+                str(len(profile.get("destinations") or [])),
+                (profile.get("description") or "-")[:32],
+            )
+        )
+
+
+def cmd_show(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        pid, profile = EG.resolve_profile(state, args.selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print_profile(pid, profile)
+
+
+def cmd_create(cfg, args):
+    # New profiles are always created disabled. Reject --enable explicitly so
+    # operators cannot bypass add-source/add-destination/test → enable.
+    if bool(getattr(args, "enable", False)):
+        fail(
+            "New egress profiles are always created disabled.\n"
+            "Configure source and destination, test the policy, then run:\n"
+            "  drlink egress enable %s" % (args.name or "<PROFILE>")
+        )
+    try:
+        def mut(state):
+            return EG.create_profile(
+                state,
+                args.name,
+                description=args.description or "",
+                enabled=False,
+            )
+
+        pid, record = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Created egress profile %s" % pid)
+    print("Name     : %s" % record["name"])
+    print("Enabled  : %s" % ("yes" if record["enabled"] else "no"))
+    print("")
+    print("The profile is disabled. Default egress policy stays DENY.")
+    print("Preferred workflow: create → add-source → add-destination → test → enable")
+    print("Next steps:")
+    print("  egress add-source %s <CIDR>" % record["name"])
+    print("  egress add-destination %s <FQDN> <PORT> --protocol http|https" % record["name"])
+    print("  egress test <SOURCE-IP> <FQDN> <PORT>")
+    print("  egress enable %s" % record["name"])
+    audit(
+        "egress.profile.created",
+        profile_id=pid,
+        profile_name=record.get("name"),
+        details={"enabled": record.get("enabled")},
+    )
+
+
+def cmd_set(cfg, args):
+    try:
+        def mut(state):
+            kwargs = {}
+            # Canonical: set <PROFILE> name|description <VALUE>
+            prop = getattr(args, "property", None)
+            value = getattr(args, "value", None)
+            if prop in ("name", "description") and value is not None:
+                kwargs[prop] = value
+            if args.name is not None:
+                kwargs["name"] = args.name
+            if args.description is not None:
+                kwargs["description"] = args.description
+            if not kwargs:
+                raise EG.EgressError(
+                    "nothing to update (use: egress set <PROFILE> name|description <VALUE>)"
+                )
+            return EG.set_profile_metadata(state, args.selector, **kwargs)
+
+        pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Updated egress profile %s" % pid)
+    print_profile(pid, profile)
+    audit(
+        "egress.profile.updated",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={
+            "name": getattr(args, "name", None),
+            "description": getattr(args, "description", None),
+            "property": getattr(args, "property", None),
+        },
+    )
+
+
+def cmd_enable(cfg, args):
+    try:
+        def mut(state):
+            return EG.set_profile_enabled(state, args.selector, True)
+
+        pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Enabled egress profile %s (%s)" % (pid, profile.get("name")))
+    audit("egress.profile.enabled", profile_id=pid, profile_name=profile.get("name"))
+
+
+def cmd_disable(cfg, args):
+    try:
+        def mut(state):
+            return EG.set_profile_enabled(state, args.selector, False)
+
+        pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Disabled egress profile %s (%s)" % (pid, profile.get("name")))
+    audit("egress.profile.disabled", profile_id=pid, profile_name=profile.get("name"))
+
+
+def cmd_delete(cfg, args):
+    confirm_enabled_profile_mutation(cfg, args.selector, yes=bool(getattr(args, "yes", False)))
+    try:
+        def mut(state):
+            return EG.delete_profile(state, args.selector)
+
+        pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Deleted egress profile %s (%s)" % (pid, profile.get("name")))
+    audit("egress.profile.deleted", profile_id=pid, profile_name=profile.get("name"))
+
+
+def cmd_add_destination(cfg, args):
+    try:
+        def mut(state):
+            return EG.add_destination(
+                state,
+                args.selector,
+                args.host,
+                args.port,
+                protocol=args.protocol,
+            )
+
+        pid, profile, entry = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print(
+        "Added destination %s:%s/%s (match=%s) to %s"
+        % (
+            entry.get("host"),
+            entry.get("port"),
+            entry.get("protocol"),
+            entry.get("match"),
+            profile.get("name"),
+        )
+    )
+    audit(
+        "egress.destination.added",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={
+            "host": entry.get("host"),
+            "port": entry.get("port"),
+            "protocol": entry.get("protocol"),
+            "match": entry.get("match"),
+        },
+    )
+
+
+def cmd_remove_destination(cfg, args):
+    confirm_enabled_profile_mutation(cfg, args.selector, yes=bool(getattr(args, "yes", False)))
+    try:
+        def mut(state):
+            return EG.remove_destination(state, args.selector, args.destination)
+
+        pid, profile, entry = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print(
+        "Removed destination %s:%s from %s"
+        % (entry.get("host"), entry.get("port"), profile.get("name"))
+    )
+    audit(
+        "egress.destination.removed",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={"host": entry.get("host"), "port": entry.get("port")},
+    )
+
+
+def cmd_add_source(cfg, args):
+    try:
+        def mut(state):
+            return EG.add_source(state, args.selector, args.cidr, name=args.name or "")
+
+        pid, profile, entry = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Added source %s to %s" % (entry.get("cidr"), profile.get("name")))
+    audit(
+        "egress.source.added",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={"cidr": entry.get("cidr")},
+    )
+
+
+def cmd_remove_source(cfg, args):
+    confirm_enabled_profile_mutation(cfg, args.selector, yes=bool(getattr(args, "yes", False)))
+    try:
+        def mut(state):
+            return EG.remove_source(state, args.selector, args.source)
+
+        pid, profile, entry = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Removed source %s from %s" % (entry.get("cidr"), profile.get("name")))
+    audit(
+        "egress.source.removed",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={"cidr": entry.get("cidr")},
+    )
+
+
+def cmd_test(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    protocol = args.protocol
+    if not protocol:
+        # Infer only for operator convenience in test; policy still requires explicit protocol.
+        if args.port == 80:
+            protocol = "http"
+        elif args.port == 443:
+            protocol = "https"
+        else:
+            fail("--protocol is required for non-80/443 test ports")
+    decision = EG.authorize_request(
+        state,
+        source_ip=args.source_ip,
+        hostname=args.host,
+        port=args.port,
+        protocol=protocol,
+        method="CONNECT" if protocol == "https" else "GET",
+    )
+    policy = decision.get("decision")
+    print("Policy       : %s" % policy)
+    print("Reason       : %s" % decision.get("reason"))
+    print("Source IP    : %s" % decision.get("source_ip"))
+    print("Hostname     : %s" % decision.get("hostname"))
+    print("Port         : %s" % decision.get("port"))
+    print("Protocol     : %s" % (decision.get("protocol") or protocol))
+    print("Profile ID   : %s" % (decision.get("profile_id") or "-"))
+    print("Profile Name : %s" % (decision.get("profile_name") or "-"))
+    print("Scope        : policy + DNS safety only (no live connection)")
+    if policy != EG.DECISION_ALLOW:
+        print("DNS          : skipped (policy deny)")
+        print("Resolved IPs : -")
+        print("Live connect : NOT TESTED")
+        raise SystemExit(2)
+
+    try:
+        results = socket.getaddrinfo(args.host, None, type=socket.SOCK_STREAM)
+        seen = set()
+        raw = []
+        for _family, _type, _proto, _canon, sockaddr in results:
+            ip = sockaddr[0]
+            if ip in seen:
+                continue
+            seen.add(ip)
+            raw.append(ip)
+        print("DNS          : ALLOW (%d address(es))" % len(raw))
+        validated = EG.validate_resolved_addresses(raw)
+        print("Resolved IPs : %s" % (", ".join(validated) if validated else "-"))
+        print("Live connect : NOT TESTED")
+    except EG.EgressError as exc:
+        print("DNS          : DENY (%s)" % exc)
+        print("Resolved IPs : -")
+        print("Live connect : NOT TESTED")
+        raise SystemExit(2) from None
+    except OSError as exc:
+        print("DNS          : DENY (%s)" % exc)
+        print("Resolved IPs : -")
+        print("Live connect : NOT TESTED")
+        raise SystemExit(2) from None
+
+
+def cmd_export(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        doc = EG.export_profile(state, args.selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        Path(args.output).write_text(text, encoding="utf-8")
+        print("Exported %s to %s" % (args.selector, args.output))
+    else:
+        sys.stdout.write(text)
+
+
+def cmd_diff(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        _pid, current = EG.resolve_profile(state, args.selector)
+        raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        candidate = EG.parse_import_document(raw)
+        diff = EG.diff_profiles(current, candidate)
+    except (EG.EgressError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail(str(exc))
+    print(json.dumps(diff, indent=2, sort_keys=True))
+
+
+def cmd_import(cfg, args):
+    try:
+        raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        candidate = EG.parse_import_document(raw)
+
+        def mut(state):
+            return EG.import_profile_into_state(
+                state,
+                candidate,
+                target_selector=args.selector or None,
+            )
+
+        pid, profile, diff = EG.mutate_egress_state(mut, cfg=cfg)
+    except (EG.EgressError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail(str(exc))
+    print("Imported into %s (%s) — left DISABLED" % (pid, profile.get("name")))
+    print(json.dumps(diff, indent=2, sort_keys=True))
+    audit(
+        "egress.profile.imported",
+        profile_id=pid,
+        profile_name=profile.get("name"),
+        details={"diff": diff},
+    )
+
+
+def cmd_status(cfg, _args):
+    path = EG.egress_control_path(cfg)
+    print("Egress control file : %s" % path)
+    print("Exists              : %s" % ("yes" if path.is_file() else "no"))
+    try:
+        host, port = EG.listen_bind(cfg)
+        print("Listen              : %s:%s" % (host, port))
+    except EG.EgressError as exc:
+        print("Listen              : ERROR %s" % exc)
+    try:
+        state = EG.load_egress_state(cfg=cfg)
+        rows = EG.list_profiles(state)
+        enabled = sum(1 for _pid, p in rows if p.get("enabled"))
+        print("Profiles            : %d (%d enabled)" % (len(rows), enabled))
+        print("Default             : DENY")
+        for issue in EG.doctor_issues(state):
+            print("Doctor %-5s        : %s" % (issue.get("severity"), issue.get("message")))
+    except EG.EgressError as exc:
+        print("Policy              : FAIL-CLOSED (%s)" % exc)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="frp-egress", description="Controlled Egress profile management")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("list", help="List egress profiles")
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("show", help="Show one egress profile")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser("create", help="Create a DISABLED egress profile")
+    p.add_argument("name")
+    p.add_argument("--description", default="")
+    p.add_argument(
+        "--enable",
+        action="store_true",
+        help="Rejected: new profiles are always created disabled; use egress enable after configure+test",
+    )
+    p.add_argument(
+        "--disabled",
+        action="store_true",
+        help=argparse.SUPPRESS,  # compatibility no-op; create is already disabled
+    )
+    p.set_defaults(func=cmd_create)
+
+    p = sub.add_parser("set", help="Update egress profile metadata")
+    p.add_argument("selector")
+    p.add_argument(
+        "property",
+        nargs="?",
+        choices=["name", "description"],
+        default=None,
+        help="Canonical property form: name|description",
+    )
+    p.add_argument("value", nargs="?", default=None, help="New property value")
+    p.add_argument("--name", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--description", default=None, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_set)
+
+    p = sub.add_parser("enable", help="Enable an egress profile")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_enable)
+
+    p = sub.add_parser("disable", help="Disable an egress profile")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_disable)
+
+    p = sub.add_parser("delete", help="Delete an egress profile")
+    p.add_argument("selector")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm mutation of an ENABLED profile without a prompt",
+    )
+    p.set_defaults(func=cmd_delete)
+
+    p = sub.add_parser("add-destination", help="Add FQDN:port destination with protocol")
+    p.add_argument("selector")
+    p.add_argument("host")
+    p.add_argument("port", type=int)
+    p.add_argument(
+        "--protocol",
+        required=True,
+        choices=["http", "https"],
+        help="Destination protocol (http absolute-form or https CONNECT+SNI)",
+    )
+    p.set_defaults(func=cmd_add_destination)
+
+    p = sub.add_parser("remove-destination", help="Remove a destination")
+    p.add_argument("selector")
+    p.add_argument("destination")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm mutation of an ENABLED profile without a prompt",
+    )
+    p.set_defaults(func=cmd_remove_destination)
+
+    p = sub.add_parser("add-source", help="Add source CIDR")
+    p.add_argument("selector")
+    p.add_argument("cidr")
+    p.add_argument("--name", default="")
+    p.set_defaults(func=cmd_add_source)
+
+    p = sub.add_parser("remove-source", help="Remove a source")
+    p.add_argument("selector")
+    p.add_argument("source")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm mutation of an ENABLED profile without a prompt",
+    )
+    p.set_defaults(func=cmd_remove_source)
+
+    p = sub.add_parser("test", help="Test policy and DNS safety only (no live connection is made)")
+    p.add_argument("source_ip")
+    p.add_argument("host")
+    p.add_argument("port", type=int)
+    p.add_argument("--protocol", choices=["http", "https"], default=None)
+    p.set_defaults(func=cmd_test)
+
+    p = sub.add_parser("export", help="Export one egress profile to JSON")
+    p.add_argument("selector")
+    p.add_argument("--output", "-o", default=None)
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("diff", help="Diff a profile against an import candidate file")
+    p.add_argument("selector")
+    p.add_argument("file")
+    p.set_defaults(func=cmd_diff)
+
+    p = sub.add_parser("import", help="Import profile JSON (always DISABLED; never auto-enable)")
+    p.add_argument("file")
+    p.add_argument(
+        "selector",
+        nargs="?",
+        default=None,
+        help="Optional existing profile to replace destinations/sources into",
+    )
+    p.set_defaults(func=cmd_import)
+
+    p = sub.add_parser("status", help="Show egress control status")
+    p.set_defaults(func=cmd_status)
+
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    cfg = load_cfg()
+    args.func(cfg, args)
+
+
+if __name__ == "__main__":
+    main()

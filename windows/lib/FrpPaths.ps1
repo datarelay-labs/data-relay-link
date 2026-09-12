@@ -22,10 +22,10 @@ function Get-FrpWindowsRoot {
         return $env:FRP_WINDOWS_ROOT.Trim().TrimEnd('\', '/')
     }
     if (-not (Test-FrpIsWindowsHost)) {
-        $fallback = '/tmp/frp-auto-deploy-windows-test'
+        $fallback = '/tmp/drlink-windows-test'
         return $fallback
     }
-    return (Join-Path $env:ProgramData 'frp-auto-deploy')
+    return (Join-Path $env:ProgramData 'drlink')
 }
 
 function Get-FrpBinDir { Join-Path (Get-FrpWindowsRoot) 'bin' }
@@ -76,7 +76,7 @@ function Get-FrpProjectVersion {
         }
     } catch { }
     # Packaged fallback must track canonical VERSION (do not hardcode stale releases).
-    return '2.3.0'
+    return '2.3.1'
 }
 
 function Get-FrpUpstreamVersion {

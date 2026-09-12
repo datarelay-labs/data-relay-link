@@ -4,9 +4,15 @@
 . (Join-Path $PSScriptRoot '_import.ps1')
 try {
     # Isolate from any leftover product/E2E scheduled task on Windows CI hosts.
-    $env:FRP_AUTOSTART_TASK_NAME = 'FRPAutoDeployClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $env:FRP_AUTOSTART_TASK_NAME = 'DataRelayLinkClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $taskName = Get-FrpAutostartTaskName
     Assert-FrpEqual $env:FRP_AUTOSTART_TASK_NAME $taskName 'product-owned task name'
+    # Canonical default branding (when env override unset).
+    $prevOverride = $env:FRP_AUTOSTART_TASK_NAME
+    Remove-Item Env:FRP_AUTOSTART_TASK_NAME -ErrorAction SilentlyContinue
+    Assert-FrpEqual 'DataRelayLinkClient' (Get-FrpAutostartTaskName) 'canonical Scheduled Task name'
+    Assert-FrpEqual 'FRPAutoDeployClient' (Get-FrpAutostartLegacyTaskName) 'legacy Scheduled Task name'
+    $env:FRP_AUTOSTART_TASK_NAME = $prevOverride
     # Never collides with the E2E reverse-SSH scheduled task.
     Assert-FrpTrue ($taskName -notmatch '(?i)reverse|ssh|e2e') 'task name does not look like the E2E reverse-SSH task'
     try { Uninstall-FrpAutostartTask -TaskName $taskName | Out-Null } catch { }
@@ -34,6 +40,33 @@ try {
     Assert-FrpTrue (-not (Test-FrpAutostartTaskExists)) 'removed after uninstall'
     # Idempotent: uninstalling an already-absent task is success, not an error.
     Uninstall-FrpAutostartTask | Out-Null
+
+    # Legacy branding migration: product-owned FRPAutoDeployClient is removed
+    # when installing the canonical DataRelayLinkClient (or test override) task.
+    $legacyName = Get-FrpAutostartLegacyTaskName
+    Initialize-FrpDirectories
+    $runCmdLegacy = Get-FrpAutostartRunCommand
+    if (-not (Test-Path -LiteralPath $runCmdLegacy)) {
+        # Ownership validation requires the product wrapper path to exist.
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runCmdLegacy) | Out-Null
+        Set-Content -LiteralPath $runCmdLegacy -Value "@echo off`r`nrem Data Relay Link autostart wrapper`r`n"
+    }
+    $prevOverride = $env:FRP_AUTOSTART_TASK_NAME
+    try {
+        # Install under the legacy name so Windows schtasks (and marker backends)
+        # both create a product-owned task that migration can detect.
+        $env:FRP_AUTOSTART_TASK_NAME = $legacyName
+        try { Uninstall-FrpAutostartTask -TaskName $legacyName | Out-Null } catch { }
+        Install-FrpAutostartTask | Out-Null
+        Assert-FrpTrue (Test-FrpAutostartHealthy -TaskName $legacyName) 'legacy task is product-owned'
+    } finally {
+        $env:FRP_AUTOSTART_TASK_NAME = $prevOverride
+    }
+    Install-FrpAutostartTask | Out-Null
+    Assert-FrpTrue (Test-FrpAutostartTaskExists) 'canonical task registered after migrate'
+    Assert-FrpTrue (-not (Test-FrpAutostartTaskExists -TaskName $legacyName)) 'legacy product task migrated away'
+    Uninstall-FrpAutostartTask | Out-Null
+    try { Uninstall-FrpAutostartTask -TaskName $legacyName | Out-Null } catch { }
 
     # Simulated failure hook (mirrors FRP_WINDOWS_FAIL_ACL pattern).
     $env:FRP_WINDOWS_FAIL_AUTOSTART = '1'

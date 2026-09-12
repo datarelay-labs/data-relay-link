@@ -20,7 +20,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -46,6 +46,11 @@ MACHINE_ID_MAX_LEN = 128
 HOSTNAME_MAX_LEN = 253
 # Request body already caps at 64KiB; also bound idle reads and fan-out.
 ALLOCATOR_REQUEST_TIMEOUT_SEC = 30
+# TLS handshake runs in a worker after accept(); keep this short so stalled
+# ClientHello cannot monopolize the accept loop or hold slots for long.
+ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC = float(
+    os.environ.get('FRP_ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC', '8')
+)
 ALLOCATOR_MAX_CONCURRENT = 32
 _REQUEST_SLOTS = threading.BoundedSemaphore(ALLOCATOR_MAX_CONCURRENT)
 
@@ -87,7 +92,7 @@ def _load_client_registry():
     candidates = [
         Path(__file__).resolve().parent / 'frp_client_registry.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     for path in candidates:
         if path.is_file():
@@ -101,15 +106,51 @@ def _load_client_registry():
 CREG = _load_client_registry()
 
 
+def _load_machine_id():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_machine_id.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_machine_id.py',
+        Path('/usr/local/lib/drlink/frp_machine_id.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_machine_id', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+MID = _load_machine_id()
+
+def _load_bounded():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_bounded_server.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_bounded_server.py',
+        Path('/usr/local/lib/drlink/frp_bounded_server.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_bounded_server', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+BOUNDED = _load_bounded()
+BOUNDED_LOAD_ERROR = (
+    None if BOUNDED is not None else "ERROR: missing frp_bounded_server.py; refusing unbounded server"
+)
+
+
+
 def _load_health_check():
     candidates = [
         Path(__file__).resolve().parent / 'frp_health_check.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_health_check.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_health_check.py'),
+        Path('/usr/local/lib/drlink/frp_health_check.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_health_check.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_health_check.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_health_check.py')
     for path in candidates:
         if path.is_file():
@@ -127,11 +168,11 @@ def _load_enrollment_lifecycle():
     candidates = [
         Path(__file__).resolve().parent / 'frp_enrollment_lifecycle.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_enrollment_lifecycle.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py'),
+        Path('/usr/local/lib/drlink/frp_enrollment_lifecycle.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_enrollment_lifecycle.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_enrollment_lifecycle.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_enrollment_lifecycle.py')
     for path in candidates:
         if path.is_file():
@@ -148,11 +189,11 @@ ELC = _load_enrollment_lifecycle()
 def _load_zero_touch():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_zero_touch.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_zero_touch.py'),
+        Path('/usr/local/lib/drlink/frp_zero_touch.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_zero_touch.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_zero_touch.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_zero_touch.py')
     for path in candidates:
         if path.is_file():
@@ -169,11 +210,11 @@ ZT = _load_zero_touch()
 def _load_pki():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_pki.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_pki.py'),
+        Path('/usr/local/lib/drlink/frp_pki.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_pki.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_pki.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_pki.py')
     for path in candidates:
         if path.is_file():
@@ -265,6 +306,11 @@ def _test_before_registry_write(path):
     return None
 
 
+def _test_enrollment_failure_point(point):
+    """Production no-op. Unit tests may raise to inject AFTER_* failures."""
+    return None
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
@@ -313,10 +359,10 @@ def read_project_version(root=''):
     """Return installed PROJECT_VERSION for health/compatibility checks."""
     candidates = []
     if root:
-        candidates.append(Path(root) / 'etc/frp-auto-deploy/version')
+        candidates.append(Path(root) / 'etc/drlink/version')
     candidates.extend(
         [
-            Path('/etc/frp-auto-deploy/version'),
+            Path('/etc/drlink/version'),
             Path(__file__).resolve().parent.parent / 'VERSION',
         ]
     )
@@ -395,7 +441,7 @@ def bootstrap_dir_from_cfg(cfg):
     enrollments = str((cfg or {}).get('enrollments_dir') or '').strip()
     if enrollments:
         return Path(enrollments).resolve().parent / 'bootstrap'
-    return Path('/var/lib/frp-auto-deploy/bootstrap')
+    return Path('/var/lib/drlink/bootstrap')
 
 
 def ensure_secret_dir(path, mode=0o700):
@@ -674,6 +720,49 @@ def require_registry_v2(state):
     return state
 
 
+def _load_infrastructure_ports():
+    candidates = [
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_infrastructure_ports.py',
+        Path('/usr/local/lib/drlink/frp_infrastructure_ports.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_infrastructure_ports.py')
+        candidates.insert(0, Path(root) / 'lib' / 'frp_infrastructure_ports.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_infrastructure_ports', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+INFRA = _load_infrastructure_ports()
+
+
+def infrastructure_protected_ports(cfg):
+    """Canonical infrastructure ports that must never be allocated as services."""
+    if INFRA is not None:
+        return set(INFRA.infrastructure_ports(cfg))
+    protected = set()
+    for port in (
+        cfg_allocator_listen_port(cfg) if cfg else None,
+        cfg_frp_control_listen_port(cfg) if cfg else None,
+        coerce_port((cfg or {}).get('listen_port')) if cfg else None,
+        coerce_port((cfg or {}).get('egress_listen_port')) if cfg else None,
+    ):
+        if port is not None:
+            protected.add(port)
+    if cfg:
+        addr = str(cfg.get('access_plugin_addr') or '127.0.0.1:6101').strip()
+        if ':' in addr:
+            port = coerce_port(addr.rsplit(':', 1)[-1])
+            if port is not None:
+                protected.add(port)
+    return protected
+
+
 def validate_registry_invariants(state, cfg=None):
     """Fail closed on severe registry corruption. Do not silently repair."""
     state = require_registry_v2(state)
@@ -688,10 +777,7 @@ def validate_registry_invariants(state, cfg=None):
         except (TypeError, ValueError):
             port_start = None
             port_end = None
-        for key in ('allocator_listen_port', 'frp_control_listen_port', 'listen_port'):
-            port = coerce_port(cfg.get(key))
-            if port is not None:
-                protected.add(port)
+        protected = infrastructure_protected_ports(cfg)
     for item in state.get('reserved') or []:
         port = coerce_port(item)
         if port is not None:
@@ -716,7 +802,10 @@ def validate_registry_invariants(state, cfg=None):
             port = coerce_port(svc.get('remote_port'))
             if port is None:
                 continue
-            if port in seen_ports:
+            # reserved[] is the held-port bookkeeping list and commonly overlaps
+            # active service remote_ports. Collision is only when another
+            # non-reserved owner already claims the port (doctor parity).
+            if port in seen_ports and seen_ports[port][0] != 'reserved':
                 raise RegistrySchemaError('REGISTRY_INVALID: duplicate public port ownership')
             seen_ports[port] = (mid, key)
             if port_start is not None and port_end is not None:
@@ -724,7 +813,36 @@ def validate_registry_invariants(state, cfg=None):
                     raise RegistrySchemaError('REGISTRY_INVALID: allocated port outside configured range')
             if port in protected:
                 raise RegistrySchemaError('REGISTRY_INVALID: allocated port collides with a reserved control port')
+    # Derived FRP proxy names must be unique (hostname + machine_id[:8] + service).
+    # Last-write-wins map assignment would silently mis-authorize.
+    acl = _load_access_control_for_invariants()
+    if acl is not None:
+        try:
+            acl.validate_proxy_name_uniqueness(state)
+        except acl.AccessError as exc:
+            raise RegistrySchemaError('REGISTRY_INVALID: %s' % exc) from exc
     return state
+
+
+_ACL_FOR_INVARIANTS = None
+
+
+def _load_access_control_for_invariants():
+    global _ACL_FOR_INVARIANTS
+    if _ACL_FOR_INVARIANTS is not None:
+        return _ACL_FOR_INVARIANTS
+    for path in (
+        Path(__file__).resolve().parent / 'frp_access_control.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_access_control.py',
+        Path('/usr/local/lib/drlink/frp_access_control.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_access_control', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _ACL_FOR_INVARIANTS = mod
+            return mod
+    return None
 
 
 def used_ports_from_state(state):
@@ -930,15 +1048,7 @@ class Allocator:
         return used_ports_from_state(state)
 
     def protected_ports(self):
-        protected = set()
-        for port in (
-            cfg_allocator_listen_port(self.cfg),
-            cfg_frp_control_listen_port(self.cfg),
-            coerce_port(self.cfg.get('listen_port')),
-        ):
-            if port is not None:
-                protected.add(port)
-        return protected
+        return infrastructure_protected_ports(self.cfg)
 
     def allocate_port(self, used):
         protected = self.protected_ports()
@@ -1091,10 +1201,17 @@ class Allocator:
         parsed = parse_bootstrap_ticket(raw_ticket if isinstance(raw_ticket, str) else '')
         machine_id = str(payload.get('machine_id', '') or '').strip()
         hostname = str(payload.get('hostname', '') or '').strip()
-        if not machine_id:
-            return 400, api_error('machine_id is required', 'ZERO_TOUCH_INPUT_INVALID')
-        if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
-            return 400, api_error('invalid machine_id', 'ZERO_TOUCH_INPUT_INVALID')
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                code = 'ZERO_TOUCH_INPUT_INVALID'
+                return 400, api_error(str(exc), code)
+        else:
+            if not machine_id:
+                return 400, api_error('machine_id is required', 'ZERO_TOUCH_INPUT_INVALID')
+            if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
+                return 400, api_error('invalid machine_id', 'ZERO_TOUCH_INPUT_INVALID')
         try:
             hostname = CREG.validate_hostname(hostname)
         except ValueError:
@@ -1596,10 +1713,18 @@ class Allocator:
 
         machine_id = str(payload.get('machine_id', '')).strip()
         hostname = str(payload.get('hostname', '')).strip()
-        if not machine_id:
-            return 400, api_error('machine_id is required', 'AUTH_FAILED')
-        if any(c in machine_id for c in '\r\n/\\'):
-            return 400, api_error('invalid machine_id', 'AUTH_FAILED')
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                return 400, api_error(str(exc), 'AUTH_FAILED')
+        else:
+            if not machine_id:
+                return 400, api_error('machine_id is required', 'AUTH_FAILED')
+            if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
+                return 400, api_error('invalid machine_id', 'AUTH_FAILED')
+            if any(ord(c) < 0x20 or (0x7F <= ord(c) <= 0x9F) for c in machine_id):
+                return 400, api_error('invalid machine_id', 'AUTH_FAILED')
         try:
             hostname = CREG.validate_hostname(hostname)
         except ValueError:
@@ -1843,11 +1968,44 @@ class Allocator:
                         client['services'] = updated
                         self.save_registry(state)
 
+                        def _rollback_enrollment_attempt():
+                            if previous_client is None:
+                                clients.pop(machine_id, None)
+                            else:
+                                clients[machine_id] = previous_client
+                            self.save_registry(state)
+                            if (
+                                previous_enrollment is not None
+                                and enroll_path is not None
+                            ):
+                                self.save_enrollment(enroll_path, previous_enrollment)
+
+                        try:
+                            _test_enrollment_failure_point('AFTER_REGISTRY_COMMIT')
+                        except Exception:
+                            _rollback_enrollment_attempt()
+                            raise
+
                         if record is not None and enroll_path is not None:
                             record['bound_machine_id'] = machine_id
                             record['used_at'] = record.get('used_at') or now_iso
                             record['last_used_at'] = now_iso
-                            self.save_enrollment(enroll_path, record)
+                            try:
+                                self.save_enrollment(enroll_path, record)
+                            except Exception:
+                                # Fail closed: never leave registry enrolled while
+                                # the enrollment record remains unused/unbound.
+                                _rollback_enrollment_attempt()
+                                raise
+                            try:
+                                _test_enrollment_failure_point(
+                                    'AFTER_ENROLLMENT_RECORD_COMMIT'
+                                )
+                            except Exception:
+                                # Enrollment record already committed with registry.
+                                # Leave recoverable committed generation; do not
+                                # resurrect an unused enrollment code.
+                                raise
                             completed = self.complete_bootstrap_for_enrollment(
                                 record.get('id') or enrollment_id, machine_id
                             )
@@ -1855,16 +2013,17 @@ class Allocator:
                                 # Fail closed: never report enrollment success while the
                                 # bootstrap ticket remains reusable. Roll back registry
                                 # and enrollment mutations from this attempt.
-                                if previous_client is None:
-                                    clients.pop(machine_id, None)
-                                else:
-                                    clients[machine_id] = previous_client
-                                self.save_registry(state)
-                                if previous_enrollment is not None:
-                                    self.save_enrollment(enroll_path, previous_enrollment)
+                                _rollback_enrollment_attempt()
                                 raise OSError(
                                     'failed to consume bootstrap ticket after enrollment'
                                 )
+                            try:
+                                _test_enrollment_failure_point('AFTER_BOOTSTRAP_CONSUME')
+                            except Exception:
+                                # Bootstrap already consumed; leave recoverable committed
+                                # generation (registry + enrollment bound). Do not resurrect
+                                # an unused enrollment code after bootstrap was spent.
+                                raise
                         response_mac_key = None
         except RegistrySchemaError as exc:
             print('allocator registry error: %s' % exc, flush=True)
@@ -1926,7 +2085,12 @@ class Allocator:
             or headers.get('X-Client-Id')
             or ''
         ).strip()
-        if not machine_id:
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                return None, str(exc)
+        elif not machine_id:
             return None, 'missing machine id'
         with self.registry_lock():
             state = self.load_registry()
@@ -1959,7 +2123,7 @@ class Allocator:
 
 def make_handler(allocator):
     class Handler(BaseHTTPRequestHandler):
-        server_version = 'frp-auto-deploy/1.2'
+        server_version = 'drlink/1.2'
         timeout = ALLOCATOR_REQUEST_TIMEOUT_SEC
         protocol_version = 'HTTP/1.1'
 
@@ -2048,17 +2212,21 @@ def make_handler(allocator):
             return True
 
         def _with_slot(self, fn):
-            acquired = _REQUEST_SLOTS.acquire(blocking=False)
-            if not acquired:
-                self.send_json(
-                    503,
-                    api_error('server is busy; retry later', 'SERVER_BUSY'),
-                )
-                return
-            try:
-                return fn()
-            finally:
-                _REQUEST_SLOTS.release()
+            # Connection-level bounding is enforced by BoundedThreadingMixIn
+            # before the worker thread starts. A second semaphore here deadlocks.
+            if BOUNDED is None:
+                acquired = _REQUEST_SLOTS.acquire(blocking=False)
+                if not acquired:
+                    self.send_json(
+                        503,
+                        api_error('server is busy; retry later', 'SERVER_BUSY'),
+                    )
+                    return
+                try:
+                    return fn()
+                finally:
+                    _REQUEST_SLOTS.release()
+            return fn()
 
         def do_GET(self):
             def _handle():
@@ -2274,8 +2442,56 @@ def main():
     if port is None:
         raise SystemExit('ERROR: allocator_listen_port is not configured')
     context = allocator_ssl_context(allocator.cfg)
-    server = ThreadingHTTPServer((host, port), make_handler(allocator))
-    server.socket = context.wrap_socket(server.socket, server_side=True)
+    handler = make_handler(allocator)
+    if BOUNDED is None:
+        raise SystemExit(BOUNDED_LOAD_ERROR)
+
+    def _reject(request, _addr):
+        # Overload path receives a raw TCP socket (TLS is deferred to workers).
+        # Close without attempting an HTTP reply — clients expect TLS.
+        try:
+            request.close()
+        except OSError:
+            pass
+
+    class AllocatorServer(BOUNDED.BoundedThreadingMixIn, HTTPServer):
+        max_concurrent = ALLOCATOR_MAX_CONCURRENT
+        request_timeout = float(ALLOCATOR_REQUEST_TIMEOUT_SEC)
+        handshake_timeout = float(ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC)
+        daemon_threads = True
+        reject_callback = staticmethod(_reject)
+        ssl_context = context
+
+        def prepare_request(self, request, client_address):
+            """Wrap + handshake in the worker so accept() stays non-blocking."""
+            del client_address
+            ctx = self.ssl_context
+            hs_timeout = float(self.handshake_timeout)
+            try:
+                request.settimeout(hs_timeout)
+            except (OSError, AttributeError):
+                pass
+            ssl_sock = ctx.wrap_socket(
+                request,
+                server_side=True,
+                do_handshake_on_connect=False,
+            )
+            try:
+                ssl_sock.settimeout(hs_timeout)
+                ssl_sock.do_handshake()
+                ssl_sock.settimeout(float(self.request_timeout))
+            except Exception:
+                try:
+                    ssl_sock.close()
+                except OSError:
+                    pass
+                raise
+            return ssl_sock
+
+    # Plain listen → accept raw → worker does bounded TLS handshake.
+    # Wrapping the listening socket would run handshake inside accept() and
+    # starve healthy clients when peers stall mid-ClientHello (AUDIT-004).
+    server = AllocatorServer((host, port), handler)
     print(f'FRP allocator listening on https://{host}:{port}', flush=True)
     server.serve_forever()
 
