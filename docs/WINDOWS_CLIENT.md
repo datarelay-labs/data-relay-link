@@ -121,15 +121,17 @@ tools\drlink.cmd autostart
 | `info` | Prints `mstsc` / `ssh` / HTTP(S) URLs without secrets |
 | `update` | Replaces `frpc.exe` after SHA256 verify; preserves identity and ports; transactional rollback of managed files + process state |
 | `uninstall` | **LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED**; removes the product autostart task |
-| `autostart` | Show / enable / disable the product Scheduled Task (`FRPAutoDeployClient`) |
+| `autostart` | Show / enable / disable the product Scheduled Task (`DataRelayLinkClient`) |
 
 ## Reboot / autostart
 
 Enrollment with enabled services registers a product-owned Scheduled Task
-named **`FRPAutoDeployClient`**. It runs `frp-client start` as **SYSTEM** at
+named **`DataRelayLinkClient`**. Older installs may still have
+`FRPAutoDeployClient`; product-owned legacy tasks are migrated on the next
+autostart register/uninstall. It runs `frp-client start` as **SYSTEM** at
 system boot (ONSTART), so `frpc` comes back without an interactive login.
 Management-only (zero-service) clients do not register the task. Use
-`frp-client autostart` to inspect, enable, or disable it. Enrollment state
+`drlink autostart` to inspect, enable, or disable it. Enrollment state
 under `ProgramData` persists across reboot.
 
 ## Unsupported / out of scope

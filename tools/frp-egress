@@ -55,6 +55,30 @@ def fail(message):
     raise SystemExit("ERROR: %s" % message)
 
 
+def confirm_enabled_profile_mutation(cfg, selector, *, yes: bool = False) -> None:
+    """Interactive safety gate for mutations on an ENABLED egress profile."""
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        _pid, profile = EG.resolve_profile(state, selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    if not profile.get("enabled"):
+        return
+    name = profile.get("name") or selector
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        fail(
+            'Profile "%s" is ENABLED; this change takes effect immediately. '
+            "Re-run with --yes to confirm non-interactively." % name
+        )
+    print('Profile "%s" is ENABLED.' % name)
+    print("This change takes effect immediately.")
+    answer = input("Continue? [y/N]: ").strip().lower()
+    if answer not in ("y", "yes"):
+        raise SystemExit("Cancelled")
+
+
 def print_profile(pid, profile):
     print("Profile ID    : %s" % pid)
     print("Name          : %s" % (profile.get("name") or "-"))
@@ -121,16 +145,21 @@ def cmd_show(cfg, args):
 
 
 def cmd_create(cfg, args):
+    # New profiles are always created disabled. Reject --enable explicitly so
+    # operators cannot bypass add-source/add-destination/test → enable.
+    if bool(getattr(args, "enable", False)):
+        fail(
+            "New egress profiles are always created disabled.\n"
+            "Configure source and destination, test the policy, then run:\n"
+            "  drlink egress enable %s" % (args.name or "<PROFILE>")
+        )
     try:
         def mut(state):
-            # Safe default: create DISABLED. Explicit --enable is the only way to
-            # start active; incomplete policies must never widen egress.
-            enabled = bool(getattr(args, "enable", False))
             return EG.create_profile(
                 state,
                 args.name,
                 description=args.description or "",
-                enabled=enabled,
+                enabled=False,
             )
 
         pid, record = EG.mutate_egress_state(mut, cfg=cfg)
@@ -216,6 +245,7 @@ def cmd_disable(cfg, args):
 
 
 def cmd_delete(cfg, args):
+    confirm_enabled_profile_mutation(cfg, args.selector, yes=bool(getattr(args, "yes", False)))
     try:
         def mut(state):
             return EG.delete_profile(state, args.selector)
@@ -265,6 +295,7 @@ def cmd_add_destination(cfg, args):
 
 
 def cmd_remove_destination(cfg, args):
+    confirm_enabled_profile_mutation(cfg, args.selector, yes=bool(getattr(args, "yes", False)))
     try:
         def mut(state):
             return EG.remove_destination(state, args.selector, args.destination)
@@ -302,6 +333,7 @@ def cmd_add_source(cfg, args):
 
 
 def cmd_remove_source(cfg, args):
+    confirm_enabled_profile_mutation(cfg, args.selector, yes=bool(getattr(args, "yes", False)))
     try:
         def mut(state):
             return EG.remove_source(state, args.selector, args.source)
@@ -346,6 +378,7 @@ def cmd_test(cfg, args):
     print("Protocol     : %s" % (decision.get("protocol") or protocol))
     print("Profile ID   : %s" % (decision.get("profile_id") or "-"))
     print("Profile Name : %s" % (decision.get("profile_name") or "-"))
+    print("Scope        : policy + DNS safety only (no live connection)")
     if policy != EG.DECISION_ALLOW:
         print("DNS          : skipped (policy deny)")
         print("Resolved IPs : -")
@@ -467,7 +500,7 @@ def build_parser():
     p.add_argument(
         "--enable",
         action="store_true",
-        help="Rejected for new profiles (create is always disabled; add source/destination, then enable)",
+        help="Rejected: new profiles are always created disabled; use egress enable after configure+test",
     )
     p.add_argument(
         "--disabled",
@@ -500,6 +533,11 @@ def build_parser():
 
     p = sub.add_parser("delete", help="Delete an egress profile")
     p.add_argument("selector")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm mutation of an ENABLED profile without a prompt",
+    )
     p.set_defaults(func=cmd_delete)
 
     p = sub.add_parser("add-destination", help="Add FQDN:port destination with protocol")
@@ -517,6 +555,11 @@ def build_parser():
     p = sub.add_parser("remove-destination", help="Remove a destination")
     p.add_argument("selector")
     p.add_argument("destination")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm mutation of an ENABLED profile without a prompt",
+    )
     p.set_defaults(func=cmd_remove_destination)
 
     p = sub.add_parser("add-source", help="Add source CIDR")
@@ -528,9 +571,14 @@ def build_parser():
     p = sub.add_parser("remove-source", help="Remove a source")
     p.add_argument("selector")
     p.add_argument("source")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm mutation of an ENABLED profile without a prompt",
+    )
     p.set_defaults(func=cmd_remove_source)
 
-    p = sub.add_parser("test", help="Test authorize(source, host, port, protocol) without connecting")
+    p = sub.add_parser("test", help="Test policy and DNS safety only (no live connection is made)")
     p.add_argument("source_ip")
     p.add_argument("host")
     p.add_argument("port", type=int)

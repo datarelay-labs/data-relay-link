@@ -145,8 +145,9 @@ def main(argv=None):
         validated.append((label, ssh_user, note, services))
 
     labels = [item[0] for item in validated if item[0]]
-    if len(labels) != len(set(labels)):
-        raise SystemExit('ERROR: duplicate labels in this batch')
+    lowered = [str(x).strip().lower() for x in labels]
+    if len(lowered) != len(set(lowered)):
+        raise SystemExit('ERROR: duplicate labels in this batch (case-insensitive)')
 
     if not sys.stdout.isatty():
         print(

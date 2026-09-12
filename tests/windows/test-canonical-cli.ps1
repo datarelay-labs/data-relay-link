@@ -30,6 +30,7 @@ try {
     Assert-FrpTrue ($help -match 'update project') 'help advertises update project'
     Assert-FrpTrue ($help -match 'update engine') 'help advertises update engine'
     Assert-FrpTrue ($help -match 're-running the canonical') 'help documents installer project-update path'
+    Assert-FrpTrue ($help -match 'support bundle') 'help advertises support bundle'
     Assert-FrpTrue ($help -notmatch 'add-service') 'help hides legacy add-service'
 
     $list = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath service list 2>&1 | Out-String
@@ -38,6 +39,12 @@ try {
 
     $info = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath client info 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'client info exits 0'
+
+    # Resource-first support bundle vocabulary (legacy support-bundle still works).
+    $bundleOut = Join-Path $tmpRoot 'bundle-test.zip'
+    $bundle = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath support bundle -Output $bundleOut 2>&1 | Out-String
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'support bundle exits 0'
+    Assert-FrpTrue (Test-Path -LiteralPath $bundleOut) 'support bundle wrote archive'
 
     $add = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath service add `
         -Preset custom -Id web -Name Web -TargetHost 10.0.0.5 -TargetPort 8080 2>&1 | Out-String

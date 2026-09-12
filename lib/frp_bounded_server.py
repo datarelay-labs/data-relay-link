@@ -23,6 +23,8 @@ class BoundedThreadingMixIn:
 
     Optional:
       - reject_callback(request, client_address) for overload response
+      - prepare_request(request, client_address) -> socket: wrap/handshake in
+        the worker thread before finish_request (keeps accept() non-blocking)
     """
 
     daemon_threads = True
@@ -35,8 +37,14 @@ class BoundedThreadingMixIn:
         self._slot_sem = threading.BoundedSemaphore(int(self.max_concurrent))
         super().__init__(*args, **kwargs)
 
+    def prepare_request(self, request, client_address):
+        """Optional hook: transform the accepted socket in the worker thread."""
+        del client_address
+        return request
+
     def process_request(self, request, client_address):
-        # Apply idle/read timeout before any worker starts.
+        # Apply idle/read timeout before any worker starts. prepare_request may
+        # tighten this further (e.g. short TLS handshake deadline).
         try:
             request.settimeout(float(self.request_timeout))
         except (OSError, AttributeError):
@@ -56,21 +64,30 @@ class BoundedThreadingMixIn:
             return
 
         def run():
+            sock = request
             try:
-                self.finish_request(request, client_address)
-            except Exception:
                 try:
-                    self.handle_error(request, client_address)
-                finally:
+                    sock = self.prepare_request(request, client_address)
+                except Exception:
+                    close_quietly(request)
+                    if sock is not request:
+                        close_quietly(sock)
+                    return
+                try:
+                    self.finish_request(sock, client_address)
+                except Exception:
                     try:
-                        self.shutdown_request(request)
+                        self.handle_error(sock, client_address)
+                    finally:
+                        try:
+                            self.shutdown_request(sock)
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        self.shutdown_request(sock)
                     except Exception:
                         pass
-            else:
-                try:
-                    self.shutdown_request(request)
-                except Exception:
-                    pass
             finally:
                 self._slot_sem.release()
 

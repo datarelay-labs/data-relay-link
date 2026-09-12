@@ -124,7 +124,9 @@ if ROOT and not str(path).startswith(ROOT):
 state = json.loads(path.read_text())
 require_v2(state)
 
-mid, client = CREG.resolve_client_or_exit(state, args.query)
+# Capture immutable CLIENT ID before confirmation; never re-resolve label/hostname.
+confirmed_mid, client = CREG.resolve_client_or_exit(state, args.query)
+mid = confirmed_mid
 
 status = mgmt_status(client)
 fingerprint = str(client.get('mgmt_fingerprint') or '')
@@ -150,7 +152,7 @@ else:
     print('  (none)')
 print()
 print('The client will need a new Enrollment Code to establish trust again.')
-print('This does not release public ports. Use frp-release-service for that.')
+print('This does not release public ports. Use: drlink client release <CLIENT-ID> [SERVICE-ID]')
 
 if not args.force:
     answer = input('Type REVOKE to continue: ')
@@ -161,7 +163,14 @@ lock_fd = lock_registry(path)
 try:
     state = json.loads(path.read_text())
     require_v2(state)
-    mid, client = CREG.resolve_client_or_exit(state, args.query)
+    clients = state.get('clients') or {}
+    if confirmed_mid not in clients or not isinstance(clients.get(confirmed_mid), dict):
+        raise SystemExit(
+            'ERROR: Target changed while waiting for confirmation.\n'
+            'Re-run the command.'
+        )
+    mid = confirmed_mid
+    client = clients[mid]
     status = mgmt_status(client)
     if status == 'revoked':
         print('Management identity is already revoked.')

@@ -78,11 +78,11 @@ grep -q 'DNS          : DENY' <<<"$out" || { echo "$out"; exit 1; }
 grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
 ! grep -q 'Final        : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
 echo "PASS EGRESS_TEST_TRUTHFUL_OUTPUT"
-"$EGRESS" remove-destination ubuntu-update localhost:443
+"$EGRESS" remove-destination ubuntu-update localhost:443 --yes
 "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
-"$EGRESS" remove-destination ubuntu-update archive.ubuntu.com:443
-"$EGRESS" remove-source ubuntu-update 203.0.113.10/32
-"$EGRESS" delete ubuntu-update
+"$EGRESS" remove-destination ubuntu-update archive.ubuntu.com:443 --yes
+"$EGRESS" remove-source ubuntu-update 203.0.113.10/32 --yes
+"$EGRESS" delete ubuntu-update --yes
 "$EGRESS" list | grep -q '(none)'
 
 # Grammar checks

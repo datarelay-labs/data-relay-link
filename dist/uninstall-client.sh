@@ -323,14 +323,19 @@ frp_u_stop_owned_frpc
 
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
-frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
-frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
-frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 
 libdir="$(frp_u_path /usr/local/lib/drlink)"
 SERVER_PRESENT=0
 if [[ -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
   SERVER_PRESENT=1
+fi
+
+# Shared management entrypoints are owned symmetrically with shared libraries:
+# preserve them when the server role remains on this host.
+if [[ "$SERVER_PRESENT" != "1" ]]; then
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 fi
 
 # Load canonical ownership (CLIENT_ONLY / SHARED).
@@ -355,7 +360,7 @@ if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   if [[ "$SERVER_PRESENT" != "1" ]]; then
     for f in frp-common.sh frp_mgmt_auth.py frp_health_check.py \
       frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py \
-      frp-role-ownership.sh; do
+      frp-role-ownership.sh frpctl; do
       frp_u_rm_file "${libdir}/${f}"
     done
   fi

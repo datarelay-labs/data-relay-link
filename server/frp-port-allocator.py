@@ -46,6 +46,11 @@ MACHINE_ID_MAX_LEN = 128
 HOSTNAME_MAX_LEN = 253
 # Request body already caps at 64KiB; also bound idle reads and fan-out.
 ALLOCATOR_REQUEST_TIMEOUT_SEC = 30
+# TLS handshake runs in a worker after accept(); keep this short so stalled
+# ClientHello cannot monopolize the accept loop or hold slots for long.
+ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC = float(
+    os.environ.get('FRP_ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC', '8')
+)
 ALLOCATOR_MAX_CONCURRENT = 32
 _REQUEST_SLOTS = threading.BoundedSemaphore(ALLOCATOR_MAX_CONCURRENT)
 
@@ -2440,24 +2445,53 @@ def main():
     handler = make_handler(allocator)
     if BOUNDED is None:
         raise SystemExit(BOUNDED_LOAD_ERROR)
+
     def _reject(request, _addr):
+        # Overload path receives a raw TCP socket (TLS is deferred to workers).
+        # Close without attempting an HTTP reply — clients expect TLS.
         try:
-            body = b'{"ok":false,"error":"server busy"}'
-            request.sendall(
-                b"HTTP/1.1 503 Service Unavailable\r\n"
-                b"Content-Type: application/json\r\n"
-                b"Content-Length: %d\r\n"
-                b"Connection: close\r\n\r\n" % len(body) + body
-            )
+            request.close()
         except OSError:
             pass
+
     class AllocatorServer(BOUNDED.BoundedThreadingMixIn, HTTPServer):
         max_concurrent = ALLOCATOR_MAX_CONCURRENT
         request_timeout = float(ALLOCATOR_REQUEST_TIMEOUT_SEC)
+        handshake_timeout = float(ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC)
         daemon_threads = True
         reject_callback = staticmethod(_reject)
+        ssl_context = context
+
+        def prepare_request(self, request, client_address):
+            """Wrap + handshake in the worker so accept() stays non-blocking."""
+            del client_address
+            ctx = self.ssl_context
+            hs_timeout = float(self.handshake_timeout)
+            try:
+                request.settimeout(hs_timeout)
+            except (OSError, AttributeError):
+                pass
+            ssl_sock = ctx.wrap_socket(
+                request,
+                server_side=True,
+                do_handshake_on_connect=False,
+            )
+            try:
+                ssl_sock.settimeout(hs_timeout)
+                ssl_sock.do_handshake()
+                ssl_sock.settimeout(float(self.request_timeout))
+            except Exception:
+                try:
+                    ssl_sock.close()
+                except OSError:
+                    pass
+                raise
+            return ssl_sock
+
+    # Plain listen → accept raw → worker does bounded TLS handshake.
+    # Wrapping the listening socket would run handshake inside accept() and
+    # starve healthy clients when peers stall mid-ClientHello (AUDIT-004).
     server = AllocatorServer((host, port), handler)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
     print(f'FRP allocator listening on https://{host}:{port}', flush=True)
     server.serve_forever()
 

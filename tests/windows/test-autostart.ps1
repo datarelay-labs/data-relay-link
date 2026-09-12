@@ -4,9 +4,15 @@
 . (Join-Path $PSScriptRoot '_import.ps1')
 try {
     # Isolate from any leftover product/E2E scheduled task on Windows CI hosts.
-    $env:FRP_AUTOSTART_TASK_NAME = 'FRPAutoDeployClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $env:FRP_AUTOSTART_TASK_NAME = 'DataRelayLinkClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $taskName = Get-FrpAutostartTaskName
     Assert-FrpEqual $env:FRP_AUTOSTART_TASK_NAME $taskName 'product-owned task name'
+    # Canonical default branding (when env override unset).
+    $prevOverride = $env:FRP_AUTOSTART_TASK_NAME
+    Remove-Item Env:FRP_AUTOSTART_TASK_NAME -ErrorAction SilentlyContinue
+    Assert-FrpEqual 'DataRelayLinkClient' (Get-FrpAutostartTaskName) 'canonical Scheduled Task name'
+    Assert-FrpEqual 'FRPAutoDeployClient' (Get-FrpAutostartLegacyTaskName) 'legacy Scheduled Task name'
+    $env:FRP_AUTOSTART_TASK_NAME = $prevOverride
     # Never collides with the E2E reverse-SSH scheduled task.
     Assert-FrpTrue ($taskName -notmatch '(?i)reverse|ssh|e2e') 'task name does not look like the E2E reverse-SSH task'
     try { Uninstall-FrpAutostartTask -TaskName $taskName | Out-Null } catch { }
@@ -33,6 +39,26 @@ try {
     Uninstall-FrpAutostartTask | Out-Null
     Assert-FrpTrue (-not (Test-FrpAutostartTaskExists)) 'removed after uninstall'
     # Idempotent: uninstalling an already-absent task is success, not an error.
+    Uninstall-FrpAutostartTask | Out-Null
+
+    # Legacy branding migration: product-owned FRPAutoDeployClient marker is removed
+    # when installing the canonical DataRelayLinkClient task.
+    $legacyName = 'FRPAutoDeployClient'
+    $legacyMarker = Get-FrpAutostartMarkerPath -TaskName $legacyName
+    $runCmdLegacy = Get-FrpAutostartRunCommand
+    $payload = [ordered]@{
+        task_name     = $legacyName
+        run           = $runCmdLegacy
+        run_as        = 'SYSTEM'
+        run_level     = 'HIGHEST'
+        trigger       = 'ONSTART'
+        registered_at = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+    ($payload | ConvertTo-Json) | Set-Content -LiteralPath $legacyMarker
+    Assert-FrpTrue (Test-FrpAutostartHealthy -TaskName $legacyName) 'legacy marker is product-owned'
+    Install-FrpAutostartTask | Out-Null
+    Assert-FrpTrue (Test-FrpAutostartTaskExists) 'canonical task registered after migrate'
+    Assert-FrpTrue (-not (Test-FrpAutostartTaskExists -TaskName $legacyName)) 'legacy product task migrated away'
     Uninstall-FrpAutostartTask | Out-Null
 
     # Simulated failure hook (mirrors FRP_WINDOWS_FAIL_ACL pattern).

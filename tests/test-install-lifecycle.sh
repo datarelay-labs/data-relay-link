@@ -929,19 +929,88 @@ pass "CLIENT_UNINSTALL_NO_SERVER_RELEASE"
 "$ROOT/uninstall-client.sh" >"$WORKDIR/cu2.out" 2>"$WORKDIR/cu2.err" || fail "client uninstall twice"
 pass "CLIENT_UNINSTALL_IDEMPOTENT"
 
-# Dual-role: client uninstall must not delete server token
+# Dual-role: client uninstall must not delete server token / shared CLI
 DUAL="$WORKDIR/dual"
-mkdir -p "$DUAL/etc/frp" "$DUAL/etc/drlink" "$DUAL/usr/local/bin"
+mkdir -p "$DUAL/etc/frp" "$DUAL/etc/drlink" "$DUAL/usr/local/bin" "$DUAL/usr/local/lib/drlink"
 echo server-token >"$DUAL/etc/frp/server_token"
 chmod 600 "$DUAL/etc/frp/server_token"
 echo 'bindPort=443' >"$DUAL/etc/frp/frps.toml"
 echo '{"public_host":"203.0.113.10"}' >"$DUAL/etc/drlink/config.json"
 echo '{"schema_version":1}' >"$DUAL/etc/frp/client-state.json"
+# Shared management entrypoints present before client uninstall.
+cat >"$DUAL/usr/local/bin/drlink" <<'EOF'
+#!/bin/sh
+case "$1" in
+  version) echo "drlink test 0.0.0";;
+  status) echo "Server status: ok (fixture)";;
+  doctor) echo "doctor ok";;
+  support) echo "support bundle ok";;
+  *) echo "drlink $*";;
+esac
+EOF
+chmod 0755 "$DUAL/usr/local/bin/drlink"
+printf '#!/bin/sh\necho frpctl\n' >"$DUAL/usr/local/bin/frpctl"
+chmod 0755 "$DUAL/usr/local/bin/frpctl"
+printf '#!/bin/sh\necho bundle\n' >"$DUAL/usr/local/bin/frp-support-bundle"
+chmod 0755 "$DUAL/usr/local/bin/frp-support-bundle"
+printf '#!/bin/sh\necho frpc\n' >"$DUAL/usr/local/bin/frpc"
+chmod 0755 "$DUAL/usr/local/bin/frpc"
+printf '#!/bin/sh\necho frp-client\n' >"$DUAL/usr/local/bin/frp-client"
+chmod 0755 "$DUAL/usr/local/bin/frp-client"
+echo 'shared' >"$DUAL/usr/local/lib/drlink/frp_doctor.py"
+echo 'shared' >"$DUAL/usr/local/lib/drlink/frp_support_bundle.py"
+echo 'client-only' >"$DUAL/usr/local/lib/drlink/frp-client-common.sh"
 export FRP_UNINSTALL_TEST_ROOT="$DUAL"
 "$ROOT/uninstall-client.sh" >"$WORKDIR/dual.out" 2>"$WORKDIR/dual.err" || fail "dual-role client uninstall"
 [[ -f "$DUAL/etc/frp/server_token" ]] || fail "dual-role deleted server token"
 [[ -f "$DUAL/etc/drlink/config.json" ]] || fail "dual-role deleted server config"
 [[ ! -f "$DUAL/etc/frp/client-state.json" ]] || fail "dual-role left client state"
+[[ ! -f "$DUAL/usr/local/bin/frpc" ]] || fail "dual-role left frpc"
+[[ ! -f "$DUAL/usr/local/bin/frp-client" ]] || fail "dual-role left frp-client"
+[[ ! -f "$DUAL/usr/local/lib/drlink/frp-client-common.sh" ]] || fail "dual-role left client-only lib"
+[[ -x "$DUAL/usr/local/bin/drlink" ]] || fail "dual-role removed shared drlink"
+[[ -x "$DUAL/usr/local/bin/frpctl" ]] || fail "dual-role removed shared frpctl"
+[[ -x "$DUAL/usr/local/bin/frp-support-bundle" ]] || fail "dual-role removed support-bundle"
+[[ -f "$DUAL/usr/local/lib/drlink/frp_doctor.py" ]] || fail "dual-role removed doctor lib"
+"$DUAL/usr/local/bin/drlink" version | grep -q 'drlink test' || fail "dual-role drlink version broken"
+"$DUAL/usr/local/bin/drlink" status | grep -q 'Server status' || fail "dual-role drlink status broken"
+"$DUAL/usr/local/bin/drlink" doctor | grep -q 'doctor ok' || fail "dual-role doctor missing"
+pass "DUAL_ROLE_CLIENT_UNINSTALL_PRESERVES_SERVER_CLI"
+
+# Dual-role opposite: server uninstall must keep client drlink usable
+DUAL2="$WORKDIR/dual2"
+mkdir -p "$DUAL2/etc/frp" "$DUAL2/etc/drlink" "$DUAL2/usr/local/bin" "$DUAL2/usr/local/lib/drlink" \
+  "$DUAL2/etc/systemd/system" "$DUAL2/var/lib/drlink"
+echo server-token >"$DUAL2/etc/frp/server_token"
+chmod 600 "$DUAL2/etc/frp/server_token"
+echo 'bindPort=443' >"$DUAL2/etc/frp/frps.toml"
+echo '{"public_host":"203.0.113.10","registry_file":"/var/lib/drlink/registry.json"}' >"$DUAL2/etc/drlink/config.json"
+echo '{"schema_version":2,"clients":{}}' >"$DUAL2/var/lib/drlink/registry.json"
+echo '{"schema_version":1}' >"$DUAL2/etc/frp/client-state.json"
+touch "$DUAL2/etc/systemd/system/drlink-server.service"
+touch "$DUAL2/etc/systemd/system/drlink-client.service"
+cat >"$DUAL2/usr/local/bin/drlink" <<'EOF'
+#!/bin/sh
+case "$1" in
+  version) echo "drlink client 0.0.0";;
+  status) echo "Client status: ok (fixture)";;
+  *) echo "drlink $*";;
+esac
+EOF
+chmod 0755 "$DUAL2/usr/local/bin/drlink"
+printf '#!/bin/sh\necho frpc\n' >"$DUAL2/usr/local/bin/frpc"
+chmod 0755 "$DUAL2/usr/local/bin/frpc"
+echo 'client-only' >"$DUAL2/usr/local/lib/drlink/frp-client-common.sh"
+echo 'shared' >"$DUAL2/usr/local/lib/drlink/frp_doctor.py"
+export FRP_UNINSTALL_TEST_ROOT="$DUAL2"
+"$ROOT/uninstall-server.sh" >"$WORKDIR/dual2.out" 2>"$WORKDIR/dual2.err" || fail "dual-role server uninstall"
+# Default server uninstall preserves token/registry; assert client CLI remains.
+[[ -f "$DUAL2/etc/frp/client-state.json" ]] || fail "dual-role server uninstall removed client state"
+[[ -x "$DUAL2/usr/local/bin/drlink" ]] || fail "dual-role server uninstall removed client drlink"
+[[ -x "$DUAL2/usr/local/bin/frpc" ]] || fail "dual-role server uninstall removed frpc"
+"$DUAL2/usr/local/bin/drlink" version | grep -q 'drlink client' || fail "dual-role client drlink broken after server uninstall"
+grep -qi 'preserved\|client' "$WORKDIR/dual2.out" "$WORKDIR/dual2.err" || true
+pass "DUAL_ROLE_SERVER_UNINSTALL_PRESERVES_CLIENT_CLI"
 
 # ---------------------------------------------------------------------------
 # Client installer re-run

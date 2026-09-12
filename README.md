@@ -2,10 +2,18 @@
 
 **Data Relay Labs — secure connectivity for restricted and isolated environments.**
 
-Data Relay Link provides secure connectivity through:
+**Data Relay** is the product family. **Data Relay Link** ships both pillars:
 
-- **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access
+- **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access over official pinned FRP
 - **Controlled Egress** (outbound) — agentless HTTP/HTTPS forward proxy for approved destinations only
+
+Canonical hierarchy (see `docs/PRODUCT_MASTER.md` §2.2):
+
+```text
+Data Relay
+  ├── Secure Remote Access  (Data Relay Link / FRP ops layer — inbound)
+  └── Controlled Egress     (agentless forward proxy — outbound)
+```
 
 Primary CLI: `sudo drlink`
 

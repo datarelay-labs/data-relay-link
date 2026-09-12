@@ -1,11 +1,16 @@
 # Security architecture
 
-This document describes the security model of `Data Relay Link` **2.3.0**.
+This document describes the security model of `Data Relay Link` **2.3.1**.
 It is not a certification, audit report, or guarantee against a compromised
 root account.
 
 Pinned FRP version: **0.71.0**. Product version is independent of the
 management protocol version (`schema: 1` in signed requests) and of FRP.
+
+**Product framing:** Data Relay is the family; Data Relay Link delivers
+**Secure Remote Access** (inbound FRP ops) plus **Controlled Egress**
+(outbound agentless proxy). See `docs/PRODUCT_MASTER.md` §2.2 and
+`docs/CONTROLLED_EGRESS.md`.
 
 ## 1. FRP tunnel authentication
 
@@ -217,12 +222,15 @@ Apply uses a new timestamp/nonce/signature and reuses existing public ports.
 
 ## 9. Revoke vs release
 
-| Action | Management identity | Port reservations |
-| --- | --- | --- |
-| `frp-revoke-client` | blocked | kept |
-| `frp-release-client` / `frp-release-service` | unchanged | freed |
+| Action | Management identity | Port reservations | Client registry record |
+| --- | --- | --- | --- |
+| `client revoke` / `frp-revoke-client` | blocked | kept | kept |
+| `client release <ID> <SERVICE>` / `frp-release-service` | unchanged | that service freed | kept |
+| `client release <ID>` / `frp-release-client` | removed | all freed | **removed** |
 
 Revoke is not release. An administrator can still release after revoke.
+`client release <CLIENT-ID>` is irreversible for that server-side client record;
+it does not uninstall software on the remote host.
 
 ## 10. Disable vs release
 

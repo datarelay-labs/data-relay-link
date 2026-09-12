@@ -424,7 +424,7 @@ def resolve_client(state, query):
 
     label_matches = [
         item for item in clients
-        if str(item[1].get('label') or '').strip() == query
+        if str(item[1].get('label') or '').strip().lower() == query.lower()
     ]
     if len(label_matches) == 1:
         return label_matches[0]
@@ -433,7 +433,7 @@ def resolve_client(state, query):
 
     host_matches = [
         item for item in clients
-        if str(item[1].get('hostname') or '').strip() == query
+        if str(item[1].get('hostname') or '').strip().lower() == query.lower()
     ]
     if len(host_matches) == 1:
         return host_matches[0]
@@ -441,6 +441,32 @@ def resolve_client(state, query):
         raise ClientLookupError('multiple clients matched', host_matches)
 
     raise ClientLookupError('client not found')
+
+
+def find_client_id_by_label(state, label, exclude_id=None):
+    """Return client id with the same label (case-insensitive), else None."""
+    wanted = str(label or '').strip().lower()
+    if not wanted:
+        return None
+    for mid, client in sorted_clients(state):
+        if exclude_id and mid == exclude_id:
+            continue
+        if str((client or {}).get('label') or '').strip().lower() == wanted:
+            return mid
+    return None
+
+
+def find_client_id_by_hostname(state, hostname, exclude_id=None):
+    """Return client id with the same hostname (case-insensitive), else None."""
+    wanted = str(hostname or '').strip().lower()
+    if not wanted:
+        return None
+    for mid, client in sorted_clients(state):
+        if exclude_id and mid == exclude_id:
+            continue
+        if str((client or {}).get('hostname') or '').strip().lower() == wanted:
+            return mid
+    return None
 
 
 def resolve_client_or_exit(state, query):
@@ -455,7 +481,7 @@ def resolve_client_or_exit(state, query):
             shown = sanitize_display(query, 128)
             sys.stderr.write('ERROR: client not found: %s\n' % shown)
             sys.stderr.write('\nUse a CLIENT ID, unique label, or unique hostname.\n')
-            sys.stderr.write('Run:\n  show clients\n\nor:\n  show client ?\n')
+            sys.stderr.write('Run:\n  client list\n\nor:\n  client show ?\n')
         else:
             sys.stderr.write('ERROR: %s\n' % exc)
         raise SystemExit(1)
@@ -608,7 +634,10 @@ def resolve_group(state, query):
         return prefixes[0]
     if len(prefixes) > 1:
         raise GroupLookupError('multiple groups matched', prefixes)
-    names = [item for item in groups if str(item[1].get('name') or '').strip() == query]
+    names = [
+        item for item in groups
+        if str(item[1].get('name') or '').strip().lower() == lower
+    ]
     if len(names) == 1:
         return names[0]
     if len(names) > 1:
@@ -638,9 +667,11 @@ def resolve_manual_group_or_exit(state, query):
 
 
 def find_group_id_by_name(state, name, exclude_id=None):
-    wanted = str(name or '').strip()
+    wanted = str(name or '').strip().lower()
+    if not wanted:
+        return None
     for gid, group in sorted_groups(state):
-        if gid != exclude_id and str(group.get('name') or '').strip() == wanted:
+        if gid != exclude_id and str(group.get('name') or '').strip().lower() == wanted:
             return gid
     return None
 

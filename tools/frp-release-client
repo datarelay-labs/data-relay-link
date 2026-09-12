@@ -141,7 +141,10 @@ if ROOT and not str(path).startswith(ROOT):
 state = json.loads(path.read_text())
 require_v2(state)
 
-mid, client = CREG.resolve_client_or_exit(state, args.query)
+# Capture the immutable CLIENT ID before confirmation. After confirmation,
+# mutate only that ID — never re-resolve a mutable label/hostname selector.
+confirmed_mid, client = CREG.resolve_client_or_exit(state, args.query)
+mid = confirmed_mid
 
 services = client.get('services') or {}
 if not isinstance(services, dict):
@@ -158,6 +161,14 @@ ensure_releasable(services, args.force)
 
 print(f'Releasing {CREG.sanitize_display(CREG.display_name(client, mid), 64)} '
       f'({CREG.sanitize_display(mid, 128)})')
+print('WHAT WILL BE REMOVED')
+print('  client registry record')
+print('  management identity')
+print('  all service reservations')
+print('  all public ports')
+print('WHAT WILL NOT HAPPEN')
+print('  no remote host deletion')
+print('  no local software uninstall')
 if ports:
     print('Services:')
     for sid, port, enabled in ports:
@@ -165,7 +176,7 @@ if ports:
         print(f'  {CREG.sanitize_display(sid, 32)}: {port}{suffix}')
 else:
     print('Services: (none)')
-answer = input('Type RELEASE to continue: ')
+answer = input('Type RELEASE to permanently remove this client from the server: ')
 if answer != 'RELEASE':
     raise SystemExit('Cancelled')
 
@@ -175,7 +186,14 @@ with LOCKS.acquire_control_state_lock(control_root()):
     try:
         state = json.loads(path.read_text())
         require_v2(state)
-        mid, client = CREG.resolve_client_or_exit(state, args.query)
+        clients = state.get('clients') or {}
+        if confirmed_mid not in clients or not isinstance(clients.get(confirmed_mid), dict):
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
+        mid = confirmed_mid
+        client = clients[mid]
         services = client.get('services') or {}
         if not isinstance(services, dict):
             services = {}
@@ -187,7 +205,11 @@ with LOCKS.acquire_control_state_lock(control_root()):
         unlock_registry(lock_fd)
 
     # Access Control binding cleanup is required after registry release.
+    # Lock order already held: control-state → registry (released) → ACL
+    # per-resource lock taken inside mutate_access_state (never reverse).
     try:
+        if os.environ.get('FRP_TEST_FAIL_ACL_CLEANUP') == '1':
+            raise RuntimeError('injected ACL cleanup failure')
         here = Path(__file__).resolve()
         acl_candidates = [
             here.parent.parent / 'lib' / 'frp_access_control.py',

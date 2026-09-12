@@ -2133,7 +2133,8 @@ frpctl_dispatch_canonical() {
       ;;
     set_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-profile set \
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_invoke frp-profile set \
         "$(frpctl_json_get "$result" profile)" \
         "$(frpctl_json_get "$result" property)" \
         "$(frpctl_json_get "$result" value)"
@@ -2250,19 +2251,22 @@ frpctl_dispatch_canonical() {
       ;;
     add_egress_source)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress add-source \
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_invoke frp-egress add-source \
         "$(frpctl_json_get "$result" profile)" \
         "$(frpctl_json_get "$result" cidr)"
       ;;
     remove_egress_destination)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress remove-destination \
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_invoke frp-egress remove-destination \
         "$(frpctl_json_get "$result" profile)" \
         "$(frpctl_json_get "$result" destination)"
       ;;
     remove_egress_source)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress remove-source \
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_invoke frp-egress remove-source \
         "$(frpctl_json_get "$result" profile)" \
         "$(frpctl_json_get "$result" source)"
       ;;
@@ -2276,7 +2280,8 @@ frpctl_dispatch_canonical() {
       ;;
     delete_egress_profile)
       frpctl_require_server || return 1
-      frpctl_invoke frp-egress delete "$(frpctl_json_get "$result" profile)"
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_invoke frp-egress delete "$(frpctl_json_get "$result" profile)"
       ;;
     delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(frpctl_json_get "$result" group)" ;;
     delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(frpctl_json_get "$result" profile)" ;;

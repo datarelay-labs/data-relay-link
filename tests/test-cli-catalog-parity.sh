@@ -89,13 +89,183 @@ for role in ("server", "client", "both"):
     assert entries and text
     assert catalog.guided_menu_action(role, "1") == entries[0][1]
     assert catalog.guided_menu_action(role, str(len(entries))) == "exit"
+# Server guided menu follows root-help IA categories.
+server_menu = catalog.render_guided_menu("server")
+for label in ("Remote Access", "Controlled Egress", "Organize", "Operate"):
+    assert label in server_menu, label
+assert "server_egress" in [e[1] for e in catalog.guided_menu_entries("server")]
 frpctl = Path("tools/frpctl").read_text(encoding="utf-8")
 assert "frpctl_render_guided_menu" in frpctl
 assert 'echo "17) Exit"' not in frpctl
 print("CLI_MENU_CATALOG_PARITY=PASS")
+
+# Strict no-arg commands reject trailing tokens (CLI-AUDIT-001).
+for tokens, needle in (
+    (["status", "foo"], "unexpected argument"),
+    (["version", "abc"], "unexpected argument"),
+    (["menu", "x"], "unexpected argument"),
+    (["access", "list", "extra"], "unexpected argument"),
+    (["egress", "status", "x"], "unexpected argument"),
+):
+    err = catalog.strict_error(tokens)
+    assert err and needle in err, (tokens, err)
+
+# Lifecycle confirmation / risk metadata.
+revoke = catalog.find(["client", "revoke"])
+release = catalog.find(["client", "release"])
+assert revoke["confirmation"] == "typed_token" and revoke["risk"] == "irreversible"
+assert release["confirmation"] == "typed_token" and release["risk"] == "irreversible"
+assert "--force" in catalog.flag_names(revoke["flags"])
+assert "--force" in catalog.flag_names(release["flags"])
+help_release = catalog.command_help(release)
+assert "WHAT WILL BE REMOVED" in help_release
+assert "registry record" in help_release.lower() or "client registry record" in help_release
+assert "no remote host deletion" in help_release.lower() or "WHAT WILL NOT HAPPEN" in help_release
+help_revoke = catalog.command_help(revoke)
+assert "WHAT STAYS" in help_revoke or "reservations" in help_revoke.lower()
+
+# Flag help metadata for shallow options.
+yes = next(f for f in catalog.find(["access", "public"])["flags"] if f["name"] == "--yes")
+assert yes.get("description")
+ttl = next(f for f in catalog.find(["access", "add-source"])["flags"] if f["name"] == "--ttl")
+assert ttl.get("metavar") and ttl.get("description")
+
+# Public catalog coverage for reverse-parity surfaces.
+assert catalog.find(["access", "replace-source"])
+assert "--yes" in catalog.flag_names(catalog.find(["access", "public"])["flags"])
+assert "--name" in catalog.flag_names(catalog.find(["egress", "add-source"])["flags"])
+assert "--ssh-user" in catalog.flag_names(catalog.find(["service-profile", "set"])["flags"])
+assert "--yes" in catalog.flag_names(catalog.find(["egress", "remove-source"])["flags"])
+assert "--yes" in catalog.flag_names(catalog.find(["egress", "delete"])["flags"])
+egress_test = catalog.find(["egress", "test"])
+assert "policy" in (egress_test.get("detail") or "").lower()
+assert "live" in (egress_test.get("detail") or "").lower() or "connection" in (egress_test.get("detail") or "").lower()
+print("CLI_STRICT_AND_METADATA=PASS")
 PY
 pass "CLI_CATALOG_PARITY"
 pass "CLI_MENU_CATALOG_PARITY"
+pass "CLI_STRICT_AND_METADATA"
+
+python3 - <<'PY' || fail "backend catalog reverse parity"
+"""ARCH-AUDIT-001: backend public argparse surfaces ⊆ catalog (or exempt)."""
+import argparse
+import ast
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("lib").resolve()))
+import frp_cli_catalog as catalog
+
+ROOT = Path(".").resolve()
+
+def catalog_flags_for(path):
+    cmd = catalog.find(list(path))
+    if cmd is None:
+        return None
+    return {f["name"] for f in cmd["flags"]} | {
+        f["name"] for f in cmd["flags"] if True
+    }
+
+# Map backend (tool, subcommand) → catalog path.
+SURFACES = {
+    ("frp-access", "replace-source"): ("access", "replace-source"),
+    ("frp-access", "public"): ("access", "public"),
+    ("frp-access", "add-source"): ("access", "add-source"),
+    ("frp-egress", "add-source"): ("egress", "add-source"),
+    ("frp-egress", "remove-source"): ("egress", "remove-source"),
+    ("frp-egress", "remove-destination"): ("egress", "remove-destination"),
+    ("frp-egress", "delete"): ("egress", "delete"),
+    ("frp-egress", "test"): ("egress", "test"),
+    ("frp-profile", "set"): ("service-profile", "set"),
+    ("frp-release-client", None): ("client", "release"),
+    ("frp-release-service", None): ("client", "release"),
+    ("frp-revoke-client", None): ("client", "revoke"),
+}
+
+def parse_tool_flags(tool_path, subcommand):
+    """Best-effort: collect add_argument('--…') under a subparser or root."""
+    text = Path(tool_path).read_text(encoding="utf-8")
+    flags = set()
+    if subcommand is None:
+        for line in text.splitlines():
+            if "add_argument(" not in line:
+                continue
+            for quote in ("'", '"'):
+                parts = line.split(quote)
+                for part in parts:
+                    if part.startswith("--"):
+                        flags.add(part.split()[0].split("=")[0])
+        return flags
+    # Match add_parser("name" or add_parser(\n        "name"
+    patterns = (
+        'add_parser("%s"' % subcommand,
+        "add_parser('%s'" % subcommand,
+        'add_parser(\n        "%s"' % subcommand,
+        "add_parser(\n        '%s'" % subcommand,
+    )
+    start = -1
+    for pat in patterns:
+        start = text.find(pat)
+        if start >= 0:
+            break
+    if start < 0:
+        # Fallback: search for quoted subcommand near add_parser
+        idx = 0
+        while True:
+            hit = text.find('"%s"' % subcommand, idx)
+            if hit < 0:
+                hit = text.find("'%s'" % subcommand, idx)
+            if hit < 0:
+                break
+            window = text[max(0, hit - 40):hit]
+            if "add_parser" in window:
+                start = hit
+                break
+            idx = hit + 1
+    if start < 0:
+        raise SystemExit("missing subparser %s in %s" % (subcommand, tool_path))
+    rest = text[start:]
+    nxt = rest.find("add_parser(", 10)
+    block = rest if nxt < 0 else rest[:nxt]
+    for line in block.splitlines():
+        if "add_argument(" not in line:
+            continue
+        for quote in ("'", '"'):
+            parts = line.split(quote)
+            for part in parts:
+                if part.startswith("--"):
+                    flags.add(part.split()[0].split("=")[0])
+    return flags
+
+missing = []
+for (tool, sub), path in SURFACES.items():
+    tool_path = ROOT / "tools" / tool
+    flags = parse_tool_flags(tool_path, sub)
+    cmd = catalog.find(list(path))
+    if cmd is None:
+        missing.append("%s %s → catalog %s missing" % (tool, sub, path))
+        continue
+    if cmd.get("surface") in ("legacy_only", "internal_only", "hidden_compat"):
+        continue
+    cat_flags = {f["name"] for f in cmd["flags"]}
+    for flag in sorted(flags):
+        key = (tool, sub or "*", flag)
+        if key in catalog.BACKEND_SURFACE_EXEMPT:
+            continue
+        if flag.startswith("-") and not flag.startswith("--"):
+            # short options may be exempt / unadvertised
+            if (tool, sub or "*", flag) in catalog.BACKEND_SURFACE_EXEMPT:
+                continue
+            continue
+        if flag not in cat_flags and flag not in ("--help",):
+            # release/revoke --force must be present; others too
+            missing.append("%s %s flag %s not in catalog %s" % (tool, sub, flag, " ".join(path)))
+
+if missing:
+    raise SystemExit("reverse parity gaps:\n  " + "\n  ".join(missing))
+print("BACKEND_CATALOG_REVERSE_PARITY=PASS")
+PY
+pass "BACKEND_CATALOG_REVERSE_PARITY"
 
 python3 - <<'PY' || fail "packaging parity"
 from pathlib import Path
@@ -106,6 +276,7 @@ for name in (
     "frp_machine_id.py",
     "frp_bounded_server.py",
     "frp_public_suffix.py",
+    "frp_policy_fingerprint.py",
     "public_suffix_list.dat",
 ):
     if name not in manifest:
@@ -116,6 +287,7 @@ for name in (
     "lib/frp_machine_id.py",
     "lib/frp_bounded_server.py",
     "lib/frp_public_suffix.py",
+    "lib/frp_policy_fingerprint.py",
     "lib/data/public_suffix_list.dat",
 ):
     if name not in bundles:
@@ -126,6 +298,7 @@ for name in (
     "frp_machine_id.py",
     "frp_bounded_server.py",
     "frp_public_suffix.py",
+    "frp_policy_fingerprint.py",
     "public_suffix_list.dat",
 ):
     if name not in install:

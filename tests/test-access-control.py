@@ -495,7 +495,8 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
         backup = self.access_path.read_bytes()
         self.access_path.unlink()
-        # Force mtime re-check
+        # Force fingerprint re-check
+        self.cache.access_fp = object()
         self.cache.access_mtime = object()
         access_state, registry, load_error, _cfg = self.cache.snapshot()
         self.assertIsNotNone(load_error)
@@ -505,6 +506,7 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
         # Restore
         self.access_path.write_bytes(backup)
+        self.cache.access_fp = object()
         self.cache.access_mtime = object()
         access_state, registry, load_error, _cfg = self.cache.snapshot()
         self.assertIsNone(load_error)
@@ -516,6 +518,7 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
         backup = self.registry_path.read_bytes()
         self.registry_path.unlink()
+        self.cache.registry_fp = object()
         self.cache.registry_mtime = object()
         _a, _r, load_error, _cfg = self.cache.snapshot()
         self.assertIsNotNone(load_error)
@@ -524,6 +527,7 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         self.assertEqual(denied["decision"], ACL.DECISION_DENY)
         self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
         self.registry_path.write_bytes(backup)
+        self.cache.registry_fp = object()
         self.cache.registry_mtime = object()
         _a, _r, load_error, _cfg = self.cache.snapshot()
         self.assertIsNone(load_error)
@@ -550,6 +554,7 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
             conn.close()
 
             self.access_path.unlink()
+            self.cache.access_fp = object()
             self.cache.access_mtime = object()
             time.sleep(0.05)
             conn = HTTPConnection("127.0.0.1", port, timeout=3)
@@ -587,6 +592,64 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_policy_fingerprint_same_mtime_new_inode_reloads(self):
+        """Atomic replace with identical mtime must still reload (new inode)."""
+        result = self._authorize_via_cache()
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        before_fp = self.cache.access_fp
+        # New allowlist without the previous source → should DENY after reload.
+        new_state = ACL.empty_access_state()
+        lid, _ = ACL.create_access_list(new_state, "OtherNet")
+        ACL.add_source_entry(new_state, lid, "other", "203.0.113.0/24")
+        ACL.set_service_binding(
+            new_state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid
+        )
+        # Write via temp + replace; then force identical mtime_ns on the new inode.
+        tmp = self.access_path.with_suffix(".tmp-fp")
+        tmp.write_text(
+            json.dumps(new_state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        old_mtime_ns = before_fp[4]
+        os.replace(tmp, self.access_path)
+        os.utime(self.access_path, ns=(old_mtime_ns, old_mtime_ns))
+        after_stat = self.access_path.stat()
+        self.assertEqual(after_stat.st_mtime_ns, old_mtime_ns)
+        self.assertNotEqual(after_stat.st_ino, before_fp[2])
+        # Do not poke cache; natural fingerprint compare must detect inode change.
+        denied = self._authorize_via_cache()
+        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
+        self.assertNotEqual(self.cache.access_fp, before_fp)
+
+    def test_policy_fingerprint_same_timestamp_different_content_reloads(self):
+        result = self._authorize_via_cache()
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        before_fp = self.cache.access_fp
+        # Overwrite in place with different size/content but same mtime_ns.
+        payload = json.loads(self.access_path.read_text(encoding="utf-8"))
+        # Flip binding to PUBLIC so ALLOW becomes broader — then deny via empty list.
+        mid_map = payload["service_access"]["machine-aaa"]
+        mid_map["ssh"] = {"access_mode": ACL.MODE_PUBLIC, "access_list_id": None}
+        raw = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        # Pad to keep size different from original while we still change content.
+        raw = raw.rstrip() + "\n"
+        self.access_path.write_text(raw, encoding="utf-8")
+        os.utime(self.access_path, ns=(before_fp[4], before_fp[4]))
+        # Size or content fingerprint fields must diverge even if mtime matches.
+        snap_a, _r, err, _c = self.cache.snapshot()
+        self.assertIsNone(err)
+        self.assertNotEqual(self.cache.access_fp, before_fp)
+        # PUBLIC should ALLOW
+        allowed = self._authorize_via_cache(source_ip="198.51.100.9")
+        self.assertEqual(allowed["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(
+            (snap_a.get("service_access") or {})
+            .get("machine-aaa", {})
+            .get("ssh", {})
+            .get("access_mode"),
+            ACL.MODE_PUBLIC,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

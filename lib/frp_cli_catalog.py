@@ -128,18 +128,56 @@ def _arg(name, complete=C_NONE, required=True):
     return {"name": name, "complete": complete, "required": bool(required)}
 
 
-def _flag(name, arity=1, choices=(), hidden=False, required=False):
+# Lightweight operator risk / confirmation vocabulary (not a policy engine).
+RISK_LEVELS = frozenset(
+    {"none", "metadata", "outage", "irreversible", "security_widening"}
+)
+CONFIRMATION_MODES = frozenset({"none", "y_n", "typed_token", "yes_flag"})
+
+# Surfaces intentionally absent from the public catalog (ARCH-AUDIT-001).
+# Format: ("tool", "subcommand", "flag-or-*")
+BACKEND_SURFACE_EXEMPT = frozenset(
+    {
+        # Compat / hidden create path; public create is always disabled.
+        ("frp-egress", "create", "--enable"),
+        ("frp-egress", "create", "--disabled"),
+        # Short -o stays accepted by the backend; catalog advertises --output.
+        ("frp-egress", "export", "-o"),
+    }
+)
+
+
+def _flag(
+    name,
+    arity=1,
+    choices=(),
+    hidden=False,
+    required=False,
+    description="",
+    metavar="",
+    examples=(),
+    effect="",
+    risk="",
+):
     """Describe one option flag.
 
     ``arity`` is ``0`` for boolean switches (no value) and ``1`` for flags that
     consume the next token as a value (AUDIT-014).
     """
+    risk_text = str(risk or "")
+    if risk_text and risk_text not in RISK_LEVELS:
+        raise ValueError("unknown flag risk: %s" % risk_text)
     return {
         "name": str(name),
         "arity": 0 if int(arity) == 0 else 1,
         "choices": tuple(choices) if choices else (),
         "hidden": bool(hidden),
         "required": bool(required),
+        "description": str(description or ""),
+        "metavar": str(metavar or ""),
+        "examples": tuple(examples) if examples else (),
+        "effect": str(effect or ""),
+        "risk": risk_text,
     }
 
 
@@ -155,13 +193,29 @@ def _normalize_flags(flags):
                     choices=item.get("choices") or (),
                     hidden=item.get("hidden", False),
                     required=item.get("required", False),
+                    description=item.get("description") or "",
+                    metavar=item.get("metavar") or "",
+                    examples=item.get("examples") or (),
+                    effect=item.get("effect") or "",
+                    risk=item.get("risk") or "",
                 )
             )
             continue
         name = str(item)
         # Historical bare strings: treat known switches as arity-0.
         arity = 0 if name in _BOOLEAN_FLAG_NAMES else 1
-        out.append(_flag(name, arity=arity))
+        meta = _FLAG_DEFAULT_META.get(name, {})
+        out.append(
+            _flag(
+                name,
+                arity=arity,
+                description=meta.get("description", ""),
+                metavar=meta.get("metavar", ""),
+                examples=meta.get("examples", ()),
+                effect=meta.get("effect", ""),
+                risk=meta.get("risk", ""),
+            )
+        )
     return tuple(out)
 
 
@@ -171,6 +225,7 @@ _BOOLEAN_FLAG_NAMES = frozenset(
         "--one-line",
         "--ssh",
         "--yes",
+        "--force",
         "--check",
         "--json",
         "--verbose",
@@ -181,6 +236,64 @@ _BOOLEAN_FLAG_NAMES = frozenset(
         "--disabled",
     }
 )
+
+# Shared help metadata applied when flags are listed as bare strings.
+_FLAG_DEFAULT_META = {
+    "--yes": {
+        "description": "Confirm without an interactive prompt (automation)",
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening",
+    },
+    "--force": {
+        "description": "Override a safety gate (active publish or typed confirm)",
+        "effect": "Bypasses an interactive or active-state guard",
+        "risk": "irreversible",
+    },
+    "--ttl": {
+        "description": "Temporary entry lifetime",
+        "metavar": "30m|1h|4h|1d",
+        "examples": ("4h", "1d"),
+        "effect": "Entry expires automatically after the TTL",
+        "risk": "metadata",
+    },
+    "--name": {
+        "description": "Human-readable name for the entry or object",
+        "metavar": "NAME",
+        "effect": "Sets display name only; selectors stay immutable IDs",
+        "risk": "metadata",
+    },
+    "--ssh-user": {
+        "description": "SSH login user for ssh preset targets",
+        "metavar": "USER",
+        "effect": "Required for ssh presets; shown in connect hints",
+        "risk": "metadata",
+    },
+    "--output": {
+        "description": "Write output to this path instead of stdout",
+        "metavar": "PATH",
+        "risk": "none",
+    },
+    "--description": {
+        "description": "Free-form operator note",
+        "metavar": "TEXT",
+        "risk": "metadata",
+    },
+    "--source": {
+        "description": "Source IP, CIDR, entry name, or entry id",
+        "metavar": "IP|CIDR|NAME|ID",
+        "risk": "metadata",
+    },
+    "--new-source": {
+        "description": "Replacement source IP or CIDR",
+        "metavar": "IP|CIDR",
+        "risk": "metadata",
+    },
+    "--protocol": {
+        "description": "Allowed application protocol",
+        "metavar": "http|https",
+        "risk": "metadata",
+    },
+}
 
 
 def flag_names(flags, *, include_hidden=False):
@@ -207,6 +320,9 @@ def _cmd(
     aliases=(),
     destructive=False,
     hidden=False,
+    risk="none",
+    confirmation="none",
+    surface="",
 ):
     """Describe one canonical command.
 
@@ -216,7 +332,26 @@ def _cmd(
 
     ``hidden=True`` keeps the command parseable (compat alias) but excludes it
     from Tab / help / menu / parity discovery surfaces.
+
+    ``risk`` / ``confirmation`` are lightweight operator-facing metadata for
+    help and tests (not an enforcement engine).
+
+    ``surface`` may be ``""`` (public), ``legacy_only``, ``internal_only``, or
+    ``hidden_compat`` for ARCH-AUDIT-001 reverse-parity annotations.
     """
+    risk_text = str(risk or "none")
+    confirm_text = str(confirmation or "none")
+    surface_text = str(surface or "")
+    if risk_text not in RISK_LEVELS:
+        raise ValueError("unknown risk: %s" % risk_text)
+    if confirm_text not in CONFIRMATION_MODES:
+        raise ValueError("unknown confirmation: %s" % confirm_text)
+    if surface_text and surface_text not in (
+        "legacy_only",
+        "internal_only",
+        "hidden_compat",
+    ):
+        raise ValueError("unknown surface: %s" % surface_text)
     return {
         "path": tuple(path),
         "roles": roles,
@@ -231,6 +366,9 @@ def _cmd(
         "aliases": tuple(tuple(a) for a in aliases),
         "destructive": bool(destructive),
         "hidden": bool(hidden),
+        "risk": risk_text,
+        "confirmation": confirm_text,
+        "surface": surface_text,
     }
 
 
@@ -244,7 +382,6 @@ COMMANDS = (
         detail="Role-aware host status. On a dual-role host both the client "
         "and the server sections are printed.",
         examples=("status",),
-        tail="any",
         aliases=(("show", "status"),),
     ),
     _cmd(
@@ -419,31 +556,78 @@ COMMANDS = (
         ("client", "revoke"),
         "server",
         "Inventory",
-        "Revoke a client's management identity",
-        detail="Removes management identity and keeps port reservations. Use "
-        "'client release' to return public ports.",
-        examples=("client revoke 24cd7856",),
+        "Block a client's management trust",
+        detail=(
+            "Blocks management identity / trust. Reservations and the client "
+            "registry record stay.\n\n"
+            "WHAT WILL BE REMOVED\n"
+            "  management identity / trust (re-enrollment required)\n\n"
+            "WHAT STAYS\n"
+            "  client registry record\n"
+            "  all service reservations\n"
+            "  all public ports\n\n"
+            "Confirmation: type REVOKE (or pass --force to skip).\n"
+            "Not the same as 'client release', 'client unset', disable, or "
+            "uninstall. This does not delete the remote host or local software."
+        ),
+        examples=("client revoke 24cd7856", "client revoke 24cd7856 --force"),
         args=(_arg("<CLIENT-ID>", C_CLIENT),),
+        flags=(
+            _flag(
+                "--force",
+                arity=0,
+                description="Skip typed REVOKE confirmation",
+                effect="Proceeds without typing REVOKE",
+                risk="irreversible",
+            ),
+        ),
         tail="flags",
         internal=("revoke", "client"),
         aliases=(("revoke", "client"), ("revoke-client",)),
         destructive=True,
+        risk="irreversible",
+        confirmation="typed_token",
     ),
     _cmd(
         ("client", "release"),
         "server",
         "Inventory",
-        "Return reserved public ports for a client or one service",
-        detail="With a CLIENT ID alone, every reservation for that client is "
-        "returned. With a Service ID as well, only that reservation is "
-        "returned. release is not revoke and not unset.",
+        "Release client record and ports, or one service reservation",
+        detail=(
+            "client release <CLIENT-ID>\n"
+            "  WHAT WILL BE REMOVED\n"
+            "    client registry record\n"
+            "    management identity\n"
+            "    ALL service reservations\n"
+            "    ALL public ports\n"
+            "  WHAT WILL NOT HAPPEN\n"
+            "    no remote host deletion\n"
+            "    no local software uninstall\n"
+            "  Confirmation: type RELEASE\n\n"
+            "client release <CLIENT-ID> <SERVICE-ID>\n"
+            "  Release only that service reservation.\n"
+            "  WHAT STAYS: management identity, client record, other services.\n"
+            "  Confirmation: type RELEASE\n\n"
+            "--force allows release while a published port is still active.\n"
+            "Not the same as revoke, unset, disable, or uninstall."
+        ),
         examples=(
             "client release 24cd7856",
             "client release 24cd7856 ssh",
+            "client release 24cd7856 --force",
         ),
         args=(
             _arg("<CLIENT-ID>", C_CLIENT),
             _arg("<SERVICE-ID>", C_CLIENT_SERVICE, required=False),
+        ),
+        flags=(
+            _flag(
+                "--force",
+                arity=0,
+                description="Release even if a published port is still active",
+                effect="Overrides the active-publish safety gate",
+                risk="outage",
+            ),
         ),
         tail="flags",
         aliases=(
@@ -453,6 +637,8 @@ COMMANDS = (
             ("release-service",),
         ),
         destructive=True,
+        risk="irreversible",
+        confirmation="typed_token",
     ),
     _cmd(
         ("client", "info"),
@@ -709,15 +895,32 @@ COMMANDS = (
         "server",
         "Templates",
         "Change a service profile property",
-        detail="Editing a profile never mutates existing services.",
-        examples=("service-profile set office-ssh target-port 2222",),
+        detail="Editing a profile never mutates existing services.\n"
+        "Atomic non-SSH → SSH: "
+        "'service-profile set <PROFILE> preset ssh --ssh-user USER'.",
+        examples=(
+            "service-profile set office-ssh target-port 2222",
+            "service-profile set office-web preset ssh --ssh-user ubuntu",
+        ),
         args=(
             _arg("<PROFILE>", C_PROFILE),
             _arg("<property>", PROFILE_PROPS),
             _arg("<value>"),
         ),
+        flags=(
+            _flag(
+                "--ssh-user",
+                arity=1,
+                description="With property=preset ssh, set ssh_user atomically",
+                metavar="USER",
+                effect="Required for non-SSH → SSH transitions",
+                risk="metadata",
+            ),
+        ),
+        tail="flags",
         internal=("set", "profile"),
         aliases=(("set", "profile"), ("profile", "set")),
+        risk="metadata",
     ),
     _cmd(
         ("service-profile", "delete"),
@@ -738,7 +941,6 @@ COMMANDS = (
         "Policy",
         "List Named Access Lists",
         examples=("access list",),
-        tail="any",
     ),
     _cmd(
         ("access", "create"),
@@ -749,6 +951,7 @@ COMMANDS = (
         args=(_arg("<name>"),),
         flags=("--description",),
         tail="flags",
+        risk="metadata",
     ),
     _cmd(
         ("access", "show"),
@@ -757,7 +960,6 @@ COMMANDS = (
         "Show one Named Access List",
         examples=("access show office",),
         args=(_arg("<LIST>", C_ACCESS_LIST),),
-        tail="any",
     ),
     _cmd(
         ("access", "delete"),
@@ -766,8 +968,11 @@ COMMANDS = (
         "Delete a Named Access List",
         examples=("access delete office",),
         args=(_arg("<LIST>", C_ACCESS_LIST),),
+        flags=("--yes",),
         tail="flags",
         destructive=True,
+        risk="irreversible",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("access", "add-source"),
@@ -778,6 +983,8 @@ COMMANDS = (
         args=(_arg("<LIST>", C_ACCESS_LIST),),
         flags=("--name", "--source", "--ttl", "--yes"),
         tail="flags",
+        risk="metadata",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("access", "remove-source"),
@@ -789,6 +996,25 @@ COMMANDS = (
         flags=("--source", "--yes"),
         tail="flags",
         destructive=True,
+        risk="outage",
+        confirmation="yes_flag",
+    ),
+    _cmd(
+        ("access", "replace-source"),
+        "server",
+        "Policy",
+        "Replace a source entry atomically",
+        detail="Updates name/source/TTL for an existing entry in one step. "
+        "Shared-list mutations still require confirmation or --yes.",
+        examples=(
+            "access replace-source office --source 203.0.113.0/24 "
+            "--name hq --new-source 198.51.100.0/24 --ttl 1d",
+        ),
+        args=(_arg("<LIST>", C_ACCESS_LIST),),
+        flags=("--source", "--name", "--new-source", "--ttl", "--yes"),
+        tail="flags",
+        risk="metadata",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("access", "edit-info"),
@@ -799,6 +1025,8 @@ COMMANDS = (
         args=(_arg("<LIST>", C_ACCESS_LIST),),
         flags=("--name", "--description", "--yes"),
         tail="flags",
+        risk="metadata",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("access", "remove-expired"),
@@ -809,6 +1037,8 @@ COMMANDS = (
         args=(_arg("<LIST>", C_ACCESS_LIST),),
         flags=("--yes",),
         tail="flags",
+        risk="metadata",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("access", "assign"),
@@ -822,15 +1052,24 @@ COMMANDS = (
             _arg("<LIST>", C_ACCESS_LIST),
         ),
         tail="flags",
+        risk="outage",
     ),
     _cmd(
         ("access", "public"),
         "server",
         "Policy",
         "Set one client service back to PUBLIC",
-        examples=("access public 24cd7856 ssh",),
+        detail="ALLOWLIST → PUBLIC widens who may reach the published port. "
+        "Requires interactive confirmation or --yes for automation.",
+        examples=(
+            "access public 24cd7856 ssh",
+            "access public 24cd7856 ssh --yes",
+        ),
         args=(_arg("<CLIENT-ID>", C_CLIENT), _arg("<SERVICE-ID>", C_CLIENT_SERVICE)),
+        flags=("--yes",),
         tail="flags",
+        risk="security_widening",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("access", "show-service"),
@@ -839,7 +1078,6 @@ COMMANDS = (
         "Show the access policy for one service",
         examples=("access show-service 24cd7856 ssh",),
         args=(_arg("<CLIENT-ID>", C_CLIENT), _arg("<SERVICE-ID>", C_CLIENT_SERVICE)),
-        tail="any",
     ),
     _cmd(
         ("access", "test"),
@@ -852,7 +1090,6 @@ COMMANDS = (
             _arg("<SERVICE-ID>", C_CLIENT_SERVICE),
             _arg("<SOURCE-IP>"),
         ),
-        tail="any",
     ),
     _cmd(
         ("access", "log"),
@@ -870,7 +1107,6 @@ COMMANDS = (
         "Policy",
         "Guided Access Control menu",
         examples=("access menu",),
-        tail="any",
     ),
     # --- egress -----------------------------------------------------------
     _cmd(
@@ -960,27 +1196,51 @@ COMMANDS = (
         "server",
         "Policy",
         "Allow one source CIDR",
-        examples=("egress add-source vendor-api 10.0.0.0/24",),
+        examples=(
+            "egress add-source vendor-api 10.0.0.0/24",
+            "egress add-source vendor-api 10.0.0.0/24 --name office",
+        ),
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<CIDR>")),
+        flags=("--name",),
+        tail="flags",
+        risk="metadata",
     ),
     _cmd(
         ("egress", "remove-destination"),
         "server",
         "Policy",
         "Remove one destination",
-        examples=("egress remove-destination vendor-api api.example.com:443",),
+        detail="When the profile is enabled, requires interactive confirmation "
+        "or --yes. Disabled profiles mutate without that confirm.",
+        examples=(
+            "egress remove-destination vendor-api api.example.com:443",
+            "egress remove-destination vendor-api api.example.com:443 --yes",
+        ),
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<SELECTOR>")),
+        flags=("--yes",),
+        tail="flags",
         aliases=(("remove", "egress-profile"),),
         destructive=True,
+        risk="outage",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("egress", "remove-source"),
         "server",
         "Policy",
         "Remove one source",
-        examples=("egress remove-source vendor-api 10.0.0.0/24",),
+        detail="When the profile is enabled, requires interactive confirmation "
+        "or --yes. Disabled profiles mutate without that confirm.",
+        examples=(
+            "egress remove-source vendor-api 10.0.0.0/24",
+            "egress remove-source vendor-api 10.0.0.0/24 --yes",
+        ),
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<SELECTOR>")),
+        flags=("--yes",),
+        tail="flags",
         destructive=True,
+        risk="outage",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("egress", "enable"),
@@ -993,6 +1253,7 @@ COMMANDS = (
         args=(_arg("<PROFILE>", C_EGRESS),),
         internal=("enable", "egress-profile"),
         aliases=(("enable", "egress-profile"),),
+        risk="security_widening",
     ),
     _cmd(
         ("egress", "disable"),
@@ -1003,17 +1264,24 @@ COMMANDS = (
         args=(_arg("<PROFILE>", C_EGRESS),),
         internal=("disable", "egress-profile"),
         aliases=(("disable", "egress-profile"),),
+        risk="outage",
     ),
     _cmd(
         ("egress", "delete"),
         "server",
         "Policy",
         "Delete an egress profile",
-        examples=("egress delete vendor-api",),
+        detail="When the profile is enabled, requires interactive confirmation "
+        "or --yes. Disabled profiles delete without that confirm.",
+        examples=("egress delete vendor-api", "egress delete vendor-api --yes"),
         args=(_arg("<PROFILE>", C_EGRESS),),
+        flags=("--yes",),
+        tail="flags",
         internal=("delete", "egress-profile"),
         aliases=(("delete", "egress-profile"),),
         destructive=True,
+        risk="irreversible",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("egress", "status"),
@@ -1021,16 +1289,19 @@ COMMANDS = (
         "Policy",
         "Show Controlled Egress status",
         examples=("egress status",),
-        tail="any",
     ),
     _cmd(
         ("egress", "test"),
         "server",
         "Policy",
-        "Preview authorize(source, host, port)",
+        "Preview authorize(source, host, port) — policy + DNS only",
+        detail="Dry-run against the live policy store and optional DNS "
+        "resolution. It does not open a live TCP/TLS connection to the "
+        "destination. Use this before 'egress enable'.",
         examples=("egress test 10.0.0.5 api.example.com 443",),
         args=(_arg("<SOURCE-IP>"), _arg("<HOST>"), _arg("<PORT>")),
-        tail="any",
+        flags=(_flag("--protocol", arity=1, choices=("http", "https")),),
+        tail="flags",
     ),
     _cmd(
         ("egress", "export"),
@@ -1073,7 +1344,6 @@ COMMANDS = (
         "Show server status",
         examples=("server status",),
         internal=("server-status",),
-        tail="any",
         aliases=(("server-status",),),
     ),
     _cmd(
@@ -1448,15 +1718,43 @@ def _rw_egress_add_destination(rest):
 
 
 def _rw_egress_add_source(rest):
-    if len(rest) >= 2:
-        return ["add", "egress-profile", rest[0], "source", rest[1]]
+    flags = []
+    values = []
+    idx = 0
+    while idx < len(rest):
+        tok = rest[idx]
+        if str(tok).startswith("-"):
+            flags.append(tok)
+            idx += 1
+            if idx < len(rest) and not str(rest[idx]).startswith("-"):
+                flags.append(rest[idx])
+                idx += 1
+            continue
+        values.append(tok)
+        idx += 1
+    if len(values) >= 2:
+        return ["add", "egress-profile", values[0], "source", values[1]] + flags + values[2:]
     return ["add", "egress-profile"] + list(rest) + ["source"]
 
 
 def _rw_egress_remove(kind):
     def inner(rest):
-        if len(rest) >= 2:
-            return ["remove", "egress-profile", rest[0], kind, rest[1]]
+        flags = []
+        values = []
+        idx = 0
+        while idx < len(rest):
+            tok = rest[idx]
+            if str(tok).startswith("-"):
+                flags.append(tok)
+                idx += 1
+                if idx < len(rest) and not str(rest[idx]).startswith("-"):
+                    flags.append(rest[idx])
+                    idx += 1
+                continue
+            values.append(tok)
+            idx += 1
+        if len(values) >= 2:
+            return ["remove", "egress-profile", values[0], kind, values[1]] + flags
         return ["remove", "egress-profile"] + list(rest) + [kind]
 
     return inner
@@ -1692,14 +1990,31 @@ def command_help(cmd):
     if shown_flags:
         rows = []
         for flag in shown_flags:
-            if flag["arity"] == 0:
-                rows.append((flag["name"], "boolean switch"))
+            label = flag["name"]
+            if flag["arity"] != 0 and flag.get("metavar"):
+                label = "%s %s" % (flag["name"], flag["metavar"])
+            bits = []
+            if flag.get("description"):
+                bits.append(flag["description"])
+            elif flag["arity"] == 0:
+                bits.append("boolean switch")
             elif flag["choices"]:
-                rows.append((flag["name"], "one of: %s" % ", ".join(flag["choices"])))
+                bits.append("one of: %s" % "|".join(flag["choices"]))
             else:
-                rows.append((flag["name"], "value"))
+                bits.append("value")
+            if flag.get("effect"):
+                bits.append("effect: %s" % flag["effect"])
+            if flag.get("risk") and flag["risk"] != "none":
+                bits.append("risk: %s" % flag["risk"])
+            if flag.get("examples"):
+                bits.append("e.g. %s" % ", ".join(flag["examples"]))
+            rows.append((label, "; ".join(bits)))
         lines.extend(["", "Options:"])
         lines.extend(_fmt_rows(rows))
+    if cmd.get("risk") and cmd["risk"] != "none":
+        lines.extend(["", "Risk: %s" % cmd["risk"]])
+    if cmd.get("confirmation") and cmd["confirmation"] != "none":
+        lines.extend(["", "Confirmation: %s" % cmd["confirmation"]])
     if cmd["examples"]:
         lines.extend(["", "Examples:"])
         for item in cmd["examples"]:
@@ -1859,8 +2174,10 @@ def shell_usage_lines(role):
 
 
 # --- Guided numbered menu (single declarative source) ---------------------
-# Each entry: (action_id, label, canonical_hint)
-# Numbers are assigned at render time from this ordered list.
+# Server menu is grouped like root help IA. Each section is
+# (category_label, ((action_id, label, canonical_hint), ...)).
+# Client/both stay flat lists of (action_id, label, hint).
+# Numbers are assigned at render time across all choices (not categories).
 GUIDED_MENU = {
     "client": (
         ("client_status", "Status", "status"),
@@ -1873,23 +2190,48 @@ GUIDED_MENU = {
         ("exit", "Exit", ""),
     ),
     "server": (
-        ("server_status", "Status", "status"),
-        ("server_clients", "Manage clients", "client list / client show / client set"),
-        ("server_zt", "Create enrollment", "zero-touch create / enrollment create"),
-        ("server_bulk", "Create enrollments in bulk", "enrollment bulk"),
-        ("server_enrollments", "Enrollment list", "enrollment list"),
-        ("server_backup", "Backup / Restore", "backup create / backup restore"),
-        ("server_access", "Access Control", "access ..."),
-        ("server_update_project", "Update project", "update project"),
-        ("server_update_engine", "Update FRP engine", "update engine"),
-        ("server_doctor", "Doctor", "doctor"),
-        ("server_audit", "Audit", "server audit"),
-        ("server_help", "Commands and workflows", "help / help workflows"),
-        ("server_egress", "Controlled Egress", "egress ..."),
-        ("server_groups", "Groups", "group list / group create"),
-        ("server_profiles", "Service profiles", "service-profile list / create"),
-        ("server_support", "Support bundle", "support bundle"),
-        ("exit", "Exit", ""),
+        (
+            "Remote Access",
+            (
+                ("server_clients", "Clients", "client list / client show / client set"),
+                ("server_zt", "Enrollment / Zero-Touch", "zero-touch create / enrollment create"),
+                ("server_bulk", "Bulk enrollment", "enrollment bulk"),
+                ("server_enrollments", "Enrollment list", "enrollment list"),
+                ("server_access", "Access Control", "access ..."),
+            ),
+        ),
+        (
+            "Controlled Egress",
+            (
+                ("server_egress", "Profiles / policy", "egress list / show / test / enable"),
+            ),
+        ),
+        (
+            "Organize",
+            (
+                ("server_groups", "Groups", "group list / group create"),
+                ("server_profiles", "Service profiles", "service-profile list / create"),
+            ),
+        ),
+        (
+            "Operate",
+            (
+                ("server_status", "Status", "status"),
+                ("server_doctor", "Doctor", "doctor"),
+                ("server_audit", "Audit", "server audit"),
+                ("server_backup", "Backup / Restore", "backup create / backup restore"),
+                ("server_support", "Support bundle", "support bundle"),
+                ("server_update_project", "Update project", "update project"),
+                ("server_update_engine", "Update FRP engine", "update engine"),
+                ("server_help", "Commands and workflows", "help / help workflows"),
+            ),
+        ),
+        (
+            None,
+            (
+                ("exit", "Exit", ""),
+            ),
+        ),
     ),
     "both": (
         ("both_client", "Client operations", ""),
@@ -1902,30 +2244,56 @@ GUIDED_MENU = {
 }
 
 
-def guided_menu_entries(role):
-    """Ordered guided-menu rows for role: list of (n, action_id, label, hint)."""
-    key = "server"
+def _guided_menu_key(role):
     client, server = role_parts(role)
     if client and server:
-        key = "both"
-    elif client:
-        key = "client"
-    elif server:
-        key = "server"
+        return "both"
+    if client:
+        return "client"
+    return "server"
+
+
+def _guided_menu_sections(role):
+    """Yield (category_or_None, entries) where entries are (action_id, label, hint)."""
+    key = _guided_menu_key(role)
+    raw = GUIDED_MENU.get(key, ())
+    if key == "server":
+        for category, entries in raw:
+            yield category, entries
+        return
+    yield None, raw
+
+
+def guided_menu_entries(role):
+    """Ordered guided-menu rows for role: list of (n, action_id, label, hint)."""
     rows = []
-    for idx, (action_id, label, hint) in enumerate(GUIDED_MENU.get(key, ()), start=1):
-        rows.append((idx, action_id, label, hint))
+    n = 0
+    for _category, entries in _guided_menu_sections(role):
+        for action_id, label, hint in entries:
+            n += 1
+            rows.append((n, action_id, label, hint))
     return rows
 
 
 def render_guided_menu(role):
     """Text block for the numbered guided menu (without catalog overview)."""
     lines = []
-    for idx, _action_id, label, hint in guided_menu_entries(role):
-        if hint:
-            lines.append("%s) %-25s (%s)" % (idx, label, hint))
-        else:
-            lines.append("%s) %s" % (idx, label))
+    n = 0
+    for category, entries in _guided_menu_sections(role):
+        if category:
+            if lines:
+                lines.append("")
+            lines.append(category)
+        elif lines:
+            # Uncategorized trailer (Exit): separate from prior section.
+            lines.append("")
+        for action_id, label, hint in entries:
+            _ = action_id
+            n += 1
+            if hint:
+                lines.append("%s) %-25s (%s)" % (n, label, hint))
+            else:
+                lines.append("%s) %s" % (n, label))
     return "\n".join(lines) + ("\n" if lines else "")
 
 

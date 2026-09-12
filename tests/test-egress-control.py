@@ -352,6 +352,10 @@ class EgressProxyFunctionalTests(unittest.TestCase):
             (ROOT / "lib" / "frp_bounded_server.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        (libdir / "frp_policy_fingerprint.py").write_text(
+            (ROOT / "lib" / "frp_policy_fingerprint.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         data_dst = libdir / "data"
         data_dst.mkdir(parents=True, exist_ok=True)
         (data_dst / "public_suffix_list.dat").write_bytes(
@@ -1096,6 +1100,10 @@ class EgressRelayTests(unittest.TestCase):
             (ROOT / "lib" / "frp_bounded_server.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        (libdir / "frp_policy_fingerprint.py").write_text(
+            (ROOT / "lib" / "frp_policy_fingerprint.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         data_dst = libdir / "data"
         data_dst.mkdir(parents=True, exist_ok=True)
         (data_dst / "public_suffix_list.dat").write_bytes(
@@ -1301,7 +1309,12 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
         libdir = self.root / "usr/local/lib/drlink"
         libdir.mkdir(parents=True, exist_ok=True)
-        for name in ("frp_egress_control.py", "frp_public_suffix.py", "frp_bounded_server.py"):
+        for name in (
+            "frp_egress_control.py",
+            "frp_public_suffix.py",
+            "frp_bounded_server.py",
+            "frp_policy_fingerprint.py",
+        ):
             (libdir / name).write_text((ROOT / "lib" / name).read_text(encoding="utf-8"), encoding="utf-8")
         data_dst = libdir / "data"
         data_dst.mkdir(parents=True, exist_ok=True)
@@ -1631,6 +1644,79 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             )
         self.assertEqual(len(attempted), self.GW.MAX_CONNECT_CANDIDATES)
         self.assertEqual(self.GW.MAX_CONNECT_CANDIDATES, 8)
+
+    def test_outbound_connect_attempt_budget_bounds_fanout(self):
+        """Unreachable destinations must not exceed the global attempt semaphore."""
+        import threading
+
+        in_flight = 0
+        peak = 0
+        lock = threading.Lock()
+        budget = 4
+        original = self.GW.OUTBOUND_CONNECT_ATTEMPTS
+        original_sem = self.GW._OUTBOUND_CONNECT_SEM
+        self.GW.OUTBOUND_CONNECT_ATTEMPTS = budget
+        self.GW._OUTBOUND_CONNECT_SEM = threading.BoundedSemaphore(budget)
+        try:
+
+            def connect_fn(ip, port, hostname, timeout):
+                nonlocal in_flight, peak
+                del ip, port, hostname
+                with lock:
+                    in_flight += 1
+                    peak = max(peak, in_flight)
+                try:
+                    time.sleep(min(0.15, float(timeout)))
+                    raise OSError("unreachable")
+                finally:
+                    with lock:
+                        in_flight -= 1
+
+            ips = ["203.0.113.%d" % i for i in range(8)]
+            # Fan out many concurrent HE races.
+            errors = []
+
+            def race():
+                try:
+                    self.GW.happy_eyeballs_connect(
+                        connect_fn,
+                        ips,
+                        443,
+                        "blackhole.test",
+                        total_timeout=1.0,
+                        stagger=0.0,
+                    )
+                except OSError as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=race) for _ in range(6)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+            self.assertEqual(len(errors), 6)
+            self.assertLessEqual(peak, budget)
+            self.assertGreater(peak, 0)
+        finally:
+            self.GW.OUTBOUND_CONNECT_ATTEMPTS = original
+            self.GW._OUTBOUND_CONNECT_SEM = original_sem
+
+    def test_egress_policy_fingerprint_atomic_replace(self):
+        before = self.gw_state.cache.fingerprint
+        self.assertIsNotNone(before)
+        # Atomic replace with same mtime_ns but new inode + deny-all content.
+        new_state = EG.empty_egress_state()
+        EG.create_profile(new_state, "replaced", enabled=False)
+        # Leave profile disabled → authorize should fail closed / deny.
+        tmp = self.state_path.with_suffix(".tmp-fp")
+        tmp.write_text(
+            json.dumps(new_state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(tmp, self.state_path)
+        os.utime(self.state_path, ns=(before[4], before[4]))
+        self.assertNotEqual(self.state_path.stat().st_ino, before[2])
+        self.gw_state.cache.reload(force=False)
+        self.assertNotEqual(self.gw_state.cache.fingerprint, before)
 
     def test_http_body_streaming_large(self):
         # Above BODY_MEMORY_THRESHOLD → disk spool; RSS must not hold full body.

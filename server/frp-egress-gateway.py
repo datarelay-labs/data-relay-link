@@ -40,6 +40,11 @@ CONNECT_TIMEOUT = 10.0
 IDLE_TIMEOUT = 120.0
 HAPPY_EYEBALLS_DELAY = 0.25
 MAX_CONNECT_CANDIDATES = 8
+# Global budget for concurrent outbound connect attempts (Happy Eyeballs fan-out).
+OUTBOUND_CONNECT_ATTEMPTS = int(
+    os.environ.get("FRP_EGRESS_OUTBOUND_CONNECT_ATTEMPTS", "64")
+)
+_OUTBOUND_CONNECT_SEM = threading.BoundedSemaphore(max(1, OUTBOUND_CONNECT_ATTEMPTS))
 CLIENT_HEADER_TIMEOUT = 30.0
 CLIENT_BODY_TIMEOUT = 60.0
 CLIENT_HELLO_TIMEOUT = 10.0
@@ -100,6 +105,7 @@ def _load_module(name: str, rel: str):
 
 
 EG = _load_module("frp_egress_control", "frp_egress_control.py")
+FP = _load_module("frp_policy_fingerprint", "frp_policy_fingerprint.py")
 
 
 def default_resolve(hostname: str) -> list[str]:
@@ -320,7 +326,19 @@ def happy_eyeballs_connect(
         if stop.is_set():
             return
         sock = None
+        remaining = max(0.05, total_timeout - delay)
+        # Bound total in-flight connect syscalls across the process so HE
+        # fan-out under unreachable destinations cannot spawn unbounded work.
+        acquired = _OUTBOUND_CONNECT_SEM.acquire(timeout=remaining)
+        if not acquired:
+            with lock:
+                winner.setdefault("errors", []).append(
+                    OSError("outbound connect attempt budget exhausted")
+                )
+            return
         try:
+            if stop.is_set():
+                return
             remaining = max(0.05, total_timeout - delay)
             sock = connect_fn(ip, port, hostname, remaining)
             with lock:
@@ -332,6 +350,7 @@ def happy_eyeballs_connect(
             with lock:
                 winner.setdefault("errors", []).append(exc)
         finally:
+            _OUTBOUND_CONNECT_SEM.release()
             if sock is not None:
                 try:
                     sock.close()
@@ -379,7 +398,8 @@ class PolicyCache:
     def __init__(self, config_path: Path):
         self.config_path = config_path
         self.lock = threading.RLock()
-        self.mtime = None
+        self.fingerprint = None
+        self.mtime = None  # legacy alias (mtime_ns from fingerprint)
         self.path = None
         self.cfg = {}
         self.load_error = "not loaded"
@@ -391,18 +411,20 @@ class PolicyCache:
             try:
                 self.cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
                 self.path = EG.egress_control_path(self.cfg)
-                mtime = self.path.stat().st_mtime if self.path.exists() else None
-                if not force and mtime == self.mtime and self.load_error is None:
+                fp = FP.policy_file_fingerprint(self.path)
+                if not force and fp == self.fingerprint and self.load_error is None:
                     snap = self.engine.snapshot()
                     if snap is not None and snap.healthy:
                         return
                 if not self.path.exists():
-                    self.mtime = mtime
+                    self.fingerprint = fp
+                    self.mtime = fp[4]
                     self.load_error = "%s missing" % self.path.name
                     self.engine.mark_unhealthy(self.load_error)
                     return
                 snap = self.engine.load_from_path(self.path, cfg=self.cfg)
-                self.mtime = mtime
+                self.fingerprint = fp
+                self.mtime = fp[4]
                 self.load_error = None if snap.healthy else (snap.load_error or "unhealthy")
             except Exception as exc:
                 self.load_error = str(exc)

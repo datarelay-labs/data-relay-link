@@ -1,8 +1,12 @@
 # drlink command reference
 
-`drlink` is the everyday operator CLI. It does not add new backend behavior.
-Existing tools (`frp-clients`, `frp-client-set`, `frp-create-client`, …) remain
-the implementation.
+`drlink` is the everyday operator CLI for **Data Relay Link**. It does not add
+new backend behavior. Existing tools (`frp-clients`, `frp-client-set`,
+`frp-create-client`, …) remain the implementation.
+
+Product framing (see `docs/PRODUCT_MASTER.md` §2.2): **Data Relay** is the
+family; this CLI operates **Secure Remote Access** (inbound) and
+**Controlled Egress** (outbound) on a Data Relay Link server.
 
 ## Canonical grammar (current)
 
@@ -50,9 +54,18 @@ CLIENT ID only. A unique label or unique hostname still works when typed by
 hand. An SSH connection string such as `user@host:port` is not a selector.
 An ambiguous prefix fails closed; use a longer CLIENT ID prefix.
 
-`client unset` removes stored metadata. `client release` returns public port
-reservations. `client revoke` removes management identity. Those three are
-never aliases of each other. There is no `delete client`.
+`client unset` removes stored metadata only.
+
+`client release <CLIENT-ID>` permanently removes the client registry record,
+management identity, and **all** service reservations / public ports for that
+client. It does not delete the remote host or uninstall local software.
+
+`client release <CLIENT-ID> <SERVICE-ID>` releases only that one service
+reservation; the client identity remains (management-only is valid).
+
+`client revoke` blocks management trust and keeps every reservation.
+
+Those three are never aliases of each other. There is no `delete client`.
 
 ---
 
@@ -104,9 +117,9 @@ help legacy
 menu
 ```
 
-Compatibility verb-first forms (`show clients`, `set client`, `create group`,
-`add client … group`, `rename group`, …) remain available; prefer the forms
-above.
+Compatibility verb-first forms (`set client`, `create group`,
+`add client … group`, `rename group`, …) remain available as hidden aliases;
+prefer the resource-first forms above (`client list`, not legacy list verbs).
 
 ---
 
@@ -115,12 +128,13 @@ above.
 ```text
 access list
 access create <name> [--description TEXT]
-access add-source <list> --name <name> --source <ip|cidr> [--ttl 30m|1h|4h|1d]
-access remove-source <list> --source <ip|cidr|name|id>
+access add-source <list> --name <name> --source <ip|cidr> [--ttl 30m|1h|4h|1d] [--yes]
+access remove-source <list> --source <ip|cidr|name|id> [--yes]
+access replace-source <list> --source <sel> --name <name> --new-source <ip|cidr> [--ttl …] [--yes]
 access show <list>
-access delete <list>
+access delete <list> [--yes]
 access assign <client> <service-id> <list>
-access public <client> <service-id>
+access public <client> <service-id> [--yes]
 access show-service <client> <service-id>
 access test <client> <service-id> <source-ip>
 access log <client> <service-id> [--limit N] [--allow|--deny]
@@ -142,14 +156,14 @@ egress list
 egress show <PROFILE>
 egress create <name> [--description TEXT]
 egress set <PROFILE> name|description <VALUE>
-egress add-source <PROFILE> <CIDR>
+egress add-source <PROFILE> <CIDR> [--name NAME]
 egress add-destination <PROFILE> <FQDN> <PORT> --protocol http|https
-egress remove-source <PROFILE> <SELECTOR>
-egress remove-destination <PROFILE> <SELECTOR>
-egress test <source-ip> <host> <port>
+egress remove-source <PROFILE> <SELECTOR> [--yes]
+egress remove-destination <PROFILE> <SELECTOR> [--yes]
+egress test <source-ip> <host> <port>   # policy + DNS only; no live connect
 egress enable <PROFILE>
 egress disable <PROFILE>
-egress delete <PROFILE>
+egress delete <PROFILE> [--yes]
 egress export <PROFILE> [--output PATH]
 egress import <PATH> [PROFILE]
 egress diff <PROFILE> <PATH>

@@ -802,14 +802,27 @@ Public port pool 반환
 
 ```text
 서비스 일시 중지
-Port 유지
+Port 유지 (reserved)
 Identity 유지
 ```
 
-## Release
+## Release service
 
 ```text
-Port reservation 반환
+client release <CLIENT-ID> <SERVICE-ID>
+한 Service의 Port reservation만 반환
+Client registry record / management identity 유지
+(남은 Service가 없으면 management-only Client로 유지)
+```
+
+## Release client
+
+```text
+client release <CLIENT-ID>
+Client registry record 제거
+management identity 제거
+모든 Service reservation / public port 반환
+원격 호스트 삭제 없음 / 로컬 소프트웨어 uninstall 없음
 ```
 
 ## Revoke
@@ -817,12 +830,14 @@ Port reservation 반환
 ```text
 Client management identity 차단
 Port reservation 유지
+Client registry record 유지
 ```
 
 따라서:
 
 ```text
 disable != release
+release service != release client
 release != revoke
 revoke != delete
 ```
@@ -1208,8 +1223,8 @@ egress create <name>
 예 (alias):
 
 ```text
-show clients
-show client 24cd7856
+client list
+client show 24cd7856
 set client 24cd7856 label branch-a
 create enrollment
 revoke client 24cd7856
@@ -1394,7 +1409,7 @@ cloud=oci
 
 # 22. Group Management — Product Direction
 
-Client 수가 증가하면 단순 `show clients`만으로 운영하기 어려워진다.
+Client 수가 증가하면 단순 `client list`만으로 운영하기 어려워진다.
 
 Group의 목적은 **few to a few dozen clients를 사람이 이해하고 관리하기 쉽게 정리하고 찾고 운영하는 것**이다.
 
@@ -1420,8 +1435,8 @@ description
 multiple membership
 show groups
 show group
-show client <ID> groups
-show clients --group
+client show <ID> groups
+client list --group
 persistence
 audit
 backup/restore preservation
@@ -1550,7 +1565,7 @@ revoked
 예:
 
 ```text
-show clients --status offline
+client list --status offline
 ```
 
 ---
@@ -1586,7 +1601,7 @@ client show <CLIENT-ID> groups
 ```text
 show groups
 show group customer-acme
-show clients --group customer-acme
+client list --group customer-acme
 create group customer-acme
 set group customer-acme description "ACME customer systems"
 add client 24cd7856 group customer-acme
@@ -1620,13 +1635,13 @@ create group prod-seoul \
 장기적으로 다음 조합을 지원한다.
 
 ```text
-show clients --group customer-acme
+client list --group customer-acme
 
-show clients --tag env=prod
+client list --tag env=prod
 
-show clients --status offline
+client list --status offline
 
-show clients \
+client list \
   --group customer-acme \
   --tag role=gateway \
   --status online
@@ -1701,7 +1716,7 @@ Dynamic Group membership은 저장하지 않고 계산한다.
 기본:
 
 ```text
-show clients
+client list
 ```
 
 는 계속:
@@ -3404,10 +3419,10 @@ Update
 운영자는 수십~수백 Client가 있어도:
 
 ```text
-show clients
+client list
 show groups
-show clients --group customer-acme
-show clients --tag env=prod
+client list --group customer-acme
+client list --tag env=prod
 doctor clients --group production
 ```
 
@@ -3655,8 +3670,8 @@ description
 add/remove client membership
 show groups
 show group
-show client <ID> groups
-show clients --group
+client show <ID> groups
+client list --group
 multiple membership
 persistence
 backup/restore

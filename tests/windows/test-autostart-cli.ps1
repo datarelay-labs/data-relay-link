@@ -23,7 +23,7 @@ function Test-FrpSchtasksExists {
 $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-autostart-cli-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 $env:FRP_WINDOWS_ROOT = $tmpRoot
-$env:FRP_AUTOSTART_TASK_NAME = 'FRPAutoDeployClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+$env:FRP_AUTOSTART_TASK_NAME = 'DataRelayLinkClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $isWin = ($env:OS -match 'Windows' -or $env:WinDir)
 try {
     $statusOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String

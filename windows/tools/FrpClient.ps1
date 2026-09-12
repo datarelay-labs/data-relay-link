@@ -97,6 +97,17 @@ switch -Regex ($Command.ToLowerInvariant()) {
             exit 1
         }
     }
+    '^support$' {
+        $sub = if ($SubCommand) { $SubCommand.ToLowerInvariant() } else { '' }
+        if ($sub -eq 'bundle' -or [string]::IsNullOrWhiteSpace($sub)) {
+            $Command = 'support-bundle'
+            $normalized = $true
+        } else {
+            Write-Host ("ERROR: unknown support command: {0}" -f $SubCommand)
+            Write-Host 'Next: drlink support bundle'
+            exit 1
+        }
+    }
 }
 
 # Legacy verb-first used Position 1 as <id>. Resource-first uses Position 1 as
@@ -187,7 +198,7 @@ OPERATE
                          Check or update pinned/tested frpc.exe (not latest upstream)
   update --check         Combined project + engine status (not an apply)
   doctor                 Basic local checks
-  support-bundle         Create a sanitized diagnostic zip (-Output <path>)
+  support bundle         Create a sanitized diagnostic zip (-Output <path>)
   uninstall              Remove local software (SERVER RESERVATIONS PRESERVED)
 
 Autostart: when services are enabled, a product Scheduled Task starts frpc at
@@ -565,7 +576,11 @@ function Invoke-FrpClientUninstall {
 function Invoke-FrpClientUninstallLocked {
     Write-Host 'LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED'
     Write-Host 'This removes local frpc binaries, config, state, and tools.'
-    Write-Host 'Public port reservations on the server remain until an administrator revokes them.'
+    Write-Host 'Server-side public port reservations are preserved.'
+    Write-Host 'To return one reservation:'
+    Write-Host '  drlink client release <CLIENT-ID> <SERVICE-ID>'
+    Write-Host 'To remove all server-side reservations and the client registry record:'
+    Write-Host '  drlink client release <CLIENT-ID>'
     try {
         Stop-FrpClient | Out-Null
     } catch {
@@ -640,7 +655,9 @@ function Invoke-FrpClientSupportBundle {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         $OutputPath = Join-Path $dir ("frp-support-{0}-{1}.zip" -f $hostName, $stamp)
     }
-    $stage = Join-Path $env:TEMP ("frp-support-" + [guid]::NewGuid().ToString('N'))
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $root }
+    $stage = Join-Path $tempRoot ("frp-support-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     $sections = New-Object System.Collections.Generic.List[string]
     try {

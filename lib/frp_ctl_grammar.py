@@ -1514,14 +1514,24 @@ def _match_set(tokens, role, names=None):
             )
         if len(tokens) < 5:
             return incomplete("Missing value.", ["set profile <PROFILE> %s <value>" % tokens[3]])
-        if len(tokens) > 5:
-            return {"status": "error", "message": "Too many arguments. Quote values that contain spaces."}
+        # Allow trailing --ssh-user for atomic non-SSH → SSH transitions.
+        idx = 5
+        while idx < len(tokens):
+            if not str(tokens[idx]).startswith("-"):
+                return {
+                    "status": "error",
+                    "message": "Too many arguments. Quote values that contain spaces.",
+                }
+            idx += 1
+            if idx < len(tokens) and not str(tokens[idx]).startswith("-"):
+                idx += 1
         return {
             "status": "ok",
             "action": "set_profile",
             "profile": tokens[2],
             "property": tokens[3],
             "value": tokens[4],
+            "passthrough": tokens[5:],
         }
     if resource == "service":
         if not client:
@@ -1969,16 +1979,27 @@ def _match_add(tokens, role, names=None):
                 "passthrough": tokens[6:],
             }
         if kind == "source":
-            if len(tokens) != 5:
+            if len(tokens) < 5:
                 return incomplete(
                     "Missing source CIDR.",
-                    ["add egress-profile <PROFILE> source <CIDR>"],
+                    ["add egress-profile <PROFILE> source <CIDR> [--name NAME]"],
                 )
+            idx = 5
+            while idx < len(tokens):
+                if not str(tokens[idx]).startswith("-"):
+                    return incomplete(
+                        "Unexpected arguments.",
+                        ["add egress-profile <PROFILE> source <CIDR> [--name NAME]"],
+                    )
+                idx += 1
+                if idx < len(tokens) and not str(tokens[idx]).startswith("-"):
+                    idx += 1
             return {
                 "status": "ok",
                 "action": "add_egress_source",
                 "profile": tokens[2],
                 "cidr": tokens[4],
+                "passthrough": tokens[5:],
             }
         return incomplete(
             "Unknown egress-profile add target.",
@@ -2018,25 +2039,47 @@ def _match_remove(tokens, role, names=None):
                 ["destination", "source"],
             )
         kind = tokens[3]
-        if kind == "destination" and len(tokens) == 5:
+        if kind == "destination" and len(tokens) >= 5:
+            idx = 5
+            while idx < len(tokens):
+                if not str(tokens[idx]).startswith("-"):
+                    return incomplete(
+                        "Unexpected arguments.",
+                        ["remove egress-profile <PROFILE> destination <SELECTOR> [--yes]"],
+                    )
+                idx += 1
+                if idx < len(tokens) and not str(tokens[idx]).startswith("-"):
+                    idx += 1
             return {
                 "status": "ok",
                 "action": "remove_egress_destination",
                 "profile": tokens[2],
                 "destination": tokens[4],
+                "passthrough": tokens[5:],
             }
-        if kind == "source" and len(tokens) == 5:
+        if kind == "source" and len(tokens) >= 5:
+            idx = 5
+            while idx < len(tokens):
+                if not str(tokens[idx]).startswith("-"):
+                    return incomplete(
+                        "Unexpected arguments.",
+                        ["remove egress-profile <PROFILE> source <SELECTOR> [--yes]"],
+                    )
+                idx += 1
+                if idx < len(tokens) and not str(tokens[idx]).startswith("-"):
+                    idx += 1
             return {
                 "status": "ok",
                 "action": "remove_egress_source",
                 "profile": tokens[2],
                 "source": tokens[4],
+                "passthrough": tokens[5:],
             }
         return incomplete(
             "Unknown egress-profile remove target.",
             [
-                "remove egress-profile <PROFILE> destination <SELECTOR>",
-                "remove egress-profile <PROFILE> source <SELECTOR>",
+                "remove egress-profile <PROFILE> destination <SELECTOR> [--yes]",
+                "remove egress-profile <PROFILE> source <SELECTOR> [--yes]",
             ],
             ["destination", "source"],
         )
@@ -2074,10 +2117,25 @@ def _match_delete(tokens, role, names=None):
         if len(tokens) < 3:
             return incomplete(
                 "Missing egress profile selector.",
-                ["delete egress-profile <PROFILE>"],
+                ["delete egress-profile <PROFILE> [--yes]"],
                 ["egress-profile"],
             )
-        return {"status": "ok", "action": "delete_egress_profile", "profile": tokens[2]}
+        idx = 3
+        while idx < len(tokens):
+            if not str(tokens[idx]).startswith("-"):
+                return incomplete(
+                    "Unexpected arguments.",
+                    ["delete egress-profile <PROFILE> [--yes]"],
+                )
+            idx += 1
+            if idx < len(tokens) and not str(tokens[idx]).startswith("-"):
+                idx += 1
+        return {
+            "status": "ok",
+            "action": "delete_egress_profile",
+            "profile": tokens[2],
+            "passthrough": tokens[3:],
+        }
     return incomplete(
         "Unknown delete resource.",
         ["delete group <GROUP>", "delete profile <PROFILE>", "delete egress-profile <PROFILE>"],

@@ -52,6 +52,7 @@ files=[
  'lib/frp_machine_id.py',
  'lib/frp_bounded_server.py',
  'lib/frp_public_suffix.py',
+ 'lib/frp_policy_fingerprint.py',
  'lib/data/public_suffix_list.dat',
  'server/frp-port-allocator.py',
  'server/frp-access-plugin.py',

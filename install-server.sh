@@ -42,6 +42,7 @@ for f in \
   "$BASE_DIR/lib/frp_machine_id.py" \
   "$BASE_DIR/lib/frp_bounded_server.py" \
   "$BASE_DIR/lib/frp_public_suffix.py" \
+  "$BASE_DIR/lib/frp_policy_fingerprint.py" \
   "$BASE_DIR/lib/data/public_suffix_list.dat" \
   "$BASE_DIR/release-manifest.json" \
   "$BASE_DIR/tools/frp-create-client" \

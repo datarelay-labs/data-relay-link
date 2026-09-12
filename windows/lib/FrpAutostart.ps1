@@ -14,7 +14,54 @@ function Get-FrpAutostartTaskName {
     if ($env:FRP_AUTOSTART_TASK_NAME -and $env:FRP_AUTOSTART_TASK_NAME.Trim().Length -gt 0) {
         return $env:FRP_AUTOSTART_TASK_NAME.Trim()
     }
+    return 'DataRelayLinkClient'
+}
+
+function Get-FrpAutostartLegacyTaskName {
+    <#
+    .SYNOPSIS
+      Historical Scheduled Task name from pre-DataRelay branding.
+    #>
     return 'FRPAutoDeployClient'
+}
+
+function Get-FrpAutostartLegacyTaskNames {
+    <#
+    .SYNOPSIS
+      Older product task names that may still exist after branding renames.
+      Migration removes them only when ownership validation passes.
+    #>
+    return @((Get-FrpAutostartLegacyTaskName))
+}
+
+function Test-FrpAutostartTaskProductOwned {
+    <#
+    .SYNOPSIS
+      True when an existing task is product-owned (SYSTEM + BootTrigger +
+      product autostart wrapper). Never touch unrelated admin tasks.
+    #>
+    param([Parameter(Mandatory = $true)][string]$TaskName)
+    if (-not (Test-FrpAutostartTaskExists -TaskName $TaskName)) { return $false }
+    return (Test-FrpAutostartHealthy -TaskName $TaskName)
+}
+
+function Move-FrpAutostartLegacyTaskIfPresent {
+    <#
+    .SYNOPSIS
+      If the legacy FRPAutoDeployClient task exists and is product-owned,
+      remove it so Install can create DataRelayLinkClient. Unrelated tasks
+      with that name are left untouched.
+    #>
+    $legacy = Get-FrpAutostartLegacyTaskName
+    $canonical = Get-FrpAutostartTaskName
+    if ($legacy -eq $canonical) { return $false }
+    if (-not (Test-FrpAutostartTaskExists -TaskName $legacy)) { return $false }
+    if (-not (Test-FrpAutostartTaskProductOwned -TaskName $legacy)) {
+        Write-Warning ("Leaving non-product Scheduled Task '{0}' untouched." -f $legacy)
+        return $false
+    }
+    Uninstall-FrpAutostartTask -TaskName $legacy
+    return $true
 }
 
 function Get-FrpAutostartRunCommand {
@@ -133,6 +180,9 @@ function Install-FrpAutostartTask {
     }
     Initialize-FrpDirectories
 
+    # Prefer canonical DataRelayLinkClient; migrate product-owned legacy name.
+    $null = Move-FrpAutostartLegacyTaskIfPresent
+
     if (Test-FrpIsWindowsHost) {
         # End a stuck prior instance so /Create can replace cleanly.
         $null = Invoke-FrpSchtasks -ArgString ('/End /TN "{0}"' -f $TaskName)
@@ -221,27 +271,43 @@ function Uninstall-FrpAutostartTask {
     .SYNOPSIS
       Remove the product autostart task. Idempotent: a missing task counts
       as success (used by uninstall, which must not fail if never enabled).
+      Also removes product-owned legacy task names when present.
     #>
     param([string]$TaskName = (Get-FrpAutostartTaskName))
     if ($env:FRP_WINDOWS_FAIL_AUTOSTART -eq '1') {
         throw 'ERROR: simulated autostart failure (FRP_WINDOWS_FAIL_AUTOSTART=1)'
     }
-    if (Test-FrpIsWindowsHost) {
-        if (-not (Test-FrpAutostartTaskExists -TaskName $TaskName)) { return $true }
-        $argString = '/Delete /F /TN "{0}"' -f $TaskName
-        $result = Invoke-FrpSchtasks -ArgString $argString
-        if ($result.ExitCode -ne 0) {
-            throw ("ERROR: failed to remove autostart task (schtasks exit {0}): {1}" -f $result.ExitCode, $result.Detail)
+    $names = New-Object System.Collections.Generic.List[string]
+    [void]$names.Add($TaskName)
+    foreach ($legacy in (Get-FrpAutostartLegacyTaskNames)) {
+        if ($legacy -ne $TaskName) { [void]$names.Add($legacy) }
+    }
+    foreach ($name in $names) {
+        if (Test-FrpIsWindowsHost) {
+            if (-not (Test-FrpAutostartTaskExists -TaskName $name)) { continue }
+            # Only delete when ownership validation passes (or marker path on
+            # non-Windows). Legacy names that are not product-owned are left alone.
+            if ($name -ne $TaskName -and -not (Test-FrpAutostartHealthy -TaskName $name)) {
+                continue
+            }
+            $argString = '/Delete /F /TN "{0}"' -f $name
+            $result = Invoke-FrpSchtasks -ArgString $argString
+            if ($result.ExitCode -ne 0) {
+                throw ("ERROR: failed to remove autostart task (schtasks exit {0}): {1}" -f $result.ExitCode, $result.Detail)
+            }
+            if (Test-FrpAutostartTaskExists -TaskName $name) {
+                throw 'ERROR: autostart task still present after removal'
+            }
+            continue
         }
-        if (Test-FrpAutostartTaskExists -TaskName $TaskName) {
+        $marker = Get-FrpAutostartMarkerPath -TaskName $name
+        if ($name -ne $TaskName -and (Test-Path -LiteralPath $marker)) {
+            if (-not (Test-FrpAutostartHealthy -TaskName $name)) { continue }
+        }
+        Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+        if (Test-FrpAutostartTaskExists -TaskName $name) {
             throw 'ERROR: autostart task still present after removal'
         }
-        return $true
-    }
-    $marker = Get-FrpAutostartMarkerPath -TaskName $TaskName
-    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
-    if (Test-FrpAutostartTaskExists -TaskName $TaskName) {
-        throw 'ERROR: autostart task still present after removal'
     }
     return $true
 }

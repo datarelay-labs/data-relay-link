@@ -139,7 +139,9 @@ if ROOT and not str(path).startswith(ROOT):
 state = json.loads(path.read_text())
 require_v2(state)
 
-mid, client = CREG.resolve_client_or_exit(state, args.query)
+# Capture immutable CLIENT ID before confirmation; never re-resolve label/hostname.
+confirmed_mid, client = CREG.resolve_client_or_exit(state, args.query)
+mid = confirmed_mid
 
 sid = str(args.service_id).strip().lower()
 services = client.get('services') or {}
@@ -166,13 +168,26 @@ with LOCKS.acquire_control_state_lock(control_root()):
     try:
         state = json.loads(path.read_text())
         require_v2(state)
-        mid, client = CREG.resolve_client_or_exit(state, args.query)
+        clients = state.get('clients') or {}
+        if confirmed_mid not in clients or not isinstance(clients.get(confirmed_mid), dict):
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
+        mid = confirmed_mid
+        client = clients[mid]
         services = client.get('services') or {}
         if not isinstance(services, dict) or sid not in services:
-            raise SystemExit(f'ERROR: service {sid} was not found on this client')
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
         svc = services[sid]
         if not isinstance(svc, dict):
-            raise SystemExit(f'ERROR: service {sid} was not found on this client')
+            raise SystemExit(
+                'ERROR: Target changed while waiting for confirmation.\n'
+                'Re-run the command.'
+            )
         port = svc.get('remote_port')
         # Re-check under the registry lock to close the TOCTOU window.
         if port:
@@ -187,7 +202,11 @@ with LOCKS.acquire_control_state_lock(control_root()):
         unlock_registry(lock_fd)
 
     # Access Control binding cleanup is required after registry release.
+    # Lock order already held: control-state → registry (released) → ACL
+    # per-resource lock taken inside mutate_access_state (never reverse).
     try:
+        if os.environ.get('FRP_TEST_FAIL_ACL_CLEANUP') == '1':
+            raise RuntimeError('injected ACL cleanup failure')
         here = Path(__file__).resolve()
         acl_candidates = [
             here.parent.parent / 'lib' / 'frp_access_control.py',

@@ -3605,6 +3605,14 @@ if overall == 'local':
     print('The Data Relay Link server and running proxy do not need to be changed.')
 elif overall == 'runtime':
     print('Applying this configuration will restart the Data Relay Link client.')
+cand_enabled = [sid for sid, item in new.items() if enabled(item)]
+if new and not cand_enabled:
+    print()
+    print('Management-only mode')
+    print('  No services are published')
+    print('  Public port reservations remain on the server until release')
+    print('  Management identity remains enrolled')
+    print('  Add a service with: drlink service add')
 print()
 PY
 }

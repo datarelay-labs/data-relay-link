@@ -48,6 +48,7 @@ def _load_module(name: str, rel: str):
 
 
 ACL = _load_module("frp_access_control", "frp_access_control.py")
+FP = _load_module("frp_policy_fingerprint", "frp_policy_fingerprint.py")
 try:
     _BOUNDED = _load_module("frp_bounded_server", "frp_bounded_server.py")
     _BOUNDED_LOAD_ERROR = None
@@ -88,6 +89,9 @@ class PolicyCache:
     def __init__(self, config_path: Path):
         self.config_path = config_path
         self.lock = threading.RLock()
+        # Fingerprints (path+dev+ino+size+mtime_ns); mtime-only aliases kept for tests.
+        self.access_fp = None
+        self.registry_fp = None
         self.access_mtime = None
         self.registry_mtime = None
         self.access_state = ACL.empty_access_state()
@@ -104,12 +108,12 @@ class PolicyCache:
                 self.cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
                 self.access_path = ACL.access_control_path(self.cfg)
                 self.registry_path = ACL.registry_path_from_cfg(self.cfg)
-                access_m = self.access_path.stat().st_mtime if self.access_path.exists() else None
-                reg_m = self.registry_path.stat().st_mtime if self.registry_path.exists() else None
+                access_fp = FP.policy_file_fingerprint(self.access_path)
+                reg_fp = FP.policy_file_fingerprint(self.registry_path)
                 if (
                     not force
-                    and access_m == self.access_mtime
-                    and reg_m == self.registry_mtime
+                    and access_fp == self.access_fp
+                    and reg_fp == self.registry_fp
                     and self.load_error is None
                 ):
                     return
@@ -121,8 +125,10 @@ class PolicyCache:
                 if not self.registry_path.exists():
                     missing.append("%s missing" % self.registry_path.name)
                 if missing:
-                    self.access_mtime = access_m
-                    self.registry_mtime = reg_m
+                    self.access_fp = access_fp
+                    self.registry_fp = reg_fp
+                    self.access_mtime = access_fp[4]
+                    self.registry_mtime = reg_fp[4]
                     self.load_error = "; ".join(missing)
                     return
                 self.access_state = ACL.load_access_state(path=self.access_path, cfg=self.cfg)
@@ -131,8 +137,10 @@ class PolicyCache:
                 # registry the control plane would reject.
                 self.registry = _validate_registry_invariants(raw_registry, self.cfg)
                 ACL.validate_access_state(self.access_state)
-                self.access_mtime = access_m
-                self.registry_mtime = reg_m
+                self.access_fp = access_fp
+                self.registry_fp = reg_fp
+                self.access_mtime = access_fp[4]
+                self.registry_mtime = reg_fp[4]
                 self.load_error = None
             except Exception as exc:
                 self.load_error = str(exc)

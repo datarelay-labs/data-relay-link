@@ -1,8 +1,11 @@
 # Controlled Egress — Operator Guide
 
-> **Product:** Data Relay  
-> **Pillar:** Agentless Controlled Egress  
-> **CLI:** `sudo drlink` (resource-first; see `docs/CLI_REFERENCE.md`)  
+> **Product family:** Data Relay
+>
+> **Pillar:** Agentless Controlled Egress (sibling of Secure Remote Access / Data Relay Link inbound)
+>
+> **CLI:** `sudo drlink` (resource-first; see `docs/CLI_REFERENCE.md`)
+>
 > **Default proxy port:** `6102` (outside published service pool `6000–6098`; not `6080`)
 
 ## What it is
