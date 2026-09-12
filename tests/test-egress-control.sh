@@ -10,6 +10,7 @@ mkdir -p \
   "$TMP/etc/drlink" \
   "$TMP/var/lib/drlink" \
   "$TMP/var/log/drlink" \
+  "$TMP/var/log/drlink/egress" \
   "$TMP/usr/local/lib/drlink" \
   "$TMP/usr/local/sbin"
 
@@ -25,7 +26,7 @@ chmod +x "$TMP/usr/local/sbin/frp-egress"
 cat >"$TMP/etc/drlink/config.json" <<EOF
 {
   "egress_control_file": "/var/lib/drlink/egress-control.json",
-  "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+  "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
   "egress_listen_addr": "0.0.0.0",
   "egress_listen_port": 6102
 }
@@ -55,20 +56,28 @@ EGRESS="$TMP/usr/local/sbin/frp-egress"
 ! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" enable ubuntu-update
 "$EGRESS" show ubuntu-update | grep -q security.ubuntu.com
-"$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https | grep -q 'Final        : ALLOW'
+out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https)"
+grep -q 'Policy       : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'DNS          : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Resolved IPs :' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+! grep -q 'Final' <<<"$out" || { echo "misleading Final line: $out"; exit 1; }
 ! "$EGRESS" test 203.0.113.10 evil.example.com 443 --protocol https
 ! "$EGRESS" test 198.51.100.1 security.ubuntu.com 443 --protocol https
 "$EGRESS" disable ubuntu-update
 out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https 2>&1 || true)"
 grep -q 'Policy       : DENY' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Final        : DENY' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
 grep -q 'Protocol     : https' <<<"$out" || { echo "$out"; exit 1; }
 "$EGRESS" enable ubuntu-update
-# DNS unsafe parity: ALLOW policy + private resolution must Final DENY.
+# DNS unsafe parity: ALLOW policy + private resolution must DENY DNS.
 "$EGRESS" add-destination ubuntu-update localhost 443 --protocol https
 out="$("$EGRESS" test 203.0.113.10 localhost 443 --protocol https 2>&1 || true)"
 grep -q 'Policy       : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Final        : DENY' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'DNS          : DENY' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+! grep -q 'Final        : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+echo "PASS EGRESS_TEST_TRUTHFUL_OUTPUT"
 "$EGRESS" remove-destination ubuntu-update localhost:443
 "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
 "$EGRESS" remove-destination ubuntu-update archive.ubuntu.com:443

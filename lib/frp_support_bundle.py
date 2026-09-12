@@ -746,8 +746,20 @@ class BundleBuilder:
         # Local product logs (sanitized); never include raw bootstrap tickets.
         log_dir = self.path("/var/log/drlink")
         if log_dir.is_dir() and not log_dir.is_symlink():
-            for name in ("audit.jsonl", "access-conn.jsonl", "egress-conn.jsonl"):
-                path = log_dir / name
+            candidates = (
+                ("audit.jsonl", log_dir / "audit.jsonl"),
+                ("access/connections.jsonl", log_dir / "access" / "connections.jsonl"),
+                ("access-conn.jsonl", log_dir / "access-conn.jsonl"),
+                ("egress/connections.jsonl", log_dir / "egress" / "connections.jsonl"),
+                ("egress-conn.jsonl", log_dir / "egress-conn.jsonl"),
+            )
+            seen = set()
+            for name, path in candidates:
+                # Prefer service-subdir layout; skip legacy name if new path collected.
+                if name == "access-conn.jsonl" and "access/connections.jsonl" in seen:
+                    continue
+                if name == "egress-conn.jsonl" and "egress/connections.jsonl" in seen:
+                    continue
                 if path.is_file() and not path.is_symlink():
                     try:
                         # Tail last ~100KB
@@ -757,6 +769,7 @@ class BundleBuilder:
                         text = data.decode("utf-8", errors="replace")
                         self.stage_write("logs/%s" % name, text)
                         self.add_section("logs")
+                        seen.add(name)
                     except OSError:
                         pass
         if lines:
@@ -836,7 +849,18 @@ class BundleBuilder:
     def _write_access_control(self) -> None:
         data, err = self.safe_read_json("/var/lib/drlink/access-control.json")
         if data is None:
-            self.skip("access-control", err or "not present")
+            # Never invent PUBLIC when authoritative policy is missing/unreadable.
+            reason = err or "not present"
+            if "not present" in reason.lower() or "missing" in reason.lower() or "no such file" in reason.lower():
+                label = "POLICY UNAVAILABLE"
+            else:
+                label = "ACCESS ERROR"
+            self.skip("access-control", "%s (%s)" % (label, reason))
+            self.stage_json(
+                "access-control-summary.json",
+                {"policy_status": label, "error": reason},
+            )
+            self.add_section("access-control")
             return
         lists = (data or {}).get("access_lists") or {}
         service_access = (data or {}).get("service_access") or {}
@@ -889,7 +913,9 @@ class BundleBuilder:
             if rc == 0:
                 unit_state = out.strip() or "unknown"
         events: List[Dict[str, Any]] = []
-        log_path = self.path("/var/log/drlink/egress-conn.jsonl")
+        log_path = self.path("/var/log/drlink/egress/connections.jsonl")
+        if not log_path.is_file():
+            log_path = self.path("/var/log/drlink/egress-conn.jsonl")
         if log_path.is_file() and not log_path.is_symlink():
             try:
                 lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()

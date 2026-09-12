@@ -27,7 +27,8 @@ from typing import Any, Optional
 EGRESS_SCHEMA_VERSION = 2
 EGRESS_SCHEMA_VERSION_LEGACY = 1
 DEFAULT_EGRESS_PATH = "/var/lib/drlink/egress-control.json"
-DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
+DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress/connections.jsonl"
+LEGACY_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
 
 PROTOCOL_HTTP = "http"
 PROTOCOL_HTTPS = "https"
@@ -194,9 +195,18 @@ def conn_log_path(cfg: Optional[dict] = None) -> Path:
     configured = ""
     if isinstance(cfg, dict):
         configured = str(cfg.get("egress_conn_log_file") or "").strip()
-    if not configured:
-        configured = os.environ.get("FRP_EGRESS_CONN_LOG", "") or DEFAULT_CONN_LOG_PATH
-    return _rooted(configured)
+    if configured:
+        return _rooted(configured)
+    env = os.environ.get("FRP_EGRESS_CONN_LOG", "").strip()
+    if env:
+        return _rooted(env)
+    path = _rooted(DEFAULT_CONN_LOG_PATH)
+    # Default path: prefer new layout; fall back to legacy flat file when present.
+    if not path.exists():
+        legacy = _rooted(LEGACY_CONN_LOG_PATH)
+        if legacy.is_file():
+            return legacy
+    return path
 
 
 def listen_bind(cfg: Optional[dict] = None) -> tuple[str, int]:
@@ -303,6 +313,10 @@ def reapply_egress_runtime_permissions(
     Mirrors install-server.sh frp_server_ensure_sandbox_dirs file grants:
     prefer named-user ACL; else root:drlink-egress with 0640/0660.
     Never widens CA keys, FRP token, or enrollment secrets.
+
+    Policy file is read-only for the egress service. Connection logging uses a
+    service-owned writable subdirectory (``/var/log/drlink/egress``) so rotation
+    (rename/unlink/create) works while the shared parent stays traverse-only.
     """
     if os.geteuid() != 0:
         return
@@ -322,6 +336,12 @@ def reapply_egress_runtime_permissions(
         var_log = root / "var/log/drlink"
         run_dir = root / "run/drlink"
 
+    egress_log_dir = var_log / "egress"
+    try:
+        egress_log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
     if config_path is None:
         config_path = etc_proj / "config.json"
     else:
@@ -331,9 +351,17 @@ def reapply_egress_runtime_permissions(
     else:
         control_path = Path(control_path)
     if conn_log_path is None:
-        conn_log_path = var_log / "egress-conn.jsonl"
+        conn_log_path = egress_log_dir / "connections.jsonl"
     else:
         conn_log_path = Path(conn_log_path)
+        # When a custom log path is under .../egress/, treat that dir as the
+        # writable service log directory.
+        if conn_log_path.parent.name == "egress":
+            egress_log_dir = conn_log_path.parent
+            try:
+                egress_log_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
     parent_dirs = []
     if parents:
@@ -352,7 +380,6 @@ def reapply_egress_runtime_permissions(
             pass
         return _setfacl_user(path, perms)
 
-    acl_ok = False
     # Probe ACL support on a real path (parent or target file).
     probe = None
     if parent_dirs:
@@ -361,6 +388,8 @@ def reapply_egress_runtime_permissions(
         probe = control_path
     elif config_path.is_file():
         probe = config_path
+    elif egress_log_dir.is_dir():
+        probe = egress_log_dir
     elif conn_log_path.is_file():
         probe = conn_log_path
     if probe is not None and _setfacl_user(probe, "--x" if probe in parent_dirs else "r--"):
@@ -368,10 +397,14 @@ def reapply_egress_runtime_permissions(
             for directory in parent_dirs:
                 if directory is not probe:
                     _setfacl_user(directory, "--x")
+        if egress_log_dir.is_dir():
+            # Writable service log dir (rotation needs rename/unlink/create).
+            _setfacl_user(egress_log_dir, "rwx")
         if config_path.is_file():
             _acl_grant_file(config_path, "r--")
         if control_path.is_file():
-            _acl_grant_file(control_path, "rw-")
+            # Least privilege: egress gateway only reads policy.
+            _acl_grant_file(control_path, "r--")
         if conn_log_path.parent.is_dir():
             try:
                 conn_log_path.touch(exist_ok=True)
@@ -390,6 +423,12 @@ def reapply_egress_runtime_permissions(
             os.chmod(directory, 0o710)
         except OSError:
             pass
+    if egress_log_dir.is_dir():
+        try:
+            os.chown(egress_log_dir, 0, gid)
+            os.chmod(egress_log_dir, 0o770)
+        except OSError:
+            pass
     if config_path.is_file():
         try:
             os.chown(config_path, 0, gid)
@@ -399,7 +438,7 @@ def reapply_egress_runtime_permissions(
     if control_path.is_file():
         try:
             os.chown(control_path, 0, gid)
-            os.chmod(control_path, 0o660)
+            os.chmod(control_path, 0o640)
         except OSError:
             pass
     if conn_log_path.parent.is_dir():
@@ -1115,6 +1154,11 @@ def create_profile(
     desc = str(description or "")
     if len(desc) > DESCRIPTION_MAX_LEN:
         raise EgressError("description too long")
+    if enabled:
+        raise EgressError(
+            "cannot create an enabled egress profile; create disabled, "
+            "add at least one source and destination, then enable"
+        )
     for _pid, existing in (state.get("egress_profiles") or {}).items():
         if str(existing.get("name") or "").lower() == name.lower():
             raise EgressError("egress profile already exists: %s" % name)
@@ -1124,7 +1168,7 @@ def create_profile(
         "id": pid,
         "name": name,
         "description": desc,
-        "enabled": bool(enabled),
+        "enabled": False,
         "sources": [],
         "destinations": [],
         "created_at": now,
@@ -1132,6 +1176,29 @@ def create_profile(
     }
     state.setdefault("egress_profiles", {})[pid] = record
     return pid, record
+
+
+def profile_enable_blockers(profile: dict) -> list[str]:
+    """Human-readable reasons a profile cannot be enabled."""
+    blockers = []
+    sources = profile.get("sources") or []
+    destinations = profile.get("destinations") or []
+    if not isinstance(sources, list) or not sources:
+        blockers.append("no source")
+    if not isinstance(destinations, list) or not destinations:
+        blockers.append("no destination")
+    return blockers
+
+
+def require_profile_complete_for_enable(profile: dict) -> None:
+    blockers = profile_enable_blockers(profile)
+    if not blockers:
+        return
+    raise EgressError(
+        "cannot enable incomplete egress profile (%s); "
+        "add source and destination, then enable"
+        % ", ".join(blockers)
+    )
 
 
 def set_profile_metadata(
@@ -1161,6 +1228,8 @@ def set_profile_metadata(
 
 def set_profile_enabled(state: dict, selector: str, enabled: bool) -> tuple[str, dict]:
     pid, profile = resolve_profile(state, selector)
+    if enabled:
+        require_profile_complete_for_enable(profile)
     profile["enabled"] = bool(enabled)
     profile["updated_at"] = utc_now_iso()
     return pid, profile
@@ -1495,13 +1564,13 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
     Lock the log inode itself (fcntl on the open FD). Do not create a sidecar
     ``*.lock`` under the parent directory: production installs make
     ``/var/log/drlink`` traverse-only for ``drlink-egress`` (``--x`` / ``0710``)
-    while granting write only on the pre-created log file. A sidecar lock
-    ``open(O_CREAT)`` fails with EACCES and previously swallowed all logging.
+    while granting write on the service subdirectory ``egress/`` so rotation
+    (rename/unlink/create) can succeed.
     """
     try:
         path = path or conn_log_path(cfg)
-        # Soft: parent mkdir may fail under traverse-only ACL; log file is
-        # pre-created at install. Rotation may also no-op without dir write.
+        # Soft: shared parent mkdir may fail under traverse-only ACL; the
+        # service log subdirectory is pre-created at install and is writable.
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -1533,8 +1602,7 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
         # Drop None keys for compact logs.
         record = {k: v for k, v in record.items() if v is not None}
         line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-        # Open for append; create only if missing (may fail without dir write —
-        # install must pre-create the file). Flock the same FD.
+        # Open for append; create if missing (service log dir is writable).
         flags = os.O_WRONLY | os.O_APPEND
         if not path.exists():
             flags |= os.O_CREAT
@@ -1566,13 +1634,17 @@ def _rotate_conn_log(path: Path) -> None:
         if not path.is_file() or path.stat().st_size < CONN_LOG_MAX_BYTES:
             return
         for idx in range(CONN_LOG_KEEP, 0, -1):
-            src = Path("%s.%d" % (path, idx - 1)) if idx > 1 else path
-            dst = Path("%s.%d" % (path, idx))
-            if src.is_file():
-                if idx == CONN_LOG_KEEP and dst.is_file():
-                    dst.unlink()
-                if src != path or not dst.exists():
-                    os.replace(src, dst)
+            src = Path("%s.%d" % (path, idx))
+            dst = Path("%s.%d" % (path, idx + 1))
+            if idx == CONN_LOG_KEEP and src.is_file():
+                try:
+                    src.unlink()
+                except OSError:
+                    pass
+            elif src.is_file():
+                os.replace(src, dst)
+        os.replace(path, Path("%s.1" % path))
+        # Recreate empty active log so append continues on a fresh inode.
         path.write_text("", encoding="utf-8")
         os.chmod(path, 0o600)
         try:

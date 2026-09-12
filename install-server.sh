@@ -51,6 +51,7 @@ for f in \
   "$BASE_DIR/tools/frp-enroll-bulk" \
   "$BASE_DIR/tools/frp-clients" \
   "$BASE_DIR/tools/frp-client-info" \
+  "$BASE_DIR/tools/frp-services" \
   "$BASE_DIR/tools/frp-groups" \
   "$BASE_DIR/tools/frp-group-set" \
   "$BASE_DIR/tools/frp-release-client" \
@@ -1192,8 +1193,8 @@ cfg = {
     'access_control_file': '/var/lib/drlink/access-control.json',
     'service_profiles_file': '/var/lib/drlink/service-profiles.json',
     'egress_control_file': '/var/lib/drlink/egress-control.json',
-    'access_conn_log_file': '/var/log/drlink/access-conn.jsonl',
-    'egress_conn_log_file': '/var/log/drlink/egress-conn.jsonl',
+    'access_conn_log_file': '/var/log/drlink/access/connections.jsonl',
+    'egress_conn_log_file': '/var/log/drlink/egress/connections.jsonl',
     'egress_listen_addr': '0.0.0.0',
     'egress_listen_port': int(os.environ.get('FRP_EGRESS_LISTEN_PORT') or '6102'),
     'access_plugin_addr': '127.0.0.1:6101',
@@ -1661,7 +1662,16 @@ frp_server_ensure_sandbox_dirs() {
   var_log="$(frp_server_fs /var/log/drlink)"
   run_dir="$(frp_server_fs /run/drlink)"
   mkdir -p "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
+  mkdir -p "$var_log/access" "$var_log/egress"
   chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir"
+  chmod 700 "$var_log/access" "$var_log/egress"
+  # Migrate legacy flat conn logs into service subdirs when safe.
+  if [[ -f "$var_log/egress-conn.jsonl" && ! -e "$var_log/egress/connections.jsonl" ]]; then
+    mv -f "$var_log/egress-conn.jsonl" "$var_log/egress/connections.jsonl" 2>/dev/null || true
+  fi
+  if [[ -f "$var_log/access-conn.jsonl" && ! -e "$var_log/access/connections.jsonl" ]]; then
+    mv -f "$var_log/access-conn.jsonl" "$var_log/access/connections.jsonl" 2>/dev/null || true
+  fi
   if [[ ${EUID} -eq 0 ]]; then
     # Dedicated non-root egress account (AL2-compatible useradd).
     if ! getent passwd drlink-egress >/dev/null 2>&1; then
@@ -1673,23 +1683,30 @@ frp_server_ensure_sandbox_dirs() {
     # Keep secret directories mode 0700. Grant egress the minimum ACL/xattr surface
     # when setfacl is available; otherwise fall back to group-execute (0710) on
     # the non-PKI project/state dirs only (/etc/frp stays root-only 0700).
+    # Shared /var/log/drlink stays traverse-oriented; writable surface is
+    # /var/log/drlink/egress (service-owned) for connection-log rotation.
     chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+    chown root:root "$var_log/access" "$var_log/egress" 2>/dev/null || true
     chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+    chmod 700 "$var_log/access" "$var_log/egress" 2>/dev/null || true
     if getent passwd drlink-egress >/dev/null 2>&1; then
       acl_ok=0
       if command -v setfacl >/dev/null 2>&1; then
         if setfacl -m u:drlink-egress:--x "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null; then
           acl_ok=1
           # Named-user ACL widens displayed group bits (often 0710) while owning
-          # group stays root. Do not chmod afterward — that clears the ACL mask.
+          # group stays root. Do not chmod shared parents afterward — that
+          # clears the ACL mask.
+          setfacl -m u:drlink-egress:rwx "$var_log/egress" 2>/dev/null || true
           if [[ -f "$etc_proj/config.json" ]]; then
             setfacl -m u:drlink-egress:r-- "$etc_proj/config.json" 2>/dev/null || true
           fi
           if [[ -f "$var_lib/egress-control.json" ]]; then
-            setfacl -m u:drlink-egress:rw- "$var_lib/egress-control.json" 2>/dev/null || true
+            setfacl -m u:drlink-egress:r-- "$var_lib/egress-control.json" 2>/dev/null || true
           fi
-          touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
-          setfacl -m u:drlink-egress:rw- "$var_log/egress-conn.jsonl" 2>/dev/null || true
+          touch "$var_log/egress/connections.jsonl" 2>/dev/null || true
+          setfacl -m u:drlink-egress:rw- "$var_log/egress/connections.jsonl" 2>/dev/null || true
+          touch "$var_log/access/connections.jsonl" 2>/dev/null || true
         fi
       fi
       if [[ "$acl_ok" -ne 1 ]] && getent group drlink-egress >/dev/null 2>&1; then
@@ -1698,19 +1715,23 @@ frp_server_ensure_sandbox_dirs() {
         # group-execute on root:root directories.
         if chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null; then
           chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+          chown root:drlink-egress "$var_log/egress" 2>/dev/null || true
+          chmod 770 "$var_log/egress" 2>/dev/null || true
           if [[ -f "$etc_proj/config.json" ]]; then
             chown root:drlink-egress "$etc_proj/config.json" 2>/dev/null || true
             chmod 640 "$etc_proj/config.json" 2>/dev/null || true
           fi
           if [[ -f "$var_lib/egress-control.json" ]]; then
             chown root:drlink-egress "$var_lib/egress-control.json" 2>/dev/null || true
-            chmod 660 "$var_lib/egress-control.json" 2>/dev/null || true
+            chmod 640 "$var_lib/egress-control.json" 2>/dev/null || true
           fi
-          touch "$var_log/egress-conn.jsonl" 2>/dev/null || true
-          chown root:drlink-egress "$var_log/egress-conn.jsonl" 2>/dev/null || true
-          chmod 660 "$var_log/egress-conn.jsonl" 2>/dev/null || true
+          touch "$var_log/egress/connections.jsonl" 2>/dev/null || true
+          chown root:drlink-egress "$var_log/egress/connections.jsonl" 2>/dev/null || true
+          chmod 660 "$var_log/egress/connections.jsonl" 2>/dev/null || true
+          touch "$var_log/access/connections.jsonl" 2>/dev/null || true
         else
           chmod 700 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+          chmod 700 "$var_log/access" "$var_log/egress" 2>/dev/null || true
         fi
       fi
     fi
@@ -2158,7 +2179,7 @@ cfg = json.loads(path.read_text(encoding="utf-8"))
 changed = False
 defaults = {
     "egress_control_file": "/var/lib/drlink/egress-control.json",
-    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+    "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6102,
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Regression: egress conn log must work when /var/log/drlink is traverse-only.
+"""Regression: egress conn log with traverse-only parent + writable egress/.
 
-Production install makes the log directory 0710 / --x for drlink-egress and
-grants write only on the pre-created egress-conn.jsonl inode. Sidecar
-``*.lock`` creation previously failed with EACCES and silently dropped logs.
+Production: ``/var/log/drlink`` is traverse-only for drlink-egress; the
+service subdirectory ``egress/`` is writable so append + rotation work.
+Sidecar ``*.lock`` must not be required.
 """
 from __future__ import annotations
 
@@ -31,21 +31,25 @@ EG = _load("frp_egress_control", "lib/frp_egress_control.py")
 ACL = _load("frp_access_control", "lib/frp_access_control.py")
 
 
+def _make_traverse_only(path: Path) -> None:
+    os.chmod(path, 0o711)
+    try:
+        os.chmod(path, stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
+
+
 class ConnLogTraverseOnly(unittest.TestCase):
-    def test_egress_emit_with_traverse_only_parent(self):
+    def test_egress_emit_with_traverse_only_parent_writable_subdir(self):
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp) / "var/log/drlink"
-            log_dir.mkdir(parents=True)
-            log_path = log_dir / "egress-conn.jsonl"
+            egress_dir = log_dir / "egress"
+            egress_dir.mkdir(parents=True)
+            log_path = egress_dir / "connections.jsonl"
             log_path.write_text("", encoding="utf-8")
             os.chmod(log_path, 0o600)
-            # Simulate production: directory not writable (no create sidecar lock).
-            os.chmod(log_dir, 0o711)  # traverse+execute for owner; no write
-            # Drop write for owner too when possible (best effort on this FS).
-            try:
-                os.chmod(log_dir, stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            except OSError:
-                pass
+            os.chmod(egress_dir, 0o700)
+            _make_traverse_only(log_dir)
             before = log_path.stat().st_size
             EG.emit_conn_log(
                 {
@@ -67,20 +71,19 @@ class ConnLogTraverseOnly(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             rec = json.loads(lines[0])
             self.assertEqual(rec.get("hostname"), "allowed.test")
-            # Sidecar lock must not be required / created.
-            self.assertFalse((log_dir / "egress-conn.jsonl.lock").exists())
+            self.assertFalse((egress_dir / "connections.jsonl.lock").exists())
+            self.assertFalse((log_dir / "connections.jsonl.lock").exists())
 
-    def test_access_emit_with_traverse_only_parent(self):
+    def test_access_emit_with_traverse_only_parent_writable_subdir(self):
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp) / "var/log/drlink"
-            log_dir.mkdir(parents=True)
-            log_path = log_dir / "access-conn.jsonl"
+            access_dir = log_dir / "access"
+            access_dir.mkdir(parents=True)
+            log_path = access_dir / "connections.jsonl"
             log_path.write_text("", encoding="utf-8")
             os.chmod(log_path, 0o600)
-            try:
-                os.chmod(log_dir, stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            except OSError:
-                pass
+            os.chmod(access_dir, 0o700)
+            _make_traverse_only(log_dir)
             ACL.emit_conn_log(
                 {
                     "client_id": "abcd1234",
@@ -92,7 +95,7 @@ class ConnLogTraverseOnly(unittest.TestCase):
                 path=log_path,
             )
             self.assertGreater(log_path.stat().st_size, 0)
-            self.assertFalse((log_dir / "access-conn.jsonl.lock").exists())
+            self.assertFalse((access_dir / "connections.jsonl.lock").exists())
 
 
 if __name__ == "__main__":

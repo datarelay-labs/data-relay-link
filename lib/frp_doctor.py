@@ -1822,7 +1822,7 @@ def check_access_control(report, paths, facts, cfg, registry_state):
             '', '', 'runtime',
         )
 
-    log_rel = '/var/log/drlink/access-conn.jsonl'
+    log_rel = '/var/log/drlink/access/connections.jsonl'
     if isinstance(cfg, dict):
         configured_log = str(cfg.get('access_conn_log_file') or '').strip()
         if configured_log.startswith('/'):
@@ -1834,7 +1834,7 @@ def check_access_control(report, paths, facts, cfg, registry_state):
             'ACCESS_LOG_ERROR', FAIL,
             'ACCESS_LOG_ERROR: access connection log directory is missing',
             log_dir_rel,
-            're-run the server installer so /var/log/drlink is created',
+            're-run the server installer so /var/log/drlink/access is created',
             'state',
         )
     elif not os.access(str(log_dir), os.W_OK):
@@ -1842,7 +1842,7 @@ def check_access_control(report, paths, facts, cfg, registry_state):
             'ACCESS_LOG_ERROR', FAIL,
             'ACCESS_LOG_ERROR: access connection log directory is not writable',
             log_dir_rel,
-            'ensure /var/log/drlink is writable by the access plugin',
+            'ensure /var/log/drlink/access is writable by the access plugin',
             'state',
         )
     else:
@@ -2180,7 +2180,7 @@ def check_egress_control(report, paths, facts, cfg):
                 'state',
             )
 
-    conn_rel = '/var/log/drlink/egress-conn.jsonl'
+    conn_rel = '/var/log/drlink/egress/connections.jsonl'
     if isinstance(cfg, dict):
         configured = str(cfg.get('egress_conn_log_file') or '').strip()
         if configured.startswith('/'):
@@ -2323,15 +2323,15 @@ def check_egress_control(report, paths, facts, cfg):
             )
         except Exception as exc:
             report.add(
-                'EGRESS_EFFECTIVE_CONFIG', WARN,
+                'EGRESS_EFFECTIVE_CONFIG', FAIL,
                 'egress effective runtime snapshot is unreadable',
                 str(exc),
-                '',
+                'restart drlink-egress or inspect journalctl -u drlink-egress',
                 'runtime',
             )
     elif unit_active == 'active':
         report.add(
-            'EGRESS_EFFECTIVE_CONFIG', WARN,
+            'EGRESS_EFFECTIVE_CONFIG', FAIL,
             'egress unit is active but effective policy snapshot is missing',
             '/run/drlink/egress/effective.json',
             'restart drlink-egress or inspect journalctl -u drlink-egress',

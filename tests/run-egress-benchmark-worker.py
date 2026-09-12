@@ -124,15 +124,16 @@ def main() -> int:
     EG.save_egress_state(EG.empty_egress_state(), path=state_path)
 
     def mut(state):
-        pid, _ = EG.create_profile(state, "bench", enabled=True)
+        pid, _ = EG.create_profile(state, "bench", enabled=False)
         EG.add_source(state, pid, "127.0.0.1/32")
         EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
+        EG.set_profile_enabled(state, pid, True)
         return pid
 
     EG.mutate_egress_state(mut, path=state_path)
     cfg = {
         "egress_control_file": "/var/lib/drlink/egress-control.json",
-        "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+        "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
         "egress_listen_addr": "127.0.0.1",
         "egress_listen_port": 0,
     }

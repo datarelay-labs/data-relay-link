@@ -5,7 +5,10 @@ Authoritative state lives in /var/lib/drlink/access-control.json.
 Runtime authorization is evaluated by the NewUserConn plugin using an
 in-memory cache derived from that file plus registry.json proxy mapping.
 
-Backward compatible: missing access metadata means PUBLIC.
+Unbound services (when policy state is loaded) default to PUBLIC.
+Missing or corrupt access-control.json is fail-closed at runtime and must
+never be displayed as PUBLIC in operator CLI — use POLICY UNAVAILABLE /
+ACCESS ERROR / UNKNOWN instead.
 ALLOWLIST failures fail closed (DENY).
 """
 from __future__ import annotations
@@ -26,7 +29,8 @@ from typing import Any, Optional
 
 ACCESS_SCHEMA_VERSION = 1
 DEFAULT_ACCESS_PATH = "/var/lib/drlink/access-control.json"
-DEFAULT_CONN_LOG_PATH = "/var/log/drlink/access-conn.jsonl"
+DEFAULT_CONN_LOG_PATH = "/var/log/drlink/access/connections.jsonl"
+LEGACY_CONN_LOG_PATH = "/var/log/drlink/access-conn.jsonl"
 DEFAULT_PLUGIN_ADDR = "127.0.0.1:6101"
 DEFAULT_PLUGIN_PATH = "/access-auth"
 ACCESS_LIST_ID_PREFIX = "acl_"
@@ -37,6 +41,11 @@ ENTRY_ID_HEX_LEN = 12
 MODE_PUBLIC = "PUBLIC"
 MODE_ALLOWLIST = "ALLOWLIST"
 VALID_MODES = frozenset({MODE_PUBLIC, MODE_ALLOWLIST})
+
+# Operator-facing display when authoritative policy cannot be read.
+DISPLAY_POLICY_UNAVAILABLE = "POLICY UNAVAILABLE"
+DISPLAY_ACCESS_ERROR = "ACCESS ERROR"
+DISPLAY_UNKNOWN = "UNKNOWN"
 
 DECISION_ALLOW = "ALLOW"
 DECISION_DENY = "DENY"
@@ -151,9 +160,18 @@ def conn_log_path(cfg: Optional[dict] = None) -> Path:
     configured = ""
     if isinstance(cfg, dict):
         configured = str(cfg.get("access_conn_log_file") or "").strip()
-    if not configured:
-        configured = os.environ.get("FRP_ACCESS_CONN_LOG", "") or DEFAULT_CONN_LOG_PATH
-    return _rooted(configured)
+    if configured:
+        return _rooted(configured)
+    env = os.environ.get("FRP_ACCESS_CONN_LOG", "").strip()
+    if env:
+        return _rooted(env)
+    path = _rooted(DEFAULT_CONN_LOG_PATH)
+    # Default path: prefer new layout; fall back to legacy flat file when present.
+    if not path.exists():
+        legacy = _rooted(LEGACY_CONN_LOG_PATH)
+        if legacy.is_file():
+            return legacy
+    return path
 
 
 def registry_path_from_cfg(cfg: dict) -> Path:
@@ -210,10 +228,9 @@ def atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
-        try:
-            os.chmod(path.parent, 0o700)
-        except OSError:
-            pass
+        # Do NOT chmod shared parent (/var/lib/drlink): that clears ACL mask /
+        # group+x needed by drlink-egress. File writers own only their inode.
+        pass
     finally:
         if os.path.exists(tmp):
             try:
@@ -281,6 +298,86 @@ def load_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -
     PUBLIC via mutation or display paths.
     """
     return require_access_state(path=path, cfg=cfg)
+
+
+def try_load_access_state_for_display(
+    path: Optional[Path] = None, cfg: Optional[dict] = None
+) -> tuple[Optional[dict], str]:
+    """Load Access Control for CLI display without inventing PUBLIC.
+
+    Returns ``(state, status)`` where status is:
+      - ``ok`` — state loaded
+      - ``unavailable`` — file missing (POLICY UNAVAILABLE)
+      - ``error`` — unreadable/corrupt/invalid (ACCESS ERROR)
+    """
+    path = path or access_control_path(cfg)
+    if not path.exists():
+        return None, "unavailable"
+    try:
+        return require_access_state(path=path, cfg=cfg), "ok"
+    except AccessError:
+        return None, "error"
+    except Exception:
+        return None, "error"
+
+
+def display_status_label(status: str) -> str:
+    """Map try_load status to a short operator-facing ACCESS column token."""
+    if status == "ok":
+        return MODE_PUBLIC  # caller should not use this alone for summaries
+    if status == "unavailable":
+        return DISPLAY_POLICY_UNAVAILABLE
+    if status == "error":
+        return DISPLAY_ACCESS_ERROR
+    return DISPLAY_UNKNOWN
+
+
+def format_service_access_display(
+    state: Optional[dict],
+    status: str,
+    machine_id: str,
+    service_id: str,
+) -> str:
+    """Per-service ACCESS column. Never returns PUBLIC when policy is unread."""
+    if status == "unavailable":
+        return DISPLAY_POLICY_UNAVAILABLE
+    if status != "ok" or state is None:
+        return DISPLAY_ACCESS_ERROR if status == "error" else DISPLAY_UNKNOWN
+    try:
+        binding = get_service_binding(state, machine_id, service_id)
+    except Exception:
+        return DISPLAY_ACCESS_ERROR
+    if binding.get("access_mode") != MODE_ALLOWLIST:
+        return MODE_PUBLIC
+    list_id = binding.get("access_list_id")
+    lst = (state.get("access_lists") or {}).get(list_id) or {}
+    entries = lst.get("entries") or []
+    active = sum(
+        1 for entry in entries if isinstance(entry, dict) and entry_is_active(entry)
+    )
+    return "ALLOWLIST (%s)" % active
+
+
+def format_client_access_summary(
+    state: Optional[dict],
+    status: str,
+    machine_id: str,
+    service_ids: list,
+) -> str:
+    """Client-list ACCESS summary. Never counts unread policy as PUBLIC."""
+    if status == "unavailable":
+        return DISPLAY_POLICY_UNAVAILABLE
+    if status != "ok" or state is None:
+        return DISPLAY_ACCESS_ERROR if status == "error" else DISPLAY_UNKNOWN
+    public = 0
+    restricted = 0
+    for sid in service_ids:
+        binding = get_service_binding(state, machine_id, sid)
+        if binding.get("access_mode") == MODE_ALLOWLIST:
+            restricted += 1
+        else:
+            public += 1
+    return "%d PUBLIC / %d RESTRICTED" % (public, restricted)
 
 
 def initialize_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
@@ -1123,10 +1220,7 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
                     os.fchmod(fd, 0o600)
                 except OSError:
                     pass
-                try:
-                    os.chmod(path.parent, 0o700)
-                except OSError:
-                    pass
+                # Do NOT chmod shared /var/log/drlink parent — clears egress ACL.
             os.write(fd, line.encode("utf-8"))
         finally:
             try:

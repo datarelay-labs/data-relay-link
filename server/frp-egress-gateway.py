@@ -54,6 +54,9 @@ DNS_NEGATIVE_TTL = 10.0
 AUDIT_HOSTNAME_REDACTED = "<invalid-or-redacted>"
 STREAM_BUF = 65536
 BODY_MEMORY_THRESHOLD = 256 * 1024  # larger bodies spool to disk before connect
+# Aggregate disk/memory spool budget across concurrent requests (inode/disk safety).
+DEFAULT_SPOOL_BUDGET_BYTES = 512 * 1024 * 1024
+DEFAULT_PER_SOURCE_SPOOL_BYTES = 128 * 1024 * 1024
 RELAY_BUF = 65536
 RELAY_MAX_BUFFER = 256 * 1024
 # RFC 9849 — TLS Encrypted Client Hello (ECH). Extension type encrypted_client_hello=0xfe0d.
@@ -426,6 +429,8 @@ class GatewayState:
         per_source_limit: int = DEFAULT_PER_SOURCE_LIMIT,
         dns_pending_limit: int = DEFAULT_DNS_PENDING_LIMIT,
         dns_worker_limit: int = DEFAULT_DNS_WORKERS,
+        spool_budget_bytes: int = DEFAULT_SPOOL_BUDGET_BYTES,
+        per_source_spool_bytes: int = DEFAULT_PER_SOURCE_SPOOL_BYTES,
     ):
         self.cache = cache
         self.resolve_fn = resolve_fn
@@ -434,18 +439,53 @@ class GatewayState:
         self.per_source_limit = per_source_limit
         self.dns_pending_limit = dns_pending_limit
         self.dns_worker_limit = dns_worker_limit
+        self.spool_budget_bytes = max(0, int(spool_budget_bytes))
+        self.per_source_spool_bytes = max(0, int(per_source_spool_bytes))
+        if self.spool_budget_bytes < MAX_CONTENT_LENGTH:
+            # Keep at least one max-sized request representable unless explicitly
+            # set lower (tests may inject tiny budgets).
+            pass
         self._sem = threading.BoundedSemaphore(max_concurrent)
         self._active = 0
         self._lock = threading.Lock()
         self.shutting_down = False
         self._per_source: dict[str, int] = {}
         self._sessions: dict[str, dict] = {}
+        self._spool_used = 0
+        self._spool_per_source: dict[str, int] = {}
         self.dns = DnsResolver(
             resolve_fn=resolve_fn,
             pending_limit=dns_pending_limit,
             worker_limit=dns_worker_limit,
             timeout=DNS_TIMEOUT,
         )
+
+    def try_reserve_spool(self, source_ip: str, size: int) -> bool:
+        """Reserve aggregate + per-source spool budget. size must be >= 0."""
+        if size < 0:
+            return False
+        if size == 0:
+            return True
+        with self._lock:
+            src_used = self._spool_per_source.get(source_ip, 0)
+            if self._spool_used + size > self.spool_budget_bytes:
+                return False
+            if src_used + size > self.per_source_spool_bytes:
+                return False
+            self._spool_used += size
+            self._spool_per_source[source_ip] = src_used + size
+            return True
+
+    def release_spool(self, source_ip: str, size: int) -> None:
+        if size <= 0:
+            return
+        with self._lock:
+            self._spool_used = max(0, self._spool_used - size)
+            src_used = self._spool_per_source.get(source_ip, 0) - size
+            if src_used <= 0:
+                self._spool_per_source.pop(source_ip, None)
+            else:
+                self._spool_per_source[source_ip] = src_used
 
     def try_acquire(self) -> bool:
         if self.shutting_down:
@@ -1670,11 +1710,8 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
     # Allowed: receive the exact body BEFORE DNS/connect so incomplete bodies
     # never create upstream I/O. Large bodies spool to a private tempfile.
     spool: Optional[_BodySpool] = None
-    try:
-        spool = _spool_exact_body(request, body_prefix, content_length)
-    except EG.EgressError:
-        state, load_error, cfg2, _snap = gw.cache.snapshot()
-        del state, load_error, _snap
+    spool_reserved = 0
+    if not gw.try_reserve_spool(source_ip, content_length):
         EG.emit_conn_log(
             {
                 "timestamp": EG.utc_now_iso(),
@@ -1684,68 +1721,96 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
                 "port": port,
                 "method": method,
                 "decision": EG.DECISION_DENY,
-                "reason": EG.REASON_MALFORMED_REQUEST,
-                "outcome": EG.AUDIT_POLICY_DENY,
+                "reason": EG.REASON_RESOURCE_LIMIT,
+                "outcome": EG.AUDIT_RESOURCE_LIMIT,
             },
-            cfg=cfg2,
+            cfg=cfg,
         )
-        _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+        _send_simple_sock(request, 503, "Service Unavailable", b"spool budget exceeded\n")
         return
-
-    upstream, decision = _connect_after_authorize(
-        gw, decision, hostname=host, port=port, cfg=cfg
-    )
-    if upstream is None:
-        if spool is not None:
-            spool.close()
-        reason = decision.get("reason")
-        if reason == EG.REASON_RESOURCE_LIMIT:
-            code, label = 503, "Service Unavailable"
-        elif reason in (EG.REASON_DNS_FAILURE, EG.REASON_CONNECT_FAILURE):
-            code, label = 502, "Bad Gateway"
-        else:
-            code, label = 403, "Forbidden"
-        _send_simple_sock(request, code, label, b"denied\n")
-        return
-
-    hop_by_hop = _connection_hop_headers(headers)
-    out_headers = []
-    for key, value in headers.items():
-        if key in hop_by_hop:
-            continue
-        out_headers.append("%s: %s" % (key, value))
-    if "host" not in headers:
-        out_headers.append(
-            "Host: %s" % (host if port == 80 else "%s:%d" % (host, port))
-        )
-    out_headers.append("Connection: close")
-    req = "%s %s %s\r\n%s\r\n\r\n" % (method, path, version, "\r\n".join(out_headers))
+    spool_reserved = content_length
     try:
-        upstream.sendall(req.encode("ascii", errors="strict"))
-        assert spool is not None
-        spool.send_to(upstream)
-        _relay_upstream_response(request, upstream)
-    except EG.EgressError:
         try:
-            upstream.close()
-        except OSError:
-            pass
-        try:
+            spool = _spool_exact_body(request, body_prefix, content_length)
+        except EG.EgressError:
+            state, load_error, cfg2, _snap = gw.cache.snapshot()
+            del state, load_error, _snap
+            EG.emit_conn_log(
+                {
+                    "timestamp": EG.utc_now_iso(),
+                    "connection_id": connection_id,
+                    "source_ip": source_ip,
+                    "hostname": host,
+                    "port": port,
+                    "method": method,
+                    "decision": EG.DECISION_DENY,
+                    "reason": EG.REASON_MALFORMED_REQUEST,
+                    "outcome": EG.AUDIT_POLICY_DENY,
+                },
+                cfg=cfg2,
+            )
             _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
-        except Exception:
-            pass
-    except OSError:
+            return
+
+        upstream, decision = _connect_after_authorize(
+            gw, decision, hostname=host, port=port, cfg=cfg
+        )
+        if upstream is None:
+            if spool is not None:
+                spool.close()
+                spool = None
+            reason = decision.get("reason")
+            if reason == EG.REASON_RESOURCE_LIMIT:
+                code, label = 503, "Service Unavailable"
+            elif reason in (EG.REASON_DNS_FAILURE, EG.REASON_CONNECT_FAILURE):
+                code, label = 502, "Bad Gateway"
+            else:
+                code, label = 403, "Forbidden"
+            _send_simple_sock(request, code, label, b"denied\n")
+            return
+
+        hop_by_hop = _connection_hop_headers(headers)
+        out_headers = []
+        for key, value in headers.items():
+            if key in hop_by_hop:
+                continue
+            out_headers.append("%s: %s" % (key, value))
+        if "host" not in headers:
+            out_headers.append(
+                "Host: %s" % (host if port == 80 else "%s:%d" % (host, port))
+            )
+        out_headers.append("Connection: close")
+        req = "%s %s %s\r\n%s\r\n\r\n" % (method, path, version, "\r\n".join(out_headers))
         try:
-            upstream.close()
+            upstream.sendall(req.encode("ascii", errors="strict"))
+            assert spool is not None
+            spool.send_to(upstream)
+            _relay_upstream_response(request, upstream)
+        except EG.EgressError:
+            try:
+                upstream.close()
+            except OSError:
+                pass
+            try:
+                _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+            except Exception:
+                pass
         except OSError:
-            pass
-        try:
-            request.close()
-        except OSError:
-            pass
+            try:
+                upstream.close()
+            except OSError:
+                pass
+            try:
+                request.close()
+            except OSError:
+                pass
+        finally:
+            if spool is not None:
+                spool.close()
+                spool = None
     finally:
-        if spool is not None:
-            spool.close()
+        if spool_reserved:
+            gw.release_spool(source_ip, spool_reserved)
 
 
 class ThreadedTCPServer(socketserver.ThreadingTCPServer):

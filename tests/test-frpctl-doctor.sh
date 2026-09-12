@@ -157,7 +157,7 @@ PY
 write_server_healthy() {
   local tree="$1"
   mkdir -p "$tree/etc/frp" "$tree/etc/drlink" "$tree/var/lib/drlink" \
-    "$tree/var/log/drlink" \
+    "$tree/var/log/drlink" "$tree/var/log/drlink/access" "$tree/var/log/drlink/egress" \
     "$tree/usr/local/bin" "$tree/usr/local/sbin" "$tree/usr/local/lib/drlink" \
     "$tree/etc/systemd/system"
   write_version "$tree"
@@ -204,10 +204,10 @@ Path(sys.argv[1]).write_text(json.dumps({
     "access_control_file": "/var/lib/drlink/access-control.json",
     "service_profiles_file": "/var/lib/drlink/service-profiles.json",
     "egress_control_file": "/var/lib/drlink/egress-control.json",
-    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+    "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6102,
-    "access_conn_log_file": "/var/log/drlink/access-conn.jsonl",
+    "access_conn_log_file": "/var/log/drlink/access/connections.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
     "token_file": "/etc/frp/server_token",
@@ -252,7 +252,7 @@ PY
   printf '{"schema_version":1,"profiles":{}}\n' \
     >"$tree/var/lib/drlink/service-profiles.json"
   chmod 600 "$tree/var/lib/drlink/service-profiles.json"
-  chmod 700 "$tree/var/log/drlink"
+  chmod 700 "$tree/var/log/drlink" "$tree/var/log/drlink/access" "$tree/var/log/drlink/egress"
   echo '{"schema_version":1,"nonces":{"abc":1}}' >"$tree/var/lib/drlink/mgmt-nonces.json"
   chmod 600 "$tree/var/lib/drlink/mgmt-nonces.json"
 }

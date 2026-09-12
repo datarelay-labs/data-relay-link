@@ -150,7 +150,7 @@ cfg=json.loads(cfgp.read_text())
 changed=False
 for k,v in {
   'access_control_file':'/var/lib/drlink/access-control.json',
-  'access_conn_log_file':'/var/log/drlink/access-conn.jsonl',
+  'access_conn_log_file':'/var/log/drlink/access/connections.jsonl',
   'access_plugin_addr':'127.0.0.1:6101',
   'access_plugin_path':'/access-auth',
 }.items():

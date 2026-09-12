@@ -60,18 +60,27 @@ class EgressPolicyTests(unittest.TestCase):
 
     def _profile(self, name="ubuntu-update", enabled=True):
         def mut(state):
-            return EG.create_profile(state, name, enabled=enabled)
+            pid, rec = EG.create_profile(state, name, enabled=False)
+            return pid, rec
 
-        return EG.mutate_egress_state(mut, cfg=self.cfg)
+        pid, rec = EG.mutate_egress_state(mut, cfg=self.cfg)
+        if enabled:
+            # Completeness required before enable; callers that need allow must
+            # add source/destination first, then call set_profile_enabled.
+            pass
+        return pid, rec
+
+    def _complete_and_enable(self, pid, source="203.0.113.10/32", host="security.ubuntu.com", port=443):
+        EG.mutate_egress_state(lambda s: EG.add_source(s, pid, source), cfg=self.cfg)
+        EG.mutate_egress_state(
+            lambda s: EG.add_destination(s, pid, host, port, protocol="https"),
+            cfg=self.cfg,
+        )
+        return EG.mutate_egress_state(lambda s: EG.set_profile_enabled(s, pid, True), cfg=self.cfg)
 
     def test_exact_fqdn_allow_deny(self):
-        pid, _ = self._profile()
-        EG.mutate_egress_state(
-            lambda s: EG.add_source(s, pid, "203.0.113.10/32"), cfg=self.cfg
-        )
-        EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, pid, "security.ubuntu.com", 443, protocol="https"), cfg=self.cfg
-        )
+        pid, _ = self._profile(enabled=False)
+        self._complete_and_enable(pid)
         state = EG.load_egress_state(cfg=self.cfg)
         allow = EG.authorize_request(
             state,
@@ -355,23 +364,24 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         EG.save_egress_state(EG.empty_egress_state(), path=state_path)
 
         def mut(state):
-            pid, _ = EG.create_profile(state, "test", enabled=True)
+            pid, _ = EG.create_profile(state, "test", enabled=False)
             EG.add_source(state, pid, "127.0.0.1/32")
             EG.add_destination(state, pid, "allowed.test", 80, protocol="http")
             EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
+            EG.set_profile_enabled(state, pid, True)
             return pid
 
         EG.mutate_egress_state(mut, path=state_path)
         cfg = {
             "egress_control_file": "/var/lib/drlink/egress-control.json",
-            "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+            "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
             "egress_listen_addr": "127.0.0.1",
             "egress_listen_port": 0,
         }
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
         self.cfg_path = cfg_path
         self.state_path = state_path
-        (self.root / "var/log/drlink").mkdir(parents=True, exist_ok=True)
+        (self.root / "var/log/drlink/egress").mkdir(parents=True, exist_ok=True)
 
         self.origin = _RecordingOrigin()
         self.origin.start()
@@ -452,7 +462,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         return needle in self.origin.total_bytes()
 
     def _conn_log(self) -> str:
-        path = self.root / "var/log/drlink/egress-conn.jsonl"
+        path = self.root / "var/log/drlink/egress/connections.jsonl"
         if not path.is_file():
             return ""
         return path.read_text(encoding="utf-8")
@@ -1098,21 +1108,22 @@ class EgressRelayTests(unittest.TestCase):
         EG.save_egress_state(EG.empty_egress_state(), path=state_path)
 
         def mut(state):
-            pid, _ = EG.create_profile(state, "test", enabled=True)
+            pid, _ = EG.create_profile(state, "test", enabled=False)
             EG.add_source(state, pid, "127.0.0.1/32")
             EG.add_destination(state, pid, "allowed.test", 80, protocol="http")
             EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
+            EG.set_profile_enabled(state, pid, True)
             return pid
 
         EG.mutate_egress_state(mut, path=state_path)
         cfg = {
             "egress_control_file": "/var/lib/drlink/egress-control.json",
-            "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+            "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
             "egress_listen_addr": "127.0.0.1",
             "egress_listen_port": 0,
         }
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-        (self.root / "var/log/drlink").mkdir(parents=True, exist_ok=True)
+        (self.root / "var/log/drlink/egress").mkdir(parents=True, exist_ok=True)
 
         self.payload = os.urandom(256 * 1024)
         self.slow_delay = 0.002
@@ -1302,22 +1313,23 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         EG.save_egress_state(EG.empty_egress_state(), path=self.state_path)
         self.cfg = {
             "egress_control_file": "/var/lib/drlink/egress-control.json",
-            "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+            "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
             "egress_listen_addr": "127.0.0.1",
             "egress_listen_port": 0,
         }
         cfg_path = self.root / "etc/drlink/config.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(json.dumps(self.cfg, indent=2) + "\n", encoding="utf-8")
-        (self.root / "var/log/drlink").mkdir(parents=True, exist_ok=True)
+        (self.root / "var/log/drlink/egress").mkdir(parents=True, exist_ok=True)
         self.cfg_path = cfg_path
 
         def mut(state):
-            pid, _ = EG.create_profile(state, "test", enabled=True)
+            pid, _ = EG.create_profile(state, "test", enabled=False)
             EG.add_source(state, pid, "127.0.0.1/32")
             EG.add_destination(state, pid, "allowed.test", 80, protocol="http")
             EG.add_destination(state, pid, "allowed.test", 443, protocol="https")
             EG.add_destination(state, pid, "allowed.test", 8443, protocol="https")
+            EG.set_profile_enabled(state, pid, True)
             return pid
 
         EG.mutate_egress_state(mut, path=self.state_path)
@@ -1386,7 +1398,7 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
 
     def _conn_log(self) -> str:
-        path = self.root / "var/log/drlink/egress-conn.jsonl"
+        path = self.root / "var/log/drlink/egress/connections.jsonl"
         if not path.is_file():
             return ""
         return path.read_text(encoding="utf-8")

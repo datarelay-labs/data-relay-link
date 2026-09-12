@@ -18,9 +18,10 @@ Group=drlink-egress
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-# Least privilege writable surface: policy file, audit log dir, runtime.
-# Parent dirs are traverse-only (710); secrets under /etc/frp stay root-only.
-ReadWritePaths=/var/lib/drlink/egress-control.json /var/log/drlink
+# Least privilege: writable service log dir + runtime only. Policy/config are
+# read-only. Shared /var/log/drlink stays traverse-only (not writable).
+ReadWritePaths=/var/log/drlink/egress /run/drlink/egress
+ReadOnlyPaths=/etc/drlink/config.json /var/lib/drlink/egress-control.json
 # Outbound TCP to approved Internet destinations.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 

@@ -90,7 +90,7 @@ def _atomic_append(path: Path, line: str):
     if not path.exists():
         path.touch()
         os.chmod(path, 0o600)
-        os.chmod(path.parent, 0o700)
+        # Do NOT chmod shared /var/log/drlink parent — clears egress ACL/mask.
     else:
         mode = stat.S_IMODE(path.stat().st_mode)
         if mode & 0o077:

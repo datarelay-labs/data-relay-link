@@ -51,7 +51,7 @@ if not path.is_file():
 cfg_path=Path('/etc/drlink/config.json')
 cfg=json.loads(cfg_path.read_text())
 cfg.setdefault('egress_control_file','/var/lib/drlink/egress-control.json')
-cfg.setdefault('egress_conn_log_file','/var/log/drlink/egress-conn.jsonl')
+cfg.setdefault('egress_conn_log_file','/var/log/drlink/egress/connections.jsonl')
 cfg.setdefault('egress_listen_addr','0.0.0.0')
 cfg['egress_listen_port'] = ${PROXY_PORT}
 cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True)+'\\n')
@@ -80,12 +80,13 @@ state=eg.empty_egress_state()
 eg.save_egress_state(state, path=path)
 
 def mut(st):
-    pid,_=eg.create_profile(st, '${PROFILE}', enabled=True)
+    pid,_=eg.create_profile(st, '${PROFILE}', enabled=False)
     # Allow client NAT/public IP and common private ranges for smoke; tighten in real ops.
     for cidr in ('0.0.0.0/0',):
         eg.add_source(st, pid, cidr)
     eg.add_destination(st, pid, 'example.com', 80, protocol='http')
     eg.add_destination(st, pid, 'example.com', 443, protocol='https')
+    eg.set_profile_enabled(st, pid, True)
     return pid
 eg.mutate_egress_state(mut, path=path)
 print('profile ready')

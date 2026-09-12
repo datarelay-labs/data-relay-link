@@ -1379,7 +1379,7 @@ frp_write_compatible_systemd_unit() {
     return 0
   fi
   tmp="$(mktemp)"
-  grep -vE '^(NoNewPrivileges|ProtectSystem|ReadWritePaths)=' "$src" >"$tmp"
+  grep -vE '^(NoNewPrivileges|ProtectSystem|ReadWritePaths|ReadOnlyPaths)=' "$src" >"$tmp"
   install -m 0644 "$tmp" "$dest"
   rm -f "$tmp"
 }

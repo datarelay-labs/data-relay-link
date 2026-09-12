@@ -20,6 +20,7 @@ mkdir -p \
   "$TREE/etc/frp" \
   "$TREE/var/lib/drlink" \
   "$TREE/var/log/drlink" \
+  "$TREE/var/log/drlink/access" \
   "$TREE/usr/local/lib/drlink"
 
 cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
@@ -41,7 +42,7 @@ cfg = {
     "public_ip": "203.0.113.10",
     "registry_file": "/var/lib/drlink/registry.json",
     "access_control_file": "/var/lib/drlink/access-control.json",
-    "access_conn_log_file": "/var/log/drlink/access-conn.jsonl",
+    "access_conn_log_file": "/var/log/drlink/access/connections.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
 }

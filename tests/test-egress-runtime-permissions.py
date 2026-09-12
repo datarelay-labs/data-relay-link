@@ -102,11 +102,11 @@ class EgressRuntimePermissionTests(unittest.TestCase):
     def test_atomic_egress_control_preserves_access(self):
         path = self.root / "var/lib/drlink/egress-control.json"
         EG.save_egress_state(EG.empty_egress_state(), path=path)
-        self._assert_egress_can_read(path, write=True)
+        self._assert_egress_can_read(path, write=False)
         # Second mutation must not drop the grant after inode replace.
         state = EG.load_egress_state(path=path, persist_migration=False)
         EG.save_egress_state(state, path=path)
-        self._assert_egress_can_read(path, write=True)
+        self._assert_egress_can_read(path, write=False)
 
     def test_atomic_config_preserves_access(self):
         path = self.root / "etc/drlink/config.json"

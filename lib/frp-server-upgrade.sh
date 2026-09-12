@@ -528,7 +528,7 @@ cfg = json.loads(path.read_text(encoding="utf-8"))
 changed = False
 defaults = {
     "egress_control_file": "/var/lib/drlink/egress-control.json",
-    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+    "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6102,
 }
