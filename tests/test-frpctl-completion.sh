@@ -148,7 +148,7 @@ echo "$all_server" | has_line doctor || fail "server list doctor"
 echo "$all_server" | has_line client || fail "server list client"
 echo "$all_server" | has_line egress || fail "server list egress"
 echo "$all_server" | has_line access || fail "server list access"
-if echo "$all_server" | has_line service; then fail "server offered local service root"; fi
+echo "$all_server" | has_line service || fail "server list service (global inventory)"
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
 if echo "$all_server" | has_line clients; then fail "legacy clients in tab"; fi
