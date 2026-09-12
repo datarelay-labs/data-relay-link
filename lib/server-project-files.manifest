@@ -65,6 +65,7 @@ project usr/local/lib/drlink/frp-enrollment-purge 0755 tools/frp-enrollment-purg
 project usr/local/lib/drlink/frp-enroll-bulk 0755 tools/frp-enroll-bulk python
 project usr/local/lib/drlink/frp-clients 0755 tools/frp-clients python
 project usr/local/lib/drlink/frp-client-info 0755 tools/frp-client-info python
+project usr/local/lib/drlink/frp-services 0755 tools/frp-services python
 project usr/local/lib/drlink/frp-client-set 0755 tools/frp-client-set python
 project usr/local/lib/drlink/frp-groups 0755 tools/frp-groups python
 project usr/local/lib/drlink/frp-group-set 0755 tools/frp-group-set python

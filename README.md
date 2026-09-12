@@ -34,13 +34,13 @@ Inbound relay engine (implementation dependency): [`fatedier/frp`](https://githu
 
 ---
 
-## Current release — v2.3.1
+## Prepared release — v2.3.1 (tag pending)
 
 | Item | Current |
 | --- | --- |
-| Data Relay Link | **v2.3.1** |
+| Data Relay Link | **v2.3.1** (prepared / RC) |
 | Pinned upstream FRP | **v0.71.0** |
-| Intended install source | immutable `v2.3.1` tag |
+| Intended install source | immutable `v2.3.1` tag **after** final audit freeze |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
@@ -52,6 +52,11 @@ Current pinned FRP version: **v0.71.0**
 prepares **v2.3.1** with FRP pinned at `0.71.0`. Historical `v2.3.0` remains
 untouched and must not be moved or recreated. Following mutable `main` is
 explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
+
+Until the `v2.3.1` Git tag exists, do **not** install from a
+`raw.githubusercontent.com/.../v2.3.1/...` URL (it would 404). Use a verified
+local checkout, a release candidate bundle, or an explicit
+`FRP_RELEASE_CHANNEL=dev` / source-ref workflow instead.
 
 On development builds, use release channel, source ref, and verified bundle SHA256 to identify the exact build.
 
@@ -172,13 +177,16 @@ This project is intentionally **not** a Web UI, database-backed RMM, Kubernetes 
 
 ## Install the server
 
-For normal field installation, use the immutable stable tag:
+After the immutable `v2.3.1` tag is published (final audit freeze), install with:
 
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.3.1/dist/bootstrap-server.sh \
   | sudo bash
 ```
+
+Until that tag exists, use a verified local checkout of this repository (or a
+signed/checked release-candidate bundle) instead of the raw tag URL above.
 
 Then verify:
 

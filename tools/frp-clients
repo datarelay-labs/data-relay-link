@@ -54,13 +54,13 @@ parser.add_argument(
     action='append',
     default=[],
     metavar='KEY=VALUE',
-    help='show clients with this tag; multiple --tag filters use AND semantics',
+    help='list clients with this tag; multiple --tag filters use AND semantics',
 )
 parser.add_argument(
     '--group',
     default=None,
     metavar='GROUP',
-    help='show clients in this group (ID, unique prefix, or exact name)',
+    help='list clients in this group (ID, unique prefix, or exact name)',
 )
 args = parser.parse_args()
 tag_filters = []
@@ -95,20 +95,11 @@ def require_v2(state):
             )
 
 
-def access_summary(access_state, mid, client):
+def access_summary(access_state, access_status, mid, client):
     if ACL is None:
         return '-'
-    public = 0
-    restricted = 0
-    for sid, _svc in CREG.enabled_services(client):
-        binding = ACL.get_service_binding(access_state, mid, sid)
-        if binding.get('access_mode') == ACL.MODE_ALLOWLIST:
-            restricted += 1
-        else:
-            public += 1
-    if public == 0 and restricted == 0:
-        return '0 PUBLIC / 0 RESTRICTED'
-    return '%d PUBLIC / %d RESTRICTED' % (public, restricted)
+    sids = [sid for sid, _svc in CREG.enabled_services(client)]
+    return ACL.format_client_access_summary(access_state, access_status, mid, sids)
 
 
 cfg = json.loads(CFG.read_text())
@@ -125,14 +116,12 @@ except (OSError, json.JSONDecodeError) as exc:
     raise SystemExit(1)
 require_v2(state)
 
-access_state = {}
+access_state = None
+access_status = 'error'
 if ACL is not None:
-    try:
-        access_path = ACL.access_control_path(cfg)
-        if access_path.exists():
-            access_state = ACL.load_access_state(cfg=cfg)
-    except Exception:
-        access_state = {}
+    access_state, access_status = ACL.try_load_access_state_for_display(cfg=cfg)
+else:
+    access_status = 'unavailable'
 
 public_ip = CREG.sanitize_display(cfg.get('public_ip') or cfg.get('public_host') or '', 253)
 public_hostname = CREG.sanitize_display(cfg.get('public_hostname') or '', 253)
@@ -180,7 +169,9 @@ for idx, (mid, client) in enumerate(clients, start=1):
     hostname = CREG.sanitize_display(client.get('hostname') or '-', 14)
     short_id = CREG.sanitize_display(CREG.unique_short_id(mid, all_mids), 10)
     state_txt = CREG.inventory_online_status(client, listener_snapshot)
-    access_txt = CREG.sanitize_display(access_summary(access_state, mid, client), 22)
+    access_txt = CREG.sanitize_display(
+        access_summary(access_state, access_status, mid, client), 22
+    )
     mgmt = CREG.mgmt_status(client)
     ssh_txt = '-'
     _sid, ssh = CREG.first_ssh_service(client)
@@ -205,24 +196,4 @@ if clients:
     if example:
         print()
         print('Example:')
-        print('  show client %s' % example)
-
-if clients:
-    print()
-    for mid, client in clients:
-        name = CREG.sanitize_display(CREG.display_name(client, mid), 64)
-        print(name)
-        services = client.get('services') or {}
-        if not isinstance(services, dict) or not services:
-            print('  (no services)')
-            continue
-        for sid, svc in sorted(
-            services.items(),
-            key=lambda kv: (kv[1].get('remote_port') or 0, kv[0]) if isinstance(kv[1], dict) else (0, kv[0]),
-        ):
-            if not isinstance(svc, dict):
-                continue
-            port = svc.get('remote_port') or '-'
-            suffix = '' if svc.get('enabled', True) else ' (reserved)'
-            print(f'  {CREG.sanitize_display(sid, 32)}:{port}{suffix}')
-        print()
+        print('  client show %s' % example)

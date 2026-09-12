@@ -92,6 +92,11 @@ if ROOT and not str(reg).startswith(ROOT):
 state = json.loads(reg.read_text())
 require_v2(state)
 
+if ACL is not None:
+    access_state, access_status = ACL.try_load_access_state_for_display(cfg=cfg)
+else:
+    access_state, access_status = None, 'unavailable'
+
 mid, client = CREG.resolve_client_or_exit(state, q)
 all_mids = list((state.get('clients') or {}))
 public_ip = CREG.sanitize_display(cfg.get('public_ip') or cfg.get('public_host') or '', 253)
@@ -126,26 +131,29 @@ def print_overview():
 
 def access_column(service_id):
     if ACL is None:
-        return 'ERROR'
-    try:
-        access_path = ACL.access_control_path(cfg)
-        if not access_path.exists():
-            return 'PUBLIC'
-        access_state = ACL.require_access_state(path=access_path, cfg=cfg)
-        binding = ACL.get_service_binding(access_state, mid, service_id)
-        if binding.get('access_mode') != ACL.MODE_ALLOWLIST:
-            return 'PUBLIC'
-        list_id = binding.get('access_list_id')
-        lst = (access_state.get('access_lists') or {}).get(list_id) or {}
-        entries = lst.get('entries') or []
-        active = sum(1 for entry in entries if isinstance(entry, dict) and ACL.entry_is_active(entry))
-        return 'ALLOWLIST (%s)' % active
-    except Exception:
-        return 'ERROR'
+        return 'ACCESS ERROR'
+    return ACL.format_service_access_display(access_state, access_status, mid, service_id)
+
+
+def service_runtime_state(svc, snapshot):
+    """STATE ONLINE/OFFLINE/DISABLED and PORT STATE ACTIVE/RESERVED."""
+    enabled = svc.get('enabled', True) is not False
+    if not enabled:
+        return 'DISABLED', 'RESERVED'
+    port_state = CREG.passive_port_state(svc.get('remote_port'), snapshot)
+    if port_state == 'online':
+        return 'ONLINE', 'ACTIVE'
+    if port_state == 'offline':
+        return 'OFFLINE', 'ACTIVE'
+    return 'UNKNOWN', 'ACTIVE'
 
 
 def print_services():
-    print('%-10s %-6s %-14s %-22s %-14s %s' % ('SERVICE', 'TYPE', 'TARGET', 'PUBLIC', 'ACCESS', 'STATE'))
+    snapshot = CREG.passive_listening_ports()
+    print(
+        '%-10s %-6s %-14s %-22s %-18s %-10s %s'
+        % ('SERVICE', 'TYPE', 'TARGET', 'PUBLIC', 'ACCESS', 'STATE', 'PORT STATE')
+    )
     if not services:
         print('(no services)')
         return
@@ -156,23 +164,22 @@ def print_services():
     ):
         if not isinstance(svc, dict):
             continue
-        if svc.get('enabled', True) is False:
-            continue
         protocol = str(svc.get('protocol') or 'tcp').upper()
         local_ip = CREG.sanitize_display(svc.get('local_ip') or '-', 64)
         local_port = svc.get('local_port') or '-'
         remote_port = svc.get('remote_port') or '-'
-        enabled_flag = 'enabled' if svc.get('enabled', True) is not False else 'disabled'
         sid_txt = CREG.sanitize_display(sid, 10)
         target = '%s:%s' % (local_ip, local_port)
         public = '%s:%s' % (access_host or 'host', remote_port)
         access = access_column(sid)
-        print('%-10s %-6s %-14s %-22s %-14s %s' % (
-            sid_txt, protocol, target[:14], public[:22], access[:14], enabled_flag,
+        runtime_state, port_state = service_runtime_state(svc, snapshot)
+        print('%-10s %-6s %-14s %-22s %-18s %-10s %s' % (
+            sid_txt, protocol, target[:14], public[:22], access[:18],
+            runtime_state, port_state,
         ))
         if access == 'PUBLIC':
             public_services.append(sid)
-    if public_services and ACL is not None:
+    if public_services and ACL is not None and access_status == 'ok':
         ACL.print_public_exposure_notice(heading=True)
     ssh_sid, ssh = CREG.first_ssh_service(client)
     if ssh:

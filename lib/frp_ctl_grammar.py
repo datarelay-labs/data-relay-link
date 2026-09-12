@@ -211,9 +211,26 @@ def _show_resources(role):
     client, server = _role_parts(role)
     items = ["status", "version"]
     if server:
-        items.extend(["clients", "client", "groups", "group", "profiles", "profile", "egress-profiles", "egress-profile", "enrollments", "audit", "upstream"])
-    if client:
+        items.extend(
+            [
+                "clients",
+                "client",
+                "services",
+                "groups",
+                "group",
+                "profiles",
+                "profile",
+                "egress-profiles",
+                "egress-profile",
+                "enrollments",
+                "audit",
+                "upstream",
+            ]
+        )
+    if client and not server:
         items.extend(["services", "info"])
+    elif client and server:
+        items.append("info")
     return items
 
 
@@ -275,7 +292,7 @@ def _safe_names(names):
     return sorted(out, key=str.lower)
 
 
-def missing_client_help(usage_lines, names=None, tip="drlink help show"):
+def missing_client_help(usage_lines, names=None, tip="drlink help client"):
     """Enter-submitted incomplete client target. Tab must not call this."""
     parts = ["Missing client.", ""]
     available = _safe_names(names)
@@ -314,21 +331,39 @@ def help_text(tokens, role):
     catalog_topic = _catalog_help_topic(tokens, role)
     if catalog_topic is not None:
         return catalog_topic
-    if verb == "show":
-        return _show_help(tokens[1:], role)
-    if verb == "set":
-        return _set_help(tokens[1:], role)
-    if verb == "unset":
-        return _unset_help(role)
-    if verb == "create":
-        return _create_help(role)
+    # Verb-first help topics are compatibility-only; do not advertise them as
+    # the current grammar. Point operators at canonical resources + help legacy.
+    if verb in (
+        "show",
+        "set",
+        "unset",
+        "create",
+        "revoke",
+        "purge",
+        "release",
+        "restore",
+        "add",
+        "remove",
+        "delete",
+        "rename",
+        "enable",
+        "disable",
+        "enroll",
+        "info",
+        "services",
+        "clients",
+    ):
+        return (
+            "Compatibility topic: '%s'\n\n"
+            "Current grammar is resource-first. Try:\n"
+            "  help\n"
+            "  help <resource>\n"
+            "  help workflows\n\n"
+            "Verb-first aliases still run for scripts. See 'help legacy'.\n"
+            % verb
+        )
     if verb == "update":
         return _update_help(role)
-    if verb in (
-        "revoke", "purge", "release", "restore", "add", "remove",
-        "delete", "rename", "enable", "disable",
-    ):
-        return _verb_help(verb, role)
     if verb == "doctor":
         return (
             "Doctor\n======\n\nUsage:\n  doctor\n  doctor --json\n  doctor --verbose\n"
@@ -1329,7 +1364,7 @@ def _match_show(tokens, role, names=None):
                     "show client <ID> tags",
                 ],
                 names,
-                tip="drlink help show",
+                tip="drlink help client",
             )
         view = tokens[3] if len(tokens) > 3 else "overview"
         if view in ("info",):

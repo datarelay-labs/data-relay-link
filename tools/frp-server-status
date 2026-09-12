@@ -183,6 +183,8 @@ PY
     allocator_health="unhealthy(${_acode})"
   fi
   # Egress: TCP listen + authoritative effective policy snapshot.
+  # Healthy requires unit ACTIVE (checked later) AND listener reachable
+  # AND readable/current snapshot AND policy_healthy=true.
   egress_policy="unknown"
   egress_generation=""
   _eff=""
@@ -206,13 +208,17 @@ from pathlib import Path
 try:
     doc = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 except Exception:
+    print("egress_policy=" + shlex.quote("unreadable"))
     raise SystemExit(0)
 healthy = bool(doc.get("policy_healthy"))
 print("egress_policy=" + shlex.quote("healthy" if healthy else "unhealthy"))
 print("egress_generation=" + shlex.quote(str(doc.get("policy_generation") or "")))
 PY
 )"
+  else
+    egress_policy="missing"
   fi
+  _egress_listening=0
   if python3 - "$_egress_addr" "$_egress_port" <<'PY' 2>/dev/null
 import socket, sys
 host, port = sys.argv[1], int(sys.argv[2])
@@ -220,12 +226,24 @@ s = socket.create_connection((host, port), timeout=2)
 s.close()
 PY
   then
-    if [[ "${egress_policy:-unknown}" == "unhealthy" ]]; then
-      egress_health="degraded(policy-unhealthy)"
-    else
-      egress_health="ok"
-      [[ "${egress_policy:-}" == "healthy" ]] || egress_policy="healthy"
-    fi
+    _egress_listening=1
+  fi
+  if [[ "$_egress_listening" -eq 1 ]]; then
+    case "${egress_policy:-unknown}" in
+      healthy)
+        egress_health="ok"
+        ;;
+      unhealthy)
+        egress_health="degraded(policy-unhealthy)"
+        ;;
+      missing|unreadable|unknown|"")
+        egress_health="degraded(policy-unavailable)"
+        [[ -n "${egress_policy:-}" && "${egress_policy}" != "unknown" ]] || egress_policy="missing"
+        ;;
+      *)
+        egress_health="degraded(policy-unavailable)"
+        ;;
+    esac
   else
     egress_health="unhealthy(not-listening)"
   fi
@@ -391,6 +409,36 @@ fi
 [[ -n "$registry_schema" ]] || registry_schema="none"
 [[ -n "$registry_state" ]] || registry_state="missing"
 
+access_policy_state="UNKNOWN"
+if [[ -r "$config_file" ]]; then
+  access_policy_state="$(python3 - "$config_file" <<'PY' 2>/dev/null || echo UNKNOWN
+import json, sys
+from pathlib import Path
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+root = ""
+import os
+root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+path = str(cfg.get("access_control_file") or "/var/lib/drlink/access-control.json")
+p = Path(root + path if root and path.startswith("/") else path)
+if not p.is_file():
+    print("POLICY UNAVAILABLE")
+    raise SystemExit(0)
+try:
+    doc = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    print("ACCESS ERROR")
+    raise SystemExit(0)
+if not isinstance(doc, dict) or doc.get("schema_version") != 1:
+    print("ACCESS ERROR")
+    raise SystemExit(0)
+if not isinstance(doc.get("access_lists"), dict) or not isinstance(doc.get("service_access"), dict):
+    print("ACCESS ERROR")
+    raise SystemExit(0)
+print("readable")
+PY
+)"
+fi
+
 clients="0"
 reserved="0"
 if type frp_registry_counts >/dev/null 2>&1 && [[ -r "$registry_file" ]]; then
@@ -465,6 +513,7 @@ Update status   : ${update_status}
 
 Registry schema : ${registry_schema}
 Registry state  : ${registry_state}
+Access policy   : ${access_policy_state}
 Allocator URL   : ${allocator_url_state}
 Public host     : ${public_host_state}
 Public IP       : ${public_ip_display:-missing}

@@ -78,8 +78,24 @@ assert catalog.find(["group", "add-member"]).get("hidden")
 internal = catalog.to_internal(["group", "add-client", "edge", "24cd7856"])
 assert internal[:2] == ["add", "client"], internal
 print("CLI_CATALOG_PARITY=PASS")
+
+# Guided menu must be generated from GUIDED_MENU / COMMANDS, not hard-coded.
+assert hasattr(catalog, "GUIDED_MENU")
+assert hasattr(catalog, "render_guided_menu")
+assert hasattr(catalog, "guided_menu_action")
+for role in ("server", "client", "both"):
+    text = catalog.render_guided_menu(role)
+    entries = catalog.guided_menu_entries(role)
+    assert entries and text
+    assert catalog.guided_menu_action(role, "1") == entries[0][1]
+    assert catalog.guided_menu_action(role, str(len(entries))) == "exit"
+frpctl = Path("tools/frpctl").read_text(encoding="utf-8")
+assert "frpctl_render_guided_menu" in frpctl
+assert 'echo "17) Exit"' not in frpctl
+print("CLI_MENU_CATALOG_PARITY=PASS")
 PY
 pass "CLI_CATALOG_PARITY"
+pass "CLI_MENU_CATALOG_PARITY"
 
 python3 - <<'PY' || fail "packaging parity"
 from pathlib import Path

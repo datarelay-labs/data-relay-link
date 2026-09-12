@@ -98,7 +98,7 @@ ROOTS = (
     ("zero-touch", "server", "Remote Access — Outside → Inside", "Connect a new machine (Zero-Touch)"),
     ("enrollment", "server", "Remote Access — Outside → Inside", "Enrollment credentials"),
     ("client", "any", "Remote Access — Outside → Inside", "Registered clients and local client info"),
-    ("service", "client", "Remote Access — Outside → Inside", "Local published services"),
+    ("service", "any", "Remote Access — Outside → Inside", "Published services (local or global)"),
     ("access", "server", "Remote Access — Outside → Inside", "Restrict who can reach published services"),
     ("egress", "server", "Controlled Egress — Inside → Internet", "Allow internal hosts to reach specific Internet destinations"),
     ("group", "server", "Organize", "Client groups"),
@@ -464,14 +464,15 @@ COMMANDS = (
         internal=("show", "info"),
         aliases=(("show", "info"), ("info",)),
     ),
-    # --- service (client role) -------------------------------------------
+    # --- service -------------------------------------------------------------
     _cmd(
         ("service", "list"),
-        "client",
+        "any",
         "Inventory",
-        "List local services",
-        detail="Local published services with CLIENT / TUNNEL / TARGET "
-        "reported separately.",
+        "List published services",
+        detail="On the server: global inventory across clients (CLIENT / SERVICE / "
+        "PUBLIC ENDPOINT / ACCESS / STATE / PORT STATE). On a client host: local "
+        "published services.",
         examples=("service list",),
         internal=("show", "services"),
         aliases=(("show", "services"), ("services",)),
@@ -1617,8 +1618,7 @@ def root_help(role):
     lines.extend(
         [
             "",
-            "Older verb-first commands (show clients, set client, enroll, ...)",
-            "still run for scripts. See 'help legacy'.",
+            "Compatibility aliases still run for scripts. See 'help legacy'.",
             "",
             "Official upstream FRP binaries are frps (server) and frpc (client).",
             "This project does not fork FRP.",
@@ -1852,8 +1852,90 @@ def shell_usage_lines(role):
     lines.extend(
         [
             "",
-            "Older verb-first commands (show clients, set client, enroll, ...)",
-            "still run for scripts. See 'help legacy'.",
+            "Compatibility aliases still run for scripts. See 'help legacy'.",
         ]
     )
     return lines
+
+
+# --- Guided numbered menu (single declarative source) ---------------------
+# Each entry: (action_id, label, canonical_hint)
+# Numbers are assigned at render time from this ordered list.
+GUIDED_MENU = {
+    "client": (
+        ("client_status", "Status", "status"),
+        ("client_services", "Service list", "service list"),
+        ("client_info", "Connection information", "client info"),
+        ("client_manage", "Manage services", "service add / service set / service apply"),
+        ("client_update", "Update project", "update project"),
+        ("client_doctor", "Doctor", "doctor"),
+        ("client_help", "Commands and workflows", "help / help workflows"),
+        ("exit", "Exit", ""),
+    ),
+    "server": (
+        ("server_status", "Status", "status"),
+        ("server_clients", "Manage clients", "client list / client show / client set"),
+        ("server_zt", "Create enrollment", "zero-touch create / enrollment create"),
+        ("server_bulk", "Create enrollments in bulk", "enrollment bulk"),
+        ("server_enrollments", "Enrollment list", "enrollment list"),
+        ("server_backup", "Backup / Restore", "backup create / backup restore"),
+        ("server_access", "Access Control", "access ..."),
+        ("server_update_project", "Update project", "update project"),
+        ("server_update_engine", "Update FRP engine", "update engine"),
+        ("server_doctor", "Doctor", "doctor"),
+        ("server_audit", "Audit", "server audit"),
+        ("server_help", "Commands and workflows", "help / help workflows"),
+        ("server_egress", "Controlled Egress", "egress ..."),
+        ("server_groups", "Groups", "group list / group create"),
+        ("server_profiles", "Service profiles", "service-profile list / create"),
+        ("server_support", "Support bundle", "support bundle"),
+        ("exit", "Exit", ""),
+    ),
+    "both": (
+        ("both_client", "Client operations", ""),
+        ("both_server", "Server operations", ""),
+        ("both_status", "Status (both)", "status"),
+        ("both_doctor", "System diagnostics", "doctor"),
+        ("both_help", "Commands and workflows", "help / help workflows"),
+        ("exit", "Exit", ""),
+    ),
+}
+
+
+def guided_menu_entries(role):
+    """Ordered guided-menu rows for role: list of (n, action_id, label, hint)."""
+    key = "server"
+    client, server = role_parts(role)
+    if client and server:
+        key = "both"
+    elif client:
+        key = "client"
+    elif server:
+        key = "server"
+    rows = []
+    for idx, (action_id, label, hint) in enumerate(GUIDED_MENU.get(key, ()), start=1):
+        rows.append((idx, action_id, label, hint))
+    return rows
+
+
+def render_guided_menu(role):
+    """Text block for the numbered guided menu (without catalog overview)."""
+    lines = []
+    for idx, _action_id, label, hint in guided_menu_entries(role):
+        if hint:
+            lines.append("%s) %-25s (%s)" % (idx, label, hint))
+        else:
+            lines.append("%s) %s" % (idx, label))
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def guided_menu_action(role, choice):
+    """Resolve a numeric menu choice to action_id, or None."""
+    text = str(choice or "").strip()
+    if not text.isdigit():
+        return None
+    n = int(text)
+    for idx, action_id, _label, _hint in guided_menu_entries(role):
+        if idx == n:
+            return action_id
+    return None

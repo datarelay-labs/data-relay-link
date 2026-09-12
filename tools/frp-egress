@@ -139,14 +139,14 @@ def cmd_create(cfg, args):
     print("Created egress profile %s" % pid)
     print("Name     : %s" % record["name"])
     print("Enabled  : %s" % ("yes" if record["enabled"] else "no"))
-    if not record["enabled"]:
-        print("")
-        print("The profile is disabled. Default egress policy stays DENY.")
-        print("Next steps:")
-        print("  egress add-source %s <CIDR>" % record["name"])
-        print("  egress add-destination %s <FQDN> <PORT> --protocol http|https" % record["name"])
-        print("  egress show %s" % record["name"])
-        print("  egress enable %s" % record["name"])
+    print("")
+    print("The profile is disabled. Default egress policy stays DENY.")
+    print("Preferred workflow: create → add-source → add-destination → test → enable")
+    print("Next steps:")
+    print("  egress add-source %s <CIDR>" % record["name"])
+    print("  egress add-destination %s <FQDN> <PORT> --protocol http|https" % record["name"])
+    print("  egress test <SOURCE-IP> <FQDN> <PORT>")
+    print("  egress enable %s" % record["name"])
     audit(
         "egress.profile.created",
         profile_id=pid,
@@ -348,8 +348,8 @@ def cmd_test(cfg, args):
     print("Profile Name : %s" % (decision.get("profile_name") or "-"))
     if policy != EG.DECISION_ALLOW:
         print("DNS          : skipped (policy deny)")
-        print("Resolved     : -")
-        print("Final        : DENY")
+        print("Resolved IPs : -")
+        print("Live connect : NOT TESTED")
         raise SystemExit(2)
 
     try:
@@ -362,19 +362,19 @@ def cmd_test(cfg, args):
                 continue
             seen.add(ip)
             raw.append(ip)
-        print("DNS          : ok (%d address(es))" % len(raw))
+        print("DNS          : ALLOW (%d address(es))" % len(raw))
         validated = EG.validate_resolved_addresses(raw)
-        print("Resolved     : %s" % (", ".join(validated) if validated else "-"))
-        print("Final        : ALLOW")
+        print("Resolved IPs : %s" % (", ".join(validated) if validated else "-"))
+        print("Live connect : NOT TESTED")
     except EG.EgressError as exc:
-        print("DNS          : deny (%s)" % exc)
-        print("Resolved     : -")
-        print("Final        : DENY")
+        print("DNS          : DENY (%s)" % exc)
+        print("Resolved IPs : -")
+        print("Live connect : NOT TESTED")
         raise SystemExit(2) from None
     except OSError as exc:
-        print("DNS          : fail (%s)" % exc)
-        print("Resolved     : -")
-        print("Final        : DENY")
+        print("DNS          : DENY (%s)" % exc)
+        print("Resolved IPs : -")
+        print("Live connect : NOT TESTED")
         raise SystemExit(2) from None
 
 
@@ -467,7 +467,7 @@ def build_parser():
     p.add_argument(
         "--enable",
         action="store_true",
-        help="Create already enabled (not recommended; prefer enable after sources/destinations)",
+        help="Rejected for new profiles (create is always disabled; add source/destination, then enable)",
     )
     p.add_argument(
         "--disabled",

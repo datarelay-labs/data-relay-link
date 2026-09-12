@@ -22,7 +22,14 @@ cfg_path.write_text(json.dumps({
   "port_start": 6000,
   "port_end": 6098,
   "listen_port": 6099,
-  "registry_file": str(reg_path),
+  "registry_file": "/var/lib/drlink/registry.json",
+  "access_control_file": "/var/lib/drlink/access-control.json",
+}, indent=2)+"\n")
+acl_path = reg_path.parent / "access-control.json"
+acl_path.write_text(json.dumps({
+  "schema_version": 1,
+  "access_lists": {},
+  "service_access": {},
 }, indent=2)+"\n")
 reg_path.write_text(json.dumps({
   "schema_version": 2,
@@ -90,17 +97,26 @@ OUT="$WORKDIR/clients.out"
 python3 "$ROOT/tools/frp-clients" >"$OUT"
 grep -q 'dev-dp-mirror' "$OUT" || fail "clients hostname"
 grep -q 'client-b' "$OUT" || fail "clients second host"
-grep -q 'ssh:6002' "$OUT" || fail "clients ssh summary"
-grep -q 'grafana:6003' "$OUT" || fail "clients grafana summary"
-grep -q 'api:6004 (reserved)' "$OUT" || fail "clients reserved service"
-grep -q 'http:6005' "$OUT" || fail "clients http summary"
+# Concise inventory: summary table only (no per-client service dump).
+! grep -qE '^\s+ssh:6002' "$OUT" || fail "clients list must stay concise"
+! grep -qE '^\s+grafana:6003' "$OUT" || fail "clients list must stay concise"
 grep -q 'ACCESS' "$OUT" || fail "clients ACCESS column"
 grep -q 'PUBLIC /' "$OUT" || fail "clients ACCESS summary"
 grep -qE 'ONLINE|OFFLINE|PARTIAL|MGMT-ONLY|UNKNOWN' "$OUT" || fail "clients STATE label"
+grep -q 'client show ' "$OUT" || fail "clients canonical example"
 if grep -qE 'ssh_port|https_port' "$OUT"; then
   fail "clients leaked legacy fields"
 fi
 pass "frp-clients generic"
+pass "CLIENT_LIST_CONCISE"
+
+SVC="$WORKDIR/services.out"
+python3 "$ROOT/tools/frp-services" >"$SVC"
+grep -q 'ssh' "$SVC" || fail "global services ssh"
+grep -q 'grafana' "$SVC" || fail "global services grafana"
+grep -q 'api' "$SVC" || fail "global services api"
+grep -q 'RESERVED' "$SVC" || fail "global services reserved"
+pass "GLOBAL_SERVICE_LIST"
 
 INFO="$WORKDIR/info.out"
 python3 "$ROOT/tools/frp-client-info" dev-dp-mirror >"$INFO"
@@ -117,10 +133,11 @@ grep -q '203.0.113.10:6002' "$WORKDIR/info-svc.out" || fail "info ssh public"
 grep -q 'ssh -p 6002 aella@203.0.113.10' "$WORKDIR/info-svc.out" || fail "info ssh connect"
 grep -q '127.0.0.1:3000' "$WORKDIR/info-svc.out" || fail "info grafana target"
 grep -qi 'Exposure' "$WORKDIR/info-svc.out" || fail "info PUBLIC exposure banner"
-if grep -q '6004' "$WORKDIR/info-svc.out"; then
-  fail "info should omit disabled service"
-fi
+grep -q '6004' "$WORKDIR/info-svc.out" || fail "info should show disabled/reserved service"
+grep -q 'DISABLED' "$WORKDIR/info-svc.out" || fail "info disabled STATE"
+grep -q 'RESERVED' "$WORKDIR/info-svc.out" || fail "info RESERVED port state"
 pass "frp-client-info generic"
+pass "CLIENT_SHOW_DISABLED_RESERVED"
 
 cp "$TREE/var/lib/drlink/registry.json" "$WORKDIR/registry.before"
 printf 'nope\n' | python3 "$ROOT/tools/frp-release-client" client-b >"$WORKDIR/cancel.out" 2>"$WORKDIR/cancel.err" && fail "cancel should fail"

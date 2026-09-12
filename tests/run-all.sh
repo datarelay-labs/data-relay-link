@@ -51,6 +51,7 @@ python3 tests/test-core-correctness-p1.py
 ./tests/test-core-correctness-lifecycle.sh
 ./tests/test-cli-hardening.sh
 ./tests/test-cli-catalog-parity.sh
+./tests/test-release-blockers-cli.sh
 ./tests/test-enroll-bulk.sh
 ./tests/test-zero-service-client.sh
 ./tests/test-management-commands.sh
@@ -69,6 +70,7 @@ python3 tests/test-restore-readiness.py
 ./tests/test-lifecycle.sh
 ./tests/test-guided-ux.sh
 ./tests/test-client-upgrade.sh
+./tests/test-safe-repo-copy.sh
 bash ./tests/test-installed-client-update.sh
 ./tests/test-legacy-client-secure-bridge.sh
 ./tests/test-install-lifecycle.sh
@@ -88,6 +90,8 @@ python3 tests/test-access-control.py
 ./tests/test-access-control.sh
 python3 tests/test-egress-control.py
 python3 tests/test-egress-conn-log-traverse-only.py
+python3 tests/test-egress-conn-log-rotation.py
+python3 tests/test-egress-shared-parent-permissions.py
 python3 tests/test-egress-create-safe-default.py
 python3 tests/test-egress-runtime-permissions.py
 ./tests/test-egress-control.sh

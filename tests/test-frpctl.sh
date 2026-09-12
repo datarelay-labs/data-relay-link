@@ -565,11 +565,13 @@ pass "FRPCTL_LEGACY_ALIAS_COMPATIBILITY"
 pass "BACKWARD_COMPATIBILITY"
 pass "DIRECT_SCRIPT_COMPATIBILITY"
 
-# Hierarchical help
+# Hierarchical help — verb-first topics redirect to canonical / help legacy
 export FRP_CTL_TEST_ROOT="$SERVER"
 run_repl "$SERVER" "$WORKDIR/help-set.out" "help set client" exit || fail "help set client"
-grep -q 'Set client configuration' "$WORKDIR/help-set.out" || fail "help set heading"
-grep -q 'set client <ID> tag' "$WORKDIR/help-set.out" || fail "help set tag"
+grep -qi 'Compatibility topic' "$WORKDIR/help-set.out" || fail "help set heading"
+grep -q 'help legacy' "$WORKDIR/help-set.out" || fail "help set points to legacy"
+run_repl "$SERVER" "$WORKDIR/help-client.out" "help client" exit || fail "help client"
+grep -qi 'client' "$WORKDIR/help-client.out" || fail "help client body"
 pass "CONTEXT_HELP"
 
 run_repl "$SERVER" "$WORKDIR/help-legacy.out" "help legacy" exit || fail "help legacy"
@@ -792,7 +794,7 @@ pass "SHOW_CLIENT_MISSING_TARGET_HELP"
 run_repl "$SERVER" "$WORKDIR/miss-set.out" "set" exit || fail "set missing"
 grep -q 'Missing resource.' "$WORKDIR/miss-set.out" || fail "set missing title"
 grep -q 'client' "$WORKDIR/miss-set.out" || fail "set missing lists client"
-grep -q 'drlink help set' "$WORKDIR/miss-set.out" || fail "set missing tip"
+grep -q 'drlink help' "$WORKDIR/miss-set.out" || fail "set missing tip"
 pass "SET_CLIENT_MISSING_TARGET_HELP"
 
 # Residual audit: exact argv round-trip for space/glob-bearing passthrough.

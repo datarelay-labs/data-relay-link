@@ -614,48 +614,65 @@ print("=========")
 PY
 }
 
+frpctl_catalog_py() {
+  local path
+  if path="$(frpctl_lib_candidate frp_cli_catalog.py)"; then
+    printf '%s' "$path"
+    return 0
+  fi
+  return 1
+}
+
+frpctl_render_guided_menu() {
+  local role="$1"
+  local cat
+  cat="$(frpctl_catalog_py)" || return 1
+  python3 - "$cat" "$role" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+role = sys.argv[2]
+spec = importlib.util.spec_from_file_location("frp_cli_catalog", str(path))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+sys.stdout.write(mod.render_guided_menu(role))
+PY
+}
+
+frpctl_menu_resolve_action() {
+  local role="$1" choice="$2"
+  local cat
+  cat="$(frpctl_catalog_py)" || return 1
+  python3 - "$cat" "$role" "$choice" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+role = sys.argv[2]
+choice = sys.argv[3]
+spec = importlib.util.spec_from_file_location("frp_cli_catalog", str(path))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+action = mod.guided_menu_action(role, choice)
+if not action:
+    raise SystemExit(1)
+print(action)
+PY
+}
+
 frpctl_print_client_menu() {
   frpctl_print_catalog_overview client
-  echo "1) Status                     (status)"
-  echo "2) Service list               (service list)"
-  echo "3) Connection information     (client info)"
-  echo "4) Manage services            (service add / service set / service apply)"
-  echo "5) Update project             (update project)"
-  echo "6) Doctor                     (doctor)"
-  echo "7) Commands and workflows     (help / help workflows)"
-  echo "8) Exit"
+  frpctl_render_guided_menu client
 }
 
 frpctl_print_server_menu() {
   frpctl_print_catalog_overview server
-  echo "1) Status                     (status)"
-  echo "2) Manage clients             (client list / client show / client set)"
-  echo "3) Create enrollment          (zero-touch create / enrollment create)"
-  echo "4) Create enrollments in bulk (enrollment bulk)"
-  echo "5) Enrollment list            (enrollment list)"
-  echo "6) Backup / Restore           (backup create / backup restore)"
-  echo "7) Access Control             (access ...)"
-  echo "8) Update project             (update project)"
-  echo "9) Update FRP engine          (update engine)"
-  echo "10) Doctor                    (doctor)"
-  echo "11) Audit                     (server audit)"
-  echo "12) Commands and workflows    (help / help workflows)"
-  echo "13) Controlled Egress         (egress ...)"
-  echo "14) Groups                    (group list / group create)"
-  echo "15) Service profiles          (service-profile list / create)"
-  echo "16) Support bundle            (support bundle)"
-  echo "17) Exit"
+  frpctl_render_guided_menu server
 }
 
 frpctl_print_both_menu() {
   echo "This host has both a Data Relay Link server and client installed."
   echo
-  echo "1) Client operations"
-  echo "2) Server operations"
-  echo "3) Status (both)"
-  echo "4) System diagnostics"
-  echo "5) Commands and workflows"
-  echo "6) Exit"
+  frpctl_render_guided_menu both
 }
 
 frpctl_input_init() {
@@ -715,7 +732,7 @@ frpctl_read() {
 }
 
 frpctl_client_menu() {
-  local choice
+  local choice action
   while true; do
     echo
     frpctl_header
@@ -725,21 +742,82 @@ frpctl_client_menu() {
       return 0
     fi
     choice="$(frpctl_read "Select: " "")" || return 1
-    case "$choice" in
-      1) frpctl_run frp-client status ;;
-      2) frpctl_run frp-client list ;;
-      3) frpctl_run frp-client info ;;
-      4) frpctl_run frp-client ;;
-      5) frpctl_client_update ;;
-      6) frpctl_dispatch doctor || true ;;
-      7) frpctl_menu_commands ;;
-      8)
+    action="$(frpctl_menu_resolve_action client "$choice" 2>/dev/null)" || {
+      echo "ERROR: select a valid menu number" >&2
+      continue
+    }
+    case "$action" in
+      client_status) frpctl_run frp-client status ;;
+      client_services) frpctl_run frp-client list ;;
+      client_info) frpctl_run frp-client info ;;
+      client_manage) frpctl_run frp-client ;;
+      client_update) frpctl_client_update ;;
+      client_doctor) frpctl_dispatch doctor || true ;;
+      client_help) frpctl_menu_commands ;;
+      exit)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-8" >&2 ;;
+      *) echo "ERROR: select a valid menu number" >&2 ;;
     esac
   done
+}
+
+frpctl_zt_validate_field() {
+  # args: kind value -> prints normalized value on success; stderr + rc=1 on failure
+  local kind="$1" value="$2"
+  python3 - "$kind" "$value" <<'PY'
+import re, sys
+kind, value = sys.argv[1], sys.argv[2]
+text = (value or "").strip()
+
+def fail(msg):
+    print("ERROR: %s" % msg, file=sys.stderr)
+    raise SystemExit(1)
+
+if kind == "label":
+    if not text:
+        fail("Client name cannot be blank.")
+    if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text):
+        fail("Client name must not contain control characters or newlines")
+    if len(text) > 64:
+        fail("Client name must be at most 64 characters")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}", text):
+        fail("invalid client name")
+    print(text)
+elif kind == "service_id":
+    if not text:
+        fail("Service ID is required.")
+    lowered = text.lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,31}", lowered):
+        fail("invalid service ID; use lowercase letters, digits, '.', '_' or '-' (max 32)")
+    print(lowered)
+elif kind == "target_host":
+    if (
+        not text
+        or len(text) > 253
+        or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text)
+        or any(c in text for c in " /\\;|&$`'\"<>")
+    ):
+        fail("invalid target host")
+    print(text)
+elif kind == "target_port":
+    try:
+        port = int(text)
+    except ValueError:
+        fail("invalid target port; must be an integer 1-65535")
+    if port < 1 or port > 65535:
+        fail("invalid target port; must be an integer 1-65535")
+    print(str(port))
+elif kind == "ssh_user":
+    if not text:
+        fail("SSH user is required.")
+    if not re.fullmatch(r"[A-Za-z0-9._@-]{1,32}", text):
+        fail("invalid ssh_user")
+    print(text)
+else:
+    fail("unknown validation kind")
+PY
 }
 
 frpctl_zt_prompt_client_identification() {
@@ -750,12 +828,9 @@ frpctl_zt_prompt_client_identification() {
   echo
   while true; do
     name="$(frpctl_read "Client name: " "")" || return 1
-    name="${name#"${name%%[![:space:]]*}"}"
-    name="${name%"${name##*[![:space:]]}"}"
-    if [[ -n "$name" ]]; then
+    if name="$(frpctl_zt_validate_field label "$name")"; then
       break
     fi
-    echo "ERROR: Client name is required." >&2
   done
   note="$(frpctl_read "Description [optional]: " "")" || return 1
   note="${note#"${note%%[![:space:]]*}"}"
@@ -773,20 +848,16 @@ frpctl_zt_prompt_ssh() {
   echo
   while true; do
     user="$(frpctl_read "SSH user: " "")" || return 1
-    user="${user#"${user%%[![:space:]]*}"}"
-    user="${user%"${user##*[![:space:]]}"}"
-    if [[ -n "$user" ]]; then
+    if user="$(frpctl_zt_validate_field ssh_user "$user")"; then
       break
     fi
-    echo "ERROR: SSH user is required." >&2
   done
-  port="$(frpctl_read "SSH port [22]: " "22")" || return 1
-  port="${port#"${port%%[![:space:]]*}"}"
-  port="${port%"${port##*[![:space:]]}"}"
-  if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
-    echo "ERROR: invalid SSH port; must be an integer 1-65535" >&2
-    return 1
-  fi
+  while true; do
+    port="$(frpctl_read "SSH port [22]: " "22")" || return 1
+    if port="$(frpctl_zt_validate_field target_port "$port")"; then
+      break
+    fi
+  done
   _FRP_ZT_SSH_USER="$user"
   _FRP_ZT_SSH_PORT="$port"
   return 0
@@ -834,13 +905,12 @@ frpctl_zt_run_rdp() {
   echo "==="
   echo
   echo "This installer does not enable Remote Desktop or change Windows Firewall."
-  rdp_port="$(frpctl_read "RDP port [3389]: " "3389")" || return 1
-  rdp_port="${rdp_port#"${rdp_port%%[![:space:]]*}"}"
-  rdp_port="${rdp_port%"${rdp_port##*[![:space:]]}"}"
-  if [[ ! "$rdp_port" =~ ^[0-9]+$ ]] || ((rdp_port < 1 || rdp_port > 65535)); then
-    echo "ERROR: invalid RDP port; must be an integer 1-65535" >&2
-    return 1
-  fi
+  while true; do
+    rdp_port="$(frpctl_read "RDP port [3389]: " "3389")" || return 1
+    if rdp_port="$(frpctl_zt_validate_field target_port "$rdp_port")"; then
+      break
+    fi
+  done
   frpctl_zt_invoke_create_client --one-line --rdp --rdp-port "$rdp_port"
 }
 
@@ -881,35 +951,32 @@ frpctl_zt_prompt_service_fields() {
   # Sets _FRP_ZT_SVC_JSON for one service. Args: preset default_id default_name default_host default_port
   local preset="$1" default_id="$2" default_name="$3" default_host="$4" default_port="$5"
   local sid host port user name
-  if [[ -n "$default_id" ]]; then
-    sid="$(frpctl_read "Service ID [${default_id}]: " "$default_id")" || return 1
-  else
-    sid="$(frpctl_read "Service ID: " "")" || return 1
-  fi
-  sid="${sid#"${sid%%[![:space:]]*}"}"
-  sid="${sid%"${sid##*[![:space:]]}"}"
-  if [[ -z "$sid" ]]; then
-    echo "ERROR: Service ID is required." >&2
-    return 1
-  fi
-  host="$(frpctl_read "Target host [${default_host}]: " "$default_host")" || return 1
-  host="${host#"${host%%[![:space:]]*}"}"
-  host="${host%"${host##*[![:space:]]}"}"
-  if [[ -z "$host" ]]; then
-    echo "ERROR: Target host is required." >&2
-    return 1
-  fi
-  if [[ -n "$default_port" ]]; then
-    port="$(frpctl_read "Target port [${default_port}]: " "$default_port")" || return 1
-  else
-    port="$(frpctl_read "Target port: " "")" || return 1
-  fi
-  port="${port#"${port%%[![:space:]]*}"}"
-  port="${port%"${port##*[![:space:]]}"}"
-  if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
-    echo "ERROR: invalid target port; must be an integer 1-65535" >&2
-    return 1
-  fi
+  while true; do
+    if [[ -n "$default_id" ]]; then
+      sid="$(frpctl_read "Service ID [${default_id}]: " "$default_id")" || return 1
+    else
+      sid="$(frpctl_read "Service ID: " "")" || return 1
+    fi
+    if sid="$(frpctl_zt_validate_field service_id "$sid")"; then
+      break
+    fi
+  done
+  while true; do
+    host="$(frpctl_read "Target host [${default_host}]: " "$default_host")" || return 1
+    if host="$(frpctl_zt_validate_field target_host "$host")"; then
+      break
+    fi
+  done
+  while true; do
+    if [[ -n "$default_port" ]]; then
+      port="$(frpctl_read "Target port [${default_port}]: " "$default_port")" || return 1
+    else
+      port="$(frpctl_read "Target port: " "")" || return 1
+    fi
+    if port="$(frpctl_zt_validate_field target_port "$port")"; then
+      break
+    fi
+  done
   name="$default_name"
   if [[ "$preset" == "custom" ]]; then
     name="$(frpctl_read "Display name [${sid}]: " "$sid")" || return 1
@@ -920,12 +987,9 @@ frpctl_zt_prompt_service_fields() {
   if [[ "$preset" == "ssh" ]]; then
     while true; do
       user="$(frpctl_read "SSH user: " "")" || return 1
-      user="${user#"${user%%[![:space:]]*}"}"
-      user="${user%"${user##*[![:space:]]}"}"
-      if [[ -n "$user" ]]; then
+      if user="$(frpctl_zt_validate_field ssh_user "$user")"; then
         break
       fi
-      echo "ERROR: SSH user is required." >&2
     done
     _FRP_ZT_SVC_JSON="$(frpctl_zt_service_payload "$preset" "$sid" "$name" "$host" "$port" "$user")" || return 1
   else
@@ -1322,7 +1386,7 @@ PY
 }
 
 frpctl_server_menu() {
-  local choice client sid
+  local choice client sid action sub path
   while true; do
     echo
     frpctl_header
@@ -1332,13 +1396,17 @@ frpctl_server_menu() {
       return 0
     fi
     choice="$(frpctl_read "Select: " "")" || return 1
-    case "$choice" in
-      1) frpctl_run frp-server-status ;;
-      2) frpctl_manage_clients ;;
-      3) frpctl_guided_enroll ;;
-      4) frpctl_run frp-enroll-bulk ;;
-      5) frpctl_run frp-enrollments ;;
-      6)
+    action="$(frpctl_menu_resolve_action server "$choice" 2>/dev/null)" || {
+      echo "ERROR: select a valid menu number" >&2
+      continue
+    }
+    case "$action" in
+      server_status) frpctl_run frp-server-status ;;
+      server_clients) frpctl_manage_clients ;;
+      server_zt) frpctl_guided_enroll ;;
+      server_bulk) frpctl_run frp-enroll-bulk ;;
+      server_enrollments) frpctl_run frp-enrollments ;;
+      server_backup)
         echo "1) Backup"
         echo "2) Restore"
         sub="$(frpctl_read "Select: " "")"
@@ -1355,27 +1423,27 @@ frpctl_server_menu() {
           *) echo "ERROR: select 1-2" >&2 ;;
         esac
         ;;
-      7) frpctl_run frp-access menu ;;
-      8) frpctl_run frp-project-update ;;
-      9) frpctl_run frp-update ;;
-      10) frpctl_dispatch doctor || true ;;
-      11) frpctl_audit_tail ;;
-      12) frpctl_menu_commands ;;
-      13) frpctl_invoke frp-egress list ;;
-      14) frpctl_invoke frp-groups ;;
-      15) frpctl_invoke frp-profile list ;;
-      16) frpctl_run frp-support-bundle ;;
-      17)
+      server_access) frpctl_run frp-access menu ;;
+      server_update_project) frpctl_run frp-project-update ;;
+      server_update_engine) frpctl_run frp-update ;;
+      server_doctor) frpctl_dispatch doctor || true ;;
+      server_audit) frpctl_audit_tail ;;
+      server_help) frpctl_menu_commands ;;
+      server_egress) frpctl_invoke frp-egress list ;;
+      server_groups) frpctl_invoke frp-groups ;;
+      server_profiles) frpctl_invoke frp-profile list ;;
+      server_support) frpctl_run frp-support-bundle ;;
+      exit)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-17" >&2 ;;
+      *) echo "ERROR: select a valid menu number" >&2 ;;
     esac
   done
 }
 
 frpctl_both_menu() {
-  local choice
+  local choice action
   while true; do
     echo
     frpctl_header
@@ -1385,17 +1453,21 @@ frpctl_both_menu() {
       return 0
     fi
     choice="$(frpctl_read "Select: " "")" || return 1
-    case "$choice" in
-      1) frpctl_client_menu ;;
-      2) frpctl_server_menu ;;
-      3) frpctl_status_both ;;
-      4) frpctl_dispatch doctor || true ;;
-      5) frpctl_menu_commands ;;
-      6)
+    action="$(frpctl_menu_resolve_action both "$choice" 2>/dev/null)" || {
+      echo "ERROR: select a valid menu number" >&2
+      continue
+    }
+    case "$action" in
+      both_client) frpctl_client_menu ;;
+      both_server) frpctl_server_menu ;;
+      both_status) frpctl_status_both ;;
+      both_doctor) frpctl_dispatch doctor || true ;;
+      both_help) frpctl_menu_commands ;;
+      exit)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-6" >&2 ;;
+      *) echo "ERROR: select a valid menu number" >&2 ;;
     esac
   done
 }
@@ -2039,7 +2111,14 @@ frpctl_dispatch_canonical() {
       frpctl_load_passthrough "$result"
       frpctl_with_pt frpctl_run frp-upstream
       ;;
-    show_services) frpctl_require_client || return 1; frpctl_invoke frp-client list ;;
+    show_services)
+      if frpctl_is_server; then
+        frpctl_invoke frp-services
+      else
+        frpctl_require_client || return 1
+        frpctl_invoke frp-client list
+      fi
+      ;;
     show_info) frpctl_require_client || return 1; frpctl_invoke frp-client info ;;
     set_client)
       frpctl_require_server || return 1
