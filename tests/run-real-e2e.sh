@@ -8,14 +8,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${FRP_E2E_PROFILE:-baseline-linux}"
 SERVER_ALIAS="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
 CLIENT_ALIAS="${FRP_E2E_CLIENT_ALIAS:-}"
-SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.112}"
+SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
 PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-}"
 SSH_USER="${FRP_E2E_SSH_USER:-aella}"
 TUNNEL_SSH_USER="${FRP_E2E_TUNNEL_SSH_USER:-}"
 SSH_KEY="${FRP_E2E_SSH_KEY:-$HOME/.ssh/frp_e2e_ed25519}"
-EXPECTED_SERVER_HOST="${FRP_E2E_SERVER_HOSTNAME:-dp-os-upgrade}"
+EXPECTED_SERVER_HOST="${FRP_E2E_SERVER_HOSTNAME:-frp-server}"
 EXPECTED_CLIENT_HOST="${FRP_E2E_CLIENT_HOSTNAME:-}"
 FORBIDDEN_HOST="${FRP_E2E_FORBIDDEN_HOSTNAME:-dev-dp-mirror}"
+# Retired lab host — never a Real E2E / release-gate target.
+EXCLUDED_SERVER_IP="${FRP_E2E_EXCLUDED_SERVER_IP:-221.139.249.112}"
+EXCLUDED_SERVER_HOST="${FRP_E2E_EXCLUDED_SERVER_HOSTNAME:-dp-os-upgrade}"
 CLIENT_LABEL="${FRP_E2E_CLIENT_LABEL:-}"
 PLATFORM_KIND="${FRP_E2E_PLATFORM_KIND:-linux}"
 SKIP_SERVER_INSTALL="${FRP_E2E_SKIP_SERVER_INSTALL:-0}"
@@ -273,6 +276,11 @@ assert_host_identity() {
   note "$role hostname=$got expected=$expected"
   if [[ "$got" == "$FORBIDDEN_HOST" ]]; then
     note "ABORT: SSH target is forbidden controller host $FORBIDDEN_HOST"
+    record "identity-$role" ABORT 2 0
+    return 2
+  fi
+  if [[ -n "$EXCLUDED_SERVER_HOST" && "$got" == "$EXCLUDED_SERVER_HOST" ]]; then
+    note "ABORT: $role host $got is excluded from Real E2E (retired lab)"
     record "identity-$role" ABORT 2 0
     return 2
   fi
@@ -839,6 +847,12 @@ main() {
   note "OVERALL_TIMEOUT=$OVERALL_TIMEOUT"
   note "STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+  if [[ -n "$EXCLUDED_SERVER_IP" && "$SERVER_IP" == "$EXCLUDED_SERVER_IP" ]]; then
+    note "ABORT: SERVER_IP=$SERVER_IP is excluded from Real E2E (retired lab host .112)"
+    record "excluded-server-ip" ABORT 2 0
+    finish 2
+  fi
+
   if [[ "$PLATFORM_KIND" == "macos" ]]; then
     if ! ssh "${SSH_OPTS[@]}" -o ConnectTimeout=8 "$CLIENT_ALIAS" 'echo ok' >/dev/null 2>&1; then
       note "ENVIRONMENT_BLOCKER: macOS SSH management path unreachable"
@@ -946,6 +960,7 @@ export FRP_E2E_SKIP_SERVER_INSTALL="$SKIP_SERVER_INSTALL"
 export FRP_E2E_SKIP_SERVER_PURGE="$SKIP_SERVER_PURGE"
 export ROOT SERVER_ALIAS CLIENT_ALIAS SERVER_IP SSH_USER SSH_KEY TUNNEL_SSH_USER
 export EXPECTED_SERVER_HOST EXPECTED_CLIENT_HOST FORBIDDEN_HOST CLIENT_LABEL PLATFORM_KIND
+export EXCLUDED_SERVER_IP EXCLUDED_SERVER_HOST
 export PUBLIC_HOSTNAME ACCESS_HOST
 export RUN_ID OUT_DIR HEAD_SHA SCENARIO STOP_ON_FAIL STEP_TIMEOUT
 export REBOOT_TRIES REBOOT_DELAY EXT_TRIES EXT_DELAY

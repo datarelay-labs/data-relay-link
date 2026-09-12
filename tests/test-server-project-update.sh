@@ -10,9 +10,13 @@ TREE_CHANNEL="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release
 TREE_REF="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["git_ref"])')"
 # shellcheck source=../lib/frp-common.sh
 . "$ROOT/lib/frp-common.sh"
+# shellcheck disable=SC1091
+. "$ROOT/tests/lib/frp-test-procs.sh"
+# shellcheck disable=SC1091
+. "$ROOT/tests/lib/frp-test-safe-copy.sh"
 UPDATE="$ROOT/tools/frp-project-update"
-WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+WORKDIR="$(mktemp -d /tmp/frp-test-server-project-update.XXXXXX)"
+frp_test_arm_cleanup
 cat >"$WORKDIR/nginx" <<'EOF'
 #!/usr/bin/env bash
 exit 0
@@ -64,7 +68,7 @@ EOF
   "port_end": 6098,
   "client_installer_url": "https://updates.example/client.sh",
   "egress_control_file": "/var/lib/drlink/egress-control.json",
-  "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+  "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
   "egress_listen_addr": "0.0.0.0",
   "egress_listen_port": 6102
 }
@@ -214,7 +218,7 @@ from pathlib import Path
 cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 required = {
     "egress_control_file": "/var/lib/drlink/egress-control.json",
-    "egress_conn_log_file": "/var/log/drlink/egress-conn.jsonl",
+    "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6102,
 }
@@ -280,7 +284,7 @@ pass "ROLLBACK_VALIDATE_INSTALL_VERIFY"
 
 # Local metadata must be present and internally consistent.
 BADMETA="$WORKDIR/badmeta"
-cp -a "$ROOT" "$BADMETA"
+frp_test_copy_repo_tree "$ROOT" "$BADMETA"
 python3 - "$BADMETA/release-manifest.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -541,8 +545,7 @@ printf '{"schema_version":2,"operation":"project-update","phase":"commit","relea
 PEND_SRC="$ROOT"
 if [[ "$TREE_CHANNEL" != "dev" ]]; then
   PEND_SRC="$WORKDIR/pend-dev-src"
-  cp -a "$ROOT/." "$PEND_SRC/"
-  rm -rf "$PEND_SRC/.git" "$PEND_SRC/dist"
+  frp_test_copy_repo_tree "$ROOT" "$PEND_SRC"
   python3 - "$PEND_SRC/release-manifest.json" <<'PY'
 import json, sys
 from pathlib import Path

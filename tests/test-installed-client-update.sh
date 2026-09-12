@@ -3,8 +3,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+# Named temp root for easier leak sweeps; INT/TERM/HUP + EXIT cleanup.
+WORKDIR="$(mktemp -d /tmp/frp-test-installed-client-update.XXXXXX)"
+# shellcheck disable=SC1091
+. "$ROOT/tests/lib/frp-test-procs.sh"
+# shellcheck disable=SC1091
+. "$ROOT/tests/lib/frp-test-safe-copy.sh"
+frp_test_arm_cleanup
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
@@ -152,9 +157,7 @@ assert_management_unchanged() {
 # Build two same-version bundles outside the source tree. Bundle B has a distinct
 # management-tool identity but the same PROJECT_VERSION.
 BUILD_SRC="$WORKDIR/build-src"
-mkdir -p "$BUILD_SRC"
-cp -a "$ROOT/." "$BUILD_SRC/"
-rm -rf "$BUILD_SRC/.git" "$BUILD_SRC/dist"
+frp_test_copy_repo_tree "$ROOT" "$BUILD_SRC"
 # This harness exercises the explicit-dev remote update path; rewrite candidate
 # metadata to channel=dev / main even when the repository tree is a stable RC.
 python3 - "$BUILD_SRC/release-manifest.json" <<'PY'

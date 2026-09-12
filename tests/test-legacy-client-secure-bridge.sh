@@ -3,8 +3,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+WORKDIR="$(mktemp -d /tmp/frp-test-legacy-client-secure-bridge.XXXXXX)"
+# shellcheck disable=SC1091
+. "$ROOT/tests/lib/frp-test-procs.sh"
+# shellcheck disable=SC1091
+. "$ROOT/tests/lib/frp-test-safe-copy.sh"
+frp_test_arm_cleanup
 
 # shellcheck disable=SC1091
 . "$ROOT/VERSION"
@@ -372,8 +376,7 @@ assert_version_unchanged "$LEGACY" "$WORKDIR/legacy.before"
 # ---------------------------------------------------------------------------
 # Dev-channel candidate (repository tree may already be a stable RC).
 DEV_SRC="$WORKDIR/dev-src"
-cp -a "$ROOT/." "$DEV_SRC/"
-rm -rf "$DEV_SRC/.git" "$DEV_SRC/dist"
+frp_test_copy_repo_tree "$ROOT" "$DEV_SRC"
 python3 - "$DEV_SRC/release-manifest.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -429,8 +432,7 @@ pass "FRPC_BINARY_PRESERVED"
 
 # Stable verified bridge uses a temporary stable-looking candidate.
 STABLE_SRC="$WORKDIR/stable-src"
-cp -a "$ROOT/." "$STABLE_SRC/"
-rm -rf "$STABLE_SRC/.git" "$STABLE_SRC/dist"
+frp_test_copy_repo_tree "$ROOT" "$STABLE_SRC"
 python3 - "$STABLE_SRC/release-manifest.json" "$PROJECT_VERSION" <<'PY'
 import json, sys
 from pathlib import Path

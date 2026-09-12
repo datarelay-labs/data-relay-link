@@ -6,8 +6,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_ROOT="${FRP_E2E_MATRIX_OUT:-$ROOT/e2e-reports/matrix-$RUN_ID}"
-PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.112.nip.io}"
-SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.112}"
+PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.113.nip.io}"
+SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
 SERVER_ALIAS="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 SSH_KEY="${FRP_E2E_SSH_KEY:-$HOME/.ssh/frp_e2e_ed25519}"
