@@ -295,13 +295,20 @@ p.write_text(json.dumps(d) + "\n")
 PY
 META_TREE="$WORKDIR/meta-tree"
 setup_tree "$META_TREE"
-if env FRP_SERVER_TEST_ROOT="$META_TREE" "$UPDATE" --source "$BADMETA" \
+# Force a clean role/root env: prior cases or harness exports must not divert
+# version-state lookup away from META_TREE (FRP_DEPLOY_TEST_ROOT wins over
+# FRP_SERVER_TEST_ROOT in frp_version_state_file).
+if env -u FRP_DEPLOY_TEST_ROOT -u FRP_CLIENT_TEST_ROOT -u FRP_CTL_TEST_ROOT \
+  -u FRP_UPDATE_ROOT -u FRP_RELEASE_CHANNEL \
+  FRP_SERVER_TEST_ROOT="$META_TREE" "$UPDATE" --source "$BADMETA" \
   >"$WORKDIR/meta.out" 2>"$WORKDIR/meta.err"; then
   fail "wrong metadata should fail"
 fi
 grep -qi 'metadata project version mismatch' "$WORKDIR/meta.err" || fail "wrong metadata message"
 rm -f "$BADMETA/release-manifest.json"
-if env FRP_SERVER_TEST_ROOT="$META_TREE" "$UPDATE" --source "$BADMETA" \
+if env -u FRP_DEPLOY_TEST_ROOT -u FRP_CLIENT_TEST_ROOT -u FRP_CTL_TEST_ROOT \
+  -u FRP_UPDATE_ROOT -u FRP_RELEASE_CHANNEL \
+  FRP_SERVER_TEST_ROOT="$META_TREE" "$UPDATE" --source "$BADMETA" \
   >"$WORKDIR/missing.out" 2>"$WORKDIR/missing.err"; then
   fail "missing metadata should fail"
 fi
