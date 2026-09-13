@@ -158,6 +158,19 @@ if isinstance(raw, dict) and 'services' in raw:
 else:
     services = raw
 preferred = alias if alias and alias != server else ''
+def host_for_url(text):
+    text = str(text or '').strip()
+    if not text:
+        return text
+    if text.startswith('[') and text.endswith(']'):
+        return text
+    try:
+        import ipaddress
+        if isinstance(ipaddress.ip_address(text), ipaddress.IPv6Address):
+            return '[%s]' % text
+    except ValueError:
+        pass
+    return text
 print()
 print('Data Relay Link client setup complete.')
 print()
@@ -195,21 +208,21 @@ for item in services:
         print('Connect:')
         if preferred:
             print('  Preferred:')
-            print('    http://%s:%s' % (preferred, remote_port))
+            print('    http://%s:%s' % (host_for_url(preferred), remote_port))
             print('  Fallback:')
-            print('    http://%s:%s' % (server, remote_port))
+            print('    http://%s:%s' % (host_for_url(server), remote_port))
         else:
-            print('  http://%s:%s' % (server, remote_port))
+            print('  http://%s:%s' % (host_for_url(server), remote_port))
         print()
     elif preset == 'https':
         print('Connect:')
         if preferred:
             print('  Preferred:')
-            print('    https://%s:%s' % (preferred, remote_port))
+            print('    https://%s:%s' % (host_for_url(preferred), remote_port))
             print('  Fallback:')
-            print('    https://%s:%s' % (server, remote_port))
+            print('    https://%s:%s' % (host_for_url(server), remote_port))
         else:
-            print('  https://%s:%s' % (server, remote_port))
+            print('  https://%s:%s' % (host_for_url(server), remote_port))
         print()
     else:
         print('Connect:')
@@ -237,6 +250,19 @@ if isinstance(raw, dict) and 'services' in raw:
 else:
     services = raw
 preferred = alias if alias and alias != server else ''
+def host_for_url(text):
+    text = str(text or '').strip()
+    if not text:
+        return text
+    if text.startswith('[') and text.endswith(']'):
+        return text
+    try:
+        import ipaddress
+        if isinstance(ipaddress.ip_address(text), ipaddress.IPv6Address):
+            return '[%s]' % text
+    except ValueError:
+        pass
+    return text
 print()
 print('=========================================')
 print(' Data Relay Link Installation Complete')
