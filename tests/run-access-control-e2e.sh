@@ -183,7 +183,7 @@ systemctl is-active drlink-server"
 
 # PUBLIC baseline
 echo "=== PUBLIC ==="
-sshx "$SERVER" "sudo frp-access public ${CLIENT_ID} ${SERVICE_ID}"
+sshx "$SERVER" "sudo frp-access public ${CLIENT_ID} ${SERVICE_ID} --yes"
 sleep 1
 probe "$SOURCE_A_HOST" || fail "PUBLIC A"
 pass PUBLIC_A
@@ -402,7 +402,7 @@ done
 if probe "$SOURCE_B_HOST"; then fail "B after reboot"; else pass REBOOT; fi
 
 # PUBLIC restore + cleanup (keep service; only clear ACL binding + list)
-sshx "$SERVER" "sudo frp-access public ${CLIENT_ID} ${SERVICE_ID}"
+sshx "$SERVER" "sudo frp-access public ${CLIENT_ID} ${SERVICE_ID} --yes"
 sleep 1
 probe "$SOURCE_A_HOST" || fail "public restore A"
 probe "$SOURCE_B_HOST" || fail "public restore B"
