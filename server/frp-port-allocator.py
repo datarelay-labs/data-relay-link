@@ -306,6 +306,11 @@ def _test_before_registry_write(path):
     return None
 
 
+def _test_before_nonce_write(path):
+    """Production no-op. Unit tests may replace this symbol to fail nonce persist."""
+    return None
+
+
 def _test_enrollment_failure_point(point):
     """Production no-op. Unit tests may raise to inject AFTER_* failures."""
     return None
@@ -335,7 +340,11 @@ def load_json(path, default=None):
 
 def atomic_write_json(path, data, mode=0o600):
     p = Path(path)
-    _test_before_registry_write(str(p))
+    path_s = str(p)
+    if path_s.endswith('mgmt-nonces.json') or path_s.endswith('mgmt-nonces.json.tmp') or p.name.startswith('mgmt-nonces.json.'):
+        _test_before_nonce_write(path_s)
+    else:
+        _test_before_registry_write(path_s)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=p.name + '.', suffix='.tmp', dir=str(p.parent))
     try:
@@ -1815,6 +1824,7 @@ class Allocator:
                                 )
                         if client is None:
                             return 403, api_error('unknown client identity', 'AUTH_FAILED')
+                        previous_client = json.loads(json.dumps(client))
                         client['hostname'] = hostname or client.get('hostname', '')
                         client['last_enrolled_at'] = now_iso
                         if not isinstance(client.get('services'), dict):
@@ -1873,10 +1883,29 @@ class Allocator:
                         self.save_registry(state)
 
                         if pending_nonce:
-                            nonce_error = self.commit_nonce(
-                                machine_id, pending_nonce, int(time.time())
-                            )
+                            try:
+                                nonce_error = self.commit_nonce(
+                                    machine_id, pending_nonce, int(time.time())
+                                )
+                            except OSError as exc:
+                                # Registry mutation must not stick when nonce
+                                # persistence fails: otherwise the caller sees
+                                # failure while the signed request remains
+                                # replayable against the new authority state.
+                                clients[machine_id] = previous_client
+                                self.save_registry(state)
+                                print(
+                                    'allocator nonce persist error after mutation: %s'
+                                    % exc,
+                                    flush=True,
+                                )
+                                return 500, api_error(
+                                    'failed to persist management nonce',
+                                    'SERVER_MUTATION_FAILED',
+                                )
                             if nonce_error:
+                                clients[machine_id] = previous_client
+                                self.save_registry(state)
                                 return 403, api_error(
                                     nonce_error, classify_auth_error(nonce_error)
                                 )
