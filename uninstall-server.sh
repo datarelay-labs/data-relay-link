@@ -118,7 +118,8 @@ for _frp_own in \
 done
 unset _frp_own
 if ! declare -F frp_role_is_shared_lib >/dev/null 2>&1; then
-  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py '
+  # Keep in sync with FRP_ROLE_SERVER_PRESERVE_IF_CLIENT in frp-role-ownership.sh.
+  FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_cli_catalog.py frp_ctl_repl.py frpctl drlink '
   frp_role_is_shared_lib() {
     local base="$1"
     [[ "$FRP_ROLE_SHARED_LIB_BASENAMES" == *" ${base} "* ]]
@@ -501,9 +502,11 @@ else
       frp_u_rm_file "${libdir}/${f}"
     done
     # SHARED libs: only remove when client role is absent.
+    # Keep in sync with FRP_ROLE_SERVER_PRESERVE_IF_CLIENT (minus bin wrappers).
     if [[ "$CLIENT_PRESENT" != "1" ]]; then
       for f in frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh \
-        frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py; do
+        frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py \
+        frp_cli_catalog.py frp_ctl_repl.py; do
         frp_u_rm_file "${libdir}/${f}"
       done
     fi

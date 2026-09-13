@@ -439,5 +439,61 @@ fi
 [[ -f "$UNIT/frps.enabled" ]] || fail "admin frps mock enabled cleared"
 pass "UNRELATED_ADMIN_FRPS_PRESERVED"
 
+# Finding L: partial-install fallback must preserve frp_cli_catalog.py for surviving client.
+TREE="$WORKDIR/fallback-catalog"
+seed "$TREE"
+printf '{"schema_version":1,"machine_id":"ccdd"}\n' >"$TREE/etc/frp/client-state.json"
+printf '#!/bin/true\n' >"$TREE/usr/local/bin/drlink"
+chmod +x "$TREE/usr/local/bin/drlink"
+printf 'catalog\n' >"$TREE/usr/local/lib/drlink/frp_cli_catalog.py"
+printf 'repl\n' >"$TREE/usr/local/lib/drlink/frp_ctl_repl.py"
+rm -f "$TREE/usr/local/lib/drlink/frp-role-ownership.sh" \
+  "$TREE/usr/local/lib/drlink/frp_project_files.py"
+WRAPPER="$WORKDIR/uninstall-server-fallback.sh"
+python3 - "$ROOT/uninstall-server.sh" "$WRAPPER" <<'PY'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1]).read_text(encoding="utf-8")
+# Neutralize script-adjacent ownership + project-files helpers so fallback inventory is used.
+src = src.replace('"${_HERE}/lib/frp-role-ownership.sh"', '"${_HERE}/lib/missing-frp-role-ownership.sh"')
+src = src.replace('"${_HERE}/../lib/frp-role-ownership.sh"', '"${_HERE}/../lib/missing-frp-role-ownership.sh"')
+src = src.replace('frp_u_project_files_py', 'frp_u_project_files_py_missing')
+Path(sys.argv[2]).write_text(src)
+PY
+chmod +x "$WRAPPER"
+UNIT="$WORKDIR/units-fallback-catalog"
+mkdir -p "$UNIT"
+export FRP_UNINSTALL_TEST_ROOT="$TREE"
+export FRP_MOCK_UNIT_DIR="$UNIT"
+export FRP_UNINSTALL_HOOK_SYSTEMCTL="$MOCK"
+if ! bash "$WRAPPER" >"$WORKDIR/fallback-catalog.out" 2>"$WORKDIR/fallback-catalog.err"; then
+  fail "fallback dual-role uninstall: $(cat "$WORKDIR/fallback-catalog.err")"
+fi
+[[ -f "$TREE/usr/local/lib/drlink/frp_cli_catalog.py" ]] || fail "fallback removed frp_cli_catalog.py"
+[[ -f "$TREE/usr/local/lib/drlink/frp_ctl_repl.py" ]] || fail "fallback removed frp_ctl_repl.py"
+[[ -x "$TREE/usr/local/bin/drlink" ]] || fail "fallback removed drlink"
+pass "DUAL_ROLE_FALLBACK_PRESERVES_CLI_CATALOG"
+
+# Client-only uninstall must remove shared catalog (no orphan) when server absent.
+TREE="$WORKDIR/client-catalog-orphan"
+seed "$TREE"
+rm -f "$TREE/etc/frp/server_token" "$TREE/etc/drlink/config.json" \
+  "$TREE/etc/systemd/system/drlink-server.service" \
+  "$TREE/etc/systemd/system/drlink-allocator.service"
+printf '{"schema_version":1,"machine_id":"eeff"}\n' >"$TREE/etc/frp/client-state.json"
+printf 'catalog\n' >"$TREE/usr/local/lib/drlink/frp_cli_catalog.py"
+printf '#!/bin/true\n' >"$TREE/usr/local/bin/frpc"
+chmod +x "$TREE/usr/local/bin/frpc"
+UNIT="$WORKDIR/units-client-catalog"
+mkdir -p "$UNIT"
+export FRP_UNINSTALL_TEST_ROOT="$TREE"
+export FRP_MOCK_UNIT_DIR="$UNIT"
+export FRP_UNINSTALL_HOOK_SYSTEMCTL="$MOCK"
+if ! "$ROOT/uninstall-client.sh" >"$WORKDIR/client-catalog.out" 2>"$WORKDIR/client-catalog.err"; then
+  fail "client uninstall catalog orphan check: $(cat "$WORKDIR/client-catalog.err")"
+fi
+[[ ! -f "$TREE/usr/local/lib/drlink/frp_cli_catalog.py" ]] || fail "client uninstall left frp_cli_catalog.py orphan"
+pass "CLIENT_UNINSTALL_REMOVES_SHARED_CATALOG"
+
 echo "SERVER_UNINSTALL_FAIL_CLOSED_TEST=PASS"
 echo "NEW_002_UNINSTALL_CONTROL_STATE_LOCK=PASS"
