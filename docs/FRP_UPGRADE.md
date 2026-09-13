@@ -189,3 +189,31 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 - Server FRP binary: `drlink update engine` (implementation: `frp-update`) restores the previous binary on health failure.
 - Server project tools: use `drlink update project` rollback / restore from backup (implementation: `frp-project-update`).
 - Disaster recovery: `sudo drlink backup restore <backup>` after a validated backup.
+
+## Future release upgrade suite (from v2.3.1 golden baseline)
+
+Use the sanitized golden baseline produced by production-realistic
+qualification (`e2e-reports/v2.3.1-golden-upgrade-baseline/`) plus a full
+server backup retained in the lab (not committed).
+
+### Scenarios (EVERY next release)
+
+1. **v2.3.1 → next** server project upgrade, then each OS client upgrade.
+2. **Mixed-version rolling**: new server + old clients; upgrade one client at a time.
+3. **Upgrade under traffic**: continuous SSH/HTTP/Egress during server and client upgrades; measure downtime and reconnect.
+4. **Interrupted / bad upgrade**: network loss, download failure, process kill, bad artifact, health-check failure → safe rollback; old version usable; state preserved.
+5. **Backup → upgrade → restore**: backup on old version; upgrade; simulate issue; restore/recover; verify fleet.
+6. **Cross-version restore policy**: old backup → newer restore (supported if designed); newer backup → older must **fail closed**.
+7. **Disaster recovery**: Server A backup → fresh Server B install+restore with same public endpoint; existing clients reconnect without reinstall.
+
+### Invariants
+
+```text
+client IDs unchanged
+machine IDs unchanged
+ports unchanged
+services unchanged
+groups/tags unchanged
+Access unchanged
+Egress unchanged
+```
