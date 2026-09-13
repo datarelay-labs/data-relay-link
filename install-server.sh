@@ -2187,6 +2187,22 @@ PY
       frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create egress-control.json"
       return 1
     fi
+  else
+    # Upgrade/reinstall: migrate legacy egress schema to current and persist.
+    if ! python3 - "$egress_control_file" "$BASE_DIR/lib/frp_egress_control.py" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+state = mod.load_egress_state(path=path, persist_migration=True)
+print("EGRESS_SCHEMA=%s" % state.get("schema_version"))
+PY
+    then
+      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to migrate egress-control.json"
+      return 1
+    fi
   fi
   chmod 600 "$egress_control_file"
   [[ -f "$egress_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "egress-control.json is missing"; return 1; }

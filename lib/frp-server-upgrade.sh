@@ -518,6 +518,27 @@ spec.loader.exec_module(mod)
 mod.save_egress_state(mod.empty_egress_state(), path=path)
 PY
     chmod 600 "$egress_file"
+  else
+    # Persist v1/v2 → current schema on upgrade so Fixed TCP / doctor see schema v3.
+    local mod=""
+    if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_egress_control.py" ]]; then
+      mod="$BASE_DIR/lib/frp_egress_control.py"
+    else
+      mod="$(frp_server_fs /usr/local/lib/drlink/frp_egress_control.py)"
+    fi
+    if [[ -f "$mod" ]]; then
+      python3 - "$egress_file" "$mod" <<'PY' || return 1
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+# load_egress_state migrates and persists under lock when schema < current.
+state = mod.load_egress_state(path=path, persist_migration=True)
+print("EGRESS_SCHEMA=%s" % state.get("schema_version"))
+PY
+    fi
   fi
   if [[ -f "$cfg_file" ]]; then
     python3 - "$cfg_file" <<'PY' || true
