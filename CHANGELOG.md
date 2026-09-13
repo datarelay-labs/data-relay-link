@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.4.0 — candidate
+
+Feature expansion on pinned FRP **0.71.0** before FEATURE FREEZE. Does **not**
+move, delete, or recreate published **v2.3.1** / **v2.3.0**.
+
+- Fixed TCP Egress (destination-pinned listeners on 6200–6299; schema v3)
+- `drlink egress explain` (policy + DNS preview; no live connect / no mutation)
+- Small egress recipe framework (`drlink egress recipe …`; apply never auto-enables)
+- Production-realistic evidence contract: canonical `perf/baseline.json` required for PASS
+- Short URL Real E2E is a hard release gate (channel matched to tree identity)
+- SPDX SBOM generator + GitHub Artifact Attestation workflow
+- Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+
 ## 2.3.1 — 2026-09-10
 
 Patch release on pinned FRP **0.71.0**. Does **not** move, delete, or recreate

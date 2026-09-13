@@ -432,8 +432,9 @@ PY
   done
   pq_sample_server_resources "$OUT/resources/churn-after.json"
   echo "CONNECTION_CHURN_MAX_STABLE=${max_ok}/sec" | tee -a "$PROD_QUAL_GATES"
-  # Leak check: compare FD/RSS
-  python3 - "$OUT/resources/churn-before.json" "$OUT/resources/churn-after.json" "$OUT/extended/churn-leak.txt" <<'PY' || true
+  # Leak check: compare FD/RSS (must not swallow exit code)
+  set +e
+  python3 - "$OUT/resources/churn-before.json" "$OUT/resources/churn-after.json" "$OUT/extended/churn-leak.txt" <<'PY'
 import json,sys
 b=json.load(open(sys.argv[1])); a=json.load(open(sys.argv[2]))
 lines=[]
@@ -457,6 +458,7 @@ print("LEAK", "YES" if leak else "NO")
 raise SystemExit(1 if leak else 0)
 PY
   local leak_rc=$?
+  set -uo pipefail
   if [[ "$max_ok" -ge 25 && "$leak_rc" -eq 0 ]]; then
     pq_gate CONNECTION_CHURN PASS
   else
@@ -631,53 +633,239 @@ print(next((((c.get('services') or {}).get('ssh') or {}).get('remote_port') or 0
       echo "SSH_LAT_$i=$lat" >>"$tmp/ssh-lat.txt"
     done
   fi
-  # Aggregate JSON
-  python3 - "$tmp" "$OUT/perf/baseline.json" "$OUT/resources" <<'PY'
-import json, re, time
+  # Aggregate canonical perf/baseline.json (atomic write; required for PASS).
+  local baseline_out="$OUT/perf/baseline.json"
+  mkdir -p "$OUT/perf/raw"
+  # Preserve raw host samples under perf/raw/ for evidence contract.
+  cp -a "$tmp"/. "$OUT/perf/raw/" 2>/dev/null || true
+  set +e
+  python3 - "$tmp" "$baseline_out" "$OUT/resources" "$(pq_head_sha)" "$ROOT/VERSION" <<'PY'
+import json, os, platform, socket, sys, tempfile, time
 from pathlib import Path
-raw, out, res = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+
+raw, out, res, git_head, version_path = (
+    Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
+)
+values = {}
+for line in version_path.read_text(encoding="utf-8").splitlines():
+    if "=" in line:
+        k, v = line.split("=", 1)
+        values[k.strip()] = v.strip()
+project_version = values.get("PROJECT_VERSION", "")
+frp_version = values.get("FRP_VERSION", "")
+
 hosts = {}
-for p in raw.glob("*.txt"):
+raw_paths = []
+for p in sorted(raw.glob("*.txt")):
     hosts[p.stem] = p.read_text(encoding="utf-8", errors="replace")
+    raw_paths.append(str(Path("perf/raw") / p.name))
+
+def _parse_latencies(blob: str):
+    vals = []
+    for line in blob.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        _, rhs = line.split("=", 1)
+        try:
+            vals.append(float(rhs))
+        except ValueError:
+            continue
+    return vals
+
+def _pct(vals, p):
+    if not vals:
+        return None
+    s = sorted(vals)
+    idx = min(len(s) - 1, max(0, int(round((p / 100.0) * (len(s) - 1)))))
+    return s[idx]
+
+egress_connect = []
+http_req = []
+ssh_lat = []
+fail_tokens = 0
+total_tokens = 0
+for name, blob in hosts.items():
+    low = blob.lower()
+    if "connect" in name or "egress" in name:
+        egress_connect.extend(_parse_latencies(blob))
+    if "http" in name:
+        http_req.extend(_parse_latencies(blob))
+    if "ssh" in name:
+        ssh_lat.extend(_parse_latencies(blob))
+    for line in blob.splitlines():
+        if "FAIL" in line.upper() or "error" in line.lower():
+            fail_tokens += 1
+        if line.strip():
+            total_tokens += 1
+
 samples = []
 ts = res / "timeseries.jsonl"
 if ts.is_file():
+    raw_paths.append("resources/timeseries.jsonl")
     for line in ts.read_text(encoding="utf-8", errors="replace").splitlines():
-        line=line.strip()
-        if not line: continue
-        try: samples.append(json.loads(line))
-        except Exception: pass
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            samples.append(json.loads(line))
+        except Exception:
+            pass
 peak = {"cpu_jiffies_delta": 0, "rss_kb": 0, "fds": 0, "threads": 0}
 for s in samples:
-    for u,d in (s.get("units") or {}).items():
-        rss = int(str(d.get("VmRSS","0")).split()[0] or 0)
+    for _u, d in (s.get("units") or {}).items():
+        rss = int(str(d.get("VmRSS", "0")).split()[0] or 0)
         fds = int(d.get("fds") or 0)
-        thr = int(str(d.get("Threads","0")).split()[0] or 0)
+        thr = int(str(d.get("Threads", "0")).split()[0] or 0)
         peak["rss_kb"] = max(peak["rss_kb"], rss)
         peak["fds"] = max(peak["fds"], fds)
         peak["threads"] = max(peak["threads"], thr)
+
+failure_rate = (fail_tokens / total_tokens) if total_tokens else 0.0
 doc = {
-  "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-  "hosts": hosts,
-  "server_peak": peak,
-  "note": "Baseline only; DR Link overhead vs direct is expected and not an automatic fail.",
+    "schema_version": 1,
+    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "git_head": git_head,
+    "project_version": project_version,
+    "frp_version": frp_version,
+    "environment": {
+        "hostname": socket.gethostname(),
+        "os": platform.system(),
+        "kernel": platform.release(),
+        "cpu": os.cpu_count() or 0,
+        "ram": None,
+    },
+    "remote_access": {
+        "concurrency": None,
+        "throughput": None,
+        "latency": {
+            "samples": ssh_lat,
+            "p50": _pct(ssh_lat, 50),
+            "p95": _pct(ssh_lat, 95),
+            "p99": _pct(ssh_lat, 99),
+        },
+        "failure_rate": failure_rate,
+    },
+    "controlled_egress": {
+        "concurrency": None,
+        "connect_p50": _pct(egress_connect, 50),
+        "connect_p95": _pct(egress_connect, 95),
+        "connect_p99": _pct(egress_connect, 99),
+        "churn": None,
+        "throughput": None,
+        "http_request_samples": http_req,
+        "failure_rate": failure_rate,
+    },
+    "fixed_tcp_egress": {
+        "concurrency": None,
+        "setup_p50": None,
+        "setup_p95": None,
+        "setup_p99": None,
+        "throughput": None,
+        "churn": None,
+        "failure_rate": None,
+        "note": "populated when Fixed TCP qualification samples are present",
+    },
+    "resources": {
+        "cpu": peak.get("cpu_jiffies_delta"),
+        "rss": peak.get("rss_kb"),
+        "fd_count": peak.get("fds"),
+        "threads": peak.get("threads"),
+        "server_peak": peak,
+    },
+    "raw_evidence_paths": raw_paths,
+    "hosts": hosts,
+    "note": (
+        "Production-realistic qualification baseline. "
+        "Overhead vs direct path is expected and not an automatic fail; "
+        "missing this artifact MUST fail the performance gate."
+    ),
 }
-out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+# Atomic write
+out.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp_name = tempfile.mkstemp(prefix=".baseline.", dir=str(out.parent), text=True)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_name, out)
+finally:
+    if os.path.exists(tmp_name):
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
 print("PERF_BASELINE_WRITTEN", out)
 PY
-  echo "PERF_BASELINE_ARTIFACT=$OUT/perf/baseline.json" | tee -a "$PROD_QUAL_GATES"
-  # Extract peaks into gates
-  python3 - "$OUT/perf/baseline.json" <<'PY' | tee -a "$PROD_QUAL_GATES"
-import json,sys
-d=json.load(open(sys.argv[1]))
-p=d.get("server_peak") or {}
-print(f"SERVER_RSS_PEAK={p.get('rss_kb')}kB")
-print(f"SERVER_FD_PEAK={p.get('fds')}")
-print(f"SERVER_THREAD_PEAK={p.get('threads')}")
+  local agg_rc=$?
+  set -uo pipefail
+  echo "PERF_BASELINE_ARTIFACT=$baseline_out" | tee -a "$PROD_QUAL_GATES"
+  if [[ "$agg_rc" -ne 0 || ! -f "$baseline_out" || ! -s "$baseline_out" ]]; then
+    pq_note "PERF_BASELINE_MISSING_OR_INVALID agg_rc=$agg_rc"
+    pq_gate REMOTE_ACCESS_PERFORMANCE_BASELINE FAIL
+    pq_gate CONTROLLED_EGRESS_PERFORMANCE_BASELINE FAIL
+    pq_gate SERVER_RESOURCE_STABILITY FAIL
+    pq_gate PERFORMANCE_BASELINE FAIL
+    return 1
+  fi
+  # Schema + HEAD + declared raw path existence gate
+  set +e
+  python3 - "$baseline_out" "$(pq_head_sha)" "$OUT" <<'PY' | tee -a "$PROD_QUAL_GATES"
+import json, sys
+from pathlib import Path
+path, expected_head, out_root = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+try:
+    d = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print("PERF_BASELINE_PARSE=FAIL")
+    print("error=%s" % exc)
+    raise SystemExit(2)
+ok = True
+if int(d.get("schema_version") or 0) < 1:
+    print("PERF_BASELINE_SCHEMA=FAIL")
+    ok = False
+else:
+    print("PERF_BASELINE_SCHEMA=PASS")
+head = str(d.get("git_head") or "")
+if head != expected_head:
+    print("PERF_BASELINE_HEAD_MATCH=FAIL")
+    print("PERF_BASELINE_HEAD=%s" % head)
+    print("EXPECTED_HEAD=%s" % expected_head)
+    ok = False
+else:
+    print("PERF_BASELINE_HEAD_MATCH=PASS")
+missing = []
+for rel in d.get("raw_evidence_paths") or []:
+    p = out_root / rel
+    if not p.is_file() or p.stat().st_size <= 0:
+        missing.append(rel)
+if missing:
+    print("PERF_BASELINE_RAW_PATHS=FAIL")
+    print("MISSING_RAW=%s" % ",".join(missing))
+    ok = False
+else:
+    print("PERF_BASELINE_RAW_PATHS=PASS")
+p = (d.get("resources") or {}).get("server_peak") or {}
+print("SERVER_RSS_PEAK=%skB" % (p.get("rss_kb") if p.get("rss_kb") is not None else "0"))
+print("SERVER_FD_PEAK=%s" % (p.get("fds") if p.get("fds") is not None else "0"))
+print("SERVER_THREAD_PEAK=%s" % (p.get("threads") if p.get("threads") is not None else "0"))
+raise SystemExit(0 if ok else 3)
 PY
+  local validate_rc=$?
+  set -uo pipefail
+  if [[ "$validate_rc" -ne 0 ]]; then
+    pq_gate REMOTE_ACCESS_PERFORMANCE_BASELINE FAIL
+    pq_gate CONTROLLED_EGRESS_PERFORMANCE_BASELINE FAIL
+    pq_gate SERVER_RESOURCE_STABILITY FAIL
+    pq_gate PERFORMANCE_BASELINE FAIL
+    return 1
+  fi
   pq_gate REMOTE_ACCESS_PERFORMANCE_BASELINE PASS
   pq_gate CONTROLLED_EGRESS_PERFORMANCE_BASELINE PASS
   pq_gate SERVER_RESOURCE_STABILITY PASS
+  pq_gate PERFORMANCE_BASELINE PASS
 }
 
 # ---------------------------------------------------------------------------

@@ -365,7 +365,7 @@ frp_u_rm_legacy_frps_unit_if_owned() {
 
 frp_u_stop_product_units() {
   local unit
-  for unit in drlink-frontend drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+  for unit in drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_should_manage_unit "$unit"; then
       continue
     fi
@@ -390,7 +390,7 @@ frp_u_stop_product_units() {
 
 frp_u_disable_product_units() {
   local unit enabled
-  for unit in drlink-frontend drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+  for unit in drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_should_manage_unit "$unit"; then
       continue
     fi
@@ -466,6 +466,7 @@ else
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-allocator.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-access.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-egress.service)"
+  frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-tcp-egress.service)"
   frp_u_rm_file "$(frp_u_path /etc/systemd/system/drlink-frontend.service)"
   # Legacy unit names from pre-rename installs.
   frp_u_rm_legacy_frps_unit_if_owned
@@ -491,7 +492,7 @@ else
   fi
   libdir="$(frp_u_path /usr/local/lib/drlink)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
-    for f in frp-port-allocator.py frp-access-plugin.py frp-egress-gateway.py frp_access_control.py frp_egress_control.py frp_pki.py frp_frontend.py frp_client_registry.py \
+    for f in frp-port-allocator.py frp-access-plugin.py frp-egress-gateway.py drlink-tcp-egress.py frp_access_control.py frp_egress_control.py frp_egress_runtime.py frp_pki.py frp_frontend.py frp_client_registry.py \
       frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
       frp_install_txn.py frp_health_check.py frp_service_profiles.py \
       frp-server-upgrade.sh frp_project_files.py frp_control_locks.py frp_server_config.py \

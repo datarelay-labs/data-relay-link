@@ -1994,8 +1994,9 @@ class EgressEntryIdValidationTests(unittest.TestCase):
         }
         profile.update(overrides)
         return {
-            "schema_version": 2,
+            "schema_version": EG.EGRESS_SCHEMA_VERSION,
             "egress_profiles": {"egp_aaaaaaaaaaaa": profile},
+            "tcp_relays": {},
         }
 
     def test_valid_ids_pass(self):
@@ -2089,6 +2090,7 @@ class EgressEntryIdValidationTests(unittest.TestCase):
             },
         }
         migrated = EG.migrate_egress_state_v1_to_v2(raw)
+        migrated = EG.migrate_egress_state_v2_to_v3(migrated)
         EG.validate_egress_state(migrated)
         src = migrated["egress_profiles"]["egp_aaaaaaaaaaaa"]["sources"][0]
         dest = migrated["egress_profiles"]["egp_aaaaaaaaaaaa"]["destinations"][0]
@@ -2101,7 +2103,7 @@ class EgressEntryIdValidationTests(unittest.TestCase):
         imported_src = "egs_dddddddddddd"
         imported_dst = "egd_eeeeeeeeeeee"
         doc = {
-            "schema_version": 2,
+            "schema_version": EG.EGRESS_SCHEMA_VERSION,
             "profile": {
                 "id": "egp_ffffffffffff",
                 "name": "imported",

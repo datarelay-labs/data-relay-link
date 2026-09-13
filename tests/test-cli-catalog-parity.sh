@@ -175,7 +175,7 @@ SURFACES = {
     ("frp-egress", "remove-source"): ("egress", "remove-source"),
     ("frp-egress", "remove-destination"): ("egress", "remove-destination"),
     ("frp-egress", "delete"): ("egress", "delete"),
-    ("frp-egress", "test"): ("egress", "test"),
+    ("frp-egress", "explain"): ("egress", "explain"),
     ("frp-profile", "set"): ("service-profile", "set"),
     ("frp-release-client", None): ("client", "release"),
     ("frp-release-service", None): ("client", "release"),
@@ -277,7 +277,10 @@ for name in (
     "frp_bounded_server.py",
     "frp_public_suffix.py",
     "frp_policy_fingerprint.py",
+    "frp_egress_runtime.py",
+    "drlink-tcp-egress.py",
     "public_suffix_list.dat",
+    "egress-recipes/https-api.json",
 ):
     if name not in manifest:
         raise SystemExit("server manifest missing %s" % name)
@@ -288,7 +291,11 @@ for name in (
     "lib/frp_bounded_server.py",
     "lib/frp_public_suffix.py",
     "lib/frp_policy_fingerprint.py",
+    "lib/frp_egress_runtime.py",
     "lib/data/public_suffix_list.dat",
+    "lib/data/egress-recipes/https-api.json",
+    "server/drlink-tcp-egress.py",
+    "server/drlink-tcp-egress.service",
 ):
     if name not in bundles:
         raise SystemExit("build-bundles missing %s" % name)

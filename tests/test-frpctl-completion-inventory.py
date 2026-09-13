@@ -74,7 +74,7 @@ class CompletionInventoryTests(unittest.TestCase):
             trailing=True,
             egress_profiles=["vendor-api"],
         )
-        self.assertEqual(sorted(hits), ["http", "https"])
+        self.assertEqual(sorted(hits), ["http", "https", "tcp"])
 
     def test_protocol_partial_value_completion(self):
         hits = GRAMMAR.completion_candidates(
@@ -97,6 +97,16 @@ class CompletionInventoryTests(unittest.TestCase):
             egress_profiles=["vendor-api"],
         )
         self.assertEqual(narrowed, ["https"])
+        tcp_hits = GRAMMAR.completion_candidates(
+            "egress add-destination vendor-api api.example.com 443 --protocol t",
+            "server",
+            [],
+            {},
+            [],
+            trailing=False,
+            egress_profiles=["vendor-api"],
+        )
+        self.assertEqual(tcp_hits, ["tcp"])
 
 
 class GrammarPayloadInventoryTests(unittest.TestCase):
@@ -140,7 +150,18 @@ class GrammarPayloadInventoryTests(unittest.TestCase):
             encoding="utf-8",
         )
         env = os.environ.copy()
+        # Prefer this fixture over any inherited FRP_*_TEST_ROOT from other tests.
+        for key in (
+            "FRP_CTL_TEST_ROOT",
+            "FRP_CLIENT_TEST_ROOT",
+            "FRP_SERVER_TEST_ROOT",
+            "FRP_ROLE_TEST_ROOT",
+            "FRP_UPDATE_ROOT",
+            "FRP_UNINSTALL_TEST_ROOT",
+        ):
+            env.pop(key, None)
         env["FRP_DEPLOY_TEST_ROOT"] = str(tree)
+        env["FRP_CTL_TEST_ROOT"] = str(tree)
         import subprocess
 
         proc = subprocess.run(

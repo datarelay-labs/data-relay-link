@@ -194,9 +194,27 @@ else
   pq_gate SUPPORT_BUNDLE_REAL_E2E FAIL
 fi
 
-run_feature profiles "$ROOT/tests/run-service-profiles-e2e.sh" || true
-run_feature health "$ROOT/tests/run-target-health-e2e.sh" || true
-run_feature shorturl "$ROOT/tests/run-short-url-e2e.sh" || true
+# Profiles / health remain product features; gate outcomes explicitly.
+# Do not swallow RC with || true — enabled features must affect final PASS.
+if run_feature profiles "$ROOT/tests/run-service-profiles-e2e.sh"; then
+  pq_gate SERVICE_PROFILES_REAL_E2E PASS
+else
+  pq_gate SERVICE_PROFILES_REAL_E2E FAIL
+fi
+if run_feature health "$ROOT/tests/run-target-health-e2e.sh"; then
+  pq_gate TARGET_HEALTH_REAL_E2E PASS
+else
+  pq_gate TARGET_HEALTH_REAL_E2E FAIL
+fi
+if run_feature shorturl "$ROOT/tests/run-short-url-e2e.sh"; then
+  pq_gate SHORTURL_REAL_E2E PASS
+  pq_gate SHORTURL_SERVER_UPGRADE PASS
+  pq_gate SHORTURL_RELEASE_GATE PASS
+else
+  pq_gate SHORTURL_REAL_E2E FAIL
+  pq_gate SHORTURL_SERVER_UPGRADE FAIL
+  pq_gate SHORTURL_RELEASE_GATE FAIL
+fi
 
 # Status/doctor truthfulness after fleet
 if pq_ssh "$PROD_QUAL_SERVER" 'sudo drlink status >/dev/null && sudo drlink doctor >/dev/null'; then
@@ -266,26 +284,86 @@ if [[ "${FRP_E2E_QUAL_SKIP_LOCAL:-0}" != "1" ]]; then
   grep -q 'ORPHAN_RC=0' "$PROD_QUAL_GATES" && pq_gate ORPHAN_TEST_CHECK PASS || pq_gate ORPHAN_TEST_CHECK FAIL
   grep -q 'SHA256_RC=0' "$PROD_QUAL_GATES" && pq_gate SHA256SUMS PASS || pq_gate SHA256SUMS FAIL
   grep -q 'SECRET_RC=0' "$PROD_QUAL_GATES" && pq_gate SECRET_SCAN PASS || pq_gate SECRET_SCAN FAIL
-  pq_gate TARGETED_TESTS PASS
-  pq_gate SOURCE_DIST_PARITY PASS
-  pq_gate BUNDLE_PARITY PASS
-  pq_gate PUBLIC_METADATA_SCAN PASS
-  pq_gate LINT_CI PASS
-  pq_gate WINDOWS_CI PASS
-  pq_gate MACOS_CI PASS
-  pq_gate DISTRO_MATRIX PASS
+  # Source/dist + public metadata integrity — execute for real.
+  set +e
+  (cd "$ROOT" && ./scripts/build-bundles.sh >/dev/null && git diff --exit-code -- dist/) >"$OUT/source-dist-parity.log" 2>&1
+  echo "SOURCE_DIST_RC=$?" | tee -a "$PROD_QUAL_GATES"
+  (cd "$ROOT" && ./scripts/verify-release-manifest-artifacts.sh) >"$OUT/release-manifest.log" 2>&1
+  echo "RELEASE_MANIFEST_RC=$?" | tee -a "$PROD_QUAL_GATES"
+  (cd "$ROOT" && ./scripts/check-public-metadata.sh) >"$OUT/public-metadata.log" 2>&1
+  echo "PUBLIC_METADATA_RC=$?" | tee -a "$PROD_QUAL_GATES"
+  set -uo pipefail
+  grep -q 'SOURCE_DIST_RC=0' "$PROD_QUAL_GATES" && pq_gate SOURCE_DIST_PARITY PASS || pq_gate SOURCE_DIST_PARITY FAIL
+  grep -q 'RELEASE_MANIFEST_RC=0' "$PROD_QUAL_GATES" && pq_gate RELEASE_MANIFEST_CROSSCHECK PASS || pq_gate RELEASE_MANIFEST_CROSSCHECK FAIL
+  grep -q 'PUBLIC_METADATA_RC=0' "$PROD_QUAL_GATES" && pq_gate PUBLIC_METADATA_SCAN PASS || pq_gate PUBLIC_METADATA_SCAN FAIL
+  # Bundle parity: rebuilt dist matches SHA256SUMS + no dirty dist tree.
+  if grep -q 'SHA256_RC=0' "$PROD_QUAL_GATES" && grep -q 'SOURCE_DIST_RC=0' "$PROD_QUAL_GATES"; then
+    pq_gate BUNDLE_PARITY PASS
+  else
+    pq_gate BUNDLE_PARITY FAIL
+  fi
+  # Targeted tests are the run-all suite for this harness.
+  grep -q 'RUN_ALL_RC=0' "$PROD_QUAL_GATES" && pq_gate TARGETED_TESTS PASS || pq_gate TARGETED_TESTS FAIL
+  # CI matrices are external; mark NOT_RUN unless GH evidence is provided.
+  if [[ -n "${FRP_E2E_QUAL_CI_EVIDENCE:-}" && -f "${FRP_E2E_QUAL_CI_EVIDENCE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${FRP_E2E_QUAL_CI_EVIDENCE}"
+    [[ "${LINT_CI:-}" == "PASS" ]] && pq_gate LINT_CI PASS || pq_gate LINT_CI FAIL
+    [[ "${WINDOWS_CI:-}" == "PASS" ]] && pq_gate WINDOWS_CI PASS || pq_gate WINDOWS_CI FAIL
+    [[ "${MACOS_CI:-}" == "PASS" ]] && pq_gate MACOS_CI PASS || pq_gate MACOS_CI FAIL
+    [[ "${DISTRO_MATRIX:-}" == "PASS" ]] && pq_gate DISTRO_MATRIX PASS || pq_gate DISTRO_MATRIX FAIL
+  else
+    pq_gate LINT_CI NOT_RUN
+    pq_gate WINDOWS_CI NOT_RUN
+    pq_gate MACOS_CI NOT_RUN
+    pq_gate DISTRO_MATRIX NOT_RUN
+  fi
 else
-  pq_note "SKIP local automated gates (FRP_E2E_QUAL_SKIP_LOCAL=1); relying on prior CI green for HEAD"
-  pq_gate RUN_ALL PASS
-  pq_gate ORPHAN_TEST_CHECK PASS
-  pq_gate SHA256SUMS PASS
-  pq_gate SECRET_SCAN PASS
-  pq_gate TARGETED_TESTS PASS
-  pq_gate LINT_CI PASS
-  pq_gate WINDOWS_CI PASS
-  pq_gate MACOS_CI PASS
-  pq_gate DISTRO_MATRIX PASS
+  pq_note "SKIP local automated gates (FRP_E2E_QUAL_SKIP_LOCAL=1); marking NOT_RUN (not PASS)"
+  pq_gate RUN_ALL NOT_RUN
+  pq_gate ORPHAN_TEST_CHECK NOT_RUN
+  pq_gate SHA256SUMS NOT_RUN
+  pq_gate SECRET_SCAN NOT_RUN
+  pq_gate TARGETED_TESTS NOT_RUN
+  pq_gate SOURCE_DIST_PARITY NOT_RUN
+  pq_gate BUNDLE_PARITY NOT_RUN
+  pq_gate RELEASE_MANIFEST_CROSSCHECK NOT_RUN
+  pq_gate PUBLIC_METADATA_SCAN NOT_RUN
+  pq_gate LINT_CI NOT_RUN
+  pq_gate WINDOWS_CI NOT_RUN
+  pq_gate MACOS_CI NOT_RUN
+  pq_gate DISTRO_MATRIX NOT_RUN
 fi
+
+# Write machine-readable summary pointing only at existing evidence.
+python3 - "$OUT" "$(pq_head_sha)" "$PASS_NAME" <<'PY' || true
+import json, sys
+from pathlib import Path
+out, head, pass_name = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+gates = {}
+gates_path = out / "gates.env"
+if gates_path.is_file():
+    for line in gates_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            gates[k.strip()] = v.strip()
+evidence = {}
+for rel in ("perf/baseline.json", "summary.txt", "matrix.log", "extended.log", "failures.txt"):
+    p = out / rel
+    if p.is_file() and p.stat().st_size > 0:
+        evidence[rel] = True
+    elif rel == "perf/baseline.json":
+        evidence[rel] = False
+doc = {
+    "schema_version": 1,
+    "pass_name": pass_name,
+    "git_head": head,
+    "gates": gates,
+    "evidence_paths": evidence,
+    "final_status": gates.get(pass_name, "UNKNOWN"),
+}
+(out / "summary.json").write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
 
 # Final HEAD check
 END_HEAD="$(pq_head_sha)"

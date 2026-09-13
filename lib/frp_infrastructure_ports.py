@@ -18,6 +18,9 @@ DEFAULT_EGRESS_LISTEN_PORT = 6102
 DEFAULT_ACCESS_PLUGIN_ADDR = "127.0.0.1:6101"
 DEFAULT_PORT_START = 6000
 DEFAULT_PORT_END = 6098
+# Fixed TCP Egress relay listeners (dedicated pool; never published client ports).
+DEFAULT_TCP_RELAY_PORT_START = 6200
+DEFAULT_TCP_RELAY_PORT_END = 6299
 
 
 def coerce_port(value: Any) -> Optional[int]:
@@ -103,6 +106,29 @@ def cfg_frontend_listen_port(cfg: Optional[dict]) -> Optional[int]:
     return coerce_port(cfg.get("frp_control_public_port")) or 443
 
 
+def tcp_relay_port_range(
+    cfg: Optional[dict] = None,
+) -> tuple[int, int]:
+    """Return inclusive Fixed TCP Egress auto-allocation range."""
+    start = DEFAULT_TCP_RELAY_PORT_START
+    end = DEFAULT_TCP_RELAY_PORT_END
+    if isinstance(cfg, dict):
+        raw_start = coerce_port(cfg.get("tcp_relay_port_start"))
+        raw_end = coerce_port(cfg.get("tcp_relay_port_end"))
+        if raw_start is not None:
+            start = raw_start
+        if raw_end is not None:
+            end = raw_end
+    if start > end:
+        start, end = end, start
+    return start, end
+
+
+def is_tcp_relay_port(port: int, cfg: Optional[dict] = None) -> bool:
+    start, end = tcp_relay_port_range(cfg)
+    return start <= int(port) <= end
+
+
 def infrastructure_ports(cfg: Optional[dict] = None) -> Set[int]:
     """Return the set of TCP ports reserved for Data Relay Link infrastructure."""
     protected: Set[int] = set()
@@ -116,6 +142,21 @@ def infrastructure_ports(cfg: Optional[dict] = None) -> Set[int]:
     ):
         if port is not None:
             protected.add(port)
+    return protected
+
+
+def protected_listen_ports(
+    cfg: Optional[dict] = None,
+    *,
+    extra: Optional[Iterable[int]] = None,
+) -> Set[int]:
+    """Infrastructure + optional extras that must not be used as TCP relay listeners."""
+    protected = set(infrastructure_ports(cfg))
+    if extra:
+        for port in extra:
+            coerced = coerce_port(port)
+            if coerced is not None:
+                protected.add(coerced)
     return protected
 
 

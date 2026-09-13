@@ -4,13 +4,14 @@
 > **Repository:** `datarelay-labs/data-relay-link`
 > **Canonical repository path:** `docs/PRODUCT_MASTER.md`
 > **Document status:** Master / Living Document
-> **Last updated:** 2026-09-10
-> **Current release:** Project `2.3.1` / FRP `0.71.0` — release candidate (historical `v2.3.0` / `v2.2.x` untouched)
-> **Release commit:** _(set when the `v2.3.1` tag is created)_
+> **Last updated:** 2026-09-13
+> **Current release:** Project `2.4.0` / FRP `0.71.0` — release candidate (historical `v2.3.1` / `v2.3.0` / `v2.2.x` untouched)
+> **Release commit:** _(set when the `v2.4.0` tag is created)_
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
 > **Primary management interface:** `sudo drlink` (resource-first CLI; catalog-owned)
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
 > **Controlled Egress default listen port:** `6102` (outside published service pool `6000–6098`)
+> **Fixed TCP Egress listen pool:** `6200–6299`
 
 ## 2026-09-07 Consolidation Notice
 
@@ -29,7 +30,7 @@
 - 목표 규모는 **1~50 Clients**, 특히 few to a few dozen 중심이다.
 - 대형 fleet orchestration, Web UI, Database, HA orchestrator는 현재 제품 목표가 아니다.
 - official FRP만 사용하고 exact version으로 pin한다.
-- **현재 준비 중인 release는 `v2.3.1` RC**이며 pinned FRP는 `0.71.0`이다. Controlled Egress (agentless outbound)와 resource-first `drlink` CLI가 이 line의 핵심 추가분이다.
+- **현재 준비 중인 release는 `v2.4.0` RC**이며 pinned FRP는 `0.71.0`이다. Fixed TCP Egress, Explain/Recipes, evidence integrity, SBOM/attestation이 이 line의 핵심 추가분이다. `v2.3.1`은 Controlled Egress HTTP/HTTPS + resource-first `drlink` CLI의 historical RC line이다.
 - `v2.3.0`은 Access Control Pack, Target Health Check, Support Bundle, Service Profiles를 포함한 **historical feature-complete inbound line**이다 (FINAL AUDIT CLOSURE 기록은 §50 / §71.1에 historical로 유지).
 - `v2.2.0`은 FRP `0.71.0`을 처음 stable로 채택한 historical release이며, `v2.2.1`은 그 이후 hardening patch release다.
 - Zero-Touch Short URL은 Option B(operator-owned reverse proxy + optional `bootstrap_hostname`) 모델로 `v2.1.3`에 stable 도입됐다.
@@ -2453,16 +2454,40 @@ Bulk Operation
 
 # 50. Current Product Status
 
-## 50.0 Current release — v2.3.1 RC (Controlled Egress + resource-first CLI)
+## 50.0 Current release — v2.4.0 RC (Fixed TCP Egress + evidence freeze)
 
 현재 준비 중인 release:
 
 ```text
+Project:              2.4.0
+Tag:                  v2.4.0 (create on final audit HEAD)
+FRP:                  0.71.0
+Feature focus:        Fixed TCP Egress + Explain/Recipes + release evidence integrity
+Release qualification: Double Full Real E2E on exact HEAD
+FEATURE_FREEZE:       ACTIVE after this phase PASS
+```
+
+`v2.4.0` 주요 사항 (`v2.3.1` capability 유지 + 추가):
+
+- Fixed TCP Egress (destination-pinned listeners **6200–6299**; schema v3 `protocol=tcp`)
+- `drlink egress explain` / Fixed TCP explain (preview; no live connect; no mutation)
+- Small egress recipe framework (apply never auto-enables)
+- Production-realistic performance evidence: canonical `perf/baseline.json` required for PASS
+- Short URL Real E2E is a hard release gate
+- SPDX SBOM generator + GitHub Artifact Attestation workflow
+- Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+
+Historical `v2.3.1` / `v2.3.0` / `v2.2.x` tags remain immutable.
+
+## 50.0a Historical — v2.3.1 RC (Controlled Egress + resource-first CLI)
+
+> **Status: HISTORICAL.** Superseded as *current* prepared release by §50.0 `v2.4.0` RC.
+
+```text
 Project:              2.3.1
-Tag:                  v2.3.1 (create on final audit HEAD)
+Tag:                  v2.3.1
 FRP:                  0.71.0
 Feature focus:        Controlled Egress + CLI catalog / resource-first hardening
-Release qualification: Double Full Real E2E on exact HEAD
 ```
 
 `v2.3.1` 주요 사항 (inbound `v2.3.0` capability 유지 + 추가):
@@ -2475,12 +2500,10 @@ Release qualification: Double Full Real E2E on exact HEAD
 - Management-only / platform status semantics for operator honesty
 - Shared `frp_machine_id` validation and bounded concurrency helpers for server daemons
 
-Historical `v2.3.0` / `v2.2.x` tags remain immutable.
-
 ## 50.1 Historical — v2.3.0 FINAL AUDIT CLOSURE
 
 > **Status: HISTORICAL.** Inbound feature-complete line under FINAL AUDIT CLOSURE.
-> Superseded as *current* prepared release by §50.0 `v2.3.1` RC.
+> Superseded as *current* prepared release by §50.0 `v2.4.0` RC.
 
 ```text
 Project:              2.3.0
@@ -3510,7 +3533,8 @@ Manage a few to a few dozen clients with drlink
 
 | 영역 | 현재 상태 / 방향 |
 |---|---|
-| Prepared release (current RC) | **v2.3.1 / FRP 0.71.0** (tag on final audit HEAD) |
+| Prepared release (current RC) | **v2.4.0 / FRP 0.71.0** (tag on final audit HEAD) |
+| Historical Controlled Egress RC | **v2.3.1** (immutable when tagged) |
 | Historical inbound line | **v2.3.0** FINAL AUDIT CLOSURE (immutable when finalized) |
 | Zero-Touch Short URL Option B | **STABLE** |
 | Public Hostname / DNS alias | **STABLE** |
@@ -3519,9 +3543,11 @@ Manage a few to a few dozen clients with drlink
 | Target Health Check | **STABLE** |
 | Support Bundle | **STABLE** |
 | Service Profiles | **STABLE** |
-| Controlled Egress (agentless, port **6102**) | **IN v2.3.1 RC** |
-| Resource-first `drlink` CLI / catalog | **IN v2.3.1 RC** |
-| FEATURE FREEZE | **ACTIVE for release qualification of current HEAD** |
+| Controlled Egress HTTP/HTTPS (port **6102**) | **STABLE (from v2.3.1)** |
+| Fixed TCP Egress (pool **6200–6299**) | **IN v2.4.0 RC** |
+| Egress Explain / Recipes | **IN v2.4.0 RC** |
+| Resource-first `drlink` CLI / catalog | **STABLE (from v2.3.1)** |
+| FEATURE FREEZE | **ACTIVE after v2.4.0 final product closure PASS** |
 | macOS Apple Silicon | **STABLE / Real E2E validated** |
 | Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
 | Rocky 8 / Rocky 9 / AL2023 | **STABLE / Real E2E validated** |
@@ -3538,7 +3564,7 @@ Manage a few to a few dozen clients with drlink
 # 71.1 Historical Release Closure — v2.3.0 FINAL AUDIT CLOSURE
 
 > **Status: HISTORICAL** for the inbound feature-complete line. Current prepared
-> release tracking is §50.0 (`v2.3.1` RC).
+> release tracking is §50.0 (`v2.4.0` RC).
 
 Current release closure (historical record for `v2.3.0`):
 

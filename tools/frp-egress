@@ -251,11 +251,11 @@ def cmd_create(cfg, args):
     print("Enabled  : %s" % ("yes" if record["enabled"] else "no"))
     print("")
     print("The profile is disabled. Default egress policy stays DENY.")
-    print("Preferred workflow: create → add-source → add-destination → test → enable")
+    print("Preferred workflow: create → add-source → add-destination → explain → enable")
     print("Next steps:")
     print("  egress add-source %s <CIDR>" % record["name"])
-    print("  egress add-destination %s <FQDN> <PORT> --protocol http|https" % record["name"])
-    print("  egress test <SOURCE-IP> <FQDN> <PORT>")
+    print("  egress add-destination %s <FQDN> <PORT> --protocol http|https|tcp" % record["name"])
+    print("  egress explain <SOURCE-IP> <FQDN> <PORT>")
     print("  egress enable %s" % record["name"])
     audit(
         "egress.profile.created",
@@ -463,23 +463,33 @@ def cmd_remove_source(cfg, args):
 
 
 def cmd_test(cfg, args):
+    """Hidden/compat alias for explain (policy + DNS only; no mutation)."""
+    return cmd_explain(cfg, args)
+
+
+def cmd_explain(cfg, args):
     state = EG.load_egress_state(cfg=cfg)
-    protocol = args.protocol
+    protocol = getattr(args, "protocol", None)
     if not protocol:
-        # Infer only for operator convenience in test; policy still requires explicit protocol.
+        # Infer only for operator convenience; policy still requires explicit protocol.
         if args.port == 80:
             protocol = "http"
         elif args.port == 443:
             protocol = "https"
         else:
-            fail("--protocol is required for non-80/443 test ports")
+            fail("--protocol is required for non-80/443 explain ports (http|https|tcp)")
+    method = None
+    if protocol == "https":
+        method = "CONNECT"
+    elif protocol == "http":
+        method = "GET"
     decision = EG.authorize_request(
         state,
         source_ip=args.source_ip,
         hostname=args.host,
         port=args.port,
         protocol=protocol,
-        method="CONNECT" if protocol == "https" else "GET",
+        method=method,
         preview=True,
     )
     policy = decision.get("decision")
@@ -533,6 +543,238 @@ def cmd_test(cfg, args):
         print("Live connect: NOT TESTED")
         print("No live policy was changed.")
         raise SystemExit(2) from None
+
+
+def _print_relay(rid, relay, state=None):
+    print("Relay ID      : %s" % rid)
+    print("Name          : %s" % (relay.get("name") or "-"))
+    print("Enabled       : %s" % ("yes" if relay.get("enabled") else "no"))
+    print("Listen        : %s:%s" % (relay.get("listen_addr"), relay.get("listen_port")))
+    print("Profile ID    : %s" % (relay.get("profile_id") or "-"))
+    print("Destination ID: %s" % (relay.get("destination_id") or "-"))
+    if state is not None:
+        profile = (state.get("egress_profiles") or {}).get(relay.get("profile_id") or "")
+        if isinstance(profile, dict):
+            print("Profile Name  : %s" % (profile.get("name") or "-"))
+            print("Profile Enabled: %s" % ("yes" if profile.get("enabled") else "no"))
+            for dest in profile.get("destinations") or []:
+                if dest.get("id") == relay.get("destination_id"):
+                    print(
+                        "Destination   : %s:%s/%s match=%s"
+                        % (dest.get("host"), dest.get("port"), dest.get("protocol"), dest.get("match"))
+                    )
+                    break
+    print("Created       : %s" % (relay.get("created_at") or "-"))
+    print("Updated       : %s" % (relay.get("updated_at") or "-"))
+
+
+def cmd_tcp_list(cfg, _args):
+    state = EG.load_egress_state(cfg=cfg)
+    print("%-18s %-24s %-8s %-22s %s" % ("RELAY ID", "NAME", "ENABLED", "LISTEN", "PROFILE"))
+    print("-" * 90)
+    rows = EG.list_tcp_relays(state)
+    if not rows:
+        print("(none)")
+        return
+    for rid, relay in rows:
+        profile = (state.get("egress_profiles") or {}).get(relay.get("profile_id") or "")
+        pname = (profile.get("name") if isinstance(profile, dict) else None) or relay.get("profile_id")
+        print(
+            "%-18s %-24s %-8s %-22s %s"
+            % (
+                rid,
+                (relay.get("name") or "-")[:24],
+                "yes" if relay.get("enabled") else "no",
+                "%s:%s" % (relay.get("listen_addr"), relay.get("listen_port")),
+                pname,
+            )
+        )
+
+
+def cmd_tcp_show(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        rid, relay = EG.resolve_tcp_relay(state, args.selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    _print_relay(rid, relay, state)
+
+
+def cmd_tcp_create(cfg, args):
+    try:
+        def mut(state):
+            return EG.create_tcp_relay(
+                state,
+                args.name,
+                profile_selector=args.profile,
+                destination_selector=args.destination,
+                listen_port=args.listen_port,
+                listen_addr=args.listen_addr or EG.DEFAULT_LISTEN_ADDR,
+                cfg=cfg,
+                enabled=False,
+            )
+
+        rid, record = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Created tcp relay %s (disabled)" % rid)
+    print("Name   : %s" % record.get("name"))
+    print("Listen : %s:%s" % (record.get("listen_addr"), record.get("listen_port")))
+    print("Enable after profile is complete: egress tcp enable %s" % record.get("name"))
+    audit(
+        "egress.tcp_relay.created",
+        details={
+            "relay_id": rid,
+            "relay_name": record.get("name"),
+            "listen_port": record.get("listen_port"),
+            "enabled": False,
+        },
+    )
+
+
+def cmd_tcp_enable(cfg, args):
+    try:
+        def mut(state):
+            return EG.set_tcp_relay_enabled(state, args.selector, True)
+
+        rid, relay = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Enabled tcp relay %s (%s)" % (rid, relay.get("name")))
+    audit("egress.tcp_relay.enabled", details={"relay_id": rid, "relay_name": relay.get("name")})
+
+
+def cmd_tcp_disable(cfg, args):
+    try:
+        def mut(state):
+            return EG.set_tcp_relay_enabled(state, args.selector, False)
+
+        rid, relay = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Disabled tcp relay %s (%s)" % (rid, relay.get("name")))
+    audit("egress.tcp_relay.disabled", details={"relay_id": rid, "relay_name": relay.get("name")})
+
+
+def cmd_tcp_delete(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    try:
+        rid, relay = EG.resolve_tcp_relay(state, args.selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    if relay.get("enabled") and not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            fail(
+                'Relay "%s" is ENABLED; re-run with --yes to confirm.'
+                % (relay.get("name") or rid)
+            )
+        print('Relay "%s" is ENABLED.' % (relay.get("name") or rid))
+        answer = input("Continue? [y/N]: ").strip().lower()
+        if answer not in ("y", "yes"):
+            raise SystemExit("Cancelled")
+    try:
+        def mut(state):
+            return EG.delete_tcp_relay(state, rid)
+
+        deleted_id, deleted = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Deleted tcp relay %s (%s)" % (deleted_id, deleted.get("name")))
+    audit("egress.tcp_relay.deleted", details={"relay_id": deleted_id, "relay_name": deleted.get("name")})
+
+
+def cmd_tcp_explain(cfg, args):
+    state = EG.load_egress_state(cfg=cfg)
+    decision = EG.authorize_tcp_relay(
+        state,
+        relay_selector=args.selector,
+        source_ip=args.source_ip,
+        preview=True,
+    )
+    print("Mode: PREVIEW")
+    print("Relay ID: %s" % (decision.get("relay_id") or "-"))
+    print("Relay Name: %s" % (decision.get("relay_name") or "-"))
+    print("Policy decision: %s" % decision.get("decision"))
+    print("Reason: %s" % decision.get("reason"))
+    print("Source IP: %s" % decision.get("source_ip"))
+    print("Hostname: %s" % (decision.get("hostname") or "-"))
+    print("Port: %s" % (decision.get("port") or "-"))
+    print("Protocol: tcp")
+    print("Profile ID: %s" % (decision.get("profile_id") or "-"))
+    print("No live policy was changed.")
+    if decision.get("decision") != EG.DECISION_ALLOW:
+        raise SystemExit(2)
+    host = decision.get("hostname")
+    if not host:
+        raise SystemExit(2)
+    try:
+        results = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        seen = set()
+        raw = []
+        for _family, _type, _proto, _canon, sockaddr in results:
+            ip = sockaddr[0]
+            if ip in seen:
+                continue
+            seen.add(ip)
+            raw.append(ip)
+        validated = EG.validate_resolved_addresses(raw)
+        print("DNS safety: ALLOW (%d address(es))" % len(raw))
+        print("Resolved IPs: %s" % (", ".join(validated) if validated else "-"))
+        print("Live connect: NOT TESTED")
+    except (EG.EgressError, OSError) as exc:
+        print("DNS safety: DENY (%s)" % exc)
+        print("Resolved IPs: -")
+        print("Live connect: NOT TESTED")
+        raise SystemExit(2) from None
+
+
+def cmd_recipe_list(cfg, _args):
+    del cfg
+    rows = EG.list_recipes()
+    print("%-16s %-24s %s" % ("ID", "NAME", "DESCRIPTION"))
+    print("-" * 72)
+    if not rows:
+        print("(none)")
+        return
+    for row in rows:
+        print(
+            "%-16s %-24s %s"
+            % (row.get("id"), (row.get("name") or "-")[:24], (row.get("description") or "-")[:40])
+        )
+
+
+def cmd_recipe_show(cfg, args):
+    del cfg
+    try:
+        recipe = EG.load_recipe(args.selector)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print(json.dumps(recipe, indent=2, sort_keys=True))
+
+
+def cmd_recipe_apply(cfg, args):
+    try:
+        def mut(state):
+            return EG.apply_recipe(
+                state,
+                args.selector,
+                profile_name=args.name or None,
+                source_cidr=args.source or None,
+                cfg=cfg,
+            )
+
+        result = EG.mutate_egress_state(mut, cfg=cfg)
+    except EG.EgressError as exc:
+        fail(str(exc))
+    print("Applied recipe %s (left DISABLED)" % args.selector)
+    print("Profile ID  : %s" % result.get("profile_id"))
+    print("Profile Name: %s" % result.get("profile_name"))
+    if result.get("relay_id"):
+        print("Relay ID    : %s" % result.get("relay_id"))
+        print("Relay Name  : %s" % result.get("relay_name"))
+    print("Enabled     : no")
+    print("No profile or relay was auto-enabled.")
+    audit("egress.recipe.applied", details=result)
 
 
 def cmd_export(cfg, args):
@@ -671,8 +913,8 @@ def build_parser():
     p.add_argument(
         "--protocol",
         required=True,
-        choices=["http", "https"],
-        help="Destination protocol (http absolute-form or https CONNECT+SNI)",
+        choices=["http", "https", "tcp"],
+        help="Destination protocol (http|https|tcp)",
     )
     p.set_defaults(func=cmd_add_destination)
 
@@ -702,12 +944,18 @@ def build_parser():
     )
     p.set_defaults(func=cmd_remove_source)
 
-    p = sub.add_parser("test", help="Test policy and DNS safety only (no live connection is made)")
+    p = sub.add_parser(
+        "explain",
+        help="Explain authorize(source, host, port) — policy + DNS only (no mutation)",
+    )
     p.add_argument("source_ip")
     p.add_argument("host")
     p.add_argument("port", type=int)
-    p.add_argument("--protocol", choices=["http", "https"], default=None)
-    p.set_defaults(func=cmd_test)
+    p.add_argument("--protocol", choices=["http", "https", "tcp"], default=None)
+    p.set_defaults(func=cmd_explain)
+
+    # Compat: "test" is rewritten to "explain" in main() so it stays hidden
+    # (Python 3.12 still renders help=argparse.SUPPRESS for subparsers).
 
     p = sub.add_parser("export", help="Export one egress profile to JSON")
     p.add_argument("selector")
@@ -732,10 +980,67 @@ def build_parser():
     p = sub.add_parser("status", help="Show egress control status")
     p.set_defaults(func=cmd_status)
 
+    # Fixed TCP Egress
+    tcp = sub.add_parser("tcp", help="Fixed TCP Egress relays")
+    tcp_sub = tcp.add_subparsers(dest="tcp_command", required=True)
+
+    p = tcp_sub.add_parser("list", help="List Fixed TCP Egress relays")
+    p.set_defaults(func=cmd_tcp_list)
+
+    p = tcp_sub.add_parser("show", help="Show one Fixed TCP Egress relay")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_tcp_show)
+
+    p = tcp_sub.add_parser("create", help="Create a DISABLED Fixed TCP Egress relay")
+    p.add_argument("name")
+    p.add_argument("--profile", required=True)
+    p.add_argument("--destination", required=True)
+    p.add_argument("--listen-port", type=int, default=None)
+    p.add_argument("--listen-addr", default="0.0.0.0")
+    p.set_defaults(func=cmd_tcp_create)
+
+    p = tcp_sub.add_parser("enable", help="Enable a Fixed TCP Egress relay")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_tcp_enable)
+
+    p = tcp_sub.add_parser("disable", help="Disable a Fixed TCP Egress relay")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_tcp_disable)
+
+    p = tcp_sub.add_parser("delete", help="Delete a Fixed TCP Egress relay")
+    p.add_argument("selector")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=cmd_tcp_delete)
+
+    p = tcp_sub.add_parser("explain", help="Explain Fixed TCP Egress authorize for a source IP")
+    p.add_argument("selector")
+    p.add_argument("source_ip")
+    p.set_defaults(func=cmd_tcp_explain)
+
+    recipe = sub.add_parser("recipe", help="Egress recipe templates")
+    recipe_sub = recipe.add_subparsers(dest="recipe_command", required=True)
+
+    p = recipe_sub.add_parser("list", help="List egress recipes")
+    p.set_defaults(func=cmd_recipe_list)
+
+    p = recipe_sub.add_parser("show", help="Show one egress recipe")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_recipe_show)
+
+    p = recipe_sub.add_parser("apply", help="Apply a recipe (always DISABLED; never auto-enable)")
+    p.add_argument("selector")
+    p.add_argument("--name", default=None, help="Override profile name")
+    p.add_argument("--source", default=None, help="Optional source CIDR to add")
+    p.set_defaults(func=cmd_recipe_apply)
+
     return parser
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Hidden compat: egress test → explain (no mutation; catalog keeps hidden alias).
+    if argv and argv[0] == "test":
+        argv[0] = "explain"
     parser = build_parser()
     args = parser.parse_args(argv)
     cfg = load_cfg()

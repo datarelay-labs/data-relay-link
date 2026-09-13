@@ -13,14 +13,17 @@ for f in \
   "$BASE_DIR/server/frp-port-allocator.py" \
   "$BASE_DIR/server/frp-access-plugin.py" \
   "$BASE_DIR/server/frp-egress-gateway.py" \
+  "$BASE_DIR/server/drlink-tcp-egress.py" \
   "$BASE_DIR/server/migrate_token.py" \
   "$BASE_DIR/server/drlink-server.service" \
   "$BASE_DIR/server/drlink-allocator.service" \
   "$BASE_DIR/server/drlink-access.service" \
   "$BASE_DIR/server/drlink-egress.service" \
+  "$BASE_DIR/server/drlink-tcp-egress.service" \
   "$BASE_DIR/server/drlink-frontend.service" \
   "$BASE_DIR/lib/frp_access_control.py" \
   "$BASE_DIR/lib/frp_egress_control.py" \
+  "$BASE_DIR/lib/frp_egress_runtime.py" \
   "$BASE_DIR/lib/frp_service_profiles.py" \
   "$BASE_DIR/lib/frp_mgmt_auth.py" \
   "$BASE_DIR/lib/frp_pki.py" \
@@ -1753,9 +1756,9 @@ frp_server_record_action() {
 frp_server_enable_units() {
   if frp_server_skip_systemd; then
     if frp_mode_is_single443; then
-      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-allocator drlink-frontend"
+      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-frontend"
     else
-      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-allocator"
+      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator"
       frp_server_record_action "disable drlink-frontend"
     fi
     if [[ "${FRP_INSTALL_HOOK_ENABLE_FAIL:-}" == "1" ]]; then
@@ -1765,9 +1768,9 @@ frp_server_enable_units() {
     return 0
   fi
   if frp_mode_is_single443; then
-    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-allocator drlink-frontend >/dev/null
+    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-frontend >/dev/null
   else
-    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-allocator >/dev/null
+    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator >/dev/null
     frp_server_systemctl disable --now drlink-frontend >/dev/null 2>&1 || true
   fi
 }
@@ -1852,6 +1855,19 @@ frp_server_health_egress() {
     return 0
   fi
   frp_wait_unit_active drlink-egress || return 1
+  return 0
+}
+
+frp_server_health_tcp_egress() {
+  # Fixed TCP Egress readiness: unit active. Isolated from inbound FRP health.
+  if [[ "${FRP_INSTALL_HOOK_TCP_EGRESS_HEALTH_FAIL:-}" == "1" ]]; then
+    echo "ERROR: simulated Fixed TCP Egress health check failure" >&2
+    return 1
+  fi
+  if frp_server_skip_systemd; then
+    return 0
+  fi
+  frp_wait_unit_active drlink-tcp-egress || return 1
   return 0
 }
 
@@ -1968,7 +1984,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_frontend sbin_dir bin_dir
+  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_tcp_egress unit_frontend sbin_dir bin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/drlink)"
@@ -1986,6 +2002,7 @@ frp_server_main() {
   unit_alloc="$(frp_server_fs /etc/systemd/system/drlink-allocator.service)"
   unit_access="$(frp_server_fs /etc/systemd/system/drlink-access.service)"
   unit_egress="$(frp_server_fs /etc/systemd/system/drlink-egress.service)"
+  unit_tcp_egress="$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)"
   unit_frontend="$(frp_server_fs /etc/systemd/system/drlink-frontend.service)"
   sbin_dir="$(frp_server_fs /usr/local/sbin)"
   bin_dir="$(frp_server_fs /usr/local/bin)"
@@ -2009,6 +2026,7 @@ frp_server_main() {
   local hash_frps_before hash_toml_before hash_unit_frps_before hash_unit_alloc_before
   local hash_unit_access_before hash_access_plugin_before hash_access_lib_before
   local hash_unit_egress_before hash_egress_gateway_before hash_egress_lib_before
+  local hash_unit_tcp_egress_before hash_tcp_egress_before hash_egress_runtime_before
   local hash_frontend_conf_before hash_unit_frontend_before
   local hash_alloc_helpers_before=() alloc_helper_rel
   hash_frps_before="$(frp_file_sha256 "$(frp_server_fs /usr/local/bin/frps)")"
@@ -2021,6 +2039,9 @@ frp_server_main() {
   hash_unit_egress_before="$(frp_file_sha256 "$unit_egress")"
   hash_egress_gateway_before="$(frp_file_sha256 "${lib_dir}/frp-egress-gateway.py")"
   hash_egress_lib_before="$(frp_file_sha256 "${lib_dir}/frp_egress_control.py")"
+  hash_unit_tcp_egress_before="$(frp_file_sha256 "$unit_tcp_egress")"
+  hash_tcp_egress_before="$(frp_file_sha256 "${lib_dir}/drlink-tcp-egress.py")"
+  hash_egress_runtime_before="$(frp_file_sha256 "${lib_dir}/frp_egress_runtime.py")"
   # Any Python module imported by the allocator must be listed in FRP_ALLOCATOR_RUNTIME_HELPERS.
   for alloc_helper_rel in frp-port-allocator.py "${FRP_ALLOCATOR_RUNTIME_HELPERS[@]}"; do
     hash_alloc_helpers_before+=("$(frp_file_sha256 "${lib_dir}/${alloc_helper_rel}")")
@@ -2218,6 +2239,9 @@ PY
   frp_write_compatible_systemd_unit \
     "$BASE_DIR/server/drlink-egress.service" \
     "$unit_egress"
+  frp_write_compatible_systemd_unit \
+    "$BASE_DIR/server/drlink-tcp-egress.service" \
+    "$unit_tcp_egress"
   if frp_mode_is_single443; then
     write_frontend_config "$frontend_conf"
     write_frontend_unit "$unit_frontend"
@@ -2225,12 +2249,13 @@ PY
     rm -f "$unit_frontend" "$frontend_conf"
   fi
 
-  local need_frps_restart=0 need_alloc_restart=0 need_access_restart=0 need_egress_restart=0 need_frontend_restart=0
+  local need_frps_restart=0 need_alloc_restart=0 need_access_restart=0 need_egress_restart=0 need_tcp_egress_restart=0 need_frontend_restart=0
   if [[ "$existing_install" != "1" ]]; then
     need_frps_restart=1
     need_alloc_restart=1
     need_access_restart=1
     need_egress_restart=1
+    need_tcp_egress_restart=1
     if frp_mode_is_single443; then
       need_frontend_restart=1
     fi
@@ -2271,6 +2296,17 @@ PY
     fi
     if [[ "$(frp_file_sha256 "${lib_dir}/frp_egress_control.py")" != "$hash_egress_lib_before" ]]; then
       need_egress_restart=1
+      need_tcp_egress_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "$unit_tcp_egress")" != "$hash_unit_tcp_egress_before" ]]; then
+      need_tcp_egress_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "${lib_dir}/drlink-tcp-egress.py")" != "$hash_tcp_egress_before" ]]; then
+      need_tcp_egress_restart=1
+    fi
+    if [[ "$(frp_file_sha256 "${lib_dir}/frp_egress_runtime.py")" != "$hash_egress_runtime_before" ]]; then
+      need_egress_restart=1
+      need_tcp_egress_restart=1
     fi
     if [[ "${PKI_ACTION:-}" == "reissued-server" || "${PKI_ACTION:-}" == "generated" ]]; then
       need_alloc_restart=1
@@ -2291,6 +2327,7 @@ PY
       need_alloc_restart=1
       need_access_restart=1
       need_egress_restart=1
+      need_tcp_egress_restart=1
       if frp_mode_is_single443; then
         need_frontend_restart=1
       fi
@@ -2329,6 +2366,12 @@ PY
   if [[ "$need_egress_restart" == "1" ]]; then
     if ! frp_server_restart_unit drlink-egress; then
       frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-egress failed to start; installation is not complete."
+      return 1
+    fi
+  fi
+  if [[ "$need_tcp_egress_restart" == "1" ]]; then
+    if ! frp_server_restart_unit drlink-tcp-egress; then
+      frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-tcp-egress failed to start; installation is not complete."
       return 1
     fi
   fi
@@ -2372,6 +2415,12 @@ PY
   if [[ "$need_egress_restart" == "1" ]] || [[ "$existing_install" != "1" ]]; then
     if ! frp_server_health_egress; then
       frp_server_fail_after_mutation HEALTH_CHECK_FAILED "egress gateway health check failed; previous semantic configuration restored."
+      return 1
+    fi
+  fi
+  if [[ "$need_tcp_egress_restart" == "1" ]] || [[ "$existing_install" != "1" ]]; then
+    if ! frp_server_health_tcp_egress; then
+      frp_server_fail_after_mutation HEALTH_CHECK_FAILED "Fixed TCP Egress health check failed; previous semantic configuration restored."
       return 1
     fi
   fi

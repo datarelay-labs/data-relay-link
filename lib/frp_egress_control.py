@@ -22,9 +22,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-# Schema v2: destinations require explicit protocol=http|https.
+# Schema v3: protocol=http|https|tcp; tcp_relays for Fixed TCP Egress.
 # Legacy v1 (port-only) migrates 80→http, 443→https; other ports fail closed.
-EGRESS_SCHEMA_VERSION = 2
+# v2→v3 adds tcp_relays={} preserving all profile IDs/fields.
+EGRESS_SCHEMA_VERSION = 3
+EGRESS_SCHEMA_VERSION_V2 = 2
 EGRESS_SCHEMA_VERSION_LEGACY = 1
 DEFAULT_EGRESS_PATH = "/var/lib/drlink/egress-control.json"
 DEFAULT_CONN_LOG_PATH = "/var/log/drlink/egress/connections.jsonl"
@@ -32,7 +34,9 @@ LEGACY_CONN_LOG_PATH = "/var/log/drlink/egress-conn.jsonl"
 
 PROTOCOL_HTTP = "http"
 PROTOCOL_HTTPS = "https"
-VALID_PROTOCOLS = frozenset({PROTOCOL_HTTP, PROTOCOL_HTTPS})
+PROTOCOL_TCP = "tcp"
+VALID_PROTOCOLS = frozenset({PROTOCOL_HTTP, PROTOCOL_HTTPS, PROTOCOL_TCP})
+VALID_HTTP_PROTOCOLS = frozenset({PROTOCOL_HTTP, PROTOCOL_HTTPS})
 
 def _default_egress_listen_port() -> int:
     """Resolve the canonical default without requiring package imports.
@@ -69,6 +73,7 @@ PROFILE_ID_PREFIX = "egp_"
 PROFILE_ID_HEX_LEN = 12
 SOURCE_ID_PREFIX = "egs_"
 DEST_ID_PREFIX = "egd_"
+RELAY_ID_PREFIX = "etr_"
 ENTRY_ID_HEX_LEN = 12
 
 DECISION_ALLOW = "ALLOW"
@@ -98,6 +103,9 @@ REASON_CLIENT_CLOSED = "CLIENT_CLOSED"
 REASON_UPSTREAM_CLOSED = "UPSTREAM_CLOSED"
 REASON_IDLE_TIMEOUT = "IDLE_TIMEOUT"
 REASON_POLICY_UNHEALTHY = "POLICY_UNHEALTHY"
+REASON_RELAY_DISABLED = "RELAY_DISABLED"
+REASON_RELAY_NOT_FOUND = "RELAY_NOT_FOUND"
+REASON_RELAY_INCOMPLETE = "RELAY_INCOMPLETE"
 
 # Audit outcome vocabulary (connection/session correlated; no payloads/secrets).
 AUDIT_CONNECTED = "CONNECTED"
@@ -262,7 +270,11 @@ def _control_state_mutation_lock(state_path):
 
 
 def empty_egress_state() -> dict:
-    return {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}}
+    return {
+        "schema_version": EGRESS_SCHEMA_VERSION,
+        "egress_profiles": {},
+        "tcp_relays": {},
+    }
 
 
 def _egress_uid_gid():
@@ -608,7 +620,16 @@ def _has_control_chars(text: str) -> bool:
 def validate_protocol(protocol: Any) -> str:
     text = str(protocol or "").strip().lower()
     if text not in VALID_PROTOCOLS:
-        raise EgressError("destination protocol must be http or https (got %r)" % protocol)
+        raise EgressError(
+            "destination protocol must be http, https, or tcp (got %r)" % protocol
+        )
+    return text
+
+
+def validate_http_protocol(protocol: Any) -> str:
+    text = validate_protocol(protocol)
+    if text not in VALID_HTTP_PROTOCOLS:
+        raise EgressError("HTTP gateway protocol must be http or https (got %r)" % protocol)
     return text
 
 
@@ -897,6 +918,12 @@ def migrate_egress_state_v1_to_v2(raw: dict) -> dict:
                 raise EgressError("invalid destination entry in %s" % pid)
             if "protocol" in dest and dest.get("protocol") not in (None, ""):
                 proto = validate_protocol(dest.get("protocol"))
+                if proto == PROTOCOL_TCP:
+                    raise EgressError(
+                        "legacy v1 migration cannot introduce protocol=tcp "
+                        "(upgrade to v2 first, then add tcp destinations)"
+                    )
+                proto = validate_http_protocol(proto)
             else:
                 port = validate_port(dest.get("port"))
                 proto = infer_legacy_protocol(port)
@@ -922,9 +949,59 @@ def migrate_egress_state_v1_to_v2(raw: dict) -> dict:
         new_profile["sources"] = sources_out
         profiles_out[pid] = new_profile
     return {
-        "schema_version": EGRESS_SCHEMA_VERSION,
+        "schema_version": EGRESS_SCHEMA_VERSION_V2,
         "egress_profiles": profiles_out,
     }
+
+
+def migrate_egress_state_v2_to_v3(raw: dict) -> dict:
+    """Deterministic v2→v3 migration: add tcp_relays={} preserving profiles."""
+    if not isinstance(raw, dict):
+        raise EgressError("egress-control.json must be a JSON object")
+    version = raw.get("schema_version")
+    if version != EGRESS_SCHEMA_VERSION_V2:
+        raise EgressError("migrate_egress_state_v2_to_v3 requires schema_version=2")
+    profiles = raw.get("egress_profiles")
+    if not isinstance(profiles, dict):
+        raise EgressError("egress_profiles must be an object")
+    relays_in = raw.get("tcp_relays")
+    if relays_in is None:
+        relays_out: dict = {}
+    elif isinstance(relays_in, dict):
+        # Ambiguous: v2 must not already carry tcp_relays with data.
+        if relays_in:
+            raise EgressError(
+                "schema_version=2 state must not define non-empty tcp_relays "
+                "(ambiguous; refuse migration)"
+            )
+        relays_out = {}
+    else:
+        raise EgressError("tcp_relays must be an object when present")
+    # Deep-copy profiles so IDs/fields are preserved without aliasing.
+    profiles_out = json.loads(json.dumps(profiles))
+    return {
+        "schema_version": EGRESS_SCHEMA_VERSION,
+        "egress_profiles": profiles_out,
+        "tcp_relays": relays_out,
+    }
+
+
+def migrate_egress_state_to_current(raw: dict) -> dict:
+    """Migrate any supported legacy schema to current. Corruption fails closed."""
+    if not isinstance(raw, dict):
+        raise EgressError("egress-control.json must be a JSON object")
+    version = raw.get("schema_version")
+    if version == EGRESS_SCHEMA_VERSION:
+        return {
+            "schema_version": EGRESS_SCHEMA_VERSION,
+            "egress_profiles": raw.get("egress_profiles"),
+            "tcp_relays": raw.get("tcp_relays") if "tcp_relays" in raw else {},
+        }
+    if version == EGRESS_SCHEMA_VERSION_V2:
+        return migrate_egress_state_v2_to_v3(raw)
+    if version == EGRESS_SCHEMA_VERSION_LEGACY:
+        return migrate_egress_state_v2_to_v3(migrate_egress_state_v1_to_v2(raw))
+    raise EgressError("unsupported egress-control schema_version: %s" % version)
 
 
 def _parse_egress_state(raw: object, *, migrate: bool = True) -> dict:
@@ -935,14 +1012,20 @@ def _parse_egress_state(raw: object, *, migrate: bool = True) -> dict:
         profiles = raw.get("egress_profiles")
         if not isinstance(profiles, dict):
             raise EgressError("egress_profiles must be an object")
+        relays = raw.get("tcp_relays")
+        if relays is None:
+            relays = {}
+        if not isinstance(relays, dict):
+            raise EgressError("tcp_relays must be an object")
         return {
             "schema_version": EGRESS_SCHEMA_VERSION,
             "egress_profiles": profiles,
+            "tcp_relays": relays,
         }
-    if version == EGRESS_SCHEMA_VERSION_LEGACY:
+    if version in (EGRESS_SCHEMA_VERSION_LEGACY, EGRESS_SCHEMA_VERSION_V2):
         if not migrate:
             raise EgressError("unsupported egress-control schema_version: %s" % version)
-        return migrate_egress_state_v1_to_v2(raw)
+        return migrate_egress_state_to_current(raw)
     raise EgressError("unsupported egress-control schema_version: %s" % version)
 
 
@@ -954,6 +1037,12 @@ def validate_egress_state(state: dict) -> None:
     profiles = state.get("egress_profiles")
     if not isinstance(profiles, dict):
         raise EgressError("egress_profiles must be an object")
+    relays = state.get("tcp_relays")
+    if relays is None:
+        state["tcp_relays"] = {}
+        relays = state["tcp_relays"]
+    if not isinstance(relays, dict):
+        raise EgressError("tcp_relays must be an object")
     # Ensure PSL is available before accepting wildcards.
     try:
         validate_wildcard_public_suffix("*.example.com")
@@ -1008,12 +1097,23 @@ def validate_egress_state(state: dict) -> None:
             if did in seen_dest_ids:
                 raise EgressError("duplicate destination entry id in %s: %s" % (pid, did))
             seen_dest_ids.add(did)
-            host, mode = canonicalize_hostname(dest.get("host") or "", allow_wildcard=True)
-            port = validate_port(dest.get("port"))
             protocol = validate_protocol(dest.get("protocol"))
+            allow_wild = protocol != PROTOCOL_TCP
+            host, mode = canonicalize_hostname(
+                dest.get("host") or "", allow_wildcard=allow_wild
+            )
+            if protocol == PROTOCOL_TCP and mode != "exact":
+                raise EgressError(
+                    "tcp destinations require exact FQDN match (no wildcard) in %s" % pid
+                )
+            port = validate_port(dest.get("port"))
             stored_mode = str(dest.get("match") or mode).lower()
             if stored_mode not in ("exact", "wildcard"):
                 raise EgressError("invalid destination match mode in %s" % pid)
+            if protocol == PROTOCOL_TCP and stored_mode != "exact":
+                raise EgressError(
+                    "tcp destinations require match=exact in %s" % pid
+                )
             if stored_mode != mode:
                 if mode == "wildcard" and stored_mode != "wildcard":
                     raise EgressError("wildcard host requires match=wildcard")
@@ -1025,11 +1125,92 @@ def validate_egress_state(state: dict) -> None:
                     "duplicate destination in %s: %s:%s/%s" % (pid, host, port, protocol)
                 )
             seen_dests.add(key)
-            # Normalize stored fields for callers that mutate in place after validate.
             dest["host"] = host
             dest["port"] = port
             dest["match"] = stored_mode
             dest["protocol"] = protocol
+
+    _validate_tcp_relays(state)
+
+
+_RELAY_ID_RE = re.compile(r"^%s[0-9a-f]{%d}$" % (re.escape(RELAY_ID_PREFIX), ENTRY_ID_HEX_LEN))
+
+
+def _canonical_relay_id(value) -> str:
+    if not isinstance(value, str) or not _RELAY_ID_RE.match(value):
+        raise EgressError("malformed tcp relay id: %s" % value)
+    return value
+
+
+def _validate_listen_addr(addr: str) -> str:
+    text = str(addr or "").strip()
+    if not text:
+        raise EgressError("listen_addr is required")
+    if _has_control_chars(text) or any(ch.isspace() for ch in text):
+        raise EgressError("invalid listen_addr")
+    if text in ("0.0.0.0", "::", "*"):
+        return text
+    try:
+        return ipaddress.ip_address(text).compressed
+    except ValueError as exc:
+        raise EgressError("invalid listen_addr: %s" % addr) from exc
+
+
+def _validate_tcp_relays(state: dict) -> None:
+    relays = state.get("tcp_relays") or {}
+    profiles = state.get("egress_profiles") or {}
+    if not isinstance(relays, dict):
+        raise EgressError("tcp_relays must be an object")
+    names: dict[str, str] = {}
+    listen_keys: set[tuple[str, int]] = set()
+    for rid, relay in relays.items():
+        if not isinstance(rid, str) or not rid.startswith(RELAY_ID_PREFIX):
+            raise EgressError("invalid tcp relay id: %s" % rid)
+        if not isinstance(relay, dict):
+            raise EgressError("invalid tcp relay record: %s" % rid)
+        if relay.get("id") != rid:
+            raise EgressError("tcp relay id mismatch: %s" % rid)
+        _canonical_relay_id(rid)
+        name = validate_profile_name(relay.get("name") or "")
+        key = name.lower()
+        if key in names:
+            raise EgressError("duplicate tcp relay name: %s" % name)
+        names[key] = rid
+        if "enabled" not in relay or not isinstance(relay.get("enabled"), bool):
+            raise EgressError("tcp relay enabled must be boolean: %s" % rid)
+        profile_id = str(relay.get("profile_id") or "")
+        destination_id = str(relay.get("destination_id") or "")
+        if profile_id not in profiles:
+            raise EgressError("tcp relay %s references missing profile %s" % (rid, profile_id))
+        profile = profiles[profile_id]
+        dest = None
+        for entry in profile.get("destinations") or []:
+            if isinstance(entry, dict) and entry.get("id") == destination_id:
+                dest = entry
+                break
+        if dest is None:
+            raise EgressError(
+                "tcp relay %s references missing destination %s" % (rid, destination_id)
+            )
+        if validate_protocol(dest.get("protocol")) != PROTOCOL_TCP:
+            raise EgressError(
+                "tcp relay %s destination must use protocol=tcp" % rid
+            )
+        if str(dest.get("match") or "exact") != "exact":
+            raise EgressError("tcp relay %s destination must use match=exact" % rid)
+        listen_addr = _validate_listen_addr(relay.get("listen_addr") or DEFAULT_LISTEN_ADDR)
+        listen_port = validate_port(relay.get("listen_port"))
+        listen_key = (listen_addr, listen_port)
+        if listen_key in listen_keys:
+            raise EgressError(
+                "duplicate tcp relay listen %s:%s" % (listen_addr, listen_port)
+            )
+        listen_keys.add(listen_key)
+        relay["name"] = name
+        relay["profile_id"] = profile_id
+        relay["destination_id"] = destination_id
+        relay["listen_addr"] = listen_addr
+        relay["listen_port"] = listen_port
 
 
 def load_egress_state(
@@ -1048,7 +1229,10 @@ def load_egress_state(
     version = raw.get("schema_version") if isinstance(raw, dict) else None
     state = _parse_egress_state(raw, migrate=True)
     validate_egress_state(state)
-    if persist_migration and version == EGRESS_SCHEMA_VERSION_LEGACY:
+    if persist_migration and version in (
+        EGRESS_SCHEMA_VERSION_LEGACY,
+        EGRESS_SCHEMA_VERSION_V2,
+    ):
         locks = _locks()
         try:
             with _control_state_mutation_lock(path):
@@ -1058,8 +1242,11 @@ def load_egress_state(
                         raw2 = json.loads(path.read_text(encoding="utf-8"))
                     except Exception:
                         raw2 = raw
-                    if isinstance(raw2, dict) and raw2.get("schema_version") == EGRESS_SCHEMA_VERSION_LEGACY:
-                        migrated = migrate_egress_state_v1_to_v2(raw2)
+                    if isinstance(raw2, dict) and raw2.get("schema_version") in (
+                        EGRESS_SCHEMA_VERSION_LEGACY,
+                        EGRESS_SCHEMA_VERSION_V2,
+                    ):
+                        migrated = migrate_egress_state_to_current(raw2)
                         validate_egress_state(migrated)
                         atomic_write_json(path, migrated)
                         state = migrated
@@ -1237,6 +1424,12 @@ def set_profile_enabled(state: dict, selector: str, enabled: bool) -> tuple[str,
 
 def delete_profile(state: dict, selector: str) -> tuple[str, dict]:
     pid, profile = resolve_profile(state, selector)
+    for rid, relay in (state.get("tcp_relays") or {}).items():
+        if isinstance(relay, dict) and relay.get("profile_id") == pid:
+            raise EgressError(
+                "cannot delete profile %s while tcp relay %s references it"
+                % (profile.get("name") or pid, relay.get("name") or rid)
+            )
     del state["egress_profiles"][pid]
     return pid, profile
 
@@ -1295,9 +1488,12 @@ def add_destination(
     protocol: Any,
 ) -> tuple[str, dict, dict]:
     pid, profile = resolve_profile(state, selector)
-    canon_host, match_mode = canonicalize_hostname(host, allow_wildcard=True)
-    port_i = validate_port(port)
     proto = validate_protocol(protocol)
+    allow_wild = proto != PROTOCOL_TCP
+    canon_host, match_mode = canonicalize_hostname(host, allow_wildcard=allow_wild)
+    if proto == PROTOCOL_TCP and match_mode != "exact":
+        raise EgressError("tcp destinations require an exact FQDN (no wildcard)")
+    port_i = validate_port(port)
     for existing in profile.get("destinations") or []:
         if (
             str(existing.get("host") or "").lower() == canon_host
@@ -1348,7 +1544,7 @@ def remove_destination(state: dict, selector: str, dest_selector: str) -> tuple[
         entry_port = int(entry.get("port"))
         if port_part is not None:
             try:
-                canon, mode = canonicalize_hostname(host_part, allow_wildcard=True)
+                canon, _mode = canonicalize_hostname(host_part, allow_wildcard=True)
             except EgressError:
                 continue
             if entry_host == canon and entry_port == port_part:
@@ -1362,6 +1558,17 @@ def remove_destination(state: dict, selector: str, dest_selector: str) -> tuple[
         raise EgressError("destination not found: %s" % dest_selector)
     if len(matches) > 1:
         raise EgressError("ambiguous destination selector: %s" % dest_selector)
+    removed = destinations[matches[0]]
+    for rid, relay in (state.get("tcp_relays") or {}).items():
+        if (
+            isinstance(relay, dict)
+            and relay.get("profile_id") == pid
+            and relay.get("destination_id") == removed.get("id")
+        ):
+            raise EgressError(
+                "cannot remove destination while tcp relay %s references it"
+                % (relay.get("name") or rid)
+            )
     removed = destinations.pop(matches[0])
     profile["updated_at"] = utc_now_iso()
     return pid, profile, removed
@@ -1461,15 +1668,19 @@ def authorize_request(
     try:
         proto = validate_protocol(protocol)
         base["protocol"] = proto
-        # Method/protocol binding (fail closed).
+        # Method/protocol binding (fail closed). TCP relays have no HTTP method.
         meth = str(method or "").upper().strip()
-        if meth:
+        if meth and proto != PROTOCOL_TCP:
             if proto == PROTOCOL_HTTP and meth == "CONNECT":
                 base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
                 return base
             if proto == PROTOCOL_HTTPS and meth != "CONNECT":
                 base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
                 return base
+        if meth and proto == PROTOCOL_TCP and meth in ("CONNECT", "GET", "POST", "PUT"):
+            # TCP path never uses HTTP methods; treat as malformed probe.
+            base["reason"] = REASON_PROTOCOL_NOT_ALLOWED
+            return base
         # Reject IP literal destinations at authorize boundary too.
         try:
             ipaddress.ip_address(str(hostname))
@@ -1609,6 +1820,8 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
             "method": event.get("method"),
             "profile_id": event.get("profile_id"),
             "profile_name": event.get("profile_name"),
+            "relay_id": event.get("relay_id"),
+            "relay_name": event.get("relay_name"),
             "decision": event.get("decision"),
             "reason": event.get("reason"),
             "outcome": event.get("outcome"),
@@ -1752,7 +1965,7 @@ def compile_policy_snapshot(
             schema_version=int(state.get("schema_version") or EGRESS_SCHEMA_VERSION),
             healthy=False,
             load_error=load_error or REASON_POLICY_UNHEALTHY,
-            state={"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}},
+            state={"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}, "tcp_relays": {}},
             exact_index={},
             wildcard_rules=(),
         )
@@ -1873,7 +2086,11 @@ class PolicyEngine:
         with self._lock:
             self._generation += 1
             snap = compile_policy_snapshot(
-                {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {}},
+                {
+                    "schema_version": EGRESS_SCHEMA_VERSION,
+                    "egress_profiles": {},
+                    "tcp_relays": {},
+                },
                 generation=self._generation,
                 load_error=str(error),
                 healthy=False,
@@ -1928,7 +2145,11 @@ def parse_import_document(raw: object) -> dict:
         candidate["enabled"] = False
     # Import never auto-enables.
     candidate["enabled"] = False
-    tmp_state = {"schema_version": EGRESS_SCHEMA_VERSION, "egress_profiles": {pid: candidate}}
+    tmp_state = {
+        "schema_version": EGRESS_SCHEMA_VERSION,
+        "egress_profiles": {pid: candidate},
+        "tcp_relays": {},
+    }
     validate_egress_state(tmp_state)
     return candidate
 
@@ -2003,6 +2224,518 @@ def import_profile_into_state(
     return pid, record, diff_profiles({"destinations": [], "sources": [], "enabled": False}, record)
 
 
+def resolve_destination(profile: dict, dest_selector: str) -> dict:
+    needle = str(dest_selector or "").strip()
+    if not needle:
+        raise EgressError("destination selector is required")
+    destinations = profile.get("destinations") or []
+    matches = []
+    host_part = needle
+    port_part = None
+    if ":" in needle and not needle.startswith("*."):
+        try:
+            maybe_host, maybe_port = needle.rsplit(":", 1)
+            if maybe_port.isdigit():
+                host_part = maybe_host
+                port_part = int(maybe_port)
+        except ValueError:
+            pass
+    for entry in destinations:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") == needle:
+            matches.append(entry)
+            continue
+        entry_host = str(entry.get("host") or "")
+        entry_port = int(entry.get("port"))
+        if port_part is not None:
+            try:
+                canon, _mode = canonicalize_hostname(host_part, allow_wildcard=True)
+            except EgressError:
+                continue
+            if entry_host == canon and entry_port == port_part:
+                matches.append(entry)
+        elif entry_host == needle.lower().rstrip("."):
+            matches.append(entry)
+    by_id = {m["id"]: m for m in matches}
+    if not by_id:
+        raise EgressError("destination not found: %s" % dest_selector)
+    if len(by_id) > 1:
+        raise EgressError("ambiguous destination selector: %s" % dest_selector)
+    return next(iter(by_id.values()))
+
+
+def list_tcp_relays(state: dict) -> list[tuple[str, dict]]:
+    relays = state.get("tcp_relays") or {}
+    rows = list(relays.items())
+    rows.sort(key=lambda item: str((item[1] or {}).get("name") or item[0]).lower())
+    return rows
+
+
+def resolve_tcp_relay(state: dict, selector: str) -> tuple[str, dict]:
+    text = str(selector or "").strip()
+    if not text:
+        raise EgressError("tcp relay selector is required")
+    relays = state.get("tcp_relays") or {}
+    if text in relays:
+        return text, relays[text]
+    matches = []
+    needle = text.lower()
+    for rid, relay in relays.items():
+        if str(relay.get("name") or "").lower() == needle:
+            matches.append((rid, relay))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise EgressError("ambiguous tcp relay name: %s" % selector)
+    raise EgressError("tcp relay not found: %s" % selector)
+
+
+def _tcp_relay_used_ports(state: dict) -> set[int]:
+    used = set()
+    for _rid, relay in (state.get("tcp_relays") or {}).items():
+        if not isinstance(relay, dict):
+            continue
+        try:
+            used.add(int(relay.get("listen_port")))
+        except (TypeError, ValueError):
+            continue
+    return used
+
+
+def _load_infra_ports():
+    try:
+        from frp_infrastructure_ports import (  # noqa: WPS433
+            coerce_port,
+            infrastructure_ports,
+            is_tcp_relay_port,
+            port_in_service_range,
+            protected_listen_ports,
+            service_owns_port,
+            tcp_relay_port_range,
+        )
+        return (
+            coerce_port,
+            infrastructure_ports,
+            is_tcp_relay_port,
+            port_in_service_range,
+            protected_listen_ports,
+            service_owns_port,
+            tcp_relay_port_range,
+        )
+    except Exception:
+        import importlib.util
+
+        here = Path(__file__).resolve().parent
+        path = here / "frp_infrastructure_ports.py"
+        spec = importlib.util.spec_from_file_location("frp_infrastructure_ports", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return (
+            mod.coerce_port,
+            mod.infrastructure_ports,
+            mod.is_tcp_relay_port,
+            mod.port_in_service_range,
+            mod.protected_listen_ports,
+            mod.service_owns_port,
+            mod.tcp_relay_port_range,
+        )
+
+
+def assert_tcp_relay_listen_port_allowed(
+    port: int,
+    state: dict,
+    *,
+    cfg: Optional[dict] = None,
+    registry: Optional[dict] = None,
+    exclude_relay_id: Optional[str] = None,
+) -> int:
+    """Fail closed if listen port is protected, out of pool, or already used."""
+    (
+        coerce_port,
+        _infra,
+        is_tcp_relay_port,
+        port_in_service_range,
+        protected_listen_ports,
+        service_owns_port,
+        _range,
+    ) = _load_infra_ports()
+    port_i = validate_port(port)
+    if coerce_port(port_i) is None:
+        raise EgressError("invalid tcp relay listen port")
+    if not is_tcp_relay_port(port_i, cfg):
+        raise EgressError(
+            "tcp relay listen port %s is outside Fixed TCP pool 6200-6299" % port_i
+        )
+    if port_in_service_range(port_i, cfg):
+        raise EgressError(
+            "tcp relay listen port %s collides with published service range" % port_i
+        )
+    protected = protected_listen_ports(cfg)
+    if port_i in protected:
+        raise EgressError(
+            "tcp relay listen port %s is reserved for infrastructure" % port_i
+        )
+    owner = service_owns_port(registry, port_i)
+    if owner is not None:
+        mid, sid = owner
+        raise EgressError(
+            "tcp relay listen port %s is owned by published service %s/%s"
+            % (port_i, mid, sid)
+        )
+    for rid, relay in (state.get("tcp_relays") or {}).items():
+        if exclude_relay_id and rid == exclude_relay_id:
+            continue
+        if not isinstance(relay, dict):
+            continue
+        try:
+            if int(relay.get("listen_port")) == port_i:
+                raise EgressError(
+                    "tcp relay listen port %s already used by %s"
+                    % (port_i, relay.get("name") or rid)
+                )
+        except (TypeError, ValueError):
+            continue
+    # Also refuse HTTP egress listen port even if somehow outside protected set.
+    try:
+        _host, http_port = listen_bind(cfg)
+        if int(http_port) == port_i:
+            raise EgressError(
+                "tcp relay listen port %s collides with HTTP egress listen" % port_i
+            )
+    except EgressError:
+        raise
+    except Exception:
+        pass
+    return port_i
+
+
+def allocate_tcp_relay_listen_port(
+    state: dict,
+    *,
+    cfg: Optional[dict] = None,
+    registry: Optional[dict] = None,
+) -> int:
+    _coerce, _infra, _is_pool, _svc_range, _prot, _owns, tcp_relay_port_range = _load_infra_ports()
+    start, end = tcp_relay_port_range(cfg)
+    used = _tcp_relay_used_ports(state)
+    for candidate in range(start, end + 1):
+        if candidate in used:
+            continue
+        try:
+            return assert_tcp_relay_listen_port_allowed(
+                candidate, state, cfg=cfg, registry=registry
+            )
+        except EgressError:
+            continue
+    raise EgressError(
+        "no free Fixed TCP Egress listen port in %s-%s" % (start, end)
+    )
+
+
+def tcp_relay_enable_blockers(state: dict, relay: dict) -> list[str]:
+    blockers = []
+    profile_id = str(relay.get("profile_id") or "")
+    destination_id = str(relay.get("destination_id") or "")
+    profiles = state.get("egress_profiles") or {}
+    profile = profiles.get(profile_id)
+    if not isinstance(profile, dict):
+        blockers.append("missing profile")
+        return blockers
+    if not profile.get("enabled"):
+        blockers.append("profile disabled")
+    dest = None
+    for entry in profile.get("destinations") or []:
+        if isinstance(entry, dict) and entry.get("id") == destination_id:
+            dest = entry
+            break
+    if dest is None:
+        blockers.append("missing destination")
+    else:
+        try:
+            if validate_protocol(dest.get("protocol")) != PROTOCOL_TCP:
+                blockers.append("destination not tcp")
+            if str(dest.get("match") or "exact") != "exact":
+                blockers.append("destination not exact")
+        except EgressError:
+            blockers.append("invalid destination")
+    sources = profile.get("sources") or []
+    if not isinstance(sources, list) or not sources:
+        blockers.append("no source")
+    try:
+        validate_port(relay.get("listen_port"))
+        _validate_listen_addr(relay.get("listen_addr") or DEFAULT_LISTEN_ADDR)
+    except EgressError:
+        blockers.append("invalid listen")
+    return blockers
+
+
+def create_tcp_relay(
+    state: dict,
+    name: str,
+    *,
+    profile_selector: str,
+    destination_selector: str,
+    listen_port: Optional[Any] = None,
+    listen_addr: str = DEFAULT_LISTEN_ADDR,
+    cfg: Optional[dict] = None,
+    registry: Optional[dict] = None,
+    enabled: bool = False,
+) -> tuple[str, dict]:
+    if enabled:
+        raise EgressError(
+            "cannot create an enabled tcp relay; create disabled, then enable"
+        )
+    name = validate_profile_name(name)
+    for _rid, existing in (state.get("tcp_relays") or {}).items():
+        if str(existing.get("name") or "").lower() == name.lower():
+            raise EgressError("tcp relay already exists: %s" % name)
+    pid, profile = resolve_profile(state, profile_selector)
+    dest = resolve_destination(profile, destination_selector)
+    if validate_protocol(dest.get("protocol")) != PROTOCOL_TCP:
+        raise EgressError("tcp relay destination must use protocol=tcp")
+    if str(dest.get("match") or "exact") != "exact":
+        raise EgressError("tcp relay destination must use match=exact")
+    addr = _validate_listen_addr(listen_addr or DEFAULT_LISTEN_ADDR)
+    if listen_port is None or str(listen_port).strip() == "":
+        port_i = allocate_tcp_relay_listen_port(state, cfg=cfg, registry=registry)
+    else:
+        port_i = assert_tcp_relay_listen_port_allowed(
+            listen_port, state, cfg=cfg, registry=registry
+        )
+    rid = _new_id(RELAY_ID_PREFIX)
+    now = utc_now_iso()
+    record = {
+        "id": rid,
+        "name": name,
+        "profile_id": pid,
+        "destination_id": dest.get("id"),
+        "listen_addr": addr,
+        "listen_port": port_i,
+        "enabled": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    state.setdefault("tcp_relays", {})[rid] = record
+    return rid, record
+
+
+def set_tcp_relay_enabled(state: dict, selector: str, enabled: bool) -> tuple[str, dict]:
+    rid, relay = resolve_tcp_relay(state, selector)
+    if enabled:
+        blockers = tcp_relay_enable_blockers(state, relay)
+        if blockers:
+            raise EgressError(
+                "cannot enable incomplete tcp relay (%s)" % ", ".join(blockers)
+            )
+    relay["enabled"] = bool(enabled)
+    relay["updated_at"] = utc_now_iso()
+    return rid, relay
+
+
+def delete_tcp_relay(state: dict, selector: str) -> tuple[str, dict]:
+    rid, relay = resolve_tcp_relay(state, selector)
+    del state["tcp_relays"][rid]
+    return rid, relay
+
+
+def authorize_tcp_relay(
+    state: Optional[dict],
+    *,
+    relay_selector: str,
+    source_ip: str,
+    load_error: Optional[str] = None,
+    preview: bool = False,
+) -> dict:
+    """Authorize a Fixed TCP Egress connection for one relay listener."""
+    base = {
+        "decision": DECISION_DENY,
+        "reason": REASON_AUTHORIZATION_ERROR,
+        "profile_id": None,
+        "profile_name": None,
+        "relay_id": None,
+        "relay_name": None,
+        "matched_source": None,
+        "matched_destination": None,
+        "source_ip": source_ip,
+        "hostname": None,
+        "port": None,
+        "protocol": PROTOCOL_TCP,
+    }
+    if load_error is not None:
+        base["reason"] = REASON_POLICY_INVALID
+        return base
+    if state is None:
+        base["reason"] = REASON_POLICY_MISSING
+        return base
+    try:
+        rid, relay = resolve_tcp_relay(state, relay_selector)
+    except EgressError:
+        base["reason"] = REASON_RELAY_NOT_FOUND
+        return base
+    base["relay_id"] = rid
+    base["relay_name"] = relay.get("name")
+    if not relay.get("enabled", False) and not preview:
+        base["reason"] = REASON_RELAY_DISABLED
+        return base
+    profiles = state.get("egress_profiles") or {}
+    profile = profiles.get(relay.get("profile_id"))
+    if not isinstance(profile, dict):
+        base["reason"] = REASON_RELAY_INCOMPLETE
+        return base
+    dest = None
+    for entry in profile.get("destinations") or []:
+        if isinstance(entry, dict) and entry.get("id") == relay.get("destination_id"):
+            dest = entry
+            break
+    if dest is None:
+        base["reason"] = REASON_RELAY_INCOMPLETE
+        return base
+    try:
+        host = str(dest.get("host") or "")
+        port = int(dest.get("port"))
+    except (TypeError, ValueError):
+        base["reason"] = REASON_RELAY_INCOMPLETE
+        return base
+    decision = authorize_request(
+        state,
+        source_ip=source_ip,
+        hostname=host,
+        port=port,
+        protocol=PROTOCOL_TCP,
+        preview=preview,
+    )
+    decision["relay_id"] = rid
+    decision["relay_name"] = relay.get("name")
+    if not relay.get("enabled", False) and preview and decision.get("decision") == DECISION_ALLOW:
+        decision["preview"] = True
+    return decision
+
+
+def recipes_dir() -> Path:
+    env = os.environ.get("FRP_EGRESS_RECIPES_DIR", "").strip()
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "data" / "egress-recipes",
+        Path("/usr/local/lib/drlink/data/egress-recipes"),
+    ]
+    root = deploy_root()
+    if root:
+        candidates.insert(1, Path(root) / "usr/local/lib/drlink/data/egress-recipes")
+    for path in candidates:
+        if path.is_dir():
+            return path
+    return candidates[0]
+
+
+def list_recipes() -> list[dict]:
+    directory = recipes_dir()
+    if not directory.is_dir():
+        return []
+    rows = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        rid = str(raw.get("id") or path.stem)
+        rows.append(
+            {
+                "id": rid,
+                "name": str(raw.get("name") or rid),
+                "description": str(raw.get("description") or ""),
+                "path": str(path),
+            }
+        )
+    return rows[:3]
+
+
+def load_recipe(selector: str) -> dict:
+    needle = str(selector or "").strip().lower()
+    if not needle:
+        raise EgressError("recipe selector is required")
+    for recipe_meta in list_recipes():
+        if recipe_meta["id"].lower() == needle or recipe_meta["name"].lower() == needle:
+            raw = json.loads(Path(recipe_meta["path"]).read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise EgressError("invalid recipe document")
+            return raw
+    raise EgressError("recipe not found: %s" % selector)
+
+
+def apply_recipe(
+    state: dict,
+    selector: str,
+    *,
+    profile_name: Optional[str] = None,
+    source_cidr: Optional[str] = None,
+    cfg: Optional[dict] = None,
+    registry: Optional[dict] = None,
+) -> dict:
+    """Apply a recipe. NEVER auto-enables profiles or relays."""
+    recipe = load_recipe(selector)
+    kind = str(recipe.get("kind") or "profile").strip().lower()
+    name = validate_profile_name(profile_name or recipe.get("profile_name") or recipe.get("name") or "")
+    description = str(recipe.get("description") or "")
+    pid, profile = create_profile(state, name, description=description, enabled=False)
+    for src in recipe.get("sources") or []:
+        if isinstance(src, dict):
+            cidr = src.get("cidr") or source_cidr
+            if cidr:
+                add_source(state, pid, cidr, name=str(src.get("name") or ""))
+        elif isinstance(src, str):
+            add_source(state, pid, src)
+    if source_cidr and not (recipe.get("sources") or []):
+        add_source(state, pid, source_cidr)
+    for dest in recipe.get("destinations") or []:
+        if not isinstance(dest, dict):
+            continue
+        add_destination(
+            state,
+            pid,
+            dest.get("host"),
+            dest.get("port"),
+            protocol=dest.get("protocol"),
+        )
+    result = {
+        "profile_id": pid,
+        "profile_name": profile.get("name"),
+        "relay_id": None,
+        "relay_name": None,
+        "enabled": False,
+    }
+    if kind == "tcp_relay" or recipe.get("tcp_relay"):
+        relay_spec = recipe.get("tcp_relay") or {}
+        dests = profile.get("destinations") or []
+        tcp_dest = None
+        for entry in dests:
+            if isinstance(entry, dict) and entry.get("protocol") == PROTOCOL_TCP:
+                tcp_dest = entry
+                break
+        if tcp_dest is None:
+            raise EgressError("tcp_relay recipe requires a tcp destination")
+        rid, relay = create_tcp_relay(
+            state,
+            str(relay_spec.get("name") or ("%s-relay" % name)),
+            profile_selector=pid,
+            destination_selector=tcp_dest["id"],
+            listen_port=relay_spec.get("listen_port"),
+            listen_addr=str(relay_spec.get("listen_addr") or DEFAULT_LISTEN_ADDR),
+            cfg=cfg,
+            registry=registry,
+            enabled=False,
+        )
+        result["relay_id"] = rid
+        result["relay_name"] = relay.get("name")
+    # Explicit: apply never enables.
+    profile["enabled"] = False
+    return result
+
+
 def doctor_issues(state: dict) -> list[dict]:
     issues = []
     try:
@@ -2018,7 +2751,8 @@ def doctor_issues(state: dict) -> list[dict]:
         return issues
 
     profiles = list_profiles(state)
-    if not profiles:
+    relays = list_tcp_relays(state)
+    if not profiles and not relays:
         issues.append(
             {
                 "class": "EGRESS_CONFIG_INFO",
@@ -2067,12 +2801,51 @@ def doctor_issues(state: dict) -> list[dict]:
                         % (profile.get("name") or pid),
                     }
                 )
-    if enabled_open == 0:
+    if enabled_open == 0 and profiles:
         issues.append(
             {
                 "class": "EGRESS_CONFIG_INFO",
                 "severity": "info",
                 "message": "no enabled egress profile has both sources and destinations",
+            }
+        )
+    enabled_relays = 0
+    for rid, relay in relays:
+        if relay.get("enabled"):
+            enabled_relays += 1
+            blockers = tcp_relay_enable_blockers(state, relay)
+            if blockers:
+                issues.append(
+                    {
+                        "class": "EGRESS_CONFIG_ERROR",
+                        "severity": "error",
+                        "message": "enabled tcp relay %s is incomplete (%s)"
+                        % (relay.get("name") or rid, ", ".join(blockers)),
+                    }
+                )
+        try:
+            assert_tcp_relay_listen_port_allowed(
+                int(relay.get("listen_port")),
+                state,
+                exclude_relay_id=rid,
+            )
+        except EgressError as exc:
+            issues.append(
+                {
+                    "class": "EGRESS_CONFIG_ERROR",
+                    "severity": "error",
+                    "message": "tcp relay %s listen conflict: %s"
+                    % (relay.get("name") or rid, exc),
+                }
+            )
+        except Exception:
+            pass
+    if relays and enabled_relays == 0:
+        issues.append(
+            {
+                "class": "EGRESS_CONFIG_INFO",
+                "severity": "info",
+                "message": "tcp relays configured but none enabled",
             }
         )
     return issues

@@ -423,6 +423,7 @@ class BundleBuilder:
             "drlink-allocator",
             "drlink-access",
             "drlink-egress",
+            "drlink-tcp-egress",
             "drlink-frontend",
             "drlink-client",
         ]
@@ -726,6 +727,7 @@ class BundleBuilder:
                 "drlink-allocator",
                 "drlink-access",
                 "drlink-egress",
+                "drlink-tcp-egress",
                 "drlink-client",
                 "drlink-frontend",
                 "frps",
@@ -815,7 +817,7 @@ class BundleBuilder:
             for line in out.splitlines():
                 if re.search(
                     r"\b(frps|frpc|drlink-server|drlink-allocator|drlink-access|"
-                    r"drlink-egress|drlink-client|drlink-frontend|frp-access|"
+                    r"drlink-egress|drlink-tcp-egress|drlink-client|drlink-frontend|frp-access|"
                     r"frp-egress-gateway)\b",
                     line,
                 ):
@@ -897,6 +899,25 @@ class BundleBuilder:
                 1 for entry in profiles.values()
                 if isinstance(entry, dict) and entry.get("enabled", True) is not False
             )
+        tcp_relays = (data or {}).get("tcp_relays") or {}
+        enabled_relay_count = 0
+        tcp_listeners = []
+        if isinstance(tcp_relays, dict):
+            for rid, relay in tcp_relays.items():
+                if not isinstance(relay, dict):
+                    continue
+                if relay.get("enabled") is True:
+                    enabled_relay_count += 1
+                tcp_listeners.append(
+                    {
+                        "id": str(rid),
+                        "name": str(relay.get("name") or ""),
+                        "enabled": bool(relay.get("enabled")),
+                        "listen_addr": str(relay.get("listen_addr") or ""),
+                        "listen_port": relay.get("listen_port"),
+                        "profile_id": str(relay.get("profile_id") or ""),
+                    }
+                )
         listener = None
         cfg, _cfg_err = self.safe_read_json("/etc/drlink/config.json")
         if isinstance(cfg, dict):
@@ -905,6 +926,7 @@ class BundleBuilder:
             if port is not None:
                 listener = "%s:%s" % (host, port)
         unit_state = "unknown"
+        tcp_unit_state = "unknown"
         if shutil.which("systemctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
             rc, out, _err = run_cmd(
                 ["systemctl", "show", "drlink-egress", "-p", "ActiveState", "-p", "UnitFileState"],
@@ -912,6 +934,12 @@ class BundleBuilder:
             )
             if rc == 0:
                 unit_state = out.strip() or "unknown"
+            rc, out, _err = run_cmd(
+                ["systemctl", "show", "drlink-tcp-egress", "-p", "ActiveState", "-p", "UnitFileState"],
+                timeout=8,
+            )
+            if rc == 0:
+                tcp_unit_state = out.strip() or "unknown"
         events: List[Dict[str, Any]] = []
         log_path = self.path("/var/log/drlink/egress/connections.jsonl")
         if not log_path.is_file():
@@ -935,8 +963,12 @@ class BundleBuilder:
             "schema_version": (data or {}).get("schema_version"),
             "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
             "enabled_profile_count": enabled_count,
+            "tcp_relay_count": len(tcp_relays) if isinstance(tcp_relays, dict) else 0,
+            "enabled_tcp_relay_count": enabled_relay_count,
+            "tcp_relay_listeners": tcp_listeners,
             "listener": listener,
             "service_status": redact_text(unit_state),
+            "tcp_service_status": redact_text(tcp_unit_state),
             "recent_conn_events": events,
         }
         self.stage_json("egress-control-summary.json", summary)

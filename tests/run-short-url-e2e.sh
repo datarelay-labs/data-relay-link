@@ -58,9 +58,21 @@ ssh_server 'command -v cloudflared >/dev/null || (
 )' || fail "install cloudflared on server"
 
 # Refresh server project tools from this branch via stdin bootstrap upgrade.
-# Working-tree artifacts are channel=dev / git_ref=main.
-note "Updating server tools from local tree"
-ssh_server "sudo env FRP_RELEASE_CHANNEL=dev FRP_CLIENT_INSTALLER_URL='$INSTALLER_URL' bash -s -- --upgrade" \
+# Match FRP_RELEASE_CHANNEL to the tree's embedded release-manifest channel
+# (stable/vPROJECT vs dev/main). Hardcoding "dev" against a stable-identity
+# candidate produces a false "release metadata channel mismatch".
+TREE_CHANNEL="$(python3 - "$ROOT/release-manifest.json" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+channel = str(data.get("channel") or "").strip().lower()
+if channel not in ("dev", "stable"):
+    raise SystemExit("unsupported release-manifest channel: %r" % channel)
+print(channel)
+PY
+)"
+note "Updating server tools from local tree (FRP_RELEASE_CHANNEL=$TREE_CHANNEL)"
+ssh_server "sudo env FRP_RELEASE_CHANNEL='$TREE_CHANNEL' FRP_CLIENT_INSTALLER_URL='$INSTALLER_URL' bash -s -- --upgrade" \
   <"$ROOT/dist/bootstrap-server.sh" >"$OUT_DIR/server-upgrade.log" 2>&1 \
   || { cat "$OUT_DIR/server-upgrade.log"; fail "server upgrade"; }
 pass "SERVER_UPGRADE"

@@ -21,8 +21,10 @@ project usr/local/lib/drlink/frp-port-allocator.py 0700 server/frp-port-allocato
 project usr/local/lib/drlink/frp-access-plugin.py 0700 server/frp-access-plugin.py python
 # Readable by unprivileged User=drlink-egress (executed via /usr/bin/python3).
 project usr/local/lib/drlink/frp-egress-gateway.py 0644 server/frp-egress-gateway.py python
+project usr/local/lib/drlink/drlink-tcp-egress.py 0644 server/drlink-tcp-egress.py python
 project usr/local/lib/drlink/frp_access_control.py 0644 lib/frp_access_control.py python
 project usr/local/lib/drlink/frp_egress_control.py 0644 lib/frp_egress_control.py python
+project usr/local/lib/drlink/frp_egress_runtime.py 0644 lib/frp_egress_runtime.py python
 project usr/local/lib/drlink/frp_state_paths.py 0644 lib/frp_state_paths.py python
 project usr/local/lib/drlink/frp_service_profiles.py 0644 lib/frp_service_profiles.py python
 project usr/local/lib/drlink/frp_mgmt_auth.py 0644 lib/frp_mgmt_auth.py python
@@ -42,6 +44,9 @@ project usr/local/lib/drlink/frp_bounded_server.py 0644 lib/frp_bounded_server.p
 project usr/local/lib/drlink/frp_public_suffix.py 0644 lib/frp_public_suffix.py python
 project usr/local/lib/drlink/frp_policy_fingerprint.py 0644 lib/frp_policy_fingerprint.py python
 project usr/local/lib/drlink/data/public_suffix_list.dat 0644 lib/data/public_suffix_list.dat none
+optional usr/local/lib/drlink/data/egress-recipes/https-api.json 0644 lib/data/egress-recipes/https-api.json none
+optional usr/local/lib/drlink/data/egress-recipes/http-update.json 0644 lib/data/egress-recipes/http-update.json none
+optional usr/local/lib/drlink/data/egress-recipes/tcp-fixed.json 0644 lib/data/egress-recipes/tcp-fixed.json none
 project usr/local/lib/drlink/frp_install_txn.py 0644 lib/frp_install_txn.py python
 project usr/local/lib/drlink/frp-server-upgrade.sh 0644 lib/frp-server-upgrade.sh bash
 project usr/local/lib/drlink/frp_client_registry.py 0644 lib/frp_client_registry.py python
@@ -59,6 +64,7 @@ unit etc/systemd/system/drlink-server.service 0644 server/drlink-server.service 
 unit etc/systemd/system/drlink-allocator.service 0644 server/drlink-allocator.service none
 unit etc/systemd/system/drlink-access.service 0644 server/drlink-access.service none
 unit etc/systemd/system/drlink-egress.service 0644 server/drlink-egress.service none
+unit etc/systemd/system/drlink-tcp-egress.service 0644 server/drlink-tcp-egress.service none
 unit-single443 etc/systemd/system/drlink-frontend.service 0644 server/drlink-frontend.service none
 project usr/local/lib/drlink/frp-create-client 0755 tools/frp-create-client python
 project usr/local/lib/drlink/frp-enrollments 0755 tools/frp-enrollments python

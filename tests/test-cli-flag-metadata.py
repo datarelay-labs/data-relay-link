@@ -30,7 +30,10 @@ class CatalogFlagMetadataTests(unittest.TestCase):
     def test_protocol_has_choices_and_type(self):
         flag = self._flag(("egress", "add-destination"), "--protocol")
         self.assertEqual(flag.get("type"), "enum")
-        self.assertEqual(set(flag.get("choices") or ()), {"http", "https"})
+        self.assertEqual(set(flag.get("choices") or ()), {"http", "https", "tcp"})
+        explain = self._flag(("egress", "explain"), "--protocol")
+        self.assertEqual(explain.get("type"), "enum")
+        self.assertEqual(set(explain.get("choices") or ()), {"http", "https", "tcp"})
 
     def test_service_add_preset_and_profile_metadata(self):
         preset = self._flag(("service", "add"), "--preset")

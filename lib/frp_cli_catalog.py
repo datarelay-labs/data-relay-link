@@ -469,8 +469,8 @@ _FLAG_DEFAULT_META = {
     },
     "--protocol": {
         "description": "Allowed application protocol",
-        "metavar": "http|https",
-        "choices": ("http", "https"),
+        "metavar": "http|https|tcp",
+        "choices": ("http", "https", "tcp"),
         "type": "enum",
         "risk": "metadata",
     },
@@ -1321,7 +1321,7 @@ COMMANDS = (
         "  1. egress create <name>\n"
         "  2. egress add-source <name> <CIDR>\n"
         "  3. egress add-destination <name> <FQDN> <PORT> --protocol https\n"
-        "  4. egress test <SOURCE-IP> <FQDN> <PORT>\n"
+        "  4. egress explain <SOURCE-IP> <FQDN> <PORT>\n"
         "  5. egress enable <name>",
         examples=('egress create vendor-api --description "Vendor API"',),
         args=(_arg("<name>"),),
@@ -1360,23 +1360,25 @@ COMMANDS = (
         "server",
         "Policy",
         "Allow one destination FQDN, port, and protocol",
-        detail="Require an explicit --protocol http|https. HTTP destinations "
+        detail="Require an explicit --protocol http|https|tcp. HTTP destinations "
         "accept absolute-form proxy requests only; HTTPS destinations require "
-        "CONNECT plus ClientHello SNI binding on every https port.",
+        "CONNECT plus ClientHello SNI binding on every https port; TCP "
+        "destinations are exact-FQDN only and used by Fixed TCP Egress relays.",
         examples=(
             "egress add-destination vendor-api api.example.com 443 --protocol https",
             "egress add-destination vendor-api archive.example.com 80 --protocol http",
+            "egress add-destination vendor-api license.example.com 27000 --protocol tcp",
         ),
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<FQDN>"), _arg("<PORT>")),
         flags=(
             _flag(
                 "--protocol",
                 arity=1,
-                choices=("http", "https"),
+                choices=("http", "https", "tcp"),
                 required=True,
-                metavar="http|https",
+                metavar="http|https|tcp",
                 type="enum",
-                description="Destination protocol (http absolute-form or https CONNECT+SNI)",
+                description="Destination protocol (http|https|tcp)",
             ),
         ),
         tail="flags",
@@ -1482,26 +1484,159 @@ COMMANDS = (
         examples=("egress status",),
     ),
     _cmd(
+        ("egress", "explain"),
+        "server",
+        "Policy",
+        "Explain authorize(source, host, port) — policy + DNS only",
+        detail="Dry-run against the live policy store and optional DNS "
+        "resolution. It does not open a live TCP/TLS connection to the "
+        "destination and does not mutate policy. Use this before 'egress enable'.",
+        examples=(
+            "egress explain 10.0.0.5 api.example.com 443",
+            "egress explain 10.0.0.5 license.example.com 27000 --protocol tcp",
+        ),
+        args=(_arg("<SOURCE-IP>"), _arg("<HOST>"), _arg("<PORT>")),
+        flags=(
+            _flag(
+                "--protocol",
+                arity=1,
+                choices=("http", "https", "tcp"),
+                metavar="http|https|tcp",
+                type="enum",
+                description="Wire protocol for the explain probe",
+            ),
+        ),
+        tail="flags",
+    ),
+    _cmd(
         ("egress", "test"),
         "server",
         "Policy",
-        "Preview authorize(source, host, port) — policy + DNS only",
-        detail="Dry-run against the live policy store and optional DNS "
-        "resolution. It does not open a live TCP/TLS connection to the "
-        "destination. Use this before 'egress enable'.",
+        "Compat alias for egress explain",
+        detail="Hidden compatibility alias for 'egress explain'. Prefer explain. "
+        "Same dry-run: evaluates live policy and optional DNS; does not open a "
+        "live connection and does not mutate policy.",
         examples=("egress test 10.0.0.5 api.example.com 443",),
         args=(_arg("<SOURCE-IP>"), _arg("<HOST>"), _arg("<PORT>")),
         flags=(
             _flag(
                 "--protocol",
                 arity=1,
-                choices=("http", "https"),
-                metavar="http|https",
+                choices=("http", "https", "tcp"),
+                metavar="http|https|tcp",
                 type="enum",
-                description="Wire protocol for the test probe",
+                description="Wire protocol for the probe",
             ),
         ),
         tail="flags",
+        hidden=True,
+        surface="hidden_compat",
+    ),
+    _cmd(
+        ("egress", "tcp", "list"),
+        "server",
+        "Policy",
+        "List Fixed TCP Egress relays",
+        examples=("egress tcp list",),
+    ),
+    _cmd(
+        ("egress", "tcp", "show"),
+        "server",
+        "Policy",
+        "Show one Fixed TCP Egress relay",
+        examples=("egress tcp show vendor-license",),
+        args=(_arg("<RELAY>"),),
+    ),
+    _cmd(
+        ("egress", "tcp", "create"),
+        "server",
+        "Policy",
+        "Create a DISABLED Fixed TCP Egress relay",
+        detail="Always created disabled. Destination must be protocol=tcp with exact FQDN. "
+        "Listen ports auto-allocate from 6200-6299 unless --listen-port is set.",
+        examples=(
+            "egress tcp create vendor-license --profile vendor-api --destination license.example.com:27000",
+        ),
+        args=(_arg("<NAME>"),),
+        flags=(
+            _flag("--profile", arity=1, required=True, metavar="PROFILE"),
+            _flag("--destination", arity=1, required=True, metavar="DEST"),
+            _flag("--listen-port", arity=1, metavar="N"),
+            _flag("--listen-addr", arity=1, metavar="A"),
+        ),
+        tail="flags",
+        risk="security_widening",
+    ),
+    _cmd(
+        ("egress", "tcp", "enable"),
+        "server",
+        "Policy",
+        "Enable a Fixed TCP Egress relay",
+        examples=("egress tcp enable vendor-license",),
+        args=(_arg("<RELAY>"),),
+        risk="security_widening",
+    ),
+    _cmd(
+        ("egress", "tcp", "disable"),
+        "server",
+        "Policy",
+        "Disable a Fixed TCP Egress relay",
+        examples=("egress tcp disable vendor-license",),
+        args=(_arg("<RELAY>"),),
+        risk="security_widening",
+    ),
+    _cmd(
+        ("egress", "tcp", "delete"),
+        "server",
+        "Policy",
+        "Delete a Fixed TCP Egress relay",
+        examples=("egress tcp delete vendor-license", "egress tcp delete vendor-license --yes"),
+        args=(_arg("<RELAY>"),),
+        flags=(_flag("--yes", arity=0),),
+        tail="flags",
+        risk="security_widening",
+        destructive=True,
+        confirmation="y_n",
+    ),
+    _cmd(
+        ("egress", "tcp", "explain"),
+        "server",
+        "Policy",
+        "Explain Fixed TCP Egress authorize for a source IP",
+        examples=("egress tcp explain vendor-license 10.0.0.5",),
+        args=(_arg("<RELAY>"), _arg("<SOURCE-IP>")),
+    ),
+    _cmd(
+        ("egress", "recipe", "list"),
+        "server",
+        "Policy",
+        "List egress recipe templates",
+        examples=("egress recipe list",),
+    ),
+    _cmd(
+        ("egress", "recipe", "show"),
+        "server",
+        "Policy",
+        "Show one egress recipe template",
+        examples=("egress recipe show tcp-fixed",),
+        args=(_arg("<RECIPE>"),),
+    ),
+    _cmd(
+        ("egress", "recipe", "apply"),
+        "server",
+        "Policy",
+        "Apply an egress recipe (always DISABLED; never auto-enable)",
+        examples=(
+            "egress recipe apply https-api --name vendor-api --source 10.0.0.0/24",
+            "egress recipe apply tcp-fixed --name vendor-license --source 10.0.0.0/24",
+        ),
+        args=(_arg("<RECIPE>"),),
+        flags=(
+            _flag("--name", arity=1, metavar="NAME"),
+            _flag("--source", arity=1, metavar="CIDR"),
+        ),
+        tail="flags",
+        risk="security_widening",
     ),
     _cmd(
         ("egress", "export"),
@@ -2261,7 +2396,7 @@ WORKFLOWS = (
             "egress create vendor-api",
             "egress add-source vendor-api 10.0.0.0/24",
             "egress add-destination vendor-api api.example.com 443 --protocol https",
-            "egress test 10.0.0.5 api.example.com 443",
+            "egress explain 10.0.0.5 api.example.com 443",
             "egress enable vendor-api",
         ),
         "A new egress profile is created disabled. Default policy is DENY.",
@@ -2403,7 +2538,7 @@ GUIDED_MENU = {
         (
             "Controlled Egress",
             (
-                ("server_egress", "Profiles / policy", "egress list / show / test / enable"),
+                ("server_egress", "Profiles / policy", "egress list / show / explain / enable"),
             ),
         ),
         (

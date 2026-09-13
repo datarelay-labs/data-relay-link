@@ -582,13 +582,20 @@ PY
   elif [[ -f "$unit_file" ]]; then
     frp_server_record_action "enable drlink-egress"
   fi
+  local tcp_unit
+  tcp_unit="$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)"
+  if [[ -f "$tcp_unit" ]] && ! frp_server_skip_systemd && ! frp_server_test_mode; then
+    frp_server_systemctl enable drlink-tcp-egress >/dev/null || return 1
+  elif [[ -f "$tcp_unit" ]]; then
+    frp_server_record_action "enable drlink-tcp-egress"
+  fi
   return 0
 }
 
 frp_server_apply_project_upgrade() {
   local source="$1" check_only="${2:-0}"
   local version_file previous target staged snapshot backups preserved_before
-  local restart_frps=0 restart_alloc=0 restart_access=0 restart_egress=0 restart_frontend=0 rel
+  local restart_frps=0 restart_alloc=0 restart_access=0 restart_egress=0 restart_tcp_egress=0 restart_frontend=0 rel
   local resolved_channel resolved_ref
   local candidate_meta target_channel target_ref
   local installed_channel installed_ref installed_bundle target_bundle
@@ -727,6 +734,11 @@ frp_server_apply_project_upgrade() {
   frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-egress.service && restart_egress=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp-egress-gateway.py && restart_egress=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_control.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_control.py && restart_tcp_egress=1
+  frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-tcp-egress.service && restart_tcp_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink-tcp-egress.py && restart_tcp_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_runtime.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_runtime.py && restart_tcp_egress=1
   if frp_server_upgrade_is_single443; then
     frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-frontend.service && restart_frontend=1
   fi
@@ -788,7 +800,7 @@ frp_server_apply_project_upgrade() {
     return 1
   fi
 
-  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_egress" == "1" || "$restart_frontend" == "1" ]]; then
+  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_egress" == "1" || "$restart_tcp_egress" == "1" || "$restart_frontend" == "1" ]]; then
     if ! frp_server_skip_systemd; then
       frp_server_systemctl daemon-reload || {
         frp_server_upgrade_rollback "$snapshot"; return 1;
@@ -804,6 +816,15 @@ frp_server_apply_project_upgrade() {
   if [[ "$restart_egress" == "1" ]]; then
     frp_server_restart_unit drlink-egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
+  if [[ "$restart_tcp_egress" == "1" ]]; then
+    frp_server_restart_unit drlink-tcp-egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    # Prefer install-server health helper when available (same tree / sourced upgrade).
+    if declare -F frp_server_health_tcp_egress >/dev/null 2>&1; then
+      frp_server_health_tcp_egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    elif ! frp_server_skip_systemd; then
+      frp_wait_unit_active drlink-tcp-egress || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    fi
   fi
   if [[ "$restart_frps" == "1" ]]; then
     frp_server_restart_unit drlink-server || { frp_server_upgrade_rollback "$snapshot"; return 1; }

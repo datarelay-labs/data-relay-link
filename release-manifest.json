@@ -1,13 +1,30 @@
 {
   "schema_version": 1,
-  "project_version": "2.3.1",
+  "project_version": "2.4.0",
   "frp_version": "0.71.0",
   "channel": "stable",
-  "git_ref": "v2.3.1",
+  "git_ref": "v2.4.0",
   "owner": "datarelay-labs",
   "repo": "data-relay-link",
   "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link",
   "signing": false,
+  "integrity": {
+    "sha256": true,
+    "checksum_file": "SHA256SUMS"
+  },
+  "sbom": {
+    "format": "spdx-json",
+    "artifact": "dist/sbom.spdx.json",
+    "generator": "scripts/generate-sbom.py",
+    "available": true
+  },
+  "provenance": {
+    "type": "github-artifact-attestation",
+    "workflow": ".github/workflows/release-attest.yml",
+    "available": false,
+    "workflow_ready": true,
+    "note": "Attestation is produced by the release-attest workflow on an immutable release ref. available=false until a verified attestation exists for the published candidate; workflow_ready=true means the workflow is present and validated in-tree."
+  },
   "checksum_file": "SHA256SUMS",
   "supported_frp_versions": {
     "0.71.0": {
@@ -19,31 +36,33 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.1 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
-    "recommended_future": [
-      "GitHub tag protection / rulesets",
-      "optional signed checksums",
-      "optional GitHub artifact attestation"
+    "sbom": "SPDX JSON via scripts/generate-sbom.py",
+    "provenance": "GitHub Artifact Attestations via .github/workflows/release-attest.yml (OIDC)",
+    "distinctions": [
+      "checksum != artifact provenance",
+      "artifact provenance != commit signature",
+      "developer commit signing is not required for this release evidence set"
     ]
   },
   "artifacts": {
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "bcabde2b153c57436960689ac01697ed1066d1f5771a32494647326b9c45b18f"
+      "sha256": "43c0542af9aa69406c9518896d11899d25a84a22fd525da6e91ee91135af0344"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "d7a4d62e43d4104476d1434aae9834037d4215a34ffeed259c23f729ae6da0bd"
+      "sha256": "1beeba4fb24d7fcb0bab29503ebfaf643bcd1370937ee716586e4b09ffcbc61c"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "453f01db742438d3f300a944309d9290845ec53b045fa7809049e0362bd91656"
+      "sha256": "a4be8719200bd41e4b5b81ca1247e096f04579e3a67f7a6fd69db3b8730e67bf"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",
@@ -53,7 +72,7 @@
     "uninstall-server.sh": {
       "path": "dist/uninstall-server.sh",
       "url_path": "dist/uninstall-server.sh",
-      "sha256": "6b9fc41bd3d72619ca266f2fa0124413b949f7791aa782b814d95957ef7f75be"
+      "sha256": "f703688fcabb98dc2e331d54c7ff7c664bac13b84faafbd2074c20c6ff5e235c"
     }
   }
 }

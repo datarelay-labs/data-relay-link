@@ -2237,6 +2237,193 @@ def check_egress_control(report, paths, facts, cfg):
     else:
         report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'inspect unit drlink-egress', 'runtime')
 
+    # Fixed TCP Egress unit + listener collision surface (same policy file).
+    tcp_unit_active = 'unknown'
+    tcp_unit_enabled = 'unknown'
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ['systemctl', 'is-active', 'drlink-tcp-egress'],
+            capture_output=True, text=True, timeout=5,
+        )
+        tcp_unit_active = (proc.stdout or '').strip() or 'unknown'
+        proc = subprocess.run(
+            ['systemctl', 'is-enabled', 'drlink-tcp-egress'],
+            capture_output=True, text=True, timeout=5,
+        )
+        tcp_unit_enabled = (proc.stdout or '').strip() or 'unknown'
+    except Exception:
+        pass
+    if tcp_unit_enabled in ('enabled', 'static', 'linked'):
+        report.add(
+            'EGRESS_TCP_UNIT_ENABLED', PASS,
+            'drlink-tcp-egress is enabled',
+            tcp_unit_enabled, '', 'runtime',
+        )
+    elif tcp_unit_enabled == 'disabled':
+        report.add(
+            'EGRESS_TCP_UNIT_ENABLED', WARN,
+            'drlink-tcp-egress is disabled',
+            tcp_unit_enabled,
+            'enable unit drlink-tcp-egress (read-only doctor will not change units)',
+            'runtime',
+        )
+    else:
+        report.add(
+            'EGRESS_TCP_UNIT_ENABLED', INFO,
+            'drlink-tcp-egress enable state is unknown',
+            tcp_unit_enabled, '', 'runtime',
+        )
+    if tcp_unit_active == 'active':
+        report.add(
+            'EGRESS_TCP_UNIT', PASS,
+            'drlink-tcp-egress is active',
+            tcp_unit_active, '', 'runtime',
+        )
+    elif tcp_unit_active == 'failed':
+        report.add(
+            'EGRESS_TCP_UNIT', FAIL,
+            'drlink-tcp-egress failed',
+            tcp_unit_active,
+            'inspect unit drlink-tcp-egress',
+            'runtime',
+        )
+    else:
+        report.add(
+            'EGRESS_TCP_UNIT', WARN,
+            'drlink-tcp-egress is not active',
+            tcp_unit_active,
+            'inspect unit drlink-tcp-egress',
+            'runtime',
+        )
+
+    tcp_unit_file = Path('/etc/systemd/system/drlink-tcp-egress.service')
+    if root:
+        candidate_tcp = Path(root) / 'etc/systemd/system/drlink-tcp-egress.service'
+        if candidate_tcp.is_file():
+            tcp_unit_file = candidate_tcp
+        else:
+            src_tcp = Path(__file__).resolve().parent.parent / 'server' / 'drlink-tcp-egress.service'
+            if src_tcp.is_file():
+                tcp_unit_file = src_tcp
+    if tcp_unit_file.is_file():
+        try:
+            tcp_unit_text = tcp_unit_file.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            tcp_unit_text = ''
+        if re.search(r'(?m)^User=drlink-egress\s*$', tcp_unit_text):
+            report.add(
+                'EGRESS_TCP_SERVICE_USER', PASS,
+                'drlink-tcp-egress runs as unprivileged user',
+                'drlink-egress', '', 'runtime',
+            )
+        else:
+            report.add(
+                'EGRESS_TCP_SERVICE_USER', WARN,
+                'drlink-tcp-egress unit is not configured for User=drlink-egress',
+                '',
+                're-run the server installer to apply non-root Fixed TCP Egress',
+                'runtime',
+            )
+
+    try:
+        relays = eg.list_tcp_relays(state) if hasattr(eg, 'list_tcp_relays') else []
+    except Exception:
+        relays = []
+    report.add(
+        'EGRESS_TCP_RELAYS', INFO,
+        'Fixed TCP Egress relays',
+        'count=%d enabled=%d'
+        % (
+            len(relays),
+            sum(1 for _rid, relay in relays if isinstance(relay, dict) and relay.get('enabled')),
+        ),
+        '',
+        'state',
+    )
+    for rid, relay in relays:
+        if not isinstance(relay, dict):
+            continue
+        try:
+            port = int(relay.get('listen_port'))
+        except (TypeError, ValueError):
+            report.add(
+                'EGRESS_TCP_LISTEN', FAIL,
+                'tcp relay has invalid listen_port',
+                str(rid),
+                'fix with: sudo drlink egress tcp show %s' % (relay.get('name') or rid),
+                'state',
+            )
+            continue
+        try:
+            registry_local = {}
+            registry_path = paths.p('/var/lib/drlink/registry.json')
+            if registry_path.is_file():
+                try:
+                    registry_local = json.loads(registry_path.read_text(encoding='utf-8'))
+                except Exception:
+                    registry_local = {}
+            eg.assert_tcp_relay_listen_port_allowed(
+                port,
+                state,
+                cfg=cfg if isinstance(cfg, dict) else None,
+                registry=registry_local if isinstance(registry_local, dict) else None,
+                exclude_relay_id=rid,
+            )
+            report.add(
+                'EGRESS_TCP_LISTEN', PASS,
+                'tcp relay listen port is free of protected collisions',
+                '%s:%s' % (relay.get('listen_addr'), port),
+                '',
+                'state',
+            )
+        except Exception as exc:
+            report.add(
+                'EGRESS_TCP_LISTEN', FAIL,
+                'tcp relay listen port collision',
+                '%s (%s)' % (port, exc),
+                'change listen port or migrate conflicting service',
+                'state',
+            )
+
+    tcp_effective = '/run/drlink/tcp-egress/effective.json'
+    if paths.is_file(tcp_effective):
+        try:
+            effective_tcp = json.loads(paths.p(tcp_effective).read_text(encoding='utf-8'))
+            healthy_tcp = bool(effective_tcp.get('healthy'))
+            if healthy_tcp:
+                report.add(
+                    'EGRESS_TCP_EFFECTIVE', PASS,
+                    'Fixed TCP Egress effective runtime is healthy',
+                    'generation=%s' % effective_tcp.get('policy_generation'),
+                    '',
+                    'runtime',
+                )
+            else:
+                report.add(
+                    'EGRESS_TCP_EFFECTIVE', FAIL,
+                    'Fixed TCP Egress effective runtime is unhealthy (fail-closed)',
+                    str(effective_tcp.get('load_error') or ''),
+                    'fix Fixed TCP Egress with: sudo drlink egress tcp list',
+                    'runtime',
+                )
+        except Exception as exc:
+            report.add(
+                'EGRESS_TCP_EFFECTIVE', WARN,
+                'Fixed TCP Egress effective runtime snapshot is unreadable',
+                str(exc),
+                'restart drlink-tcp-egress or inspect journalctl -u drlink-tcp-egress',
+                'runtime',
+            )
+    elif tcp_unit_active == 'active':
+        report.add(
+            'EGRESS_TCP_EFFECTIVE', WARN,
+            'Fixed TCP Egress unit is active but effective snapshot is missing',
+            tcp_effective,
+            'restart drlink-tcp-egress or inspect journalctl -u drlink-tcp-egress',
+            'runtime',
+        )
+
     # Least-privilege service identity + runtime effective snapshot (read-only).
     unit_file = Path('/etc/systemd/system/drlink-egress.service')
     if root:

@@ -36,7 +36,13 @@ pq_ssh() {
 
 pq_gate() {
   local name="$1" status="$2"
-  printf '%s=%s\n' "$name" "$status" | tee -a "${PROD_QUAL_GATES:-/dev/null}"
+  local gates="${PROD_QUAL_GATES:-}"
+  # Replace prior value for the same key so retries cannot leave FAIL+PASS.
+  if [[ -n "$gates" && -f "$gates" ]]; then
+    grep -Ev "^${name}=" "$gates" >"${gates}.tmp" 2>/dev/null || true
+    mv "${gates}.tmp" "$gates"
+  fi
+  printf '%s=%s\n' "$name" "$status" | tee -a "${gates:-/dev/null}"
   pq_note "GATE $name=$status"
   if [[ "$status" == "FAIL" || "$status" == "BLOCKED" ]]; then
     PROD_QUAL_FAILS=$((${PROD_QUAL_FAILS:-0} + 1))

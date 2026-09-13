@@ -30,7 +30,7 @@ Data Relay Link helps you securely reach servers behind NAT or firewalls **and**
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
 - Named Access Lists / temporary TTL / connection access log
-- Agentless Controlled Egress profiles (FQDN + port + protocol http|https, source CIDR, default DENY, listen **6102**)
+- Agentless Controlled Egress profiles (FQDN + port + protocol http|https|tcp, source CIDR, default DENY, HTTP listen **6102**, Fixed TCP pool **6200–6299**)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
 - One primary operator interface: `sudo drlink` (resource-first CLI)
@@ -42,27 +42,26 @@ Inbound relay engine (implementation dependency): [`fatedier/frp`](https://githu
 
 ---
 
-## Prepared release — v2.3.1 (tag pending)
+## Prepared release — v2.4.0 (tag pending)
 
 | Item | Current |
 | --- | --- |
-| Data Relay Link | **v2.3.1** (prepared / RC) |
+| Data Relay Link | **v2.4.0** (prepared / RC) |
 | Pinned upstream FRP | **v0.71.0** |
-| Intended install source | immutable `v2.3.1` tag **after** final audit freeze |
+| Intended install source | immutable `v2.4.0` tag **after** final audit freeze |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
 
-Current project version: **2.3.1**
+Current project version: **2.4.0**
 Current pinned FRP version: **v0.71.0**
 
-`v2.2.1` and earlier tags remain immutable historical releases. This tree
-prepares **v2.3.1** with FRP pinned at `0.71.0`. Historical `v2.3.0` remains
-untouched and must not be moved or recreated. Following mutable `main` is
+`v2.3.1`, `v2.3.0`, `v2.2.1` and earlier tags remain immutable historical releases. This tree
+prepares **v2.4.0** with FRP pinned at `0.71.0`. Historical tags must not be moved or recreated. Following mutable `main` is
 explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
 
-Until the `v2.3.1` Git tag exists, do **not** install from a
-`raw.githubusercontent.com/.../v2.3.1/...` URL (it would 404). Use a verified
+Until the `v2.4.0` Git tag exists, do **not** install from a
+`raw.githubusercontent.com/.../v2.4.0/...` URL (it would 404). Use a verified
 local checkout, a release candidate bundle, or an explicit
 `FRP_RELEASE_CHANNEL=dev` / source-ref workflow instead.
 
@@ -77,15 +76,15 @@ The post-**v2.2.1** documentation restoration phase
 **PASS**. That work restored [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md)
 without moving the immutable `v2.2.1` tag or changing runtime artifacts. It is
 historical context only; current product version and platform claims are under
-**v2.3.1** above.
+**v2.4.0** above.
 
 ---
 
-## Supported client platforms — v2.3.1
+## Supported client platforms — v2.4.0
 
 Real-host validation and container/CI portability are deliberately reported separately.
 
-| Platform | v2.3.1 validation claim |
+| Platform | v2.4.0 validation claim |
 | --- | --- |
 | **Ubuntu 24 physical host** | **Real E2E validated** |
 | **Rocky Linux 8.10** | **Real E2E validated** |
@@ -102,7 +101,7 @@ The Data Relay Link **server remains Linux-based**. macOS and Windows are client
 
 ### What the final Real E2E covered
 
-Across applicable platforms, the v2.3.1 release path validated the actual product lifecycle, including:
+Across applicable platforms, the v2.4.0 release path validates the actual product lifecycle, including:
 
 - install and Zero-Touch enrollment
 - persistent `CLIENT ID`
@@ -185,11 +184,11 @@ This project is intentionally **not** a Web UI, database-backed RMM, Kubernetes 
 
 ## Install the server
 
-After the immutable `v2.3.1` tag is published (final audit freeze), install with:
+After the immutable `v2.4.0` tag is published (final audit freeze), install with:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.3.1/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.4.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
@@ -556,4 +555,4 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 ## Product definition in one sentence
 
-> Data Relay Link v2.3.1 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.
+> Data Relay Link v2.4.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations — with Controlled HTTP/HTTPS Egress and Fixed TCP Egress — without requiring a Web UI, database, or large-scale fleet orchestration.

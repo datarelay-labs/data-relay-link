@@ -1,0 +1,146 @@
+name: release-attest
+# Build, integrity-check, SBOM, and GitHub Artifact Attestation for a release
+# candidate ref. Does NOT publish a GitHub Release or move tags.
+#
+# Trigger manually with an immutable ref (tag or full commit SHA).
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Immutable release candidate ref (tag or full commit SHA)
+        required: true
+        type: string
+      publish_artifacts:
+        description: Upload workflow artifacts (not a GitHub Release)
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-attest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # actions/checkout@v4.2.2
+      - name: Checkout immutable ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Verify source version / ref consistency
+        run: |
+          set -euo pipefail
+          PROJECT_VERSION="$(awk -F= '/^PROJECT_VERSION=/{print $2}' VERSION)"
+          MANIFEST_VERSION="$(python3 -c 'import json;print(json.load(open("release-manifest.json"))["project_version"])')"
+          CHANNEL="$(python3 -c 'import json;print(json.load(open("release-manifest.json"))["channel"])')"
+          GIT_REF="$(python3 -c 'import json;print(json.load(open("release-manifest.json"))["git_ref"])')"
+          HEAD="$(git rev-parse HEAD)"
+          echo "PROJECT_VERSION=$PROJECT_VERSION"
+          echo "MANIFEST_VERSION=$MANIFEST_VERSION"
+          echo "CHANNEL=$CHANNEL"
+          echo "GIT_REF=$GIT_REF"
+          echo "HEAD=$HEAD"
+          test "$PROJECT_VERSION" = "$MANIFEST_VERSION"
+          test "$CHANNEL" = "stable" -o "$CHANNEL" = "dev"
+          if [[ "$CHANNEL" == "stable" ]]; then
+            test "$GIT_REF" = "v${PROJECT_VERSION}"
+          else
+            test "$GIT_REF" = "main"
+          fi
+
+      - name: Build bundles twice (deterministic parity)
+        run: |
+          set -euo pipefail
+          ./scripts/build-bundles.sh
+          cp -a dist dist-build1
+          ./scripts/build-bundles.sh
+          diff -ru dist-build1 dist
+
+      - name: Verify SHA256SUMS and release-manifest digests
+        run: |
+          set -euo pipefail
+          ./scripts/verify-sha256sums.sh
+          ./scripts/verify-release-manifest-artifacts.sh
+
+      - name: Secret and public metadata scans
+        run: |
+          set -euo pipefail
+          ./scripts/secret-scan.sh
+          ./scripts/check-public-metadata.sh
+
+      - name: Generate SPDX SBOM
+        run: |
+          set -euo pipefail
+          python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json
+          test -s dist/sbom.spdx.json
+
+      - name: Package attestation subject set
+        id: subjects
+        run: |
+          set -euo pipefail
+          mkdir -p release-subjects
+          cp dist/bootstrap-client.sh dist/bootstrap-server.sh \
+             dist/bootstrap-client.ps1 dist/uninstall-client.sh dist/uninstall-server.sh \
+             dist/sbom.spdx.json SHA256SUMS release-manifest.json \
+             release-subjects/
+          # Subject list for attestation
+          find release-subjects -type f | sort | tee subject-list.txt
+
+      # actions/attest-build-provenance@v2.2.0 (pin by commit SHA)
+      - name: Attest release artifacts
+        id: attest
+        uses: actions/attest-build-provenance@520d128f165991a6c774bcb264f323e3d70747f4
+        with:
+          subject-path: |
+            release-subjects/bootstrap-client.sh
+            release-subjects/bootstrap-server.sh
+            release-subjects/bootstrap-client.ps1
+            release-subjects/uninstall-client.sh
+            release-subjects/uninstall-server.sh
+            release-subjects/sbom.spdx.json
+            release-subjects/SHA256SUMS
+            release-subjects/release-manifest.json
+
+      - name: Record attestation evidence
+        run: |
+          set -euo pipefail
+          mkdir -p attestation-evidence
+          {
+            echo "schema_version=1"
+            echo "provenance_type=github-artifact-attestation"
+            echo "subject_ref=${{ inputs.ref }}"
+            echo "git_head=$(git rev-parse HEAD)"
+            echo "attestation_id=${{ steps.attest.outputs.attestation-id || '' }}"
+            echo "attestation_url=${{ steps.attest.outputs.attestation-url || '' }}"
+            echo "bundle_path=${{ steps.attest.outputs.bundle-path || '' }}"
+          } | tee attestation-evidence/provenance.env
+          # Prefer gh attestation verify when available in the runner image.
+          if command -v gh >/dev/null 2>&1 && [[ -n "${{ steps.attest.outputs.bundle-path }}" ]]; then
+            gh attestation verify release-subjects/SHA256SUMS \
+              --repo "${{ github.repository }}" \
+              --bundle "${{ steps.attest.outputs.bundle-path }}" \
+              | tee attestation-evidence/verify.txt \
+              || echo "ATTESTATION_VERIFY=DEFERRED" | tee -a attestation-evidence/provenance.env
+          else
+            echo "ATTESTATION_VERIFY=NOT_RUN" | tee -a attestation-evidence/provenance.env
+            echo "gh attestation verify unavailable or bundle path empty" > attestation-evidence/verify.txt
+          fi
+
+      - name: Upload workflow artifacts
+        if: ${{ inputs.publish_artifacts }}
+        # actions/upload-artifact@v4.6.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: data-relay-link-release-subjects
+          path: |
+            release-subjects/
+            attestation-evidence/
+            subject-list.txt
+          if-no-files-found: error
