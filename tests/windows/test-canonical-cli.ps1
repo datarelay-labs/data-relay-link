@@ -45,6 +45,15 @@ try {
     $bundle = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath support bundle -Output $bundleOut 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'support bundle exits 0'
     Assert-FrpTrue (Test-Path -LiteralPath $bundleOut) 'support bundle wrote archive'
+    $extractDir = Join-Path $tmpRoot 'bundle-extract'
+    New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+    Expand-Archive -LiteralPath $bundleOut -DestinationPath $extractDir -Force
+    $doctorTxt = Get-ChildItem -Path $extractDir -Recurse -Filter 'doctor.txt' | Select-Object -First 1
+    Assert-FrpTrue ($null -ne $doctorTxt) 'support bundle contains doctor.txt'
+    $doctorBody = Get-Content -LiteralPath $doctorTxt.FullName -Raw
+    Assert-FrpTrue ($doctorBody -match 'frp-client doctor') 'doctor.txt has doctor body header'
+    Assert-FrpTrue ($doctorBody -match 'MISS|Enrolled|Doctor') 'doctor.txt has diagnostic content'
+    Assert-FrpTrue ($doctorBody -notmatch '^\s*[01]\s*$') 'doctor.txt is not bare exit code'
 
     $add = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath service add `
         -Preset custom -Id web -Name Web -TargetHost 10.0.0.5 -TargetPort 8080 2>&1 | Out-String

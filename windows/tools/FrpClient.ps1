@@ -607,38 +607,52 @@ function Invoke-FrpClientUninstallLocked {
     return 0
 }
 
-function Invoke-FrpClientDoctor {
+function Get-FrpClientDoctorReport {
+    $lines = New-Object System.Collections.Generic.List[string]
     $issues = 0
-    Write-Host 'frp-client doctor (basic)'
-    Write-Host ("Root: {0}" -f (Get-FrpWindowsRoot))
+    [void]$lines.Add('frp-client doctor (basic)')
+    [void]$lines.Add(("Root: {0}" -f (Get-FrpWindowsRoot)))
     if (Test-FrpIsEnrolled) {
-        Write-Host 'Enrolled: yes'
+        [void]$lines.Add('Enrolled: yes')
     } else {
-        Write-Host 'Enrolled: no'
+        [void]$lines.Add('Enrolled: no')
         $issues++
     }
     foreach ($p in @((Get-FrpTomlPath), (Get-FrpStatePath), (Get-FrpAllocatorCaPath), (Get-FrpIdentityPubPath))) {
         if (Test-Path -LiteralPath $p) {
-            Write-Host ("OK  {0}" -f $p)
+            [void]$lines.Add(("OK  {0}" -f $p))
         } else {
-            Write-Host ("MISS {0}" -f $p)
+            [void]$lines.Add(("MISS {0}" -f $p))
             $issues++
         }
     }
     if (Test-Path -LiteralPath (Get-FrpFrpcPath)) {
-        Write-Host ("OK  {0}" -f (Get-FrpFrpcPath))
+        [void]$lines.Add(("OK  {0}" -f (Get-FrpFrpcPath)))
     } else {
-        Write-Host ("MISS {0}" -f (Get-FrpFrpcPath))
+        [void]$lines.Add(("MISS {0}" -f (Get-FrpFrpcPath)))
         $issues++
     }
     $st = Get-FrpClientStatus
-    Write-Host ("Running: {0} pid={1}" -f $st.Running, $st.Pid)
+    [void]$lines.Add(("Running: {0} pid={1}" -f $st.Running, $st.Pid))
     if ($issues -gt 0) {
-        Write-Host ("Doctor found {0} issue(s)" -f $issues)
-        return 1
+        [void]$lines.Add(("Doctor found {0} issue(s)" -f $issues))
+    } else {
+        [void]$lines.Add('Doctor: basic checks passed')
     }
-    Write-Host 'Doctor: basic checks passed'
-    return 0
+    $exitCode = 0
+    if ($issues -gt 0) {
+        $exitCode = 1
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Text = ($lines -join "`n")
+    }
+}
+
+function Invoke-FrpClientDoctor {
+    $report = Get-FrpClientDoctorReport
+    Write-Host $report.Text
+    return $report.ExitCode
 }
 
 function Invoke-FrpClientSupportBundle {
@@ -673,11 +687,8 @@ function Invoke-FrpClientSupportBundle {
         Set-Content -LiteralPath (Join-Path $stage 'meta.json') -Value $meta -Encoding UTF8
         [void]$sections.Add('meta')
 
-        $doctorOut = & {
-            $ErrorActionPreference = 'Continue'
-            Invoke-FrpClientDoctor | Out-String
-        }
-        Set-Content -LiteralPath (Join-Path $stage 'doctor.txt') -Value $doctorOut -Encoding UTF8
+        $doctorReport = Get-FrpClientDoctorReport
+        Set-Content -LiteralPath (Join-Path $stage 'doctor.txt') -Value $doctorReport.Text -Encoding UTF8
         [void]$sections.Add('doctor')
 
         $safeCopies = @()
