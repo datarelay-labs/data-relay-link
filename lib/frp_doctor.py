@@ -918,7 +918,14 @@ def https_loopback_get(public_host, port, path, ca_path, timeout=NETWORK_TIMEOUT
     path = str(path or '/')
     if not path.startswith('/'):
         path = '/' + path
-    url = 'https://%s:%s%s' % (host, port, path)
+    url_host = host
+    try:
+        import ipaddress
+        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
+            url_host = '[%s]' % host
+    except ValueError:
+        pass
+    url = 'https://%s:%s%s' % (url_host, port, path)
     try:
         ctx = ssl.create_default_context(cafile=str(ca_path) if ca_path else None)
         if hasattr(ssl, 'TLSVersion'):
