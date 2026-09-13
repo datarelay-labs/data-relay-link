@@ -44,8 +44,23 @@ PROJECT_VERSION="$(awk -F= '/^PROJECT_VERSION=/{print $2}' "$ROOT/VERSION")"
 PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.113.nip.io}"
 PUBLIC_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
 
+tree_channel() {
+  python3 - "$1/release-manifest.json" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+channel = str(data.get("channel") or "").strip().lower()
+if channel not in ("dev", "stable"):
+    raise SystemExit("unsupported release-manifest channel: %r" % channel)
+print(channel)
+PY
+}
+V231_CHANNEL="$(tree_channel "$V231_TREE")"
+V240_CHANNEL="$(tree_channel "$ROOT")"
+
 pq_note "LIVE_V231_TO_V240_UPGRADE start HEAD=$HEAD PROJECT_VERSION=$PROJECT_VERSION"
 pq_note "OUT=$OUT GOLDEN=$GOLDEN V231_TREE=$V231_TREE"
+pq_note "V231_CHANNEL=$V231_CHANNEL V240_CHANNEL=$V240_CHANNEL"
 
 fail_out() {
   pq_gate LIVE_V231_TO_V240_UPGRADE FAIL
@@ -79,12 +94,12 @@ fi
 pq_gate V231_PURGE PASS
 
 # --- 1) Fresh v2.3.1 install on server ---
-pq_note "Installing release-equivalent v2.3.1 from $V231_TREE"
+pq_note "Installing release-equivalent v2.3.1 from $V231_TREE (FRP_RELEASE_CHANNEL=$V231_CHANNEL)"
 set +e
 pq_ssh "$SERVER" "sudo env \
   FRP_PUBLIC_HOSTNAME='$PUBLIC_HOSTNAME' \
   FRP_PUBLIC_IP='$PUBLIC_IP' \
-  FRP_RELEASE_CHANNEL=dev \
+  FRP_RELEASE_CHANNEL='$V231_CHANNEL' \
   bash -s --" \
   <"$V231_TREE/dist/bootstrap-server.sh" >"$OUT/v231-install.log" 2>&1
 inst_rc=$?
@@ -245,12 +260,13 @@ PY
 
 # --- 3) Upgrade to current v2.4 tree ---
 # Prefer stdin bootstrap from the candidate tree so we do not depend on an unpublished tag.
-pq_note "Upgrading server to v2.4 candidate from current tree"
+# Match FRP_RELEASE_CHANNEL to the candidate tree manifest (same rule as short-url E2E).
+pq_note "Upgrading server to v2.4 candidate from current tree (FRP_RELEASE_CHANNEL=$V240_CHANNEL)"
 set +e
 pq_ssh "$SERVER" "sudo env \
   FRP_PUBLIC_HOSTNAME='$PUBLIC_HOSTNAME' \
   FRP_PUBLIC_IP='$PUBLIC_IP' \
-  FRP_RELEASE_CHANNEL=dev \
+  FRP_RELEASE_CHANNEL='$V240_CHANNEL' \
   bash -s -- --upgrade" \
   <"$ROOT/dist/bootstrap-server.sh" >"$OUT/server-upgrade.log" 2>&1
 up_rc=$?
