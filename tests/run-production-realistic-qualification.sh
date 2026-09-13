@@ -142,12 +142,27 @@ else
   pq_note "WARN live fleet online count low: $ONLINE_N"
   pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION FAIL
 fi
-# Map server reboot recovery from matrix evidence when extra reboot skipped
+# Map server reboot recovery from matrix evidence when extra reboot skipped.
+# Presence of a log heading alone is NOT evidence of recovery success.
 if [[ "${FRP_E2E_QUAL_SERVER_REBOOT}" != "1" ]]; then
-  if grep -q 'FLEET server reboot' "$OUT/matrix.log" 2>/dev/null; then
-    pq_gate SERVER_REBOOT_RECOVERY PASS
-    pq_gate CLIENT_RESTART_RECOVERY PASS
-    pq_gate RECONNECT_STORM PASS
+  if [[ -f "$OUT/matrix.log" ]] && grep -q 'FLEET server reboot' "$OUT/matrix.log" 2>/dev/null; then
+    recovery_status=""
+    if [[ -f "$MATRIX_OUT/fleet-reboot-recovery.env" ]]; then
+      # shellcheck disable=SC1090
+      recovery_status="$(grep -E '^FLEET_REBOOT_RECOVERY=' "$MATRIX_OUT/fleet-reboot-recovery.env" | tail -n1 | cut -d= -f2-)"
+    fi
+    if [[ "$recovery_status" == "PASS" ]] \
+      && [[ -f "$MATRIX_OUT/fleet-after-reboot.txt" ]] \
+      && grep -qi ONLINE "$MATRIX_OUT/fleet-after-reboot.txt" 2>/dev/null; then
+      pq_gate SERVER_REBOOT_RECOVERY PASS
+      pq_gate CLIENT_RESTART_RECOVERY PASS
+      pq_gate RECONNECT_STORM PASS
+    else
+      pq_note "matrix reboot heading present but recovery evidence missing/failed (status=${recovery_status:-absent})"
+      pq_gate SERVER_REBOOT_RECOVERY FAIL
+      pq_gate CLIENT_RESTART_RECOVERY FAIL
+      pq_gate RECONNECT_STORM FAIL
+    fi
   fi
 fi
 set -uo pipefail

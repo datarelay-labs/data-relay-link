@@ -59,7 +59,7 @@ def main_pid(unit):
             ["systemctl", "show", "-p", "MainPID", "--value", unit], text=True).strip() or 0)
     except Exception:
         return 0
-units = ["drlink-server", "drlink-allocator", "drlink-access", "drlink-egress", "drlink-frontend"]
+units = ["drlink-server", "drlink-allocator", "drlink-access", "drlink-egress", "drlink-tcp-egress", "drlink-frontend"]
 sample = {"ts": time.time(), "units": {}, "loadavg": os.getloadavg()}
 for u in units:
     pid = main_pid(u)
@@ -145,13 +145,25 @@ pq_wait_macos() {
 
 pq_matrix_platform_gate() {
   # Args: tsv_path
+  # INSTALL / ENROLL / SERVICE are required for a platform PASS.
+  # REBOOT / UNINSTALL / DNS may be intentional SKIP on some profiles.
+  # Unexpected values (empty, UNKNOWN, etc.) are FAIL — never silent PASS.
   local tsv="$1"
   [[ -f "$tsv" ]] || return 1
   local plat install enroll service reboot uninstall dns
   local any_fail=0
+  local allowed_skip='^(PASS|SKIP|HEADROOM_LIMIT)$'
   while IFS=$'\t' read -r plat install enroll service reboot uninstall dns; do
     [[ "$plat" == "PLATFORM" || -z "$plat" ]] && continue
     local status=PASS
+    # Normalize empties to UNKNOWN so they cannot slip through as PASS.
+    [[ -n "$install" ]] || install=UNKNOWN
+    [[ -n "$enroll" ]] || enroll=UNKNOWN
+    [[ -n "$service" ]] || service=UNKNOWN
+    [[ -n "$reboot" ]] || reboot=UNKNOWN
+    [[ -n "$uninstall" ]] || uninstall=UNKNOWN
+    [[ -n "$dns" ]] || dns=UNKNOWN
+
     if [[ "$install" == "FAIL" || "$enroll" == "FAIL" || "$service" == "FAIL" ]]; then
       status=FAIL
       any_fail=1
@@ -159,11 +171,26 @@ pq_matrix_platform_gate() {
       status=BLOCKED
       any_fail=1
     elif [[ "$install" != "PASS" || "$enroll" != "PASS" || "$service" != "PASS" ]]; then
-      # SKIP alone on reboot/uninstall is OK for mac/win; install/enroll/service must PASS
-      if [[ "$install" != "PASS" || "$enroll" != "PASS" ]]; then
-        status=FAIL
-        any_fail=1
-      fi
+      # Required columns must be PASS. SKIP/UNKNOWN/empty on SERVICE is not OK.
+      status=FAIL
+      any_fail=1
+    else
+      # Optional columns: only PASS, intentional SKIP, or HEADROOM_LIMIT allowed.
+      for col in "$reboot" "$uninstall" "$dns"; do
+        if [[ "$col" == "FAIL" ]]; then
+          status=FAIL
+          any_fail=1
+          break
+        elif [[ "$col" == "BLOCKED" ]]; then
+          status=BLOCKED
+          any_fail=1
+          break
+        elif [[ ! "$col" =~ $allowed_skip ]]; then
+          status=FAIL
+          any_fail=1
+          break
+        fi
+      done
     fi
     case "$plat" in
       ubuntu-24.04|baseline-linux) pq_gate UBUNTU_REAL_E2E "$status" ;;

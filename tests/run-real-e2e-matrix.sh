@@ -167,6 +167,15 @@ print(json.dumps({mid[:8]: ((c.get('services') or {}).get('ssh') or {}).get('rem
   done
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo /usr/local/bin/drlink show clients; sudo /usr/local/bin/drlink doctor' \
     | tee "$OUT_ROOT/fleet-after-reboot.txt"
+  # Explicit recovery evidence — log headings alone must never imply PASS.
+  if grep -qi ONLINE "$OUT_ROOT/fleet-after-reboot.txt" 2>/dev/null; then
+    echo "FLEET_REBOOT_RECOVERY=PASS" | tee "$OUT_ROOT/fleet-reboot-recovery.env"
+    note "FLEET_REBOOT_RECOVERY=PASS"
+  else
+    echo "FLEET_REBOOT_RECOVERY=FAIL" | tee "$OUT_ROOT/fleet-reboot-recovery.env"
+    note "FLEET_REBOOT_RECOVERY=FAIL"
+    FAILED=$((FAILED + 1))
+  fi
   set -uo pipefail
 
   # External SSH via DNS hostname for each discovered ssh port from registry.
