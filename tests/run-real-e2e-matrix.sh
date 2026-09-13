@@ -248,12 +248,18 @@ PY
     | tee "$OUT_ROOT/fleet-isolation-enable.txt"
   set -uo pipefail
 
-  # Fleet backup/restore once.
+  # Fleet backup/restore once — RCs are authoritative (must fail the matrix).
   note "==== FLEET backup/restore ===="
   set +e
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
     'sudo /usr/local/bin/drlink create backup /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \
     | tee "$OUT_ROOT/fleet-backup.txt"
+  backup_rc=$?
+  note "FLEET_BACKUP_RC=$backup_rc"
+  if [[ "$backup_rc" -ne 0 ]]; then
+    note "FLEET_BACKUP=FAIL"
+    FAILED=$((FAILED + 1))
+  fi
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
     "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME' || true; sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print(c.get('public_hostname'))\"" \
     | tee "$OUT_ROOT/fleet-hostname-before-restore.txt"
@@ -263,9 +269,19 @@ PY
   cat "$ROOT/tools/frp-backup" | ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo tee /tmp/frp-backup >/dev/null && sudo chmod 755 /tmp/frp-backup'
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" 'sudo python3 /tmp/frp-restore /var/lib/drlink/backups/matrix-fleet-backup.tar.gz' \
     | tee "$OUT_ROOT/fleet-restore.txt"
+  restore_rc=$?
+  note "FLEET_RESTORE_RC=$restore_rc"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
     "sudo python3 -c \"import json; c=json.load(open('/etc/drlink/config.json')); print('public_hostname='+str(c.get('public_hostname') or ''))\"" \
     | tee "$OUT_ROOT/fleet-hostname-after-restore.txt"
+  post_restore_rc=$?
+  note "FLEET_POST_RESTORE_RC=$post_restore_rc"
+  if [[ "$restore_rc" -ne 0 || "$post_restore_rc" -ne 0 ]]; then
+    note "FLEET_RESTORE=FAIL"
+    FAILED=$((FAILED + 1))
+  elif [[ "$backup_rc" -eq 0 ]]; then
+    note "FLEET_BACKUP_RESTORE=PASS"
+  fi
   set -uo pipefail
 fi
 
