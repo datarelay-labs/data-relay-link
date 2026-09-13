@@ -160,15 +160,53 @@ def protected_listen_ports(
     return protected
 
 
-def port_in_service_range(port: int, cfg: Optional[dict] = None) -> bool:
+def service_port_range(cfg: Optional[dict] = None) -> tuple[int, int]:
+    """Return inclusive published FRP service port range."""
     if not cfg:
-        start, end = DEFAULT_PORT_START, DEFAULT_PORT_END
-    else:
-        try:
-            start = int(cfg.get("port_start", DEFAULT_PORT_START))
-            end = int(cfg.get("port_end", DEFAULT_PORT_END))
-        except (TypeError, ValueError):
-            start, end = DEFAULT_PORT_START, DEFAULT_PORT_END
+        return DEFAULT_PORT_START, DEFAULT_PORT_END
+    try:
+        start = int(cfg.get("port_start", DEFAULT_PORT_START))
+        end = int(cfg.get("port_end", DEFAULT_PORT_END))
+    except (TypeError, ValueError):
+        return DEFAULT_PORT_START, DEFAULT_PORT_END
+    if start > end:
+        start, end = end, start
+    return start, end
+
+
+def ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    """Inclusive range overlap."""
+    return int(a_start) <= int(b_end) and int(b_start) <= int(a_end)
+
+
+def service_range_overlaps_tcp_relay_pool(cfg: Optional[dict] = None) -> bool:
+    """True when published service ports collide with the Fixed TCP relay pool."""
+    svc_start, svc_end = service_port_range(cfg)
+    tcp_start, tcp_end = tcp_relay_port_range(cfg)
+    return ranges_overlap(svc_start, svc_end, tcp_start, tcp_end)
+
+
+def service_tcp_relay_overlap_message(cfg: Optional[dict] = None) -> str:
+    svc_start, svc_end = service_port_range(cfg)
+    tcp_start, tcp_end = tcp_relay_port_range(cfg)
+    return (
+        "FRP service port range %s-%s overlaps Fixed TCP Egress pool %s-%s. "
+        "Choose a service range that does not intersect the TCP relay listen pool "
+        "(default 6200-6299), or reconfigure tcp_relay_port_start/tcp_relay_port_end."
+        % (svc_start, svc_end, tcp_start, tcp_end)
+    )
+
+
+def assert_service_range_not_overlapping_tcp_relay_pool(
+    cfg: Optional[dict] = None,
+) -> None:
+    """Fail closed when published service ports collide with Fixed TCP pool."""
+    if service_range_overlaps_tcp_relay_pool(cfg):
+        raise RuntimeError(service_tcp_relay_overlap_message(cfg))
+
+
+def port_in_service_range(port: int, cfg: Optional[dict] = None) -> bool:
+    start, end = service_port_range(cfg)
     return start <= port <= end
 
 

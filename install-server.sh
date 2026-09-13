@@ -1200,6 +1200,45 @@ PY
     echo "ERROR: Controlled Egress listen port collides with another infrastructure listener" >&2
     exit 1
   fi
+  # Refuse published service ranges that collide with the Fixed TCP Egress pool
+  # (default 6200-6299; overridable via existing config tcp_relay_port_*).
+  local _infra_ports="$BASE_DIR/lib/frp_infrastructure_ports.py"
+  if [[ ! -f "$_infra_ports" ]]; then
+    _infra_ports="$(frp_server_fs /usr/local/lib/drlink/frp_infrastructure_ports.py)"
+  fi
+  [[ -f "$_infra_ports" ]] || {
+    echo "ERROR: missing frp_infrastructure_ports.py for Fixed TCP pool validation" >&2
+    exit 1
+  }
+  python3 - "$_infra_ports" "$FRP_PORT_START" "$FRP_PORT_END" "$(frp_server_config_path)" <<'PY' || exit 1
+import importlib.util, json, sys
+from pathlib import Path
+
+mod_path = Path(sys.argv[1])
+start, end = int(sys.argv[2]), int(sys.argv[3])
+cfg_path = Path(sys.argv[4])
+cfg = {"port_start": start, "port_end": end}
+if cfg_path.is_file():
+    try:
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            for key in ("tcp_relay_port_start", "tcp_relay_port_end"):
+                if key in raw:
+                    cfg[key] = raw[key]
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+spec = importlib.util.spec_from_file_location("frp_infrastructure_ports", str(mod_path))
+if spec is None or spec.loader is None:
+    sys.stderr.write("ERROR: unable to load frp_infrastructure_ports.py\n")
+    raise SystemExit(1)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+try:
+    mod.assert_service_range_not_overlapping_tcp_relay_pool(cfg)
+except Exception as exc:
+    sys.stderr.write("ERROR: %s\n" % exc)
+    raise SystemExit(1)
+PY
   if frp_mode_is_single443; then
     if (( 10#$FRP_CONTROL_LISTEN_PORT == 10#$FRP_CONTROL_PUBLIC_PORT )); then
       echo "ERROR: FRP control backend port cannot be the public frontend port ${FRP_CONTROL_PUBLIC_PORT}" >&2
