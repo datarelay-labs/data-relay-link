@@ -33,23 +33,42 @@ REQUIRED = {
     "var/lib/drlink/egress-control.json",
     "var/lib/drlink/service-profiles.json",
 }
+def _load_state_paths():
+    candidates = []
+    try:
+        here = Path(__file__).resolve()
+        candidates.append(here.parent.parent / "lib" / "frp_state_paths.py")
+    except NameError:
+        pass
+    env_root = os.environ.get("ROOT") or os.environ.get("FRP_SOURCE_ROOT") or ""
+    if env_root:
+        candidates.append(Path(env_root) / "lib" / "frp_state_paths.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_state_paths.py"))
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("frp_state_paths", str(path))
+            module = importlib.util.module_from_spec(spec)
+            # dataclasses requires the module to be present in sys.modules
+            # before exec_module when using from __future__ import annotations.
+            sys.modules[spec.name] = module
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError("frp_state_paths.py is unavailable")
+
+
+_STATE_PATHS = _load_state_paths()
 OPTIONAL_EXACT = {
     "etc/drlink/frontend.conf",
     "var/lib/drlink/mgmt-nonces.json",
     "var/lib/drlink/nginx-ownership",
-    "var/log/drlink/audit.jsonl",
-    "var/log/drlink/access-conn.jsonl",
-    "var/log/drlink/egress-conn.jsonl",
+    *_STATE_PATHS.restore_optional_exact(),
 }
 TREE_PREFIXES = (
     "etc/drlink/pki/",
-    "var/lib/drlink/enrollments/",
-    "var/lib/drlink/bootstrap/",
+    *(prefix + "/" for prefix in _STATE_PATHS.backup_tree_roots()),
 )
 TREE_ROOTS = tuple(prefix.rstrip("/") for prefix in TREE_PREFIXES)
-AUDIT_ROTATED_PREFIX = "var/log/drlink/audit.jsonl."
-ACCESS_CONN_ROTATED_PREFIX = "var/log/drlink/access-conn.jsonl."
-EGRESS_CONN_ROTATED_PREFIX = "var/log/drlink/egress-conn.jsonl."
 
 
 class RestoreError(RuntimeError):
@@ -73,15 +92,8 @@ def allowed_path(rel: str) -> bool:
         return True
     if any(rel.startswith(prefix) for prefix in TREE_PREFIXES):
         return True
-    if rel.startswith(AUDIT_ROTATED_PREFIX):
-        suffix = rel[len(AUDIT_ROTATED_PREFIX) :]
-        return suffix.isdigit() and not rel.endswith(".lock")
-    if rel.startswith(ACCESS_CONN_ROTATED_PREFIX):
-        suffix = rel[len(ACCESS_CONN_ROTATED_PREFIX) :]
-        return suffix.isdigit() and not rel.endswith(".lock")
-    if rel.startswith(EGRESS_CONN_ROTATED_PREFIX):
-        suffix = rel[len(EGRESS_CONN_ROTATED_PREFIX) :]
-        return suffix.isdigit() and not rel.endswith(".lock")
+    if _STATE_PATHS.allowed_rotated_rel(rel):
+        return True
     return False
 
 
@@ -341,20 +353,13 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
         if allow_hook and hook_after and count >= hook_after:
             raise RestoreError("simulated restore failure")
 
-    # Restore rotated audit companions declared in the backup payload.
-    audit_payload_dir = payload / "var/log/drlink"
-    if audit_payload_dir.is_dir():
-        for pattern in ("audit.jsonl.*", "access-conn.jsonl.*", "egress-conn.jsonl.*"):
-            for source in sorted(audit_payload_dir.glob(pattern)):
-                if not source.is_file() or source.name.endswith(".lock"):
-                    continue
-                rel = source.relative_to(payload).as_posix()
-                if not allowed_path(rel):
-                    continue
-                atomic_file(source, root / rel, rel)
-                count += 1
-                if allow_hook and hook_after and count >= hook_after:
-                    raise RestoreError("simulated restore failure")
+    for rel, source in _STATE_PATHS.collect_present_rotated_files(payload):
+        if not allowed_path(rel):
+            continue
+        atomic_file(source, root / rel, rel)
+        count += 1
+        if allow_hook and hook_after and count >= hook_after:
+            raise RestoreError("simulated restore failure")
 
 
 def _load_module(name, filename):
@@ -382,7 +387,7 @@ def _reapply_egress_permissions_after_restore(root: Path) -> None:
         return
     config = root / "etc/drlink/config.json"
     control = root / "var/lib/drlink/egress-control.json"
-    conn_log = root / "var/log/drlink/egress-conn.jsonl"
+    conn_log = root / _STATE_PATHS.default_egress_conn_log_rel()
     # Prefer paths from restored config when present.
     if config.is_file():
         try:
@@ -535,7 +540,12 @@ def _audit_emit(event, **kwargs):
         return
 
 
-def _write_txn(root: Path, snapshot: Path | None = None) -> None:
+def _write_txn(
+    root: Path,
+    snapshot: Path | None = None,
+    *,
+    rollback_kind: str = "VALIDATED",
+) -> None:
     # Restore is a server-role operation; use the server marker path.
     marker = root / "var/lib/drlink/server-update-pending.json"
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -547,6 +557,7 @@ def _write_txn(root: Path, snapshot: Path | None = None) -> None:
         "candidate_version": "",
         "started_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "mutation_started": True,
+        "rollback_kind": rollback_kind,
     }
     if snapshot is not None:
         record["snapshot_path"] = str(snapshot)
@@ -763,12 +774,41 @@ def restart_services(root: Path, allow_hook: bool = True, expect_client_role: bo
         raise RestoreError("failed to restart drlink-client.service")
 
 
-def validate_to_temp(archive: Path, parent: Path | None = None) -> tuple[tempfile.TemporaryDirectory, Path]:
+def validate_to_temp(
+    archive: Path,
+    parent: Path | None = None,
+    *,
+    require_semantic: bool = True,
+) -> tuple[tempfile.TemporaryDirectory, Path]:
+    """Extract archive to a temp dir and optionally run semantic validation.
+
+    Restore candidates must always be semantically valid (require_semantic=True).
+    Pre-restore rollback snapshots of a damaged live tree may be preserved as
+    raw evidence without semantic validation (require_semantic=False).
+    """
     temp = tempfile.TemporaryDirectory(prefix="frp-restore-", dir=str(parent) if parent else None)
     extracted = Path(temp.name)
     extract_and_validate(archive, extracted)
-    validate_staged_control_payload(extracted)
+    if require_semantic:
+        validate_staged_control_payload(extracted)
     return temp, extracted
+
+
+def classify_rollback_snapshot(snapshot: Path) -> tuple[str, tempfile.TemporaryDirectory | None, Path | None]:
+    """Classify a pre-restore snapshot as VALIDATED or RAW_CORRUPT.
+
+    Returns (kind, temp_dir_or_None, extracted_or_None).
+    VALIDATED snapshots may be used for automatic rollback on mutation failure.
+    RAW_CORRUPT snapshots are retained on disk for emergency/manual recovery
+    but must not block applying a valid backup candidate.
+    """
+    try:
+        temp, extracted = validate_to_temp(snapshot, require_semantic=True)
+        return "VALIDATED", temp, extracted
+    except (RestoreError, OSError, tarfile.TarError, ValueError, json.JSONDecodeError) as exc:
+        # Preserve the raw archive; do not treat corrupt-current as restore failure.
+        del exc
+        return "RAW_CORRUPT", None, None
 
 
 def make_snapshot(root: Path) -> Path:
@@ -780,6 +820,8 @@ def make_snapshot(root: Path) -> Path:
     backup_tool = Path(__file__).resolve().with_name("frp-backup")
     env = os.environ.copy()
     env["FRP_BACKUP_ALREADY_LOCKED"] = "1"
+    # Capture exact raw files even if current required state is missing/corrupt.
+    env["FRP_BACKUP_RAW_SNAPSHOT"] = "1"
     subprocess.run(
         [sys.executable, str(backup_tool), str(snapshot)],
         stdout=subprocess.DEVNULL,
@@ -849,7 +891,8 @@ def main() -> int:
         error("frp_control_locks.py is unavailable; refusing unlocked restore")
         return 1
     try:
-        candidate_temp, candidate = validate_to_temp(archive)
+        # Candidate must always be semantically valid before any live mutation.
+        candidate_temp, candidate = validate_to_temp(archive, require_semantic=True)
         manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
         assert_same_version_restore(root, manifest)
         timeout = float(os.environ.get("FRP_RESTORE_LOCK_TIMEOUT", "30"))
@@ -858,37 +901,60 @@ def main() -> int:
         lock_cm.__enter__()
         try:
             snapshot = make_snapshot(root)
-            _write_txn(root, snapshot)
-            rollback_temp, rollback = validate_to_temp(snapshot)
+            rollback_kind, rollback_temp, rollback = classify_rollback_snapshot(snapshot)
+            # Mutation marker only after preflight succeeds (candidate valid;
+            # current state preserved as VALIDATED or RAW_CORRUPT evidence).
+            _write_txn(root, snapshot, rollback_kind=rollback_kind)
             try:
                 apply_payload(root, candidate)
                 _reapply_egress_permissions_after_restore(root)
                 restart_services(root, expect_client_role=expect_client_role)
                 verify_restored_control_state(root, expect_client_role=expect_client_role)
             except Exception as restore_exc:
-                try:
-                    apply_payload(root, rollback, allow_hook=False)
-                    _reapply_egress_permissions_after_restore(root)
-                    restart_services(root, allow_hook=False, expect_client_role=expect_client_role)
-                    verify_restored_control_state(
-                        root, in_rollback=True, expect_client_role=expect_client_role
-                    )
-                except Exception as rollback_exc:
-                    print("RESTORE_ROLLBACK_FAILED", file=sys.stderr)
-                    print("RECOVERY_REQUIRED", file=sys.stderr)
-                    _audit_emit("restore.failed", details={"rollback": "failed"})
+                if rollback_kind == "VALIDATED" and rollback is not None:
+                    try:
+                        apply_payload(root, rollback, allow_hook=False)
+                        _reapply_egress_permissions_after_restore(root)
+                        restart_services(root, allow_hook=False, expect_client_role=expect_client_role)
+                        verify_restored_control_state(
+                            root, in_rollback=True, expect_client_role=expect_client_role
+                        )
+                    except Exception as rollback_exc:
+                        print("RESTORE_ROLLBACK_FAILED", file=sys.stderr)
+                        print("RECOVERY_REQUIRED", file=sys.stderr)
+                        print(f"Raw pre-restore snapshot: {snapshot}", file=sys.stderr)
+                        _audit_emit("restore.failed", details={"rollback": "failed"})
+                        raise RestoreError(
+                            f"restore failed and rollback also failed: {rollback_exc}"
+                        ) from restore_exc
+                    _clear_txn(root)
+                    _audit_emit("restore.failed", details={"rollback": "pass"})
                     raise RestoreError(
-                        f"restore failed and rollback also failed: {rollback_exc}"
-                    ) from restore_exc
-                _clear_txn(root)
-                _audit_emit("restore.failed", details={"rollback": "pass"})
-                raise RestoreError(f"restore failed; previous state was restored: {restore_exc}")
+                        f"restore failed; previous state was restored: {restore_exc}"
+                    )
+                # Current state was already corrupt — cannot auto-rollback, but
+                # the valid candidate was the recovery target. Leave evidence.
+                print("RESTORE_FAILED", file=sys.stderr)
+                print("AUTO_ROLLBACK_UNAVAILABLE: current state was RAW_CORRUPT", file=sys.stderr)
+                print(f"Raw pre-restore snapshot preserved: {snapshot}", file=sys.stderr)
+                _audit_emit(
+                    "restore.failed",
+                    details={"rollback": "unavailable", "rollback_kind": "RAW_CORRUPT"},
+                )
+                raise RestoreError(
+                    "restore failed; automatic rollback unavailable because the "
+                    f"pre-restore state was corrupt (snapshot preserved at {snapshot}): "
+                    f"{restore_exc}"
+                ) from restore_exc
             _clear_txn(root)
         finally:
             lock_cm.__exit__(None, None, None)
         print("WARNING: the restored backup contained private keys, authentication tokens, and enrollment secrets.")
-        print(f"Restore completed. Pre-restore snapshot: {snapshot}")
-        _audit_emit("restore.completed", details={"snapshot": snapshot.name})
+        print(f"Restore completed. Pre-restore snapshot: {snapshot} ({rollback_kind})")
+        _audit_emit(
+            "restore.completed",
+            details={"snapshot": snapshot.name, "rollback_kind": rollback_kind},
+        )
         return 0
     except (RestoreError, OSError, subprocess.SubprocessError, ValueError) as exc:
         error(str(exc))

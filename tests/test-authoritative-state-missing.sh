@@ -126,6 +126,7 @@ repo = Path(os.environ["ROOT"])
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 path = repo / "tools" / "frp-backup"
 mod = types.ModuleType("frp_backup")
+mod.__file__ = str(path)
 sys.modules["frp_backup"] = mod
 code = compile(path.read_text(encoding="utf-8"), str(path), "exec")
 exec(code, mod.__dict__)

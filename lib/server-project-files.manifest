@@ -23,6 +23,7 @@ project usr/local/lib/drlink/frp-access-plugin.py 0700 server/frp-access-plugin.
 project usr/local/lib/drlink/frp-egress-gateway.py 0644 server/frp-egress-gateway.py python
 project usr/local/lib/drlink/frp_access_control.py 0644 lib/frp_access_control.py python
 project usr/local/lib/drlink/frp_egress_control.py 0644 lib/frp_egress_control.py python
+project usr/local/lib/drlink/frp_state_paths.py 0644 lib/frp_state_paths.py python
 project usr/local/lib/drlink/frp_service_profiles.py 0644 lib/frp_service_profiles.py python
 project usr/local/lib/drlink/frp_mgmt_auth.py 0644 lib/frp_mgmt_auth.py python
 project usr/local/lib/drlink/frp_health_check.py 0644 lib/frp_health_check.py python

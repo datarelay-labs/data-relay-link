@@ -31,23 +31,40 @@ REQUIRED = (
     "var/lib/drlink/egress-control.json",
     "var/lib/drlink/service-profiles.json",
 )
+def _load_state_paths():
+    candidates = []
+    try:
+        here = Path(__file__).resolve()
+        candidates.append(here.parent.parent / "lib" / "frp_state_paths.py")
+    except NameError:
+        # compile()/exec() harnesses may omit __file__.
+        pass
+    env_root = os.environ.get("ROOT") or os.environ.get("FRP_SOURCE_ROOT") or ""
+    if env_root:
+        candidates.append(Path(env_root) / "lib" / "frp_state_paths.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_state_paths.py"))
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("frp_state_paths", str(path))
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError("frp_state_paths.py is unavailable")
+
+
+_STATE_PATHS = _load_state_paths()
 OPTIONAL_FILES = (
     "etc/drlink/frontend.conf",
     "var/lib/drlink/mgmt-nonces.json",
     "var/lib/drlink/nginx-ownership",
-    "var/log/drlink/audit.jsonl",
-    "var/log/drlink/access-conn.jsonl",
-    "var/log/drlink/egress-conn.jsonl",
+    *_STATE_PATHS.backup_optional_files(),
 )
 OPTIONAL_TREES = (
     "etc/drlink/pki",
-    "var/lib/drlink/enrollments",
-    "var/lib/drlink/bootstrap",
+    *_STATE_PATHS.backup_tree_roots(),
 )
-# Rotated audit companions (audit.jsonl.1 .. audit.jsonl.N).
-AUDIT_ROTATED_GLOB = "var/log/drlink/audit.jsonl.*"
-ACCESS_CONN_ROTATED_GLOB = "var/log/drlink/access-conn.jsonl.*"
-EGRESS_CONN_ROTATED_GLOB = "var/log/drlink/egress-conn.jsonl.*"
 
 
 def fail(message: str) -> "NoReturn":
@@ -124,11 +141,14 @@ def _audit_emit(event, **kwargs):
 
 
 def collect_files(root: Path) -> list[tuple[str, Path]]:
+    # Pre-restore raw snapshots must capture whatever is present even when
+    # required control-state files are missing or damaged.
+    raw_snapshot = os.environ.get("FRP_BACKUP_RAW_SNAPSHOT") == "1"
     found: dict[str, Path] = {}
     for rel in REQUIRED:
-        source = safe_source(root, rel, required=True)
-        assert source is not None
-        found[rel] = source
+        source = safe_source(root, rel, required=not raw_snapshot)
+        if source is not None:
+            found[rel] = source
     for rel in OPTIONAL_FILES:
         source = safe_source(root, rel)
         if source is not None:
@@ -149,30 +169,8 @@ def collect_files(root: Path) -> list[tuple[str, Path]]:
                 found[child_rel] = source
             elif not source.is_dir():
                 fail(f"unsupported control-state entry: /{child_rel}")
-    # Include rotated audit logs with secure permissions preserved.
-    audit_dir = root / "var/log/drlink"
-    if audit_dir.is_dir() and not audit_dir.is_symlink():
-        for source in sorted(audit_dir.glob("audit.jsonl.*")):
-            if source.is_symlink() or not source.is_file():
-                continue
-            if source.name.endswith(".lock"):
-                continue
-            child_rel = source.relative_to(root).as_posix()
-            found[child_rel] = source
-        for source in sorted(audit_dir.glob("access-conn.jsonl.*")):
-            if source.is_symlink() or not source.is_file():
-                continue
-            if source.name.endswith(".lock"):
-                continue
-            child_rel = source.relative_to(root).as_posix()
-            found[child_rel] = source
-        for source in sorted(audit_dir.glob("egress-conn.jsonl.*")):
-            if source.is_symlink() or not source.is_file():
-                continue
-            if source.name.endswith(".lock"):
-                continue
-            child_rel = source.relative_to(root).as_posix()
-            found[child_rel] = source
+    for child_rel, source in _STATE_PATHS.collect_present_rotated_files(root):
+        found[child_rel] = source
     return sorted(found.items())
 
 
