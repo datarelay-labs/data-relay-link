@@ -78,6 +78,38 @@ mkdir -p "$OUT/golden"
 cp -a "$GOLDEN/." "$OUT/golden/" 2>/dev/null || true
 pq_gate GOLDEN_BASELINE_PRESENT PASS
 
+# Clear stale lifecycle lock left by interrupted install/upgrade (holder PID dead).
+pq_note "Clearing stale server-lifecycle lock if holder is dead"
+pq_ssh "$SERVER" 'sudo python3 -' >"$OUT/stale-lock-cleanup.log" 2>&1 <<'PY' || true
+from pathlib import Path
+import os
+lock = Path("/var/lib/drlink/server-lifecycle.lock")
+pidf = Path("/var/lib/drlink/server-lifecycle.lock.pid")
+pid = None
+if pidf.is_file():
+    try:
+        pid = int(pidf.read_text(encoding="utf-8").strip() or "0")
+    except Exception:
+        pid = None
+alive = False
+if pid and pid > 0:
+    try:
+        os.kill(pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+if alive:
+    print("LOCK_HOLDER_ALIVE pid=%s" % pid)
+else:
+    if lock.exists() or pidf.exists():
+        lock.unlink(missing_ok=True)
+        pidf.unlink(missing_ok=True)
+        print("CLEARED_STALE_LIFECYCLE_LOCK pid=%s" % pid)
+    else:
+        print("NO_LIFECYCLE_LOCK")
+PY
+pq_gate STALE_LIFECYCLE_LOCK_CLEANUP PASS
+
 # --- 0) Purge existing server so starting side is a real v2.3.1 install ---
 pq_note "Purging existing server install for clean v2.3.1 baseline"
 set +e
@@ -86,6 +118,15 @@ pq_ssh "$SERVER" "sudo bash -s -- --purge --yes" \
 purge_rc=$?
 set -uo pipefail
 # purge may return non-zero if already absent; require config gone afterward
+if pq_ssh "$SERVER" 'test -f /etc/drlink/config.json'; then
+  # One more stale-lock clear + purge retry (interrupted ops leave lock behind)
+  pq_ssh "$SERVER" 'sudo rm -f /var/lib/drlink/server-lifecycle.lock /var/lib/drlink/server-lifecycle.lock.pid' || true
+  set +e
+  pq_ssh "$SERVER" "sudo bash -s -- --purge --yes" \
+    <"$ROOT/dist/uninstall-server.sh" >>"$OUT/server-purge.log" 2>&1
+  purge_rc=$?
+  set -uo pipefail
+fi
 if pq_ssh "$SERVER" 'test -f /etc/drlink/config.json'; then
   pq_gate V231_PURGE FAIL
   tail -40 "$OUT/server-purge.log" | tee -a "$PROD_QUAL_SUMMARY" || true
