@@ -753,7 +753,18 @@ def _absolute_uri_authority(target: str, headers: dict[str, str]) -> tuple[str, 
         raise EG.EgressError("malformed URI") from exc
 
 
+# Connection tokens that would strip framing/routing headers → reject (400).
+_CONNECTION_CRITICAL_TOKENS = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+    }
+)
+
+
 def _connection_hop_headers(headers: dict[str, str]) -> set[str]:
+    """Build hop-by-hop strip set; reject Connection tokens that nominate framing headers."""
     hop = {
         "proxy-connection",
         "connection",
@@ -766,12 +777,24 @@ def _connection_hop_headers(headers: dict[str, str]) -> set[str]:
         "proxy-authenticate",
         "expect",
     }
+    # Collect all Connection header values (dict may already collapse duplicates).
+    conn_values: list[str] = []
     conn = headers.get("connection")
     if conn:
-        for token in conn.split(","):
+        conn_values.append(conn)
+    for key, value in headers.items():
+        if key == "connection" and value not in conn_values:
+            conn_values.append(value)
+    for raw in conn_values:
+        for token in raw.split(","):
             name = token.strip().lower()
-            if name:
-                hop.add(name)
+            if not name:
+                continue
+            if name in _CONNECTION_CRITICAL_TOKENS:
+                raise EG.EgressError(
+                    "Connection header must not nominate %s" % name
+                )
+            hop.add(name)
     return hop
 
 
@@ -1384,11 +1407,17 @@ def _relay_bidirectional(
 
 
 def _relay_upstream_response(client: socket.socket, upstream: socket.socket) -> None:
-    """One-request HTTP model: only forward upstream → client; never client → upstream."""
+    """One-request HTTP model: only forward upstream → client; never client → upstream.
+
+    Client write half-close (SHUT_WR) is normal after a single request and must not
+    busy-spin: once client read-side EOF is observed, stop polling the client fd.
+    Idle timeout is evaluated whenever select returns with no ready descriptors.
+    """
     client.setblocking(False)
     upstream.setblocking(False)
     u2c = bytearray()
     upstream_open_r = True
+    client_open_r = True
     client_open_w = True
     last_data = time.monotonic()
     try:
@@ -1398,11 +1427,22 @@ def _relay_upstream_response(client: socket.socket, upstream: socket.socket) -> 
             rlist = []
             wlist = []
             # Detect pipelined second request — read & discard, do not forward.
-            rlist.append(client)
+            # After client EOF, omit client from the read set so idle timeout can fire.
+            if client_open_r:
+                rlist.append(client)
             if upstream_open_r and len(u2c) < RELAY_MAX_BUFFER and client_open_w:
                 rlist.append(upstream)
             if u2c and client_open_w:
                 wlist.append(client)
+            if not rlist and not wlist:
+                # Upstream still open but silent and client already EOF: wait on
+                # error set only so the idle deadline can still advance.
+                _, _, errored = select.select([], [], [client, upstream], 1.0)
+                if errored:
+                    return
+                if time.monotonic() - last_data > IDLE_TIMEOUT:
+                    return
+                continue
             readable, writable, errored = select.select(
                 rlist, wlist, [client, upstream], 1.0
             )
@@ -1420,12 +1460,14 @@ def _relay_upstream_response(client: socket.socket, upstream: socket.socket) -> 
                         continue
                     except OSError:
                         return
+                    if not extra:
+                        client_open_r = False
+                        continue
                     # Extra client bytes after the single request: drop & close write to upstream.
-                    if extra:
-                        try:
-                            upstream.shutdown(socket.SHUT_WR)
-                        except OSError:
-                            pass
+                    try:
+                        upstream.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
                     continue
                 try:
                     data = sock.recv(RELAY_BUF)
@@ -1681,6 +1723,8 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             raise EG.EgressError("Expect: 100-continue not supported")
         content_length = _parse_content_length(headers)
         host, port, path = _absolute_uri_authority(target, headers)
+        # Reject Connection tokens that would strip Host/CL/TE before any upstream I/O.
+        _connection_hop_headers(headers)
         if content_length is None:
             if body_prefix:
                 raise EG.EgressError("body without Content-Length")
