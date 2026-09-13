@@ -1422,7 +1422,13 @@ class Allocator:
         return None
 
     def commit_nonce(self, machine_id, nonce, now):
-        """Persist a nonce after the matching mutation has been committed."""
+        """Persist a nonce after the matching mutation has been committed.
+
+        Never evict a nonce that is still inside the replay-protection horizon
+        (MAX_CLOCK_SKEW). When the per-client cap is exhausted by still-valid
+        entries, reject new signed requests with a bounded-resource error
+        instead of re-enabling replay of an earlier request.
+        """
         if not NONCE_RE.fullmatch(nonce or ''):
             return 'invalid nonce'
         data = self.expire_nonces(now)
@@ -1431,12 +1437,22 @@ class Allocator:
         if key in nonces:
             return 'replayed request'
         prefix = machine_id + ':'
+        # Expiry timestamps are absolute; an entry remains replay-blocking while
+        # now < exp. A signed request accepted with future skew can remain
+        # cryptographically valid for up to 2*MAX_CLOCK_SKEW after commit, so
+        # never drop entries younger than that under size pressure.
+        protect_after_commit = 2 * MAX_CLOCK_SKEW
+        horizon_floor = now + (MGMT_NONCE_TTL - protect_after_commit)
         owned = sorted(
             ((k, nonces[k]) for k in list(nonces) if k.startswith(prefix)),
             key=lambda item: item[1],
         )
         while len(owned) >= MAX_NONCES_PER_CLIENT:
-            old_key, _exp = owned.pop(0)
+            old_key, old_exp = owned[0]
+            # Still inside the signature acceptance window → refuse eviction.
+            if old_exp > horizon_floor:
+                return 'nonce store full; retry later'
+            owned.pop(0)
             nonces.pop(old_key, None)
         nonces[key] = now + MGMT_NONCE_TTL
         self.save_nonces(data)
@@ -1448,7 +1464,8 @@ class Allocator:
         Nonces are stored as machine_id:nonce -> expiry. Entries expire after
         MGMT_NONCE_TTL seconds (900), which is longer than MAX_CLOCK_SKEW so a
         request stays non-replayable for its entire accepted timestamp window.
-        Per-client count is capped; oldest entries are dropped first.
+        Per-client count is capped; entries still inside the skew window are
+        never evicted — capacity exhaustion returns a transient error instead.
 
         Callers that need check-then-commit around a registry mutation should
         use check_nonce() + commit_nonce() instead.
