@@ -74,6 +74,7 @@ EOF
 phase_egress_allow_deny() {
   pq_note "==== MULTI_OS_EGRESS_ALLOW_DENY ===="
   local profile="qual-egress-$(date -u +%H%M%S)"
+  local unique_host="qual-disable-${profile}.example"
   ensure_egress_listener || { pq_gate MULTI_OS_EGRESS_ALLOW_DENY FAIL; return 1; }
 
   pq_ssh "$SERVER" "sudo bash -s" <<EOF
@@ -84,7 +85,8 @@ drlink egress create '$profile' --description 'prod-qual allow-deny'
 drlink egress add-source '$profile' 0.0.0.0/0 --name any
 drlink egress add-destination '$profile' example.com 80 --protocol http
 drlink egress add-destination '$profile' example.com 443 --protocol https
-drlink egress add-destination '$profile' example.com 9 --protocol tcp || true
+  # Unique FQDN only in this profile (reserved for disable-isolation experiments).
+drlink egress add-destination '$profile' '$unique_host' 80 --protocol http || true
 drlink egress enable '$profile'
 drlink egress show '$profile' || drlink egress list
 EOF
@@ -146,8 +148,25 @@ EOF
     fi
   fi
 
-  # Disabled profile must DENY
+  # Disabled profile must DENY. Other lab profiles may also allow example.com, so
+  # temporarily disable every other enabled profile for this check, then restore.
+  local other_enabled
+  other_enabled="$(pq_ssh "$SERVER" "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+st=json.loads(Path('/var/lib/drlink/egress-control.json').read_text())
+mine='${profile}'
+for p in (st.get('profiles') or {}).values():
+    name=str(p.get('name') or '')
+    if name and name != mine and p.get('enabled'):
+        print(name)
+PY")"
+  while IFS= read -r op; do
+    [[ -z "$op" ]] && continue
+    pq_ssh "$SERVER" "sudo drlink egress disable '$op' --yes" >/dev/null 2>&1 || true
+  done <<<"$other_enabled"
   pq_ssh "$SERVER" "sudo drlink egress disable '$profile' --yes" >/dev/null 2>&1 || true
+  sleep 1
   local disabled
   disabled="$(pq_ssh frp-e2e-client "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/ || true")"
   if [[ "$disabled" != "200" ]]; then
@@ -157,6 +176,10 @@ EOF
     fails=$((fails + 1))
   fi
   pq_ssh "$SERVER" "sudo drlink egress enable '$profile'" >/dev/null 2>&1 || true
+  while IFS= read -r op; do
+    [[ -z "$op" ]] && continue
+    pq_ssh "$SERVER" "sudo drlink egress enable '$op'" >/dev/null 2>&1 || true
+  done <<<"$other_enabled"
 
   if [[ "$fails" -eq 0 ]]; then
     pq_gate MULTI_OS_EGRESS_ALLOW_DENY PASS
@@ -315,9 +338,19 @@ phase_noisy_neighbor() {
   fi
   # External SSH to AWS client if port known
   local aws_port
-  aws_port="$(pq_ssh "$SERVER" "sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));
-cs=d.get('clients') or {};
-print(next(((c.get('services') or {}).get('ssh') or {}).get('remote_port') or '' for c in cs.values() if 'al2023' in str(c.get('label','')).lower() or 'aws' in str(c.get('label','')).lower() or 'ip-10' in str(c.get('hostname','')).lower()), ''))\"")"
+  aws_port="$(pq_ssh "$SERVER" 'sudo python3 -' <<'PY'
+import json
+d = json.load(open("/var/lib/drlink/registry.json"))
+port = ""
+for c in (d.get("clients") or {}).values():
+    label = str(c.get("label") or "").lower()
+    host = str(c.get("hostname") or "").lower()
+    if "al2023" in label or "aws" in label or "ip-10" in host:
+        port = str(((c.get("services") or {}).get("ssh") or {}).get("remote_port") or "")
+        break
+print(port)
+PY
+)"
   if [[ -n "$aws_port" ]]; then
     if ssh "${PROD_QUAL_SSH_OPTS[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o IdentitiesOnly=yes -i "$SSH_KEY" -p "$aws_port" "ec2-user@$SERVER_IP" 'hostname' >/dev/null 2>&1; then
