@@ -56,15 +56,171 @@ PROFILE_PROPS = (
 )
 CLIENT_VIEWS = ("services", "tags", "groups")
 
+
+def _arg(name, complete=C_NONE, required=True):
+    return {"name": name, "complete": complete, "required": bool(required)}
+
+
+# Lightweight operator risk / confirmation vocabulary (not a policy engine).
+RISK_LEVELS = frozenset(
+    {"none", "metadata", "outage", "irreversible", "security_widening"}
+)
+CONFIRMATION_MODES = frozenset({"none", "y_n", "typed_token", "yes_flag"})
+
+
+def _flag(
+    name,
+    arity=1,
+    choices=(),
+    hidden=False,
+    required=False,
+    description="",
+    metavar="",
+    examples=(),
+    effect="",
+    risk="",
+    type="",
+    unit="",
+    default="",
+    platform="",
+    role="",
+):
+    """Describe one option flag.
+
+    ``arity`` is ``0`` for boolean switches (no value) and ``1`` for flags that
+    consume the next token as a value (AUDIT-014).
+    """
+    risk_text = str(risk or "")
+    if risk_text and risk_text not in RISK_LEVELS:
+        raise ValueError("unknown flag risk: %s" % risk_text)
+    out = {
+        "name": str(name),
+        "arity": 0 if int(arity) == 0 else 1,
+        "choices": tuple(choices) if choices else (),
+        "hidden": bool(hidden),
+        "required": bool(required),
+        "description": str(description or ""),
+        "metavar": str(metavar or ""),
+        "examples": tuple(examples) if examples else (),
+        "effect": str(effect or ""),
+        "risk": risk_text,
+    }
+    if type:
+        out["type"] = str(type)
+    if unit:
+        out["unit"] = str(unit)
+    if default != "":
+        out["default"] = default
+    if platform:
+        out["platform"] = str(platform)
+    if role:
+        out["role"] = str(role)
+    return out
+
+
 ENROLL_FLAGS = (
-    "--one-line",
-    "--ssh",
-    "--ssh-user",
-    "--ssh-port",
-    "--ttl",
-    "--note",
-    "--label",
-    "--client-name",
+    _flag(
+        "--one-line",
+        arity=0,
+        description="Print a one-line zero-touch client install command",
+        effect="Emits installer/bootstrap output instead of interactive manual steps",
+        risk="metadata",
+    ),
+    _flag(
+        "--ssh",
+        arity=0,
+        description="Seed an SSH convenience service (127.0.0.1:22)",
+        effect="Requires --one-line; mutually exclusive with --rdp and --services-file",
+        risk="metadata",
+        platform="linux",
+    ),
+    _flag(
+        "--ssh-user",
+        arity=1,
+        metavar="USER",
+        description="SSH login user for the ssh preset",
+        effect="Required for non-interactive --ssh creation",
+        risk="metadata",
+    ),
+    _flag(
+        "--ssh-port",
+        arity=1,
+        metavar="PORT",
+        description="Local SSH listen port (default 22)",
+        type="integer",
+        unit="port",
+        default=22,
+        risk="metadata",
+    ),
+    _flag(
+        "--ttl",
+        arity=1,
+        metavar="DURATION|SECONDS",
+        description="Enrollment lifetime as duration (30m|1h|4h|1d) or raw seconds",
+        examples=("4h", "600"),
+        default=600,
+        effect="Credential expires automatically after TTL",
+        risk="metadata",
+        type="duration",
+        unit="s|m|h|d|seconds",
+        role="enrollment",
+    ),
+    _flag("--note", arity=1, metavar="TEXT", description="Operator note", risk="metadata"),
+    _flag(
+        "--label",
+        arity=1,
+        metavar="NAME",
+        hidden=True,
+        description="Alias for --client-name",
+        risk="metadata",
+    ),
+    _flag(
+        "--client-name",
+        arity=1,
+        metavar="NAME",
+        description="Administrator label seeded at enrollment",
+        effect="Display metadata only; does not replace client hostname",
+        risk="metadata",
+    ),
+    _flag(
+        "--services-file",
+        arity=1,
+        metavar="PATH",
+        description="JSON service list (same schema as FRP_SERVICES_JSON)",
+        effect="Requires --one-line; mutually exclusive with --ssh and --rdp",
+        risk="metadata",
+        type="path",
+    ),
+    _flag(
+        "--platform",
+        arity=1,
+        choices=("linux", "windows"),
+        default="linux",
+        description="Client platform for the one-line installer command",
+        effect="Windows requires windows_client_installer_url in server config",
+        risk="metadata",
+        type="enum",
+    ),
+    _flag(
+        "--rdp",
+        arity=0,
+        description="Windows RDP convenience service (127.0.0.1:3389)",
+        effect="Requires --one-line and --platform windows",
+        risk="metadata",
+        platform="windows",
+    ),
+    _flag(
+        "--rdp-port",
+        arity=1,
+        metavar="PORT",
+        description="Local RDP listen port (default 3389)",
+        effect="Requires --rdp",
+        type="integer",
+        unit="port",
+        default=3389,
+        risk="metadata",
+        platform="windows",
+    ),
 )
 BULK_FLAGS = ("--count", "--csv", "--label-prefix", "--ssh-user", "--note", "--ttl")
 PROFILE_CREATE_FLAGS = (
@@ -124,16 +280,6 @@ CATEGORY_ORDER = (
 )
 
 
-def _arg(name, complete=C_NONE, required=True):
-    return {"name": name, "complete": complete, "required": bool(required)}
-
-
-# Lightweight operator risk / confirmation vocabulary (not a policy engine).
-RISK_LEVELS = frozenset(
-    {"none", "metadata", "outage", "irreversible", "security_widening"}
-)
-CONFIRMATION_MODES = frozenset({"none", "y_n", "typed_token", "yes_flag"})
-
 # Surfaces intentionally absent from the public catalog (ARCH-AUDIT-001).
 # Format: ("tool", "subcommand", "flag-or-*")
 BACKEND_SURFACE_EXEMPT = frozenset(
@@ -145,40 +291,6 @@ BACKEND_SURFACE_EXEMPT = frozenset(
         ("frp-egress", "export", "-o"),
     }
 )
-
-
-def _flag(
-    name,
-    arity=1,
-    choices=(),
-    hidden=False,
-    required=False,
-    description="",
-    metavar="",
-    examples=(),
-    effect="",
-    risk="",
-):
-    """Describe one option flag.
-
-    ``arity`` is ``0`` for boolean switches (no value) and ``1`` for flags that
-    consume the next token as a value (AUDIT-014).
-    """
-    risk_text = str(risk or "")
-    if risk_text and risk_text not in RISK_LEVELS:
-        raise ValueError("unknown flag risk: %s" % risk_text)
-    return {
-        "name": str(name),
-        "arity": 0 if int(arity) == 0 else 1,
-        "choices": tuple(choices) if choices else (),
-        "hidden": bool(hidden),
-        "required": bool(required),
-        "description": str(description or ""),
-        "metavar": str(metavar or ""),
-        "examples": tuple(examples) if examples else (),
-        "effect": str(effect or ""),
-        "risk": risk_text,
-    }
 
 
 def _normalize_flags(flags):
@@ -198,6 +310,11 @@ def _normalize_flags(flags):
                     examples=item.get("examples") or (),
                     effect=item.get("effect") or "",
                     risk=item.get("risk") or "",
+                    type=item.get("type", ""),
+                    unit=item.get("unit", ""),
+                    default=item.get("default", ""),
+                    platform=item.get("platform", ""),
+                    role=item.get("role", ""),
                 )
             )
             continue
@@ -209,11 +326,17 @@ def _normalize_flags(flags):
             _flag(
                 name,
                 arity=arity,
+                choices=meta.get("choices") or (),
                 description=meta.get("description", ""),
                 metavar=meta.get("metavar", ""),
                 examples=meta.get("examples", ()),
                 effect=meta.get("effect", ""),
                 risk=meta.get("risk", ""),
+                type=meta.get("type", ""),
+                unit=meta.get("unit", ""),
+                default=meta.get("default", ""),
+                platform=meta.get("platform", ""),
+                role=meta.get("role", ""),
             )
         )
     return tuple(out)
@@ -224,6 +347,7 @@ _BOOLEAN_FLAG_NAMES = frozenset(
     {
         "--one-line",
         "--ssh",
+        "--rdp",
         "--yes",
         "--force",
         "--check",
@@ -250,11 +374,66 @@ _FLAG_DEFAULT_META = {
         "risk": "irreversible",
     },
     "--ttl": {
-        "description": "Temporary entry lifetime",
+        "description": "Temporary entry lifetime (access lists)",
         "metavar": "30m|1h|4h|1d",
         "examples": ("4h", "1d"),
         "effect": "Entry expires automatically after the TTL",
         "risk": "metadata",
+        "type": "duration",
+        "unit": "s|m|h|d",
+        "role": "access",
+    },
+    "--preset": {
+        "description": "Service preset template (ssh, http, custom, …)",
+        "metavar": "PRESET",
+        "examples": ("ssh", "http"),
+        "effect": "Seeds target defaults from a preset",
+        "risk": "metadata",
+        "type": "enum",
+        "choices": ("ssh", "http", "custom"),
+    },
+    "--profile": {
+        "description": "Service profile template name or id",
+        "metavar": "PROFILE",
+        "effect": "Copies template defaults into a pending service",
+        "risk": "metadata",
+        "type": "profile",
+    },
+    "--target-host": {
+        "description": "Local target host or IP for the service",
+        "metavar": "HOST",
+        "type": "host",
+        "risk": "metadata",
+    },
+    "--target-port": {
+        "description": "Local target TCP port",
+        "metavar": "PORT",
+        "type": "integer",
+        "unit": "port",
+        "risk": "metadata",
+    },
+    "--health-timeout": {
+        "description": "Health check timeout",
+        "metavar": "SECONDS",
+        "type": "integer",
+        "unit": "seconds",
+        "risk": "metadata",
+    },
+    "--health-interval": {
+        "description": "Health check interval",
+        "metavar": "SECONDS",
+        "type": "integer",
+        "unit": "seconds",
+        "risk": "metadata",
+    },
+    "--older-than": {
+        "description": "Purge enrollments older than this many days",
+        "metavar": "DAYS",
+        "type": "integer",
+        "unit": "days",
+        "default": 30,
+        "effect": "Bulk purge terminal enrollment metadata",
+        "risk": "irreversible",
     },
     "--name": {
         "description": "Human-readable name for the entry or object",
@@ -291,6 +470,8 @@ _FLAG_DEFAULT_META = {
     "--protocol": {
         "description": "Allowed application protocol",
         "metavar": "http|https",
+        "choices": ("http", "https"),
+        "type": "enum",
         "risk": "metadata",
     },
 }
@@ -1187,7 +1368,17 @@ COMMANDS = (
             "egress add-destination vendor-api archive.example.com 80 --protocol http",
         ),
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<FQDN>"), _arg("<PORT>")),
-        flags=(_flag("--protocol", arity=1, choices=("http", "https"), required=True),),
+        flags=(
+            _flag(
+                "--protocol",
+                arity=1,
+                choices=("http", "https"),
+                required=True,
+                metavar="http|https",
+                type="enum",
+                description="Destination protocol (http absolute-form or https CONNECT+SNI)",
+            ),
+        ),
         tail="flags",
         aliases=(("add", "egress-profile"),),
     ),
@@ -1300,7 +1491,16 @@ COMMANDS = (
         "destination. Use this before 'egress enable'.",
         examples=("egress test 10.0.0.5 api.example.com 443",),
         args=(_arg("<SOURCE-IP>"), _arg("<HOST>"), _arg("<PORT>")),
-        flags=(_flag("--protocol", arity=1, choices=("http", "https")),),
+        flags=(
+            _flag(
+                "--protocol",
+                arity=1,
+                choices=("http", "https"),
+                metavar="http|https",
+                type="enum",
+                description="Wire protocol for the test probe",
+            ),
+        ),
         tail="flags",
     ),
     _cmd(

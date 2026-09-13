@@ -386,6 +386,7 @@ import json, sys
 from pathlib import Path
 role, cfg_path, root, state_path = sys.argv[1:5]
 names, services, local_services, clients_meta, groups = [], {}, [], [], []
+egress, access_lists, service_profiles = [], [], []
 inventory_warning = False
 server_role = role in ("server", "both", "dual")
 client_role = role in ("client", "both", "dual")
@@ -406,6 +407,27 @@ def _is_file(path):
         return path.is_file()
     except OSError:
         return False
+
+def _map_path(raw):
+    path = Path(str(raw or ""))
+    if root and raw and not str(path).startswith(root):
+        path = Path(root + str(path))
+    return path
+
+def _inventory_from_store(raw, key):
+    store = (raw or {}).get(key) or {}
+    if not isinstance(store, dict):
+        return None
+    items = []
+    for pid, entry in store.items():
+        pid_text = str(pid).strip()
+        if pid_text:
+            items.append(pid_text)
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or "").strip()
+            if name:
+                items.append(name)
+    return items
 
 if server_role and not _is_file(cfg):
     inventory_warning = True
@@ -459,6 +481,26 @@ if _is_file(cfg):
                     services[host] = sids
         elif server_role:
             inventory_warning = True
+        for cfg_key, rel_default, store_key, target in (
+            ("egress_control_file", "/var/lib/drlink/egress-control.json", "egress_profiles", egress),
+            ("access_control_file", "/var/lib/drlink/access-control.json", "access_lists", access_lists),
+            ("service_profiles_file", "/var/lib/drlink/service-profiles.json", "profiles", service_profiles),
+        ):
+            raw_path = str((data or {}).get(cfg_key) or rel_default)
+            store_path = _map_path(raw_path)
+            if not _is_file(store_path):
+                if server_role:
+                    inventory_warning = True
+                continue
+            try:
+                state = json.loads(store_path.read_text(encoding="utf-8"))
+                loaded = _inventory_from_store(state, store_key)
+                if loaded is None:
+                    inventory_warning = True
+                else:
+                    target.extend(loaded)
+            except Exception:
+                inventory_warning = True
     except Exception:
         inventory_warning = True
 st = Path(state_path)
@@ -481,6 +523,9 @@ json.dump({
     "services": services,
     "local_services": local_services,
     "groups": sorted(set(item for item in groups if item)),
+    "egress": sorted(set(item for item in egress if item)),
+    "access_lists": sorted(set(item for item in access_lists if item)),
+    "service_profiles": sorted(set(item for item in service_profiles if item)),
     "inventory_warning": inventory_warning,
 }, sys.stdout)
 PY
@@ -1939,47 +1984,11 @@ PY
 
 frpctl_suggest() {
   local unknown="$1"
-  local ranked=""
+  local ranked="" grammar_py=""
   [[ -n "$unknown" ]] || return 0
-  # One Python process ranks all candidates (prefix + edit distance ≤ 2).
-  # Script comes from FD 3 so stdin can carry the command list.
+  grammar_py="$(frpctl_grammar_py 2>/dev/null)" || return 0
   ranked="$(
-    frpctl_known_commands | sort -u | python3 /dev/fd/3 "$unknown" 3<<'PY'
-import sys
-unknown = sys.argv[1]
-cmds = [line.strip() for line in sys.stdin.read().splitlines() if line.strip() and line.strip() != "?"]
-
-def distance(a, b):
-    if a == b:
-        return 0
-    if not a or not b:
-        return max(len(a), len(b))
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            ins, delete, sub = cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + (ca != cb)
-            cur.append(min(ins, delete, sub))
-        prev = cur
-    return prev[-1]
-
-seen = set()
-for cmd in cmds:
-    if cmd in seen:
-        continue
-    keep = False
-    if len(unknown) >= 3 and cmd.startswith(unknown):
-        keep = True
-    elif len(cmd) >= 3 and unknown.startswith(cmd):
-        keep = True
-    else:
-        d = distance(unknown, cmd)
-        if 1 <= d <= 2:
-            keep = True
-    if keep:
-        seen.add(cmd)
-        print(cmd)
-PY
+    frpctl_known_commands | sort -u | python3 "$grammar_py" suggest "$unknown" 2>/dev/null
   )" || true
   if [[ -z "$ranked" ]]; then
     return 0

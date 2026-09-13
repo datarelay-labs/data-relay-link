@@ -108,17 +108,32 @@ class ParseError(ValueError):
 
 
 def tokenize(line):
-    """Split an operator line into tokens. Quotes group; metacharacters do not expand."""
+    """Split an operator line into tokens. Quotes group; metacharacters do not expand.
+
+    Empty quoted tokens (``""`` / ``''``) are preserved. Adjacent quoted and
+    unquoted segments concatenate into one token (``"a""b"`` → ``ab``).
+    Token existence is tracked with ``token_started``, not buffer length.
+    """
     tokens = []
     buf = []
     quote = None
     escaped = False
+    token_started = False
     i = 0
     text = line if line is not None else ""
+
+    def flush():
+        nonlocal token_started
+        if token_started:
+            tokens.append("".join(buf))
+            buf.clear()
+            token_started = False
+
     while i < len(text):
         ch = text[i]
         if escaped:
             buf.append(ch)
+            token_started = True
             escaped = False
             i += 1
             continue
@@ -128,6 +143,8 @@ def tokenize(line):
                 i += 1
                 continue
             if ch == quote:
+                # Close quote but keep the current token open so adjacent
+                # quoted/unquoted segments concatenate.
                 quote = None
                 i += 1
                 continue
@@ -135,20 +152,20 @@ def tokenize(line):
             i += 1
             continue
         if ch in " \t":
-            if buf:
-                tokens.append("".join(buf))
-                buf = []
+            flush()
             i += 1
             continue
         if ch in "'\"":
             quote = ch
+            token_started = True
             i += 1
             continue
         if ch == "\\":
             escaped = True
+            token_started = True
             i += 1
             continue
-        if ch == "?" and not buf:
+        if ch == "?" and not token_started:
             nxt = text[i + 1] if i + 1 < len(text) else ""
             if nxt in ("", " ", "\t"):
                 tokens.append("?")
@@ -160,13 +177,13 @@ def tokenize(line):
                 % ch
             )
         buf.append(ch)
+        token_started = True
         i += 1
     if quote:
         raise ParseError("unclosed quote")
     if escaped:
         raise ParseError("trailing backslash")
-    if buf:
-        tokens.append("".join(buf))
+    flush()
     return tokens
 
 
@@ -2187,7 +2204,18 @@ def _match_enable_disable(tokens, role, names=None):
     return {"status": "ok", "action": "%s_service" % verb, "service": tokens[2]}
 
 
-def completion_candidates(line, role, names, services, local_services, trailing=None, groups=None):
+def completion_candidates(
+    line,
+    role,
+    names,
+    services,
+    local_services,
+    trailing=None,
+    groups=None,
+    egress_profiles=None,
+    access_lists=None,
+    service_profiles=None,
+):
     try:
         tokens = tokenize(line)
     except ParseError:
@@ -2211,12 +2239,28 @@ def completion_candidates(line, role, names, services, local_services, trailing=
         services,
         local_services,
         groups or [],
+        egress_profiles=egress_profiles,
+        access_lists=access_lists,
+        service_profiles=service_profiles,
+        tokens=tokens,
+        trailing=trailing,
     )
     if hit is not None:
         return hit
     if verb in LEGACY_COMMANDS:
         return _legacy_completion(tokens, trailing, role, names, services)
-    return _canonical_completion(tokens, trailing, role, names, services, local_services, groups or [])
+    return _canonical_completion(
+        tokens,
+        trailing,
+        role,
+        names,
+        services,
+        local_services,
+        groups or [],
+        egress_profiles=egress_profiles,
+        access_lists=access_lists,
+        service_profiles=service_profiles,
+    )
 
 
 def _catalog_desc_map(filled, role):
@@ -2442,15 +2486,51 @@ def _filter(items, prefix):
     return [item for item in items if item.startswith(prefix)]
 
 
-def _inventory(names, services, local_services, groups):
+def _inventory(
+    names,
+    services,
+    local_services,
+    groups,
+    egress_profiles=None,
+    access_lists=None,
+    service_profiles=None,
+):
     return {
         CATALOG.C_CLIENT: list(names or []),
         CATALOG.C_GROUP: list(groups or []),
         CATALOG.C_LOCAL_SERVICE: list(local_services or []),
+        CATALOG.C_EGRESS: list(egress_profiles or []),
+        CATALOG.C_ACCESS_LIST: list(access_lists or []),
+        CATALOG.C_PROFILE: list(service_profiles or []),
     }
 
 
-def _catalog_candidates(filled, prefix, role, names, services, local_services, groups):
+def _pending_flag_value(tokens, cmd, *, trailing):
+    """When completing a flag value, return (flag_meta, value_prefix) or None."""
+    if not tokens or not cmd.get("flags"):
+        return None
+    flags = {item["name"]: item for item in CATALOG._normalize_flags(cmd["flags"])}
+    if trailing and tokens[-1] in flags and flags[tokens[-1]]["arity"] == 1:
+        return flags[tokens[-1]], ""
+    if len(tokens) >= 2 and tokens[-2] in flags and flags[tokens[-2]]["arity"] == 1:
+        return flags[tokens[-2]], tokens[-1]
+    return None
+
+
+def _catalog_candidates(
+    filled,
+    prefix,
+    role,
+    names,
+    services,
+    local_services,
+    groups,
+    egress_profiles=None,
+    access_lists=None,
+    service_profiles=None,
+    tokens=(),
+    trailing=False,
+):
     """Catalog-driven Tab candidates. None means 'not a canonical command'."""
     if not filled:
         return None
@@ -2490,15 +2570,35 @@ def _catalog_candidates(filled, prefix, role, names, services, local_services, g
         if complete == CATALOG.C_CLIENT_SERVICE:
             selector = _selector_before(cmd, probe, CATALOG.C_CLIENT)
             return _filter((services or {}).get(selector, []), prefix)
-        pool = _inventory(names, services, local_services, groups).get(complete)
+        pool = _inventory(
+            names,
+            services,
+            local_services,
+            groups,
+            egress_profiles=egress_profiles,
+            access_lists=access_lists,
+            service_profiles=service_profiles,
+        ).get(complete)
         if pool is not None:
             return _filter(pool, prefix)
+        pending = _pending_flag_value(tokens or filled, cmd, trailing=trailing)
+        if pending is not None:
+            flag_meta, value_prefix = pending
+            choices = flag_meta.get("choices") or ()
+            if choices:
+                return _filter(list(choices), value_prefix)
         if cmd["flags"] and prefix.startswith("-"):
             return _filter(
                 CATALOG.flag_names(cmd["flags"], include_hidden=True), prefix
             )
         return []
     if cmd["flags"]:
+        pending = _pending_flag_value(tokens or filled, cmd, trailing=trailing)
+        if pending is not None:
+            flag_meta, value_prefix = pending
+            choices = flag_meta.get("choices") or ()
+            if choices:
+                return _filter(list(choices), value_prefix)
         return _filter(CATALOG.flag_names(cmd["flags"], include_hidden=True), prefix)
     return []
 
@@ -2511,14 +2611,36 @@ def _selector_before(cmd, probe, kind):
     return ""
 
 
-def _canonical_completion(tokens, trailing, role, names, services, local_services, groups):
+def _canonical_completion(
+    tokens,
+    trailing,
+    role,
+    names,
+    services,
+    local_services,
+    groups,
+    egress_profiles=None,
+    access_lists=None,
+    service_profiles=None,
+):
     client, server = _role_parts(role)
     prefix = _current_prefix(tokens, trailing)
     filled = tokens if trailing else tokens[:-1]
     if not filled:
         return _filter(canonical_verbs(role), prefix)
     catalog_hit = _catalog_candidates(
-        filled, prefix, role, names, services, local_services, groups
+        filled,
+        prefix,
+        role,
+        names,
+        services,
+        local_services,
+        groups,
+        egress_profiles=egress_profiles,
+        access_lists=access_lists,
+        service_profiles=service_profiles,
+        tokens=tokens,
+        trailing=trailing,
     )
     if catalog_hit is not None:
         return catalog_hit
@@ -2713,11 +2835,29 @@ def _legacy_completion(tokens, trailing, role, names, services):
     return []
 
 
-def complete_line(line, role, names, services, local_services, groups=None):
+def complete_line(
+    line,
+    role,
+    names,
+    services,
+    local_services,
+    groups=None,
+    egress_profiles=None,
+    access_lists=None,
+    service_profiles=None,
+):
     trailing = bool(line) and line[-1:] in " \t"
     cands = completion_candidates(
-        line, role, names, services, local_services,
-        trailing=trailing, groups=groups or [],
+        line,
+        role,
+        names,
+        services,
+        local_services,
+        trailing=trailing,
+        groups=groups or [],
+        egress_profiles=egress_profiles,
+        access_lists=access_lists,
+        service_profiles=service_profiles,
     )
     if not cands:
         return line
@@ -2764,11 +2904,68 @@ def _replace_last(line, token, add_space):
     return new
 
 
+def _command_edit_distance(a, b):
+    if a == b:
+        return 0
+    if not a or not b:
+        return max(len(a), len(b))
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            ins = cur[j - 1] + 1
+            delete = prev[j] + 1
+            sub = prev[j - 1] + (ca != cb)
+            cur.append(min(ins, delete, sub))
+        prev = cur
+    return prev[-1]
+
+
+def suggest_commands(unknown, cmds):
+    """Rank likely command names for typo recovery (prefix + edit distance ≤ 2)."""
+    needle = str(unknown or "").strip()
+    if not needle:
+        return []
+    ranked = []
+    seen = set()
+    for cmd in cmds or []:
+        text = str(cmd or "").strip()
+        if not text or text == "?" or text in seen:
+            continue
+        keep = False
+        if len(needle) >= 3 and text.startswith(needle):
+            keep = True
+        elif len(text) >= 3 and needle.startswith(text):
+            keep = True
+        else:
+            dist = _command_edit_distance(needle, text)
+            if 1 <= dist <= 2:
+                keep = True
+        if keep:
+            seen.add(text)
+            ranked.append(text)
+    return ranked
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        raise SystemExit("usage: frp_ctl_grammar.py tokenize|match|help|complete|complete-line ...")
+        raise SystemExit(
+            "usage: frp_ctl_grammar.py tokenize|match|help|complete|complete-line|suggest ..."
+        )
     cmd = argv[0]
+    if cmd == "suggest":
+        unknown = argv[1] if len(argv) > 1 else ""
+        cmds = []
+        if not sys.stdin.isatty():
+            cmds = [
+                line.strip()
+                for line in sys.stdin.read().splitlines()
+                if line.strip() and line.strip() != "?"
+            ]
+        for item in suggest_commands(unknown, cmds):
+            sys.stdout.write(item + "\n")
+        return 0
     if cmd == "tokenize":
         line = argv[1] if len(argv) > 1 else sys.stdin.read()
         try:
@@ -2789,6 +2986,9 @@ def main(argv=None):
     services = payload.get("services") or {}
     local_services = payload.get("local_services") or []
     groups = payload.get("groups") or []
+    egress_profiles = payload.get("egress") or []
+    access_lists = payload.get("access_lists") or []
+    service_profiles = payload.get("service_profiles") or []
     if cmd == "match":
         tokens = payload.get("tokens") or argv[1:]
         json.dump(match(tokens, role, names=names, clients=payload.get("clients") or []), sys.stdout)
@@ -2800,12 +3000,34 @@ def main(argv=None):
         return 0
     if cmd == "complete":
         line = payload.get("line") or (argv[1] if len(argv) > 1 else "")
-        for item in completion_candidates(line, role, names, services, local_services, groups=groups):
+        for item in completion_candidates(
+            line,
+            role,
+            names,
+            services,
+            local_services,
+            groups=groups,
+            egress_profiles=egress_profiles,
+            access_lists=access_lists,
+            service_profiles=service_profiles,
+        ):
             sys.stdout.write(item + "\n")
         return 0
     if cmd == "complete-line":
         line = payload.get("line") or (argv[1] if len(argv) > 1 else "")
-        sys.stdout.write(complete_line(line, role, names, services, local_services, groups=groups))
+        sys.stdout.write(
+            complete_line(
+                line,
+                role,
+                names,
+                services,
+                local_services,
+                groups=groups,
+                egress_profiles=egress_profiles,
+                access_lists=access_lists,
+                service_profiles=service_profiles,
+            )
+        )
         return 0
     raise SystemExit("unknown grammar action")
 

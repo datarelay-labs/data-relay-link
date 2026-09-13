@@ -17,6 +17,7 @@ BACKEND_TOOLS = (
     ("tools/frp-release-client", "client release"),
     ("tools/frp-revoke-client", "client revoke"),
     ("tools/frp-profile", "service-profile"),
+    ("tools/frp-create-client", "enrollment create"),
 )
 
 
@@ -89,6 +90,35 @@ class BackendCatalogReverseParityTests(unittest.TestCase):
     def test_exemptions_documented(self):
         self.assertTrue(hasattr(self.cat, "BACKEND_SURFACE_EXEMPT"))
         self.assertIn(("frp-egress", "create", "--enable"), self.cat.BACKEND_SURFACE_EXEMPT)
+
+    def test_create_client_flags_in_enrollment_catalog(self):
+        tool_flags = _collect_add_argument_flags(ROOT / "tools" / "frp-create-client")
+        cmd = self.cat.find(["enrollment", "create"])
+        self.assertIsNotNone(cmd)
+        cat_flags = set(self.cat.flag_names(cmd["flags"], include_hidden=True))
+        expected = {
+            "--ttl",
+            "--one-line",
+            "--ssh",
+            "--ssh-user",
+            "--ssh-port",
+            "--services-file",
+            "--platform",
+            "--rdp",
+            "--rdp-port",
+            "--client-name",
+            "--label",
+            "--note",
+        }
+        missing = sorted(flag for flag in expected if flag in tool_flags and flag not in cat_flags)
+        self.assertEqual(missing, [], msg="catalog missing enrollment flags: %s" % missing)
+
+    def test_enrollment_public_flags_documented(self):
+        cmd = self.cat.find(["enrollment", "create"])
+        by_name = {f["name"]: f for f in cmd["flags"]}
+        for name in ("--services-file", "--platform", "--rdp", "--rdp-port"):
+            self.assertIn(name, by_name)
+            self.assertTrue(by_name[name].get("description"))
 
 
 if __name__ == "__main__":
