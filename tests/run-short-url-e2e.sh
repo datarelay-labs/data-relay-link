@@ -10,7 +10,30 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5)
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/short-url-e2e-$RUN_ID}"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${HEAD_SHA}/dist/bootstrap-client.sh"
+# Prefer a GitHub-raw SHA that is actually published (unpushed HEAD 404s).
+INSTALLER_SHA="${FRP_E2E_INSTALLER_SHA:-$HEAD_SHA}"
+if [[ -z "${FRP_E2E_INSTALLER_SHA:-}" ]]; then
+  candidates=("$HEAD_SHA")
+  branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
+  if [[ -n "$branch" ]]; then
+    upstream="$(git -C "$ROOT" rev-parse --abbrev-ref "$branch@{upstream}" 2>/dev/null || true)"
+    if [[ -n "$upstream" ]]; then
+      candidates+=("$(git -C "$ROOT" rev-parse "$upstream" 2>/dev/null || true)")
+      mb="$(git -C "$ROOT" merge-base HEAD "$upstream" 2>/dev/null || true)"
+      [[ -n "$mb" ]] && candidates+=("$mb")
+    fi
+  fi
+  for sha in "${candidates[@]}"; do
+    [[ -n "$sha" ]] || continue
+    url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${sha}/dist/bootstrap-client.sh"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      INSTALLER_SHA="$sha"
+      break
+    fi
+  done
+fi
+INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA}/dist/bootstrap-client.sh"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.txt"
 : >"$SUMMARY"
@@ -40,6 +63,7 @@ esac
 
 note "PROFILE=$PROFILE"
 note "HEAD_SHA=$HEAD_SHA"
+note "INSTALLER_SHA=$INSTALLER_SHA"
 note "INSTALLER_URL=$INSTALLER_URL"
 note "CLIENT_ALIAS=$CLIENT_ALIAS"
 
