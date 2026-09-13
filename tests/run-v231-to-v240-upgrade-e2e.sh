@@ -121,8 +121,10 @@ fi
 pq_gate V231_VERSION_IDENTITY PASS
 
 # --- 2) Seed stable Remote Access + Egress state ---
+# IMPORTANT: registry schema must remain v2 (allocator reject schema 1).
+# Mutate the installer-created registry rather than replacing with a legacy shape.
 pq_ssh "$SERVER" 'sudo python3 -' >"$OUT/seed.log" 2>&1 <<'PY'
-import json, os, time, uuid
+import json, os, time
 from pathlib import Path
 
 reg_path = Path("/var/lib/drlink/registry.json")
@@ -135,69 +137,88 @@ client_id = "upgclid01deadbeef"
 service_id = "ssh"
 remote_port = 6010
 
-reg = {
-    "schema_version": 1,
-    "clients": {
-        machine_id: {
-            "client_id": client_id,
-            "machine_id": machine_id,
-            "hostname": "upgrade-e2e-client",
-            "label": "v231-upgrade-seed",
-            "labels": {"role": "upgrade-seed"},
-            "tags": {"qual": "v231-to-v240"},
-            "groups": ["upgrade-lab"],
-            "notes": "seeded for live upgrade qualification",
-            "services": {
-                service_id: {
-                    "service_id": service_id,
-                    "id": service_id,
-                    "remote_port": remote_port,
-                    "local_port": 22,
-                    "local_ip": "127.0.0.1",
-                    "type": "tcp",
-                    "enabled": True,
-                }
-            },
-            "created_at": now,
-            "updated_at": now,
+if reg_path.is_file():
+    reg = json.loads(reg_path.read_text(encoding="utf-8"))
+else:
+    reg = {"schema_version": 2, "reserved": [], "clients": {}}
+if not isinstance(reg, dict):
+    raise SystemExit("registry.json is not an object")
+# Fresh v2.3.1 installs use schema 2. Never seed schema 1.
+reg["schema_version"] = 2
+reg.setdefault("reserved", [])
+if not isinstance(reg.get("reserved"), list):
+    reg["reserved"] = []
+clients = reg.get("clients")
+if not isinstance(clients, dict):
+    clients = {}
+    reg["clients"] = clients
+clients[machine_id] = {
+    "client_id": client_id,
+    "machine_id": machine_id,
+    "hostname": "upgrade-e2e-client",
+    "label": "v231-upgrade-seed",
+    "labels": {"role": "upgrade-seed"},
+    "tags": {"qual": "v231-to-v240"},
+    "groups": ["upgrade-lab"],
+    "notes": "seeded for live upgrade qualification",
+    "mgmt_status": "enrolled",
+    "services": {
+        service_id: {
+            "service_id": service_id,
+            "id": service_id,
+            "remote_port": remote_port,
+            "local_port": 22,
+            "local_ip": "127.0.0.1",
+            "type": "tcp",
+            "enabled": True,
         }
     },
+    "created_at": now,
+    "updated_at": now,
 }
+if remote_port not in reg["reserved"]:
+    reg["reserved"].append(remote_port)
 reg_path.parent.mkdir(parents=True, exist_ok=True)
-reg_path.write_text(json.dumps(reg, indent=2) + "\n", encoding="utf-8")
+reg_path.write_text(json.dumps(reg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 os.chmod(reg_path, 0o600)
 
 # Minimal v2 egress policy (HTTP/HTTPS only; Fixed TCP arrives after upgrade migration)
-eg = {
-    "schema_version": 2,
-    "egress_profiles": {
-        "egp_upgrade_seed": {
-            "id": "egp_upgrade_seed",
-            "name": "upgrade-seed",
-            "description": "seeded profile for upgrade",
-            "enabled": False,
-            "sources": [
-                {
-                    "id": "egs_upgrade_seed",
-                    "cidr": "10.20.30.0/24",
-                    "description": "lab",
-                }
-            ],
-            "destinations": [
-                {
-                    "id": "egd_upgrade_seed",
-                    "host": "example.com",
-                    "port": 443,
-                    "protocol": "https",
-                    "match": "exact",
-                }
-            ],
-            "created_at": now,
-            "updated_at": now,
+if eg_path.is_file():
+    eg = json.loads(eg_path.read_text(encoding="utf-8"))
+    if not isinstance(eg, dict):
+        eg = {"schema_version": 2, "egress_profiles": {}}
+else:
+    eg = {"schema_version": 2, "egress_profiles": {}}
+eg["schema_version"] = 2
+profiles = eg.get("egress_profiles")
+if not isinstance(profiles, dict):
+    profiles = {}
+    eg["egress_profiles"] = profiles
+profiles["egp_upgrade_seed"] = {
+    "id": "egp_upgrade_seed",
+    "name": "upgrade-seed",
+    "description": "seeded profile for upgrade",
+    "enabled": False,
+    "sources": [
+        {
+            "id": "egs_upgrade_seed",
+            "cidr": "10.20.30.0/24",
+            "description": "lab",
         }
-    },
+    ],
+    "destinations": [
+        {
+            "id": "egd_upgrade_seed",
+            "host": "example.com",
+            "port": 443,
+            "protocol": "https",
+            "match": "exact",
+        }
+    ],
+    "created_at": now,
+    "updated_at": now,
 }
-eg_path.write_text(json.dumps(eg, indent=2) + "\n", encoding="utf-8")
+eg_path.write_text(json.dumps(eg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 os.chmod(eg_path, 0o600)
 
 if not acl_path.is_file():
@@ -205,8 +226,24 @@ if not acl_path.is_file():
     acl_path.write_text(json.dumps(acl, indent=2) + "\n", encoding="utf-8")
     os.chmod(acl_path, 0o600)
 
+# Prove allocator accepts seeded registry before upgrade.
+import subprocess
+subprocess.check_call(["systemctl", "restart", "drlink-allocator"])
+import urllib.request
+ok = False
+for _ in range(20):
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:6099/healthz", timeout=1) as resp:
+            if resp.status == 200:
+                ok = True
+                break
+    except Exception:
+        time.sleep(0.5)
+if not ok:
+    raise SystemExit("allocator unhealthy after schema-v2 seed")
+
 print("SEED_OK")
-print(json.dumps({"client_id": client_id, "service_id": service_id, "remote_port": remote_port}))
+print(json.dumps({"client_id": client_id, "service_id": service_id, "remote_port": remote_port, "registry_schema": 2}))
 PY
 grep -q SEED_OK "$OUT/seed.log" || fail_out "state seed failed"
 pq_gate V231_STATE_SEED PASS
