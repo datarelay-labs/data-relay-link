@@ -229,16 +229,17 @@ if not acl_path.is_file():
 # Prove allocator accepts seeded registry before upgrade.
 import subprocess
 subprocess.check_call(["systemctl", "restart", "drlink-allocator"])
-import urllib.request
 ok = False
-for _ in range(20):
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:6099/healthz", timeout=1) as resp:
-            if resp.status == 200:
-                ok = True
-                break
-    except Exception:
-        time.sleep(0.5)
+for _ in range(30):
+    rc = subprocess.call(
+        ["curl", "-fsSk", "https://127.0.0.1:6099/healthz"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if rc == 0:
+        ok = True
+        break
+    time.sleep(0.5)
 if not ok:
     raise SystemExit("allocator unhealthy after schema-v2 seed")
 
