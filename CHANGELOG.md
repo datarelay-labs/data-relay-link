@@ -10,6 +10,9 @@ published **v2.3.0**.
 - Repository identity: `datarelay-labs/data-relay-link` with primary CLI `drlink`
 - Fix Zero-Touch client install false `HEALTH_CHECK_FAILED` caused by polling the
   legacy `frpc` systemd unit after rename to `drlink-client` (bounded retry/backoff)
+- Fix macOS Zero-Touch false `HEALTH_CHECK_FAILED` when `wait_for_proxies` used a
+  UTC ISO log cursor that never appears in local-time frpc file logs (byte-offset
+  `logpos` cursor with rotation/truncation safety)
 - Ensure successful client install finishes with `drlink` on PATH and no PATH `frpctl`
 - Homebrew formula renamed to `packaging/homebrew/Formula/data-relay-link.rb`
 - Access Control Real E2E harness no longer hard-requires an AL2023 inventory client

@@ -2128,9 +2128,13 @@ frp_client_runtime_unit() {
 }
 
 frp_client_journal_cursor() {
-  # Capture a generation boundary before restart. Empty on unsupported platforms.
+  # Capture a generation boundary before restart/start + readiness wait.
+  # Linux: systemd journal cursor. Darwin: inode+byte-offset logpos cursor
+  # over frpc.out/err logs (never a wall-clock timestamp string).
   if frp_is_darwin; then
-    date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true
+    if declare -F frp_macos_log_cursor >/dev/null 2>&1; then
+      frp_macos_log_cursor 2>/dev/null || true
+    fi
     return 0
   fi
   journalctl -u "$(frp_client_runtime_unit)" -n 0 --show-cursor --no-pager 2>/dev/null \
@@ -2141,15 +2145,10 @@ frp_client_recent_runtime_logs() {
   local lines="${1:-400}"
   local since_cursor="${2:-}"
   if frp_is_darwin; then
-    # macOS: filter by optional ISO timestamp generation boundary when provided.
-    if [[ -n "$since_cursor" ]]; then
-      frp_macos_recent_logs "$lines" 2>/dev/null | awk -v since="$since_cursor" '
-        BEGIN { show=0 }
-        {
-          # Lines often start with a timestamp; once we pass "since", show all.
-          if (index($0, since) || show) { show=1; print }
-        }' || true
-    else
+    # macOS: only bytes/lines appended after the logpos cursor may count.
+    if declare -F frp_macos_logs_since_cursor >/dev/null 2>&1; then
+      frp_macos_logs_since_cursor "$lines" "$since_cursor" 2>/dev/null || true
+    elif declare -F frp_macos_recent_logs >/dev/null 2>&1; then
       frp_macos_recent_logs "$lines" 2>/dev/null || true
     fi
     return 0
@@ -2168,7 +2167,8 @@ wait_for_proxies() {
   # Zero-Touch, while genuine failure still returns non-zero within ~45s.
   #
   # Only evidence AFTER the optional generation cursor (FRP_PROXY_WAIT_CURSOR
-  # or first argument --since-cursor=...) may satisfy readiness.
+  # or --since-cursor=...) may satisfy readiness. On Darwin the cursor is a
+  # file byte-offset (logpos), not a timestamp substring.
   local logs proxy missing
   local -a names=()
   local since_cursor="${FRP_PROXY_WAIT_CURSOR:-}"
@@ -4194,8 +4194,9 @@ frp_client_restart() {
     echo "ERROR: simulated service restart failure" >&2
     return 1
   fi
-  # Capture journal generation boundary before restart so readiness waits
-  # never accept stale success lines from the previous process generation.
+  # Capture generation boundary before restart so readiness waits never accept
+  # stale success lines from the previous process generation (journal cursor on
+  # Linux; inode+byte-offset logpos cursor on Darwin file logs).
   FRP_PROXY_WAIT_CURSOR="$(frp_client_journal_cursor 2>/dev/null || true)"
   export FRP_PROXY_WAIT_CURSOR
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then

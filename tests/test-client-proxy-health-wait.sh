@@ -100,4 +100,63 @@ fi
 grep -q 'UNIT=drlink-client' "$WORK/state/units" || fail "fail-closed path must still query drlink-client"
 pass "GENUINE_FAILURE_FAIL_CLOSED"
 
+# Linux journal cursor causality: evidence before --after-cursor must not PASS.
+rm -f "$WORK/state/count" "$WORK/state/units"
+cat >"$BIN/journalctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+unit=""
+after_cursor=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u) unit="$2"; shift 2 ;;
+    --after-cursor) after_cursor="$2"; shift 2 ;;
+    --show-cursor)
+      echo "-- cursor: linux-cursor-gen2"
+      exit 0
+      ;;
+    -n|--no-pager) shift ;;
+    *) shift ;;
+  esac
+done
+printf 'UNIT=%s AFTER=%s\n' "$unit" "$after_cursor" >>"${FRP_FAKE_JOURNAL_STATE}/units"
+if [[ "$unit" != "drlink-client" ]]; then
+  exit 0
+fi
+if [[ -n "$after_cursor" ]]; then
+  # Only post-cursor generation is visible.
+  if [[ "$after_cursor" == "linux-cursor-gen1" ]]; then
+    cat <<'LOG'
+login to server success
+[host-ssh] start proxy success
+LOG
+  fi
+  exit 0
+fi
+# Without a cursor, stale pre-generation lines would appear — wait path must pass one.
+cat <<'LOG'
+[stale] start proxy success
+LOG
+EOF
+chmod 0755 "$BIN/journalctl"
+
+unset FRP_PROXY_WAIT_CURSOR || true
+CURSOR_LINUX="$(frp_client_journal_cursor)"
+[[ "$CURSOR_LINUX" == "linux-cursor-gen2" ]] || fail "Linux cursor capture failed (got: $CURSOR_LINUX)"
+# Wrong/old cursor yields empty after-cursor logs → fail closed.
+export FRP_PROXY_WAIT_CURSOR="linux-cursor-stale"
+export FRP_PROXY_WAIT_MAX_ATTEMPTS=3
+if wait_for_proxies host-ssh; then
+  fail "Linux wait must fail closed for unknown after-cursor generation"
+fi
+# Fresh matching cursor yields proxy success → PASS.
+export FRP_PROXY_WAIT_CURSOR="linux-cursor-gen1"
+export FRP_PROXY_WAIT_MAX_ATTEMPTS=4
+if ! wait_for_proxies host-ssh; then
+  fail "Linux wait must PASS for after-cursor proxy-success evidence"
+fi
+grep -q 'AFTER=linux-cursor-gen1' "$WORK/state/units" || fail "Linux wait did not honor after-cursor"
+pass "LINUX_PROXY_WAIT_REGRESSION"
+pass "LINUX_STALE_CURSOR_CAUSALITY"
+
 echo "CLIENT_PROXY_HEALTH_WAIT_TEST=PASS"

@@ -264,6 +264,175 @@ frp_macos_launchd_set_enabled() {
   return 0
 }
 
+frp_macos_log_paths() {
+  # Canonical launchd stdout/stderr log paths under the macOS state root.
+  local state
+  state="$(frp_macos_fs /etc/frp)"
+  printf '%s\n' "$state/logs/frpc.out.log" "$state/logs/frpc.err.log"
+}
+
+frp_macos_log_file_meta() {
+  # Print "inode size" for a log file. Missing files report "0 0".
+  # Uses Linux or BSD stat so Darwin simulation under Linux tests still works.
+  local f="${1:-}" meta=""
+  if [[ -z "$f" || ! -f "$f" ]]; then
+    printf '0 0'
+    return 0
+  fi
+  if meta="$(stat -c '%i %s' "$f" 2>/dev/null)"; then
+    printf '%s' "$meta"
+    return 0
+  fi
+  if meta="$(stat -f '%i %z' "$f" 2>/dev/null)"; then
+    printf '%s' "$meta"
+    return 0
+  fi
+  printf '0 %s' "$(wc -c <"$f" | tr -d '[:space:]')"
+}
+
+frp_macos_log_region_fingerprint() {
+  # Fingerprint bytes immediately before absolute offset END (up to 64 bytes).
+  # Detects same-inode file replacement that pure size cursors would miss.
+  local f="${1:-}" end="${2:-0}"
+  if [[ -z "$f" || ! -f "$f" || "${end:-0}" -le 0 ]]; then
+    printf 'none'
+    return 0
+  fi
+  python3 - "$f" "$end" <<'PY'
+import hashlib
+import sys
+
+path = sys.argv[1]
+end = int(sys.argv[2])
+if end <= 0:
+    print("none")
+    raise SystemExit(0)
+start = max(0, end - 64)
+with open(path, "rb") as fh:
+    fh.seek(start)
+    data = fh.read(end - start)
+print(hashlib.sha256(data).hexdigest() if data else "none")
+PY
+}
+
+frp_macos_log_cursor() {
+  # Byte-offset generation boundary for frpc file logs.
+  # Format: logpos:v1:out=INODE,SIZE,FP:err=INODE,SIZE,FP
+  # FP fingerprints the pre-cursor region so inode-reuse replacements reset.
+  local out_log err_log out_meta err_meta out_ino out_sz err_ino err_sz out_fp err_fp
+  {
+    read -r out_log
+    read -r err_log
+  } < <(frp_macos_log_paths)
+  out_meta="$(frp_macos_log_file_meta "$out_log")"
+  err_meta="$(frp_macos_log_file_meta "$err_log")"
+  out_ino="${out_meta%% *}"
+  out_sz="${out_meta#* }"
+  err_ino="${err_meta%% *}"
+  err_sz="${err_meta#* }"
+  out_fp="$(frp_macos_log_region_fingerprint "$out_log" "$out_sz")"
+  err_fp="$(frp_macos_log_region_fingerprint "$err_log" "$err_sz")"
+  printf 'logpos:v1:out=%s,%s,%s:err=%s,%s,%s\n' \
+    "$out_ino" "$out_sz" "$out_fp" "$err_ino" "$err_sz" "$err_fp"
+}
+
+frp_macos_emit_log_bytes_after() {
+  # Emit bytes written after a saved inode/size/fingerprint cursor.
+  # Reset to byte 0 when: inode changes, file shrinks, or the pre-cursor
+  # fingerprint no longer matches (replaced file with reused inode).
+  local file="$1"
+  local saved_ino="${2:-0}"
+  local saved_sz="${3:-0}"
+  local saved_fp="${4:-none}"
+  local cur_meta cur_ino cur_sz start cur_fp
+  [[ -f "$file" ]] || return 0
+  cur_meta="$(frp_macos_log_file_meta "$file")"
+  cur_ino="${cur_meta%% *}"
+  cur_sz="${cur_meta#* }"
+  start="$saved_sz"
+  if [[ "$cur_ino" != "$saved_ino" ]] || [[ "${cur_sz:-0}" -lt "${saved_sz:-0}" ]]; then
+    start=0
+  elif [[ "${saved_sz:-0}" -gt 0 ]]; then
+    cur_fp="$(frp_macos_log_region_fingerprint "$file" "$saved_sz")"
+    if [[ "$cur_fp" != "$saved_fp" ]]; then
+      start=0
+    fi
+  fi
+  if [[ "${cur_sz:-0}" -le "${start:-0}" ]]; then
+    return 0
+  fi
+  tail -c "+$((start + 1))" "$file" 2>/dev/null || true
+}
+
+frp_macos_logs_since_cursor() {
+  # Read frpc logs after an optional logpos:v1 cursor. Without a cursor,
+  # fall back to the recent-tail helper used by doctor/support paths.
+  local lines="${1:-80}"
+  local cursor="${2:-}"
+  local out_log err_log out_ino=0 out_sz=0 out_fp=none err_ino=0 err_sz=0 err_fp=none
+  local rest out_part err_part
+  {
+    read -r out_log
+    read -r err_log
+  } < <(frp_macos_log_paths)
+
+  if [[ -z "$cursor" ]]; then
+    frp_macos_recent_logs "$lines"
+    return 0
+  fi
+
+  case "$cursor" in
+    logpos:v1:*)
+      rest="${cursor#logpos:v1:}"
+      out_part="${rest%%:err=*}"
+      err_part="${rest#*:err=}"
+      out_part="${out_part#out=}"
+      out_ino="${out_part%%,*}"
+      rest="${out_part#*,}"
+      case "$rest" in
+        *,*)
+          out_sz="${rest%%,*}"
+          out_fp="${rest#*,}"
+          ;;
+        *)
+          out_sz="$rest"
+          out_fp=none
+          ;;
+      esac
+      err_ino="${err_part%%,*}"
+      rest="${err_part#*,}"
+      case "$rest" in
+        *,*)
+          err_sz="${rest%%,*}"
+          err_fp="${rest#*,}"
+          ;;
+        *)
+          err_sz="$rest"
+          err_fp=none
+          ;;
+      esac
+      ;;
+    *)
+      # Legacy/unknown cursors (e.g. UTC ISO timestamps) must not string-match
+      # frpc local-time log lines. Fail closed: only bytes appended after this
+      # call's current EOF may satisfy readiness.
+      rest="$(frp_macos_log_file_meta "$out_log")"
+      out_ino="${rest%% *}"
+      out_sz="${rest#* }"
+      out_fp="$(frp_macos_log_region_fingerprint "$out_log" "$out_sz")"
+      rest="$(frp_macos_log_file_meta "$err_log")"
+      err_ino="${rest%% *}"
+      err_sz="${rest#* }"
+      err_fp="$(frp_macos_log_region_fingerprint "$err_log" "$err_sz")"
+      ;;
+  esac
+
+  {
+    frp_macos_emit_log_bytes_after "$out_log" "$out_ino" "$out_sz" "$out_fp"
+    frp_macos_emit_log_bytes_after "$err_log" "$err_ino" "$err_sz" "$err_fp"
+  } | tail -n "$lines"
+}
+
 frp_macos_recent_logs() {
   local lines="${1:-80}" state
   state="$(frp_macos_fs /etc/frp)"
