@@ -46,6 +46,19 @@ cfg.setdefault("egress_control_file", "/var/lib/drlink/egress-control.json")
 cfg.setdefault("egress_conn_log_file", "/var/log/drlink/egress/connections.jsonl")
 cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n")
 print("egress listen configured", cfg["egress_listen_addr"], cfg["egress_listen_port"])
+# Preserve egress runtime ACL after harness config mutation.
+try:
+    import importlib.util
+    from pathlib import Path as P
+    mod_path = P("/usr/local/lib/drlink/frp_server_config.py")
+    if mod_path.is_file():
+        spec = importlib.util.spec_from_file_location("frp_server_config", str(mod_path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if hasattr(mod, "_reapply_config_egress_permissions"):
+            mod._reapply_config_egress_permissions(cfg_path)
+except Exception as exc:
+    print("WARN acl reapply:", exc)
 PY
 # Prefer systemd unit if it honors config; else ensure dedicated smoke listener.
 systemctl restart drlink-egress || true
@@ -439,7 +452,7 @@ import json,sys
 b=json.load(open(sys.argv[1])); a=json.load(open(sys.argv[2]))
 lines=[]
 leak=False
-for u in ("drlink-egress","drlink-server","drlink-allocator"):
+for u in ("drlink-egress","drlink-tcp-egress","drlink-server","drlink-allocator"):
     bu=b.get("units",{}).get(u,{}); au=a.get("units",{}).get(u,{})
     def rss(d):
         v=d.get("VmRSS","0"); return int(str(v).split()[0]) if v else 0
@@ -1075,6 +1088,145 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Fixed TCP Egress qualification (v2.4 product capability)
+# ---------------------------------------------------------------------------
+phase_fixed_tcp_egress() {
+  pq_note "==== FIXED_TCP_EGRESS ===="
+  local stamp
+  stamp="$(date -u +%H%M%S)"
+  local profile="qual-tcp-${stamp}"
+  local relay="qual-tcp-relay-${stamp}"
+  # Public destination required: loopback/private IPs are fail-closed by design.
+  local fqdn="example.com"
+  local dport=80
+  local evidence="$OUT/extended/fixed-tcp-egress.log"
+  : >"$evidence"
+  pq_sample_server_resources "$OUT/resources/tcp-egress-before.json"
+
+  set +e
+  pq_ssh "$SERVER" "sudo bash -s" >"$evidence" 2>&1 <<EOF
+set -euo pipefail
+drlink egress delete '$profile' --yes 2>/dev/null || true
+drlink egress tcp delete '$relay' --yes 2>/dev/null || true
+drlink egress create '$profile' --description 'prod-qual fixed tcp'
+drlink egress show '$profile' | tee /tmp/qual-tcp-show-disabled.txt
+drlink egress add-source '$profile' 0.0.0.0/0 --name any
+drlink egress add-destination '$profile' '$fqdn' $dport --protocol tcp
+out="\$(drlink egress tcp create '$relay' --profile '$profile' --destination '$fqdn:$dport')"
+printf '%s\n' "\$out" | tee /tmp/qual-tcp-create.txt
+echo "\$out" | grep -qi disabled
+listen_port="\$(echo "\$out" | sed -n 's/.*Listen[[:space:]]*:[[:space:]]*[^:]*:\\([0-9][0-9]*\\).*/\\1/p' | head -n1)"
+[[ -n "\$listen_port" ]]
+echo "\$listen_port" >/tmp/qual-tcp-listen-port.txt
+drlink egress enable '$profile'
+drlink egress tcp enable '$relay'
+systemctl restart drlink-tcp-egress
+sleep 2
+systemctl is-active drlink-tcp-egress
+drlink egress tcp show '$relay' | tee /tmp/qual-tcp-show.txt
+# Raw IP / metadata destinations must fail closed for tcp protocol
+set +e
+drlink egress add-destination '$profile' 169.254.169.254 80 --protocol tcp >/tmp/qual-tcp-dns-deny.txt 2>&1
+dns_rc=\$?
+set -e
+test "\$dns_rc" -ne 0
+echo FIXED_TCP_SETUP=OK
+EOF
+  local setup_rc=$?
+  set -uo pipefail
+
+  local relay_port=""
+  relay_port="$(pq_ssh "$SERVER" 'cat /tmp/qual-tcp-listen-port.txt 2>/dev/null' || true)"
+  local byte_ok=1 deny_ok=1
+  if [[ "$setup_rc" -eq 0 && -n "$relay_port" && "$relay_port" =~ ^[0-9]+$ ]]; then
+    set +e
+    pq_ssh frp-e2e-client "python3 -" >>"$evidence" 2>&1 <<PY
+import socket, time, json
+req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+t0 = time.time()
+s = socket.create_connection(("${SERVER_IP}", int("${relay_port}")), 15)
+s.sendall(req)
+s.settimeout(15)
+chunks = []
+while True:
+    try:
+        data = s.recv(65536)
+    except Exception:
+        break
+    if not data:
+        break
+    chunks.append(data)
+    if len(b"".join(chunks)) > 64:
+        break
+s.close()
+body = b"".join(chunks)
+dt = (time.time() - t0) * 1000.0
+ok = body.startswith(b"HTTP/")
+print(json.dumps({"ok": bool(ok), "ms": round(dt, 2), "recv": body[:80].decode("latin1", "replace")}))
+raise SystemExit(0 if ok else 1)
+PY
+    byte_ok=$?
+    pq_ssh "$SERVER" "sudo bash -s" >>"$evidence" 2>&1 <<EOF
+set -euo pipefail
+drlink egress remove-source '$profile' any --yes 2>/dev/null || true
+drlink egress add-source '$profile' 198.51.100.0/24 --name lab-only
+EOF
+    if pq_ssh frp-e2e-client "python3 -c \"
+import socket
+s=socket.socket(); s.settimeout(3)
+try:
+  s.connect(('${SERVER_IP}', int('${relay_port}'))); s.sendall(b'GET / HTTP/1.0\\r\\n\\r\\n'); s.recv(16); raise SystemExit(1)
+except Exception:
+  raise SystemExit(0)
+\"" >>"$evidence" 2>&1; then
+      deny_ok=0
+    else
+      deny_ok=1
+    fi
+    pq_ssh "$SERVER" "sudo bash -s" >>"$evidence" 2>&1 <<EOF
+set -euo pipefail
+drlink egress remove-source '$profile' lab-only --yes 2>/dev/null || true
+drlink egress add-source '$profile' 0.0.0.0/0 --name any
+EOF
+    set -uo pipefail
+  else
+    pq_note "WARN fixed tcp setup incomplete; byte-relay skipped (setup_rc=$setup_rc port=$relay_port)"
+  fi
+
+  set +e
+  pq_ssh "$SERVER" "sudo bash -s" >>"$evidence" 2>&1 <<EOF
+set -euo pipefail
+drlink egress tcp disable '$relay' || true
+drlink egress disable '$profile' || true
+systemctl restart drlink-tcp-egress
+sleep 1
+systemctl is-active drlink-tcp-egress
+drlink egress tcp delete '$relay' --yes 2>/dev/null || true
+drlink egress delete '$profile' --yes 2>/dev/null || true
+echo FIXED_TCP_CLEANUP=OK
+EOF
+  local cleanup_rc=$?
+  set -uo pipefail
+
+  pq_sample_server_resources "$OUT/resources/tcp-egress-after.json"
+  echo "FIXED_TCP_EGRESS_SETUP_RC=$setup_rc" | tee -a "$PROD_QUAL_GATES"
+  echo "FIXED_TCP_EGRESS_BYTE_RC=$byte_ok" | tee -a "$PROD_QUAL_GATES"
+  echo "FIXED_TCP_EGRESS_DENY_RC=$deny_ok" | tee -a "$PROD_QUAL_GATES"
+  echo "FIXED_TCP_EGRESS_CLEANUP_RC=$cleanup_rc" | tee -a "$PROD_QUAL_GATES"
+  if [[ "$setup_rc" -eq 0 && "$cleanup_rc" -eq 0 && "$byte_ok" -eq 0 && "$deny_ok" -eq 0 ]]; then
+    pq_gate FIXED_TCP_EGRESS_REAL PASS
+    pq_gate FIXED_TCP_EGRESS_ALLOW_DENY PASS
+    pq_gate FIXED_TCP_EGRESS_DNS_SAFETY PASS
+    pq_gate FIXED_TCP_EGRESS_SERVICE_RESTART PASS
+  else
+    pq_gate FIXED_TCP_EGRESS_REAL FAIL
+    pq_gate FIXED_TCP_EGRESS_ALLOW_DENY FAIL
+    pq_gate FIXED_TCP_EGRESS_DNS_SAFETY FAIL
+    pq_gate FIXED_TCP_EGRESS_SERVICE_RESTART FAIL
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Soak
 # ---------------------------------------------------------------------------
 phase_soak() {
@@ -1251,6 +1403,7 @@ main() {
   phase_network_flap
   phase_docs_free_ux
   phase_wrong_ops
+  phase_fixed_tcp_egress
   phase_soak
   phase_golden_baseline
   pq_note "EXTENDED_FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ) FAILS=$PROD_QUAL_FAILS"
