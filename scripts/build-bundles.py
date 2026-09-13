@@ -46,6 +46,7 @@ files=[
  'lib/frp_ctl_repl.py',
  'lib/frp_access_control.py',
  'lib/frp_egress_control.py',
+ 'lib/frp_state_paths.py',
  'lib/frp_infrastructure_ports.py',
  'lib/frp_health_check.py',
  'lib/frp_service_profiles.py',
