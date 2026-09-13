@@ -172,11 +172,25 @@ frp_valid_tcp_port() {
 
 frp_format_https_url() {
   local host="$1" port="$2" path="${3:-/enroll}"
-  if [[ "$port" == "443" ]]; then
-    printf 'https://%s%s' "$host" "$path"
-  else
-    printf 'https://%s:%s%s' "$host" "$port" "$path"
-  fi
+  # Bracket IPv6 literals for URL authority (hostname/IPv4 unchanged).
+  python3 -c '
+import ipaddress, sys
+host, port, path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+text = str(host or "").strip()
+if text.startswith("[") and text.endswith("]"):
+    authority = text
+else:
+    try:
+        parsed = ipaddress.ip_address(text)
+    except ValueError:
+        authority = text
+    else:
+        authority = ("[%s]" % text) if isinstance(parsed, ipaddress.IPv6Address) else text
+if port == 443:
+    print("https://%s%s" % (authority, path), end="")
+else:
+    print("https://%s:%s%s" % (authority, port, path), end="")
+' "$host" "$port" "$path"
 }
 
 frp_pki_dir() {
@@ -721,7 +735,7 @@ frp_server_prepare_host() {
 }
 
 load_existing_server_config() {
-  local path
+  local path loaded
   path="$(frp_server_config_path)"
   EXISTING_PUBLIC_IP=""
   EXISTING_CONTROL_PORT=""
@@ -737,17 +751,51 @@ load_existing_server_config() {
   EXISTING_WINDOWS_CLIENT_INSTALLER_URL=""
   EXISTING_DEPLOYMENT_MODE=""
   EXISTING_SERVER_CONFIG=""
-  [[ -r "$path" ]] || return 0
-  eval "$(python3 - "$path" <<'PY'
+  EXISTING_EGRESS_LISTEN_ADDR=""
+  EXISTING_EGRESS_LISTEN_PORT=""
+  EXISTING_EGRESS_CONTROL_FILE=""
+  EXISTING_EGRESS_CONN_LOG_FILE=""
+  # Missing config is a supported fresh-install path.
+  [[ -e "$path" ]] || return 0
+  if [[ ! -r "$path" ]]; then
+    echo "ERROR: existing server config is not readable: $path" >&2
+    echo "Refusing to continue; fix permissions or restore from backup." >&2
+    return 1
+  fi
+  # Authoritative config that exists must parse as a JSON object. Malformed or
+  # wrong-type config must fail closed — never look like a fresh install.
+  if ! loaded="$(python3 - "$path" <<'PY'
 import json, shlex, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 try:
-    cfg = json.loads(path.read_text(encoding='utf-8'))
-except Exception:
-    raise SystemExit(0)
+    raw = path.read_text(encoding='utf-8')
+except OSError as exc:
+    print('ERROR: failed to read server config %s: %s' % (path, exc), file=sys.stderr)
+    raise SystemExit(1)
+try:
+    cfg = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(
+        'ERROR: existing server config is malformed JSON: %s (%s)' % (path, exc),
+        file=sys.stderr,
+    )
+    print(
+        'Refusing to treat corrupted authoritative config as a fresh install.',
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 if not isinstance(cfg, dict):
-    raise SystemExit(0)
+    print(
+        'ERROR: existing server config must be a JSON object: %s (got %s)'
+        % (path, type(cfg).__name__),
+        file=sys.stderr,
+    )
+    print(
+        'Refusing to treat corrupted authoritative config as a fresh install.',
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 print('EXISTING_SERVER_CONFIG=1')
 mapping = {
     'public_host': 'EXISTING_PUBLIC_IP',
@@ -765,6 +813,10 @@ mapping = {
     'client_installer_url': 'EXISTING_CLIENT_INSTALLER_URL',
     'windows_client_installer_url': 'EXISTING_WINDOWS_CLIENT_INSTALLER_URL',
     'deployment_mode': 'EXISTING_DEPLOYMENT_MODE',
+    'egress_listen_addr': 'EXISTING_EGRESS_LISTEN_ADDR',
+    'egress_listen_port': 'EXISTING_EGRESS_LISTEN_PORT',
+    'egress_control_file': 'EXISTING_EGRESS_CONTROL_FILE',
+    'egress_conn_log_file': 'EXISTING_EGRESS_CONN_LOG_FILE',
 }
 # public_ip is the control endpoint; public_host is a legacy synonym.
 # Prefer public_ip when both exist so a stale public_host cannot override IP.
@@ -775,6 +827,8 @@ order = [
     'listen_port', 'allocator_listen_port', 'allocator_public_port',
     'client_installer_url', 'windows_client_installer_url',
     'deployment_mode',
+    'egress_listen_addr', 'egress_listen_port',
+    'egress_control_file', 'egress_conn_log_file',
 ]
 seen = {}
 for key in order:
@@ -792,7 +846,10 @@ url = str(cfg.get('allocator_public_url') or '').strip()
 if url.lower().startswith('https://'):
     print('EXISTING_ALLOCATOR_URL=' + shlex.quote(url))
 PY
-)"
+)"; then
+    return 1
+  fi
+  eval "$loaded"
 }
 
 resolve_server_settings() {
@@ -1114,7 +1171,23 @@ PY
     echo "ERROR: FRP control listen port must be outside the FRP service port range" >&2
     exit 1
   fi
+  # Preserve existing Controlled Egress listen settings on reinstall unless
+  # the operator explicitly provided FRP_EGRESS_* before resolution.
+  local user_egress_port=0 user_egress_addr=0
+  if [[ -n "${FRP_EGRESS_LISTEN_PORT:-}" ]]; then
+    user_egress_port=1
+  fi
+  if [[ -n "${FRP_EGRESS_LISTEN_ADDR:-}" ]]; then
+    user_egress_addr=1
+  fi
+  if [[ "$user_egress_port" -eq 0 && -n "${EXISTING_EGRESS_LISTEN_PORT:-}" ]]; then
+    FRP_EGRESS_LISTEN_PORT="$EXISTING_EGRESS_LISTEN_PORT"
+  fi
+  if [[ "$user_egress_addr" -eq 0 && -n "${EXISTING_EGRESS_LISTEN_ADDR:-}" ]]; then
+    FRP_EGRESS_LISTEN_ADDR="$EXISTING_EGRESS_LISTEN_ADDR"
+  fi
   FRP_EGRESS_LISTEN_PORT="${FRP_EGRESS_LISTEN_PORT:-6102}"
+  FRP_EGRESS_LISTEN_ADDR="${FRP_EGRESS_LISTEN_ADDR:-0.0.0.0}"
   if ! frp_valid_tcp_port "$FRP_EGRESS_LISTEN_PORT"; then
     echo "ERROR: FRP_EGRESS_LISTEN_PORT must be an integer TCP port between 1 and 65535" >&2
     exit 1
@@ -1151,7 +1224,23 @@ write_server_config() {
   FRP_LISTEN_HOST="${FRP_LISTEN_HOST:-0.0.0.0}"
   FRP_CONTROL_BIND_ADDR="${FRP_CONTROL_BIND_ADDR:-0.0.0.0}"
   FRP_TRANSPORT="${FRP_TRANSPORT:-tcp}"
+  # Preserve custom Controlled Egress listener settings on reinstall unless
+  # the operator explicitly overrides via environment.
+  if [[ -z "${FRP_EGRESS_LISTEN_ADDR:-}" && -n "${EXISTING_EGRESS_LISTEN_ADDR:-}" ]]; then
+    FRP_EGRESS_LISTEN_ADDR="$EXISTING_EGRESS_LISTEN_ADDR"
+  fi
+  if [[ -z "${FRP_EGRESS_LISTEN_PORT:-}" && -n "${EXISTING_EGRESS_LISTEN_PORT:-}" ]]; then
+    FRP_EGRESS_LISTEN_PORT="$EXISTING_EGRESS_LISTEN_PORT"
+  fi
+  if [[ -z "${FRP_EGRESS_CONTROL_FILE:-}" && -n "${EXISTING_EGRESS_CONTROL_FILE:-}" ]]; then
+    FRP_EGRESS_CONTROL_FILE="$EXISTING_EGRESS_CONTROL_FILE"
+  fi
+  if [[ -z "${FRP_EGRESS_CONN_LOG_FILE:-}" && -n "${EXISTING_EGRESS_CONN_LOG_FILE:-}" ]]; then
+    FRP_EGRESS_CONN_LOG_FILE="$EXISTING_EGRESS_CONN_LOG_FILE"
+  fi
   export FRP_DEPLOYMENT_MODE FRP_LISTEN_HOST FRP_CONTROL_BIND_ADDR FRP_TRANSPORT
+  export FRP_EGRESS_LISTEN_ADDR FRP_EGRESS_LISTEN_PORT
+  export FRP_EGRESS_CONTROL_FILE FRP_EGRESS_CONN_LOG_FILE
   python3 - "$path" \
     "$FRP_PUBLIC_HOST" \
     "$FRP_CONTROL_PUBLIC_PORT" \
@@ -1173,6 +1262,31 @@ pki = sys.argv[12]
 host = sys.argv[2]
 hostname = (sys.argv[13] if len(sys.argv) > 13 else '').strip()
 bootstrap_hostname = (sys.argv[14] if len(sys.argv) > 14 else '').strip()
+existing = {}
+if path.is_file():
+    try:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(raw, dict):
+            existing = raw
+    except (OSError, json.JSONDecodeError):
+        existing = {}
+
+def _preserved(key, env_name, default):
+    env_val = os.environ.get(env_name)
+    if env_val not in (None, ''):
+        return env_val
+    prev = existing.get(key)
+    if prev not in (None, ''):
+        return prev
+    return default
+
+egress_listen_port_raw = _preserved(
+    'egress_listen_port', 'FRP_EGRESS_LISTEN_PORT', '6102'
+)
+try:
+    egress_listen_port = int(egress_listen_port_raw)
+except (TypeError, ValueError):
+    egress_listen_port = 6102
 cfg = {
     'public_host': host,
     'public_ip': host,
@@ -1196,11 +1310,21 @@ cfg = {
     'token_file': '/etc/frp/server_token',
     'access_control_file': '/var/lib/drlink/access-control.json',
     'service_profiles_file': '/var/lib/drlink/service-profiles.json',
-    'egress_control_file': '/var/lib/drlink/egress-control.json',
+    'egress_control_file': str(_preserved(
+        'egress_control_file',
+        'FRP_EGRESS_CONTROL_FILE',
+        '/var/lib/drlink/egress-control.json',
+    )),
     'access_conn_log_file': '/var/log/drlink/access/connections.jsonl',
-    'egress_conn_log_file': '/var/log/drlink/egress/connections.jsonl',
-    'egress_listen_addr': '0.0.0.0',
-    'egress_listen_port': int(os.environ.get('FRP_EGRESS_LISTEN_PORT') or '6102'),
+    'egress_conn_log_file': str(_preserved(
+        'egress_conn_log_file',
+        'FRP_EGRESS_CONN_LOG_FILE',
+        '/var/log/drlink/egress/connections.jsonl',
+    )),
+    'egress_listen_addr': str(_preserved(
+        'egress_listen_addr', 'FRP_EGRESS_LISTEN_ADDR', '0.0.0.0'
+    )),
+    'egress_listen_port': egress_listen_port,
     'access_plugin_addr': '127.0.0.1:6101',
     'access_plugin_path': '/access-auth',
     'client_installer_url': sys.argv[10],
@@ -1231,6 +1355,21 @@ finally:
             pass
 PY
   chmod 600 "$path"
+  # Re-apply egress ACLs after chmod/replace (inode change drops named-user ACL).
+  # Best-effort when setfacl/user is unavailable (fixture trees, non-root).
+  python3 - "$path" "${BASE_DIR}/lib/frp_server_config.py" <<'PY' || true
+import importlib.util, sys
+from pathlib import Path
+cfg_path = Path(sys.argv[1])
+mod_path = Path(sys.argv[2])
+if not mod_path.is_file():
+    raise SystemExit(0)
+spec = importlib.util.spec_from_file_location("frp_server_config", str(mod_path))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+if hasattr(mod, "_reapply_config_egress_permissions"):
+    mod._reapply_config_egress_permissions(cfg_path)
+PY
 }
 
 write_frps_toml() {
@@ -2241,6 +2380,20 @@ if changed:
                 os.unlink(tmp)
             except OSError:
                 pass
+PY
+    # Re-apply egress ACL if the ensure-keys path replaced config.json.
+    python3 - "$(frp_server_fs /etc/drlink/config.json)" "$BASE_DIR/lib/frp_server_config.py" <<'PY' || true
+import importlib.util, sys
+from pathlib import Path
+cfg_path = Path(sys.argv[1])
+mod_path = Path(sys.argv[2])
+if not mod_path.is_file():
+    raise SystemExit(0)
+spec = importlib.util.spec_from_file_location("frp_server_config", str(mod_path))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+if hasattr(mod, "_reapply_config_egress_permissions"):
+    mod._reapply_config_egress_permissions(cfg_path)
 PY
   fi
 

@@ -36,6 +36,8 @@ for macos_test in ./tests/test-macos-*.sh; do
 done
 ./tests/test-portability.sh
 ./tests/test-server-install-config.sh
+./tests/test-install-config-hardening.sh
+./tests/test-qual-gate-truthfulness.sh
 ./tests/test-public-hostname.sh
 ./tests/test-allocator-ready.sh
 ./tests/test-create-client.sh
