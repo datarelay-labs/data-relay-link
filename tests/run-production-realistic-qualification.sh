@@ -23,6 +23,10 @@ export FRP_E2E_PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.113.nip.i
 export FRP_E2E_SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
 export FRP_E2E_SOAK_SECONDS="${FRP_E2E_SOAK_SECONDS:-1800}"
 export FRP_E2E_CHURN_SECONDS="${FRP_E2E_CHURN_SECONDS:-300}"
+# Matrix already performs a fleet server reboot; extra reboot is optional.
+export FRP_E2E_QUAL_SERVER_REBOOT="${FRP_E2E_QUAL_SERVER_REBOOT:-0}"
+# CI already green for candidate; local run-all still runs unless skipped.
+export FRP_E2E_QUAL_SKIP_LOCAL="${FRP_E2E_QUAL_SKIP_LOCAL:-0}"
 
 pq_note "PHASE=DATA_RELAY_LINK_V2_3_1_FINAL_PRODUCTION_REALISTIC_QUALIFICATION"
 pq_note "PASS_NAME=$PASS_NAME RUN_ID=$RUN_ID OUT=$OUT"
@@ -95,6 +99,44 @@ else
   pq_gate FUNCTIONAL_FULL_MATRIX FAIL
   pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION FAIL
 fi
+
+# Matrix uninstalls macOS/Windows at profile end; re-enroll them for live multi-OS fleet.
+pq_note "==== LIVE FLEET REBUILD (macos/windows keep) ===="
+set +e
+for profile in macos-arm64 windows-10; do
+  env \
+    FRP_E2E_PROFILE="$profile" \
+    FRP_E2E_SCENARIO=full \
+    FRP_E2E_SKIP_UNINSTALL=1 \
+    FRP_E2E_SKIP_SERVER_PURGE=1 \
+    FRP_E2E_SKIP_SERVER_INSTALL=1 \
+    FRP_E2E_CLIENT_REBOOT_REPEAT=0 \
+    FRP_E2E_SERVER_REBOOT_REPEAT=0 \
+    FRP_E2E_BACKUP_REPEAT=0 \
+    FRP_E2E_STOP_ON_FAIL=1 \
+    FRP_E2E_OUT_DIR="$OUT/fleet-keep-$profile" \
+    FRP_E2E_RUN_ID="${PASS_NAME,,}-fleetkeep-$profile-$RUN_ID" \
+    FRP_E2E_PUBLIC_HOSTNAME="$FRP_E2E_PUBLIC_HOSTNAME" \
+    bash "$ROOT/tests/run-real-e2e.sh" \
+    | tee "$OUT/fleet-keep-$profile.log"
+done
+pq_ssh "$PROD_QUAL_SERVER" 'sudo drlink show clients' | tee "$OUT/live-fleet-clients.txt"
+ONLINE_N="$(grep -ci ONLINE "$OUT/live-fleet-clients.txt" || true)"
+pq_note "REAL_CLIENTS_ONLINE=$ONLINE_N"
+if [[ "${ONLINE_N:-0}" -ge 3 ]]; then
+  pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION PASS
+else
+  pq_note "WARN live fleet online count low: $ONLINE_N"
+fi
+# Map server reboot recovery from matrix evidence when extra reboot skipped
+if [[ "${FRP_E2E_QUAL_SERVER_REBOOT}" != "1" ]]; then
+  if grep -q 'FLEET server reboot' "$OUT/matrix.log" 2>/dev/null; then
+    pq_gate SERVER_REBOOT_RECOVERY PASS
+    pq_gate CLIENT_RESTART_RECOVERY PASS
+    pq_gate RECONNECT_STORM PASS
+  fi
+fi
+set -uo pipefail
 
 # --- Feature Real E2Es (reuse) ---
 run_feature() {

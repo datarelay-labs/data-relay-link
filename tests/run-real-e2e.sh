@@ -36,6 +36,8 @@ EXT_DELAY="${FRP_E2E_EXT_DELAY:-5}"
 BACKUP_REPEAT="${FRP_E2E_BACKUP_REPEAT:-1}"
 CLIENT_REBOOT_REPEAT="${FRP_E2E_CLIENT_REBOOT_REPEAT:-1}"
 SERVER_REBOOT_REPEAT="${FRP_E2E_SERVER_REBOOT_REPEAT:-1}"
+# When 1, macOS/Windows full scenarios keep the enrolled client (no local uninstall / server release).
+SKIP_UNINSTALL="${FRP_E2E_SKIP_UNINSTALL:-0}"
 OVERALL_TIMEOUT="${FRP_E2E_OVERALL_TIMEOUT:-5400}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 CLIENT_MID=""
@@ -570,6 +572,12 @@ PY" || fail_stop
   MATRIX_REBOOT=SKIP
   MATRIX_DNS=SKIP
 
+  if [[ "$SKIP_UNINSTALL" == "1" ]]; then
+    note "SKIP_UNINSTALL=1 keeping Windows client enrolled for live fleet"
+    record 52-client-uninstall SKIP 0 0
+    MATRIX_UNINSTALL=SKIP
+    return 0
+  fi
   run_client 52-client-uninstall "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\ProgramData\\drlink\\tools\\frp-client.cmd' uninstall; if (Test-Path 'C:\\ProgramData\\drlink') { exit 1 }; Write-Output UNINSTALL_OK\"" || fail_stop
   # Local uninstall preserves server reservations by design; release so matrix fleet
   # DNS does not probe a dead Windows proxy after the profile completes.
@@ -628,6 +636,12 @@ PY" || fail_stop
   MATRIX_REBOOT=SKIP
   MATRIX_DNS=SKIP
 
+  if [[ "$SKIP_UNINSTALL" == "1" ]]; then
+    note "SKIP_UNINSTALL=1 keeping macOS client enrolled for live fleet"
+    record 52-client-uninstall SKIP 0 0
+    MATRIX_UNINSTALL=SKIP
+    return 0
+  fi
   run_local 52-client-uninstall bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'sudo bash -s --' < '$ROOT/dist/uninstall-client.sh'" || fail_stop
   run_client 52b-client-gone "test ! -d '$state_root' && echo LOCAL_GONE" || fail_stop
   run_server 53-release-client "printf 'RELEASE\n' | sudo /usr/local/bin/drlink release client '$CLIENT_MID_PREFIX'" || fail_stop
