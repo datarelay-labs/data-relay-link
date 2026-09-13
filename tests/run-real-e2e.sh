@@ -26,6 +26,49 @@ SKIP_SERVER_PURGE="${FRP_E2E_SKIP_SERVER_PURGE:-0}"
 RUN_ID="${FRP_E2E_RUN_ID:-${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}}"
 OUT_DIR="${FRP_E2E_OUT_DIR:-${OUT_DIR:-$ROOT/e2e-reports/real-e2e-$RUN_ID}}"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+# Zero-touch enroll fetches bootstrap via GitHub raw. Unpushed HEADs 404 and
+# must not silently look like ENROLL=SKIP/product failure. Prefer HEAD when
+# published; otherwise fall back to origin tip / merge-base / explicit override.
+INSTALLER_SHA="${FRP_E2E_INSTALLER_SHA:-}"
+resolve_installer_sha() {
+  if [[ -n "${FRP_E2E_INSTALLER_SHA:-}" ]]; then
+    INSTALLER_SHA="$FRP_E2E_INSTALLER_SHA"
+    return 0
+  fi
+  local candidates=("$HEAD_SHA")
+  local origin_tip
+  origin_tip="$(git -C "$ROOT" rev-parse origin/HEAD 2>/dev/null || true)"
+  [[ -n "$origin_tip" ]] && candidates+=("$origin_tip")
+  local branch upstream mb
+  branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
+  if [[ -n "$branch" ]]; then
+    upstream="$(git -C "$ROOT" rev-parse --abbrev-ref "$branch@{upstream}" 2>/dev/null || true)"
+    if [[ -n "$upstream" ]]; then
+      candidates+=("$(git -C "$ROOT" rev-parse "$upstream" 2>/dev/null || true)")
+      mb="$(git -C "$ROOT" merge-base HEAD "$upstream" 2>/dev/null || true)"
+      [[ -n "$mb" ]] && candidates+=("$mb")
+    fi
+  fi
+  local sha url code
+  for sha in "${candidates[@]}"; do
+    [[ -n "$sha" && "$sha" != "unknown" ]] || continue
+    url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${sha}/dist/bootstrap-client.sh"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      INSTALLER_SHA="$sha"
+      if [[ "$sha" != "$HEAD_SHA" ]]; then
+        note "INSTALLER_SHA_FALLBACK=$sha (HEAD=$HEAD_SHA not published on GitHub raw)"
+      else
+        note "INSTALLER_SHA=$sha"
+      fi
+      return 0
+    fi
+  done
+  INSTALLER_SHA="$HEAD_SHA"
+  note "INSTALLER_SHA_UNPUBLISHED=$HEAD_SHA (zero-touch curl may 404 until push)"
+  return 1
+}
+resolve_installer_sha || true
 SCENARIO="${FRP_E2E_SCENARIO:-full}"
 STOP_ON_FAIL="${FRP_E2E_STOP_ON_FAIL:-1}"
 STEP_TIMEOUT="${FRP_E2E_STEP_TIMEOUT:-240}"
@@ -381,7 +424,7 @@ server_install_env() {
     "FRP_PORT_START=6000"
     "FRP_PORT_END=6098"
     "FRP_ALLOCATOR_PUBLIC_URL=https://$SERVER_IP:6099/enroll"
-    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/data-relay-link/$HEAD_SHA/dist/bootstrap-client.sh"
+    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
   )
   if [[ -n "$PUBLIC_HOSTNAME" ]]; then
     env+=("FRP_PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME")
@@ -511,8 +554,28 @@ discover_client_identity_macos() {
   record discover-client-identity PASS 0 "$elapsed"
 }
 
+pin_linux_installer_urls() {
+  # Ensure zero-touch curl targets a GitHub-raw SHA that actually exists.
+  local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
+  local win="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
+  run_server pin-installer-urls "sudo python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path('/etc/drlink/config.json')
+c = json.loads(p.read_text(encoding='utf-8'))
+c['client_installer_url'] = '$url'
+c['windows_client_installer_url'] = '$win'
+p.write_text(json.dumps(c, indent=2) + '\n', encoding='utf-8')
+print(c['client_installer_url'])
+print(c['windows_client_installer_url'])
+PY
+sudo systemctl restart drlink-allocator
+sleep 1
+systemctl is-active drlink-allocator"
+}
+
 pin_windows_installer_url() {
-  local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${HEAD_SHA}/dist/bootstrap-client.ps1"
+  local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
   run_server win-pin-installer "sudo python3 - <<'PY'
 import json
 from pathlib import Path
@@ -703,6 +766,8 @@ scenario_install() {
     MATRIX_INSTALL=PASS
   fi
   run_server 06-server-doctor "sudo /usr/local/bin/drlink show status; echo ====; sudo /usr/local/bin/drlink doctor" || fail_stop
+
+  pin_linux_installer_urls || fail_stop
 
   create_zero_touch "$OUT_DIR/07-zero-touch-create.log" "$OUT_DIR/07-zero-touch-command.sh" 07-zero-touch-create "automated-real-e2e-$PROFILE" || fail_stop
   run_local 08-zero-touch-run bash -lc "ssh ${SSH_OPTS[*]} '$CLIENT_ALIAS' 'bash -s' < '$OUT_DIR/07-zero-touch-command.sh'" || fail_stop
