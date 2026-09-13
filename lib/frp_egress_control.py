@@ -1423,6 +1423,7 @@ def authorize_request(
     protocol: str,
     load_error: Optional[str] = None,
     method: Optional[str] = None,
+    preview: bool = False,
 ) -> dict:
     """Authorize an egress request. Always fail closed.
 
@@ -1431,6 +1432,10 @@ def authorize_request(
         even if host:port otherwise matches an http destination)
       - https: CONNECT + ClientHello SNI binding required at the gateway for
         ALL https ports (not just 443)
+
+    When preview=True, a disabled profile that otherwise matches source,
+    destination, and protocol returns ALLOW (prospective policy) without
+    mutating live state. Live gateway authorization must pass preview=False.
 
     Returns dict with decision, reason, profile_id, profile_name, matched_source,
     matched_destination, protocol.
@@ -1516,6 +1521,20 @@ def authorize_request(
                             pass
                 continue
             if not profile.get("enabled", False):
+                if preview:
+                    return {
+                        "decision": DECISION_ALLOW,
+                        "reason": REASON_PROFILE_MATCH,
+                        "profile_id": pid,
+                        "profile_name": profile.get("name"),
+                        "matched_source": src,
+                        "matched_destination": dest,
+                        "source_ip": source_ip,
+                        "hostname": host,
+                        "port": port_i,
+                        "protocol": proto,
+                        "preview": True,
+                    }
                 saw_disabled_with_match = True
                 continue
             return {

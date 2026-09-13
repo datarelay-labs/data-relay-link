@@ -52,30 +52,41 @@ EGRESS="$TMP/usr/local/sbin/frp-egress"
 "$EGRESS" add-destination ubuntu-update security.ubuntu.com 443 --protocol https
 "$EGRESS" add-destination ubuntu-update archive.ubuntu.com 443 --protocol https
 "$EGRESS" add-source ubuntu-update 203.0.113.10/32
-# Create is DISABLED by default — must enable before ALLOW.
-! "$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https
+# Preview shows prospective ALLOW while the profile remains disabled.
+out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https)"
+grep -q 'Profile state: DISABLED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'No live policy was changed.' <<<"$out" || { echo "$out"; exit 1; }
+"$EGRESS" show ubuntu-update | grep -q 'Enabled       : no' || { echo "create/add must leave profile disabled"; exit 1; }
 "$EGRESS" enable ubuntu-update
 "$EGRESS" show ubuntu-update | grep -q security.ubuntu.com
 out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https)"
-grep -q 'Policy       : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'DNS          : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Resolved IPs :' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Profile state: ENABLED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Mode: PREVIEW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'DNS safety: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Resolved IPs:' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connect: NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'No live policy was changed.' <<<"$out" || { echo "$out"; exit 1; }
 ! grep -q 'Final' <<<"$out" || { echo "misleading Final line: $out"; exit 1; }
 ! "$EGRESS" test 203.0.113.10 evil.example.com 443 --protocol https
 ! "$EGRESS" test 198.51.100.1 security.ubuntu.com 443 --protocol https
 "$EGRESS" disable ubuntu-update
 out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https 2>&1 || true)"
-grep -q 'Policy       : DENY' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Protocol     : https' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Profile state: DISABLED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Mode: PREVIEW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connect: NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Protocol: https' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'No live policy was changed.' <<<"$out" || { echo "$out"; exit 1; }
+"$EGRESS" show ubuntu-update | grep -q 'Enabled       : no' || { echo "disable must leave profile disabled"; exit 1; }
 "$EGRESS" enable ubuntu-update
 # DNS unsafe parity: ALLOW policy + private resolution must DENY DNS.
 "$EGRESS" add-destination ubuntu-update localhost 443 --protocol https
 out="$("$EGRESS" test 203.0.113.10 localhost 443 --protocol https 2>&1 || true)"
-grep -q 'Policy       : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'DNS          : DENY' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Live connect : NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'DNS safety: DENY' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connect: NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
 ! grep -q 'Final        : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
 echo "PASS EGRESS_TEST_TRUTHFUL_OUTPUT"
 "$EGRESS" remove-destination ubuntu-update localhost:443 --yes
@@ -107,6 +118,18 @@ cases = [
 for toks in cases:
     r = g.match(toks, "server")
     assert r.get("status") == "ok", (toks, r)
+token_cases = {
+    '""': [""],
+    "''": [""],
+    '" "': [" "],
+    '"" ""': ["", ""],
+    '"a""b"': ["ab"],
+    'group set edge description ""': ["group", "set", "edge", "description", ""],
+    "foo bar": ["foo", "bar"],
+}
+for line, expect in token_cases.items():
+    got = g.tokenize(line)
+    assert got == expect, (line, got, expect)
 print("grammar ok")
 PY
 

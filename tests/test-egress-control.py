@@ -129,6 +129,34 @@ class EgressPolicyTests(unittest.TestCase):
         self.assertEqual(d["decision"], EG.DECISION_DENY)
         self.assertEqual(d["reason"], EG.REASON_PROFILE_DISABLED)
 
+    def test_preview_disabled_profile_allow_without_enabling(self):
+        pid, _ = self._profile(enabled=True)
+        EG.mutate_egress_state(lambda s: EG.add_source(s, pid, "10.0.0.0/8"), cfg=self.cfg)
+        EG.mutate_egress_state(
+            lambda s: EG.add_destination(s, pid, "example.com", 443, protocol="https"), cfg=self.cfg
+        )
+        EG.mutate_egress_state(lambda s: EG.set_profile_enabled(s, pid, False), cfg=self.cfg)
+        state = EG.load_egress_state(cfg=self.cfg)
+        preview = EG.authorize_request(
+            state,
+            source_ip="10.1.2.3",
+            hostname="example.com",
+            port=443,
+            protocol="https",
+            preview=True,
+        )
+        self.assertEqual(preview["decision"], EG.DECISION_ALLOW)
+        self.assertEqual(preview["reason"], EG.REASON_PROFILE_MATCH)
+        self.assertEqual(preview["profile_id"], pid)
+        self.assertTrue(preview.get("preview"))
+        live = EG.authorize_request(
+            state, source_ip="10.1.2.3", hostname="example.com", port=443, protocol="https"
+        )
+        self.assertEqual(live["decision"], EG.DECISION_DENY)
+        self.assertEqual(live["reason"], EG.REASON_PROFILE_DISABLED)
+        reloaded = EG.load_egress_state(cfg=self.cfg)
+        self.assertFalse(reloaded["egress_profiles"][pid]["enabled"])
+
     def test_wildcard_semantics(self):
         self.assertTrue(EG.hostname_matches("api.example.com", "*.example.com", "wildcard"))
         self.assertTrue(EG.hostname_matches("a.b.example.com", "*.example.com", "wildcard"))
