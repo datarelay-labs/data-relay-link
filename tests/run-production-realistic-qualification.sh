@@ -39,9 +39,10 @@ echo "${PASS_NAME}_HEAD=$FROZEN_HEAD" >>"$PROD_QUAL_GATES"
 
 # --- Precheck ---
 pq_note "==== INFRA PRECHECK ===="
-if ! pq_precheck_hosts; then
-  pq_note "PRECHECK had failures; attempting macOS reverse-SSH keepalive probe"
-  pq_ssh frp-e2e-macos 'echo macos-ok' || true
+pq_precheck_hosts || true
+# macOS reverse SSH is intermittent; wait before matrix so we do not claim PASS on BLOCKED.
+if ! pq_ssh frp-e2e-macos 'echo ok' >/dev/null 2>&1; then
+  pq_wait_macos 90 || pq_note "WARN proceeding; macOS may BLOCKED and will be retried"
 fi
 
 # --- Multi-OS functional matrix (fleet build) ---
@@ -62,48 +63,59 @@ env \
 MATRIX_RC=$?
 set -uo pipefail
 pq_note "MATRIX_RC=$MATRIX_RC"
-if [[ "$MATRIX_RC" -eq 0 ]]; then
+
+# Always parse matrix.tsv — MATRIX_RC=0 can still include BLOCKED macOS rows.
+if pq_matrix_platform_gate "$MATRIX_OUT/matrix.tsv"; then
   pq_gate FUNCTIONAL_FULL_MATRIX PASS
-  pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION PASS
-  pq_gate UBUNTU_REAL_E2E PASS
-  pq_gate ROCKY_REAL_E2E PASS
-  pq_gate AWS_LINUX_REAL_E2E PASS
-  pq_gate WINDOWS_REAL_E2E PASS
-  pq_gate MACOS_REAL_E2E PASS
   pq_gate ZERO_TOUCH_REAL_E2E PASS
   pq_gate SERVICE_LIFECYCLE_REAL_E2E PASS
 else
-  # Parse matrix table for partial credit
-  if [[ -f "$MATRIX_OUT/matrix.tsv" ]]; then
-    while IFS=$'\t' read -r plat install enroll service reboot uninstall dns; do
-      [[ "$plat" == "PLATFORM" ]] && continue
-      case "$plat" in
-        ubuntu-24.04)
-          [[ "$install$enroll$service" == *FAIL* ]] && pq_gate UBUNTU_REAL_E2E FAIL || pq_gate UBUNTU_REAL_E2E PASS
-          ;;
-        rocky-linux-8.10)
-          [[ "$install$enroll$service" == *FAIL* ]] && pq_gate ROCKY_REAL_E2E FAIL || pq_gate ROCKY_REAL_E2E PASS
-          ;;
-        amazon-linux-2023)
-          [[ "$install$enroll$service" == *FAIL* ]] && pq_gate AWS_LINUX_REAL_E2E FAIL || pq_gate AWS_LINUX_REAL_E2E PASS
-          ;;
-        macos-arm64)
-          [[ "$install$enroll$service" == *FAIL* ]] && pq_gate MACOS_REAL_E2E FAIL || pq_gate MACOS_REAL_E2E PASS
-          ;;
-        windows-10)
-          [[ "$install$enroll$service" == *FAIL* ]] && pq_gate WINDOWS_REAL_E2E FAIL || pq_gate WINDOWS_REAL_E2E PASS
-          ;;
-      esac
-    done <"$MATRIX_OUT/matrix.tsv"
+  # Retry macOS once if blocked and tunnel recovers.
+  if grep -q $'macos-arm64\tBLOCKED' "$MATRIX_OUT/matrix.tsv" 2>/dev/null; then
+    pq_note "==== MACOS RETRY AFTER BLOCKED ===="
+    if pq_wait_macos 60; then
+      set +e
+      env \
+        FRP_E2E_PROFILE=macos-arm64 \
+        FRP_E2E_SCENARIO=full \
+        FRP_E2E_SKIP_SERVER_PURGE=1 \
+        FRP_E2E_SKIP_SERVER_INSTALL=1 \
+        FRP_E2E_OUT_DIR="$OUT/macos-retry" \
+        FRP_E2E_RUN_ID="${PASS_NAME,,}-macos-retry-$RUN_ID" \
+        FRP_E2E_PUBLIC_HOSTNAME="$FRP_E2E_PUBLIC_HOSTNAME" \
+        bash "$ROOT/tests/run-real-e2e.sh" | tee "$OUT/macos-retry.log"
+      set -uo pipefail
+      if [[ -f "$OUT/macos-retry/matrix-row.tsv" ]] && awk -F'\t' 'NR==1{exit !($2=="PASS" && $3=="PASS" && $4=="PASS")}' "$OUT/macos-retry/matrix-row.tsv"; then
+        pq_gate MACOS_REAL_E2E PASS
+        # Rewrite matrix row for summary
+        grep -v $'macos-arm64\t' "$MATRIX_OUT/matrix.tsv" >"$MATRIX_OUT/matrix.tsv.tmp" || true
+        cat "$OUT/macos-retry/matrix-row.tsv" >>"$MATRIX_OUT/matrix.tsv.tmp"
+        mv "$MATRIX_OUT/matrix.tsv.tmp" "$MATRIX_OUT/matrix.tsv"
+      else
+        pq_gate MACOS_REAL_E2E FAIL
+      fi
+    else
+      pq_gate MACOS_REAL_E2E BLOCKED
+    fi
   fi
-  pq_gate FUNCTIONAL_FULL_MATRIX FAIL
-  pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION FAIL
+  if grep -Eq '=(FAIL|BLOCKED)$' <(grep -E '^(UBUNTU|ROCKY|AWS_LINUX|WINDOWS|MACOS)_REAL_E2E=' "$PROD_QUAL_GATES"); then
+    pq_gate FUNCTIONAL_FULL_MATRIX FAIL
+  else
+    pq_gate FUNCTIONAL_FULL_MATRIX PASS
+    pq_gate ZERO_TOUCH_REAL_E2E PASS
+    pq_gate SERVICE_LIFECYCLE_REAL_E2E PASS
+  fi
 fi
 
 # Matrix uninstalls macOS/Windows at profile end; re-enroll them for live multi-OS fleet.
 pq_note "==== LIVE FLEET REBUILD (macos/windows keep) ===="
 set +e
+pq_wait_macos 30 || true
 for profile in macos-arm64 windows-10; do
+  [[ "$profile" == "macos-arm64" ]] && ! pq_ssh frp-e2e-macos 'echo ok' >/dev/null 2>&1 && {
+    pq_note "SKIP fleet-keep macos: SSH down"
+    continue
+  }
   env \
     FRP_E2E_PROFILE="$profile" \
     FRP_E2E_SCENARIO=full \
@@ -127,6 +139,7 @@ if [[ "${ONLINE_N:-0}" -ge 3 ]]; then
   pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION PASS
 else
   pq_note "WARN live fleet online count low: $ONLINE_N"
+  pq_gate MULTI_HOST_SIMULTANEOUS_OPERATION FAIL
 fi
 # Map server reboot recovery from matrix evidence when extra reboot skipped
 if [[ "${FRP_E2E_QUAL_SERVER_REBOOT}" != "1" ]]; then
@@ -283,7 +296,7 @@ else
 fi
 
 # Determine pass result
-FAIL_COUNT="$(grep -c '=FAIL$' "$PROD_QUAL_GATES" || true)"
+FAIL_COUNT="$(grep -cE '=(FAIL|BLOCKED)$' "$PROD_QUAL_GATES" || true)"
 if [[ "${FAIL_COUNT:-0}" -eq 0 ]]; then
   pq_gate "$PASS_NAME" PASS
   pq_note "FINAL_${PASS_NAME}=PASS"
@@ -291,6 +304,6 @@ if [[ "${FAIL_COUNT:-0}" -eq 0 ]]; then
 else
   pq_gate "$PASS_NAME" FAIL
   pq_note "FINAL_${PASS_NAME}=FAIL FAIL_COUNT=$FAIL_COUNT"
-  grep '=FAIL$' "$PROD_QUAL_GATES" | tee "$OUT/failures.txt" || true
+  grep -E '=(FAIL|BLOCKED)$' "$PROD_QUAL_GATES" | tee "$OUT/failures.txt" || true
   exit 1
 fi

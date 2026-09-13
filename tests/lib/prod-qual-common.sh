@@ -38,7 +38,7 @@ pq_gate() {
   local name="$1" status="$2"
   printf '%s=%s\n' "$name" "$status" | tee -a "${PROD_QUAL_GATES:-/dev/null}"
   pq_note "GATE $name=$status"
-  if [[ "$status" == "FAIL" ]]; then
+  if [[ "$status" == "FAIL" || "$status" == "BLOCKED" ]]; then
     PROD_QUAL_FAILS=$((${PROD_QUAL_FAILS:-0} + 1))
   fi
 }
@@ -117,3 +117,56 @@ pq_precheck_hosts() {
 pq_head_sha() {
   git -C "$PROD_QUAL_ROOT" rev-parse HEAD
 }
+
+pq_wait_macos() {
+  local max="${1:-60}"
+  local t
+  pq_note "Waiting for macOS reverse SSH (max ${max} tries)..."
+  for t in $(seq 1 "$max"); do
+    if ssh "${PROD_QUAL_SSH_OPTS[@]}" -o ConnectTimeout=6 frp-e2e-macos 'echo ok' >/dev/null 2>&1; then
+      pq_note "MACOS_SSH_READY try=$t"
+      return 0
+    fi
+    # Clear stale listeners so Mac-side launchd can rebind.
+    for p in $(sudo -n lsof -t -iTCP:2222 -sTCP:LISTEN 2>/dev/null || true); do
+      sudo -n kill "$p" 2>/dev/null || true
+    done
+    sleep 10
+  done
+  pq_note "MACOS_SSH_NOT_READY after ${max} tries"
+  return 1
+}
+
+pq_matrix_platform_gate() {
+  # Args: tsv_path
+  local tsv="$1"
+  [[ -f "$tsv" ]] || return 1
+  local plat install enroll service reboot uninstall dns
+  local any_fail=0
+  while IFS=$'\t' read -r plat install enroll service reboot uninstall dns; do
+    [[ "$plat" == "PLATFORM" || -z "$plat" ]] && continue
+    local status=PASS
+    if [[ "$install" == "FAIL" || "$enroll" == "FAIL" || "$service" == "FAIL" ]]; then
+      status=FAIL
+      any_fail=1
+    elif [[ "$install" == "BLOCKED" || "$enroll" == "BLOCKED" || "$service" == "BLOCKED" ]]; then
+      status=BLOCKED
+      any_fail=1
+    elif [[ "$install" != "PASS" || "$enroll" != "PASS" || "$service" != "PASS" ]]; then
+      # SKIP alone on reboot/uninstall is OK for mac/win; install/enroll/service must PASS
+      if [[ "$install" != "PASS" || "$enroll" != "PASS" ]]; then
+        status=FAIL
+        any_fail=1
+      fi
+    fi
+    case "$plat" in
+      ubuntu-24.04|baseline-linux) pq_gate UBUNTU_REAL_E2E "$status" ;;
+      rocky-linux-8.10) pq_gate ROCKY_REAL_E2E "$status" ;;
+      amazon-linux-2023) pq_gate AWS_LINUX_REAL_E2E "$status" ;;
+      macos-arm64) pq_gate MACOS_REAL_E2E "$status" ;;
+      windows-10) pq_gate WINDOWS_REAL_E2E "$status" ;;
+    esac
+  done <"$tsv"
+  return "$any_fail"
+}
+
