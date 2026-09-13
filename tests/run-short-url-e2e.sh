@@ -182,9 +182,10 @@ pass "STOCK_OS_TRUST_HEALTHZ"
 # Configure bootstrap hostname + installer URL on server.
 # Tools update config.json without restarting services; allocator reloads on
 # mtime change, and we still bounce it so E2E never races a stale process.
+# Canonical operator surface is drlink (legacy /usr/local/sbin helpers are retired).
 ssh_server "sudo /usr/local/bin/drlink set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
   >"$OUT_DIR/set-bootstrap.log" 2>&1 || fail "set bootstrap-hostname"
-ssh_server "sudo /usr/local/sbin/frp-set-client-installer-url '$INSTALLER_URL'" \
+ssh_server "sudo /usr/local/bin/drlink set server installer-url '$INSTALLER_URL'" \
   >"$OUT_DIR/set-installer.log" 2>&1 || fail "set installer url"
 ssh_server 'sudo systemctl daemon-reload; sudo systemctl restart drlink-allocator' \
   >"$OUT_DIR/restart-allocator.log" 2>&1 || fail "restart allocator after config"
@@ -201,7 +202,7 @@ ssh_client 'sudo bash -s --' <"$ROOT/dist/uninstall-client.sh" >"$OUT_DIR/client
 
 # Create short URL enrollment and capture exact printed command.
 CREATE_OUT="$OUT_DIR/create.out"
-ssh_server "sudo /usr/local/sbin/frp-create-client --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note 'short-url-e2e'" \
+ssh_server "sudo /usr/local/bin/drlink enrollment create --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note 'short-url-e2e'" \
   >"$CREATE_OUT" 2>&1 || { cat "$CREATE_OUT"; fail "create enrollment"; }
 
 CMD="$(python3 - "$CREATE_OUT" <<'PY'
@@ -304,7 +305,7 @@ BAD_HOST="untrusted-bootstrap.invalid"
 # Ensure zt1 fallback still works after cert failure path.
 ssh_server "sudo /usr/local/bin/drlink unset server bootstrap-hostname" >/dev/null
 FALLBACK_OUT="$OUT_DIR/zt1-fallback.out"
-ssh_server "sudo /usr/local/sbin/frp-create-client --one-line --client-name '${CLIENT_LABEL}-zt1' --note 'zt1-fallback'" \
+ssh_server "sudo /usr/local/bin/drlink enrollment create --one-line --client-name '${CLIENT_LABEL}-zt1' --note 'zt1-fallback'" \
   >"$FALLBACK_OUT" 2>&1 || { cat "$FALLBACK_OUT"; fail "zt1 create"; }
 grep -q 'zt1\.' "$FALLBACK_OUT" || fail "zt1 fallback not printed after unset"
 pass "ZT1_FALLBACK_AFTER_CERT_PATH"
