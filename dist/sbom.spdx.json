@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "data-relay-link-2.4.0",
-  "documentNamespace": "https://github.com/datarelay-labs/data-relay-link/sbom/2.4.0/796fe5513f9b",
+  "documentNamespace": "https://github.com/datarelay-labs/data-relay-link/sbom/2.4.0/5a0a6b6a95e4",
   "creationInfo": {
-    "created": "2026-09-13T12:33:05Z",
+    "created": "2026-09-13T13:51:41Z",
     "creators": [
       "Tool: data-relay-link-generate-sbom",
       "Organization: datarelay-labs"
@@ -24,7 +24,7 @@
         {
           "referenceCategory": "OTHER",
           "referenceType": "gitCommit",
-          "referenceLocator": "796fe5513f9b139c017ff5ed83a82cf4ebf8a461"
+          "referenceLocator": "5a0a6b6a95e4dcf7b644bece82e0d9538453bee9"
         }
       ],
       "comment": "Primary product package. FRP is a pinned upstream dependency."
@@ -80,6 +80,20 @@
         {
           "algorithm": "SHA256",
           "checksumValue": "a274f046c3ce57bcbd18343e5662429a53e49e23b0c47a230fb43867f83b717f"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-_github-workflows-release-attest_yml",
+      "name": ".github/workflows/release-attest.yml",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "5c67206abb40ccf1e5d7c951f82a15ea30cb9cdcd8cfcf1628db3f7f4a85cddc"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -275,7 +289,21 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "a4be8719200bd41e4b5b81ca1247e096f04579e3a67f7a6fd69db3b8730e67bf"
+          "checksumValue": "bd37b61e5a7330c58f43a0adb4e2127e87f15ee4fa8b99842fbb3ed5129edcc6"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-dist-sbom_spdx_json",
+      "name": "dist/sbom.spdx.json",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "fe91581de89631f530f3f74909ce821ad431b71541429368ab735ca41802a179"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -597,7 +625,49 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "63455a2df924798707aecb1cf878c48d0b8ea01a07e3ebe9f32e949ff4366bea"
+          "checksumValue": "b8fc5f25b43d2afa0386f25a2ceb954ba477f66bf17e9c5473e168043c3a8fa0"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-lib-data-egress-recipes-http-update_json",
+      "name": "lib/data/egress-recipes/http-update.json",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a0a1e808830b6e1c5ea0495b2d5621b6ebb0e1fa28b07181b38874f34ba605c1"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-lib-data-egress-recipes-https-api_json",
+      "name": "lib/data/egress-recipes/https-api.json",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "ae784cfc69c2f7627c15dd5906055248c678f66babde0941d94494ecd411e390"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-lib-data-egress-recipes-tcp-fixed_json",
+      "name": "lib/data/egress-recipes/tcp-fixed.json",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "b93756eaf8a6e526d9bc140276b681cc090d4e1d3d42e1068cf24d394a9fb839"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -695,7 +765,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "56477fc327d8da754be9871a788c0a22493b4e14d5dc69fda5e306687772ce63"
+          "checksumValue": "b0de803e23dce649847e40df6c5762c3f6c2cdf4961b1108c8dedaf9f48f3ea2"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -836,6 +906,20 @@
         {
           "algorithm": "SHA256",
           "checksumValue": "68e2ec60a0772fd45446b7b0f04f139a212462d83c2b148141b9bfbdb4c5d0f2"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-lib-frp_egress_runtime_py",
+      "name": "lib/frp_egress_runtime.py",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "466a3bb87b98ad6cf5daaba29492fbd0ac6e0d64766516f94b4ebcca6fa64a9c"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -1163,6 +1247,20 @@
       "comment": "Repository-owned path from SHA256SUMS."
     },
     {
+      "SPDXID": "SPDXRef-File-scripts-generate-sbom_py",
+      "name": "scripts/generate-sbom.py",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "88102c47a02dcbba739ec63881c73cdd5b95fba91629cc9345078096e434c8c1"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
       "SPDXID": "SPDXRef-File-scripts-secret-scan_sh",
       "name": "scripts/secret-scan.sh",
       "versionInfo": "2.4.0",
@@ -1312,6 +1410,34 @@
         {
           "algorithm": "SHA256",
           "checksumValue": "334c47443069a2ce22898ef258a31864128160146136b73515b5723f27bbe582"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-server-drlink-tcp-egress_py",
+      "name": "server/drlink-tcp-egress.py",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "22676f273eae2f8e08a566a4d46c11fa709ed2ed4036de077e4241a3c683bcf5"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-server-drlink-tcp-egress_service",
+      "name": "server/drlink-tcp-egress.service",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "5a751cdc0cd667c109c95e6a9584dd93bd5e85424d845a928587d113bc024010"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -1933,6 +2059,20 @@
       "comment": "Repository-owned path from SHA256SUMS."
     },
     {
+      "SPDXID": "SPDXRef-File-tests-run-v231-to-v240-upgrade-e2e_sh",
+      "name": "tests/run-v231-to-v240-upgrade-e2e.sh",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "cc2bd6aef82f7de4161d639f9405ecca8526ce53624fbea1d36007b8334b83d0"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
       "SPDXID": "SPDXRef-File-tests-test-access-control_py",
       "name": "tests/test-access-control.py",
       "versionInfo": "2.4.0",
@@ -2521,6 +2661,20 @@
       "comment": "Repository-owned path from SHA256SUMS."
     },
     {
+      "SPDXID": "SPDXRef-File-tests-test-egress-schema-v3_sh",
+      "name": "tests/test-egress-schema-v3.sh",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "0c032002c05f14b7e537e0c0141244163323e8c43a1ca562d2695b0258f0521c"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
       "SPDXID": "SPDXRef-File-tests-test-egress-shared-parent-permissions_py",
       "name": "tests/test-egress-shared-parent-permissions.py",
       "versionInfo": "2.4.0",
@@ -2614,6 +2768,34 @@
         {
           "algorithm": "SHA256",
           "checksumValue": "c535cfbd18d0a3670f03793065fcba38ac10f6f99415eb07cc4a1625a0060ae9"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-tests-test-fixed-tcp-egress_py",
+      "name": "tests/test-fixed-tcp-egress.py",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "ec0a99c84b9df4584579222c0a991d6b1d7e375a107e66b5c3f354bcfecac82e"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-tests-test-fixed-tcp-egress_sh",
+      "name": "tests/test-fixed-tcp-egress.sh",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e83f21c48c6648c80ee2cb390ce4fbc1a76a70d7e492d80361a07627a943dae8"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -2810,6 +2992,20 @@
         {
           "algorithm": "SHA256",
           "checksumValue": "ffcfd88f0a6076cc20bab922f72a5720b5492d62784aa1d6255d4133d12dda24"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-tests-test-harness-gate-truthfulness_sh",
+      "name": "tests/test-harness-gate-truthfulness.sh",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e9be0b72efa2e5714dc4a3c13fe41056814b3306676eb27b5a0fa94aa14f8b2b"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -3272,6 +3468,20 @@
         {
           "algorithm": "SHA256",
           "checksumValue": "bc3ad5995e9fe875c7dc06a95c72abfa399096ba0a1e7423dccb2201efb84103"
+        }
+      ],
+      "comment": "Repository-owned path from SHA256SUMS."
+    },
+    {
+      "SPDXID": "SPDXRef-File-tests-test-perf-baseline-evidence-contract_sh",
+      "name": "tests/test-perf-baseline-evidence-contract.sh",
+      "versionInfo": "2.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "efd63131a9b327fc8436793804aee3a51b5b26e6098f1cd9effaf59aa5a0d316"
         }
       ],
       "comment": "Repository-owned path from SHA256SUMS."
@@ -5105,7 +5315,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "a4be8719200bd41e4b5b81ca1247e096f04579e3a67f7a6fd69db3b8730e67bf"
+          "checksumValue": "bd37b61e5a7330c58f43a0adb4e2127e87f15ee4fa8b99842fbb3ed5129edcc6"
         }
       ],
       "comment": "Release artifact from release-manifest.json."
@@ -5154,6 +5364,11 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-_github-workflows-macos-client_yml"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-_github-workflows-release-attest_yml"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
@@ -5224,6 +5439,11 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-dist-bootstrap-server_sh"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-dist-sbom_spdx_json"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
@@ -5343,6 +5563,21 @@
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-lib-data-egress-recipes-http-update_json"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-lib-data-egress-recipes-https-api_json"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-lib-data-egress-recipes-tcp-fixed_json"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-lib-data-public_suffix_list_dat"
     },
     {
@@ -5424,6 +5659,11 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-lib-frp_egress_control_py"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-lib-frp_egress_runtime_py"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
@@ -5543,6 +5783,11 @@
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-scripts-generate-sbom_py"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-scripts-secret-scan_sh"
     },
     {
@@ -5594,6 +5839,16 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-server-drlink-server_service"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-server-drlink-tcp-egress_py"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-server-drlink-tcp-egress_service"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
@@ -5818,6 +6073,11 @@
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-tests-run-v231-to-v240-upgrade-e2e_sh"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-tests-test-access-control_py"
     },
     {
@@ -6028,6 +6288,11 @@
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-tests-test-egress-schema-v3_sh"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-tests-test-egress-shared-parent-permissions_py"
     },
     {
@@ -6059,6 +6324,16 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-tests-test-enrollment-ttl-help_py"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-tests-test-fixed-tcp-egress_py"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-tests-test-fixed-tcp-egress_sh"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
@@ -6129,6 +6404,11 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-tests-test-guided-ux_sh"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-tests-test-harness-gate-truthfulness_sh"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
@@ -6294,6 +6574,11 @@
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-File-tests-test-pending-enrollments_sh"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-DataRelayLink",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-tests-test-perf-baseline-evidence-contract_sh"
     },
     {
       "spdxElementId": "SPDXRef-Package-DataRelayLink",
