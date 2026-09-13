@@ -657,6 +657,7 @@ def verify_restored_control_state(
         "drlink-allocator.service",
         "drlink-access.service",
         "drlink-egress.service",
+        "drlink-tcp-egress.service",
     ]
     frontend = (root / "etc/drlink/frontend.conf").is_file()
     if frontend:
@@ -760,6 +761,7 @@ def restart_services(root: Path, allow_hook: bool = True, expect_client_role: bo
         "drlink-allocator.service",
         "drlink-access.service",
         "drlink-egress.service",
+        "drlink-tcp-egress.service",
     ]
     if (root / "etc/drlink/frontend.conf").is_file():
         units.append("drlink-frontend.service")

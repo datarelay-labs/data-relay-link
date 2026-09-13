@@ -28,6 +28,7 @@ UNIT_NAMES = (
     'drlink-allocator.service',
     'drlink-access.service',
     'drlink-egress.service',
+    'drlink-tcp-egress.service',
     'drlink-frontend.service',
 )
 
