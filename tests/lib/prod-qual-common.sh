@@ -124,6 +124,40 @@ pq_head_sha() {
   git -C "$PROD_QUAL_ROOT" rev-parse HEAD
 }
 
+pq_macos_listener_owned() {
+  # Ownership proof for :2222 reverse-SSH cleanup. Never kill unrelated listeners.
+  # Accept if: recorded PID matches, or cmdline looks like our reverse tunnel, or
+  # process user matches the expected macOS reverse-SSH owner on this controller.
+  local pid="$1"
+  local recorded="${PROD_QUAL_MACOS_SSH_PID:-}"
+  local recorded_file="${PROD_QUAL_MACOS_SSH_PID_FILE:-/tmp/frp-macos-reverse-ssh.pid}"
+  local expect_user="${PROD_QUAL_MACOS_SSH_USER:-}"
+  [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 1
+  if [[ -z "$recorded" && -f "$recorded_file" ]]; then
+    recorded="$(tr -d '[:space:]' <"$recorded_file" 2>/dev/null || true)"
+  fi
+  if [[ -n "$recorded" && "$recorded" == "$pid" ]]; then
+    return 0
+  fi
+  local cmdline=""
+  cmdline="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  if printf '%s' "$cmdline" | grep -Eqi \
+    'frp-e2e-macos|macos.*2222|2222.*(ssh|autossh)|reverse.?ssh|sshd.*:2222|ssh.*-R.*2222'; then
+    return 0
+  fi
+  if [[ -n "$expect_user" ]]; then
+    local owner=""
+    owner="$(ps -p "$pid" -o user= 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -n "$owner" && "$owner" == "$expect_user" ]]; then
+      # User match alone is insufficient without a tunnel-ish cmdline.
+      if printf '%s' "$cmdline" | grep -Eqi 'ssh|autossh|sshd|reverse'; then
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+
 pq_wait_macos() {
   local max="${1:-60}"
   local t
@@ -133,9 +167,16 @@ pq_wait_macos() {
       pq_note "MACOS_SSH_READY try=$t"
       return 0
     fi
-    # Clear stale listeners so Mac-side launchd can rebind.
+    # Clear only owned stale listeners so Mac-side launchd can rebind.
+    # Never kill an unrelated :2222 process (ownership via cmdline/user/recorded PID).
+    local p
     for p in $(sudo -n lsof -t -iTCP:2222 -sTCP:LISTEN 2>/dev/null || true); do
-      sudo -n kill "$p" 2>/dev/null || true
+      if pq_macos_listener_owned "$p"; then
+        pq_note "MACOS_STALE_LISTENER_KILL pid=$p (owned)"
+        sudo -n kill "$p" 2>/dev/null || true
+      else
+        pq_note "MACOS_STALE_LISTENER_SKIP pid=$p (unrelated; not owned)"
+      fi
     done
     sleep 10
   done
