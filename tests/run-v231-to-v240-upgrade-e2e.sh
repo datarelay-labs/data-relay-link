@@ -63,6 +63,21 @@ mkdir -p "$OUT/golden"
 cp -a "$GOLDEN/." "$OUT/golden/" 2>/dev/null || true
 pq_gate GOLDEN_BASELINE_PRESENT PASS
 
+# --- 0) Purge existing server so starting side is a real v2.3.1 install ---
+pq_note "Purging existing server install for clean v2.3.1 baseline"
+set +e
+pq_ssh "$SERVER" "sudo bash -s -- --purge --yes" \
+  <"$ROOT/dist/uninstall-server.sh" >"$OUT/server-purge.log" 2>&1
+purge_rc=$?
+set -uo pipefail
+# purge may return non-zero if already absent; require config gone afterward
+if pq_ssh "$SERVER" 'test -f /etc/drlink/config.json'; then
+  pq_gate V231_PURGE FAIL
+  tail -40 "$OUT/server-purge.log" | tee -a "$PROD_QUAL_SUMMARY" || true
+  fail_out "server still installed after purge (rc=$purge_rc)"
+fi
+pq_gate V231_PURGE PASS
+
 # --- 1) Fresh v2.3.1 install on server ---
 pq_note "Installing release-equivalent v2.3.1 from $V231_TREE"
 set +e
