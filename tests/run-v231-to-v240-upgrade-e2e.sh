@@ -177,6 +177,11 @@ machine_id = "upgrade-e2e-machine-001"
 client_id = "upgclid01deadbeef"
 service_id = "ssh"
 remote_port = 6010
+# Canonical egress IDs are prefix + 12 hex chars (see ENTRY_ID_HEX_LEN).
+import secrets
+profile_id = "egp_" + secrets.token_hex(6)
+source_id = "egs_" + secrets.token_hex(6)
+dest_id = "egd_" + secrets.token_hex(6)
 
 if reg_path.is_file():
     reg = json.loads(reg_path.read_text(encoding="utf-8"))
@@ -235,21 +240,27 @@ profiles = eg.get("egress_profiles")
 if not isinstance(profiles, dict):
     profiles = {}
     eg["egress_profiles"] = profiles
-profiles["egp_upgrade_seed"] = {
-    "id": "egp_upgrade_seed",
+# Drop any previous invalid seed ids from interrupted runs.
+for bad in list(profiles):
+    if bad.startswith("egp_") and (
+        bad == "egp_upgrade_seed" or (profiles.get(bad) or {}).get("name") == "upgrade-seed"
+    ):
+        profiles.pop(bad, None)
+profiles[profile_id] = {
+    "id": profile_id,
     "name": "upgrade-seed",
     "description": "seeded profile for upgrade",
     "enabled": False,
     "sources": [
         {
-            "id": "egs_upgrade_seed",
+            "id": source_id,
             "cidr": "10.20.30.0/24",
             "description": "lab",
         }
     ],
     "destinations": [
         {
-            "id": "egd_upgrade_seed",
+            "id": dest_id,
             "host": "example.com",
             "port": 443,
             "protocol": "https",
@@ -285,7 +296,13 @@ if not ok:
     raise SystemExit("allocator unhealthy after schema-v2 seed")
 
 print("SEED_OK")
-print(json.dumps({"client_id": client_id, "service_id": service_id, "remote_port": remote_port, "registry_schema": 2}))
+print(json.dumps({
+    "client_id": client_id,
+    "service_id": service_id,
+    "remote_port": remote_port,
+    "registry_schema": 2,
+    "egress_profile_id": profile_id,
+}))
 PY
 grep -q SEED_OK "$OUT/seed.log" || fail_out "state seed failed"
 pq_gate V231_STATE_SEED PASS
@@ -356,6 +373,22 @@ if [[ "$up_rc" -ne 0 ]]; then
   fail_out "upgrade failed rc=$up_rc"
 fi
 pq_gate UPGRADE_SERVER PASS
+
+# Ensure egress schema migrates to v3 (load persists migration under lock).
+pq_ssh "$SERVER" 'sudo python3 -' >"$OUT/egress-migrate.log" 2>&1 <<'PY'
+import sys
+sys.path.insert(0, "/usr/local/lib/drlink")
+import frp_egress_control as eg
+state = eg.load_egress_state()
+print("LOADED_SCHEMA=%s" % state.get("schema_version"))
+print("TCP_RELAYS=%s" % type(state.get("tcp_relays")).__name__)
+PY
+grep -q 'LOADED_SCHEMA=3' "$OUT/egress-migrate.log" || {
+  pq_gate UPGRADE_EGRESS_MIGRATE FAIL
+  cat "$OUT/egress-migrate.log" | tee -a "$PROD_QUAL_SUMMARY" || true
+  fail_out "egress schema did not migrate to v3 after upgrade"
+}
+pq_gate UPGRADE_EGRESS_MIGRATE PASS
 
 # Post-upgrade fingerprint
 pq_ssh "$SERVER" 'sudo python3 -' >"$OUT/post-upgrade-fingerprint.json" <<'PY'
