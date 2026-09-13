@@ -370,6 +370,13 @@ frp_server_upgrade_verify_rollback_health() {
   if declare -F frp_server_health_egress >/dev/null 2>&1; then
     frp_server_health_egress || return 1
   fi
+  if declare -F frp_server_health_tcp_egress >/dev/null 2>&1; then
+    if [[ -f "$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)" ]]; then
+      frp_server_health_tcp_egress || return 1
+    fi
+  elif [[ -f "$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)" ]]; then
+    frp_wait_unit_active drlink-tcp-egress || return 1
+  fi
   if frp_server_upgrade_is_single443; then
     frp_server_health_frontend || return 1
   fi
@@ -407,7 +414,13 @@ frp_server_upgrade_restore_snapshot_files() {
     return 0
   fi
   frp_server_systemctl daemon-reload || true
+  # Restart every project-owned runtime that may already be running post-cutover
+  # code, so disk restore cannot leave old files with new in-memory processes.
   frp_server_restart_unit drlink-access || return 1
+  frp_server_restart_unit drlink-egress || return 1
+  if [[ -f "$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)" ]]; then
+    frp_server_restart_unit drlink-tcp-egress || return 1
+  fi
   frp_server_restart_unit drlink-server || return 1
   frp_server_restart_unit drlink-allocator || return 1
   if frp_server_upgrade_is_single443; then

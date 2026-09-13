@@ -767,4 +767,49 @@ fi
 [[ ! -f "$REFRESH/var/lib/drlink/server-update-pending.json" ]] || fail "second actual left txn marker"
 pass "SERVER_ACTUAL_SAME_BUILD_NO_MUTATION"
 
+# Finding K: project-update rollback must restart egress + tcp-egress runtimes.
+grep -q 'frp_server_restart_unit drlink-egress' "$ROOT/lib/frp-server-upgrade.sh" \
+  || fail "rollback missing drlink-egress restart"
+grep -q 'frp_server_restart_unit drlink-tcp-egress' "$ROOT/lib/frp-server-upgrade.sh" \
+  || fail "rollback missing drlink-tcp-egress restart"
+grep -Eq 'frp_server_health_tcp_egress|frp_wait_unit_active drlink-tcp-egress' \
+  "$ROOT/lib/frp-server-upgrade.sh" \
+  || fail "rollback health missing tcp-egress"
+# Injected post-mutation failure must restore egress/tcp-egress project files.
+RB="$WORKDIR/rollback-egress-runtime"
+setup_tree "$RB"
+printf '[Unit]\nDescription=tcp-egress\n' >"$RB/etc/systemd/system/drlink-tcp-egress.service"
+printf '[Unit]\nDescription=egress\n' >"$RB/etc/systemd/system/drlink-egress.service"
+printf 'old-tcp-egress\n' >"$RB/usr/local/lib/drlink/drlink-tcp-egress.py"
+printf 'old-egress-gw\n' >"$RB/usr/local/lib/drlink/frp-egress-gateway.py"
+if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$RB" \
+  FRP_SERVER_UPGRADE_HOOK_FAIL=install \
+  "$UPDATE" --source "$ROOT" >"$WORKDIR/rb-egress.out" 2>"$WORKDIR/rb-egress.err"; then
+  fail "egress-runtime rollback fixture should fail"
+fi
+grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/rb-egress.out" "$WORKDIR/rb-egress.err" \
+  || fail "egress-runtime rollback marker"
+cmp "$RB/usr/local/lib/drlink/drlink-tcp-egress.py" <(printf 'old-tcp-egress\n') >/dev/null \
+  || fail "tcp-egress file not restored"
+cmp "$RB/usr/local/lib/drlink/frp-egress-gateway.py" <(printf 'old-egress-gw\n') >/dev/null \
+  || fail "egress gateway file not restored"
+# Ensure restore path still names both runtimes (test mode skips live systemctl).
+python3 - "$ROOT/lib/frp-server-upgrade.sh" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+# Locate restore_snapshot_files body.
+start = text.index("frp_server_upgrade_restore_snapshot_files()")
+chunk = text[start:start + 2500]
+for unit in ("drlink-egress", "drlink-tcp-egress", "drlink-access", "drlink-server", "drlink-allocator"):
+    if f"frp_server_restart_unit {unit}" not in chunk:
+        raise SystemExit("restore_snapshot_files missing restart: %s" % unit)
+health = text[text.index("frp_server_upgrade_verify_rollback_health()"):]
+health = health[:1800]
+if "tcp-egress" not in health:
+    raise SystemExit("verify_rollback_health missing tcp-egress")
+print("ok")
+PY
+pass "PROJECT_UPDATE_ROLLBACK_EGRESS_TCP_RUNTIME"
+
 echo "SERVER_PROJECT_UPDATE_TESTS=PASS"
