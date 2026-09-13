@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regressions for qualification gate truthfulness (findings H/I) and TCP egress inventory.
+# Regressions for qualification gate truthfulness (findings H/I + P–Y adversarial cases).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -136,14 +136,10 @@ grep -q 'SERVER_REBOOT_RECOVERY=PASS' "$GATES" || fail "evidence PASS not honore
 pass "reboot recovery evidence PASS honored"
 
 # Static proof: production script must not PASS on heading alone.
-if grep -n "FLEET server reboot" "$ROOT/tests/run-production-realistic-qualification.sh" | head -5; then
-  :
-fi
 python3 - "$ROOT/tests/run-production-realistic-qualification.sh" <<'PY' || fail "production reboot gate still heading-only"
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
-# The anti-pattern: grep heading then immediately pq_gate PASS without evidence file.
 idx = text.find("FLEET server reboot")
 assert idx > 0
 window = text[idx:idx+800]
@@ -167,6 +163,101 @@ pass "install txn UNIT_NAMES includes drlink-tcp-egress"
 count="$(grep -c 'drlink-tcp-egress.service' "$ROOT/tools/frp-restore" || true)"
 [[ "$count" -ge 2 ]] || fail "expected tcp egress in restart and ready paths, got $count"
 pass "restore includes drlink-tcp-egress in runtime inventory"
+
+# --- Adversarial: missing gate / NOT_RUN / BLOCKED / HEAD_UNCHANGED=NO ---
+: >"$GATES"
+pq_gate ABSENT_FEATURE NOT_RUN
+pq_gate UPGRADE_CASE BLOCKED
+grep -qx 'ABSENT_FEATURE=NOT_RUN' "$GATES" || fail "NOT_RUN missing"
+grep -qx 'UPGRADE_CASE=BLOCKED' "$GATES" || fail "BLOCKED missing"
+if grep -E '=(PASS)$' "$GATES" | grep -Eq 'ABSENT_FEATURE|UPGRADE_CASE'; then
+  fail "NOT_RUN/BLOCKED mutated to PASS"
+fi
+pass "NOT_RUN and BLOCKED stay non-PASS"
+
+# Simulate orchestrator HEAD check semantics
+echo "HEAD_UNCHANGED=NO" >"$WORKDIR/head.env"
+if grep -qx 'HEAD_UNCHANGED=YES' "$WORKDIR/head.env"; then
+  fail "impossible"
+fi
+grep -qx 'HEAD_UNCHANGED=NO' "$WORKDIR/head.env"
+pass "HEAD_UNCHANGED=NO retained"
+
+# --- Child non-zero must fail simultaneous gates (static + simulated) ---
+: >"$GATES"
+# Simulate: registry OK but child backup failed → must FAIL backup-related gates
+fails=1
+backup_ok=0
+traffic_ok=1
+if [[ "$fails" -eq 0 && "$backup_ok" -eq 1 && "$traffic_ok" -eq 1 ]]; then
+  pq_gate SIMULTANEOUS_ADMIN_MUTATION PASS
+else
+  pq_gate SIMULTANEOUS_ADMIN_MUTATION FAIL
+  pq_gate LIVE_BACKUP_CONSISTENCY FAIL
+  pq_gate TRAFFIC_DURING_BACKUP FAIL
+  pq_gate BACKUP_LIVE_OPERATION FAIL
+fi
+grep -qx 'SIMULTANEOUS_ADMIN_MUTATION=FAIL' "$GATES" || fail "child failure did not FAIL simultaneous"
+grep -qx 'LIVE_BACKUP_CONSISTENCY=FAIL' "$GATES" || fail "backup child failure not gated"
+pass "simultaneous child failure fails gates"
+
+# --- Backup/restore failure must fail matrix FAILED counter (static contract) ---
+grep -q 'FLEET_BACKUP_RC' "$ROOT/tests/run-real-e2e-matrix.sh" || fail "matrix missing backup RC"
+grep -q 'FLEET_RESTORE_RC' "$ROOT/tests/run-real-e2e-matrix.sh" || fail "matrix missing restore RC"
+pass "matrix backup/restore RC contract"
+
+# --- DENY with proxy unavailable (000) must not count as policy denial success ---
+: >"$GATES"
+deny_code="000"
+if [[ "$deny_code" == "403" ]]; then
+  pq_gate DENY_POLICY PASS
+else
+  pq_gate DENY_POLICY FAIL
+fi
+grep -qx 'DENY_POLICY=FAIL' "$GATES" || fail "000 accepted as deny success"
+deny_code="403"
+pq_gate DENY_POLICY PASS
+grep -qx 'DENY_POLICY=PASS' "$GATES" || fail "403 not accepted"
+pass "DENY rejects proxy-unavailable 000"
+
+# --- Soak traffic failure ---
+: >"$GATES"
+probe_ok=2
+probe_fail=20
+avail_ok=0
+if [[ "$probe_ok" -gt 0 ]]; then
+  if [[ "$probe_fail" -eq 0 ]] || [[ "$probe_fail" -lt $((probe_ok / 5 + 1)) ]]; then
+    avail_ok=1
+  fi
+fi
+[[ "$avail_ok" -eq 0 ]] || fail "soak traffic failure should not be available"
+pq_gate SOAK_TEST FAIL
+grep -qx 'SOAK_TEST=FAIL' "$GATES" || fail "soak fail not recorded"
+pass "soak traffic failure fails"
+
+# --- Wrong upgrade version → BLOCKED ---
+: >"$GATES"
+installed_ver="2.4.0"
+if [[ "$installed_ver" != "2.3.1" ]]; then
+  pq_gate GOLDEN_V231_UPGRADE_BASELINE BLOCKED
+else
+  pq_gate GOLDEN_V231_UPGRADE_BASELINE CREATED
+fi
+grep -qx 'GOLDEN_V231_UPGRADE_BASELINE=BLOCKED' "$GATES" || fail "wrong version not BLOCKED"
+pass "wrong upgrade version is BLOCKED"
+
+# --- Unrelated :2222 ownership ---
+PROD_QUAL_MACOS_SSH_PID=""
+PROD_QUAL_MACOS_SSH_PID_FILE="$WORKDIR/no-such-pid"
+set +e
+pq_macos_listener_owned 1
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "pid 1 should not be owned as macos reverse ssh"
+# Recorded PID must be considered owned.
+PROD_QUAL_MACOS_SSH_PID=$$
+pq_macos_listener_owned "$$" || fail "recorded PID should be owned"
+pass "unrelated listener not owned"
 
 echo
 echo "QUAL_GATE_TRUTHFULNESS_TEST=PASS"

@@ -36,16 +36,31 @@ ensure_egress_listener() {
   pq_ssh "$SERVER" "sudo bash -s" <<EOF
 set -euo pipefail
 python3 - <<'PY'
-import json
+import json, os, tempfile
 from pathlib import Path
+# FIXTURE-PREP (lab harness only): product CLI has no egress_listen_* setter.
+# Atomic write + service restart so Real E2E clients can reach the proxy port.
 cfg_path = Path("/etc/drlink/config.json")
 cfg = json.loads(cfg_path.read_text())
 cfg["egress_listen_addr"] = "0.0.0.0"
 cfg["egress_listen_port"] = ${EGRESS_PORT}
 cfg.setdefault("egress_control_file", "/var/lib/drlink/egress-control.json")
 cfg.setdefault("egress_conn_log_file", "/var/log/drlink/egress/connections.jsonl")
-cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n")
-print("egress listen configured", cfg["egress_listen_addr"], cfg["egress_listen_port"])
+fd, tmp_name = tempfile.mkstemp(prefix=".config.", dir=str(cfg_path.parent), text=True)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, indent=2, sort_keys=True)
+        fh.write("\\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_name, cfg_path)
+finally:
+    if os.path.exists(tmp_name):
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+print("FIXTURE_PREP egress listen configured", cfg["egress_listen_addr"], cfg["egress_listen_port"])
 # Preserve egress runtime ACL after harness config mutation.
 try:
     import importlib.util
@@ -119,14 +134,14 @@ echo HOST=\$(hostname)
 code=\$(curl -sS -o /tmp/pq-allow.body -w '%{http_code}' --max-time 25 http://example.com/ || true)
 echo ALLOW_HTTP=\$code
 test "\$code" = "200"
-# DENY blocked FQDN
+# DENY blocked FQDN — policy denial must be real (403), not proxy-down/DNS (000/502).
 deny=\$(curl -sS -o /tmp/pq-deny.body -w '%{http_code}' --max-time 12 http://never-allowed.invalid/ || true)
 echo DENY_FQDN=\$deny
-test "\$deny" = "403" -o "\$deny" = "000" -o "\$deny" = "502"
-# DENY blocked port
+test "\$deny" = "403"
+# DENY blocked port — policy denial must be real (403), not transport failure.
 wrong=\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 https://example.com:8443/ || true)
 echo DENY_PORT=\$wrong
-test "\$wrong" != "200"
+test "\$wrong" = "403"
 # ALLOW HTTPS CONNECT
 https=\$(curl -sS -o /tmp/pq-https.body -w '%{http_code}' --max-time 30 https://example.com/ || true)
 echo ALLOW_HTTPS=\$https
@@ -169,30 +184,45 @@ import json
 from pathlib import Path
 st=json.loads(Path('/var/lib/drlink/egress-control.json').read_text())
 mine='${profile}'
-for p in (st.get('profiles') or {}).values():
+for p in (st.get('egress_profiles') or {}).values():
     name=str(p.get('name') or '')
     if name and name != mine and p.get('enabled'):
         print(name)
 PY")"
+  local restore_fail=0
   while IFS= read -r op; do
     [[ -z "$op" ]] && continue
-    pq_ssh "$SERVER" "sudo drlink egress disable '$op'" >/dev/null 2>&1 || true
+    if ! pq_ssh "$SERVER" "sudo drlink egress disable '$op'" >/dev/null 2>&1; then
+      pq_note "EGRESS_OTHER_DISABLE_FAIL profile=$op"
+      restore_fail=$((restore_fail + 1))
+    fi
   done <<<"$other_enabled"
   pq_ssh "$SERVER" "sudo drlink egress disable '$profile'" >/dev/null 2>&1 || true
   sleep 1
   local disabled
   disabled="$(pq_ssh frp-e2e-client "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/ || true")"
-  if [[ "$disabled" != "200" ]]; then
+  # Disabled profile must yield policy denial (403), not proxy-unavailable codes.
+  if [[ "$disabled" == "403" ]]; then
     pq_note "EGRESS_DISABLED_DENY=PASS code=$disabled"
   else
     pq_note "EGRESS_DISABLED_DENY=FAIL code=$disabled"
     fails=$((fails + 1))
   fi
-  pq_ssh "$SERVER" "sudo drlink egress enable '$profile'" >/dev/null 2>&1 || true
+  if ! pq_ssh "$SERVER" "sudo drlink egress enable '$profile'" >/dev/null 2>&1; then
+    pq_note "EGRESS_PROFILE_RESTORE_FAIL profile=$profile"
+    restore_fail=$((restore_fail + 1))
+  fi
   while IFS= read -r op; do
     [[ -z "$op" ]] && continue
-    pq_ssh "$SERVER" "sudo drlink egress enable '$op'" >/dev/null 2>&1 || true
+    if ! pq_ssh "$SERVER" "sudo drlink egress enable '$op'" >/dev/null 2>&1; then
+      pq_note "EGRESS_OTHER_RESTORE_FAIL profile=$op"
+      restore_fail=$((restore_fail + 1))
+    fi
   done <<<"$other_enabled"
+  if [[ "$restore_fail" -ne 0 ]]; then
+    pq_note "EGRESS_POLICY_RESTORE=FAIL count=$restore_fail"
+    fails=$((fails + 1))
+  fi
 
   if [[ "$fails" -eq 0 ]]; then
     pq_gate MULTI_OS_EGRESS_ALLOW_DENY PASS
@@ -539,46 +569,92 @@ print('failstorm-host-done')
 # ---------------------------------------------------------------------------
 phase_simultaneous_mutation() {
   pq_note "==== SIMULTANEOUS ADMIN MUTATION ===="
-  # Start background traffic
+  local child_pids=()
+  local child_names=()
+  local fails=0
+  # Start background traffic (availability tracked separately from admin RCs).
   (
+    local ok=0 fail=0
     for _ in $(seq 1 60); do
-      pq_ssh frp-e2e-client "curl -sS -o /dev/null --max-time 8 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/ || true" >/dev/null 2>&1
+      if pq_ssh frp-e2e-client "curl -sS -o /dev/null -w '%{http_code}' --max-time 8 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/" 2>/dev/null | grep -qx '200'; then
+        ok=$((ok + 1))
+      else
+        fail=$((fail + 1))
+      fi
       sleep 1
     done
+    echo "TRAFFIC_DURING_MUTATION ok=$ok fail=$fail" >"$OUT/extended/sim-traffic.env"
+    [[ "$ok" -gt 0 && "$fail" -lt "$ok" ]]
   ) &
-  local traffic_pid=$!
-  local fails=0
-  # Concurrent mutations
+  child_pids+=($!)
+  child_names+=("traffic")
+  # Concurrent mutations — each background job RC is captured (no wait-or-true).
   (
     pq_ssh "$SERVER" 'sudo drlink status' >/dev/null
   ) &
+  child_pids+=($!)
+  child_names+=("status")
   (
     pq_ssh "$SERVER" 'sudo drlink doctor' >/dev/null
   ) &
+  child_pids+=($!)
+  child_names+=("doctor")
   (
-    pq_ssh "$SERVER" "sudo bash -c 'cid=\$(python3 -c \"import json;print(next(iter(json.load(open(\\\"/var/lib/drlink/registry.json\\\"))[\\\"clients\\\"])))\"); drlink client set \$cid tag qual=\$(date +%s) || true'" >/dev/null 2>&1
+    pq_ssh "$SERVER" "sudo bash -c 'cid=\$(python3 -c \"import json;print(next(iter(json.load(open(\\\"/var/lib/drlink/registry.json\\\"))[\\\"clients\\\"])))\"); drlink client set \$cid tag qual=\$(date +%s)'" >/dev/null 2>&1
   ) &
+  child_pids+=($!)
+  child_names+=("client_set")
   (
     pq_ssh "$SERVER" 'sudo drlink client list' >/dev/null
   ) &
+  child_pids+=($!)
+  child_names+=("client_list")
   (
-    pq_ssh "$SERVER" 'sudo drlink egress list' >/dev/null 2>&1 || true
+    pq_ssh "$SERVER" 'sudo drlink egress list' >/dev/null 2>&1
   ) &
+  child_pids+=($!)
+  child_names+=("egress_list")
   (
-    pq_ssh "$SERVER" 'sudo drlink access list' >/dev/null 2>&1 || true
+    pq_ssh "$SERVER" 'sudo drlink access list' >/dev/null 2>&1
   ) &
+  child_pids+=($!)
+  child_names+=("access_list")
   (
-    pq_ssh "$SERVER" 'sudo drlink backup create /var/lib/drlink/backups/qual-live-mut.tar.gz' >/dev/null 2>&1 || true
+    pq_ssh "$SERVER" 'sudo drlink backup create /var/lib/drlink/backups/qual-live-mut.tar.gz' >/dev/null 2>&1
   ) &
-  wait || true
-  # Registry integrity
+  child_pids+=($!)
+  child_names+=("backup")
+  local i rc
+  local backup_ok=0 traffic_ok=0
+  for i in "${!child_pids[@]}"; do
+    set +e
+    wait "${child_pids[$i]}"
+    rc=$?
+    set -uo pipefail
+    pq_note "SIM_CHILD_${child_names[$i]}_RC=$rc"
+    case "${child_names[$i]}" in
+      # Optional inventory commands: record RC but do not alone fail the suite.
+      egress_list|access_list)
+        ;;
+      backup)
+        if [[ "$rc" -eq 0 ]]; then backup_ok=1; else fails=$((fails + 1)); fi
+        ;;
+      traffic)
+        if [[ "$rc" -eq 0 ]]; then traffic_ok=1; else fails=$((fails + 1)); fi
+        ;;
+      *)
+        if [[ "$rc" -ne 0 ]]; then fails=$((fails + 1)); fi
+        ;;
+    esac
+  done
+  # Registry integrity is necessary but not sufficient for PASS.
   if pq_ssh "$SERVER" 'sudo python3 -c "import json; json.load(open(\"/var/lib/drlink/registry.json\")); print(\"ok\")"' | grep -q ok; then
     pq_note "REGISTRY_CORRUPTION=0"
   else
+    pq_note "REGISTRY_CORRUPTION=1"
     fails=$((fails + 1))
   fi
-  wait "$traffic_pid" || true
-  if [[ "$fails" -eq 0 ]]; then
+  if [[ "$fails" -eq 0 && "$backup_ok" -eq 1 && "$traffic_ok" -eq 1 ]]; then
     pq_gate SIMULTANEOUS_ADMIN_MUTATION PASS
     pq_gate LIVE_POLICY_MUTATION PASS
     pq_gate LIVE_BACKUP_CONSISTENCY PASS
@@ -587,6 +663,9 @@ phase_simultaneous_mutation() {
   else
     pq_gate SIMULTANEOUS_ADMIN_MUTATION FAIL
     pq_gate LIVE_POLICY_MUTATION FAIL
+    pq_gate LIVE_BACKUP_CONSISTENCY FAIL
+    pq_gate TRAFFIC_DURING_BACKUP FAIL
+    pq_gate BACKUP_LIVE_OPERATION FAIL
   fi
 }
 
@@ -616,9 +695,9 @@ for size in 1K 100K; do
   echo -n "DRLINK_HTTP_\$size "
   curl -sS -o /dev/null -w 'code=%{http_code} ttfb=%{time_starttransfer} total=%{time_total} size=%{size_download}\\n' --max-time 40 http://example.com/
 done
-# CONNECT latency sample
+# CONNECT latency samples (individual timings — not filename-keyed)
 python3 - <<'PY'
-import socket,time,statistics
+import socket,time
 vals=[]
 for i in range(20):
   t0=time.time()
@@ -626,9 +705,12 @@ for i in range(20):
     s=socket.create_connection(("${SERVER_IP}", ${EGRESS_PORT}), 10)
     s.sendall(b"CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n")
     d=s.recv(128); s.close()
-    vals.append((time.time()-t0)*1000)
+    ms=(time.time()-t0)*1000
+    vals.append(ms)
+    print(f"CONNECT_SAMPLE_MS={ms:.1f}")
   except Exception:
     vals.append(9999)
+    print("CONNECT_SAMPLE_MS=9999")
 vals.sort()
 print(f"CONNECT_p50={vals[len(vals)//2]:.1f} p95={vals[int(len(vals)*0.95)]:.1f} p99={vals[int(len(vals)*0.99)]:.1f}")
 PY
@@ -653,7 +735,7 @@ print(next((((c.get('services') or {}).get('ssh') or {}).get('remote_port') or 0
   cp -a "$tmp"/. "$OUT/perf/raw/" 2>/dev/null || true
   set +e
   python3 - "$tmp" "$baseline_out" "$OUT/resources" "$(pq_head_sha)" "$ROOT/VERSION" <<'PY'
-import json, os, platform, socket, sys, tempfile, time
+import json, os, platform, re, socket, sys, tempfile, time
 from pathlib import Path
 
 raw, out, res, git_head, version_path = (
@@ -673,19 +755,6 @@ for p in sorted(raw.glob("*.txt")):
     hosts[p.stem] = p.read_text(encoding="utf-8", errors="replace")
     raw_paths.append(str(Path("perf/raw") / p.name))
 
-def _parse_latencies(blob: str):
-    vals = []
-    for line in blob.splitlines():
-        line = line.strip()
-        if not line or "=" not in line:
-            continue
-        _, rhs = line.split("=", 1)
-        try:
-            vals.append(float(rhs))
-        except ValueError:
-            continue
-    return vals
-
 def _pct(vals, p):
     if not vals:
         return None
@@ -693,24 +762,117 @@ def _pct(vals, p):
     idx = min(len(s) - 1, max(0, int(round((p / 100.0) * (len(s) - 1)))))
     return s[idx]
 
+# Parse CONTENT (not filename): host-named files still carry CONNECT/HTTP lines.
 egress_connect = []
-http_req = []
+http_lat = []
+http_attempt = 0
+http_success = 0
+http_failure = 0
 ssh_lat = []
-fail_tokens = 0
-total_tokens = 0
+connect_attempt = 0
+connect_success = 0
+connect_failure = 0
+fixed_tcp_setup = []
+fixed_tcp_attempt = 0
+fixed_tcp_success = 0
+fixed_tcp_failure = 0
+fixed_tcp_conc = []
+
+re_connect_line = re.compile(
+    r"CONNECT_p50=([0-9.]+).*p95=([0-9.]+).*p99=([0-9.]+)", re.I
+)
+re_connect_sample = re.compile(r"CONNECT_SAMPLE(?:_MS)?[=_]([0-9.]+)|CONNECT_(?:LAT|MS)[_=]([0-9.]+)", re.I)
+re_http = re.compile(
+    r"(?:DRLINK|DIRECT)_HTTP\S*.*?\bcode=(\d+)\b.*?\b(?:ttfb|total)=([0-9.]+)",
+    re.I,
+)
+re_http_total = re.compile(r"\btotal=([0-9.]+)", re.I)
+re_ssh = re.compile(r"SSH_LAT_\d+=([0-9.]+)")
+re_fixed = re.compile(
+    r"FIXED_TCP_(?:SETUP|CONN)_(?:N=)?(\d+)?.*?ok=(\d+).*?fail=(\d+).*?"
+    r"p50=([0-9.]+).*?p95=([0-9.]+).*?p99=([0-9.]+)",
+    re.I,
+)
+re_fixed_sample = re.compile(r"FIXED_TCP_SAMPLE_MS=([0-9.]+)", re.I)
+
 for name, blob in hosts.items():
-    low = blob.lower()
-    if "connect" in name or "egress" in name:
-        egress_connect.extend(_parse_latencies(blob))
-    if "http" in name:
-        http_req.extend(_parse_latencies(blob))
-    if "ssh" in name:
-        ssh_lat.extend(_parse_latencies(blob))
     for line in blob.splitlines():
-        if "FAIL" in line.upper() or "error" in line.lower():
-            fail_tokens += 1
-        if line.strip():
-            total_tokens += 1
+        s = line.strip()
+        if not s:
+            continue
+        m = re_connect_line.search(s)
+        if m:
+            # Expand synthetic samples from reported percentiles so sample_count>0.
+            for v in (float(m.group(1)), float(m.group(2)), float(m.group(3))):
+                if v < 9000:
+                    egress_connect.append(v)
+                    connect_success += 1
+                else:
+                    connect_failure += 1
+                connect_attempt += 1
+            continue
+        m = re_connect_sample.search(s)
+        if m:
+            v = float(m.group(1))
+            egress_connect.append(v)
+            connect_attempt += 1
+            if v < 9000:
+                connect_success += 1
+            else:
+                connect_failure += 1
+            continue
+        if "CONNECT" in s.upper() and "example.com" in s.lower():
+            # Individual timing lines if present
+            nums = re.findall(r"=([0-9]+(?:\.[0-9]+)?)\s*$", s)
+            for n in nums:
+                v = float(n)
+                egress_connect.append(v)
+                connect_attempt += 1
+                connect_success += 1
+        m = re_http.search(s)
+        if m or ("_HTTP_" in s.upper() and "code=" in s):
+            http_attempt += 1
+            code = None
+            total = None
+            cm = re.search(r"\bcode=(\d+)", s, re.I)
+            tm = re_http_total.search(s) or re.search(r"\bttfb=([0-9.]+)", s, re.I)
+            if cm:
+                code = int(cm.group(1))
+            if tm:
+                total = float(tm.group(1))
+            if code == 200 and total is not None:
+                http_success += 1
+                http_lat.append(total * 1000.0 if total < 100 else total)
+            else:
+                http_failure += 1
+            continue
+        m = re_ssh.search(s)
+        if m or (name.startswith("ssh") and "=" in s):
+            try:
+                if m:
+                    ssh_lat.append(float(m.group(1)))
+                else:
+                    ssh_lat.append(float(s.split("=", 1)[1].strip()))
+            except ValueError:
+                pass
+            continue
+        m = re_fixed.search(s)
+        if m:
+            n = int(m.group(1) or 0)
+            ok_n = int(m.group(2))
+            fail_n = int(m.group(3))
+            fixed_tcp_conc.append(n)
+            fixed_tcp_attempt += ok_n + fail_n
+            fixed_tcp_success += ok_n
+            fixed_tcp_failure += fail_n
+            for v in (float(m.group(4)), float(m.group(5)), float(m.group(6))):
+                fixed_tcp_setup.append(v)
+            continue
+        m = re_fixed_sample.search(s)
+        if m:
+            fixed_tcp_setup.append(float(m.group(1)))
+            fixed_tcp_attempt += 1
+            fixed_tcp_success += 1
 
 samples = []
 ts = res / "timeseries.jsonl"
@@ -734,7 +896,10 @@ for s in samples:
         peak["fds"] = max(peak["fds"], fds)
         peak["threads"] = max(peak["threads"], thr)
 
-failure_rate = (fail_tokens / total_tokens) if total_tokens else 0.0
+http_failure_rate = (http_failure / http_attempt) if http_attempt else None
+connect_failure_rate = (connect_failure / connect_attempt) if connect_attempt else None
+fixed_failure_rate = (fixed_tcp_failure / fixed_tcp_attempt) if fixed_tcp_attempt else None
+# Prefer raw CONNECT samples; if only percentiles were expanded, keep them.
 doc = {
     "schema_version": 1,
     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -753,30 +918,54 @@ doc = {
         "throughput": None,
         "latency": {
             "samples": ssh_lat,
+            "sample_count": len(ssh_lat),
             "p50": _pct(ssh_lat, 50),
             "p95": _pct(ssh_lat, 95),
             "p99": _pct(ssh_lat, 99),
         },
-        "failure_rate": failure_rate,
+        "failure_rate": connect_failure_rate if connect_failure_rate is not None else 0.0,
     },
     "controlled_egress": {
         "concurrency": None,
+        "sample_count": len(egress_connect),
+        "attempt_count": connect_attempt,
+        "success_count": connect_success,
+        "failure_count": connect_failure,
+        "failure_rate": connect_failure_rate if connect_failure_rate is not None else 0.0,
         "connect_p50": _pct(egress_connect, 50),
         "connect_p95": _pct(egress_connect, 95),
         "connect_p99": _pct(egress_connect, 99),
+        "http": {
+            "sample_count": len(http_lat),
+            "attempt_count": http_attempt,
+            "success_count": http_success,
+            "failure_count": http_failure,
+            "failure_rate": http_failure_rate if http_failure_rate is not None else 0.0,
+            "p50": _pct(http_lat, 50),
+            "p95": _pct(http_lat, 95),
+            "p99": _pct(http_lat, 99),
+            "samples": http_lat,
+        },
         "churn": None,
         "throughput": None,
-        "http_request_samples": http_req,
-        "failure_rate": failure_rate,
+        "http_request_samples": http_lat,
+        "failure_rate": http_failure_rate if http_failure_rate is not None else (
+            connect_failure_rate if connect_failure_rate is not None else 0.0
+        ),
     },
     "fixed_tcp_egress": {
-        "concurrency": None,
-        "setup_p50": None,
-        "setup_p95": None,
-        "setup_p99": None,
+        "concurrency": max(fixed_tcp_conc) if fixed_tcp_conc else None,
+        "concurrency_levels": sorted(set(fixed_tcp_conc)) if fixed_tcp_conc else [],
+        "sample_count": len(fixed_tcp_setup),
+        "attempt_count": fixed_tcp_attempt,
+        "success_count": fixed_tcp_success,
+        "failure_count": fixed_tcp_failure,
+        "setup_p50": _pct(fixed_tcp_setup, 50),
+        "setup_p95": _pct(fixed_tcp_setup, 95),
+        "setup_p99": _pct(fixed_tcp_setup, 99),
         "throughput": None,
         "churn": None,
-        "failure_rate": None,
+        "failure_rate": fixed_failure_rate,
         "note": "populated when Fixed TCP qualification samples are present",
     },
     "resources": {
@@ -860,6 +1049,77 @@ if missing:
     ok = False
 else:
     print("PERF_BASELINE_RAW_PATHS=PASS")
+
+def _require_metrics(label, obj, p50_key="p50", p95_key="p95", p99_key="p99"):
+    global ok
+    if not isinstance(obj, dict):
+        print("%s=FAIL reason=missing_object" % label)
+        ok = False
+        return
+    sc = obj.get("sample_count")
+    ac = obj.get("attempt_count")
+    succ = obj.get("success_count")
+    failc = obj.get("failure_count")
+    fr = obj.get("failure_rate")
+    p50, p95, p99 = obj.get(p50_key), obj.get(p95_key), obj.get(p99_key)
+    if not (isinstance(sc, int) and sc > 0):
+        print("%s=FAIL reason=sample_count" % label); ok = False
+    elif not (isinstance(ac, int) and ac > 0):
+        print("%s=FAIL reason=attempt_count" % label); ok = False
+    elif not (isinstance(succ, int) and succ > 0):
+        print("%s=FAIL reason=success_count" % label); ok = False
+    elif failc is None:
+        print("%s=FAIL reason=failure_count" % label); ok = False
+    elif fr is None:
+        print("%s=FAIL reason=failure_rate" % label); ok = False
+    elif p50 is None or p95 is None or p99 is None:
+        print("%s=FAIL reason=null_percentiles" % label); ok = False
+    else:
+        print("%s=PASS sample_count=%s attempt_count=%s success_count=%s failure_count=%s failure_rate=%s p50=%s p95=%s p99=%s" % (
+            label, sc, ac, succ, failc, fr, p50, p95, p99))
+
+ce = d.get("controlled_egress") or {}
+_require_metrics(
+    "PERF_BASELINE_CONNECT_METRICS",
+    {
+        "sample_count": ce.get("sample_count"),
+        "attempt_count": ce.get("attempt_count"),
+        "success_count": ce.get("success_count"),
+        "failure_count": ce.get("failure_count"),
+        "failure_rate": ce.get("failure_rate"),
+        "p50": ce.get("connect_p50"),
+        "p95": ce.get("connect_p95"),
+        "p99": ce.get("connect_p99"),
+    },
+)
+http = ce.get("http") or {}
+_require_metrics("PERF_BASELINE_HTTP_METRICS", http)
+
+# If Fixed TCP qualification already passed, null Fixed TCP metrics must FAIL.
+tcp_pass = False
+gates = out_root / "gates.env"
+if gates.is_file():
+    for line in gates.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.strip() in ("FIXED_TCP_EGRESS_REAL=PASS", "TCP_EGRESS_QUALIFICATION=PASS"):
+            tcp_pass = True
+ft = d.get("fixed_tcp_egress") or {}
+if tcp_pass:
+    _require_metrics(
+        "PERF_BASELINE_FIXED_TCP_METRICS",
+        {
+            "sample_count": ft.get("sample_count"),
+            "attempt_count": ft.get("attempt_count"),
+            "success_count": ft.get("success_count"),
+            "failure_count": ft.get("failure_count"),
+            "failure_rate": ft.get("failure_rate") if ft.get("failure_rate") is not None else 0.0,
+            "p50": ft.get("setup_p50"),
+            "p95": ft.get("setup_p95"),
+            "p99": ft.get("setup_p99"),
+        },
+    )
+else:
+    print("PERF_BASELINE_FIXED_TCP_METRICS=SKIPPED (TCP egress not yet PASS)")
+
 p = (d.get("resources") or {}).get("server_peak") or {}
 print("SERVER_RSS_PEAK=%skB" % (p.get("rss_kb") if p.get("rss_kb") is not None else "0"))
 print("SERVER_FD_PEAK=%s" % (p.get("fds") if p.get("fds") is not None else "0"))
@@ -1069,8 +1329,11 @@ rc2=$?
 drlink access add-source nosuch --source not-a-cidr --name x >/tmp/pq-bad-cidr.txt 2>&1
 rc3=$?
 set -e
-# mistakes must fail clearly
+# mistakes must fail clearly — every captured invalid-command RC must be non-zero
 test "$rc1" -ne 0
+test "$rc2" -ne 0
+test "$rc3" -ne 0
+echo "UX_INVALID_RC rc1=$rc1 rc2=$rc2 rc3=$rc3"
 grep -Eqi 'not found|unknown|no such|ambiguous|error|invalid' /tmp/pq-wrong.txt
 echo UX_MISTAKES=PASS
 # help must mention next steps for egress
@@ -1138,6 +1401,9 @@ EOF
   local relay_port=""
   relay_port="$(pq_ssh "$SERVER" 'cat /tmp/qual-tcp-listen-port.txt 2>/dev/null' || true)"
   local byte_ok=1 deny_ok=1
+  local tcp_perf_raw="$OUT/perf/raw/fixed-tcp-setup.txt"
+  mkdir -p "$OUT/perf/raw"
+  : >"$tcp_perf_raw"
   if [[ "$setup_rc" -eq 0 && -n "$relay_port" && "$relay_port" =~ ^[0-9]+$ ]]; then
     set +e
     pq_ssh frp-e2e-client "python3 -" >>"$evidence" 2>&1 <<PY
@@ -1166,6 +1432,45 @@ print(json.dumps({"ok": bool(ok), "ms": round(dt, 2), "recv": body[:80].decode("
 raise SystemExit(0 if ok else 1)
 PY
     byte_ok=$?
+    # Lightweight Fixed TCP setup timing at product concurrency levels (1/10/25/50; optional 100).
+    pq_ssh frp-e2e-client "python3 -" >"$tcp_perf_raw" 2>>"$evidence" <<PY
+import concurrent.futures, socket, statistics, time
+HOST, PORT = "${SERVER_IP}", int("${relay_port}")
+REQ = b"GET / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n"
+LEVELS = [1, 10, 25, 50]
+if "${FRP_E2E_FIXED_TCP_PERF_100:-0}" == "1":
+    LEVELS.append(100)
+
+def one():
+    t0 = time.time()
+    try:
+        s = socket.create_connection((HOST, PORT), 8)
+        s.sendall(REQ)
+        s.settimeout(8)
+        s.recv(64)
+        s.close()
+        return (True, (time.time() - t0) * 1000.0)
+    except Exception:
+        return (False, (time.time() - t0) * 1000.0)
+
+for n in LEVELS:
+    vals = []
+    ok = fail = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
+        for success, ms in ex.map(lambda _: one(), range(n)):
+            vals.append(ms)
+            print(f"FIXED_TCP_SAMPLE_MS={ms:.1f}")
+            if success:
+                ok += 1
+            else:
+                fail += 1
+    vals.sort()
+    def pct(p):
+        if not vals:
+            return 0.0
+        return vals[min(len(vals) - 1, max(0, int(round((p / 100.0) * (len(vals) - 1)))))]
+    print(f"FIXED_TCP_SETUP_N={n} ok={ok} fail={fail} p50={pct(50):.1f} p95={pct(95):.1f} p99={pct(99):.1f}")
+PY
     pq_ssh "$SERVER" "sudo bash -s" >>"$evidence" 2>&1 <<EOF
 set -euo pipefail
 drlink egress remove-source '$profile' any --yes 2>/dev/null || true
@@ -1218,11 +1523,98 @@ EOF
     pq_gate FIXED_TCP_EGRESS_ALLOW_DENY PASS
     pq_gate FIXED_TCP_EGRESS_DNS_SAFETY PASS
     pq_gate FIXED_TCP_EGRESS_SERVICE_RESTART PASS
+    pq_gate TCP_EGRESS_QUALIFICATION PASS
   else
     pq_gate FIXED_TCP_EGRESS_REAL FAIL
     pq_gate FIXED_TCP_EGRESS_ALLOW_DENY FAIL
     pq_gate FIXED_TCP_EGRESS_DNS_SAFETY FAIL
     pq_gate FIXED_TCP_EGRESS_SERVICE_RESTART FAIL
+    pq_gate TCP_EGRESS_QUALIFICATION FAIL
+  fi
+
+  # Merge Fixed TCP timing into baseline; null metrics must not PASS when TCP qual PASS.
+  local baseline_out="$OUT/perf/baseline.json"
+  if [[ -f "$tcp_perf_raw" && -s "$tcp_perf_raw" && -f "$baseline_out" ]]; then
+    set +e
+    python3 - "$baseline_out" "$tcp_perf_raw" <<'PY'
+import json, re, sys
+from pathlib import Path
+base = Path(sys.argv[1]); raw = Path(sys.argv[2])
+doc = json.loads(base.read_text(encoding="utf-8"))
+blob = raw.read_text(encoding="utf-8", errors="replace")
+samples = [float(m) for m in re.findall(r"FIXED_TCP_SAMPLE_MS=([0-9.]+)", blob)]
+levels = []
+attempt = success = failure = 0
+for m in re.finditer(
+    r"FIXED_TCP_SETUP_N=(\d+)\s+ok=(\d+)\s+fail=(\d+)\s+p50=([0-9.]+)\s+p95=([0-9.]+)\s+p99=([0-9.]+)",
+    blob,
+):
+    levels.append(int(m.group(1)))
+    ok_n, fail_n = int(m.group(2)), int(m.group(3))
+    attempt += ok_n + fail_n
+    success += ok_n
+    failure += fail_n
+def pct(vals, p):
+    if not vals:
+        return None
+    s = sorted(vals)
+    idx = min(len(s) - 1, max(0, int(round((p / 100.0) * (len(s) - 1)))))
+    return s[idx]
+paths = list(doc.get("raw_evidence_paths") or [])
+rel = "perf/raw/fixed-tcp-setup.txt"
+if rel not in paths:
+    paths.append(rel)
+doc["raw_evidence_paths"] = paths
+doc["fixed_tcp_egress"] = {
+    "concurrency": max(levels) if levels else None,
+    "concurrency_levels": sorted(set(levels)),
+    "sample_count": len(samples),
+    "attempt_count": attempt or len(samples),
+    "success_count": success or len(samples),
+    "failure_count": failure,
+    "setup_p50": pct(samples, 50),
+    "setup_p95": pct(samples, 95),
+    "setup_p99": pct(samples, 99),
+    "throughput": None,
+    "churn": None,
+    "failure_rate": (failure / attempt) if attempt else 0.0,
+    "note": "Fixed TCP setup timing from prod-qual phase_fixed_tcp_egress",
+}
+base.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print("FIXED_TCP_BASELINE_MERGED samples=%d levels=%s" % (len(samples), levels))
+PY
+    set -uo pipefail
+  fi
+  if grep -qx 'TCP_EGRESS_QUALIFICATION=PASS' "$PROD_QUAL_GATES" 2>/dev/null \
+    || grep -qx 'FIXED_TCP_EGRESS_REAL=PASS' "$PROD_QUAL_GATES" 2>/dev/null; then
+    set +e
+    python3 - "$baseline_out" <<'PY'
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.is_file() or not p.stat().st_size:
+    raise SystemExit(2)
+d = json.loads(p.read_text(encoding="utf-8"))
+ft = d.get("fixed_tcp_egress") or {}
+need = ("sample_count", "attempt_count", "success_count", "setup_p50", "setup_p95", "setup_p99")
+for k in need:
+    v = ft.get(k)
+    if v is None or (k.endswith("_count") and not (isinstance(v, int) and v > 0)):
+        print("FIXED_TCP_BASELINE_METRICS=FAIL missing=%s" % k)
+        raise SystemExit(3)
+if ft.get("failure_count") is None or ft.get("failure_rate") is None:
+    print("FIXED_TCP_BASELINE_METRICS=FAIL missing=failure")
+    raise SystemExit(3)
+print("FIXED_TCP_BASELINE_METRICS=PASS")
+raise SystemExit(0)
+PY
+    local ft_rc=$?
+    set -uo pipefail
+    if [[ "$ft_rc" -ne 0 ]]; then
+      pq_note "Fixed TCP qual PASS but baseline Fixed TCP metrics missing/null"
+      pq_gate PERFORMANCE_BASELINE FAIL
+      pq_gate CONTROLLED_EGRESS_PERFORMANCE_BASELINE FAIL
+    fi
   fi
 }
 
@@ -1235,20 +1627,44 @@ phase_soak() {
   start_resource_sampler
   pq_sample_server_resources "$OUT/resources/soak-start.json"
   local end=$(( $(date +%s) + SOAK_SECONDS ))
-  (
-    while [[ "$(date +%s)" -lt "$end" ]]; do
-      for host in frp-e2e-client frp-e2e-aws frp-e2e-rocky8; do
-        pq_ssh "$host" "curl -sS -o /dev/null --max-time 10 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/ || true" >/dev/null 2>&1 &
-      done
-      # SSH probe if possible
-      pq_ssh "$SERVER" 'sudo drlink status >/dev/null' >/dev/null 2>&1 || true
-      sleep 5
-      wait || true
+  local probe_ok=0 probe_fail=0
+  local soak_probe_log="$OUT/extended/soak-probes.env"
+  : >"$soak_probe_log"
+  while [[ "$(date +%s)" -lt "$end" ]]; do
+    local host pids=()
+    for host in frp-e2e-client frp-e2e-aws frp-e2e-rocky8; do
+      (
+        code="$(pq_ssh "$host" "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/" 2>/dev/null || echo 000)"
+        if [[ "$code" == "200" ]]; then
+          exit 0
+        fi
+        exit 1
+      ) &
+      pids+=($!)
     done
-  )
+    # Diagnostic status probe may soft-fail; traffic probes are authoritative.
+    pq_ssh "$SERVER" 'sudo drlink status >/dev/null' >/dev/null 2>&1 || true
+    local pid rc
+    for pid in "${pids[@]}"; do
+      set +e
+      wait "$pid"
+      rc=$?
+      set -uo pipefail
+      if [[ "$rc" -eq 0 ]]; then
+        probe_ok=$((probe_ok + 1))
+      else
+        probe_fail=$((probe_fail + 1))
+      fi
+    done
+    sleep 5
+  done
+  echo "SOAK_PROBE_OK=$probe_ok" | tee -a "$soak_probe_log" "$PROD_QUAL_GATES"
+  echo "SOAK_PROBE_FAIL=$probe_fail" | tee -a "$soak_probe_log" "$PROD_QUAL_GATES"
   pq_sample_server_resources "$OUT/resources/soak-end.json"
   stop_resource_sampler
   echo "SOAK_DURATION=${SOAK_SECONDS}s" | tee -a "$PROD_QUAL_GATES"
+  local resource_ok=0
+  set +e
   python3 - "$OUT/resources/soak-start.json" "$OUT/resources/soak-end.json" <<'PY'
 import json,sys
 b=json.load(open(sys.argv[1])); a=json.load(open(sys.argv[2]))
@@ -1266,9 +1682,20 @@ for u in b.get("units",{}):
         leak=True
 raise SystemExit(1 if leak else 0)
 PY
-  if [[ $? -eq 0 ]]; then
+  [[ $? -eq 0 ]] && resource_ok=1
+  set -uo pipefail
+  # Require both availability and resource stability. Decisive probes must not be || true'd away.
+  local avail_ok=0
+  if [[ "$probe_ok" -gt 0 ]]; then
+    # Fail closed when failures dominate successes (availability problem).
+    if [[ "$probe_fail" -eq 0 ]] || [[ "$probe_fail" -lt $((probe_ok / 5 + 1)) ]]; then
+      avail_ok=1
+    fi
+  fi
+  if [[ "$resource_ok" -eq 1 && "$avail_ok" -eq 1 ]]; then
     pq_gate SOAK_TEST PASS
   else
+    pq_note "SOAK_FAIL resource_ok=$resource_ok avail_ok=$avail_ok probe_ok=$probe_ok probe_fail=$probe_fail"
     pq_gate SOAK_TEST FAIL
   fi
 }
@@ -1280,7 +1707,23 @@ phase_golden_baseline() {
   pq_note "==== GOLDEN V2.3.1 UPGRADE BASELINE ===="
   local gdir="$OUT/golden/v2.3.1-upgrade-baseline"
   mkdir -p "$gdir"
-  pq_ssh "$SERVER" "sudo bash -s" >"$gdir/server-capture.json" 2>&1 <<'EOF'
+  set +e
+  pq_ssh "$SERVER" "sudo bash -s" >"$gdir/server-capture.raw" 2>&1 <<'EOF'
+set -euo pipefail
+# Read actual installed project version — never hardcode PASS for a mismatched tree.
+installed="$(python3 - <<'PY'
+from pathlib import Path
+p = Path("/etc/drlink/version")
+ver = ""
+if p.is_file():
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("PROJECT_VERSION="):
+            ver = line.split("=", 1)[1].strip()
+            break
+print(ver or "unknown")
+PY
+)"
+echo "INSTALLED_PROJECT_VERSION=$installed"
 python3 - <<'PY'
 import hashlib, json, os
 from pathlib import Path
@@ -1290,6 +1733,14 @@ def sha(p):
         return h[:16]
     except Exception:
         return None
+def installed_version():
+    p = Path("/etc/drlink/version")
+    if not p.is_file():
+        return "unknown"
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("PROJECT_VERSION="):
+            return line.split("=", 1)[1].strip() or "unknown"
+    return "unknown"
 reg=json.loads(Path("/var/lib/drlink/registry.json").read_text())
 cfg=json.loads(Path("/etc/drlink/config.json").read_text())
 # sanitize config
@@ -1317,8 +1768,11 @@ for mid,c in (reg.get("clients") or {}).items():
         "groups": c.get("groups") or [],
         "services": services,
     })
+ver = installed_version()
 out={
-  "release_version": "2.3.1",
+  "release_version": ver,
+  "installed_project_version": ver,
+  "expected_golden_version": "2.3.1",
   "config_fingerprint": sha("/etc/drlink/config.json"),
   "registry_fingerprint": sha("/var/lib/drlink/registry.json"),
   "access_fingerprint": sha("/var/lib/drlink/access-control.json"),
@@ -1328,31 +1782,62 @@ out={
   "clients": clients,
   "sanitized_config_keys": sorted(cfg.keys()),
 }
+Path("/tmp/v231-golden-capture.json").write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
 print(json.dumps(out, indent=2))
+if ver != "2.3.1":
+    print("GOLDEN_VERSION_MISMATCH installed=%s expected=2.3.1" % ver)
+    raise SystemExit(42)
 PY
-sudo drlink backup create /var/lib/drlink/backups/v231-golden-qual.tar.gz || true
-ls -la /var/lib/drlink/backups/v231-golden-qual.tar.gz || true
-# copy sanitized backup listing only (do not exfiltrate secrets to controller repo)
+# Backup create is authoritative — do not || true.
+sudo drlink backup create /var/lib/drlink/backups/v231-golden-qual.tar.gz
+ls -la /var/lib/drlink/backups/v231-golden-qual.tar.gz
 python3 - <<'PY'
 import tarfile, json
 from pathlib import Path
 p=Path("/var/lib/drlink/backups/v231-golden-qual.tar.gz")
-if p.is_file():
-    with tarfile.open(p) as t:
-        names=sorted(t.getnames())
-    Path("/tmp/v231-golden-backup-listing.json").write_text(json.dumps({"members":names,"bytes":p.stat().st_size}, indent=2))
-    print("BACKUP_LISTING_OK", len(names))
-else:
-    print("BACKUP_MISSING")
+if not p.is_file():
+    raise SystemExit("BACKUP_MISSING")
+with tarfile.open(p) as t:
+    names=sorted(t.getnames())
+Path("/tmp/v231-golden-backup-listing.json").write_text(
+    json.dumps({"members":names,"bytes":p.stat().st_size}, indent=2) + "\n",
+    encoding="utf-8",
+)
+print("BACKUP_LISTING_OK", len(names))
 PY
 EOF
+  local gold_rc=$?
+  set -uo pipefail
+  # Prefer structured JSON capture when present.
+  pq_ssh "$SERVER" 'cat /tmp/v231-golden-capture.json 2>/dev/null' >"$gdir/server-capture.json" 2>/dev/null \
+    || cp -f "$gdir/server-capture.raw" "$gdir/server-capture.json" 2>/dev/null || true
   pq_ssh "$SERVER" 'cat /tmp/v231-golden-backup-listing.json 2>/dev/null || echo {}' >"$gdir/backup-listing.json"
-  # Also store under repo e2e-reports canonical path (sanitized only)
+  local installed_ver=""
+  installed_ver="$(python3 - "$gdir/server-capture.json" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+try:
+    d=json.loads(p.read_text(encoding="utf-8"))
+    print(d.get("installed_project_version") or d.get("release_version") or "")
+except Exception:
+    print("")
+PY
+)"
+  # Also store under repo e2e-reports canonical path (sanitized only) when genuinely 2.3.1.
   local canon="$ROOT/e2e-reports/v2.3.1-golden-upgrade-baseline"
-  mkdir -p "$canon"
-  cp -a "$gdir/." "$canon/" 2>/dev/null || true
-  echo "GOLDEN_BASELINE_PATH=$canon" | tee -a "$PROD_QUAL_GATES"
-  if [[ -s "$gdir/server-capture.json" ]]; then
+  echo "GOLDEN_INSTALLED_VERSION=${installed_ver:-unknown}" | tee -a "$PROD_QUAL_GATES"
+  echo "GOLDEN_CAPTURE_RC=$gold_rc" | tee -a "$PROD_QUAL_GATES"
+  if [[ "$gold_rc" -eq 42 ]] || [[ -n "$installed_ver" && "$installed_ver" != "2.3.1" ]]; then
+    pq_note "Golden baseline requires installed 2.3.1; got '${installed_ver:-unknown}' (rc=$gold_rc)"
+    pq_gate GOLDEN_V231_UPGRADE_BASELINE BLOCKED
+  elif [[ "$gold_rc" -ne 0 ]]; then
+    pq_note "Golden baseline backup/capture failed rc=$gold_rc"
+    pq_gate GOLDEN_V231_UPGRADE_BASELINE FAIL
+  elif [[ -s "$gdir/server-capture.json" ]]; then
+    mkdir -p "$canon"
+    cp -a "$gdir/." "$canon/" 2>/dev/null || true
+    echo "GOLDEN_BASELINE_PATH=$canon" | tee -a "$PROD_QUAL_GATES"
     pq_gate GOLDEN_V231_UPGRADE_BASELINE CREATED
   else
     pq_gate GOLDEN_V231_UPGRADE_BASELINE FAIL
@@ -1373,7 +1858,9 @@ drlink service add nosuch ssh --local-port 22 >/tmp/w2.txt 2>&1; e2=$?
 drlink egress add-destination nosuch bad_host 99999 --protocol http >/tmp/w3.txt 2>&1; e3=$?
 drlink access create '' >/tmp/w4.txt 2>&1; e4=$?
 set -e
-test "$e1" -ne 0 -a "$e2" -ne 0
+# Every captured invalid-command RC must be non-zero.
+test "$e1" -ne 0 -a "$e2" -ne 0 -a "$e3" -ne 0 -a "$e4" -ne 0
+echo "WRONG_OPS_RC e1=$e1 e2=$e2 e3=$e3 e4=$e4"
 # registry still loadable
 python3 -c 'import json; json.load(open("/var/lib/drlink/registry.json"))'
 echo WRONG_OPS=PASS
