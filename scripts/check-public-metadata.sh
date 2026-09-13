@@ -68,7 +68,8 @@ LAB_ALLOW_IPV4 = {
 TEST_ONLY_LAB_IPV4 = {
     "221.139.249.113",  # established Real E2E server fixture (env-overridable)
     "221.139.249.114",
-    "221.139.249.110",  # forbidden in secret-scan; keep listed so soft scan classifies
+    # Note: 221.139.249.110 is forbidden by scripts/secret-scan.sh and must
+    # never appear in the tracked tree (including this file).
 }
 
 def is_doc_or_nonpublic(ip: str) -> bool:

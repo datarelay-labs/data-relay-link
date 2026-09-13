@@ -265,7 +265,7 @@ if [[ "${FRP_E2E_QUAL_SERVER_REBOOT:-1}" == "1" ]]; then
     sleep 5
   done
   sleep 20
-  if pq_ssh "$PROD_QUAL_SERVER" 'sudo drlink doctor >/dev/null && sudo systemctl is-active drlink-server drlink-allocator drlink-access drlink-egress'; then
+  if pq_ssh "$PROD_QUAL_SERVER" 'sudo drlink doctor >/dev/null && sudo systemctl is-active drlink-server drlink-allocator drlink-access drlink-egress drlink-tcp-egress'; then
     pq_gate SERVER_REBOOT_RECOVERY PASS
   else
     pq_gate SERVER_REBOOT_RECOVERY FAIL

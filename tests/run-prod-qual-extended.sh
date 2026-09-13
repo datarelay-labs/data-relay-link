@@ -985,7 +985,7 @@ EOF
 phase_component_restart() {
   pq_note "==== SERVER COMPONENT RESTART ===="
   local unit fails=0
-  for unit in drlink-allocator drlink-access drlink-egress drlink-server; do
+  for unit in drlink-allocator drlink-access drlink-egress drlink-tcp-egress drlink-server; do
     pq_note "restart $unit"
     pq_ssh "$SERVER" "sudo systemctl restart $unit" || fails=$((fails + 1))
     sleep 3
