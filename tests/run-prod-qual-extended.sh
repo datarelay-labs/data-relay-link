@@ -163,9 +163,9 @@ for p in (st.get('profiles') or {}).values():
 PY")"
   while IFS= read -r op; do
     [[ -z "$op" ]] && continue
-    pq_ssh "$SERVER" "sudo drlink egress disable '$op' --yes" >/dev/null 2>&1 || true
+    pq_ssh "$SERVER" "sudo drlink egress disable '$op'" >/dev/null 2>&1 || true
   done <<<"$other_enabled"
-  pq_ssh "$SERVER" "sudo drlink egress disable '$profile' --yes" >/dev/null 2>&1 || true
+  pq_ssh "$SERVER" "sudo drlink egress disable '$profile'" >/dev/null 2>&1 || true
   sleep 1
   local disabled
   disabled="$(pq_ssh frp-e2e-client "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -x http://${SERVER_IP}:${EGRESS_PORT} http://example.com/ || true")"
