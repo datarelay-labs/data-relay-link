@@ -118,7 +118,7 @@ pq_ssh "$SERVER" "sudo bash -s -- --purge --yes" \
 purge_rc=$?
 set -uo pipefail
 # purge may return non-zero if already absent; require config gone afterward
-if pq_ssh "$SERVER" 'test -f /etc/drlink/config.json'; then
+if pq_ssh "$SERVER" 'sudo test -f /etc/drlink/config.json'; then
   # One more stale-lock clear + purge retry (interrupted ops leave lock behind)
   pq_ssh "$SERVER" 'sudo rm -f /var/lib/drlink/server-lifecycle.lock /var/lib/drlink/server-lifecycle.lock.pid' || true
   set +e
@@ -127,7 +127,7 @@ if pq_ssh "$SERVER" 'test -f /etc/drlink/config.json'; then
   purge_rc=$?
   set -uo pipefail
 fi
-if pq_ssh "$SERVER" 'test -f /etc/drlink/config.json'; then
+if pq_ssh "$SERVER" 'sudo test -f /etc/drlink/config.json'; then
   pq_gate V231_PURGE FAIL
   tail -40 "$OUT/server-purge.log" | tee -a "$PROD_QUAL_SUMMARY" || true
   fail_out "server still installed after purge (rc=$purge_rc)"
