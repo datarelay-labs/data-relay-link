@@ -190,7 +190,8 @@ done
 note "BOOTSTRAP_HOST=$BOOTSTRAP_HOST"
 pass "PUBLIC_PROXY_TUNNEL"
 
-# Wait until the publicly trusted bootstrap edge answers /healthz.
+# Wait until the publicly trusted bootstrap edge answers /healthz from the
+# controller (proves the tunnel/proxy path is live with stock TLS).
 ok=0
 for _ in $(seq 1 40); do
   if curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 \
@@ -203,13 +204,56 @@ done
 [[ "$ok" == "1" ]] || fail "stock OS trust failed for bootstrap host /healthz"
 pass "STOCK_OS_TRUST_HEALTHZ"
 
+# The enroll target must also reach the bootstrap edge. Some lab resolvers
+# return AAAA-only for *.trycloudflare.com while the client has no IPv6 route;
+# dig still sees A records via public resolvers. Seed temporary IPv4 /etc/hosts
+# entries so the exact printed curl|bash command exercises product TLS, not lab
+# dual-stack DNS breakage. Restore hosts on exit.
+SHORTURL_HOSTS_SEEDED=0
+restore_client_hosts() {
+  if [[ "${SHORTURL_HOSTS_SEEDED:-0}" == "1" ]]; then
+    ssh_client 'sudo bash -c "if [[ -f /etc/hosts.frp-shorturl.bak ]]; then mv -f /etc/hosts.frp-shorturl.bak /etc/hosts; fi"' >/dev/null 2>&1 || true
+    SHORTURL_HOSTS_SEEDED=0
+  fi
+}
+trap 'restore_client_hosts' EXIT
+
+client_healthz_ok=0
+if ssh_client "curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 -o /dev/null https://${BOOTSTRAP_HOST}/healthz" >/dev/null 2>&1; then
+  client_healthz_ok=1
+fi
+if [[ "$client_healthz_ok" != "1" ]]; then
+  note "WARN: enroll client cannot reach https://${BOOTSTRAP_HOST}/healthz; seeding IPv4 /etc/hosts from public DNS"
+  mapfile -t _shorturl_ips < <(dig +short A "$BOOTSTRAP_HOST" @1.1.1.1 | grep -E '^[0-9.]+$' | head -4)
+  [[ "${#_shorturl_ips[@]}" -gt 0 ]] || fail "no public IPv4 for ${BOOTSTRAP_HOST}; client cannot reach bootstrap edge"
+  _hosts_lines=""
+  for _ip in "${_shorturl_ips[@]}"; do
+    _hosts_lines+="${_ip} ${BOOTSTRAP_HOST}"$'\n'
+  done
+  ssh_client "sudo bash -s" <<EOF || fail "seed client /etc/hosts for bootstrap IPv4"
+set -euo pipefail
+cp -a /etc/hosts /etc/hosts.frp-shorturl.bak
+cat >> /etc/hosts <<'HOSTSEOF'
+${_hosts_lines}
+HOSTSEOF
+EOF
+  SHORTURL_HOSTS_SEEDED=1
+  if ! ssh_client "curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 -o /dev/null https://${BOOTSTRAP_HOST}/healthz" >/dev/null 2>&1; then
+    fail "enroll client still cannot reach bootstrap edge after IPv4 hosts seed"
+  fi
+  pass "CLIENT_BOOTSTRAP_IPV4_HOSTS_SEED"
+fi
+pass "CLIENT_STOCK_OS_TRUST_HEALTHZ"
+
 # Configure bootstrap hostname + installer URL on server.
 # Tools update config.json without restarting services; allocator reloads on
 # mtime change, and we still bounce it so E2E never races a stale process.
 # Canonical operator surface is drlink (legacy /usr/local/sbin helpers are retired).
 ssh_server "sudo /usr/local/bin/drlink set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
   >"$OUT_DIR/set-bootstrap.log" 2>&1 || fail "set bootstrap-hostname"
-ssh_server "sudo /usr/local/bin/drlink set server installer-url '$INSTALLER_URL'" \
+# Canonical grammar is resource-first: set installer-url <url>
+# (not "set server installer-url", which is not a server setting).
+ssh_server "sudo /usr/local/bin/drlink set installer-url '$INSTALLER_URL'" \
   >"$OUT_DIR/set-installer.log" 2>&1 || fail "set installer url"
 ssh_server 'sudo systemctl daemon-reload; sudo systemctl restart drlink-allocator' \
   >"$OUT_DIR/restart-allocator.log" 2>&1 || fail "restart allocator after config"
@@ -342,7 +386,8 @@ grep -qiE 'Could not resolve|SSL|certificate|not known' "$OUT_DIR/bad-cert.err" 
   || note "WARN bad-cert diagnostic: $(head -2 "$OUT_DIR/bad-cert.err")"
 pass "CERT_FAILURE_FAILS_CLOSED"
 
-# Cleanup tunnel/proxy
+# Cleanup tunnel/proxy and any temporary client hosts seed.
+restore_client_hosts
 ssh_server 'sudo pkill -x cloudflared 2>/dev/null || true; sudo pkill -f "[f]rp-short-url-proxy.py" 2>/dev/null || true' || true
 
 note "SHORT_URL_REAL_E2E=PASS"
