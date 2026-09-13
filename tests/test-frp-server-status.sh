@@ -167,5 +167,40 @@ if env \
 fi
 pass "status --check v1 fail closed"
 
+# Finding: Fixed TCP runtime visibility on operator status.
+python3 - "$TREE/var/lib/drlink/egress-control.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  "schema_version": 3,
+  "egress_profiles": {},
+  "tcp_relays": {
+    "r1": {"enabled": True, "listen_port": 6201, "dest_host": "example.com", "dest_port": 443},
+    "r2": {"enabled": False, "listen_port": 6202, "dest_host": "example.com", "dest_port": 80},
+  },
+}, indent=2, sort_keys=True) + "\n")
+PY
+OUT_TCP="$WORKDIR/status-tcp.out"
+if ! env \
+  FRP_UPDATE_TEST_HARNESS=1 \
+  FRP_UPDATE_TEST_MARKER="$MARKER" \
+  FRP_DEPLOY_TEST_ROOT="$TREE" \
+  FRP_UPDATE_ROOT="$TREE" \
+  FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
+  FRP_STATUS_SKIP_UPSTREAM=1 \
+  FRP_STATUS_TCP_EGRESS_STATE=active \
+  FRP_STATUS_TCP_EGRESS_HEALTH=ok \
+  FRP_STATUS_TCP_EGRESS_POLICY=healthy \
+  FRP_STATUS_TCP_EGRESS_ENABLED=1 \
+  FRP_STATUS_TCP_EGRESS_BOUND=1 \
+  "$STATUS" >"$OUT_TCP"; then
+  fail "status tcp visibility exited non-zero"
+fi
+grep -q "drlink-tcp-egress :" "$OUT_TCP" || fail "missing tcp-egress unit line"
+grep -q "Fixed TCP Egress" "$OUT_TCP" || fail "missing Fixed TCP summary"
+grep -q "TCP relays enabled : 1" "$OUT_TCP" || fail "missing enabled relay count"
+grep -q "TCP relays bound   : 1" "$OUT_TCP" || fail "missing bound relay count"
+pass "status Fixed TCP visibility"
+
 echo
 echo "FRP_STATUS_ENHANCED=PASS"

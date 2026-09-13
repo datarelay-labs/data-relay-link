@@ -249,6 +249,108 @@ PY
   fi
 fi
 
+tcp_egress_state="$(unit_state drlink-tcp-egress)"
+tcp_egress_health="unknown"
+tcp_egress_policy="unknown"
+tcp_enabled_count=0
+tcp_bound_count=0
+if type frp_test_harness_enabled >/dev/null 2>&1 && frp_test_harness_enabled && [[ "${FRP_UPDATE_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+  tcp_egress_health="${FRP_STATUS_TCP_EGRESS_HEALTH:-skipped}"
+  tcp_egress_policy="${FRP_STATUS_TCP_EGRESS_POLICY:-unknown}"
+  tcp_enabled_count="${FRP_STATUS_TCP_EGRESS_ENABLED:-0}"
+  tcp_bound_count="${FRP_STATUS_TCP_EGRESS_BOUND:-0}"
+  [[ "${FRP_STATUS_TCP_EGRESS_STATE:-}" != "" ]] && tcp_egress_state="$FRP_STATUS_TCP_EGRESS_STATE"
+else
+  _tcp_eff=""
+  _run_base="/run/drlink"
+  if type frp_path >/dev/null 2>&1; then
+    _run_base="$(frp_path /run/drlink)"
+  fi
+  for _cand in \
+    "${_run_base}/tcp-egress/effective.json" \
+    "${_run_base}/tcp-egress-effective.json"
+  do
+    if [[ -r "$_cand" ]]; then
+      _tcp_eff="$_cand"
+      break
+    fi
+  done
+  _egress_ctrl=""
+  if type frp_path >/dev/null 2>&1; then
+    _egress_ctrl="$(frp_path /var/lib/drlink/egress-control.json)"
+  else
+    _egress_ctrl="/var/lib/drlink/egress-control.json"
+  fi
+  eval "$(python3 - "${_egress_ctrl}" "${_tcp_eff}" <<'PY' 2>/dev/null || true
+import json, shlex, sys
+from pathlib import Path
+
+ctrl = Path(sys.argv[1])
+eff = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
+enabled = 0
+policy = "unknown"
+if ctrl.is_file():
+    try:
+        doc = json.loads(ctrl.read_text(encoding="utf-8"))
+        relays = doc.get("tcp_relays") if isinstance(doc, dict) else None
+        if isinstance(relays, dict):
+            enabled = sum(1 for r in relays.values() if isinstance(r, dict) and r.get("enabled") is True)
+            policy = "healthy"
+        else:
+            policy = "unhealthy"
+    except Exception:
+        policy = "unreadable"
+else:
+    policy = "missing"
+bound = 0
+if eff is not None and eff.is_file():
+    try:
+        snap = json.loads(eff.read_text(encoding="utf-8"))
+        if isinstance(snap, dict):
+            listeners = snap.get("listeners") or snap.get("bound_ports") or []
+            if isinstance(listeners, list):
+                bound = len(listeners)
+            elif isinstance(listeners, dict):
+                bound = len(listeners)
+            if "policy_healthy" in snap:
+                policy = "healthy" if snap.get("policy_healthy") else "unhealthy"
+    except Exception:
+        pass
+print("tcp_enabled_count=" + shlex.quote(str(enabled)))
+print("tcp_bound_count=" + shlex.quote(str(bound)))
+print("tcp_egress_policy=" + shlex.quote(policy))
+PY
+)"
+  [[ -n "${tcp_enabled_count:-}" ]] || tcp_enabled_count=0
+  [[ -n "${tcp_bound_count:-}" ]] || tcp_bound_count=0
+  [[ -n "${tcp_egress_policy:-}" ]] || tcp_egress_policy="unknown"
+  case "${tcp_egress_state}" in
+    active|activating)
+      if [[ "${tcp_egress_policy}" == "healthy" ]]; then
+        if (( tcp_enabled_count > 0 && tcp_bound_count < tcp_enabled_count )); then
+          tcp_egress_health="degraded(configured-not-listening)"
+        else
+          tcp_egress_health="ok"
+        fi
+      elif [[ "${tcp_egress_policy}" == "missing" || "${tcp_egress_policy}" == "unreadable" ]]; then
+        tcp_egress_health="degraded(policy-unavailable)"
+      else
+        tcp_egress_health="degraded(policy-unhealthy)"
+      fi
+      ;;
+    inactive|failed|unknown|"")
+      if (( tcp_enabled_count > 0 )); then
+        tcp_egress_health="unhealthy(not-running)"
+      else
+        tcp_egress_health="inactive"
+      fi
+      ;;
+    *)
+      tcp_egress_health="unknown"
+      ;;
+  esac
+fi
+
 host_role="Server"
 if type frp_detect_host_role >/dev/null 2>&1; then
   frp_detect_host_role
@@ -535,6 +637,20 @@ Controlled Egress : $(
 )
 Egress listener : ${_egress_addr:--}:${_egress_port:--}
 Egress policy   : ${egress_policy:-unknown}${egress_generation:+ (generation ${egress_generation})}
+drlink-tcp-egress : ${tcp_egress_state} (${tcp_egress_health})
+Fixed TCP Egress  : $(
+  case "${tcp_egress_health}" in
+    ok) echo "ACTIVE" ;;
+    degraded*) echo "DEGRADED" ;;
+    unhealthy*) echo "UNHEALTHY" ;;
+    inactive) echo "INACTIVE" ;;
+    skipped) echo "SKIPPED" ;;
+    *) echo "${tcp_egress_state}" ;;
+  esac
+)
+TCP relays enabled : ${tcp_enabled_count:-0}
+TCP relays bound   : ${tcp_bound_count:-0}
+TCP egress policy  : ${tcp_egress_policy:-unknown}
 drlink-frontend : ${frontend_state}
 Lifecycle       : ${lifecycle}
 EOF
