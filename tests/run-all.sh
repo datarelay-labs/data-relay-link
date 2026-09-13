@@ -16,9 +16,9 @@ git ls-files -o --exclude-standard '*.sh' | xargs -r bash -n
 bash -n tools/frp-server-status tools/frp-project-update tools/frp-update tools/frp-upstream tools/frp-client tools/frpctl
 
 echo "=== Python compile ==="
-python3 -m py_compile server/frp-port-allocator.py server/frp-access-plugin.py server/frp-egress-gateway.py server/migrate_token.py scripts/build-bundles.py lib/frp_mgmt_auth.py lib/frp_pki.py lib/frp_frontend.py lib/frp_doctor.py lib/frp_install_txn.py lib/frp_client_registry.py lib/frp_audit.py lib/frp_project_files.py lib/frp_control_locks.py lib/frp_server_config.py lib/frp_zero_touch.py lib/frp_ctl_grammar.py lib/frp_cli_catalog.py lib/frp_ctl_repl.py lib/frp_enrollment_lifecycle.py lib/frp_access_control.py lib/frp_egress_control.py lib/frp_infrastructure_ports.py lib/frp_health_check.py lib/frp_service_profiles.py lib/frp_machine_id.py lib/frp_bounded_server.py lib/frp_public_suffix.py lib/frp_policy_fingerprint.py
+python3 -m py_compile server/frp-port-allocator.py server/frp-access-plugin.py server/frp-egress-gateway.py server/migrate_token.py scripts/build-bundles.py lib/frp_mgmt_auth.py lib/frp_pki.py lib/frp_frontend.py lib/frp_doctor.py lib/frp_install_txn.py lib/frp_client_registry.py lib/frp_audit.py lib/frp_project_files.py lib/frp_control_locks.py lib/frp_server_config.py lib/frp_zero_touch.py lib/frp_ctl_grammar.py lib/frp_cli_catalog.py lib/frp_ctl_repl.py lib/frp_enrollment_lifecycle.py lib/frp_access_control.py lib/frp_egress_control.py lib/frp_infrastructure_ports.py lib/frp_health_check.py lib/frp_service_profiles.py lib/frp_machine_id.py lib/frp_bounded_server.py lib/frp_public_suffix.py lib/frp_policy_fingerprint.py lib/frp_state_paths.py
 python3 -m py_compile tools/frp-create-client tools/frp-enrollments tools/frp-enrollment-revoke tools/frp-enrollment-purge tools/frp-enroll-bulk tools/frp-clients tools/frp-client-info tools/frp-client-set tools/frp-release-client tools/frp-release-service tools/frp-access tools/frp-profile tools/frp-revoke-client tools/frp-set-client-installer-url tools/frp-server-set tools/frp-backup tools/frp-restore tools/frp-egress
-python3 -m py_compile tests/test-allocator.py tests/test-enrollment-security.py tests/test-mgmt-identity.py tests/test-pki-https.py tests/test-bootstrap-ticket.py tests/test-frontend-proxy.py tests/test-client-registry.py tests/test-access-control.py tests/test-egress-control.py tests/test-service-profiles.py tests/test-destructive-selector-toctou.py tests/test-egress-create-safe-default.py tests/test-policy-fingerprint.py tests/test-strict-cli-parsing.py tests/test-cli-backend-reverse-parity.py tests/test-enabled-egress-mutation-confirm.py tests/test-lifecycle-contract-matrix.py tests/test-allocator-tls-slow-handshake.py
+python3 -m py_compile tests/test-allocator.py tests/test-enrollment-security.py tests/test-mgmt-identity.py tests/test-pki-https.py tests/test-bootstrap-ticket.py tests/test-frontend-proxy.py tests/test-client-registry.py tests/test-access-control.py tests/test-egress-control.py tests/test-service-profiles.py tests/test-destructive-selector-toctou.py tests/test-egress-create-safe-default.py tests/test-policy-fingerprint.py tests/test-strict-cli-parsing.py tests/test-cli-backend-reverse-parity.py tests/test-enabled-egress-mutation-confirm.py tests/test-lifecycle-contract-matrix.py tests/test-allocator-tls-slow-handshake.py tests/test-http-relay-half-close-idle.py tests/test-http-connection-critical-headers.py tests/test-nonce-capacity-replay.py tests/test-restore-corrupt-current.py tests/test-egress-confirm-toctou.py tests/test-state-paths-backup-restore.py tests/test-enrollment-ttl-help.py tests/test-frpctl-completion-inventory.py tests/test-cli-flag-metadata.py tests/test-operator-workflow-regressions.py
 
 echo "=== tests ==="
 ./tests/test-server-migration.sh
@@ -76,6 +76,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-install-lifecycle.sh
 ./tests/test-uninstall-owned-frpc.sh
 ./tests/test-frpctl.sh
+./tests/test-frpctl-suggest-portable.sh
 ./tests/test-frpctl-completion.sh
 ./tests/test-frpctl-pty-completion.sh
 ./tests/test-frp-compat-gate.sh
@@ -94,7 +95,17 @@ python3 tests/test-egress-conn-log-rotation.py
 python3 tests/test-egress-shared-parent-permissions.py
 python3 tests/test-egress-create-safe-default.py
 python3 tests/test-enabled-egress-mutation-confirm.py
+python3 tests/test-operator-workflow-regressions.py
+python3 tests/test-egress-confirm-toctou.py
 python3 tests/test-destructive-selector-toctou.py
+python3 tests/test-http-relay-half-close-idle.py
+python3 tests/test-http-connection-critical-headers.py
+python3 tests/test-nonce-capacity-replay.py
+python3 tests/test-restore-corrupt-current.py
+python3 tests/test-state-paths-backup-restore.py
+python3 tests/test-enrollment-ttl-help.py
+python3 tests/test-frpctl-completion-inventory.py
+python3 tests/test-cli-flag-metadata.py
 python3 tests/test-lifecycle-contract-matrix.py
 python3 tests/test-allocator-tls-slow-handshake.py
 python3 tests/test-policy-fingerprint.py
