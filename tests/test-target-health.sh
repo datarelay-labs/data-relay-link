@@ -151,10 +151,10 @@ pass "write_client_state preserves health_check"
 export FRP_CLIENT_TEST_ROOT="$WORKDIR/client-root"
 mkdir -p \
   "$FRP_CLIENT_TEST_ROOT/etc/frp" \
-  "$FRP_CLIENT_TEST_ROOT/var/lib/frp-auto-deploy" \
-  "$FRP_CLIENT_TEST_ROOT/usr/local/lib/frp-auto-deploy"
-cp "$ROOT/lib/frp_health_check.py" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp-client-common.sh" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/frp-auto-deploy/"
+  "$FRP_CLIENT_TEST_ROOT/var/lib/drlink" \
+  "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink"
+cp "$ROOT/lib/frp_health_check.py" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp-client-common.sh" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink/"
 python3 - "$STATE" "$FRP_CLIENT_TEST_ROOT/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -168,7 +168,7 @@ PY
 
 export FRP_SKIP_SYSTEMD=1
 export FRP_SKIP_CONNECTIVITY_CHECK=1
-DRAFT="$FRP_CLIENT_TEST_ROOT/var/lib/frp-auto-deploy/client-draft.json"
+DRAFT="$FRP_CLIENT_TEST_ROOT/var/lib/drlink/client-draft.json"
 CLIENT="$ROOT/tools/frp-client"
 "$CLIENT" set-service plain health-type tcp >/dev/null
 "$CLIENT" set-service plain health-timeout 7 >/dev/null

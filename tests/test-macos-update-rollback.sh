@@ -27,6 +27,7 @@ printf 'mutated\n' >"$version"
 
 frp_client_upgrade_restore_tools "$backup"
 frp_client_upgrade_verify_restored "$backup"
-grep -q '^original:' "$(frp_client_path /usr/local/bin/frpctl)"
+grep -q '^original:' "$(frp_client_path /usr/local/bin/drlink)"
+grep -q '^original:' "$(frp_client_path /usr/local/lib/drlink/frpctl)"
 grep -q '^PROJECT_VERSION=2.2.1' "$version"
 echo "MACOS_UPDATE_ROLLBACK_TEST=PASS"

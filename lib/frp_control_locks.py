@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Shared control-state locks for backup, restore, and registry writers.
 
-Lock order (mandatory whenever an operation takes both):
+Lock order (mandatory whenever an operation takes multiple locks):
 
   1. server-lifecycle.lock
-  2. registry.lock
+  2. control-state.lock
+  3. registry.lock
+
+Per-resource locks (access-control.json.lock, egress-control.json.lock,
+service-profiles.json.lock, etc.) are taken ONLY after control-state.lock
+and must never be acquired in reverse order.
 
 Allocator HTTP writers take only registry.lock (plus an in-process thread
-lock). They must never acquire the lifecycle lock after registry.lock.
+lock). They must never acquire the lifecycle or control-state locks after
+registry.lock.
 
 Inside an allocator registry.lock transaction the order is:
 
@@ -19,18 +25,21 @@ Inside an allocator registry.lock transaction the order is:
 Never reacquire registry.lock through a second fd while it is already held —
 Linux flock is not recursive across independent descriptors.
 
-Backup and restore take lifecycle then registry, with a timeout, so they
-cannot block network operations indefinitely if a lifecycle holder is stuck.
+Backup and restore take lifecycle then control-state then registry, with a
+timeout, so they cannot block network operations indefinitely if a lifecycle
+holder is stuck.
 """
 from __future__ import annotations
 
 import fcntl
 import os
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
-LIFECYCLE_LOCK_REL = "var/lib/frp-auto-deploy/server-lifecycle.lock"
+LIFECYCLE_LOCK_REL = "var/lib/drlink/server-lifecycle.lock"
+CONTROL_STATE_LOCK_REL = "var/lib/drlink/control-state.lock"
 DEFAULT_TIMEOUT_SEC = 30
 
 
@@ -83,13 +92,87 @@ def lifecycle_lock_path(root):
     return Path(root) / LIFECYCLE_LOCK_REL
 
 
-def registry_lock_path(root, registry_rel="var/lib/frp-auto-deploy/registry.json"):
+def control_state_lock_path(root):
+    return Path(root) / CONTROL_STATE_LOCK_REL
+
+
+def registry_lock_path(root, registry_rel="var/lib/drlink/registry.json"):
     return (Path(root) / registry_rel).resolve().parent / "registry.lock"
 
 
+def control_root_from_env():
+    """Deploy root for lock files: FRP_DEPLOY_TEST_ROOT or live '/'."""
+    return Path(os.environ.get("FRP_DEPLOY_TEST_ROOT") or "/")
+
+
+_TLS = threading.local()
+
+
+def _held_control_state():
+    held = getattr(_TLS, "control_state", None)
+    if held is None:
+        _TLS.control_state = {}
+        held = _TLS.control_state
+    return held
+
+
+def _control_state_key(root):
+    return str(control_state_lock_path(root).resolve())
+
+
 @contextmanager
-def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/lib/frp-auto-deploy/registry.json"):
-    """Acquire lifecycle then registry. Same order as documented above."""
+def acquire_control_state_lock(root, timeout=DEFAULT_TIMEOUT_SEC):
+    """Acquire the coarse control-state lock for cross-authority mutations.
+
+    Linux flock is not recursive across independent descriptors. Nested
+    in-process callers in the same thread reuse the held lock instead of
+    opening a second fd (which would deadlock).
+    """
+    with _acquire_control_state_lock_path(control_state_lock_path(root), timeout=timeout) as lock:
+        yield lock
+
+
+@contextmanager
+def _acquire_control_state_lock_path(lock_path, timeout=DEFAULT_TIMEOUT_SEC):
+    key = str(Path(lock_path).resolve())
+    held = _held_control_state()
+    if key in held:
+        yield held[key]
+        return
+    with ExclusiveFileLock(lock_path, timeout=timeout) as lock:
+        held[key] = lock
+        try:
+            yield lock
+        finally:
+            held.pop(key, None)
+
+
+@contextmanager
+def mutation_lock(root=None, timeout=None, state_path=None):
+    """Control-state lock for authoritative Access/Egress/Profile writers.
+
+    When state_path is provided, the lock file is the sibling
+    control-state.lock next to that authoritative JSON (the same inode
+    backup/restore use for /var/lib/drlink/control-state.lock).
+    """
+    if timeout is None:
+        timeout = float(os.environ.get("FRP_CONTROL_STATE_LOCK_TIMEOUT") or DEFAULT_TIMEOUT_SEC)
+    else:
+        timeout = float(timeout)
+    if state_path is not None:
+        lock_path = Path(state_path).resolve().parent / "control-state.lock"
+        with _acquire_control_state_lock_path(lock_path, timeout=timeout) as lock:
+            yield lock
+        return
+    root = Path(root) if root is not None else control_root_from_env()
+    with acquire_control_state_lock(root, timeout=timeout) as lock:
+        yield lock
+
+
+@contextmanager
+def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/lib/drlink/registry.json"):
+    """Acquire lifecycle, control-state, then registry. Same order as documented."""
     with ExclusiveFileLock(lifecycle_lock_path(root), timeout=timeout) as life:
-        with ExclusiveFileLock(registry_lock_path(root, registry_rel), timeout=timeout) as reg:
-            yield (life, reg)
+        with acquire_control_state_lock(root, timeout=timeout) as ctrl:
+            with ExclusiveFileLock(registry_lock_path(root, registry_rel), timeout=timeout) as reg:
+                yield (life, ctrl, reg)

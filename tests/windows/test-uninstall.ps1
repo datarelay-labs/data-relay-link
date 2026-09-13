@@ -23,7 +23,7 @@ try {
 
     $root = Get-FrpWindowsRoot
     Assert-FrpTrue (Test-Path -LiteralPath $root) 'root exists'
-    $env:FRP_AUTOSTART_TASK_NAME = 'FRPAutoDeployClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $env:FRP_AUTOSTART_TASK_NAME = 'DataRelayLinkClient-Test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 
     Install-FrpAutostartTask | Out-Null
     Assert-FrpTrue (Test-FrpAutostartTaskExists) 'autostart present before uninstall'
@@ -47,6 +47,10 @@ try {
     $client = Get-Content -LiteralPath $clientPath -Raw
     Assert-FrpTrue ($client -match 'SERVER RESERVATIONS PRESERVED') 'uninstall message in tool'
     Assert-FrpTrue ($client -match 'leaving product files in place') 'fail-closed uninstall message in tool'
+    Assert-FrpTrue ($client -match 'Server-side public port reservations are preserved') 'canonical reservation wording'
+    Assert-FrpTrue ($client -match 'drlink client release <CLIENT-ID> <SERVICE-ID>') 'service release guidance'
+    Assert-FrpTrue ($client -match 'drlink client release <CLIENT-ID>') 'client release guidance'
+    Assert-FrpTrue ($client -notmatch 'remain until an administrator revokes them') 'no revoke-for-ports wording'
 
     Write-FrpTestPass 'test-uninstall'
 } finally {

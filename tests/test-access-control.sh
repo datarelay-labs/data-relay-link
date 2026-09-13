@@ -16,16 +16,19 @@ export HOME="$WORKDIR/home"
 mkdir -p "$HOME"
 
 mkdir -p \
-  "$TREE/etc/frp-auto-deploy" \
+  "$TREE/etc/drlink" \
   "$TREE/etc/frp" \
-  "$TREE/var/lib/frp-auto-deploy" \
-  "$TREE/var/log/frp-auto-deploy" \
-  "$TREE/usr/local/lib/frp-auto-deploy"
+  "$TREE/var/lib/drlink" \
+  "$TREE/var/log/drlink" \
+  "$TREE/var/log/drlink/access" \
+  "$TREE/usr/local/lib/drlink"
 
-cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_control_locks.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_cli_catalog.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/drlink/"
 
 python3 - <<'PY'
 import importlib.util
@@ -37,13 +40,13 @@ root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 cfg = {
     "public_host": "203.0.113.10",
     "public_ip": "203.0.113.10",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
-    "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
-    "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
+    "registry_file": "/var/lib/drlink/registry.json",
+    "access_control_file": "/var/lib/drlink/access-control.json",
+    "access_conn_log_file": "/var/log/drlink/access/connections.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
 }
-(root / "etc/frp-auto-deploy/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+(root / "etc/drlink/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 registry = {
     "schema_version": 2,
     "clients": {
@@ -55,18 +58,18 @@ registry = {
     },
     "reserved": [6001],
 }
-(root / "var/lib/frp-auto-deploy/registry.json").write_text(
+(root / "var/lib/drlink/registry.json").write_text(
     json.dumps(registry, indent=2) + "\n", encoding="utf-8"
 )
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
 acl.save_access_state(
     acl.empty_access_state(),
-    path=root / "var/lib/frp-auto-deploy/access-control.json",
+    path=root / "var/lib/drlink/access-control.json",
 )
 PY
 
@@ -100,7 +103,19 @@ grep -q '(none)' "$WORKDIR/list.out" || fail "empty access list"
 grep -qi 'ALLOW' "$WORKDIR/test-allow.out" || fail "test allow"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-deny.out"
 grep -qi 'DENY' "$WORKDIR/test-deny.out" || fail "test deny"
-"$CTL" access public demo ssh >"$WORKDIR/public.out"
+"$CTL" access public demo ssh --yes >"$WORKDIR/public.out"
+grep -qi 'Exposure' "$WORKDIR/public.out" || fail "public exposure banner"
+grep -qi 'Existing established connections' "$WORKDIR/public.out" || fail "session semantics on public"
+
+# ALLOWLIST → PUBLIC requires --yes in non-interactive mode.
+"$CTL" access assign demo ssh Office >/dev/null
+if "$CTL" access public demo ssh >"$WORKDIR/public-no.out" 2>"$WORKDIR/public-no.err"; then
+  fail "ALLOWLIST→PUBLIC without --yes should fail non-interactive"
+fi
+grep -qi '\-\-yes\|confirmation' "$WORKDIR/public-no.err" "$WORKDIR/public-no.out" \
+  || fail "ALLOWLIST→PUBLIC must mention --yes/confirmation"
+"$CTL" access public demo ssh --yes >"$WORKDIR/public-yes.out"
+grep -qi 'publicly reachable' "$WORKDIR/public-yes.out" || fail "broadening warning shown with --yes"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-public.out"
 grep -qi 'ALLOW' "$WORKDIR/test-public.out" || fail "public allow"
 pass "frpctl access list/create/add-source/assign/test/public"
@@ -133,11 +148,11 @@ from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 state = acl.load_access_state(path=path)
 lid, _ = acl.resolve_access_list(state, "Office")
 past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -189,11 +204,11 @@ from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 state = acl.load_access_state(path=path)
 lid, _ = acl.resolve_access_list(state, "Office")
 past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -212,7 +227,7 @@ if grep -qi '203.0.113.77' "$WORKDIR/exp-only-list.out"; then
 fi
 pass "expired-only cleanup stays ALLOWLIST"
 
-"$CTL" access public demo ssh >/dev/null
+"$CTL" access public demo ssh --yes >/dev/null
 
 export FRP_SERVER_SOURCED=1
 # shellcheck disable=SC1091
@@ -247,7 +262,7 @@ assert 'ops = ["NewUserConn"]' in text
 assert "access_control_file" in text
 assert "access_conn_log_file" in text
 assert "access_plugin_addr" in text
-assert "frp-access-plugin" in text
+assert "drlink-access" in text
 print("ok")
 PY
 pass "install-server.sh embeds access plugin wiring"

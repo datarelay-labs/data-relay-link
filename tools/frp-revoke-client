@@ -20,10 +20,10 @@ def load_creg():
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy/frp_client_registry.py')
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink/frp_client_registry.py')
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_client_registry', str(path))
@@ -117,14 +117,16 @@ parser.add_argument('query', help='label, unique hostname, or machine-id prefix'
 parser.add_argument('--force', action='store_true', help='skip interactive confirmation')
 args = parser.parse_args()
 
-cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads(Path(ROOT + '/etc/drlink/config.json').read_text())
 path = Path(cfg['registry_file'])
 if ROOT and not str(path).startswith(ROOT):
     path = Path(ROOT + str(path))
 state = json.loads(path.read_text())
 require_v2(state)
 
-mid, client = CREG.resolve_client_or_exit(state, args.query)
+# Capture immutable CLIENT ID before confirmation; never re-resolve label/hostname.
+confirmed_mid, client = CREG.resolve_client_or_exit(state, args.query)
+mid = confirmed_mid
 
 status = mgmt_status(client)
 fingerprint = str(client.get('mgmt_fingerprint') or '')
@@ -150,7 +152,7 @@ else:
     print('  (none)')
 print()
 print('The client will need a new Enrollment Code to establish trust again.')
-print('This does not release public ports. Use frp-release-service for that.')
+print('This does not release public ports. Use: drlink client release <CLIENT-ID> [SERVICE-ID]')
 
 if not args.force:
     answer = input('Type REVOKE to continue: ')
@@ -161,7 +163,14 @@ lock_fd = lock_registry(path)
 try:
     state = json.loads(path.read_text())
     require_v2(state)
-    mid, client = CREG.resolve_client_or_exit(state, args.query)
+    clients = state.get('clients') or {}
+    if confirmed_mid not in clients or not isinstance(clients.get(confirmed_mid), dict):
+        raise SystemExit(
+            'ERROR: Target changed while waiting for confirmation.\n'
+            'Re-run the command.'
+        )
+    mid = confirmed_mid
+    client = clients[mid]
     status = mgmt_status(client)
     if status == 'revoked':
         print('Management identity is already revoked.')
@@ -175,12 +184,12 @@ try:
 finally:
     unlock_registry(lock_fd)
 print('Revoked.')
-print('Create a new Enrollment Code with sudo frp-create-client, then re-enroll the client.')
+print('Create a new Enrollment Code with sudo drlink enrollment create, then re-enroll the client.')
 try:
     here = Path(__file__).resolve()
     for path in (
         here.parent.parent / 'lib' / 'frp_audit.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+        Path('/usr/local/lib/drlink/frp_audit.py'),
     ):
         if path.is_file():
             spec = importlib.util.spec_from_file_location('frp_audit', str(path))

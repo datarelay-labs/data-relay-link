@@ -16,7 +16,7 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORKDIR/status"
-mkdir -p "$TREE/usr/local/bin" "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy"
+mkdir -p "$TREE/usr/local/bin" "$TREE/etc/drlink" "$TREE/var/lib/drlink"
 
 cat >"$TREE/usr/local/bin/frps" <<'EOF'
 #!/usr/bin/env bash
@@ -25,12 +25,12 @@ exit 0
 EOF
 chmod 0755 "$TREE/usr/local/bin/frps"
 
-cat >"$TREE/etc/frp-auto-deploy/version" <<'EOF'
+cat >"$TREE/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.0.0
 FRP_VERSION=0.71.0
 EOF
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json,sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
@@ -43,7 +43,7 @@ Path(sys.argv[1]).write_text(json.dumps({
 }, indent=2, sort_keys=True)+"\n")
 PY
 
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
@@ -136,7 +136,7 @@ grep -q "Update status   : up to date" "$WORKDIR/status-current.out" || fail "up
 pass "status up to date"
 
 # Incompatible v1 registry: status still exits 0, --check fails.
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({

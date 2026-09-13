@@ -7,20 +7,20 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 ## Existing server upgrade
 
 1. Record registry, labels, notes, tags, ports, CA fingerprint, token digest, installer URL.
-2. `sudo frpctl project-update`
+2. `sudo drlink update project`
 3. Confirm registry/labels/notes/tags/ports/CA/token/mode retained.
-4. `sudo frpctl doctor`
+4. `sudo drlink doctor`
 
 ## Existing client update
 
 1. Record identity files, public ports, SSH reachability.
-2. `sudo frpctl update` on the client
+2. `sudo drlink update` on the client
 3. Identity, ports, SSH still work. No re-enrollment.
 
 ## New client
 
-1. `frpctl enroll` / one-line installer with label + SSH user
-2. List client, connect over published SSH
+1. `sudo drlink zero-touch create` / `sudo drlink enrollment create` / one-line installer with label + SSH user
+2. List client (`sudo drlink client list`), connect over published SSH
 
 ## Server metadata
 
@@ -41,14 +41,14 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 ## Zero-service client
 
 1. Enroll with no published service
-2. Visible in `frpctl clients` with 0 services
+2. Visible in `sudo drlink client list` with 0 services
 3. Add SSH later → port allocated → SSH succeeds
 
 ## Backup / Restore
 
-1. `sudo frpctl backup`
+1. `sudo drlink backup create`
 2. Record state, change metadata
-3. Restore from that backup
+3. Restore from that backup (`sudo drlink backup restore <path>`)
 4. Exact expected state; `doctor` PASS
 5. Use a controlled restore; do not wipe the live host as the only copy
 
@@ -56,8 +56,8 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 
 1. Client project update
 2. Server project update
-3. `frpctl frp-update --check` / pinned FRP only
-4. `frpctl upstream` informational, no install
+3. `sudo drlink update engine --check` / pinned FRP only
+4. `sudo drlink server upstream` informational, no install
 
 ## Reboot recovery
 

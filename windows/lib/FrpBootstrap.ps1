@@ -297,12 +297,16 @@ function Complete-FrpZeroTouchPostEnroll {
         Initialize-FrpDirectories
         $srcClient = Join-Path $script:FrpWindowsSrcRoot 'tools/FrpClient.ps1'
         $srcCmd = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-client.cmd'
+        $srcDrlink = Join-Path $script:FrpWindowsSrcRoot 'tools/drlink.cmd'
         $srcAuto = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-autostart.cmd'
         if (Test-Path -LiteralPath $srcClient) {
             Copy-Item -LiteralPath $srcClient -Destination (Join-Path (Get-FrpToolsDir) 'FrpClient.ps1') -Force
         }
         if (Test-Path -LiteralPath $srcCmd) {
             Copy-Item -LiteralPath $srcCmd -Destination (Join-Path (Get-FrpToolsDir) 'frp-client.cmd') -Force
+        }
+        if (Test-Path -LiteralPath $srcDrlink) {
+            Copy-Item -LiteralPath $srcDrlink -Destination (Join-Path (Get-FrpToolsDir) 'drlink.cmd') -Force
         }
         if (Test-Path -LiteralPath $srcAuto) {
             Copy-Item -LiteralPath $srcAuto -Destination (Join-Path (Get-FrpToolsDir) 'frp-autostart.cmd') -Force
@@ -320,7 +324,7 @@ function Complete-FrpZeroTouchPostEnroll {
         Write-Host 'Management-only enrollment: no public services; skipping frpc start.'
         Set-FrpInstallStatus -Status 'management_only'
         Write-Host ''
-        Write-Host 'Enrollment complete (management-only). Use frp-client info for details.'
+        Write-Host 'Enrollment complete (management-only). Use drlink client info for details.'
         Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
         return 0
     }
@@ -354,7 +358,7 @@ function Complete-FrpZeroTouchPostEnroll {
 
     Set-FrpInstallStatus -Status 'installed'
     Write-Host ''
-    Write-Host 'Enrollment complete. Use frp-client info for connection details.'
+    Write-Host 'Enrollment complete. Use drlink client info for connection details.'
     Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
     return 0
 }
@@ -511,7 +515,7 @@ function Invoke-FrpClientApplyDraft {
     .SYNOPSIS
       Apply pending draft service changes: identity-auth request to the
       allocator, merge allocated ports, regenerate frpc.toml + client-state.json,
-      restart frpc if it was running. Existing FRP token is reused (identity
+      restart drlink-client if it was running. Existing FRP token is reused (identity
       auth never rotates it). On local activation failure: restore local files
       and compensate the server reservation (Unix-equivalent transaction).
     #>
@@ -545,12 +549,6 @@ function Invoke-FrpClientApplyDraftLocked {
     }
 
     $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
-    $enabledCount = 0
-    foreach ($sid in $draftMap.Keys) { if ($draftMap[$sid]['enabled'] -ne $false) { $enabledCount++ } }
-    if ($enabledCount -le 0) {
-        Write-Host 'ERROR: at least one enabled service is required.'
-        return 1
-    }
 
     if ($changeClass -eq 'local') {
         return (Invoke-FrpApplyLocalMetadata -Current $current -DraftMap $draftMap)
@@ -694,7 +692,7 @@ function Invoke-FrpClientApplyDraftLocked {
 
         Save-FrpClientState -AllocatorUrl $allocatorUrl -FrpServer $result.FrpServer -FrpServerPort $result.FrpServerPort `
             -Hostname $hostnameValue -MachineId $machineId -HostId $hostId -Services $draftMap -Transport $transport `
-            -InstallStatus 'installed' @saveHostname | Out-Null
+            -InstallStatus $(if ($enabledAny) { 'installed' } else { 'management_only' }) @saveHostname | Out-Null
 
         if ($enabledAny) {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
@@ -709,6 +707,8 @@ function Invoke-FrpClientApplyDraftLocked {
             }
         } else {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
+            # Zero enabled services: management-only — no reboot autostart.
+            Uninstall-FrpAutostartTask | Out-Null
         }
     } catch {
         Write-Host ("ERROR: failed to activate new configuration: {0}" -f $_.Exception.Message)
@@ -795,7 +795,7 @@ function Invoke-FrpApplyReconcileRuntime {
         Write-Host 'ERROR: simulated service restart failure'
         Write-Host 'FAILURE_CLASS=FRPC_RESTART_FAILED'
         Write-Host 'RECOVERY_REQUIRED=YES'
-        throw 'ERROR: failed to restart frpc after server reconciliation.'
+        throw 'ERROR: failed to restart drlink-client after server reconciliation.'
     }
     $state = Read-FrpClientState
     $map = ConvertTo-FrpServiceMap -Services $state.services
@@ -806,6 +806,7 @@ function Invoke-FrpApplyReconcileRuntime {
     if (-not $enabledAny) {
         Set-FrpInstallStatus -Status 'management_only'
         Stop-FrpClient | Out-Null
+        Uninstall-FrpAutostartTask | Out-Null
         return
     }
     $wasRunning = (Get-FrpClientStatus).Running
@@ -1121,13 +1122,13 @@ function Invoke-FrpZeroTouch {
             }
             if (Test-FrpIsInstallComplete) {
                 Write-Host 'ERROR: this machine is already enrolled.'
-                Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: frp-client start'
+                Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: start the Data Relay Link client service'
                 Write-Host 'To replace this install, uninstall locally first (server reservations are preserved).'
                 return 2
             }
             # Legacy enrolled installs without install_status: treat as complete / refuse re-ticket
             Write-Host 'ERROR: this machine is already enrolled.'
-            Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: frp-client start'
+            Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: start the Data Relay Link client service'
             Write-Host 'To replace this install, uninstall locally first (server reservations are preserved).'
             return 2
         }

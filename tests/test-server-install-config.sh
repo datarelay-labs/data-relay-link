@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 export FRP_SERVER_TEST_ROOT="$WORKDIR/isolated-root"
-mkdir -p "$FRP_SERVER_TEST_ROOT/etc/frp-auto-deploy"
+mkdir -p "$FRP_SERVER_TEST_ROOT/etc/drlink"
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
@@ -217,8 +217,8 @@ legacy_owner='RickLee-kr'
 legacy_repo='frp-auto-deploy'
 LEGACY_INSTALLER_URL="https://raw.githubusercontent.com/${legacy_owner}/${legacy_repo}/main/dist/bootstrap-client.sh"
 # Stable releases must pin an immutable tag/commit URL, never mutable main.
-CANONICAL_INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v${PROJECT_VERSION}/dist/bootstrap-client.sh"
-OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh'
+CANONICAL_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.sh"
+OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh'
 
 # Known obsolete project installer URL is migrated on a safe installer rerun.
 EXISTING_LEGACY="$WORKDIR/legacy-installer-url.json"
@@ -237,13 +237,41 @@ Path(sys.argv[1]).write_text(json.dumps({
 PY
 reset_env
 # Pin stable so this assertion is independent of any host-persisted
-# /etc/frp-auto-deploy/version RELEASE_CHANNEL (dev vs stable).
+# /etc/drlink/version RELEASE_CHANNEL (dev vs stable).
 export FRP_RELEASE_CHANNEL=stable
 export FRP_SERVER_CONFIG="$EXISTING_LEGACY"
 load_existing_server_config
 resolve_server_settings
 [[ "$CLIENT_INSTALLER_URL" == "$CANONICAL_INSTALLER_URL" ]] || fail "legacy installer URL not migrated"
 pass "legacy project installer URL migrated"
+
+# Former xdr-labs product repository installer URLs migrate to the canonical repo.
+FORMER_INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/025ba51af6c4c4628e61d870ccdca4f55a8414e0/dist/bootstrap-client.sh"
+FORMER_WINDOWS_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/025ba51af6c4c4628e61d870ccdca4f55a8414e0/dist/bootstrap-client.ps1"
+EXISTING_FORMER="$WORKDIR/former-installer-url.json"
+python3 - "$EXISTING_FORMER" "$FORMER_INSTALLER_URL" "$FORMER_WINDOWS_URL" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  "public_ip": "203.0.113.10",
+  "control_port": 443,
+  "port_start": 6000,
+  "port_end": 6098,
+  "listen_port": 6099,
+  "allocator_public_url": "https://203.0.113.10:6099/enroll",
+  "client_installer_url": sys.argv[2],
+  "windows_client_installer_url": sys.argv[3],
+}, indent=2, sort_keys=True) + "\n")
+PY
+reset_env
+export FRP_RELEASE_CHANNEL=stable
+export FRP_SERVER_CONFIG="$EXISTING_FORMER"
+load_existing_server_config
+resolve_server_settings
+[[ "$CLIENT_INSTALLER_URL" == "$CANONICAL_INSTALLER_URL" ]] || fail "former xdr-labs installer URL not migrated"
+[[ "$WINDOWS_CLIENT_INSTALLER_URL" == "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.ps1" ]] \
+  || fail "former xdr-labs windows installer URL not migrated"
+pass "former xdr-labs installer URL migrated"
 
 # Official mutable-main installer URL is rewritten to the immutable stable tag.
 EXISTING_MAIN="$WORKDIR/main-installer-url.json"

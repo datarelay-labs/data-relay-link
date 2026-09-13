@@ -591,7 +591,7 @@ function Save-FrpPendingEnroll {
       response needed to finish the local commit without another network
       round trip.
 
-      Stored under the Windows state directory (ProgramData\frp-auto-deploy\
+      Stored under the Windows state directory (ProgramData\drlink\
       state\enroll-pending.json by default), restricted ACL (SYSTEM /
       Administrators only), atomic replace (temp file + Move-Item). The
       enrollment secret is DPAPI-protected with LocalMachine scope on a real

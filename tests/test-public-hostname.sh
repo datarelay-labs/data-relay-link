@@ -94,9 +94,9 @@ pass 'frpctl grammar'
 
 # Runtime set/unset with lifecycle lock + no tunnel mutation fields
 TREE="$TMP/root"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy"
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink"
 CA_BEFORE='deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
-cat >"$TREE/etc/frp-auto-deploy/config.json" <<EOF
+cat >"$TREE/etc/drlink/config.json" <<EOF
 {
   "public_host": "203.0.113.10",
   "public_ip": "203.0.113.10",
@@ -110,13 +110,13 @@ cat >"$TREE/etc/frp-auto-deploy/config.json" <<EOF
   "allocator_public_url": "https://203.0.113.10:6099/enroll",
   "deployment_mode": "direct",
   "frp_transport": "tcp",
-  "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+  "registry_file": "/var/lib/drlink/registry.json",
   "token_file": "/etc/frp/server_token",
-  "tls_ca_cert": "/etc/frp-auto-deploy/pki/ca.crt",
+  "tls_ca_cert": "/etc/drlink/pki/ca.crt",
   "client_installer_url": ""
 }
 EOF
-cat >"$TREE/var/lib/frp-auto-deploy/registry.json" <<'EOF'
+cat >"$TREE/var/lib/drlink/registry.json" <<'EOF'
 {
   "schema_version": 2,
   "clients": {
@@ -139,13 +139,13 @@ cat >"$TREE/var/lib/frp-auto-deploy/registry.json" <<'EOF'
   "reserved": [6000]
 }
 EOF
-chmod 600 "$TREE/etc/frp-auto-deploy/config.json" "$TREE/var/lib/frp-auto-deploy/registry.json"
+chmod 600 "$TREE/etc/drlink/config.json" "$TREE/var/lib/drlink/registry.json"
 
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 # Let audit_path() join FRP_DEPLOY_TEST_ROOT + /var/log/... (do not set
 # FRP_AUDIT_LOG to an already-rooted path; that double-prefixes under test).
 unset FRP_AUDIT_LOG || true
-mkdir -p "$TREE/var/log/frp-auto-deploy"
+mkdir -p "$TREE/var/log/drlink"
 
 OUT="$("$ROOT/tools/frp-server-set" hostname frp.example.com)"
 echo "$OUT" | grep -q 'Type  : A' || fail 'missing DNS A guidance'
@@ -156,12 +156,12 @@ echo "$OUT" | grep -q 'FRP control endpoint is unchanged' || fail 'missing contr
 python3 - "$TREE" <<'PY' || fail 'config after set'
 import json, sys
 from pathlib import Path
-cfg = json.loads(Path(sys.argv[1], 'etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads(Path(sys.argv[1], 'etc/drlink/config.json').read_text())
 assert cfg['public_ip'] == '203.0.113.10'
 assert cfg['public_host'] == '203.0.113.10'
 assert cfg['public_hostname'] == 'frp.example.com'
 assert cfg['allocator_public_url'] == 'https://203.0.113.10:6099/enroll'
-reg = json.loads(Path(sys.argv[1], 'var/lib/frp-auto-deploy/registry.json').read_text())
+reg = json.loads(Path(sys.argv[1], 'var/lib/drlink/registry.json').read_text())
 svc = reg['clients']['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']['services']['ssh']
 assert svc['remote_port'] == 6000
 print('set ok')
@@ -215,7 +215,7 @@ code = (root / 'server' / 'frp-port-allocator.py').read_text(encoding='utf-8')
 # Extract only the helper functions we need by importing frp_server_config style copies.
 sys.path.insert(0, str(root / 'lib'))
 # Replicate allocator helpers lightly
-cfg = json.loads((tree / 'etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads((tree / 'etc/drlink/config.json').read_text())
 def cfg_public_host(cfg):
     for key in ('public_ip', 'public_host'):
         value = cfg.get(key)
@@ -298,10 +298,10 @@ pass 'access-info preferred/fallback + https guidance'
 python3 - "$TREE" <<'PY' || fail 'config after unset'
 import json, sys
 from pathlib import Path
-cfg = json.loads(Path(sys.argv[1], 'etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads(Path(sys.argv[1], 'etc/drlink/config.json').read_text())
 assert 'public_hostname' not in cfg or not cfg.get('public_hostname')
 assert cfg['public_ip'] == '203.0.113.10'
-reg = json.loads(Path(sys.argv[1], 'var/lib/frp-auto-deploy/registry.json').read_text())
+reg = json.loads(Path(sys.argv[1], 'var/lib/drlink/registry.json').read_text())
 svc = reg['clients']['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']['services']['ssh']
 assert svc['remote_port'] == 6000
 print('unset ok')
@@ -379,12 +379,12 @@ class Paths:
         return path.read_bytes() if path.is_file() else None
 
 # Minimal unit: call server_config_ports + assess via helper path
-cfg = json.loads((tree / 'etc/frp-auto-deploy/config.json').read_text())
+cfg = json.loads((tree / 'etc/drlink/config.json').read_text())
 ports = doc.server_config_ports(cfg)
 assert not ports.get('public_hostname')
 # set hostname that will not resolve
 cfg['public_hostname'] = 'no-such-host.invalid.test'
-(tree / 'etc/frp-auto-deploy/config.json').write_text(json.dumps(cfg, indent=2) + '\n')
+(tree / 'etc/drlink/config.json').write_text(json.dumps(cfg, indent=2) + '\n')
 sys.path.insert(0, str(root / 'lib'))
 import frp_server_config as S
 assessment = S.assess_dns('no-such-host.invalid.test', '203.0.113.10')
@@ -395,7 +395,7 @@ PY
 pass 'doctor DNS WARN/PENDING not FAIL'
 
 # Audit events present
-AUDIT_FILE="$TREE/var/log/frp-auto-deploy/audit.jsonl"
+AUDIT_FILE="$TREE/var/log/drlink/audit.jsonl"
 [[ -f "$AUDIT_FILE" ]] || fail "audit log missing at $AUDIT_FILE"
 grep -q 'server.hostname_set' "$AUDIT_FILE" || fail 'missing hostname_set audit event'
 grep -q 'server.hostname_unset' "$AUDIT_FILE" || fail 'missing hostname_unset audit event'

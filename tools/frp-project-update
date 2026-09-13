@@ -5,9 +5,9 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_SCRIPT_DIR}/../lib/frp-common.sh" ]]; then
   # shellcheck source=../lib/frp-common.sh
   . "${_SCRIPT_DIR}/../lib/frp-common.sh"
-elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
+elif [[ -f /usr/local/lib/drlink/frp-common.sh ]]; then
   # shellcheck disable=SC1091
-  . /usr/local/lib/frp-auto-deploy/frp-common.sh
+  . /usr/local/lib/drlink/frp-common.sh
 else
   echo "ERROR: missing lib/frp-common.sh" >&2
   exit 1
@@ -17,7 +17,7 @@ usage() {
   cat <<'EOF'
 Usage: frp-project-update [--check] [--source DIR] [--channel CHANNEL]
 
-Safely refresh frp-auto-deploy server management software without changing the
+Safely refresh Data Relay Link server management software without changing the
 FRP binary or asking installation questions.
 
   --check, --dry-run  verify the candidate and report update availability only

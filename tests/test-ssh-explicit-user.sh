@@ -42,7 +42,11 @@ for bad in ('root\nx', '\x1broot', 'bad user', 'root\x9b'):
         raise AssertionError('invalid ssh_user was accepted: %r' % bad)
 PY
 
-if rg -n "ssh_user.*(or 'root'|else 'root'|get\\('ssh_user'.*root)|or ['\"]ubuntu['\"]|or ['\"]ec2-user['\"]" \
+if ! command -v grep >/dev/null 2>&1; then
+  echo "FAIL: grep is required for this test" >&2
+  exit 1
+fi
+if grep -nE "ssh_user.*(or 'root'|else 'root'|get\('ssh_user'.*root)|or ['\"]ubuntu['\"]|or ['\"]ec2-user['\"]" \
   "$ROOT/lib/frp-client-common.sh" "$ROOT/server/frp-port-allocator.py" \
   "$ROOT/install-client.sh" "$ROOT/tools/frp-client" >/dev/null; then
   echo "FAIL implicit SSH user fallback remains" >&2

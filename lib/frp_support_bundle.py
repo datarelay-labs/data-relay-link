@@ -61,8 +61,8 @@ def _load_doctor():
     here = Path(__file__).resolve().parent
     candidates = (
         here / "frp_doctor.py",
-        Path("/usr/local/lib/frp-auto-deploy/frp_doctor.py"),
-        Path("/Library/Application Support/frp-auto-deploy/lib/frp_doctor.py"),
+        Path("/usr/local/lib/drlink/frp_doctor.py"),
+        Path("/Library/Application Support/drlink/lib/frp_doctor.py"),
     )
     for path in candidates:
         if path.is_file():
@@ -331,6 +331,7 @@ class BundleBuilder:
             self._write_processes()
             self._write_disk()
             self._write_access_control()
+            self._write_egress_control()
             self._write_target_health_optional()
             self._write_manifest()
             return self.stage
@@ -340,7 +341,7 @@ class BundleBuilder:
             raise
 
     def _write_meta(self, role_info: dict) -> None:
-        identity = read_identity(self.path("/etc/frp-auto-deploy/version"))
+        identity = read_identity(self.path("/etc/drlink/version"))
         payload = {
             "format": FORMAT,
             "schema_version": SCHEMA_VERSION,
@@ -370,7 +371,7 @@ class BundleBuilder:
         self.add_section("meta")
 
     def _write_versions(self) -> None:
-        identity = read_identity(self.path("/etc/frp-auto-deploy/version"))
+        identity = read_identity(self.path("/etc/drlink/version"))
         lines = [
             "PROJECT_VERSION=%s" % identity.get("project_version", "unknown"),
             "FRP_VERSION=%s" % identity.get("frp_version", "unknown"),
@@ -418,16 +419,17 @@ class BundleBuilder:
     def _write_service_status(self) -> None:
         lines: List[str] = []
         units = [
-            "frps",
-            "frp-port-allocator",
-            "frp-access-plugin",
-            "frp-frontend",
-            "frpc",
+            "drlink-server",
+            "drlink-allocator",
+            "drlink-access",
+            "drlink-egress",
+            "drlink-frontend",
+            "drlink-client",
         ]
         if shutil.which("systemctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
             for unit in units:
                 unit_path = self.path("/etc/systemd/system/%s.service" % unit)
-                if not unit_path.is_file() and unit not in ("frps", "frpc"):
+                if not unit_path.is_file():
                     continue
                 lines.append("=== systemctl status %s ===" % unit)
                 rc, out, err = run_cmd(
@@ -437,12 +439,16 @@ class BundleBuilder:
                 lines.append(out.strip() or err.strip() or ("exit=%s" % rc))
                 lines.append("")
         elif sys.platform == "darwin" or os.environ.get("FRP_TEST_UNAME_S") == "Darwin":
-            label = os.environ.get("FRP_MACOS_LAUNCHD_LABEL") or "com.datarelay.frp-auto-deploy.frpc"
+            label = os.environ.get("FRP_MACOS_LAUNCHD_LABEL") or "com.datarelay.drlink.frpc"
             lines.append("=== launchctl print system/%s ===" % label)
             rc, out, err = run_cmd(["launchctl", "print", "system/%s" % label], timeout=8)
             lines.append(redact_text(out.strip() or err.strip() or ("exit=%s" % rc)))
         else:
             lines.append("service status probes skipped (no usable systemd/launchd in this environment)")
+            for unit in units:
+                unit_path = self.path("/etc/systemd/system/%s.service" % unit)
+                if unit_path.is_file():
+                    lines.append("=== %s (unit file present; status probe skipped) ===" % unit)
         # Windows stub marker for fixture/portability.
         if sys.platform.startswith("win"):
             lines.append("Windows service status is collected by the Windows client stub when available.")
@@ -518,7 +524,7 @@ class BundleBuilder:
             self.stage_write("doctor.json.error.txt", "doctor json failed: %s\n" % redact_text(exc))
 
     def _write_product_config(self) -> None:
-        data, err = self.safe_read_json("/etc/frp-auto-deploy/config.json")
+        data, err = self.safe_read_json("/etc/drlink/config.json")
         if data is None:
             self.skip("product-config", err or "missing")
             return
@@ -563,7 +569,7 @@ class BundleBuilder:
         }
 
     def _write_registry_summary(self) -> None:
-        data, err = self.safe_read_json("/var/lib/frp-auto-deploy/registry.json")
+        data, err = self.safe_read_json("/var/lib/drlink/registry.json")
         if data is None:
             if self.role in ("server", "dual", "partial_server"):
                 self.skip("registry-summary", err or "missing")
@@ -662,7 +668,7 @@ class BundleBuilder:
         return "\n".join(lines) + "\n"
 
     def _write_generated_config(self) -> None:
-        for rel in ("/etc/frp/frps.toml", "/etc/frp/frpc.toml", "/etc/frp-auto-deploy/frontend.conf"):
+        for rel in ("/etc/frp/frps.toml", "/etc/frp/frpc.toml", "/etc/drlink/frontend.conf"):
             text = self.safe_read_text(rel)
             if text is None:
                 continue
@@ -675,9 +681,9 @@ class BundleBuilder:
 
     def _write_certs_public_only(self) -> None:
         for rel in (
-            "/etc/frp-auto-deploy/pki/ca.crt",
-            "/etc/frp-auto-deploy/pki/server.crt",
-            "/etc/frp-auto-deploy/allocator-ca.crt",
+            "/etc/drlink/pki/ca.crt",
+            "/etc/drlink/pki/server.crt",
+            "/etc/drlink/allocator-ca.crt",
             "/etc/frp/allocator-ca.crt",
             "/etc/frp/client-identity.pub",
         ):
@@ -696,8 +702,8 @@ class BundleBuilder:
         # Explicitly record omitted private material.
         omitted = []
         for rel in (
-            "/etc/frp-auto-deploy/pki/ca.key",
-            "/etc/frp-auto-deploy/pki/server.key",
+            "/etc/drlink/pki/ca.key",
+            "/etc/drlink/pki/server.key",
             "/etc/frp/client-identity.key",
             "/etc/frp/server_token",
         ):
@@ -715,7 +721,20 @@ class BundleBuilder:
     def _write_logs(self) -> None:
         lines: List[str] = []
         if shutil.which("journalctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
-            for unit in ("frps", "frp-port-allocator", "frp-access-plugin", "frpc", "frp-frontend"):
+            units = (
+                "drlink-server",
+                "drlink-allocator",
+                "drlink-access",
+                "drlink-egress",
+                "drlink-client",
+                "drlink-frontend",
+                "frps",
+                "frpc",
+            )
+            for unit in units:
+                unit_path = self.path("/etc/systemd/system/%s.service" % unit)
+                if unit not in ("frps", "frpc") and not unit_path.is_file():
+                    continue
                 rc, out, err = run_cmd(
                     ["journalctl", "-u", unit, "-n", "80", "--no-pager", "-o", "short-iso"],
                     timeout=12,
@@ -725,10 +744,22 @@ class BundleBuilder:
                     lines.append(out.rstrip())
                     lines.append("")
         # Local product logs (sanitized); never include raw bootstrap tickets.
-        log_dir = self.path("/var/log/frp-auto-deploy")
+        log_dir = self.path("/var/log/drlink")
         if log_dir.is_dir() and not log_dir.is_symlink():
-            for name in ("audit.jsonl", "access-conn.jsonl"):
-                path = log_dir / name
+            candidates = (
+                ("audit.jsonl", log_dir / "audit.jsonl"),
+                ("access/connections.jsonl", log_dir / "access" / "connections.jsonl"),
+                ("access-conn.jsonl", log_dir / "access-conn.jsonl"),
+                ("egress/connections.jsonl", log_dir / "egress" / "connections.jsonl"),
+                ("egress-conn.jsonl", log_dir / "egress-conn.jsonl"),
+            )
+            seen = set()
+            for name, path in candidates:
+                # Prefer service-subdir layout; skip legacy name if new path collected.
+                if name == "access-conn.jsonl" and "access/connections.jsonl" in seen:
+                    continue
+                if name == "egress-conn.jsonl" and "egress/connections.jsonl" in seen:
+                    continue
                 if path.is_file() and not path.is_symlink():
                     try:
                         # Tail last ~100KB
@@ -738,6 +769,7 @@ class BundleBuilder:
                         text = data.decode("utf-8", errors="replace")
                         self.stage_write("logs/%s" % name, text)
                         self.add_section("logs")
+                        seen.add(name)
                     except OSError:
                         pass
         if lines:
@@ -781,7 +813,12 @@ class BundleBuilder:
                 continue
             filtered = []
             for line in out.splitlines():
-                if re.search(r"\b(frps|frpc|frp-port-allocator|frp-access|frp-frontend)\b", line):
+                if re.search(
+                    r"\b(frps|frpc|drlink-server|drlink-allocator|drlink-access|"
+                    r"drlink-egress|drlink-client|drlink-frontend|frp-access|"
+                    r"frp-egress-gateway)\b",
+                    line,
+                ):
                     filtered.append(redact_text(line))
             chunks.append("$ %s | grep frp*" % " ".join(args))
             chunks.extend(filtered or ["(no matching FRP processes)"])
@@ -793,9 +830,9 @@ class BundleBuilder:
     def _write_disk(self) -> None:
         chunks: List[str] = []
         targets = [
-            str(self.path("/var/lib/frp-auto-deploy")),
+            str(self.path("/var/lib/drlink")),
             str(self.path("/etc/frp")),
-            str(self.path("/etc/frp-auto-deploy")),
+            str(self.path("/etc/drlink")),
             str(self.root),
         ]
         if shutil.which("df"):
@@ -810,9 +847,20 @@ class BundleBuilder:
         self.add_section("disk")
 
     def _write_access_control(self) -> None:
-        data, err = self.safe_read_json("/var/lib/frp-auto-deploy/access-control.json")
+        data, err = self.safe_read_json("/var/lib/drlink/access-control.json")
         if data is None:
-            self.skip("access-control", err or "not present")
+            # Never invent PUBLIC when authoritative policy is missing/unreadable.
+            reason = err or "not present"
+            if "not present" in reason.lower() or "missing" in reason.lower() or "no such file" in reason.lower():
+                label = "POLICY UNAVAILABLE"
+            else:
+                label = "ACCESS ERROR"
+            self.skip("access-control", "%s (%s)" % (label, reason))
+            self.stage_json(
+                "access-control-summary.json",
+                {"policy_status": label, "error": reason},
+            )
+            self.add_section("access-control")
             return
         lists = (data or {}).get("access_lists") or {}
         service_access = (data or {}).get("service_access") or {}
@@ -836,6 +884,63 @@ class BundleBuilder:
                 }
         self.stage_json("access-control-summary.json", summary)
         self.add_section("access-control")
+
+    def _write_egress_control(self) -> None:
+        data, err = self.safe_read_json("/var/lib/drlink/egress-control.json")
+        if data is None:
+            self.skip("egress-control", err or "not present")
+            return
+        profiles = (data or {}).get("egress_profiles") or {}
+        enabled_count = 0
+        if isinstance(profiles, dict):
+            enabled_count = sum(
+                1 for entry in profiles.values()
+                if isinstance(entry, dict) and entry.get("enabled", True) is not False
+            )
+        listener = None
+        cfg, _cfg_err = self.safe_read_json("/etc/drlink/config.json")
+        if isinstance(cfg, dict):
+            host = str(cfg.get("egress_listen_addr") or "0.0.0.0").strip() or "0.0.0.0"
+            port = cfg.get("egress_listen_port")
+            if port is not None:
+                listener = "%s:%s" % (host, port)
+        unit_state = "unknown"
+        if shutil.which("systemctl") and os.environ.get("FRP_SKIP_SYSTEMD") != "1":
+            rc, out, _err = run_cmd(
+                ["systemctl", "show", "drlink-egress", "-p", "ActiveState", "-p", "UnitFileState"],
+                timeout=8,
+            )
+            if rc == 0:
+                unit_state = out.strip() or "unknown"
+        events: List[Dict[str, Any]] = []
+        log_path = self.path("/var/log/drlink/egress/connections.jsonl")
+        if not log_path.is_file():
+            log_path = self.path("/var/log/drlink/egress-conn.jsonl")
+        if log_path.is_file() and not log_path.is_symlink():
+            try:
+                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                for line in lines[-20:]:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(item, dict):
+                        events.append(sanitize_json_value(item))
+            except OSError:
+                pass
+        summary = {
+            "schema_version": (data or {}).get("schema_version"),
+            "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+            "enabled_profile_count": enabled_count,
+            "listener": listener,
+            "service_status": redact_text(unit_state),
+            "recent_conn_events": events,
+        }
+        self.stage_json("egress-control-summary.json", summary)
+        self.add_section("egress-control")
 
     def _health_entries_from_services(
         self, services: Any, *, source: str, client_id: Optional[str] = None
@@ -880,7 +985,7 @@ class BundleBuilder:
             )
 
         if self.role in ("server", "dual", "partial_server"):
-            registry, _rerr = self.safe_read_json("/var/lib/frp-auto-deploy/registry.json")
+            registry, _rerr = self.safe_read_json("/var/lib/drlink/registry.json")
             clients = (registry or {}).get("clients") if isinstance(registry, dict) else None
             if isinstance(clients, dict):
                 for mid, client in clients.items():
@@ -989,8 +1094,8 @@ def create_support_bundle(root: Path, output: Path, *, secure_parent: bool) -> D
 
 def default_output_path(root: Path) -> Path:
     stamp = now_utc_stamp()
-    name = "frp-support-%s-%s.tar.gz" % (safe_hostname(), stamp)
-    return root / "var/lib/frp-auto-deploy/support-bundles" / name
+    name = "drlink-support-%s-%s.tar.gz" % (safe_hostname(), stamp)
+    return root / "var/lib/drlink/support-bundles" / name
 
 
 def print_summary(result: Dict[str, Any]) -> None:
@@ -1023,14 +1128,14 @@ def print_summary(result: Dict[str, Any]) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="frp-support-bundle",
-        description="Create a sanitized read-only FRP Auto Deploy support bundle.",
+        prog="drlink-support-bundle",
+        description="Create a sanitized read-only Data Relay Link support bundle.",
     )
     parser.add_argument(
         "--output",
         "-o",
         metavar="PATH",
-        help="Output .tar.gz path (default: /var/lib/frp-auto-deploy/support-bundles/...)",
+        help="Output .tar.gz path (default: /var/lib/drlink/support-bundles/...)",
     )
     parser.add_argument(
         "--root",

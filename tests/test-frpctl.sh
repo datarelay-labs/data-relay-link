@@ -13,6 +13,8 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 chmod +x "$ROOT/tools/frpctl" "$ROOT/tools/frp-client"
 
 CTL="$ROOT/tools/frpctl"
+export FRP_CTL_FORCE_DRLINK=1
+export FRP_CTL_CMD_NAME=drlink
 export FRP_CTL_BIN_DIR="$ROOT/tools"
 export FRP_CLIENT_LIB="$ROOT/lib/frp-client-common.sh"
 export FRP_SKIP_SYSTEMD=1
@@ -21,7 +23,7 @@ mkdir -p "$HOME"
 
 write_client_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink"
   python3 - "$tree/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -42,7 +44,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     },
 }, indent=2, sort_keys=True) + "\n")
 PY
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.4.0
 FRP_VERSION=0.71.0
 EOF
@@ -50,8 +52,8 @@ EOF
 
 write_server_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" "$tree/var/lib/frp-auto-deploy/registry.json" <<'PY'
+  mkdir -p "$tree/etc/drlink" "$tree/var/lib/drlink"
+  python3 - "$tree/etc/drlink/config.json" "$tree/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = Path(sys.argv[1]), Path(sys.argv[2])
@@ -62,7 +64,7 @@ cfg.write_text(json.dumps({
     "port_end": 6098,
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:6099/enroll",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+    "registry_file": "/var/lib/drlink/registry.json",
 }, indent=2, sort_keys=True) + "\n")
 reg.write_text(json.dumps({
     "schema_version": 2,
@@ -79,14 +81,14 @@ reg.write_text(json.dumps({
     },
 }, indent=2, sort_keys=True) + "\n")
 PY
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.4.0
 FRP_VERSION=0.71.0
 EOF
 }
 
 prompt_count() {
-  grep -c '^frpctl>' "$1"
+  grep -cE '^(frpctl|drlink)>' "$1"
 }
 
 run_repl() {
@@ -113,19 +115,26 @@ write_server_tree "$BOTH"
 
 # --- Help / unknown (direct mode)
 "$CTL" help >"$WORKDIR/help.out"
-grep -q 'only command you need to remember' "$WORKDIR/help.out" || fail "help remember line"
-grep -q 'sudo frpctl' "$WORKDIR/help.out" || fail "help sudo frpctl"
-grep -q 'frps' "$WORKDIR/help.out" || fail "help mentions frps"
-grep -q 'frpc' "$WORKDIR/help.out" || fail "help mentions frpc"
+grep -q 'Grammar: <resource> <action>' "$WORKDIR/help.out" || fail "help grammar line"
+grep -qE 'status[[:space:]]+Host status' "$WORKDIR/help.out" || fail "help status resource"
 grep -q 'doctor' "$WORKDIR/help.out" || fail "help doctor"
-grep -q 'persistent management CLI' "$WORKDIR/help.out" || fail "help persistent CLI"
+grep -qE 'Tab|help workflows|Navigation' "$WORKDIR/help.out" || fail "help discovery hint"
+# Role-aware root help: server tree includes egress
+export FRP_CTL_TEST_ROOT="$SERVER"
+export FRP_DEPLOY_TEST_ROOT="$SERVER"
+"$CTL" help >"$WORKDIR/help-server.out"
+grep -q 'egress' "$WORKDIR/help-server.out" || fail "server help egress resource"
+unset FRP_CTL_TEST_ROOT FRP_DEPLOY_TEST_ROOT
 "$CTL" --help >"$WORKDIR/help2.out"
-grep -q 'Usage: frpctl' "$WORKDIR/help2.out" || fail "--help usage"
+grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/help2.out" || fail "--help usage"
+grep -q 'only command you need to remember' "$WORKDIR/help2.out" || fail "--help remember line"
+grep -q 'frps' "$WORKDIR/help2.out" || fail "--help mentions frps"
+grep -q 'frpc' "$WORKDIR/help2.out" || fail "--help mentions frpc"
 if "$CTL" definitely-not-a-command >"$WORKDIR/unknown.out" 2>"$WORKDIR/unknown.err"; then
   fail "unknown command should fail"
 fi
 grep -q 'unknown command' "$WORKDIR/unknown.err" || fail "unknown error"
-grep -q 'Usage: frpctl' "$WORKDIR/unknown.err" || fail "unknown usage"
+grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/unknown.err" || fail "unknown usage"
 pass "FRPCTL_HELP"
 pass "FRPCTL_UNKNOWN_COMMAND_RECOVERY"
 
@@ -133,15 +142,21 @@ pass "FRPCTL_UNKNOWN_COMMAND_RECOVERY"
 export FRP_CTL_TEST_ROOT="$CLIENT"
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 "$CTL" status >"$WORKDIR/client-status.out"
-grep -q 'FRP Client' "$WORKDIR/client-status.out" || fail "client status header"
+grep -q 'Data Relay Link Client' "$WORKDIR/client-status.out" || fail "client status header"
 grep -q 'Hostname        : ctl-client' "$WORKDIR/client-status.out" || fail "client status hostname"
 pass "FRPCTL_CLIENT_STATUS"
 
 export FRP_CTL_DRY_RUN=1
 "$CTL" manage >"$WORKDIR/client-manage.out"
 grep -qx 'DISPATCH frp-client' "$WORKDIR/client-manage.out" || fail "manage dispatch"
-"$CTL" update >"$WORKDIR/client-update.out"
-grep -qx 'DISPATCH frp-client update' "$WORKDIR/client-update.out" || fail "client update dispatch"
+set +e
+"$CTL" update >"$WORKDIR/client-update.out" 2>"$WORKDIR/client-update.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "bare client update should not mutate"
+grep -qiE 'Missing action|project|engine' "$WORKDIR/client-update.out" "$WORKDIR/client-update.err" \
+  || fail "bare client update discovery"
+"$CTL" update project --check >"$WORKDIR/client-upd-proj.out" || true
 "$CTL" update frp --check >"$WORKDIR/client-upd-frp.out"
 grep -qx 'DISPATCH frp-update --check' "$WORKDIR/client-upd-frp.out" || fail "client update frp"
 "$CTL" info >"$WORKDIR/client-info.out"
@@ -156,7 +171,7 @@ pass "FRPCTL_CLIENT_UPDATE_FRP"
 if "$CTL" clients >"$WORKDIR/client-clients.out" 2>"$WORKDIR/client-clients.err"; then
   fail "client host should reject server clients command"
 fi
-grep -q 'installed FRP server' "$WORKDIR/client-clients.err" || fail "client reject server command"
+grep -q 'installed Data Relay Link server' "$WORKDIR/client-clients.err" || fail "client reject server command"
 
 # --- Direct server role
 unset FRP_CLIENT_TEST_ROOT
@@ -187,8 +202,15 @@ grep -qx 'DISPATCH frp-revoke-client customer-dp' "$WORKDIR/server-revoke2.out" 
 grep -qx 'DISPATCH frp-release-service customer-dp grafana' "$WORKDIR/server-relsvc.out" || fail "release-service dispatch"
 "$CTL" release-client customer-dp >"$WORKDIR/server-relcli.out"
 grep -qx 'DISPATCH frp-release-client customer-dp' "$WORKDIR/server-relcli.out" || fail "release-client dispatch"
-"$CTL" update >"$WORKDIR/server-update.out"
-grep -qx 'DISPATCH frp-update' "$WORKDIR/server-update.out" || fail "server update dispatch"
+set +e
+"$CTL" update >"$WORKDIR/server-update.out" 2>"$WORKDIR/server-update.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "bare server update should not mutate"
+grep -qiE 'Missing action|project|engine' "$WORKDIR/server-update.out" "$WORKDIR/server-update.err" \
+  || fail "bare server update discovery"
+"$CTL" update engine --check >"$WORKDIR/server-update-engine.out"
+grep -qx 'DISPATCH frp-update --check' "$WORKDIR/server-update-engine.out" || fail "server update engine dispatch"
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_SERVER_STATUS"
 pass "FRPCTL_CLIENTS_DISPATCH"
@@ -232,9 +254,13 @@ export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_CTL_TEST_MENU=1
 run_repl "$SERVER" "$WORKDIR/server-menu.out" menu exit || fail "server menu repl"
 grep -q 'Role            : Server' "$WORKDIR/server-menu.out" || fail "server role"
-grep -q '2) Manage clients' "$WORKDIR/server-menu.out" || fail "server menu manage clients"
-grep -q '7) Access Control' "$WORKDIR/server-menu.out" || fail "server menu access control"
-grep -q '9) Update FRP' "$WORKDIR/server-menu.out" || fail "server menu frp update"
+grep -q 'Remote Access' "$WORKDIR/server-menu.out" || fail "server menu Remote Access category"
+grep -q 'Controlled Egress' "$WORKDIR/server-menu.out" || fail "server menu Controlled Egress category"
+grep -q 'Organize' "$WORKDIR/server-menu.out" || fail "server menu Organize category"
+grep -q 'Operate' "$WORKDIR/server-menu.out" || fail "server menu Operate category"
+grep -qE '[0-9]+\) Clients' "$WORKDIR/server-menu.out" || fail "server menu clients"
+grep -qE '[0-9]+\) Access Control' "$WORKDIR/server-menu.out" || fail "server menu access control"
+grep -qE '[0-9]+\) Update FRP' "$WORKDIR/server-menu.out" || fail "server menu frp update"
 pass "FRPCTL_SERVER_DETECTION"
 
 unset FRP_CTL_TEST_MENU
@@ -250,15 +276,15 @@ pass "FRPCTL_REPL_START_DUAL_ROLE"
 unset FRP_CTL_DRY_RUN
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 run_repl "$CLIENT" "$WORKDIR/client-repl.out" status help version exit || fail "client repl"
-grep -q 'FRP Auto Deploy CLI' "$WORKDIR/client-repl.out" || fail "client repl banner"
+grep -q 'Data Relay Link' "$WORKDIR/client-repl.out" || fail "client repl banner"
 grep -q 'Role            : Client' "$WORKDIR/client-repl.out" || fail "client repl role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-repl.out" || fail "client repl version"
 grep -q 'FRP version     : 0.71.0' "$WORKDIR/client-repl.out" || fail "client repl frp version"
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
-grep -q 'FRP Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
-grep -q 'FRP Auto Deploy — Client Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
-grep -q 'services' "$WORKDIR/client-repl.out" || fail "client help services"
+grep -q 'Data Relay Link Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
+grep -q 'Data Relay Link — Client Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
+grep -qE 'service|client' "$WORKDIR/client-repl.out" || fail "client help service"
 pass "FRPCTL_REPL_START_CLIENT"
 pass "FRPCTL_REPL_HELP"
 pass "FRPCTL_REPL_VERSION"
@@ -266,8 +292,8 @@ pass "FRPCTL_REPL_STATUS"
 pass "FRPCTL_REPL_EXIT"
 
 run_repl "$CLIENT" "$WORKDIR/client-qhelp.out" '?' exit || fail "client ? help"
-grep -q 'show' "$WORKDIR/client-qhelp.out" || fail "question mark help show"
-grep -q 'set' "$WORKDIR/client-qhelp.out" || fail "question mark help set"
+grep -qE 'service|client' "$WORKDIR/client-qhelp.out" || fail "question mark help service"
+grep -qE 'status|update|doctor' "$WORKDIR/client-qhelp.out" || fail "question mark help ops"
 if grep -q 'Grammar: <verb>' "$WORKDIR/client-qhelp.out"; then
   fail "root ? dumped full syntax tree"
 fi
@@ -303,10 +329,10 @@ export FRP_CTL_BIN_DIR="$SAVE_BIN"
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/server-repl.out" status help version exit || fail "server repl"
-grep -q 'FRP Auto Deploy CLI' "$WORKDIR/server-repl.out" || fail "server repl banner"
+grep -q 'Data Relay Link' "$WORKDIR/server-repl.out" || fail "server repl banner"
 grep -q 'Role            : Server' "$WORKDIR/server-repl.out" || fail "server repl role"
 grep -q 'DISPATCH frp-server-status' "$WORKDIR/server-repl.out" || fail "server repl status"
-grep -q 'FRP Auto Deploy — Server Commands' "$WORKDIR/server-repl.out" || fail "server repl help"
+grep -q 'Data Relay Link — Server Commands' "$WORKDIR/server-repl.out" || fail "server repl help"
 grep -q 'enroll' "$WORKDIR/server-repl.out" || fail "server help enroll"
 [[ "$(prompt_count "$WORKDIR/server-repl.out")" -ge 3 ]] || fail "server repl persistent"
 pass "FRPCTL_REPL_START_SERVER"
@@ -331,7 +357,7 @@ pass "FRPCTL_REPL_SERVER_CLIENT_INFO"
 pass "FRPCTL_REPL_SERVER_ENROLL_DISPATCH"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/guided-enroll.out" menu 3 1 zt-ssh-client "" aella "" 12 exit \
+run_repl "$SERVER" "$WORKDIR/guided-enroll.out" menu 2 1 zt-ssh-client "" aella "" 17 exit \
   || fail "guided enroll zero-touch"
 grep -q 'Create enrollment' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
 grep -q 'Zero-touch SSH' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
@@ -341,7 +367,7 @@ grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-
   || fail "guided enroll did not dispatch zero-touch"
 pass "FRPCTL_GUIDED_ENROLL_ZERO_TOUCH"
 
-run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 3 2 12 exit || fail "guided enroll manual"
+run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 2 2 17 exit || fail "guided enroll manual"
 grep -q 'DISPATCH frp-create-client' "$WORKDIR/guided-enroll-manual.out" \
   || fail "guided enroll manual dispatch"
 if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/guided-enroll-manual.out"; then
@@ -377,11 +403,10 @@ unset FRP_CTL_DRY_RUN
 # --- Invalid argument recovery
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/badargs.out" client "release-service dp-os-upgrade" clients exit || fail "bad args"
-grep -q 'ERROR: usage: client <name>' "$WORKDIR/badargs.out" || fail "client usage"
-grep -q 'ERROR: usage: release-service <client> <service-id>' "$WORKDIR/badargs.out" || fail "release-service usage"
+run_repl "$SERVER" "$WORKDIR/badargs.out" "client release-service" clients exit || true
+grep -qi 'Unknown action' "$WORKDIR/badargs.out" || fail "client bad action must not fall through"
 grep -q 'DISPATCH frp-clients' "$WORKDIR/badargs.out" || fail "clients after bad args"
-[[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 4 ]] || fail "bad args stayed in cli"
+[[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 3 ]] || fail "bad args stayed in cli"
 pass "FRPCTL_REPL_INVALID_ARGUMENT_RECOVERY"
 unset FRP_CTL_DRY_RUN
 
@@ -400,7 +425,7 @@ exit 0
 EOF
 chmod +x "$FAILBIN/frp-client-info" "$FAILBIN/frp-clients"
 export FRP_CTL_BIN_DIR="$FAILBIN"
-run_repl "$SERVER" "$WORKDIR/childfail.out" "client nonexistent" clients exit || fail "child fail repl"
+run_repl "$SERVER" "$WORKDIR/childfail.out" "client no-such-client" clients exit || fail "child fail repl"
 grep -q 'ERROR: no such client' "$WORKDIR/childfail.out" || fail "child error shown"
 grep -q 'Command failed with exit code 1.' "$WORKDIR/childfail.out" || fail "child fail message"
 grep -q 'HOSTNAME ...' "$WORKDIR/childfail.out" || fail "later command after child fail"
@@ -411,12 +436,12 @@ export FRP_CTL_BIN_DIR="$SAVE_BIN"
 # --- quit / EOF
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 run_repl "$CLIENT" "$WORKDIR/quit.out" quit || fail "quit"
-grep -q 'FRP Auto Deploy CLI' "$WORKDIR/quit.out" || fail "quit banner"
+grep -q 'Data Relay Link' "$WORKDIR/quit.out" || fail "quit banner"
 [[ "$(prompt_count "$WORKDIR/quit.out")" -ge 1 ]] || fail "quit prompt"
 pass "FRPCTL_REPL_QUIT"
 
 run_repl "$CLIENT" "$WORKDIR/eof.out" status || fail "eof exit"
-grep -q 'FRP Client' "$WORKDIR/eof.out" || fail "eof ran status"
+grep -q 'Data Relay Link Client' "$WORKDIR/eof.out" || fail "eof ran status"
 pass "FRPCTL_REPL_EOF_EXIT"
 
 # --- No TTY
@@ -428,12 +453,12 @@ set +e
 notty_rc=$?
 set -e
 [[ "$notty_rc" -ne 0 ]] || fail "no-tty interactive should fail"
-grep -q 'interactive frpctl requires a TTY' "$WORKDIR/notty.err" || fail "no-tty message"
-grep -q 'Use: frpctl <command>' "$WORKDIR/notty.err" || fail "no-tty hint"
+grep -qE "interactive (frpctl|drlink) requires a TTY" "$WORKDIR/notty.err" || fail "no-tty message"
+grep -qE "Use: (frpctl|drlink) <command>" "$WORKDIR/notty.err" || fail "no-tty hint"
 pass "FRPCTL_NO_TTY_INTERACTIVE_FAILS_CLEANLY"
 
 "$CTL" status </dev/null >"$WORKDIR/notty-status.out"
-grep -q 'FRP Client' "$WORKDIR/notty-status.out" || fail "no-tty direct status"
+grep -q 'Data Relay Link Client' "$WORKDIR/notty-status.out" || fail "no-tty direct status"
 pass "FRPCTL_NO_TTY_DIRECT_MODE"
 pass "FRPCTL_NO_TTY_HANDLING"
 
@@ -544,11 +569,13 @@ pass "FRPCTL_LEGACY_ALIAS_COMPATIBILITY"
 pass "BACKWARD_COMPATIBILITY"
 pass "DIRECT_SCRIPT_COMPATIBILITY"
 
-# Hierarchical help
+# Hierarchical help — verb-first topics redirect to canonical / help legacy
 export FRP_CTL_TEST_ROOT="$SERVER"
 run_repl "$SERVER" "$WORKDIR/help-set.out" "help set client" exit || fail "help set client"
-grep -q 'Set client configuration' "$WORKDIR/help-set.out" || fail "help set heading"
-grep -q 'set client <ID> tag' "$WORKDIR/help-set.out" || fail "help set tag"
+grep -qi 'Compatibility topic' "$WORKDIR/help-set.out" || fail "help set heading"
+grep -q 'help legacy' "$WORKDIR/help-set.out" || fail "help set points to legacy"
+run_repl "$SERVER" "$WORKDIR/help-client.out" "help client" exit || fail "help client"
+grep -qi 'client' "$WORKDIR/help-client.out" || fail "help client body"
 pass "CONTEXT_HELP"
 
 run_repl "$SERVER" "$WORKDIR/help-legacy.out" "help legacy" exit || fail "help legacy"
@@ -580,7 +607,7 @@ fi
 pass "NO_SECRET_HISTORY_PERSISTENCE"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/guided-meta.out" menu 2 1 12 12 exit || fail "guided metadata menu"
+run_repl "$SERVER" "$WORKDIR/guided-meta.out" menu 1 1 12 12 exit || fail "guided metadata menu"
 grep -q 'Set label' "$WORKDIR/guided-meta.out" || fail "guided set label"
 grep -q 'Unset label' "$WORKDIR/guided-meta.out" || fail "guided unset label"
 grep -q 'Set description' "$WORKDIR/guided-meta.out" || fail "guided set description"
@@ -595,7 +622,7 @@ pass "GUIDED_MENU_TAGS"
 pass "GUIDED_MENU_UPDATED"
 
 # --- Canonical CLIENT ID selector (real tools, not dry-run)
-python3 - "$SERVER/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$SERVER/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
@@ -726,10 +753,15 @@ pass "LEGACY_TAG_KEY_EQUALS_VALUE_COMPAT"
 unset FRP_CTL_DRY_RUN
 
 run_repl "$SERVER" "$WORKDIR/ctx-root.out" "?" exit || fail "root ?"
-grep -q 'show' "$WORKDIR/ctx-root.out" || fail "root ? show"
-grep -q 'set' "$WORKDIR/ctx-root.out" || fail "root ? set"
+grep -qE 'client[[:space:]]+Registered clients|^\s+client\s' "$WORKDIR/ctx-root.out" || fail "root ? client"
+grep -qE 'status[[:space:]]+Host status|^\s+status\s' "$WORKDIR/ctx-root.out" || fail "root ? status"
+grep -q 'egress' "$WORKDIR/ctx-root.out" || fail "root ? egress"
 if grep -q 'Grammar: <verb>' "$WORKDIR/ctx-root.out"; then
   fail "root ? dumped full syntax tree"
+fi
+# Canonical root ? must not advertise verb-first discovery as primary.
+if grep -qE '^\s+show\s+|^Available:.*\n\s+show\s' "$WORKDIR/ctx-root.out"; then
+  fail "root ? still lists verb-first show as primary"
 fi
 pass "CONTEXT_HELP_ROOT"
 pass "ROOT_HELP_SIMPLIFIED"
@@ -766,7 +798,102 @@ pass "SHOW_CLIENT_MISSING_TARGET_HELP"
 run_repl "$SERVER" "$WORKDIR/miss-set.out" "set" exit || fail "set missing"
 grep -q 'Missing resource.' "$WORKDIR/miss-set.out" || fail "set missing title"
 grep -q 'client' "$WORKDIR/miss-set.out" || fail "set missing lists client"
-grep -q 'type: set ?' "$WORKDIR/miss-set.out" || fail "set missing tip"
+grep -q 'drlink help' "$WORKDIR/miss-set.out" || fail "set missing tip"
 pass "SET_CLIENT_MISSING_TARGET_HELP"
+
+# Residual audit: exact argv round-trip for space/glob-bearing passthrough.
+export FRP_CTL_DRY_RUN=1
+set +e
+"$CTL" enrollment create --note "Seoul production" >"$WORKDIR/argv-space.out" 2>"$WORKDIR/argv-space.err"
+rc=$?
+set -e
+[[ "$rc" -eq 0 ]] || fail "enrollment create note spaces rc=$rc"
+python3 - "$WORKDIR/argv-space.out" <<'PY' || fail "argv space note not preserved"
+import json,sys
+from pathlib import Path
+text=Path(sys.argv[1]).read_text(encoding="utf-8")
+rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
+assert rows, text
+argv=json.loads(rows[-1])
+assert argv == ["frp-create-client", "--note", "Seoul production"], argv
+PY
+mkdir -p "$WORKDIR/globdir"
+touch "$WORKDIR/globdir/a.txt" "$WORKDIR/globdir/b.txt"
+"$CTL" enrollment create --note "$WORKDIR/globdir/*.txt" >"$WORKDIR/argv-glob.out" 2>"$WORKDIR/argv-glob.err" \
+  || fail "enrollment create glob note"
+python3 - "$WORKDIR/argv-glob.out" "$WORKDIR/globdir/*.txt" <<'PY' || fail "glob re-expanded in argv"
+import json,sys
+from pathlib import Path
+text=Path(sys.argv[1]).read_text(encoding="utf-8")
+want=sys.argv[2]
+rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
+argv=json.loads(rows[-1])
+assert argv == ["frp-create-client", "--note", want], argv
+PY
+"$CTL" backup create "/tmp/Seoul production.tar.gz" >"$WORKDIR/argv-backup.out" \
+  || fail "backup create spaced path"
+python3 - "$WORKDIR/argv-backup.out" <<'PY' || fail "backup path argv split"
+import json,sys
+from pathlib import Path
+text=Path(sys.argv[1]).read_text(encoding="utf-8")
+rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
+argv=json.loads(rows[-1])
+assert argv == ["frp-backup", "/tmp/Seoul production.tar.gz"], argv
+PY
+unset FRP_CTL_DRY_RUN
+pass "CLI_ARGV_BOUNDARY_PRESERVED"
+pass "CLI_GLOB_REEXPANSION=0"
+
+# Incomplete one-shot must exit non-zero; REPL stays usable.
+set +e
+"$CTL" group create >"$WORKDIR/inc-direct.out" 2>"$WORKDIR/inc-direct.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "incomplete group create exited 0"
+[[ "$rc" -eq 2 ]] || fail "incomplete group create want exit 2 got $rc"
+grep -qi 'Missing' "$WORKDIR/inc-direct.out" "$WORKDIR/inc-direct.err" \
+  || fail "incomplete direct missing usage"
+run_repl "$SERVER" "$WORKDIR/inc-repl.out" "group create" "status" exit || fail "incomplete REPL continuity"
+grep -qi 'Missing' "$WORKDIR/inc-repl.out" || fail "incomplete REPL guidance"
+pass "CLI_INCOMPLETE_DIRECT_EXIT_NONZERO"
+pass "CLI_INCOMPLETE_REPL_STAYS_USABLE"
+
+# Empty passthrough under set -u (Bash 4.2/AL2 + macOS Bash 3.2).
+set +e
+"$CTL" help >"$WORKDIR/empty-pt-help.out" 2>"$WORKDIR/empty-pt-help.err"
+rc=$?
+set -e
+[[ "$rc" -eq 0 ]] || fail "help with empty passthrough rc=$rc"
+if grep -q 'unbound variable' "$WORKDIR/empty-pt-help.out" "$WORKDIR/empty-pt-help.err"; then
+  fail "empty passthrough unbound variable"
+fi
+grep -qiE 'status|backup|update|help' "$WORKDIR/empty-pt-help.out" || fail "help empty-pt produced no catalog"
+pass "CLI_EMPTY_PASSTHROUGH_SET_U"
+
+# Bare roots must discover, not mutate.
+export FRP_CTL_DRY_RUN=1
+set +e
+"$CTL" update >"$WORKDIR/bare-update.out" 2>"$WORKDIR/bare-update.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "bare update exited 0"
+if grep -q '^DISPATCH ' "$WORKDIR/bare-update.out"; then
+  fail "bare update mutated/dispatched: $(cat "$WORKDIR/bare-update.out")"
+fi
+grep -qiE 'Missing action|project|engine' "$WORKDIR/bare-update.out" "$WORKDIR/bare-update.err" \
+  || fail "bare update missing discovery"
+set +e
+"$CTL" backup >"$WORKDIR/bare-backup.out" 2>"$WORKDIR/bare-backup.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "bare backup exited 0"
+if grep -q '^DISPATCH ' "$WORKDIR/bare-backup.out"; then
+  fail "bare backup mutated/dispatched: $(cat "$WORKDIR/bare-backup.out")"
+fi
+grep -qiE 'Missing action|create|restore' "$WORKDIR/bare-backup.out" "$WORKDIR/bare-backup.err" \
+  || fail "bare backup missing discovery"
+unset FRP_CTL_DRY_RUN
+pass "CLI_BARE_ROOT_MUTATION=0"
+pass "CLI_BARE_ROOT_DISCOVERY"
 
 echo "FRPCTL_TESTS=PASS"

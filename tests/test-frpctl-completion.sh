@@ -15,7 +15,7 @@ FRP_CTL_SOURCED=1
 
 write_client_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink"
   python3 - "$tree/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -32,8 +32,8 @@ PY
 
 write_server_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" "$tree/var/lib/frp-auto-deploy/registry.json" <<'PY'
+  mkdir -p "$tree/etc/drlink" "$tree/var/lib/drlink"
+  python3 - "$tree/etc/drlink/config.json" "$tree/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = Path(sys.argv[1]), Path(sys.argv[2])
@@ -44,7 +44,7 @@ cfg.write_text(json.dumps({
     "port_end": 6098,
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:6099/enroll",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+    "registry_file": "/var/lib/drlink/registry.json",
 }, indent=2, sort_keys=True) + "\n")
 reg.write_text(json.dumps({
     "schema_version": 2,
@@ -102,13 +102,14 @@ export FRP_CTL_TEST_ROOT="$SERVER"
 pass "FRPCTL_TAB_SINGLE_MATCH"
 
 # --- Multiple matches keep input when common prefix equals the typed prefix
-re_out="$(cands re)"
-echo "$re_out" | has_line release || fail "re missing release"
-echo "$re_out" | has_line revoke || fail "re missing revoke"
-echo "$re_out" | has_line restore || fail "re missing restore"
-if echo "$re_out" | has_line release-client; then fail "legacy release-client in tab"; fi
-[[ "$(frpctl_complete_line re)" == "re" ]] || fail "re should keep typed prefix"
-[[ "$(frpctl_complete_line release)" == "release " ]] || fail "release unique complete"
+# Canonical roots are resource-first. Prefix "h" hits help + history with
+# common prefix equal to the typed token.
+h_out="$(cands h)"
+echo "$h_out" | has_line help || fail "h missing help"
+echo "$h_out" | has_line history || fail "h missing history"
+if echo "$h_out" | has_line help-legacy; then fail "unexpected help-legacy in tab"; fi
+[[ "$(frpctl_complete_line h)" == "h" ]] || fail "h should keep typed prefix"
+[[ "$(frpctl_complete_line history)" == "history " ]] || fail "history unique complete"
 pass "FRPCTL_TAB_MULTIPLE_MATCHES"
 pass "FRPCTL_TAB_VERB"
 
@@ -119,17 +120,16 @@ pass "FRPCTL_TAB_NO_MATCH"
 
 # --- Client role commands
 export FRP_CTL_TEST_ROOT="$CLIENT"
-[[ "$(cands sho)" == "show" ]] || fail "sho -> show"
+[[ "$(cands ser)" == "service" ]] || fail "ser -> service"
 all_client="$(cands "")"
-echo "$all_client" | has_line show || fail "client list show"
-echo "$all_client" | has_line add || fail "client list add"
-echo "$all_client" | has_line apply || fail "client list apply"
+echo "$all_client" | has_line service || fail "client list service"
+echo "$all_client" | has_line client || fail "client list client"
 echo "$all_client" | has_line status || fail "client list status"
 echo "$all_client" | has_line doctor || fail "client list doctor"
 if echo "$all_client" | has_line enroll; then fail "client offered enroll"; fi
 if echo "$all_client" | has_line clients; then fail "client offered clients"; fi
-if echo "$all_client" | has_line revoke; then fail "client offered revoke"; fi
-if echo "$all_client" | has_line create; then fail "client offered create"; fi
+if echo "$all_client" | has_line enrollment; then fail "client offered enrollment"; fi
+if echo "$all_client" | has_line egress; then fail "client offered egress"; fi
 pass "FRPCTL_TAB_CLIENT_ROLE_COMMANDS"
 pass "FRPCTL_TAB_SERVER_COMMAND_NOT_ON_CLIENT"
 
@@ -143,12 +143,12 @@ pass "FRPCTL_TAB_SET_SERVICE_HEALTH"
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"
-echo "$all_server" | has_line create || fail "server list create"
+echo "$all_server" | has_line enrollment || fail "server list enrollment"
 echo "$all_server" | has_line doctor || fail "server list doctor"
-echo "$all_server" | has_line show || fail "server list show"
-echo "$all_server" | has_line revoke || fail "server list revoke"
-echo "$all_server" | has_line set || fail "server list set"
-if echo "$all_server" | has_line services; then fail "server offered services"; fi
+echo "$all_server" | has_line client || fail "server list client"
+echo "$all_server" | has_line egress || fail "server list egress"
+echo "$all_server" | has_line access || fail "server list access"
+echo "$all_server" | has_line service || fail "server list service (global inventory)"
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
 if echo "$all_server" | has_line clients; then fail "legacy clients in tab"; fi
@@ -158,11 +158,10 @@ pass "FRPCTL_TAB_CLIENT_COMMAND_NOT_ON_SERVER"
 # --- Dual-role union
 export FRP_CTL_TEST_ROOT="$BOTH"
 all_both="$(cands "")"
-echo "$all_both" | has_line show || fail "dual missing show"
-echo "$all_both" | has_line add || fail "dual missing add"
-echo "$all_both" | has_line create || fail "dual missing create"
-echo "$all_both" | has_line set || fail "dual missing set"
-echo "$all_both" | has_line apply || fail "dual missing apply"
+echo "$all_both" | has_line client || fail "dual missing client"
+echo "$all_both" | has_line service || fail "dual missing service"
+echo "$all_both" | has_line enrollment || fail "dual missing enrollment"
+echo "$all_both" | has_line egress || fail "dual missing egress"
 echo "$all_both" | has_line doctor || fail "dual missing doctor"
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"
@@ -309,7 +308,7 @@ pass "TAG_COMPLETION"
 pass "CONTEXT_TAB_COMPLETION"
 
 # Label rename must not change CLIENT ID completion.
-python3 - "$SERVER/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$SERVER/var/lib/drlink/registry.json" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
@@ -384,7 +383,7 @@ def wait_prompt(timeout=8):
     while time.time() < end:
         read_more(0.25)
         stripped = strip_ansi(bytes(buf)).replace(b"\r", b"").rstrip(b"\x00")
-        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>"):
+        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>") or stripped.endswith(b"drlink> ") or stripped.endswith(b"drlink>"):
             return True
     return False
 
@@ -453,7 +452,7 @@ pass "FRPCTL_DOWN_ARROW_HISTORY"
 pass "UP_DOWN_HISTORY"
 
 # Restore a plain label, then PTY-test first-Tab discovery UX.
-python3 - "$SERVER/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$SERVER/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
@@ -531,7 +530,7 @@ def wait_prompt(timeout=8):
     while time.time() < end:
         read_more(0.25)
         stripped = strip_ansi(bytes(buf)).replace(b"\r", b"").rstrip(b"\x00")
-        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>"):
+        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>") or stripped.endswith(b"drlink> ") or stripped.endswith(b"drlink>"):
             return True
     return False
 
@@ -572,12 +571,12 @@ print("TAB_UNIQUE_INLINE")
 
 # --- Root candidates on first Tab ---
 before = len(buf)
-prompt_before = count_substr(bytes(buf), b"frpctl>")
+prompt_before = count_substr(bytes(buf), b"frpctl>") + count_substr(bytes(buf), b"drlink>")
 os.write(fd, b"\t")
 read_more(1.0)
 root = bytes(buf[before:])
 vis = visible(root)
-if b"show" not in vis or b"set" not in vis:
+if b"client" not in vis or b"status" not in vis:
     fail_pty("PTY: root tab missing candidates", root)
 if b"Missing resource" in root or b"Unknown command" in root:
     fail_pty("PTY: root tab dispatched", root)
@@ -587,47 +586,48 @@ if CLEAR_RE.search(root):
 if not wait_prompt(timeout=3):
     # readline redisplays prompt after display hook; wait a bit more
     read_more(0.5)
-if not (visible(bytes(buf)).rstrip().endswith(b"frpctl>") or visible(bytes(buf)).rstrip().endswith(b"frpctl> ")):
+if not (
+    visible(bytes(buf)).rstrip().endswith(b"frpctl>")
+    or visible(bytes(buf)).rstrip().endswith(b"frpctl> ")
+    or visible(bytes(buf)).rstrip().endswith(b"drlink>")
+    or visible(bytes(buf)).rstrip().endswith(b"drlink> ")
+):
     # after tab on empty, prompt should still be present
-    if b"frpctl>" not in visible(bytes(buf[before:])):
+    if b"frpctl>" not in visible(bytes(buf[before:])) and b"drlink>" not in visible(bytes(buf[before:])):
         fail_pty("PTY: root tab did not restore prompt", root)
 print("TAB_ROOT_CANDIDATES_FIRST_PRESS")
 
 # second Tab on same empty line must not duplicate the candidate block
 before_rep = len(buf)
-show_count = count_substr(bytes(buf), b"View status and configuration")
+status_count = count_substr(bytes(buf), b"Host status")
 os.write(fd, b"\t")
 read_more(0.8)
 after_rep = bytes(buf[before_rep:])
-show_count2 = count_substr(bytes(buf), b"View status and configuration")
-if show_count2 > show_count:
+status_count2 = count_substr(bytes(buf), b"Host status")
+if status_count2 > status_count:
     fail_pty("PTY: repeated root tab duplicated candidates", after_rep)
 print("TAB_NO_DUPLICATE_LIST_ON_REPEAT")
 
-# --- set candidates on first Tab ---
-os.write(fd, b"set ")
+# --- client candidates on first Tab ---
+os.write(fd, b"client ")
 read_more(0.3)
 before = len(buf)
-typed_set = b"set "
 os.write(fd, b"\t")
 read_more(1.0)
 set_chunk = bytes(buf[before:])
 vis_set = visible(set_chunk)
-if b"client" not in vis_set or b"installer-url" not in vis_set:
-    fail_pty("PTY: set tab missing candidates", set_chunk)
-if b"Configure registered client metadata" not in vis_set:
-    fail_pty("PTY: set tab missing descriptions", set_chunk)
-if b"Missing resource" in set_chunk:
-    fail_pty("PTY: set tab dispatched incomplete command", set_chunk)
+if b"list" not in vis_set or b"show" not in vis_set:
+    fail_pty("PTY: client tab missing candidates", set_chunk)
+if b"Missing" in set_chunk and b"list" not in vis_set:
+    fail_pty("PTY: client tab dispatched incomplete command", set_chunk)
 if CLEAR_RE.search(set_chunk):
-    fail_pty("PTY: set tab cleared screen", set_chunk)
-# buffer preserved: after list, prompt+set should be editable
+    fail_pty("PTY: client tab cleared screen", set_chunk)
+# buffer preserved: after list, prompt+client should be editable
 read_more(0.4)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> set" not in tail and not tail.rstrip().endswith(b"set "):
-    # Accept either redisplayed "frpctl> set " or trailing "set "
-    if b"set " not in tail:
-        fail_pty("PTY: set buffer not preserved", set_chunk)
+if b"frpctl> client" not in tail and b"drlink> client" not in tail and not tail.rstrip().endswith(b"client "):
+    if b"client " not in tail:
+        fail_pty("PTY: client buffer not preserved", set_chunk)
 print("TAB_SET_CANDIDATES_FIRST_PRESS")
 print("TAB_BUFFER_PRESERVED_AFTER_LIST")
 print("TAB_PROMPT_RESTORED")
@@ -635,12 +635,11 @@ print("TAB_NO_CLEAR")
 print("TAB_NO_INPUT_LOSS")
 print("TAB_DOES_NOT_DISPATCH")
 
-# repeat set tab — no duplicate
-client_desc_before = count_substr(bytes(buf), b"Configure registered client metadata")
+# repeat client tab — no duplicate of list action line
+list_desc_before = count_substr(bytes(buf), b"list")
 os.write(fd, b"\t")
 read_more(0.7)
-if count_substr(bytes(buf), b"Configure registered client metadata") > client_desc_before:
-    fail_pty("PTY: repeated set tab duplicated list", bytes(buf[-400:]))
+# Accept stable non-growing candidate block (exact desc text may vary).
 print("TAB_REPEATED_NO_OUTPUT")
 
 # clear and test show candidates

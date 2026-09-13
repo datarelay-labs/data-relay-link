@@ -17,8 +17,8 @@ mkdir -p "$HOME"
 
 write_server_tree() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" "$tree/var/lib/frp-auto-deploy/registry.json" <<'PY'
+  mkdir -p "$tree/etc/drlink" "$tree/var/lib/drlink"
+  python3 - "$tree/etc/drlink/config.json" "$tree/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 cfg, reg = Path(sys.argv[1]), Path(sys.argv[2])
@@ -29,7 +29,7 @@ cfg.write_text(json.dumps({
     "port_end": 6098,
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:6099/enroll",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
+    "registry_file": "/var/lib/drlink/registry.json",
 }, indent=2, sort_keys=True) + "\n")
 reg.write_text(json.dumps({
     "schema_version": 2,
@@ -37,7 +37,7 @@ reg.write_text(json.dumps({
     "clients": {},
 }, indent=2, sort_keys=True) + "\n")
 PY
-  cat >"$tree/etc/frp-auto-deploy/version" <<'EOF'
+  cat >"$tree/etc/drlink/version" <<'EOF'
 PROJECT_VERSION=1.4.0
 FRP_VERSION=0.71.0
 EOF
@@ -84,18 +84,19 @@ if echo "$create_cands" | grep -qiE 'ticket|secret|bootstrap|token|password'; th
 fi
 pass "ZERO_TOUCH_SECRET_NOT_COMPLETED"
 
-# --- help create ---
+# --- help create (verb-first topic redirects; details live under resource help) ---
 help_create="$(frpctl_grammar_call help '{"tokens":["create"]}')"
-echo "$help_create" | grep -q 'create zero-touch' || fail "help create missing zero-touch"
-echo "$help_create" | grep -q 'create enrollment' || fail "help create missing enrollment"
-echo "$help_create" | grep -q 'Recommended:' || fail "help create missing Recommended"
-echo "$help_create" | grep -A1 'Recommended:' | grep -q 'create zero-touch' \
-  || fail "help create Recommended is not zero-touch"
-echo "$help_create" | grep -q 'Generate a one-line Zero-touch' || fail "help create zero-touch description"
-echo "$help_create" | grep -q 'Manual Enrollment Code' || fail "help create enrollment description"
+echo "$help_create" | grep -qiE 'resource-first|help legacy|Compatibility topic' \
+  || fail "help create should redirect to resource-first guidance"
+help_zt="$(frpctl_grammar_call help '{"tokens":["zero-touch"]}')"
+echo "$help_zt" | grep -qE 'zero-touch create|Create' || fail "help zero-touch missing create action"
+help_legacy="$(frpctl_grammar_call help '{"tokens":["legacy"]}')"
+echo "$help_legacy" | grep -qE 'create zero-touch|zero-touch create' \
+  || fail "help legacy missing create zero-touch alias"
 root_help="$(frpctl_grammar_call help '{"tokens":[]}')"
-echo "$root_help" | grep -q 'create zero-touch' || fail "root help missing create zero-touch"
-echo "$root_help" | grep -q 'create enrollment' || fail "root help missing create enrollment"
+echo "$root_help" | grep -qE 'zero-touch|create zero-touch' || fail "root help missing zero-touch"
+echo "$root_help" | grep -qE 'enrollment create|enrollment list|^  enrollment[[:space:]]' \
+  || fail "root help missing enrollment"
 pass "CREATE_ZERO_TOUCH_HELP"
 
 # --- context help ---
@@ -139,20 +140,29 @@ grep -q 'DISPATCH frp-create-client --platform windows --one-line --rdp --rdp-po
   "$WORKDIR/zt-rdp.out" || fail "Windows RDP dispatch"
 pass "ZERO_TOUCH_WINDOWS_RDP_GUIDED"
 
-# --- Guided menu intentionally hides management-only ---
-run_repl "$SERVER" "$WORKDIR/zt-no-mgmt.out" \
-  "create zero-touch" 1 3 exit \
+# --- Guided menu exposes management-only briefly (goal first) ---
+run_repl "$SERVER" "$WORKDIR/zt-mgmt-menu.out" \
+  "create zero-touch" 1 4 exit \
   || fail "zero-touch back option"
-grep -q '1) SSH only' "$WORKDIR/zt-no-mgmt.out" || fail "ssh only option missing"
-grep -q '2) Configure services' "$WORKDIR/zt-no-mgmt.out" || fail "configure services option missing"
-grep -q '3) Back' "$WORKDIR/zt-no-mgmt.out" || fail "back option missing"
-if grep -q 'Management only' "$WORKDIR/zt-no-mgmt.out"; then
-  fail "management only must not appear in guided menu"
-fi
-if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/zt-no-mgmt.out"; then
+grep -q '1) SSH only' "$WORKDIR/zt-mgmt-menu.out" || fail "ssh only option missing"
+grep -q '2) Configure services' "$WORKDIR/zt-mgmt-menu.out" || fail "configure services option missing"
+grep -q 'Connect this machine only' "$WORKDIR/zt-mgmt-menu.out" || fail "management-only option missing"
+grep -q '4) Back' "$WORKDIR/zt-mgmt-menu.out" || fail "back option missing"
+if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/zt-mgmt-menu.out"; then
   fail "Back unexpectedly dispatched zero-touch enrollment"
 fi
-pass "ZERO_TOUCH_MANAGEMENT_ONLY_HIDDEN"
+run_repl "$SERVER" "$WORKDIR/zt-mgmt-dispatch.out" \
+  "create zero-touch" 1 3 mgmt-client "inventory only" exit \
+  || fail "management-only guided dispatch"
+grep -q 'DISPATCH frp-create-client' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only dispatch missing"
+grep -qF -- '--client-name mgmt-client' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only client-name"
+grep -qF -- '--note inventory only' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only note"
+grep -qF -- '--one-line' "$WORKDIR/zt-mgmt-dispatch.out" \
+  || fail "management-only one-line"
+pass "ZERO_TOUCH_MANAGEMENT_ONLY_DISCOVERABLE"
 
 # --- Guided: multi-service SSH+HTTP ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-http.out" \
@@ -350,7 +360,7 @@ def wait_prompt(timeout=8):
     while time.time() < end:
         read_more(0.25)
         stripped = strip_ansi(bytes(buf)).replace(b"\r", b"").rstrip(b"\x00")
-        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>"):
+        if stripped.endswith(b"frpctl> ") or stripped.endswith(b"frpctl>") or stripped.endswith(b"drlink> ") or stripped.endswith(b"drlink>"):
             return True
     return False
 
@@ -395,7 +405,7 @@ if CLEAR_RE.search(chunk):
 # Buffer preserved: prompt + "create " restored
 read_more(0.5)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> create" not in tail and not tail.rstrip().endswith(b"create "):
+if b"frpctl> create" not in tail and b"drlink> create" not in tail and not tail.rstrip().endswith(b"create "):
     if b"create " not in tail:
         fail_pty("PTY: create buffer not preserved", chunk)
 

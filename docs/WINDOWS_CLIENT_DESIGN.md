@@ -23,7 +23,7 @@ Windows does **not** fork enrollment. It reuses:
 | Concern | Linux | Windows |
 | --- | --- | --- |
 | Installer | `bootstrap-client.sh` | `bootstrap-client.ps1` |
-| Paths | `/etc/frp`, `/etc/frp-auto-deploy` | `C:\ProgramData\frp-auto-deploy\` |
+| Paths | `/etc/frp`, `/etc/drlink` | `C:\ProgramData\drlink\` |
 | Process | systemd | background process + optional autostart later |
 | machine_id | `/etc/machine-id` or random `client-id` | random id persisted under ProgramData |
 | Crypto CLI | OpenSSL | .NET `System.Security.Cryptography` |
@@ -32,7 +32,7 @@ Windows does **not** fork enrollment. It reuses:
 ## Filesystem
 
 ```
-C:\ProgramData\frp-auto-deploy\
+C:\ProgramData\drlink\
   bin\frpc.exe
   config\frpc.toml
   state\client-state.json
@@ -51,7 +51,7 @@ Sensitive files: ACL for `SYSTEM` + `Administrators` only.
 
 ## Zero-touch UX
 
-`create zero-touch` → platform menu → Linux (existing) or Windows (RDP-first).
+`zero-touch create` → platform menu → Linux (existing) or Windows (RDP-first).
 
 Windows one-line (no `irm | iex`):
 
@@ -63,7 +63,7 @@ Windows one-line (no `irm | iex`):
 
 **ENROLL ONCE / RUN MANY TIMES**
 
-- First run: redeem + enroll + write state/config + start frpc
+- First run: redeem + enroll + write state/config + start drlink-client
 - Later: `frp-client start` uses existing identity/config/ports — no ticket, no re-enroll
 
 Autostart (Service / Task Scheduler) is **optional**, not MVP-blocking.

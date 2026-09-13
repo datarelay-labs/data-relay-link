@@ -76,12 +76,14 @@ try {
     $nowEnabled = Set-FrpDraftServiceEnabled -Id 'web' -Enable $true
     Assert-FrpTrue $nowEnabled 'web re-enabled'
 
-    # Disabling the last enabled service is rejected.
+    # Disabling the last enabled service is allowed (management-only).
     Set-FrpDraftServiceEnabled -Id 'web' -Enable $false | Out-Null
     Set-FrpDraftServiceEnabled -Id 'ssh' -Enable $false | Out-Null
-    $threw = $false
-    try { Set-FrpDraftServiceEnabled -Id 'rdp' -Enable $false | Out-Null } catch { $threw = $true }
-    Assert-FrpTrue $threw 'cannot disable last enabled service'
+    $nowEnabled = Set-FrpDraftServiceEnabled -Id 'rdp' -Enable $false
+    Assert-FrpTrue (-not $nowEnabled) 'last service may be disabled for management-only'
+    $map = Get-FrpDraftServiceMap
+    Assert-FrpTrue (-not [bool]$map['rdp'].enabled) 'rdp disabled in map'
+    Assert-FrpEqual 60010 ([int]$map['rdp'].remote_port) 'rdp reservation preserved when disabled'
 
     # discard removes the draft entirely; client-state.json is untouched.
     $existed = Remove-FrpDraftState

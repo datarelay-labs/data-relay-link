@@ -111,7 +111,7 @@ SECRET='enroll-secret-abcdef0123456789abcdef0123456789ab'
 write_enrollment "$ALLOC_ROOT/enrollments" "$EID" "$SECRET"
 
 TREE="$WORKDIR/client"
-mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin" "$TREE/usr/local/lib/frp-auto-deploy"
+mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin" "$TREE/usr/local/lib/drlink"
 make_frpc "$TREE/usr/local/bin/frpc"
 
 export FRP_CLIENT_TEST_ROOT="$TREE"

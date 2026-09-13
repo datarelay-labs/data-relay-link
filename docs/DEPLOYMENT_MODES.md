@@ -1,8 +1,8 @@
 # Deployment modes
 
-`frp-auto-deploy` supports two server deployment modes. Direct mode is the
+`Data Relay Link` supports two server deployment modes. Direct mode is the
 default and matches 2.0.0. Enterprise single-443 is optional. Project version
-**2.3.0** (FINAL AUDIT CLOSURE; recreate/move the `v2.3.0` tag on final HEAD).
+**2.3.1** (v2.3.0 remains historical/untouched).
 
 Published service ports stay **TCP/6000-6098** (1:1) in both modes.
 
@@ -11,7 +11,7 @@ control and the default allocator URL. An optional **public hostname** may be
 configured as a user-facing DNS alias for published services (SSH/HTTP/HTTPS/
 custom TCP). Setting or unsetting that hostname does not change Direct or
 single-443 control paths, frontend proxy configuration, or CA identity. DNS
-records are managed outside FRP Auto Deploy. HTTPS published services remain
+records are managed outside Data Relay Link. HTTPS published services remain
 TCP passthrough.
 
 An optional **bootstrap hostname** may be configured separately for publicly
@@ -103,7 +103,7 @@ The official bootstrap URL is unchanged:
 
 ```bash
 curl -fsSL \
-https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.2/dist/bootstrap-server.sh \
+https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.1.2/dist/bootstrap-server.sh \
 | sudo bash
 ```
 
@@ -132,18 +132,18 @@ Compared for this project: nginx, HAProxy, Caddy.
 
 **nginx** is used because it is present as `nginx` on the supported package
 managers, WebSocket reverse-proxy behaviour is stable, and a **dedicated**
-unit with `/etc/frp-auto-deploy/frontend.conf` does not take over distro
+unit with `/etc/drlink/frontend.conf` does not take over distro
 nginx sites. Direct mode does not install or enable this unit.
 
 The frontend is not the distro `nginx.service`. Uninstall removes
-`frp-frontend.service` and does not purge the nginx package.
+`drlink-frontend.service` and does not purge the nginx package.
 
 If the installer added the nginx package, it stops and disables distro
 `nginx.service` so the package manager autostart does not bind TCP/80.
 A pre-existing active or enabled `nginx.service` is a conflict: single-443
 fails before changing a working Direct deployment. A pre-existing inactive
 and disabled `nginx.service` is left that way. Reinstall of an existing
-single-443 tree is idempotent and does not treat `frp-frontend.service` as
+single-443 tree is idempotent and does not treat `drlink-frontend.service` as
 the distro unit. Uninstall never enables or starts distro `nginx.service`.
 
 ## TLS termination (single-443)
@@ -166,7 +166,7 @@ the distro unit. Uninstall never enables or starts distro `nginx.service`.
   nginx is already-decrypted HTTP Upgrade. The backend listens on 127.0.0.1
   only. FRP token authentication is unchanged.
 - frpc uses `transport.protocol = "wss"` plus `transport.tls.trustedCaFile`
-  pointing at `/etc/frp-auto-deploy/allocator-ca.crt` (same pin as allocator
+  pointing at `/etc/drlink/allocator-ca.crt` (same pin as allocator
   HTTPS). There is no fallback to `websocket` without TLS.
 
 First enrollment still:
@@ -215,16 +215,16 @@ fresh install with no `config.json` does not require that confirmation.
 Recommended sequence:
 
 1. Upgrade client software to 2.1.0+ while the server is still Direct
-   (`sudo frpctl update`). This does not re-enroll or change ports.
+   (`sudo drlink update`). This does not re-enroll or change ports.
 2. Schedule a window. Re-run the server installer with
    `FRP_DEPLOYMENT_MODE=single443` and `FRP_CONFIRM_MODE_SWITCH=yes`
    (or type `SWITCH` on a TTY).
 3. On each client, Apply (or otherwise contact the allocator) so
    `frp_transport=wss` is stored and `frpc.toml` is regenerated.
-4. Confirm `sudo frpctl status` / `sudo frpctl doctor` on server and client.
+4. Confirm `sudo drlink status` / `sudo drlink doctor` on server and client.
 
 Rollback of a failed cutover restores the previous `frps.toml` when the
-frontend config is invalid or `frp-frontend` fails to start, then restarts
+frontend config is invalid or `drlink-frontend` fails to start, then restarts
 frps. A completed cutover is reversed by reinstalling with
 `FRP_DEPLOYMENT_MODE=direct` and `FRP_CONFIRM_MODE_SWITCH=yes`, then Apply
 on clients so they return to `tcp`.
@@ -249,7 +249,7 @@ points at single-443 rather than HTTP downgrade.
 
 ## Configuration fields
 
-Stored in `/etc/frp-auto-deploy/config.json`:
+Stored in `/etc/drlink/config.json`:
 
 | Field | Direct | single-443 |
 | --- | --- | --- |

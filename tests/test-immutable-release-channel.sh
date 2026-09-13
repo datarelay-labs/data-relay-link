@@ -21,7 +21,7 @@ export FRP_RELEASE_CHANNEL=stable
 ref="$(frp_release_git_ref)"
 [[ "$ref" == "v${PROJECT_VERSION}" ]] || fail "stable ref is $ref"
 url="$(frp_default_client_installer_url)"
-[[ "$url" == "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v${PROJECT_VERSION}/dist/bootstrap-client.sh" ]] \
+[[ "$url" == "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.sh" ]] \
   || fail "stable installer URL: $url"
 upd="$(frp_default_client_update_url)"
 [[ "$upd" == "$url" ]] || fail "stable update URL mismatch: $upd"
@@ -42,7 +42,7 @@ unset FRP_RELEASE_CHANNEL FRP_CLIENT_INSTALLER_URL || true
 export FRP_RELEASE_CHANNEL=stable
 # shellcheck source=install-server.sh
 # Source only the migration helpers by extracting behavior via a mini check.
-MAIN_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh"
+MAIN_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh"
 frp_is_official_main_installer_url "$MAIN_URL" || fail "main URL not recognized"
 STABLE_URL="$(frp_default_client_installer_url)"
 [[ "$STABLE_URL" != "$MAIN_URL" ]] || fail "stable default still main"
@@ -59,8 +59,8 @@ grep -qi 'HTTPS' /tmp/frp-release-channel-http.err || fail "HTTPS requirement me
 pass "UPDATE_HTTPS_REQUIRED"
 
 # A stable client also rejects mutable refs even when transport is HTTPS.
-export FRP_CLIENT_UPDATE_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh"
-export FRP_CLIENT_UPDATE_METADATA_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/SHA256SUMS"
+export FRP_CLIENT_UPDATE_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh"
+export FRP_CLIENT_UPDATE_METADATA_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/SHA256SUMS"
 if frp_client_fetch_and_upgrade >/tmp/frp-release-channel-main.out 2>/tmp/frp-release-channel-main.err; then
   fail "stable update should reject mutable main"
 fi
@@ -142,21 +142,21 @@ pass "STABLE_IMMUTABLE"
 persist="$(mktemp -d)"
 trap 'rm -rf "$FRP_CLIENT_TEST_ROOT" "$persist"' EXIT
 export FRP_DEPLOY_TEST_ROOT="$persist"
-mkdir -p "$persist/etc/frp-auto-deploy"
+mkdir -p "$persist/etc/drlink"
 unset FRP_RELEASE_CHANNEL || true
 export FRP_RELEASE_CHANNEL=dev
 export FRP_BUNDLE_SHA256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-frp_write_version_file "$persist/etc/frp-auto-deploy/version"
-grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/frp-auto-deploy/version" || fail "dev channel not written"
-grep -q 'SOURCE_REF=main' "$persist/etc/frp-auto-deploy/version" || fail "dev source ref"
+frp_write_version_file "$persist/etc/drlink/version"
+grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/drlink/version" || fail "dev channel not written"
+grep -q 'SOURCE_REF=main' "$persist/etc/drlink/version" || fail "dev source ref"
 grep -q 'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-  "$persist/etc/frp-auto-deploy/version" || fail "bundle sha not written"
+  "$persist/etc/drlink/version" || fail "bundle sha not written"
 unset FRP_RELEASE_CHANNEL FRP_BUNDLE_SHA256 || true
-frp_write_version_file "$persist/etc/frp-auto-deploy/version"
-grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/frp-auto-deploy/version" || fail "dev channel lost on re-run"
-grep -q 'SOURCE_REF=main' "$persist/etc/frp-auto-deploy/version" || fail "dev source ref lost"
+frp_write_version_file "$persist/etc/drlink/version"
+grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/drlink/version" || fail "dev channel lost on re-run"
+grep -q 'SOURCE_REF=main' "$persist/etc/drlink/version" || fail "dev source ref lost"
 grep -q 'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-  "$persist/etc/frp-auto-deploy/version" || fail "bundle sha lost"
+  "$persist/etc/drlink/version" || fail "bundle sha lost"
 [[ "$(frp_release_channel)" == "dev" ]] || fail "persisted channel not used for URLs"
 case "$(frp_default_client_installer_url)" in
   */main/dist/bootstrap-client.sh) ;;
@@ -170,11 +170,11 @@ pass "BUILD_IDENTITY"
 unset FRP_RELEASE_CHANNEL || true
 stable_tree="$(mktemp -d)"
 export FRP_DEPLOY_TEST_ROOT="$stable_tree"
-mkdir -p "$stable_tree/etc/frp-auto-deploy"
+mkdir -p "$stable_tree/etc/drlink"
 export FRP_RELEASE_CHANNEL=stable
-frp_write_version_file "$stable_tree/etc/frp-auto-deploy/version"
-grep -q 'RELEASE_CHANNEL=stable' "$stable_tree/etc/frp-auto-deploy/version" || fail "stable channel"
-grep -q "SOURCE_REF=v${PROJECT_VERSION}" "$stable_tree/etc/frp-auto-deploy/version" || fail "stable source ref"
+frp_write_version_file "$stable_tree/etc/drlink/version"
+grep -q 'RELEASE_CHANNEL=stable' "$stable_tree/etc/drlink/version" || fail "stable channel"
+grep -q "SOURCE_REF=v${PROJECT_VERSION}" "$stable_tree/etc/drlink/version" || fail "stable source ref"
 unset FRP_RELEASE_CHANNEL || true
 [[ "$(frp_release_channel)" == "stable" ]] || fail "stable persistence"
 case "$(frp_default_client_installer_url)" in

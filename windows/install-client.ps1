@@ -30,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 
 function Show-FrpInstallHelp {
     @'
-frp-auto-deploy Windows client installer
+Data Relay Link Windows client installer
 
 Zero-touch:
   .\install-client.ps1 -ZeroTouch -AllocatorUrl https://HOST/enroll `
@@ -40,7 +40,8 @@ Environment equivalents:
   FRP_ALLOCATOR_URL, FRP_ALLOCATOR_CA_SHA256, FRP_BOOTSTRAP_TICKET
 
 After enrollment:
-  tools\frp-client.cmd start|stop|status|info|update|uninstall|doctor
+  tools\drlink.cmd start|stop|status|info|update|uninstall|doctor
+  (compatibility: tools\frp-client.cmd)
 
 Notes:
   - ENROLL ONCE: if already enrolled, refuse ticket re-use; run frp-client start

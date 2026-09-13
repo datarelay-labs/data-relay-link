@@ -10,7 +10,7 @@ _frp_u_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _frp_u_macos in \
   "${_frp_u_here}/lib/frp-macos.sh" \
   "${_frp_u_here}/frp-macos.sh" \
-  '/Library/Application Support/frp-auto-deploy/lib/frp-macos.sh'; do
+  '/Library/Application Support/drlink/lib/frp-macos.sh'; do
   if [[ -f "$_frp_u_macos" ]]; then
     frp_is_darwin() { [[ "${FRP_TEST_UNAME_S:-$(uname -s)}" == Darwin ]]; }
     frp_command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -140,7 +140,9 @@ frp_u_stop_owned_frpc() {
 }
 
 SKIP_SYSTEMD=0
-if [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}" || -n "${FRP_CLIENT_TEST_ROOT:-}" || "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+if [[ "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
+  SKIP_SYSTEMD=1
+elif [[ -n "${FRP_UNINSTALL_TEST_ROOT:-}${FRP_CLIENT_TEST_ROOT:-}" && -z "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
   SKIP_SYSTEMD=1
 fi
 
@@ -148,6 +150,156 @@ echo 'Local software will be removed.'
 echo 'Server-side reservations remain.'
 echo 'Use an explicit server release command if ports should be freed.'
 echo
+
+frp_u_legacy_client_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  case "$exec_line" in
+    */usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|*/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    /usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Client'|'Data Relay Link Client'|'Data Relay Link Client (legacy unit name; use drlink-client)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+frp_u_legacy_systemctl() {
+  if [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]]; then
+    "${FRP_UNINSTALL_HOOK_SYSTEMCTL}" "$@"
+    return $?
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl "$@"
+}
+
+frp_u_use_systemd() {
+  [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin \
+    && { [[ -n "${FRP_UNINSTALL_HOOK_SYSTEMCTL:-}" ]] || command -v systemctl >/dev/null 2>&1; }
+}
+
+frp_u_unit_is_active() {
+  local unit="$1" st
+  st="$(frp_u_legacy_systemctl is-active "$unit" 2>/dev/null || true)"
+  [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
+}
+
+frp_u_legacy_unit_is_active() {
+  frp_u_unit_is_active frpc.service
+}
+
+frp_u_unit_owns_product_frpc() {
+  local unit="$1"
+  local main_pid="" exe=""
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC:-}" ]]; then
+    "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC}"
+    return $?
+  fi
+  main_pid="$(frp_u_legacy_systemctl show -p MainPID --value "$unit" 2>/dev/null || true)"
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! kill -0 "$main_pid" 2>/dev/null; then
+    return 1
+  fi
+  if [[ -e "/proc/${main_pid}/exe" ]]; then
+    exe="$(readlink -f "/proc/${main_pid}/exe" 2>/dev/null || true)"
+    case "$exe" in
+      /usr/local/bin/frpc|/usr/local/bin/frpc\ \(deleted\)) return 0 ;;
+    esac
+    return 1
+  fi
+  return 0
+}
+
+frp_u_legacy_unit_owns_product_frpc() {
+  frp_u_unit_owns_product_frpc frpc.service
+}
+
+frp_u_retire_unit_fail_closed() {
+  local unit="$1"
+  local unit_file="$2"
+  local label="$3"
+  local class_prefix="${4:-CLIENT_UNIT}"
+  local attempt max_attempts=3 enabled=""
+  [[ -f "$unit_file" ]] || return 0
+  if frp_u_use_systemd; then
+    if frp_u_unit_is_active "$unit" || frp_u_unit_owns_product_frpc "$unit"; then
+      attempt=1
+      while (( attempt <= max_attempts )); do
+        if frp_u_legacy_systemctl stop "$unit" >/dev/null 2>&1; then
+          break
+        fi
+        if (( attempt == max_attempts )); then
+          echo "ERROR: failed to stop ${label}" >&2
+          echo "FAILURE_CLASS=${class_prefix}_STOP_FAILED" >&2
+          return 1
+        fi
+        sleep 0.2
+        attempt=$((attempt + 1))
+      done
+      if frp_u_unit_is_active "$unit"; then
+        echo "ERROR: ${label} remains active after stop" >&2
+        echo "FAILURE_CLASS=${class_prefix}_STILL_ACTIVE" >&2
+        return 1
+      fi
+      if frp_u_unit_owns_product_frpc "$unit"; then
+        echo "ERROR: ${label} MainPID still owns frpc after stop" >&2
+        echo "FAILURE_CLASS=${class_prefix}_PROCESS_REMAINS" >&2
+        return 1
+      fi
+    fi
+    if ! frp_u_legacy_systemctl disable "$unit" >/dev/null 2>&1; then
+      enabled="$(frp_u_legacy_systemctl is-enabled "$unit" 2>/dev/null || true)"
+      case "$enabled" in
+        enabled|enabled-runtime|linked|linked-runtime)
+          echo "ERROR: failed to disable ${label}" >&2
+          echo "FAILURE_CLASS=${class_prefix}_DISABLE_FAILED" >&2
+          return 1
+          ;;
+      esac
+    fi
+  fi
+  frp_u_rm_file "$unit_file"
+  if frp_u_use_systemd; then
+    if ! frp_u_legacy_systemctl daemon-reload >/dev/null 2>&1; then
+      echo "ERROR: daemon-reload failed after removing ${label}" >&2
+      echo "FAILURE_CLASS=${class_prefix}_RELOAD_FAILED" >&2
+      return 1
+    fi
+    frp_u_legacy_systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+frp_u_retire_canonical_client_unit() {
+  local unit unit_file
+  unit=drlink-client.service
+  unit_file="$(frp_u_path /etc/systemd/system/drlink-client.service)"
+  frp_u_retire_unit_fail_closed "$unit" "$unit_file" "product-owned drlink-client.service" "CLIENT_UNIT"
+}
+
+frp_u_retire_legacy_client_unit() {
+  local unit unit_file
+  unit=frpc.service
+  unit_file="$(frp_u_path /etc/systemd/system/frpc.service)"
+  [[ -f "$unit_file" ]] || return 0
+  if ! frp_u_legacy_client_unit_is_product_owned "$unit_file"; then
+    echo "WARNING: leaving non-product frpc.service in place at ${unit_file}" >&2
+    return 0
+  fi
+  frp_u_retire_unit_fail_closed "$unit" "$unit_file" "product-owned legacy frpc.service" "LEGACY_UNIT"
+}
 
 if [[ "$SKIP_SYSTEMD" != "1" ]]; then
   if frp_u_is_darwin; then
@@ -157,23 +309,33 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
       exit 1
     fi
     frp_macos_launchd_bootout
-  elif command -v systemctl >/dev/null 2>&1; then
-    systemctl stop frpc 2>/dev/null || true
-    systemctl disable frpc 2>/dev/null || true
   fi
+fi
+# Canonical supervisor must stop fail-closed before binary/config removal.
+if ! frp_u_retire_canonical_client_unit; then
+  exit 1
+fi
+# Historical product supervisor must not survive uninstall and respawn on reboot.
+if ! frp_u_retire_legacy_client_unit; then
+  exit 1
 fi
 frp_u_stop_owned_frpc
 
-frp_u_rm_file "$(frp_u_path /etc/systemd/system/frpc.service)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
-frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
-frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 
-libdir="$(frp_u_path /usr/local/lib/frp-auto-deploy)"
+libdir="$(frp_u_path /usr/local/lib/drlink)"
 SERVER_PRESENT=0
-if [[ -f "$(frp_u_path /etc/frp-auto-deploy/config.json)" ]]; then
+if [[ -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
   SERVER_PRESENT=1
+fi
+
+# Shared management entrypoints are owned symmetrically with shared libraries:
+# preserve them when the server role remains on this host.
+if [[ "$SERVER_PRESENT" != "1" ]]; then
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
+  frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 fi
 
 # Load canonical ownership (CLIENT_ONLY / SHARED).
@@ -191,14 +353,14 @@ unset _frp_own
 
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   # CLIENT_ONLY: always remove on client uninstall.
-  for f in frp-client-common.sh frp-macos.sh com.datarelay.frp-auto-deploy.frpc.plist; do
+  for f in frp-client-common.sh frp-macos.sh com.datarelay.drlink.frpc.plist; do
     frp_u_rm_file "${libdir}/${f}"
   done
   # SHARED with server: remove only when server role is absent.
   if [[ "$SERVER_PRESENT" != "1" ]]; then
     for f in frp-common.sh frp_mgmt_auth.py frp_health_check.py \
       frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_ctl_repl.py \
-      frp-role-ownership.sh; do
+      frp-role-ownership.sh frpctl; do
       frp_u_rm_file "${libdir}/${f}"
     done
   fi
@@ -233,10 +395,10 @@ if [[ -d "$etc_frp" ]]; then
   fi
 fi
 
-frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/allocator-ca.crt)"
+frp_u_rm_file "$(frp_u_path /etc/drlink/allocator-ca.crt)"
 # Client role owns client-update-pending.json only. Never remove the server marker.
-frp_u_rm_file "$(frp_u_path /var/lib/frp-auto-deploy/client-update-pending.json)"
-legacy_marker="$(frp_u_path /var/lib/frp-auto-deploy/update-pending.json)"
+frp_u_rm_file "$(frp_u_path /var/lib/drlink/client-update-pending.json)"
+legacy_marker="$(frp_u_path /var/lib/drlink/update-pending.json)"
 if [[ -f "$legacy_marker" ]]; then
   legacy_op="$(python3 - "$legacy_marker" <<'PY'
 import json, sys
@@ -252,18 +414,22 @@ PY
     frp_u_rm_file "$legacy_marker"
   fi
 fi
-frp_u_rm_file "$(frp_u_path /var/lib/frp-auto-deploy/client-draft.json)"
-frp_u_safe_rm_rf "$(frp_u_path /var/lib/frp-auto-deploy/client-upgrades)"
+frp_u_rm_file "$(frp_u_path /var/lib/drlink/client-draft.json)"
+frp_u_safe_rm_rf "$(frp_u_path /var/lib/drlink/client-upgrades)"
 
-# Dual-role guard: if [[ ! -f /etc/frp-auto-deploy/config.json ]]
-if [[ ! -f "$(frp_u_path /etc/frp-auto-deploy/config.json)" ]]; then
-  frp_u_rm_file "$(frp_u_path /etc/frp-auto-deploy/version)"
-  rmdir "$(frp_u_path /etc/frp-auto-deploy)" 2>/dev/null || true
+# Dual-role guard: if [[ ! -f /etc/drlink/config.json ]]
+if [[ ! -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
+  frp_u_rm_file "$(frp_u_path /etc/drlink/version)"
+  rmdir "$(frp_u_path /etc/drlink)" 2>/dev/null || true
 fi
 
-if [[ "$SKIP_SYSTEMD" != "1" ]] && ! frp_u_is_darwin && command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload
-  systemctl reset-failed 2>/dev/null || true
+if frp_u_use_systemd; then
+  if ! frp_u_legacy_systemctl daemon-reload >/dev/null 2>&1; then
+    echo "ERROR: daemon-reload failed after client uninstall" >&2
+    echo "FAILURE_CLASS=CLIENT_UNIT_RELOAD_FAILED" >&2
+    exit 1
+  fi
+  frp_u_legacy_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
 echo 'FRP client removed locally. The central port reservation is intentionally preserved.'

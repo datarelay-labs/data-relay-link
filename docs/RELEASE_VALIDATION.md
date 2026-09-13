@@ -72,14 +72,14 @@ Do **not** map Docker, LXD, or QEMU TCG to `REAL_VM=PASS`.
 On a throwaway VM only:
 
 1. Fresh install (server and/or client bootstrap)
-2. `systemctl is-enabled` / `is-active` for `frps`, `frp-port-allocator`, `frpc` as applicable
+2. `systemctl is-enabled` / `is-active` for `frps`, `drlink-allocator`, `frpc` as applicable
 3. Reboot; confirm units and `frpctl status`
-4. `sudo frpctl doctor` (read-only)
+4. `sudo drlink doctor` (read-only)
 5. Zero-touch **or** manual enrollment
 6. Publish a service; connect with the **public** host and **public** service port
    (`ssh -p <public-port> <user>@<public-host>`)
 7. Disable and re-enable; confirm the same public port
-8. `sudo frpctl update`
+8. `sudo drlink update`
 9. Uninstall only on the test host (`uninstall-client.sh` does not release server ports;
    server uninstall preserves state; purge requires `--purge --yes`)
 
@@ -210,3 +210,53 @@ ROCKY_9_SELINUX_ENFORCING=NOT_TESTED
 REAL_ARM_SYSTEMD=NOT_TESTED
 REAL_OPENSSL_1_0_2_TLS_ENROLLMENT=NOT_TESTED
 ```
+
+## Production-realistic qualification (v2.3.1+)
+
+Authoritative orchestrator:
+
+```bash
+./tests/run-production-realistic-qualification.sh PASS1
+./tests/run-production-realistic-qualification.sh PASS2
+```
+
+Extended load/perf/recovery phases:
+
+```bash
+PROD_QUAL_OUT=e2e-reports/manual-extended \
+  ./tests/run-prod-qual-extended.sh
+```
+
+This suite is designed so a separate manual E2E is not required when both
+PASS1 and PASS2 succeed on the **same exact HEAD**.
+
+### Gate families
+
+| Family | Coverage | Cadence |
+| --- | --- | --- |
+| EVERY RELEASE | Multi-OS Real E2E matrix, Access, Egress allow/deny, backup/restore, support bundle, status/doctor, docs-free UX, PASS1+PASS2 | Required for stable |
+| PERFORMANCE BASELINE | Concurrent CONNECT 1..500, churn, noisy-neighbor, failure-load, remote-access + egress latency/throughput samples, server RSS/FD/threads | Required for stable; establishes baseline (overhead ≠ automatic fail) |
+| UPGRADE FROM PREVIOUS RELEASE | Golden baseline compare; server-first then clients; mixed-version rolling; upgrade under traffic | Required when shipping N→N+1 |
+| DISASTER RECOVERY | Fresh-server restore from golden backup; clients reconnect without reinstall | Required when changing backup/restore or identity contracts |
+| OPTIONAL EXTENDED STRESS | 1000-conn exploratory, multi-hour soak beyond 30m, 100/sec churn sustained | Recommended when capacity claims change |
+
+### Environment variables
+
+```text
+FRP_E2E_QUAL_OUT              Evidence directory
+FRP_E2E_SOAK_SECONDS          Default 1800 (30m)
+FRP_E2E_CHURN_SECONDS         Default 300 (5m)
+FRP_E2E_QUAL_SKIP_LOCAL=1     Skip local run-all when CI already green for HEAD
+FRP_E2E_QUAL_SERVER_REBOOT=0  Skip extra server reboot (matrix already reboots)
+FRP_E2E_EGRESS_PORT           Default 16080 for Real E2E egress listener
+```
+
+### Golden v2.3.1 upgrade baseline
+
+On successful qualification, sanitized artifacts are written under:
+
+```text
+e2e-reports/v2.3.1-golden-upgrade-baseline/
+```
+
+Contents are fingerprints/listings only — never raw tokens or private keys.

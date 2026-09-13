@@ -242,9 +242,9 @@ python3 "$ROOT/lib/frp_frontend.py" \
   --frontend-port 443 \
   --allocator-listen-port 6099 \
   --control-listen-port 7000 \
-  --ca-cert /etc/frp-auto-deploy/pki/ca.crt \
-  --server-cert /etc/frp-auto-deploy/pki/server.crt \
-  --server-key /etc/frp-auto-deploy/pki/server.key >/dev/null
+  --ca-cert /etc/drlink/pki/ca.crt \
+  --server-cert /etc/drlink/pki/server.crt \
+  --server-key /etc/drlink/pki/server.key >/dev/null
 python3 - "$FRP_SERVER_CONFIG" "$WORKDIR/frps-s443.toml" "$WORKDIR/frontend.conf" <<'PY' || fail "single443 generated files"
 import json, sys
 from pathlib import Path
@@ -270,7 +270,7 @@ assert 'proxy_ssl_verify on' in conf
 assert 'proxy_ssl_name localhost;' in conf
 assert 'proxy_ssl_server_name on' in conf
 assert 'proxy_ssl_name 203.0.113.10;' not in conf
-assert 'ssl_certificate /etc/frp-auto-deploy/pki/server.crt' in conf
+assert 'ssl_certificate /etc/drlink/pki/server.crt' in conf
 assert 'listen 443 ssl;' in conf
 assert 'ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+' in conf
 assert 'return 404;' in conf
@@ -299,9 +299,9 @@ python3 "$ROOT/lib/frp_frontend.py" \
   --frontend-port 443 \
   --allocator-listen-port 6099 \
   --control-listen-port 7000 \
-  --ca-cert /etc/frp-auto-deploy/pki/ca.crt \
-  --server-cert /etc/frp-auto-deploy/pki/server.crt \
-  --server-key /etc/frp-auto-deploy/pki/server.key >/dev/null
+  --ca-cert /etc/drlink/pki/ca.crt \
+  --server-cert /etc/drlink/pki/server.crt \
+  --server-key /etc/drlink/pki/server.key >/dev/null
 python3 - "$WORKDIR/frontend-dns.conf" <<'PY' || fail "dns public host backend identity"
 from pathlib import Path
 import sys

@@ -1,0 +1,9 @@
+# Tests under tests/ that are intentionally NOT invoked by run-all.sh.
+# Keep this list small. Prefer adding new regressions to run-all.sh.
+#
+# Real E2E / benchmark / destructive / optional infrastructure:
+run-egress-userspace-e2e.sh
+run-egress-real-e2e-smoke.sh
+run-egress-benchmark-worker.py
+run-short-url-e2e.sh
+run-distro-matrix.sh
