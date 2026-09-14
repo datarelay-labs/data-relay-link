@@ -126,8 +126,13 @@ EOF
     set +e
     pq_ssh "$host" "bash -s" >"$log" 2>&1 <<EOF
 set -euo pipefail
+# curl honors lowercase http_proxy/https_proxy; uppercase alone can be ignored,
+# which makes DENY probes go direct and falsely report 200 as policy allow.
+export http_proxy=http://${SERVER_IP}:${EGRESS_PORT}
+export https_proxy=http://${SERVER_IP}:${EGRESS_PORT}
 export HTTP_PROXY=http://${SERVER_IP}:${EGRESS_PORT}
 export HTTPS_PROXY=http://${SERVER_IP}:${EGRESS_PORT}
+export no_proxy=127.0.0.1,localhost
 export NO_PROXY=127.0.0.1,localhost
 echo HOST=\$(hostname)
 # ALLOW HTTP
@@ -700,8 +705,12 @@ for size in 1K 100K; do
   curl -sS -o /dev/null -w 'code=%{http_code} ttfb=%{time_starttransfer} total=%{time_total} size=%{size_download}\\n' --max-time 30 "\$url"
 done
 # DRLINK via proxy
+export http_proxy=http://${SERVER_IP}:${EGRESS_PORT}
+export https_proxy=http://${SERVER_IP}:${EGRESS_PORT}
 export HTTP_PROXY=http://${SERVER_IP}:${EGRESS_PORT}
 export HTTPS_PROXY=http://${SERVER_IP}:${EGRESS_PORT}
+export no_proxy=127.0.0.1,localhost
+export NO_PROXY=127.0.0.1,localhost
 for size in 1K 100K; do
   echo -n "DRLINK_HTTP_\$size "
   curl -sS -o /dev/null -w 'code=%{http_code} ttfb=%{time_starttransfer} total=%{time_total} size=%{size_download}\\n' --max-time 40 http://example.com/
