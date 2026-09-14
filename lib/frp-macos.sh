@@ -10,6 +10,10 @@ FRP_MACOS_LAUNCHD_LABEL="${FRP_MACOS_LAUNCHD_LABEL:-com.datarelay.drlink.frpc}"
 FRP_MACOS_STATE_ROOT_DEFAULT='/Library/Application Support/drlink'
 FRP_MACOS_LAUNCHDAEMON_DIR='/Library/LaunchDaemons'
 FRP_MACOS_MIN_PRODUCT_VERSION="${FRP_MACOS_MIN_PRODUCT_VERSION:-11}"
+# launchd has no log rotation of its own, so the product enforces the bound on
+# the frpc stdout/stderr files it owns: 5 MB per file, 3 kept generations.
+FRP_MACOS_LOG_MAX_BYTES="${FRP_MACOS_LOG_MAX_BYTES:-5242880}"
+FRP_MACOS_LOG_KEEP="${FRP_MACOS_LOG_KEEP:-3}"
 
 frp_macos_state_root() {
   printf '%s' "${FRP_MACOS_STATE_ROOT:-$FRP_MACOS_STATE_ROOT_DEFAULT}"
@@ -207,6 +211,7 @@ PY
 frp_macos_launchd_install() {
   local dest
   dest="$(frp_macos_fs /etc/systemd/system/drlink-client.service)"
+  frp_macos_rotate_logs
   frp_require_safe_write_path "$dest" && frp_macos_render_plist "$dest"
 }
 
@@ -219,6 +224,7 @@ frp_macos_launchd_bootout() {
 frp_macos_launchd_bootstrap() {
   local plist
   frp_launchd_usable || return 0
+  frp_macos_rotate_logs
   plist="$(frp_macos_fs /etc/systemd/system/drlink-client.service)"
   if frp_invoke launchctl bootstrap system "$plist" >/dev/null 2>&1; then
     return 0
@@ -231,6 +237,7 @@ frp_macos_launchd_bootstrap() {
 }
 
 frp_macos_launchd_kickstart() {
+  frp_macos_rotate_logs
   frp_invoke launchctl kickstart -k "system/${FRP_MACOS_LAUNCHD_LABEL}" >/dev/null 2>&1
 }
 
@@ -269,6 +276,38 @@ frp_macos_log_paths() {
   local state
   state="$(frp_macos_fs /etc/frp)"
   printf '%s\n' "$state/logs/frpc.out.log" "$state/logs/frpc.err.log"
+}
+
+frp_macos_rotate_log() {
+  # Bound one launchd log file. Rotation is copy-then-truncate so the inode
+  # survives: launchd hands frpc an already-open descriptor, and renaming the
+  # file would leave frpc appending to the rotated generation forever.
+  local f="${1:-}" max="${FRP_MACOS_LOG_MAX_BYTES}" keep="${FRP_MACOS_LOG_KEEP}" i size
+  [[ -n "$f" && -f "$f" ]] || return 0
+  [[ "$max" =~ ^[0-9]+$ && "$keep" =~ ^[0-9]+$ ]] || return 0
+  (( max > 0 && keep > 0 )) || return 0
+  size="$(frp_macos_log_file_meta "$f")"
+  size="${size#* }"
+  [[ "$size" =~ ^[0-9]+$ ]] || return 0
+  (( size > max )) || return 0
+
+  rm -f "${f}.${keep}" 2>/dev/null || true
+  for (( i = keep - 1; i >= 1; i-- )); do
+    [[ -f "${f}.${i}" ]] && mv -f "${f}.${i}" "${f}.$((i + 1))" 2>/dev/null
+  done
+  cp -p "$f" "${f}.1" 2>/dev/null || return 0
+  chmod 0640 "${f}.1" 2>/dev/null || true
+  : >"$f" 2>/dev/null || true
+  return 0
+}
+
+frp_macos_rotate_logs() {
+  # Enforce the retention bound on both launchd log files.
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && frp_macos_rotate_log "$f"
+  done < <(frp_macos_log_paths)
+  return 0
 }
 
 frp_macos_log_file_meta() {
@@ -320,6 +359,10 @@ frp_macos_log_cursor() {
   # Format: logpos:v1:out=INODE,SIZE,FP:err=INODE,SIZE,FP
   # FP fingerprints the pre-cursor region so inode-reuse replacements reset.
   local out_log err_log out_meta err_meta out_ino out_sz err_ino err_sz out_fp err_fp
+  # Enforce retention before recording the cursor, so a client that runs for
+  # months without a restart is still bounded and the cursor reflects the
+  # post-rotation offsets.
+  frp_macos_rotate_logs
   {
     read -r out_log
     read -r err_log

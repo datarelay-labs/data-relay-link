@@ -132,4 +132,85 @@ s=json.load(open(sys.argv[1]))
 assert s['management_only'] is True
 assert s['services']=={}
 PY
+
+# --- F17: the install path must not force a service on a fresh client -----
+(
+  set -euo pipefail
+  INSTALL_WORK="$WORK/install-ux"
+  mkdir -p "$INSTALL_WORK"
+  export FRP_CLIENT_SOURCED=1
+  export FRP_CLIENT_TEST_ROOT="$INSTALL_WORK/root"
+  mkdir -p "$FRP_CLIENT_TEST_ROOT/etc/frp"
+  # shellcheck source=../install-client.sh
+  . "$ROOT/install-client.sh"
+
+  SERVICES_FILE="$INSTALL_WORK/services.json"
+  FRP_VERSION="${FRP_VERSION:-0.71.0}"
+
+  # Interactive: a fresh client can reach "install" with nothing configured.
+  export FRP_CLIENT_TEST_INPUT=$'3\ny\n'
+  rm -f "$(frp_test_input_path)" 2>/dev/null || true
+  collect_services >"$INSTALL_WORK/interactive.out" 2>&1 \
+    || { cat "$INSTALL_WORK/interactive.out" >&2; echo "FAIL F17 interactive management-only install was refused" >&2; exit 1; }
+  [[ "$(services_count)" == "0" ]] \
+    || { echo "FAIL F17 interactive install invented a service" >&2; exit 1; }
+  grep -qi 'at least one service must be configured' "$INSTALL_WORK/interactive.out" \
+    && { echo "FAIL F17 installer still demands a service" >&2; exit 1; }
+  grep -qi 'management-only' "$INSTALL_WORK/interactive.out" \
+    || { cat "$INSTALL_WORK/interactive.out" >&2; echo "FAIL F17 install summary does not name management-only mode" >&2; exit 1; }
+  grep -qi 'stopped' "$INSTALL_WORK/interactive.out" \
+    || { echo "FAIL F17 install summary does not say frpc stays stopped" >&2; exit 1; }
+  unset FRP_CLIENT_TEST_INPUT
+
+  # Non-interactive: an explicit empty service list is management-only, not an
+  # error. The variable is only consulted when it was deliberately set.
+  export FRP_SERVICES_JSON='[]'
+  collect_services >"$INSTALL_WORK/env.out" 2>&1 \
+    || { cat "$INSTALL_WORK/env.out" >&2; echo "FAIL F17 FRP_SERVICES_JSON=[] was rejected" >&2; exit 1; }
+  [[ "$(services_count)" == "0" ]] || { echo "FAIL F17 env path invented a service" >&2; exit 1; }
+  unset FRP_SERVICES_JSON
+
+  # The installer starts frpc only when a service exists; management-only
+  # installs leave the unit installed but stopped.
+  python3 - "$ROOT/install-client.sh" <<'PY' || { echo "FAIL F17 install start guard" >&2; exit 1; }
+import re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = text.index('echo "Starting FRP client ..."')
+guard = text.rindex('if [[ "$(services_count)" != "0"', 0, start)
+assert 'FRP_SKIP_SYSTEMD' in text[guard:start], "start guard lost its systemd condition"
+assert re.search(
+    r'Management-only mode: frpc is not started until a service is enabled',
+    text[start:],
+), "management-only branch no longer explains the stopped client"
+PY
+) || exit 1
+pass_f17="PASS F17 fresh install allows management-only enrollment"
+echo "$pass_f17"
+
+# A management-only client can publish a service afterwards.
+(
+  set -euo pipefail
+  LATER="$WORK/later-add"
+  export FRP_CLIENT_TEST_ROOT="$LATER/root"
+  export FRP_SKIP_SYSTEMD=1
+  export FRP_SKIP_CONNECTIVITY_CHECK=1
+  mkdir -p "$FRP_CLIENT_TEST_ROOT/etc/frp" "$FRP_CLIENT_TEST_ROOT/var/lib/drlink" \
+    "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink"
+  cp "$ROOT/lib/frp_health_check.py" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink/"
+  cp "$ROOT/lib/frp-client-common.sh" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink/"
+  cp "$WORK/state.json" "$FRP_CLIENT_TEST_ROOT/etc/frp/client-state.json"
+  "$ROOT/tools/frp-client" add-service --preset ssh --id ssh --name SSH \
+    --target-port 22 --ssh-user aella >"$LATER.out" 2>&1 \
+    || { cat "$LATER.out" >&2; echo "FAIL F17 service add after management-only install" >&2; exit 1; }
+  python3 - "$FRP_CLIENT_TEST_ROOT/var/lib/drlink/client-draft.json" <<'PY' \
+    || { echo "FAIL F17 added service missing from pending state" >&2; exit 1; }
+import json, sys
+from pathlib import Path
+draft = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert draft["services"]["ssh"]["preset"] == "ssh", draft
+PY
+) || exit 1
+echo "PASS F17 service add works after a management-only install"
+
 echo "ZERO_SERVICE_CLIENT_TEST=PASS"

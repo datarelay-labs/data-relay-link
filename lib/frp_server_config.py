@@ -13,13 +13,29 @@ be overloaded onto public_hostname or FRP control identity.
 """
 from __future__ import annotations
 
+import importlib.util
 import ipaddress
 import json
 import os
 import re
 import socket
+import sys
 import tempfile
 from pathlib import Path
+
+
+def durable_replace(tmp, path):
+    """Shared durable replace (lib/frp_control_locks.py)."""
+    mod = sys.modules.get('frp_control_locks')
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            'frp_control_locks', str(Path(__file__).resolve().parent / 'frp_control_locks.py')
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules['frp_control_locks'] = mod
+        spec.loader.exec_module(mod)
+    return mod.durable_replace(tmp, path)
+
 
 # DNS hostname: labels of [A-Za-z0-9-] separated by dots; no scheme/port/path.
 _HOSTNAME_RE = re.compile(
@@ -328,7 +344,10 @@ def atomic_write_config(path, cfg):
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        # config.json carries the server's identity, ports and trust anchors;
+        # a lost rename would silently restore a superseded configuration on
+        # the next boot.
+        durable_replace(tmp, path)
         if path.name == 'config.json':
             _reapply_config_egress_permissions(path)
     finally:

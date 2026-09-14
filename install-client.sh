@@ -86,7 +86,7 @@ collect_services_interactive() {
       frp_ux_empty_services_help
       echo "1) Add service"
       echo "2) Remove a service"
-      echo "3) Install and connect"
+      echo "3) Install management-only (no published services)"
       echo "4) Cancel"
       echo
       choice="$(read_tty "Select an option [1]: " "1")"
@@ -107,10 +107,9 @@ collect_services_interactive() {
       1) menu_add_service ;;
       2) menu_remove_service ;;
       3)
-        if [[ "$(services_count)" == "0" ]]; then
-          echo "ERROR: at least one service must be configured" >&2
-          continue
-        fi
+        # Management-only enrollment is a supported end state: the machine is
+        # enrolled and manageable, and frpc stays stopped until a service is
+        # added later. Do not force a service just to finish the install.
         frp_ux_print_install_summary "$SERVICES_FILE" "$FRP_VERSION"
         if frp_confirm_yes "Continue? [Y/n]: "; then
           return 0
@@ -129,11 +128,9 @@ collect_services_interactive() {
 collect_services() {
   services_init
   if [[ -n "${FRP_SERVICES_JSON:-}" ]]; then
+    # An explicit empty list is management-only enrollment, not a mistake:
+    # the variable is only consulted when it was set to a non-empty value.
     services_load_from_env
-    if [[ "$(services_count)" == "0" ]]; then
-      echo "ERROR: at least one service must be configured" >&2
-      exit 1
-    fi
     return 0
   fi
   collect_services_interactive || exit 1

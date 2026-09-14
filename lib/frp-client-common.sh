@@ -1159,6 +1159,9 @@ Examples:
 You may publish one or more services.
 SSH is optional.
 
+You may also install management-only: this machine is enrolled and
+manageable now, and you publish services later with: sudo drlink
+
 EOF
 }
 
@@ -1300,28 +1303,39 @@ print()
 print('Ready to install')
 print('================')
 print()
-print('The following services will be published:')
-print()
-for item in services:
-    name = item.get('name') or item.get('id')
-    preset = item.get('preset') or 'custom'
-    kind = labels.get(preset, 'Custom TCP')
-    print(name)
-    print(f"  Type        : {kind}")
-    print(f"  Target      : {item.get('local_ip')}:{item.get('local_port')}")
-    print('  Public port : assigned automatically')
+if not services:
+    print('No services will be published (management-only).')
     print()
-print('The public port is assigned automatically by the Data Relay Link server.')
-print('You do not enter an external/public port here.')
-print()
+    print('This machine will be enrolled and manageable, and no public port')
+    print('is reserved. Publish a service later with: sudo drlink')
+    print()
+else:
+    print('The following services will be published:')
+    print()
+    for item in services:
+        name = item.get('name') or item.get('id')
+        preset = item.get('preset') or 'custom'
+        kind = labels.get(preset, 'Custom TCP')
+        print(name)
+        print(f"  Type        : {kind}")
+        print(f"  Target      : {item.get('local_ip')}:{item.get('local_port')}")
+        print('  Public port : assigned automatically')
+        print()
+    print('The public port is assigned automatically by the Data Relay Link server.')
+    print('You do not enter an external/public port here.')
+    print()
 print('The installer will:')
 print()
 print(f'  - install FRP v{version}')
 print('  - create /etc/frp/frpc.toml')
 print('  - write /etc/frp/client-state.json')
-print('  - install the frpc systemd service')
-print('  - enable drlink-client at boot')
-print('  - start the FRP client')
+if services:
+    print('  - install the frpc systemd service')
+    print('  - enable drlink-client at boot')
+    print('  - start the FRP client')
+else:
+    print('  - install the frpc systemd service (left stopped)')
+    print('  - leave the FRP client stopped until a service is added')
 print()
 PY
 }
@@ -1348,6 +1362,23 @@ frp_atomic_write_text() {
   python3 - "$dest" "$mode" <<'PY'
 import os, sys, tempfile
 from pathlib import Path
+
+
+def durable_replace(tmp, dest):
+    """Rename plus parent-directory fsync, so the name survives power loss."""
+    os.replace(tmp, dest)
+    try:
+        dfd = os.open(str(dest.parent), getattr(os, 'O_DIRECTORY', 0) | os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
 dest = Path(sys.argv[1])
 mode = int(sys.argv[2], 8)
 text = sys.stdin.read()
@@ -1359,7 +1390,7 @@ try:
         fh.flush()
         os.fsync(fh.fileno())
     os.chmod(tmp, mode)
-    os.replace(tmp, dest)
+    durable_replace(tmp, dest)
 except Exception:
     try:
         os.unlink(tmp)
@@ -1374,6 +1405,23 @@ frp_atomic_copy_file() {
   python3 - "$dest" "$src" "$mode" <<'PY'
 import os, sys, tempfile
 from pathlib import Path
+
+
+def durable_replace(tmp, dest):
+    """Rename plus parent-directory fsync, so the name survives power loss."""
+    os.replace(tmp, dest)
+    try:
+        dfd = os.open(str(dest.parent), getattr(os, 'O_DIRECTORY', 0) | os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
 dest = Path(sys.argv[1])
 src = Path(sys.argv[2])
 mode = int(sys.argv[3], 8)
@@ -1386,7 +1434,7 @@ try:
         fh.flush()
         os.fsync(fh.fileno())
     os.chmod(tmp, mode)
-    os.replace(tmp, dest)
+    durable_replace(tmp, dest)
 except Exception:
     try:
         os.unlink(tmp)
@@ -4258,7 +4306,11 @@ if not services:
     print('(none)')
     raise SystemExit(0)
 n = 0
-for sid, item in services.items():
+ordered = list(services.items())
+# Bounded, deadline-capped batch: probing serially would make the worst case
+# the sum of every per-service timeout.
+targets = HC.target_status_labels(item for _, item in ordered)
+for (sid, item), target in zip(ordered, targets):
     n += 1
     enabled = item.get('enabled', True) is not False
     state = 'enabled' if enabled else 'disabled'
@@ -4274,7 +4326,7 @@ for sid, item in services.items():
     print(f"   Health      : {HC.format_health_config(item.get('health_check'))}")
     print(f"   CLIENT      : {client_label}")
     print(f"   TUNNEL      : {HC.tunnel_status_label(item)}")
-    print(f"   TARGET      : {HC.target_status_label(item)}")
+    print(f"   TARGET      : {target}")
     print()
 PY
 }

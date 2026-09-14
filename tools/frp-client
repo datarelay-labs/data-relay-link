@@ -200,7 +200,11 @@ print(f"frpc            : {active}")
 print()
 print(f"Services        : {enabled} enabled / {disabled} disabled")
 print()
-for sid, item in services.items():
+ordered = list(services.items())
+# One bounded, deadline-capped batch: N unreachable targets must not make
+# status wait N x timeout.
+targets = HC.target_status_labels(item for _, item in ordered)
+for (sid, item), target in zip(ordered, targets):
     state = 'enabled' if item.get('enabled', True) is not False else 'disabled'
     print(item.get('id') or sid)
     if item.get('local_ip') is not None:
@@ -211,7 +215,7 @@ for sid, item in services.items():
     print(f"  health        : {HC.format_health_config(item.get('health_check'))}")
     print(f"  CLIENT        : {client_label}")
     print(f"  TUNNEL        : {HC.tunnel_status_label(item)}")
-    print(f"  TARGET        : {HC.target_status_label(item)}")
+    print(f"  TARGET        : {target}")
     print()
 PY
   frp_lifecycle_report

@@ -123,7 +123,7 @@ def atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        _locks().durable_replace(tmp, path)
         # Do NOT chmod shared parent (/var/lib/drlink): that clears ACL mask /
         # group+x needed by drlink-egress. File writers own only their inode.
         pass

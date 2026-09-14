@@ -935,7 +935,7 @@ frp_atomic_install() {
   if [[ ${EUID} -eq 0 ]]; then
     chown root:root "$tmp" 2>/dev/null || true
   fi
-  mv -f "$tmp" "$dest"
+  frp_durable_replace "$tmp" "$dest"
 }
 
 frp_write_version_file() {
@@ -1732,6 +1732,36 @@ frp_safe_rm_rf() {
   rm -rf "$path"
 }
 
+frp_durable_replace() {
+  # Rename tmp over dest so both the contents and the name survive a power
+  # failure: fsync the staged file, rename, then fsync the parent directory.
+  # Mirrors lib/frp_control_locks.py durable_replace() for shell writers.
+  # Filesystems that reject a directory fsync (NFS, FAT, some overlays) still
+  # get the atomic rename; the command does not fail over a durability gap.
+  local tmp="$1" dest="$2"
+  python3 - "$tmp" "$dest" <<'PY'
+import os, sys
+tmp, dest = sys.argv[1], sys.argv[2]
+fd = os.open(tmp, os.O_RDONLY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+os.replace(tmp, dest)
+parent = os.path.dirname(os.path.abspath(dest)) or "."
+try:
+    dfd = os.open(parent, getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY)
+except OSError:
+    raise SystemExit(0)
+try:
+    os.fsync(dfd)
+except OSError:
+    pass
+finally:
+    os.close(dfd)
+PY
+}
+
 frp_atomic_write() {
   local dest="$1" mode="${2:-0600}"
   local dir tmp
@@ -1744,7 +1774,7 @@ frp_atomic_write() {
   if [[ ${EUID} -eq 0 ]]; then
     chown root:root "$tmp" 2>/dev/null || true
   fi
-  mv -f "$tmp" "$dest"
+  frp_durable_replace "$tmp" "$dest"
 }
 
 frp_secure_mktemp_dir() {

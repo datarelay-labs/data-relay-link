@@ -68,7 +68,7 @@ resolve_installer_sha() {
   note "INSTALLER_SHA_UNPUBLISHED=$HEAD_SHA (zero-touch curl may 404 until push)"
   return 1
 }
-resolve_installer_sha || true
+# Deferred until note()/SUMMARY exist (calling here printed "note: command not found").
 SCENARIO="${FRP_E2E_SCENARIO:-full}"
 STOP_ON_FAIL="${FRP_E2E_STOP_ON_FAIL:-1}"
 STEP_TIMEOUT="${FRP_E2E_STEP_TIMEOUT:-240}"
@@ -180,6 +180,9 @@ MATRIX_UNINSTALL=SKIP
 MATRIX_DNS=SKIP
 
 note() { printf '%s\n' "$*" | tee -a "$SUMMARY"; }
+
+# Resolve published installer SHA only after note()/SUMMARY are ready.
+resolve_installer_sha || true
 
 redact() {
   python3 - "$1" <<'PY' 2>/dev/null || true

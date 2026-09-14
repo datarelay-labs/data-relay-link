@@ -6,9 +6,11 @@ client-state and do not emit healthCheck.* into frpc.toml.
 """
 from __future__ import annotations
 
+import ipaddress
 import socket
 import urllib.error
 import urllib.request
+from time import monotonic as _monotonic
 from typing import Any, Optional
 
 HEALTH_TYPES = frozenset({"tcp", "http"})
@@ -16,6 +18,12 @@ DEFAULT_TIMEOUT_SECONDS = 3
 DEFAULT_INTERVAL_SECONDS = 10
 DEFAULT_MAX_FAILED = 1
 DEFAULT_HTTP_PATH = "/health"
+
+# Status renders one row per service; probing them one after another makes the
+# worst-case wait the sum of every per-service timeout. Probe concurrently with
+# a bounded worker count and clamp the whole batch to one aggregate deadline.
+PROBE_MAX_WORKERS = 8
+PROBE_BATCH_DEADLINE_SECONDS = 6.0
 
 STATUS_N_A = "N/A"
 STATUS_HEALTHY = "HEALTHY"
@@ -204,6 +212,39 @@ def tunnel_status_label(item: dict, *, live_state: Optional[str] = None) -> str:
     return TUNNEL_UNKNOWN
 
 
+def url_host(host: Any) -> str:
+    """Render a host for a URL authority, bracketing IPv6 literals."""
+    text = str(host or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    if not text:
+        return ""
+    try:
+        ipaddress.IPv6Address(text.split("%", 1)[0])
+    except ValueError:
+        return text
+    return "[%s]" % text
+
+
+def probe_url(host: Any, port: Any, path: Any = DEFAULT_HTTP_PATH) -> str:
+    """Absolute probe URL. IPv6 literals are bracketed per RFC 3986."""
+    return "http://%s:%d%s" % (url_host(host), int(port), path or DEFAULT_HTTP_PATH)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Diagnostic probes report what the configured target said.
+
+    Following a 30x would contact a host the operator never configured and
+    would report that host's health as if it were the target's.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_PROBE_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def probe_target(local_ip: Any, local_port: Any, hc: Any) -> str:
     """One-shot local probe for status/show display only."""
     normalized = normalize_health_check(hc)
@@ -221,19 +262,23 @@ def probe_target(local_ip: Any, local_port: Any, hc: Any) -> str:
         if normalized["type"] == "tcp":
             with socket.create_connection((host, port), timeout=timeout):
                 return STATUS_HEALTHY
-        path = normalized.get("path") or DEFAULT_HTTP_PATH
-        url = "http://%s:%d%s" % (host, port, path)
+        url = probe_url(host, port, normalized.get("path"))
         req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _PROBE_OPENER.open(req, timeout=timeout) as resp:
             code = int(getattr(resp, "status", 0) or resp.getcode())
             if 200 <= code < 300:
                 return STATUS_HEALTHY
             return STATUS_UNHEALTHY
-    except (socket.timeout, TimeoutError, ConnectionRefusedError, OSError):
-        return STATUS_UNHEALTHY
     except urllib.error.HTTPError as exc:
+        # A blocked redirect surfaces here as the original 30x response.
+        try:
+            exc.close()
+        except Exception:
+            pass
         if 200 <= int(exc.code) < 300:
             return STATUS_HEALTHY
+        return STATUS_UNHEALTHY
+    except (socket.timeout, TimeoutError, ConnectionRefusedError, OSError):
         return STATUS_UNHEALTHY
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", None)
@@ -246,6 +291,77 @@ def probe_target(local_ip: Any, local_port: Any, hc: Any) -> str:
 
 def target_status_label(item: dict) -> str:
     return probe_target(item.get("local_ip"), item.get("local_port"), item.get("health_check"))
+
+
+def target_status_labels(
+    items,
+    *,
+    max_workers: int = PROBE_MAX_WORKERS,
+    deadline_seconds: float = PROBE_BATCH_DEADLINE_SECONDS,
+) -> list:
+    """Probe many services under one aggregate deadline (F13).
+
+    Returns one label per input item, in order. Services still in flight when
+    the batch deadline expires report UNKNOWN rather than extending the wait;
+    services needing no probe never cost a worker.
+    """
+    items = list(items)
+    labels: list = [None] * len(items)
+    pending = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            labels[index] = STATUS_UNKNOWN
+            continue
+        try:
+            if normalize_health_check(item.get("health_check")) is None:
+                labels[index] = STATUS_N_A
+                continue
+        except HealthCheckError:
+            labels[index] = STATUS_UNKNOWN
+            continue
+        pending.append(index)
+
+    if not pending:
+        return labels
+    if len(pending) == 1:
+        labels[pending[0]] = target_status_label(items[pending[0]])
+        return labels
+
+    try:
+        from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    except ImportError:  # pragma: no cover - stdlib is always present
+        for index in pending:
+            labels[index] = target_status_label(items[index])
+        return labels
+
+    workers = max(1, min(int(max_workers), len(pending)))
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = {
+            executor.submit(target_status_label, items[index]): index
+            for index in pending
+        }
+        remaining = set(futures)
+        deadline = _monotonic() + float(deadline_seconds)
+        while remaining:
+            budget = deadline - _monotonic()
+            if budget <= 0:
+                break
+            done, remaining = wait(remaining, timeout=budget, return_when=FIRST_COMPLETED)
+            for future in done:
+                index = futures[future]
+                try:
+                    labels[index] = future.result()
+                except Exception:
+                    labels[index] = STATUS_UNKNOWN
+        for future in remaining:
+            future.cancel()
+            labels[futures[future]] = STATUS_UNKNOWN
+    finally:
+        # Probe sockets carry their own timeout, so stragglers cannot pin the
+        # interpreter; do not block status on them.
+        executor.shutdown(wait=False)
+    return labels
 
 
 def apply_health_property(item: dict, prop: str, value: str) -> None:
