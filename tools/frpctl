@@ -2292,7 +2292,11 @@ frpctl_dispatch_canonical() {
       frpctl_load_passthrough "$result"
       frpctl_with_pt frpctl_invoke frp-egress delete "$(frpctl_json_get "$result" profile)"
       ;;
-    delete_group) frpctl_require_server || return 1; frpctl_invoke frp-group-set delete "$(frpctl_json_get "$result" group)" ;;
+    delete_group)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_invoke frp-group-set delete "$(frpctl_json_get "$result" group)"
+      ;;
     delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(frpctl_json_get "$result" profile)" ;;
     add_group_member)
       frpctl_require_server || return 1

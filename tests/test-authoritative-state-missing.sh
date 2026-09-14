@@ -106,6 +106,16 @@ grep -qi 'missing\|authoritative\|ERROR' "$WORKDIR/clients.err" || fail "clients
 [[ ! -f "$WORKDIR/var/lib/drlink/registry.json" ]] || fail "clients recreated registry"
 pass "frp-clients missing registry"
 
+if "$ROOT/tools/frp-groups" >/dev/null 2>"$WORKDIR/groups.err"; then
+  fail "frp-groups should error when registry missing"
+fi
+grep -qi 'missing.*authoritative registry state required' "$WORKDIR/groups.err" || {
+  cat "$WORKDIR/groups.err" >&2
+  fail "frp-groups error message"
+}
+[[ ! -f "$WORKDIR/var/lib/drlink/registry.json" ]] || fail "frp-groups recreated registry"
+pass "frp-groups missing registry"
+
 if echo | "$ROOT/tools/frp-group-set" create "Test Group" >/dev/null 2>"$WORKDIR/group.err"; then
   fail "group-set should error when registry missing"
 fi

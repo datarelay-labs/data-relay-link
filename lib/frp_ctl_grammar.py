@@ -489,7 +489,7 @@ def _root_help_legacy(role):
                 "  rename group <GROUP> <name>",
                 "  set group <GROUP> name|description <value>",
                 "  set profile <PROFILE> <prop> <value>",
-                "  delete group <GROUP>",
+                "  delete group <GROUP> [--yes]",
                 "  delete profile <PROFILE>",
                 "  add client <ID> group <GROUP>",
                 "  remove client <ID> group <GROUP>",
@@ -757,7 +757,7 @@ def _verb_help(verb, role):
             "=======================\n\n"
             "Usage:\n  remove client <ID> group <GROUP>\n"
         ),
-        "delete": ("Delete\n======\n\nUsage:\n  delete group <GROUP>\n  delete profile <PROFILE>\n\nDeleting a profile does not change existing services.\n"),
+        "delete": ("Delete\n======\n\nUsage:\n  delete group <GROUP> [--yes]\n  delete profile <PROFILE>\n\nDeleting a group needs interactive confirmation or --yes.\nDeleting a profile does not change existing services.\n"),
         "rename": "Rename group\n============\n\nUsage:\n  rename group <GROUP> <name>\n",
     }
     return mapping.get(verb, "Usage:\n  %s\n" % verb)
@@ -2124,8 +2124,20 @@ def _match_delete(tokens, role, names=None):
         )
     if tokens[1] == "group":
         if len(tokens) < 3:
-            return incomplete("Missing group selector.", ["delete group <GROUP>"], ["group"])
-        return {"status": "ok", "action": "delete_group", "group": tokens[2]}
+            return incomplete(
+                "Missing group selector.", ["delete group <GROUP> [--yes]"], ["group"]
+            )
+        for token in tokens[3:]:
+            if not str(token).startswith("-"):
+                return incomplete(
+                    "Unexpected arguments.", ["delete group <GROUP> [--yes]"]
+                )
+        return {
+            "status": "ok",
+            "action": "delete_group",
+            "group": tokens[2],
+            "passthrough": tokens[3:],
+        }
     if tokens[1] == "profile":
         if len(tokens) < 3:
             return incomplete("Missing profile selector.", ["delete profile <PROFILE>"], ["profile"])

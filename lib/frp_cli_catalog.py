@@ -84,6 +84,7 @@ def _flag(
     default="",
     platform="",
     role="",
+    maximum="",
 ):
     """Describe one option flag.
 
@@ -111,6 +112,8 @@ def _flag(
         out["unit"] = str(unit)
     if default != "":
         out["default"] = default
+    if maximum != "":
+        out["maximum"] = maximum
     if platform:
         out["platform"] = str(platform)
     if role:
@@ -156,9 +159,13 @@ ENROLL_FLAGS = (
         "--ttl",
         arity=1,
         metavar="DURATION|SECONDS",
-        description="Enrollment lifetime as duration (30m|1h|4h|1d) or raw seconds",
+        description=(
+            "Enrollment lifetime as duration (30m|1h|4h|1d) or raw seconds "
+            "(maximum 30d / 2592000 seconds)"
+        ),
         examples=("4h", "600"),
         default=600,
+        maximum=2592000,
         effect="Credential expires automatically after TTL",
         risk="metadata",
         type="duration",
@@ -313,6 +320,7 @@ def _normalize_flags(flags):
                     type=item.get("type", ""),
                     unit=item.get("unit", ""),
                     default=item.get("default", ""),
+                    maximum=item.get("maximum", ""),
                     platform=item.get("platform", ""),
                     role=item.get("role", ""),
                 )
@@ -335,6 +343,7 @@ def _normalize_flags(flags):
                 type=meta.get("type", ""),
                 unit=meta.get("unit", ""),
                 default=meta.get("default", ""),
+                maximum=meta.get("maximum", ""),
                 platform=meta.get("platform", ""),
                 role=meta.get("role", ""),
             )
@@ -374,23 +383,23 @@ _FLAG_DEFAULT_META = {
         "risk": "irreversible",
     },
     "--ttl": {
-        "description": "Temporary entry lifetime (access lists)",
+        "description": "Temporary entry lifetime (access lists; max 3650d)",
         "metavar": "30m|1h|4h|1d",
         "examples": ("4h", "1d"),
-        "effect": "Entry expires automatically after the TTL",
+        "effect": "Entry expires automatically after the TTL (maximum 3650d)",
         "risk": "metadata",
         "type": "duration",
         "unit": "s|m|h|d",
         "role": "access",
     },
     "--preset": {
-        "description": "Service preset template (ssh, http, custom, …)",
+        "description": "Service preset template (ssh, http, https, custom)",
         "metavar": "PRESET",
-        "examples": ("ssh", "http"),
+        "examples": ("ssh", "http", "https"),
         "effect": "Seeds target defaults from a preset",
         "risk": "metadata",
         "type": "enum",
-        "choices": ("ssh", "http", "custom"),
+        "choices": ("ssh", "http", "https", "custom"),
     },
     "--profile": {
         "description": "Service profile template name or id",
@@ -990,12 +999,16 @@ COMMANDS = (
         "Inventory",
         "Delete a group",
         detail="Removes membership references. Client identity, services, and "
-        "ports are unchanged.",
-        examples=("group delete edge",),
+        "ports are unchanged. Requires interactive confirmation or --yes.",
+        examples=("group delete edge", "group delete edge --yes"),
         args=(_arg("<GROUP>", C_GROUP),),
+        flags=("--yes",),
+        tail="flags",
         internal=("delete", "group"),
         aliases=(("delete", "group"),),
         destructive=True,
+        risk="irreversible",
+        confirmation="yes_flag",
     ),
     _cmd(
         ("group", "add-client"),
@@ -1128,6 +1141,8 @@ COMMANDS = (
         "server",
         "Policy",
         "Create a Named Access List",
+        detail="Descriptions are limited to 1024 characters; control characters, "
+        "newlines, and ANSI escapes are rejected.",
         examples=('access create office --description "Office ranges"',),
         args=(_arg("<name>"),),
         flags=("--description",),
@@ -1160,6 +1175,7 @@ COMMANDS = (
         "server",
         "Policy",
         "Add a source range to a list",
+        detail="--ttl accepts Ns/Nm/Nh/Nd up to 3650d (10 years); larger values are rejected.",
         examples=("access add-source office --name hq --source 203.0.113.0/24 --ttl 4h",),
         args=(_arg("<LIST>", C_ACCESS_LIST),),
         flags=("--name", "--source", "--ttl", "--yes"),
@@ -1202,6 +1218,8 @@ COMMANDS = (
         "server",
         "Policy",
         "Edit a list name or description",
+        detail="Descriptions are limited to 1024 characters; control characters, "
+        "newlines, and ANSI escapes are rejected.",
         examples=('access edit-info office --description "HQ only"',),
         args=(_arg("<LIST>", C_ACCESS_LIST),),
         flags=("--name", "--description", "--yes"),

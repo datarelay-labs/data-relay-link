@@ -69,7 +69,95 @@ grep -q bbbbbbbb "$WORKDIR/filter"
 
 "$GSET" remove-member aaaaaaaa pilot
 "$GSET" remove-member aaaaaaaa pilot | grep -qi 'not in group'
-"$GSET" delete seoul
+
+# --- F33: destructive group delete confirmation -------------------------
+cat >"$WORKDIR/pty-answer.py" <<'PY'
+"""Run a command on a PTY and answer its [y/N] prompt once."""
+import os
+import pty
+import select
+import sys
+import time
+
+answer = sys.argv[1].encode()
+argv = sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+buf = bytearray()
+sent = False
+deadline = time.time() + 20
+while time.time() < deadline:
+    ready, _w, _x = select.select([fd], [], [], 0.2)
+    if not ready:
+        continue
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf.extend(chunk)
+    if not sent and b'[y/N]' in bytes(buf):
+        os.write(fd, answer + b'\n')
+        sent = True
+os.close(fd)
+_wpid, status = os.waitpid(pid, 0)
+sys.stdout.buffer.write(bytes(buf))
+sys.stdout.flush()
+raise SystemExit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+PY
+
+group_exists() {
+  python3 - "$REG" "$1" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+names = {(g.get('name') or '') for g in state['groups'].values()}
+raise SystemExit(0 if sys.argv[2] in names else 1)
+PY
+}
+
+# Non-interactive without --yes fails closed and leaves the group in place.
+if "$GSET" delete seoul </dev/null >"$WORKDIR/del-noninteractive.out" \
+  2>"$WORKDIR/del-noninteractive.err"; then
+  echo "FAIL: non-interactive group delete without --yes succeeded" >&2
+  exit 1
+fi
+grep -q -- '--yes' "$WORKDIR/del-noninteractive.err"
+group_exists seoul
+
+# Interactive default (empty answer) and explicit N both abort.
+for answer in '' 'n'; do
+  if python3 "$WORKDIR/pty-answer.py" "$answer" "$GSET" delete seoul \
+    >"$WORKDIR/del-abort.out" 2>&1; then
+    echo "FAIL: interactive group delete answered '$answer' deleted the group" >&2
+    exit 1
+  fi
+  grep -q 'Delete group "seoul" from 1 clients? \[y/N\]' "$WORKDIR/del-abort.out"
+  grep -qi 'services' "$WORKDIR/del-abort.out"
+  grep -qi 'abort' "$WORKDIR/del-abort.out"
+  group_exists seoul
+done
+
+# Interactive y deletes; services and identity stay untouched.
+python3 "$WORKDIR/pty-answer.py" 'y' "$GSET" delete seoul >"$WORKDIR/del-yes.out" 2>&1
+grep -q 'Delete group "seoul" from 1 clients? \[y/N\]' "$WORKDIR/del-yes.out"
+grep -q 'Deleted group' "$WORKDIR/del-yes.out"
+! group_exists seoul
+python3 - "$REG" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+client = state['clients']['aaaaaaaa11111111aaaaaaaa11111111']
+assert client['services']['ssh']['remote_port'] == 6001, client['services']
+assert client['services']['ssh']['enabled'] is True
+assert client['mgmt_pubkey'] == 'KEEP'
+assert not any(g.get('name') == 'seoul' for g in state['groups'].values())
+PY
+
+# --yes deletes non-interactively.
+"$GSET" delete pilot --yes </dev/null | grep -q 'Deleted group'
+! group_exists pilot
+
 python3 - "$REG" "$GID" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))
@@ -106,6 +194,66 @@ status, message, issues = doctor.validate_registry(json.load(open(sys.argv[2])))
 assert status == doctor.FAIL
 assert any('nonexistent group' in issue for issue in issues)
 PY
+
+# F30: the same invariant fails closed in the allocator load path, the restore
+# staged preflight, and the group tooling (one shared implementation).
+python3 - "$ROOT" "$REG" "$WORKDIR" <<'PY'
+import importlib.util, json, sys, types
+from pathlib import Path
+
+repo, reg, workdir = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+state = json.loads(reg.read_text())
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+alloc = load('frp_port_allocator', repo / 'server' / 'frp-port-allocator.py')
+try:
+    alloc.validate_registry_invariants(state, None)
+except alloc.RegistrySchemaError as exc:
+    assert 'nonexistent group' in str(exc), exc
+else:
+    raise AssertionError('allocator accepted a dangling group reference')
+
+creg = load('frp_client_registry', repo / 'lib' / 'frp_client_registry.py')
+try:
+    creg.validate_group_invariants(state)
+except creg.GroupInvariantError as exc:
+    assert 'grp_00000000' in str(exc), exc
+else:
+    raise AssertionError('registry helper accepted a dangling group reference')
+
+# Restore staged preflight uses the same invariant.
+restore_path = repo / 'tools' / 'frp-restore'
+mod = types.ModuleType('frp_restore')
+mod.__file__ = str(restore_path)
+sys.modules['frp_restore'] = mod
+exec(compile(restore_path.read_text(encoding='utf-8'), str(restore_path), 'exec'), mod.__dict__)
+staged = workdir / 'staged'
+payload = staged / 'payload'
+(payload / 'etc/drlink').mkdir(parents=True, exist_ok=True)
+(payload / 'var/lib/drlink').mkdir(parents=True, exist_ok=True)
+(payload / 'etc/drlink/config.json').write_text(json.dumps({'port_start': 6000, 'port_end': 6100}))
+(payload / 'var/lib/drlink/registry.json').write_text(json.dumps(state))
+for name in ('access-control.json', 'egress-control.json', 'service-profiles.json'):
+    (payload / 'var/lib/drlink' / name).write_text('{}')
+try:
+    mod.validate_staged_control_payload(staged)
+except mod.RestoreError as exc:
+    assert 'nonexistent group' in str(exc), exc
+else:
+    raise AssertionError('restore preflight accepted a dangling group reference')
+print('f30-ok')
+PY
+
+# Group tooling refuses to read or mutate a registry with dangling references.
+! "$GROUP_TOOL" >/dev/null 2>&1
+! "$GSET" create another-group >/dev/null 2>&1
 cp "$WORKDIR/good" "$REG"
 
 "$CTL" show groups | grep -q acme-korea
@@ -117,7 +265,7 @@ cp "$WORKDIR/good" "$REG"
 "$CTL" set group safer-group description 'new description'
 "$CTL" add client cccccccc group safer-group
 "$CTL" remove client cccccccc group safer-group
-"$CTL" delete group safer-group
+"$CTL" delete group safer-group --yes
 # Verb-first help topics redirect to resource-first guidance (not full topic pages).
 "$CTL" help create >"$WORKDIR/help-create"
 "$CTL" help add >"$WORKDIR/help-add"

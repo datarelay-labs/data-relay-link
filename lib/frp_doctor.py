@@ -1106,6 +1106,29 @@ def server_config_ports(cfg):
     }
 
 
+_CLIENT_REGISTRY = None
+
+
+def _load_client_registry():
+    """Load the canonical registry helpers (group invariants live there)."""
+    global _CLIENT_REGISTRY
+    if _CLIENT_REGISTRY is not None:
+        return _CLIENT_REGISTRY
+    import importlib.util as _ilu
+    for path in (
+        Path(__file__).resolve().parent / 'frp_client_registry.py',
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
+    ):
+        if path.is_file():
+            spec = _ilu.spec_from_file_location('_drlink_creg_doctor', str(path))
+            mod = _ilu.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(mod)
+            _CLIENT_REGISTRY = mod
+            return mod
+    return None
+
+
 def validate_registry(state, cfg=None):
     issues = []
     infos = []
@@ -1127,32 +1150,10 @@ def validate_registry(state, cfg=None):
         groups = {}
     if not isinstance(groups, dict):
         return FAIL, 'registry groups is not an object', issues
-    group_names = {}
-    valid_group_ids = set()
-    for gid, group in groups.items():
-        if not isinstance(gid, str) or not re.fullmatch(r'grp_[0-9a-f]{8}', gid):
-            issues.append('invalid group id %s' % gid)
-            continue
-        valid_group_ids.add(gid)
-        if not isinstance(group, dict):
-            issues.append('group %s record is not an object' % gid)
-            continue
-        name = group.get('name')
-        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', name):
-            issues.append('group %s has invalid name' % gid)
-            continue
-        if name.lower() in ('all', 'ungrouped'):
-            issues.append('group %s uses reserved name %s' % (gid, name))
-        if name in group_names:
-            issues.append('duplicate group name %s' % name)
-        group_names[name] = gid
-        description = group.get('description')
-        if description is not None and (
-            not isinstance(description, str)
-            or len(description) > 1024
-            or any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in description)
-        ):
-            issues.append('group %s has invalid description' % gid)
+    creg = _load_client_registry()
+    if creg is None:
+        return FAIL, 'frp_client_registry.py is unavailable', issues
+    issues.extend(creg.group_invariant_issues(state))
     port_start = port_end = None
     protected = set()
     if cfg:
@@ -1178,20 +1179,6 @@ def validate_registry(state, cfg=None):
         if not isinstance(client, dict):
             issues.append('client record is not an object')
             continue
-        group_ids = client.get('group_ids')
-        if group_ids is not None:
-            if not isinstance(group_ids, list):
-                issues.append('client %s group_ids must be a list' % str(mid)[:12])
-            else:
-                seen_group_ids = set()
-                for gid in group_ids:
-                    if not isinstance(gid, str) or not re.fullmatch(r'grp_[0-9a-f]{8}', gid):
-                        issues.append('client %s has invalid group id' % str(mid)[:12])
-                    elif gid in seen_group_ids:
-                        issues.append('client %s has duplicate group id %s' % (str(mid)[:12], gid))
-                    elif gid not in valid_group_ids:
-                        issues.append('client %s references nonexistent group %s' % (str(mid)[:12], gid))
-                    seen_group_ids.add(gid)
         if 'ssh_port' in client or 'https_port' in client:
             issues.append('legacy SSH/HTTPS fields are present')
             continue

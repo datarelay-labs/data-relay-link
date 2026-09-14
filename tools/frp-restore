@@ -453,6 +453,7 @@ def validate_staged_control_payload(extracted: Path) -> None:
         raise RestoreError("staged config.json must be an object")
 
     allocator = _load_allocator_validator()
+    creg = _load_module("frp_client_registry", "frp_client_registry.py")
     acl = _load_module("frp_access_control", "frp_access_control.py")
     egress = _load_module("frp_egress_control", "frp_egress_control.py")
     profiles = _load_module("frp_service_profiles", "frp_service_profiles.py")
@@ -482,6 +483,12 @@ def validate_staged_control_payload(extracted: Path) -> None:
             raise RestoreError("staged registry failed invariant checks: %s" % exc) from exc
     elif staged["registry"].get("schema_version") != 2:
         raise RestoreError("staged registry schema is invalid")
+    # Group invariants do not depend on the allocator being importable.
+    if creg is not None:
+        try:
+            creg.validate_group_invariants(staged["registry"])
+        except Exception as exc:
+            raise RestoreError("staged registry failed group invariant checks: %s" % exc) from exc
 
     if acl is not None:
         try:
@@ -529,6 +536,71 @@ def validate_staged_control_payload(extracted: Path) -> None:
                 "staged infrastructure ports collide with service range: %s"
                 % ", ".join(str(p) for p in sorted(colliding))
             )
+
+    pair_errors = staged_enrollment_pair_errors(payload)
+    if pair_errors:
+        raise RestoreError(
+            "staged enrollment state contains orphan Zero-Touch pairs: %s"
+            % "; ".join(pair_errors[:5])
+        )
+
+
+def staged_enrollment_pair_errors(payload: Path) -> list[str]:
+    """Structural Zero-Touch pair errors in a staged payload.
+
+    A bootstrap ticket without its enrollment record is an orphan: the ticket
+    can never be redeemed and the pair can never be purged coherently. Manual
+    enrollments legitimately have no ticket and are not inspected here. Only
+    unambiguous structural breakage is reported; state disagreements inside an
+    intact pair are lifecycle findings for doctor, not restore blockers.
+    """
+    bootstrap_dir = payload / "var/lib/drlink/bootstrap"
+    enrollments_dir = payload / "var/lib/drlink/enrollments"
+    if not bootstrap_dir.is_dir():
+        return []
+    errors: list[str] = []
+    tickets_by_enrollment: dict[str, list[str]] = {}
+    for path in sorted(bootstrap_dir.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            errors.append(f"bootstrap ticket {path.name} is unreadable")
+            continue
+        if not isinstance(record, dict):
+            errors.append(f"bootstrap ticket {path.name} is not an object")
+            continue
+        enrollment_id = str(record.get("enrollment_id") or "").strip().lower()
+        if not enrollment_id:
+            errors.append(f"bootstrap ticket {path.name} has no enrollment_id")
+            continue
+        tickets_by_enrollment.setdefault(enrollment_id, []).append(path.name)
+        enroll_path = enrollments_dir / (enrollment_id + ".json")
+        if not enroll_path.is_file():
+            errors.append(
+                f"bootstrap ticket {path.name} has no paired enrollment record "
+                f"({enrollment_id}.json)"
+            )
+            continue
+        try:
+            enrollment = json.loads(enroll_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            errors.append(f"enrollment record {enroll_path.name} is unreadable")
+            continue
+        if not isinstance(enrollment, dict):
+            errors.append(f"enrollment record {enroll_path.name} is not an object")
+            continue
+        if str(enrollment.get("id") or "").strip().lower() != enrollment_id:
+            errors.append(
+                f"bootstrap ticket {path.name} does not match enrollment record "
+                f"{enroll_path.name}"
+            )
+    for enrollment_id, names in sorted(tickets_by_enrollment.items()):
+        if len(names) > 1:
+            errors.append(
+                "enrollment %s is paired to multiple bootstrap tickets: %s"
+                % (enrollment_id, ", ".join(sorted(names)))
+            )
+    return errors
 
 
 def _audit_emit(event, **kwargs):

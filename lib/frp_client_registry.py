@@ -4,6 +4,7 @@
 Immutable identity is machine_id. Hostname is observed from the client.
 label/note/tags/group_ids are server-owned and must survive re-enrollment.
 """
+import importlib.util
 import ipaddress
 import json
 import os
@@ -15,6 +16,20 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def durable_replace(tmp, path):
+    """Shared durable replace (lib/frp_control_locks.py)."""
+    mod = sys.modules.get('frp_control_locks')
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            'frp_control_locks', str(Path(__file__).resolve().parent / 'frp_control_locks.py')
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules['frp_control_locks'] = mod
+        spec.loader.exec_module(mod)
+    return mod.durable_replace(tmp, path)
+
 
 LABEL_MAX_LEN = 64
 NOTE_MAX_LEN = 1024
@@ -721,6 +736,103 @@ def client_group_memberships(state, client):
     return out
 
 
+def group_invariant_issues(state):
+    """Canonical group invariants for a registry document.
+
+    Single implementation shared by the allocator load path, doctor,
+    restore staged preflight, and the group tooling so all four agree on
+    what a structurally valid group map is. Returns a list of
+    operator-readable issues; an empty list means the group state is sound.
+    """
+    if not isinstance(state, dict):
+        return ['registry is not an object']
+    groups = state.get('groups')
+    if groups is None:
+        groups = {}
+    if not isinstance(groups, dict):
+        return ['registry groups is not an object']
+    issues = []
+    names = {}
+    valid_group_ids = set()
+    for gid, group in groups.items():
+        if not isinstance(gid, str) or not GROUP_ID_RE.fullmatch(gid):
+            issues.append('invalid group id %s' % sanitize_display(gid, 32))
+            continue
+        valid_group_ids.add(gid)
+        if not isinstance(group, dict):
+            issues.append('group %s record is not an object' % gid)
+            continue
+        name = group.get('name')
+        if not isinstance(name, str):
+            issues.append('group %s has invalid name' % gid)
+            continue
+        if is_reserved_group_name(name):
+            issues.append(
+                'group %s uses reserved name %s' % (gid, sanitize_display(name, 64))
+            )
+            continue
+        try:
+            validate_group_name(name)
+        except ValueError:
+            issues.append('group %s has invalid name' % gid)
+            continue
+        key = name.strip().lower()
+        if key in names:
+            issues.append('duplicate group name %s' % sanitize_display(name, 64))
+        names[key] = gid
+        description = group.get('description')
+        if description is not None:
+            if not isinstance(description, str):
+                issues.append('group %s has invalid description' % gid)
+            else:
+                try:
+                    validate_group_description(description)
+                except ValueError:
+                    issues.append('group %s has invalid description' % gid)
+    clients = state.get('clients')
+    if clients is None:
+        clients = {}
+    if not isinstance(clients, dict):
+        issues.append('registry clients is not an object')
+        return issues
+    for mid, client in clients.items():
+        if not isinstance(client, dict):
+            continue
+        group_ids = client.get('group_ids')
+        if group_ids is None:
+            continue
+        short = sanitize_display(str(mid)[:12], 12)
+        if not isinstance(group_ids, list):
+            issues.append('client %s group_ids must be a list' % short)
+            continue
+        seen = set()
+        for gid in group_ids:
+            if not isinstance(gid, str) or not GROUP_ID_RE.fullmatch(gid):
+                issues.append('client %s has invalid group id' % short)
+            elif gid in seen:
+                issues.append('client %s has duplicate group id %s' % (short, gid))
+            elif gid not in valid_group_ids:
+                issues.append(
+                    'client %s references nonexistent group %s' % (short, gid)
+                )
+            seen.add(gid)
+    return issues
+
+
+class GroupInvariantError(ValueError):
+    def __init__(self, issues):
+        self.issues = list(issues or [])
+        super().__init__('; '.join(self.issues) or 'group invariants failed')
+
+
+def validate_group_invariants(state):
+    """Raise GroupInvariantError when group state is corrupt. Never repairs."""
+    issues = group_invariant_issues(state)
+    if issues:
+        raise GroupInvariantError(issues)
+    return state
+
+
 def apply_observed_fields(client, hostname=None, source_ip=None, seen_at=None):
     if not isinstance(client, dict):
         return client
@@ -748,7 +860,10 @@ def atomic_write_json(path, data, mode=0o600):
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        # The registry is the authority for client identity and port
+        # reservations: losing the rename to a power failure would revive a
+        # superseded document and hand out ports that are already in use.
+        durable_replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             try:
