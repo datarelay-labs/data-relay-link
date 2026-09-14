@@ -27,7 +27,8 @@ C_PATH = "path"
 C_NONE = None
 
 CLIENT_PROPS = ("label", "note", "tag")
-SERVER_SETTINGS = ("public-hostname", "bootstrap-hostname", "installer-url")
+SERVER_SETTINGS = ("public-hostname", "bootstrap-hostname")
+INSTALLER_URL_SETTINGS = ("installer-url", "windows-installer-url")
 GROUP_PROPS = ("name", "description")
 SERVICE_PROPS = (
     "target-host",
@@ -1737,17 +1738,40 @@ COMMANDS = (
         "bootstrap-hostname is the optional publicly trusted Zero-Touch short "
         "URL hostname. Data Relay Link never creates DNS records or issues "
         "certificates.\n"
-        "installer-url is the client installer URL handed to new clients.",
+        "Client installer URLs use: set installer-url / set windows-installer-url.",
         examples=(
             "server set public-hostname frp.example.com",
             "server set bootstrap-hostname bootstrap.example.com",
-            "server set installer-url https://example.com/install-client.sh",
         ),
         args=(
-            _arg("public-hostname|bootstrap-hostname|installer-url", SERVER_SETTINGS),
+            _arg("public-hostname|bootstrap-hostname", SERVER_SETTINGS),
             _arg("<value>"),
         ),
-        aliases=(("set", "server"), ("set", "installer-url")),
+        aliases=(("set", "server"),),
+    ),
+    # Dedicated installer URL commands (must not be aliases of set server:
+    # alias expansion would drop the setting name and treat the URL as a
+    # server setting key).
+    _cmd(
+        ("set", "installer-url"),
+        "server",
+        "Server",
+        "Set the Linux client installer URL",
+        detail="installer-url is the client installer URL handed to new Linux clients.",
+        examples=("set installer-url https://example.com/install-client.sh",),
+        args=(_arg("<url>"),),
+        internal=("set", "installer-url"),
+        aliases=(("server", "set", "installer-url"),),
+    ),
+    _cmd(
+        ("set", "windows-installer-url"),
+        "server",
+        "Server",
+        "Set the Windows client installer URL",
+        detail="windows-installer-url is handed to new Windows clients.",
+        examples=("set windows-installer-url https://example.com/install-client.ps1",),
+        args=(_arg("<url>"),),
+        internal=("set", "windows-installer-url"),
     ),
     _cmd(
         ("server", "unset"),
@@ -1757,7 +1781,7 @@ COMMANDS = (
         detail="Unsetting public-hostname falls back to Public IP access. "
         "Unsetting bootstrap-hostname falls back to zt1 Zero-Touch commands.",
         examples=("server unset public-hostname",),
-        args=(_arg("public-hostname|bootstrap-hostname", SERVER_SETTINGS[:2]),),
+        args=(_arg("public-hostname|bootstrap-hostname", SERVER_SETTINGS),),
         aliases=(("unset", "server"),),
     ),
     _cmd(
@@ -2405,6 +2429,8 @@ def _rw_server_set(rest):
     key = rest[0]
     if key == "installer-url":
         return ["set", "installer-url"] + list(rest[1:])
+    if key == "windows-installer-url":
+        return ["set", "windows-installer-url"] + list(rest[1:])
     if key == "public-hostname":
         return ["set", "server", "hostname"] + list(rest[1:])
     return ["set", "server"] + list(rest)

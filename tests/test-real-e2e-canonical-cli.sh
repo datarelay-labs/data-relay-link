@@ -43,6 +43,25 @@ pass "NO_DIRECT_INSTALLER_JSON_PATCH"
 grep -q "set installer-url" "$E2E" || fail "missing set installer-url pin"
 grep -q "set windows-installer-url" "$E2E" || fail "missing set windows-installer-url pin"
 grep -q "drlink create zero-touch" "$E2E" || fail "missing create zero-touch"
+grep -q "FRP_CTL_TEST_INPUT" "$E2E" || fail "zero-touch must use FRP_CTL_TEST_INPUT under sudo use_pty"
 pass "CANONICAL_INSTALLER_AND_ZERO_TOUCH"
+
+# set installer-url must not resolve through set server (URL-as-setting bug).
+python3 - "$ROOT" <<'PY' || fail "set installer-url catalog resolve regression"
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "lib"))
+import frp_cli_catalog as c
+import frp_ctl_grammar as g
+tokens = ["set", "installer-url", "https://example.com/install-client.sh"]
+resolved = c.resolve_tokens(tokens, role="server")
+if resolved != tokens:
+    raise SystemExit("resolve mutated set installer-url: %r" % resolved)
+matched = g.match(tokens, "server")
+if matched.get("status") != "ok" or matched.get("action") != "set_installer_url":
+    raise SystemExit("match failed: %r" % matched)
+print("ok")
+PY
+pass "SET_INSTALLER_URL_NOT_ALIASED_TO_SET_SERVER"
 
 echo "REAL_E2E_CANONICAL_CLI_CONTRACT=PASS"

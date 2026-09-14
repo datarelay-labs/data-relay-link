@@ -437,12 +437,14 @@ server_install_env() {
 
 create_zero_touch() {
   local out="$1" cmd_out="$2" name="$3" note_text="$4"
-  local start rc=0
+  local start rc=0 inputs
   start="$(date +%s)"
   set +e
-  # Canonical operator path: guided create zero-touch (no backend escape hatch).
+  # Guided create under sudo use_pty cannot consume a pipe; use the supported
+  # non-interactive input channel (same as unit tests).
+  inputs="$(printf '%s\n' '1' '1' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22')"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "printf '%s\n' '1' '1' '$CLIENT_LABEL' '$note_text' '$TUNNEL_SSH_USER' '22' | sudo /usr/local/bin/drlink create zero-touch" \
+    "sudo FRP_CTL_TEST_INPUT=$(printf '%q' "$inputs") /usr/local/bin/drlink create zero-touch" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -466,12 +468,12 @@ PY
 
 create_zero_touch_windows() {
   local out="$1" enc_out="$2" name="$3" note_text="$4"
-  local start rc=0
+  local start rc=0 inputs
   start="$(date +%s)"
   set +e
-  # Canonical: Windows → OpenSSH guided create zero-touch.
+  inputs="$(printf '%s\n' '2' '3' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22')"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "printf '%s\n' '2' '3' '$CLIENT_LABEL' '$note_text' '$TUNNEL_SSH_USER' '22' | sudo /usr/local/bin/drlink create zero-touch" \
+    "sudo FRP_CTL_TEST_INPUT=$(printf '%q' "$inputs") /usr/local/bin/drlink create zero-touch" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
