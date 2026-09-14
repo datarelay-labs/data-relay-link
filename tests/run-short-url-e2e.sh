@@ -290,7 +290,10 @@ note "SHORT_URL_COMMAND=curl -fsSL https://${BOOTSTRAP_HOST}/i/<redacted> | sudo
 if [[ "$CMD" == *zt1.* ]]; then
   fail "short URL path unexpectedly used zt1"
 fi
-if [[ "$CMD" == *'-k'* || "$CMD" == *'--insecure'* ]]; then
+# Only inspect curl argv before the URL. Substring "-k" inside a hostname
+# (e.g. trycloudflare "...-keyboard...") must not trip this gate.
+curl_argv="${CMD%%\'https://*}"
+if [[ "$curl_argv" == *'--insecure'* || "$curl_argv" == *' -k '* || "$curl_argv" == *' -k'* || "$curl_argv" == curl\ -k* || "$curl_argv" == curl\ -*k* ]]; then
   fail "insecure TLS in printed command"
 fi
 pass "SHORT_URL_COMMAND_PRINTED"

@@ -244,4 +244,23 @@ grep -q 'FIXTURE-PREP' "$ROOT/tests/run-prod-qual-extended.sh" \
   || fail "config.json edit not marked fixture-prep"
 pass "fixture-prep marked"
 
+# --- Short-URL insecure-TLS gate must not match "-k" inside hostnames ---
+python3 - "$ROOT/tests/run-short-url-e2e.sh" <<'PY' || fail "shorturl -k hostname false-positive still present"
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+needle = "curl_argv=\"${CMD%%\\'https://*}\""
+if needle not in text and "curl_argv=\"${CMD%%'https://*}\"" not in text:
+    # Accept either quoting style used in the harness.
+    if "curl_argv=" not in text or "%%" not in text or "https://" not in text:
+        raise SystemExit("shorturl harness must inspect curl argv before the URL")
+if "mechanism-keyboard" in text.split("insecure TLS")[0][-200:]:
+    pass  # comment context ok
+# Must not use unscoped whole-command substring match for -k.
+bad = "if [[ \"$CMD\" == *'-k'* || \"$CMD\" == *'--insecure'* ]]; then"
+if bad in text:
+    raise SystemExit("unscoped CMD *-k* match still present")
+print("ok")
+PY
+pass "shorturl -k hostname false-positive guard"
+
 echo "PASS harness gate truthfulness"
