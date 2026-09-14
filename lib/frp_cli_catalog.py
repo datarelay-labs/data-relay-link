@@ -951,7 +951,7 @@ COMMANDS = (
         "client",
         "Inventory",
         "Reconcile local services against server releases",
-        examples=("sync", "service sync"),
+        examples=("sync",),
         internal=("sync",),
         aliases=(("sync",),),
     ),
