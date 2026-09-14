@@ -76,7 +76,7 @@ separate trust domains (see below).
 
 ## 5. Enrollment Code
 
-A short-lived secret created on the server (`sudo drlink enrollment create`).
+A short-lived secret created on the server (`sudo drlink` → `create enrollment`).
 
 - Default TTL: 10 minutes
 - Bound to the first machine (`machine-id`) that uses it
@@ -468,7 +468,9 @@ Security contract:
 
 Windows Update over the proxy is possible with an explicit destination set. **Delivery Optimization peer traffic is out of Controlled Egress scope** — keep DO disabled or use WSUS/managed update paths on closed hosts.
 
-Operator CLI (resource-first): `drlink egress list` / `egress status` / safe create→source→destination+protocol→test→enable. See `docs/CONTROLLED_EGRESS.md`.
+Operator CLI (action-first): `show egress` / `create egress-profile` / guided
+`add egress-source` → `add egress-destination` → `test egress` →
+`enable egress-profile`. See `docs/CONTROLLED_EGRESS.md`.
 
 ## 18. Mixed product versions
 

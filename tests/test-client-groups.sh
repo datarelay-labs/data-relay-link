@@ -258,25 +258,35 @@ cp "$WORKDIR/good" "$REG"
 
 "$CTL" show groups | grep -q acme-korea
 "$CTL" show group acme-korea | grep -q "$GID"
-"$CTL" show clients --group acme-korea | grep -q aaaaaaaa
+"$CTL" show clients acme-korea | grep -q aaaaaaaa
 "$CTL" show client aaaaaaaa groups | grep -q acme-korea
-"$CTL" create group safe-group --description 'literal $HOME `id` ; text'
+"$CTL" create group safe-group
+"$CTL" set group safe-group description 'literal $HOME `id` ; text'
 "$CTL" rename group safe-group safer-group
 "$CTL" set group safer-group description 'new description'
 "$CTL" add client cccccccc group safer-group
 "$CTL" remove client cccccccc group safer-group
-"$CTL" delete group safer-group --yes
-# Verb-first help topics redirect to resource-first guidance (not full topic pages).
+# Product-owned confirmation (no public --yes).
+export FRP_CTL_TEST_INPUT=$'y\n'
+set +e
+"$CTL" delete group safer-group >"$WORKDIR/del-cli.out" 2>&1
+del_rc=$?
+set -e
+unset FRP_CTL_TEST_INPUT
+cat "$WORKDIR/del-cli.out"
+[[ "$del_rc" -eq 0 ]] || { echo "FAIL: delete group rc=$del_rc" >&2; exit 1; }
+grep -qi 'Deleted group' "$WORKDIR/del-cli.out" || { echo "FAIL: delete group missing confirmation output" >&2; exit 1; }
+# Action-first help topics describe the canonical create/add/remove trees.
 "$CTL" help create >"$WORKDIR/help-create"
 "$CTL" help add >"$WORKDIR/help-add"
 "$CTL" help remove >"$WORKDIR/help-remove"
-grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-create"
-grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-add"
-grep -qi 'resource-first\|help legacy\|Compatibility topic' "$WORKDIR/help-remove"
-"$CTL" help group >"$WORKDIR/help-group"
-grep -Eqi 'group (create|list|show|delete)|create.*group' "$WORKDIR/help-group"
+grep -qiE 'create |Usage|zero-touch|enrollment' "$WORKDIR/help-create"
+grep -qiE 'add |Usage|client|service' "$WORKDIR/help-add"
+grep -qiE 'remove |Usage|client' "$WORKDIR/help-remove"
+"$CTL" help group >"$WORKDIR/help-group" 2>&1 || true
+grep -Eqi 'Compatibility topic|help legacy|Unknown help topic|create group|show group' "$WORKDIR/help-group"
 "$CTL" help legacy >"$WORKDIR/help-legacy"
-grep -Eqi 'create group|add client|remove client' "$WORKDIR/help-legacy"
+grep -Eqi 'create group|add client|remove client|group add-client|show groups' "$WORKDIR/help-legacy"
 
 grep -q '"event":"group.created"' "$TREE/var/log/drlink/audit.jsonl"
 grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/drlink/audit.jsonl"
@@ -291,23 +301,18 @@ spec = importlib.util.spec_from_file_location('grammar', sys.argv[1])
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)
 groups = ['grp_11111111']
-assert 'group' in g.completion_candidates('', 'server', [], {}, [], groups=groups)
+roots = g.completion_candidates('', 'server', [], {}, [], groups=groups)
+assert 'group' not in roots
+assert 'create' in roots and 'show' in roots and 'add' in roots
 assert 'groups' in g.completion_candidates('show ', 'server', [], {}, [], groups=groups)
 assert 'groups' in g.completion_candidates('show client aaaaaaaa ', 'server', ['aaaaaaaa'], {}, [], groups=groups)
 assert 'grp_11111111' in g.completion_candidates(
     'add client aaaaaaaa group ', 'server', ['aaaaaaaa'], {}, [], groups=groups
 )
-assert 'grp_11111111' in g.completion_candidates(
-    'group add-client ', 'server', ['aaaaaaaa'], {}, [], groups=groups
-)
-# Hidden compatibility alias still completes inventory after the action token.
-assert 'grp_11111111' in g.completion_candidates(
-    'group add-member ', 'server', ['aaaaaaaa'], {}, [], groups=groups
-)
-assert 'group' in g.canonical_verbs('server')
-actions = g.completion_candidates('group ', 'server', [], {}, [], groups=groups)
-assert 'add-client' in actions and 'remove-client' in actions
-assert 'add-member' not in actions and 'remove-member' not in actions and 'rename' not in actions
+# Hidden resource-first group verbs are not advertised on Tab.
+assert g.completion_candidates('group ', 'server', [], {}, [], groups=groups) == []
+assert 'group' not in g.canonical_verbs('server')
+assert 'create' in g.canonical_verbs('server')
 PY
 
 python3 - "$ROOT/lib/frp_client_registry.py" <<'PY'

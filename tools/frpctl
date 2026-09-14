@@ -239,10 +239,29 @@ frpctl_find_cmd() {
   return 1
 }
 
+frpctl_sanitize_backend_stream() {
+  # Rewrite backend argparse / frp-* tool leaks into product-owned wording.
+  python3 -c '
+import re, sys
+text = sys.stdin.read()
+if not text:
+    raise SystemExit(0)
+out = []
+for line in text.splitlines(True):
+    raw = line
+    if re.match(r"(?i)^\s*usage:\s*frp-", line):
+        line = "Command failed. Run help for Data Relay Link usage.\\n"
+    line = re.sub(r"(?i)\\bfrp-[a-z0-9_-]+\\b", "backend tool", line)
+    line = re.sub(r"(?i)usage:\\s*backend tool", "usage: drlink", line)
+    out.append(line)
+sys.stdout.write("".join(out))
+'
+}
+
 frpctl_run() {
   local name="$1"
   shift
-  local bin rc
+  local bin rc err
   bin="$(frpctl_find_cmd "$name")" || return 1
   if [[ "${FRP_CTL_DRY_RUN:-}" == "1" ]]; then
     if [[ $# -gt 0 ]]; then
@@ -256,8 +275,20 @@ frpctl_run() {
     python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1]]+sys.argv[2:], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
-  "$bin" "$@"
+  # Keep interactive TTY backends live. Sanitize captured stderr for scripts
+  # and any output that still leaks backend command names.
+  if [[ -t 2 ]]; then
+    "$bin" "$@"
+    rc=$?
+    return "$rc"
+  fi
+  err="$(mktemp)"
+  "$bin" "$@" 2>"$err"
   rc=$?
+  if [[ -s "$err" ]]; then
+    frpctl_sanitize_backend_stream <"$err" >&2 || cat "$err" >&2
+  fi
+  rm -f "$err"
   return "$rc"
 }
 
@@ -345,7 +376,7 @@ frpctl_grammar_py() {
     return 0
   fi
   echo "ERROR: the ${FRP_CTL_PRODUCT_NAME} CLI backend is incomplete (command grammar module not found)." >&2
-  echo "Reinstall or run: ${FRP_CTL_CMD_NAME} update project" >&2
+  echo "Reinstall or run: ${FRP_CTL_CMD_NAME} update product" >&2
   return 1
 }
 
@@ -570,13 +601,13 @@ PY
   if [[ -z "$usage_body" ]]; then
     usage_body="$(cat <<EOF
 Canonical grammar:
-  <resource> <action> [target] [options]
+  <action> <resource> [target] [value]
 
-  status | version | doctor | support bundle
-  client list | group list | egress list | ...
-  help | help workflows | help legacy | menu | history | exit
+  show | create | set | unset | add | remove | enable | disable
+  revoke | release | delete | restore | update | test | doctor
+  help | menu | history | clear | exit
 
-Older verb-first commands still run for scripts. See 'help legacy'.
+Design: action-first · no user-facing --options · backend hidden
 EOF
 )"
   fi
@@ -1210,6 +1241,33 @@ frpctl_guided_zero_touch() {
   esac
 }
 
+frpctl_guided_manual_enrollment() {
+  local client_name lifetime note confirm
+  echo
+  echo "Create Enrollment"
+  echo "================="
+  echo
+  client_name="$(frpctl_read "Client name [optional]: " "")" || return 1
+  lifetime="$(frpctl_read "Lifetime [1h]: " "1h")" || return 1
+  [[ -n "$lifetime" ]] || lifetime=1h
+  note="$(frpctl_read "Note [optional]: " "")" || return 1
+  echo
+  echo "Review"
+  echo "------"
+  echo "  Client name : ${client_name:-"(none)"}"
+  echo "  Lifetime    : $lifetime"
+  echo "  Note        : ${note:-"(none)"}"
+  echo
+  confirm="$(frpctl_read "Create? [Y/n]: " "Y")" || return 1
+  case "${confirm,,}" in
+    n|no) echo "Cancelled."; return 0 ;;
+  esac
+  local -a args=(--ttl "$lifetime")
+  [[ -n "$client_name" ]] && args+=(--client-name "$client_name")
+  [[ -n "$note" ]] && args+=(--note "$note")
+  frpctl_run frp-create-client "${args[@]}"
+}
+
 frpctl_guided_enroll() {
   local choice
   echo
@@ -1226,7 +1284,7 @@ frpctl_guided_enroll() {
       _FRP_ZT_PLATFORM=linux; frpctl_zt_run_ssh
       ;;
     2)
-      frpctl_run frp-create-client
+      frpctl_guided_manual_enrollment
       ;;
     3|"")
       return 0
@@ -1615,9 +1673,9 @@ frpctl_help_navigation() {
 Navigation
   menu                  Open guided menu
   help                  Detailed help
-  help <resource>       Resource-specific help
+  help <action>         Action-specific help
   help workflows        End-to-end examples
-  help legacy           Compatibility aliases
+  help legacy           Hidden compatibility aliases
   ?                     Context-sensitive help
   Tab                   Show/complete next tokens (first press)
   history               This session only
@@ -2198,7 +2256,11 @@ frpctl_dispatch_canonical() {
     create_enrollment)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-create-client
+      if ((${#_frpctl_pt[@]} == 0)); then
+        frpctl_guided_manual_enrollment
+      else
+        frpctl_with_pt frpctl_invoke frp-create-client
+      fi
       ;;
     create_enrollments)
       frpctl_require_server || return 1
@@ -2253,10 +2315,44 @@ frpctl_dispatch_canonical() {
     add_egress_destination)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-egress add-destination \
-        "$(frpctl_json_get "$result" profile)" \
-        "$(frpctl_json_get "$result" host)" \
-        "$(frpctl_json_get "$result" port)"
+      local _eg_profile _eg_host _eg_port _eg_proto _eg_confirm
+      _eg_profile="$(frpctl_json_get "$result" profile)"
+      _eg_host="$(frpctl_json_get "$result" host)"
+      _eg_port="$(frpctl_json_get "$result" port)"
+      if [[ -z "$_eg_host" || -z "$_eg_port" ]]; then
+        echo
+        echo "Add Egress Destination"
+        echo "======================"
+        echo
+        _eg_host="$(frpctl_read "Destination FQDN: " "")" || return 1
+        [[ -n "$_eg_host" ]] || { echo "ERROR: destination FQDN is required" >&2; return 1; }
+        _eg_port="$(frpctl_read "Port [443]: " "443")" || return 1
+        [[ -n "$_eg_port" ]] || _eg_port=443
+        echo
+        echo "Protocol:"
+        echo "  1) HTTPS"
+        echo "  2) HTTP"
+        echo "  3) TCP"
+        echo
+        _eg_proto="$(frpctl_read "Select: " "1")" || return 1
+        case "$_eg_proto" in
+          2) _eg_proto=http ;;
+          3) _eg_proto=tcp ;;
+          *) _eg_proto=https ;;
+        esac
+        echo
+        _eg_confirm="$(frpctl_read "Add destination? [Y/n]: " "Y")" || return 1
+        case "${_eg_confirm,,}" in
+          n|no) echo "Cancelled."; return 0 ;;
+        esac
+        frpctl_invoke frp-egress add-destination \
+          "$_eg_profile" "$_eg_host" "$_eg_port" --protocol "$_eg_proto"
+      else
+        frpctl_with_pt frpctl_invoke frp-egress add-destination \
+          "$_eg_profile" \
+          "$_eg_host" \
+          "$_eg_port"
+      fi
       ;;
     add_egress_source)
       frpctl_require_server || return 1
@@ -2294,8 +2390,32 @@ frpctl_dispatch_canonical() {
       ;;
     delete_group)
       frpctl_require_server || return 1
-      frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-group-set delete "$(frpctl_json_get "$result" group)"
+      _del_group="$(frpctl_json_get "$result" group)"
+      # Product-owned confirmation (no public --yes). Backend still receives
+      # --yes only after the operator confirms here.
+      _del_ans=""
+      if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
+        echo
+        echo "Delete group \"${_del_group}\"?"
+        echo "Group membership is removed. Client identity, services, and ports"
+        echo "are not changed."
+        _del_ans="$(frpctl_read "Delete group? [y/N]: " "N")" || return 1
+      elif IFS= read -r _del_ans; then
+        :
+      else
+        echo "ERROR: deleting a group requires confirmation." >&2
+        echo "Run interactively:" >&2
+        echo "  delete group ${_del_group}" >&2
+        return 1
+      fi
+      case "${_del_ans,,}" in
+        y|yes) ;;
+        *)
+          echo "Aborted."
+          return 0
+          ;;
+      esac
+      frpctl_invoke frp-group-set delete "$_del_group" --yes
       ;;
     delete_profile) frpctl_require_server || return 1; frpctl_invoke frp-profile delete "$(frpctl_json_get "$result" profile)" ;;
     add_group_member)
@@ -2696,7 +2816,7 @@ frpctl_repl_banner() {
   echo "Bundle SHA256   : $(frpctl_bundle_sha256)"
   echo
   echo "Type '?' for a short command list, or 'help' for full syntax."
-  echo "Commands read <resource> <action>, for example: client list"
+  echo "Commands read <action> <resource>, for example: show clients"
   echo "Type 'help workflows' for end-to-end examples."
   echo "Press Tab to complete a unique match or list next-token candidates."
   echo "On a server, Tab completes CLIENT IDs and service IDs."

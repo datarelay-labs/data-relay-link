@@ -69,23 +69,27 @@ PY
 pass 'frp_server_config helpers'
 
 # Grammar + completion
-python3 - "$ROOT/lib" <<'PY' || fail 'grammar set/unset server hostname'
+python3 - "$ROOT/lib" <<'PY' || fail 'grammar set/unset server public-hostname'
 import sys
 sys.path.insert(0, sys.argv[1])
 import frp_ctl_grammar as G
 
-ok = G.match(['set', 'server', 'hostname', 'frp.example.com'], 'server')
+ok = G.match(['set', 'server', 'public-hostname', 'frp.example.com'], 'server')
 assert ok['status'] == 'ok' and ok['action'] == 'set_server_hostname'
 assert ok['value'] == 'frp.example.com'
-bad = G.match(['set', 'server', 'hostname', 'https://evil'], 'server')
+# Hidden compatibility alias still resolves.
+alias = G.match(['set', 'server', 'hostname', 'frp.example.com'], 'server')
+assert alias['status'] == 'ok' and alias['action'] == 'set_server_hostname'
+bad = G.match(['set', 'server', 'public-hostname', 'https://evil'], 'server')
 # Grammar accepts token; tool validates. Ensure match is still ok action.
 assert bad['status'] == 'ok'
-unset = G.match(['unset', 'server', 'hostname'], 'server')
+unset = G.match(['unset', 'server', 'public-hostname'], 'server')
 assert unset['status'] == 'ok' and unset['action'] == 'unset_server_hostname'
 comp = G.completion_candidates('set ', 'server', [], [], [])
 assert 'server' in comp
 comp2 = G.completion_candidates('set server ', 'server', [], [], [])
-assert 'hostname' in comp2
+assert 'public-hostname' in comp2
+assert 'hostname' not in comp2
 comp3 = G.completion_candidates('unset ', 'server', [], [], [])
 assert 'server' in comp3
 print('grammar ok')

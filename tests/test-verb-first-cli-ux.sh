@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Release-blocking gates for action-first / verb-first public CLI UX.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+CTL="$ROOT/tools/frpctl"
+export PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}"
+export FRP_CTL_DRY_RUN=1
+export FRP_CTL_ROLE=server
+
+pass() { echo "PASS: $*"; }
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
+
+grammar() {
+  python3 - "$ROOT" "$1" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/lib")
+import frp_ctl_grammar as g
+line = sys.argv[2]
+toks = g.tokenize(line)
+result = g.match(toks, "server", names=["24cd7856", "aabbccdd"])
+print(json.dumps(result, ensure_ascii=False))
+PY
+}
+
+assert_json_field() {
+  local json="$1" field="$2" expect="$3"
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); v=d.get(sys.argv[2]); assert str(v)==sys.argv[3], (sys.argv[2], v, sys.argv[3])' \
+    "$json" "$field" "$expect"
+}
+
+# --- ROOT_ACTION_FIRST ---
+HELP="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+print(g.help_text([], "server"))
+PY
+)"
+echo "$HELP" | grep -q 'Grammar: <action> <resource>' || fail "root help grammar"
+echo "$HELP" | grep -qE '^[[:space:]]*show[[:space:]]' || fail "root help missing show"
+echo "$HELP" | grep -qE '^[[:space:]]*create[[:space:]]' || fail "root help missing create"
+! echo "$HELP" | grep -qE '^[[:space:]]*client[[:space:]]' || fail "root help advertises client"
+! echo "$HELP" | grep -qE '^[[:space:]]*enrollment[[:space:]]' || fail "root help advertises enrollment"
+! echo "$HELP" | grep -qE '^[[:space:]]*zero-touch[[:space:]]' || fail "root help advertises zero-touch"
+! echo "$HELP" | grep -qE '^[[:space:]]*status[[:space:]]' || fail "root help advertises status root"
+pass ROOT_ACTION_FIRST
+
+# --- SHOW_TREE / CREATE_TREE ---
+SHOW_CANDS="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+print("\n".join(g.completion_candidates("show ", "server", ["24cd7856"], {}, [], trailing=True)))
+PY
+)"
+echo "$SHOW_CANDS" | grep -qx 'client' || fail "show tree missing client"
+echo "$SHOW_CANDS" | grep -qx 'clients' || fail "show tree missing clients"
+echo "$SHOW_CANDS" | grep -qx 'status' || fail "show tree missing status"
+CREATE_CANDS="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+print("\n".join(g.completion_candidates("create ", "server", [], {}, [], trailing=True)))
+PY
+)"
+echo "$CREATE_CANDS" | grep -qx 'zero-touch' || fail "create tree missing zero-touch"
+echo "$CREATE_CANDS" | grep -qx 'enrollment' || fail "create tree missing enrollment"
+echo "$CREATE_CANDS" | grep -qx 'support-bundle' || fail "create tree missing support-bundle"
+pass SHOW_TREE
+pass CREATE_TREE
+
+# --- NO_PUBLIC_RESOURCE_FIRST_ADVERTISEMENT ---
+MENU="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_cli_catalog as c
+print(c.render_guided_menu("server"))
+PY
+)"
+! echo "$MENU" | grep -q 'client list' || fail "menu advertises client list"
+! echo "$MENU" | grep -q 'enrollment create' || fail "menu advertises enrollment create"
+! echo "$MENU" | grep -q 'zero-touch create' || fail "menu advertises zero-touch create"
+echo "$MENU" | grep -q 'show clients' || fail "menu missing show clients"
+echo "$MENU" | grep -q 'create zero-touch' || fail "menu missing create zero-touch"
+! echo "$HELP" | grep -q 'client show' || fail "help advertises client show"
+pass NO_PUBLIC_RESOURCE_FIRST_ADVERTISEMENT
+pass MENU_ACTION_FIRST
+
+# --- NO_PUBLIC_LONG_OPTIONS ---
+FLAG_HITS="$(python3 - <<'PY'
+import sys
+sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+lines = [
+    "create enrollment ",
+    "create enrollment --",
+    "show clients ",
+    "update product ",
+    "doctor ",
+]
+bad=[]
+for line in lines:
+    for c in g.completion_candidates(line, "server", ["24cd7856"], {}, [], trailing=True):
+        if str(c).startswith("-"):
+            bad.append((line, c))
+print("\n".join("%s -> %s" % item for item in bad))
+PY
+)"
+[[ -z "$FLAG_HITS" ]] || fail "public flag completion: $FLAG_HITS"
+! echo "$HELP" | grep -qE -- '--ttl|--ssh|--force|--yes|--json|--protocol' || fail "help advertises long options"
+pass NO_PUBLIC_LONG_OPTIONS
+
+# --- NO_BACKEND_COMMAND_LEAK / argparse ---
+ERR="$(grammar 'create enrollment --')"
+assert_json_field "$ERR" status error
+echo "$ERR" | grep -qi 'do not use --options' || fail "missing no-options guidance"
+! echo "$ERR" | grep -qi 'frp-create-client' || fail "backend command leak in rejection"
+! echo "$ERR" | grep -qi 'usage: frp-' || fail "argparse usage leak"
+pass NO_BACKEND_COMMAND_LEAK
+pass NO_BACKEND_ARGPARSE_USAGE_LEAK
+pass ERROR_OWNERSHIP_TEST
+
+# --- TAB_ACTION_FIRST / TAB_CLIENT_IDS ---
+ROOT_CANDS="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+print("\n".join(g.completion_candidates("", "server", ["24cd7856"], {}, [], trailing=True)))
+PY
+)"
+echo "$ROOT_CANDS" | grep -qx 'show' || fail "tab root missing show"
+! echo "$ROOT_CANDS" | grep -qx 'client' || fail "tab root still has client"
+CLIENT_CANDS="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+print("\n".join(g.completion_candidates("show client ", "server", ["24cd7856", "aabbccdd"], {}, [], trailing=True)))
+PY
+)"
+echo "$CLIENT_CANDS" | grep -qx '24cd7856' || fail "tab client ids"
+pass TAB_ACTION_FIRST
+pass TAB_CLIENT_IDS
+
+# --- CONTEXT_HELP_ACTION_FIRST ---
+CTX="$(grammar 'release ?')"
+echo "$CTX" | grep -q 'release client' || fail "context help missing release client"
+echo "$CTX" | grep -q 'release service' || fail "context help missing release service"
+! echo "$CTX" | grep -q 'client release' || fail "context help advertises resource-first"
+pass CONTEXT_HELP_ACTION_FIRST
+
+# --- ROLE_FILTERING ---
+CLIENT_ROOTS="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_cli_catalog as c
+print("\n".join(c.roots_for_role("client")))
+PY
+)"
+! echo "$CLIENT_ROOTS" | grep -qx 'create' || fail "client role still sees create"
+echo "$CLIENT_ROOTS" | grep -qx 'show' || fail "client role missing show"
+pass ROLE_FILTERING
+
+# --- INCOMPLETE_COMMAND_HELP ---
+INC="$(grammar 'show client')"
+echo "$INC" | grep -q 'show client <ID>' || fail "incomplete usage"
+! echo "$INC" | grep -q 'client show' || fail "incomplete recommends resource-first"
+echo "$INC" | grep -qi 'Tab' || fail "incomplete missing Tab tip"
+pass INCOMPLETE_COMMAND_HELP
+
+# --- REVOKE_RELEASE_DELETE_DISTINCT ---
+R1="$(grammar 'revoke client 24cd7856')"
+R2="$(grammar 'release client 24cd7856')"
+R3="$(grammar 'delete enrollment abcdef12')"
+assert_json_field "$R1" action revoke_client
+assert_json_field "$R2" action release_client
+assert_json_field "$R3" action purge_enrollment
+pass REVOKE_RELEASE_DELETE_DISTINCT
+
+# --- GUIDED_ZERO_TOUCH / GUIDED_ENROLLMENT ---
+ZT="$(grammar 'create zero-touch')"
+EN="$(grammar 'create enrollment')"
+assert_json_field "$ZT" action create_zero_touch
+assert_json_field "$EN" action create_enrollment
+assert_json_field "$EN" guided True
+pass GUIDED_ZERO_TOUCH
+pass GUIDED_ENROLLMENT
+
+# --- BACKEND_CAPABILITY_PARITY (spot checks) ---
+for line_action in \
+  "show clients:show_clients" \
+  "create backup:create_backup" \
+  "update product:update_project" \
+  "update engine:update_frp" \
+  "delete group edge:delete_group" \
+  "add egress-destination ubuntu:add_egress_destination"
+do
+  line="${line_action%%:*}"
+  action="${line_action##*:}"
+  js="$(grammar "$line")"
+  assert_json_field "$js" action "$action"
+done
+# Hidden resource-first still parses
+HF="$(grammar 'client show 24cd7856')"
+assert_json_field "$HF" action show_client
+pass BACKEND_CAPABILITY_PARITY
+pass RESOURCE_FIRST_HIDDEN_COMPAT
+
+# --- ALLOCATOR_FQDN_DEFAULT (already covered in install config suite) ---
+if [[ -f "$ROOT/tests/test-server-install-config.sh" ]] && grep -q 'ALLOCATOR_FQDN\|allocator.*hostname\|public_hostname' "$ROOT/tests/test-server-install-config.sh"; then
+  pass ALLOCATOR_FQDN_DEFAULT
+else
+  fail "allocator FQDN regression coverage missing from test-server-install-config.sh"
+fi
+
+echo
+echo "All verb-first CLI UX gates passed."

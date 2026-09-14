@@ -23,8 +23,8 @@ need() {
 # --- Guidance text ----------------------------------------------------------
 frp_ux_print_all_guidance >"$WORKDIR/guide.out"
 need "$WORKDIR/guide.out" 'Enrollment Code' 'enrollment heading'
-need "$WORKDIR/guide.out" 'sudo drlink zero-touch create' 'enrollment source command'
-need "$WORKDIR/guide.out" 'sudo drlink enrollment create' 'enrollment alternate command'
+need "$WORKDIR/guide.out" 'sudo drlink create zero-touch' 'enrollment source command'
+need "$WORKDIR/guide.out" 'sudo drlink create enrollment' 'enrollment alternate command'
 need "$WORKDIR/guide.out" 'short-lived' 'short-lived enrollment'
 need "$WORKDIR/guide.out" 'not stored' 'code not stored'
 need "$WORKDIR/guide.out" 'not the FRP token' 'not the FRP token'
@@ -187,8 +187,8 @@ need "$WORKDIR/complete.out" 'Public port  : 6002' 'complete public'
 need "$WORKDIR/complete.out" 'ssh -p 6002 aella@203.0.113.10' 'complete ssh'
 need "$WORKDIR/complete.out" 'sudo drlink' 'complete drlink'
 need "$WORKDIR/complete.out" 'sudo drlink' 'complete manage'
-need "$WORKDIR/complete.out" 'sudo drlink status' 'complete status'
-need "$WORKDIR/complete.out" 'sudo drlink client info' 'complete info'
+need "$WORKDIR/complete.out" 'sudo drlink show status' 'complete status'
+need "$WORKDIR/complete.out" 'sudo drlink show info' 'complete info'
 pass "installation complete screen"
 
 # --- Apply summary ---------------------------------------------------------

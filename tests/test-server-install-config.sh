@@ -12,7 +12,7 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 reset_env() {
-  unset FRP_PUBLIC_IP FRP_PUBLIC_HOST FRP_INTERNAL_IP FRP_CONTROL_PORT \
+  unset FRP_PUBLIC_IP FRP_PUBLIC_HOST FRP_PUBLIC_HOSTNAME FRP_INTERNAL_IP FRP_CONTROL_PORT \
     FRP_CONTROL_PUBLIC_PORT FRP_CONTROL_LISTEN_PORT \
     FRP_PORT_START FRP_PORT_END FRP_ALLOCATOR_PORT \
     FRP_ALLOCATOR_PUBLIC_PORT FRP_ALLOCATOR_LISTEN_PORT \
@@ -22,7 +22,8 @@ reset_env() {
     CLIENT_INSTALLER_URL WINDOWS_CLIENT_INSTALLER_URL \
     FRP_DEPLOYMENT_MODE FRP_CONFIRM_MODE_SWITCH \
     FRP_LISTEN_HOST FRP_CONTROL_BIND_ADDR FRP_TRANSPORT FRP_MODE_SWITCH \
-    EXISTING_DEPLOYMENT_MODE EXISTING_SERVER_CONFIG FRP_RELEASE_CHANNEL || true
+    EXISTING_DEPLOYMENT_MODE EXISTING_SERVER_CONFIG EXISTING_ALLOCATOR_URL \
+    FRP_RELEASE_CHANNEL || true
 }
 
 reset_env
@@ -56,6 +57,29 @@ load_existing_server_config
 resolve_server_settings
 [[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://203.0.113.10:6099/enroll' ]] || fail "derived allocator URL"
 pass "derived allocator URL from public host"
+
+# When public DNS hostname is set, allocator URL must default to the FQDN
+# (not the public IP). Regression for Real E2E allocator prompt bug.
+reset_env
+export FRP_PUBLIC_IP='129.225.184.60'
+export FRP_PUBLIC_HOSTNAME='remote.xdr.ooo'
+export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_PUBLIC_HOST" == '129.225.184.60' ]] || fail "FQDN default keeps public_host as IP"
+[[ "$FRP_PUBLIC_HOSTNAME" == 'remote.xdr.ooo' ]] || fail "FQDN default keeps public_hostname"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://remote.xdr.ooo:6099/enroll' ]] || fail "FQDN allocator URL default (got ${FRP_ALLOCATOR_PUBLIC_URL})"
+pass "ALLOCATOR_FQDN_DEFAULT derived from public hostname"
+
+# Bare hostname FRP_ALLOCATOR_PUBLIC_URL is normalized to the enrollment URL.
+reset_env
+export FRP_PUBLIC_IP='203.0.113.10'
+export FRP_ALLOCATOR_PUBLIC_URL='remote.xdr.ooo'
+export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://remote.xdr.ooo:6099/enroll' ]] || fail "bare hostname allocator URL normalize (got ${FRP_ALLOCATOR_PUBLIC_URL})"
+pass "bare hostname allocator URL normalized"
 
 # NAT split: public ports differ from listen ports.
 reset_env

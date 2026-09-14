@@ -15,9 +15,8 @@ This procedure is for an existing server that still has a v1 registry, or for a 
 On the FRP server:
 
 ```bash
-sudo drlink status
-sudo drlink status
-sudo drlink status --check
+sudo drlink show status
+sudo drlink doctor
 ```
 
 Read:
@@ -151,7 +150,7 @@ Re-running the installer reuses existing runtime config when present. It preserv
 ## 7. Verify frps and the allocator
 
 ```bash
-sudo drlink status --check
+sudo drlink doctor
 sudo systemctl status drlink-server --no-pager
 sudo systemctl status drlink-allocator --no-pager
 # Post-install on the server (CA file already exists after install-server.sh):
@@ -174,7 +173,8 @@ allocator       : active
 ## 8. Create an enrollment
 
 ```bash
-sudo drlink enrollment create
+sudo drlink
+# then: create enrollment
 ```
 
 The command prints an enrollment code and a client install one-liner that sets `FRP_ALLOCATOR_URL` via `sudo env`. The enrollment secret is not placed on the command line; the client installer asks for it interactively.

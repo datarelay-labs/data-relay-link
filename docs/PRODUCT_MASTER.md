@@ -8,7 +8,7 @@
 > **Current release:** Project `2.4.0` / FRP `0.71.0` — release candidate (historical `v2.3.1` / `v2.3.0` / `v2.2.x` untouched)
 > **Release commit:** _(set when the `v2.4.0` tag is created)_
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
-> **Primary management interface:** `sudo drlink` (resource-first CLI; catalog-owned)
+> **Primary management interface:** `sudo drlink` (action-first CLI; catalog-owned)
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
 > **Controlled Egress default listen port:** `6102` (outside published service pool `6000–6098`)
 > **Fixed TCP Egress listen pool:** `6200–6299`
@@ -36,7 +36,7 @@
 - Zero-Touch Short URL은 Option B(operator-owned reverse proxy + optional `bootstrap_hostname`) 모델로 `v2.1.3`에 stable 도입됐다.
 - `public_hostname`은 published service용 optional user-facing alias이며 control identity가 아니다.
 - Group은 몇십 대 관리를 위한 **Simple Manual Group + multiple membership + Tags + basic filters** 범위가 기준이다.
-- Canonical operator CLI는 **resource-first** (`drlink <resource> <action> …`). 구 verb-first (`show clients`, `set client`, …)는 compatibility alias로만 유지한다.
+- Canonical operator CLI는 **action-first** (`drlink <action> <resource> …`). 구 resource-first (`client list`, `enrollment create`, …)는 hidden compatibility alias로만 유지한다.
 - macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.x` validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
 
 ---
@@ -1171,12 +1171,12 @@ NAT topology는 지원할 수 있으나 network topology이며 deployment mode�
 
 # 18. CLI Product Specification
 
-## 18.1 Current canonical grammar (v2.3.1) — resource-first
+## 18.1 Current canonical grammar (v2.4.0) — action-first
 
 Canonical operator grammar:
 
 ```text
-<resource> <action> [target] [property] [value] [options]
+<action> <resource> [target] [value]
 ```
 
 Single source of truth: `lib/frp_cli_catalog.py`. Root help, resource help,
@@ -1187,56 +1187,60 @@ but are not advertised.
 Examples (current):
 
 ```text
-client list
-client show 24cd7856
-client set 24cd7856 label branch-a
+show clients
+show client 24cd7856
+set client 24cd7856 label branch-a
 
-enrollment create
-client revoke 24cd7856
-client release 24cd7856 ssh
+create zero-touch
+create enrollment
+revoke client 24cd7856
+release client 24cd7856
+release service 24cd7856 ssh
+delete enrollment 0011223344556677
 
-group list
-group add-client edge 24cd7856
-group set edge description "Edge sites"
+show groups
+add client 24cd7856 group edge
+set group edge description "Edge sites"
 
-egress list
-egress create vendor-api
-egress add-source vendor-api 10.0.0.0/24
-egress add-destination vendor-api api.example.com 443 --protocol https
-egress test 10.0.0.5 api.example.com 443
-egress enable vendor-api
+show egress-profiles
+create egress-profile vendor-api
+add egress-source vendor-api
+add egress-destination vendor-api
+test egress
+enable egress-profile vendor-api
 
 doctor
+update product
 ```
 
 Safe Controlled Egress workflow (create is always DISABLED):
 
 ```text
-egress create <name>
-→ egress add-source …
-→ egress add-destination … --protocol http|https
-→ egress test …
-→ egress enable …
+create egress-profile <name>
+→ add egress-source …
+→ add egress-destination …
+→ test egress …
+→ enable egress-profile …
 ```
 
-## 18.2 Historical — verb-first grammar (compatibility only)
+## 18.2 Historical — resource-first grammar (hidden compatibility only)
 
 > **Status: HISTORICAL / COMPATIBILITY.** Not the current advertised CLI.
-> Verb-first forms still run for scripts and muscle memory (`help legacy`).
+> Resource-first forms still run for scripts and muscle memory (`help legacy`).
 
 ```text
-<verb> <resource> [target] [property] [value]
+<resource> <action> [target] [property] [value]
 ```
 
-예 (alias):
+예 (hidden alias):
 
 ```text
 client list
 client show 24cd7856
-set client 24cd7856 label branch-a
-create enrollment
-revoke client 24cd7856
-release service 24cd7856 ssh
+client set 24cd7856 label branch-a
+enrollment create
+client revoke 24cd7856
+client release 24cd7856 ssh
 ```
 
 ---
@@ -1417,7 +1421,7 @@ cloud=oci
 
 # 22. Group Management — Product Direction
 
-Client 수가 증가하면 단순 `client list`만으로 운영하기 어려워진다.
+Client 수가 증가하면 단순 `show clients`만으로 운영하기 어려워진다.
 
 Group의 목적은 **few to a few dozen clients를 사람이 이해하고 관리하기 쉽게 정리하고 찾고 운영하는 것**이다.
 
@@ -1443,8 +1447,8 @@ description
 multiple membership
 show groups
 show group
-client show <ID> groups
-client list --group
+show client <ID> groups
+show clients --group
 persistence
 audit
 backup/restore preservation
@@ -1573,7 +1577,7 @@ revoked
 예:
 
 ```text
-client list --status offline
+show clients --status offline
 ```
 
 ---
@@ -1598,8 +1602,8 @@ group remove-client <GROUP> <CLIENT>
 Related views:
 
 ```text
-client list --group <GROUP>
-client show <CLIENT-ID> groups
+show clients --group <GROUP>
+show client <CLIENT-ID> groups
 ```
 
 ## 27.2 Historical verb-first (compatibility)
@@ -1609,7 +1613,7 @@ client show <CLIENT-ID> groups
 ```text
 show groups
 show group customer-acme
-client list --group customer-acme
+show clients --group customer-acme
 create group customer-acme
 set group customer-acme description "ACME customer systems"
 add client 24cd7856 group customer-acme
@@ -1643,13 +1647,13 @@ create group prod-seoul \
 장기적으로 다음 조합을 지원한다.
 
 ```text
-client list --group customer-acme
+show clients --group customer-acme
 
-client list --tag env=prod
+show clients --tag env=prod
 
-client list --status offline
+show clients --status offline
 
-client list \
+show clients \
   --group customer-acme \
   --tag role=gateway \
   --status online
@@ -1724,7 +1728,7 @@ Dynamic Group membership은 저장하지 않고 계산한다.
 기본:
 
 ```text
-client list
+show clients
 ```
 
 는 계속:
@@ -1993,7 +1997,7 @@ drlink egress status
 Project update와 upstream FRP update를 구분한다.
 
 ```text
-update project
+update product
 update frp
 ```
 
@@ -2668,7 +2672,7 @@ Historical line  = v2.3.0 FINAL AUDIT CLOSURE (published; immutable)
 - Target Health Check (CLIENT / TUNNEL / TARGET)
 - Support Bundle (sanitized diagnostics)
 - Service Profiles (server-owned creation templates)
-- canonical `drlink` resource-first grammar / REPL hardening (`frpctl` remains the internal binary name)
+- canonical `drlink` action-first grammar / REPL hardening (`frpctl` remains the internal binary name)
 - GNU Readline + macOS libedit completion portability
 - Client ID selector hardening
 - `public_hostname` alias
@@ -3455,10 +3459,10 @@ Update
 운영자는 수십~수백 Client가 있어도:
 
 ```text
-client list
+show clients
 show groups
-client list --group customer-acme
-client list --tag env=prod
+show clients --group customer-acme
+show clients --tag env=prod
 doctor clients --group production
 ```
 
@@ -3709,8 +3713,8 @@ description
 add/remove client membership
 show groups
 show group
-client show <ID> groups
-client list --group
+show client <ID> groups
+show clients --group
 multiple membership
 persistence
 backup/restore

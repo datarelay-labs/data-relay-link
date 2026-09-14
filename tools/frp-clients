@@ -196,4 +196,4 @@ if clients:
     if example:
         print()
         print('Example:')
-        print('  client show %s' % example)
+        print('  show client %s' % example)

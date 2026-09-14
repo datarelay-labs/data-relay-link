@@ -75,8 +75,8 @@ OUT="$WORKDIR/clients-missing.out"
 "$ROOT/tools/frp-clients" >"$OUT"
 grep -q 'POLICY UNAVAILABLE' "$OUT" || { cat "$OUT"; fail "client list missing policy"; }
 ! grep -qE 'PUBLIC /| [0-9]+ PUBLIC' "$OUT" || { cat "$OUT"; fail "client list claimed PUBLIC"; }
-grep -q 'client show ' "$OUT" || fail "client list example not canonical"
-! grep -q 'show client ' "$OUT" || fail "client list legacy example"
+grep -q 'show client ' "$OUT" || fail "client list example not canonical"
+! grep -q 'client show ' "$OUT" || fail "client list resource-first example"
 ! grep -qE '^\s+ssh:6000' "$OUT" || fail "client list dumped services"
 pass "CLIENT_LIST_CONCISE"
 
@@ -258,19 +258,20 @@ g = importlib.util.module_from_spec(specg); specg.loader.exec_module(g)
 
 banned = re.compile(
     r"(?m)^\s*(?:\$\s*)?(?:sudo\s+)?(?:drlink\s+)?(?:"
-    r"show\s+clients|show\s+client\b|set\s+client\b|create\s+client\b|"
-    r"show\s+info\b|show\s+services\b|enroll\b|revoke\s+client\b"
+    r"client\s+list\b|client\s+show\b|client\s+set\b|enrollment\s+create\b|"
+    r"zero-touch\s+create\b|group\s+list\b|egress\s+list\b|service\s+list\b|"
+    r"backup\s+create\b|support\s+bundle\b|update\s+project\b"
     r")"
 )
 
 def scan(label, text):
     for m in banned.finditer(text):
         line = text[max(0, m.start()-60):m.end()+60]
-        if "help legacy" in line.lower():
+        if "help legacy" in line.lower() or "historical" in line.lower():
             continue
-        if "Compatibility aliases still run" in line:
+        if "hidden compatibility" in line.lower():
             continue
-        raise AssertionError("%s advertises legacy grammar near: %r" % (label, line))
+        raise AssertionError("%s advertises resource-first near: %r" % (label, line))
 
 for role in ("server", "client", "both"):
     scan("root_help", c.root_help(role))
@@ -287,11 +288,12 @@ for cmd in c.COMMANDS:
         toks = ex.split()
         found = c.find(toks)
         assert found is not None, "catalog example not canonical: %r" % ex
+        assert not any(t.startswith("--") for t in toks), "public example has --option: %r" % ex
 
 clients_src = (root / "tools/frp-clients").read_text(encoding="utf-8")
-assert "client show %" in clients_src or 'client show %s' in clients_src or "print('  client show" in clients_src
-assert "print('  show client" not in clients_src
-assert 'print("  show client' not in clients_src
+assert "show client" in clients_src
+assert "print('  client show" not in clients_src
+assert 'print("  client show' not in clients_src
 print("USER_FACING_CANONICAL_COMMAND_CONTRACT=PASS")
 PY
 pass "USER_FACING_CANONICAL_COMMAND_CONTRACT"

@@ -1107,9 +1107,27 @@ resolve_server_settings() {
     FRP_TRANSPORT=tcp
   fi
 
+  # Prefer the optional public DNS hostname for the enrollment URL default.
+  # Control/tunnel identity still uses FRP_PUBLIC_HOST (the public IP).
+  local derived_host="$FRP_PUBLIC_HOST"
+  if [[ -n "${FRP_PUBLIC_HOSTNAME:-}" ]]; then
+    derived_host="$FRP_PUBLIC_HOSTNAME"
+  fi
   local derived_url
-  derived_url="$(frp_format_https_url "$FRP_PUBLIC_HOST" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+  derived_url="$(frp_format_https_url "$derived_host" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+
+  # Normalize a bare hostname (or host:port) into the enrollment HTTPS URL when
+  # the operator supplied an incomplete FRP_ALLOCATOR_PUBLIC_URL / FRP_ALLOCATOR_URL.
   if [[ -n "${FRP_ALLOCATOR_PUBLIC_URL:-}" ]]; then
+    if [[ "${FRP_ALLOCATOR_PUBLIC_URL}" != *"://"* ]]; then
+      local bare="${FRP_ALLOCATOR_PUBLIC_URL}"
+      bare="${bare%%/*}"
+      if [[ "$bare" == *":"* ]]; then
+        FRP_ALLOCATOR_PUBLIC_URL="$(frp_format_https_url "${bare%%:*}" "${bare##*:}" /enroll)"
+      else
+        FRP_ALLOCATOR_PUBLIC_URL="$(frp_format_https_url "$bare" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+      fi
+    fi
     if [[ "${FRP_ALLOCATOR_PUBLIC_URL,,}" == http://* ]]; then
       echo "ERROR: allocator public URL must be HTTPS; plain HTTP is not supported" >&2
       exit 1
@@ -1117,11 +1135,9 @@ resolve_server_settings() {
   elif [[ -n "${EXISTING_ALLOCATOR_URL:-}" ]]; then
     FRP_ALLOCATOR_PUBLIC_URL="$EXISTING_ALLOCATOR_URL"
   else
-    if frp_has_tty; then
-      prompt "Allocator public URL" "$derived_url" FRP_ALLOCATOR_PUBLIC_URL
-    else
-      FRP_ALLOCATOR_PUBLIC_URL="$derived_url"
-    fi
+    # Public IP/hostname + allocator port + /enroll already determine the URL.
+    # Do not re-ask for information the installer already knows.
+    FRP_ALLOCATOR_PUBLIC_URL="$derived_url"
   fi
   require_value FRP_ALLOCATOR_PUBLIC_URL "Allocator public URL (FRP_ALLOCATOR_PUBLIC_URL or FRP_ALLOCATOR_URL)"
   if [[ "${FRP_ALLOCATOR_PUBLIC_URL,,}" == http://* ]]; then
@@ -1130,6 +1146,7 @@ resolve_server_settings() {
   fi
   if ! frp_valid_https_url "$FRP_ALLOCATOR_PUBLIC_URL"; then
     echo "ERROR: Allocator public URL must be an https:// URL with a host" >&2
+    echo "Example: ${derived_url}" >&2
     exit 1
   fi
   if frp_mode_is_single443; then
@@ -2694,17 +2711,17 @@ Everyday management (start here):
   Then type help or ? inside the CLI.
 
 Enroll the first client (Zero-Touch preferred):
-  sudo drlink zero-touch create
-  # or: sudo drlink enrollment create
+  sudo drlink create zero-touch
+  # or: sudo drlink create enrollment
 
 Useful checks:
-  sudo drlink status
+  sudo drlink show status
   sudo drlink doctor
-  sudo drlink client list
+  sudo drlink show clients
   sudo drlink help
 
 Backup:
-  sudo drlink backup create
+  sudo drlink create backup
 
 ============================================================
 EOF2

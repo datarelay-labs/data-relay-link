@@ -111,7 +111,7 @@ def _recovery_for_operation(operation, role):
     if op == 'restore':
         return (
             'inspect the pending restore marker and retry '
-            'sudo drlink backup restore <PATH> only after the failure is understood'
+            'sudo drlink restore backup <PATH> only after the failure is understood'
             + extra
         )
     if op == 'update':
@@ -2481,7 +2481,7 @@ def check_egress_control(report, paths, facts, cfg):
                     'EGRESS_EFFECTIVE_CONFIG', FAIL,
                     'egress effective policy is unhealthy (fail-closed)',
                     'generation=%s path=%s' % (generation, effective_rel),
-                    'fix Controlled Egress policy with: sudo drlink egress list',
+                    'fix Controlled Egress policy with: sudo drlink show egress-profiles',
                     'runtime',
                 )
             report.add(
@@ -2536,7 +2536,7 @@ def check_egress_control(report, paths, facts, cfg):
             status,
             '%s: %s' % (cls, issue.get('message') or 'issue'),
             '',
-            'inspect Controlled Egress with drlink egress list',
+            'inspect Controlled Egress with show egress-profiles',
             'state',
         )
 
@@ -3149,7 +3149,7 @@ def check_client(report, paths, facts, skip_network):
             'client_identity', INFO,
             'management identity is not established',
             '',
-            'Create a short-lived Enrollment Code on the server with sudo drlink enrollment create (or zero-touch create), then enroll this client.',
+            'Create a short-lived Enrollment Code on the server with sudo drlink create enrollment (or create zero-touch), then enroll this client.',
             'security',
         )
     elif missing_ident:
@@ -3157,7 +3157,7 @@ def check_client(report, paths, facts, skip_network):
             'client_identity', FAIL,
             'management identity files are incomplete',
             'missing %s' % ', '.join(missing_ident),
-            'Do not regenerate identity automatically. Create a new Enrollment Code with sudo drlink enrollment create (or zero-touch create) and re-enroll this client.',
+            'Do not regenerate identity automatically. Create a new Enrollment Code with sudo drlink create enrollment (or create zero-touch) and re-enroll this client.',
             'security',
         )
     else:
@@ -3274,7 +3274,7 @@ def check_client(report, paths, facts, skip_network):
                 'access_info', WARN,
                 'access-info.txt is missing',
                 'display-only file; state/runtime can still be healthy',
-                'sudo drlink client info regenerates connection text from local client-state when the file is absent',
+                'sudo drlink show info regenerates connection text from local client-state when the file is absent',
                 'state',
             )
         else:

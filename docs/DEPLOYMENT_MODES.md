@@ -221,7 +221,7 @@ Recommended sequence:
    (or type `SWITCH` on a TTY).
 3. On each client, Apply (or otherwise contact the allocator) so
    `frp_transport=wss` is stored and `frpc.toml` is regenerated.
-4. Confirm `sudo drlink status` / `sudo drlink doctor` on server and client.
+4. Confirm `sudo drlink show status` / `sudo drlink doctor` on server and client.
 
 Rollback of a failed cutover restores the previous `frps.toml` when the
 frontend config is invalid or `drlink-frontend` fails to start, then restarts

@@ -496,7 +496,7 @@ def resolve_client_or_exit(state, query):
             shown = sanitize_display(query, 128)
             sys.stderr.write('ERROR: client not found: %s\n' % shown)
             sys.stderr.write('\nUse a CLIENT ID, unique label, or unique hostname.\n')
-            sys.stderr.write('Run:\n  client list\n\nor:\n  client show ?\n')
+            sys.stderr.write('Run:\n  show clients\n\nor:\n  show client ?\n')
         else:
             sys.stderr.write('ERROR: %s\n' % exc)
         raise SystemExit(1)

@@ -188,7 +188,7 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 
 - Server FRP binary: `drlink update engine` (implementation: `frp-update`) restores the previous binary on health failure.
 - Server project tools: use `drlink update project` rollback / restore from backup (implementation: `frp-project-update`).
-- Disaster recovery: `sudo drlink backup restore <backup>` after a validated backup.
+- Disaster recovery: `sudo drlink restore backup <backup>` after a validated backup.
 
 ## Future release upgrade suite (from v2.3.1 golden baseline)
 

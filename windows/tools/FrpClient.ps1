@@ -49,7 +49,7 @@ switch -Regex ($Command.ToLowerInvariant()) {
             $normalized = $true
         } else {
             Write-Host ("ERROR: unknown client command: {0}" -f $SubCommand)
-            Write-Host 'Next: drlink client info'
+            Write-Host 'Next: drlink show info'
             exit 1
         }
     }

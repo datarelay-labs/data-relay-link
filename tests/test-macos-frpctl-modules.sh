@@ -41,7 +41,7 @@ out="$("$TMP/prefix/bin/frpctl" help 2>&1)" || {
   echo "FAIL: frpctl help exited nonzero on Darwin layout" >&2
   exit 1
 }
-printf '%s\n' "$out" | grep -Eq 'Grammar: <resource> <action>|status[[:space:]]+Host status' || {
+printf '%s\n' "$out" | grep -Eq 'Grammar: <action> <resource>|show[[:space:]]+View current state' || {
   printf '%s\n' "$out" >&2
   echo "FAIL: frpctl help missing grammar text" >&2
   exit 1

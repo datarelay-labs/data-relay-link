@@ -339,7 +339,7 @@ function Complete-FrpZeroTouchPostEnroll {
         Write-Host 'Management-only enrollment: no public services; skipping frpc start.'
         Set-FrpInstallStatus -Status 'management_only'
         Write-Host ''
-        Write-Host 'Enrollment complete (management-only). Use drlink client info for details.'
+        Write-Host 'Enrollment complete (management-only). Use drlink show info for details.'
         Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
         return 0
     }
@@ -373,7 +373,7 @@ function Complete-FrpZeroTouchPostEnroll {
 
     Set-FrpInstallStatus -Status 'installed'
     Write-Host ''
-    Write-Host 'Enrollment complete. Use drlink client info for connection details.'
+    Write-Host 'Enrollment complete. Use drlink show info for connection details.'
     Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
     return 0
 }

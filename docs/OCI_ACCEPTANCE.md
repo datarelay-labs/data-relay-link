@@ -14,41 +14,41 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 ## Existing client update
 
 1. Record identity files, public ports, SSH reachability.
-2. `sudo drlink update` on the client
+2. `sudo drlink` → `update product` on the client
 3. Identity, ports, SSH still work. No re-enrollment.
 
 ## New client
 
-1. `sudo drlink zero-touch create` / `sudo drlink enrollment create` / one-line installer with label + SSH user
-2. List client (`sudo drlink client list`), connect over published SSH
+1. `sudo drlink` → `create zero-touch` / `create enrollment`
+2. List client (`show clients`), connect over published SSH
 
 ## Server metadata
 
-1. Change label, note, tags
+1. Change label, note, tags (`set client …`)
 2. Client machine identity and public ports unchanged
 
 ## Pending enrollment
 
 1. Create ticket → list shows pending (no raw secret)
-2. Revoke pending/bound
+2. Revoke pending/bound (`revoke enrollment …`)
 3. Confirm expired and completed states
 
 ## Bulk enrollment
 
-1. Create at least 3 independent tickets (CSV or `--count`)
+1. Create at least 3 independent tickets (`create enrollments`)
 2. Prove one ticket cannot enroll two machines
 
 ## Zero-service client
 
 1. Enroll with no published service
-2. Visible in `sudo drlink client list` with 0 services
+2. Visible in `show clients` with 0 services
 3. Add SSH later → port allocated → SSH succeeds
 
 ## Backup / Restore
 
-1. `sudo drlink backup create`
+1. `create backup`
 2. Record state, change metadata
-3. Restore from that backup (`sudo drlink backup restore <path>`)
+3. Restore from that backup (`restore backup <path>`)
 4. Exact expected state; `doctor` PASS
 5. Use a controlled restore; do not wipe the live host as the only copy
 

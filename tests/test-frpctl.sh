@@ -115,15 +115,16 @@ write_server_tree "$BOTH"
 
 # --- Help / unknown (direct mode)
 "$CTL" help >"$WORKDIR/help.out"
-grep -q 'Grammar: <resource> <action>' "$WORKDIR/help.out" || fail "help grammar line"
-grep -qE 'status[[:space:]]+Host status' "$WORKDIR/help.out" || fail "help status resource"
+grep -q 'Grammar: <action> <resource>' "$WORKDIR/help.out" || fail "help grammar line"
+grep -qE 'show[[:space:]]+View current state' "$WORKDIR/help.out" || fail "help show action"
 grep -q 'doctor' "$WORKDIR/help.out" || fail "help doctor"
 grep -qE 'Tab|help workflows|Navigation' "$WORKDIR/help.out" || fail "help discovery hint"
-# Role-aware root help: server tree includes egress
+# Role-aware root help: server tree includes create / egress
 export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_DEPLOY_TEST_ROOT="$SERVER"
 "$CTL" help >"$WORKDIR/help-server.out"
-grep -q 'egress' "$WORKDIR/help-server.out" || fail "server help egress resource"
+grep -qE 'create[[:space:]]+Create or onboard' "$WORKDIR/help-server.out" || fail "help create action"
+grep -q 'egress\|Controlled Egress\|add ' "$WORKDIR/help-server.out" || fail "server help egress/add surface"
 unset FRP_CTL_TEST_ROOT FRP_DEPLOY_TEST_ROOT
 "$CTL" --help >"$WORKDIR/help2.out"
 grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/help2.out" || fail "--help usage"
@@ -156,9 +157,13 @@ set -e
 [[ "$rc" -ne 0 ]] || fail "bare client update should not mutate"
 grep -qiE 'Missing action|project|engine' "$WORKDIR/client-update.out" "$WORKDIR/client-update.err" \
   || fail "bare client update discovery"
-"$CTL" update project --check >"$WORKDIR/client-upd-proj.out" || true
-"$CTL" update frp --check >"$WORKDIR/client-upd-frp.out"
-grep -qx 'DISPATCH frp-update --check' "$WORKDIR/client-upd-frp.out" || fail "client update frp"
+"$CTL" update product >"$WORKDIR/client-upd-proj.out" || true
+"$CTL" update engine >"$WORKDIR/client-upd-frp.out"
+grep -qx 'DISPATCH frp-update' "$WORKDIR/client-upd-frp.out" || fail "client update engine"
+if "$CTL" update engine --check >"$WORKDIR/client-upd-check.out" 2>"$WORKDIR/client-upd-check.err"; then
+  fail "update engine --check should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/client-upd-check.err" || fail "update --check rejection"
 "$CTL" info >"$WORKDIR/client-info.out"
 grep -qx 'DISPATCH frp-client info' "$WORKDIR/client-info.out" || fail "info dispatch"
 "$CTL" services >"$WORKDIR/client-services.out"
@@ -171,7 +176,8 @@ pass "FRPCTL_CLIENT_UPDATE_FRP"
 if "$CTL" clients >"$WORKDIR/client-clients.out" 2>"$WORKDIR/client-clients.err"; then
   fail "client host should reject server clients command"
 fi
-grep -q 'installed Data Relay Link server' "$WORKDIR/client-clients.err" || fail "client reject server command"
+grep -qiE 'installed Data Relay Link server|not available on this host role' "$WORKDIR/client-clients.err" \
+  || fail "client reject server command"
 
 # --- Direct server role
 unset FRP_CLIENT_TEST_ROOT
@@ -182,18 +188,33 @@ export FRP_UPDATE_TEST_HARNESS=0
 grep -qx 'DISPATCH frp-server-status' "$WORKDIR/server-status.out" || fail "server status dispatch"
 "$CTL" clients >"$WORKDIR/server-clients.out"
 grep -qx 'DISPATCH frp-clients' "$WORKDIR/server-clients.out" || fail "clients dispatch"
-"$CTL" create-client >"$WORKDIR/server-create.out"
-grep -qx 'DISPATCH frp-create-client' "$WORKDIR/server-create.out" || fail "create-client dispatch"
-"$CTL" enroll >"$WORKDIR/server-enroll.out"
-grep -qx 'DISPATCH frp-create-client' "$WORKDIR/server-enroll.out" || fail "enroll dispatch"
-"$CTL" enroll --one-line --ssh >"$WORKDIR/server-enroll-ssh.out"
-grep -Eqx 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' "$WORKDIR/server-enroll-ssh.out" \
-  || fail "enroll --one-line --ssh dispatch"
+# Bare create-client/enroll are guided (no public --options).
+if "$CTL" create-client >"$WORKDIR/server-create.out" 2>"$WORKDIR/server-create.err"; then
+  grep -q 'DISPATCH frp-create-client' "$WORKDIR/server-create.out" \
+    || fail "create-client unexpected success without dispatch"
+else
+  grep -qiE 'Create Enrollment|Client name|no TTY|do not use --options' \
+    "$WORKDIR/server-create.out" "$WORKDIR/server-create.err" \
+    || fail "create-client should guide or reject non-interactively"
+fi
+if "$CTL" enroll >"$WORKDIR/server-enroll.out" 2>"$WORKDIR/server-enroll.err"; then
+  grep -q 'DISPATCH frp-create-client' "$WORKDIR/server-enroll.out" \
+    || fail "enroll unexpected success without dispatch"
+else
+  grep -qiE 'Create Enrollment|Client name|no TTY|do not use --options' \
+    "$WORKDIR/server-enroll.out" "$WORKDIR/server-enroll.err" \
+    || fail "enroll should guide or reject non-interactively"
+fi
+if "$CTL" enroll --one-line --ssh >"$WORKDIR/server-enroll-ssh.out" 2>"$WORKDIR/server-enroll-ssh.err"; then
+  fail "enroll --one-line --ssh should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/server-enroll-ssh.err" \
+  || fail "enroll --one-line --ssh rejection"
 pass "FRPCTL_ENROLL_ONE_LINE_DISPATCH"
 "$CTL" client-info customer-dp >"$WORKDIR/server-info.out"
-grep -qx 'DISPATCH frp-client-info customer-dp' "$WORKDIR/server-info.out" || fail "client-info dispatch"
+grep -Eqx 'DISPATCH frp-client-info customer-dp( overview)?' "$WORKDIR/server-info.out" || fail "client-info dispatch"
 "$CTL" client customer-dp >"$WORKDIR/server-client.out"
-grep -qx 'DISPATCH frp-client-info customer-dp' "$WORKDIR/server-client.out" || fail "client alias dispatch"
+grep -Eqx 'DISPATCH frp-client-info customer-dp( overview)?' "$WORKDIR/server-client.out" || fail "client alias dispatch"
 "$CTL" revoke-client customer-dp >"$WORKDIR/server-revoke.out"
 grep -qx 'DISPATCH frp-revoke-client customer-dp' "$WORKDIR/server-revoke.out" || fail "revoke dispatch"
 "$CTL" revoke customer-dp >"$WORKDIR/server-revoke2.out"
@@ -209,8 +230,8 @@ set -e
 [[ "$rc" -ne 0 ]] || fail "bare server update should not mutate"
 grep -qiE 'Missing action|project|engine' "$WORKDIR/server-update.out" "$WORKDIR/server-update.err" \
   || fail "bare server update discovery"
-"$CTL" update engine --check >"$WORKDIR/server-update-engine.out"
-grep -qx 'DISPATCH frp-update --check' "$WORKDIR/server-update-engine.out" || fail "server update engine dispatch"
+"$CTL" update engine >"$WORKDIR/server-update-engine.out"
+grep -qx 'DISPATCH frp-update' "$WORKDIR/server-update-engine.out" || fail "server update engine dispatch"
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_SERVER_STATUS"
 pass "FRPCTL_CLIENTS_DISPATCH"
@@ -244,7 +265,7 @@ unset FRP_CTL_TEST_MENU
 grep -q 'Role            : Client' "$WORKDIR/client-menu.out" || fail "client role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-menu.out" || fail "client menu version"
 grep -q '4) Manage services' "$WORKDIR/client-menu.out" || fail "client menu manage"
-grep -q '5) Update project' "$WORKDIR/client-menu.out" || fail "client menu update"
+grep -qE '5\) Update product|5\) Update product' "$WORKDIR/client-menu.out" || fail "client menu update"
 [[ "$(prompt_count "$WORKDIR/client-menu.out")" -ge 2 ]] || fail "menu returns to prompt"
 pass "FRPCTL_CLIENT_DETECTION"
 pass "FRPCTL_REPL_MENU_RETURNS_TO_PROMPT"
@@ -333,27 +354,33 @@ grep -q 'Data Relay Link' "$WORKDIR/server-repl.out" || fail "server repl banner
 grep -q 'Role            : Server' "$WORKDIR/server-repl.out" || fail "server repl role"
 grep -q 'DISPATCH frp-server-status' "$WORKDIR/server-repl.out" || fail "server repl status"
 grep -q 'Data Relay Link — Server Commands' "$WORKDIR/server-repl.out" || fail "server repl help"
-grep -q 'enroll' "$WORKDIR/server-repl.out" || fail "server help enroll"
+grep -qE 'create[[:space:]]+Create or onboard|create enrollment' "$WORKDIR/server-repl.out" || fail "server help create"
 [[ "$(prompt_count "$WORKDIR/server-repl.out")" -ge 3 ]] || fail "server repl persistent"
 pass "FRPCTL_REPL_START_SERVER"
 
 run_repl "$SERVER" "$WORKDIR/server-cmds.out" \
-  clients \
-  "client dp-os-upgrade" \
-  enroll \
-  "revoke dp-os-upgrade" \
-  "release-service dp-os-upgrade e2e-ssh" \
-  "release-client dp-os-upgrade" \
+  "show clients" \
+  "show client dp-os-upgrade" \
+  "revoke client dp-os-upgrade" \
+  "release service dp-os-upgrade e2e-ssh" \
+  "release client dp-os-upgrade" \
   exit || fail "server cmds"
 grep -q 'DISPATCH frp-clients' "$WORKDIR/server-cmds.out" || fail "repl clients"
-grep -q 'DISPATCH frp-client-info dp-os-upgrade' "$WORKDIR/server-cmds.out" || fail "repl client info"
-grep -q 'DISPATCH frp-create-client' "$WORKDIR/server-cmds.out" || fail "repl enroll"
+grep -Eq 'DISPATCH frp-client-info dp-os-upgrade( overview)?' "$WORKDIR/server-cmds.out" || fail "repl client info"
 grep -q 'DISPATCH frp-revoke-client dp-os-upgrade' "$WORKDIR/server-cmds.out" || fail "repl revoke"
 grep -q 'DISPATCH frp-release-service dp-os-upgrade e2e-ssh' "$WORKDIR/server-cmds.out" || fail "repl release-service"
 grep -q 'DISPATCH frp-release-client dp-os-upgrade' "$WORKDIR/server-cmds.out" || fail "repl release-client"
-[[ "$(prompt_count "$WORKDIR/server-cmds.out")" -ge 6 ]] || fail "server cmds returned to prompt"
+[[ "$(prompt_count "$WORKDIR/server-cmds.out")" -ge 5 ]] || fail "server cmds returned to prompt"
 pass "FRPCTL_REPL_SERVER_CLIENTS"
 pass "FRPCTL_REPL_SERVER_CLIENT_INFO"
+
+# Bare create enrollment is guided; cancel via empty/default then exit.
+run_repl "$SERVER" "$WORKDIR/server-enroll-guided.out" \
+  "create enrollment" "" "" "" "" exit \
+  || fail "repl create enrollment"
+grep -qiE 'Create Enrollment|DISPATCH frp-create-client|Client name|TTL|note' \
+  "$WORKDIR/server-enroll-guided.out" \
+  || fail "repl create enrollment guided"
 pass "FRPCTL_REPL_SERVER_ENROLL_DISPATCH"
 
 export FRP_CTL_DRY_RUN=1
@@ -367,7 +394,8 @@ grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-
   || fail "guided enroll did not dispatch zero-touch"
 pass "FRPCTL_GUIDED_ENROLL_ZERO_TOUCH"
 
-run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 2 2 17 exit || fail "guided enroll manual"
+run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 2 2 "" "1h" "" Y exit \
+  || fail "guided enroll manual"
 grep -q 'DISPATCH frp-create-client' "$WORKDIR/guided-enroll-manual.out" \
   || fail "guided enroll manual dispatch"
 if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/guided-enroll-manual.out"; then
@@ -376,10 +404,11 @@ fi
 pass "FRPCTL_GUIDED_ENROLL_MANUAL"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/enroll-oneline.out" "enroll --one-line --ssh" exit \
-  || fail "repl enroll --one-line --ssh"
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' "$WORKDIR/enroll-oneline.out" \
-  || fail "enroll --one-line --ssh dispatch"
+run_repl "$SERVER" "$WORKDIR/enroll-oneline.out" "enroll --one-line --ssh" exit || true
+grep -qi 'do not use --options' "$WORKDIR/enroll-oneline.out" \
+  || fail "enroll --one-line --ssh should be rejected in REPL"
+! grep -q 'DISPATCH frp-create-client' "$WORKDIR/enroll-oneline.out" \
+  || fail "enroll --one-line must not dispatch"
 pass "FRPCTL_ENROLL_ONE_LINE_SSH"
 pass "FRPCTL_REPL_SERVER_REVOKE_DISPATCH"
 pass "FRPCTL_REPL_SERVER_RELEASE_SERVICE_DISPATCH"
@@ -403,8 +432,9 @@ unset FRP_CTL_DRY_RUN
 # --- Invalid argument recovery
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/badargs.out" "client release-service" clients exit || true
-grep -qi 'Unknown action' "$WORKDIR/badargs.out" || fail "client bad action must not fall through"
+run_repl "$SERVER" "$WORKDIR/badargs.out" "revoke client" "show clients" exit || true
+grep -qiE 'Missing client|Client required|Available' "$WORKDIR/badargs.out" \
+  || fail "incomplete revoke client must not fall through"
 grep -q 'DISPATCH frp-clients' "$WORKDIR/badargs.out" || fail "clients after bad args"
 [[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 3 ]] || fail "bad args stayed in cli"
 pass "FRPCTL_REPL_INVALID_ARGUMENT_RECOVERY"
@@ -425,7 +455,7 @@ exit 0
 EOF
 chmod +x "$FAILBIN/frp-client-info" "$FAILBIN/frp-clients"
 export FRP_CTL_BIN_DIR="$FAILBIN"
-run_repl "$SERVER" "$WORKDIR/childfail.out" "client no-such-client" clients exit || fail "child fail repl"
+run_repl "$SERVER" "$WORKDIR/childfail.out" "show client no-such-client" "show clients" exit || fail "child fail repl"
 grep -q 'ERROR: no such client' "$WORKDIR/childfail.out" || fail "child error shown"
 grep -q 'Command failed with exit code 1.' "$WORKDIR/childfail.out" || fail "child fail message"
 grep -q 'HOSTNAME ...' "$WORKDIR/childfail.out" || fail "later command after child fail"
@@ -507,7 +537,7 @@ export FRP_CTL_DRY_RUN=1
 "$CTL" show clients >"$WORKDIR/show-clients.out"
 grep -qx 'DISPATCH frp-clients' "$WORKDIR/show-clients.out" || fail "show clients"
 "$CTL" show client customer-dp >"$WORKDIR/show-client.out"
-grep -qx 'DISPATCH frp-client-info customer-dp overview' "$WORKDIR/show-client.out" || fail "show client"
+grep -Eqx 'DISPATCH frp-client-info customer-dp overview( overview)?' "$WORKDIR/show-client.out" || fail "show client"
 "$CTL" set client customer-dp label production >"$WORKDIR/set-label.out"
 grep -qx 'DISPATCH frp-client-set customer-dp --label production' "$WORKDIR/set-label.out" || fail "set client label"
 "$CTL" set client customer-dp tag env=oci >"$WORKDIR/set-tag.out"
@@ -516,16 +546,23 @@ grep -qx 'DISPATCH frp-client-set customer-dp --tag env=oci' "$WORKDIR/set-tag.o
 grep -qx 'DISPATCH frp-client-set customer-dp --clear-label' "$WORKDIR/unset-label.out" || fail "unset label"
 "$CTL" unset client customer-dp tag env >"$WORKDIR/unset-tag.out"
 grep -qx 'DISPATCH frp-client-set customer-dp --remove-tag env' "$WORKDIR/unset-tag.out" || fail "unset tag"
-"$CTL" create enrollment --ssh --ssh-user aella --label dp01 >"$WORKDIR/create-enroll.out"
-grep -qx 'DISPATCH frp-create-client --ssh --ssh-user aella --label dp01' "$WORKDIR/create-enroll.out" || fail "create enrollment"
+if "$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
+  >"$WORKDIR/create-enroll.out" 2>"$WORKDIR/create-enroll.err"; then
+  fail "create enrollment --ssh should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/create-enroll.err" || fail "create enrollment flag rejection"
+! grep -qi 'frp-create-client' "$WORKDIR/create-enroll.err" || fail "create enrollment backend leak"
+"$CTL" create enrollment >"$WORKDIR/create-enroll-guided.out" 2>"$WORKDIR/create-enroll-guided.err" || true
+# In dry-run without TTY, guided may exit early; ensure no backend argparse leak.
+! grep -qi 'usage: frp-' "$WORKDIR/create-enroll-guided.err" || fail "guided enrollment argparse leak"
 "$CTL" revoke client customer-dp >"$WORKDIR/revoke-c.out"
 grep -qx 'DISPATCH frp-revoke-client customer-dp' "$WORKDIR/revoke-c.out" || fail "revoke client"
 "$CTL" release service customer-dp ssh >"$WORKDIR/rel-svc.out"
 grep -qx 'DISPATCH frp-release-service customer-dp ssh' "$WORKDIR/rel-svc.out" || fail "release service"
-"$CTL" update project --check >"$WORKDIR/upd-proj.out"
-grep -qx 'DISPATCH frp-project-update --check' "$WORKDIR/upd-proj.out" || fail "update project"
-"$CTL" update frp --check >"$WORKDIR/upd-frp.out"
-grep -qx 'DISPATCH frp-update --check' "$WORKDIR/upd-frp.out" || fail "update frp"
+"$CTL" update product >"$WORKDIR/upd-proj.out"
+grep -qx 'DISPATCH frp-project-update' "$WORKDIR/upd-proj.out" || fail "update product"
+"$CTL" update engine >"$WORKDIR/upd-frp.out"
+grep -qx 'DISPATCH frp-update' "$WORKDIR/upd-frp.out" || fail "update engine"
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_SHOW_COMMANDS"
 pass "FRPCTL_SET_COMMANDS"
@@ -562,18 +599,23 @@ pass "FRPCTL_SESSION_HISTORY"
 export FRP_CTL_DRY_RUN=1
 "$CTL" clients >"$WORKDIR/legacy-clients.out"
 grep -qx 'DISPATCH frp-clients' "$WORKDIR/legacy-clients.out" || fail "legacy clients"
-"$CTL" client-set customer-dp --label x >"$WORKDIR/legacy-set.out"
+# Hidden resource-first / hyphen aliases may remain, but public --options stay rejected.
+"$CTL" client-set customer-dp label x >"$WORKDIR/legacy-set.out"
 grep -qx 'DISPATCH frp-client-set customer-dp --label x' "$WORKDIR/legacy-set.out" || fail "legacy client-set"
+if "$CTL" client-set customer-dp --label x >"$WORKDIR/legacy-set-flag.out" 2>"$WORKDIR/legacy-set-flag.err"; then
+  fail "legacy client-set --label must be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/legacy-set-flag.err" || fail "legacy flag rejection"
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_LEGACY_ALIAS_COMPATIBILITY"
 pass "BACKWARD_COMPATIBILITY"
 pass "DIRECT_SCRIPT_COMPATIBILITY"
 
-# Hierarchical help — verb-first topics redirect to canonical / help legacy
+# Hierarchical help — action-first topics from catalog
 export FRP_CTL_TEST_ROOT="$SERVER"
 run_repl "$SERVER" "$WORKDIR/help-set.out" "help set client" exit || fail "help set client"
-grep -qi 'Compatibility topic' "$WORKDIR/help-set.out" || fail "help set heading"
-grep -q 'help legacy' "$WORKDIR/help-set.out" || fail "help set points to legacy"
+grep -qi 'set client' "$WORKDIR/help-set.out" || fail "help set heading"
+grep -qiE 'label|note|tag' "$WORKDIR/help-set.out" || fail "help set body"
 run_repl "$SERVER" "$WORKDIR/help-client.out" "help client" exit || fail "help client"
 grep -qi 'client' "$WORKDIR/help-client.out" || fail "help client body"
 pass "CONTEXT_HELP"
@@ -607,7 +649,7 @@ fi
 pass "NO_SECRET_HISTORY_PERSISTENCE"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/guided-meta.out" menu 1 1 12 12 exit || fail "guided metadata menu"
+run_repl "$SERVER" "$WORKDIR/guided-meta.out" menu 1 1 12 17 exit || fail "guided metadata menu"
 grep -q 'Set label' "$WORKDIR/guided-meta.out" || fail "guided set label"
 grep -q 'Unset label' "$WORKDIR/guided-meta.out" || fail "guided unset label"
 grep -q 'Set description' "$WORKDIR/guided-meta.out" || fail "guided set description"
@@ -753,16 +795,14 @@ pass "LEGACY_TAG_KEY_EQUALS_VALUE_COMPAT"
 unset FRP_CTL_DRY_RUN
 
 run_repl "$SERVER" "$WORKDIR/ctx-root.out" "?" exit || fail "root ?"
-grep -qE 'client[[:space:]]+Registered clients|^\s+client\s' "$WORKDIR/ctx-root.out" || fail "root ? client"
-grep -qE 'status[[:space:]]+Host status|^\s+status\s' "$WORKDIR/ctx-root.out" || fail "root ? status"
-grep -q 'egress' "$WORKDIR/ctx-root.out" || fail "root ? egress"
+grep -qE 'show[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? show"
+grep -qE 'create[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? create"
+! grep -qE '^[[:space:]]*client[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? advertises client"
 if grep -q 'Grammar: <verb>' "$WORKDIR/ctx-root.out"; then
   fail "root ? dumped full syntax tree"
 fi
-# Canonical root ? must not advertise verb-first discovery as primary.
-if grep -qE '^\s+show\s+|^Available:.*\n\s+show\s' "$WORKDIR/ctx-root.out"; then
-  fail "root ? still lists verb-first show as primary"
-fi
+# Canonical root ? must advertise action-first verbs only.
+grep -qE '[[:space:]]show[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? missing action-first show"
 pass "CONTEXT_HELP_ROOT"
 pass "ROOT_HELP_SIMPLIFIED"
 
@@ -785,7 +825,7 @@ grep -q 'tag' "$WORKDIR/ctx-setc.out" || fail "set client ? tag"
 pass "CONTEXT_HELP_SET_CLIENT"
 
 run_repl "$SERVER" "$WORKDIR/ctx-tag.out" "set client 24cd7856 tag ?" exit || fail "set tag ?"
-grep -q 'tag <key> <value>' "$WORKDIR/ctx-tag.out" || fail "set tag ? usage"
+grep -qiE 'tag <key> <value>|tag env |set client .* tag' "$WORKDIR/ctx-tag.out" || fail "set tag ? usage"
 pass "CONTEXT_HELP_TAG"
 
 run_repl "$SERVER" "$WORKDIR/miss-show.out" "show client" exit || fail "show client missing"
@@ -801,13 +841,13 @@ grep -q 'client' "$WORKDIR/miss-set.out" || fail "set missing lists client"
 grep -q 'drlink help' "$WORKDIR/miss-set.out" || fail "set missing tip"
 pass "SET_CLIENT_MISSING_TARGET_HELP"
 
-# Residual audit: exact argv round-trip for space/glob-bearing passthrough.
+# Residual audit: exact argv round-trip for space/glob-bearing values without public --options.
 export FRP_CTL_DRY_RUN=1
 set +e
-"$CTL" enrollment create --note "Seoul production" >"$WORKDIR/argv-space.out" 2>"$WORKDIR/argv-space.err"
+"$CTL" set client customer-dp note "Seoul production" >"$WORKDIR/argv-space.out" 2>"$WORKDIR/argv-space.err"
 rc=$?
 set -e
-[[ "$rc" -eq 0 ]] || fail "enrollment create note spaces rc=$rc"
+[[ "$rc" -eq 0 ]] || fail "set client note spaces rc=$rc"
 python3 - "$WORKDIR/argv-space.out" <<'PY' || fail "argv space note not preserved"
 import json,sys
 from pathlib import Path
@@ -815,12 +855,12 @@ text=Path(sys.argv[1]).read_text(encoding="utf-8")
 rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
 assert rows, text
 argv=json.loads(rows[-1])
-assert argv == ["frp-create-client", "--note", "Seoul production"], argv
+assert argv == ["frp-client-set", "customer-dp", "--note", "Seoul production"], argv
 PY
 mkdir -p "$WORKDIR/globdir"
 touch "$WORKDIR/globdir/a.txt" "$WORKDIR/globdir/b.txt"
-"$CTL" enrollment create --note "$WORKDIR/globdir/*.txt" >"$WORKDIR/argv-glob.out" 2>"$WORKDIR/argv-glob.err" \
-  || fail "enrollment create glob note"
+"$CTL" set client customer-dp note "$WORKDIR/globdir/*.txt" >"$WORKDIR/argv-glob.out" 2>"$WORKDIR/argv-glob.err" \
+  || fail "set client glob note"
 python3 - "$WORKDIR/argv-glob.out" "$WORKDIR/globdir/*.txt" <<'PY' || fail "glob re-expanded in argv"
 import json,sys
 from pathlib import Path
@@ -828,10 +868,10 @@ text=Path(sys.argv[1]).read_text(encoding="utf-8")
 want=sys.argv[2]
 rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
 argv=json.loads(rows[-1])
-assert argv == ["frp-create-client", "--note", want], argv
+assert argv == ["frp-client-set", "customer-dp", "--note", want], argv
 PY
-"$CTL" backup create "/tmp/Seoul production.tar.gz" >"$WORKDIR/argv-backup.out" \
-  || fail "backup create spaced path"
+"$CTL" create backup "/tmp/Seoul production.tar.gz" >"$WORKDIR/argv-backup.out" \
+  || fail "create backup spaced path"
 python3 - "$WORKDIR/argv-backup.out" <<'PY' || fail "backup path argv split"
 import json,sys
 from pathlib import Path

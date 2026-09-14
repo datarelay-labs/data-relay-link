@@ -69,22 +69,33 @@ class BackendCatalogReverseParityTests(unittest.TestCase):
             ("client", "revoke"),
             ("service-profile", "set"),
         }
-        present = {cmd["path"] for cmd in self.cat.COMMANDS if not cmd.get("hidden")}
-        missing = sorted(required_paths - present)
+        def covered(path):
+            for cmd in self.cat.COMMANDS:
+                if cmd.get("hidden"):
+                    continue
+                if cmd["path"] == path:
+                    return True
+                if path in (cmd.get("aliases") or ()):
+                    return True
+            return self.cat.find(list(path), include_aliases=True) is not None
+
+        missing = sorted(p for p in required_paths if not covered(p))
         self.assertEqual(missing, [], msg="missing catalog paths: %s" % missing)
 
     def test_force_and_yes_exposed_where_needed(self):
-        by_path = {cmd["path"]: cmd for cmd in self.cat.COMMANDS}
-        release = by_path[("client", "release")]
-        revoke = by_path[("client", "revoke")]
-        public = by_path[("access", "public")]
+        release = self.cat.find(["release", "client"], include_aliases=True)
+        revoke = self.cat.find(["revoke", "client"], include_aliases=True)
+        public = self.cat.find(["set", "access-public"], include_aliases=True)
+        self.assertIsNotNone(release)
+        self.assertIsNotNone(revoke)
+        self.assertIsNotNone(public)
         self.assertIn("--force", self.cat.flag_names(release["flags"], include_hidden=True))
         self.assertIn("--force", self.cat.flag_names(revoke["flags"], include_hidden=True))
         self.assertIn("--yes", self.cat.flag_names(public["flags"], include_hidden=True))
 
     def test_egress_add_source_name_flag(self):
-        by_path = {cmd["path"]: cmd for cmd in self.cat.COMMANDS}
-        add_source = by_path[("egress", "add-source")]
+        add_source = self.cat.find(["add", "egress-source"], include_aliases=True)
+        self.assertIsNotNone(add_source)
         self.assertIn("--name", self.cat.flag_names(add_source["flags"], include_hidden=True))
 
     def test_exemptions_documented(self):
@@ -93,7 +104,7 @@ class BackendCatalogReverseParityTests(unittest.TestCase):
 
     def test_create_client_flags_in_enrollment_catalog(self):
         tool_flags = _collect_add_argument_flags(ROOT / "tools" / "frp-create-client")
-        cmd = self.cat.find(["enrollment", "create"])
+        cmd = self.cat.find(["create", "enrollment"], include_aliases=True)
         self.assertIsNotNone(cmd)
         cat_flags = set(self.cat.flag_names(cmd["flags"], include_hidden=True))
         expected = {
@@ -114,7 +125,7 @@ class BackendCatalogReverseParityTests(unittest.TestCase):
         self.assertEqual(missing, [], msg="catalog missing enrollment flags: %s" % missing)
 
     def test_enrollment_public_flags_documented(self):
-        cmd = self.cat.find(["enrollment", "create"])
+        cmd = self.cat.find(["create", "enrollment"], include_aliases=True)
         by_name = {f["name"]: f for f in cmd["flags"]}
         for name in ("--services-file", "--platform", "--rdp", "--rdp-port"):
             self.assertIn(name, by_name)

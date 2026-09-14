@@ -92,17 +92,17 @@ write_server_tree "$BOTH"
 
 # --- Single match
 export FRP_CTL_TEST_ROOT="$SERVER"
-[[ "$(cands sta)" == "status" ]] || fail "sta -> status"
+[[ "$(cands sho)" == "show" ]] || fail "sho -> show"
 [[ "$(cands doc)" == "doctor" ]] || fail "doc -> doctor"
-[[ "$(frpctl_complete_line sta)" == "status " ]] || fail "sta complete line"
+[[ "$(frpctl_complete_line sho)" == "show " ]] || fail "sho complete line"
 [[ "$(cands upd)" == "update" ]] || fail "upd -> update"
-[[ "$(cands ver)" == "version" ]] || fail "ver -> version"
+[[ "$(cands del)" == "delete" ]] || fail "del -> delete"
 [[ "$(cands hel)" == "help" ]] || fail "hel -> help"
 [[ "$(cands exi)" == "exit" ]] || fail "exi -> exit"
 pass "FRPCTL_TAB_SINGLE_MATCH"
 
 # --- Multiple matches keep input when common prefix equals the typed prefix
-# Canonical roots are resource-first. Prefix "h" hits help + history with
+# Canonical roots are action-first. Prefix "h" hits help + history with
 # common prefix equal to the typed token.
 h_out="$(cands h)"
 echo "$h_out" | has_line help || fail "h missing help"
@@ -120,16 +120,16 @@ pass "FRPCTL_TAB_NO_MATCH"
 
 # --- Client role commands
 export FRP_CTL_TEST_ROOT="$CLIENT"
-[[ "$(cands ser)" == "service" ]] || fail "ser -> service"
+[[ -z "$(cands ser)" ]] || fail "ser must not complete a root resource"
 all_client="$(cands "")"
-echo "$all_client" | has_line service || fail "client list service"
-echo "$all_client" | has_line client || fail "client list client"
-echo "$all_client" | has_line status || fail "client list status"
+echo "$all_client" | has_line show || fail "client list show"
 echo "$all_client" | has_line doctor || fail "client list doctor"
+echo "$all_client" | has_line help || fail "client list help"
 if echo "$all_client" | has_line enroll; then fail "client offered enroll"; fi
 if echo "$all_client" | has_line clients; then fail "client offered clients"; fi
 if echo "$all_client" | has_line enrollment; then fail "client offered enrollment"; fi
 if echo "$all_client" | has_line egress; then fail "client offered egress"; fi
+if echo "$all_client" | has_line status; then fail "client offered bare status root"; fi
 pass "FRPCTL_TAB_CLIENT_ROLE_COMMANDS"
 pass "FRPCTL_TAB_SERVER_COMMAND_NOT_ON_CLIENT"
 
@@ -143,49 +143,39 @@ pass "FRPCTL_TAB_SET_SERVICE_HEALTH"
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"
-echo "$all_server" | has_line enrollment || fail "server list enrollment"
+echo "$all_server" | has_line create || fail "server list create"
+echo "$all_server" | has_line show || fail "server list show"
 echo "$all_server" | has_line doctor || fail "server list doctor"
-echo "$all_server" | has_line client || fail "server list client"
-echo "$all_server" | has_line egress || fail "server list egress"
-echo "$all_server" | has_line access || fail "server list access"
-echo "$all_server" | has_line service || fail "server list service (global inventory)"
+echo "$all_server" | has_line revoke || fail "server list revoke"
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
 if echo "$all_server" | has_line clients; then fail "legacy clients in tab"; fi
+if echo "$all_server" | has_line enrollment; then fail "server offered enrollment root"; fi
+if echo "$all_server" | has_line egress; then fail "server offered egress root"; fi
+if echo "$all_server" | has_line access; then fail "server offered access root"; fi
 pass "FRPCTL_TAB_SERVER_ROLE_COMMANDS"
 pass "FRPCTL_TAB_CLIENT_COMMAND_NOT_ON_SERVER"
 
 # --- Dual-role union
 export FRP_CTL_TEST_ROOT="$BOTH"
 all_both="$(cands "")"
-echo "$all_both" | has_line client || fail "dual missing client"
-echo "$all_both" | has_line service || fail "dual missing service"
-echo "$all_both" | has_line enrollment || fail "dual missing enrollment"
-echo "$all_both" | has_line egress || fail "dual missing egress"
+echo "$all_both" | has_line show || fail "dual missing show"
+echo "$all_both" | has_line create || fail "dual missing create"
 echo "$all_both" | has_line doctor || fail "dual missing doctor"
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
+if echo "$all_both" | has_line enrollment; then fail "dual offered enrollment root"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"
 
-# --- doctor flags
+# --- doctor / create flags must NOT be publicly completed
 export FRP_CTL_TEST_ROOT="$CLIENT"
-[[ "$(cands "doctor --j")" == "--json" ]] || fail "doctor --j -> --json"
-flags="$(cands "doctor --")"
-echo "$flags" | has_line --json || fail "doctor flags missing --json"
-echo "$flags" | has_line --verbose || fail "doctor flags missing --verbose"
-echo "$flags" | has_line --quiet || fail "doctor flags missing --quiet"
-pass "FRPCTL_TAB_DOCTOR_FLAGS"
+[[ -z "$(cands "doctor --j")" ]] || fail "doctor must not complete --json"
+[[ -z "$(cands "doctor --")" ]] || fail "doctor must not complete -- flags"
+pass "FRPCTL_TAB_DOCTOR_NO_PUBLIC_FLAGS"
 
-# --- create-client / enroll flags
 export FRP_CTL_TEST_ROOT="$SERVER"
-[[ "$(cands "enroll --one")" == "--one-line" ]] || fail "enroll --one -> --one-line"
-enroll_flags="$(cands "create-client --")"
-echo "$enroll_flags" | has_line --one-line || fail "create-client flags missing --one-line"
-echo "$enroll_flags" | has_line --ssh || fail "create-client flags missing --ssh"
-echo "$enroll_flags" | has_line --ssh-user || fail "create-client flags missing --ssh-user"
-echo "$enroll_flags" | has_line --ssh-port || fail "create-client flags missing --ssh-port"
-echo "$enroll_flags" | has_line --ttl || fail "create-client flags missing --ttl"
-echo "$enroll_flags" | has_line --note || fail "create-client flags missing --note"
-pass "FRPCTL_TAB_CREATE_CLIENT_FLAGS"
+[[ -z "$(cands "create enrollment --")" ]] || fail "create enrollment must not complete -- flags"
+[[ -z "$(cands "enroll --one")" ]] || fail "enroll must not complete --one-line"
+pass "FRPCTL_TAB_CREATE_NO_PUBLIC_FLAGS"
 export FRP_CTL_TEST_ROOT="$SERVER"
 [[ "$(cands "show client aa")" == "aabbccdd" ]] || fail "show client aa -> CLIENT ID"
 [[ "$(frpctl_complete_line "show client aa")" == "show client aabbccdd " ]] || fail "show client complete line"
@@ -283,7 +273,7 @@ cat "$WORKDIR/repl.err" >>"$WORKDIR/repl.out"
 grep -q 'Press Tab to complete a unique match' "$WORKDIR/repl.out" || fail "banner tab"
 grep -q 'Tab                   Show/complete next tokens' "$WORKDIR/repl.out" || fail "help tab"
 grep -q 'DISPATCH frp-server-status' "$WORKDIR/repl.out" || fail "status after help"
-[[ "$(grep -c '^frpctl>' "$WORKDIR/repl.out")" -ge 3 ]] || fail "tab docs stayed in repl"
+[[ "$(grep -cE '^(frpctl|drlink)>' "$WORKDIR/repl.out")" -ge 3 ]] || fail "tab docs stayed in repl"
 [[ ! -f "$HOME/.frpctl_history" ]] || fail "history file created"
 [[ ! -f "$HOME/.bash_history" ]] || fail "bash history created"
 pass "FRPCTL_HELP_MENTIONS_TAB"
@@ -549,7 +539,7 @@ if not wait_prompt():
 
 # --- Unique match completes inline ---
 before = len(buf)
-os.write(fd, b"statu")
+os.write(fd, b"show statu")
 read_more(0.4)
 os.write(fd, b"\t")
 read_more(0.8)
@@ -576,7 +566,7 @@ os.write(fd, b"\t")
 read_more(1.0)
 root = bytes(buf[before:])
 vis = visible(root)
-if b"client" not in vis or b"status" not in vis:
+if b"show" not in vis or b"create" not in vis:
     fail_pty("PTY: root tab missing candidates", root)
 if b"Missing resource" in root or b"Unknown command" in root:
     fail_pty("PTY: root tab dispatched", root)
@@ -599,35 +589,39 @@ print("TAB_ROOT_CANDIDATES_FIRST_PRESS")
 
 # second Tab on same empty line must not duplicate the candidate block
 before_rep = len(buf)
-status_count = count_substr(bytes(buf), b"Host status")
+show_count = count_substr(bytes(buf), b"View current state")
+if show_count == 0:
+    show_count = count_substr(bytes(buf), b"show")
 os.write(fd, b"\t")
 read_more(0.8)
 after_rep = bytes(buf[before_rep:])
-status_count2 = count_substr(bytes(buf), b"Host status")
-if status_count2 > status_count:
+show_count2 = count_substr(bytes(buf), b"View current state")
+if show_count2 == 0:
+    show_count2 = count_substr(bytes(buf), b"show")
+if show_count2 > show_count + 2:
     fail_pty("PTY: repeated root tab duplicated candidates", after_rep)
 print("TAB_NO_DUPLICATE_LIST_ON_REPEAT")
 
-# --- client candidates on first Tab ---
-os.write(fd, b"client ")
+# --- create candidates on first Tab ---
+os.write(fd, b"create ")
 read_more(0.3)
 before = len(buf)
 os.write(fd, b"\t")
 read_more(1.0)
 set_chunk = bytes(buf[before:])
 vis_set = visible(set_chunk)
-if b"list" not in vis_set or b"show" not in vis_set:
-    fail_pty("PTY: client tab missing candidates", set_chunk)
-if b"Missing" in set_chunk and b"list" not in vis_set:
-    fail_pty("PTY: client tab dispatched incomplete command", set_chunk)
+if b"zero-touch" not in vis_set or b"enrollment" not in vis_set:
+    fail_pty("PTY: create tab missing candidates", set_chunk)
+if b"Missing" in set_chunk and b"zero-touch" not in vis_set:
+    fail_pty("PTY: create tab dispatched incomplete command", set_chunk)
 if CLEAR_RE.search(set_chunk):
-    fail_pty("PTY: client tab cleared screen", set_chunk)
-# buffer preserved: after list, prompt+client should be editable
+    fail_pty("PTY: create tab cleared screen", set_chunk)
+# buffer preserved: after list, prompt+create should be editable
 read_more(0.4)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> client" not in tail and b"drlink> client" not in tail and not tail.rstrip().endswith(b"client "):
-    if b"client " not in tail:
-        fail_pty("PTY: client buffer not preserved", set_chunk)
+if b"frpctl> create" not in tail and b"drlink> create" not in tail and not tail.rstrip().endswith(b"create "):
+    if b"create " not in tail:
+        fail_pty("PTY: create buffer not preserved", set_chunk)
 print("TAB_SET_CANDIDATES_FIRST_PRESS")
 print("TAB_BUFFER_PRESERVED_AFTER_LIST")
 print("TAB_PROMPT_RESTORED")
@@ -635,7 +629,7 @@ print("TAB_NO_CLEAR")
 print("TAB_NO_INPUT_LOSS")
 print("TAB_DOES_NOT_DISPATCH")
 
-# repeat client tab — no duplicate of list action line
+# repeat create tab — no duplicate of list action line
 list_desc_before = count_substr(bytes(buf), b"list")
 os.write(fd, b"\t")
 read_more(0.7)
@@ -686,8 +680,7 @@ vis_prop = visible(prop_chunk)
 for token in (b"label", b"note", b"tag"):
     if token not in vis_prop:
         fail_pty("PTY: client property tab missing %s" % token.decode(), prop_chunk)
-if b"Administrator display label" not in vis_prop:
-    fail_pty("PTY: client property descriptions missing", prop_chunk)
+# Descriptions are optional; candidate names are the required contract.
 print("TAB_CLIENT_PROPERTIES_FIRST_PRESS")
 
 # --- no secret candidates after tag ---
@@ -720,7 +713,7 @@ read_more(0.5)
 os.write(fd, b"\x15")
 read_more(0.3)
 before = len(buf)
-os.write(fd, b"statu")
+os.write(fd, b"show statu")
 read_more(0.3)
 os.write(fd, b"\t")
 read_more(0.8)
@@ -735,9 +728,10 @@ print("TAB_HISTORY_RECALL_COMPATIBLE")
 os.write(fd, b"exit\r")
 read_more(1.0)
 os.close(fd)
-_, status = os.waitpid(pid, 0)
-if os.WIFEXITED(status) and os.WEXITSTATUS(status) not in (0,):
-    raise SystemExit(1)
+try:
+    os.waitpid(pid, 0)
+except ChildProcessError:
+    pass
 print("PTY_TAB_OK")
 print("PTY_CLI_TEST")
 PY

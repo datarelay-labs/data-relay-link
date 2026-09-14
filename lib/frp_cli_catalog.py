@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Canonical Data Relay Link CLI command catalog (CLI-011).
 
-Single source of truth for the resource-first ``drlink`` grammar:
+Single source of truth for the action-first ``drlink`` grammar:
 
-    drlink <resource|domain> <action> [target] [options]
+    drlink <action> <resource> [target] [value]
 
 Root help, ``help <topic>``, context ``?``, Tab discovery, and the guided
 menu are all derived from :data:`COMMANDS`. Nothing else may hard-code the
 canonical command list.
 
-Every canonical entry also records how it rewrites into the older verb-first
-token sequence (``internal``). The older verb-first commands keep working as
-hidden compatibility aliases; they are simply not advertised.
+Public UX never advertises GNU-style ``--options`` or backend ``frp-*``
+tool names. Resource-first forms may remain as hidden compatibility aliases.
 """
 from __future__ import annotations
 
@@ -252,38 +251,41 @@ SERVICE_ADD_FLAGS = (
     "--ssh-user",
 )
 
-# --- root resources -------------------------------------------------------
+# --- root actions ---------------------------------------------------------
 # (name, roles, category, summary)
 # Categories are display-only groupings for help/menu discoverability.
 ROOTS = (
-    ("status", "any", "Operate", "Host status"),
-    ("version", "any", "Session", "Installed versions"),
-    ("zero-touch", "server", "Remote Access — Outside → Inside", "Connect a new machine (Zero-Touch)"),
-    ("enrollment", "server", "Remote Access — Outside → Inside", "Enrollment credentials"),
-    ("client", "any", "Remote Access — Outside → Inside", "Registered clients and local client info"),
-    ("service", "any", "Remote Access — Outside → Inside", "Published services (local or global)"),
-    ("access", "server", "Remote Access — Outside → Inside", "Restrict who can reach published services"),
-    ("egress", "server", "Controlled Egress — Inside → Internet", "Allow internal hosts to reach specific Internet destinations"),
-    ("group", "server", "Organize", "Client groups"),
-    ("service-profile", "server", "Organize", "Reusable service creation templates"),
-    ("server", "server", "Operate", "Server settings and server-side views"),
-    ("backup", "server", "Operate", "Backup and restore"),
-    ("update", "any", "Operate", "Update project tools or the FRP engine"),
-    ("doctor", "any", "Operate", "Run health checks"),
-    ("support", "any", "Operate", "Sanitized diagnostic archive"),
-    ("help", "any", "Session", "Detailed help"),
-    ("menu", "any", "Session", "Guided numbered menu"),
-    ("history", "any", "Session", "Session command history"),
-    ("clear", "any", "Session", "Clear the screen"),
-    ("exit", "any", "Session", "Leave the CLI"),
+    ("show", "any", "View", "View current state and inventory"),
+    ("create", "server", "Create", "Create or onboard something"),
+    ("set", "any", "Change", "Change a value or configuration"),
+    ("unset", "any", "Change", "Clear optional metadata or configuration"),
+    ("add", "any", "Change", "Add a member, source or destination"),
+    ("remove", "server", "Change", "Remove a member, source or destination"),
+    ("enable", "any", "Change", "Enable an existing object"),
+    ("disable", "any", "Change", "Disable an existing object"),
+    ("apply", "client", "Change", "Apply pending local service changes"),
+    ("discard", "client", "Change", "Discard pending local service changes"),
+    ("revoke", "server", "Security / Lifecycle", "Revoke credentials or management trust"),
+    ("release", "server", "Security / Lifecycle", "Release a client or service reservation"),
+    ("delete", "server", "Security / Lifecycle", "Permanently delete configuration or metadata"),
+    ("restore", "server", "Security / Lifecycle", "Restore a backup"),
+    ("update", "any", "Security / Lifecycle", "Update Data Relay Link or the FRP engine"),
+    ("test", "server", "Validate", "Test access, egress or target connectivity"),
+    ("doctor", "any", "Validate", "Run system health checks"),
+    ("help", "any", "Help / Session", "Detailed help"),
+    ("menu", "any", "Help / Session", "Guided numbered menu"),
+    ("history", "any", "Help / Session", "Session command history"),
+    ("clear", "any", "Help / Session", "Clear the screen"),
+    ("exit", "any", "Help / Session", "Leave the CLI"),
 )
 
 CATEGORY_ORDER = (
-    "Remote Access — Outside → Inside",
-    "Controlled Egress — Inside → Internet",
-    "Organize",
-    "Operate",
-    "Session",
+    "View",
+    "Create",
+    "Change",
+    "Security / Lifecycle",
+    "Validate",
+    "Help / Session",
 )
 
 
@@ -676,9 +678,20 @@ COMMANDS = (
         "Inventory",
         "List registered clients",
         detail="CLIENT ID is the immutable selector and the first identity "
-        "column. Label and hostname are display metadata.",
-        examples=("client list", "client list --group edge"),
-        flags=("--group",),
+        "column. Label and hostname are display metadata. Optional GROUP "
+        "filters the list to members of that group.",
+        examples=("client list", "client list edge"),
+        args=(_arg("<GROUP>", required=False),),
+        flags=(
+            _flag(
+                "--group",
+                arity=1,
+                description="Hidden compatibility filter by group",
+                effect="Same as positional GROUP",
+                risk="none",
+                hidden=True,
+            ),
+        ),
         tail="flags",
         internal=("show", "clients"),
         aliases=(("show", "clients"), ("clients",)),
@@ -1017,6 +1030,7 @@ COMMANDS = (
         "Add a client to a group",
         examples=("group add-client edge 24cd7856",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
+        # Flipped to: add client <CLIENT-ID> group <GROUP>
         aliases=(("add", "client"),),
     ),
     _cmd(
@@ -1026,6 +1040,7 @@ COMMANDS = (
         "Remove a client from a group",
         examples=("group remove-client edge 24cd7856",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
+        # Flipped to: remove client <CLIENT-ID> group <GROUP>
         aliases=(("remove", "client"),),
     ),
     _cmd(
@@ -1036,6 +1051,7 @@ COMMANDS = (
         examples=("group add-member edge 24cd7856",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
         hidden=True,
+        aliases=(("add", "client"),),
     ),
     _cmd(
         ("group", "remove-member"),
@@ -1045,6 +1061,7 @@ COMMANDS = (
         examples=("group remove-member edge 24cd7856",),
         args=(_arg("<GROUP>", C_GROUP), _arg("<CLIENT-ID>", C_CLIENT)),
         hidden=True,
+        aliases=(("remove", "client"),),
     ),
     # --- service profiles -------------------------------------------------
     _cmd(
@@ -1867,6 +1884,336 @@ COMMANDS = (
 )
 
 
+
+# --- action-first public grammar flip ------------------------------------
+# Resource-first literals above are the migration input. After this flip,
+# COMMANDS / ROOTS advertise action-first only; old resource-first paths
+# remain as hidden compatibility aliases.
+
+
+def _hide_all_flags(flags):
+    out = []
+    for flag in _normalize_flags(flags):
+        item = dict(flag)
+        item["hidden"] = True
+        # Public grammar is positional/guided; never require --flags.
+        item["required"] = False
+        out.append(item)
+    return tuple(out)
+
+
+def _action_first_examples(examples):
+    """Rewrite resource-first examples; strip public --option advertising."""
+    repl = (
+        ("zero-touch create", "create zero-touch"),
+        ("enrollment create", "create enrollment"),
+        ("enrollment bulk", "create enrollments"),
+        ("enrollment list", "show enrollments"),
+        ("enrollment revoke", "revoke enrollment"),
+        ("enrollment purge", "delete enrollment"),
+        ("client list", "show clients"),
+        ("client show", "show client"),
+        ("client set", "set client"),
+        ("client unset", "unset client"),
+        ("client revoke", "revoke client"),
+        ("client release", "release client"),
+        ("client info", "show info"),
+        ("service list", "show services"),
+        ("service add", "add service"),
+        ("service set", "set service"),
+        ("service enable", "enable service"),
+        ("service disable", "disable service"),
+        ("service apply", "apply"),
+        ("service discard", "discard"),
+        ("group list", "show groups"),
+        ("group show", "show group"),
+        ("group create", "create group"),
+        ("group set", "set group"),
+        ("group delete", "delete group"),
+        ("group add-client", "add client"),
+        ("group remove-client", "remove client"),
+        ("service-profile list", "show service-profiles"),
+        ("service-profile show", "show service-profile"),
+        ("service-profile create", "create service-profile"),
+        ("service-profile set", "set service-profile"),
+        ("service-profile delete", "delete service-profile"),
+        ("egress list", "show egress-profiles"),
+        ("egress show", "show egress-profile"),
+        ("egress create", "create egress-profile"),
+        ("egress set", "set egress-profile"),
+        ("egress add-destination", "add egress-destination"),
+        ("egress add-source", "add egress-source"),
+        ("egress remove-destination", "remove egress-destination"),
+        ("egress remove-source", "remove egress-source"),
+        ("egress enable", "enable egress-profile"),
+        ("egress disable", "disable egress-profile"),
+        ("egress delete", "delete egress-profile"),
+        ("egress status", "show egress"),
+        ("egress explain", "explain egress"),
+        ("egress tcp list", "show egress-tcp"),
+        ("egress tcp show", "show egress-tcp-entry"),
+        ("egress tcp create", "create egress-tcp"),
+        ("egress tcp enable", "enable egress-tcp"),
+        ("egress tcp disable", "disable egress-tcp"),
+        ("egress tcp delete", "delete egress-tcp"),
+        ("egress tcp explain", "explain egress-tcp"),
+        ("egress recipe list", "show egress-recipes"),
+        ("egress recipe show", "show egress-recipe"),
+        ("egress recipe apply", "apply egress-recipe"),
+        ("egress export", "export egress"),
+        ("egress import", "import egress"),
+        ("egress diff", "diff egress"),
+        ("backup create", "create backup"),
+        ("backup restore", "restore backup"),
+        ("update project", "update product"),
+        ("support bundle", "create support-bundle"),
+        ("server audit", "show audit"),
+        ("server upstream", "show upstream"),
+        ("server status", "show server-status"),
+        ("server set", "set server"),
+        ("server unset", "unset server"),
+        ("access list", "show access-lists"),
+        ("access create", "create access-list"),
+        ("access show", "show access-list"),
+        ("access delete", "delete access-list"),
+        ("access add-source", "add access-source"),
+        ("access remove-source", "remove access-source"),
+        ("access replace-source", "set access-source"),
+        ("access edit-info", "set access-list"),
+        ("access remove-expired", "remove access-expired"),
+        ("access assign", "set access-assign"),
+        ("access public", "set access-public"),
+        ("access show-service", "show access-service"),
+        ("access test", "test access"),
+        ("access log", "show access-log"),
+        ("show access-list-service", "show access-service"),
+    )
+    out = []
+    for ex in examples or ():
+        text = str(ex)
+        for old, new in sorted(repl, key=lambda p: -len(p[0])):
+            text = text.replace(old, new)
+        if " --" in text or text.strip().startswith("--"):
+            continue
+        if text.strip() == "status":
+            text = "show status"
+        elif text.strip() == "version":
+            text = "show version"
+        out.append(text)
+    return tuple(out)
+
+
+
+_SPECIAL_FLIP = {
+    ("status",): (("show", "status"), None),
+    ("version",): (("show", "version"), None),
+    ("enrollment", "purge"): (("delete", "enrollment"), ("purge", "enrollment")),
+    ("update", "project"): (("update", "product"), ("update", "project")),
+    ("support", "bundle"): (("create", "support-bundle"), ("support-bundle",)),
+    ("doctor",): (("doctor",), None),
+    ("help",): (("help",), None),
+    ("menu",): (("menu",), None),
+    ("history",): (("history",), None),
+    ("clear",): (("clear",), None),
+    ("exit",): (("exit",), None),
+    ("update", "engine"): (("update", "engine"), ("update", "frp")),
+    ("group", "add-client"): (("add", "client"), None),
+    ("group", "remove-client"): (("remove", "client"), None),
+    ("group", "add-member"): (("add", "client"), None),
+    ("group", "remove-member"): (("remove", "client"), None),
+    ("client", "release"): (("release", "client"), None),
+    ("access", "list"): (("show", "access-lists"), ("access", "list")),
+    ("access", "create"): (("create", "access-list"), ("access", "create")),
+    ("access", "show"): (("show", "access-list"), ("access", "show")),
+    ("access", "delete"): (("delete", "access-list"), ("access", "delete")),
+    ("access", "add-source"): (("add", "access-source"), ("access", "add-source")),
+    ("access", "remove-source"): (("remove", "access-source"), ("access", "remove-source")),
+    ("access", "replace-source"): (("set", "access-source"), ("access", "replace-source")),
+    ("access", "edit-info"): (("set", "access-list"), ("access", "edit-info")),
+    ("access", "remove-expired"): (("remove", "access-expired"), ("access", "remove-expired")),
+    ("access", "assign"): (("set", "access-assign"), ("access", "assign")),
+    ("access", "public"): (("set", "access-public"), ("access", "public")),
+    ("access", "show-service"): (("show", "access-service"), ("access", "show-service")),
+    ("access", "test"): (("test", "access"), ("access", "test")),
+    ("access", "log"): (("show", "access-log"), ("access", "log")),
+    ("access", "menu"): (("access", "menu"), ("access", "menu")),
+    ("egress", "add-destination"): (("add", "egress-destination"), None),
+    ("egress", "add-source"): (("add", "egress-source"), None),
+    ("egress", "remove-destination"): (("remove", "egress-destination"), None),
+    ("egress", "remove-source"): (("remove", "egress-source"), None),
+    ("egress", "status"): (("show", "egress"), ("egress", "status")),
+    ("egress", "explain"): (("explain", "egress"), ("egress", "explain")),
+    ("egress", "test"): (("test", "egress"), ("egress", "test")),
+    ("egress", "tcp", "list"): (("show", "egress-tcp"), ("egress", "tcp", "list")),
+    ("egress", "tcp", "show"): (("show", "egress-tcp-entry"), ("egress", "tcp", "show")),
+    ("egress", "tcp", "create"): (("create", "egress-tcp"), ("egress", "tcp", "create")),
+    ("egress", "tcp", "enable"): (("enable", "egress-tcp"), ("egress", "tcp", "enable")),
+    ("egress", "tcp", "disable"): (("disable", "egress-tcp"), ("egress", "tcp", "disable")),
+    ("egress", "tcp", "delete"): (("delete", "egress-tcp"), ("egress", "tcp", "delete")),
+    ("egress", "tcp", "explain"): (("explain", "egress-tcp"), ("egress", "tcp", "explain")),
+    ("egress", "recipe", "list"): (("show", "egress-recipes"), ("egress", "recipe", "list")),
+    ("egress", "recipe", "show"): (("show", "egress-recipe"), ("egress", "recipe", "show")),
+    ("egress", "recipe", "apply"): (("apply", "egress-recipe"), ("egress", "recipe", "apply")),
+    ("egress", "export"): (("export", "egress"), ("egress", "export")),
+    ("egress", "import"): (("import", "egress"), ("egress", "import")),
+    ("egress", "diff"): (("diff", "egress"), ("egress", "diff")),
+    ("server", "status"): (("show", "server-status"), ("server-status",)),
+    ("server", "set"): (("set", "server"), None),
+    ("server", "unset"): (("unset", "server"), None),
+    ("server", "upstream"): (("show", "upstream"), ("show", "upstream")),
+    ("server", "audit"): (("show", "audit"), ("show", "audit")),
+    ("backup", "restore"): (("restore", "backup"), ("restore", "backup")),
+    ("service", "apply"): (("apply",), ("apply",)),
+    ("service", "discard"): (("discard",), ("discard",)),
+    ("service-profile", "list"): (("show", "service-profiles"), ("show", "profiles")),
+    ("service-profile", "show"): (("show", "service-profile"), ("show", "profile")),
+    ("service-profile", "create"): (("create", "service-profile"), ("create", "profile")),
+    ("service-profile", "set"): (("set", "service-profile"), ("set", "profile")),
+    ("service-profile", "delete"): (("delete", "service-profile"), ("delete", "profile")),
+    ("group", "rename"): (("rename", "group"), ("rename", "group")),
+}
+
+
+_PUBLIC_NAME_UPGRADE = {
+    ("show", "profiles"): (("show", "service-profiles"), ("show", "profiles")),
+    ("show", "profile"): (("show", "service-profile"), ("show", "profile")),
+    ("create", "profile"): (("create", "service-profile"), ("create", "profile")),
+    ("set", "profile"): (("set", "service-profile"), ("set", "profile")),
+    ("delete", "profile"): (("delete", "service-profile"), ("delete", "profile")),
+    ("add", "egress-profile"): (("add", "egress-destination"), None),
+    ("remove", "egress-profile"): (("remove", "egress-destination"), None),
+}
+
+
+def _flip_one_command(cmd):
+    old_path = tuple(cmd["path"])
+    old_aliases = list(cmd.get("aliases") or ())
+    if old_path in _SPECIAL_FLIP:
+        new_path, new_internal = _SPECIAL_FLIP[old_path]
+    elif cmd.get("internal"):
+        new_path = tuple(cmd["internal"])
+        new_internal = None
+        if new_path in _PUBLIC_NAME_UPGRADE:
+            new_path, new_internal = _PUBLIC_NAME_UPGRADE[new_path]
+    else:
+        raise RuntimeError("unmapped catalog path: %s" % (old_path,))
+
+    # Resource-first becomes a hidden compat alias.
+    aliases = []
+    if old_path != new_path:
+        aliases.append(old_path)
+    for alias in old_aliases:
+        alias_t = tuple(alias)
+        if alias_t == new_path:
+            continue
+        if alias_t not in aliases:
+            aliases.append(alias_t)
+
+    # Prefer identity internal when path already matches dispatcher tokens.
+    internal = new_internal
+    if internal is None and cmd.get("internal") and tuple(cmd["internal"]) == new_path:
+        internal = None
+    elif internal is None and cmd.get("internal") and old_path not in _SPECIAL_FLIP:
+        # Path was taken from old internal; identity.
+        internal = None
+
+    detail = str(cmd.get("detail") or "")
+    for old, new in (
+        ("client release", "release client"),
+        ("client revoke", "revoke client"),
+        ("client unset", "unset client"),
+        ("client list", "show clients"),
+        ("enrollment create", "create enrollment"),
+        ("zero-touch create", "create zero-touch"),
+        ("service apply", "apply"),
+        ("--force", "confirmation prompt"),
+        ("--yes", "confirmation"),
+        ("--older-than", "older-than days"),
+    ):
+        detail = detail.replace(old, new)
+
+    args = tuple(cmd.get("args") or ())
+    examples = _action_first_examples(cmd.get("examples") or ())
+    # Membership: public form is add/remove client <ID> group <GROUP>.
+    if old_path in (
+        ("group", "add-client"),
+        ("group", "remove-client"),
+        ("group", "add-member"),
+        ("group", "remove-member"),
+    ):
+        args = (
+            _arg("<CLIENT-ID>", C_CLIENT),
+            _arg("group", ("group",)),
+            _arg("<GROUP>", C_GROUP),
+        )
+        verb = "add" if "add" in old_path[1] else "remove"
+        examples = ("%s client 24cd7856 group edge" % verb,)
+
+    return {
+        "path": tuple(new_path),
+        "roles": cmd["roles"],
+        "category": cmd["category"],
+        "summary": cmd["summary"],
+        "detail": detail,
+        "examples": examples,
+        "args": args,
+        "flags": _hide_all_flags(cmd.get("flags") or ()),
+        "tail": cmd.get("tail"),
+        "internal": internal,
+        "aliases": tuple(aliases),
+        "destructive": bool(cmd.get("destructive")),
+        "hidden": bool(cmd.get("hidden")),
+        "risk": cmd.get("risk") or "none",
+        "confirmation": cmd.get("confirmation") or "none",
+        "surface": "hidden_compat" if cmd.get("hidden") else (cmd.get("surface") or ""),
+        "_old_path": old_path,
+    }
+
+
+def _flip_commands_to_action_first(commands):
+    """Collapse resource-first entries into action-first SSOT rows."""
+    by_path = {}
+    order = []
+    for cmd in commands:
+        flipped = _flip_one_command(cmd)
+        path = flipped["path"]
+        if path not in by_path:
+            by_path[path] = flipped
+            order.append(path)
+            continue
+        # Merge duplicate targets (e.g. add-client / add-member).
+        existing = by_path[path]
+        alias_set = list(existing["aliases"])
+        for alias in flipped["aliases"]:
+            if alias not in alias_set and alias != path:
+                alias_set.append(alias)
+        # Keep resource-first source path as a hidden alias when merging.
+        old = flipped.get("_old_path")
+        if old and old != path and old not in alias_set:
+            alias_set.append(old)
+        existing["aliases"] = tuple(alias_set)
+        # Never demote a public command to hidden just because a compat alias
+        # (add-member / remove-member) merges into the same path.
+        if existing.get("hidden") and not flipped.get("hidden"):
+            existing["hidden"] = False
+            existing["surface"] = flipped.get("surface") or ""
+        if not existing.get("args") and flipped.get("args"):
+            existing["args"] = flipped["args"]
+        if not existing.get("examples") and flipped.get("examples"):
+            existing["examples"] = flipped["examples"]
+        if not existing.get("internal") and flipped.get("internal"):
+            existing["internal"] = flipped["internal"]
+    out = []
+    for path in order:
+        item = dict(by_path[path])
+        item.pop("_old_path", None)
+        # apply/discard stay public but are session utilities under Change.
+        out.append(item)
+    return tuple(out)
+
+
+COMMANDS = _flip_commands_to_action_first(COMMANDS)
+
 # --- role helpers ---------------------------------------------------------
 def role_parts(role):
     role = (role or "").strip().lower()
@@ -1885,28 +2232,28 @@ def role_allows(roles, role):
 
 
 def roots_for_role(role):
-    """Ordered canonical root resources visible for this host role."""
+    """Ordered canonical root actions visible for this host role."""
     out = []
     for name, roles, _category, _summary in ROOTS:
         if not role_allows(roles, role):
             continue
-        if name == "client" and not _root_has_commands("client", role):
+        if name in ("help", "menu", "history", "clear", "exit", "doctor"):
+            out.append(name)
+            continue
+        if not _root_has_commands(name, role):
             continue
         out.append(name)
     return out
 
-
 def root_rows(role):
-    """(name, summary) rows for the canonical root resources."""
+    """(name, summary) rows for the canonical root actions."""
     rows = []
+    allowed = set(roots_for_role(role))
     for name, roles, _category, summary in ROOTS:
-        if not role_allows(roles, role):
-            continue
-        if name == "client" and not _root_has_commands("client", role):
+        if name not in allowed:
             continue
         rows.append((name, summary))
     return rows
-
 
 def _root_has_commands(root, role):
     for cmd in COMMANDS:
@@ -1938,20 +2285,52 @@ def subcommands(root, role):
     return rows
 
 
-def find(tokens, role=None):
-    """Longest canonical command whose path is a prefix of ``tokens``."""
+def find(tokens, role=None, include_aliases=False):
+    """Longest canonical command whose path is a prefix of ``tokens``.
+
+    When ``include_aliases`` is true, also match hidden compatibility aliases
+    (historical resource-first forms) and return the canonical command.
+    """
     best = None
+    best_len = -1
     for cmd in COMMANDS:
-        path = cmd["path"]
-        if len(tokens) < len(path):
-            continue
-        if tuple(tokens[: len(path)]) != path:
-            continue
-        if role is not None and not role_allows(cmd["roles"], role):
-            continue
-        if best is None or len(path) > len(best["path"]):
-            best = cmd
+        candidates = [cmd["path"]]
+        if include_aliases:
+            candidates.extend(cmd.get("aliases") or ())
+        for path in candidates:
+            path = tuple(path)
+            if len(tokens) < len(path):
+                continue
+            if tuple(tokens[: len(path)]) != path:
+                continue
+            if role is not None and not role_allows(cmd["roles"], role):
+                continue
+            if len(path) > best_len:
+                best = cmd
+                best_len = len(path)
     return best
+
+
+def resolve_tokens(tokens, role=None):
+    """Expand a hidden compatibility alias into the canonical action-first path."""
+    if not tokens:
+        return list(tokens)
+    cmd = find(tokens, role=role, include_aliases=True)
+    if cmd is None:
+        return list(tokens)
+    # Prefer exact path match length when both path and alias could apply.
+    path = cmd["path"]
+    if tuple(tokens[: len(path)]) == path:
+        return list(tokens)
+    for alias in cmd.get("aliases") or ():
+        alias = tuple(alias)
+        if tuple(tokens[: len(alias)]) == alias:
+            rest = list(tokens[len(alias) :])
+            rewrite = REWRITES.get(alias)
+            if rewrite is not None:
+                return rewrite(rest)
+            return list(path) + rest
+    return list(tokens)
 
 
 def usage_line(cmd):
@@ -1959,10 +2338,8 @@ def usage_line(cmd):
     for arg in cmd["args"]:
         name = arg["name"]
         parts.append(name if arg["required"] else "[%s]" % name)
-    shown = flag_names(cmd["flags"])
-    if cmd["tail"] == "flags" and shown:
-        parts.append("[options]")
-    elif cmd["tail"] == "any":
+    # Public UX is positional / guided — never advertise [options].
+    if cmd["tail"] == "any":
         parts.append("...")
     return " ".join(parts)
 
@@ -2142,31 +2519,83 @@ def canonical_actions(root):
 
 
 def to_internal(tokens):
-    """Rewrite a canonical token list into the internal verb-first form.
+    """Rewrite a canonical action-first token list into dispatcher tokens.
 
     Returns ``None`` when ``tokens`` is not a canonical command.
     """
     if not tokens:
         return None
-    root = tokens[0]
-    if root == "profile":
-        tokens = ["service-profile"] + list(tokens[1:])
-        root = "service-profile"
-    elif root == "egress-profile":
-        tokens = ["egress"] + list(tokens[1:])
-        root = "egress"
     cmd = find(tokens)
     if cmd is None:
         return None
     path = cmd["path"]
     rest = list(tokens[len(path) :])
+    # Compat rewrites still keyed by historical resource-first paths.
+    for alias in cmd.get("aliases") or ():
+        rewrite = REWRITES.get(tuple(alias))
+        if rewrite is not None and tuple(alias) == tuple(tokens[: len(alias)]):
+            return rewrite(list(tokens[len(alias) :]))
     rewrite = REWRITES.get(path)
     if rewrite is not None:
         return rewrite(rest)
+    # Special public action-first forms that need dispatcher-shaped tokens.
+    # Incomplete forms stay on the public path so grammar can launch guided UX.
+    if path == ("add", "egress-destination"):
+        if len(rest) >= 3:
+            return ["add", "egress-profile", rest[0], "destination", rest[1], rest[2]] + rest[3:]
+        return list(path) + rest
+    if path == ("add", "egress-source"):
+        if len(rest) >= 2:
+            return ["add", "egress-profile", rest[0], "source", rest[1]] + rest[2:]
+        return list(path) + rest
+    if path == ("remove", "egress-destination"):
+        if len(rest) >= 2:
+            return ["remove", "egress-profile", rest[0], "destination", rest[1]] + rest[2:]
+        return list(path) + rest
+    if path == ("remove", "egress-source"):
+        if len(rest) >= 2:
+            return ["remove", "egress-profile", rest[0], "source", rest[1]] + rest[2:]
+        return list(path) + rest
+    if path == ("release", "client") and len(rest) >= 2:
+        return ["release", "service", rest[0], rest[1]] + rest[2:]
+    if path == ("delete", "enrollment") and rest and rest[0] == "--older-than":
+        return ["purge", "enrollments"] + list(rest)
+    # add|remove client <CLIENT> group <GROUP> → dispatcher member tokens
+    if path in (("add", "client"), ("remove", "client")):
+        if len(rest) >= 3 and rest[1] == "group":
+            return [path[0], "client", rest[0], "group", rest[2]] + rest[3:]
+        return list(path) + rest
     internal = cmd["internal"]
     if internal is None:
         return list(path) + rest
     return list(internal) + rest
+
+
+def expand_compat_alias(tokens):
+    """Expand a hidden resource-first alias into canonical action-first tokens.
+
+    Returns ``None`` when ``tokens`` is not a known compatibility alias.
+    """
+    if not tokens:
+        return None
+    best = None
+    best_len = 0
+    for alias, cmd in ALIASES.items():
+        n = len(alias)
+        if n > best_len and n <= len(tokens) and tuple(tokens[:n]) == alias:
+            # Only treat non-canonical (hidden) aliases here.
+            if tuple(alias) == tuple(cmd["path"]):
+                continue
+            best = (alias, cmd)
+            best_len = n
+    if best is None:
+        return None
+    alias, cmd = best
+    rest = list(tokens[best_len:])
+    rewrite = REWRITES.get(tuple(alias))
+    if rewrite is not None:
+        return rewrite(rest)
+    return list(cmd["path"]) + rest
 
 
 def strict_error(tokens):
@@ -2174,10 +2603,12 @@ def strict_error(tokens):
 
     Returns an error message, or ``None`` when the token list is acceptable.
     """
-    cmd = find(tokens)
+    cmd = find(tokens, include_aliases=True)
     if cmd is None:
         return None
-    rest = list(tokens[len(cmd["path"]) :])
+    # Normalize to canonical path length when tokens used a hidden alias.
+    resolved = resolve_tokens(tokens)
+    rest = list(resolved[len(cmd["path"]) :])
     if cmd["tail"] == "any":
         return None
     idx = 0
@@ -2221,7 +2652,8 @@ def strict_error(tokens):
         seen_flags.add(tok)
         idx += 2
     for flag in cmd["flags"]:
-        if flag.get("required") and flag["name"] not in seen_flags:
+        # Hidden flags are never required on the public grammar.
+        if flag.get("required") and not flag.get("hidden") and flag["name"] not in seen_flags:
             return "missing required flag: %s" % flag["name"]
     return None
 
@@ -2242,21 +2674,22 @@ def _fmt_rows(rows, indent="  "):
 
 
 def root_help(role):
-    """Canonical root help. Shows canonical commands only."""
+    """Canonical root help. Shows canonical action verbs only."""
     lines = [
-        "Data Relay Link CLI",
-        "===================",
+        "Data Relay Link Commands",
+        "========================",
         "",
-        "Grammar: <resource> <action> [target] [options]",
+        "Grammar: <action> <resource> [target] [value]",
         "",
-        "Discover commands with Tab. Type 'help <resource>' for details,",
+        "Design: action-first, guided complex workflows, no user-facing --options.",
+        "Discover commands with Tab. Type 'help <action>' for details,",
         "'help workflows' for end-to-end examples, or '?' for context help.",
     ]
     by_category = {}
     for name, roles, category, summary in ROOTS:
         if not role_allows(roles, role):
             continue
-        if name == "client" and not _root_has_commands("client", role):
+        if name in ("apply", "discard") and not _root_has_commands(name, role):
             continue
         by_category.setdefault(category, []).append((name, summary))
     for category in CATEGORY_ORDER:
@@ -2268,8 +2701,6 @@ def root_help(role):
         lines.extend(_fmt_rows(rows))
     lines.extend(
         [
-            "",
-            "Compatibility aliases still run for scripts. See 'help legacy'.",
             "",
             "Official upstream FRP binaries are frps (server) and frpc (client).",
             "This project does not fork FRP.",
@@ -2339,7 +2770,10 @@ def command_help(cmd):
                 rows.append((arg["name"], "required" if arg["required"] else "optional"))
         lines.extend(["", "Arguments:"])
         lines.extend(_fmt_rows(rows))
-    shown_flags = [flag for flag in cmd["flags"] if not flag.get("hidden")]
+    shown_flags = []
+    # Public command help never advertises GNU-style --options.
+    if False:
+        shown_flags = [flag for flag in cmd["flags"] if not flag.get("hidden")]
     if shown_flags:
         rows = []
         for flag in shown_flags:
@@ -2381,41 +2815,40 @@ WORKFLOWS = (
     (
         "Onboard a new client",
         (
-            "zero-touch create",
-            "client list",
-            "client show <CLIENT-ID>",
+            "create zero-touch",
+            "show clients",
+            "show client <CLIENT-ID>",
         ),
-        "Zero-Touch is the recommended path. Use 'enrollment create' only when "
+        "Zero-Touch is the recommended path. Use 'create enrollment' only when "
         "an interactive install is required.",
     ),
     (
         "Publish and reach a remote service",
         (
-            "service add --preset ssh --ssh-user aella      # on the client",
-            "service apply                                  # on the client",
-            "client show <CLIENT-ID> services               # on the server",
+            "add service",
+            "apply",
+            "show client <CLIENT-ID> services",
         ),
         "Public ports are assigned by the server at apply time and stay "
-        "reserved until 'client release'.",
+        "reserved until 'release client' / 'release service'.",
     ),
     (
         "Restrict who may reach a service",
         (
-            "access create office --description \"Office ranges\"",
-            "access add-source office --name hq --source 203.0.113.0/24",
-            "access assign <CLIENT-ID> <SERVICE-ID> office",
-            "access test <CLIENT-ID> <SERVICE-ID> 203.0.113.9",
+            "create access-list office",
+            "add access-source office",
+            "set access-assign <CLIENT-ID> <SERVICE-ID> office",
+            "test access <CLIENT-ID> <SERVICE-ID> 203.0.113.9",
         ),
-        "Services are PUBLIC until a list is assigned. 'access public' reverts.",
+        "Services are PUBLIC until a list is assigned.",
     ),
     (
         "Allow one outbound destination",
         (
-            "egress create vendor-api",
-            "egress add-source vendor-api 10.0.0.0/24",
-            "egress add-destination vendor-api api.example.com 443 --protocol https",
-            "egress explain 10.0.0.5 api.example.com 443",
-            "egress enable vendor-api",
+            "create egress-profile vendor-api",
+            "add egress-source vendor-api",
+            "add egress-destination vendor-api",
+            "enable egress-profile vendor-api",
         ),
         "A new egress profile is created disabled. Default policy is DENY.",
     ),
@@ -2423,9 +2856,9 @@ WORKFLOWS = (
         "Routine maintenance",
         (
             "doctor",
-            "backup create",
-            "update project --check",
-            "support bundle",
+            "create backup",
+            "update product",
+            "create support-bundle",
         ),
         "'update engine' updates the upstream FRP binary separately.",
     ),
@@ -2457,9 +2890,9 @@ def legacy_help(role):
         "Compatibility aliases",
         "=====================",
         "",
-        "These older verb-first commands still run for scripts and muscle",
-        "memory. Root help, Tab discovery, and the guided menu show the",
-        "canonical resource-first form only.",
+        "These older resource-first commands still run for scripts.",
+        "Root help, Tab discovery, and the guided menu show the",
+        "canonical action-first form only.",
         "",
     ]
     rows = []
@@ -2501,7 +2934,9 @@ def shell_usage_lines(role):
     """Compact usage bullets for ``drlink --help`` / unknown-command recovery."""
     lines = [
         "Canonical grammar:",
-        "  <resource> <action> [target] [options]",
+        "  <action> <resource> [target] [value]",
+        "",
+        "Design: action-first · no user-facing --options · backend hidden",
         "",
     ]
     for root, summary in root_rows(role):
@@ -2517,12 +2952,6 @@ def shell_usage_lines(role):
                 % (root, " | ".join(actions[:4]))
             )
         _ = summary
-    lines.extend(
-        [
-            "",
-            "Compatibility aliases still run for scripts. See 'help legacy'.",
-        ]
-    )
     return lines
 
 
@@ -2533,11 +2962,11 @@ def shell_usage_lines(role):
 # Numbers are assigned at render time across all choices (not categories).
 GUIDED_MENU = {
     "client": (
-        ("client_status", "Status", "status"),
-        ("client_services", "Service list", "service list"),
-        ("client_info", "Connection information", "client info"),
-        ("client_manage", "Manage services", "service add / service set / service apply"),
-        ("client_update", "Update project", "update project"),
+        ("client_status", "Status", "show status"),
+        ("client_services", "Service list", "show services"),
+        ("client_info", "Connection information", "show info"),
+        ("client_manage", "Manage services", "add service / set service / apply"),
+        ("client_update", "Update product", "update product"),
         ("client_doctor", "Doctor", "doctor"),
         ("client_help", "Commands and workflows", "help / help workflows"),
         ("exit", "Exit", ""),
@@ -2546,35 +2975,35 @@ GUIDED_MENU = {
         (
             "Remote Access",
             (
-                ("server_clients", "Clients", "client list / client show / client set"),
-                ("server_zt", "Enrollment / Zero-Touch", "zero-touch create / enrollment create"),
-                ("server_bulk", "Bulk enrollment", "enrollment bulk"),
-                ("server_enrollments", "Enrollment list", "enrollment list"),
-                ("server_access", "Access Control", "access ..."),
+                ("server_clients", "Clients", "show clients / show client / set client"),
+                ("server_zt", "Enrollment / Zero-Touch", "create zero-touch / create enrollment"),
+                ("server_bulk", "Bulk enrollment", "create enrollments"),
+                ("server_enrollments", "Enrollment list", "show enrollments"),
+                ("server_access", "Access Control", "show access-lists / create access-list"),
             ),
         ),
         (
             "Controlled Egress",
             (
-                ("server_egress", "Profiles / policy", "egress list / show / explain / enable"),
+                ("server_egress", "Profiles / policy", "show egress-profiles / add egress-destination"),
             ),
         ),
         (
             "Organize",
             (
-                ("server_groups", "Groups", "group list / group create"),
-                ("server_profiles", "Service profiles", "service-profile list / create"),
+                ("server_groups", "Groups", "show groups / create group"),
+                ("server_profiles", "Service profiles", "show service-profiles / create service-profile"),
             ),
         ),
         (
             "Operate",
             (
-                ("server_status", "Status", "status"),
+                ("server_status", "Status", "show status"),
                 ("server_doctor", "Doctor", "doctor"),
-                ("server_audit", "Audit", "server audit"),
-                ("server_backup", "Backup / Restore", "backup create / backup restore"),
-                ("server_support", "Support bundle", "support bundle"),
-                ("server_update_project", "Update project", "update project"),
+                ("server_audit", "Audit", "show audit"),
+                ("server_backup", "Backup / Restore", "create backup / restore backup"),
+                ("server_support", "Support bundle", "create support-bundle"),
+                ("server_update_project", "Update product", "update product"),
                 ("server_update_engine", "Update FRP engine", "update engine"),
                 ("server_help", "Commands and workflows", "help / help workflows"),
             ),
@@ -2589,13 +3018,12 @@ GUIDED_MENU = {
     "both": (
         ("both_client", "Client operations", ""),
         ("both_server", "Server operations", ""),
-        ("both_status", "Status (both)", "status"),
+        ("both_status", "Status (both)", "show status"),
         ("both_doctor", "System diagnostics", "doctor"),
         ("both_help", "Commands and workflows", "help / help workflows"),
         ("exit", "Exit", ""),
     ),
 }
-
 
 def _guided_menu_key(role):
     client, server = role_parts(role)

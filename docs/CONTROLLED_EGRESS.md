@@ -4,7 +4,7 @@
 >
 > **Pillar:** Agentless Controlled Egress (sibling of Secure Remote Access / Data Relay Link inbound)
 >
-> **CLI:** `sudo drlink` (resource-first; see `docs/CLI_REFERENCE.md`)
+> **CLI:** `sudo drlink` (action-first; see `docs/CLI_REFERENCE.md`)
 >
 > **Default HTTP/HTTPS proxy port:** `6102` (outside published service pool `6000–6098`; not `6080`)
 >
@@ -26,7 +26,10 @@ export HTTPS_PROXY=http://datarelay.example.com:6102
 
 HTTPS traffic uses `CONNECT` plus TLS ClientHello SNI binding. Application TLS stays end-to-end between the client and the destination. Data Relay does **not** decrypt TLS. Encrypted Client Hello (ECH) is denied.
 
-HTTP destinations use absolute-form `http://` proxy requests and must be listed with `--protocol http`. Mixing protocols on the same host:port is not allowed without an explicit matching protocol entry.
+HTTP destinations use absolute-form `http://` proxy requests and must be listed
+with protocol HTTP in the guided destination flow (or the matching backend
+protocol when using internal tools). Mixing protocols on the same host:port is
+not allowed without an explicit matching protocol entry.
 
 ## Quick start (safe create workflow)
 
@@ -34,16 +37,17 @@ Profiles are always created **DISABLED**. Incomplete policies cannot widen egres
 
 ```text
 sudo drlink
-drlink> egress create ubuntu-update
-drlink> egress add-source ubuntu-update 203.0.113.10/32
-drlink> egress add-destination ubuntu-update security.ubuntu.com 443 --protocol https
-drlink> egress add-destination ubuntu-update archive.ubuntu.com 443 --protocol https
-drlink> egress explain 203.0.113.10 security.ubuntu.com 443 --protocol https
-drlink> egress show ubuntu-update
-drlink> egress enable ubuntu-update
+drlink> create egress-profile ubuntu-update
+drlink> add egress-source ubuntu-update
+drlink> add egress-destination ubuntu-update
+drlink> test egress
+drlink> show egress-profile ubuntu-update
+drlink> enable egress-profile ubuntu-update
 ```
 
-`egress explain` (preferred) and legacy `egress test` preview policy + DNS safety only: **no live connect**, **no state mutation**.
+`add egress-source` / `add egress-destination` collect CIDR, FQDN, port, and
+protocol through guided prompts (no public `--options`). `test egress`
+previews policy + DNS safety only: **no live connect**, **no state mutation**.
 
 Then on the closed host, set `HTTP_PROXY` / `HTTPS_PROXY` (or app-specific proxy settings). Verify an allowed destination succeeds and a non-allowed destination is denied.
 
@@ -53,23 +57,23 @@ Each Fixed TCP relay pins **one** listener to **one** exact destination FQDN:por
 
 ```text
 sudo drlink
-drlink> egress tcp create vendor-license --destination license.vendor.example --port 443 --source 10.20.30.0/24
-drlink> egress tcp explain vendor-license 10.20.30.10
-drlink> egress tcp enable vendor-license
+drlink> create egress-profile vendor-license
+# follow guided Fixed TCP / destination prompts, then:
+drlink> enable egress-profile vendor-license
 ```
 
-Relays are always created **DISABLED**. Listen ports auto-allocate from **6200–6299** unless `--listen-port` is set. Runtime: `drlink-tcp-egress.service`.
+Relays are always created **DISABLED**. Listen ports auto-allocate from **6200–6299** unless the operator chooses a listen port in the guided flow. Runtime: `drlink-tcp-egress.service`.
 
 ### Recipes (templates; never auto-enable)
 
 ```text
-drlink> egress recipe list
-drlink> egress recipe show https-api
-drlink> egress recipe apply https-api --name my-api
-# then add sources, explain, enable
+drlink> show egress
+drlink> create egress-profile my-api
+# then add sources, test, enable
 ```
 
-Compatibility verb-first forms (`create egress-profile`, `show egress-profiles`, …) still run; prefer the resource-first forms above.
+Older resource-first forms (`egress create`, `egress add-destination`, …) may
+still run as hidden compatibility aliases. They are not the advertised CLI.
 
 ## Firewall responsibility
 
@@ -125,7 +129,7 @@ remain root-owned and are not writable by the egress account.
 ## Doctor / backup
 
 - `drlink doctor` checks egress policy validity, HTTP listen (`6102`), Fixed TCP listeners (`6200–6299`), and gateway/TCP unit state (read-only).
-- After doctor hints, inspect with `drlink egress list` / `drlink egress tcp list` / `drlink egress status`.
+- After doctor hints, inspect with `show egress-profiles` / `show egress` / `test egress`.
 - Server backup/restore includes `var/lib/drlink/egress-control.json` (profiles + Fixed TCP relays).
 
 ## Verified client patterns

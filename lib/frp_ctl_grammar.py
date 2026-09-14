@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Safe drlink tokenizer, command-tree help, and context-aware completion.
 
-The canonical grammar is resource-first (``<resource> <action> ...``) and is
+The canonical grammar is action-first (``<action> <resource> ...``) and is
 described once in :mod:`frp_cli_catalog`. This module tokenizes, resolves a
-canonical command against that catalog, rewrites it into the internal
-verb-first form that the dispatcher already understands, and renders help,
-context help, and Tab completion from the same catalog.
+canonical command against that catalog, rewrites hidden resource-first
+compatibility aliases into action-first tokens, and renders help, context
+help, and Tab completion from the same catalog.
 
 No eval, no glob, no variable expansion, no command substitution.
+Public UX never advertises GNU-style ``--options`` or backend ``frp-*`` names.
 """
 from __future__ import annotations
 
@@ -235,18 +236,24 @@ def _show_resources(role):
                 "services",
                 "groups",
                 "group",
-                "profiles",
-                "profile",
+                "service-profiles",
+                "service-profile",
+                "access-lists",
+                "access-list",
+                "egress",
                 "egress-profiles",
                 "egress-profile",
                 "enrollments",
+                "enrollment",
                 "audit",
                 "upstream",
+                "backups",
+                "info",
             ]
         )
     if client and not server:
         items.extend(["services", "info"])
-    elif client and server:
+    elif client and server and "info" not in items:
         items.append("info")
     return items
 
@@ -272,7 +279,7 @@ def _unset_resources(role):
 def _create_resources(role):
     _, server = _role_parts(role)
     if server:
-        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "profile", "egress-profile"]
+        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "service-profile", "egress-profile", "access-list", "support-bundle"]
     return []
 
 
@@ -309,7 +316,7 @@ def _safe_names(names):
     return sorted(out, key=str.lower)
 
 
-def missing_client_help(usage_lines, names=None, tip="drlink help client"):
+def missing_client_help(usage_lines, names=None, tip="Press Tab after \"show client \" to select a client."):
     """Enter-submitted incomplete client target. Tab must not call this."""
     parts = ["Missing client.", ""]
     available = _safe_names(names)
@@ -329,7 +336,7 @@ def missing_client_help(usage_lines, names=None, tip="drlink help client"):
             "  unique hostname",
             "",
             "Tip:",
-            "  type: %s" % tip,
+            "  %s" % tip,
         ]
     )
     return {"status": "incomplete", "message": "\n".join(parts)}
@@ -348,47 +355,32 @@ def help_text(tokens, role):
     catalog_topic = _catalog_help_topic(tokens, role)
     if catalog_topic is not None:
         return catalog_topic
-    # Verb-first help topics are compatibility-only; do not advertise them as
-    # the current grammar. Point operators at canonical resources + help legacy.
-    if verb in (
-        "show",
-        "set",
-        "unset",
-        "create",
-        "revoke",
-        "purge",
-        "release",
-        "restore",
-        "add",
-        "remove",
-        "delete",
-        "rename",
-        "enable",
-        "disable",
-        "enroll",
-        "info",
-        "services",
-        "clients",
-    ):
+    # Hidden resource-first help topics → action-first usage redirect.
+    if verb == "group":
         return (
-            "Compatibility topic: '%s'\n\n"
-            "Current grammar is resource-first. Try:\n"
-            "  help\n"
-            "  help <resource>\n"
-            "  help workflows\n\n"
-            "Verb-first aliases still run for scripts. See 'help legacy'.\n"
-            % verb
+            "Groups\n"
+            "======\n\n"
+            "Usage:\n"
+            "  show groups\n"
+            "  show group <GROUP>\n"
+            "  create group <NAME>\n"
+            "  set group <GROUP> description|name <value>\n"
+            "  rename group <GROUP> <NAME>\n"
+            "  add client <CLIENT> group <GROUP>\n"
+            "  remove client <CLIENT> group <GROUP>\n"
+            "  delete group <GROUP>\n"
         )
+    # Action-first topics are served by _catalog_help_topic above.
     if verb == "update":
         return _update_help(role)
     if verb == "doctor":
         return (
-            "Doctor\n======\n\nUsage:\n  doctor\n  doctor --json\n  doctor --verbose\n"
+            "Doctor\n======\n\nUsage:\n  doctor\n"
         )
     if verb == "support-bundle":
         return (
             "Support Bundle\n==============\n\n"
-            "Usage:\n  support-bundle\n  support-bundle --output <path>\n\n"
+            "Usage:\n  create support-bundle\n\n"
             "Create a sanitized read-only diagnostic archive. Never includes private keys or tokens.\n"
         )
     if verb == "access":
@@ -461,7 +453,7 @@ def _root_help_legacy(role):
                 "  show client <ID>",
                 "  show client <ID> services",
                 "  show client <ID> tags",
-                "  enrollment list",
+                "  show enrollments",
                 "  show audit",
                 "  show upstream",
             ]
@@ -476,7 +468,7 @@ def _root_help_legacy(role):
                 "  show group <GROUP>",
                 "  show profiles",
                 "  show profile <PROFILE>",
-                "  show clients --group <GROUP>",
+                "  show clients",
                 "  show client <ID> groups",
                 "  set client <ID> label <value>",
                 "  set client <ID> note <value>",
@@ -484,12 +476,12 @@ def _root_help_legacy(role):
                 "  unset client <ID> label",
                 "  unset client <ID> note",
                 "  unset client <ID> tag <key>",
-                "  create group <name> [--description TEXT]",
+                "  create group <name>",
                 "  create profile <name> --preset ... --target-host ... --target-port ...",
                 "  rename group <GROUP> <name>",
                 "  set group <GROUP> name|description <value>",
                 "  set profile <PROFILE> <prop> <value>",
-                "  delete group <GROUP> [--yes]",
+                "  delete group <GROUP>",
                 "  delete profile <PROFILE>",
                 "  add client <ID> group <GROUP>",
                 "  remove client <ID> group <GROUP>",
@@ -499,7 +491,7 @@ def _root_help_legacy(role):
         lines.extend(
             [
                 "  add service",
-                "  add service --profile <PROFILE> [--id ID] [--name NAME]",
+                "  add service",
                 "  set service <id> target-host <host>",
                 "  set service <id> target-port <port>",
                 "  set service <id> ssh-user <user>",
@@ -519,13 +511,12 @@ def _root_help_legacy(role):
     if server:
         lines.extend(
             [
-                "  zero-touch create",
-                "  enrollment create [--ssh --ssh-user USER --label NAME]",
-                "  enrollment bulk --count N",
-                "  backup create",
-                "  enrollment revoke <id>",
-                "  enrollment purge <id>",
-                "  purge enrollments --older-than <days>",
+                "  create zero-touch",
+                "  create enrollment",
+                "  create enrollments",
+                "  create backup",
+                "  revoke enrollment <id>",
+                "  delete enrollment <id>",
                 "  revoke client <ID>",
                 "  release service <ID> <service-id>",
                 "  release client <ID>",
@@ -534,8 +525,8 @@ def _root_help_legacy(role):
         )
     lines.extend(
         [
-            "  update project [--check]",
-            "  update frp [--check]",
+            "  update product",
+            "  update engine",
         ]
     )
     other = [
@@ -593,7 +584,7 @@ def _show_help(rest, role):
             "Usage:\n"
             "  show groups\n"
             "  show group <GROUP>\n"
-            "  show clients --group <GROUP>\n"
+            "  show clients\n"
             "  show client <ID> groups\n"
         )
     if topic in ("profile", "profiles"):
@@ -672,10 +663,10 @@ def _unset_help(role):
         "  unset client <ID> label\n"
         "  unset client <ID> note\n"
         "  unset client <ID> tag <key>\n"
-        "  unset server hostname\n"
+        "  unset server public-hostname\n"
         "  unset server bootstrap-hostname\n\n"
         "unset removes metadata only. It does not release ports or revoke identity.\n"
-        "unset server hostname falls back to Public IP access.\n"
+        "unset server public-hostname falls back to Public IP access.\n"
         "unset server bootstrap-hostname falls back to zt1 Zero-Touch commands.\n"
     )
 
@@ -685,79 +676,91 @@ def _create_help(role):
         "Create\n"
         "======\n\n"
         "Usage:\n"
-        "  create group <name> [--description TEXT]\n"
-        "  create profile <name> --preset ssh|http|https|custom\n"
-        "                 --target-host HOST --target-port PORT\n"
-        "                 [--description TEXT] [--ssh-user USER]\n"
-        "  zero-touch create\n"
-        "  enrollment create\n"
-        "  enrollment bulk --count N\n"
-        "  enrollment bulk --csv FILE\n"
-        "  backup create [path]\n\n"
+        "  create zero-touch\n"
+        "  create enrollment\n"
+        "  create enrollments\n"
+        "  create group <name>\n"
+        "  create service-profile <name>\n"
+        "  create access-list <name>\n"
+        "  create egress-profile <name>\n"
+        "  create backup [path]\n"
+        "  create support-bundle\n\n"
         "Recommended:\n"
-        "  zero-touch create\n\n"
-        "Descriptions:\n\n"
-        "zero-touch create\n"
-        "  Generate a one-line Zero-touch client installation command.\n\n"
-        "enrollment create\n"
-        "  Generate a Manual Enrollment Code.\n"
+        "  create zero-touch\n\n"
+        "Complex creates use guided prompts. Data Relay Link does not use "
+        "--options.\n"
     )
 
 
 def _update_help(role):
-    lines = [
-        "Update\n======\n\nUsage:\n  update project [--check]",
-        "  update frp [--check]",
-    ]
-    lines.append("\nA software update does not re-enroll clients or rotate CA/token/ports.\n")
-    return "\n".join(lines)
+    return (
+        "Update\n======\n\nUsage:\n"
+        "  update product\n"
+        "  update engine\n\n"
+        "update product updates Data Relay Link management tools.\n"
+        "update engine updates the pinned upstream FRP binary.\n"
+        "A software update does not re-enroll clients or rotate CA/token/ports.\n"
+    )
 
 
 def _verb_help(verb, role):
     mapping = {
         "revoke": (
             "Revoke\n======\n\nUsage:\n"
-            "  client revoke <ID>\n"
-            "  enrollment revoke <id>\n\n"
-            "client revoke removes management identity and keeps port reservations.\n"
-            "enrollment revoke prevents a pending or bound enrollment credential from being used.\n"
+            "  revoke client <CLIENT>\n"
+            "  revoke enrollment <ENROLLMENT>\n\n"
+            "revoke blocks management trust / credential use while preserving "
+            "appropriate registry and reservation state.\n"
         ),
         "purge": (
-            "Purge\n=====\n\nUsage:\n"
-            "  purge enrollment <id>\n"
-            "  purge enrollments --older-than <days>\n\n"
-            "purge permanently removes terminal enrollment metadata "
+            "Delete enrollment metadata\n"
+            "==========================\n\n"
+            "Canonical:\n"
+            "  delete enrollment <ENROLLMENT>\n\n"
+            "Deletes only terminal enrollment metadata "
             "(expired, completed, or revoked).\n"
-            "Active pending or bound enrollments must be revoked first.\n"
+            "Active enrollments must be revoked first.\n"
         ),
         "release": (
             "Release\n=======\n\nUsage:\n"
-            "  release service <ID> <service-id>\n"
-            "  release client <ID>\n\n"
+            "  release client <CLIENT>\n"
+            "  release service <CLIENT> <SERVICE>\n\n"
             "release returns public port reservations. It is not revoke or unset.\n"
         ),
-        "restore": "Restore\n=======\n\nUsage:\n  restore backup <path>\n",
+        "restore": "Restore\n=======\n\nUsage:\n  restore backup <BACKUP>\n",
         "add": (
             "Add\n===\n\nUsage:\n"
-            "  add client <ID> group <GROUP>\n"
-            "  add service [--preset ssh|http|https|custom] [--id ID] [--name NAME]\n"
-            "              [--target-host HOST] [--target-port PORT] [--ssh-user USER]\n"
-            "  add service --profile <PROFILE|NAME> [--id ID] [--name NAME]\n\n"
-            "Pending until apply. Does not release server-side reservations.\n"
-            "Profile seeding copies template defaults only; public ports stay\n"
-            "unallocated until apply. Editing a profile never mutates services.\n"
+            "  add client <CLIENT> group <GROUP>\n"
+            "  add egress-destination <PROFILE>\n"
+            "  add egress-source <PROFILE>\n"
+            "  add access-source <LIST>\n"
+            "  add service\n\n"
+            "Complex source/destination parameters use guided prompts.\n"
+            "Pending client service changes apply with apply.\n"
         ),
-        "enable": "Enable service\n==============\n\nUsage:\n  enable service <service-id>\n",
+        "enable": "Enable\n======\n\nUsage:\n  enable service <SERVICE>\n  enable egress-profile <PROFILE>\n",
         "disable": (
-            "Disable service\n===============\n\nUsage:\n  disable service <service-id>\n\n"
-            "The public reservation remains until release service.\n"
+            "Disable\n=======\n\nUsage:\n"
+            "  disable service <SERVICE>\n"
+            "  disable egress-profile <PROFILE>\n\n"
+            "Service public reservations remain until release service.\n"
         ),
         "remove": (
-            "Remove group membership\n"
-            "=======================\n\n"
-            "Usage:\n  remove client <ID> group <GROUP>\n"
+            "Remove\n======\n\nUsage:\n"
+            "  remove client <CLIENT> group <GROUP>\n"
+            "  remove egress-destination <PROFILE>\n"
+            "  remove egress-source <PROFILE>\n"
+            "  remove access-source <LIST>\n"
         ),
-        "delete": ("Delete\n======\n\nUsage:\n  delete group <GROUP> [--yes]\n  delete profile <PROFILE>\n\nDeleting a group needs interactive confirmation or --yes.\nDeleting a profile does not change existing services.\n"),
+        "delete": (
+            "Delete\n======\n\nUsage:\n"
+            "  delete group <GROUP>\n"
+            "  delete service-profile <PROFILE>\n"
+            "  delete access-list <LIST>\n"
+            "  delete egress-profile <PROFILE>\n"
+            "  delete enrollment <ENROLLMENT>\n\n"
+            "Destructive deletes ask for confirmation.\n"
+        ),
         "rename": "Rename group\n============\n\nUsage:\n  rename group <GROUP> <name>\n",
     }
     return mapping.get(verb, "Usage:\n  %s\n" % verb)
@@ -815,6 +818,34 @@ def context_help(tokens, role, names=None, clients=None):
     tokens = [t for t in (tokens or []) if t != "?"]
     if not tokens:
         return _concise_root(role)
+    if tokens == ["release"] and server:
+        return (
+            "release client <CLIENT>\n"
+            "  Revoke port reservations for the whole client and clear its registry entry.\n\n"
+            "release service <CLIENT> <SERVICE>\n"
+            "  Release one service reservation only; the client record remains.\n\n"
+            "These are destructive. Prefer revoke when you only need to block management trust.\n"
+        )
+    if tokens == ["revoke"] and server:
+        return (
+            "revoke client <CLIENT>\n"
+            "  Block management trust / credential use for a registered client.\n\n"
+            "revoke enrollment <ENROLLMENT>\n"
+            "  Prevent a pending or bound enrollment credential from being used.\n\n"
+            "Revoke preserves the appropriate registry/reservation state.\n"
+            "Use release to free ports, or delete enrollment for terminal metadata only.\n"
+        )
+    if tokens == ["delete"] and server:
+        return (
+            "delete group <GROUP>\n"
+            "delete service-profile <PROFILE>\n"
+            "delete access-list <LIST>\n"
+            "delete egress-profile <PROFILE>\n"
+            "delete enrollment <ENROLLMENT>\n\n"
+            "delete enrollment removes terminal enrollment metadata only.\n"
+            "If the enrollment is still active, revoke it first:\n"
+            "  revoke enrollment <ID>\n"
+        )
     catalog_text = _catalog_context_help(tokens, role, names=names, clients=clients)
     if catalog_text is not None:
         return catalog_text
@@ -907,7 +938,7 @@ def context_help(tokens, role, names=None, clients=None):
             if len(tokens) == 2:
                 return _fmt_available(
                     [
-                        ("hostname", "Optional public DNS hostname for published services"),
+                        ("public-hostname", "Optional public DNS hostname for published services"),
                         ("bootstrap-hostname", "Optional Zero-Touch public TLS bootstrap hostname"),
                     ]
                 )
@@ -926,14 +957,14 @@ def context_help(tokens, role, names=None, clients=None):
                 )
             return (
                 "Usage:\n"
-                "  set server hostname <fqdn>\n\n"
+                "  set server public-hostname <fqdn>\n\n"
                 "Purpose:\n"
                 "  Set an optional DNS alias for published service access.\n"
                 "  FRP control continues to use the Public IP.\n\n"
                 "Example:\n"
-                "  set server hostname frp.example.com\n\n"
+                "  set server public-hostname frp.example.com\n\n"
                 "Remove:\n"
-                "  unset server hostname\n"
+                "  unset server public-hostname\n"
             )
         return _fmt_available([(item, "") for item in _set_resources(role)])
     if verb == "unset":
@@ -947,7 +978,7 @@ def context_help(tokens, role, names=None, clients=None):
         if tokens[1] == "server":
             return (
                 "Usage:\n"
-                "  unset server hostname\n"
+                "  unset server public-hostname\n"
                 "  unset server bootstrap-hostname\n"
             )
         if len(tokens) <= 2:
@@ -977,7 +1008,7 @@ def context_help(tokens, role, names=None, clients=None):
                 "  enrollment create\n"
                 "  enrollment create [--one-line] [--ssh --ssh-user USER --label NAME]\n\n"
                 "Generate a Manual Enrollment Code for interactive client install.\n"
-                "For everyday onboarding prefer: zero-touch create\n"
+                "For everyday onboarding prefer: create zero-touch\n"
             )
         if len(tokens) >= 2 and tokens[1] == "enrollments":
             return (
@@ -1169,75 +1200,109 @@ def canonical_tokens(tokens):
     return [root] + list(tokens[1:])
 
 
+def public_option_error(tokens):
+    return public_option_rejection(tokens)
+
+
+def public_option_rejection(tokens):
+    """Reject public GNU-style option tokens with a drlink-owned message.
+
+    Always reject bare ``--`` / ``-``. Also reject dash tokens on guided
+    create/onboarding commands so backend argparse never leaks.
+    """
+    toks = [str(t) for t in (tokens or ())]
+    bad = None
+    for tok in toks:
+        if tok in ("-", "--") or tok.startswith("-"):
+            bad = tok
+            break
+    if bad is None:
+        return None
+    focus = [t for t in toks if not t.startswith("-")]
+    # Guided / no-flag public commands
+    guided_prefixes = (
+        ("create", "enrollment"),
+        ("create", "enrollments"),
+        ("create", "zero-touch"),
+        ("create", "support-bundle"),
+        ("add", "egress-destination"),
+        ("add", "egress-source"),
+        ("add", "access-source"),
+        ("delete", "enrollment"),
+        ("enrollment", "create"),
+        ("enrollment", "bulk"),
+        ("enrollment", "purge"),
+        ("zero-touch", "create"),
+        ("egress", "add-destination"),
+        ("egress", "add-source"),
+    )
+    is_guided = False
+    for prefix in guided_prefixes:
+        if tuple(focus[: len(prefix)]) == prefix:
+            is_guided = True
+            break
+    if bad not in ("-", "--") and not is_guided:
+        return None
+    hint = " ".join(focus[:2]) if len(focus) >= 2 else (focus[0] if focus else "help")
+    return {
+        "status": "error",
+        "message": (
+            "Unknown input: %s\n\n"
+            "Data Relay Link commands do not use --options.\n\n"
+            "Run:\n"
+            "  %s\n\n"
+            "and follow the guided prompts."
+        )
+        % (bad, hint),
+    }
+
+
 def _canonical_result(tokens, role, names=None):
-    """Resolve a canonical resource-first command.
+    """Resolve canonical action-first commands; expand hidden resource-first.
 
     Returns ``(internal_tokens, error_result)``. ``internal_tokens`` is None
-    when the caller should keep the original verb-first interpretation.
+    when the caller should keep the original tokens for verb-handler matching.
     """
-    canon = canonical_tokens(tokens)
-    if canon is None:
-        root = canonical_root(tokens[0])
-        actions = CATALOG.canonical_actions(root)
-        if root == "client" and len(tokens) >= 2 and actions:
-            if tokens[1].startswith("-"):
-                return None, None
-            if _looks_like_client_action(tokens[1]):
-                rows = CATALOG.subcommands(root, role)
-                return None, incomplete(
-                    "Unknown action %r for %s." % (tokens[1], root),
-                    ["%s <action> ..." % root],
-                    [name for name, _desc in rows],
-                    tip="drlink help %s" % root,
-                )
-            if _client_legacy_selector(tokens, names=names):
-                return None, None
-            rows = CATALOG.subcommands(root, role)
-            return None, incomplete(
-                "Unknown action %r for %s." % (tokens[1], root),
-                ["%s <action> ..." % root],
-                [name for name, _desc in rows],
-                tip="drlink help %s" % root,
-            )
-        if not actions or root in FALLTHROUGH_ROOTS:
-            return None, None
-        rows = CATALOG.subcommands(root, role)
-        if not rows:
-            if CATALOG.subcommands(root, "both"):
-                return None, {"status": "role", "need": "other", "command": root}
-            return None, None
-        if len(tokens) == 1:
-            return None, incomplete(
-                "Missing action for %s." % root,
-                ["%s <action> ..." % root],
-                [name for name, _desc in rows],
-                tip="drlink help %s" % root,
-            )
-        # Flag-leading forms (e.g. `update --check`) keep the verb-handler path.
-        if tokens[1].startswith("-"):
-            return None, None
-        # Compatibility synonym kept for scripts: `update frp` == `update engine`.
-        if root == "update" and tokens[1] == "frp":
-            return None, None
-        return None, incomplete(
-            "Unknown action %r for %s." % (tokens[1], root),
-            ["%s <action> ..." % root],
-            [name for name, _desc in rows],
-            tip="drlink help %s" % root,
-        )
-    cmd = CATALOG.find(canon)
-    if cmd is None:
+    if not tokens:
         return None, None
+
+    opt_err = public_option_error(tokens)
+    if opt_err is not None:
+        return None, opt_err
+
+    # Hidden resource-first compatibility → action-first.
+    expanded = None
+    if hasattr(CATALOG, "expand_compat_alias"):
+        expanded = CATALOG.expand_compat_alias(tokens)
+    work = list(expanded) if expanded is not None else list(tokens)
+
+    cmd = CATALOG.find(work)
+    if cmd is None:
+        root = canonical_root(work[0])
+        if root == "client" and _client_legacy_selector(work, names=names):
+            return None, None
+        if root in FALLTHROUGH_ROOTS:
+            return None, None
+        return None, None
+
     if not CATALOG.role_allows(cmd["roles"], role):
         return None, {
             "status": "role",
             "need": cmd["roles"],
             "command": " ".join(cmd["path"]),
         }
-    problem = CATALOG.strict_error(canon)
+    problem = CATALOG.strict_error(work)
     if problem:
+        if "flag" in problem or "required flag" in problem or problem.startswith("missing value for -"):
+            return None, public_option_rejection(work + ["--"]) or {
+                "status": "error",
+                "message": (
+                    "Data Relay Link commands do not use --options.\n"
+                    "Run the action and follow guided prompts."
+                ),
+            }
         return None, {"status": "error", "message": problem}
-    internal = CATALOG.to_internal(canon)
+    internal = CATALOG.to_internal(work)
     if internal is None:
         return None, None
     return internal, None
@@ -1246,13 +1311,43 @@ def _canonical_result(tokens, role, names=None):
 def match(tokens, role, names=None, clients=None):
     if not tokens:
         return {"status": "empty"}
+    # Binary shell meta-flags (not REPL command options).
+    if list(tokens) in (["--help"], ["-h"]):
+        return {"status": "unknown", "command": tokens[0]}
     if tokens[-1] == "?":
+        focus = CATALOG.resolve_tokens(tokens[:-1], role=role)
         return {
             "status": "ok",
             "action": "context_help",
-            "focus": tokens[:-1],
-            "message": context_help(tokens[:-1], role, names=names, clients=clients),
+            "focus": focus,
+            "message": context_help(focus, role, names=names, clients=clients),
         }
+    # Hidden resource-first compatibility → canonical action-first tokens.
+    tokens = CATALOG.resolve_tokens(tokens, role=role)
+    opt_err = public_option_error(tokens)
+    if opt_err is None:
+        # Reject all remaining public --options (not only guided prefixes).
+        for tok in tokens:
+            if tok in ("-h", "--help"):
+                continue
+            if tok == "--" or str(tok).startswith("--") or (
+                len(str(tok)) >= 2 and str(tok).startswith("-") and not str(tok)[1:].replace(".", "", 1).isdigit()
+            ):
+                focus = " ".join(t for t in tokens if not str(t).startswith("-")) or "help"
+                opt_err = {
+                    "status": "error",
+                    "message": (
+                        "Unknown input: %s\n\n"
+                        "Data Relay Link commands do not use --options.\n\n"
+                        "Run:\n"
+                        "  %s\n\n"
+                        "and follow the guided prompts when more detail is required."
+                    )
+                    % (tok, focus),
+                }
+                break
+    if opt_err is not None:
+        return opt_err
     verb = tokens[0]
     if verb.startswith("!") or verb in SHELL_REJECT:
         return {"status": "shell"}
@@ -1263,6 +1358,13 @@ def match(tokens, role, names=None, clients=None):
     if rewritten:
         tokens = internal
         verb = tokens[0]
+    # Hidden resource-first bare roots must discover, never mutate.
+    if not rewritten and list(tokens) == ["backup"]:
+        return incomplete(
+            "Missing action.",
+            ["create backup [path]", "restore backup <path>"],
+            available=["create", "restore"],
+        )
     if not rewritten and verb in LEGACY_COMMANDS:
         return {"status": "legacy"}
     client, server = _role_parts(role)
@@ -1299,6 +1401,15 @@ def match(tokens, role, names=None, clients=None):
         "status": lambda toks, role, names=None: {"status": "ok", "action": "show_status", "passthrough": toks[1:]},
         "server-status": lambda toks, role, names=None: {"status": "ok", "action": "show_server_status", "passthrough": toks[1:]},
         "version": lambda toks, role, names=None: {"status": "ok", "action": "show_version"},
+        "test": lambda toks, role, names=None: (
+            {"status": "ok", "action": "access_cmd", "passthrough": ["test"] + list(toks[2:])}
+            if len(toks) > 1 and toks[1] == "access"
+            else {"status": "ok", "action": "egress_cmd", "passthrough": list(toks[1:])}
+        ),
+        "explain": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["explain"] + list(toks[2:])},
+        "export": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["export"] + list(toks[2:])},
+        "import": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["import"] + list(toks[2:])},
+        "diff": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["diff"] + list(toks[2:])},
     }
     fn = handlers.get(verb)
     if fn is None:
@@ -1331,7 +1442,29 @@ def _match_show(tokens, role, names=None):
     if resource == "version":
         return {"status": "ok", "action": "show_version"}
     if resource == "clients":
-        return {"status": "ok", "action": "show_clients", "passthrough": tokens[2:]}
+        if len(tokens) > 3:
+            return incomplete(
+                "Unexpected arguments.",
+                ["show clients", "show clients <GROUP>"],
+            )
+        if len(tokens) == 3:
+            group = tokens[2]
+            if str(group).startswith("-"):
+                return {
+                    "status": "error",
+                    "message": (
+                        "Unknown input: %s\n\n"
+                        "Data Relay Link commands do not use --options.\n\n"
+                        "Run:\n  show clients <GROUP>\n"
+                        % group
+                    ),
+                }
+            return {
+                "status": "ok",
+                "action": "show_clients",
+                "passthrough": ["--group", group],
+            }
+        return {"status": "ok", "action": "show_clients", "passthrough": []}
     if resource == "groups":
         if len(tokens) > 2:
             return incomplete("Unexpected arguments.", ["show groups"])
@@ -1346,7 +1479,7 @@ def _match_show(tokens, role, names=None):
         if len(tokens) > 2:
             return incomplete("Unexpected arguments.", ["show profiles"])
         return {"status": "ok", "action": "show_profiles"}
-    if resource == "profile":
+    if resource in ("profile", "service-profile"):
         if len(tokens) < 3:
             return incomplete("Missing profile selector.", ["show profile <PROFILE>"])
         if len(tokens) > 3:
@@ -1356,6 +1489,36 @@ def _match_show(tokens, role, names=None):
         if len(tokens) > 2:
             return incomplete("Unexpected arguments.", ["show egress-profiles"])
         return {"status": "ok", "action": "show_egress_profiles"}
+    if resource == "access-lists":
+        return {"status": "ok", "action": "access_cmd", "passthrough": ["list"] + list(tokens[2:])}
+    if resource == "access-list":
+        if len(tokens) < 3:
+            return incomplete("Missing access list.", ["show access-list <LIST>"])
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["show", tokens[2]] + list(tokens[3:]),
+        }
+    if resource == "access-service":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["show-service"] + list(tokens[2:]),
+        }
+    if resource == "access-log":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["log"] + list(tokens[2:]),
+        }
+    if resource == "egress":
+        return {"status": "ok", "action": "egress_cmd", "passthrough": ["status"] + list(tokens[2:])}
+    if resource == "service-profiles":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["show service-profiles"])
+        return {"status": "ok", "action": "show_profiles"}
+    if resource == "backups":
+        return incomplete("Use create backup / restore backup.", ["create backup", "restore backup <path>"])
     if resource == "egress-profile":
         if len(tokens) < 3:
             return incomplete("Missing egress profile selector.", ["show egress-profile <PROFILE>"])
@@ -1381,7 +1544,7 @@ def _match_show(tokens, role, names=None):
                     "show client <ID> tags",
                 ],
                 names,
-                tip="drlink help client",
+                tip="Press Tab after \"show client \" to select a client.",
             )
         view = tokens[3] if len(tokens) > 3 else "overview"
         if view in ("info",):
@@ -1514,7 +1677,7 @@ def _match_set(tokens, role, names=None):
             "property": tokens[3],
             "value": tokens[4],
         }
-    if resource == "profile":
+    if resource in ("profile", "service-profile"):
         props = [
             "name", "description", "preset", "target-host", "target-port", "ssh-user",
             "health-type", "health-timeout", "health-interval", "health-max-failed", "health-path",
@@ -1575,6 +1738,36 @@ def _match_set(tokens, role, names=None):
             "property": tokens[3],
             "value": tokens[4],
         }
+    if resource == "access-lists":
+        return {"status": "ok", "action": "access_cmd", "passthrough": ["list"] + list(tokens[2:])}
+    if resource == "access-list":
+        if len(tokens) < 3:
+            return incomplete("Missing access list.", ["show access-list <LIST>"])
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["show", tokens[2]] + list(tokens[3:]),
+        }
+    if resource == "access-service":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["show-service"] + list(tokens[2:]),
+        }
+    if resource == "access-log":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["log"] + list(tokens[2:]),
+        }
+    if resource == "egress":
+        return {"status": "ok", "action": "egress_cmd", "passthrough": ["status"] + list(tokens[2:])}
+    if resource == "service-profiles":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["show service-profiles"])
+        return {"status": "ok", "action": "show_profiles"}
+    if resource == "backups":
+        return incomplete("Use create backup / restore backup.", ["create backup", "restore backup <path>"])
     if resource == "egress-profile":
         if not server:
             return {"status": "role", "need": "server", "command": "set egress-profile"}
@@ -1619,22 +1812,26 @@ def _match_set(tokens, role, names=None):
     if resource == "server":
         if not server:
             return {"status": "role", "need": "server", "command": "set server"}
-        server_settings = ["hostname", "bootstrap-hostname"]
+        # Canonical: public-hostname. Hidden compat: hostname.
+        server_settings = ["public-hostname", "bootstrap-hostname"]
         if len(tokens) < 3:
             return incomplete(
                 "Missing server setting.",
                 [
-                    "set server hostname <fqdn>",
+                    "set server public-hostname <fqdn>",
                     "set server bootstrap-hostname <fqdn>",
                 ],
                 server_settings,
                 tip="drlink help set",
             )
-        if tokens[2] not in server_settings:
+        setting = tokens[2]
+        if setting == "hostname":
+            setting = "public-hostname"
+        if setting not in server_settings:
             return incomplete(
                 "Unknown server setting.",
                 [
-                    "set server hostname <fqdn>",
+                    "set server public-hostname <fqdn>",
                     "set server bootstrap-hostname <fqdn>",
                 ],
                 server_settings,
@@ -1642,7 +1839,7 @@ def _match_set(tokens, role, names=None):
         if len(tokens) < 4:
             return incomplete(
                 "Missing hostname.",
-                ["set server %s <fqdn>" % tokens[2]],
+                ["set server %s <fqdn>" % setting],
                 tip="drlink help set",
             )
         if len(tokens) > 4:
@@ -1650,7 +1847,7 @@ def _match_set(tokens, role, names=None):
                 "status": "error",
                 "message": "Too many arguments. Quote values that contain spaces.",
             }
-        if tokens[2] == "hostname":
+        if setting == "public-hostname":
             return {
                 "status": "ok",
                 "action": "set_server_hostname",
@@ -1672,35 +1869,38 @@ def _match_unset(tokens, role, names=None):
     if len(tokens) < 2:
         return incomplete(
             "Missing resource.",
-            ["unset client <ID> <setting>", "unset server hostname"],
+            ["unset client <ID> <setting>", "unset server public-hostname"],
             avail,
         )
     if tokens[1] == "server":
         if len(tokens) < 3:
             return incomplete(
                 "Missing server setting.",
-                ["unset server hostname", "unset server bootstrap-hostname"],
-                ["hostname", "bootstrap-hostname"],
+                ["unset server public-hostname", "unset server bootstrap-hostname"],
+                ["public-hostname", "bootstrap-hostname"],
                 tip="drlink help unset",
             )
-        if tokens[2] not in ("hostname", "bootstrap-hostname"):
+        setting = tokens[2]
+        if setting == "hostname":
+            setting = "public-hostname"
+        if setting not in ("public-hostname", "bootstrap-hostname"):
             return incomplete(
                 "Unknown server setting.",
-                ["unset server hostname", "unset server bootstrap-hostname"],
-                ["hostname", "bootstrap-hostname"],
+                ["unset server public-hostname", "unset server bootstrap-hostname"],
+                ["public-hostname", "bootstrap-hostname"],
             )
         if len(tokens) > 3:
             return {
                 "status": "error",
                 "message": "Too many arguments.",
             }
-        if tokens[2] == "hostname":
+        if setting == "public-hostname":
             return {"status": "ok", "action": "unset_server_hostname"}
         return {"status": "ok", "action": "unset_server_bootstrap_hostname"}
     if tokens[1] != "client":
         return incomplete(
             "Unknown unset resource.",
-            ["unset client <ID> <setting>", "unset server hostname"],
+            ["unset client <ID> <setting>", "unset server public-hostname"],
             avail,
         )
     if len(tokens) < 3:
@@ -1754,18 +1954,23 @@ def _match_create(tokens, role, names=None):
             )
         return {"status": "ok", "action": "create_zero_touch"}
     if resource == "enrollment":
-        return {"status": "ok", "action": "create_enrollment", "passthrough": tokens[2:]}
+        return {
+            "status": "ok",
+            "action": "create_enrollment",
+            "passthrough": tokens[2:],
+            "guided": len(tokens) == 2,
+        }
     if resource == "enrollments":
         return {"status": "ok", "action": "create_enrollments", "passthrough": tokens[2:]}
     if resource == "backup":
         return {"status": "ok", "action": "create_backup", "passthrough": tokens[2:]}
     if resource == "group":
         if len(tokens) < 3:
-            return incomplete("Missing group name.", ["create group <name> [--description TEXT]"])
+            return incomplete("Missing group name.", ["create group <name>"])
         description = ""
         if len(tokens) > 3:
             if len(tokens) != 5 or tokens[3] != "--description":
-                return incomplete("Unexpected arguments.", ["create group <name> [--description TEXT]"])
+                return incomplete("Unexpected arguments.", ["create group <name>"])
             description = tokens[4]
         return {
             "status": "ok",
@@ -1773,15 +1978,11 @@ def _match_create(tokens, role, names=None):
             "name": tokens[2],
             "description": description,
         }
-    if resource == "profile":
+    if resource in ("profile", "service-profile"):
         if len(tokens) < 3:
             return incomplete(
                 "Missing profile name.",
-                [
-                    "create profile <name> --preset ssh|http|https|custom "
-                    "--target-host HOST --target-port PORT "
-                    "[--description TEXT] [--ssh-user USER]"
-                ],
+                ["create service-profile <name>"],
             )
         return {
             "status": "ok",
@@ -1789,18 +1990,48 @@ def _match_create(tokens, role, names=None):
             "name": tokens[2],
             "passthrough": tokens[3:],
         }
+    if resource == "access-lists":
+        return {"status": "ok", "action": "access_cmd", "passthrough": ["list"] + list(tokens[2:])}
+    if resource == "access-list":
+        if len(tokens) < 3:
+            return incomplete("Missing access list.", ["show access-list <LIST>"])
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["show", tokens[2]] + list(tokens[3:]),
+        }
+    if resource == "access-service":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["show-service"] + list(tokens[2:]),
+        }
+    if resource == "access-log":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["log"] + list(tokens[2:]),
+        }
+    if resource == "egress":
+        return {"status": "ok", "action": "egress_cmd", "passthrough": ["status"] + list(tokens[2:])}
+    if resource == "service-profiles":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["show service-profiles"])
+        return {"status": "ok", "action": "show_profiles"}
+    if resource == "backups":
+        return incomplete("Use create backup / restore backup.", ["create backup", "restore backup <path>"])
     if resource == "egress-profile":
         if len(tokens) < 3:
             return incomplete(
                 "Missing egress profile name.",
-                ["create egress-profile <name> [--description TEXT]"],
+                ["create egress-profile <name>"],
             )
         description = ""
         if len(tokens) > 3:
             if len(tokens) != 5 or tokens[3] != "--description":
                 return incomplete(
                     "Unexpected arguments.",
-                    ["create egress-profile <name> [--description TEXT]"],
+                    ["create egress-profile <name>"],
                 )
             description = tokens[4]
         return {
@@ -1816,7 +2047,7 @@ def _match_revoke(tokens, role, names=None):
     if len(tokens) == 1:
         return incomplete(
             "Missing resource.",
-            ["client revoke <ID>", "enrollment revoke <ID>"],
+            ["revoke client <ID>", "revoke enrollment <ID>"],
             ["client", "enrollment"],
         )
     if tokens[1] == "client":
@@ -1824,12 +2055,12 @@ def _match_revoke(tokens, role, names=None):
             return missing_client_help(
                 ["revoke client <ID>"],
                 names,
-                tip="drlink help revoke",
+                tip='Press Tab after "revoke client " to select a client.',
             )
         return {"status": "ok", "action": "revoke_client", "client": tokens[2], "passthrough": tokens[3:]}
     if tokens[1] == "enrollment":
         if len(tokens) < 3:
-            return incomplete("Missing enrollment id.", ["enrollment revoke <ID>"])
+            return incomplete("Missing enrollment id.", ["revoke enrollment <ID>"])
         return {"status": "ok", "action": "revoke_enrollment", "id": tokens[2]}
     # Compatibility: `revoke <client>` without the resource word.
     return {
@@ -1885,7 +2116,7 @@ def _match_release(tokens, role, names=None):
             return missing_client_help(
                 ["release client <ID>"],
                 names,
-                tip="drlink help release",
+                tip='Press Tab after "release client " to select a client.',
             )
         return {"status": "ok", "action": "release_client", "client": tokens[2], "passthrough": tokens[3:]}
     if tokens[1] == "service":
@@ -1893,7 +2124,7 @@ def _match_release(tokens, role, names=None):
             return missing_client_help(
                 ["release service <ID> <service-id>"],
                 names,
-                tip="drlink help release",
+                tip='Press Tab after "release client " to select a client.',
             )
         if len(tokens) < 4:
             return incomplete("Missing service ID.", ["release service <ID> <service-id>"])
@@ -1912,22 +2143,25 @@ def _match_update(tokens, role, names=None):
     if len(tokens) == 1:
         return incomplete(
             "Missing update target.",
-            ["update project [--check]", "update engine [--check]"],
-            ["project", "engine"],
+            ["update product", "update engine"],
+            ["product", "engine"],
             tip="drlink help update",
         )
     resource = tokens[1]
-    if resource in ("project", "frp", "engine") or resource.startswith("-"):
+    if resource in ("product", "project", "frp", "engine") or resource.startswith("-"):
         if resource.startswith("-"):
-            return {"status": "ok", "action": "update_default", "passthrough": tokens[1:]}
-        action = "update_project" if resource == "project" else "update_frp"
+            return public_option_rejection(tokens) or {
+                "status": "error",
+                "message": "Data Relay Link commands do not use --options.",
+            }
+        action = "update_project" if resource in ("product", "project") else "update_frp"
         if resource in ("frp", "engine") and not server and not client_role:
             return {"status": "role", "need": "client or server", "command": "update engine"}
         return {"status": "ok", "action": action, "passthrough": tokens[2:]}
-    avail = ["project", "engine"]
+    avail = ["product", "engine"]
     return incomplete(
         "Unknown update target.",
-        ["update project [--check]", "update engine [--check]"],
+        ["update product", "update engine"],
         avail,
         tip="drlink help update",
     )
@@ -1947,6 +2181,71 @@ def _match_add(tokens, role, names=None):
     client_role, server = _role_parts(role)
     if len(tokens) >= 2 and tokens[1] == "service" and client_role:
         return {"status": "ok", "action": "add_service", "passthrough": tokens[2:]}
+    if len(tokens) >= 2 and tokens[1] == "egress-destination" and server:
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile.",
+                ["add egress-destination <PROFILE>"],
+                tip="Press Tab after \"add egress-destination \" to select a profile.",
+            )
+        # Profile only → guided prompt in frpctl. Full host/port may be provided positionally.
+        if len(tokens) == 3:
+            return {
+                "status": "ok",
+                "action": "add_egress_destination",
+                "profile": tokens[2],
+                "host": "",
+                "port": "",
+                "passthrough": [],
+                "guided": True,
+            }
+        if len(tokens) < 5:
+            return incomplete(
+                "Destination FQDN and port required.",
+                ["add egress-destination <PROFILE> <FQDN> <PORT>"],
+            )
+        return {
+            "status": "ok",
+            "action": "add_egress_destination",
+            "profile": tokens[2],
+            "host": tokens[3],
+            "port": tokens[4],
+            "passthrough": tokens[5:],
+        }
+    if len(tokens) >= 2 and tokens[1] == "egress-source" and server:
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing egress profile.",
+                ["add egress-source <PROFILE>"],
+            )
+        if len(tokens) == 3:
+            return {
+                "status": "ok",
+                "action": "add_egress_source",
+                "profile": tokens[2],
+                "cidr": "",
+                "passthrough": [],
+                "guided": True,
+            }
+        return {
+            "status": "ok",
+            "action": "add_egress_source",
+            "profile": tokens[2],
+            "cidr": tokens[3],
+            "passthrough": tokens[4:],
+        }
+    if len(tokens) >= 2 and tokens[1] == "access-source" and server:
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing access list.",
+                ["add access-source <LIST>"],
+            )
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["add-source", tokens[2]] + list(tokens[3:]),
+            "guided": len(tokens) == 3,
+        }
     if len(tokens) >= 2 and tokens[1] == "client" and server:
         if len(tokens) < 5 or tokens[3] != "group":
             return incomplete("Missing group.", ["add client <CLIENT> group <GROUP>"])
@@ -2030,14 +2329,15 @@ def _match_add(tokens, role, names=None):
     if client_role:
         available.append("service")
     if server:
-        available.extend(["client", "egress-profile"])
+        available.extend(["client", "egress-destination", "egress-source", "access-source"])
     return incomplete(
         "Missing resource.",
         [
             "add service ...",
             "add client <CLIENT> group <GROUP>",
-            "add egress-profile <PROFILE> destination <FQDN> <PORT>",
-            "add egress-profile <PROFILE> source <CIDR>",
+            "add egress-destination <PROFILE>",
+            "add egress-source <PROFILE>",
+            "add access-source <LIST>",
         ],
         available,
     )
@@ -2045,6 +2345,53 @@ def _match_add(tokens, role, names=None):
 
 def _match_remove(tokens, role, names=None):
     _, server = _role_parts(role)
+    if len(tokens) >= 2 and tokens[1] == "egress-destination" and server:
+        if len(tokens) < 3:
+            return incomplete("Missing egress profile.", ["remove egress-destination <PROFILE> <SELECTOR>"])
+        if len(tokens) < 4:
+            return {
+                "status": "ok",
+                "action": "remove_egress_destination",
+                "profile": tokens[2],
+                "destination": "",
+                "passthrough": [],
+                "guided": True,
+            }
+        return {
+            "status": "ok",
+            "action": "remove_egress_destination",
+            "profile": tokens[2],
+            "destination": tokens[3],
+            "passthrough": tokens[4:],
+        }
+    if len(tokens) >= 2 and tokens[1] == "egress-source" and server:
+        if len(tokens) < 3:
+            return incomplete("Missing egress profile.", ["remove egress-source <PROFILE> <SELECTOR>"])
+        if len(tokens) < 4:
+            return {
+                "status": "ok",
+                "action": "remove_egress_source",
+                "profile": tokens[2],
+                "source": "",
+                "passthrough": [],
+                "guided": True,
+            }
+        return {
+            "status": "ok",
+            "action": "remove_egress_source",
+            "profile": tokens[2],
+            "source": tokens[3],
+            "passthrough": tokens[4:],
+        }
+    if len(tokens) >= 2 and tokens[1] == "access-source" and server:
+        if len(tokens) < 3:
+            return incomplete("Missing access list.", ["remove access-source <LIST>"])
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["remove-source", tokens[2]] + list(tokens[3:]),
+            "guided": len(tokens) == 3,
+        }
     if len(tokens) >= 2 and tokens[1] == "egress-profile" and server:
         if len(tokens) < 5:
             return incomplete(
@@ -2119,9 +2466,38 @@ def _match_delete(tokens, role, names=None):
     if len(tokens) < 2:
         return incomplete(
             "Missing resource.",
-            ["delete group <GROUP>", "delete profile <PROFILE>", "delete egress-profile <PROFILE>"],
-            ["group", "profile", "egress-profile"],
+            [
+                "delete group <GROUP>",
+                "delete service-profile <PROFILE>",
+                "delete egress-profile <PROFILE>",
+                "delete access-list <LIST>",
+                "delete enrollment <ENROLLMENT-ID>",
+            ],
+            ["group", "service-profile", "egress-profile", "access-list", "enrollment"],
         )
+    if tokens[1] == "enrollment":
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing enrollment id.",
+                ["delete enrollment <ENROLLMENT-ID>"],
+                tip="Revoke active enrollments first with: revoke enrollment <ID>",
+            )
+        return {"status": "ok", "action": "purge_enrollment", "id": tokens[2]}
+    if tokens[1] == "access-list":
+        if len(tokens) < 3:
+            return incomplete("Missing access list.", ["delete access-list <LIST>"])
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["delete", tokens[2]] + list(tokens[3:]),
+        }
+    if tokens[1] == "service-profile":
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing profile selector.",
+                ["delete service-profile <PROFILE>"],
+            )
+        return {"status": "ok", "action": "delete_profile", "profile": tokens[2]}
     if tokens[1] == "group":
         if len(tokens) < 3:
             return incomplete(
@@ -2375,7 +2751,7 @@ def _tab_desc_map(line, role, names=None, clients=None):
     if verb == "set" and len(filled) >= 2 and filled[1] == "server":
         if len(filled) == 2:
             return {
-                "hostname": "Optional public DNS hostname for published services",
+                "public-hostname": "Optional public DNS hostname for published services",
                 "bootstrap-hostname": "Optional Zero-Touch public TLS bootstrap hostname",
             }, "named"
     if verb == "set" and len(filled) >= 2 and filled[1] == "client":
@@ -2395,7 +2771,7 @@ def _tab_desc_map(line, role, names=None, clients=None):
     if verb == "unset" and len(filled) >= 2 and filled[1] == "server":
         if len(filled) == 2:
             return {
-                "hostname": "Remove public DNS hostname",
+                "public-hostname": "Remove public DNS hostname",
                 "bootstrap-hostname": "Remove Zero-Touch bootstrap hostname",
             }, "named"
     if verb == "unset" and len(filled) >= 2 and filled[1] == "client":
@@ -2568,7 +2944,8 @@ def _catalog_candidates(
     if filled[1] not in actions:
         if root == "client" and _client_legacy_selector([root, filled[1]]):
             return None  # fall through to legacy operand completion
-        return None if root in FALLTHROUGH_ROOTS else []
+        # Fall through to verb-specific completion (action-first handlers).
+        return None
     probe = [root] + list(filled[1:])
     cmd = CATALOG.find(probe)
     if cmd is None or not CATALOG.role_allows(cmd["roles"], role):
@@ -2599,19 +2976,8 @@ def _catalog_candidates(
             choices = flag_meta.get("choices") or ()
             if choices:
                 return _filter(list(choices), value_prefix)
-        if cmd["flags"] and prefix.startswith("-"):
-            return _filter(
-                CATALOG.flag_names(cmd["flags"], include_hidden=True), prefix
-            )
         return []
-    if cmd["flags"]:
-        pending = _pending_flag_value(tokens or filled, cmd, trailing=trailing)
-        if pending is not None:
-            flag_meta, value_prefix = pending
-            choices = flag_meta.get("choices") or ()
-            if choices:
-                return _filter(list(choices), value_prefix)
-        return _filter(CATALOG.flag_names(cmd["flags"], include_hidden=True), prefix)
+    # Public Tab never offers --options.
     return []
 
 
@@ -2692,7 +3058,7 @@ def _canonical_completion(
                 return _filter(["name", "description"], prefix)
         if filled[1] == "server" and server:
             if len(filled) == 2:
-                return _filter(["hostname", "bootstrap-hostname"], prefix)
+                return _filter(["public-hostname", "bootstrap-hostname"], prefix)
         if filled[1] == "service" and client:
             if len(filled) == 2:
                 return _filter(local_services, prefix)
@@ -2717,7 +3083,7 @@ def _canonical_completion(
             return _filter(_unset_resources(role), prefix)
         if filled[1] == "server" and server:
             if len(filled) == 2:
-                return _filter(["hostname", "bootstrap-hostname"], prefix)
+                return _filter(["public-hostname", "bootstrap-hostname"], prefix)
         if filled[1] == "client":
             if len(filled) == 2:
                 return _filter(names, prefix)
@@ -2727,13 +3093,7 @@ def _canonical_completion(
     if verb == "create":
         if len(filled) == 1:
             return _filter(_create_resources(role), prefix)
-        if filled[1] == "enrollment":
-            return _filter(
-                ["--one-line", "--ssh", "--ssh-user", "--ssh-port", "--ttl", "--note", "--label", "--client-name"],
-                prefix,
-            )
-        if filled[1] == "enrollments":
-            return _filter(["--count", "--csv", "--label-prefix", "--ssh-user", "--note", "--ttl"], prefix)
+        # Public UX is guided — never offer --options after create resources.
         return []
     if verb == "revoke":
         if len(filled) == 1:
@@ -2745,7 +3105,7 @@ def _canonical_completion(
         if len(filled) == 1:
             return _filter(["enrollment", "enrollments"], prefix)
         if filled[1] == "enrollments" and len(filled) == 2:
-            return _filter(["--older-than"], prefix)
+            return []
         return []
     if verb == "release":
         if len(filled) == 1:
@@ -2760,9 +3120,9 @@ def _canonical_completion(
         return []
     if verb == "update":
         if len(filled) == 1:
-            return _filter(["project", "engine", "frp", "--check"], prefix)
-        if filled[1] in ("project", "frp", "engine"):
-            return _filter(["--check"], prefix)
+            return _filter(["product", "project", "engine", "frp"], prefix)
+        if filled[1] in ("product", "project", "frp", "engine"):
+            return []
         return []
     if verb == "restore":
         if len(filled) == 1:
@@ -2813,9 +3173,9 @@ def _canonical_completion(
             return _filter(groups, prefix)
         return []
     if verb == "doctor":
-        return _filter(["--json", "--verbose", "--quiet"], prefix)
+        return []
     if verb == "support-bundle":
-        return _filter(["--output"], prefix)
+        return []
     return []
 
 
@@ -2828,7 +3188,7 @@ def _legacy_completion(tokens, trailing, role, names, services):
     if cmd in ("client-set", "edit-client"):
         if len(filled) == 1:
             return _filter(names, prefix)
-        return _filter(["--label", "--note", "--tag", "--remove-tag"], prefix)
+        return []
     if cmd == "release-service":
         if len(filled) == 1:
             return _filter(names, prefix)
@@ -2836,14 +3196,12 @@ def _legacy_completion(tokens, trailing, role, names, services):
             return _filter(services.get(filled[1], []), prefix)
         return []
     if cmd in ("enroll", "create-client"):
-        return _filter(
-            ["--one-line", "--ssh", "--ssh-user", "--ssh-port", "--ttl", "--note", "--client-name", "--label"],
-            prefix,
-        )
+        # Hidden aliases remain runnable, but Tab never advertises --options.
+        return []
     if cmd == "doctor":
-        return _filter(["--json", "--verbose", "--quiet"], prefix)
+        return []
     if cmd == "support-bundle":
-        return _filter(["--output"], prefix)
+        return []
     return []
 
 

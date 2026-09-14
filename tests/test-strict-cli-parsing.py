@@ -23,23 +23,23 @@ class StrictCliParsingTests(unittest.TestCase):
         cls.cat = load_catalog()
 
     def test_status_rejects_garbage(self):
-        err = self.cat.strict_error(["status", "garbage"])
+        err = self.cat.strict_error(["show", "status", "garbage"])
         self.assertIsNotNone(err)
         self.assertIn("unexpected argument", err)
         self.assertIn("garbage", err)
 
     def test_version_rejects_extra(self):
-        err = self.cat.strict_error(["version", "abc"])
+        err = self.cat.strict_error(["show", "version", "abc"])
         self.assertIsNotNone(err)
         self.assertIn("unexpected argument", err)
 
     def test_egress_enable_rejects_extra(self):
-        err = self.cat.strict_error(["egress", "enable", "p", "extra"])
+        err = self.cat.strict_error(["enable", "egress-profile", "p", "extra"])
         self.assertIsNotNone(err)
         self.assertIn("unexpected argument", err)
 
     def test_status_alone_ok(self):
-        self.assertIsNone(self.cat.strict_error(["status"]))
+        self.assertIsNone(self.cat.strict_error(["show", "status"]))
 
     def test_guided_menu_categories(self):
         text = self.cat.render_guided_menu("server")

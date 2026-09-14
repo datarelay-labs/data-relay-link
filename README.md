@@ -33,7 +33,7 @@ Data Relay Link helps you securely reach servers behind NAT or firewalls **and**
 - Agentless Controlled Egress profiles (FQDN + port + protocol http|https|tcp, source CIDR, default DENY, HTTP listen **6102**, Fixed TCP pool **6200–6299**)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
-- One primary operator interface: `sudo drlink` (resource-first CLI)
+- One primary operator interface: `sudo drlink` (action-first CLI)
 
 Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)
 Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)
@@ -199,7 +199,7 @@ Then verify:
 
 ```bash
 sudo drlink version
-sudo drlink status
+sudo drlink show status
 sudo drlink doctor
 ```
 
@@ -257,13 +257,13 @@ sudo drlink
 Then use the guided command:
 
 ```text
-zero-touch create
+create zero-touch
 ```
 
 Or create an explicit SSH profile:
 
 ```bash
-sudo drlink enrollment create \
+sudo drlink create enrollment \
   --one-line \
   --ssh \
   --ssh-user admin \
@@ -368,36 +368,39 @@ sudo drlink
 Typical server operations:
 
 ```text
-status
-version
-client list
-client show <CLIENT-ID>
-enrollment list
-group list
-server audit
+show status
+show version
+show clients
+show client <CLIENT-ID>
+show enrollments
+show groups
+show audit
 
-enrollment create
-backup create
+create zero-touch
+create enrollment
+create backup
 
-client set <CLIENT-ID> label branch-a
-client set <CLIENT-ID> tag site seoul
+set client <CLIENT-ID> label branch-a
+set client <CLIENT-ID> tag site seoul
 
-egress list
-egress create vendor-api
-egress add-source vendor-api 10.0.0.0/24
-egress add-destination vendor-api api.example.com 443 --protocol https
-egress enable vendor-api
+show egress-profiles
+create egress-profile vendor-api
+add egress-source vendor-api
+add egress-destination vendor-api
+enable egress-profile vendor-api
 
-client revoke <CLIENT-ID>
-client release <CLIENT-ID> <SERVICE-ID>
+revoke client <CLIENT-ID>
+release client <CLIENT-ID>
+release service <CLIENT-ID> <SERVICE-ID>
+delete enrollment <ENROLLMENT-ID>
 
 doctor
-update project --check
-update engine --check
+update product
+update engine
 ```
 
-Older verb-first forms (`show clients`, `set client`, …) still work as
-compatibility aliases. Prefer the resource-first forms above.
+Older resource-first forms (`client list`, `enrollment create`, …) still work as
+hidden compatibility aliases. Prefer the action-first forms above.
 
 The canonical client identity is immutable `CLIENT ID`. Label, hostname, note, tags, and groups are metadata and do not replace identity.
 
@@ -506,8 +509,8 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 ## Backup, restore, and updates
 
 ```bash
-sudo drlink backup create
-sudo drlink backup restore <path>
+sudo drlink create backup
+sudo drlink restore backup <path>
 
 sudo drlink update project --check
 sudo drlink update project
