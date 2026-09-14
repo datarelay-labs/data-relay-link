@@ -321,6 +321,20 @@ function Complete-FrpZeroTouchPostEnroll {
         }
     }
 
+    # Documented UX is a bare `drlink ...` from any shell, so the installed
+    # tools directory goes on the system PATH. Never fatal: the client is
+    # still fully usable through the explicit launcher path.
+    if ($env:FRP_WINDOWS_SKIP_PATH_SHIM -eq '1') {
+        Write-Host 'Skipping PATH registration (FRP_WINDOWS_SKIP_PATH_SHIM=1)'
+    } else {
+        try {
+            Install-FrpCommandShim | Out-Null
+        } catch {
+            Write-Host ("WARNING: could not put the product CLI on the system PATH: {0}" -f $_.Exception.Message)
+            Write-Host ("Run the client explicitly as: {0}" -f (Get-FrpShimPath))
+        }
+    }
+
     if ($enabledCount -le 0) {
         Write-Host 'Management-only enrollment: no public services; skipping frpc start.'
         Set-FrpInstallStatus -Status 'management_only'
@@ -659,8 +673,9 @@ function Invoke-FrpClientApplyDraftLocked {
     if (-not $transport) { $transport = 'tcp' }
 
     Initialize-FrpDirectories
-    $backupRoot = Join-Path (Get-FrpBackupDir) ("apply-" + (Get-Date -Format 'yyyyMMddHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    # The snapshot includes frpc.toml, which carries the plaintext FRP token,
+    # so the backup directory and every copy get the product-enforced ACL.
+    $backupRoot = New-FrpBackupRoot -Prefix 'apply'
     $snapshotMap = [ordered]@{
         'frpc.toml'         = (Get-FrpTomlPath)
         'client-state.json' = (Get-FrpStatePath)
@@ -668,7 +683,7 @@ function Invoke-FrpClientApplyDraftLocked {
     foreach ($name in @($snapshotMap.Keys)) {
         $src = $snapshotMap[$name]
         if (Test-Path -LiteralPath $src) {
-            Copy-Item -LiteralPath $src -Destination (Join-Path $backupRoot $name) -Force
+            Copy-FrpProtectedFile -Source $src -Destination (Join-Path $backupRoot $name) | Out-Null
         }
     }
 
@@ -1105,6 +1120,12 @@ function Invoke-FrpZeroTouch {
       Platform / ServicesJson / SshUser are accepted for installer CLI
       compatibility but do not select services: the Bootstrap Ticket defines
       the authorized service scope and the allocator enforces it at /enroll.
+
+      The entire mutable transaction runs under the client lifecycle lock,
+      taken before the first identity/state write (the client id) and held
+      through completion, so two concurrent installers cannot interleave and
+      produce a split identity. The lock is re-entrant per process, so the
+      installer may take it first for its own pre-flight.
     #>
     param(
         [string]$AllocatorUrl,
@@ -1118,6 +1139,12 @@ function Invoke-FrpZeroTouch {
         [switch]$SkipDownload
     )
 
+    if (-not (Enter-FrpClientLock)) {
+        Write-Host 'ERROR: another Data Relay Link client lifecycle operation is already running on this host.'
+        Write-Host 'FAILURE_CLASS=CLIENT_LOCK_BUSY'
+        Write-Host 'Wait for it to finish, then check status with: drlink status'
+        return 1
+    }
     try {
         if (Test-FrpIsEnrolled) {
             if (Test-FrpCanResumeInstall) {
@@ -1313,5 +1340,6 @@ function Invoke-FrpZeroTouch {
         return (Complete-FrpZeroTouchPostEnroll -SkipStart:$SkipStart -SkipDownload:$SkipDownload -Services $merged)
     } finally {
         Clear-FrpSecretEnv
+        Exit-FrpClientLock
     }
 }

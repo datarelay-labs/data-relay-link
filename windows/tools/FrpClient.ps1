@@ -160,7 +160,7 @@ function Import-FrpWindowsModules {
     }
     foreach ($mod in @(
             'FrpPaths.ps1', 'FrpLock.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
-            'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpAutostart.ps1', 'FrpBootstrap.ps1'
+            'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpShim.ps1', 'FrpAutostart.ps1', 'FrpBootstrap.ps1'
         )) {
         . (Join-Path $libDir $mod)
     }
@@ -356,6 +356,8 @@ function Install-FrpProjectManagementFiles {
             Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destLib $_.Name) -Force
         }
     }
+    # Keep the bare `drlink` command resolvable after a tools refresh.
+    try { Install-FrpCommandShim -Quiet | Out-Null } catch { }
     # Preserve identity/ports: do not rewrite client-state or frpc.toml.
     $verSrc = Join-Path $SrcRoot '..\VERSION'
     if (-not (Test-Path -LiteralPath $verSrc)) {
@@ -492,8 +494,9 @@ function Invoke-FrpClientUpdate {
     if (-not (Enter-FrpClientLock)) { return 1 }
     try {
     Initialize-FrpDirectories
-    $backupRoot = Join-Path (Get-FrpBackupDir) ("update-" + (Get-Date -Format 'yyyyMMddHHmmss'))
-    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    # The snapshot includes frpc.toml, which carries the plaintext FRP token,
+    # so the backup directory and every copy get the product-enforced ACL.
+    $backupRoot = New-FrpBackupRoot -Prefix 'update'
     $snapshotMap = [ordered]@{
         'frpc.exe'          = (Get-FrpFrpcPath)
         'frpc.toml'         = (Get-FrpTomlPath)
@@ -503,7 +506,7 @@ function Invoke-FrpClientUpdate {
     foreach ($name in @($snapshotMap.Keys)) {
         $src = $snapshotMap[$name]
         if (Test-Path -LiteralPath $src) {
-            Copy-Item -LiteralPath $src -Destination (Join-Path $backupRoot $name) -Force
+            Copy-FrpProtectedFile -Source $src -Destination (Join-Path $backupRoot $name) | Out-Null
         }
     }
     $wasRunning = $false
@@ -599,6 +602,13 @@ function Invoke-FrpClientUninstallLocked {
         Write-Host 'ERROR: autostart task still present; leaving product files in place.'
         return 1
     }
+    # Must run while state\path-shim.json is still readable: it records whether
+    # this product added the PATH entry, so nothing else on PATH is touched.
+    try {
+        Uninstall-FrpCommandShim | Out-Null
+    } catch {
+        Write-Host ("WARNING: could not update the system PATH: {0}" -f $_.Exception.Message)
+    }
     $root = Get-FrpWindowsRoot
     if (Test-Path -LiteralPath $root) {
         Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
@@ -631,6 +641,24 @@ function Get-FrpClientDoctorReport {
     } else {
         [void]$lines.Add(("MISS {0}" -f (Get-FrpFrpcPath)))
         $issues++
+    }
+    $enrolledNow = Test-FrpIsEnrolled
+    $logPath = Get-FrpLogPath
+    if (Test-Path -LiteralPath $logPath) {
+        [void]$lines.Add(("OK  {0}" -f $logPath))
+    } else {
+        [void]$lines.Add(("MISS {0} (runtime log)" -f $logPath))
+        if ($enrolledNow) { $issues++ }
+    }
+    $shim = Get-FrpCommandShimStatus
+    if ($shim.ResolvesToProduct) {
+        [void]$lines.Add(("OK  drlink resolves from a new shell: {0}" -f $shim.Resolved))
+    } elseif ($shim.ForeignCommand) {
+        [void]$lines.Add(("WARN drlink on PATH belongs to another product: {0}" -f $shim.ForeignCommand))
+        [void]$lines.Add(("     run this client as {0}" -f $shim.ShimPath))
+    } else {
+        [void]$lines.Add(("MISS drlink is not on the system PATH; run it as {0}" -f $shim.ShimPath))
+        if ($enrolledNow) { $issues++ }
     }
     $st = Get-FrpClientStatus
     [void]$lines.Add(("Running: {0} pid={1}" -f $st.Running, $st.Pid))
@@ -778,6 +806,20 @@ function Invoke-FrpClientSupportBundle {
                 [void]$sections.Add('generated-config')
             } catch { }
         }
+
+        # Sanitized tail of the advertised runtime log (logs\frpc.log). The
+        # tail is redacted line by line; the raw log is never copied.
+        try {
+            $logTail = @(Get-FrpSanitizedLogTail -Lines 200)
+            $logDir = Join-Path $stage 'logs'
+            New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+            if ($logTail.Count -gt 0) {
+                Set-Content -LiteralPath (Join-Path $logDir 'frpc.log.tail') -Value ($logTail -join "`n") -Encoding UTF8
+            } else {
+                Set-Content -LiteralPath (Join-Path $logDir 'frpc.log.tail') -Value ('runtime log not present: {0}' -f (Get-FrpLogPath)) -Encoding UTF8
+            }
+            [void]$sections.Add('runtime-log-tail')
+        } catch { }
 
         # Process / service status via existing helpers when available.
         try {
