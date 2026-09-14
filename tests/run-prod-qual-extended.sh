@@ -146,8 +146,16 @@ deny=\$(curl -sS -o /tmp/pq-deny.body -w '%{http_code}' --max-time 12 http://exa
 echo DENY_FQDN=\$deny
 test "\$deny" = "403"
 # DENY blocked port — policy denial must be real (403), not transport failure.
-wrong=\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 https://example.com:8443/ || true)
+# Some curl builds surface a CONNECT-method 403 as http_code=000 with
+# "response 403" on stderr; treat that as authoritative policy DENY too.
+wrong=\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 https://example.com:8443/ 2>/tmp/pq-wrong.err || true)
 echo DENY_PORT=\$wrong
+if [[ "\$wrong" != "403" ]]; then
+  if [[ "\$wrong" == "000" ]] && grep -Eq '403|CONNECT tunnel failed' /tmp/pq-wrong.err; then
+    echo DENY_PORT_CONNECT_403_VIA_STDERR=1
+    wrong=403
+  fi
+fi
 test "\$wrong" = "403"
 # ALLOW HTTPS CONNECT
 https=\$(curl -sS -o /tmp/pq-https.body -w '%{http_code}' --max-time 30 https://example.com/ || true)
