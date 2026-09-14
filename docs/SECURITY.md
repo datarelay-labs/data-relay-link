@@ -1,6 +1,6 @@
 # Security architecture
 
-This document describes the security model of `Data Relay Link` **2.3.1**.
+This document describes the security model of `Data Relay Link` **2.4.0**.
 It is not a certification, audit report, or guarantee against a compromised
 root account.
 
@@ -313,16 +313,41 @@ bootstrap script.
 Checksums:
 
 - Official FRP archives are checked against pinned SHA256 values
-- Repository `SHA256SUMS` covers tracked source/release files
+- Repository `SHA256SUMS` covers tracked source/release files, excluding the
+  three derived metadata files that would make the relation circular
+  (`SHA256SUMS`, `release-manifest.json`, `dist/sbom.spdx.json`)
 - `scripts/check-frp-compatibility.sh` verifies digests **before** extract/execute
   and writes an atomic PASS report only after required checks succeed
 
-This project does **not** currently ship cryptographic signatures or GitHub
-artifact attestations of its own bundles (`release-manifest.json` records
-`"signing": false`). SHA256 verification protects against accidental corruption
-and many tampering cases when the checksum channel is trusted, but it is **not**
-the same as an independently signed release. Residual supply-chain risk remains
-accepted for v2.2.x until a low-risk signing/attestation path is added.
+Three distinct evidence classes, in increasing strength:
+
+| Class | Artifact | What it proves |
+| --- | --- | --- |
+| Integrity | `SHA256SUMS` | bytes were not altered **if** the checksum channel is trusted |
+| Inventory | `dist/sbom.spdx.json` | what the release contains, bound to one source commit |
+| Provenance | GitHub Artifact Attestation | which workflow, at which commit, produced these exact bytes |
+
+A checksum is not provenance, and provenance is not a commit signature.
+
+`release-manifest.json` records `"signing": false`: this project does **not**
+ship its own detached cryptographic signatures (GPG/cosign) of its bundles.
+It **does** produce GitHub Artifact Attestations via
+`.github/workflows/release-attest.yml`, which signs a provenance statement over
+the release subjects using workflow OIDC identity. That workflow verifies its
+own attestation before the release passes; verification failure fails the
+release. Consumers can check it independently:
+
+```bash
+gh attestation verify <artifact> --repo datarelay-labs/data-relay-link
+```
+
+Developer commit signing is not part of this release evidence set. Residual
+supply-chain risk from the absence of detached release signatures remains
+accepted for the 2.4.x line.
+
+Published tags are immutable and are never moved, recreated, or retargeted.
+Attestation binds a tag to a commit to a set of artifact digests, so repointing
+a tag would invalidate evidence a consumer has already verified.
 
 ## 14. Threat boundaries
 
@@ -396,6 +421,20 @@ Connection authorization events are written to a bounded local log
 (`/var/log/drlink/access-conn.jsonl`). Enrollment tickets, FRP
 tokens, CA keys, and passwords are not logged.
 
+Access Control mutations emit structured audit events to `audit.jsonl`
+(`access.list.created|updated|deleted`, `access.source.added|updated|removed`,
+`access.service.assigned|public`). Audit payloads use a field allowlist:
+identifiers, list/source names, CIDRs, and expiry only — never descriptions,
+tickets, or other operator free text.
+
+Input bounds for Access Control policy:
+
+- Temporary source TTL accepts `Ns/Nm/Nh/Nd` up to **3650d** (10 years);
+  larger values are a user-facing error, not an arithmetic overflow
+- Access List descriptions are limited to 1024 characters and reject C0/C1
+  control characters, CR/LF, and ANSI escapes so policy text cannot forge
+  terminal output or log lines
+
 If an upstream device SNATs clients, allowlists must use the source address
 observed by `frps`.
 
@@ -416,6 +455,8 @@ Security contract:
   - `https`: `CONNECT` + TLS ClientHello SNI binding; ECH denied; no TLS interception
 - Wildcard hosts are checked against a **pinned Public Suffix List**
   (`lib/frp_public_suffix.py`, `lib/data/public_suffix_list.dat`); bare public-suffix wildcards are rejected
+  - PSL rules are indexed in both their Unicode and IDNA/punycode spellings, so
+    `*.公司.cn` and `*.xn--55qx5d.cn` are rejected identically
 - IP literals denied by default
 - Server-side DNS; every resolved candidate IP is validated before connect
 - Reject loopback, RFC1918, link-local, ULA, metadata (`169.254.169.254`), multicast/reserved

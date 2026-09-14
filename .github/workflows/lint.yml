@@ -12,6 +12,8 @@ jobs:
     steps:
       # actions/checkout@v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Version consistency
+        run: ./scripts/check-version-consistency.sh
       - name: Full local non-Docker suite
         run: ./tests/run-all.sh
       # Live distro containers cannot validate systemd unless PID 1 is systemd.
@@ -22,6 +24,12 @@ jobs:
           git diff --exit-code dist/
       - name: SHA256SUMS
         run: ./scripts/verify-sha256sums.sh
+      # Same order as scripts/build-release-artifacts.sh: the SBOM is generated
+      # after SHA256SUMS and verified against the checked-out commit.
+      - name: SBOM binds to the checked-out commit
+        run: |
+          python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json
+          ./scripts/verify-sbom.sh
 
   portability-containers:
     name: distro ${{ matrix.image }}

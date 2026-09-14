@@ -10,11 +10,16 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 
 # shellcheck disable=SC1091
 . "$ROOT/VERSION"
-[[ "$PROJECT_VERSION" == "2.4.0" ]] || fail "VERSION project is $PROJECT_VERSION"
-[[ "$FRP_VERSION" == "0.71.0" ]] || fail "VERSION FRP is $FRP_VERSION"
+[[ -n "${PROJECT_VERSION:-}" ]] || fail "VERSION missing PROJECT_VERSION"
+[[ -n "${FRP_VERSION:-}" ]] || fail "VERSION missing FRP_VERSION"
 pass "VERSION_FILE"
 
-grep -qF "Current project version: **${PROJECT_VERSION}**" README.md || fail "README project version"
+# VERSION is the single source of truth. Cross-document agreement, and the
+# published-tag immutability policy, are asserted there rather than by
+# repeating version literals in this file.
+"$ROOT/scripts/check-version-consistency.sh" || fail "version consistency"
+pass "VERSION_CONSISTENCY"
+
 grep -qF "**v${FRP_VERSION}**" README.md || fail "README FRP version"
 if grep -nE 'Current project version: \*\*1\.(7|8|9)\.' README.md; then
   fail "README still shows a pre-2.0 current version"

@@ -424,9 +424,16 @@ Validated
 
 ```text
 Current prepared FRP          = 0.71.0
-Current project version       = 2.3.0 (FINAL AUDIT CLOSURE)
+Current project version       = 2.4.0 (FINAL PRODUCT CLOSURE)
+Historical v2.3.0 project     = 2.3.0 (FINAL AUDIT CLOSURE, historical)
 Historical v2.1.3 FRP        = 0.70.1
 ```
+
+Current project version: **2.4.0**
+Current pinned FRP version: **v0.71.0**
+
+이 값들은 `VERSION`이 single source of truth이며
+`./scripts/check-version-consistency.sh`가 문서와의 일치를 자동 검증한다.
 
 향후 FRP bump도 exact tested version으로 pin하며 자동으로 latest를 추적하지 않는다.
 
@@ -2507,12 +2514,15 @@ Feature focus:        Controlled Egress + CLI catalog / resource-first hardening
 
 ```text
 Project:              2.3.0
-Tag:                  v2.3.0 (recreate/move on final HEAD)
+Tag:                  v2.3.0 (published; immutable, left as published)
 FRP:                  0.71.0
 Feature freeze:       ACTIVE (for that line)
 Product feature complete: YES (inbound pack)
-FINAL_AUDIT_CLOSURE:  IN PROGRESS / recorded for that line
+FINAL_AUDIT_CLOSURE:  recorded for that line
 ```
+
+`v2.3.0`은 published 시점의 commit에 그대로 고정된다. Audit-closure 이후의
+변경분은 tag를 옮기지 않고 후속 version tag (`v2.3.1`, `v2.4.0`)로 제공한다.
 
 `v2.3.0` 주요 사항:
 
@@ -2636,17 +2646,20 @@ UNRESOLVED_RELEASE_BLOCKERS=0
 FEATURE_FREEZE_ACTIVE=YES
 ```
 
-Final tag move/recreate 이후 code/runtime 변경이 필요하면 이미 확정된 tag를 움직이지 않고 새로운 patch release를 사용한다. Historical `v2.2.1` 및 이전 tag는 그대로 immutable이다.
+Release 이후 code/runtime 변경이 필요하면 이미 published된 tag를 움직이지 않고 새로운 patch release를 사용한다. Historical `v2.2.1` 및 이전 tag는 그대로 immutable이다.
 
 ---
 
 # 51. Main / Development State
 
-현재 release line은 `v2.3.0` FINAL AUDIT CLOSURE로 준비 중이며, premature GitHub tag를 final HEAD로 맞춘 뒤에야 field install의 최종 기준으로 취급한다.
+현재 준비 중인 release line은 `v2.4.0` FINAL PRODUCT CLOSURE이며 pinned FRP는
+`0.71.0`이다. Published `v2.3.0` tag는 published commit에 immutable하게 남고,
+closure 결과물은 새 `v2.4.0` tag로 published된다.
 
 ```text
-Prepared release = v2.3.0 FINAL AUDIT CLOSURE
+Prepared release = v2.4.0 FINAL PRODUCT CLOSURE
 Pinned FRP       = 0.71.0
+Historical line  = v2.3.0 FINAL AUDIT CLOSURE (published; immutable)
 ```
 
 `v2.3.0`에 포함된 주요 capability:
@@ -3580,9 +3593,9 @@ FULL_REAL_E2E_PASS_1=(set during final qualification)
 FULL_REAL_E2E_PASS_2=(set during final qualification)
 PASS_HEADS_IDENTICAL=(set during final qualification)
 
-TAG_V2_3_0_PREMATURE=YES (exists; recreate/move onto final audit HEAD)
-TAG_V2_3_0_FINAL=(set when tag is moved/recreated on final HEAD)
-GITHUB_RELEASE_V2_3_0_FINAL=(set at final release time)
+TAG_V2_3_0_PUBLISHED=YES (immutable; stays on its published commit)
+TAG_V2_4_0_PLANNED=YES (new tag on the closure HEAD; supersedes v2.3.0)
+GITHUB_RELEASE_V2_4_0=(set at final release time)
 
 UNRESOLVED_RELEASE_BLOCKERS=0
 ```
@@ -3836,8 +3849,9 @@ FEATURE FREEZE = ACTIVE
 ```
 
 No further product feature development until the next explicitly approved release scope.
-`v2.3.0` is the feature-complete product line under FINAL AUDIT CLOSURE; treat the
-GitHub tag as final only after it is recreated or moved onto the audit-closure HEAD.
+`v2.3.0` is the historical feature-complete inbound line and its published tag is
+immutable. Closure work ships as the new `v2.4.0` tag; published tags are never
+moved, recreated, or retargeted.
 
 ---
 

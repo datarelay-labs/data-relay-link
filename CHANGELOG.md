@@ -14,6 +14,17 @@ move, delete, or recreate published **v2.3.1** / **v2.3.0**.
 - Short URL Real E2E is a hard release gate (channel matched to tree identity)
 - SPDX SBOM generator + GitHub Artifact Attestation workflow
 - Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+- Attestation verification is authoritative: `gh attestation verify` failure fails
+  the release-integrity gate (no `DEFERRED` outcome)
+- Attestation binds tag → commit → checked-out HEAD → attested subjects, and
+  rejects a mutable or non-immutable `ref` input
+- Single authoritative artifact ordering via `scripts/build-release-artifacts.sh`
+  (build → `SHA256SUMS` → SBOM → verify); derived metadata is excluded from
+  `SHA256SUMS`, removing the SBOM/checksum circularity
+- SBOM is deterministic per source commit and binds to it; `scripts/verify-sbom.sh`
+  gates that binding. `dist/sbom.spdx.json` is generated, no longer committed
+- `scripts/check-version-consistency.sh` derives release-doc assertions from
+  `VERSION` and enforces published-tag immutability in documentation
 
 ## 2.3.1 — 2026-09-10
 
@@ -84,8 +95,8 @@ this release.
 ### Audit closure
 
 - FINAL AUDIT CLOSURE hardening and release-documentation sync for prepared
-  **2.3.0** (recreate or move the premature GitHub `v2.3.0` tag onto final
-  audit-closure HEAD; no new product features)
+  **2.3.0**; no new product features. The published `v2.3.0` tag is immutable
+  and was never moved — closure work shipped in later version tags instead.
 
 ## 2.2.1 — 2026-09-08
 

@@ -12,29 +12,88 @@ does not prove a real VM.
 installed systemd host. It does not install, enroll, update, uninstall, or
 mutate firewall/SELinux.
 
-## Gate classification — v2.3.0 FINAL AUDIT CLOSURE
+## Gate classification — v2.4.0 FINAL PRODUCT CLOSURE
 
-Current project version **2.3.0** / FRP **0.71.0**. Treat field installs as
-final only after the premature GitHub `v2.3.0` tag is recreated or moved onto
-the audit-closure HEAD.
+Current project version **2.4.0** / FRP **0.71.0**. Values here are checked
+against `VERSION` by `./scripts/check-version-consistency.sh`; that script, not
+this prose, is authoritative for version agreement.
+
+Published tags are immutable. `v2.3.1`, `v2.3.0`, `v2.2.1` and earlier stay
+exactly where they were published. Field installs become final when the new
+`v2.4.0` tag is created on the closure HEAD — no existing tag is repointed to
+get there.
 
 | Item | Classification | Current support claim |
 | --- | --- | --- |
-| Ubuntu 24 physical host Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
-| Rocky Linux 8.10 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
-| Rocky Linux 9.4 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
-| Amazon Linux 2023 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
-| macOS Apple Silicon Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
-| Windows 10 / PowerShell 5.1 Real E2E | REQUIRED_FOR_STABLE (2.3.0) | **Real E2E validated** |
+| Ubuntu 24 physical host Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
+| Rocky Linux 8.10 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
+| Rocky Linux 9.4 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
+| Amazon Linux 2023 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
+| macOS Apple Silicon Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
+| Windows 10 / PowerShell 5.1 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
 | Amazon Linux 2 | CI / container portability | **Container / CI only** — no live-host Real E2E |
 | PowerShell 7 | CI | **CI validated** unless same-host Real E2E with `pwsh` installed |
 | Rocky 8/9, AlmaLinux 9, AL2023, AL2 container matrix | REQUIRED_FOR_STABLE (automated) | container PASS |
+| Release artifact / SBOM / attestation integrity | REQUIRED_FOR_STABLE (automated) | see "Release integrity gate" below |
 | Rocky 9 SELinux Enforcing | RECOMMENDED | NOT_TESTED; do not advertise Enforcing support |
 | AlmaLinux 9 real VM / SELinux Enforcing | RECOMMENDED | NOT_TESTED |
 | Native ARM64 Linux systemd | RECOMMENDED | architecture mapping unit-tested only |
 | Real OpenSSL 1.0.2 TLS enrollment | RECOMMENDED | AL2 container userspace is not this gate |
 | Ubuntu 24.04 x86_64 single-443 (direct public-IP, enterprise-restricted client) | Historical REQUIRED (2.1.0) | PASS (2026-08-29); see historical section |
 | Zero-Touch Short URL Real E2E (baseline Linux, AL2023, Rocky 8.10) | Historical REQUIRED (2.1.3) | PASS; see historical Short URL section |
+
+## Release integrity gate (automated, required for stable)
+
+Release artifacts are produced in one authoritative order by
+`./scripts/build-release-artifacts.sh`:
+
+```text
+build bundles  ->  update SHA256SUMS  ->  generate SBOM  ->  verify
+```
+
+Each stage reads only the output of earlier stages, so the relation is acyclic
+and a rebuild converges in a single pass. Three files are derived release
+metadata and are deliberately **not** checksummed into `SHA256SUMS`:
+
+| File | Why it is excluded |
+| --- | --- |
+| `SHA256SUMS` | cannot contain its own digest |
+| `release-manifest.json` | carries artifact digests copied from `SHA256SUMS` |
+| `dist/sbom.spdx.json` | its inventory is built **from** `SHA256SUMS` |
+
+`dist/sbom.spdx.json` is generated, not committed. A file stored in a commit
+cannot record the hash of the commit that contains it, so a committed SBOM can
+only ever bind to some earlier tree. The SBOM is built from the checked-out
+release commit and published as an attested workflow artifact instead.
+
+`./scripts/verify-sbom.sh` is the binding gate. It fails unless the SBOM
+records the expected release commit (`SBOM_EXPECTED_COMMIT`, default `HEAD`),
+records the `git_ref` from `release-manifest.json`, matches `VERSION` for both
+the project and pinned FRP versions, and agrees with `SHA256SUMS`
+entry-for-entry in both directions.
+
+The SBOM is deterministic for a given commit: its creation timestamp comes from
+`SOURCE_DATE_EPOCH` or the HEAD commit time, never wall-clock `now()`.
+Regenerating twice on one commit yields identical bytes, which
+`tests/test-release-artifact-ordering.sh` asserts.
+
+Attestation is **authoritative, not advisory**. In
+`.github/workflows/release-attest.yml` the `gh attestation verify` step must
+succeed for every subject; a verification failure fails the job. There is no
+`DEFERRED` outcome. The workflow also binds the chain
+`expected tag -> expected commit -> checked-out HEAD -> attested subjects`
+before it will attest anything, and refuses a ref that is not immutable.
+
+```text
+RELEASE_ARTIFACT_ORDERING=
+SHA256SUMS=
+SBOM=
+VERSION_CONSISTENCY=
+ATTESTATION_VERIFY=
+```
+
+`ATTESTATION_VERIFY` accepts `PASS` or `NOT_RUN` (workflow not yet executed for
+the candidate). `DEFERRED` is not a valid value.
 
 ## Result format
 
@@ -99,7 +158,7 @@ release-blocking evidence requires it.
 ## Amazon Linux 2 real gate
 
 Prove systemd 219, Bash 4.2, Python 3.7, OpenSSL 1.0.2k, real PID 1, reboot,
-and TTY. Docker userspace PASS is not this column. For **2.3.0**, Amazon Linux 2
+and TTY. Docker userspace PASS is not this column. For **2.4.0**, Amazon Linux 2
 remains **container/CI portability only** until a live-host Real E2E exists.
 
 ## ARM64
@@ -107,7 +166,7 @@ remains **container/CI portability only** until a live-host Real E2E exists.
 Native host only for `REAL_ARM_SYSTEMD=PASS`: architecture detection, FRP
 arm64 artifact, install, systemd, basic connection, doctor. QEMU userspace
 emulation is not that gate. macOS Apple Silicon Real E2E is a separate client
-platform claim (validated for 2.3.0).
+platform claim (validated for 2.4.0).
 
 ## Real OpenSSL 1.0.2 TLS enrollment
 

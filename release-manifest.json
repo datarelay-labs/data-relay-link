@@ -16,14 +16,20 @@
     "format": "spdx-json",
     "artifact": "dist/sbom.spdx.json",
     "generator": "scripts/generate-sbom.py",
-    "available": true
+    "verifier": "scripts/verify-sbom.sh",
+    "committed": false,
+    "available": true,
+    "binds_to": "release source commit",
+    "deterministic": true,
+    "note": "Generated at release time from the checked-out release commit and published as an attested workflow artifact; not tracked in git, because a committed file cannot record the hash of the commit containing it. Excluded from SHA256SUMS: its inventory is built from SHA256SUMS, so checksumming it there would be circular. Deterministic for a fixed commit (SOURCE_DATE_EPOCH or HEAD commit time)."
   },
   "provenance": {
     "type": "github-artifact-attestation",
     "workflow": ".github/workflows/release-attest.yml",
     "available": false,
     "workflow_ready": true,
-    "note": "Attestation is produced by the release-attest workflow on an immutable release ref. available=false until a verified attestation exists for the published candidate; workflow_ready=true means the workflow is present and validated in-tree."
+    "verification": "authoritative",
+    "note": "Attestation is produced by the release-attest workflow, which must be dispatched from the immutable release tag. The workflow binds expected tag -> expected commit -> checked-out HEAD -> attested subjects before attesting, and its gh attestation verify step is authoritative: verification failure fails the release-integrity gate. There is no DEFERRED outcome. available=false until a verified attestation exists for the published candidate; workflow_ready=true means the workflow is present and validated in-tree."
   },
   "checksum_file": "SHA256SUMS",
   "supported_frp_versions": {
@@ -39,9 +45,17 @@
   "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
+    "tag_policy": "Published tags are immutable and are never moved, deleted, recreated, retargeted, or force-pushed. A wrong tag is superseded by a new version tag.",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
-    "sbom": "SPDX JSON via scripts/generate-sbom.py",
+    "artifact_ordering": "scripts/build-release-artifacts.sh: build bundles -> update SHA256SUMS -> generate SBOM -> verify",
+    "excluded_from_sha256sums": [
+      "SHA256SUMS",
+      "release-manifest.json",
+      "dist/sbom.spdx.json"
+    ],
+    "sbom": "SPDX JSON via scripts/generate-sbom.py, gated by scripts/verify-sbom.sh",
     "provenance": "GitHub Artifact Attestations via .github/workflows/release-attest.yml (OIDC)",
+    "version_consistency": "scripts/check-version-consistency.sh, derived from VERSION",
     "distinctions": [
       "checksum != artifact provenance",
       "artifact provenance != commit signature",
@@ -52,17 +66,17 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "d76d846d63387f18bf5eaaf181745d1d2557f84d819a9bf9ee23755c3515f324"
+      "sha256": "9cb72410418e6f584a6f45f0d95aaf7cfdfceca81428ed4dd9e2a37a0f8db87d"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "1beeba4fb24d7fcb0bab29503ebfaf643bcd1370937ee716586e4b09ffcbc61c"
+      "sha256": "856c5ce92a242a11399c76d204604fa1799c4957e228277bb9ccfe5807a9910a"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "3431b74296529235cd6ce75b606f6c3b55c54740b497ed076f272a297cd4d0e8"
+      "sha256": "1ad35f6006b6881959914f0ec098a49807cbe69367830e2bbbaf7356c86d5394"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",

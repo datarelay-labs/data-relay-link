@@ -94,14 +94,14 @@ client set <ID> tag <key> <value>
 server set public-hostname <fqdn>
 server set bootstrap-hostname <fqdn>
 
-enrollment create
+enrollment create [--one-line] [--ttl 30m|1h|4h|1d|SECONDS] [--client-name NAME] [--note TEXT]
 zero-touch create
 backup create
 group create <name> [--description TEXT]
 group set <GROUP> name|description <value>
 group add-client <GROUP> <CLIENT>
 group remove-client <GROUP> <CLIENT>
-group delete <GROUP>
+group delete <GROUP> [--yes]
 
 client revoke <ID>
 client release <ID> [SERVICE-ID]
@@ -116,6 +116,12 @@ help workflows
 help legacy
 menu
 ```
+
+`enrollment create --ttl` accepts `Ns/Nm/Nh/Nd` or raw seconds, up to `30d`
+(2592000 seconds). An enrollment credential is a short-lived hand-off, so the
+ceiling is deliberately far below the `enrollment_retention_days` maximum;
+larger values are rejected rather than silently clamped. `enrollment bulk`
+shares the same grammar and ceiling.
 
 Compatibility verb-first forms (`set client`, `create group`,
 `add client … group`, `rename group`, …) remain available as hidden aliases;
@@ -140,6 +146,9 @@ access test <client> <service-id> <source-ip>
 access log <client> <service-id> [--limit N] [--allow|--deny]
 access menu
 ```
+
+`--ttl` accepts `Ns/Nm/Nh/Nd` up to `3650d`. `--description` is limited to 1024
+characters and rejects control characters, newlines, and ANSI escapes.
 
 Interactive `drlink` server menu includes Access Control. Empty ALLOWLIST
 assignment is refused. Deleting a list that is still referenced is refused.
