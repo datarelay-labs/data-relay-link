@@ -20,6 +20,7 @@ $tests = @(
     'test-frpclient-entrypoint.ps1',
     'test-rdp-service.ps1',
     'test-zero-service.ps1',
+    'test-ticket-scope.ps1',
     'test-install-start-failure.ps1',
     'test-partial-resume.ps1',
     'test-pending-enroll-recovery.ps1',

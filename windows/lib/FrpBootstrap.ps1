@@ -147,10 +147,11 @@ function Invoke-FrpBootstrapRedeem {
         throw 'ERROR: bootstrap response is missing enrollment data'
     }
     $parts = $code.Split('.', 2)
-    $services = @($data.services)
-    if ($services.Count -lt 0) {
+    if (-not (Test-FrpObjectHasProperty -Object $data -Name 'services') -or $null -eq $data.services) {
         throw 'ERROR: bootstrap response is missing services'
     }
+    # An empty list is valid: it is a management-only ticket.
+    $services = @($data.services)
     return @{
         EnrollmentId     = $parts[0]
         EnrollmentSecret = $parts[1]
@@ -1100,6 +1101,10 @@ function Invoke-FrpZeroTouch {
       pinned to disk and the Bootstrap Ticket must not be re-supplied /
       re-used). Presence is validated explicitly in the body instead, with a
       resume-aware exception for CaSha256/BootstrapTicket.
+
+      Platform / ServicesJson / SshUser are accepted for installer CLI
+      compatibility but do not select services: the Bootstrap Ticket defines
+      the authorized service scope and the allocator enforces it at /enroll.
     #>
     param(
         [string]$AllocatorUrl,
@@ -1110,8 +1115,7 @@ function Invoke-FrpZeroTouch {
         [string]$SshUser,
         [string]$Hostname,
         [switch]$SkipStart,
-        [switch]$SkipDownload,
-        [switch]$UseLocalDefaults
+        [switch]$SkipDownload
     )
 
     try {
@@ -1203,15 +1207,15 @@ function Invoke-FrpZeroTouch {
             $redeem = Invoke-FrpBootstrapRedeem -AllocatorUrl $AllocatorUrl -Ticket $BootstrapTicket `
                 -MachineId $machineId -Hostname $Hostname
 
-            # Ticket redeem is authoritative. Empty services = management-only.
-            # Get-FrpDefaultServices is only for explicit local guided UX.
+            # Ticket redeem is authoritative and the allocator enforces that
+            # scope at /enroll. Local input (-ServicesJson / FRP_SERVICES_JSON)
+            # must never widen it, including for a management-only (empty)
+            # ticket. Get-FrpDefaultServices stays for the explicit local
+            # guided UX only.
             $services = @($redeem.Services)
-            if ($UseLocalDefaults) {
-                $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
-            } elseif (-not [string]::IsNullOrWhiteSpace($ServicesJson) -and @($services).Count -eq 0) {
-                $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
+            if (-not [string]::IsNullOrWhiteSpace($ServicesJson)) {
+                Write-Host 'NOTE: local service input is ignored; the setup command defines the authorized services.'
             }
-            # else: keep ticket services as-is (including empty)
 
             Write-Host 'Generating management identity...'
             $id = New-FrpEcdsaIdentity

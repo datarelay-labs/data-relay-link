@@ -507,8 +507,10 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
     """Create a hashed bootstrap ticket plus a normal enrollment record.
 
     Does not allocate a public port. Caller must have already validated
-    `services` with normalize_services().
+    `services` with normalize_services(); re-normalizing here keeps the ticket
+    scope byte-identical to what /enroll compares a request against.
     """
+    services = normalize_services(services)
     ttl = int(ttl)
     note = str(note or '')
     label = str(label or '')
@@ -530,6 +532,9 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
         'used_at': None,
         'note': note,
         'label': label,
+        # Ticket scope is authoritative: /enroll must refuse any service set
+        # the administrator did not authorize when issuing this ticket.
+        'authorized_services': services,
     }
     ticket_record = {
         'schema': 1,
@@ -976,6 +981,57 @@ def normalize_services(raw_services):
         seen.add(service['id'])
         normalized.append(service)
     return normalized
+
+
+SERVICE_SCOPE_FIELDS = (
+    'id',
+    'name',
+    'protocol',
+    'local_ip',
+    'local_port',
+    'preset',
+    'ssh_user',
+    'health_check',
+)
+
+
+def service_scope_key(service):
+    """Canonical comparable form of one service for authorization scope checks."""
+    if not isinstance(service, dict):
+        return None
+    canonical = {
+        field: service[field]
+        for field in SERVICE_SCOPE_FIELDS
+        if field in service
+    }
+    return canonical_json(canonical)
+
+
+def services_match_authorized(requested, authorized):
+    """Exact (order-independent) match of requested services against ticket scope."""
+    if not isinstance(requested, list) or not isinstance(authorized, list):
+        return False
+    if len(requested) != len(authorized):
+        return False
+    want = {}
+    for svc in authorized:
+        key = service_scope_key(svc)
+        if key is None:
+            return False
+        sid = str(svc.get('id', ''))
+        if sid in want:
+            return False
+        want[sid] = key
+    got = {}
+    for svc in requested:
+        key = service_scope_key(svc)
+        if key is None:
+            return False
+        sid = str(svc.get('id', ''))
+        if sid in got:
+            return False
+        got[sid] = key
+    return got == want
 
 
 class Allocator:
@@ -1783,6 +1839,21 @@ class Allocator:
                                 'enrollment code is already bound to another machine',
                                 'AUTH_FAILED',
                             )
+                        # Bootstrap-ticket enrollments carry an authorized
+                        # service scope. The Enrollment Code proves possession,
+                        # not authority to widen that scope (an empty list is a
+                        # management-only ticket and is enforced as such).
+                        # Manual enrollment records have no scope and keep the
+                        # client-supplied service set.
+                        if 'authorized_services' in record:
+                            if not services_match_authorized(
+                                requested, record.get('authorized_services')
+                            ):
+                                return 403, api_error(
+                                    'enrollment services do not match authorized '
+                                    'ticket scope',
+                                    'SERVICE_SCOPE_VIOLATION',
+                                )
 
                     state = self.load_registry()
                     clients = state.setdefault('clients', {})

@@ -522,6 +522,137 @@ def test_bootstrap_completion_fail_closed():
         env.cleanup()
 
 
+def _enroll_as(env, enroll, machine_id, services, hostname='host-a'):
+    body = json.dumps({
+        'machine_id': machine_id,
+        'hostname': hostname,
+        'services': services,
+    }, separators=(',', ':')).encode()
+    ts = str(int(time.time()))
+    sig = hmac.new(
+        enroll['secret'].encode(),
+        (ts + '\n' + body.decode()).encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return env.allocator.enroll(enroll['id'], ts, sig, body)
+
+
+def test_enroll_enforces_ticket_scope():
+    """F27: the Enrollment Code proves possession, not authority to widen scope."""
+    env = Env()
+    try:
+        rdp = [{
+            'id': 'rdp',
+            'name': 'RDP',
+            'protocol': 'tcp',
+            'local_ip': '127.0.0.1',
+            'local_port': 3389,
+            'preset': 'custom',
+        }]
+
+        # Management-only ticket: no service may be added at /enroll.
+        ticket, enroll, _r = env.issue(services=[])
+        code, _res = env.redeem(ticket, 'machine-mgmt')
+        if code != 200:
+            fail('redeem management-only ticket', code)
+            return
+        code, result = _enroll_as(env, enroll, 'machine-mgmt', env.ssh_services())
+        if code != 403 or result.get('error_class') != 'SERVICE_SCOPE_VIOLATION':
+            fail('management-only ticket accepted ssh', '%s %s' % (code, result))
+            return
+        state = env.allocator.load_registry()
+        if 'machine-mgmt' in (state.get('clients') or {}) or env.allocator.used_ports(state):
+            fail('rejected scope violation still mutated registry', state)
+            return
+        pass_('SCOPE_MANAGEMENT_ONLY_REJECTS_SSH')
+
+        # SSH-only ticket: a different service is out of scope.
+        ticket, enroll, _r = env.issue()
+        code, _res = env.redeem(ticket, 'machine-ssh')
+        if code != 200:
+            fail('redeem ssh ticket', code)
+            return
+        for label, attempt in (
+            ('rdp', rdp),
+            ('ssh+rdp', env.ssh_services() + rdp),
+            ('ssh-port', env.ssh_services(port=2222)),
+            ('ssh-user', env.ssh_services(user='root')),
+            ('empty', []),
+        ):
+            code, result = _enroll_as(env, enroll, 'machine-ssh', attempt)
+            if code != 403 or result.get('error_class') != 'SERVICE_SCOPE_VIOLATION':
+                fail('out-of-scope %s accepted' % label, '%s %s' % (code, result))
+                return
+        pass_('SCOPE_SSH_TICKET_REJECTS_OTHER_SERVICES')
+
+        # The exact authorized set enrolls, and an exact lost-response replay
+        # (same machine, same request) still recovers the committed response.
+        code, result = _enroll_as(env, enroll, 'machine-ssh', env.ssh_services())
+        if code != 200:
+            fail('authorized services rejected', '%s %s' % (code, result))
+            return
+        allocated = result.get('services')
+        code, replay = _enroll_as(env, enroll, 'machine-ssh', env.ssh_services())
+        if code != 200 or replay.get('services') != allocated:
+            fail('exact replay rejected', '%s %s' % (code, replay))
+            return
+        pass_('SCOPE_EXACT_SERVICES_ENROLL')
+        pass_('SCOPE_EXACT_REPLAY_SAFE')
+
+        # A changed service on replay stays rejected by scope, not silently applied.
+        code, result = _enroll_as(env, enroll, 'machine-ssh', rdp)
+        if code != 403 or result.get('error_class') != 'SERVICE_SCOPE_VIOLATION':
+            fail('changed replay accepted', '%s %s' % (code, result))
+            return
+        state = env.allocator.load_registry()
+        services = state['clients']['machine-ssh']['services']
+        if set(services) != {'ssh'}:
+            fail('changed replay mutated services', services)
+            return
+        pass_('SCOPE_CHANGED_REPLAY_REJECTED')
+
+        # Order differences within the authorized set are not a violation.
+        ticket, enroll, _r = env.issue(
+            services=MOD.normalize_services(env.ssh_services() + rdp)
+        )
+        code, _res = env.redeem(ticket, 'machine-multi')
+        if code != 200:
+            fail('redeem multi ticket', code)
+            return
+        code, result = _enroll_as(
+            env, enroll, 'machine-multi', rdp + env.ssh_services(),
+            hostname='host-multi',
+        )
+        if code != 200:
+            fail('reordered authorized services rejected', '%s %s' % (code, result))
+            return
+        pass_('SCOPE_ORDER_INDEPENDENT')
+    finally:
+        env.cleanup()
+
+
+def test_manual_enrollment_without_scope_unrestricted():
+    """Enrollment records with no ticket scope keep the pre-F27 behavior."""
+    env = Env()
+    try:
+        ticket, enroll, _r = env.issue(services=[])
+        code, _res = env.redeem(ticket, 'machine-manual')
+        if code != 200:
+            fail('redeem for manual downgrade', code)
+            return
+        path = env.allocator.enrollment_path(enroll['id'])
+        record = json.loads(path.read_text())
+        record.pop('authorized_services', None)
+        env.allocator.save_enrollment(path, record)
+        code, result = _enroll_as(env, enroll, 'machine-manual', env.ssh_services())
+        if code != 200:
+            fail('manual enrollment rejected', '%s %s' % (code, result))
+            return
+        pass_('MANUAL_ENROLLMENT_UNSCOPED_ALLOWED')
+    finally:
+        env.cleanup()
+
+
 def main():
     test_issue_hashed_and_entropy()
     test_redeem_bind_and_retry()
@@ -535,6 +666,8 @@ def main():
     test_enroll_reuses_existing_and_note()
     test_redeem_retry_before_and_after_enroll()
     test_bootstrap_completion_fail_closed()
+    test_enroll_enforces_ticket_scope()
+    test_manual_enrollment_without_scope_unrestricted()
     if FAILED:
         print('BOOTSTRAP_TICKET_TEST=FAIL')
         return 1

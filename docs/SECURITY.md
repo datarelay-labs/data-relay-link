@@ -115,6 +115,11 @@ Shared ticket properties (both delivery modes):
 - After successful enrollment the ticket is marked completed; further redeem
   attempts fail with `BOOTSTRAP_TICKET_USED`
 - A different machine is rejected with `BOOTSTRAP_TICKET_BOUND`
+- The ticket defines the authorized service scope. `/enroll` requires the
+  Enrollment Code request to match it exactly (an empty list is a
+  management-only ticket); anything else is rejected with
+  `SERVICE_SCOPE_VIOLATION`. Later service changes go through the management
+  identity, not the Enrollment Code.
 - TTL enforced; revocable before use
 - Not persisted on the client as the raw ticket
 - Must not be logged

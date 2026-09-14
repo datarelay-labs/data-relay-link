@@ -56,6 +56,19 @@ def enroll_hmac(services):
     return a.enroll(enrollment['id'], ts, sig, body)
 
 
+ssh_spec = [{
+    'id': 'ssh', 'name': 'SSH', 'protocol': 'tcp',
+    'local_ip': '127.0.0.1', 'local_port': 22, 'preset': 'ssh', 'ssh_user': 'aella',
+}]
+
+# A management-only ticket authorizes no services: the Enrollment Code must
+# not be usable to smuggle one in (F27).
+status, result = enroll_hmac(ssh_spec)
+assert status == 403 and result.get('error_class') == 'SERVICE_SCOPE_VIOLATION', (status, result)
+state = a.load_registry()
+assert 'machine-zero' not in (state.get('clients') or {}), state
+assert a.used_ports(state) == set(), state
+
 status, result = enroll_hmac([])
 assert status == 200 and result['services'] == [], (status, result)
 state = a.load_registry()
@@ -65,14 +78,10 @@ assert client['services'] == {}
 assert a.used_ports(state) == set()
 
 # After Enrollment Code consumption, service changes use management identity.
-ssh = [{
-    'id': 'ssh', 'name': 'SSH', 'protocol': 'tcp',
-    'local_ip': '127.0.0.1', 'local_port': 22, 'preset': 'ssh', 'ssh_user': 'aella',
-}]
 body = json.dumps({
     'machine_id': 'machine-zero',
     'hostname': 'zero-host',
-    'services': ssh,
+    'services': ssh_spec,
 }, separators=(',', ':')).encode()
 ts = int(time.time())
 nonce = mod.MGMT.new_nonce()
@@ -89,11 +98,19 @@ assert status == 200 and result['services'] == [{'id': 'ssh', 'remote_port': 190
 state = a.load_registry()
 assert state['clients']['machine-zero']['services']['ssh']['remote_port'] == 19000
 
-# Used Enrollment Code cannot change authority (new key) or services.
+# Used Enrollment Code cannot change authority (new key) or services, and the
+# management-identity service addition above did not widen the ticket scope.
 status, result = enroll_hmac([{
     'id': 'web', 'name': 'Web', 'protocol': 'tcp',
     'local_ip': '127.0.0.1', 'local_port': 8080, 'preset': 'custom',
 }])
+assert status == 403 and result.get('error_class') == 'SERVICE_SCOPE_VIOLATION', (status, result)
+status, result = enroll_hmac(ssh_spec)
+assert status == 403 and result.get('error_class') == 'SERVICE_SCOPE_VIOLATION', (status, result)
+
+# The in-scope (empty) request stays in scope, but the registry has since moved
+# on under management identity, so it is no longer an exact lost-response replay.
+status, result = enroll_hmac([])
 assert status == 403 and 'already used' in result.get('error', ''), (status, result)
 PY
 cat >"$WORK/empty.json" <<'JSON'
