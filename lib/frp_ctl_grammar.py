@@ -1219,22 +1219,20 @@ def public_option_rejection(tokens):
     if bad is None:
         return None
     focus = [t for t in toks if not t.startswith("-")]
-    # Guided / no-flag public commands
+    # Guided / no-flag public commands (reject all dash tokens).
+    # Enrollment / zero-touch / destination create flows are prompt-driven.
+    # Other commands may still accept catalog-declared hidden machine flags.
     guided_prefixes = (
         ("create", "enrollment"),
         ("create", "enrollments"),
         ("create", "zero-touch"),
-        ("create", "support-bundle"),
         ("add", "egress-destination"),
-        ("add", "egress-source"),
-        ("add", "access-source"),
         ("delete", "enrollment"),
         ("enrollment", "create"),
         ("enrollment", "bulk"),
         ("enrollment", "purge"),
         ("zero-touch", "create"),
         ("egress", "add-destination"),
-        ("egress", "add-source"),
     )
     is_guided = False
     for prefix in guided_prefixes:
@@ -1246,6 +1244,7 @@ def public_option_rejection(tokens):
     hint = " ".join(focus[:2]) if len(focus) >= 2 else (focus[0] if focus else "help")
     return {
         "status": "error",
+        "exit_code": 2,
         "message": (
             "Unknown input: %s\n\n"
             "Data Relay Link commands do not use --options.\n\n"
@@ -1254,6 +1253,47 @@ def public_option_rejection(tokens):
             "and follow the guided prompts."
         )
         % (bad, hint),
+    }
+
+
+def _machine_allowed_flags(tokens):
+    """Hidden machine/script flags still accepted for a resolved command.
+
+    Public Tab/help never advertise these; they exist for automation and
+    backend passthrough only.
+    """
+    toks = [str(t) for t in (tokens or ())]
+    allowed = set()
+    if toks and toks[0] == "doctor":
+        allowed.update({"--json", "--verbose"})
+    if toks[:2] in (
+        ["update", "product"],
+        ["update", "engine"],
+        ["update", "project"],
+        ["update", "frp"],
+    ):
+        allowed.add("--check")
+    cmd = CATALOG.find(toks)
+    if cmd is None:
+        focus = [t for t in toks if not t.startswith("-")]
+        cmd = CATALOG.find(focus)
+    if cmd is not None:
+        allowed.update(CATALOG.flag_names(cmd.get("flags") or (), include_hidden=True))
+    return allowed
+
+
+def _option_rejection_message(tok, focus):
+    return {
+        "status": "error",
+        "exit_code": 2,
+        "message": (
+            "Unknown input: %s\n\n"
+            "Data Relay Link commands do not use --options.\n\n"
+            "Run:\n"
+            "  %s\n\n"
+            "and follow the guided prompts when more detail is required."
+        )
+        % (tok, focus),
     }
 
 
@@ -1296,6 +1336,7 @@ def _canonical_result(tokens, role, names=None):
         if "flag" in problem or "required flag" in problem or problem.startswith("missing value for -"):
             return None, public_option_rejection(work + ["--"]) or {
                 "status": "error",
+                "exit_code": 2,
                 "message": (
                     "Data Relay Link commands do not use --options.\n"
                     "Run the action and follow guided prompts."
@@ -1326,25 +1367,24 @@ def match(tokens, role, names=None, clients=None):
     tokens = CATALOG.resolve_tokens(tokens, role=role)
     opt_err = public_option_error(tokens)
     if opt_err is None:
-        # Reject all remaining public --options (not only guided prefixes).
+        # Reject undeclared dash tokens. Catalog-declared flags and a small
+        # set of machine interfaces remain callable but never Tab/help-advertised.
+        allowed = _machine_allowed_flags(tokens)
         for tok in tokens:
-            if tok in ("-h", "--help"):
+            raw = str(tok)
+            if raw in ("-h", "--help"):
                 continue
-            if tok == "--" or str(tok).startswith("--") or (
-                len(str(tok)) >= 2 and str(tok).startswith("-") and not str(tok)[1:].replace(".", "", 1).isdigit()
+            if raw in allowed:
+                continue
+            # Flag values are not options (e.g. --ttl 4h).
+            name = raw.split("=", 1)[0]
+            if name in allowed:
+                continue
+            if raw == "--" or raw.startswith("--") or (
+                len(raw) >= 2 and raw.startswith("-") and not raw[1:].replace(".", "", 1).isdigit()
             ):
                 focus = " ".join(t for t in tokens if not str(t).startswith("-")) or "help"
-                opt_err = {
-                    "status": "error",
-                    "message": (
-                        "Unknown input: %s\n\n"
-                        "Data Relay Link commands do not use --options.\n\n"
-                        "Run:\n"
-                        "  %s\n\n"
-                        "and follow the guided prompts when more detail is required."
-                    )
-                    % (tok, focus),
-                }
+                opt_err = _option_rejection_message(raw, focus)
                 break
     if opt_err is not None:
         return opt_err
@@ -1364,6 +1404,21 @@ def match(tokens, role, names=None, clients=None):
             "Missing action.",
             ["create backup [path]", "restore backup <path>"],
             available=["create", "restore"],
+        )
+    # Resource-first client root: unknown actions must not fall through as a
+    # client-id shortcut (e.g. "client release-service").
+    if (
+        not rewritten
+        and verb == "client"
+        and len(tokens) >= 2
+        and not _client_legacy_selector(tokens, names=names)
+    ):
+        actions = sorted(set(CATALOG.canonical_actions("client")) | set(_CLIENT_ACTION_LIKE))
+        return incomplete(
+            "Unknown action.",
+            ["client <ID>", "show client <ID>", "revoke client <ID>", "release client <ID>"],
+            available=actions[:12] or None,
+            tip="Use action-first commands such as show client / revoke client / release client.",
         )
     if not rewritten and verb in LEGACY_COMMANDS:
         return {"status": "legacy"}
@@ -1452,6 +1507,7 @@ def _match_show(tokens, role, names=None):
             if str(group).startswith("-"):
                 return {
                     "status": "error",
+                    "exit_code": 2,
                     "message": (
                         "Unknown input: %s\n\n"
                         "Data Relay Link commands do not use --options.\n\n"
@@ -1738,36 +1794,37 @@ def _match_set(tokens, role, names=None):
             "property": tokens[3],
             "value": tokens[4],
         }
-    if resource == "access-lists":
-        return {"status": "ok", "action": "access_cmd", "passthrough": ["list"] + list(tokens[2:])}
     if resource == "access-list":
         if len(tokens) < 3:
-            return incomplete("Missing access list.", ["show access-list <LIST>"])
+            return incomplete(
+                "Missing access list.",
+                ["set access-list <LIST>"],
+            )
         return {
             "status": "ok",
             "action": "access_cmd",
-            "passthrough": ["show", tokens[2]] + list(tokens[3:]),
+            "passthrough": ["edit-info"] + list(tokens[2:]),
         }
-    if resource == "access-service":
+    if resource == "access-source":
+        if len(tokens) < 3:
+            return incomplete("Missing access list.", ["set access-source <LIST>"])
         return {
             "status": "ok",
             "action": "access_cmd",
-            "passthrough": ["show-service"] + list(tokens[2:]),
+            "passthrough": ["replace-source"] + list(tokens[2:]),
         }
-    if resource == "access-log":
+    if resource == "access-assign":
         return {
             "status": "ok",
             "action": "access_cmd",
-            "passthrough": ["log"] + list(tokens[2:]),
+            "passthrough": ["assign"] + list(tokens[2:]),
         }
-    if resource == "egress":
-        return {"status": "ok", "action": "egress_cmd", "passthrough": ["status"] + list(tokens[2:])}
-    if resource == "service-profiles":
-        if len(tokens) > 2:
-            return incomplete("Unexpected arguments.", ["show service-profiles"])
-        return {"status": "ok", "action": "show_profiles"}
-    if resource == "backups":
-        return incomplete("Use create backup / restore backup.", ["create backup", "restore backup <path>"])
+    if resource == "access-public":
+        return {
+            "status": "ok",
+            "action": "access_cmd",
+            "passthrough": ["public"] + list(tokens[2:]),
+        }
     if resource == "egress-profile":
         if not server:
             return {"status": "role", "need": "server", "command": "set egress-profile"}
@@ -1990,36 +2047,17 @@ def _match_create(tokens, role, names=None):
             "name": tokens[2],
             "passthrough": tokens[3:],
         }
-    if resource == "access-lists":
-        return {"status": "ok", "action": "access_cmd", "passthrough": ["list"] + list(tokens[2:])}
     if resource == "access-list":
         if len(tokens) < 3:
-            return incomplete("Missing access list.", ["show access-list <LIST>"])
+            return incomplete(
+                "Missing access list name.",
+                ["create access-list <NAME>"],
+            )
         return {
             "status": "ok",
             "action": "access_cmd",
-            "passthrough": ["show", tokens[2]] + list(tokens[3:]),
+            "passthrough": ["create"] + list(tokens[2:]),
         }
-    if resource == "access-service":
-        return {
-            "status": "ok",
-            "action": "access_cmd",
-            "passthrough": ["show-service"] + list(tokens[2:]),
-        }
-    if resource == "access-log":
-        return {
-            "status": "ok",
-            "action": "access_cmd",
-            "passthrough": ["log"] + list(tokens[2:]),
-        }
-    if resource == "egress":
-        return {"status": "ok", "action": "egress_cmd", "passthrough": ["status"] + list(tokens[2:])}
-    if resource == "service-profiles":
-        if len(tokens) > 2:
-            return incomplete("Unexpected arguments.", ["show service-profiles"])
-        return {"status": "ok", "action": "show_profiles"}
-    if resource == "backups":
-        return incomplete("Use create backup / restore backup.", ["create backup", "restore backup <path>"])
     if resource == "egress-profile":
         if len(tokens) < 3:
             return incomplete(
@@ -2080,7 +2118,7 @@ def _match_purge(tokens, role, names=None):
         )
     if tokens[1] == "enrollment":
         if len(tokens) < 3:
-            return incomplete("Missing enrollment id.", ["purge enrollment <ID>"])
+            return incomplete("Missing enrollment id.", ["delete enrollment <ID>"])
         return {"status": "ok", "action": "purge_enrollment", "id": tokens[2]}
     if tokens[1] == "enrollments":
         older_than = None
@@ -2099,7 +2137,7 @@ def _match_purge(tokens, role, names=None):
         return {"status": "ok", "action": "purge_enrollments", "older_than": older_than}
     return incomplete(
         "Unknown purge resource.",
-        ["purge enrollment <ID>", "purge enrollments --older-than <days>"],
+        ["delete enrollment <ID>", "delete enrollments older-than <days>"],
         ["enrollment", "enrollments"],
     )
 
@@ -2152,6 +2190,7 @@ def _match_update(tokens, role, names=None):
         if resource.startswith("-"):
             return public_option_rejection(tokens) or {
                 "status": "error",
+                "exit_code": 2,
                 "message": "Data Relay Link commands do not use --options.",
             }
         action = "update_project" if resource in ("product", "project") else "update_frp"

@@ -103,7 +103,8 @@ grep -q 'client-b' "$OUT" || fail "clients second host"
 grep -q 'ACCESS' "$OUT" || fail "clients ACCESS column"
 grep -q 'PUBLIC /' "$OUT" || fail "clients ACCESS summary"
 grep -qE 'ONLINE|OFFLINE|PARTIAL|MGMT-ONLY|UNKNOWN' "$OUT" || fail "clients STATE label"
-grep -q 'client show ' "$OUT" || fail "clients canonical example"
+grep -q 'show client ' "$OUT" || fail "clients canonical example"
+! grep -q 'client show ' "$OUT" || fail "clients must not advertise resource-first example"
 if grep -qE 'ssh_port|https_port' "$OUT"; then
   fail "clients leaked legacy fields"
 fi

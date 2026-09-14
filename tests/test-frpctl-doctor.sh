@@ -706,8 +706,8 @@ echo '{"operation":"project-update","phase":"commit","failure_class":"HEALTH_CHE
   >"$PROJMARK/var/lib/drlink/server-update-pending.json"
 run_json "$PROJMARK" "$WORKDIR/projmark.json" || true
 [[ "$(check_status "$WORKDIR/projmark.json" pending_server_transaction)" == "FAIL" ]] || fail "project pending"
-grep -q 'drlink update project' "$WORKDIR/projmark.json" || fail "project-update guidance"
-if grep -qE 'sudo drlink update($|[[:space:]]|--)' "$WORKDIR/projmark.json" && ! grep -q 'drlink update project' "$WORKDIR/projmark.json"; then
+grep -q 'drlink update product' "$WORKDIR/projmark.json" || fail "project-update guidance"
+if grep -qE 'sudo drlink update($|[[:space:]]|--)' "$WORKDIR/projmark.json" && ! grep -q 'drlink update product' "$WORKDIR/projmark.json"; then
   fail "generic update guidance for project-update"
 fi
 [[ -f "$PROJMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted project marker"

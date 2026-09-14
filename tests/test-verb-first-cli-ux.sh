@@ -154,8 +154,18 @@ import frp_cli_catalog as c
 print("\n".join(c.roots_for_role("client")))
 PY
 )"
-! echo "$CLIENT_ROOTS" | grep -qx 'create' || fail "client role still sees create"
 echo "$CLIENT_ROOTS" | grep -qx 'show' || fail "client role missing show"
+echo "$CLIENT_ROOTS" | grep -qx 'create' || fail "client role missing create (support-bundle)"
+! echo "$CLIENT_ROOTS" | grep -qx 'revoke' || fail "client role still sees revoke"
+CLIENT_CREATE="$(python3 - <<'PY'
+import sys; sys.path.insert(0,"lib")
+import frp_ctl_grammar as g
+print("\n".join(g.completion_candidates("create ", "client", [], {}, [], trailing=True)))
+PY
+)"
+echo "$CLIENT_CREATE" | grep -qx 'support-bundle' || fail "client create missing support-bundle"
+! echo "$CLIENT_CREATE" | grep -qx 'enrollment' || fail "client create still offers enrollment"
+! echo "$CLIENT_CREATE" | grep -qx 'zero-touch' || fail "client create still offers zero-touch"
 pass ROLE_FILTERING
 
 # --- INCOMPLETE_COMMAND_HELP ---

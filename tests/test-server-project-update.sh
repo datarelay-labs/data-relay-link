@@ -372,6 +372,7 @@ pass "TAMPER_REJECTED"
 HTTP="$WORKDIR/http"
 setup_tree "$HTTP"
 if env FRP_SERVER_TEST_ROOT="$HTTP" \
+  FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
   FRP_SERVER_PROJECT_SHA256SUMS_URL=http://fixture.invalid/SHA256SUMS \
   FRP_SERVER_PROJECT_UPDATE_URL=https://fixture.invalid/bootstrap-server.sh \
   "$UPDATE" >"$WORKDIR/http.out" 2>"$WORKDIR/http.err"; then

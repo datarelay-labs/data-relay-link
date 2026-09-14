@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F09: completion inventory pools and flag value choices."""
+"""F09: completion inventory pools; public Tab never offers --options."""
 from __future__ import annotations
 
 import importlib.util
@@ -27,7 +27,7 @@ class CompletionInventoryTests(unittest.TestCase):
     def test_egress_profile_completion(self):
         inv = ["vendor-api", "partner"]
         hits = GRAMMAR.completion_candidates(
-            "egress show ",
+            "show egress-profile ",
             "server",
             [],
             {},
@@ -41,7 +41,7 @@ class CompletionInventoryTests(unittest.TestCase):
     def test_access_list_completion(self):
         inv = ["office", "acl_office"]
         hits = GRAMMAR.completion_candidates(
-            "access show ",
+            "show access-list ",
             "server",
             [],
             {},
@@ -54,7 +54,7 @@ class CompletionInventoryTests(unittest.TestCase):
     def test_service_profile_completion(self):
         inv = ["office-ssh"]
         hits = GRAMMAR.completion_candidates(
-            "service-profile show ",
+            "show service-profile ",
             "server",
             [],
             {},
@@ -64,49 +64,37 @@ class CompletionInventoryTests(unittest.TestCase):
         )
         self.assertIn("office-ssh", hits)
 
-    def test_protocol_flag_value_completion(self):
+    def test_no_public_protocol_flag_completion(self):
+        # Public Tab must not complete or advertise --protocol values.
+        for line, trailing in (
+            ("add egress-destination vendor-api api.example.com 443 --protocol ", True),
+            ("add egress-destination vendor-api api.example.com 443 --protocol h", False),
+            ("egress add-destination vendor-api api.example.com 443 --protocol ", True),
+        ):
+            hits = GRAMMAR.completion_candidates(
+                line,
+                "server",
+                [],
+                {},
+                [],
+                trailing=trailing,
+                egress_profiles=["vendor-api"],
+            )
+            self.assertEqual(hits, [], msg=line)
+            self.assertFalse(any(str(h).startswith("-") for h in hits))
+
+    def test_add_egress_destination_offers_profiles(self):
         hits = GRAMMAR.completion_candidates(
-            "egress add-destination vendor-api api.example.com 443 --protocol ",
+            "add egress-destination ",
             "server",
             [],
             {},
             [],
             trailing=True,
-            egress_profiles=["vendor-api"],
+            egress_profiles=["vendor-api", "partner"],
         )
-        self.assertEqual(sorted(hits), ["http", "https", "tcp"])
-
-    def test_protocol_partial_value_completion(self):
-        hits = GRAMMAR.completion_candidates(
-            "egress add-destination vendor-api api.example.com 443 --protocol h",
-            "server",
-            [],
-            {},
-            [],
-            trailing=False,
-            egress_profiles=["vendor-api"],
-        )
-        self.assertEqual(sorted(hits), ["http", "https"])
-        narrowed = GRAMMAR.completion_candidates(
-            "egress add-destination vendor-api api.example.com 443 --protocol https",
-            "server",
-            [],
-            {},
-            [],
-            trailing=False,
-            egress_profiles=["vendor-api"],
-        )
-        self.assertEqual(narrowed, ["https"])
-        tcp_hits = GRAMMAR.completion_candidates(
-            "egress add-destination vendor-api api.example.com 443 --protocol t",
-            "server",
-            [],
-            {},
-            [],
-            trailing=False,
-            egress_profiles=["vendor-api"],
-        )
-        self.assertEqual(tcp_hits, ["tcp"])
+        self.assertIn("vendor-api", hits)
+        self.assertIn("partner", hits)
 
 
 class GrammarPayloadInventoryTests(unittest.TestCase):

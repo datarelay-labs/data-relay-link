@@ -243,7 +243,7 @@ unset FRP_RELEASE_CHANNEL FRP_CLIENT_UPDATE_SHA256 FRP_RELEASE_SHA256SUMS_FILE |
 
 snapshot_preserved_state "$CLIENT" "$WORKDIR/runtime.before"
 CHECK_TOOL_SHA="$(sha "$CLIENT/usr/local/bin/drlink")"
-"$CLIENT/usr/local/bin/drlink" update --check >"$WORKDIR/check.out" 2>"$WORKDIR/check.err"
+"$CLIENT/usr/local/bin/drlink" update product --check >"$WORKDIR/check.out" 2>"$WORKDIR/check.err"
 grep -q 'Update                    : available' "$WORKDIR/check.out" || fail "same-version build not available"
 grep -q 'Installed project version :' "$WORKDIR/check.out" || fail "check missing installed version"
 grep -q 'Target project version    :' "$WORKDIR/check.out" || fail "check missing target version"
@@ -261,7 +261,7 @@ fi
 pass "SAME_VERSION_DIFFERENT_BUILD"
 pass "CHECK_ONLY_READONLY"
 
-"$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/update.out" 2>"$WORKDIR/update.err"
+"$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/update.out" 2>"$WORKDIR/update.err"
 assert_preserved_state "$CLIENT" "$WORKDIR/runtime.before"
 grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/drlink/version" || fail "dev channel changed"
 grep -q 'SOURCE_REF=main' "$CLIENT/etc/drlink/version" || fail "dev source ref changed"
@@ -275,7 +275,7 @@ fi
 pass "REMOTE_INSTALLED_CLIENT_UPDATE"
 pass "DEV_MAIN_UPDATE"
 pass "SHA256_VALID"
-"$CLIENT/usr/local/bin/drlink" update --check >"$WORKDIR/same-build-check.out" 2>"$WORKDIR/same-build-check.err"
+"$CLIENT/usr/local/bin/drlink" update product --check >"$WORKDIR/same-build-check.out" 2>"$WORKDIR/same-build-check.err"
 grep -q "Installed bundle SHA256   : ${B_SHA}" "$WORKDIR/same-build-check.out" || fail "same-build installed sha"
 grep -q "Target bundle SHA256      : ${B_SHA}" "$WORKDIR/same-build-check.out" || fail "same-build target sha"
 grep -q 'Update                    : not needed' "$WORKDIR/same-build-check.out" || fail "same verified build should be not needed"
@@ -313,7 +313,7 @@ stable_urls="$(
 grep -q "/v${PROJECT_VERSION}/dist/bootstrap-client.sh" <<<"$stable_urls" || fail "stable artifact URL mutable"
 grep -q "/v${PROJECT_VERSION}/SHA256SUMS" <<<"$stable_urls" || fail "stable metadata URL mutable"
 : >"$MOCK_CURL_LOG"
-if "$CLIENT/usr/local/bin/drlink" update --check >"$WORKDIR/stable-check.out" 2>"$WORKDIR/stable-check.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product --check >"$WORKDIR/stable-check.out" 2>"$WORKDIR/stable-check.err"; then
   fail "stable expected channel must not accept a dev candidate"
 fi
 grep -q "/v${PROJECT_VERSION}/SHA256SUMS" "$MOCK_CURL_LOG" || fail "stable metadata was not fetched from tag"
@@ -331,7 +331,7 @@ pass "STABLE_IMMUTABLE_UPDATE"
 LIVE_SHA="$(sha "$CLIENT/usr/local/bin/drlink")"
 cp "$REMOTE/bootstrap-client.sh" "$WORKDIR/valid-bundle"
 printf '\n# tampered\n' >>"$REMOTE/bootstrap-client.sh"
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/tamper.out" 2>"$WORKDIR/tamper.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/tamper.out" 2>"$WORKDIR/tamper.err"; then
   fail "tampered artifact accepted"
 fi
 grep -q 'INTEGRITY_FAILED' "$WORKDIR/tamper.out" "$WORKDIR/tamper.err" || fail "tamper failure class"
@@ -340,7 +340,7 @@ pass "TAMPERED_ARTIFACT"
 
 cp "$WORKDIR/valid-bundle" "$REMOTE/bootstrap-client.sh"
 printf '%s  dist/bootstrap-client.sh\n' "$A_SHA" >"$REMOTE/SHA256SUMS"
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/wrong-metadata.out" 2>"$WORKDIR/wrong-metadata.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/wrong-metadata.out" 2>"$WORKDIR/wrong-metadata.err"; then
   fail "wrong metadata accepted"
 fi
 grep -q 'SHA256 checksum mismatch' "$WORKDIR/wrong-metadata.err" || fail "wrong metadata mismatch message"
@@ -349,7 +349,7 @@ pass "SHA256_MISMATCH"
 pass "WRONG_METADATA_REJECTED"
 
 printf '%s  dist/bootstrap-client.sh\n' 'not-a-sha256' >"$REMOTE/SHA256SUMS"
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/malformed-sha.out" 2>"$WORKDIR/malformed-sha.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/malformed-sha.out" 2>"$WORKDIR/malformed-sha.err"; then
   fail "malformed SHA256 accepted"
 fi
 grep -q 'malformed SHA256' "$WORKDIR/malformed-sha.err" || fail "malformed SHA256 message"
@@ -357,7 +357,7 @@ assert_management_unchanged "$CLIENT" "$LIVE_SHA"
 pass "MALFORMED_SHA256_REJECTED"
 
 rm -f "$REMOTE/SHA256SUMS"
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/missing-metadata.out" 2>"$WORKDIR/missing-metadata.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/missing-metadata.out" 2>"$WORKDIR/missing-metadata.err"; then
   fail "missing metadata accepted"
 fi
 grep -q 'INTEGRITY_FAILED' "$WORKDIR/missing-metadata.out" "$WORKDIR/missing-metadata.err" || fail "missing metadata failure class"
@@ -365,7 +365,7 @@ assert_management_unchanged "$CLIENT" "$LIVE_SHA"
 pass "MISSING_METADATA_REJECTED"
 
 export FRP_CLIENT_UPDATE_URL="http://updates.example.test/main/dist/bootstrap-client.sh"
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/http.out" 2>"$WORKDIR/http.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/http.out" 2>"$WORKDIR/http.err"; then
   fail "HTTP artifact URL accepted"
 fi
 grep -qi 'valid HTTPS URL' "$WORKDIR/http.err" || fail "HTTP rejection message"
@@ -373,7 +373,7 @@ assert_management_unchanged "$CLIENT" "$LIVE_SHA"
 pass "HTTP_REJECTED"
 
 export FRP_CLIENT_UPDATE_URL="https:///main/dist/bootstrap-client.sh"
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/malformed-url.out" 2>"$WORKDIR/malformed-url.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/malformed-url.out" 2>"$WORKDIR/malformed-url.err"; then
   fail "malformed artifact URL accepted"
 fi
 grep -qi 'valid HTTPS URL' "$WORKDIR/malformed-url.err" || fail "malformed URL rejection message"
@@ -383,7 +383,7 @@ pass "MALFORMED_URL_REJECTED"
 export FRP_CLIENT_UPDATE_URL="https://updates.example.test/main/dist/bootstrap-client.sh"
 printf '%s  dist/bootstrap-client.sh\n' "$B_SHA" >"$REMOTE/SHA256SUMS"
 export MOCK_CURL_FAIL_ARTIFACT=1
-if "$CLIENT/usr/local/bin/drlink" update project >"$WORKDIR/download.out" 2>"$WORKDIR/download.err"; then
+if "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/download.out" 2>"$WORKDIR/download.err"; then
   fail "artifact download failure accepted"
 fi
 unset MOCK_CURL_FAIL_ARTIFACT

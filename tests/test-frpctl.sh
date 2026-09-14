@@ -160,10 +160,13 @@ grep -qiE 'Missing action|project|engine' "$WORKDIR/client-update.out" "$WORKDIR
 "$CTL" update product >"$WORKDIR/client-upd-proj.out" || true
 "$CTL" update engine >"$WORKDIR/client-upd-frp.out"
 grep -qx 'DISPATCH frp-update' "$WORKDIR/client-upd-frp.out" || fail "client update engine"
-if "$CTL" update engine --check >"$WORKDIR/client-upd-check.out" 2>"$WORKDIR/client-upd-check.err"; then
-  fail "update engine --check should be rejected"
+# Hidden machine --check remains callable for scripts; bare update --check stays rejected.
+"$CTL" update engine --check >"$WORKDIR/client-upd-check.out" 2>"$WORKDIR/client-upd-check.err" || true
+grep -qx 'DISPATCH frp-update --check' "$WORKDIR/client-upd-check.out" || fail "hidden update engine --check"
+if "$CTL" update --check >"$WORKDIR/client-upd-bare-check.out" 2>"$WORKDIR/client-upd-bare-check.err"; then
+  fail "bare update --check should be rejected"
 fi
-grep -qi 'do not use --options' "$WORKDIR/client-upd-check.err" || fail "update --check rejection"
+grep -qi 'do not use --options' "$WORKDIR/client-upd-bare-check.err" || fail "bare update --check rejection"
 "$CTL" info >"$WORKDIR/client-info.out"
 grep -qx 'DISPATCH frp-client info' "$WORKDIR/client-info.out" || fail "info dispatch"
 "$CTL" services >"$WORKDIR/client-services.out"

@@ -324,11 +324,13 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("frp_cli_catalog", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-cmd = mod.find(["access", "add-source"])
+cmd = mod.find(["add", "access-source"]) or mod.find(["access", "add-source"], include_aliases=True)
+assert cmd is not None, "add access-source catalog entry missing"
 flag = next(f for f in cmd["flags"] if f["name"] == "--ttl")
 assert "3650d" in flag["description"], flag
 assert "3650d" in cmd["detail"], cmd["detail"]
-create = mod.find(["access", "create"])
+create = mod.find(["create", "access-list"]) or mod.find(["access", "create"], include_aliases=True)
+assert create is not None, "create access-list catalog entry missing"
 assert "1024" in create["detail"], create["detail"]
 print("ok")
 PY

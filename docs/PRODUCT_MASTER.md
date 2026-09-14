@@ -3172,7 +3172,8 @@ Dynamic Group tests는 해당 기능이 실제 scope에 들어올 때만 require
 macOS CI에는 실제 readline backend에서 최소:
 
 ```text
-statu<Tab> → status
+sho<Tab> → show
+show statu<Tab> → show status
 ```
 
 같은 PTY completion regression을 포함한다.

@@ -448,14 +448,19 @@ assert r.get('status') == 'ok' and r.get('action') == 'support_bundle', r
 assert '--output' in (r.get('passthrough') or [])
 r2 = g.match(g.tokenize('support-bundle'), 'client')
 assert r2.get('status') == 'ok' and r2.get('action') == 'support_bundle', r2
-# Canonical resource-first form.
+# Hidden resource-first compat form.
 r3 = g.match(g.tokenize('support bundle --output /tmp/x.tar.gz'), 'server')
 assert r3.get('status') == 'ok' and r3.get('action') == 'support_bundle', r3
+# Canonical action-first form.
+r4 = g.match(g.tokenize('create support-bundle --output /tmp/x.tar.gz'), 'server')
+assert r4.get('status') == 'ok' and r4.get('action') == 'support_bundle', r4
 for role in ('server', 'client', 'both'):
     help_txt = g.help_text([], role)
-    assert 'support' in help_txt, (role, help_txt)
-    concise = g._concise_root(role)
-    assert 'support' in concise, (role, concise)
+    assert 'create' in help_txt, (role, help_txt)
+    # support is not a root action; it lives under create.
+    assert not any(line.strip().startswith('support ') for line in help_txt.splitlines()), (role, help_txt)
+    create_help = g.help_text(['create'], role)
+    assert 'support-bundle' in create_help, (role, create_help)
 print('ok')
 PY
 pass "FRPCTL_GRAMMAR"

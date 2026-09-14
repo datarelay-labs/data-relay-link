@@ -1259,7 +1259,7 @@ frpctl_guided_manual_enrollment() {
   echo "  Note        : ${note:-"(none)"}"
   echo
   confirm="$(frpctl_read "Create? [Y/n]: " "Y")" || return 1
-  case "${confirm,,}" in
+  case "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" in
     n|no) echo "Cancelled."; return 0 ;;
   esac
   local -a args=(--ttl "$lifetime")
@@ -2117,8 +2117,16 @@ frpctl_dispatch_canonical() {
       return
       ;;
     error)
-      echo "ERROR: $(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("message",""))' "$result")" >&2
-      _FRP_CTL_RC=1
+      _err_msg="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("message",""))' "$result")"
+      _err_code="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("exit_code",1))' "$result")"
+      # Option/usage rejections are product-owned (exit 2); never leak backend argparse.
+      if [[ "$_err_msg" == *"do not use --options"* ]]; then
+        printf '%s\n' "$_err_msg" >&2
+        _FRP_CTL_RC=2
+      else
+        echo "ERROR: ${_err_msg}" >&2
+        _FRP_CTL_RC="${_err_code:-1}"
+      fi
       return 0
       ;;
     ok)
@@ -2342,7 +2350,7 @@ frpctl_dispatch_canonical() {
         esac
         echo
         _eg_confirm="$(frpctl_read "Add destination? [Y/n]: " "Y")" || return 1
-        case "${_eg_confirm,,}" in
+        case "$(printf '%s' "$_eg_confirm" | tr '[:upper:]' '[:lower:]')" in
           n|no) echo "Cancelled."; return 0 ;;
         esac
         frpctl_invoke frp-egress add-destination \
@@ -2408,7 +2416,7 @@ frpctl_dispatch_canonical() {
         echo "  delete group ${_del_group}" >&2
         return 1
       fi
-      case "${_del_ans,,}" in
+      case "$(printf '%s' "$_del_ans" | tr '[:upper:]' '[:lower:]')" in
         y|yes) ;;
         *)
           echo "Aborted."

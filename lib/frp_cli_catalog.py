@@ -256,7 +256,7 @@ SERVICE_ADD_FLAGS = (
 # Categories are display-only groupings for help/menu discoverability.
 ROOTS = (
     ("show", "any", "View", "View current state and inventory"),
-    ("create", "server", "Create", "Create or onboard something"),
+    ("create", "any", "Create", "Create or onboard something"),
     ("set", "any", "Change", "Change a value or configuration"),
     ("unset", "any", "Change", "Clear optional metadata or configuration"),
     ("add", "any", "Change", "Add a member, source or destination"),
@@ -617,7 +617,8 @@ COMMANDS = (
         "Onboarding",
         "Create one Manual Enrollment Code",
         detail="Generates a Manual Enrollment Code for an interactive client "
-        "install. For everyday onboarding prefer 'zero-touch create'.",
+        "install. Lifetime maximum is 30d (2592000 seconds). For everyday "
+        "onboarding prefer 'create zero-touch'.",
         examples=(
             "enrollment create",
             "enrollment create --ssh --ssh-user aella --label dp01",
@@ -1074,7 +1075,7 @@ COMMANDS = (
         "assignments.",
         examples=("service-profile list",),
         internal=("show", "profiles"),
-        aliases=(("show", "profiles"), ("show", "profile"), ("profile", "list")),
+        aliases=(("show", "profiles"), ("profile", "list")),
     ),
     _cmd(
         ("service-profile", "show"),
@@ -1084,7 +1085,7 @@ COMMANDS = (
         examples=("service-profile show office-ssh",),
         args=(_arg("<PROFILE>", C_PROFILE),),
         internal=("show", "profile"),
-        aliases=(("profile", "show"),),
+        aliases=(("show", "profile"), ("profile", "show")),
     ),
     _cmd(
         ("service-profile", "create"),
@@ -1417,7 +1418,7 @@ COMMANDS = (
             ),
         ),
         tail="flags",
-        aliases=(("add", "egress-profile"),),
+        aliases=(),
     ),
     _cmd(
         ("egress", "add-source"),
@@ -1447,7 +1448,7 @@ COMMANDS = (
         args=(_arg("<PROFILE>", C_EGRESS), _arg("<SELECTOR>")),
         flags=("--yes",),
         tail="flags",
-        aliases=(("remove", "egress-profile"),),
+        aliases=(),
         destructive=True,
         risk="outage",
         confirmation="yes_flag",
@@ -2080,8 +2081,8 @@ _PUBLIC_NAME_UPGRADE = {
     ("create", "profile"): (("create", "service-profile"), ("create", "profile")),
     ("set", "profile"): (("set", "service-profile"), ("set", "profile")),
     ("delete", "profile"): (("delete", "service-profile"), ("delete", "profile")),
-    ("add", "egress-profile"): (("add", "egress-destination"), None),
-    ("remove", "egress-profile"): (("remove", "egress-destination"), None),
+    # Keep add/remove egress-profile <P> destination|source as a distinct
+    # grammar form; do not collapse it onto add/remove egress-destination.
 }
 
 

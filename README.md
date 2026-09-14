@@ -512,8 +512,8 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 sudo drlink create backup
 sudo drlink restore backup <path>
 
-sudo drlink update project --check
-sudo drlink update project
+sudo drlink update product --check
+sudo drlink update product
 
 sudo drlink server upstream
 sudo drlink update engine --check

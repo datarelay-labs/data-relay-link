@@ -118,7 +118,9 @@ class EnrollmentTtlHelpTests(unittest.TestCase):
             CREATE.parse_enrollment_ttl("bad")
 
     def test_catalog_enrollment_ttl_examples_parse(self):
-        cmd = CATALOG.find(["enrollment", "create"])
+        cmd = CATALOG.find(["create", "enrollment"]) or CATALOG.find(
+            ["enrollment", "create"], include_aliases=True
+        )
         self.assertIsNotNone(cmd)
         ttl_flag = next(f for f in cmd["flags"] if f["name"] == "--ttl")
         self.assertEqual(ttl_flag.get("role"), "enrollment")
@@ -126,12 +128,14 @@ class EnrollmentTtlHelpTests(unittest.TestCase):
             CREATE.parse_enrollment_ttl(example)
 
     def test_access_ttl_metavar_differs_by_role(self):
-        access = next(
-            f for f in CATALOG.find(["access", "add-source"])["flags"] if f["name"] == "--ttl"
+        access_cmd = CATALOG.find(["add", "access-source"]) or CATALOG.find(
+            ["access", "add-source"], include_aliases=True
         )
-        enroll = next(
-            f for f in CATALOG.find(["enrollment", "create"])["flags"] if f["name"] == "--ttl"
+        enroll_cmd = CATALOG.find(["create", "enrollment"]) or CATALOG.find(
+            ["enrollment", "create"], include_aliases=True
         )
+        access = next(f for f in access_cmd["flags"] if f["name"] == "--ttl")
+        enroll = next(f for f in enroll_cmd["flags"] if f["name"] == "--ttl")
         self.assertEqual(access.get("role"), "access")
         self.assertEqual(enroll.get("role"), "enrollment")
         self.assertIn("|SECONDS", enroll.get("metavar", ""))
@@ -187,12 +191,19 @@ class EnrollmentTtlUpperBoundTests(unittest.TestCase):
             self.assertIn("2592000", result.stdout)
 
     def test_catalog_documents_the_maximum(self):
-        cmd = CATALOG.find(["enrollment", "create"])
+        cmd = CATALOG.find(["create", "enrollment"]) or CATALOG.find(
+            ["enrollment", "create"], include_aliases=True
+        )
+        self.assertIsNotNone(cmd)
         ttl_flag = next(f for f in cmd["flags"] if f["name"] == "--ttl")
         self.assertEqual(ttl_flag.get("maximum"), MAX_TTL)
         self.assertIn("30d", ttl_flag.get("description", ""))
         self.assertIn("2592000", ttl_flag.get("description", ""))
-        self.assertIn("30d", CATALOG.command_help(cmd))
+        # Public help is action-first and does not advertise --ttl; the bound
+        # remains on hidden machine flag metadata and guided lifetime prompts.
+        self.assertTrue(ttl_flag.get("hidden"))
+        self.assertNotIn("--ttl", CATALOG.command_help(cmd))
+        self.assertIn("30d", cmd.get("detail", ""))
 
     def test_manual_and_zero_touch_reject_extreme_ttl(self):
         with tempfile.TemporaryDirectory() as name:

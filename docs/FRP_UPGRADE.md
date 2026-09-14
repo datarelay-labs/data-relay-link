@@ -171,7 +171,7 @@ a verified candidate whose manifest is `dev` / `main`.
 
 ## Server project-update build identity
 
-`sudo drlink update project --check` is read-only. Availability is not decided
+`sudo drlink update product --check` is read-only. Availability is not decided
 from `PROJECT_VERSION` alone:
 
 - installed version **less than** candidate → update available
@@ -187,7 +187,7 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 ## Rollback
 
 - Server FRP binary: `drlink update engine` (implementation: `frp-update`) restores the previous binary on health failure.
-- Server project tools: use `drlink update project` rollback / restore from backup (implementation: `frp-project-update`).
+- Server project tools: use `drlink update product` rollback / restore from backup (implementation: `frp-project-update`).
 - Disaster recovery: `sudo drlink restore backup <backup>` after a validated backup.
 
 ## Future release upgrade suite (from v2.3.1 golden baseline)

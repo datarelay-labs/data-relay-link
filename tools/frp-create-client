@@ -316,11 +316,17 @@ def parse_args(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             'examples:\n'
-            '  sudo drlink enrollment create\n'
-            '  sudo drlink enrollment create --one-line --ssh --note client-01\n'
-            '  sudo drlink enrollment create --one-line --ssh --ssh-user aella --note customer-01\n'
-            '  sudo drlink enrollment create --one-line --ssh --client-name seoul-groupware --note "Seoul office"\n'
-            '  sudo drlink enrollment create --one-line --client-name inventory-only\n'
+            '  # Preferred operator UX (guided, no --options):\n'
+            '  sudo drlink\n'
+            '  create zero-touch\n'
+            '  create enrollment\n'
+            '\n'
+            '  # This backend tool still accepts internal flags for scripts:\n'
+            '  frp-create-client --one-line --ssh --note client-01\n'
+            '  frp-create-client --one-line --ssh --ssh-user aella --note customer-01\n'
+            '  frp-create-client --one-line --ssh --client-name seoul-groupware '
+            '--note "Seoul office"\n'
+            '  frp-create-client --one-line --client-name inventory-only\n'
         ),
     )
     p.add_argument(
