@@ -186,6 +186,28 @@ def _load_enrollment_lifecycle():
 ELC = _load_enrollment_lifecycle()
 
 
+def _load_control_locks():
+    candidates = [
+        Path(__file__).resolve().parent / 'frp_control_locks.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_control_locks.py',
+        Path('/usr/local/lib/drlink/frp_control_locks.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_control_locks.py')
+        candidates.insert(0, Path(root) / 'lib' / 'frp_control_locks.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_control_locks', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise RuntimeError('missing frp_control_locks.py')
+
+
+CLOCKS = _load_control_locks()
+
+
 def _load_zero_touch():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_zero_touch.py',
@@ -316,6 +338,25 @@ def _test_enrollment_failure_point(point):
     return None
 
 
+def _pair_write_pause_hook():
+    """Pause between the two durable writes of an enrollment pair.
+
+    Production no-op unless both hook paths are set. Tests use it to prove a
+    concurrent backup cannot observe a half-written pair: the writer signals
+    readiness while still holding the control locks and waits for a go file.
+    """
+    ready = os.environ.get('FRP_ENROLLMENT_PAIR_HOOK_READY', '')
+    go = os.environ.get('FRP_ENROLLMENT_PAIR_HOOK_GO', '')
+    if not ready or not go:
+        return
+    Path(ready).write_text('ready\n', encoding='utf-8')
+    deadline = time.time() + float(os.environ.get('FRP_ENROLLMENT_PAIR_HOOK_WAIT', '10'))
+    while time.time() < deadline:
+        if Path(go).is_file():
+            return
+        time.sleep(0.05)
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
@@ -354,9 +395,14 @@ def atomic_write_json(path, data, mode=0o600):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, p)
+        try:
+            CLOCKS.durable_replace(tmp, p)
+        except Exception:
+            # Fallback keeps prior semantics on exotic/unsupported filesystems.
+            os.replace(tmp, p)
+        tmp = None  # durable_replace/replace consumed the temp path
     finally:
-        if os.path.exists(tmp):
+        if tmp and os.path.exists(tmp):
             os.unlink(tmp)
 
 
@@ -487,6 +533,9 @@ def cleanup_expired_bootstrap_tickets(
 
     already_locked=True when the caller already holds registry.lock (e.g.
     /bootstrap/redeem). Retention must not reacquire the flock in that case.
+
+    cfg carries the retention policy. Without it there is nothing to enforce, so
+    cleanup is skipped rather than run against a substituted default.
     """
     del keep_id
     if ELC is None or not cfg:
@@ -503,12 +552,29 @@ def cleanup_expired_bootstrap_tickets(
         return
 
 
+def enrollment_state_dir(enrollments_dir, cfg=None):
+    """Directory holding registry.json and the control-state lock files."""
+    registry_file = str((cfg or {}).get('registry_file') or '').strip()
+    if registry_file:
+        return Path(registry_file).resolve().parent
+    return Path(enrollments_dir).resolve().parent
+
+
 def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='', label='', cfg=None):
     """Create a hashed bootstrap ticket plus a normal enrollment record.
 
     Does not allocate a public port. Caller must have already validated
     `services` with normalize_services(); re-normalizing here keeps the ticket
     scope byte-identical to what /enroll compares a request against.
+
+    The enrollment record and the bootstrap ticket are one logical pair. Both
+    durable writes happen under lifecycle → control-state → registry locks (the
+    documented order backup and restore use), so a concurrent backup archives
+    either the pre-create state or the complete pair, never one half.
+
+    Retention cleanup uses the caller's server cfg. Callers must pass cfg= to
+    get their configured enrollment_retention_days; a cfg synthesized here
+    would silently fall back to the 30-day default.
     """
     services = normalize_services(services)
     ttl = int(ttl)
@@ -559,33 +625,43 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
             os.chmod(str(enrollments_dir), 0o700)
         except OSError:
             pass
-    cleanup_cfg = cfg
-    if cleanup_cfg is None:
-        cleanup_cfg = {
-            'enrollments_dir': str(enrollments_dir),
-            'bootstrap_dir': str(bootstrap_dir),
-            'registry_file': str(Path(enrollments_dir).parent / 'registry.json'),
-        }
-    cleanup_expired_bootstrap_tickets(bootstrap_dir, now, cfg=cleanup_cfg, force=True)
+    # Retention policy lives in the server cfg; keep it and only realign the
+    # paths this call is actually writing.
+    cleanup_cfg = None
+    if cfg:
+        cleanup_cfg = dict(cfg)
+        cleanup_cfg['enrollments_dir'] = str(enrollments_dir)
+        cleanup_cfg['bootstrap_dir'] = str(bootstrap_dir)
     enroll_path = enrollment_file_path(enrollments_dir, enrollment_id)
     ticket_path = bootstrap_file_path(bootstrap_dir, ticket_id)
     if enroll_path is None or ticket_path is None:
         raise RuntimeError('failed to allocate bootstrap ticket paths')
-    try:
-        atomic_write_json(enroll_path, enroll_record, mode=0o600)
+    state_dir = enrollment_state_dir(enrollments_dir, cfg)
+    lock_timeout = float(
+        os.environ.get('FRP_ENROLLMENT_LOCK_TIMEOUT')
+        or CLOCKS.DEFAULT_TIMEOUT_SEC
+    )
+    with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
+        # registry.lock is already held here: retention must not reacquire it.
+        cleanup_expired_bootstrap_tickets(
+            bootstrap_dir, now, cfg=cleanup_cfg, force=True, already_locked=True
+        )
         try:
-            os.chmod(str(enroll_path), 0o600)
-        except OSError:
-            pass
-        atomic_write_json(ticket_path, ticket_record, mode=0o600)
-        try:
-            os.chmod(str(ticket_path), 0o600)
-        except OSError:
-            pass
-    except Exception:
-        unlink_quiet(ticket_path)
-        unlink_quiet(enroll_path)
-        raise
+            atomic_write_json(enroll_path, enroll_record, mode=0o600)
+            try:
+                os.chmod(str(enroll_path), 0o600)
+            except OSError:
+                pass
+            _pair_write_pause_hook()
+            atomic_write_json(ticket_path, ticket_record, mode=0o600)
+            try:
+                os.chmod(str(ticket_path), 0o600)
+            except OSError:
+                pass
+        except Exception:
+            unlink_quiet(ticket_path)
+            unlink_quiet(enroll_path)
+            raise
     ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
     return ticket, enroll_record, ticket_record
 
@@ -780,6 +856,17 @@ def infrastructure_protected_ports(cfg):
 def validate_registry_invariants(state, cfg=None):
     """Fail closed on severe registry corruption. Do not silently repair."""
     state = require_registry_v2(state)
+    # Group structure / membership referential integrity (canonical helper
+    # shared with doctor, restore preflight, and the group tooling).
+    creg = _load_client_registry_for_invariants()
+    if creg is None:
+        raise RegistrySchemaError(
+            'REGISTRY_INVALID: frp_client_registry.py is unavailable'
+        )
+    try:
+        creg.validate_group_invariants(state)
+    except creg.GroupInvariantError as exc:
+        raise RegistrySchemaError('REGISTRY_INVALID: %s' % exc) from exc
     seen_ports = {}
     port_start = None
     port_end = None
@@ -839,6 +926,25 @@ def validate_registry_invariants(state, cfg=None):
 
 
 _ACL_FOR_INVARIANTS = None
+_CREG_FOR_INVARIANTS = None
+
+
+def _load_client_registry_for_invariants():
+    global _CREG_FOR_INVARIANTS
+    if _CREG_FOR_INVARIANTS is not None:
+        return _CREG_FOR_INVARIANTS
+    for path in (
+        Path(__file__).resolve().parent / 'frp_client_registry.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_client_registry.py',
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_client_registry', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _CREG_FOR_INVARIANTS = mod
+            return mod
+    return None
 
 
 def _load_access_control_for_invariants():

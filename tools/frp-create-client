@@ -125,21 +125,30 @@ def load_enrollment_lifecycle():
     )
 
 
+def remapped_server_cfg(cfg):
+    """Server cfg with state paths remapped into the active tree.
+
+    Returns the whole cfg, never a synthesized subset: retention, lock, and
+    path policy must all come from the administrator's configuration.
+    """
+    out = dict(cfg)
+    out['enrollments_dir'] = str(remap(cfg['enrollments_dir']))
+    out['bootstrap_dir'] = str(
+        remap(cfg.get('bootstrap_dir') or str(Path(cfg['enrollments_dir']).parent / 'bootstrap'))
+    )
+    out['registry_file'] = str(
+        remap(cfg.get('registry_file') or str(Path(cfg['enrollments_dir']).parent / 'registry.json'))
+    )
+    return out
+
+
 def run_enrollment_retention_cleanup(cfg):
     lifecycle = load_enrollment_lifecycle()
     if lifecycle is None:
         return
     try:
-        cleanup_cfg = dict(cfg)
-        cleanup_cfg['enrollments_dir'] = str(remap(cfg['enrollments_dir']))
-        cleanup_cfg['bootstrap_dir'] = str(
-            remap(cfg.get('bootstrap_dir') or str(Path(cfg['enrollments_dir']).parent / 'bootstrap'))
-        )
-        cleanup_cfg['registry_file'] = str(
-            remap(cfg.get('registry_file') or str(Path(cfg['enrollments_dir']).parent / 'registry.json'))
-        )
         lifecycle.maybe_run_retention_cleanup(
-            cleanup_cfg,
+            remapped_server_cfg(cfg),
             force=True,
             audit_emit=lifecycle.load_audit_emit(),
         )
@@ -216,6 +225,16 @@ def fail(message, code=2):
 
 TTL_DURATION_RE = re.compile(r'^(\d+)([smhd])$', re.I)
 
+# An enrollment credential is a short-lived hand-off, not long-term access.
+# 30 days is the hard ceiling: deliberately far below the enrollment retention
+# maximum (3650 days) so a mistyped TTL cannot outlive the record that tracks it.
+MAX_ENROLLMENT_TTL_SEC = 30 * 86400
+MAX_ENROLLMENT_TTL_TEXT = '30d'
+TTL_TOO_LARGE_ERROR = (
+    'TTL must be at most %s (%s seconds); enrollment credentials are short-lived'
+    % (MAX_ENROLLMENT_TTL_TEXT, MAX_ENROLLMENT_TTL_SEC)
+)
+
 
 def parse_enrollment_ttl(raw):
     text = str(raw or '').strip()
@@ -225,6 +244,8 @@ def parse_enrollment_ttl(raw):
         seconds = int(text)
         if seconds <= 0:
             raise ValueError('TTL must be a positive integer')
+        if seconds > MAX_ENROLLMENT_TTL_SEC:
+            raise ValueError(TTL_TOO_LARGE_ERROR)
         return seconds
     match = TTL_DURATION_RE.match(text.lower())
     if not match:
@@ -234,7 +255,10 @@ def parse_enrollment_ttl(raw):
     if amount <= 0:
         raise ValueError('TTL must be positive')
     multipliers = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
-    return amount * multipliers[unit]
+    seconds = amount * multipliers[unit]
+    if seconds > MAX_ENROLLMENT_TTL_SEC:
+        raise ValueError(TTL_TOO_LARGE_ERROR)
+    return seconds
 
 
 def atomic_write_json(path, data, mode=0o600):
@@ -303,7 +327,11 @@ def parse_args(argv=None):
         '--ttl',
         default='600',
         metavar='DURATION|SECONDS',
-        help='Enrollment lifetime: duration (30m|1h|4h|1d) or seconds (default 600)',
+        help=(
+            'Enrollment lifetime: duration (30m|1h|4h|1d) or seconds '
+            '(default 600, maximum %s / %s seconds)'
+            % (MAX_ENROLLMENT_TTL_TEXT, MAX_ENROLLMENT_TTL_SEC)
+        ),
     )
     p.add_argument('--note', default='')
     p.add_argument(
@@ -967,7 +995,13 @@ def main(argv=None):
 
     try:
         ticket, _enroll_record, ticket_record = alloc_mod.issue_bootstrap_ticket(
-            enroll_dir, bootstrap_dir, services, ttl, note, label=client_name
+            enroll_dir,
+            bootstrap_dir,
+            services,
+            ttl,
+            note,
+            label=client_name,
+            cfg=remapped_server_cfg(cfg),
         )
     except Exception as exc:
         fail('failed to issue bootstrap ticket: %s' % exc)

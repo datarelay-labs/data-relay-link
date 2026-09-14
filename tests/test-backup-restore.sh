@@ -44,9 +44,10 @@ EOF
   printf 'server-key-%s\n' "$marker" >"$tree/etc/drlink/pki/server.key"
   printf 'server-cert-%s\n' "$marker" >"$tree/etc/drlink/pki/server.crt"
   printf 'serial-%s\n' "$marker" >"$tree/etc/drlink/pki/ca.srl"
-  printf '{"ticket":"%s-enrollment"}\n' "$marker" \
+  # Coherent Zero-Touch pair: restore preflight rejects orphan tickets.
+  printf '{"id":"ticket","note":"%s-enrollment"}\n' "$marker" \
     >"$tree/var/lib/drlink/enrollments/ticket.json"
-  printf '{"ticket":"%s-bootstrap"}\n' "$marker" \
+  printf '{"schema":1,"id":"ticket","enrollment_id":"ticket","note":"%s-bootstrap"}\n' "$marker" \
     >"$tree/var/lib/drlink/bootstrap/ticket.json"
   mkdir -p "$tree/var/log/drlink"
   printf '{"event":"backup.created","marker":"%s"}\n' "$marker" \

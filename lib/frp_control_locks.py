@@ -25,9 +25,19 @@ Inside an allocator registry.lock transaction the order is:
 Never reacquire registry.lock through a second fd while it is already held —
 Linux flock is not recursive across independent descriptors.
 
+Enrollment pair issuance (bootstrap ticket + enrollment record) writes two
+durable files that are only meaningful together, so it takes the full
+lifecycle → control-state → registry set via acquire_state_dir_control_locks
+and runs retention cleanup with already_locked=True.
+
 Backup and restore take lifecycle then control-state then registry, with a
 timeout, so they cannot block network operations indefinitely if a lifecycle
 holder is stuck.
+
+durable_replace() lives here for the same reason: authoritative writers need
+one agreed answer for how a state file becomes visible, both against other
+writers (the locks above) and against a power failure (the parent-directory
+fsync).
 """
 from __future__ import annotations
 
@@ -98,6 +108,22 @@ def control_state_lock_path(root):
 
 def registry_lock_path(root, registry_rel="var/lib/drlink/registry.json"):
     return (Path(root) / registry_rel).resolve().parent / "registry.lock"
+
+
+def state_dir_lock_paths(state_dir):
+    """Lifecycle / control-state / registry lock files inside a state directory.
+
+    state_dir is the directory that holds registry.json (production:
+    /var/lib/drlink). For that directory the three paths are the same inodes
+    acquire_control_locks() derives from the deploy root, so writers that only
+    know their configured state paths still exclude backup and restore.
+    """
+    state_dir = Path(state_dir).resolve()
+    return (
+        state_dir / Path(LIFECYCLE_LOCK_REL).name,
+        state_dir / Path(CONTROL_STATE_LOCK_REL).name,
+        state_dir / "registry.lock",
+    )
 
 
 def control_root_from_env():
@@ -176,3 +202,65 @@ def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/l
         with acquire_control_state_lock(root, timeout=timeout) as ctrl:
             with ExclusiveFileLock(registry_lock_path(root, registry_rel), timeout=timeout) as reg:
                 yield (life, ctrl, reg)
+
+
+@contextmanager
+def acquire_state_dir_control_locks(state_dir, timeout=DEFAULT_TIMEOUT_SEC):
+    """acquire_control_locks() for callers that only know their state directory.
+
+    Same lock order (lifecycle → control-state → registry) and the same lock
+    files, so a multi-file durable write inside state_dir cannot interleave
+    with a backup or restore of that directory.
+    """
+    life_path, _ctrl_path, reg_path = state_dir_lock_paths(state_dir)
+    with ExclusiveFileLock(life_path, timeout=timeout) as life:
+        with _acquire_control_state_lock_path(_ctrl_path, timeout=timeout) as ctrl:
+            with ExclusiveFileLock(reg_path, timeout=timeout) as reg:
+                yield (life, ctrl, reg)
+
+
+def fsync_dir(path):
+    """Flush a directory entry to stable storage. True when it took effect.
+
+    Returns False instead of raising on filesystems that do not support it:
+    a diagnostic-grade durability gap must not turn an operator command into
+    a failure.
+    """
+    if os.name != "posix":
+        return False
+    flags = getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return False
+    try:
+        os.fsync(fd)
+        return True
+    except OSError:
+        # Some overlay, NFS and FAT mounts reject fsync on a directory fd.
+        return False
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def durable_replace(tmp, path):
+    """os.replace() that also survives a power failure (F16).
+
+    os.replace() is atomic but not durable. Writers already fsync the temp
+    file's contents, so the bytes are safe; the directory entry that gives
+    those bytes their name is not. After a power failure the rename can be
+    lost while the write that preceded it in program order is kept, which
+    for authoritative state, secrets, registries and config means reverting
+    to a superseded document — or, for a name that never existed before,
+    losing the record entirely. Both are semantic corruption, not just a
+    stale read.
+
+    Only the parent directory is synced. Callers that create a new name must
+    fsync their own temp data first, exactly as they do today.
+    """
+    path = Path(path)
+    os.replace(str(tmp), str(path))
+    return fsync_dir(path.parent)
