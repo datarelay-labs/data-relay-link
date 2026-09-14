@@ -651,5 +651,202 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         )
 
 
+class AccessTtlBoundsTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_max_ttl_is_accepted(self):
+        exp = ACL.parse_ttl("%dd" % ACL.TTL_MAX_DAYS, now=self.now)
+        self.assertEqual(exp, self.now + timedelta(days=ACL.TTL_MAX_DAYS))
+
+    def test_ttl_above_max_is_rejected(self):
+        for value in ("3651d", "87601h", "5256001m", "315360001s"):
+            with self.assertRaises(ACL.AccessError) as ctx:
+                ACL.parse_ttl(value, now=self.now)
+            self.assertIn("3650d", str(ctx.exception))
+
+    def test_giant_ttl_raises_access_error_not_overflow(self):
+        for value in ("99999999999999d", "9" * 40 + "h", "9" * 6000 + "s"):
+            with self.assertRaises(ACL.AccessError):
+                ACL.parse_ttl(value, now=self.now)
+
+    def test_ttl_near_datetime_limit_is_bounded(self):
+        # A base close to datetime.max must still fail closed with AccessError.
+        near_max = datetime(9999, 12, 30, tzinfo=timezone.utc)
+        with self.assertRaises(ACL.AccessError):
+            ACL.parse_ttl("30d", now=near_max)
+
+    def test_ttl_zero_and_malformed_still_rejected(self):
+        for value in ("0s", "-1d", "", "4x", "d", "1.5h"):
+            with self.assertRaises(ACL.AccessError):
+                ACL.parse_ttl(value, now=self.now)
+
+    def test_add_source_rejects_oversized_ttl(self):
+        state = ACL.empty_access_state()
+        lid, _ = ACL.create_access_list(state, "Bounded")
+        with self.assertRaises(ACL.AccessError):
+            ACL.add_source_entry(state, lid, "forever", "198.51.100.7", ttl="99999999999999d")
+        self.assertEqual(state["access_lists"][lid]["entries"], [])
+
+
+class AccessDescriptionValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.state = ACL.empty_access_state()
+
+    def test_description_is_trimmed_and_kept(self):
+        _lid, record = ACL.create_access_list(self.state, "Office", "  Corp ranges  ")
+        self.assertEqual(record["description"], "Corp ranges")
+
+    def test_description_max_length(self):
+        ok = "a" * ACL.DESCRIPTION_MAX_LEN
+        _lid, record = ACL.create_access_list(self.state, "Long", ok)
+        self.assertEqual(len(record["description"]), ACL.DESCRIPTION_MAX_LEN)
+        with self.assertRaises(ACL.AccessError):
+            ACL.create_access_list(self.state, "TooLong", "a" * (ACL.DESCRIPTION_MAX_LEN + 1))
+
+    def test_create_rejects_control_and_escape_sequences(self):
+        bad = (
+            "line\nbreak",
+            "carriage\rreturn",
+            "null\x00byte",
+            "bell\x07",
+            "tab\tstop",
+            "ansi\x1b[31mred\x1b[0m",
+            "c1\x9bcsi",
+            "del\x7f",
+        )
+        for value in bad:
+            with self.assertRaises(ACL.AccessError):
+                ACL.create_access_list(self.state, "Bad", value)
+        self.assertEqual(self.state["access_lists"], {})
+
+    def test_update_rejects_control_characters_and_keeps_previous_value(self):
+        lid, _ = ACL.create_access_list(self.state, "Office", "clean")
+        with self.assertRaises(ACL.AccessError):
+            ACL.update_access_list_info(self.state, lid, description="evil\x1b[2J")
+        self.assertEqual(self.state["access_lists"][lid]["description"], "clean")
+        self.assertEqual(self.state["access_lists"][lid]["name"], "Office")
+
+    def test_rejected_description_does_not_apply_rename(self):
+        lid, _ = ACL.create_access_list(self.state, "Office", "clean")
+        with self.assertRaises(ACL.AccessError):
+            ACL.update_access_list_info(
+                self.state, lid, name="Renamed", description="bad\x1b[0m"
+            )
+        self.assertEqual(self.state["access_lists"][lid]["name"], "Office")
+
+    def test_validate_access_state_rejects_hostile_description(self):
+        lid, _ = ACL.create_access_list(self.state, "Office", "clean")
+        ACL.validate_access_state(self.state)
+        self.state["access_lists"][lid]["description"] = "spoof\r\nACCESS ALLOW"
+        with self.assertRaises(ACL.AccessError):
+            ACL.validate_access_state(self.state)
+
+    def test_validate_access_state_rejects_oversized_description(self):
+        lid, _ = ACL.create_access_list(self.state, "Office")
+        self.state["access_lists"][lid]["description"] = "a" * (ACL.DESCRIPTION_MAX_LEN + 1)
+        with self.assertRaises(ACL.AccessError):
+            ACL.validate_access_state(self.state)
+
+    def test_non_string_description_rejected(self):
+        with self.assertRaises(ACL.AccessError):
+            ACL.create_access_list(self.state, "Office", {"nested": "object"})
+
+
+class AccessAuditFieldsTests(unittest.TestCase):
+    def test_event_names_cover_documented_mutations(self):
+        self.assertEqual(
+            set(ACL.ACCESS_AUDIT_EVENTS),
+            {
+                "access.list.created",
+                "access.list.updated",
+                "access.list.deleted",
+                "access.source.added",
+                "access.source.updated",
+                "access.source.removed",
+                "access.service.assigned",
+                "access.service.public",
+            },
+        )
+
+    def test_unknown_event_is_rejected(self):
+        with self.assertRaises(ACL.AccessError):
+            ACL.access_audit_fields("access.list.exfiltrated", list_id="acl_1")
+
+    def test_allowed_fields_pass_through(self):
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_SOURCE_ADDED,
+            list_id="acl_abc",
+            list_name="Office",
+            entry_id="ace_def",
+            entry_name="hq",
+            cidr="203.0.113.0/24",
+            details={"expires_at": "2026-01-01T00:00:00Z"},
+        )
+        self.assertEqual(
+            payload,
+            {
+                "list_id": "acl_abc",
+                "list_name": "Office",
+                "entry_id": "ace_def",
+                "entry_name": "hq",
+                "cidr": "203.0.113.0/24",
+                "details": {"expires_at": "2026-01-01T00:00:00Z"},
+            },
+        )
+
+    def test_description_and_secret_fields_are_dropped(self):
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_LIST_CREATED,
+            list_id="acl_abc",
+            list_name="Office",
+            description="bt1.deadbeef.0123456789abcdef",
+            ticket="bt1.deadbeef.0123456789abcdef",
+            server_token="s3cr3t",
+            details={
+                "description": "bt1.deadbeef.0123456789abcdef",
+                "enrollment_code": "zt1.AAAAAAAAAAAAAAAAAA",
+                "description_length": 12,
+            },
+        )
+        self.assertEqual(
+            payload,
+            {
+                "list_id": "acl_abc",
+                "list_name": "Office",
+                "details": {"description_length": 12},
+            },
+        )
+        self.assertNotIn("bt1.", json.dumps(payload))
+
+    def test_none_values_and_empty_details_are_omitted(self):
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_SERVICE_PUBLIC,
+            client_id="machine-aaa",
+            service_id="ssh",
+            public_port=None,
+            details={"previous_mode": None},
+        )
+        self.assertEqual(payload, {"client_id": "machine-aaa", "service_id": "ssh"})
+
+    def test_audit_payload_survives_redaction_unchanged(self):
+        audit_spec = importlib.util.spec_from_file_location(
+            "frp_audit_for_access_test", str(ROOT / "lib" / "frp_audit.py")
+        )
+        audit_mod = importlib.util.module_from_spec(audit_spec)
+        audit_spec.loader.exec_module(audit_mod)
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_SERVICE_ASSIGNED,
+            client_id="machine-aaa",
+            service_id="ssh",
+            list_id="acl_abc",
+            list_name="Office",
+            public_port=6001,
+            access_mode=ACL.MODE_ALLOWLIST,
+            details={"previous_mode": ACL.MODE_PUBLIC},
+        )
+        self.assertEqual(audit_mod._redact(payload), payload)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -94,6 +94,74 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 ENTRY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 TTL_RE = re.compile(r"^(\d+)([smhd])$", re.IGNORECASE)
 
+DESCRIPTION_MAX_LEN = 1024
+
+# Documented upper bound for temporary (TTL) sources. Without it a giant value
+# such as 99999999999999d overflows datetime arithmetic instead of producing a
+# user-facing error.
+TTL_MAX_DAYS = 3650
+TTL_MAX_SECONDS = TTL_MAX_DAYS * 86400
+TTL_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+# Digits beyond this cannot express a TTL within the bound; reject before int().
+_TTL_MAX_DIGITS = 20
+
+# Access Control mutation audit events (parity with egress.*/profile.*).
+AUDIT_LIST_CREATED = "access.list.created"
+AUDIT_LIST_UPDATED = "access.list.updated"
+AUDIT_LIST_DELETED = "access.list.deleted"
+AUDIT_SOURCE_ADDED = "access.source.added"
+AUDIT_SOURCE_UPDATED = "access.source.updated"
+AUDIT_SOURCE_REMOVED = "access.source.removed"
+AUDIT_SERVICE_ASSIGNED = "access.service.assigned"
+AUDIT_SERVICE_PUBLIC = "access.service.public"
+
+ACCESS_AUDIT_EVENTS = frozenset(
+    {
+        AUDIT_LIST_CREATED,
+        AUDIT_LIST_UPDATED,
+        AUDIT_LIST_DELETED,
+        AUDIT_SOURCE_ADDED,
+        AUDIT_SOURCE_UPDATED,
+        AUDIT_SOURCE_REMOVED,
+        AUDIT_SERVICE_ASSIGNED,
+        AUDIT_SERVICE_PUBLIC,
+    }
+)
+
+# Allowlist, not denylist: any field an audit caller has not been explicitly
+# cleared to record is dropped, so operator free text and credentials can never
+# reach audit.jsonl through a new call site.
+AUDIT_ALLOWED_FIELDS = frozenset(
+    {
+        "list_id",
+        "list_name",
+        "entry_id",
+        "entry_name",
+        "cidr",
+        "client_id",
+        "service_id",
+        "public_port",
+        "access_mode",
+        "access_list_id",
+    }
+)
+AUDIT_ALLOWED_DETAIL_KEYS = frozenset(
+    {
+        "fields",
+        "expires_at",
+        "name_changed",
+        "description_changed",
+        "description_length",
+        "previous_mode",
+        "previous_list_id",
+        "previous_list_name",
+        "previous_cidr",
+        "previous_entry_name",
+        "previous_expires_at",
+        "reason",
+    }
+)
+
 CONN_LOG_MAX_BYTES = 5 * 1024 * 1024
 CONN_LOG_KEEP = 5
 CONN_LOG_MAX_AGE_DAYS = 7
@@ -439,6 +507,54 @@ def validate_entry_name(name: str) -> str:
     return text
 
 
+def validate_description(value: Any) -> str:
+    """Access List descriptions are operator free text rendered in the CLI.
+
+    Control characters (C0/C1, CR/LF) and ANSI escapes are rejected rather than
+    stripped so a pasted payload cannot forge terminal output or log lines.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise AccessError("access list description must be text")
+    if any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+        raise AccessError(
+            "invalid access list description (control characters are not allowed)"
+        )
+    text = value.strip()
+    if len(text) > DESCRIPTION_MAX_LEN:
+        raise AccessError(
+            "access list description too long (max %d)" % DESCRIPTION_MAX_LEN
+        )
+    return text
+
+
+def access_audit_fields(event: str, **fields) -> dict:
+    """Build a secret-free audit payload for one Access Control mutation.
+
+    Unknown fields and unknown ``details`` keys are dropped, so descriptions,
+    tickets, and other operator-supplied text never reach the audit log.
+    """
+    if event not in ACCESS_AUDIT_EVENTS:
+        raise AccessError("unknown access audit event: %s" % event)
+    payload: dict = {}
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key == "details":
+            details = {}
+            if isinstance(value, dict):
+                for dkey, dvalue in value.items():
+                    if dkey in AUDIT_ALLOWED_DETAIL_KEYS and dvalue is not None:
+                        details[dkey] = dvalue
+            if details:
+                payload["details"] = details
+            continue
+        if key in AUDIT_ALLOWED_FIELDS:
+            payload[key] = value
+    return payload
+
+
 def canonicalize_cidr(source: str) -> str:
     text = str(source or "").strip()
     if not text:
@@ -462,18 +578,24 @@ def parse_ttl(text: str, now: Optional[datetime] = None) -> datetime:
     match = TTL_RE.match(raw)
     if not match:
         raise AccessError("invalid TTL (use Ns/Nm/Nh/Nd, e.g. 30m, 4h, 1d)")
-    amount = int(match.group(1))
+    digits = match.group(1)
     unit = match.group(2).lower()
+    if len(digits.lstrip("0")) > _TTL_MAX_DIGITS:
+        raise AccessError("TTL too large (maximum %dd)" % TTL_MAX_DAYS)
+    try:
+        amount = int(digits)
+    except ValueError as exc:
+        raise AccessError("invalid TTL (use Ns/Nm/Nh/Nd, e.g. 30m, 4h, 1d)") from exc
     if amount <= 0:
         raise AccessError("TTL must be positive")
-    delta = {
-        "s": timedelta(seconds=amount),
-        "m": timedelta(minutes=amount),
-        "h": timedelta(hours=amount),
-        "d": timedelta(days=amount),
-    }[unit]
+    seconds = amount * TTL_UNIT_SECONDS[unit]
+    if seconds > TTL_MAX_SECONDS:
+        raise AccessError("TTL too large (maximum %dd)" % TTL_MAX_DAYS)
     base = now or utc_now()
-    return (base + delta).replace(microsecond=0)
+    try:
+        return (base + timedelta(seconds=seconds)).replace(microsecond=0)
+    except (OverflowError, ValueError, OSError) as exc:
+        raise AccessError("TTL out of supported range (maximum %dd)" % TTL_MAX_DAYS) from exc
 
 
 def generate_id(prefix: str, hex_len: int, existing: set[str]) -> str:
@@ -515,6 +637,8 @@ def validate_access_state(state: dict) -> None:
         if str(lst.get("id") or "") != str(lid):
             raise AccessError("access list id mismatch for %s" % lid)
         name = validate_list_name(lst.get("name") or "")
+        if lst.get("description") is not None:
+            validate_description(lst.get("description"))
         key = name.lower()
         if key in names:
             raise AccessError("duplicate access list name: %s" % name)
@@ -666,6 +790,7 @@ def clear_client_bindings(state: dict, machine_id: str) -> int:
 
 def create_access_list(state: dict, name: str, description: str = "") -> tuple[str, dict]:
     name = validate_list_name(name)
+    description = validate_description(description)
     if find_list_by_name(state, name):
         raise AccessError("access list name already exists: %s" % name)
     lists = state.setdefault("access_lists", {})
@@ -673,7 +798,7 @@ def create_access_list(state: dict, name: str, description: str = "") -> tuple[s
     record = {
         "id": lid,
         "name": name,
-        "description": str(description or "").strip(),
+        "description": description,
         "entries": [],
         "created_at": utc_now_iso(),
         "updated_at": utc_now_iso(),
@@ -686,14 +811,19 @@ def update_access_list_info(state: dict, list_id: str, name=None, description=No
     lst = (state.get("access_lists") or {}).get(list_id)
     if not isinstance(lst, dict):
         raise AccessError("access list not found")
+    # Validate everything before mutating so a rejected description cannot
+    # leave a half-applied rename behind.
     if name is not None:
         name = validate_list_name(name)
         other = find_list_by_name(state, name, exclude_id=list_id)
         if other:
             raise AccessError("access list name already exists: %s" % name)
+    if description is not None:
+        description = validate_description(description)
+    if name is not None:
         lst["name"] = name
     if description is not None:
-        lst["description"] = str(description).strip()
+        lst["description"] = description
     lst["updated_at"] = utc_now_iso()
     return lst
 

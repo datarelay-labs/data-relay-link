@@ -1796,6 +1796,11 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
     ``/var/log/drlink`` traverse-only for ``drlink-egress`` (``--x`` / ``0710``)
     while granting write on the service subdirectory ``egress/`` so rotation
     (rename/unlink/create) can succeed.
+
+    Rotation and append share one exclusive lock on the inode that ``path``
+    currently names. Rotating outside the lock lets two writers rotate the same
+    log, and lets a writer resolve, open, or append to an inode that is being
+    replaced underneath it, which silently drops records.
     """
     try:
         path = path or conn_log_path(cfg)
@@ -1803,10 +1808,6 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
         # service log subdirectory is pre-created at install and is writable.
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        try:
-            _rotate_conn_log(path)
         except OSError:
             pass
         record = {
@@ -1834,14 +1835,11 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
         # Drop None keys for compact logs.
         record = {k: v for k, v in record.items() if v is not None}
         line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-        # Open for append; create if missing (service log dir is writable).
-        flags = os.O_WRONLY | os.O_APPEND
-        if not path.exists():
-            flags |= os.O_CREAT
-        fd = os.open(str(path), flags, 0o600)
+        fd, created = _open_conn_log_locked(path)
+        if fd is None:
+            return
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            if flags & os.O_CREAT:
+            if created:
                 try:
                     os.fchmod(fd, 0o600)
                 except OSError:
@@ -1850,21 +1848,68 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
                     reapply_egress_runtime_permissions(conn_log_path=path, parents=False)
                 except OSError:
                     pass
+            if os.fstat(fd).st_size >= CONN_LOG_MAX_BYTES:
+                _rotate_conn_log_locked(path, fd)
             os.write(fd, line.encode("utf-8"))
         finally:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-            os.close(fd)
+            _unlock_close(fd)
     except Exception:
         return
 
 
-def _rotate_conn_log(path: Path) -> None:
+def _unlock_close(fd: Optional[int]) -> None:
+    if fd is None:
+        return
     try:
-        if not path.is_file() or path.stat().st_size < CONN_LOG_MAX_BYTES:
-            return
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _open_conn_log_locked(path: Path, attempts: int = 8) -> tuple[Optional[int], bool]:
+    """Open the active log for append, holding LOCK_EX on the *current* inode.
+
+    A lock on an inode that is no longer named ``path`` protects nothing, so
+    re-stat after locking and retry if the name moved on (an external logrotate,
+    or an operator replacing the file). Returns ``(None, False)`` when the log
+    cannot be locked; callers treat that as a dropped best-effort record.
+    """
+    flags = os.O_WRONLY | os.O_APPEND
+    for _ in range(max(1, int(attempts))):
+        created = False
+        try:
+            fd = os.open(str(path), flags)
+        except FileNotFoundError:
+            try:
+                fd = os.open(str(path), flags | os.O_CREAT | os.O_EXCL, 0o600)
+                created = True
+            except FileExistsError:
+                continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if os.fstat(fd).st_ino == os.stat(str(path)).st_ino:
+                return fd, created
+        except OSError:
+            _unlock_close(fd)
+            continue
+        _unlock_close(fd)
+    return None, False
+
+
+def _rotate_conn_log_locked(path: Path, fd: int) -> None:
+    """Shift ``.N`` generations and empty the active log in place.
+
+    Callers must hold LOCK_EX on ``fd``, the inode named by ``path``. Copy then
+    truncate, rather than rename plus recreate: the active inode stays the same,
+    so writers already queued on this lock keep a valid lock instead of waking
+    up on a rotated-away inode and having to queue again. Copying into a temp
+    generation first means an interrupted rotation cannot lose the log.
+    """
+    try:
         for idx in range(CONN_LOG_KEEP, 0, -1):
             src = Path("%s.%d" % (path, idx))
             dst = Path("%s.%d" % (path, idx + 1))
@@ -1875,10 +1920,19 @@ def _rotate_conn_log(path: Path) -> None:
                     pass
             elif src.is_file():
                 os.replace(src, dst)
-        os.replace(path, Path("%s.1" % path))
-        # Recreate empty active log so append continues on a fresh inode.
-        path.write_text("", encoding="utf-8")
-        os.chmod(path, 0o600)
+        tmp = Path("%s.rot.%d.tmp" % (path, os.getpid()))
+        out = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with open(str(path), "rb") as src_file:
+                while True:
+                    chunk = src_file.read(256 * 1024)
+                    if not chunk:
+                        break
+                    os.write(out, chunk)
+        finally:
+            os.close(out)
+        os.replace(tmp, Path("%s.1" % path))
+        os.ftruncate(fd, 0)
         try:
             reapply_egress_runtime_permissions(conn_log_path=path, parents=False)
         except OSError:

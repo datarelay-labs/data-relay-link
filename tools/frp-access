@@ -43,6 +43,22 @@ def control_root() -> Path:
     return Path(root)
 
 
+def audit(event, **fields):
+    """Emit one Access Control mutation audit event. Never fails the command."""
+    try:
+        payload = ACL.access_audit_fields(event, **fields)
+    except ACL.AccessError:
+        return
+    try:
+        module = load_mod("frp_audit", "frp_audit.py")
+    except SystemExit:
+        return
+    try:
+        module.try_emit(event, **payload)
+    except Exception:
+        pass
+
+
 def with_control_state_lock(fn):
     """Serialize cross-authority access mutations under control-state.lock."""
     with LOCKS.acquire_control_state_lock(control_root()):
@@ -198,6 +214,12 @@ def cmd_create(cfg, args):
     print("Created Access List")
     print("  ID   : %s" % lid)
     print("  Name : %s" % record["name"])
+    audit(
+        ACL.AUDIT_LIST_CREATED,
+        list_id=lid,
+        list_name=record.get("name"),
+        details={"description_length": len(record.get("description") or "")},
+    )
 
 
 def cmd_show(cfg, args):
@@ -256,6 +278,15 @@ def cmd_add_source(cfg, args):
     print("Added source %s (%s)" % (entry.get("name"), entry.get("cidr")))
     if entry.get("expires_at"):
         print("Expires at  : %s" % entry.get("expires_at"))
+    audit(
+        ACL.AUDIT_SOURCE_ADDED,
+        list_id=lid,
+        list_name=_lst.get("name"),
+        entry_id=entry.get("id"),
+        entry_name=entry.get("name"),
+        cidr=entry.get("cidr"),
+        details={"expires_at": entry.get("expires_at")},
+    )
     print_access_session_semantics()
 
 
@@ -270,6 +301,14 @@ def cmd_remove_source(cfg, args):
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Removed source %s (%s)" % (entry.get("name"), entry.get("cidr")))
+    audit(
+        ACL.AUDIT_SOURCE_REMOVED,
+        list_id=lid,
+        list_name=_lst.get("name"),
+        entry_id=entry.get("id"),
+        entry_name=entry.get("name"),
+        cidr=entry.get("cidr"),
+    )
     print_access_session_semantics()
 
 
@@ -277,7 +316,8 @@ def cmd_replace_source(cfg, args):
     lid, _lst, used = confirm_shared_list_mutation(cfg, args.list, yes=bool(args.yes))
 
     def mut(state):
-        return ACL.replace_source_entry(
+        before = dict(ACL.find_source_entry(state, lid, args.source))
+        entry = ACL.replace_source_entry(
             state,
             lid,
             args.source,
@@ -285,27 +325,44 @@ def cmd_replace_source(cfg, args):
             args.new_source,
             ttl=args.ttl,
         )
+        return before, entry
 
     try:
-        entry = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
+        before, entry = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Replaced source %s (%s)" % (entry.get("name"), entry.get("cidr")))
     if entry.get("expires_at"):
         print("Expires at  : %s" % entry.get("expires_at"))
+    audit(
+        ACL.AUDIT_SOURCE_UPDATED,
+        list_id=lid,
+        list_name=_lst.get("name"),
+        entry_id=entry.get("id"),
+        entry_name=entry.get("name"),
+        cidr=entry.get("cidr"),
+        details={
+            "expires_at": entry.get("expires_at"),
+            "previous_entry_name": before.get("name"),
+            "previous_cidr": before.get("cidr"),
+            "previous_expires_at": before.get("expires_at"),
+        },
+    )
 
 
 def cmd_delete(cfg, args):
     def mut(state):
         lid, lst = ACL.resolve_access_list(state, args.list)
+        name = lst.get("name")
         ACL.delete_access_list(state, lid)
-        return lst.get("name")
+        return lid, name
 
     try:
-        name = ACL.mutate_access_state(mut, cfg=cfg)
+        lid, name = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Deleted Access List %s" % name)
+    audit(ACL.AUDIT_LIST_DELETED, list_id=lid, list_name=name)
 
 
 def cmd_edit_info(cfg, args):
@@ -324,6 +381,22 @@ def cmd_edit_info(cfg, args):
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Updated Access List %s" % lst.get("name"))
+    changed = [
+        field
+        for field, value in (("name", args.name), ("description", args.description))
+        if value is not None
+    ]
+    audit(
+        ACL.AUDIT_LIST_UPDATED,
+        list_id=lid,
+        list_name=lst.get("name"),
+        details={
+            "fields": changed,
+            "description_length": (
+                len(lst.get("description") or "") if args.description is not None else None
+            ),
+        },
+    )
 
 
 def cmd_remove_expired(cfg, args):
@@ -348,6 +421,16 @@ def cmd_remove_expired(cfg, args):
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
     print("Removed %d expired entr%s" % (len(removed), "y" if len(removed) == 1 else "ies"))
+    for entry in removed:
+        audit(
+            ACL.AUDIT_SOURCE_REMOVED,
+            list_id=lid,
+            list_name=lst.get("name"),
+            entry_id=entry.get("id"),
+            entry_name=entry.get("name"),
+            cidr=entry.get("cidr"),
+            details={"reason": "expired", "expires_at": entry.get("expires_at")},
+        )
 
 
 def resolve_service(cfg, client_sel, service_id):
@@ -364,12 +447,13 @@ def cmd_assign(cfg, args):
     registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
 
     def mut(state):
+        previous = ACL.get_service_binding(state, mid, sid)
         lid, lst = ACL.resolve_access_list(state, args.list)
         ACL.set_service_binding(state, mid, sid, ACL.MODE_ALLOWLIST, lid)
-        return lst
+        return lst, previous
 
     try:
-        lst = ACL.mutate_access_state(mut, cfg=cfg)
+        lst, previous = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         # Interactive empty-allowlist UX
         msg = str(exc)
@@ -388,6 +472,19 @@ def cmd_assign(cfg, args):
     print("Assigned Access List %s to %s:%s (port %s)" % (
         lst.get("name"), short_client(registry, mid), sid, svc.get("remote_port"),
     ))
+    audit(
+        ACL.AUDIT_SERVICE_ASSIGNED,
+        client_id=mid,
+        service_id=sid,
+        list_id=lst.get("id"),
+        list_name=lst.get("name"),
+        public_port=svc.get("remote_port"),
+        access_mode=ACL.MODE_ALLOWLIST,
+        details={
+            "previous_mode": previous.get("access_mode"),
+            "previous_list_id": previous.get("access_list_id"),
+        },
+    )
 
 
 def confirm_public_broadening(cfg, mid, sid, *, yes=False):
@@ -432,13 +529,29 @@ def cmd_public(cfg, args):
     confirm_public_broadening(cfg, mid, sid, yes=bool(getattr(args, "yes", False)))
 
     def mut(state):
+        previous = ACL.get_service_binding(state, mid, sid)
+        previous_list = (state.get("access_lists") or {}).get(
+            previous.get("access_list_id")
+        ) or {}
         ACL.set_service_binding(state, mid, sid, ACL.MODE_PUBLIC, None)
-        return True
+        return previous, previous_list.get("name")
 
-    ACL.mutate_access_state(mut, cfg=cfg)
+    previous, previous_list_name = ACL.mutate_access_state(mut, cfg=cfg)
     print("Set %s:%s to PUBLIC (port %s)" % (
         short_client(registry, mid), sid, svc.get("remote_port"),
     ))
+    audit(
+        ACL.AUDIT_SERVICE_PUBLIC,
+        client_id=mid,
+        service_id=sid,
+        public_port=svc.get("remote_port"),
+        access_mode=ACL.MODE_PUBLIC,
+        details={
+            "previous_mode": previous.get("access_mode"),
+            "previous_list_id": previous.get("access_list_id"),
+            "previous_list_name": previous_list_name,
+        },
+    )
     print()
     ACL.print_public_exposure_notice()
     print_access_session_semantics()
@@ -733,6 +846,11 @@ def interactive_edit_list(cfg):
         state = ACL.load_access_state(cfg=cfg)
 
 
+TTL_HELP = "Temporary entry lifetime: Ns/Nm/Nh/Nd, e.g. 30m, 4h, 1d (max %dd)" % (
+    ACL.TTL_MAX_DAYS
+)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="frp-access", description="Data Relay Link Access Control")
     sub = parser.add_subparsers(dest="cmd")
@@ -742,7 +860,12 @@ def build_parser():
 
     p = sub.add_parser("create", help="Create access list")
     p.add_argument("name")
-    p.add_argument("--description", default="")
+    p.add_argument(
+        "--description",
+        default="",
+        help="Free-text note (max %d chars; control characters rejected)"
+        % ACL.DESCRIPTION_MAX_LEN,
+    )
 
     p = sub.add_parser("show", help="Show access list")
     p.add_argument("list")
@@ -754,7 +877,7 @@ def build_parser():
     p.add_argument("list")
     p.add_argument("--name", required=True)
     p.add_argument("--source", required=True)
-    p.add_argument("--ttl", default=None)
+    p.add_argument("--ttl", default=None, help=TTL_HELP)
     p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("remove-source", help="Remove source from access list")
@@ -767,13 +890,18 @@ def build_parser():
     p.add_argument("--source", required=True, help="Existing source selector")
     p.add_argument("--name", required=True)
     p.add_argument("--new-source", required=True)
-    p.add_argument("--ttl", default=None)
+    p.add_argument("--ttl", default=None, help=TTL_HELP)
     p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("edit-info", help="Edit access list name/description")
     p.add_argument("list")
     p.add_argument("--name", default=None)
-    p.add_argument("--description", default=None)
+    p.add_argument(
+        "--description",
+        default=None,
+        help="Free-text note (max %d chars; control characters rejected)"
+        % ACL.DESCRIPTION_MAX_LEN,
+    )
     p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("remove-expired", help="Remove expired entries")

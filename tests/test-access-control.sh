@@ -13,6 +13,7 @@ export FRP_DEPLOY_TEST_ROOT="$TREE"
 export FRP_CTL_TEST_ROOT="$TREE"
 export FRP_CTL_BIN_DIR="$ROOT/tools"
 export HOME="$WORKDIR/home"
+export FRP_AUDIT_LOG=/var/log/drlink/audit.jsonl
 mkdir -p "$HOME"
 
 mkdir -p \
@@ -24,6 +25,7 @@ mkdir -p \
   "$TREE/usr/local/lib/drlink"
 
 cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_audit.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_control_locks.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/drlink/"
@@ -228,6 +230,109 @@ fi
 pass "expired-only cleanup stays ALLOWLIST"
 
 "$CTL" access public demo ssh --yes >/dev/null
+
+# Access Control mutations must emit structured audit events without secrets.
+AUDIT="$TREE/var/log/drlink/audit.jsonl"
+SECRET_DESC='shared note bt1.deadbeef.0123456789abcdef'
+"$CTL" access create AuditLab --description "$SECRET_DESC" >/dev/null
+"$CTL" access add-source AuditLab --name lab --source 203.0.113.128/25 --ttl 4h --yes >/dev/null
+"$CTL" access replace-source AuditLab --source 203.0.113.128/25 --name lab2 \
+  --new-source 203.0.113.192/26 --ttl 1d --yes >/dev/null
+"$CTL" access assign demo ssh AuditLab >/dev/null
+"$CTL" access public demo ssh --yes >/dev/null
+"$CTL" access edit-info AuditLab --description 'plain note' --yes >/dev/null
+"$CTL" access remove-source AuditLab --source 203.0.113.192/26 --yes >/dev/null
+"$CTL" access delete AuditLab >/dev/null
+
+[[ -f "$AUDIT" ]] || fail "access mutations must write an audit log"
+python3 - "$AUDIT" <<'PY' || fail "access mutation audit events"
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+by_event = {}
+for record in records:
+    by_event.setdefault(record.get("event"), []).append(record)
+
+required = {
+    "access.list.created": ("list_id", "list_name"),
+    "access.list.updated": ("list_id", "list_name"),
+    "access.list.deleted": ("list_id", "list_name"),
+    "access.source.added": ("list_id", "entry_id", "entry_name", "cidr"),
+    "access.source.updated": ("list_id", "entry_id", "cidr"),
+    "access.source.removed": ("list_id", "entry_id", "cidr"),
+    "access.service.assigned": ("client_id", "service_id", "list_id", "access_mode"),
+    "access.service.public": ("client_id", "service_id", "access_mode"),
+}
+for event, fields in required.items():
+    hits = by_event.get(event)
+    assert hits, "missing audit event %s" % event
+    for field in fields:
+        assert all(field in hit for hit in hits), "%s missing %s" % (event, field)
+
+assert by_event["access.source.added"][-1]["cidr"] == "203.0.113.128/25"
+assert by_event["access.source.updated"][-1]["details"]["previous_cidr"] == "203.0.113.128/25"
+assert by_event["access.service.assigned"][-1]["access_mode"] == "ALLOWLIST"
+assert by_event["access.service.public"][-1]["access_mode"] == "PUBLIC"
+
+access_records = [r for r in records if str(r.get("event", "")).startswith("access.")]
+blob = json.dumps(access_records)
+for leak in ("bt1.deadbeef", "shared note", "plain note", "description\":\"" ):
+    assert leak not in blob, "audit leaked %r" % leak
+print("ok")
+PY
+pass "access mutation audit events (no secrets)"
+
+# Description hygiene: bounded length, no control characters or ANSI escapes.
+if "$CTL" access create BadDesc --description $'evil\x1b[31mred' \
+  >"$WORKDIR/desc-ansi.out" 2>"$WORKDIR/desc-ansi.err"; then
+  fail "ANSI escape in description should be rejected"
+fi
+grep -qi 'control characters' "$WORKDIR/desc-ansi.err" || fail "ANSI description error message"
+if "$CTL" access create BadDesc --description $'line\nbreak' \
+  >"$WORKDIR/desc-nl.out" 2>"$WORKDIR/desc-nl.err"; then
+  fail "newline in description should be rejected"
+fi
+LONG_DESC="$(python3 -c 'import sys; sys.stdout.write("a" * 1025)')"
+if "$CTL" access create BadDesc --description "$LONG_DESC" \
+  >"$WORKDIR/desc-long.out" 2>"$WORKDIR/desc-long.err"; then
+  fail "over-long description should be rejected"
+fi
+grep -qi 'too long' "$WORKDIR/desc-long.err" || fail "over-long description error message"
+"$CTL" access list >"$WORKDIR/desc-list.out"
+if grep -q 'BadDesc' "$WORKDIR/desc-list.out"; then
+  fail "rejected description must not create a list"
+fi
+pass "access list description validation"
+
+# TTL upper bound: giant values are a user-facing error, not an overflow.
+"$CTL" access create TtlLab >/dev/null
+if "$CTL" access add-source TtlLab --name huge --source 198.51.100.77 \
+  --ttl 99999999999999d --yes >"$WORKDIR/ttl-big.out" 2>"$WORKDIR/ttl-big.err"; then
+  fail "giant TTL should be rejected"
+fi
+grep -qi '3650d' "$WORKDIR/ttl-big.err" || fail "giant TTL must name the documented maximum"
+if grep -qi 'traceback\|OverflowError' "$WORKDIR/ttl-big.err"; then
+  fail "giant TTL must not surface a Python traceback"
+fi
+"$CTL" access add-source TtlLab --name bounded --source 198.51.100.78 --ttl 3650d --yes >/dev/null
+"$CTL" access delete TtlLab >/dev/null
+"$CTL" access add-source --help 2>/dev/null | grep -qi '3650d' \
+  || fail "--ttl help must document the maximum"
+python3 - "$ROOT/lib/frp_cli_catalog.py" <<'PY' || fail "catalog --ttl maximum note"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("frp_cli_catalog", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+cmd = mod.find(["access", "add-source"])
+flag = next(f for f in cmd["flags"] if f["name"] == "--ttl")
+assert "3650d" in flag["description"], flag
+assert "3650d" in cmd["detail"], cmd["detail"]
+create = mod.find(["access", "create"])
+assert "1024" in create["detail"], create["detail"]
+print("ok")
+PY
+pass "access TTL upper bound documented and enforced"
 
 export FRP_SERVER_SOURCED=1
 # shellcheck disable=SC1091

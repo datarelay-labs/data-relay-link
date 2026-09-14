@@ -47,6 +47,44 @@ def psl_metadata() -> dict:
     }
 
 
+def idna_ascii(name: str) -> Optional[str]:
+    """Return the lowercase IDNA/punycode ASCII form of a dotted name.
+
+    Returns None when the name cannot be represented in IDNA ASCII. Labels that
+    are already ASCII are lowercased without running the codec so entries the
+    stdlib codec rejects (long or otherwise unusual ASCII labels) survive.
+    """
+    text = str(name or "").strip().lower().rstrip(".")
+    if not text:
+        return None
+    out = []
+    for label in text.split("."):
+        if not label:
+            return None
+        try:
+            label.encode("ascii")
+        except UnicodeEncodeError:
+            try:
+                label = label.encode("idna").decode("ascii").lower()
+            except (UnicodeError, ValueError):
+                return None
+        out.append(label)
+    return ".".join(out)
+
+
+def _add_rule(dest: set[str], rule: str) -> None:
+    """Store a PSL rule in both its literal and IDNA-ASCII forms.
+
+    The list ships Unicode entries (e.g. ``公司.cn``) while policy hostnames are
+    IDNA-canonicalized before lookup, so a Unicode-only rule would let
+    ``*.xn--55qx5d.cn`` slip past the public-suffix wildcard guard.
+    """
+    dest.add(rule)
+    ascii_form = idna_ascii(rule)
+    if ascii_form:
+        dest.add(ascii_form)
+
+
 def _parse_psl(text: str) -> tuple[set[str], set[str], set[str]]:
     exact: set[str] = set()
     wildcard: set[str] = set()
@@ -55,15 +93,14 @@ def _parse_psl(text: str) -> tuple[set[str], set[str], set[str]]:
         line = raw.strip()
         if not line or line.startswith("//"):
             continue
-        # Punycode / IDNA labels in the list are already ASCII for most entries.
         rule = line.lower()
         if rule.startswith("!"):
-            exception.add(rule[1:])
+            _add_rule(exception, rule[1:])
             continue
         if rule.startswith("*."):
-            wildcard.add(rule[2:])
+            _add_rule(wildcard, rule[2:])
             continue
-        exact.add(rule)
+        _add_rule(exact, rule)
     return exact, wildcard, exception
 
 
@@ -80,21 +117,33 @@ def load_psl(*, force: bool = False) -> tuple[set[str], set[str], set[str]]:
         return _rules
 
 
+def _name_forms(name: str) -> list[str]:
+    """Literal and IDNA-ASCII spellings of a name, so either matches a rule."""
+    forms = [name]
+    ascii_form = idna_ascii(name)
+    if ascii_form and ascii_form != name:
+        forms.append(ascii_form)
+    return forms
+
+
 def is_public_suffix(domain: str) -> bool:
     """Return True if domain is itself a public suffix (e.g. com, co.uk, github.io)."""
     exact, wildcard, exception = load_psl()
     name = str(domain or "").strip().lower().rstrip(".")
     if not name:
         return False
-    if name in exception:
+    forms = _name_forms(name)
+    if any(form in exception for form in forms):
         return False
-    if name in exact:
+    if any(form in exact for form in forms):
         return True
     # Wildcard PSL rules: *.ck means label.ck is a public suffix.
-    labels = name.split(".")
-    if len(labels) >= 2:
+    for form in forms:
+        labels = form.split(".")
+        if len(labels) < 2:
+            continue
         parent = ".".join(labels[1:])
-        if parent in wildcard:
+        if any(candidate in wildcard for candidate in _name_forms(parent)):
             return True
     return False
 

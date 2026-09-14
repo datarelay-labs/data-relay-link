@@ -1915,9 +1915,18 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         self.assertEqual(pid, doc["profile"]["id"])
 
 
+def load_psl_module():
+    spec = importlib.util.spec_from_file_location(
+        "frp_public_suffix_test", ROOT / "lib" / "frp_public_suffix.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class EgressPublicSuffixTests(unittest.TestCase):
     def test_reject_public_suffix_wildcards(self):
-        for bad in ("*.com", "*.net", "*.org", "*.co.kr", "*.co.uk"):
+        for bad in ("*.com", "*.net", "*.org", "*.co.kr", "*.co.uk", "*.co.jp"):
             with self.assertRaises(EG.EgressError):
                 EG.canonicalize_hostname(bad, allow_wildcard=True)
 
@@ -1925,6 +1934,62 @@ class EgressPublicSuffixTests(unittest.TestCase):
         host, mode = EG.canonicalize_hostname("*.ubuntu.com", allow_wildcard=True)
         self.assertEqual(host, "*.ubuntu.com")
         self.assertEqual(mode, "wildcard")
+
+    def test_reject_idn_public_suffix_wildcard_in_both_spellings(self):
+        """Policy hosts are IDNA-canonicalized; Unicode-only PSL rules must not
+        leave the punycode spelling of the same suffix reachable."""
+        for bad in ("*.\u516c\u53f8.cn", "*.xn--55qx5d.cn"):
+            with self.assertRaises(EG.EgressError):
+                EG.canonicalize_hostname(bad, allow_wildcard=True)
+
+    def test_allow_narrow_wildcard_under_idn_public_suffix(self):
+        host, mode = EG.canonicalize_hostname("*.example.\u516c\u53f8.cn", allow_wildcard=True)
+        self.assertEqual(host, "*.example.xn--55qx5d.cn")
+        self.assertEqual(mode, "wildcard")
+
+
+class PublicSuffixIdnaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.psl = load_psl_module()
+
+    def test_unicode_and_ascii_exact_rules_are_equivalent(self):
+        pairs = (
+            ("\u516c\u53f8.cn", "xn--55qx5d.cn"),
+            ("\u70b9\u770b", "xn--45q11c"),
+            ("verm\u00f6gensberater", "xn--vermgensberater-ctb"),
+        )
+        for unicode_form, ascii_form in pairs:
+            self.assertTrue(self.psl.is_public_suffix(unicode_form), unicode_form)
+            self.assertTrue(self.psl.is_public_suffix(ascii_form), ascii_form)
+
+    def test_ascii_public_suffixes_still_detected(self):
+        for name in ("com", "net", "co.jp", "co.uk", "github.io"):
+            self.assertTrue(self.psl.is_public_suffix(name), name)
+
+    def test_registrable_domains_are_not_public_suffixes(self):
+        for name in ("ubuntu.com", "example.com", "example.\u516c\u53f8.cn",
+                     "example.xn--55qx5d.cn"):
+            self.assertFalse(self.psl.is_public_suffix(name), name)
+
+    def test_wildcard_and_exception_rules_hold_in_both_spellings(self):
+        # PSL: "*.kobe.jp" with exception "!city.kobe.jp".
+        self.assertTrue(self.psl.is_public_suffix("shibuya.kobe.jp"))
+        self.assertFalse(self.psl.is_public_suffix("city.kobe.jp"))
+        self.assertFalse(self.psl.is_public_suffix("kobe.jp"))
+        # Unicode label under a wildcard parent resolves the same either way.
+        self.assertTrue(self.psl.is_public_suffix("\u795e\u6238.kobe.jp"))
+        self.assertTrue(self.psl.is_public_suffix("xn--h9jw16h.kobe.jp"))
+
+    def test_idna_ascii_rejects_unconvertible_names(self):
+        self.assertIsNone(self.psl.idna_ascii(""))
+        self.assertIsNone(self.psl.idna_ascii("a..b"))
+        self.assertEqual(self.psl.idna_ascii("EXAMPLE.COM."), "example.com")
+
+    def test_rule_sets_carry_ascii_form_of_unicode_entries(self):
+        exact, _wildcard, _exception = self.psl.load_psl()
+        self.assertIn("\u516c\u53f8.cn", exact)
+        self.assertIn("xn--55qx5d.cn", exact)
 
 
 class EgressSchemaMigrationTests(unittest.TestCase):
