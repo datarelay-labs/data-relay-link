@@ -44,6 +44,7 @@ grep -q "set installer-url" "$E2E" || fail "missing set installer-url pin"
 grep -q "set windows-installer-url" "$E2E" || fail "missing set windows-installer-url pin"
 grep -q "drlink create zero-touch" "$E2E" || fail "missing create zero-touch"
 grep -q "FRP_CTL_TEST_INPUT" "$E2E" || fail "zero-touch must use FRP_CTL_TEST_INPUT under sudo use_pty"
+grep -q "base64" "$E2E" || fail "zero-touch TEST_INPUT must be base64-safe across remote shells"
 pass "CANONICAL_INSTALLER_AND_ZERO_TOUCH"
 
 # set installer-url must not resolve through set server (URL-as-setting bug).

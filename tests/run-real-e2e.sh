@@ -437,14 +437,14 @@ server_install_env() {
 
 create_zero_touch() {
   local out="$1" cmd_out="$2" name="$3" note_text="$4"
-  local start rc=0 inputs
+  local start rc=0 payload
   start="$(date +%s)"
   set +e
-  # Guided create under sudo use_pty cannot consume a pipe; use the supported
-  # non-interactive input channel (same as unit tests).
-  inputs="$(printf '%s\n' '1' '1' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22')"
+  # Guided create under sudo use_pty cannot consume a pipe. Deliver answers via
+  # FRP_CTL_TEST_INPUT using base64 so remote /bin/sh does not mangle newlines.
+  payload="$(printf '%s\n' '1' '1' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64 -w0 2>/dev/null || printf '%s\n' '1' '1' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64)"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo FRP_CTL_TEST_INPUT=$(printf '%q' "$inputs") /usr/local/bin/drlink create zero-touch" \
+    "sudo env FRP_CTL_TEST_INPUT=\"\$(printf '%s' '$payload' | base64 -d)\" /usr/local/bin/drlink create zero-touch" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -461,6 +461,11 @@ open(sys.argv[2], "w", encoding="utf-8").write(cmd.group(0) + "\n")
 PY
     rc=$?
   fi
+  # Guard against mangled guided answers (seen when TEST_INPUT newlines were lost).
+  if [[ "$rc" -eq 0 ]] && grep -qE 'Client name[[:space:]]*:[[:space:]]*1$|SSH port[[:space:]]*:[[:space:]]*1$' "$out"; then
+    echo "ERROR: zero-touch guided answers look mangled (client name/port became 1)" >>"$out"
+    rc=1
+  fi
   redact "$out"
   record "$name" "$([[ $rc -eq 0 ]] && echo PASS || echo FAIL)" "$rc" "$(( $(date +%s) - start ))"
   return "$rc"
@@ -468,12 +473,12 @@ PY
 
 create_zero_touch_windows() {
   local out="$1" enc_out="$2" name="$3" note_text="$4"
-  local start rc=0 inputs
+  local start rc=0 payload
   start="$(date +%s)"
   set +e
-  inputs="$(printf '%s\n' '2' '3' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22')"
+  payload="$(printf '%s\n' '2' '3' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64 -w0 2>/dev/null || printf '%s\n' '2' '3' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64)"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo FRP_CTL_TEST_INPUT=$(printf '%q' "$inputs") /usr/local/bin/drlink create zero-touch" \
+    "sudo env FRP_CTL_TEST_INPUT=\"\$(printf '%s' '$payload' | base64 -d)\" /usr/local/bin/drlink create zero-touch" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -492,6 +497,10 @@ open(sys.argv[2], "w", encoding="utf-8").write(
 )
 PY
     rc=$?
+  fi
+  if [[ "$rc" -eq 0 ]] && grep -qE 'Client name[[:space:]]*:[[:space:]]*1$|SSH port[[:space:]]*:[[:space:]]*1$' "$out"; then
+    echo "ERROR: zero-touch guided answers look mangled (client name/port became 1)" >>"$out"
+    rc=1
   fi
   redact "$out"
   record "$name" "$([[ $rc -eq 0 ]] && echo PASS || echo FAIL)" "$rc" "$(( $(date +%s) - start ))"

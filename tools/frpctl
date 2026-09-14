@@ -752,14 +752,20 @@ frpctl_print_both_menu() {
 }
 
 frpctl_input_init() {
-  if [[ -n "${FRP_CTL_TEST_INPUT:-}" && -z "${_FRP_CTL_INPUT_READY:-}" ]]; then
-    _FRP_CTL_INPUT_FILE="$(mktemp)"
-    printf '%s' "${FRP_CTL_TEST_INPUT}" >"$_FRP_CTL_INPUT_FILE"
+  # Command substitution (name="$(frpctl_read ...)") runs each prompt in a new
+  # subshell, so in-memory fds/exports cannot carry the read cursor. Key the
+  # spool by PPID so sibling subshells share one file + offset.
+  if [[ -z "${FRP_CTL_TEST_INPUT:-}" ]]; then
+    return 0
+  fi
+  _FRP_CTL_INPUT_FILE="${TMPDIR:-/tmp}/frpctl-test-input.${PPID}"
+  _FRP_CTL_INPUT_POS_FILE="${_FRP_CTL_INPUT_FILE}.pos"
+  if [[ ! -f "${_FRP_CTL_INPUT_FILE}" ]]; then
+    printf '%s' "${FRP_CTL_TEST_INPUT}" >"${_FRP_CTL_INPUT_FILE}"
     if [[ "${FRP_CTL_TEST_INPUT}" != *$'\n' ]]; then
-      printf '\n' >>"$_FRP_CTL_INPUT_FILE"
+      printf '\n' >>"${_FRP_CTL_INPUT_FILE}"
     fi
-    exec 9<"$_FRP_CTL_INPUT_FILE"
-    _FRP_CTL_INPUT_READY=1
+    printf '0\n' >"${_FRP_CTL_INPUT_POS_FILE}"
   fi
 }
 
@@ -767,11 +773,15 @@ frpctl_input_cleanup() {
   if [[ -n "${_FRP_CTL_INPUT_FILE:-}" && -f "${_FRP_CTL_INPUT_FILE}" ]]; then
     rm -f "${_FRP_CTL_INPUT_FILE}"
   fi
-  if [[ "${_FRP_CTL_INPUT_READY:-}" == "1" ]]; then
-    exec 9<&- 2>/dev/null || true
+  if [[ -n "${_FRP_CTL_INPUT_POS_FILE:-}" && -f "${_FRP_CTL_INPUT_POS_FILE}" ]]; then
+    rm -f "${_FRP_CTL_INPUT_POS_FILE}"
   fi
+  # Also sweep the PPID-keyed spool used by TEST_INPUT reads.
+  rm -f "${TMPDIR:-/tmp}/frpctl-test-input.$$" "${TMPDIR:-/tmp}/frpctl-test-input.$$.pos" \
+    "${TMPDIR:-/tmp}/frpctl-test-input.${PPID}" "${TMPDIR:-/tmp}/frpctl-test-input.${PPID}.pos" 2>/dev/null || true
   _FRP_CTL_INPUT_READY=""
   _FRP_CTL_INPUT_FILE=""
+  _FRP_CTL_INPUT_POS_FILE=""
 }
 
 # Returns 1 on EOF. Empty Enter is a successful empty string.
@@ -780,9 +790,16 @@ frpctl_try_read() {
   local value=""
   frpctl_input_init
   if [[ -n "${FRP_CTL_TEST_INPUT:-}" ]]; then
-    if ! IFS= read -r value <&9; then
+    local pos lines
+    pos="$(cat "${_FRP_CTL_INPUT_POS_FILE}")"
+    pos=$((pos + 1))
+    lines="$(wc -l < "${_FRP_CTL_INPUT_FILE}")"
+    lines="${lines// /}"
+    if [[ "$pos" -gt "$lines" ]]; then
       return 1
     fi
+    value="$(sed -n "${pos}p" "${_FRP_CTL_INPUT_FILE}")"
+    printf '%s\n' "$pos" >"${_FRP_CTL_INPUT_POS_FILE}"
   elif [[ -t 0 ]]; then
     if ! IFS= read -r -p "$prompt" value; then
       return 1
@@ -2844,10 +2861,17 @@ frpctl_repl_read_line() {
   _FRP_CTL_LINE=""
   frpctl_input_init
   if [[ -n "${FRP_CTL_TEST_INPUT:-}" ]]; then
+    local pos lines
     printf '%s' "$FRP_CTL_PROMPT"
-    if ! IFS= read -r _FRP_CTL_LINE <&9; then
+    pos="$(cat "${_FRP_CTL_INPUT_POS_FILE}")"
+    pos=$((pos + 1))
+    lines="$(wc -l < "${_FRP_CTL_INPUT_FILE}")"
+    lines="${lines// /}"
+    if [[ "$pos" -gt "$lines" ]]; then
       return 1
     fi
+    _FRP_CTL_LINE="$(sed -n "${pos}p" "${_FRP_CTL_INPUT_FILE}")"
+    printf '%s\n' "$pos" >"${_FRP_CTL_INPUT_POS_FILE}"
     printf '%s\n' "$_FRP_CTL_LINE"
     return 0
   fi
