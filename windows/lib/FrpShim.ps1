@@ -31,6 +31,15 @@ function Get-FrpSimulatedMachinePathFile {
 }
 
 function Get-FrpMachinePathValue {
+    # Tests set FRP_WINDOWS_FAKE_MACHINE_PATH so install/uninstall logic can be
+    # exercised without mutating the real machine PATH — including on Windows.
+    if ($env:FRP_WINDOWS_FAKE_MACHINE_PATH -and $env:FRP_WINDOWS_FAKE_MACHINE_PATH.Trim().Length -gt 0) {
+        $file = $env:FRP_WINDOWS_FAKE_MACHINE_PATH.Trim()
+        if (Test-Path -LiteralPath $file) {
+            return ([System.IO.File]::ReadAllText($file)).Trim()
+        }
+        return ''
+    }
     if (Test-FrpIsWindowsHost) {
         try {
             $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
@@ -51,6 +60,15 @@ function Set-FrpMachinePathValue {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
     if ($env:FRP_WINDOWS_FAIL_PATH_SHIM -eq '1') {
         throw 'ERROR: simulated machine PATH update failure (FRP_WINDOWS_FAIL_PATH_SHIM=1)'
+    }
+    if ($env:FRP_WINDOWS_FAKE_MACHINE_PATH -and $env:FRP_WINDOWS_FAKE_MACHINE_PATH.Trim().Length -gt 0) {
+        $file = $env:FRP_WINDOWS_FAKE_MACHINE_PATH.Trim()
+        $dir = Split-Path -Parent $file
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($file, $Value + "`n")
+        return $Value
     }
     if (Test-FrpIsWindowsHost) {
         # Write through the registry so a REG_EXPAND_SZ Path keeps its type and
