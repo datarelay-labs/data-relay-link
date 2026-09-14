@@ -107,18 +107,33 @@ assert int(p['local_port'])==3000
 PY
 pass "Custom TCP prompt"
 
-# --- Zero services cannot install ------------------------------------------
+# --- Management-only install is allowed (F17) --------------------------------
 SERVICES_FILE="$WORKDIR/services.json"
 services_init
 frp_reset_test_input
-export FRP_CLIENT_TEST_INPUT=$'3\n4\n'
-if collect_services_interactive >"$WORKDIR/zero.out" 2>"$WORKDIR/zero.err"; then
-  fail "zero-service install should not succeed"
+export FRP_CLIENT_TEST_INPUT=$'3\nY\n'
+if ! collect_services_interactive >"$WORKDIR/mgmt.out" 2>"$WORKDIR/mgmt.err"; then
+  fail "management-only install should succeed"
 fi
-grep -q 'at least one service must be configured' "$WORKDIR/zero.err" "$WORKDIR/zero.out" || fail "zero-service error"
+grep -qi 'management-only\|no published services\|Continue' "$WORKDIR/mgmt.out" \
+  || fail "management-only summary missing"
+[[ "$(services_count)" == "0" ]] || fail "management-only must leave services empty"
 unset FRP_CLIENT_TEST_INPUT
 frp_reset_test_input
-pass "zero services cannot install"
+pass "management-only install allowed"
+
+# --- Cancel from empty menu -----------------------------------------------
+SERVICES_FILE="$WORKDIR/services.json"
+services_init
+frp_reset_test_input
+export FRP_CLIENT_TEST_INPUT=$'4\n'
+if collect_services_interactive >"$WORKDIR/cancel.out" 2>"$WORKDIR/cancel.err"; then
+  fail "cancel should exit non-zero"
+fi
+grep -qi 'Cancelled' "$WORKDIR/cancel.out" "$WORKDIR/cancel.err" || fail "cancel message missing"
+unset FRP_CLIENT_TEST_INPUT
+frp_reset_test_input
+pass "empty-menu cancel"
 
 # --- Install confirmation: No returns to menu ------------------------------
 SERVICES_FILE="$WORKDIR/services.json"
