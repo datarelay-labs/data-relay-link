@@ -1511,7 +1511,20 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
 
         t = threading.Thread(target=run)
         t.daemon = self.daemon_threads
-        t.start()
+        try:
+            t.start()
+        except Exception:
+            # run() never executes, so its finally-release never happens: give
+            # the slot back here or capacity shrinks permanently.
+            try:
+                self._slot_sem.release()
+            except ValueError:
+                pass
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
 
     def finish_request(self, request, client_address):
         handle_client(self.gw, request, client_address)

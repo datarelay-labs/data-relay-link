@@ -93,7 +93,17 @@ class BoundedThreadingMixIn:
 
         t = threading.Thread(target=run)
         t.daemon = self.daemon_threads
-        t.start()
+        try:
+            t.start()
+        except Exception:
+            # run() never executes, so its finally-release never happens: give
+            # the slot back here or capacity shrinks permanently.
+            try:
+                self._slot_sem.release()
+            except ValueError:
+                pass
+            close_quietly(request)
+            return
 
 
 def close_quietly(sock: Optional[socket.socket]) -> None:

@@ -142,12 +142,74 @@ class RelayServer(socketserver.ThreadingTCPServer):
         super().__init__(server_address, _RelayHandler)
         self.request_queue_size = 64
 
+    def process_request(self, request, client_address):
+        """Reserve concurrency slots in the accept loop, before any worker.
+
+        ThreadingMixIn starts a thread here and only then runs the handler, so
+        an acquire inside the handler bounds concurrent *sessions* while thread
+        creation stays unbounded. Admission must precede Thread.start.
+        """
+        state = self.state
+        source_ip = str(client_address[0])
+        if not state.try_acquire():
+            self._reject(request, source_ip)
+            return
+        if not state.try_acquire_source(source_ip):
+            state.release()
+            self._reject(request, source_ip)
+            return
+        try:
+            thread = threading.Thread(
+                target=self._serve_admitted, args=(request, client_address)
+            )
+            thread.daemon = self.daemon_threads
+            thread.start()
+        except Exception:
+            # The worker never runs, so release the reservations it would have
+            # freed; otherwise capacity leaks on every failed thread creation.
+            state.release_source(source_ip)
+            state.release()
+            self.shutdown_request(request)
+
+    def _serve_admitted(self, request, client_address):
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
+        finally:
+            self.shutdown_request(request)
+
+    def _reject(self, request, source_ip: str) -> None:
+        # Last-loaded cfg only: a rejection must not trigger a policy reload in
+        # the accept loop, which is exactly where an overload flood lands.
+        try:
+            cfg = dict(getattr(self.state.cache, "cfg", None) or {})
+        except Exception:
+            cfg = {}
+        EG.emit_conn_log(
+            {
+                "timestamp": EG.utc_now_iso(),
+                "connection_id": _new_ids()[0],
+                "source_ip": source_ip,
+                "protocol": EG.PROTOCOL_TCP,
+                "relay_id": self.relay_id,
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_RESOURCE_LIMIT,
+                "outcome": EG.AUDIT_RESOURCE_LIMIT,
+            },
+            cfg=cfg,
+        )
+        self.shutdown_request(request)
+
 
 class _RelayHandler(socketserver.BaseRequestHandler):
     def handle(self):
         state: TcpEgressState = self.server.state  # type: ignore[attr-defined]
         relay_id = self.server.relay_id  # type: ignore[attr-defined]
-        handle_tcp_client(state, self.request, self.client_address, relay_id)
+        # RelayServer.process_request already holds both slots for this socket.
+        handle_tcp_client(
+            state, self.request, self.client_address, relay_id, admitted=True
+        )
 
 
 def _new_ids() -> tuple[str, str]:
@@ -159,46 +221,54 @@ def handle_tcp_client(
     request: socket.socket,
     client_address,
     relay_id: str,
+    admitted: bool = False,
 ) -> None:
+    """Relay one accepted TCP connection.
+
+    ``admitted`` means the caller already reserved the global and per-source
+    slots (RelayServer does this before starting the worker); this function
+    still owns releasing them.
+    """
     source_ip = str(client_address[0])
     connection_id, session_id = _new_ids()
     cfg = {}
     upstream = None
-    acquired = False
-    source_acquired = False
+    acquired = bool(admitted)
+    source_acquired = bool(admitted)
     try:
-        if not state.try_acquire():
-            EG.emit_conn_log(
-                {
-                    "timestamp": EG.utc_now_iso(),
-                    "connection_id": connection_id,
-                    "source_ip": source_ip,
-                    "protocol": EG.PROTOCOL_TCP,
-                    "relay_id": relay_id,
-                    "decision": EG.DECISION_DENY,
-                    "reason": EG.REASON_RESOURCE_LIMIT,
-                    "outcome": EG.AUDIT_RESOURCE_LIMIT,
-                },
-                cfg=cfg,
-            )
-            return
-        acquired = True
-        if not state.try_acquire_source(source_ip):
-            EG.emit_conn_log(
-                {
-                    "timestamp": EG.utc_now_iso(),
-                    "connection_id": connection_id,
-                    "source_ip": source_ip,
-                    "protocol": EG.PROTOCOL_TCP,
-                    "relay_id": relay_id,
-                    "decision": EG.DECISION_DENY,
-                    "reason": EG.REASON_RESOURCE_LIMIT,
-                    "outcome": EG.AUDIT_RESOURCE_LIMIT,
-                },
-                cfg=cfg,
-            )
-            return
-        source_acquired = True
+        if not admitted:
+            if not state.try_acquire():
+                EG.emit_conn_log(
+                    {
+                        "timestamp": EG.utc_now_iso(),
+                        "connection_id": connection_id,
+                        "source_ip": source_ip,
+                        "protocol": EG.PROTOCOL_TCP,
+                        "relay_id": relay_id,
+                        "decision": EG.DECISION_DENY,
+                        "reason": EG.REASON_RESOURCE_LIMIT,
+                        "outcome": EG.AUDIT_RESOURCE_LIMIT,
+                    },
+                    cfg=cfg,
+                )
+                return
+            acquired = True
+            if not state.try_acquire_source(source_ip):
+                EG.emit_conn_log(
+                    {
+                        "timestamp": EG.utc_now_iso(),
+                        "connection_id": connection_id,
+                        "source_ip": source_ip,
+                        "protocol": EG.PROTOCOL_TCP,
+                        "relay_id": relay_id,
+                        "decision": EG.DECISION_DENY,
+                        "reason": EG.REASON_RESOURCE_LIMIT,
+                        "outcome": EG.AUDIT_RESOURCE_LIMIT,
+                    },
+                    cfg=cfg,
+                )
+                return
+            source_acquired = True
 
         policy_state, load_error, cfg, snap = state.cache.snapshot()
         decision = EG.authorize_tcp_relay(
