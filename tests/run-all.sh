@@ -30,6 +30,7 @@ python3 tests/test-enrollment-atomicity.py
 python3 tests/test-enrollment-pair-atomicity.py
 python3 tests/test-enrollment-retention-policy.py
 python3 tests/test-mgmt-identity.py
+python3 tests/test-mgmt-identity-first-gen-atomicity.py
 ./tests/test-client-config.sh
 ./tests/test-client-allocator-url.sh
 ./tests/test-client-platform.sh
@@ -98,8 +99,11 @@ python3 tests/test-access-control.py
 python3 tests/test-egress-control.py
 python3 tests/test-fixed-tcp-egress.py
 ./tests/test-fixed-tcp-egress.sh
+python3 tests/test-tcp-egress-admission-ordering.py
+python3 tests/test-bounded-server-slot-release.py
 python3 tests/test-egress-conn-log-traverse-only.py
 python3 tests/test-egress-conn-log-rotation.py
+python3 tests/test-egress-conn-log-rotation-concurrency.py
 python3 tests/test-egress-shared-parent-permissions.py
 python3 tests/test-egress-create-safe-default.py
 python3 tests/test-enabled-egress-mutation-confirm.py
