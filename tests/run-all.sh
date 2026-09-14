@@ -75,6 +75,7 @@ python3 tests/test-restore-readiness.py
 ./tests/test-lifecycle.sh
 ./tests/test-guided-ux.sh
 ./tests/test-verb-first-cli-ux.sh
+./tests/test-real-e2e-canonical-cli.sh
 ./tests/test-client-upgrade.sh
 ./tests/test-safe-repo-copy.sh
 bash ./tests/test-installed-client-update.sh

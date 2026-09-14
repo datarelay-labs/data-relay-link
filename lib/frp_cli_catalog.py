@@ -265,6 +265,7 @@ ROOTS = (
     ("disable", "any", "Change", "Disable an existing object"),
     ("apply", "client", "Change", "Apply pending local service changes"),
     ("discard", "client", "Change", "Discard pending local service changes"),
+    ("sync", "client", "Change", "Reconcile local services against server releases"),
     ("revoke", "server", "Security / Lifecycle", "Revoke credentials or management trust"),
     ("release", "server", "Security / Lifecycle", "Release a client or service reservation"),
     ("delete", "server", "Security / Lifecycle", "Permanently delete configuration or metadata"),
@@ -944,6 +945,15 @@ COMMANDS = (
         examples=("service discard",),
         internal=("discard",),
         aliases=(("discard",),),
+    ),
+    _cmd(
+        ("service", "sync"),
+        "client",
+        "Inventory",
+        "Reconcile local services against server releases",
+        examples=("sync", "service sync"),
+        internal=("sync",),
+        aliases=(("sync",),),
     ),
     # --- group ------------------------------------------------------------
     _cmd(
@@ -2066,6 +2076,7 @@ _SPECIAL_FLIP = {
     ("backup", "restore"): (("restore", "backup"), ("restore", "backup")),
     ("service", "apply"): (("apply",), ("apply",)),
     ("service", "discard"): (("discard",), ("discard",)),
+    ("service", "sync"): (("sync",), ("sync",)),
     ("service-profile", "list"): (("show", "service-profiles"), ("show", "profiles")),
     ("service-profile", "show"): (("show", "service-profile"), ("show", "profile")),
     ("service-profile", "create"): (("create", "service-profile"), ("create", "profile")),
@@ -2690,7 +2701,7 @@ def root_help(role):
     for name, roles, category, summary in ROOTS:
         if not role_allows(roles, role):
             continue
-        if name in ("apply", "discard") and not _root_has_commands(name, role):
+        if name in ("apply", "discard", "sync") and not _root_has_commands(name, role):
             continue
         by_category.setdefault(category, []).append((name, summary))
     for category in CATEGORY_ORDER:

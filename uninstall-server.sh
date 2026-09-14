@@ -11,7 +11,7 @@ while [[ $# -gt 0 ]]; do
       cat <<'EOF'
 Usage: uninstall-server.sh [--purge] [--yes]
 
-Default uninstall removes FRP server software and runtime units.
+Default uninstall removes Data Relay Link server software and runtime units.
 Token, private CA, registry, and reservations are preserved.
 
   --purge   Permanently delete preserved state (token, CA, registry, config)
@@ -630,9 +630,9 @@ ${p}"
     printf '%s\n' "$PURGE_REMAINING" >&2
     exit 1
   fi
-  echo 'FRP server removed and state/secrets purged.'
+  echo 'Data Relay Link server removed and state/secrets purged.'
 else
-  echo 'FRP server binaries/services removed. Configuration, token, and registry were preserved.'
+  echo 'Data Relay Link server binaries/services removed. Configuration, token, and registry were preserved.'
   echo 'Use --purge only if you intentionally want to delete all reservations and secrets.'
   echo 'Reinstalling the server later reuses the same CA, token, and port reservations.'
 fi

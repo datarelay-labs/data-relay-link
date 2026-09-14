@@ -1107,14 +1107,10 @@ resolve_server_settings() {
     FRP_TRANSPORT=tcp
   fi
 
-  # Prefer the optional public DNS hostname for the enrollment URL default.
-  # Control/tunnel identity still uses FRP_PUBLIC_HOST (the public IP).
-  local derived_host="$FRP_PUBLIC_HOST"
-  if [[ -n "${FRP_PUBLIC_HOSTNAME:-}" ]]; then
-    derived_host="$FRP_PUBLIC_HOSTNAME"
-  fi
+  # Allocator/control identity uses FRP_PUBLIC_HOST (public IP), not public_hostname.
+  # public_hostname remains the published-service access alias only.
   local derived_url
-  derived_url="$(frp_format_https_url "$derived_host" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+  derived_url="$(frp_format_https_url "$FRP_PUBLIC_HOST" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
 
   # Normalize a bare hostname (or host:port) into the enrollment HTTPS URL when
   # the operator supplied an incomplete FRP_ALLOCATOR_PUBLIC_URL / FRP_ALLOCATOR_URL.

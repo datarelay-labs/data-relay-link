@@ -84,14 +84,18 @@ historical context only; current product version and platform claims are under
 
 Real-host validation and container/CI portability are deliberately reported separately.
 
-| Platform | v2.4.0 validation claim |
+v2.4.0 is still an **untagged release candidate**. Platform rows below are the
+**required validation target** for the eventual stable tag, not a claim that the
+current candidate HEAD has already completed same-HEAD Real E2E PASS.
+
+| Platform | v2.4.0 candidate status |
 | --- | --- |
-| **Ubuntu 24 physical host** | **Real E2E validated** |
-| **Rocky Linux 8.10** | **Real E2E validated** |
-| **Rocky Linux 9.4** | **Real E2E validated** |
-| **Amazon Linux 2023** | **Real E2E validated** |
-| **macOS Apple Silicon** | **Real E2E validated** |
-| **Windows 10 / PowerShell 5.1** | **Real E2E validated** |
+| **Ubuntu 24 physical host** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Rocky Linux 8.10** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Rocky Linux 9.4** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Amazon Linux 2023** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **macOS Apple Silicon** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Windows 10 / PowerShell 5.1** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
 | **Amazon Linux 2** | **Container / CI portability only** — no live-host Real E2E claim |
 | **PowerShell 7** | **CI validated** — same-host Real E2E is claimed only where `pwsh` is actually installed |
 
@@ -99,9 +103,13 @@ Additional automated Linux portability coverage includes Ubuntu 22.04/24.04, Roc
 
 The Data Relay Link **server remains Linux-based**. macOS and Windows are client platforms; a Windows Data Relay Link server is not part of the current product scope.
 
-### What the final Real E2E covered
+Historical Real E2E PASS evidence for earlier releases (`v2.3.x` and before) remains
+valid for those immutable tags only. It is **not** same-HEAD evidence for this
+v2.4.0 candidate.
 
-Across applicable platforms, the v2.4.0 release path validates the actual product lifecycle, including:
+### What the final Real E2E must cover (required target)
+
+Across applicable platforms, the v2.4.0 release path must validate the actual product lifecycle, including:
 
 - install and Zero-Touch enrollment
 - persistent `CLIENT ID`

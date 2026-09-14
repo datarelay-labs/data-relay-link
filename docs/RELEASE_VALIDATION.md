@@ -23,14 +23,14 @@ exactly where they were published. Field installs become final when the new
 `v2.4.0` tag is created on the closure HEAD — no existing tag is repointed to
 get there.
 
-| Item | Classification | Current support claim |
+| Item | Classification | Current candidate status |
 | --- | --- | --- |
-| Ubuntu 24 physical host Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
-| Rocky Linux 8.10 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
-| Rocky Linux 9.4 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
-| Amazon Linux 2023 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
-| macOS Apple Silicon Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
-| Windows 10 / PowerShell 5.1 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **Real E2E validated** |
+| Ubuntu 24 physical host Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| Rocky Linux 8.10 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| Rocky Linux 9.4 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| Amazon Linux 2023 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| macOS Apple Silicon Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| Windows 10 / PowerShell 5.1 Real E2E | REQUIRED_FOR_STABLE (2.4.0) | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
 | Amazon Linux 2 | CI / container portability | **Container / CI only** — no live-host Real E2E |
 | PowerShell 7 | CI | **CI validated** unless same-host Real E2E with `pwsh` installed |
 | Rocky 8/9, AlmaLinux 9, AL2023, AL2 container matrix | REQUIRED_FOR_STABLE (automated) | container PASS |
@@ -131,8 +131,8 @@ Do **not** map Docker, LXD, or QEMU TCG to `REAL_VM=PASS`.
 On a throwaway VM only:
 
 1. Fresh install (server and/or client bootstrap)
-2. `systemctl is-enabled` / `is-active` for `frps`, `drlink-allocator`, `frpc` as applicable
-3. Reboot; confirm units and `frpctl status`
+2. `systemctl is-enabled` / `is-active` for `drlink-server`, `drlink-allocator`, `drlink-client` as applicable
+3. Reboot; confirm units and `sudo drlink show status`
 4. `sudo drlink doctor` (read-only)
 5. Zero-touch **or** manual enrollment
 6. Publish a service; connect with the **public** host and **public** service port
@@ -148,7 +148,7 @@ Then run `tests/live-distro-smoke.sh` for a non-destructive evidence dump.
 
 Require `getenforce` => `Enforcing`. Do not `setenforce 0` to obtain PASS.
 
-Validate server install, client install, allocator HTTPS, `frps`, `frpc`,
+Validate server install, client install, allocator HTTPS, `drlink-server`, `drlink-client`,
 systemd, local file access, ports, and doctor.
 
 If policy blocks legitimate product behavior, record the exact AVC and decide

@@ -58,8 +58,7 @@ resolve_server_settings
 [[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://203.0.113.10:6099/enroll' ]] || fail "derived allocator URL"
 pass "derived allocator URL from public host"
 
-# When public DNS hostname is set, allocator URL must default to the FQDN
-# (not the public IP). Regression for Real E2E allocator prompt bug.
+# public_hostname is a published-service alias only; allocator URL stays on public IP.
 reset_env
 export FRP_PUBLIC_IP='129.225.184.60'
 export FRP_PUBLIC_HOSTNAME='remote.xdr.ooo'
@@ -68,8 +67,8 @@ load_existing_server_config
 resolve_server_settings
 [[ "$FRP_PUBLIC_HOST" == '129.225.184.60' ]] || fail "FQDN default keeps public_host as IP"
 [[ "$FRP_PUBLIC_HOSTNAME" == 'remote.xdr.ooo' ]] || fail "FQDN default keeps public_hostname"
-[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://remote.xdr.ooo:6099/enroll' ]] || fail "FQDN allocator URL default (got ${FRP_ALLOCATOR_PUBLIC_URL})"
-pass "ALLOCATOR_FQDN_DEFAULT derived from public hostname"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://129.225.184.60:6099/enroll' ]] || fail "allocator URL stays on public IP (got ${FRP_ALLOCATOR_PUBLIC_URL})"
+pass "ALLOCATOR_SEPARATE_FROM_PUBLIC_HOSTNAME"
 
 # Bare hostname FRP_ALLOCATOR_PUBLIC_URL is normalized to the enrollment URL.
 reset_env

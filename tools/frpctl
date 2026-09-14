@@ -1203,15 +1203,17 @@ frpctl_guided_zero_touch_windows() {
   echo
   echo "1) RDP only"
   echo "2) Configure TCP services"
-  echo "3) Back"
+  echo "3) OpenSSH (SSH)"
+  echo "4) Back"
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
     1) frpctl_zt_run_rdp ;;
     2) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_services ;;
-    3|"") return 0 ;;
+    3) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_ssh ;;
+    4|"") return 0 ;;
     *)
-      echo "ERROR: select 1-3" >&2
+      echo "ERROR: select 1-4" >&2
       return 1
       ;;
   esac
@@ -2222,6 +2224,10 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       frpctl_invoke frp-set-client-installer-url "$(frpctl_json_get "$result" value)"
       ;;
+    set_windows_installer_url)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-set-client-installer-url --windows "$(frpctl_json_get "$result" value)"
+      ;;
     set_server_hostname)
       frpctl_require_server || return 1
       frpctl_invoke frp-server-set hostname "$(frpctl_json_get "$result" value)"
@@ -2260,6 +2266,7 @@ frpctl_dispatch_canonical() {
       ;;
     apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
+    sync) frpctl_require_client || return 1; frpctl_invoke frp-client sync ;;
     create_zero_touch) frpctl_require_server || return 1; frpctl_guided_zero_touch ;;
     create_enrollment)
       frpctl_require_server || return 1

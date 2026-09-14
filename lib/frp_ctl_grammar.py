@@ -262,7 +262,7 @@ def _set_resources(role):
     client, server = _role_parts(role)
     items = []
     if server:
-        items.extend(["client", "group", "profile", "egress-profile", "installer-url", "server"])
+        items.extend(["client", "group", "profile", "egress-profile", "installer-url", "windows-installer-url", "server"])
     if client:
         items.append("service")
     return items
@@ -1441,6 +1441,7 @@ def match(tokens, role, names=None, clients=None):
         "disable": _match_enable_disable,
         "apply": lambda toks, role, names=None: {"status": "ok", "action": "apply"},
         "discard": lambda toks, role, names=None: {"status": "ok", "action": "discard"},
+        "sync": lambda toks, role, names=None: {"status": "ok", "action": "sync"},
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
         "support-bundle": lambda toks, role, names=None: {"status": "ok", "action": "support_bundle", "passthrough": toks[1:]},
         "access": lambda toks, role, names=None: {"status": "ok", "action": "access_cmd", "passthrough": toks[1:]},
@@ -1473,7 +1474,7 @@ def match(tokens, role, names=None, clients=None):
         if verb == "set" and client:
             return fn(tokens, role, names)
         return {"status": "role", "need": "server", "command": verb}
-    if verb in ("apply", "discard") and not client:
+    if verb in ("apply", "discard", "sync") and not client:
         return {"status": "role", "need": "client", "command": verb}
     if verb in ("enable", "disable"):
         if not client and not server:
@@ -1866,6 +1867,19 @@ def _match_set(tokens, role, names=None):
         if len(tokens) < 3:
             return incomplete("Missing installer URL.", ["set installer-url <url>"])
         return {"status": "ok", "action": "set_installer_url", "value": tokens[2]}
+    if resource == "windows-installer-url":
+        if not server:
+            return {"status": "role", "need": "server", "command": "set windows-installer-url"}
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing Windows installer URL.",
+                ["set windows-installer-url <url>"],
+            )
+        return {
+            "status": "ok",
+            "action": "set_windows_installer_url",
+            "value": tokens[2],
+        }
     if resource == "server":
         if not server:
             return {"status": "role", "need": "server", "command": "set server"}
@@ -2757,6 +2771,7 @@ def _tab_desc_map(line, role, names=None, clients=None):
         "disable": "Disable a local service",
         "apply": "Apply pending local changes",
         "discard": "Discard pending local changes",
+        "sync": "Reconcile local services against server releases",
         "quit": "Leave drlink",
         "q": "Leave drlink",
     }

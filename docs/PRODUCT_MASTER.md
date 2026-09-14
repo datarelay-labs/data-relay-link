@@ -2471,10 +2471,11 @@ Bulk Operation
 
 ```text
 Project:              2.4.0
-Tag:                  v2.4.0 (create on final audit HEAD)
+Tag:                  v2.4.0 (create on final audit HEAD — not yet published)
 FRP:                  0.71.0
 Feature focus:        Fixed TCP Egress + Explain/Recipes + release evidence integrity
-Release qualification: Double Full Real E2E on exact HEAD
+Release qualification: Double Full Real E2E on exact final HEAD
+Current candidate Real E2E: REQUIRED / PENDING FINAL SAME-HEAD VALIDATION
 FEATURE_FREEZE:       ACTIVE after this phase PASS
 ```
 
@@ -2487,8 +2488,10 @@ FEATURE_FREEZE:       ACTIVE after this phase PASS
 - Short URL Real E2E is a hard release gate
 - SPDX SBOM generator + GitHub Artifact Attestation workflow
 - Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+- Action-first `drlink` operator grammar (verb → resource → target → property)
 
-Historical `v2.3.1` / `v2.3.0` / `v2.2.x` tags remain immutable.
+Historical `v2.3.1` / `v2.3.0` / `v2.2.x` tags remain immutable. Historical Real E2E
+PASS evidence for those tags is **not** same-HEAD evidence for this candidate.
 
 ## 50.0a Historical — v2.3.1 RC (Controlled Egress + resource-first CLI)
 
@@ -3564,11 +3567,11 @@ Manage a few to a few dozen clients with drlink
 | Controlled Egress HTTP/HTTPS (port **6102**) | **STABLE (from v2.3.1)** |
 | Fixed TCP Egress (pool **6200–6299**) | **IN v2.4.0 RC** |
 | Egress Explain / Recipes | **IN v2.4.0 RC** |
-| Resource-first `drlink` CLI / catalog | **STABLE (from v2.3.1)** |
+| Action-first `drlink` CLI / catalog | **IN v2.4.0 RC** (resource-first was v2.3.1) |
 | FEATURE FREEZE | **ACTIVE after v2.4.0 final product closure PASS** |
-| macOS Apple Silicon | **STABLE / Real E2E validated** |
-| Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
-| Rocky 8 / Rocky 9 / AL2023 | **STABLE / Real E2E validated** |
+| macOS Apple Silicon | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** (v2.4.0 candidate) |
+| Windows 10 / PS5.1 Client | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** (v2.4.0 candidate) |
+| Rocky 8 / Rocky 9 / AL2023 | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** (v2.4.0 candidate) |
 | Amazon Linux 2 | **Portability/CI only; no live Real E2E host** |
 | PowerShell 7 | **CI validated; same-host depends on `pwsh` availability** |
 | Dynamic Group | OPTIONAL / LATER |

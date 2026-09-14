@@ -440,8 +440,9 @@ create_zero_touch() {
   local start rc=0
   start="$(date +%s)"
   set +e
+  # Canonical operator path: guided create zero-touch (no backend escape hatch).
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo /usr/local/lib/drlink/frp-create-client --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
+    "printf '%s\n' '1' '1' '$CLIENT_LABEL' '$note_text' '$TUNNEL_SSH_USER' '22' | sudo /usr/local/bin/drlink create zero-touch" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -468,8 +469,9 @@ create_zero_touch_windows() {
   local start rc=0
   start="$(date +%s)"
   set +e
+  # Canonical: Windows → OpenSSH guided create zero-touch.
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo /usr/local/lib/drlink/frp-create-client --one-line --platform windows --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note '$note_text'" \
+    "printf '%s\n' '2' '3' '$CLIENT_LABEL' '$note_text' '$TUNNEL_SSH_USER' '22' | sudo /usr/local/bin/drlink create zero-touch" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -558,39 +560,15 @@ discover_client_identity_macos() {
 }
 
 pin_linux_installer_urls() {
-  # Ensure zero-touch curl targets a GitHub-raw SHA that actually exists.
+  # Untagged RC: pin exact-commit installer URLs through the canonical CLI.
   local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
   local win="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
-  run_server pin-installer-urls "sudo python3 - <<'PY'
-import json
-from pathlib import Path
-p = Path('/etc/drlink/config.json')
-c = json.loads(p.read_text(encoding='utf-8'))
-c['client_installer_url'] = '$url'
-c['windows_client_installer_url'] = '$win'
-p.write_text(json.dumps(c, indent=2) + '\n', encoding='utf-8')
-print(c['client_installer_url'])
-print(c['windows_client_installer_url'])
-PY
-sudo systemctl restart drlink-allocator
-sleep 1
-systemctl is-active drlink-allocator"
+  run_server pin-installer-urls "sudo /usr/local/bin/drlink set installer-url '$url' && sudo /usr/local/bin/drlink set windows-installer-url '$win' && sudo systemctl restart drlink-allocator && sleep 1 && systemctl is-active drlink-allocator && echo '$url' && echo '$win'"
 }
 
 pin_windows_installer_url() {
   local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
-  run_server win-pin-installer "sudo python3 - <<'PY'
-import json
-from pathlib import Path
-p = Path('/etc/drlink/config.json')
-c = json.loads(p.read_text(encoding='utf-8'))
-c['windows_client_installer_url'] = '$url'
-p.write_text(json.dumps(c, indent=2) + '\n', encoding='utf-8')
-print(c['windows_client_installer_url'])
-PY
-sudo systemctl restart drlink-allocator
-sleep 1
-systemctl is-active drlink-allocator"
+  run_server win-pin-installer "sudo /usr/local/bin/drlink set windows-installer-url '$url' && sudo systemctl restart drlink-allocator && sleep 1 && systemctl is-active drlink-allocator && echo '$url'"
 }
 
 scenario_windows_full() {
@@ -691,7 +669,7 @@ print('PROXY_MAPPED_OK')
 PY" || fail_stop
 
   run_client 12-http-fixtures 'mkdir -p /tmp/frp-e2e-http && printf "macos-web\n" >/tmp/frp-e2e-http/index.html; nohup python3 -m http.server 18080 --bind 127.0.0.1 -d /tmp/frp-e2e-http >/tmp/frp-http.log 2>&1 </dev/null & sleep 1; curl -fsS http://127.0.0.1:18080' || fail_stop
-  run_client 13-http-add 'sudo /usr/local/bin/frp-client add-service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services' || fail_stop
+  run_client 13-http-add 'sudo /usr/local/bin/drlink add service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services' || fail_stop
   local http_port
   http_port="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
     "sudo python3 -c \"import json; d=json.load(open('$state_root/client-state.json')); print(((d.get('services') or {}).get('web') or {}).get('remote_port') or '')\"" | tr -d '\r\n')"
@@ -783,7 +761,7 @@ scenario_install() {
 
 scenario_services() {
   run_client 10-http-fixtures "rm -rf /tmp/frp-e2e-http-a /tmp/frp-e2e-http-b; mkdir -p /tmp/frp-e2e-http-a /tmp/frp-e2e-http-b; printf 'web-a\n' >/tmp/frp-e2e-http-a/index.html; printf 'web-b\n' >/tmp/frp-e2e-http-b/index.html; nohup python3 -m http.server 18080 --bind 127.0.0.1 -d /tmp/frp-e2e-http-a >/tmp/frp-http-a.log 2>&1 </dev/null & nohup python3 -m http.server 18081 --bind 127.0.0.1 -d /tmp/frp-e2e-http-b >/tmp/frp-http-b.log 2>&1 </dev/null & sleep 1; curl -fsS http://127.0.0.1:18080; echo ====; curl -fsS http://127.0.0.1:18081" || fail_stop
-  run_client 11-http-add "sudo /usr/local/bin/frp-client add-service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 11-http-add "sudo /usr/local/bin/drlink add service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
   # Discover HTTP port from client state (not hardcoded 6001 when other clients exist).
   local http_port
   http_port="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
@@ -791,13 +769,13 @@ scenario_services() {
   [[ -n "$http_port" ]] || fail_stop
   note "HTTP_PUBLIC_PORT=$http_port"
   run_server 12-http-external "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 13-http-edit "sudo /usr/local/bin/frp-client set-service web target-port 18081 && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 13-http-edit "sudo /usr/local/bin/drlink set service web target-port 18081 && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 14-http-external-edited "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 15-http-disable "sudo /usr/local/bin/frp-client disable-service web && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 15-http-disable "sudo /usr/local/bin/drlink disable service web && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 16-http-disabled "! curl -fsS --max-time 5 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 17-http-enable "sudo /usr/local/bin/frp-client enable-service web && sudo /usr/local/bin/frp-client apply-pending && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 17-http-enable "sudo /usr/local/bin/drlink enable service web && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 18-http-reenabled "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 19-http-disable-again "sudo /usr/local/bin/frp-client disable-service web && sudo /usr/local/bin/frp-client apply-pending >/dev/null" || fail_stop
+  run_client 19-http-disable-again "sudo /usr/local/bin/drlink disable service web && sudo /usr/local/bin/drlink apply >/dev/null" || fail_stop
   run_server 20-release "printf 'RELEASE\n' | sudo /usr/local/bin/drlink release service '$CLIENT_MID_PREFIX' web" || fail_stop
   run_server 21-http-released "! curl -fsS --max-time 5 'http://127.0.0.1:$http_port'" || fail_stop
 
@@ -822,7 +800,7 @@ print('server registry: web removed for %s' % mid)
 PY
 
   # Server release does not mutate client-state.json; explicit sync reconciles.
-  run_client 23-client-sync "sudo /usr/local/bin/frp-client sync" || fail_stop
+  run_client 23-client-sync "sudo /usr/local/bin/drlink sync" || fail_stop
   run_client 23b-client-show-services "sudo /usr/local/bin/drlink show services" || fail_stop
   python_remote "$CLIENT_ALIAS" 24-client-state-assert <<'PY' || fail_stop
 import json
@@ -901,14 +879,14 @@ scenario_dns_only() {
     discover_client_identity || { scenario_install; }
   fi
   # Ensure hostname configured (install may have set it; also exercise runtime set).
-  run_server dns-set "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
+  run_server dns-set "sudo /usr/local/bin/drlink set server public-hostname '$PUBLIC_HOSTNAME'" || fail_stop
   ACCESS_HOST="$PUBLIC_HOSTNAME"
   scenario_dns_checks
   # Configuration change to a second hostname that also resolves (sslip alternate form not required).
-  run_server dns-change-unset "sudo /usr/local/bin/drlink unset server hostname || sudo /usr/local/lib/drlink/frp-server-set hostname --unset" || fail_stop
+  run_server dns-change-unset "sudo /usr/local/bin/drlink unset server public-hostname" || fail_stop
   ACCESS_HOST="$SERVER_IP"
   wait_external_ssh dns-ip-fallback "$EXT_TRIES" "$EXT_DELAY" "$SERVER_IP" "$SSH_PUBLIC_PORT" "$TUNNEL_SSH_USER" || fail_stop
-  run_server dns-change-reset "sudo /usr/local/bin/drlink set server hostname '$PUBLIC_HOSTNAME'" || fail_stop
+  run_server dns-change-reset "sudo /usr/local/bin/drlink set server public-hostname '$PUBLIC_HOSTNAME'" || fail_stop
   ACCESS_HOST="$PUBLIC_HOSTNAME"
   wait_external_ssh dns-after-reset "$EXT_TRIES" "$EXT_DELAY" "$PUBLIC_HOSTNAME" "$SSH_PUBLIC_PORT" "$TUNNEL_SSH_USER" || fail_stop
   run_server dns-ports-unchanged "sudo /usr/local/bin/drlink show client '$CLIENT_MID_PREFIX'" || fail_stop

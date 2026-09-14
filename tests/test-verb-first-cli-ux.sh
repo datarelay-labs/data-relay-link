@@ -213,11 +213,11 @@ assert_json_field "$HF" action show_client
 pass BACKEND_CAPABILITY_PARITY
 pass RESOURCE_FIRST_HIDDEN_COMPAT
 
-# --- ALLOCATOR_FQDN_DEFAULT (already covered in install config suite) ---
-if [[ -f "$ROOT/tests/test-server-install-config.sh" ]] && grep -q 'ALLOCATOR_FQDN\|allocator.*hostname\|public_hostname' "$ROOT/tests/test-server-install-config.sh"; then
+# --- ALLOCATOR_PUBLIC_HOSTNAME_SEPARATION (EXPECTED_BEHAVIOR) ---
+if [[ -f "$ROOT/tests/test-server-install-config.sh" ]] && grep -q 'ALLOCATOR_SEPARATE_FROM_PUBLIC_HOSTNAME\|allocator URL stays on public IP' "$ROOT/tests/test-server-install-config.sh"; then
   pass ALLOCATOR_FQDN_DEFAULT
 else
-  fail "allocator FQDN regression coverage missing from test-server-install-config.sh"
+  fail "allocator/public_hostname separation coverage missing from test-server-install-config.sh"
 fi
 
 echo
