@@ -41,8 +41,17 @@ shells, downloads `frp_0.71.0_darwin_arm64.tar.gz`, and verifies SHA-256
 
 ## Service control
 
-Normal client commands remain `sudo drlink` and `sudo frp-client`. Direct
-launchd inspection is:
+Normal client commands use `sudo drlink`. Everyday lifecycle examples:
+
+```bash
+sudo drlink show status
+sudo drlink system pause
+sudo drlink system resume
+sudo drlink system restart
+sudo drlink system autostart
+```
+
+Direct launchd inspection for troubleshooting is:
 
 ```bash
 sudo launchctl print system/com.datarelay.drlink.frpc
@@ -53,6 +62,11 @@ the state root.
 
 ## Uninstall
 
-Run `sudo drlink uninstall` or the client uninstaller. Local files and the
-LaunchDaemon are removed. Server-side enrollment records and port reservations
-are intentionally retained and must be released explicitly on the server.
+Run `sudo drlink system uninstall`. Local files and the LaunchDaemon are
+removed. Server-side enrollment records and port reservations are intentionally
+retained and must be released explicitly on the server with:
+
+```bash
+unset client <CLIENT> service <SERVICE>
+unset client <CLIENT>
+```

@@ -219,16 +219,25 @@ frpctl_find_cmd() {
       return 0
     fi
   fi
+  # Prefer canonical bin paths before PATH lookup so a stale /usr/local/sbin
+  # shadow cannot win over /usr/local/bin after a partial upgrade.
+  for cand in     "/usr/local/bin/${name}"     "/usr/local/lib/drlink/${name}"; do
+    if [[ -x "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
   if command -v "$name" >/dev/null 2>&1; then
     command -v "$name"
     return 0
   fi
   # Canonical install layout keeps management helpers under lib/drlink (not on PATH).
-  # Legacy PATH locations remain as fallbacks for mid-upgrade hosts.
+  # Prefer /usr/local/bin over legacy /usr/local/sbin so mid-upgrade hosts do not
+  # keep dispatching a stale backend beside an updated bin copy.
   for cand in \
     "/usr/local/lib/drlink/${name}" \
-    "/usr/local/sbin/${name}" \
-    "/usr/local/bin/${name}"; do
+    "/usr/local/bin/${name}" \
+    "/usr/local/sbin/${name}"; do
     if [[ -x "$cand" ]]; then
       printf '%s' "$cand"
       return 0
@@ -2721,6 +2730,17 @@ frpctl_dispatch_canonical() {
     apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
     sync) frpctl_require_client || return 1; frpctl_invoke frp-client sync ;;
+    client_pause) frpctl_require_client || return 1; frpctl_invoke frp-client pause ;;
+    client_resume) frpctl_require_client || return 1; frpctl_invoke frp-client resume ;;
+    client_restart) frpctl_require_client || return 1; frpctl_invoke frp-client restart ;;
+    client_autostart)
+      frpctl_require_client || return 1
+      frpctl_invoke frp-client autostart "$(frpctl_json_get "$result" mode)"
+      ;;
+    system_uninstall)
+      frpctl_load_passthrough "$result"
+      frpctl_system_uninstall
+      ;;
     create_zero_touch) frpctl_require_server || return 1; frpctl_guided_client_onboarding ;;
     create_enrollment)
       frpctl_require_server || return 1
@@ -3075,6 +3095,200 @@ frpctl_dispatch_canonical() {
   return 0
 }
 
+
+frpctl_find_uninstaller() {
+  local kind="$1" cand
+  local cands=()
+  if [[ "$kind" == "server" ]]; then
+    cands+=(
+      "$(frpctl_path /usr/local/lib/drlink/uninstall-server.sh)"
+      "${_FRPCTL_DIR}/../uninstall-server.sh"
+      "${_FRPCTL_DIR}/uninstall-server.sh"
+    )
+  else
+    cands+=(
+      "$(frpctl_path /usr/local/lib/drlink/uninstall-client.sh)"
+      "${_FRPCTL_DIR}/../uninstall-client.sh"
+      "${_FRPCTL_DIR}/uninstall-client.sh"
+    )
+  fi
+  for cand in "${cands[@]}"; do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+frpctl_run_uninstaller() {
+  local script="$1"
+  shift
+  local root="${FRP_CTL_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
+  if [[ -n "$root" ]]; then
+    FRP_UNINSTALL_TEST_ROOT="$root" FRP_CLIENT_TEST_ROOT="${FRP_CLIENT_TEST_ROOT:-$root}" \
+      bash "$script" "$@"
+  else
+    bash "$script" "$@"
+  fi
+}
+
+frpctl_client_uninstall_flow() {
+  local script ans yes=0 pt
+  script="$(frpctl_find_uninstaller client)" || {
+    echo "ERROR: client uninstaller is not installed on this host." >&2
+    echo "Install or update Data Relay Link, then retry: system uninstall" >&2
+    return 1
+  }
+  for pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+    [[ "$pt" == "--yes" ]] && yes=1
+  done
+  echo
+  echo "Uninstall Data Relay Link client"
+  echo "================================"
+  echo
+  echo "WHAT WILL BE REMOVED"
+  echo
+  echo "Local Data Relay Link software"
+  echo "Local client identity"
+  echo "Local client configuration"
+  echo "Local service state"
+  echo "Local autostart configuration"
+  echo
+  echo "WHAT WILL REMAIN ON THE SERVER"
+  echo
+  echo "Client record"
+  echo "Published service reservations"
+  echo "Public port reservations"
+  echo "Server-side policy state"
+  echo
+  echo "This uninstall does not contact the server and does not release ports."
+  echo
+  if [[ "$yes" != "1" ]]; then
+    ans="$(frpctl_read "Remove local Data Relay Link client? [y/N]: " "N")" || return 1
+    case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+      y|yes) ;;
+      *) echo "Cancelled."; return 0 ;;
+    esac
+  fi
+  frpctl_run_uninstaller "$script"
+}
+
+frpctl_server_uninstall_flow() {
+  local script choice ans yes=0 pt
+  script="$(frpctl_find_uninstaller server)" || {
+    echo "ERROR: server uninstaller is not installed on this host." >&2
+    echo "Install or update Data Relay Link, then retry: system uninstall" >&2
+    return 1
+  }
+  for pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+    [[ "$pt" == "--yes" ]] && yes=1
+  done
+  echo
+  echo "Uninstall Data Relay Link"
+  echo "========================"
+  echo
+  echo "1) Remove software"
+  echo "   Preserve server configuration and state for reinstall"
+  echo
+  echo "2) Completely remove Data Relay Link"
+  echo "   Remove software and all Data Relay Link server state"
+  echo
+  echo "3) Back"
+  echo
+  choice="$(frpctl_read "Select [3]: " "3")" || return 1
+  case "$choice" in
+    1)
+      echo
+      echo "WHAT WILL BE REMOVED"
+      echo
+      echo "Data Relay Link server software"
+      echo "Runtime services"
+      echo
+      echo "WHAT WILL BE PRESERVED"
+      echo
+      echo "Server configuration"
+      echo "CA / PKI state"
+      echo "Client registry"
+      echo "Enrollment state"
+      echo "Service reservations"
+      echo "Public port reservations"
+      echo "ACLs"
+      echo "Internet Access configuration"
+      echo
+      if [[ "$yes" != "1" ]]; then
+        ans="$(frpctl_read "Remove server software and preserve state? [y/N]: " "N")" || return 1
+        case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+          y|yes) ;;
+          *) echo "Cancelled."; return 0 ;;
+        esac
+      fi
+      frpctl_run_uninstaller "$script"
+      ;;
+    2)
+      echo
+      echo "WHAT WILL BE REMOVED"
+      echo
+      echo "Data Relay Link server software"
+      echo "Server configuration"
+      echo "CA / PKI state"
+      echo "Client registry"
+      echo "Enrollment state"
+      echo "Service reservations"
+      echo "Public port reservations"
+      echo "ACLs"
+      echo "Internet Access configuration"
+      echo "Other Data Relay Link server-owned state"
+      echo
+      echo "This cannot be undone."
+      echo
+      ans="$(frpctl_read "Type PURGE to permanently delete all server state: " "")" || return 1
+      if [[ "$ans" != "PURGE" ]]; then
+        echo "Cancelled."
+        return 0
+      fi
+      frpctl_run_uninstaller "$script" --purge --yes
+      ;;
+    *)
+      echo "Cancelled."
+      return 0
+      ;;
+  esac
+}
+
+frpctl_system_uninstall() {
+  local has_client=0 has_server=0 choice
+  frpctl_is_client && has_client=1
+  frpctl_is_server && has_server=1
+  if [[ "$has_client" != "1" && "$has_server" != "1" ]]; then
+    echo "ERROR: Data Relay Link is not installed on this host." >&2
+    return 1
+  fi
+  if [[ "$has_client" == "1" && "$has_server" == "1" ]]; then
+    echo
+    echo "Uninstall Data Relay Link"
+    echo "========================"
+    echo
+    echo "This host has both server and client roles."
+    echo
+    echo "1) Uninstall client role"
+    echo "2) Uninstall server role"
+    echo "3) Back"
+    echo
+    choice="$(frpctl_read "Select [3]: " "3")" || return 1
+    case "$choice" in
+      1) frpctl_client_uninstall_flow ;;
+      2) frpctl_server_uninstall_flow ;;
+      *) echo "Cancelled."; return 0 ;;
+    esac
+    return $?
+  fi
+  if [[ "$has_server" == "1" ]]; then
+    frpctl_server_uninstall_flow
+    return $?
+  fi
+  frpctl_client_uninstall_flow
+}
 
 frpctl_guided_service_profile_create() {
   local name="$1" preset target_host target_port ssh_user confirm

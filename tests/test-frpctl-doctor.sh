@@ -660,7 +660,7 @@ cp -a "$CL" "$NOTOML"
 rm -f "$NOTOML/etc/frp/frpc.toml"
 run_json "$NOTOML" "$WORKDIR/notoml.json" || true
 [[ "$(check_status "$WORKDIR/notoml.json" frpc_config)" == "FAIL" ]] || fail "missing toml"
-grep -q 'drlink manage' "$WORKDIR/notoml.json" || fail "toml recovery guidance"
+grep -q 'drlink system services apply' "$WORKDIR/notoml.json" || fail "toml recovery guidance"
 pass "MISSING_FRPC_TOML"
 
 DRIFT="$WORKDIR/drift"
@@ -706,8 +706,8 @@ echo '{"operation":"project-update","phase":"commit","failure_class":"HEALTH_CHE
   >"$PROJMARK/var/lib/drlink/server-update-pending.json"
 run_json "$PROJMARK" "$WORKDIR/projmark.json" || true
 [[ "$(check_status "$WORKDIR/projmark.json" pending_server_transaction)" == "FAIL" ]] || fail "project pending"
-grep -q 'drlink update product' "$WORKDIR/projmark.json" || fail "project-update guidance"
-if grep -qE 'sudo drlink update($|[[:space:]]|--)' "$WORKDIR/projmark.json" && ! grep -q 'drlink update product' "$WORKDIR/projmark.json"; then
+grep -q 'drlink system update product' "$WORKDIR/projmark.json" || fail "project-update guidance"
+if grep -qE 'sudo drlink update($|[[:space:]]|--)' "$WORKDIR/projmark.json" && ! grep -q 'drlink system update product' "$WORKDIR/projmark.json"; then
   fail "generic update guidance for project-update"
 fi
 [[ -f "$PROJMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted project marker"

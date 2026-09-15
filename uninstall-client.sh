@@ -381,7 +381,7 @@ unset _frp_own _frp_own_cands
 
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   # CLIENT_ONLY: always remove on client uninstall.
-  for f in frp-client-common.sh frp-macos.sh com.datarelay.drlink.frpc.plist; do
+  for f in frp-client-common.sh frp-macos.sh com.datarelay.drlink.frpc.plist uninstall-client.sh; do
     frp_u_rm_file "${libdir}/${f}"
   done
   # SHARED with server: remove only when server role is absent.
@@ -461,5 +461,9 @@ if frp_u_use_systemd; then
   frp_u_legacy_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
-echo 'FRP client removed locally. The central port reservation is intentionally preserved.'
+echo 'Data Relay Link client removed locally. The central port reservation is intentionally preserved.'
 echo 'This uninstall does not contact the server and does not release ports.'
+echo 'To release a published service on the server:'
+echo '  unset client <CLIENT> service <SERVICE>'
+echo 'To remove the client record and all of its reservations on the server:'
+echo '  unset client <CLIENT>'

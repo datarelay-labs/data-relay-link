@@ -91,9 +91,9 @@ def _recovery_for_role(role, kind):
     if kind == 'frp':
         return 'sudo drlink update engine'
     if role in ('client', 'partial_client'):
-        return 'sudo drlink update product'
+        return 'sudo drlink system update product'
     if role in ('server', 'partial_server', 'dual'):
-        return 'sudo drlink update product'
+        return 'sudo drlink system update product'
     return ''
 
 
@@ -101,11 +101,11 @@ def _recovery_for_operation(operation, role):
     op = str(operation or '').strip()
     extra = '\n%s' % MARKER_NOTE
     if op == 'project-update':
-        return 'sudo drlink update product' + extra
+        return 'sudo drlink system update product' + extra
     if op in ('frp-update',):
         return 'sudo drlink update engine' + extra
     if op in ('client-update',):
-        return 'sudo drlink update product' + extra
+        return 'sudo drlink system update product' + extra
     if op == 'install':
         return 're-run the server installer; do not delete the pending marker' + extra
     if op == 'restore':
@@ -116,7 +116,7 @@ def _recovery_for_operation(operation, role):
         )
     if op == 'update':
         if role in ('client', 'partial_client', 'dual'):
-            return 'sudo drlink update product' + extra
+            return 'sudo drlink system update product' + extra
         return 'sudo drlink update engine' + extra
     return (
         'inspect the pending transaction marker (server-update-pending.json / '
@@ -1524,7 +1524,7 @@ def check_pending(report, paths):
                 'pending_apply', FAIL,
                 'client Apply pending marker is unreadable',
                 err,
-                'inspect /etc/frp/apply-pending.json; run sudo drlink manage and Apply after recovery. doctor does not clear it',
+                'inspect /etc/frp/apply-pending.json; run sudo drlink system services apply after recovery. doctor does not clear it',
                 'state',
             )
         else:
@@ -1538,7 +1538,7 @@ def check_pending(report, paths):
                 'pending_apply', status,
                 'pending client Apply transaction',
                 detail,
-                'sudo drlink manage\n  Apply the current configuration\nDoctor does not clear the pending marker.',
+                'sudo drlink system services apply\nDoctor does not clear the pending marker.',
                 'state',
             )
             report.display['pending_apply'] = {'phase': phase, 'failure_class': failure}
@@ -1615,7 +1615,7 @@ def check_backups_and_locks(report, paths, role):
                 'stale_lock', WARN,
                 'client management lock looks stale',
                 'path=/etc/frp/client-manage.lock pid=%s' % (pid or 'none'),
-                'do not remove the lock from doctor; retry sudo drlink manage after confirming no other operator session is running',
+                'do not remove the lock from doctor; retry sudo drlink after confirming no other operator session is running',
                 'state',
             )
     elif role in ('client', 'dual', 'partial_client'):
@@ -3092,7 +3092,7 @@ def check_client(report, paths, facts, skip_network):
                 'client_state', FAIL,
                 'client-state.json schema is unsupported',
                 'schema_version=%s' % state.get('schema_version'),
-                'Restore a schema v1 client-state.json from backup, then run sudo drlink manage and Apply.',
+                'Restore a schema v1 client-state.json from backup, then run sudo drlink system services apply.',
                 'state',
             )
         elif 'services' not in state:
@@ -3219,7 +3219,7 @@ def check_client(report, paths, facts, skip_network):
                 'frpc_config', FAIL,
                 'client-state is valid but frpc.toml is missing',
                 '',
-                'sudo drlink manage\n  Apply the current configuration',
+                'sudo drlink system services apply',
                 'state',
             )
         else:
@@ -3251,7 +3251,7 @@ def check_client(report, paths, facts, skip_network):
                     'frpc_config', FAIL,
                     'frpc.toml has drifted from client-state.json',
                     'missing proxies=%s port mismatches=%s' % (','.join(missing_proxy) or 'none', ','.join(port_mismatch) or 'none'),
-                    'sudo drlink manage\n  Apply the current configuration',
+                    'sudo drlink system services apply',
                     'state',
                 )
             elif extra_enabled:
@@ -3259,7 +3259,7 @@ def check_client(report, paths, facts, skip_network):
                     'frpc_config', WARN,
                     'disabled services still appear in frpc.toml',
                     ','.join(extra_enabled),
-                    'sudo drlink manage\n  Apply the current configuration',
+                    'sudo drlink system services apply',
                     'state',
                 )
             else:
@@ -3280,7 +3280,7 @@ def check_client(report, paths, facts, skip_network):
         else:
             report.add('access_info', PASS, 'access-info.txt is present', '', '', 'state')
     elif not paths.is_file(toml_path) and report.role in ('client', 'dual', 'partial_client'):
-        report.add('frpc_config', FAIL, 'frpc.toml is missing', '', 'sudo drlink manage and Apply, or restore from backup', 'state')
+        report.add('frpc_config', FAIL, 'frpc.toml is missing', '', 'sudo drlink system services apply, or restore from backup', 'state')
 
     if state is not None and not client_has_enabled_services(state):
         info = (facts.get('units') or {}).get('frpc') or {}
@@ -3570,7 +3570,7 @@ def run_doctor(root, facts, fmt='human', quiet=False, verbose=False, skip_networ
         role_info['reason'],
         'server_signals=%s client_signals=%s' % (role_info['server_signals'], role_info['client_signals']),
         {
-            'partial_client': 'complete the client install or run sudo drlink update product; do not re-enroll over a damaged identity',
+            'partial_client': 'complete the client install or run sudo drlink system update product; do not re-enroll over a damaged identity',
             'partial_server': 're-run the server installer to complete missing components',
             'ambiguous': 'inspect leftover server and client files before taking further action',
             'uninstalled': 'install the server or client bootstrap first',

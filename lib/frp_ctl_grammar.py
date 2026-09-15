@@ -1691,6 +1691,15 @@ def match(tokens, role, names=None, clients=None):
         "sync": lambda toks, role, names=None: {"status": "ok", "action": "sync"},
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
         "support-bundle": lambda toks, role, names=None: {"status": "ok", "action": "support_bundle", "passthrough": toks[1:]},
+        "pause": lambda toks, role, names=None: {"status": "ok", "action": "client_pause"},
+        "resume": lambda toks, role, names=None: {"status": "ok", "action": "client_resume"},
+        "restart": lambda toks, role, names=None: {"status": "ok", "action": "client_restart"},
+        "autostart": _match_autostart,
+        "uninstall": lambda toks, role, names=None: {
+            "status": "ok",
+            "action": "system_uninstall",
+            "passthrough": list(toks[1:]),
+        },
         "access": _match_access_root,
         "egress": _match_egress_root,
         "help": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
@@ -1720,7 +1729,7 @@ def match(tokens, role, names=None, clients=None):
         if verb == "unset" and client:
             return fn(tokens, role, names)
         return {"status": "role", "need": "server", "command": verb}
-    if verb in ("apply", "discard", "sync") and not client:
+    if verb in ("apply", "discard", "sync", "pause", "resume", "restart", "autostart") and not client:
         return {"status": "role", "need": "client", "command": verb}
     if verb in ("enable", "disable"):
         if not client and not server:
@@ -1906,6 +1915,32 @@ def _match_system(tokens, role, names=None):
         ["system <operation>"],
         avail,
         tip="Type: system ?",
+    )
+
+
+def _match_autostart(tokens, role, names=None):
+    if len(tokens) == 1:
+        return {"status": "ok", "action": "client_autostart", "mode": "status"}
+    mode = tokens[1]
+    if mode in ("enable", "disable", "status"):
+        if len(tokens) > 2:
+            return incomplete(
+                "Unexpected arguments.",
+                [
+                    "system autostart",
+                    "system autostart enable",
+                    "system autostart disable",
+                ],
+            )
+        return {"status": "ok", "action": "client_autostart", "mode": mode}
+    return incomplete(
+        "Unknown autostart operation.",
+        [
+            "system autostart",
+            "system autostart enable",
+            "system autostart disable",
+        ],
+        ["enable", "disable"],
     )
 
 

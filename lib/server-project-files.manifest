@@ -55,6 +55,7 @@ project usr/local/lib/drlink/frp_enrollment_lifecycle.py 0644 lib/frp_enrollment
 project usr/local/lib/drlink/frp_audit.py 0644 lib/frp_audit.py python
 project usr/local/lib/drlink/frp_project_files.py 0644 lib/frp_project_files.py python
 project usr/local/lib/drlink/frp-role-ownership.sh 0644 lib/frp-role-ownership.sh bash
+project usr/local/lib/drlink/uninstall-server.sh 0755 uninstall-server.sh bash
 project usr/local/lib/drlink/frp_control_locks.py 0644 lib/frp_control_locks.py python
 project usr/local/lib/drlink/frp_server_config.py 0644 lib/frp_server_config.py python
 project usr/local/lib/drlink/frp_zero_touch.py 0644 lib/frp_zero_touch.py python

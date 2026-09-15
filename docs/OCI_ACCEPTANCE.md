@@ -7,7 +7,7 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 ## Existing server upgrade
 
 1. Record registry, labels, notes, tags, ports, CA fingerprint, token digest, installer URL.
-2. `sudo drlink update product`
+2. `sudo drlink system update product`
 3. Confirm registry/labels/notes/tags/ports/CA/token/mode retained.
 4. `sudo drlink system diagnostics`
 

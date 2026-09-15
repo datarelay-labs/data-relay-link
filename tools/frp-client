@@ -1430,6 +1430,23 @@ frp_client_cmd_main() {
       frp_require_root
       frp_client_discard_pending
       ;;
+    pause)
+      frp_require_root
+      frp_client_pause_cmd
+      ;;
+    resume)
+      frp_require_root
+      frp_client_resume_cmd
+      ;;
+    restart)
+      frp_require_root
+      frp_client_restart_runtime_cmd
+      ;;
+    autostart)
+      frp_require_root
+      shift
+      frp_client_autostart_cmd "${1:-status}"
+      ;;
     -h|--help|help)
       cat <<'EOF'
 Usage: frp-client [status|info|list|sync|update]

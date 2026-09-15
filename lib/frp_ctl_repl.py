@@ -269,6 +269,12 @@ _MUTATING_PUBLIC_PREFIXES = (
     ("system", "services", "apply"),
     ("system", "services", "discard"),
     ("system", "services", "sync"),
+    ("system", "pause"),
+    ("system", "resume"),
+    ("system", "restart"),
+    ("system", "autostart", "enable"),
+    ("system", "autostart", "disable"),
+    ("system", "uninstall"),
 )
 
 

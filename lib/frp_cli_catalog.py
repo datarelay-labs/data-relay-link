@@ -2610,6 +2610,20 @@ def to_internal(tokens):
         return ["discard"] + rest
     if path == ("system", "services", "sync"):
         return ["sync"] + rest
+    if path == ("system", "pause"):
+        return ["pause"] + rest
+    if path == ("system", "resume"):
+        return ["resume"] + rest
+    if path == ("system", "restart"):
+        return ["restart"] + rest
+    if path == ("system", "autostart"):
+        return ["autostart"] + rest
+    if path == ("system", "autostart", "enable"):
+        return ["autostart", "enable"] + rest
+    if path == ("system", "autostart", "disable"):
+        return ["autostart", "disable"] + rest
+    if path == ("system", "uninstall"):
+        return ["uninstall"] + rest
     if path == ("system", "history"):
         return ["history"] + rest
     if path == ("system", "clear"):
@@ -2919,6 +2933,7 @@ def domain_help(topic, role):
             "  system update product",
             "  system update engine",
             "  system update check-engine",
+            "  system uninstall",
         ]
         if server:
             lines.extend(
@@ -2930,10 +2945,16 @@ def domain_help(topic, role):
                     "  set server bootstrap-hostname <FQDN>",
                 ]
             )
-        elif client:
+        if client:
             lines.extend(
                 [
                     "  system info",
+                    "  system pause",
+                    "  system resume",
+                    "  system restart",
+                    "  system autostart",
+                    "  system autostart enable",
+                    "  system autostart disable",
                 ]
             )
         return "\n".join(lines) + "\n"
@@ -3268,11 +3289,16 @@ NAVIGATION_TREE = {
     "client.system": (
         ("client_sys_status", "Status", "", "command", "show status"),
         ("client_sys_info", "Connection information", "", "command", "system info"),
-        ("client_sys_version", "Version information", "", "command", "system version"),
+        ("client_sys_pause", "Pause client", "", "command", "system pause"),
+        ("client_sys_resume", "Resume client", "", "command", "system resume"),
+        ("client_sys_restart", "Restart client", "", "command", "system restart"),
+        ("client_sys_autostart", "Autostart", "", "command", "system autostart"),
         ("client_sys_update_product", "Update Data Relay Link", "", "command", "system update product"),
         ("client_sys_update_engine", "Update Relay Engine (FRP)", "", "command", "system update engine"),
         ("client_sys_doctor", "Diagnostics", "", "command", "system diagnostics"),
         ("client_sys_support", "Support Bundle", "", "command", "system support-bundle"),
+        ("client_sys_version", "Version Information", "", "command", "system version"),
+        ("client_sys_uninstall", "Uninstall Data Relay Link", "", "command", "system uninstall"),
         ("back", "Back", "", "back", None),
     ),
     "server": (
@@ -3444,6 +3470,7 @@ NAVIGATION_TREE = {
         ("server_sys_diag", "Diagnostics", "", "submenu", "server.system.diagnostics"),
         ("server_sys_audit", "Audit Log", "", "command", "system audit"),
         ("server_sys_version", "Version Information", "", "command", "system version"),
+        ("server_sys_uninstall", "Uninstall Data Relay Link", "", "command", "system uninstall"),
         ("back", "Back", "", "back", None),
     ),
     "server.system.settings": (
@@ -3497,12 +3524,27 @@ NAVIGATION_TREE["both"] = (
     (
         "both_system",
         "System",
-        "Status, settings, backup, updates and diagnostics",
+        "Status, settings, backup, updates, client lifecycle and diagnostics",
         "submenu",
-        "server.system",
+        "both.system",
     ),
     ("both_help", "Help", "", "help", None),
     ("exit", "Exit", "", "exit", None),
+)
+NAVIGATION_TREE["both.system"] = (
+    ("both_sys_status", "Status", "", "command", "show status"),
+    ("both_sys_settings", "Server Settings", "", "submenu", "server.system.settings"),
+    ("both_sys_backup", "Backup & Restore", "", "submenu", "server.system.backup"),
+    ("both_sys_pause", "Pause client", "", "command", "system pause"),
+    ("both_sys_resume", "Resume client", "", "command", "system resume"),
+    ("both_sys_restart", "Restart client", "", "command", "system restart"),
+    ("both_sys_autostart", "Autostart", "", "command", "system autostart"),
+    ("both_sys_updates", "Updates", "", "submenu", "server.system.updates"),
+    ("both_sys_diag", "Diagnostics", "", "submenu", "server.system.diagnostics"),
+    ("both_sys_audit", "Audit Log", "", "command", "system audit"),
+    ("both_sys_version", "Version Information", "", "command", "system version"),
+    ("both_sys_uninstall", "Uninstall Data Relay Link", "", "command", "system uninstall"),
+    ("back", "Back", "", "back", None),
 )
 NAVIGATION_TREE["both.services"] = (
     ("both_svc_published", "Published services", "", "command", "show services"),

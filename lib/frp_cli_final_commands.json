@@ -4296,6 +4296,234 @@
   {
     "path": [
       "system",
+      "pause"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Pause the local Data Relay Link client",
+    "detail": "Stop the local relay runtime and disable automatic startup. Client identity, registration, service definitions, and server-side reservations are preserved.",
+    "examples": [
+      "system pause"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "pause"
+    ],
+    "aliases": [
+      [
+        "pause"
+      ],
+      [
+        "stop"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "resume"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Resume a paused Data Relay Link client",
+    "detail": "Enable automatic startup and start the local relay runtime. Identity, services, and public ports are unchanged.",
+    "examples": [
+      "system resume"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "resume"
+    ],
+    "aliases": [
+      [
+        "resume"
+      ],
+      [
+        "start"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "restart"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Restart the local Data Relay Link relay runtime",
+    "detail": "Restart only the local relay runtime. Identity, service definitions, public ports, and server registration are preserved.",
+    "examples": [
+      "system restart"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "restart"
+    ],
+    "aliases": [
+      [
+        "restart"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "autostart"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Show whether the client starts automatically",
+    "detail": "Read-only autostart status for the local Data Relay Link client.",
+    "examples": [
+      "system autostart"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "autostart"
+    ],
+    "aliases": [
+      [
+        "autostart"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "autostart",
+      "enable"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Enable automatic client startup",
+    "detail": "Enable product-owned automatic startup for the local client.",
+    "examples": [
+      "system autostart enable"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "autostart",
+      "enable"
+    ],
+    "aliases": [
+      [
+        "autostart",
+        "enable"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "autostart",
+      "disable"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Disable automatic client startup",
+    "detail": "Disable product-owned automatic startup for the local client.",
+    "examples": [
+      "system autostart disable"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "autostart",
+      "disable"
+    ],
+    "aliases": [
+      [
+        "autostart",
+        "disable"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "uninstall"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Uninstall Data Relay Link on this host",
+    "detail": "Guided uninstall for the installed role(s). Client uninstall removes local software and state while preserving server-side reservations. Server uninstall can preserve or purge server state.",
+    "examples": [
+      "system uninstall"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "uninstall"
+    ],
+    "aliases": [
+      [
+        "uninstall"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "irreversible",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Skip interactive confirmation for non-purge uninstall",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when uninstalling without purge",
+        "risk": "irreversible"
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
       "history"
     ],
     "roles": "any",

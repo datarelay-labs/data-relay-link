@@ -4287,6 +4287,203 @@ frp_client_restart() {
   fi
 }
 
+frp_client_supervisor_name() {
+  if frp_is_darwin; then
+    printf 'launchd'
+  else
+    printf 'systemd'
+  fi
+}
+
+frp_client_autostart_enabled() {
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    if [[ "${FRP_CLIENT_TEST_AUTOSTART:-enabled}" == "disabled" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+  if frp_is_darwin; then
+    # launchctl print-disabled is the durable disabled bit for pause/resume.
+    local disabled
+    disabled="$(launchctl print-disabled system 2>/dev/null | awk -F'[= "]+' -v label="${FRP_MACOS_LAUNCHD_LABEL}" '$2==label {print tolower($3); exit}')"
+    [[ "$disabled" != "true" ]]
+    return $?
+  fi
+  local en
+  en="$(systemctl is-enabled drlink-client 2>/dev/null || true)"
+  case "$en" in
+    enabled|alias|static|indirect) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_client_runtime_active() {
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    [[ "${FRP_CLIENT_TEST_RUNTIME:-inactive}" == "active" ]]
+    return $?
+  fi
+  local state
+  state="$(frp_client_service_status 2>/dev/null || printf 'unknown')"
+  case "$state" in
+    active) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_client_pause_cmd() {
+  local already=0
+  if ! frp_client_runtime_active && ! frp_client_autostart_enabled; then
+    already=1
+  fi
+  if ! frp_client_stop; then
+    return 1
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    FRP_CLIENT_TEST_RUNTIME=inactive
+    export FRP_CLIENT_TEST_RUNTIME
+    FRP_CLIENT_TEST_AUTOSTART=disabled
+    export FRP_CLIENT_TEST_AUTOSTART
+  fi
+  if [[ "$already" == "1" ]]; then
+    echo "Client is already paused."
+    echo "Runtime is stopped and autostart is disabled."
+    return 0
+  fi
+  echo "Client paused."
+  echo "Runtime    : stopped"
+  echo "Autostart  : disabled"
+  echo "Identity   : preserved"
+  echo "Services   : preserved"
+  echo "Public ports: preserved"
+}
+
+frp_client_resume_cmd() {
+  local was_active=0 was_auto=0
+  frp_client_runtime_active && was_active=1
+  frp_client_autostart_enabled && was_auto=1
+  if [[ "$was_active" == "1" && "$was_auto" == "1" ]]; then
+    echo "Client is already active."
+    echo "Runtime    : active"
+    echo "Autostart  : enabled"
+    echo "Identity   : preserved"
+    return 0
+  fi
+  if ! frp_client_restart; then
+    return 1
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    FRP_CLIENT_TEST_RUNTIME=active
+    export FRP_CLIENT_TEST_RUNTIME
+    FRP_CLIENT_TEST_AUTOSTART=enabled
+    export FRP_CLIENT_TEST_AUTOSTART
+  fi
+  echo "Client resumed."
+  echo "Runtime    : active"
+  echo "Autostart  : enabled"
+  echo "Identity   : preserved"
+}
+
+frp_client_restart_runtime_cmd() {
+  # Restart local relay runtime only; do not change autostart enablement.
+  frp_client_hook_log restart-runtime
+  if [[ "${FRP_CLIENT_HOOK_RESTART_FAIL:-}" == "1" ]]; then
+    FRP_CLIENT_HOOK_RESTART_FAIL=0
+    echo "ERROR: simulated service restart failure" >&2
+    return 1
+  fi
+  FRP_PROXY_WAIT_CURSOR="$(frp_client_journal_cursor 2>/dev/null || true)"
+  export FRP_PROXY_WAIT_CURSOR
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    echo "Client restarted."
+    echo "Identity and public port reservations were preserved."
+    return 0
+  fi
+  if frp_is_darwin; then
+    if frp_macos_launchd_running; then
+      frp_macos_launchd_kickstart || return 1
+    else
+      frp_macos_launchd_bootstrap || return 1
+    fi
+  else
+    if declare -F frp_retire_legacy_client_unit >/dev/null 2>&1; then
+      frp_retire_legacy_client_unit || return 1
+    fi
+    if ! systemctl restart drlink-client >/dev/null 2>&1; then
+      if [[ "$(systemctl is-active drlink-client 2>/dev/null || true)" != "active" ]]; then
+        if ! systemctl start drlink-client >/dev/null 2>&1; then
+          echo "ERROR: failed to restart Data Relay Link client runtime." >&2
+          return 1
+        fi
+      fi
+    fi
+  fi
+  echo "Client restarted."
+  echo "Identity and public port reservations were preserved."
+}
+
+frp_client_autostart_cmd() {
+  local mode="${1:-status}"
+  case "$mode" in
+    status|'')
+      if frp_client_autostart_enabled; then
+        echo "Autostart : enabled"
+      else
+        echo "Autostart : disabled"
+      fi
+      echo "Supervisor: $(frp_client_supervisor_name)"
+      return 0
+      ;;
+    enable)
+      if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+        FRP_CLIENT_TEST_AUTOSTART=enabled
+        export FRP_CLIENT_TEST_AUTOSTART
+        echo "Autostart : enabled"
+        echo "Supervisor: $(frp_client_supervisor_name)"
+        return 0
+      fi
+      if frp_is_darwin; then
+        frp_macos_launchd_set_enabled enable || return 1
+      else
+        systemctl enable drlink-client >/dev/null || return 1
+      fi
+      echo "Autostart : enabled"
+      echo "Supervisor: $(frp_client_supervisor_name)"
+      return 0
+      ;;
+    disable)
+      if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+        FRP_CLIENT_TEST_AUTOSTART=disabled
+        export FRP_CLIENT_TEST_AUTOSTART
+        echo "Autostart : disabled"
+        echo "Supervisor: $(frp_client_supervisor_name)"
+        return 0
+      fi
+      if frp_is_darwin; then
+        frp_macos_launchd_set_enabled disable || return 1
+      else
+        systemctl disable drlink-client >/dev/null || {
+          local en
+          en="$(systemctl is-enabled drlink-client 2>/dev/null || true)"
+          case "$en" in
+            disabled|static|masked|indirect) ;;
+            *)
+              echo "ERROR: failed to disable Data Relay Link client autostart." >&2
+              return 1
+              ;;
+          esac
+        }
+      fi
+      echo "Autostart : disabled"
+      echo "Supervisor: $(frp_client_supervisor_name)"
+      return 0
+      ;;
+    *)
+      echo "ERROR: unknown autostart mode: $mode" >&2
+      return 2
+      ;;
+  esac
+}
+
 frp_client_service_status() {
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     printf 'test'
@@ -4474,6 +4671,12 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_cli_final_commands.json" "${libdir}/frp_cli_final_commands.json"
   install -m 0644 "${source}/lib/frp_service_profiles.py" "${libdir}/frp_service_profiles.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
+  if [[ -f "${source}/lib/frp-role-ownership.sh" ]]; then
+    install -m 0644 "${source}/lib/frp-role-ownership.sh" "${libdir}/frp-role-ownership.sh"
+  fi
+  if [[ -f "${source}/uninstall-client.sh" ]]; then
+    install -m 0755 "${source}/uninstall-client.sh" "${libdir}/uninstall-client.sh"
+  fi
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${libdir}/frpctl"
   install -m 0755 "${source}/tools/drlink" "${bindir}/drlink"
@@ -4486,6 +4689,10 @@ frp_client_install_management_files() {
   install -m 0755 "${source}/tools/frp-update" "${bindir}/frp-update"
   # Retire legacy PATH entry points from prior product identity.
   rm -f "${bindir}/frpctl" "$(frp_client_path /usr/local/sbin/frpctl)" 2>/dev/null || true
+  # Keep a stale /usr/local/sbin/frp-client from shadowing the updated binary.
+  if [[ -e "$(frp_client_path /usr/local/sbin/frp-client)" ]]; then
+    install -m 0755 "${source}/tools/frp-client" "$(frp_client_path /usr/local/sbin/frp-client)"
+  fi
   chmod 0755 "${bindir}/drlink" "${libdir}/frpctl"
   if [[ -x "$(frp_client_path /usr/bin/drlink)" ]]; then
     chmod 0755 "$(frp_client_path /usr/bin/drlink)"
@@ -4516,6 +4723,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/frp_service_profiles.py:0644:lib/frp_service_profiles.py" \
     "usr/local/lib/drlink/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
+    "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/drlink:0755:tools/drlink" \
     "usr/bin/drlink:0755:tools/drlink" \
@@ -4616,6 +4824,7 @@ frp_client_upgrade_validate_staged() {
   bash -n "${staged}/usr/local/lib/drlink/frp-client-common.sh" || return 1
   bash -n "${staged}/usr/local/lib/drlink/frp-common.sh" || return 1
   bash -n "${staged}/usr/local/lib/drlink/frp-doctor-common.sh" || return 1
+  bash -n "${staged}/usr/local/lib/drlink/uninstall-client.sh" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_mgmt_auth.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_health_check.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_doctor.py" || return 1
