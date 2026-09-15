@@ -1,0 +1,118 @@
+name: Bug report
+description: Report a reproducible problem in Data Relay Link
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Data Relay Link.
+
+        Before submitting, please remove passwords, private keys, enrollment tokens, API keys, customer data, and other secrets from logs or screenshots.
+
+        If this may be a security vulnerability, do not include vulnerability details in a public issue. See the repository Security Policy instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Data Relay Link version
+      description: Run the relevant version command or provide the installed release/tag.
+      placeholder: "e.g. v2.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Server installation or upgrade
+        - Client enrollment or bootstrap
+        - Secure Remote Access
+        - Service publishing or public ports
+        - Controlled Egress
+        - drlink CLI
+        - Lifecycle, backup, restore, or diagnostics
+        - Linux client
+        - macOS client
+        - Windows client
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: server_os
+    attributes:
+      label: Server OS
+      placeholder: "e.g. Ubuntu 24.04"
+
+  - type: input
+    id: client_os
+    attributes:
+      label: Client OS
+      placeholder: "e.g. Rocky Linux 9.4, macOS Apple Silicon, Windows 10"
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - Direct
+        - Single-port / 443
+        - Behind NAT or DNAT
+        - Cloud VM
+        - Other / not sure
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem clearly and include the affected client/service if relevant.
+      placeholder: "Describe the failure and what you were doing when it occurred."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: "What did you expect to happen?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable sequence that reproduces the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics and logs
+      description: Paste only relevant, redacted output. Include drlink diagnostics or service status when useful.
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add screenshots, topology notes, firewall/NAT details, or anything else that may help.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed passwords, private keys, tokens, customer data, and other secrets from the report.
+          required: true
+        - label: This is not a security vulnerability containing sensitive exploit details.
+          required: true

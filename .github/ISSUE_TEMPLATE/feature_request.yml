@@ -1,0 +1,100 @@
+name: Feature request
+description: Suggest an improvement or a new Data Relay Link capability
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement.
+
+        Please describe the problem first, then the desired behavior. This helps evaluate whether the request fits Data Relay Link's intentionally lightweight scope.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Secure Remote Access
+        - Controlled Egress
+        - Client enrollment or bootstrap
+        - Service publishing or public ports
+        - drlink CLI and operator UX
+        - Lifecycle, upgrade, backup, restore, or diagnostics
+        - Platform compatibility
+        - AI / MCP integration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to accomplish, and what is difficult today?
+      placeholder: "Describe the real problem or workflow rather than only the proposed implementation."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Requested behavior
+      description: Describe how you would like Data Relay Link to behave.
+      placeholder: "What should the product do?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How do you solve this today, if at all?
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - Server / Linux
+        - Linux client
+        - macOS client
+        - Windows client
+        - Cross-platform
+        - Documentation only
+        - Not platform-specific
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Importance to your workflow
+      options:
+        - Nice to have
+        - Useful improvement
+        - Important
+        - Blocking a real deployment or workflow
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and constraints
+      description: Mention security, compatibility, scale, or operational constraints that matter.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add examples, diagrams, screenshots, or references if useful.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for similar requests.
+          required: true
+        - label: I described the underlying problem or use case, not only an implementation preference.
+          required: true
