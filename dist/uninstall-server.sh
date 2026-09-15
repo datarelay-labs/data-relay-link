@@ -31,7 +31,25 @@ if [[ ${EUID} -ne 0 && -z "${FRP_UNINSTALL_TEST_ROOT:-}" ]]; then
   exit 1
 fi
 
-_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the directory of this script when executed as a real file.
+# Stdin / bash -s execution leaves BASH_SOURCE[0] unset under `set -u`;
+# never fall back to $0 (may be "bash") or the current working directory.
+frp_u_script_dir() {
+  local src=""
+  if [[ -n "${BASH_SOURCE[0]+x}" && -n "${BASH_SOURCE[0]}" ]]; then
+    src="${BASH_SOURCE[0]}"
+  fi
+  if [[ -z "$src" || "$src" == "-" || "$src" == "bash" || "$src" == "sh" ]]; then
+    printf ''
+    return 0
+  fi
+  if [[ ! -f "$src" ]]; then
+    printf ''
+    return 0
+  fi
+  cd "$(dirname "$src")" && pwd
+}
+_HERE="$(frp_u_script_dir)"
 
 frp_u_path() {
   local p="$1"
@@ -93,10 +111,14 @@ frp_u_client_present() {
 
 frp_u_project_files_py() {
   local cand
-  for cand in \
-    "$(frp_u_path /usr/local/lib/drlink/frp_project_files.py)" \
-    "${_HERE}/lib/frp_project_files.py" \
-    "${_HERE}/../lib/frp_project_files.py"; do
+  local cands=( "$(frp_u_path /usr/local/lib/drlink/frp_project_files.py)" )
+  if [[ -n "${_HERE:-}" ]]; then
+    cands+=(
+      "${_HERE}/lib/frp_project_files.py"
+      "${_HERE}/../lib/frp_project_files.py"
+    )
+  fi
+  for cand in "${cands[@]}"; do
     if [[ -f "$cand" ]]; then
       printf '%s' "$cand"
       return 0
@@ -106,17 +128,21 @@ frp_u_project_files_py() {
 }
 
 # Canonical SERVER_ONLY / CLIENT_ONLY / SHARED ownership for dual-role uninstall.
-for _frp_own in \
-  "$(frp_u_path /usr/local/lib/drlink/frp-role-ownership.sh)" \
-  "${_HERE}/lib/frp-role-ownership.sh" \
-  "${_HERE}/../lib/frp-role-ownership.sh"; do
+_frp_own_cands=( "$(frp_u_path /usr/local/lib/drlink/frp-role-ownership.sh)" )
+if [[ -n "${_HERE:-}" ]]; then
+  _frp_own_cands+=(
+    "${_HERE}/lib/frp-role-ownership.sh"
+    "${_HERE}/../lib/frp-role-ownership.sh"
+  )
+fi
+for _frp_own in "${_frp_own_cands[@]}"; do
   if [[ -f "$_frp_own" ]]; then
     # shellcheck disable=SC1090
     . "$_frp_own"
     break
   fi
 done
-unset _frp_own
+unset _frp_own _frp_own_cands
 if ! declare -F frp_role_is_shared_lib >/dev/null 2>&1; then
   # Keep in sync with FRP_ROLE_SERVER_PRESERVE_IF_CLIENT in frp-role-ownership.sh.
   FRP_ROLE_SHARED_LIB_BASENAMES=' frp-common.sh frp_mgmt_auth.py frp_health_check.py frp-client-common.sh frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py frp_cli_catalog.py frp_ctl_repl.py frpctl drlink '

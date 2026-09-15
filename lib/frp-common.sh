@@ -202,6 +202,23 @@ frp_release_channel() {
 }
 
 frp_release_git_ref() {
+  # Installer/update artifact refs prefer explicit provenance, then the
+  # persisted SOURCE_REF from /etc/drlink/version. Only fall back to the
+  # channel-derived tag/main default when no install provenance exists.
+  local persisted=""
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    printf '%s' "$FRP_EXPECTED_SOURCE_REF"
+    return 0
+  fi
+  if [[ -n "${FRP_TXN_SOURCE_REF:-}" ]]; then
+    printf '%s' "$FRP_TXN_SOURCE_REF"
+    return 0
+  fi
+  persisted="$(frp_read_kv_file "$(frp_version_state_file)" SOURCE_REF)"
+  if [[ -n "$persisted" ]]; then
+    printf '%s' "$persisted"
+    return 0
+  fi
   if [[ "$(frp_release_channel)" == "dev" ]]; then
     printf 'main'
   else
@@ -291,6 +308,51 @@ from urllib.parse import unquote, urlsplit
 parts = [unquote(part) for part in urlsplit(sys.argv[1]).path.split("/") if part]
 raise SystemExit(0 if sys.argv[2] in parts else 1)
 PY
+}
+
+frp_source_ref_from_github_raw_url() {
+  # Extract owner/repo/<ref>/... from an official GitHub raw URL.
+  # Prints the ref on success; returns non-zero when the URL is not official.
+  local url="${1:-}"
+  python3 - "$url" "$FRP_GITHUB_RAW_HOST" "$FRP_GITHUB_OWNER" "$FRP_GITHUB_REPO" <<'PY'
+import sys
+from urllib.parse import unquote, urlsplit
+
+url, host, owner, repo = sys.argv[1:5]
+try:
+    parsed = urlsplit(url)
+except ValueError:
+    raise SystemExit(1)
+if parsed.scheme != "https" or parsed.hostname != host:
+    raise SystemExit(1)
+parts = [unquote(part) for part in parsed.path.split("/") if part]
+if len(parts) < 3 or parts[0] != owner or parts[1] != repo:
+    raise SystemExit(1)
+ref = parts[2]
+if not ref or ref in (".", "..") or "/" in ref:
+    raise SystemExit(1)
+print(ref)
+PY
+}
+
+frp_infer_expected_source_ref() {
+  # Populate FRP_EXPECTED_SOURCE_REF from existing provenance signals only.
+  # Never invent a second provenance mechanism or guess from PROJECT_VERSION.
+  local ref="" url=""
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    return 0
+  fi
+  for url in \
+    "${FRP_BOOTSTRAP_URL:-}" \
+    "${FRP_CLIENT_INSTALLER_URL:-}" \
+    "${FRP_WINDOWS_CLIENT_INSTALLER_URL:-}"; do
+    if [[ -n "$url" ]] && ref="$(frp_source_ref_from_github_raw_url "$url")"; then
+      FRP_EXPECTED_SOURCE_REF="$ref"
+      export FRP_EXPECTED_SOURCE_REF
+      return 0
+    fi
+  done
+  return 0
 }
 
 frp_is_official_main_installer_url() {
@@ -953,7 +1015,13 @@ frp_write_version_file() {
       channel="$(frp_release_channel)"
     fi
   fi
-  if [[ "$channel" == "dev" ]]; then
+  # SOURCE_REF is install provenance (commit SHA or release tag), not
+  # PROJECT_VERSION. Prefer explicit expected/txn refs over channel defaults.
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    source_ref="$FRP_EXPECTED_SOURCE_REF"
+  elif [[ -n "${FRP_TXN_SOURCE_REF:-}" ]]; then
+    source_ref="$FRP_TXN_SOURCE_REF"
+  elif [[ "$channel" == "dev" ]]; then
     source_ref="main"
   else
     source_ref="v${PROJECT_VERSION}"

@@ -82,6 +82,9 @@ done
 # shellcheck source=lib/frp-server-upgrade.sh
 . "$BASE_DIR/lib/frp-server-upgrade.sh"
 
+# Derive FRP_EXPECTED_SOURCE_REF from bootstrap/installer URL provenance when set.
+frp_infer_expected_source_ref
+
 DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
 DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
 # Historical owner/repo, concatenated only to recognize obsolete project URLs.
@@ -894,11 +897,28 @@ resolve_server_settings() {
   FRP_INTERNAL_IP="${FRP_INTERNAL_IP:-}"
   FRP_PORT_START="${FRP_PORT_START:-${EXISTING_PORT_START:-}}"
   FRP_PORT_END="${FRP_PORT_END:-${EXISTING_PORT_END:-}}"
+  # Re-infer after env/existing installer URLs are visible so exact-SHA RC
+  # installs persist SOURCE_REF and matching default client installer URLs.
+  frp_infer_expected_source_ref
+  DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
+  DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
   CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
   frp_migrate_legacy_client_installer_url
   WINDOWS_CLIENT_INSTALLER_URL="${FRP_WINDOWS_CLIENT_INSTALLER_URL:-${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL}}"
   if frp_is_former_product_installer_url "${WINDOWS_CLIENT_INSTALLER_URL:-}"; then
     WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
+  fi
+  # Existing config installer URLs are also provenance when env overrides are absent.
+  if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    _frp_resolved_ref=""
+    for _frp_resolved_url in "$CLIENT_INSTALLER_URL" "$WINDOWS_CLIENT_INSTALLER_URL"; do
+      if _frp_resolved_ref="$(frp_source_ref_from_github_raw_url "${_frp_resolved_url:-}")"; then
+        FRP_EXPECTED_SOURCE_REF="$_frp_resolved_ref"
+        export FRP_EXPECTED_SOURCE_REF
+        break
+      fi
+    done
+    unset _frp_resolved_ref _frp_resolved_url
   fi
   if ! frp_validate_https_url "$CLIENT_INSTALLER_URL"; then
     echo "ERROR: client_installer_url must be a valid https:// URL" >&2
@@ -2653,6 +2673,7 @@ PY
   fi
 
   # Version metadata is written only after a successful install/reinstall.
+  frp_infer_expected_source_ref
   frp_write_version_file "$(frp_server_fs /etc/drlink/version)"
   frp_txn_clear server
   frp_prune_backup_dirs "$backups_dir" "$FRP_BACKUP_KEEP"

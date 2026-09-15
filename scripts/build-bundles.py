@@ -111,6 +111,62 @@ for rel in files:
 for rel in files:
     if rel.endswith('.sh') or rel.startswith('tools/') or rel.endswith('.py'):
         lines.append(f'chmod +x "$TMP/{rel}"')
+# Preserve exact-SHA (or tag) install provenance for Zero-Touch installer URLs.
+# FRP_EXPECTED_SOURCE_REF wins; otherwise derive from FRP_BOOTSTRAP_URL or a
+# best-effort scan of this process group for the official raw bootstrap URL.
+lines.append('''if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+  _frp_bootstrap_ref=""
+  if [[ -n "${FRP_BOOTSTRAP_URL:-}" ]]; then
+    _frp_bootstrap_ref="$(python3 -c '
+import sys
+from urllib.parse import unquote, urlsplit
+url = sys.argv[1]
+host, owner, repo = sys.argv[2:5]
+try:
+    p = urlsplit(url)
+except ValueError:
+    raise SystemExit(0)
+if p.scheme != "https" or p.hostname != host:
+    raise SystemExit(0)
+parts = [unquote(x) for x in p.path.split("/") if x]
+if len(parts) >= 3 and parts[0] == owner and parts[1] == repo:
+    print(parts[2])
+' "$FRP_BOOTSTRAP_URL" raw.githubusercontent.com datarelay-labs data-relay-link 2>/dev/null || true)"
+  fi
+  if [[ -z "$_frp_bootstrap_ref" && -d /proc ]]; then
+    _frp_bootstrap_ref="$(python3 - <<'PY' 2>/dev/null || true
+import os, re
+from urllib.parse import unquote, urlsplit
+pat = re.compile(
+    r"https://raw\\.githubusercontent\\.com/datarelay-labs/data-relay-link/"
+    r"([^/\\s\"']+)/dist/bootstrap-server\\.sh"
+)
+pgid = os.getpgid(0)
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    try:
+        if os.getpgid(int(name)) != pgid:
+            continue
+        raw = open(f"/proc/{name}/cmdline", "rb").read()
+    except (OSError, ProcessLookupError, PermissionError):
+        continue
+    text = raw.replace(b"\\0", b" ").decode("utf-8", "replace")
+    m = pat.search(text)
+    if not m:
+        continue
+    ref = unquote(m.group(1))
+    if ref and ref not in (".", ".."):
+        print(ref)
+        break
+PY
+)"
+  fi
+  if [[ -n "$_frp_bootstrap_ref" ]]; then
+    export FRP_EXPECTED_SOURCE_REF="$_frp_bootstrap_ref"
+  fi
+  unset _frp_bootstrap_ref
+fi''')
 lines.append('exec "$TMP/install-server.sh" "$@"')
 (dist/'bootstrap-server.sh').write_text('\n'.join(lines)+'\n')
 (dist/'bootstrap-server.sh').chmod(0o755)

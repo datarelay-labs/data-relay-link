@@ -6,11 +6,34 @@ if [[ ${EUID} -ne 0 && -z "${FRP_UNINSTALL_TEST_ROOT:-}" && -z "${FRP_CLIENT_TES
   exit 1
 fi
 
-_frp_u_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _frp_u_macos in \
-  "${_frp_u_here}/lib/frp-macos.sh" \
-  "${_frp_u_here}/frp-macos.sh" \
-  '/Library/Application Support/drlink/lib/frp-macos.sh'; do
+# Resolve the directory of this script when executed as a real file.
+# Stdin / bash -s execution leaves BASH_SOURCE[0] unset under `set -u`;
+# never fall back to $0 (may be "bash") or the current working directory.
+frp_u_script_dir() {
+  local src=""
+  if [[ -n "${BASH_SOURCE[0]+x}" && -n "${BASH_SOURCE[0]}" ]]; then
+    src="${BASH_SOURCE[0]}"
+  fi
+  if [[ -z "$src" || "$src" == "-" || "$src" == "bash" || "$src" == "sh" ]]; then
+    printf ''
+    return 0
+  fi
+  if [[ ! -f "$src" ]]; then
+    printf ''
+    return 0
+  fi
+  cd "$(dirname "$src")" && pwd
+}
+_frp_u_here="$(frp_u_script_dir)"
+_frp_u_macos_cands=()
+if [[ -n "${_frp_u_here:-}" ]]; then
+  _frp_u_macos_cands+=(
+    "${_frp_u_here}/lib/frp-macos.sh"
+    "${_frp_u_here}/frp-macos.sh"
+  )
+fi
+_frp_u_macos_cands+=( '/Library/Application Support/drlink/lib/frp-macos.sh' )
+for _frp_u_macos in "${_frp_u_macos_cands[@]}"; do
   if [[ -f "$_frp_u_macos" ]]; then
     frp_is_darwin() { [[ "${FRP_TEST_UNAME_S:-$(uname -s)}" == Darwin ]]; }
     frp_command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -20,7 +43,7 @@ for _frp_u_macos in \
     break
   fi
 done
-unset _frp_u_macos
+unset _frp_u_macos _frp_u_macos_cands
 
 frp_u_is_darwin() {
   declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin
@@ -339,17 +362,21 @@ if [[ "$SERVER_PRESENT" != "1" ]]; then
 fi
 
 # Load canonical ownership (CLIENT_ONLY / SHARED).
-for _frp_own in \
-  "${libdir}/frp-role-ownership.sh" \
-  "${_frp_u_here}/lib/frp-role-ownership.sh" \
-  "${_frp_u_here}/../lib/frp-role-ownership.sh"; do
+_frp_own_cands=( "${libdir}/frp-role-ownership.sh" )
+if [[ -n "${_frp_u_here:-}" ]]; then
+  _frp_own_cands+=(
+    "${_frp_u_here}/lib/frp-role-ownership.sh"
+    "${_frp_u_here}/../lib/frp-role-ownership.sh"
+  )
+fi
+for _frp_own in "${_frp_own_cands[@]}"; do
   if [[ -f "$_frp_own" ]]; then
     # shellcheck disable=SC1090
     . "$_frp_own"
     break
   fi
 done
-unset _frp_own
+unset _frp_own _frp_own_cands
 
 if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   # CLIENT_ONLY: always remove on client uninstall.

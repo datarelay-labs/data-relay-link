@@ -891,6 +891,7 @@ frp_server_apply_project_upgrade() {
   fi
 
   if ! FRP_RELEASE_CHANNEL="$target_channel" \
+      FRP_EXPECTED_SOURCE_REF="$target_ref" \
       FRP_BUNDLE_SHA256="$target_bundle" \
       FRP_VERSION_REQUIRE_VERIFIED_BUNDLE=1 \
       PROJECT_VERSION="$target" \

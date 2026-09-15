@@ -101,11 +101,43 @@ def installed_project_version():
     return '2.3.1'
 
 
+def installed_source_ref():
+    """Install provenance ref (commit SHA or release tag), never PROJECT_VERSION."""
+    env = str(os.environ.get('FRP_EXPECTED_SOURCE_REF') or '').strip()
+    if env:
+        return env
+    for candidate in (
+        remap('/etc/drlink/version'),
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('SOURCE_REF='):
+                value = line.split('=', 1)[1].strip()
+                if value:
+                    return value
+    return ''
+
+
 def default_client_installer_url():
-    ver = installed_project_version()
+    ref = installed_source_ref()
+    if not ref:
+        ref = 'v%s' % installed_project_version()
     return (
         'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
-        'v%s/dist/bootstrap-client.sh' % ver
+        '%s/dist/bootstrap-client.sh' % ref
+    )
+
+
+def default_windows_client_installer_url():
+    ref = installed_source_ref()
+    if not ref:
+        ref = 'v%s' % installed_project_version()
+    return (
+        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
+        '%s/dist/bootstrap-client.ps1' % ref
     )
 
 
