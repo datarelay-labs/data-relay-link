@@ -2240,7 +2240,7 @@
     "roles": "server",
     "category": "Inventory",
     "summary": "Remove client metadata, trust, a service reservation, group membership, or the client",
-    "detail": "release client <CLIENT-ID>\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nrelease client <CLIENT-ID> <SERVICE-ID>\n  Release only that service reservation.\n  WHAT STAYS: management identity, client record, other services.\n  Confirmation: type RELEASE\n\nconfirmation prompt allows release while a published port is still active.\nNot the same as revoke, unset, disable, or uninstall.",
+    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> \u2014 require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag \u2026\nGroup membership: unset client <CLIENT> group <GROUP>",
     "examples": [
       "unset client 24cd7856 label",
       "unset client 24cd7856 trust",
@@ -2255,8 +2255,15 @@
         "required": true
       },
       {
-        "name": "<SERVICE-ID>",
-        "complete": "client-services",
+        "name": "trust|service|group|label|note|tag",
+        "complete": [
+          "trust",
+          "service",
+          "group",
+          "label",
+          "note",
+          "tag"
+        ],
         "required": false
       }
     ],

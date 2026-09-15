@@ -1217,12 +1217,19 @@ Product/architecture documents may still use **Secure Remote Access** and
 **Controlled Egress** as capability names. Those names are **not** interactive
 root menu labels.
 
-Bare `?` and bare `help` are domain-oriented overviews. The complete expert
-command reference lives under `help commands`. Resource-first forms remain
-hidden compatibility aliases (`help legacy`).
+Bare `?` lists executable public roots (`show` / `set` / `unset` / `test` /
+`system` / `menu` / `help` / `exit`). Bare `help` explains domains and
+concepts. The complete expert command reference lives under `help commands`.
+`menu` opens the guided domain UI. Resource-first forms remain hidden
+compatibility aliases (`help legacy`).
 
-Future changes must not flatten root navigation back into parser actions
-(`show` / `create` / `set` / … as the beginner root).
+Do not confuse:
+
+```text
+?     = executable command discovery
+help  = conceptual / domain help
+menu  = guided numbered UI
+```
 
 ## 18.1 Current canonical grammar (v2.4.0) — canonical
 
@@ -1249,34 +1256,36 @@ set client 24cd7856 label branch-a
 
 set client
 set enrollment
+unset client 24cd7856 trust
+unset client 24cd7856 service ssh
 unset client 24cd7856
-unset client 24cd7856
-unset client 24cd7856 ssh
 unset enrollment 0011223344556677
 
 show groups
-add client 24cd7856 group edge
+set client 24cd7856 group edge
 set group edge description "Edge sites"
 
 show internet-profiles
 set internet-profile vendor-api
-add egress-source vendor-api
-add egress-destination vendor-api
-test egress
-enable egress-profile vendor-api
+set internet-source vendor-api 10.0.0.0/24
+set internet-destination vendor-api api.example.com 443 https
+test internet 10.0.0.5 api.example.com 443 https
+set internet-profile vendor-api enabled
 
 system diagnostics
 system update product
+system update engine
+system update check-engine
 ```
 
-Safe Controlled Egress workflow (create is always DISABLED):
+Safe Internet Access workflow (new profiles are always DISABLED):
 
 ```text
 set internet-profile <name>
-→ add egress-source …
-→ add egress-destination …
-→ test egress …
-→ enable egress-profile …
+→ set internet-source …
+→ set internet-destination …
+→ test internet …
+→ set internet-profile <name> enabled
 ```
 
 ## 18.2 Historical — resource-first grammar (hidden compatibility only)
@@ -1821,7 +1830,8 @@ show group ACME
 향후 반복 수요가 확인된 제한적 read-only/safe bulk operation 후보:
 
 ```text
-doctor clients --group customer-acme
+# future candidate (not current public CLI)
+# doctor clients --group customer-acme
 show services --group customer-acme
 ```
 
@@ -2014,7 +2024,7 @@ rollback on failure
 
 # 40. Doctor
 
-`drlink doctor`는 대표적인 문제 진단 도구다 (internal entrypoint may still be named `frpctl`).
+`drlink system diagnostics`는 대표적인 문제 진단 도구다 (internal entrypoint may still be named doctor/frpctl).
 
 중요한 원칙:
 
@@ -2937,7 +2947,8 @@ canary/staged rollout
 후보:
 
 ```text
-doctor clients --group ...
+# future candidate (not current public CLI)
+# doctor clients --group ...
 show services --group ...
 ```
 
@@ -3523,7 +3534,8 @@ show clients
 show groups
 show clients --group customer-acme
 show clients --tag env=prod
-doctor clients --group production
+# future candidate (not current public CLI)
+# doctor clients --group production
 ```
 
 같은 단순한 command로 관리한다.

@@ -76,7 +76,7 @@ separate trust domains (see below).
 
 ## 5. Enrollment Code
 
-A short-lived secret created on the server (`sudo drlink` → `create enrollment`).
+A short-lived secret created on the server (`sudo drlink` → `set enrollment`).
 
 - Default TTL: 10 minutes
 - Bound to the first machine (`machine-id`) that uses it
@@ -183,7 +183,7 @@ eligible for automatic cleanup during enrollment issuance or allocator startup.
 - `revoke enrollment` — security lifecycle; blocks pending/bound credentials
 - `purge enrollment` — housekeeping lifecycle; permanently removes terminal metadata
 - Automatic cleanup is pair-aware for zero-touch (bootstrap ticket + paired enrollment)
-- Malformed or inconsistent pairs are never silently deleted (fail closed; see `doctor`)
+- Malformed or inconsistent pairs are never silently deleted (fail closed; see `system diagnostics`)
 - Audit log retention is independent; purging enrollment JSON does not delete audit events
 - Non-interactive purge requires `FRP_ENROLLMENT_PURGE_YES=yes`
 
@@ -223,7 +223,7 @@ MAX_NONCES_PER_CLIENT=256
 Replayed nonces and stale timestamps are rejected. A retry of the same logical
 Apply uses a new timestamp/nonce/signature and reuses existing public ports.
 
-`drlink doctor` is read-only and does not consume a nonce.
+`drlink system diagnostics` is read-only and does not consume a nonce.
 
 ## 9. Revoke vs release
 
@@ -468,9 +468,10 @@ Security contract:
 
 Windows Update over the proxy is possible with an explicit destination set. **Delivery Optimization peer traffic is out of Controlled Egress scope** — keep DO disabled or use WSUS/managed update paths on closed hosts.
 
-Operator CLI (action-first): `show egress` / `create egress-profile` / guided
-`add egress-source` → `add egress-destination` → `test egress` →
-`enable egress-profile`. See `docs/CONTROLLED_EGRESS.md`.
+Operator CLI (final public grammar): `show internet` /
+`set internet-profile` / guided
+`set internet-source` → `set internet-destination` → `test internet` →
+`set internet-profile … enabled`. See `docs/CONTROLLED_EGRESS.md`.
 
 ## 18. Mixed product versions
 

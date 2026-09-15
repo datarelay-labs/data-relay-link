@@ -208,7 +208,7 @@ Then verify:
 ```bash
 sudo drlink version
 sudo drlink show status
-sudo drlink doctor
+sudo drlink system diagnostics
 ```
 
 Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, UFW, firewalld, iptables, or DNS-provider records.
@@ -393,18 +393,19 @@ set client <CLIENT-ID> tag site seoul
 
 show internet-profiles
 set internet-profile vendor-api
-add egress-source vendor-api
-add egress-destination vendor-api
-enable egress-profile vendor-api
+set internet-source vendor-api 10.0.0.0/24
+set internet-destination vendor-api api.example.com 443 https
+set internet-profile vendor-api enabled
 
+unset client <CLIENT-ID> trust
+unset client <CLIENT-ID> service <SERVICE-ID>
 unset client <CLIENT-ID>
-unset client <CLIENT-ID>
-unset client <CLIENT-ID> <SERVICE-ID>
 unset enrollment <ENROLLMENT-ID>
 
 system diagnostics
 system update product
 system update engine
+system update check-engine
 ```
 
 Older resource-first forms (`client list`, `enrollment create`, …) still work as
@@ -427,14 +428,14 @@ uninstall != release
 update    != re-enrollment
 ```
 
-| Operation | Identity | Public port |
+| Operation | Identity / trust | Public port |
 | --- | --- | --- |
-| disable service | kept | **reserved** |
-| enable service | kept | **same port reused** |
-| edit service | kept | **preserved** |
-| unset client | management blocked | **reserved** |
-| unset client | kept | **released for that service** |
-| unset client | removed | **released** |
+| unset service <SERVICE> enabled | kept | **reserved** |
+| set service <SERVICE> enabled | kept | **same port reused** |
+| set service <SERVICE> … | kept | **preserved** |
+| unset client <CLIENT> trust | management blocked | **reserved** |
+| unset client <CLIENT> service <SERVICE> | kept | **released for that service** |
+| unset client <CLIENT> | client record and management identity removed | **all ports released** |
 | local client uninstall | server identity remains | **reserved** |
 | normal update | preserved | **preserved** |
 
@@ -477,18 +478,29 @@ v2.3.0 includes the lightweight Group model intended for a few to a few dozen cl
 
 Dynamic Group, nested hierarchy, broad destructive fleet operations, canary rollout frameworks, and hundreds/thousands-client orchestration are not current core scope.
 
-## Access Control Pack
+## Access Rules
 
-Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE):
+Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE) and carried forward:
 
-- Named reusable Access Lists (IPv4/IPv6 CIDR)
-- Service modes: `PUBLIC` (default) and `ALLOWLIST`
+- Reusable Access Rules (IPv4/IPv6 CIDR sources)
+- Service modes: `PUBLIC` (default) and assigned Access Rule
 - Optional temporary sources with absolute expiry (`expires_at`)
-- Bounded connection ALLOW/DENY log
-- `drlink access ...` interactive menu and scriptable CLI
-- FRP 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed for ALLOWLIST)
+- Bounded connection ALLOW/DENY log (`show access-log`)
+- Final public CLI family: `show/set/unset/test` Access Rule commands
+- Relay Engine (FRP) 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed when a rule is assigned)
 
 IP allowlisting is defense-in-depth. Keep target authentication enabled.
+
+Everyday commands:
+
+```text
+show access-rules
+set access-rule <RULE>
+set access-source <RULE> <SOURCE>
+set service-access <CLIENT> <SERVICE> <RULE>
+test access <CLIENT> <SERVICE> <SOURCE-IP>
+unset service-access <CLIENT> <SERVICE>
+```
 
 ---
 
@@ -520,14 +532,12 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 sudo drlink system backup
 sudo drlink system restore <path>
 
-sudo drlink system update product --check
 sudo drlink system update product
-
-sudo drlink server upstream
-sudo drlink system update engine --check
+sudo drlink system update engine
+sudo drlink system update check-engine
 ```
 
-`server upstream` is informational. Data Relay Link does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
+`system update check-engine` is informational. Data Relay Link does not automatically follow the newest upstream Relay Engine (FRP) release; it stays on the explicitly qualified pinned version.
 
 Legacy clients that do not have persisted release identity fail closed on remote update. Use the **one-time verified bridge** documented in [`docs/FRP_UPGRADE.md`](docs/FRP_UPGRADE.md); do not guess or silently switch a legacy install to a release channel.
 

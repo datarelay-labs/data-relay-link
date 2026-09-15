@@ -1733,7 +1733,7 @@ def check_access_control(report, paths, facts, cfg, registry_state):
                 status,
                 '%s: %s' % (cls, issue.get('message') or 'issue'),
                 '',
-                'inspect Access Control with drlink access; doctor does not rewrite ACL state',
+                'inspect Access Rules with show access-rules / show access-rule; diagnostics does not rewrite ACL state',
                 'state',
             )
 
@@ -2481,7 +2481,7 @@ def check_egress_control(report, paths, facts, cfg):
                     'EGRESS_EFFECTIVE_CONFIG', FAIL,
                     'egress effective policy is unhealthy (fail-closed)',
                     'generation=%s path=%s' % (generation, effective_rel),
-                    'fix Controlled Egress policy with: sudo drlink show egress-profiles',
+                    'fix Controlled Egress policy with: sudo drlink show internet-profiles',
                     'runtime',
                 )
             report.add(
@@ -2536,7 +2536,7 @@ def check_egress_control(report, paths, facts, cfg):
             status,
             '%s: %s' % (cls, issue.get('message') or 'issue'),
             '',
-            'inspect Controlled Egress with show egress-profiles',
+            'inspect Internet Access with show internet-profiles',
             'state',
         )
 

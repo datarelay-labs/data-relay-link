@@ -14,11 +14,27 @@ capability names above. See `docs/PRODUCT_MASTER.md` §18.0.
 
 ## Canonical grammar (current)
 
+Public roots:
+
+```text
+show
+set
+unset
+test
+system
+menu
+help
+exit
+```
+
+Typical form:
+
 ```text
 <action> <resource> [target] [value]
 ```
 
-Single source of truth: `lib/frp_cli_catalog.py` (`COMMANDS`). Root help,
+Single source of truth: `lib/frp_cli_final_commands.json` via
+`lib/frp_cli_catalog.py` (`PUBLIC_COMMANDS` / `COMMANDS`). Root help,
 resource help, context `?`, Tab, guided menu (`NAVIGATION_TREE`), and
 suggestions are generated from that catalog. Host role decides which
 resources appear. Dual-role hosts use the server product-domain root.
@@ -59,19 +75,32 @@ CLIENT ID only. A unique label or unique hostname still works when typed by
 hand. An SSH connection string such as `user@host:port` is not a selector.
 An ambiguous prefix fails closed; use a longer CLIENT ID prefix.
 
-`unset client` removes stored metadata only.
+Client removal model (three distinct operations):
 
-`unset client <CLIENT-ID>` permanently removes the client registry record,
-management identity, and **all** service reservations / public ports for that
-client. It does not delete the remote host or uninstall local software.
+```text
+unset client <CLIENT> trust
+  Block management trust. Registry record and public ports stay reserved.
 
-`unset client <CLIENT-ID> <SERVICE-ID>` releases only that one service
-reservation; the client identity remains (zero published services is valid
-for an already enrolled client).
+unset client <CLIENT> service <SERVICE>
+  Release one service reservation / public port. Client identity stays.
 
-`unset client <CLIENT> trust` blocks management trust and keeps every reservation.
+unset client <CLIENT>
+  Remove the client registry record, management identity, and all
+  service reservations / public ports. Does not delete the remote host
+  or uninstall Data Relay Link on the remote machine.
+```
 
-Those three are never aliases of each other. There is no `delete client`.
+Metadata helpers remain separate:
+
+```text
+unset client <CLIENT> label
+unset client <CLIENT> note
+unset client <CLIENT> tag <KEY>
+unset client <CLIENT> group <GROUP>
+```
+
+Those forms are never aliases of each other. There is no public
+`unset client <CLIENT> <SERVICE>` shorthand and no `delete client`.
 
 
 ## Everyday canonical commands
@@ -80,10 +109,10 @@ Those three are never aliases of each other. There is no `delete client`.
 show status
 system version
 show clients
-show client <ID>
-show client <ID> services
-show client <ID> tags
-show client <ID> groups
+show client <CLIENT>
+show client <CLIENT> services
+show client <CLIENT> tags
+show client <CLIENT> groups
 show groups
 show group <GROUP>
 show enrollments
@@ -92,49 +121,64 @@ system update check-engine
 show services
 system info
 
-set client <ID> label <value>
-set client <ID> note <value>
-set client <ID> tag <key> <value>
+set client
+set client <CLIENT> label <value>
+set client <CLIENT> note <value>
+set client <CLIENT> tag <key> <value>
+set client <CLIENT> group <GROUP>
 set server public-hostname <fqdn>
 set server bootstrap-hostname <fqdn>
+set server installer-url <url>
+set server windows-installer-url <url>
 
-set client
 set enrollment
+set enrollment bulk
 system backup
 system support-bundle
-set group <name>
-create service-profile <name>
-set internet-profile <name>
-set access-rule <name>
+set group <GROUP>
+set service-profile <PROFILE>
+set internet-profile <PROFILE>
+set access-rule <RULE>
 
-add client <CLIENT> group <GROUP>
-remove client <CLIENT> group <GROUP>
-add egress-destination <PROFILE>
-add egress-source <PROFILE>
-add access-source <LIST>
+set access-source <RULE> <SOURCE>
+set service-access <CLIENT> <SERVICE> <RULE>
+set internet-source <PROFILE> <CIDR>
+set internet-destination <PROFILE> <FQDN> <PORT> <PROTOCOL>
+set fixed-tcp <ENTRY>
+set internet-profile <PROFILE> enabled
+set fixed-tcp <ENTRY> enabled
 
-enable egress-profile <PROFILE>
-disable egress-profile <PROFILE>
-
-unset client <ID>
-unset enrollment <ID>
-unset client <ID>
-unset client <ID> <SERVICE-ID>
-unset enrollment <ID>
+unset client <CLIENT> trust
+unset client <CLIENT> service <SERVICE>
+unset client <CLIENT>
+unset client <CLIENT> group <GROUP>
+unset enrollment <ENROLLMENT>
 unset group <GROUP>
-delete service-profile <PROFILE>
-delete egress-profile <PROFILE>
-delete access-list <LIST>
+unset service-profile <PROFILE>
+unset access-rule <RULE>
+unset access-source <RULE> <SELECTOR>
+unset service-access <CLIENT> <SERVICE>
+unset internet-source <PROFILE> <SELECTOR>
+unset internet-destination <PROFILE> <FQDN> <PORT> [PROTOCOL]
+unset internet-profile <PROFILE> enabled
+unset internet-profile <PROFILE>
+unset fixed-tcp <ENTRY> enabled
+unset fixed-tcp <ENTRY>
 
 system restore <path>
 system update product
 system update engine
-test access
-test internet
+system update check-engine
+test access <CLIENT> <SERVICE> <SOURCE-IP>
+test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]
+test fixed-tcp <ENTRY> <SOURCE-IP>
 system diagnostics
+system export internet-profile <PROFILE> [PATH]
+system import internet-profile <FILE> [PROFILE]
+system diff internet-profile <PROFILE> <FILE>
 ```
 
-Public UX does not advertise GNU-style `--options`. Complex create/add flows
+Public UX does not advertise GNU-style `--options`. Complex create flows
 use guided prompts. Backend tools may still use flags internally.
 
 Session helpers:
@@ -149,8 +193,8 @@ help commands
 help workflows
 help legacy
 menu
-history
-clear
+system history
+system clear
 exit
 ```
 
@@ -165,23 +209,24 @@ canonical forms above (`show clients`, not legacy list verbs).
 
 ## Access Rules
 
-Beginner/operator term: **Access Rules**. Direct command resource remains
-`access-list`.
+Beginner/operator term and direct CLI resource: **Access Rules**
+(`access-rule` / `access-rules`).
 
 ```text
 show access-rules
-set access-rule <name>
-show access-rule <list>
-add access-source <list>
-remove access-source <list>
-set access-assign <client> <service-id> <list>
-set access-public <client> <service-id>
-test access <client> <service-id> <source-ip>
+show access-rule <RULE>
+set access-rule <RULE>
+set access-source <RULE> <SOURCE>
+set service-access <CLIENT> <SERVICE> <RULE>
+unset access-source <RULE> <SELECTOR>
+unset service-access <CLIENT> <SERVICE>
+unset access-rule <RULE>
+test access <CLIENT> <SERVICE> <SOURCE-IP>
 show access-log
 ```
 
 Interactive `drlink` server menu places Access Rules under **Services**.
-Empty ALLOWLIST assignment is refused. Deleting a list that is still
+Empty allowlist assignment is refused. Deleting a rule that is still
 referenced is refused. IP allowlisting is defense-in-depth; keep target
 authentication enabled.
 
@@ -193,48 +238,62 @@ Capability / architecture term: **Controlled Egress**.
 ```text
 show internet
 show internet-profiles
-set internet-profile <NAME>
 show internet-profile <PROFILE>
-set egress-profile <PROFILE> name|description <VALUE>
-add egress-destination <PROFILE>
-add egress-source <PROFILE>
-test internet
-enable egress-profile <PROFILE>
-disable egress-profile <PROFILE>
-import egress <PATH>
-diff egress <PROFILE> <PATH>
+set internet-profile <PROFILE>
+set internet-profile <PROFILE> name|description <VALUE>
+set internet-source <PROFILE> <CIDR>
+set internet-destination <PROFILE> <FQDN> <PORT> <PROTOCOL>
+test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]
+set internet-profile <PROFILE> enabled
+unset internet-profile <PROFILE> enabled
+system import internet-profile <FILE> [PROFILE]
+system export internet-profile <PROFILE> [PATH]
+system diff internet-profile <PROFILE> <FILE>
 show fixed-tcp
-set fixed-tcp <NAME>
+show fixed-tcp <ENTRY>
+set fixed-tcp <ENTRY>
+set fixed-tcp <ENTRY> enabled
+unset fixed-tcp <ENTRY> enabled
+unset fixed-tcp <ENTRY>
+test fixed-tcp <ENTRY> <SOURCE-IP>
 show internet-templates
-set internet-profile <NEW> template <NAME>
+show internet-template <TEMPLATE>
+set internet-profile <NEW_PROFILE> template <TEMPLATE>
 ```
 
 `test internet` evaluates policy + DNS. It is **not** a live destination
 connection test (menu label: **Check policy**).
 
-Safe workflow: create (disabled) → add-source → add-destination + protocol →
-check policy → enable. See `docs/CONTROLLED_EGRESS.md`.
+Safe workflow: create profile (disabled) → set source → set destination +
+protocol → check policy → enable. See `docs/CONTROLLED_EGRESS.md`.
 
-## update
+## Updates
 
-`update` with no resource keeps the previous role default (client project
-tools on a client; engine update on a server). Updater security is unchanged:
-stable tag, verified SHA256SUMS, fail-closed, rollback, no re-enrollment, no
-CA/token/port loss. FRP stays pinned at 0.71.0.
+Public update commands:
+
+```text
+system update product
+system update engine
+system update check-engine
+```
+
+Updater security is unchanged: stable tag, verified SHA256SUMS, fail-closed,
+rollback, no re-enrollment, no CA/token/port loss. Relay Engine (FRP) stays
+pinned at the explicitly qualified version.
 
 ## Other
 
 ```text
 system diagnostics
 system support-bundle
+system history
+system clear
 help
 help commands
 help workflows
 help legacy
 ?
 menu
-history
-clear
 exit
 ```
 
@@ -243,9 +302,16 @@ exit
 enrollment secrets, and auth material are omitted or redacted. It does not
 restart services.
 
-Root `?` and bare `help` show product work areas (Clients / Services /
-Internet Access / System). Full expert grammar is under `help commands`.
-`menu` is the guided numbered interface using the navigation tree.
+Three discovery surfaces (do not conflate them):
+
+```text
+?     = executable root / next-token discovery
+help  = conceptual / domain help (and help commands)
+menu  = guided numbered UI (Clients / Services / Internet Access / System)
+```
+
+Bare `?` lists executable roots: `show set unset test system menu help exit`.
+Full expert grammar is under `help commands`.
 
 
 ## Compatibility cheat sheet (legacy → canonical)
@@ -257,9 +323,9 @@ Internet Access / System). Full expert grammar is under `help commands`.
 | `enrollment revoke` | `unset enrollment` |
 | `egress list` | `show internet-profiles` |
 | `egress create` | `set internet-profile` |
-| `egress status` | `show egress` |
+| `egress status` | `show internet` |
 | `access list` | `show access-rules` |
-| `access assign` | `set access-assign` |
+| `access assign` | `set service-access` |
 | `frp-update` / `update frp` | `system update engine` |
 | `support-bundle` | `system support-bundle` |
-| `purge enrollment` | `delete enrollment` |
+| `purge enrollment` / `delete enrollment` | `unset enrollment` |

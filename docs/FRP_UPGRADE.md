@@ -66,7 +66,7 @@ Install on a server only with `sudo drlink update engine`, which installs the
 Informational check:
 
 ```bash
-sudo drlink server upstream
+sudo drlink system update check-engine
 # implementation tool: frp-upstream
 ```
 
@@ -171,7 +171,7 @@ a verified candidate whose manifest is `dev` / `main`.
 
 ## Server project-update build identity
 
-`sudo drlink update product --check` is read-only. Availability is not decided
+`sudo drlink system update product` is read-only. Availability is not decided
 from `PROJECT_VERSION` alone:
 
 - installed version **less than** candidate → update available

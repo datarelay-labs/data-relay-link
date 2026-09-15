@@ -2765,8 +2765,9 @@ def domain_help(topic, role):
             "  show client <CLIENT-ID>\n"
             "  set client\n"
             "  set client <CLIENT-ID> label <value>\n"
-            "  unset client <CLIENT> trust <CLIENT-ID>\n"
-            "  unset client <CLIENT> <CLIENT-ID>\n\n"
+            "  unset client <CLIENT-ID> trust\n"
+            "  unset client <CLIENT-ID> service <SERVICE-ID>\n"
+            "  unset client <CLIENT-ID>\n\n"
             "CLIENT ID is the immutable selector. Labels and hostnames are\n"
             "convenient display shortcuts when unique.\n"
         )
@@ -2789,8 +2790,8 @@ def domain_help(topic, role):
                 "  show services\n"
                 "  show client <CLIENT-ID> services\n"
                 "  set access-rule <NAME>\n"
-                "  create service-profile <NAME>\n"
-                "  unset client <CLIENT> service <SERVICE> <CLIENT-ID> <SERVICE-ID>\n"
+                "  set service-profile <NAME>\n"
+                "  unset client <CLIENT-ID> service <SERVICE-ID>\n"
             )
         if client:
             return (
@@ -2828,9 +2829,11 @@ def domain_help(topic, role):
             "  Templates\n"
             "  Check policy   (policy + DNS; not a live connection test)\n\n"
             "Everyday commands:\n"
-            "  show egress\n"
+            "  show internet\n"
             "  show internet-profiles\n"
             "  set internet-profile <NAME>\n"
+            "  set internet-source <NAME> <CIDR>\n"
+            "  set internet-destination <NAME> <FQDN> <PORT> <PROTOCOL>\n"
             "  test internet\n"
             "  show fixed-tcp\n"
             "  show internet-templates\n"
@@ -2853,6 +2856,7 @@ def domain_help(topic, role):
             "  system support-bundle",
             "  system update product",
             "  system update engine",
+            "  system update check-engine",
         ]
         if server:
             lines.extend(
@@ -3013,52 +3017,53 @@ WORKFLOWS = (
     (
         "Onboard a new client",
         (
-            "create zero-touch",
+            "set client",
             "show clients",
             "show client <CLIENT-ID>",
         ),
-        "Zero-Touch is the recommended path. Use 'create enrollment' only when "
-        "an interactive install is required.",
+        "Zero-Touch via set client is the recommended path. Use 'set enrollment' "
+        "only when an interactive install is required.",
     ),
     (
         "Publish and reach a remote service",
         (
-            "add service",
+            "set service",
             "apply",
             "show client <CLIENT-ID> services",
         ),
         "Public ports are assigned by the server at apply time and stay "
-        "reserved until 'release client' / 'release service'.",
+        "reserved until 'unset client … service …' / 'unset client …'.",
     ),
     (
         "Restrict who may reach a service",
         (
-            "create access-list office",
-            "add access-source office",
-            "set access-assign <CLIENT-ID> <SERVICE-ID> office",
+            "set access-rule office",
+            "set access-source office 203.0.113.0/24",
+            "set service-access <CLIENT-ID> <SERVICE-ID> office",
             "test access <CLIENT-ID> <SERVICE-ID> 203.0.113.9",
         ),
-        "Services are PUBLIC until a list is assigned.",
+        "Services are PUBLIC until an Access Rule is assigned.",
     ),
     (
         "Allow one outbound destination",
         (
-            "create egress-profile vendor-api",
-            "add egress-source vendor-api",
-            "add egress-destination vendor-api",
-            "enable egress-profile vendor-api",
+            "set internet-profile vendor-api",
+            "set internet-source vendor-api 10.0.0.0/24",
+            "set internet-destination vendor-api api.example.com 443 https",
+            "set internet-profile vendor-api enabled",
         ),
-        "A new egress profile is created disabled. Default policy is DENY.",
+        "A new Internet Access profile is created disabled. Default policy is DENY.",
     ),
     (
         "Routine maintenance",
         (
-            "doctor",
-            "create backup",
-            "update product",
-            "create support-bundle",
+            "system diagnostics",
+            "system backup",
+            "system update product",
+            "system support-bundle",
         ),
-        "'update engine' updates the upstream FRP binary separately.",
+        "'system update engine' updates the upstream Relay Engine (FRP) binary separately. "
+        "Use 'system update check-engine' to check upstream releases.",
     ),
 )
 
@@ -3142,8 +3147,9 @@ def shell_usage_lines(role):
         "",
         "Design: action-first · guided domains · no user-facing --options",
         "",
-        "Work areas: menu",
+        "Guided UI:  menu",
         "Commands:   help commands",
+        "Discovery:  ?  (executable roots; not domain work areas)",
         "",
     ]
     for root, summary in root_rows(role):
@@ -3200,11 +3206,11 @@ NAVIGATION_TREE = {
     "client.system": (
         ("client_sys_status", "Status", "", "command", "show status"),
         ("client_sys_info", "Connection information", "", "command", "show info"),
-        ("client_sys_version", "Version information", "", "command", "show version"),
-        ("client_sys_update_product", "Update Data Relay Link", "", "command", "update product"),
-        ("client_sys_update_engine", "Update Relay Engine (FRP)", "", "command", "update engine"),
-        ("client_sys_doctor", "Diagnostics", "", "command", "doctor"),
-        ("client_sys_support", "Support Bundle", "", "command", "create support-bundle"),
+        ("client_sys_version", "Version information", "", "command", "system version"),
+        ("client_sys_update_product", "Update Data Relay Link", "", "command", "system update product"),
+        ("client_sys_update_engine", "Update Relay Engine (FRP)", "", "command", "system update engine"),
+        ("client_sys_doctor", "Diagnostics", "", "command", "system diagnostics"),
+        ("client_sys_support", "Support Bundle", "", "command", "system support-bundle"),
         ("back", "Back", "", "back", None),
     ),
     "server": (
@@ -3300,7 +3306,7 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.services.access": (
-        ("server_access_list", "List rules", "", "command", "show access-lists"),
+        ("server_access_list", "List rules", "", "command", "show access-rules"),
         ("server_access_create", "Create rule", "", "workflow", "create_access_list"),
         ("server_access_edit", "View or edit rule", "", "workflow", "manage_access_list"),
         ("server_access_assign", "Assign rule to a service", "", "workflow", "assign_access"),
@@ -3317,7 +3323,7 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.internet": (
-        ("server_egress_overview", "Overview", "", "command", "show egress"),
+        ("server_egress_overview", "Overview", "", "command", "show internet"),
         (
             "server_egress_profiles",
             "Access Profiles",
@@ -3349,7 +3355,7 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.internet.profiles": (
-        ("server_egp_list", "List profiles", "", "command", "show egress-profiles"),
+        ("server_egp_list", "List profiles", "", "command", "show internet-profiles"),
         ("server_egp_create", "Create profile", "", "workflow", "create_egress_profile"),
         ("server_egp_manage", "View or manage profile", "", "workflow", "manage_egress_profile"),
         ("server_egp_import", "Import profile", "", "workflow", "import_egress"),
@@ -3357,13 +3363,13 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.internet.tcp": (
-        ("server_egt_list", "List Fixed TCP entries", "", "command", "show egress-tcp"),
+        ("server_egt_list", "List Fixed TCP entries", "", "command", "show fixed-tcp"),
         ("server_egt_create", "Create Fixed TCP entry", "", "workflow", "create_egress_tcp"),
         ("server_egt_manage", "View or manage an entry", "", "workflow", "manage_egress_tcp"),
         ("back", "Back", "", "back", None),
     ),
     "server.internet.templates": (
-        ("server_egr_list", "List templates", "", "command", "show egress-recipes"),
+        ("server_egr_list", "List templates", "", "command", "show internet-templates"),
         ("server_egr_view", "View template", "", "workflow", "view_egress_recipe"),
         ("server_egr_create", "Create configuration from template", "", "workflow", "apply_egress_recipe"),
         ("back", "Back", "", "back", None),
@@ -3374,8 +3380,8 @@ NAVIGATION_TREE = {
         ("server_sys_backup", "Backup & Restore", "", "submenu", "server.system.backup"),
         ("server_sys_updates", "Updates", "", "submenu", "server.system.updates"),
         ("server_sys_diag", "Diagnostics", "", "submenu", "server.system.diagnostics"),
-        ("server_sys_audit", "Audit Log", "", "command", "show audit"),
-        ("server_sys_version", "Version Information", "", "command", "show version"),
+        ("server_sys_audit", "Audit Log", "", "command", "system audit"),
+        ("server_sys_version", "Version Information", "", "command", "system version"),
         ("back", "Back", "", "back", None),
     ),
     "server.system.settings": (
@@ -3385,19 +3391,19 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.system.backup": (
-        ("server_bak_create", "Create backup", "", "command", "create backup"),
+        ("server_bak_create", "Create backup", "", "command", "system backup"),
         ("server_bak_restore", "Restore backup", "", "workflow", "restore_backup"),
         ("back", "Back", "", "back", None),
     ),
     "server.system.updates": (
-        ("server_upd_product", "Update Data Relay Link", "", "command", "update product"),
-        ("server_upd_upstream", "Check upstream relay-engine release", "", "command", "show upstream"),
-        ("server_upd_engine", "Update Relay Engine (FRP)", "", "command", "update engine"),
+        ("server_upd_product", "Update Data Relay Link", "", "command", "system update product"),
+        ("server_upd_upstream", "Check upstream relay-engine release", "", "command", "system update check-engine"),
+        ("server_upd_engine", "Update Relay Engine (FRP)", "", "command", "system update engine"),
         ("back", "Back", "", "back", None),
     ),
     "server.system.diagnostics": (
-        ("server_diag_doctor", "Run health checks", "", "command", "doctor"),
-        ("server_diag_support", "Create support bundle", "", "command", "create support-bundle"),
+        ("server_diag_doctor", "Run health checks", "", "command", "system diagnostics"),
+        ("server_diag_support", "Create support bundle", "", "command", "system support-bundle"),
         ("back", "Back", "", "back", None),
     ),
 }
@@ -3582,23 +3588,25 @@ COMPLETION_DOMAIN_GROUPS = (
             "service",
             "service-profiles",
             "service-profile",
-            "access-lists",
-            "access-list",
+            "access-rules",
+            "access-rule",
+            "access-source",
+            "service-access",
             "access-service",
             "access-log",
-            "access-assign",
         ),
     ),
     (
         "Internet Access",
         (
-            "egress",
-            "egress-profiles",
-            "egress-profile",
-            "egress-tcp",
-            "egress-tcp-entry",
-            "egress-recipes",
-            "egress-recipe",
+            "internet",
+            "internet-profiles",
+            "internet-profile",
+            "internet-source",
+            "internet-destination",
+            "fixed-tcp",
+            "internet-templates",
+            "internet-template",
             "egress-destination",
             "egress-source",
         ),

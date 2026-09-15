@@ -9,7 +9,7 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 1. Record registry, labels, notes, tags, ports, CA fingerprint, token digest, installer URL.
 2. `sudo drlink update product`
 3. Confirm registry/labels/notes/tags/ports/CA/token/mode retained.
-4. `sudo drlink doctor`
+4. `sudo drlink system diagnostics`
 
 ## Existing client update
 
@@ -19,7 +19,7 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 
 ## New client
 
-1. `sudo drlink` → `create zero-touch` / `create enrollment`
+1. `sudo drlink` → `set client` / `set enrollment`
 2. List client (`show clients`), connect over published SSH
 
 ## Server metadata
@@ -35,7 +35,7 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 
 ## Bulk enrollment
 
-1. Create at least 3 independent tickets (`create enrollments`)
+1. Create at least 3 independent tickets (`set enrollment bulk`)
 2. Prove one ticket cannot enroll two machines
 
 ## Zero-service client
@@ -49,15 +49,15 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 1. `create backup`
 2. Record state, change metadata
 3. Restore from that backup (`restore backup <path>`)
-4. Exact expected state; `doctor` PASS
+4. Exact expected state; `system diagnostics` PASS
 5. Use a controlled restore; do not wipe the live host as the only copy
 
 ## Updates
 
 1. Client project update
 2. Server project update
-3. `sudo drlink update engine --check` / pinned FRP only
-4. `sudo drlink server upstream` informational, no install
+3. `sudo drlink system update check-engine` / pinned Relay Engine (FRP) only
+4. `sudo drlink system update check-engine` informational, no install
 
 ## Reboot recovery
 

@@ -125,16 +125,15 @@ set client
 set enrollment
 
 set client <ID> label production
+set client <ID> group <GROUP>
 
-add client <ID> group <GROUP>
-
-revoke enrollment <ID>
-revoke client <ID>
-
-release service <CLIENT> <SERVICE>
-release client <ID>
+unset enrollment <ID>
+unset client <ID> trust
+unset client <ID> service <SERVICE>
+unset client <ID>
 
 system update product
+system update check-engine
 system diagnostics
 ```
 
@@ -336,17 +335,23 @@ Services
 
 Rules controlling which source IP addresses may connect to published services.
 
-The implementation/direct-command object may continue to use:
+Public direct-command resources:
 
 ```text
-access-list
+access-rule
+access-rules
+access-source
+service-access
 ```
 
-but beginner-facing navigation uses:
+Beginner-facing navigation uses:
 
 ```text
 Access Rules
 ```
+
+Internal completion provider identifiers may still say `access-lists`; that is
+not public CLI vocabulary.
 
 ## Internet Access
 
@@ -637,13 +642,13 @@ Details and tags
 → show / set / unset client metadata
 
 Groups
-→ group membership operations
+→ set / unset client <ID> group …
 
 Revoke management trust
-→ revoke client <ID>
+→ unset client <ID> trust
 
 Remove client from server
-→ release client <ID>
+→ unset client <ID>
 ```
 
 ---
@@ -652,31 +657,37 @@ Remove client from server
 
 These operations must remain distinct.
 
-## Revoke client
+## Revoke client trust
 
 ```text
-revoke client <ID>
+unset client <ID> trust
 ```
 
 Blocks the client's management trust.
 
 It does not release all reservations.
 
+Legacy compatibility (hidden): `revoke client <ID>` — see `help legacy`.
+
 ## Release service
 
 ```text
-release service <CLIENT> <SERVICE>
+unset client <CLIENT> service <SERVICE>
 ```
 
 Releases one service reservation.
 
 The client remains enrolled.
 
+Legacy compatibility (hidden): `release service <CLIENT> <SERVICE>` — see `help legacy`.
+
 ## Release client
 
 ```text
-release client <ID>
+unset client <ID>
 ```
+
+Legacy compatibility (hidden): `release client <ID>` — see `help legacy`.
 
 Removes:
 
@@ -1531,19 +1542,18 @@ Services
   services
   service-profiles
   service-profile
-  access-lists
-  access-list
+  access-rules
+  access-rule
   access-service
   access-log
 
 Internet Access
-  egress
-  egress-profiles
-  egress-profile
-  egress-tcp
-  egress-tcp-entry
-  egress-recipes
-  egress-recipe
+  internet
+  internet-profiles
+  internet-profile
+  fixed-tcp
+  internet-templates
+  internet-template
 
 System
   status

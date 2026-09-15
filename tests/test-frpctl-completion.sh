@@ -143,13 +143,21 @@ pass "FRPCTL_TAB_SET_SERVICE_HEALTH"
 # --- Server role commands
 export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"
-echo "$all_server" | has_line create || fail "server list create"
 echo "$all_server" | has_line show || fail "server list show"
+echo "$all_server" | has_line set || fail "server list set"
+echo "$all_server" | has_line unset || fail "server list unset"
+echo "$all_server" | has_line test || fail "server list test"
 echo "$all_server" | has_line system || fail "server list system"
+echo "$all_server" | has_line menu || fail "server list menu"
+echo "$all_server" | has_line help || fail "server list help"
+echo "$all_server" | has_line exit || fail "server list exit"
 ! echo "$all_server" | has_line doctor || fail "server list leaked doctor"
-echo "$all_server" | has_line revoke || fail "server list revoke"
-echo "$all_server" | has_line explain || fail "server list explain"
-echo "$all_server" | has_line access || fail "server list access"
+! echo "$all_server" | has_line create || fail "server list leaked create"
+! echo "$all_server" | has_line revoke || fail "server list leaked revoke"
+! echo "$all_server" | has_line explain || fail "server list leaked explain"
+! echo "$all_server" | has_line access || fail "server list leaked access"
+! echo "$all_server" | has_line history || fail "server list leaked history"
+! echo "$all_server" | has_line clear || fail "server list leaked clear"
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
 if echo "$all_server" | has_line clients; then fail "legacy clients in tab"; fi
@@ -162,9 +170,10 @@ pass "FRPCTL_TAB_CLIENT_COMMAND_NOT_ON_SERVER"
 export FRP_CTL_TEST_ROOT="$BOTH"
 all_both="$(cands "")"
 echo "$all_both" | has_line show || fail "dual missing show"
-echo "$all_both" | has_line create || fail "dual missing create"
+echo "$all_both" | has_line set || fail "dual missing set"
 echo "$all_both" | has_line system || fail "dual missing system"
 ! echo "$all_both" | has_line doctor || fail "dual leaked doctor"
+! echo "$all_both" | has_line create || fail "dual leaked create"
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
 if echo "$all_both" | has_line enrollment; then fail "dual offered enrollment root"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"
@@ -236,10 +245,10 @@ pass "NO_SECRET_SELECTOR_COMPLETION"
 
 # --- No arbitrary shell / eval completion
 [[ -z "$(cands bash)" ]] || fail "bash must not complete"
-[[ -z "$(cands sh)" ]] || fail "sh must not complete"
+[[ "$(cands sh)" == "show" ]] || fail "sh should complete show (not a shell)"
 [[ -z "$(cands exec)" ]] || fail "exec must not complete"
 [[ -z "$(cands '!ls')" ]] || fail "!ls must not complete"
-[[ -z "$(cands system)" ]] || fail "system must not complete"
+[[ "$(cands sys)" == "system" ]] || fail "sys should complete system"
 [[ "$(cands exi)" == "exit" ]] || fail "exi should still complete exit"
 if grep -nE '(^|[[:space:]])eval |bash -c |sh -c |system\(' "$ROOT/tools/frpctl"; then
   fail "frpctl uses unsafe dispatch/completion"
@@ -569,8 +578,12 @@ os.write(fd, b"\t")
 read_more(1.0)
 root = bytes(buf[before:])
 vis = visible(root)
-if b"show" not in vis or b"create" not in vis:
+if b"show" not in vis or b"set" not in vis or b"system" not in vis:
     fail_pty("PTY: root tab missing candidates", root)
+# Reject hidden roots as leading Tab tokens (not the word "create" inside a summary).
+import re as _re
+if _re.search(rb"(?m)^\s*(?:create|doctor|history|clear|revoke|explain|access)\s", vis):
+    fail_pty("PTY: root tab leaked hidden roots", root)
 if b"Missing resource" in root or b"Unknown command" in root:
     fail_pty("PTY: root tab dispatched", root)
 if CLEAR_RE.search(root):
@@ -605,26 +618,26 @@ if show_count2 > show_count + 2:
     fail_pty("PTY: repeated root tab duplicated candidates", after_rep)
 print("TAB_NO_DUPLICATE_LIST_ON_REPEAT")
 
-# --- create candidates on first Tab ---
-os.write(fd, b"create ")
+# --- set candidates on first Tab (public create path) ---
+os.write(fd, b"set ")
 read_more(0.3)
 before = len(buf)
 os.write(fd, b"\t")
 read_more(1.0)
 set_chunk = bytes(buf[before:])
 vis_set = visible(set_chunk)
-if b"zero-touch" not in vis_set or b"enrollment" not in vis_set:
-    fail_pty("PTY: create tab missing candidates", set_chunk)
-if b"Missing" in set_chunk and b"zero-touch" not in vis_set:
-    fail_pty("PTY: create tab dispatched incomplete command", set_chunk)
+if b"client" not in vis_set:
+    fail_pty("PTY: set tab missing candidates", set_chunk)
+if b"Missing" in set_chunk and b"client" not in vis_set:
+    fail_pty("PTY: set tab dispatched incomplete command", set_chunk)
 if CLEAR_RE.search(set_chunk):
-    fail_pty("PTY: create tab cleared screen", set_chunk)
-# buffer preserved: after list, prompt+create should be editable
+    fail_pty("PTY: set tab cleared screen", set_chunk)
+# buffer preserved: after list, prompt+set should be editable
 read_more(0.4)
 tail = visible(bytes(buf[before:]))
-if b"frpctl> create" not in tail and b"drlink> create" not in tail and not tail.rstrip().endswith(b"create "):
-    if b"create " not in tail:
-        fail_pty("PTY: create buffer not preserved", set_chunk)
+if b"frpctl> set" not in tail and b"drlink> set" not in tail and not tail.rstrip().endswith(b"set "):
+    if b"set " not in tail:
+        fail_pty("PTY: set buffer not preserved", set_chunk)
 print("TAB_SET_CANDIDATES_FIRST_PRESS")
 print("TAB_BUFFER_PRESERVED_AFTER_LIST")
 print("TAB_PROMPT_RESTORED")
@@ -632,7 +645,7 @@ print("TAB_NO_CLEAR")
 print("TAB_NO_INPUT_LOSS")
 print("TAB_DOES_NOT_DISPATCH")
 
-# repeat create tab — no duplicate of list action line
+# repeat set tab — no duplicate of list action line
 list_desc_before = count_substr(bytes(buf), b"list")
 os.write(fd, b"\t")
 read_more(0.7)
@@ -649,7 +662,7 @@ os.write(fd, b"\t")
 read_more(1.0)
 show_chunk = bytes(buf[before:])
 vis_show = visible(show_chunk)
-for token in (b"status", b"version", b"clients", b"client", b"enrollments"):
+for token in (b"status", b"clients", b"client", b"enrollments", b"internet", b"access-rules"):
     if token not in vis_show:
         fail_pty("PTY: show tab missing %s" % token.decode(), show_chunk)
 print("TAB_SHOW_CANDIDATES_FIRST_PRESS")

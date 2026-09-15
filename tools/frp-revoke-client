@@ -152,8 +152,9 @@ else:
     print('  (none)')
 print()
 print('The client will need a new Enrollment Code to establish trust again.')
-print('This does not release public ports. Use: release client <CLIENT-ID>')
-print('To release one service reservation: release service <CLIENT-ID> <SERVICE-ID>')
+print('This does not release public ports. Use: unset client <CLIENT-ID>')
+print('To release one service reservation: unset client <CLIENT-ID> service <SERVICE-ID>')
+print('Legacy compatibility: release client / release service (see help legacy).')
 
 if not args.force:
     answer = input('Type REVOKE to continue: ')

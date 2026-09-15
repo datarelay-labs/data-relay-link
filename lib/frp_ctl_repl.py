@@ -305,7 +305,7 @@ def run_repl(frpctl_bin, payload):
     if payload.get("inventory_warning"):
         sys.stderr.write(
             "WARNING: completion inventory could not be loaded; "
-            "Tab candidates may be incomplete. Run: doctor\n"
+            "Tab candidates may be incomplete. Run: system diagnostics\n"
         )
     hist = []
     while True:

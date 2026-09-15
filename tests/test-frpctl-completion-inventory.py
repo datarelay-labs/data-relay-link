@@ -24,10 +24,10 @@ GRAMMAR = load("frp_ctl_grammar", "lib/frp_ctl_grammar.py")
 
 
 class CompletionInventoryTests(unittest.TestCase):
-    def test_egress_profile_completion(self):
+    def test_internet_profile_completion(self):
         inv = ["vendor-api", "partner"]
         hits = GRAMMAR.completion_candidates(
-            "show egress-profile ",
+            "show internet-profile ",
             "server",
             [],
             {},
@@ -38,10 +38,10 @@ class CompletionInventoryTests(unittest.TestCase):
         self.assertIn("vendor-api", hits)
         self.assertIn("partner", hits)
 
-    def test_access_list_completion(self):
+    def test_access_rule_completion(self):
         inv = ["office", "acl_office"]
         hits = GRAMMAR.completion_candidates(
-            "show access-list ",
+            "show access-rule ",
             "server",
             [],
             {},
@@ -67,8 +67,9 @@ class CompletionInventoryTests(unittest.TestCase):
     def test_no_public_protocol_flag_completion(self):
         # Public Tab must not complete or advertise --protocol values.
         for line, trailing in (
+            ("set internet-destination vendor-api api.example.com 443 --protocol ", True),
+            ("set internet-destination vendor-api api.example.com 443 --protocol h", False),
             ("add egress-destination vendor-api api.example.com 443 --protocol ", True),
-            ("add egress-destination vendor-api api.example.com 443 --protocol h", False),
             ("egress add-destination vendor-api api.example.com 443 --protocol ", True),
         ):
             hits = GRAMMAR.completion_candidates(
@@ -83,9 +84,9 @@ class CompletionInventoryTests(unittest.TestCase):
             self.assertEqual(hits, [], msg=line)
             self.assertFalse(any(str(h).startswith("-") for h in hits))
 
-    def test_add_egress_destination_offers_profiles(self):
+    def test_set_internet_destination_offers_profiles(self):
         hits = GRAMMAR.completion_candidates(
-            "add egress-destination ",
+            "set internet-destination ",
             "server",
             [],
             {},

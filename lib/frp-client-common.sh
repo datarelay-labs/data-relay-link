@@ -2110,7 +2110,7 @@ for item in services:
 has_enabled = any(item.get('enabled', True) is not False for item in services)
 # Default inbound exposure is PUBLIC unless Access Control restricts it on the
 # server. Client-side access-info cannot know server allowlists, so only warn
-# when enabled services exist (operators must confirm with drlink access show).
+# when enabled services exist (operators must confirm with show access-service).
 if has_enabled:
     lines.extend([
         'Public exposure',
@@ -2125,7 +2125,7 @@ if has_enabled:
         '',
         'Recommended:',
         '  Restrict services with an Access List if public access is not intended.',
-        '  On the server: drlink access show-service <client> <service>',
+        '  On the server: drlink show access-service <client> <service>',
         '',
     ])
 path = Path(dest)

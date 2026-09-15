@@ -37,17 +37,18 @@ Profiles are always created **DISABLED**. Incomplete policies cannot widen egres
 
 ```text
 sudo drlink
-drlink> create egress-profile ubuntu-update
-drlink> add egress-source ubuntu-update
-drlink> add egress-destination ubuntu-update
-drlink> test egress
-drlink> show egress-profile ubuntu-update
-drlink> enable egress-profile ubuntu-update
+drlink> set internet-profile ubuntu-update
+drlink> set internet-source ubuntu-update 10.0.0.0/24
+drlink> set internet-destination ubuntu-update archive.ubuntu.com 443 https
+drlink> test internet 10.0.0.5 archive.ubuntu.com 443 https
+drlink> show internet-profile ubuntu-update
+drlink> set internet-profile ubuntu-update enabled
 ```
 
-`add egress-source` / `add egress-destination` collect CIDR, FQDN, port, and
-protocol through guided prompts (no public `--options`). `test egress`
-previews policy + DNS safety only: **no live connect**, **no state mutation**.
+`set internet-source` / `set internet-destination` collect CIDR, FQDN, port, and
+protocol through guided prompts when incomplete (no public `--options`).
+`test internet` previews policy + DNS safety only: **no live connect**,
+**no state mutation**.
 
 Then on the closed host, set `HTTP_PROXY` / `HTTPS_PROXY` (or app-specific proxy settings). Verify an allowed destination succeeds and a non-allowed destination is denied.
 
@@ -57,23 +58,24 @@ Each Fixed TCP relay pins **one** listener to **one** exact destination FQDN:por
 
 ```text
 sudo drlink
-drlink> create egress-profile vendor-license
-# follow guided Fixed TCP / destination prompts, then:
-drlink> enable egress-profile vendor-license
+drlink> set fixed-tcp vendor-license
+# follow guided Fixed TCP prompts, then:
+drlink> set fixed-tcp vendor-license enabled
 ```
 
 Relays are always created **DISABLED**. Listen ports auto-allocate from **6200–6299** unless the operator chooses a listen port in the guided flow. Runtime: `drlink-tcp-egress.service`.
 
-### Recipes (templates; never auto-enable)
+### Templates (never auto-enable)
 
 ```text
-drlink> show egress
-drlink> create egress-profile my-api
-# then add sources, test, enable
+drlink> show internet
+drlink> show internet-templates
+drlink> set internet-profile my-api template <TEMPLATE>
+# then set sources if needed, test, enable
 ```
 
-Older resource-first forms (`egress create`, `egress add-destination`, …) may
-still run as hidden compatibility aliases. They are not the advertised CLI.
+Older `egress*` / `recipe` forms may still run as hidden compatibility aliases.
+They are not the advertised CLI.
 
 ## Firewall responsibility
 
@@ -126,10 +128,10 @@ systemd hardening (`NoNewPrivileges`, `ProtectSystem=strict`, …). Parent
 directories are traversed with least privilege; registry/enrollment secrets
 remain root-owned and are not writable by the egress account.
 
-## Doctor / backup
+## Diagnostics / backup
 
-- `drlink doctor` checks egress policy validity, HTTP listen (`6102`), Fixed TCP listeners (`6200–6299`), and gateway/TCP unit state (read-only).
-- After doctor hints, inspect with `show egress-profiles` / `show egress` / `test egress`.
+- `drlink system diagnostics` checks Internet Access / egress policy validity, HTTP listen (`6102`), Fixed TCP listeners (`6200–6299`), and gateway/TCP unit state (read-only).
+- After diagnostics hints, inspect with `show internet-profiles` / `show internet` / `test internet`.
 - Server backup/restore includes `var/lib/drlink/egress-control.json` (profiles + Fixed TCP relays).
 
 ## Verified client patterns

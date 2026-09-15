@@ -343,24 +343,27 @@ def help_text(tokens, role):
             "Usage:\n"
             "  show groups\n"
             "  show group <GROUP>\n"
-            "  create group <NAME>\n"
+            "  set group <NAME>\n"
             "  set group <GROUP> description|name <value>\n"
-            "  rename group <GROUP> <NAME>\n"
-            "  add client <CLIENT> group <GROUP>\n"
-            "  remove client <CLIENT> group <GROUP>\n"
-            "  delete group <GROUP>\n"
+            "  set client <CLIENT> group <GROUP>\n"
+            "  unset client <CLIENT> group <GROUP>\n"
+            "  unset group <GROUP>\n"
         )
     # Action-first topics are served by _catalog_help_topic above.
     if verb == "update":
         return _update_help(role)
     if verb == "doctor":
         return (
-            "Doctor\n======\n\nUsage:\n  doctor\n"
+            "Diagnostics\n"
+            "===========\n\n"
+            "Public command:\n"
+            "  system diagnostics\n\n"
+            "Compatibility: help legacy (hidden `doctor`).\n"
         )
     if verb == "support-bundle":
         return (
             "Support Bundle\n==============\n\n"
-            "Usage:\n  create support-bundle\n\n"
+            "Usage:\n  system support-bundle\n\n"
             "Create a sanitized read-only diagnostic archive. Never includes private keys or tokens.\n"
         )
     if verb == "access":
@@ -369,20 +372,21 @@ def help_text(tokens, role):
             "============\n\n"
             "Control which source IPs may reach published services.\n\n"
             "Usage:\n"
-            "  show access-lists\n"
-            "  create access-list <name>\n"
-            "  show access-list <list>\n"
-            "  add access-source <list>\n"
-            "  remove access-source <list>\n"
-            "  set access-assign <client> <service> <list>\n"
-            "  set access-public <client> <service>\n"
-            "  test access <client> <service> <source-ip>\n"
+            "  show access-rules\n"
+            "  show access-rule <RULE>\n"
+            "  set access-rule <RULE>\n"
+            "  set access-source <RULE> <SOURCE>\n"
+            "  set service-access <CLIENT> <SERVICE> <RULE>\n"
+            "  unset access-source <RULE> <SELECTOR>\n"
+            "  unset service-access <CLIENT> <SERVICE>\n"
+            "  unset access-rule <RULE>\n"
+            "  test access <CLIENT> <SERVICE> <SOURCE-IP>\n"
             "  show access-log\n"
         )
     lines = [
         "Unknown help topic: %s" % " ".join(tokens),
         "",
-        "Type 'help' for work areas, 'help commands' for the full command",
+        "Type 'help' for domains, 'help commands' for the full command",
         "reference, or 'help legacy' for compatibility aliases.",
     ]
     if client or server:
@@ -672,12 +676,16 @@ def _create_help(role):
 
 def _update_help(role):
     return (
-        "Update\n======\n\nUsage:\n"
-        "  update product\n"
-        "  update engine\n\n"
-        "update product updates Data Relay Link management tools.\n"
-        "update engine updates the pinned upstream FRP binary.\n"
+        "Update\n======\n\n"
+        "Public commands:\n"
+        "  system update product\n"
+        "  system update engine\n"
+        "  system update check-engine\n\n"
+        "system update product updates Data Relay Link management tools.\n"
+        "system update engine updates the pinned upstream Relay Engine (FRP) binary.\n"
+        "system update check-engine checks upstream Relay Engine releases (read-only).\n"
         "A software update does not re-enroll clients or rotate CA/token/ports.\n"
+        "Compatibility: help legacy (hidden root `update …`).\n"
     )
 
 
@@ -771,6 +779,22 @@ def _fmt_available(rows):
     return "\n".join(parts) + "\n"
 
 
+def _catalog_next_path_tokens(probe, role):
+    """Public child tokens for a command-path prefix (e.g. system update)."""
+    nxt = []
+    for row in CATALOG.COMMANDS:
+        if row.get("hidden"):
+            continue
+        if not CATALOG.role_allows(row["roles"], role):
+            continue
+        path = list(row["path"])
+        if len(path) > len(probe) and path[: len(probe)] == probe:
+            tok = path[len(probe)]
+            if tok not in nxt:
+                nxt.append(tok)
+    return nxt
+
+
 def _catalog_context_help(tokens, role, names=None, clients=None):
     """Catalog-driven '?' help for the canonical resource-first grammar."""
     if not tokens:
@@ -791,9 +815,40 @@ def _catalog_context_help(tokens, role, names=None, clients=None):
             return None
         return _fmt_available(rows)
     probe = [root] + list(tokens[1:])
+    # Final client-removal model must be explicit before listing clients.
+    if probe == ["unset", "client"]:
+        lines = [
+            "Client removal model",
+            "====================",
+            "",
+            "unset client <CLIENT> trust",
+            "  identity/trust: management blocked",
+            "  public ports: reserved",
+            "",
+            "unset client <CLIENT> service <SERVICE>",
+            "  client identity: kept",
+            "  selected service port: released",
+            "",
+            "unset client <CLIENT>",
+            "  client record/management identity: removed",
+            "  all service ports: released",
+            "",
+            "Also: unset client <CLIENT> group|label|note|tag …",
+            "",
+            "Select a client:",
+            "",
+        ]
+        return "\n".join(lines) + _context_client_list(names, clients)
     cmd = CATALOG.find(probe)
     if cmd is None or not CATALOG.role_allows(cmd["roles"], role):
+        nxt = _catalog_next_path_tokens(probe, role)
+        if nxt:
+            return _fmt_available([(tok, "") for tok in nxt])
         return None
+    # Exact path is also a prefix of longer public commands (system update …).
+    nxt = _catalog_next_path_tokens(probe, role)
+    if nxt and len(probe) == len(cmd["path"]):
+        return _fmt_available([(tok, "") for tok in nxt])
     index = len(probe) - len(cmd["path"])
     if index < len(cmd["args"]):
         arg = cmd["args"][index]
@@ -974,8 +1029,40 @@ def context_help(tokens, role, names=None, clients=None):
                 "  unset server public-hostname\n"
                 "  unset server bootstrap-hostname\n"
             )
-        if len(tokens) <= 2:
-            return _context_client_list(names, clients)
+        if tokens[1] == "client":
+            if len(tokens) == 2:
+                lines = [
+                    "Client removal model",
+                    "====================",
+                    "",
+                    "unset client <CLIENT> trust",
+                    "  identity/trust: management blocked",
+                    "  public ports: reserved",
+                    "",
+                    "unset client <CLIENT> service <SERVICE>",
+                    "  client identity: kept",
+                    "  selected service port: released",
+                    "",
+                    "unset client <CLIENT>",
+                    "  client record/management identity: removed",
+                    "  all service ports: released",
+                    "",
+                    "Select a client:",
+                    "",
+                ]
+                return "\n".join(lines) + _context_client_list(names, clients)
+            return (
+                "Available:\n\n"
+                "  trust    Block management trust (ports reserved)\n"
+                "  service  Release one service reservation\n"
+                "  group    Remove group membership\n"
+                "  label    Administrator display label\n"
+                "  note     Administrator description\n"
+                "  tag      Key/value metadata\n"
+                "\n"
+                "Or omit a property to remove the whole client:\n"
+                "  unset client <CLIENT>\n"
+            )
         return (
             "Available settings:\n\n"
             "  label   Administrator display label\n"
@@ -2986,8 +3073,8 @@ def _tab_desc_map(line, role, names=None, clients=None):
                 "label": "Administrator display label",
                 "note": "Administrator description",
                 "tag": "Key/value metadata",
+                "group": "Add client to a group",
             }, "named"
-    if verb == "unset" and len(filled) == 1:
         return {
             "client": "Remove client metadata",
             "server": "Remove server access settings",
@@ -3003,6 +3090,9 @@ def _tab_desc_map(line, role, names=None, clients=None):
             return {}, "clients"
         if len(filled) == 3:
             return {
+                "trust": "Block management trust (ports reserved)",
+                "service": "Release one service reservation",
+                "group": "Remove group membership",
                 "label": "Administrator display label",
                 "note": "Administrator description",
                 "tag": "Key/value metadata",
@@ -3258,7 +3348,9 @@ def _catalog_candidates(
     longer = _longer_path_children()
     if longer:
         return longer
-    return []
+    # No further catalog tokens — allow verb-specific overlays (set service
+    # properties, set client metadata, …) instead of hard-stopping with [].
+    return None
 
 
 def _selector_before(cmd, probe, kind):
@@ -3338,7 +3430,7 @@ def _canonical_completion(
             if len(filled) == 2:
                 return _filter(names, prefix)
             if len(filled) == 3:
-                return _filter(["label", "note", "tag"], prefix)
+                return _filter(["label", "note", "tag", "group"], prefix)
         if filled[1] == "group" and server:
             if len(filled) == 2:
                 return _filter(groups, prefix)
@@ -3376,7 +3468,14 @@ def _canonical_completion(
             if len(filled) == 2:
                 return _filter(names, prefix)
             if len(filled) == 3:
-                return _filter(["label", "note", "tag"], prefix)
+                return _filter(
+                    ["trust", "service", "group", "label", "note", "tag"],
+                    prefix,
+                )
+            if len(filled) == 4 and filled[3] == "service":
+                return _filter((services or {}).get(filled[2], []), prefix)
+            if len(filled) == 4 and filled[3] == "group":
+                return _filter(groups or [], prefix)
         return []
     if verb == "create":
         if len(filled) == 1:
