@@ -29,11 +29,11 @@ Data Relay Link helps you securely reach servers behind NAT or firewalls **and**
 - Immutable client identity
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
-- Named Access Lists / temporary TTL / connection access log
+- Access Rules / temporary TTL / connection access log
 - Agentless Controlled Egress profiles (FQDN + port + protocol http|https|tcp, source CIDR, default DENY, HTTP listen **6102**, Fixed TCP pool **6200–6299**)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
-- One primary operator interface: `sudo drlink` (action-first CLI)
+- One primary operator interface: `sudo drlink` (canonical CLI)
 
 Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)
 Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)
@@ -265,13 +265,13 @@ sudo drlink
 Guided path: **Clients → Connect a new client**, or run the expert command:
 
 ```text
-create zero-touch
+set client
 ```
 
 Or create an explicit SSH enrollment (automation / advanced):
 
 ```bash
-sudo drlink create enrollment \
+sudo drlink set enrollment \
   --one-line \
   --ssh \
   --ssh-user admin \
@@ -377,38 +377,38 @@ Typical server operations:
 
 ```text
 show status
-show version
+system version
 show clients
 show client <CLIENT-ID>
 show enrollments
 show groups
-show audit
+system audit
 
-create zero-touch
-create enrollment
-create backup
+set client
+set enrollment
+system backup
 
 set client <CLIENT-ID> label branch-a
 set client <CLIENT-ID> tag site seoul
 
-show egress-profiles
-create egress-profile vendor-api
+show internet-profiles
+set internet-profile vendor-api
 add egress-source vendor-api
 add egress-destination vendor-api
 enable egress-profile vendor-api
 
-revoke client <CLIENT-ID>
-release client <CLIENT-ID>
-release service <CLIENT-ID> <SERVICE-ID>
-delete enrollment <ENROLLMENT-ID>
+unset client <CLIENT-ID>
+unset client <CLIENT-ID>
+unset client <CLIENT-ID> <SERVICE-ID>
+unset enrollment <ENROLLMENT-ID>
 
-doctor
-update product
-update engine
+system diagnostics
+system update product
+system update engine
 ```
 
 Older resource-first forms (`client list`, `enrollment create`, …) still work as
-hidden compatibility aliases. Prefer the action-first forms above.
+hidden compatibility aliases. Prefer the canonical forms above.
 
 The canonical client identity is immutable `CLIENT ID`. Label, hostname, note, tags, and groups are metadata and do not replace identity.
 
@@ -432,9 +432,9 @@ update    != re-enrollment
 | disable service | kept | **reserved** |
 | enable service | kept | **same port reused** |
 | edit service | kept | **preserved** |
-| revoke client | management blocked | **reserved** |
-| release service | kept | **released for that service** |
-| release client | removed | **released** |
+| unset client | management blocked | **reserved** |
+| unset client | kept | **released for that service** |
+| unset client | removed | **released** |
 | local client uninstall | server identity remains | **reserved** |
 | normal update | preserved | **preserved** |
 
@@ -517,14 +517,14 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 ## Backup, restore, and updates
 
 ```bash
-sudo drlink create backup
-sudo drlink restore backup <path>
+sudo drlink system backup
+sudo drlink system restore <path>
 
-sudo drlink update product --check
-sudo drlink update product
+sudo drlink system update product --check
+sudo drlink system update product
 
 sudo drlink server upstream
-sudo drlink update engine --check
+sudo drlink system update engine --check
 ```
 
 `server upstream` is informational. Data Relay Link does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.

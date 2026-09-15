@@ -93,23 +93,22 @@ write_server_tree "$BOTH"
 # --- Single match
 export FRP_CTL_TEST_ROOT="$SERVER"
 [[ "$(cands sho)" == "show" ]] || fail "sho -> show"
-[[ "$(cands doc)" == "doctor" ]] || fail "doc -> doctor"
+[[ "$(cands sys)" == "system" ]] || fail "sys -> system"
 [[ "$(frpctl_complete_line sho)" == "show " ]] || fail "sho complete line"
-[[ "$(cands upd)" == "update" ]] || fail "upd -> update"
-[[ "$(cands del)" == "delete" ]] || fail "del -> delete"
+[[ "$(cands "system up")" == "update" ]] || fail "system up -> update"
+[[ "$(cands un)" == "unset" ]] || fail "un -> unset"
 [[ "$(cands hel)" == "help" ]] || fail "hel -> help"
 [[ "$(cands exi)" == "exit" ]] || fail "exi -> exit"
 pass "FRPCTL_TAB_SINGLE_MATCH"
 
-# --- Multiple matches keep input when common prefix equals the typed prefix
-# Canonical roots are action-first. Prefix "h" hits help + history with
-# common prefix equal to the typed token.
+# Prefix "h" uniquely completes to help (history lives under system).
 h_out="$(cands h)"
 echo "$h_out" | has_line help || fail "h missing help"
-echo "$h_out" | has_line history || fail "h missing history"
+! echo "$h_out" | has_line history || fail "h leaked root history"
 if echo "$h_out" | has_line help-legacy; then fail "unexpected help-legacy in tab"; fi
-[[ "$(frpctl_complete_line h)" == "h" ]] || fail "h should keep typed prefix"
-[[ "$(frpctl_complete_line history)" == "history " ]] || fail "history unique complete"
+[[ "$(frpctl_complete_line h)" == "help " ]] || fail "h unique complete to help"
+[[ "$(cands "system h")" == "history" ]] || fail "system h -> history"
+[[ "$(frpctl_complete_line "system history")" == "system history " ]] || fail "system history unique complete"
 pass "FRPCTL_TAB_MULTIPLE_MATCHES"
 pass "FRPCTL_TAB_VERB"
 
@@ -123,7 +122,8 @@ export FRP_CTL_TEST_ROOT="$CLIENT"
 [[ -z "$(cands ser)" ]] || fail "ser must not complete a root resource"
 all_client="$(cands "")"
 echo "$all_client" | has_line show || fail "client list show"
-echo "$all_client" | has_line doctor || fail "client list doctor"
+echo "$all_client" | has_line system || fail "client list system"
+! echo "$all_client" | has_line doctor || fail "client list leaked doctor"
 echo "$all_client" | has_line help || fail "client list help"
 if echo "$all_client" | has_line enroll; then fail "client offered enroll"; fi
 if echo "$all_client" | has_line clients; then fail "client offered clients"; fi
@@ -145,7 +145,8 @@ export FRP_CTL_TEST_ROOT="$SERVER"
 all_server="$(cands "")"
 echo "$all_server" | has_line create || fail "server list create"
 echo "$all_server" | has_line show || fail "server list show"
-echo "$all_server" | has_line doctor || fail "server list doctor"
+echo "$all_server" | has_line system || fail "server list system"
+! echo "$all_server" | has_line doctor || fail "server list leaked doctor"
 echo "$all_server" | has_line revoke || fail "server list revoke"
 echo "$all_server" | has_line explain || fail "server list explain"
 echo "$all_server" | has_line access || fail "server list access"
@@ -162,15 +163,16 @@ export FRP_CTL_TEST_ROOT="$BOTH"
 all_both="$(cands "")"
 echo "$all_both" | has_line show || fail "dual missing show"
 echo "$all_both" | has_line create || fail "dual missing create"
-echo "$all_both" | has_line doctor || fail "dual missing doctor"
+echo "$all_both" | has_line system || fail "dual missing system"
+! echo "$all_both" | has_line doctor || fail "dual leaked doctor"
 if echo "$all_both" | has_line client-status; then fail "legacy client-status in tab"; fi
 if echo "$all_both" | has_line enrollment; then fail "dual offered enrollment root"; fi
 pass "FRPCTL_TAB_DUAL_ROLE_COMMANDS"
 
 # --- doctor / create flags must NOT be publicly completed
 export FRP_CTL_TEST_ROOT="$CLIENT"
-[[ -z "$(cands "doctor --j")" ]] || fail "doctor must not complete --json"
-[[ -z "$(cands "doctor --")" ]] || fail "doctor must not complete -- flags"
+[[ -z "$(cands "system diagnostics --j")" ]] || fail "system diagnostics must not complete --json"
+[[ -z "$(cands "system diagnostics --")" ]] || fail "system diagnostics must not complete -- flags"
 pass "FRPCTL_TAB_DOCTOR_NO_PUBLIC_FLAGS"
 
 export FRP_CTL_TEST_ROOT="$SERVER"

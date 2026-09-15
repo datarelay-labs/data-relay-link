@@ -1,0 +1,4417 @@
+[
+  {
+    "path": [
+      "show",
+      "status"
+    ],
+    "roles": "any",
+    "category": "Status",
+    "summary": "Show host status",
+    "detail": "Role-aware host status. On a dual-role host both the client and the server sections are printed.",
+    "examples": [
+      "show status"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "status"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "clients"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "List registered clients",
+    "detail": "CLIENT ID is the immutable selector and the first identity column. Label and hostname are display metadata. Optional GROUP filters the list to members of that group.",
+    "examples": [
+      "show clients",
+      "show clients edge"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": "flags",
+    "internal": null,
+    "aliases": [
+      [
+        "client",
+        "list"
+      ],
+      [
+        "clients"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--group",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Hidden compatibility filter by group",
+        "metavar": "",
+        "examples": [],
+        "effect": "Same as positional GROUP",
+        "risk": "none"
+      }
+    ]
+  },
+  {
+    "path": [
+      "show",
+      "client"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Show one client (overview, services, tags, groups)",
+    "detail": "CLIENT ID is the immutable selector. A unique label or unique hostname is also accepted as a shortcut.",
+    "examples": [
+      "show client 24cd7856",
+      "show client 24cd7856 services",
+      "show client 24cd7856 tags"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "services|tags|groups",
+        "complete": [
+          "services",
+          "tags",
+          "groups"
+        ],
+        "required": false
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "client",
+        "show"
+      ],
+      [
+        "client-info"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "services"
+    ],
+    "roles": "any",
+    "category": "Inventory",
+    "summary": "List published services",
+    "detail": "On the server: global inventory across clients (CLIENT / SERVICE / PUBLIC ENDPOINT / ACCESS / STATE / PORT STATE). On a client host: local published services.",
+    "examples": [
+      "show services"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "service",
+        "list"
+      ],
+      [
+        "services"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "groups"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "List client groups",
+    "detail": "",
+    "examples": [
+      "show groups"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "group",
+        "list"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "group"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Show one group and its members",
+    "detail": "",
+    "examples": [
+      "show group edge"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "groups",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "group",
+        "show"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "enrollments"
+    ],
+    "roles": "server",
+    "category": "Onboarding",
+    "summary": "List issued enrollment credentials",
+    "detail": "Lists manual Enrollment Codes and Zero-Touch bootstrap tickets still on disk. Secrets are never printed.",
+    "examples": [
+      "show enrollments"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "enrollment",
+        "list"
+      ],
+      [
+        "enrollments"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-profiles"
+    ],
+    "roles": "server",
+    "category": "Templates",
+    "summary": "List service profiles",
+    "detail": "Service profiles are server-owned creation templates. They never store public ports, CLIENT IDs, Service IDs, or ACL assignments.",
+    "examples": [
+      "show service-profiles"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "show",
+      "profiles"
+    ],
+    "aliases": [
+      [
+        "service-profile",
+        "list"
+      ],
+      [
+        "show",
+        "profiles"
+      ],
+      [
+        "profile",
+        "list"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-profile"
+    ],
+    "roles": "server",
+    "category": "Templates",
+    "summary": "Show one service profile",
+    "detail": "",
+    "examples": [
+      "show service-profile office-ssh"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "service-profiles",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "show",
+      "profile"
+    ],
+    "aliases": [
+      [
+        "service-profile",
+        "show"
+      ],
+      [
+        "show",
+        "profile"
+      ],
+      [
+        "profile",
+        "show"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "access-rules"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "List Access Rules",
+    "detail": "",
+    "examples": [
+      "show access-rules"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "access",
+      "list"
+    ],
+    "aliases": [
+      [
+        "show",
+        "access-lists"
+      ],
+      [
+        "access",
+        "list"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "access-rule"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show one Access Rule",
+    "detail": "",
+    "examples": [
+      "show access-rule office"
+    ],
+    "args": [
+      {
+        "name": "<LIST>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "access",
+      "show"
+    ],
+    "aliases": [
+      [
+        "show",
+        "access-list"
+      ],
+      [
+        "access",
+        "show"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "access-service"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show the access policy for one service",
+    "detail": "",
+    "examples": [
+      "show access-service 24cd7856 ssh"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "access",
+      "show-service"
+    ],
+    "aliases": [
+      [
+        "access",
+        "show-service"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "access-log"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show recent authorization decisions",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "access",
+      "log"
+    ],
+    "aliases": [
+      [
+        "access",
+        "log"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--limit",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--allow",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--deny",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "show",
+      "internet"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show Internet Access status",
+    "detail": "",
+    "examples": [
+      "show internet"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "egress",
+      "status"
+    ],
+    "aliases": [
+      [
+        "show",
+        "egress"
+      ],
+      [
+        "egress",
+        "status"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "internet-profiles"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "List Internet Access profiles",
+    "detail": "",
+    "examples": [
+      "show internet-profiles"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "show",
+      "egress-profiles"
+    ],
+    "aliases": [
+      [
+        "show",
+        "egress-profiles"
+      ],
+      [
+        "egress",
+        "list"
+      ],
+      [
+        "egress-profile",
+        "list"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "internet-profile"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show one Internet Access profile",
+    "detail": "",
+    "examples": [
+      "show internet-profile vendor-api"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "show",
+      "egress-profile"
+    ],
+    "aliases": [
+      [
+        "show",
+        "egress-profile"
+      ],
+      [
+        "egress",
+        "show"
+      ],
+      [
+        "egress-profile",
+        "show"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "internet-templates"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "List Internet Access templates",
+    "detail": "",
+    "examples": [
+      "show internet-templates"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "egress",
+      "recipe",
+      "list"
+    ],
+    "aliases": [
+      [
+        "show",
+        "egress-recipes"
+      ],
+      [
+        "egress",
+        "recipe",
+        "list"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "internet-template"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show one Internet Access template",
+    "detail": "",
+    "examples": [
+      "show internet-template tcp-fixed"
+    ],
+    "args": [
+      {
+        "name": "<RECIPE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "recipe",
+      "show"
+    ],
+    "aliases": [
+      [
+        "show",
+        "egress-recipe"
+      ],
+      [
+        "egress",
+        "recipe",
+        "show"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "fixed-tcp"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "List Fixed TCP entries or show one entry",
+    "detail": "Outbound TCP access for applications that cannot use an HTTP/HTTPS proxy.",
+    "examples": [
+      "show fixed-tcp",
+      "show fixed-tcp vendor-license"
+    ],
+    "args": [
+      {
+        "name": "<ENTRY>",
+        "complete": "fixed-tcp",
+        "required": false
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "tcp",
+      "list"
+    ],
+    "aliases": [
+      [
+        "show",
+        "egress-tcp"
+      ],
+      [
+        "egress",
+        "tcp",
+        "list"
+      ],
+      [
+        "show",
+        "egress-tcp-entry"
+      ],
+      [
+        "egress",
+        "tcp",
+        "show"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "client"
+    ],
+    "roles": "server",
+    "category": "Change",
+    "summary": "Connect a new client, or set client metadata / group membership",
+    "detail": "Bare 'set client' starts Zero-Touch onboarding. With a client selector, set label/note/tag or ensure group membership.",
+    "examples": [
+      "set client",
+      "set client 24cd7856 label production",
+      "set client 24cd7856 group edge"
+    ],
+    "args": [],
+    "tail": "any",
+    "internal": [
+      "create",
+      "zero-touch"
+    ],
+    "aliases": [
+      [
+        "create",
+        "zero-touch"
+      ],
+      [
+        "zero-touch",
+        "create"
+      ],
+      [
+        "add",
+        "client"
+      ],
+      [
+        "group",
+        "add-client"
+      ],
+      [
+        "group",
+        "add-member"
+      ],
+      [
+        "client",
+        "set"
+      ],
+      [
+        "client-set"
+      ],
+      [
+        "edit-client"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "group"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Create a group or change group name/description",
+    "detail": "Group IDs are immutable ('grp_' plus eight hex digits). Names and descriptions are mutable.",
+    "examples": [
+      "set group edge",
+      "set group edge name edge-sites"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "groups",
+        "required": false
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "create",
+      "group"
+    ],
+    "aliases": [
+      [
+        "create",
+        "group"
+      ],
+      [
+        "group",
+        "create"
+      ],
+      [
+        "group",
+        "set"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--description",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Free-form operator note",
+        "metavar": "TEXT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "enrollment"
+    ],
+    "roles": "server",
+    "category": "Onboarding",
+    "summary": "Create a Manual Enrollment Code",
+    "detail": "Generates a Manual Enrollment Code for an interactive client install. Lifetime maximum is 30d (2592000 seconds). For everyday onboarding prefer 'create zero-touch'.",
+    "examples": [
+      "set enrollment"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "create",
+      "enrollment"
+    ],
+    "aliases": [
+      [
+        "create",
+        "enrollment"
+      ],
+      [
+        "enrollment",
+        "create"
+      ],
+      [
+        "enroll"
+      ],
+      [
+        "create-client"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--one-line",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Print a one-line zero-touch client install command",
+        "metavar": "",
+        "examples": [],
+        "effect": "Emits installer/bootstrap output instead of interactive manual steps",
+        "risk": "metadata"
+      },
+      {
+        "name": "--ssh",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Seed an SSH convenience service (127.0.0.1:22)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Requires --one-line; mutually exclusive with --rdp and --services-file",
+        "risk": "metadata",
+        "platform": "linux"
+      },
+      {
+        "name": "--ssh-user",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "SSH login user for the ssh preset",
+        "metavar": "USER",
+        "examples": [],
+        "effect": "Required for non-interactive --ssh creation",
+        "risk": "metadata"
+      },
+      {
+        "name": "--ssh-port",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Local SSH listen port (default 22)",
+        "metavar": "PORT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "integer",
+        "unit": "port",
+        "default": 22
+      },
+      {
+        "name": "--ttl",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Enrollment lifetime as duration (30m|1h|4h|1d) or raw seconds (maximum 30d / 2592000 seconds)",
+        "metavar": "DURATION|SECONDS",
+        "examples": [
+          "4h",
+          "600"
+        ],
+        "effect": "Credential expires automatically after TTL",
+        "risk": "metadata",
+        "type": "duration",
+        "unit": "s|m|h|d|seconds",
+        "default": 600,
+        "maximum": 2592000,
+        "role": "enrollment"
+      },
+      {
+        "name": "--note",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Operator note",
+        "metavar": "TEXT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--label",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Alias for --client-name",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--client-name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Administrator label seeded at enrollment",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "Display metadata only; does not replace client hostname",
+        "risk": "metadata"
+      },
+      {
+        "name": "--services-file",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "JSON service list (same schema as FRP_SERVICES_JSON)",
+        "metavar": "PATH",
+        "examples": [],
+        "effect": "Requires --one-line; mutually exclusive with --ssh and --rdp",
+        "risk": "metadata",
+        "type": "path"
+      },
+      {
+        "name": "--platform",
+        "arity": 1,
+        "choices": [
+          "linux",
+          "windows"
+        ],
+        "hidden": true,
+        "required": false,
+        "description": "Client platform for the one-line installer command",
+        "metavar": "",
+        "examples": [],
+        "effect": "Windows requires windows_client_installer_url in server config",
+        "risk": "metadata",
+        "type": "enum",
+        "default": "linux"
+      },
+      {
+        "name": "--rdp",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Windows RDP convenience service (127.0.0.1:3389)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Requires --one-line and --platform windows",
+        "risk": "metadata",
+        "platform": "windows"
+      },
+      {
+        "name": "--rdp-port",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Local RDP listen port (default 3389)",
+        "metavar": "PORT",
+        "examples": [],
+        "effect": "Requires --rdp",
+        "risk": "metadata",
+        "type": "integer",
+        "unit": "port",
+        "default": 3389,
+        "platform": "windows"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "enrollment",
+      "bulk"
+    ],
+    "roles": "server",
+    "category": "Onboarding",
+    "summary": "Create enrollment codes in bulk",
+    "detail": "Bulk issuance from a count or a CSV file.",
+    "examples": [
+      "set enrollment bulk"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "create",
+      "enrollments"
+    ],
+    "aliases": [
+      [
+        "create",
+        "enrollments"
+      ],
+      [
+        "enrollment",
+        "bulk"
+      ],
+      [
+        "enroll-bulk"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--count",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--csv",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--label-prefix",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--ssh-user",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "SSH login user for ssh preset targets",
+        "metavar": "USER",
+        "examples": [],
+        "effect": "Required for ssh presets; shown in connect hints",
+        "risk": "metadata"
+      },
+      {
+        "name": "--note",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--ttl",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Temporary entry lifetime (access lists; max 3650d)",
+        "metavar": "30m|1h|4h|1d",
+        "examples": [
+          "4h",
+          "1d"
+        ],
+        "effect": "Entry expires automatically after the TTL (maximum 3650d)",
+        "risk": "metadata",
+        "type": "duration",
+        "unit": "s|m|h|d",
+        "role": "access"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "service-profile"
+    ],
+    "roles": "server",
+    "category": "Templates",
+    "summary": "Create a Service Profile or change its properties",
+    "detail": "",
+    "examples": [
+      "set service-profile office-ssh",
+      "set service-profile office-ssh target-port 22"
+    ],
+    "args": [
+      {
+        "name": "<name>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "create",
+      "profile"
+    ],
+    "aliases": [
+      [
+        "create",
+        "service-profile"
+      ],
+      [
+        "service-profile",
+        "create"
+      ],
+      [
+        "create",
+        "profile"
+      ],
+      [
+        "profile",
+        "create"
+      ],
+      [
+        "service-profile",
+        "set"
+      ],
+      [
+        "set",
+        "profile"
+      ],
+      [
+        "profile",
+        "set"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--preset",
+        "arity": 1,
+        "choices": [
+          "ssh",
+          "http",
+          "https",
+          "custom"
+        ],
+        "hidden": true,
+        "required": false,
+        "description": "Service preset template (ssh, http, https, custom)",
+        "metavar": "PRESET",
+        "examples": [
+          "ssh",
+          "http",
+          "https"
+        ],
+        "effect": "Seeds target defaults from a preset",
+        "risk": "metadata",
+        "type": "enum"
+      },
+      {
+        "name": "--target-host",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Local target host or IP for the service",
+        "metavar": "HOST",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "host"
+      },
+      {
+        "name": "--target-port",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Local target TCP port",
+        "metavar": "PORT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "integer",
+        "unit": "port"
+      },
+      {
+        "name": "--description",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Free-form operator note",
+        "metavar": "TEXT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--ssh-user",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "With property=preset ssh, set ssh_user atomically",
+        "metavar": "USER",
+        "examples": [],
+        "effect": "Required for non-SSH \u2192 SSH transitions",
+        "risk": "metadata"
+      },
+      {
+        "name": "--health-type",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--health-timeout",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Health check timeout",
+        "metavar": "SECONDS",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "integer",
+        "unit": "seconds"
+      },
+      {
+        "name": "--health-interval",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Health check interval",
+        "metavar": "SECONDS",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "integer",
+        "unit": "seconds"
+      },
+      {
+        "name": "--health-max-failed",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--health-path",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "access-rule"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Create an Access Rule or change its metadata",
+    "detail": "Descriptions are limited to 1024 characters; control characters, newlines, and ANSI escapes are rejected.",
+    "examples": [
+      "set access-rule office"
+    ],
+    "args": [
+      {
+        "name": "<name>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "access",
+      "create"
+    ],
+    "aliases": [
+      [
+        "create",
+        "access-list"
+      ],
+      [
+        "access",
+        "create"
+      ],
+      [
+        "set",
+        "access-list"
+      ],
+      [
+        "access",
+        "edit-info"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "metadata",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--description",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Free-form operator note",
+        "metavar": "TEXT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Human-readable name for the entry or object",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "Sets display name only; selectors stay immutable IDs",
+        "risk": "metadata"
+      },
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "access-source"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Add or update an allowed inbound source",
+    "detail": "--ttl accepts Ns/Nm/Nh/Nd up to 3650d (10 years); larger values are rejected.",
+    "examples": [
+      "set access-source office 203.0.113.10"
+    ],
+    "args": [
+      {
+        "name": "<LIST>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "access",
+      "add-source"
+    ],
+    "aliases": [
+      [
+        "add",
+        "access-source"
+      ],
+      [
+        "access",
+        "add-source"
+      ],
+      [
+        "access",
+        "replace-source"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "metadata",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Human-readable name for the entry or object",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "Sets display name only; selectors stay immutable IDs",
+        "risk": "metadata"
+      },
+      {
+        "name": "--source",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Source IP, CIDR, entry name, or entry id",
+        "metavar": "IP|CIDR|NAME|ID",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--ttl",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Temporary entry lifetime (access lists; max 3650d)",
+        "metavar": "30m|1h|4h|1d",
+        "examples": [
+          "4h",
+          "1d"
+        ],
+        "effect": "Entry expires automatically after the TTL (maximum 3650d)",
+        "risk": "metadata",
+        "type": "duration",
+        "unit": "s|m|h|d",
+        "role": "access"
+      },
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      },
+      {
+        "name": "--new-source",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Replacement source IP or CIDR",
+        "metavar": "IP|CIDR",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "service-access"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Assign an Access Rule to a published service",
+    "detail": "",
+    "examples": [
+      "set service-access 24cd7856 ssh office"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": true
+      },
+      {
+        "name": "<LIST>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "access",
+      "assign"
+    ],
+    "aliases": [
+      [
+        "set",
+        "access-assign"
+      ],
+      [
+        "access",
+        "assign"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "outage",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "internet-profile"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Create an Internet Access profile (DISABLED) or change/enable it",
+    "detail": "New profiles are DISABLED until explicitly enabled.",
+    "examples": [
+      "set internet-profile vendor-api",
+      "set internet-profile vendor-api enabled",
+      "set internet-profile vendor-api template tcp-fixed"
+    ],
+    "args": [
+      {
+        "name": "<name>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "create",
+      "egress-profile"
+    ],
+    "aliases": [
+      [
+        "create",
+        "egress-profile"
+      ],
+      [
+        "egress",
+        "create"
+      ],
+      [
+        "egress-profile",
+        "create"
+      ],
+      [
+        "set",
+        "egress-profile"
+      ],
+      [
+        "egress",
+        "set"
+      ],
+      [
+        "enable",
+        "egress-profile"
+      ],
+      [
+        "egress",
+        "enable"
+      ],
+      [
+        "apply",
+        "egress-recipe"
+      ],
+      [
+        "egress",
+        "recipe",
+        "apply"
+      ],
+      [
+        "egress-profile",
+        "set"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--description",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Free-form operator note",
+        "metavar": "TEXT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--source",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "CIDR",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "internet-source"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Add an approved Internet Access source",
+    "detail": "",
+    "examples": [
+      "set internet-source vendor-api 10.0.0.0/24"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      },
+      {
+        "name": "<CIDR>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "add",
+      "egress-source"
+    ],
+    "aliases": [
+      [
+        "add",
+        "egress-source"
+      ],
+      [
+        "egress",
+        "add-source"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "metadata",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Human-readable name for the entry or object",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "Sets display name only; selectors stay immutable IDs",
+        "risk": "metadata"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "internet-destination"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Add an approved Internet Access destination",
+    "detail": "Require an explicit --protocol http|https|tcp. HTTP destinations accept absolute-form proxy requests only; HTTPS destinations require CONNECT plus ClientHello SNI binding on every https port; TCP destinations are exact-FQDN only and used by Fixed TCP Egress relays.",
+    "examples": [
+      "set internet-destination vendor-api api.example.com 443 https"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      },
+      {
+        "name": "<FQDN>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PORT>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PROTOCOL>",
+        "complete": [
+          "http",
+          "https",
+          "tcp"
+        ],
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "add",
+      "egress-destination"
+    ],
+    "aliases": [
+      [
+        "add",
+        "egress-destination"
+      ],
+      [
+        "egress",
+        "add-destination"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--protocol",
+        "arity": 1,
+        "choices": [
+          "http",
+          "https",
+          "tcp"
+        ],
+        "hidden": true,
+        "required": false,
+        "description": "Destination protocol (http|https|tcp)",
+        "metavar": "http|https|tcp",
+        "examples": [],
+        "effect": "",
+        "risk": "",
+        "type": "enum"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "fixed-tcp"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Create a Fixed TCP entry (DISABLED) or enable it",
+    "detail": "New Fixed TCP entries are DISABLED until explicitly enabled.",
+    "examples": [
+      "set fixed-tcp vendor-license",
+      "set fixed-tcp vendor-license enabled"
+    ],
+    "args": [
+      {
+        "name": "<NAME>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "egress",
+      "tcp",
+      "create"
+    ],
+    "aliases": [
+      [
+        "create",
+        "egress-tcp"
+      ],
+      [
+        "egress",
+        "tcp",
+        "create"
+      ],
+      [
+        "enable",
+        "egress-tcp"
+      ],
+      [
+        "egress",
+        "tcp",
+        "enable"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "security_widening",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--profile",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "PROFILE",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--destination",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "DEST",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--listen-port",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "N",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--listen-addr",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "A",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
+      "server"
+    ],
+    "roles": "server",
+    "category": "Server",
+    "summary": "Change server settings",
+    "detail": "public-hostname is a published-service alias only; never allocator identity.",
+    "examples": [
+      "set server public-hostname frp.example.com",
+      "set server bootstrap-hostname bootstrap.example.com",
+      "set server installer-url https://example.com/install-client.sh",
+      "set server windows-installer-url https://example.com/install-client.ps1"
+    ],
+    "args": [
+      {
+        "name": "public-hostname|bootstrap-hostname",
+        "complete": [
+          "public-hostname",
+          "bootstrap-hostname"
+        ],
+        "required": true
+      },
+      {
+        "name": "<value>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [
+      [
+        "server",
+        "set"
+      ],
+      [
+        "set",
+        "installer-url"
+      ],
+      [
+        "set",
+        "windows-installer-url"
+      ],
+      [
+        "server",
+        "set",
+        "installer-url"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "service"
+    ],
+    "roles": "client",
+    "category": "Inventory",
+    "summary": "Add a local service or change/enable a pending service",
+    "detail": "Pending until 'apply'. Seeding from a service profile copies template defaults only; public ports stay unallocated until apply.",
+    "examples": [
+      "set service",
+      "set service ssh target-port 2222",
+      "set service ssh enabled"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "add",
+      "service"
+    ],
+    "aliases": [
+      [
+        "add",
+        "service"
+      ],
+      [
+        "service",
+        "add"
+      ],
+      [
+        "service",
+        "set"
+      ],
+      [
+        "enable",
+        "service"
+      ],
+      [
+        "service",
+        "enable"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--profile",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Service profile template name or id",
+        "metavar": "PROFILE",
+        "examples": [],
+        "effect": "Copies template defaults into a pending service",
+        "risk": "metadata",
+        "type": "profile"
+      },
+      {
+        "name": "--preset",
+        "arity": 1,
+        "choices": [
+          "ssh",
+          "http",
+          "https",
+          "custom"
+        ],
+        "hidden": true,
+        "required": false,
+        "description": "Service preset template (ssh, http, https, custom)",
+        "metavar": "PRESET",
+        "examples": [
+          "ssh",
+          "http",
+          "https"
+        ],
+        "effect": "Seeds target defaults from a preset",
+        "risk": "metadata",
+        "type": "enum"
+      },
+      {
+        "name": "--id",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Human-readable name for the entry or object",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "Sets display name only; selectors stay immutable IDs",
+        "risk": "metadata"
+      },
+      {
+        "name": "--target-host",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Local target host or IP for the service",
+        "metavar": "HOST",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "host"
+      },
+      {
+        "name": "--target-port",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Local target TCP port",
+        "metavar": "PORT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata",
+        "type": "integer",
+        "unit": "port"
+      },
+      {
+        "name": "--ssh-user",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "SSH login user for ssh preset targets",
+        "metavar": "USER",
+        "examples": [],
+        "effect": "Required for ssh presets; shown in connect hints",
+        "risk": "metadata"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "client"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Remove client metadata, trust, a service reservation, group membership, or the client",
+    "detail": "release client <CLIENT-ID>\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nrelease client <CLIENT-ID> <SERVICE-ID>\n  Release only that service reservation.\n  WHAT STAYS: management identity, client record, other services.\n  Confirmation: type RELEASE\n\nconfirmation prompt allows release while a published port is still active.\nNot the same as revoke, unset, disable, or uninstall.",
+    "examples": [
+      "unset client 24cd7856 label",
+      "unset client 24cd7856 trust",
+      "unset client 24cd7856 service ssh",
+      "unset client 24cd7856 group edge",
+      "unset client 24cd7856"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": false
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "release",
+      "client"
+    ],
+    "aliases": [
+      [
+        "remove",
+        "client"
+      ],
+      [
+        "group",
+        "remove-client"
+      ],
+      [
+        "group",
+        "remove-member"
+      ],
+      [
+        "client",
+        "unset"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "irreversible",
+    "confirmation": "typed_token",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--force",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Release even if a published port is still active",
+        "metavar": "",
+        "examples": [],
+        "effect": "Overrides the active-publish safety gate",
+        "risk": "outage"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "group"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Delete a group",
+    "detail": "Removes membership references. Client identity, services, and ports are unchanged. Requires interactive confirmation or confirmation.",
+    "examples": [
+      "unset group edge"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "groups",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "delete",
+      "group"
+    ],
+    "aliases": [
+      [
+        "delete",
+        "group"
+      ],
+      [
+        "group",
+        "delete"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "irreversible",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "enrollment"
+    ],
+    "roles": "server",
+    "category": "Onboarding",
+    "summary": "Revoke an active enrollment or delete terminal enrollment metadata",
+    "detail": "State-aware: PENDING/BOUND \u2192 revoke; EXPIRED/COMPLETED/REVOKED \u2192 delete metadata.",
+    "examples": [
+      "unset enrollment 0011223344556677"
+    ],
+    "args": [
+      {
+        "name": "<ENROLLMENT-ID>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "revoke",
+      "enrollment"
+    ],
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--older-than",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Purge enrollments older than this many days",
+        "metavar": "DAYS",
+        "examples": [],
+        "effect": "Bulk purge terminal enrollment metadata",
+        "risk": "irreversible",
+        "type": "integer",
+        "unit": "days",
+        "default": 30
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "service-profile"
+    ],
+    "roles": "server",
+    "category": "Templates",
+    "summary": "Delete a Service Profile",
+    "detail": "Deleting a profile does not change existing services.",
+    "examples": [
+      "unset service-profile office-ssh"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "service-profiles",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "delete",
+      "profile"
+    ],
+    "aliases": [
+      [
+        "delete",
+        "service-profile"
+      ],
+      [
+        "service-profile",
+        "delete"
+      ],
+      [
+        "delete",
+        "profile"
+      ],
+      [
+        "profile",
+        "delete"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "access-rule"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Delete an Access Rule",
+    "detail": "",
+    "examples": [
+      "unset access-rule office"
+    ],
+    "args": [
+      {
+        "name": "<LIST>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "access",
+      "delete"
+    ],
+    "aliases": [
+      [
+        "delete",
+        "access-list"
+      ],
+      [
+        "access",
+        "delete"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "irreversible",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "access-source"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Remove an allowed inbound source",
+    "detail": "",
+    "examples": [
+      "unset access-source office 203.0.113.10"
+    ],
+    "args": [
+      {
+        "name": "<LIST>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "access",
+      "remove-source"
+    ],
+    "aliases": [
+      [
+        "remove",
+        "access-source"
+      ],
+      [
+        "access",
+        "remove-source"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "outage",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--source",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Source IP, CIDR, entry name, or entry id",
+        "metavar": "IP|CIDR|NAME|ID",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "service-access"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Remove Access Rule assignment (return service to PUBLIC access)",
+    "detail": "SECURITY-WIDENING: inbound exposure becomes public. Confirmation required.",
+    "examples": [
+      "unset service-access 24cd7856 ssh"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "access",
+      "public"
+    ],
+    "aliases": [
+      [
+        "set",
+        "access-public"
+      ],
+      [
+        "access",
+        "public"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "security_widening",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "internet-profile"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Disable or delete an Internet Access profile",
+    "detail": "When the profile is enabled, requires interactive confirmation or confirmation. Disabled profiles delete without that confirm.",
+    "examples": [
+      "unset internet-profile vendor-api enabled",
+      "unset internet-profile vendor-api"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "delete",
+      "egress-profile"
+    ],
+    "aliases": [
+      [
+        "delete",
+        "egress-profile"
+      ],
+      [
+        "egress",
+        "delete"
+      ],
+      [
+        "disable",
+        "egress-profile"
+      ],
+      [
+        "egress",
+        "disable"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "irreversible",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "internet-source"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Remove an approved Internet Access source",
+    "detail": "When the profile is enabled, requires interactive confirmation or confirmation. Disabled profiles mutate without that confirm.",
+    "examples": [
+      "unset internet-source vendor-api 10.0.0.0/24"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      },
+      {
+        "name": "<SELECTOR>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "remove",
+      "egress-source"
+    ],
+    "aliases": [
+      [
+        "remove",
+        "egress-source"
+      ],
+      [
+        "egress",
+        "remove-source"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "outage",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "internet-destination"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Remove an approved Internet Access destination",
+    "detail": "When the profile is enabled, requires interactive confirmation or confirmation. Disabled profiles mutate without that confirm.",
+    "examples": [
+      "unset internet-destination vendor-api api.example.com 443"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      },
+      {
+        "name": "<FQDN>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PORT>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PROTOCOL>",
+        "complete": [
+          "http",
+          "https",
+          "tcp"
+        ],
+        "required": false
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "remove",
+      "egress-destination"
+    ],
+    "aliases": [
+      [
+        "remove",
+        "egress-destination"
+      ],
+      [
+        "egress",
+        "remove-destination"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "outage",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "fixed-tcp"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Disable or delete a Fixed TCP entry",
+    "detail": "",
+    "examples": [
+      "unset fixed-tcp vendor-license enabled",
+      "unset fixed-tcp vendor-license"
+    ],
+    "args": [
+      {
+        "name": "<RELAY>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "egress",
+      "tcp",
+      "delete"
+    ],
+    "aliases": [
+      [
+        "delete",
+        "egress-tcp"
+      ],
+      [
+        "egress",
+        "tcp",
+        "delete"
+      ],
+      [
+        "disable",
+        "egress-tcp"
+      ],
+      [
+        "egress",
+        "tcp",
+        "disable"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "security_widening",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
+      "server"
+    ],
+    "roles": "server",
+    "category": "Server",
+    "summary": "Clear optional server hostname settings",
+    "detail": "Unsetting public-hostname falls back to Public IP access. Unsetting bootstrap-hostname falls back to zt1 Zero-Touch commands.",
+    "examples": [
+      "unset server public-hostname",
+      "unset server bootstrap-hostname"
+    ],
+    "args": [
+      {
+        "name": "public-hostname|bootstrap-hostname",
+        "complete": [
+          "public-hostname",
+          "bootstrap-hostname"
+        ],
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [
+      [
+        "server",
+        "unset"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "service"
+    ],
+    "roles": "client",
+    "category": "Inventory",
+    "summary": "Disable a pending local service",
+    "detail": "Only 'unset service <SERVICE> enabled' is supported.",
+    "examples": [
+      "unset service ssh enabled"
+    ],
+    "args": [
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "local-services",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "disable",
+      "service"
+    ],
+    "aliases": [
+      [
+        "disable",
+        "service"
+      ],
+      [
+        "service",
+        "disable"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "test",
+      "access"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Evaluate inbound Access Rule decision",
+    "detail": "",
+    "examples": [
+      "test access 24cd7856 ssh 203.0.113.10"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": true
+      },
+      {
+        "name": "<SOURCE-IP>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "access",
+      "test"
+    ],
+    "aliases": [
+      [
+        "access",
+        "test"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "test",
+      "internet"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Evaluate Internet Access policy + DNS (not a live connection test)",
+    "detail": "Policy + DNS evaluation only. Live connection performed: NO.",
+    "examples": [
+      "test internet 10.0.0.5 api.example.com 443",
+      "test internet 10.0.0.5 api.example.com 443 https"
+    ],
+    "args": [
+      {
+        "name": "<SOURCE-IP>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<HOST>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PORT>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PROTOCOL>",
+        "complete": [
+          "http",
+          "https",
+          "tcp"
+        ],
+        "required": false
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "explain"
+    ],
+    "aliases": [
+      [
+        "explain",
+        "egress"
+      ],
+      [
+        "egress",
+        "explain"
+      ],
+      [
+        "test",
+        "egress"
+      ],
+      [
+        "egress",
+        "test"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--protocol",
+        "arity": 1,
+        "choices": [
+          "http",
+          "https",
+          "tcp"
+        ],
+        "hidden": true,
+        "required": false,
+        "description": "Wire protocol for the explain probe",
+        "metavar": "http|https|tcp",
+        "examples": [],
+        "effect": "",
+        "risk": "",
+        "type": "enum"
+      }
+    ]
+  },
+  {
+    "path": [
+      "test",
+      "fixed-tcp"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Evaluate Fixed TCP source authorization",
+    "detail": "",
+    "examples": [
+      "test fixed-tcp vendor-license 10.0.0.5"
+    ],
+    "args": [
+      {
+        "name": "<RELAY>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<SOURCE-IP>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "tcp",
+      "explain"
+    ],
+    "aliases": [
+      [
+        "explain",
+        "egress-tcp"
+      ],
+      [
+        "egress",
+        "tcp",
+        "explain"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "version"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Show Data Relay Link and Relay Engine versions",
+    "detail": "Project version, release channel, source ref, FRP version, and the installed bundle checksum.",
+    "examples": [
+      "system version"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "show",
+      "version"
+    ],
+    "aliases": [
+      [
+        "show",
+        "version"
+      ],
+      [
+        "version"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "server-status"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Show detailed server status",
+    "detail": "",
+    "examples": [
+      "system server-status"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "server-status"
+    ],
+    "aliases": [
+      [
+        "show",
+        "server-status"
+      ],
+      [
+        "server",
+        "status"
+      ],
+      [
+        "server-status"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "info"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Show local client connection information",
+    "detail": "Connection information for this installed client host.",
+    "examples": [
+      "system info"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "show",
+      "info"
+    ],
+    "aliases": [
+      [
+        "show",
+        "info"
+      ],
+      [
+        "client",
+        "info"
+      ],
+      [
+        "info"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "backup"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Create a server backup",
+    "detail": "",
+    "examples": [
+      "system backup",
+      "system backup /var/lib/drlink/backups/b.tar.gz"
+    ],
+    "args": [
+      {
+        "name": "<path>",
+        "complete": "path",
+        "required": false
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "create",
+      "backup"
+    ],
+    "aliases": [
+      [
+        "create",
+        "backup"
+      ],
+      [
+        "backup",
+        "create"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "restore"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Restore from a backup archive",
+    "detail": "Keeps archive validation, snapshot, restart, doctor, and rollback behavior.",
+    "examples": [
+      "system restore /var/lib/drlink/backups/b.tar.gz"
+    ],
+    "args": [
+      {
+        "name": "<path>",
+        "complete": "path",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "restore",
+      "backup"
+    ],
+    "aliases": [
+      [
+        "restore",
+        "backup"
+      ],
+      [
+        "backup",
+        "restore"
+      ],
+      [
+        "restore"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "update",
+      "product"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Update Data Relay Link management software",
+    "detail": "A software update does not re-enroll clients and does not rotate the CA, token, or ports.",
+    "examples": [
+      "system update product"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "update",
+      "project"
+    ],
+    "aliases": [
+      [
+        "update",
+        "product"
+      ],
+      [
+        "update",
+        "project"
+      ],
+      [
+        "project-update"
+      ],
+      [
+        "client-update"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--check",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
+      "update",
+      "engine"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Update Relay Engine (FRP)",
+    "detail": "Updates the official upstream FRP / Relay Engine binary.",
+    "examples": [
+      "system update engine"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "update",
+      "frp"
+    ],
+    "aliases": [
+      [
+        "update",
+        "engine"
+      ],
+      [
+        "update",
+        "frp"
+      ],
+      [
+        "frp-update"
+      ],
+      [
+        "server-update"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--check",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
+      "update",
+      "check-engine"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Check upstream Relay Engine (FRP) releases",
+    "detail": "",
+    "examples": [
+      "system update check-engine"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "show",
+      "upstream"
+    ],
+    "aliases": [
+      [
+        "show",
+        "upstream"
+      ],
+      [
+        "server",
+        "upstream"
+      ],
+      [
+        "upstream"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "diagnostics"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Run read-only health diagnostics",
+    "detail": "",
+    "examples": [
+      "system diagnostics"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "doctor"
+    ],
+    "aliases": [
+      [
+        "doctor"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--json",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--verbose",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      },
+      {
+        "name": "--quiet",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
+      "support-bundle"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Create a sanitized diagnostic archive",
+    "detail": "Read-only. Private keys, tokens, enrollment secrets, and auth material are omitted or redacted. Services are not restarted.",
+    "examples": [
+      "system support-bundle",
+      "system support-bundle /tmp/bundle.tgz"
+    ],
+    "args": [],
+    "tail": "flags",
+    "internal": [
+      "support-bundle"
+    ],
+    "aliases": [
+      [
+        "create",
+        "support-bundle"
+      ],
+      [
+        "support",
+        "bundle"
+      ],
+      [
+        "support-bundle"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--output",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Write output to this path instead of stdout",
+        "metavar": "PATH",
+        "examples": [],
+        "effect": "",
+        "risk": "none"
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
+      "audit"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Show recent Data Relay Link audit events",
+    "detail": "",
+    "examples": [
+      "system audit"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "show",
+      "audit"
+    ],
+    "aliases": [
+      [
+        "show",
+        "audit"
+      ],
+      [
+        "server",
+        "audit"
+      ],
+      [
+        "audit"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "export",
+      "internet-profile"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Export an Internet Access profile",
+    "detail": "Portable profile document for review/vendor updates. Import never auto-enables.",
+    "examples": [
+      "system export internet-profile vendor-api"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      },
+      {
+        "name": "<PATH>",
+        "complete": "path",
+        "required": false
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "export"
+    ],
+    "aliases": [
+      [
+        "export",
+        "egress"
+      ],
+      [
+        "egress",
+        "export"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--output",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "",
+        "metavar": "",
+        "examples": [],
+        "effect": "",
+        "risk": ""
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
+      "import",
+      "internet-profile"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Import an Internet Access profile (always DISABLED)",
+    "detail": "Imported profile remains DISABLED until set internet-profile <PROFILE> enabled.",
+    "examples": [
+      "system import internet-profile /tmp/vendor.json"
+    ],
+    "args": [
+      {
+        "name": "<FILE>",
+        "complete": "path",
+        "required": true
+      },
+      {
+        "name": "<PROFILE>",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "import"
+    ],
+    "aliases": [
+      [
+        "import",
+        "egress"
+      ],
+      [
+        "egress",
+        "import"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "diff",
+      "internet-profile"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Compare an Internet Access profile with an import file",
+    "detail": "Compare live profile to a candidate without applying changes.",
+    "examples": [
+      "system diff internet-profile vendor-api /tmp/vendor.json"
+    ],
+    "args": [
+      {
+        "name": "<PROFILE>",
+        "complete": "egress-profiles",
+        "required": true
+      },
+      {
+        "name": "<FILE>",
+        "complete": "path",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "egress",
+      "diff"
+    ],
+    "aliases": [
+      [
+        "diff",
+        "egress"
+      ],
+      [
+        "egress",
+        "diff"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "cleanup",
+      "access-rule"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Remove expired sources from an Access Rule",
+    "detail": "",
+    "examples": [
+      "system cleanup access-rule office expired"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": "access-lists",
+        "required": true
+      },
+      {
+        "name": "expired",
+        "complete": [
+          "expired"
+        ],
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "access",
+      "remove-expired"
+    ],
+    "aliases": [
+      [
+        "remove",
+        "access-expired"
+      ],
+      [
+        "access",
+        "remove-expired"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "metadata",
+    "confirmation": "yes_flag",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "system",
+      "services",
+      "apply"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Apply pending local service configuration",
+    "detail": "Applies the pending draft and restarts the Data Relay Link client. It does not release server-side reservations.",
+    "examples": [
+      "system services apply"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "apply"
+    ],
+    "aliases": [
+      [
+        "apply"
+      ],
+      [
+        "service",
+        "apply"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "services",
+      "discard"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Discard pending local service configuration",
+    "detail": "",
+    "examples": [
+      "system services discard"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "discard"
+    ],
+    "aliases": [
+      [
+        "discard"
+      ],
+      [
+        "service",
+        "discard"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "services",
+      "sync"
+    ],
+    "roles": "client",
+    "category": "System",
+    "summary": "Reconcile local services against server-side releases",
+    "detail": "",
+    "examples": [
+      "system services sync"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "sync"
+    ],
+    "aliases": [
+      [
+        "sync"
+      ],
+      [
+        "service",
+        "sync"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "history"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Session command history (never written to disk)",
+    "detail": "",
+    "examples": [
+      "system history"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "history"
+    ],
+    "aliases": [
+      [
+        "history"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "clear"
+    ],
+    "roles": "any",
+    "category": "System",
+    "summary": "Clear the screen",
+    "detail": "",
+    "examples": [
+      "system clear"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "clear"
+    ],
+    "aliases": [
+      [
+        "clear"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "menu"
+    ],
+    "roles": "any",
+    "category": "Session",
+    "summary": "Guided numbered menu",
+    "detail": "",
+    "examples": [
+      "menu"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "help"
+    ],
+    "roles": "any",
+    "category": "Session",
+    "summary": "Detailed help",
+    "detail": "",
+    "examples": [
+      "help",
+      "help client",
+      "help workflows"
+    ],
+    "args": [],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "exit"
+    ],
+    "roles": "any",
+    "category": "Session",
+    "summary": "Leave the CLI",
+    "detail": "",
+    "examples": [
+      "exit"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "rename",
+      "group"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Rename a group (compatibility alias for 'group set \u2026 name')",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "groups",
+        "required": true
+      },
+      {
+        "name": "<name>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "rename",
+      "group"
+    ],
+    "aliases": [
+      [
+        "group",
+        "rename"
+      ]
+    ],
+    "destructive": false,
+    "hidden": true,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "hidden_compat",
+    "flags": []
+  },
+  {
+    "path": [
+      "access",
+      "menu"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Guided Access Control menu",
+    "detail": "",
+    "examples": [],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "access",
+      "menu"
+    ],
+    "aliases": [],
+    "destructive": false,
+    "hidden": true,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "hidden_compat",
+    "flags": []
+  },
+  {
+    "path": [
+      "revoke",
+      "client"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Block a client's management trust",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "revoke",
+      "client"
+    ],
+    "aliases": [
+      [
+        "client",
+        "revoke"
+      ],
+      [
+        "revoke-client"
+      ]
+    ],
+    "destructive": true,
+    "hidden": true,
+    "risk": "irreversible",
+    "confirmation": "typed_token",
+    "surface": "hidden_compat",
+    "flags": [
+      {
+        "name": "--force",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Skip typed REVOKE confirmation",
+        "metavar": "",
+        "examples": [],
+        "effect": "Proceeds without typing REVOKE",
+        "risk": "irreversible"
+      }
+    ]
+  },
+  {
+    "path": [
+      "release",
+      "client"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Release client record and ports, or one service reservation",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": false
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "release",
+      "client"
+    ],
+    "aliases": [
+      [
+        "client",
+        "release"
+      ],
+      [
+        "release-client"
+      ]
+    ],
+    "destructive": true,
+    "hidden": true,
+    "risk": "irreversible",
+    "confirmation": "typed_token",
+    "surface": "hidden_compat",
+    "flags": [
+      {
+        "name": "--force",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Release even if a published port is still active",
+        "metavar": "",
+        "examples": [],
+        "effect": "Overrides the active-publish safety gate",
+        "risk": "outage"
+      }
+    ]
+  },
+  {
+    "path": [
+      "release",
+      "service"
+    ],
+    "roles": "server",
+    "category": "Inventory",
+    "summary": "Release one published service reservation",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<CLIENT-ID>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "client-services",
+        "required": true
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "release",
+      "service"
+    ],
+    "aliases": [
+      [
+        "release-service"
+      ]
+    ],
+    "destructive": true,
+    "hidden": true,
+    "risk": "irreversible",
+    "confirmation": "typed_token",
+    "surface": "hidden_compat",
+    "flags": [
+      {
+        "name": "--force",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Release even if a published port is still active",
+        "metavar": "",
+        "examples": [],
+        "effect": "Overrides the active-publish safety gate",
+        "risk": "outage"
+      }
+    ]
+  },
+  {
+    "path": [
+      "revoke",
+      "enrollment"
+    ],
+    "roles": "server",
+    "category": "Security / Lifecycle",
+    "summary": "Revoke a pending or bound enrollment",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<ENROLLMENT-ID>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "revoke",
+      "enrollment"
+    ],
+    "aliases": [
+      [
+        "enrollment",
+        "revoke"
+      ],
+      [
+        "enrollment-revoke"
+      ]
+    ],
+    "destructive": true,
+    "hidden": true,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "hidden_compat",
+    "flags": []
+  },
+  {
+    "path": [
+      "delete",
+      "enrollment"
+    ],
+    "roles": "server",
+    "category": "Security / Lifecycle",
+    "summary": "Permanently remove terminal enrollment metadata",
+    "detail": "",
+    "examples": [],
+    "args": [
+      {
+        "name": "<ENROLLMENT-ID>",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": "flags",
+    "internal": [
+      "purge",
+      "enrollment"
+    ],
+    "aliases": [
+      [
+        "enrollment",
+        "purge"
+      ],
+      [
+        "purge",
+        "enrollment"
+      ]
+    ],
+    "destructive": true,
+    "hidden": true,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "hidden_compat",
+    "flags": [
+      {
+        "name": "--older-than",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Purge enrollments older than this many days",
+        "metavar": "DAYS",
+        "examples": [],
+        "effect": "Bulk purge terminal enrollment metadata",
+        "risk": "irreversible",
+        "type": "integer",
+        "unit": "days",
+        "default": 30
+      }
+    ]
+  }
+]

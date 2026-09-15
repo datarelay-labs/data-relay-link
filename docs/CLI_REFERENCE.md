@@ -61,24 +61,24 @@ An ambiguous prefix fails closed; use a longer CLIENT ID prefix.
 
 `unset client` removes stored metadata only.
 
-`release client <CLIENT-ID>` permanently removes the client registry record,
+`unset client <CLIENT-ID>` permanently removes the client registry record,
 management identity, and **all** service reservations / public ports for that
 client. It does not delete the remote host or uninstall local software.
 
-`release client <CLIENT-ID> <SERVICE-ID>` releases only that one service
+`unset client <CLIENT-ID> <SERVICE-ID>` releases only that one service
 reservation; the client identity remains (zero published services is valid
 for an already enrolled client).
 
-`revoke client` blocks management trust and keeps every reservation.
+`unset client <CLIENT> trust` blocks management trust and keeps every reservation.
 
 Those three are never aliases of each other. There is no `delete client`.
 
 
-## Everyday action-first commands
+## Everyday canonical commands
 
 ```text
 show status
-show version
+system version
 show clients
 show client <ID>
 show client <ID> services
@@ -87,10 +87,10 @@ show client <ID> groups
 show groups
 show group <GROUP>
 show enrollments
-show audit
-show upstream
+system audit
+system update check-engine
 show services
-show info
+system info
 
 set client <ID> label <value>
 set client <ID> note <value>
@@ -98,14 +98,14 @@ set client <ID> tag <key> <value>
 set server public-hostname <fqdn>
 set server bootstrap-hostname <fqdn>
 
-create zero-touch
-create enrollment
-create backup
-create support-bundle
-create group <name>
+set client
+set enrollment
+system backup
+system support-bundle
+set group <name>
 create service-profile <name>
-create egress-profile <name>
-create access-list <name>
+set internet-profile <name>
+set access-rule <name>
 
 add client <CLIENT> group <GROUP>
 remove client <CLIENT> group <GROUP>
@@ -116,22 +116,22 @@ add access-source <LIST>
 enable egress-profile <PROFILE>
 disable egress-profile <PROFILE>
 
-revoke client <ID>
-revoke enrollment <ID>
-release client <ID>
-release service <ID> <SERVICE-ID>
-delete enrollment <ID>
-delete group <GROUP>
+unset client <ID>
+unset enrollment <ID>
+unset client <ID>
+unset client <ID> <SERVICE-ID>
+unset enrollment <ID>
+unset group <GROUP>
 delete service-profile <PROFILE>
 delete egress-profile <PROFILE>
 delete access-list <LIST>
 
-restore backup <path>
-update product
-update engine
+system restore <path>
+system update product
+system update engine
 test access
-explain egress
-doctor
+test internet
+system diagnostics
 ```
 
 Public UX does not advertise GNU-style `--options`. Complex create/add flows
@@ -160,7 +160,7 @@ deliberately far below the `enrollment_retention_days` maximum; larger values
 are rejected rather than silently clamped.
 
 Compatibility forms remain available as hidden aliases; prefer the
-action-first forms above (`show clients`, not legacy list verbs).
+canonical forms above (`show clients`, not legacy list verbs).
 
 
 ## Access Rules
@@ -169,9 +169,9 @@ Beginner/operator term: **Access Rules**. Direct command resource remains
 `access-list`.
 
 ```text
-show access-lists
-create access-list <name>
-show access-list <list>
+show access-rules
+set access-rule <name>
+show access-rule <list>
 add access-source <list>
 remove access-source <list>
 set access-assign <client> <service-id> <list>
@@ -191,25 +191,25 @@ Beginner/operator navigation term: **Internet Access**.
 Capability / architecture term: **Controlled Egress**.
 
 ```text
-show egress
-show egress-profiles
-create egress-profile <NAME>
-show egress-profile <PROFILE>
+show internet
+show internet-profiles
+set internet-profile <NAME>
+show internet-profile <PROFILE>
 set egress-profile <PROFILE> name|description <VALUE>
 add egress-destination <PROFILE>
 add egress-source <PROFILE>
-explain egress
+test internet
 enable egress-profile <PROFILE>
 disable egress-profile <PROFILE>
 import egress <PATH>
 diff egress <PROFILE> <PATH>
-show egress-tcp
-create egress-tcp <NAME>
-show egress-recipes
-apply egress-recipe <NAME>
+show fixed-tcp
+set fixed-tcp <NAME>
+show internet-templates
+set internet-profile <NEW> template <NAME>
 ```
 
-`explain egress` evaluates policy + DNS. It is **not** a live destination
+`test internet` evaluates policy + DNS. It is **not** a live destination
 connection test (menu label: **Check policy**).
 
 Safe workflow: create (disabled) → add-source → add-destination + protocol →
@@ -225,8 +225,8 @@ CA/token/port loss. FRP stays pinned at 0.71.0.
 ## Other
 
 ```text
-doctor
-create support-bundle
+system diagnostics
+system support-bundle
 help
 help commands
 help workflows
@@ -238,7 +238,7 @@ clear
 exit
 ```
 
-`create support-bundle` writes a sanitized read-only diagnostic archive
+`system support-bundle` writes a sanitized read-only diagnostic archive
 (`frp-support-<hostname>-<YYYYMMDDTHHMMSSZ>.tar.gz`). Private keys, tokens,
 enrollment secrets, and auth material are omitted or redacted. It does not
 restart services.
@@ -248,18 +248,18 @@ Internet Access / System). Full expert grammar is under `help commands`.
 `menu` is the guided numbered interface using the navigation tree.
 
 
-## Compatibility cheat sheet (legacy → action-first)
+## Compatibility cheat sheet (legacy → canonical)
 
 | Older / legacy form | Prefer |
 |---|---|
 | `client list` | `show clients` |
 | `enrollment list` | `show enrollments` |
-| `enrollment revoke` | `revoke enrollment` |
-| `egress list` | `show egress-profiles` |
-| `egress create` | `create egress-profile` |
+| `enrollment revoke` | `unset enrollment` |
+| `egress list` | `show internet-profiles` |
+| `egress create` | `set internet-profile` |
 | `egress status` | `show egress` |
-| `access list` | `show access-lists` |
+| `access list` | `show access-rules` |
 | `access assign` | `set access-assign` |
-| `frp-update` / `update frp` | `update engine` |
-| `support-bundle` | `create support-bundle` |
+| `frp-update` / `update frp` | `system update engine` |
+| `support-bundle` | `system support-bundle` |
 | `purge enrollment` | `delete enrollment` |

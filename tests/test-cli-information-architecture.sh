@@ -51,10 +51,12 @@ import frp_ctl_grammar as g
 print(g.context_help([], "server"))
 PY
 )"
-echo "$QMARK" | grep -q 'Work areas' || fail "bare ? missing Work areas"
-echo "$QMARK" | grep -q 'Clients' || fail "bare ? missing Clients"
+echo "$QMARK" | grep -q '^show$' || fail "bare ? missing show"
+echo "$QMARK" | grep -q '^set$' || fail "bare ? missing set"
+echo "$QMARK" | grep -q '^system$' || fail "bare ? missing system"
 ! echo "$QMARK" | grep -qE '^Available:$' || fail "bare ? still flat Available dump"
-! echo "$QMARK" | grep -qE '^[[:space:]]*show[[:space:]]+View' || fail "bare ? flat action dump"
+! echo "$QMARK" | grep -qE '^View$' || fail "bare ? View heading"
+! echo "$QMARK" | grep -q 'create' || fail "bare ? leaked create"
 pass ROOT_QUESTION_MARK_NOT_FLAT_ACTION_DUMP
 
 HELP="$(python3 - <<'PY'

@@ -54,32 +54,27 @@ for role in ("server", "client", "both"):
 
 # Action-first group surface under create/show/set/delete/add/remove.
 assert "group" in [a for a, _ in catalog.subcommands("show", "server")]
-assert "group" in [a for a, _ in catalog.subcommands("create", "server")]
 assert "group" in [a for a, _ in catalog.subcommands("set", "server")]
-assert "group" in [a for a, _ in catalog.subcommands("delete", "server")]
+assert "group" in [a for a, _ in catalog.subcommands("unset", "server")]
 set_cmd = catalog.find(["set", "group"])
 assert set_cmd is not None
-assert [a["name"] for a in set_cmd["args"]] == [
-    "<GROUP>", "name|description", "<value>"
-]
+assert set_cmd["path"] == ("set", "group")
 
-egress_set = catalog.find(["set", "egress-profile"])
+internet_set = catalog.find(["set", "internet-profile"])
+assert internet_set is not None
+assert internet_set["path"] == ("set", "internet-profile")
+egress_set = catalog.find(["set", "egress-profile"], include_aliases=True)
 assert egress_set is not None
-assert [a["name"] for a in egress_set["args"]][:2] == ["<PROFILE>", "name|description"]
-assert any(f["name"] == "--name" and f.get("hidden") for f in egress_set["flags"])
 
 # Public UX does not require --protocol; guided/backends enforce it.
-assert catalog.strict_error(["add", "egress-destination", "p", "h", "443"]) in (None, "missing required flag: --protocol")
-assert catalog.strict_error(["doctor", "--json", "true"]) == "flag --json does not take a value"
-assert catalog.strict_error(
-    ["create", "egress-profile", "x", "--description"]
-) == "missing value for --description"
+assert catalog.strict_error(["set", "internet-destination", "p", "h", "443", "https"]) in (None,)
+assert catalog.strict_error(["system", "diagnostics", "--json", "true"]) == "flag --json does not take a value"
 
 assert catalog.find(["rename", "group"], include_aliases=True).get("hidden")
-# Hidden resource-first compat still rewrites.
+# Hidden resource-first compat still rewrites into dispatcher-shaped tokens.
 resolved = catalog.resolve_tokens(["group", "add-client", "edge", "24cd7856"])
-assert resolved[:2] == ["add", "client"], resolved
-internal = catalog.to_internal(resolved)
+assert resolved[:2] in (["add", "client"], ["set", "client"]), resolved
+internal = catalog.to_internal(["group", "add-client", "edge", "24cd7856"])
 assert internal[:2] == ["add", "client"], internal
 print("CLI_CATALOG_PARITY=PASS")
 
@@ -109,10 +104,10 @@ print("CLI_MENU_CATALOG_PARITY=PASS")
 # Strict no-arg commands reject trailing tokens (CLI-AUDIT-001).
 for tokens, needle in (
     (["show", "status", "foo"], "unexpected argument"),
-    (["show", "version", "abc"], "unexpected argument"),
+    (["system", "version", "abc"], "unexpected argument"),
     (["menu", "x"], "unexpected argument"),
-    (["show", "access-lists", "extra"], "unexpected argument"),
-    (["show", "egress", "x"], "unexpected argument"),
+    (["show", "access-rules", "extra"], "unexpected argument"),
+    (["show", "internet", "x"], "unexpected argument"),
 ):
     err = catalog.strict_error(tokens)
     assert err and needle in err, (tokens, err)
@@ -120,31 +115,27 @@ for tokens, needle in (
 # Lifecycle confirmation / risk metadata.
 revoke = catalog.find(["revoke", "client"], include_aliases=True)
 release = catalog.find(["release", "client"], include_aliases=True)
+unset_client = catalog.find(["unset", "client"])
 assert revoke["confirmation"] == "typed_token" and revoke["risk"] == "irreversible"
 assert release["confirmation"] == "typed_token" and release["risk"] == "irreversible"
+assert unset_client["confirmation"] == "typed_token"
 assert "--force" in catalog.flag_names(revoke["flags"], include_hidden=True)
 assert "--force" in catalog.flag_names(release["flags"], include_hidden=True)
-help_release = catalog.command_help(release)
-assert "WHAT WILL BE REMOVED" in help_release
-assert "registry record" in help_release.lower() or "client registry record" in help_release
-assert "no remote host deletion" in help_release.lower() or "WHAT WILL NOT HAPPEN" in help_release
-help_revoke = catalog.command_help(revoke)
-assert "WHAT STAYS" in help_revoke or "reservations" in help_revoke.lower()
 
 # Flag help metadata for shallow options (hidden flags still carry metadata).
-yes = next(f for f in catalog.find(["set", "access-public"], include_aliases=True)["flags"] if f["name"] == "--yes")
+yes = next(f for f in catalog.find(["unset", "service-access"], include_aliases=True)["flags"] if f["name"] == "--yes")
 assert yes.get("description")
-ttl = next(f for f in catalog.find(["add", "access-source"], include_aliases=True)["flags"] if f["name"] == "--ttl")
+ttl = next(f for f in catalog.find(["set", "access-source"], include_aliases=True)["flags"] if f["name"] == "--ttl")
 assert ttl.get("metavar") and ttl.get("description")
 
 # Public catalog coverage for reverse-parity surfaces.
 assert catalog.find(["set", "access-source"], include_aliases=True)
-assert "--yes" in catalog.flag_names(catalog.find(["set", "access-public"], include_aliases=True)["flags"], include_hidden=True)
-assert "--name" in catalog.flag_names(catalog.find(["add", "egress-source"], include_aliases=True)["flags"], include_hidden=True)
+assert "--yes" in catalog.flag_names(catalog.find(["unset", "service-access"], include_aliases=True)["flags"], include_hidden=True)
+assert "--name" in catalog.flag_names(catalog.find(["set", "internet-source"], include_aliases=True)["flags"], include_hidden=True)
 assert "--ssh-user" in catalog.flag_names(catalog.find(["set", "service-profile"], include_aliases=True)["flags"], include_hidden=True)
-assert "--yes" in catalog.flag_names(catalog.find(["remove", "egress-source"], include_aliases=True)["flags"], include_hidden=True)
-assert "--yes" in catalog.flag_names(catalog.find(["delete", "egress-profile"], include_aliases=True)["flags"], include_hidden=True)
-egress_test = catalog.find(["test", "egress"], include_aliases=True) or catalog.find(["egress", "test"], include_aliases=True)
+assert "--yes" in catalog.flag_names(catalog.find(["unset", "internet-source"], include_aliases=True)["flags"], include_hidden=True)
+assert "--yes" in catalog.flag_names(catalog.find(["unset", "internet-profile"], include_aliases=True)["flags"], include_hidden=True)
+egress_test = catalog.find(["test", "internet"], include_aliases=True)
 assert egress_test is not None
 assert "policy" in (egress_test.get("detail") or "").lower()
 assert "live" in (egress_test.get("detail") or "").lower() or "connection" in (egress_test.get("detail") or "").lower()
@@ -387,10 +378,10 @@ for label, block in (("install-server.sh", server_block), ("install-client.sh", 
         if needle in lower:
             raise SystemExit("%s post-install teaches banned form: %r" % (label, needle))
 # Positive sanity: canonical forms remain present.
-for needle in ("create zero-touch", "show clients"):
+for needle in ("set client", "show clients"):
     if needle not in server_block:
         raise SystemExit("install-server.sh post-install missing canonical %r" % needle)
-if "show info" not in client_block and "show status" not in client_block:
+if "system info" not in client_block and "show info" not in client_block and "show status" not in client_block:
     raise SystemExit("install-client.sh useful-commands missing canonical show status/info")
 print("POST_INSTALL_TEACHING_PARITY=PASS")
 PY

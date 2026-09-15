@@ -856,7 +856,7 @@ frpctl_nav_workflow() {
     manage_client) frpctl_manage_clients ;;
     create_group)
       id="$(frpctl_nav_prompt_id "Group name: ")" || return 1
-      frpctl_dispatch create group "$id" || true
+      frpctl_dispatch set group "$id" || true
       ;;
     manage_group)
       id="$(frpctl_nav_prompt_id "Group name: ")" || return 1
@@ -864,7 +864,7 @@ frpctl_nav_workflow() {
       ;;
     revoke_enrollment)
       id="$(frpctl_nav_prompt_id "Enrollment ID: ")" || return 1
-      frpctl_dispatch revoke enrollment "$id" || true
+      frpctl_dispatch unset enrollment "$id" || true
       ;;
     delete_enrollment)
       id="$(frpctl_nav_prompt_id "Enrollment ID: ")" || return 1
@@ -877,26 +877,26 @@ frpctl_nav_workflow() {
     release_service)
       id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
       value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
-      frpctl_dispatch release service "$id" "$value" || true
+      frpctl_dispatch unset client "$id" service "$value" || true
       ;;
     create_access_list)
       id="$(frpctl_nav_prompt_id "Access Rule name: ")" || return 1
-      frpctl_dispatch create access-list "$id" || true
+      frpctl_dispatch set access-rule "$id" || true
       ;;
     manage_access_list)
       id="$(frpctl_nav_prompt_id "Access Rule name: ")" || return 1
-      frpctl_dispatch show access-list "$id" || true
+      frpctl_dispatch show access-rule "$id" || true
       ;;
     assign_access)
       id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
       value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
       path="$(frpctl_nav_prompt_id "Access Rule name: ")" || return 1
-      frpctl_dispatch set access-assign "$id" "$value" "$path" || true
+      frpctl_dispatch set service-access "$id" "$value" "$path" || true
       ;;
     public_access)
       id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
       value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
-      frpctl_dispatch set access-public "$id" "$value" || true
+      frpctl_dispatch unset service-access "$id" "$value" || true
       ;;
     test_access)
       id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
@@ -906,7 +906,7 @@ frpctl_nav_workflow() {
       ;;
     create_service_profile)
       id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
-      frpctl_dispatch create service-profile "$id" || true
+      frpctl_dispatch set service-profile "$id" || true
       ;;
     manage_service_profile)
       id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
@@ -914,22 +914,22 @@ frpctl_nav_workflow() {
       ;;
     delete_service_profile)
       id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
-      frpctl_dispatch delete service-profile "$id" || true
+      frpctl_dispatch unset service-profile "$id" || true
       ;;
     explain_egress)
       echo
       echo "Check whether this access would be allowed"
       echo "(policy + DNS evaluation; not a live connection test)."
       echo
-      frpctl_dispatch explain egress || true
+      frpctl_dispatch test internet || true
       ;;
     create_egress_profile)
       id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
-      frpctl_dispatch create egress-profile "$id" || true
+      frpctl_dispatch set internet-profile "$id" || true
       ;;
     manage_egress_profile)
       id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
-      frpctl_dispatch show egress-profile "$id" || true
+      frpctl_dispatch show internet-profile "$id" || true
       ;;
     import_egress)
       path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
@@ -942,19 +942,20 @@ frpctl_nav_workflow() {
       ;;
     create_egress_tcp)
       id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
-      frpctl_dispatch create egress-tcp "$id" || true
+      frpctl_dispatch set fixed-tcp "$id" || true
       ;;
     manage_egress_tcp)
       id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
-      frpctl_dispatch show egress-tcp-entry "$id" || true
+      frpctl_dispatch show fixed-tcp "$id" || true
       ;;
     view_egress_recipe)
       id="$(frpctl_nav_prompt_id "Template name: ")" || return 1
-      frpctl_dispatch show egress-recipe "$id" || true
+      frpctl_dispatch show internet-template "$id" || true
       ;;
     apply_egress_recipe)
       id="$(frpctl_nav_prompt_id "Template name: ")" || return 1
-      frpctl_dispatch apply egress-recipe "$id" || true
+      profile="$(frpctl_nav_prompt_id "New profile name: ")" || return 1
+      frpctl_dispatch set internet-profile "$profile" template "$id" || true
       ;;
     set_public_hostname)
       value="$(frpctl_nav_prompt_id "Published service hostname: ")" || return 1
@@ -970,14 +971,14 @@ frpctl_nav_workflow() {
       ;;
     restore_backup)
       path="$(frpctl_nav_prompt_id "Backup path: ")" || return 1
-      frpctl_dispatch restore backup "$path" || true
+      frpctl_dispatch system restore "$path" || true
       ;;
     edit_service|enable_service|disable_service)
       id="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
       case "$workflow" in
         edit_service) frpctl_dispatch set service "$id" || true ;;
-        enable_service) frpctl_dispatch enable service "$id" || true ;;
-        disable_service) frpctl_dispatch disable service "$id" || true ;;
+        enable_service) frpctl_dispatch set service "$id" enabled || true ;;
+        disable_service) frpctl_dispatch unset service "$id" enabled || true ;;
       esac
       ;;
     help) frpctl_menu_commands ;;
@@ -1655,7 +1656,7 @@ frpctl_manage_one_client() {
               echo "ERROR: service ID is required" >&2
               continue
             fi
-            frpctl_dispatch release service "$mid" "$sid" || true
+            frpctl_dispatch unset client "$mid" service "$sid" || true
             ;;
         esac
         ;;
@@ -1704,19 +1705,19 @@ frpctl_manage_one_client() {
         case "$sub" in
           1)
             label="$(frpctl_nav_prompt_id "Group name: ")" || continue
-            frpctl_dispatch add client "$mid" group "$label" || true
+            frpctl_dispatch set client "$mid" group "$label" || true
             ;;
           2)
             label="$(frpctl_nav_prompt_id "Group name: ")" || continue
-            frpctl_dispatch remove client "$mid" group "$label" || true
+            frpctl_dispatch unset client "$mid" group "$label" || true
             ;;
         esac
         ;;
       5)
-        frpctl_dispatch revoke client "$mid" || true
+        frpctl_dispatch unset client "$mid" trust || true
         ;;
       6)
-        frpctl_dispatch release client "$mid" || true
+        frpctl_dispatch unset client "$mid" || true
         return 0
         ;;
       7|"")
@@ -1924,14 +1925,14 @@ frpctl_manage_one_group() {
         ;;
       4)
         mid="$(frpctl_nav_prompt_id "CLIENT ID: ")" || continue
-        frpctl_dispatch add client "$mid" group "$gid" || true
+        frpctl_dispatch set client "$mid" group "$gid" || true
         ;;
       5)
         mid="$(frpctl_nav_prompt_id "CLIENT ID: ")" || continue
-        frpctl_dispatch remove client "$mid" group "$gid" || true
+        frpctl_dispatch unset client "$mid" group "$gid" || true
         ;;
       6)
-        frpctl_dispatch delete group "$gid" || true
+        frpctl_dispatch unset group "$gid" || true
         return 0
         ;;
       7|"")
@@ -2457,6 +2458,36 @@ frpctl_print_grammar_help() {
   printf '%s\n' "$msg"
 }
 
+
+frpctl_unset_enrollment() {
+  local id="$1" state=""
+  [[ -n "$id" ]] || { echo "ERROR: enrollment id required" >&2; return 1; }
+  # Tests may force classification without reading secrets.
+  if [[ -n "${FRP_ENROLLMENT_STATE:-}" ]]; then
+    state="$(printf '%s' "$FRP_ENROLLMENT_STATE" | tr '[:lower:]' '[:upper:]')"
+  else
+    state="$(frpctl_invoke frp-enrollment-state "$id" 2>/dev/null || true)"
+    state="$(printf '%s' "$state" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
+  fi
+  case "$state" in
+    PENDING|BOUND|ACTIVE|ISSUED)
+      echo "Action: Revoke active enrollment"
+      frpctl_invoke frp-enrollment-revoke "$id"
+      ;;
+    EXPIRED|COMPLETED|REVOKED|USED|TERMINAL)
+      echo "Action: Delete terminal enrollment metadata"
+      frpctl_invoke frp-enrollment-purge enrollment "$id"
+      ;;
+    *)
+      echo "Action: Revoke active enrollment"
+      if ! frpctl_invoke frp-enrollment-revoke "$id"; then
+        echo "Action: Delete terminal enrollment metadata"
+        frpctl_invoke frp-enrollment-purge enrollment "$id"
+      fi
+      ;;
+  esac
+}
+
 frpctl_dispatch_canonical() {
   local extra result status action extra_args=""
   _FRP_CTL_RC=0
@@ -2818,6 +2849,10 @@ frpctl_dispatch_canonical() {
       frpctl_with_pt frpctl_invoke frp-revoke-client "$(frpctl_json_get "$result" client)"
       ;;
     revoke_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-revoke "$(frpctl_json_get "$result" id)" ;;
+    unset_enrollment)
+      frpctl_require_server || return 1
+      frpctl_unset_enrollment "$(frpctl_json_get "$result" id)"
+      ;;
     purge_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollment "$(frpctl_json_get "$result" id)" ;;
     purge_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollment-purge enrollments --older-than "$(frpctl_json_get "$result" older_than)" ;;
     release_client)
@@ -3128,7 +3163,7 @@ frpctl_dispatch() {
       fi
       frpctl_invoke frp-release-client "$@"
       ;;
-    shell|exec|bash|sh|system)
+    shell|exec|bash|sh)
       frpctl_reject_shell
       ;;
     '!'*|\!*)
@@ -3306,7 +3341,7 @@ frpctl_repl() {
     fi
     frpctl_history_maybe_record "$_FRP_CTL_LINE"
     case "${_FRP_CTL_TOKENS[0]}" in
-      '!'*|shell|exec|bash|sh|system)
+      '!'*|shell|exec|bash|sh)
         frpctl_reject_shell || true
         continue
         ;;

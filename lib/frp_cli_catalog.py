@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Canonical Data Relay Link CLI command catalog (CLI-011).
 
-Single source of truth for the action-first ``drlink`` grammar:
+Single source of truth for the final public ``drlink`` grammar:
 
-    drlink <action> <resource> [target] [value]
+    show | set | unset | test | system | menu | help | exit
 
 Root help, ``help <topic>``, context ``?``, Tab discovery, and the guided
-menu are all derived from :data:`COMMANDS`. Nothing else may hard-code the
-canonical command list.
+menu are all derived from :data:`PUBLIC_COMMANDS` / :data:`COMMANDS`.
+Hidden compatibility aliases live in :data:`HIDDEN_COMPAT_ALIASES` and must
+not appear in normal discovery surfaces.
 
 Public UX never advertises GNU-style ``--options`` or backend ``frp-*``
-tool names. Resource-first forms may remain as hidden compatibility aliases.
+tool names.
 """
 from __future__ import annotations
 
@@ -256,43 +257,22 @@ SERVICE_ADD_FLAGS = (
 # (name, roles, category, summary)
 # Categories are display-only groupings for help/menu discoverability.
 ROOTS = (
-    ("show", "any", "View", "View current state and inventory"),
-    ("create", "any", "Create", "Create or onboard something"),
-    ("set", "any", "Change", "Change a value or configuration"),
-    ("unset", "any", "Change", "Clear optional metadata or configuration"),
-    ("add", "any", "Change", "Add a member, source or destination"),
-    ("remove", "server", "Change", "Remove a member, source or destination"),
-    ("enable", "any", "Change", "Enable an existing object"),
-    ("disable", "any", "Change", "Disable an existing object"),
-    ("apply", "any", "Change", "Apply pending changes or a template"),
-    ("discard", "client", "Change", "Discard pending local service changes"),
-    ("sync", "client", "Change", "Reconcile local services against server releases"),
-    ("revoke", "server", "Security / Lifecycle", "Revoke credentials or management trust"),
-    ("release", "server", "Security / Lifecycle", "Release a client or service reservation"),
-    ("delete", "server", "Security / Lifecycle", "Permanently delete configuration or metadata"),
-    ("restore", "server", "Security / Lifecycle", "Restore a backup"),
-    ("update", "any", "Security / Lifecycle", "Update Data Relay Link or the FRP engine"),
-    ("test", "server", "Validate", "Test access, egress or target connectivity"),
-    ("explain", "server", "Validate", "Explain policy decisions (policy + DNS)"),
-    ("export", "server", "View", "Export configuration"),
-    ("import", "server", "Create", "Import configuration"),
-    ("diff", "server", "Validate", "Compare configuration with an import file"),
-    ("access", "server", "Change", "Open Access Rules guided tools"),
-    ("doctor", "any", "Validate", "Run system health checks"),
-    ("help", "any", "Help / Session", "Detailed help"),
-    ("menu", "any", "Help / Session", "Guided numbered menu"),
-    ("history", "any", "Help / Session", "Session command history"),
-    ("clear", "any", "Help / Session", "Clear the screen"),
-    ("exit", "any", "Help / Session", "Leave the CLI"),
+    ("show", "any", "View", "View current clients, services, policies and status"),
+    ("set", "any", "Change", "Create, add, change or enable configuration"),
+    ("unset", "any", "Change", "Remove, delete, revoke, release or disable configuration"),
+    ("test", "server", "Validate", "Check policy decisions without changing configuration"),
+    ("system", "any", "System", "Updates, backup, restore, diagnostics and system operations"),
+    ("menu", "any", "Session", "Open the guided menu"),
+    ("help", "any", "Session", "Show help"),
+    ("exit", "any", "Session", "Exit Data Relay Link"),
 )
 
 CATEGORY_ORDER = (
     "View",
-    "Create",
     "Change",
-    "Security / Lifecycle",
     "Validate",
-    "Help / Session",
+    "System",
+    "Session",
 )
 
 
@@ -571,7 +551,7 @@ def _cmd(
     }
 
 
-COMMANDS = (
+_MIGRATION_SOURCE_COMMANDS = (
     # --- status / version -------------------------------------------------
     _cmd(
         ("status",),
@@ -1925,335 +1905,87 @@ COMMANDS = (
 
 
 
-# --- action-first public grammar flip ------------------------------------
-# Resource-first literals above are the migration input. After this flip,
-# COMMANDS / ROOTS advertise action-first only; old resource-first paths
-# remain as hidden compatibility aliases.
+# --- FINAL PUBLIC COMMAND SSOT (v2.4.0) -----------------------------------
+# Public grammar is the literal command tree in frp_cli_final_commands.json.
+# Migration source above is retained only as a private reference for internals;
+# it is NOT the public SSOT and is not flipped at runtime.
+
+import json as _json
+import os as _os
+
+_FINAL_JSON = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "frp_cli_final_commands.json")
 
 
-def _hide_all_flags(flags):
+def _load_final_commands():
+    with open(_FINAL_JSON, "r", encoding="utf-8") as fh:
+        rows = _json.load(fh)
     out = []
-    for flag in _normalize_flags(flags):
-        item = dict(flag)
-        item["hidden"] = True
-        # Public grammar is positional/guided; never require --flags.
-        item["required"] = False
-        out.append(item)
-    return tuple(out)
-
-
-def _action_first_examples(examples):
-    """Rewrite resource-first examples; strip public --option advertising."""
-    repl = (
-        ("zero-touch create", "create zero-touch"),
-        ("enrollment create", "create enrollment"),
-        ("enrollment bulk", "create enrollments"),
-        ("enrollment list", "show enrollments"),
-        ("enrollment revoke", "revoke enrollment"),
-        ("enrollment purge", "delete enrollment"),
-        ("client list", "show clients"),
-        ("client show", "show client"),
-        ("client set", "set client"),
-        ("client unset", "unset client"),
-        ("client revoke", "revoke client"),
-        ("client release", "release client"),
-        ("client info", "show info"),
-        ("service list", "show services"),
-        ("service add", "add service"),
-        ("service set", "set service"),
-        ("service enable", "enable service"),
-        ("service disable", "disable service"),
-        ("service apply", "apply"),
-        ("service discard", "discard"),
-        ("group list", "show groups"),
-        ("group show", "show group"),
-        ("group create", "create group"),
-        ("group set", "set group"),
-        ("group delete", "delete group"),
-        ("group add-client", "add client"),
-        ("group remove-client", "remove client"),
-        ("service-profile list", "show service-profiles"),
-        ("service-profile show", "show service-profile"),
-        ("service-profile create", "create service-profile"),
-        ("service-profile set", "set service-profile"),
-        ("service-profile delete", "delete service-profile"),
-        ("egress list", "show egress-profiles"),
-        ("egress show", "show egress-profile"),
-        ("egress create", "create egress-profile"),
-        ("egress set", "set egress-profile"),
-        ("egress add-destination", "add egress-destination"),
-        ("egress add-source", "add egress-source"),
-        ("egress remove-destination", "remove egress-destination"),
-        ("egress remove-source", "remove egress-source"),
-        ("egress enable", "enable egress-profile"),
-        ("egress disable", "disable egress-profile"),
-        ("egress delete", "delete egress-profile"),
-        ("egress status", "show egress"),
-        ("egress explain", "explain egress"),
-        ("egress tcp list", "show egress-tcp"),
-        ("egress tcp show", "show egress-tcp-entry"),
-        ("egress tcp create", "create egress-tcp"),
-        ("egress tcp enable", "enable egress-tcp"),
-        ("egress tcp disable", "disable egress-tcp"),
-        ("egress tcp delete", "delete egress-tcp"),
-        ("egress tcp explain", "explain egress-tcp"),
-        ("egress recipe list", "show egress-recipes"),
-        ("egress recipe show", "show egress-recipe"),
-        ("egress recipe apply", "apply egress-recipe"),
-        ("egress export", "export egress"),
-        ("egress import", "import egress"),
-        ("egress diff", "diff egress"),
-        ("backup create", "create backup"),
-        ("backup restore", "restore backup"),
-        ("update project", "update product"),
-        ("support bundle", "create support-bundle"),
-        ("server audit", "show audit"),
-        ("server upstream", "show upstream"),
-        ("server status", "show server-status"),
-        ("server set", "set server"),
-        ("server unset", "unset server"),
-        ("access list", "show access-lists"),
-        ("access create", "create access-list"),
-        ("access show", "show access-list"),
-        ("access delete", "delete access-list"),
-        ("access add-source", "add access-source"),
-        ("access remove-source", "remove access-source"),
-        ("access replace-source", "set access-source"),
-        ("access edit-info", "set access-list"),
-        ("access remove-expired", "remove access-expired"),
-        ("access assign", "set access-assign"),
-        ("access public", "set access-public"),
-        ("access show-service", "show access-service"),
-        ("access test", "test access"),
-        ("access log", "show access-log"),
-        ("show access-list-service", "show access-service"),
-    )
-    out = []
-    for ex in examples or ():
-        text = str(ex)
-        for old, new in sorted(repl, key=lambda p: -len(p[0])):
-            text = text.replace(old, new)
-        if " --" in text or text.strip().startswith("--"):
-            continue
-        if text.strip() == "status":
-            text = "show status"
-        elif text.strip() == "version":
-            text = "show version"
-        out.append(text)
-    return tuple(out)
-
-
-
-_SPECIAL_FLIP = {
-    ("status",): (("show", "status"), None),
-    ("version",): (("show", "version"), None),
-    ("enrollment", "purge"): (("delete", "enrollment"), ("purge", "enrollment")),
-    ("update", "project"): (("update", "product"), ("update", "project")),
-    ("support", "bundle"): (("create", "support-bundle"), ("support-bundle",)),
-    ("doctor",): (("doctor",), None),
-    ("help",): (("help",), None),
-    ("menu",): (("menu",), None),
-    ("history",): (("history",), None),
-    ("clear",): (("clear",), None),
-    ("exit",): (("exit",), None),
-    ("update", "engine"): (("update", "engine"), ("update", "frp")),
-    ("group", "add-client"): (("add", "client"), None),
-    ("group", "remove-client"): (("remove", "client"), None),
-    ("group", "add-member"): (("add", "client"), None),
-    ("group", "remove-member"): (("remove", "client"), None),
-    ("client", "release"): (("release", "client"), None),
-    ("access", "list"): (("show", "access-lists"), ("access", "list")),
-    ("access", "create"): (("create", "access-list"), ("access", "create")),
-    ("access", "show"): (("show", "access-list"), ("access", "show")),
-    ("access", "delete"): (("delete", "access-list"), ("access", "delete")),
-    ("access", "add-source"): (("add", "access-source"), ("access", "add-source")),
-    ("access", "remove-source"): (("remove", "access-source"), ("access", "remove-source")),
-    ("access", "replace-source"): (("set", "access-source"), ("access", "replace-source")),
-    ("access", "edit-info"): (("set", "access-list"), ("access", "edit-info")),
-    ("access", "remove-expired"): (("remove", "access-expired"), ("access", "remove-expired")),
-    ("access", "assign"): (("set", "access-assign"), ("access", "assign")),
-    ("access", "public"): (("set", "access-public"), ("access", "public")),
-    ("access", "show-service"): (("show", "access-service"), ("access", "show-service")),
-    ("access", "test"): (("test", "access"), ("access", "test")),
-    ("access", "log"): (("show", "access-log"), ("access", "log")),
-    ("access", "menu"): (("access", "menu"), ("access", "menu")),
-    ("egress", "add-destination"): (("add", "egress-destination"), None),
-    ("egress", "add-source"): (("add", "egress-source"), None),
-    ("egress", "remove-destination"): (("remove", "egress-destination"), None),
-    ("egress", "remove-source"): (("remove", "egress-source"), None),
-    ("egress", "status"): (("show", "egress"), ("egress", "status")),
-    ("egress", "explain"): (("explain", "egress"), ("egress", "explain")),
-    ("egress", "test"): (("test", "egress"), ("egress", "test")),
-    ("egress", "tcp", "list"): (("show", "egress-tcp"), ("egress", "tcp", "list")),
-    ("egress", "tcp", "show"): (("show", "egress-tcp-entry"), ("egress", "tcp", "show")),
-    ("egress", "tcp", "create"): (("create", "egress-tcp"), ("egress", "tcp", "create")),
-    ("egress", "tcp", "enable"): (("enable", "egress-tcp"), ("egress", "tcp", "enable")),
-    ("egress", "tcp", "disable"): (("disable", "egress-tcp"), ("egress", "tcp", "disable")),
-    ("egress", "tcp", "delete"): (("delete", "egress-tcp"), ("egress", "tcp", "delete")),
-    ("egress", "tcp", "explain"): (("explain", "egress-tcp"), ("egress", "tcp", "explain")),
-    ("egress", "recipe", "list"): (("show", "egress-recipes"), ("egress", "recipe", "list")),
-    ("egress", "recipe", "show"): (("show", "egress-recipe"), ("egress", "recipe", "show")),
-    ("egress", "recipe", "apply"): (("apply", "egress-recipe"), ("egress", "recipe", "apply")),
-    ("egress", "export"): (("export", "egress"), ("egress", "export")),
-    ("egress", "import"): (("import", "egress"), ("egress", "import")),
-    ("egress", "diff"): (("diff", "egress"), ("egress", "diff")),
-    ("server", "status"): (("show", "server-status"), ("server-status",)),
-    ("server", "set"): (("set", "server"), None),
-    ("server", "unset"): (("unset", "server"), None),
-    ("server", "upstream"): (("show", "upstream"), ("show", "upstream")),
-    ("server", "audit"): (("show", "audit"), ("show", "audit")),
-    ("backup", "restore"): (("restore", "backup"), ("restore", "backup")),
-    ("service", "apply"): (("apply",), ("apply",)),
-    ("service", "discard"): (("discard",), ("discard",)),
-    ("service", "sync"): (("sync",), ("sync",)),
-    ("service-profile", "list"): (("show", "service-profiles"), ("show", "profiles")),
-    ("service-profile", "show"): (("show", "service-profile"), ("show", "profile")),
-    ("service-profile", "create"): (("create", "service-profile"), ("create", "profile")),
-    ("service-profile", "set"): (("set", "service-profile"), ("set", "profile")),
-    ("service-profile", "delete"): (("delete", "service-profile"), ("delete", "profile")),
-    ("group", "rename"): (("rename", "group"), ("rename", "group")),
-}
-
-
-_PUBLIC_NAME_UPGRADE = {
-    ("show", "profiles"): (("show", "service-profiles"), ("show", "profiles")),
-    ("show", "profile"): (("show", "service-profile"), ("show", "profile")),
-    ("create", "profile"): (("create", "service-profile"), ("create", "profile")),
-    ("set", "profile"): (("set", "service-profile"), ("set", "profile")),
-    ("delete", "profile"): (("delete", "service-profile"), ("delete", "profile")),
-    # Keep add/remove egress-profile <P> destination|source as a distinct
-    # grammar form; do not collapse it onto add/remove egress-destination.
-}
-
-
-def _flip_one_command(cmd):
-    old_path = tuple(cmd["path"])
-    old_aliases = list(cmd.get("aliases") or ())
-    if old_path in _SPECIAL_FLIP:
-        new_path, new_internal = _SPECIAL_FLIP[old_path]
-    elif cmd.get("internal"):
-        new_path = tuple(cmd["internal"])
-        new_internal = None
-        if new_path in _PUBLIC_NAME_UPGRADE:
-            new_path, new_internal = _PUBLIC_NAME_UPGRADE[new_path]
-    else:
-        raise RuntimeError("unmapped catalog path: %s" % (old_path,))
-
-    # Resource-first becomes a hidden compat alias.
-    aliases = []
-    if old_path != new_path:
-        aliases.append(old_path)
-    for alias in old_aliases:
-        alias_t = tuple(alias)
-        if alias_t == new_path:
-            continue
-        if alias_t not in aliases:
-            aliases.append(alias_t)
-
-    # Prefer identity internal when path already matches dispatcher tokens.
-    internal = new_internal
-    if internal is None and cmd.get("internal") and tuple(cmd["internal"]) == new_path:
-        internal = None
-    elif internal is None and cmd.get("internal") and old_path not in _SPECIAL_FLIP:
-        # Path was taken from old internal; identity.
-        internal = None
-
-    detail = str(cmd.get("detail") or "")
-    for old, new in (
-        ("client release", "release client"),
-        ("client revoke", "revoke client"),
-        ("client unset", "unset client"),
-        ("client list", "show clients"),
-        ("enrollment create", "create enrollment"),
-        ("zero-touch create", "create zero-touch"),
-        ("service apply", "apply"),
-        ("--force", "confirmation prompt"),
-        ("--yes", "confirmation"),
-        ("--older-than", "older-than days"),
-    ):
-        detail = detail.replace(old, new)
-
-    args = tuple(cmd.get("args") or ())
-    examples = _action_first_examples(cmd.get("examples") or ())
-    # Membership: public form is add/remove client <ID> group <GROUP>.
-    if old_path in (
-        ("group", "add-client"),
-        ("group", "remove-client"),
-        ("group", "add-member"),
-        ("group", "remove-member"),
-    ):
-        args = (
-            _arg("<CLIENT-ID>", C_CLIENT),
-            _arg("group", ("group",)),
-            _arg("<GROUP>", C_GROUP),
+    for row in rows:
+        args = tuple(
+            _arg(a["name"], a.get("complete"), required=a.get("required", True))
+            for a in (row.get("args") or [])
         )
-        verb = "add" if "add" in old_path[1] else "remove"
-        examples = ("%s client 24cd7856 group edge" % verb,)
-
-    return {
-        "path": tuple(new_path),
-        "roles": cmd["roles"],
-        "category": cmd["category"],
-        "summary": cmd["summary"],
-        "detail": detail,
-        "examples": examples,
-        "args": args,
-        "flags": _hide_all_flags(cmd.get("flags") or ()),
-        "tail": cmd.get("tail"),
-        "internal": internal,
-        "aliases": tuple(aliases),
-        "destructive": bool(cmd.get("destructive")),
-        "hidden": bool(cmd.get("hidden")),
-        "risk": cmd.get("risk") or "none",
-        "confirmation": cmd.get("confirmation") or "none",
-        "surface": "hidden_compat" if cmd.get("hidden") else (cmd.get("surface") or ""),
-        "_old_path": old_path,
-    }
-
-
-def _flip_commands_to_action_first(commands):
-    """Collapse resource-first entries into action-first SSOT rows."""
-    by_path = {}
-    order = []
-    for cmd in commands:
-        flipped = _flip_one_command(cmd)
-        path = flipped["path"]
-        if path not in by_path:
-            by_path[path] = flipped
-            order.append(path)
-            continue
-        # Merge duplicate targets (e.g. add-client / add-member).
-        existing = by_path[path]
-        alias_set = list(existing["aliases"])
-        for alias in flipped["aliases"]:
-            if alias not in alias_set and alias != path:
-                alias_set.append(alias)
-        # Keep resource-first source path as a hidden alias when merging.
-        old = flipped.get("_old_path")
-        if old and old != path and old not in alias_set:
-            alias_set.append(old)
-        existing["aliases"] = tuple(alias_set)
-        # Never demote a public command to hidden just because a compat alias
-        # (add-member / remove-member) merges into the same path.
-        if existing.get("hidden") and not flipped.get("hidden"):
-            existing["hidden"] = False
-            existing["surface"] = flipped.get("surface") or ""
-        if not existing.get("args") and flipped.get("args"):
-            existing["args"] = flipped["args"]
-        if not existing.get("examples") and flipped.get("examples"):
-            existing["examples"] = flipped["examples"]
-        if not existing.get("internal") and flipped.get("internal"):
-            existing["internal"] = flipped["internal"]
-    out = []
-    for path in order:
-        item = dict(by_path[path])
-        item.pop("_old_path", None)
-        # apply/discard stay public but are session utilities under Change.
-        out.append(item)
+        raw_flags = row.get("flags") or []
+        if raw_flags and isinstance(raw_flags[0] if raw_flags else None, str):
+            raw_flags = [{"name": n, "hidden": True} for n in raw_flags]
+        if not raw_flags and row.get("flag_names"):
+            raw_flags = [{"name": n, "hidden": True} for n in row["flag_names"]]
+        flags = []
+        for f in raw_flags:
+            if not isinstance(f, dict):
+                f = {"name": str(f), "hidden": True}
+            flags.append(
+                _flag(
+                    f["name"],
+                    arity=f.get("arity", 1),
+                    choices=tuple(f.get("choices") or ()),
+                    hidden=bool(f.get("hidden", True)),
+                    required=False,
+                    description=f.get("description") or "",
+                    metavar=f.get("metavar") or "",
+                    examples=tuple(f.get("examples") or ()),
+                    effect=f.get("effect") or "",
+                    risk=f.get("risk") or "",
+                    type=f.get("type", ""),
+                    unit=f.get("unit", ""),
+                    default=f.get("default", ""),
+                    maximum=f.get("maximum", ""),
+                    platform=f.get("platform", ""),
+                    role=f.get("role", ""),
+                )
+            )
+        flags = tuple(flags)
+        out.append(
+            _cmd(
+                tuple(row["path"]),
+                row["roles"],
+                row["category"],
+                row["summary"],
+                detail=row.get("detail") or "",
+                examples=tuple(row.get("examples") or ()),
+                args=args,
+                flags=flags,
+                tail=row.get("tail"),
+                internal=tuple(row["internal"]) if row.get("internal") else None,
+                aliases=tuple(tuple(a) for a in (row.get("aliases") or ())),
+                destructive=bool(row.get("destructive")),
+                hidden=bool(row.get("hidden")),
+                risk=row.get("risk") or "none",
+                confirmation=row.get("confirmation") or "none",
+                surface=row.get("surface")
+                or ("hidden_compat" if row.get("hidden") else ""),
+            )
+        )
     return tuple(out)
 
 
-COMMANDS = _flip_commands_to_action_first(COMMANDS)
+COMMANDS = _load_final_commands()
+PUBLIC_COMMANDS = tuple(cmd for cmd in COMMANDS if not cmd.get("hidden"))
+HIDDEN_COMPAT_ALIASES = {
+    tuple(alias): cmd["path"]
+    for cmd in COMMANDS
+    for alias in (cmd.get("aliases") or ())
+}
 
 # --- role helpers ---------------------------------------------------------
 def role_parts(role):
@@ -2278,7 +2010,7 @@ def roots_for_role(role):
     for name, roles, _category, _summary in ROOTS:
         if not role_allows(roles, role):
             continue
-        if name in ("help", "menu", "history", "clear", "exit", "doctor"):
+        if name in ("help", "menu", "exit"):
             out.append(name)
             continue
         if not _root_has_commands(name, role):
@@ -2562,56 +2294,288 @@ def canonical_actions(root):
 
 
 def to_internal(tokens):
-    """Rewrite a canonical action-first token list into dispatcher tokens.
+    """Rewrite a final public token list into dispatcher tokens.
 
-    Returns ``None`` when ``tokens`` is not a canonical command.
+    Returns ``None`` when ``tokens`` is not a known command (public or alias).
     """
     if not tokens:
         return None
-    cmd = find(tokens)
+    original = [str(t) for t in tokens]
+    # Preserve distinct legacy safety semantics that collapse onto unset client.
+    if original[:2] in (["revoke", "client"], ["client", "revoke"]):
+        return ["revoke", "client"] + original[2:]
+    if original[:2] == ["release", "service"] or original[:2] == ["release-service"]:
+        return ["release", "service"] + original[2:]
+    if original[:2] in (["release", "client"], ["client", "release"]):
+        return ["release", "client"] + original[2:]
+    if original[:2] in (["revoke", "enrollment"], ["enrollment", "revoke"]):
+        return ["revoke", "enrollment"] + original[2:]
+    if original[:2] in (["delete", "enrollment"], ["purge", "enrollment"], ["enrollment", "purge"]):
+        return ["purge", "enrollment"] if original[0] != "delete" else ["delete", "enrollment"] + original[2:]
+    # Prefer alias-aware resolution so legacy forms still dispatch.
+    resolved = resolve_tokens(tokens)
+    cmd = find(resolved, include_aliases=True)
     if cmd is None:
-        return None
+        cmd = find(tokens, include_aliases=True)
+        if cmd is None:
+            return None
+        resolved = resolve_tokens(tokens)
     path = cmd["path"]
-    rest = list(tokens[len(path) :])
+    # If tokens matched via alias length, use resolved canonical tokens.
+    if tuple(resolved[: len(path)]) != path:
+        # resolve_tokens should have canonicalized; fall back.
+        work = list(resolved)
+    else:
+        work = list(resolved)
+    rest = list(work[len(path) :])
+
+    # --- Merged final-grammar specials (preserve distinct safety semantics) ---
+    if path == ("set", "client"):
+        if not rest:
+            return ["create", "zero-touch"]
+        # set client <CLIENT> group <GROUP>
+        if len(rest) >= 3 and rest[1] == "group":
+            return ["add", "client", rest[0], "group", rest[2]] + rest[3:]
+        # metadata
+        return ["set", "client"] + rest
+
+    if path == ("unset", "client"):
+        if not rest:
+            return ["unset", "client"]
+        client = rest[0]
+        if len(rest) == 1:
+            return ["release", "client", client]
+        if rest[1] == "trust":
+            return ["revoke", "client", client] + rest[2:]
+        if rest[1] == "service" and len(rest) >= 3:
+            return ["release", "service", client, rest[2]] + rest[3:]
+        if rest[1] == "group" and len(rest) >= 3:
+            return ["remove", "client", client, "group", rest[2]] + rest[3:]
+        # metadata label/note/tag
+        return ["unset", "client"] + rest
+
+    if path == ("set", "group"):
+        if not rest:
+            return ["set", "group"]
+        if len(rest) == 1:
+            return ["create", "group", rest[0]]
+        if len(rest) >= 3 and rest[1] in ("name", "description"):
+            return ["set", "group"] + rest
+        return ["create", "group"] + rest
+
+    if path == ("set", "enrollment"):
+        return ["create", "enrollment"] + rest
+
+    if path == ("set", "enrollment", "bulk"):
+        return ["create", "enrollments"] + rest
+
+    if path == ("set", "service-profile"):
+        if not rest:
+            return ["set", "service-profile"]
+        if len(rest) == 1:
+            return ["create", "service-profile", rest[0]]
+        return ["set", "service-profile"] + rest
+
+    if path == ("set", "access-rule"):
+        if not rest:
+            return ["set", "access-rule"]
+        if len(rest) == 1:
+            return ["create", "access-list", rest[0]]
+        return ["set", "access-list"] + rest
+
+    if path == ("set", "access-source"):
+        return ["add", "access-source"] + rest if rest else ["set", "access-source"]
+
+    if path == ("set", "service-access"):
+        return ["set", "access-assign"] + rest
+
+    if path == ("unset", "service-access"):
+        return ["set", "access-public"] + rest
+
+    if path == ("set", "internet-profile"):
+        if not rest:
+            return ["set", "internet-profile"]
+        if len(rest) == 1:
+            return ["create", "egress-profile", rest[0]]
+        if len(rest) >= 2 and rest[1] == "enabled":
+            return ["enable", "egress-profile", rest[0]] + rest[2:]
+        if len(rest) >= 3 and rest[1] == "template":
+            # egress recipe apply <TEMPLATE> --name <NEW_PROFILE>
+            return ["egress", "recipe", "apply", rest[2], "--name", rest[0]] + rest[3:]
+        if len(rest) >= 3 and rest[1] in ("name", "description"):
+            return ["set", "egress-profile"] + rest
+        return ["set", "egress-profile"] + rest
+
+    if path == ("set", "internet-source"):
+        if len(rest) >= 2:
+            return ["add", "egress-source", rest[0], rest[1]] + rest[2:]
+        return ["add", "egress-source"] + rest
+
+    if path == ("set", "internet-destination"):
+        if len(rest) >= 4:
+            # PROFILE FQDN PORT PROTOCOL → add egress-destination shape
+            return ["add", "egress-destination", rest[0], rest[1], rest[2], rest[3]] + rest[4:]
+        return ["add", "egress-destination"] + rest
+
+    if path == ("set", "fixed-tcp"):
+        if not rest:
+            return ["set", "fixed-tcp"]
+        if len(rest) == 1:
+            return ["create", "egress-tcp", rest[0]]
+        if len(rest) >= 2 and rest[1] == "enabled":
+            return ["enable", "egress-tcp", rest[0]] + rest[2:]
+        return ["create", "egress-tcp"] + rest
+
+    if path == ("set", "server"):
+        if not rest:
+            return ["set", "server"]
+        if rest[0] == "installer-url":
+            return ["set", "installer-url"] + rest[1:]
+        if rest[0] == "windows-installer-url":
+            return ["set", "windows-installer-url"] + rest[1:]
+        return ["set", "server"] + rest
+
+    if path == ("set", "service"):
+        if not rest:
+            return ["add", "service"]
+        if len(rest) >= 2 and rest[1] == "enabled":
+            return ["enable", "service", rest[0]] + rest[2:]
+        return ["set", "service"] + rest
+
+    if path == ("unset", "service"):
+        # Only enabled is supported publicly
+        if len(rest) >= 2 and rest[1] == "enabled":
+            return ["disable", "service", rest[0]] + rest[2:]
+        return ["disable", "service"] + rest
+
+    if path == ("unset", "group"):
+        return ["delete", "group"] + rest
+
+    if path == ("unset", "enrollment"):
+        # State-aware handling is done in the match/dispatch layer.
+        return ["unset", "enrollment"] + rest
+
+    if path == ("unset", "service-profile"):
+        return ["delete", "service-profile"] + rest
+
+    if path == ("unset", "access-rule"):
+        return ["delete", "access-list"] + rest
+
+    if path == ("unset", "access-source"):
+        return ["remove", "access-source"] + rest
+
+    if path == ("unset", "internet-profile"):
+        if len(rest) >= 2 and rest[1] == "enabled":
+            return ["disable", "egress-profile", rest[0]] + rest[2:]
+        return ["delete", "egress-profile"] + rest
+
+    if path == ("unset", "internet-source"):
+        return ["remove", "egress-source"] + rest
+
+    if path == ("unset", "internet-destination"):
+        return ["remove", "egress-destination"] + rest
+
+    if path == ("unset", "fixed-tcp"):
+        if len(rest) >= 2 and rest[1] == "enabled":
+            return ["disable", "egress-tcp", rest[0]] + rest[2:]
+        return ["delete", "egress-tcp"] + rest
+
+    if path == ("unset", "server"):
+        return ["unset", "server"] + rest
+
+    if path == ("show", "access-rules"):
+        return ["show", "access-lists"] + rest
+    if path == ("show", "access-rule"):
+        return ["show", "access-list"] + rest
+    if path == ("show", "internet"):
+        return ["show", "egress"] + rest
+    if path == ("show", "internet-profiles"):
+        return ["show", "egress-profiles"] + rest
+    if path == ("show", "internet-profile"):
+        return ["show", "egress-profile"] + rest
+    if path == ("show", "internet-templates"):
+        return ["egress", "recipe", "list"] + rest
+    if path == ("show", "internet-template"):
+        return ["egress", "recipe", "show"] + rest
+    if path == ("show", "fixed-tcp"):
+        if rest:
+            return ["egress", "tcp", "show"] + rest
+        return ["egress", "tcp", "list"]
+
+    if path == ("test", "internet"):
+        return ["explain", "egress"] + rest
+    if path == ("test", "fixed-tcp"):
+        return ["explain", "egress-tcp"] + rest
+    if path == ("test", "access"):
+        return ["test", "access"] + rest
+
+    if path == ("system", "version"):
+        return ["show", "version"] + rest
+    if path == ("system", "server-status"):
+        return ["show", "server-status"] + rest
+    if path == ("system", "info"):
+        return ["show", "info"] + rest
+    if path == ("system", "backup"):
+        return ["create", "backup"] + rest
+    if path == ("system", "restore"):
+        return ["restore", "backup"] + rest
+    if path == ("system", "update", "product"):
+        return ["update", "product"] + rest
+    if path == ("system", "update", "engine"):
+        return ["update", "engine"] + rest
+    if path == ("system", "update", "check-engine"):
+        return ["show", "upstream"] + rest
+    if path == ("system", "diagnostics"):
+        return ["doctor"] + rest
+    if path == ("system", "support-bundle"):
+        return ["create", "support-bundle"] + rest
+    if path == ("system", "audit"):
+        return ["show", "audit"] + rest
+    if path == ("system", "export", "internet-profile"):
+        return ["export", "egress"] + rest
+    if path == ("system", "import", "internet-profile"):
+        return ["import", "egress"] + rest
+    if path == ("system", "diff", "internet-profile"):
+        return ["diff", "egress"] + rest
+    if path == ("system", "cleanup", "access-rule"):
+        # system cleanup access-rule <RULE> expired
+        if rest and rest[-1] == "expired":
+            return ["remove", "access-expired"] + rest[:-1]
+        return ["remove", "access-expired"] + rest
+    if path == ("system", "services", "apply"):
+        return ["apply"] + rest
+    if path == ("system", "services", "discard"):
+        return ["discard"] + rest
+    if path == ("system", "services", "sync"):
+        return ["sync"] + rest
+    if path == ("system", "history"):
+        return ["history"] + rest
+    if path == ("system", "clear"):
+        return ["clear"] + rest
+
     # Compat rewrites still keyed by historical resource-first paths.
     for alias in cmd.get("aliases") or ():
         rewrite = REWRITES.get(tuple(alias))
-        if rewrite is not None and tuple(alias) == tuple(tokens[: len(alias)]):
+        if rewrite is not None and tuple(tokens[: len(alias)]) == tuple(alias):
             return rewrite(list(tokens[len(alias) :]))
     rewrite = REWRITES.get(path)
     if rewrite is not None:
         return rewrite(rest)
-    # Special public action-first forms that need dispatcher-shaped tokens.
-    # Incomplete forms stay on the public path so grammar can launch guided UX.
-    if path == ("add", "egress-destination"):
-        if len(rest) >= 3:
-            return ["add", "egress-profile", rest[0], "destination", rest[1], rest[2]] + rest[3:]
-        return list(path) + rest
-    if path == ("add", "egress-source"):
-        if len(rest) >= 2:
-            return ["add", "egress-profile", rest[0], "source", rest[1]] + rest[2:]
-        return list(path) + rest
-    if path == ("remove", "egress-destination"):
-        if len(rest) >= 2:
-            return ["remove", "egress-profile", rest[0], "destination", rest[1]] + rest[2:]
-        return list(path) + rest
-    if path == ("remove", "egress-source"):
-        if len(rest) >= 2:
-            return ["remove", "egress-profile", rest[0], "source", rest[1]] + rest[2:]
-        return list(path) + rest
+    rewrite = REWRITES.get(tuple(cmd.get("internal") or ()))
+    if rewrite is not None and cmd.get("internal"):
+        return rewrite(rest)
+
+    # Legacy specials retained for absorbed forms that still appear as internal.
     if path == ("release", "client") and len(rest) >= 2:
         return ["release", "service", rest[0], rest[1]] + rest[2:]
     if path == ("delete", "enrollment") and rest and rest[0] == "--older-than":
         return ["purge", "enrollments"] + list(rest)
-    # add|remove client <CLIENT> group <GROUP> → dispatcher member tokens
-    if path in (("add", "client"), ("remove", "client")):
-        if len(rest) >= 3 and rest[1] == "group":
-            return [path[0], "client", rest[0], "group", rest[2]] + rest[3:]
-        return list(path) + rest
+
     internal = cmd["internal"]
     if internal is None:
         return list(path) + rest
     return list(internal) + rest
+
 
 
 def expand_compat_alias(tokens):
@@ -2717,132 +2681,65 @@ def _fmt_rows(rows, indent="  "):
 
 
 def root_help(role):
-    """Domain-oriented root help (same mental model as bare '?')."""
-    return domain_overview(role, detailed=True)
+    """Root help — same mental model as bare '?'."""
+    return root_command_overview(role, detailed=True)
 
 
 def concise_root(role):
-    """Short root listing used by a bare '?' — product domains, not actions."""
-    return domain_overview(role, detailed=False)
+    """Short root listing used by bare '?'."""
+    return root_command_overview(role, detailed=False)
 
 
 def domain_overview(role, detailed=False):
-    """Beginner/operator work-area overview for help / '?'."""
+    """Compatibility alias for root_command_overview."""
+    return root_command_overview(role, detailed=detailed)
+
+
+def root_command_overview(role, detailed=False):
+    """Final public root command overview for help / '?'."""
     client, server = role_parts(role)
     lines = [
         "Data Relay Link",
         "===============",
         "",
     ]
+    rows = []
+    for name, summary in root_rows(role):
+        rows.append((name, summary))
+    # Render each root with its summary and discovery tip for primary verbs.
+    tip_roots = {"show", "set", "unset", "test", "system"}
+    for name, summary in rows:
+        lines.append(name)
+        if summary:
+            lines.append("  %s" % summary)
+        if name in tip_roots:
+            lines.append("  Type: %s ?" % name)
+        lines.append("")
+    lines.extend(
+        [
+            "Tip:",
+            '  Type "<command> ?" or press Tab to see valid next choices.',
+            "",
+        ]
+    )
     if detailed:
         lines.extend(
             [
-                "Direct commands use action-first grammar:",
-                "  <action> <resource> [target] [value]",
-                "",
-                "Interactive navigation is organized by task domain,",
-                "not by parser verbs. Type 'menu' for guided navigation.",
-                "",
-            ]
-        )
-    lines.append("Work areas")
-    lines.append("")
-    if server:
-        lines.extend(
-            [
-                "  Clients",
-                "    Connect and manage client machines",
-                "",
-                "  Services",
-                "    View published services and control who can reach them",
-                "",
-                "  Internet Access",
-                "    Allow clients to reach approved Internet destinations",
-                "",
-                "  System",
-                "    Status, settings, backup, updates and diagnostics",
-                "",
-            ]
-        )
-    elif client:
-        lines.extend(
-            [
-                "  Services",
-                "    Configure services published from this machine",
-                "",
-                "  System",
-                "    Status, connection information, updates and diagnostics",
-                "",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "  (install a Data Relay Link server or client to see work areas)",
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            "Guided navigation:",
-            "  menu",
-            "",
-            "Quick commands:",
-        ]
-    )
-    if server:
-        lines.extend(
-            [
-                "  show status",
-                "  show clients",
-                "  show services",
-                "  create zero-touch",
-                "  doctor",
-            ]
-        )
-    elif client:
-        lines.extend(
-            [
-                "  show status",
-                "  show services",
-                "  apply",
-                "  doctor",
-            ]
-        )
-    else:
-        lines.append("  help")
-    lines.extend(["", "Help:"])
-    if server:
-        lines.extend(
-            [
+                "Help topics:",
                 "  help clients",
                 "  help services",
                 "  help internet",
                 "  help system",
                 "  help commands",
-            ]
-        )
-    elif client:
-        lines.extend(
-            [
-                "  help services",
-                "  help system",
-                "  help commands",
-            ]
-        )
-    else:
-        lines.append("  help commands")
-    if detailed:
-        lines.extend(
-            [
+                "  help workflows",
+                "  help legacy",
                 "",
-                "Also: help workflows · help legacy",
-                "",
-                "Official upstream FRP binaries are frps (server) and frpc (client).",
+                "Relay Engine (FRP) is the upstream tunnel engine.",
                 "This project does not fork FRP.",
+                "",
             ]
         )
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
 def domain_help(topic, role):
@@ -2858,7 +2755,7 @@ def domain_help(topic, role):
             "Clients are enrolled machines managed by this server.\n\n"
             "Guided path:\n"
             "  menu → Clients\n\n"
-            "  1) Connect a new client   (create zero-touch)\n"
+            "  1) Connect a new client   (set client)\n"
             "  2) List clients          (show clients)\n"
             "  3) View or manage a client\n"
             "  4) Groups\n"
@@ -2866,10 +2763,10 @@ def domain_help(topic, role):
             "Everyday commands:\n"
             "  show clients\n"
             "  show client <CLIENT-ID>\n"
-            "  create zero-touch\n"
+            "  set client\n"
             "  set client <CLIENT-ID> label <value>\n"
-            "  revoke client <CLIENT-ID>\n"
-            "  release client <CLIENT-ID>\n\n"
+            "  unset client <CLIENT> trust <CLIENT-ID>\n"
+            "  unset client <CLIENT> <CLIENT-ID>\n\n"
             "CLIENT ID is the immutable selector. Labels and hostnames are\n"
             "convenient display shortcuts when unique.\n"
         )
@@ -2891,9 +2788,9 @@ def domain_help(topic, role):
                 "Everyday commands:\n"
                 "  show services\n"
                 "  show client <CLIENT-ID> services\n"
-                "  create access-list <NAME>\n"
+                "  set access-rule <NAME>\n"
                 "  create service-profile <NAME>\n"
-                "  release service <CLIENT-ID> <SERVICE-ID>\n"
+                "  unset client <CLIENT> service <SERVICE> <CLIENT-ID> <SERVICE-ID>\n"
             )
         if client:
             return (
@@ -2932,11 +2829,11 @@ def domain_help(topic, role):
             "  Check policy   (policy + DNS; not a live connection test)\n\n"
             "Everyday commands:\n"
             "  show egress\n"
-            "  show egress-profiles\n"
-            "  create egress-profile <NAME>\n"
-            "  explain egress\n"
-            "  show egress-tcp\n"
-            "  show egress-recipes\n"
+            "  show internet-profiles\n"
+            "  set internet-profile <NAME>\n"
+            "  test internet\n"
+            "  show fixed-tcp\n"
+            "  show internet-templates\n"
         )
     if topic in ("system", "operate"):
         lines = [
@@ -2951,18 +2848,18 @@ def domain_help(topic, role):
             "",
             "Everyday commands:",
             "  show status",
-            "  show version",
-            "  doctor",
-            "  create support-bundle",
-            "  update product",
-            "  update engine",
+            "  system version",
+            "  system diagnostics",
+            "  system support-bundle",
+            "  system update product",
+            "  system update engine",
         ]
         if server:
             lines.extend(
                 [
-                    "  create backup",
-                    "  restore backup <PATH>",
-                    "  show audit",
+                    "  system backup",
+                    "  system restore <PATH>",
+                    "  system audit",
                     "  set server public-hostname <FQDN>",
                     "  set server bootstrap-hostname <FQDN>",
                 ]
@@ -2970,7 +2867,7 @@ def domain_help(topic, role):
         elif client:
             lines.extend(
                 [
-                    "  show info",
+                    "  system info",
                 ]
             )
         return "\n".join(lines) + "\n"
@@ -3188,12 +3085,17 @@ def workflow_help(role):
 
 def legacy_help(role):
     lines = [
-        "Compatibility aliases",
-        "=====================",
+        "Legacy compatibility commands",
+        "=============================",
         "",
-        "These older resource-first commands still run for scripts.",
-        "Root help, Tab discovery, and the guided menu show the",
-        "canonical action-first form only.",
+        "These forms are accepted only for backward compatibility.",
+        "",
+        "Do not use them for new interactive operation, documentation, or scripts.",
+        "",
+        "Use:",
+        "  help commands",
+        "",
+        "for the current Data Relay Link command grammar.",
         "",
     ]
     rows = []
@@ -3202,19 +3104,20 @@ def legacy_help(role):
         if not role_allows(cmd["roles"], role):
             continue
         for alias in cmd["aliases"]:
-            text = " ".join(alias)
-            if text in seen:
+            text_alias = " ".join(alias)
+            if text_alias in seen:
                 continue
-            seen.add(text)
-            rows.append((text, " ".join(cmd["path"])))
+            seen.add(text_alias)
+            rows.append((text_alias, " ".join(cmd["path"])))
     lines.extend(_fmt_rows(rows))
     lines.extend(
         [
             "",
             "Also accepted: client-status, manage, revoke <ID>, restore <PATH>.",
+            "",
         ]
     )
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
 def parity_paths(role):

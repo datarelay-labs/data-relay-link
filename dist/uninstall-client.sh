@@ -388,7 +388,7 @@ if [[ -d "$libdir" && ! -L "$libdir" ]]; then
   if [[ "$SERVER_PRESENT" != "1" ]]; then
     for f in frp-common.sh frp_mgmt_auth.py frp_health_check.py \
       frp-doctor-common.sh frp_doctor.py frp_support_bundle.py frp_ctl_grammar.py \
-      frp_cli_catalog.py frp_ctl_repl.py frp-role-ownership.sh frpctl; do
+      frp_cli_catalog.py frp_cli_final_commands.json frp_ctl_repl.py frp-role-ownership.sh frpctl; do
       frp_u_rm_file "${libdir}/${f}"
     done
   fi

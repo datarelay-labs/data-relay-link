@@ -8,7 +8,7 @@
 > **Current release:** Project `2.4.0` / FRP `0.71.0` — release candidate (historical `v2.3.1` / `v2.3.0` / `v2.2.x` untouched)
 > **Release commit:** _(set when the `v2.4.0` tag is created)_
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
-> **Primary management interface:** `sudo drlink` (action-first CLI; catalog-owned)
+> **Primary management interface:** `sudo drlink` (canonical CLI; catalog-owned)
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
 > **Controlled Egress default listen port:** `6102` (outside published service pool `6000–6098`)
 > **Fixed TCP Egress listen pool:** `6200–6299`
@@ -36,7 +36,7 @@
 - Zero-Touch Short URL은 Option B(operator-owned reverse proxy + optional `bootstrap_hostname`) 모델로 `v2.1.3`에 stable 도입됐다.
 - `public_hostname`은 published service용 optional user-facing alias이며 control identity가 아니다.
 - Group은 몇십 대 관리를 위한 **Simple Manual Group + multiple membership + Tags + basic filters** 범위가 기준이다.
-- Canonical operator CLI는 **action-first** (`drlink <action> <resource> …`). 구 resource-first (`client list`, `enrollment create`, …)는 hidden compatibility alias로만 유지한다.
+- Canonical operator CLI는 **canonical** (`drlink <action> <resource> …`). 구 resource-first (`client list`, `enrollment create`, …)는 hidden compatibility alias로만 유지한다.
 - macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.x` validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
 
 ---
@@ -845,7 +845,7 @@ Client registry record 유지
 
 ```text
 disable != release
-release service != release client
+unset client != release client
 release != revoke
 revoke != delete
 ```
@@ -867,7 +867,7 @@ Client uninstall 역시 Server reservation을 자동으로 release하지 않는�
 ```text
 Server
   ↓
-create enrollment / Zero-Touch profile
+set enrollment / Zero-Touch profile
   ↓
 Short-lived bootstrap ticket
   ↓
@@ -1182,7 +1182,7 @@ into one flat list of parser verbs.
 drlink <action> <resource> [target] [value]
 ```
 
-Examples: `show clients`, `create zero-touch`, `revoke enrollment <ID>`.
+Examples: `show clients`, `set client`, `unset enrollment <ID>`.
 
 ### Interactive guided navigation (human)
 
@@ -1224,7 +1224,7 @@ hidden compatibility aliases (`help legacy`).
 Future changes must not flatten root navigation back into parser actions
 (`show` / `create` / `set` / … as the beginner root).
 
-## 18.1 Current canonical grammar (v2.4.0) — action-first
+## 18.1 Current canonical grammar (v2.4.0) — canonical
 
 Canonical operator grammar:
 
@@ -1238,7 +1238,7 @@ all derived from that catalog. Hidden compatibility aliases exist for scripts
 but are not advertised.
 
 The guided menu uses `NAVIGATION_TREE` (task domains). `COMMANDS` remains the
-action-first scriptable grammar. They are related but not the same structure.
+canonical scriptable grammar. They are related but not the same structure.
 
 Examples (current):
 
@@ -1247,32 +1247,32 @@ show clients
 show client 24cd7856
 set client 24cd7856 label branch-a
 
-create zero-touch
-create enrollment
-revoke client 24cd7856
-release client 24cd7856
-release service 24cd7856 ssh
-delete enrollment 0011223344556677
+set client
+set enrollment
+unset client 24cd7856
+unset client 24cd7856
+unset client 24cd7856 ssh
+unset enrollment 0011223344556677
 
 show groups
 add client 24cd7856 group edge
 set group edge description "Edge sites"
 
-show egress-profiles
-create egress-profile vendor-api
+show internet-profiles
+set internet-profile vendor-api
 add egress-source vendor-api
 add egress-destination vendor-api
 test egress
 enable egress-profile vendor-api
 
-doctor
-update product
+system diagnostics
+system update product
 ```
 
 Safe Controlled Egress workflow (create is always DISABLED):
 
 ```text
-create egress-profile <name>
+set internet-profile <name>
 → add egress-source …
 → add egress-destination …
 → test egress …
@@ -1670,7 +1670,7 @@ show client <CLIENT-ID> groups
 show groups
 show group customer-acme
 show clients --group customer-acme
-create group customer-acme
+set group customer-acme
 set group customer-acme description "ACME customer systems"
 add client 24cd7856 group customer-acme
 remove client 24cd7856 group customer-acme
@@ -1688,7 +1688,7 @@ Dynamic Group CLI는 현재 제품의 필수 구현 요구사항이 아니다.
 장기 후보 예:
 
 ```text
-create group prod-seoul \
+set group prod-seoul \
   --dynamic \
   --match-tag env=prod \
   --match-tag site=seoul
@@ -1750,7 +1750,7 @@ Manual Group CRUD
 향후 필요 시:
 
 ```text
-create enrollment --group customer-acme
+set enrollment --group customer-acme
 ```
 
 같은 server-owned assignment를 추가할 수 있다. Client가 privileged Group metadata를 self-assign해서는 안 된다.
@@ -2004,7 +2004,7 @@ archive validation
 snapshot
 restore
 service restart
-doctor
+system diagnostics
 rollback on failure
 ```
 
@@ -2053,7 +2053,7 @@ drlink egress status
 Project update와 upstream FRP update를 구분한다.
 
 ```text
-update product
+system update product
 update frp
 ```
 
@@ -2731,7 +2731,7 @@ Historical line  = v2.3.0 FINAL AUDIT CLOSURE (published; immutable)
 - Target Health Check (CLIENT / TUNNEL / TARGET)
 - Support Bundle (sanitized diagnostics)
 - Service Profiles (server-owned creation templates)
-- canonical `drlink` action-first grammar / REPL hardening (`frpctl` remains the internal binary name)
+- canonical `drlink` canonical grammar / REPL hardening (`frpctl` remains the internal binary name)
 - GNU Readline + macOS libedit completion portability
 - Client ID selector hardening
 - `public_hostname` alias

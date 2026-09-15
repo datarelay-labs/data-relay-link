@@ -40,9 +40,15 @@ import frp_ctl_grammar as g
 print(g.help_text([], "server"))
 PY
 )"
-echo "$HELP" | grep -q 'Work areas' || fail "root help missing work areas"
-echo "$HELP" | grep -q 'Clients' || fail "root help missing Clients"
-echo "$HELP" | grep -q 'Internet Access' || fail "root help missing Internet Access"
+echo "$HELP" | grep -q '^show$' || fail "root help missing show"
+echo "$HELP" | grep -q '^set$' || fail "root help missing set"
+echo "$HELP" | grep -q 'unset' || fail "root help missing unset"
+echo "$HELP" | grep -q 'system' || fail "root help missing system"
+echo "$(python3 - <<'PY'
+import frp_ctl_grammar as g
+print(g.help_text(["internet"], "server"))
+PY
+)" | grep -qi 'Internet Access' || fail "help internet missing Internet Access"
 echo "$HELP" | grep -q 'help commands' || fail "root help missing help commands"
 ! echo "$HELP" | grep -qE '^[[:space:]]*client[[:space:]]' || fail "root help advertises client"
 ! echo "$HELP" | grep -qE '^[[:space:]]*enrollment[[:space:]]' || fail "root help advertises enrollment"
@@ -61,17 +67,17 @@ PY
 echo "$SHOW_CANDS" | grep -qx 'client' || fail "show tree missing client"
 echo "$SHOW_CANDS" | grep -qx 'clients' || fail "show tree missing clients"
 echo "$SHOW_CANDS" | grep -qx 'status' || fail "show tree missing status"
-CREATE_CANDS="$(python3 - <<'PY'
+SET_CANDS="$(python3 - <<'PY'
 import sys; sys.path.insert(0,"lib")
 import frp_ctl_grammar as g
-print("\n".join(g.completion_candidates("create ", "server", [], {}, [], trailing=True)))
+print("\n".join(g.completion_candidates("set ", "server", [], {}, [], trailing=True)))
 PY
 )"
-echo "$CREATE_CANDS" | grep -qx 'zero-touch' || fail "create tree missing zero-touch"
-echo "$CREATE_CANDS" | grep -qx 'enrollment' || fail "create tree missing enrollment"
-echo "$CREATE_CANDS" | grep -qx 'support-bundle' || fail "create tree missing support-bundle"
+echo "$SET_CANDS" | grep -qx 'client' || fail "set tree missing client"
+echo "$SET_CANDS" | grep -qx 'enrollment' || fail "set tree missing enrollment"
+echo "$SET_CANDS" | grep -qx 'server' || fail "set tree missing server"
 pass SHOW_TREE
-pass CREATE_TREE
+pass SET_TREE
 
 # --- NO_PUBLIC_RESOURCE_FIRST_ADVERTISEMENT ---
 MENU="$(python3 - <<'PY'
@@ -146,10 +152,9 @@ pass TAB_ACTION_FIRST
 pass TAB_CLIENT_IDS
 
 # --- CONTEXT_HELP_ACTION_FIRST ---
-CTX="$(grammar 'release ?')"
-echo "$CTX" | grep -q 'release client' || fail "context help missing release client"
-echo "$CTX" | grep -q 'release service' || fail "context help missing release service"
-! echo "$CTX" | grep -q 'client release' || fail "context help advertises resource-first"
+CTX="$(grammar 'unset ?')"
+echo "$CTX" | grep -q 'client' || fail "context help missing unset client"
+echo "$CTX" | grep -qi 'Available' || fail "context help missing Available"
 pass CONTEXT_HELP_ACTION_FIRST
 
 # --- ROLE_FILTERING ---
@@ -160,17 +165,17 @@ print("\n".join(c.roots_for_role("client")))
 PY
 )"
 echo "$CLIENT_ROOTS" | grep -qx 'show' || fail "client role missing show"
-echo "$CLIENT_ROOTS" | grep -qx 'create' || fail "client role missing create (support-bundle)"
+echo "$CLIENT_ROOTS" | grep -qx 'system' || fail "client role missing system"
+! echo "$CLIENT_ROOTS" | grep -qx 'create' || fail "client role leaked create"
 ! echo "$CLIENT_ROOTS" | grep -qx 'revoke' || fail "client role still sees revoke"
-CLIENT_CREATE="$(python3 - <<'PY'
+CLIENT_SYSTEM="$(python3 - <<'PY'
 import sys; sys.path.insert(0,"lib")
 import frp_ctl_grammar as g
-print("\n".join(g.completion_candidates("create ", "client", [], {}, [], trailing=True)))
+print("\n".join(g.completion_candidates("system ", "client", [], {}, [], trailing=True)))
 PY
 )"
-echo "$CLIENT_CREATE" | grep -qx 'support-bundle' || fail "client create missing support-bundle"
-! echo "$CLIENT_CREATE" | grep -qx 'enrollment' || fail "client create still offers enrollment"
-! echo "$CLIENT_CREATE" | grep -qx 'zero-touch' || fail "client create still offers zero-touch"
+echo "$CLIENT_SYSTEM" | grep -qx 'support-bundle' || fail "client system missing support-bundle"
+! echo "$CLIENT_SYSTEM" | grep -qx 'backup' || fail "client system leaked server backup"
 pass ROLE_FILTERING
 
 # --- INCOMPLETE_COMMAND_HELP ---
@@ -190,7 +195,7 @@ assert_json_field "$R3" action purge_enrollment
 pass REVOKE_RELEASE_DELETE_DISTINCT
 
 # --- GUIDED_ZERO_TOUCH / GUIDED_ENROLLMENT ---
-ZT="$(grammar 'create zero-touch')"
+ZT="$(grammar 'set client')"
 EN="$(grammar 'create enrollment')"
 assert_json_field "$ZT" action create_zero_touch
 assert_json_field "$EN" action create_enrollment

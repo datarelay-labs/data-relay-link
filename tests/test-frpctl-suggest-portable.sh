@@ -21,6 +21,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/usr/local/lib/drlink" "$tmp/usr/local/sbin"
 cp "$ROOT/lib/frp_ctl_grammar.py" "$tmp/usr/local/lib/drlink/"
 cp "$ROOT/lib/frp_cli_catalog.py" "$tmp/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_cli_final_commands.json" "$tmp/usr/local/lib/drlink/"
 # Minimal frpctl fragment: call suggest helper if present by sourcing is heavy;
 # instead verify module path used by frpctl_grammar_py pattern.
 python3 "$tmp/usr/local/lib/drlink/frp_ctl_grammar.py" suggest statu <<EOF | grep -qx status

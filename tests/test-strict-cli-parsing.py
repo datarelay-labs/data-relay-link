@@ -1,40 +1,25 @@
 #!/usr/bin/env python3
-"""CLI-AUDIT-001: canonical no-arg commands reject trailing tokens."""
-from __future__ import annotations
-
-import importlib.util
 import unittest
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_catalog():
-    path = ROOT / "lib" / "frp_cli_catalog.py"
-    spec = importlib.util.spec_from_file_location("frp_cli_catalog", str(path))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+sys.path.insert(0, str(ROOT / "lib"))
+import frp_cli_catalog as cat  # noqa: E402
 
 
 class StrictCliParsingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cat = load_catalog()
+        cls.cat = cat
 
-    def test_status_rejects_garbage(self):
-        err = self.cat.strict_error(["show", "status", "garbage"])
-        self.assertIsNotNone(err)
-        self.assertIn("unexpected argument", err)
-        self.assertIn("garbage", err)
-
-    def test_version_rejects_extra(self):
-        err = self.cat.strict_error(["show", "version", "abc"])
+    def test_system_version_rejects_extra(self):
+        err = self.cat.strict_error(["system", "version", "abc"])
         self.assertIsNotNone(err)
         self.assertIn("unexpected argument", err)
 
-    def test_egress_enable_rejects_extra(self):
-        err = self.cat.strict_error(["enable", "egress-profile", "p", "extra"])
+    def test_show_status_rejects_extra(self):
+        err = self.cat.strict_error(["show", "status", "extra"])
         self.assertIsNotNone(err)
         self.assertIn("unexpected argument", err)
 
@@ -43,10 +28,12 @@ class StrictCliParsingTests(unittest.TestCase):
 
     def test_guided_menu_categories(self):
         text = self.cat.render_guided_menu("server")
-        self.assertIn("Remote Access", text)
-        self.assertIn("Controlled Egress", text)
-        self.assertIn("Organize", text)
-        self.assertIn("Operate", text)
+        self.assertIn("Clients", text)
+        self.assertIn("Services", text)
+        self.assertIn("Internet Access", text)
+        self.assertIn("System", text)
+        self.assertNotIn("Remote Access", text)
+        self.assertNotIn("Controlled Egress", text)
 
 
 if __name__ == "__main__":

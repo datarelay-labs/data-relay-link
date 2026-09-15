@@ -41,6 +41,7 @@ for f in \
   "$BASE_DIR/lib/frp_support_bundle.py" \
   "$BASE_DIR/lib/frp_ctl_grammar.py" \
   "$BASE_DIR/lib/frp_cli_catalog.py" \
+  "$BASE_DIR/lib/frp_cli_final_commands.json" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
   "$BASE_DIR/lib/frp_machine_id.py" \
   "$BASE_DIR/lib/frp_bounded_server.py" \
@@ -2733,17 +2734,17 @@ Everyday management (start here):
   Then type help or ? inside the CLI.
 
 Enroll the first client (Zero-Touch preferred):
-  sudo drlink create zero-touch
+  sudo drlink set client
   # or: sudo drlink create enrollment
 
 Useful checks:
   sudo drlink show status
-  sudo drlink doctor
+  sudo drlink system diagnostics
   sudo drlink show clients
   sudo drlink help
 
 Backup:
-  sudo drlink create backup
+  sudo drlink system backup
 
 ============================================================
 EOF2
