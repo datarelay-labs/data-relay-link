@@ -126,9 +126,9 @@ pass "CREATE_ZERO_TOUCH_CONTEXT_HELP"
 
 # --- Guided: SSH only ---
 run_repl "$SERVER" "$WORKDIR/zt-ssh.out" \
-  "create zero-touch" 1 1 office-ssh "Seoul office" aella 22 exit \
+  "create zero-touch" 1 office-ssh "Seoul office" 1 aella 22 exit \
   || fail "zero-touch ssh guided"
-grep -qiE 'Zero-Touch|Guided Zero-Touch|zero-touch' "$WORKDIR/zt-ssh.out" || fail "zero-touch heading"
+grep -qiE 'Connect a new client|Client details|zero-touch' "$WORKDIR/zt-ssh.out" || fail "zero-touch heading"
 grep -q '1) SSH only' "$WORKDIR/zt-ssh.out" || fail "ssh only option"
 grep -q 'DISPATCH frp-create-client --platform linux --one-line --ssh --ssh-user aella --ssh-port 22 --client-name office-ssh --note Seoul office' \
   "$WORKDIR/zt-ssh.out" || fail "ssh only dispatch"
@@ -136,41 +136,47 @@ pass "ZERO_TOUCH_SSH_GUIDED"
 
 # --- Guided: Windows RDP custom TCP preset ---
 run_repl "$SERVER" "$WORKDIR/zt-rdp.out" \
-  "create zero-touch" 2 1 office-rdp "Windows desktop" 3389 exit \
+  "create zero-touch" 2 office-rdp "Windows desktop" 1 3389 exit \
   || fail "zero-touch Windows RDP guided"
-grep -qiE 'Windows|Zero-touch|Zero-Touch|RDP' "$WORKDIR/zt-rdp.out" \
+grep -qiE 'Windows|Connect a new client|RDP|Client details' "$WORKDIR/zt-rdp.out" \
   || fail "Windows platform menu"
 grep -q 'DISPATCH frp-create-client --platform windows --one-line --rdp --rdp-port 3389 --client-name office-rdp --note Windows desktop' \
   "$WORKDIR/zt-rdp.out" || fail "Windows RDP dispatch"
 pass "ZERO_TOUCH_WINDOWS_RDP_GUIDED"
 
-# --- Guided menu exposes management-only briefly (goal first) ---
+# --- Guided menu: management-only initial onboarding removed ---
 run_repl "$SERVER" "$WORKDIR/zt-mgmt-menu.out" \
-  "create zero-touch" 1 4 exit \
+  "create zero-touch" 1 zt-back "optional note" 3 exit \
   || fail "zero-touch back option"
 grep -q '1) SSH only' "$WORKDIR/zt-mgmt-menu.out" || fail "ssh only option missing"
-grep -q '2) Configure services' "$WORKDIR/zt-mgmt-menu.out" || fail "configure services option missing"
-grep -q 'Connect this machine only' "$WORKDIR/zt-mgmt-menu.out" || fail "management-only option missing"
-grep -q '4) Back' "$WORKDIR/zt-mgmt-menu.out" || fail "back option missing"
+grep -q '2) Choose services' "$WORKDIR/zt-mgmt-menu.out" || fail "choose services option missing"
+grep -q '3) Back' "$WORKDIR/zt-mgmt-menu.out" || fail "back option missing"
+! grep -q 'Connect this machine only' "$WORKDIR/zt-mgmt-menu.out" \
+  || fail "management-only option must be removed from initial onboarding"
+! grep -qi 'management-only' "$WORKDIR/zt-mgmt-menu.out" \
+  || fail "management-only wording must not appear in guided zero-touch"
 if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/zt-mgmt-menu.out"; then
   fail "Back unexpectedly dispatched zero-touch enrollment"
 fi
-run_repl "$SERVER" "$WORKDIR/zt-mgmt-dispatch.out" \
-  "create zero-touch" 1 3 mgmt-client "inventory only" exit \
-  || fail "management-only guided dispatch"
-grep -q 'DISPATCH frp-create-client' "$WORKDIR/zt-mgmt-dispatch.out" \
-  || fail "management-only dispatch missing"
-grep -qF -- '--client-name mgmt-client' "$WORKDIR/zt-mgmt-dispatch.out" \
-  || fail "management-only client-name"
-grep -qF -- '--note inventory only' "$WORKDIR/zt-mgmt-dispatch.out" \
-  || fail "management-only note"
-grep -qF -- '--one-line' "$WORKDIR/zt-mgmt-dispatch.out" \
-  || fail "management-only one-line"
-pass "ZERO_TOUCH_MANAGEMENT_ONLY_DISCOVERABLE"
+# Blank description accepted without a second Client details prompt.
+run_repl "$SERVER" "$WORKDIR/zt-blank-note.out" \
+  "create zero-touch" 1 blank-desc "" 1 aella 22 exit \
+  || fail "blank description guided"
+ident_count="$(grep -c 'Client details' "$WORKDIR/zt-blank-note.out" || true)"
+[[ "$ident_count" == "1" ]] || fail "CLIENT_IDENTIFICATION_PROMPT_COUNT expected 1 got $ident_count"
+! grep -q 'Client identification' "$WORKDIR/zt-blank-note.out" \
+  || fail "stale Client identification heading"
+grep -qF -- '--client-name blank-desc' "$WORKDIR/zt-blank-note.out" \
+  || fail "blank description missing client-name"
+grep -qF -- '--note' "$WORKDIR/zt-blank-note.out" \
+  || fail "blank description must still pass --note"
+pass "MANAGEMENT_ONLY_INITIAL_ONBOARDING_REMOVED"
+pass "ZERO_TOUCH_SINGLE_IDENTIFICATION_PROMPT"
 
 # --- Guided: multi-service SSH+HTTP ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-http.out" \
-  "create zero-touch" 1 2 multi-http "" \
+  "create zero-touch" 1 multi-http "" \
+  2 \
   1 "" "" "" aella \
   2 "" "" "" \
   5 \
@@ -204,7 +210,8 @@ pass "ZERO_TOUCH_MULTI_SERVICE_SSH_HTTP"
 
 # --- Guided: multi-service SSH+HTTPS ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-https.out" \
-  "create zero-touch" 1 2 multi-https "" \
+  "create zero-touch" 1 multi-https "" \
+  2 \
   1 "" "" "" aella \
   3 "" "" "" \
   5 \
@@ -225,7 +232,8 @@ pass "ZERO_TOUCH_MULTI_SERVICE_SSH_HTTPS"
 
 # --- Remote LAN target hosts ---
 run_repl "$SERVER" "$WORKDIR/zt-lan.out" \
-  "create zero-touch" 1 2 lan-client "lan note" \
+  "create zero-touch" 1 lan-client "lan note" \
+  2 \
   1 ssh 10.10.10.20 22 ops \
   2 web 10.10.10.30 80 \
   5 \

@@ -83,7 +83,8 @@ internal = catalog.to_internal(resolved)
 assert internal[:2] == ["add", "client"], internal
 print("CLI_CATALOG_PARITY=PASS")
 
-# Guided menu must be generated from GUIDED_MENU / COMMANDS, not hard-coded.
+# Guided menu must be generated from NAVIGATION_TREE / COMMANDS, not hard-coded.
+assert hasattr(catalog, "NAVIGATION_TREE")
 assert hasattr(catalog, "GUIDED_MENU")
 assert hasattr(catalog, "render_guided_menu")
 assert hasattr(catalog, "guided_menu_action")
@@ -93,13 +94,15 @@ for role in ("server", "client", "both"):
     assert entries and text
     assert catalog.guided_menu_action(role, "1") == entries[0][1]
     assert catalog.guided_menu_action(role, str(len(entries))) == "exit"
-# Server guided menu follows root-help IA categories.
+# Server guided menu follows product-domain IA (not parser verbs / old roots).
 server_menu = catalog.render_guided_menu("server")
-for label in ("Remote Access", "Controlled Egress", "Organize", "Operate"):
+for label in ("Clients", "Services", "Internet Access", "System"):
     assert label in server_menu, label
-assert "server_egress" in [e[1] for e in catalog.guided_menu_entries("server")]
+for label in ("Remote Access", "Controlled Egress", "Organize", "Operate"):
+    assert label not in server_menu, label
+assert "server_clients" in [e[1] for e in catalog.guided_menu_entries("server")]
 frpctl = Path("tools/frpctl").read_text(encoding="utf-8")
-assert "frpctl_render_guided_menu" in frpctl
+assert "frpctl_render_nav_menu" in frpctl or "frpctl_render_guided_menu" in frpctl
 assert 'echo "17) Exit"' not in frpctl
 print("CLI_MENU_CATALOG_PARITY=PASS")
 

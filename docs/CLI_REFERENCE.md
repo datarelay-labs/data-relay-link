@@ -8,15 +8,20 @@ Product framing (see `docs/PRODUCT_MASTER.md` §2.2): **Data Relay** is the
 family; this CLI operates **Secure Remote Access** (inbound) and
 **Controlled Egress** (outbound) on a Data Relay Link server.
 
+Interactive root navigation uses beginner domains (**Clients**, **Services**,
+**Internet Access**, **System**). Those labels are not the same as the
+capability names above. See `docs/PRODUCT_MASTER.md` §18.0.
+
 ## Canonical grammar (current)
 
 ```text
 <action> <resource> [target] [value]
 ```
 
-Single source of truth: `lib/frp_cli_catalog.py`. Root help, resource help,
-context `?`, Tab, guided menu, and suggestions are generated from that catalog.
-Host role decides which resources appear. Dual-role hosts see the union.
+Single source of truth: `lib/frp_cli_catalog.py` (`COMMANDS`). Root help,
+resource help, context `?`, Tab, guided menu (`NAVIGATION_TREE`), and
+suggestions are generated from that catalog. Host role decides which
+resources appear. Dual-role hosts use the server product-domain root.
 
 ### Historical / compatibility grammar
 
@@ -61,7 +66,8 @@ management identity, and **all** service reservations / public ports for that
 client. It does not delete the remote host or uninstall local software.
 
 `release client <CLIENT-ID> <SERVICE-ID>` releases only that one service
-reservation; the client identity remains (management-only is valid).
+reservation; the client identity remains (zero published services is valid
+for an already enrolled client).
 
 `revoke client` blocks management trust and keeps every reservation.
 
@@ -124,7 +130,7 @@ restore backup <path>
 update product
 update engine
 test access
-test egress
+explain egress
 doctor
 ```
 
@@ -135,6 +141,11 @@ Session helpers:
 
 ```text
 help
+help clients
+help services
+help internet
+help system
+help commands
 help workflows
 help legacy
 menu
@@ -148,52 +159,63 @@ paths). An enrollment credential is a short-lived hand-off, so the ceiling is
 deliberately far below the `enrollment_retention_days` maximum; larger values
 are rejected rather than silently clamped.
 
-Compatibility verb-first forms (`set client`, `create group`,
-`add client … group`, `rename group`, …) remain available as hidden aliases;
-prefer the action-first forms above (`show clients`, not legacy list verbs).
+Compatibility forms remain available as hidden aliases; prefer the
+action-first forms above (`show clients`, not legacy list verbs).
 
 
-## Access Control
+## Access Rules
 
-```text
-access list
-access show <list>
-access assign <client> <service-id> <list>
-access show-service <client> <service-id>
-access test <client> <service-id> <source-ip>
-access menu
-```
-
-characters and rejects control characters, newlines, and ANSI escapes.
-
-Interactive `drlink` server menu includes Access Control. Empty ALLOWLIST
-assignment is refused. Deleting a list that is still referenced is refused.
-IP allowlisting is defense-in-depth; keep target authentication enabled.
-
-## Controlled Egress
-
-Agentless outbound HTTP/HTTPS forward proxy policy (separate from Access Control).
+Beginner/operator term: **Access Rules**. Direct command resource remains
+`access-list`.
 
 ```text
-egress status
-egress list
-egress show <PROFILE>
-egress set <PROFILE> name|description <VALUE>
-egress add-destination <PROFILE> <FQDN> <PORT> --protocol http|https
-egress test <source-ip> <host> <port>   # policy + DNS only; no live connect
-egress enable <PROFILE>
-egress disable <PROFILE>
-egress import <PATH> [PROFILE]
-egress diff <PROFILE> <PATH>
+show access-lists
+create access-list <name>
+show access-list <list>
+add access-source <list>
+remove access-source <list>
+set access-assign <client> <service-id> <list>
+set access-public <client> <service-id>
+test access <client> <service-id> <source-ip>
+show access-log
 ```
+
+Interactive `drlink` server menu places Access Rules under **Services**.
+Empty ALLOWLIST assignment is refused. Deleting a list that is still
+referenced is refused. IP allowlisting is defense-in-depth; keep target
+authentication enabled.
+
+## Internet Access (Controlled Egress)
+
+Beginner/operator navigation term: **Internet Access**.
+Capability / architecture term: **Controlled Egress**.
+
+```text
+show egress
+show egress-profiles
+create egress-profile <NAME>
+show egress-profile <PROFILE>
+set egress-profile <PROFILE> name|description <VALUE>
+add egress-destination <PROFILE>
+add egress-source <PROFILE>
+explain egress
+enable egress-profile <PROFILE>
+disable egress-profile <PROFILE>
+import egress <PATH>
+diff egress <PROFILE> <PATH>
+show egress-tcp
+create egress-tcp <NAME>
+show egress-recipes
+apply egress-recipe <NAME>
+```
+
+`explain egress` evaluates policy + DNS. It is **not** a live destination
+connection test (menu label: **Check policy**).
 
 Safe workflow: create (disabled) → add-source → add-destination + protocol →
-test → enable. See `docs/CONTROLLED_EGRESS.md`.
+check policy → enable. See `docs/CONTROLLED_EGRESS.md`.
 
 ## update
-
-```text
-```
 
 `update` with no resource keeps the previous role default (client project
 tools on a client; engine update on a server). Updater security is unchanged:
@@ -205,9 +227,8 @@ CA/token/port loss. FRP stays pinned at 0.71.0.
 ```text
 doctor
 create support-bundle
-create support-bundle --output <path>
 help
-help <resource>
+help commands
 help workflows
 help legacy
 ?
@@ -222,24 +243,23 @@ exit
 enrollment secrets, and auth material are omitted or redacted. It does not
 restart services.
 
-Root `?` lists resources. Detailed syntax is under `help` / `help <resource>`
-or a context `?`. `menu` is the guided numbered interface using the same
-catalog vocabulary.
+Root `?` and bare `help` show product work areas (Clients / Services /
+Internet Access / System). Full expert grammar is under `help commands`.
+`menu` is the guided numbered interface using the navigation tree.
 
 
-## Compatibility cheat sheet (verb-first → action-first)
+## Compatibility cheat sheet (legacy → action-first)
 
-| Older form | Prefer |
+| Older / legacy form | Prefer |
 |---|---|
-| `show clients` | `show clients` |
-| `show client <ID>` | `show client <ID>` |
-| `show groups` | `show groups` |
-| `show egress-profiles` | `egress list` |
-| `create egress-profile` | `egress create` |
-| `set egress-profile … --name` | `egress set … name` |
-| `add egress-profile … destination` | `egress add-destination … --protocol` |
-| `create group` | `create group` |
-| `add client <ID> group <G>` | `group add-client <G> <ID>` |
-| `rename group` | `group set <G> name` |
+| `client list` | `show clients` |
+| `enrollment list` | `show enrollments` |
+| `enrollment revoke` | `revoke enrollment` |
+| `egress list` | `show egress-profiles` |
+| `egress create` | `create egress-profile` |
+| `egress status` | `show egress` |
+| `access list` | `show access-lists` |
+| `access assign` | `set access-assign` |
 | `frp-update` / `update frp` | `update engine` |
 | `support-bundle` | `create support-bundle` |
+| `purge enrollment` | `delete enrollment` |

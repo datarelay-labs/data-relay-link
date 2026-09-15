@@ -1159,8 +1159,9 @@ Examples:
 You may publish one or more services.
 SSH is optional.
 
-You may also install management-only: this machine is enrolled and
-manageable now, and you publish services later with: sudo drlink
+Initial onboarding requires at least one service.
+An enrolled client may later have zero published services
+after reservations are released.
 
 EOF
 }

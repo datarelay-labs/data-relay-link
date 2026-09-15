@@ -249,7 +249,7 @@ FRP_CREATE_CLIENT_TEST_INPUT='' FRP_DEPLOY_TEST_ROOT="$TREE" \
 eof_rc=$?
 set -e
 [[ "$eof_rc" -ne 0 ]] || fail "EOF during SSH prompt should fail"
-grep -q 'Client identification' "$WORKDIR/eof.out" || fail "EOF did not show client identification"
+grep -q 'Client details' "$WORKDIR/eof.out" || fail "EOF did not show client details"
 grep -q 'Client name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client name"
 [[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "ticket created before input completed"
 pass "TICKET_NOT_CREATED_BEFORE_INPUT"
@@ -258,7 +258,7 @@ BEFORE_TICKETS="$(ticket_count)"
 FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\naella\n\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
   python3 "$CREATE" --one-line --ssh \
   >"$WORKDIR/prompt.out" 2>"$WORKDIR/prompt.err"
-grep -q 'Client identification' "$WORKDIR/prompt.out" || fail "missing client identification"
+grep -q 'Client details' "$WORKDIR/prompt.out" || fail "missing client details"
 grep -q 'Client name:' "$WORKDIR/prompt.out" || fail "missing client name prompt"
 grep -q 'ERROR: Client name cannot be blank.' "$WORKDIR/prompt.err" \
   || fail "blank client name not rejected"

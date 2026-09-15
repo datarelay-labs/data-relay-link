@@ -532,8 +532,8 @@ def validate_prompt_label(raw):
 
 def prompt_client_identification(existing_name, existing_note):
     print()
-    print('Client identification')
-    print('=====================')
+    print('Client details')
+    print('==============')
     print()
     print('Enter a name that will help you identify this machine later.')
     print()
@@ -547,15 +547,41 @@ def prompt_client_identification(existing_name, existing_note):
                 break
             sys.stderr.write('ERROR: %s\n' % err)
 
-    note = '' if existing_note is None else str(existing_note)
-    if not str(existing_note or '').strip():
+    # None means "not collected yet"; empty string means "explicitly blank".
+    if existing_note is None:
         entered = read_prompt('Description [optional]: ')
         note = '' if entered is None else str(entered).strip()
         if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in note):
             fail('Description must not contain control characters or newlines')
         if len(note) > 1024:
             fail('Description must be at most 1024 characters')
+    else:
+        note = str(existing_note)
     return name, note
+
+
+def _enrollment_track_hints(tracking_id=''):
+    """Action-first enrollment guidance; REPL vs shell-aware."""
+    repl = str(os.environ.get('FRP_CTL_REPL') or '').strip() == '1'
+    tid = str(tracking_id or '<ID>').strip() or '<ID>'
+    lines = ['Track or revoke with the Enrollment ID (not the ticket secret):']
+    if repl:
+        lines.extend(
+            [
+                '  show enrollments',
+                '  revoke enrollment %s' % tid,
+                '  delete enrollment %s' % tid,
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                '  sudo drlink show enrollments',
+                '  sudo drlink revoke enrollment %s' % tid,
+                '  sudo drlink delete enrollment %s' % tid,
+            ]
+        )
+    return lines
 
 
 def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
@@ -619,9 +645,8 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     print()
     print('Expires: %s (%s seconds)' % (record['expires_at_iso'], ttl))
     print()
-    print('Track or revoke with the Enrollment ID (not the secret):')
-    print('  drlink enrollment list')
-    print('  drlink enrollment revoke %s' % record['id'])
+    for line in _enrollment_track_hints(record['id']):
+        print(line)
     print()
     if public_host and control_public:
         print('Data Relay Link Server: %s:%s' % (public_host, control_public))
@@ -757,9 +782,8 @@ def print_one_line_windows(
     print('Use: drlink service apply  (or legacy: drlink apply)')
     if tracking_id:
         print()
-        print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  drlink enrollment list')
-        print('  drlink enrollment revoke %s' % tracking_id)
+        for line in _enrollment_track_hints(tracking_id):
+            print(line)
     print()
 
 
@@ -842,9 +866,8 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     print('It cannot be reused by another machine once bound.')
     if tracking_id:
         print()
-        print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  drlink enrollment list')
-        print('  drlink enrollment revoke %s' % tracking_id)
+        for line in _enrollment_track_hints(tracking_id):
+            print(line)
     print()
 
 
@@ -969,8 +992,10 @@ def main(argv=None):
     if alloc_mod is None:
         fail('allocator module is missing')
 
-    if is_interactive_stdin() and (not client_name or not str(a.note or '').strip()):
-        client_name, note = prompt_client_identification(client_name, note)
+    # Identification is collected once. When --client-name was already supplied
+    # (guided wrapper), accept a blank --note without a second prompt.
+    if is_interactive_stdin() and not client_name:
+        client_name, note = prompt_client_identification(None, None)
         reject_control_chars('--client-name', client_name)
         reject_control_chars('--note', note)
 

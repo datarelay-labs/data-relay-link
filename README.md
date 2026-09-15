@@ -262,13 +262,13 @@ On the server:
 sudo drlink
 ```
 
-Then use the guided command:
+Guided path: **Clients → Connect a new client**, or run the expert command:
 
 ```text
 create zero-touch
 ```
 
-Or create an explicit SSH profile:
+Or create an explicit SSH enrollment (automation / advanced):
 
 ```bash
 sudo drlink create enrollment \
