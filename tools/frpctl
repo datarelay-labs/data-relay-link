@@ -4000,13 +4000,17 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
       _restore_path="$(frpctl_json_get "$result" path)"
-      frpctl_confirm_restore "$_restore_path"
-      _restore_rc=$?
+      _restore_rc=0
+      # Capture with `cmd || rc=$?` — plain `rc=$?` after a failing call is
+      # lost under `set -e`, and a non-zero `return` here is swallowed by the
+      # canonical dispatcher which only exports `_FRP_CTL_RC`.
+      frpctl_confirm_restore "$_restore_path" || _restore_rc=$?
       if [[ "$_restore_rc" -eq 3 ]]; then
         return 0
       fi
       if [[ "$_restore_rc" -ne 0 ]]; then
-        return "$_restore_rc"
+        _FRP_CTL_RC="$_restore_rc"
+        return 0
       fi
       frpctl_run frp-restore "$_restore_path"
       ;;
