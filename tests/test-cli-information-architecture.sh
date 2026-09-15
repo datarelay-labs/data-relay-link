@@ -192,6 +192,60 @@ print("HELP_COMMANDS_VISIBLE=YES")
 PY
 pass PUBLIC_COMMAND_DISCOVERY_PARITY
 
+# --- Beginner descriptions on Services / Internet Access ---
+SERVICES_MENU="$(python3 - <<'PY'
+import frp_cli_catalog as c
+print(c.render_navigation_menu("server.services", title="Services"))
+PY
+)"
+echo "$SERVICES_MENU" | grep -q 'List published services' || fail "services missing list"
+echo "$SERVICES_MENU" | grep -q 'View services currently exposed through Data Relay Link' \
+  || fail "services missing list description"
+echo "$SERVICES_MENU" | grep -q 'Service Profiles' || fail "services missing Service Profiles"
+echo "$SERVICES_MENU" | grep -q 'Reusable templates for configuring services' \
+  || fail "services missing profile description"
+echo "$SERVICES_MENU" | grep -q 'Release a published service' || fail "services missing release label"
+echo "$SERVICES_MENU" | grep -q 'Remove its reservation and return the public port' \
+  || fail "services missing release description"
+pass SERVICES_MENU_BEGINNER_DESCRIPTIONS
+
+INTERNET_MENU="$(python3 - <<'PY'
+import frp_cli_catalog as c
+print(c.render_navigation_menu("server.internet", title="Internet Access"))
+PY
+)"
+echo "$INTERNET_MENU" | grep -q 'Access Profiles' || fail "internet missing Access Profiles"
+echo "$INTERNET_MENU" | grep -q 'Define which sources may reach approved Internet destinations' \
+  || fail "internet missing Access Profiles description"
+echo "$INTERNET_MENU" | grep -q 'Fixed TCP' || fail "internet missing Fixed TCP"
+echo "$INTERNET_MENU" | grep -q 'Allow approved TCP connections for apps that cannot use HTTP/HTTPS proxy' \
+  || fail "internet missing Fixed TCP description"
+echo "$INTERNET_MENU" | grep -q 'Check whether a connection would be allowed' \
+  || fail "internet missing Check policy description"
+! echo "$INTERNET_MENU" | grep -q 'Controlled Egress' || fail "internet menu leaked Controlled Egress"
+pass INTERNET_ACCESS_BEGINNER_DESCRIPTIONS
+
+# --- Selected-group context workflow is wired ---
+python3 - <<'PY' || fail "SELECTED_GROUP_CONTEXT_MENU"
+import frp_cli_catalog as c
+row = None
+for entry in c.navigation_entries("server.clients.groups"):
+    if entry[0] == "server_groups_manage":
+        row = entry
+        break
+assert row is not None, "missing View or manage a group"
+assert row[3] == "workflow" and row[4] == "manage_group", row
+print("ok")
+PY
+grep -q 'frpctl_manage_one_group' tools/frpctl || fail "missing manage_one_group implementation"
+grep -q 'Rename / description' tools/frpctl || fail "missing group rename/description action"
+grep -q 'View members' tools/frpctl || fail "missing group view members action"
+pass SELECTED_GROUP_CONTEXT_MENU
+
+# --- Guided identity banner is not repeated every submenu ---
+grep -q 'shown_identity' tools/frpctl || fail "nav loop missing one-shot identity banner gate"
+pass SUBMENU_VERSION_BANNER_NOT_REPEATED
+
 # --- PRODUCT_MASTER IA contract ---
 grep -q 'Canonical CLI Information Architecture' docs/PRODUCT_MASTER.md \
   || fail "PRODUCT_MASTER missing IA section"

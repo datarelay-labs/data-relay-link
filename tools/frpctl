@@ -860,7 +860,7 @@ frpctl_nav_workflow() {
       ;;
     manage_group)
       id="$(frpctl_nav_prompt_id "Group name: ")" || return 1
-      frpctl_dispatch show group "$id" || true
+      frpctl_manage_one_group "$id"
       ;;
     revoke_enrollment)
       id="$(frpctl_nav_prompt_id "Enrollment ID: ")" || return 1
@@ -992,9 +992,18 @@ frpctl_nav_loop() {
   local menu_key="$1"
   local choice action_id kind target label top
   local -a stack=()
+  local shown_identity=0
   while true; do
     echo
-    frpctl_header
+    # Show product/build identity once when guided navigation starts outside the
+    # REPL. Inside the REPL the identity banner was already printed at entry.
+    # Never reprint it above every submenu.
+    if [[ "$shown_identity" -eq 0 ]]; then
+      if [[ "${FRP_CTL_REPL:-}" != "1" ]]; then
+        frpctl_header
+      fi
+      shown_identity=1
+    fi
     frpctl_render_nav_menu "$menu_key"
     echo
     if [[ "${FRP_CTL_TEST_MENU:-}" == "1" ]]; then
@@ -1815,6 +1824,124 @@ PY
   }
   [[ -n "$mid" ]] || return 1
   frpctl_manage_one_client "$mid"
+}
+
+frpctl_print_manage_group_actions() {
+  echo "1) Overview"
+  echo "2) Rename / description"
+  echo "3) View members"
+  echo "4) Add client"
+  echo "5) Remove client"
+  echo "6) Delete group"
+  echo "7) Back"
+}
+
+frpctl_group_display_name() {
+  local selector="$1" cfg root libdir
+  cfg="$(frpctl_path /etc/drlink/config.json)"
+  root="${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}"
+  libdir="${_FRPCTL_DIR}/../lib"
+  python3 - "$cfg" "$root" "$libdir" "$selector" <<'PY'
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+root = sys.argv[2]
+libdir = Path(sys.argv[3])
+selector = sys.argv[4]
+search = []
+if root:
+    search.append(Path(root) / 'usr/local/lib/drlink/frp_client_registry.py')
+search.append(libdir / 'frp_client_registry.py')
+search.append(Path('/usr/local/lib/drlink/frp_client_registry.py'))
+mod = None
+for path in search:
+    if path.is_file():
+        spec = importlib.util.spec_from_file_location('frp_client_registry', str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        break
+if mod is None or not cfg_path.is_file():
+    print(selector)
+    raise SystemExit(0)
+cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+reg = Path(str(cfg.get('registry_file') or ''))
+if root and not str(reg).startswith(root):
+    reg = Path(root + str(reg))
+state = json.loads(reg.read_text(encoding='utf-8')) if reg.is_file() else {'clients': {}, 'groups': {}}
+try:
+    _gid, group = mod.resolve_group_or_exit(state, selector)
+except SystemExit:
+    print(selector)
+    raise SystemExit(0)
+print(mod.sanitize_display(group.get('name') or selector, 64))
+PY
+}
+
+frpctl_manage_one_group() {
+  local gid="$1" action sub name value mid display
+  # Resolve once so invalid selectors fail before the context menu.
+  if ! frpctl_dispatch show group "$gid" >/dev/null; then
+    return 1
+  fi
+  display="$(frpctl_group_display_name "$gid" 2>/dev/null || true)"
+  [[ -n "$display" ]] || display="$gid"
+  while true; do
+    echo
+    echo "Group: $display"
+    echo
+    frpctl_print_manage_group_actions
+    echo
+    action="$(frpctl_read "Select: " "")" || return 1
+    case "$action" in
+      1)
+        frpctl_dispatch show group "$gid" || true
+        ;;
+      2)
+        echo
+        echo "1) Rename"
+        echo "2) Set description"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            name="$(frpctl_read "New name: " "")"
+            [[ -n "$name" ]] || { echo "ERROR: name is required" >&2; continue; }
+            frpctl_dispatch rename group "$gid" "$name" || true
+            display="$(frpctl_group_display_name "$gid" 2>/dev/null || true)"
+            [[ -n "$display" ]] || display="$name"
+            ;;
+          2)
+            value="$(frpctl_read "New description: " "")"
+            frpctl_dispatch set group "$gid" description "$value" || true
+            ;;
+        esac
+        ;;
+      3)
+        frpctl_dispatch show clients "$gid" || true
+        ;;
+      4)
+        mid="$(frpctl_nav_prompt_id "CLIENT ID: ")" || continue
+        frpctl_dispatch add client "$mid" group "$gid" || true
+        ;;
+      5)
+        mid="$(frpctl_nav_prompt_id "CLIENT ID: ")" || continue
+        frpctl_dispatch remove client "$mid" group "$gid" || true
+        ;;
+      6)
+        frpctl_dispatch delete group "$gid" || true
+        return 0
+        ;;
+      7|"")
+        return 0
+        ;;
+      *)
+        echo "ERROR: select 1-7" >&2
+        ;;
+    esac
+  done
 }
 
 frpctl_status_both() {

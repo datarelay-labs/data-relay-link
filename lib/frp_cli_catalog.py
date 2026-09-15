@@ -778,10 +778,10 @@ COMMANDS = (
             "  all service reservations\n"
             "  all public ports\n\n"
             "Confirmation: type REVOKE (or pass --force to skip).\n"
-            "Not the same as 'client release', 'client unset', disable, or "
+            "Not the same as 'release client', 'unset client', disable, or "
             "uninstall. This does not delete the remote host or local software."
         ),
-        examples=("client revoke 24cd7856", "client revoke 24cd7856 --force"),
+        examples=("revoke client 24cd7856", "revoke client 24cd7856 --force"),
         args=(_arg("<CLIENT-ID>", C_CLIENT),),
         flags=(
             _flag(
@@ -2885,7 +2885,7 @@ def domain_help(topic, role):
                 "  View a client's services\n"
                 "  Access Rules (source-IP controls)\n"
                 "  Service Profiles (reusable templates)\n"
-                "  Release a service reservation\n\n"
+                "  Release a published service\n\n"
                 "Service definitions are changed on the client.\n"
                 "Use drlink on that client to add or edit services.\n\n"
                 "Everyday commands:\n"
@@ -3359,11 +3359,41 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.services": (
-        ("server_svc_list", "List published services", "", "command", "show services"),
-        ("server_svc_client", "View a client's services", "", "workflow", "client_services"),
-        ("server_access", "Access Rules", "", "submenu", "server.services.access"),
-        ("server_profiles", "Service Profiles", "", "submenu", "server.services.profiles"),
-        ("server_svc_release", "Release a service reservation", "", "workflow", "release_service"),
+        (
+            "server_svc_list",
+            "List published services",
+            "View services currently exposed through Data Relay Link",
+            "command",
+            "show services",
+        ),
+        (
+            "server_svc_client",
+            "View a client's services",
+            "See published services for a selected client",
+            "workflow",
+            "client_services",
+        ),
+        (
+            "server_access",
+            "Access Rules",
+            "Control who can reach published services",
+            "submenu",
+            "server.services.access",
+        ),
+        (
+            "server_profiles",
+            "Service Profiles",
+            "Reusable templates for configuring services",
+            "submenu",
+            "server.services.profiles",
+        ),
+        (
+            "server_svc_release",
+            "Release a published service",
+            "Remove its reservation and return the public port",
+            "workflow",
+            "release_service",
+        ),
         ("back", "Back", "", "back", None),
     ),
     "server.services.access": (
@@ -3385,10 +3415,34 @@ NAVIGATION_TREE = {
     ),
     "server.internet": (
         ("server_egress_overview", "Overview", "", "command", "show egress"),
-        ("server_egress_profiles", "Access Profiles", "", "submenu", "server.internet.profiles"),
-        ("server_egress_tcp", "Fixed TCP", "", "submenu", "server.internet.tcp"),
-        ("server_egress_templates", "Templates", "", "submenu", "server.internet.templates"),
-        ("server_egress_check", "Check policy", "", "workflow", "explain_egress"),
+        (
+            "server_egress_profiles",
+            "Access Profiles",
+            "Define which sources may reach approved Internet destinations",
+            "submenu",
+            "server.internet.profiles",
+        ),
+        (
+            "server_egress_tcp",
+            "Fixed TCP",
+            "Allow approved TCP connections for apps that cannot use HTTP/HTTPS proxy",
+            "submenu",
+            "server.internet.tcp",
+        ),
+        (
+            "server_egress_templates",
+            "Templates",
+            "Start from predefined Internet Access configurations",
+            "submenu",
+            "server.internet.templates",
+        ),
+        (
+            "server_egress_check",
+            "Check policy",
+            "Check whether a connection would be allowed",
+            "workflow",
+            "explain_egress",
+        ),
         ("back", "Back", "", "back", None),
     ),
     "server.internet.profiles": (
@@ -3488,10 +3542,34 @@ NAVIGATION_TREE["both.services"] = (
         "submenu",
         "client.services",
     ),
-    ("server_svc_client", "View a client's services", "", "workflow", "client_services"),
-    ("server_access", "Access Rules", "", "submenu", "server.services.access"),
-    ("server_profiles", "Service Profiles", "", "submenu", "server.services.profiles"),
-    ("server_svc_release", "Release a service reservation", "", "workflow", "release_service"),
+    (
+        "server_svc_client",
+        "View a client's services",
+        "See published services for a selected client",
+        "workflow",
+        "client_services",
+    ),
+    (
+        "server_access",
+        "Access Rules",
+        "Control who can reach published services",
+        "submenu",
+        "server.services.access",
+    ),
+    (
+        "server_profiles",
+        "Service Profiles",
+        "Reusable templates for configuring services",
+        "submenu",
+        "server.services.profiles",
+    ),
+    (
+        "server_svc_release",
+        "Release a published service",
+        "Remove its reservation and return the public port",
+        "workflow",
+        "release_service",
+    ),
     ("back", "Back", "", "back", None),
 )
 

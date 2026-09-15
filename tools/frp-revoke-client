@@ -152,7 +152,8 @@ else:
     print('  (none)')
 print()
 print('The client will need a new Enrollment Code to establish trust again.')
-print('This does not release public ports. Use: drlink client release <CLIENT-ID> [SERVICE-ID]')
+print('This does not release public ports. Use: release client <CLIENT-ID>')
+print('To release one service reservation: release service <CLIENT-ID> <SERVICE-ID>')
 
 if not args.force:
     answer = input('Type REVOKE to continue: ')

@@ -93,6 +93,9 @@ LEGACY_CLIENT_INSTALLER_REPO='frp-auto-deploy'
 # Former GitHub product identity before datarelay-labs/data-relay-link.
 FORMER_CLIENT_INSTALLER_OWNER='xdr-labs'
 FORMER_CLIENT_INSTALLER_REPO='frp-auto-deploy'
+# Renamed product repository under the current org (pre data-relay-link).
+RENAMED_CLIENT_INSTALLER_OWNER='datarelay-labs'
+RENAMED_CLIENT_INSTALLER_REPO='frp-auto-deploy'
 
 frp_legacy_client_installer_url() {
   printf 'https://raw.githubusercontent.com/%s/%s/main/dist/bootstrap-client.sh' \
@@ -104,6 +107,8 @@ frp_is_former_product_installer_url() {
   case "$url" in
     https://raw.githubusercontent.com/${FORMER_CLIENT_INSTALLER_OWNER}/${FORMER_CLIENT_INSTALLER_REPO}/*) return 0 ;;
     https://github.com/${FORMER_CLIENT_INSTALLER_OWNER}/${FORMER_CLIENT_INSTALLER_REPO}/*) return 0 ;;
+    https://raw.githubusercontent.com/${RENAMED_CLIENT_INSTALLER_OWNER}/${RENAMED_CLIENT_INSTALLER_REPO}/*) return 0 ;;
+    https://github.com/${RENAMED_CLIENT_INSTALLER_OWNER}/${RENAMED_CLIENT_INSTALLER_REPO}/*) return 0 ;;
     *) return 1 ;;
   esac
 }
