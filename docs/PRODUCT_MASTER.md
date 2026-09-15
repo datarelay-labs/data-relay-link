@@ -1171,6 +1171,59 @@ NAT topology는 지원할 수 있으나 network topology이며 deployment mode�
 
 # 18. CLI Product Specification
 
+## 18.0 Canonical CLI Information Architecture
+
+Data Relay Link exposes **two** operator surfaces. They must not be collapsed
+into one flat list of parser verbs.
+
+### Direct expert grammar (scriptable)
+
+```text
+drlink <action> <resource> [target] [value]
+```
+
+Examples: `show clients`, `create zero-touch`, `revoke enrollment <ID>`.
+
+### Interactive guided navigation (human)
+
+Root navigation is organized by **user task domain**, not by action verbs:
+
+```text
+Server / dual-role root:
+  Clients
+  Services
+  Internet Access
+  System
+  Help
+  Exit
+
+Client-only root:
+  Services
+  System
+  Help
+  Exit
+```
+
+Domain placement (normative):
+
+```text
+Groups            → under Clients
+Service Profiles  → under Services
+Access Rules      → under Services
+Internet Access   = beginner-facing navigation name for Controlled Egress
+```
+
+Product/architecture documents may still use **Secure Remote Access** and
+**Controlled Egress** as capability names. Those names are **not** interactive
+root menu labels.
+
+Bare `?` and bare `help` are domain-oriented overviews. The complete expert
+command reference lives under `help commands`. Resource-first forms remain
+hidden compatibility aliases (`help legacy`).
+
+Future changes must not flatten root navigation back into parser actions
+(`show` / `create` / `set` / … as the beginner root).
+
 ## 18.1 Current canonical grammar (v2.4.0) — action-first
 
 Canonical operator grammar:
@@ -1183,6 +1236,9 @@ Single source of truth: `lib/frp_cli_catalog.py`. Root help, resource help,
 context `?`, Tab completion, guided menu, and “Did you mean” suggestions are
 all derived from that catalog. Hidden compatibility aliases exist for scripts
 but are not advertised.
+
+The guided menu uses `NAVIGATION_TREE` (task domains). `COMMANDS` remains the
+action-first scriptable grammar. They are related but not the same structure.
 
 Examples (current):
 

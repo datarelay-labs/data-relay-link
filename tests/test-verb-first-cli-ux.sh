@@ -33,21 +33,23 @@ assert_json_field() {
     "$json" "$field" "$expect"
 }
 
-# --- ROOT_ACTION_FIRST ---
+# --- ROOT_DOMAIN_ORIENTED ---
 HELP="$(python3 - <<'PY'
 import sys; sys.path.insert(0,"lib")
 import frp_ctl_grammar as g
 print(g.help_text([], "server"))
 PY
 )"
-echo "$HELP" | grep -q 'Grammar: <action> <resource>' || fail "root help grammar"
-echo "$HELP" | grep -qE '^[[:space:]]*show[[:space:]]' || fail "root help missing show"
-echo "$HELP" | grep -qE '^[[:space:]]*create[[:space:]]' || fail "root help missing create"
+echo "$HELP" | grep -q 'Work areas' || fail "root help missing work areas"
+echo "$HELP" | grep -q 'Clients' || fail "root help missing Clients"
+echo "$HELP" | grep -q 'Internet Access' || fail "root help missing Internet Access"
+echo "$HELP" | grep -q 'help commands' || fail "root help missing help commands"
 ! echo "$HELP" | grep -qE '^[[:space:]]*client[[:space:]]' || fail "root help advertises client"
 ! echo "$HELP" | grep -qE '^[[:space:]]*enrollment[[:space:]]' || fail "root help advertises enrollment"
 ! echo "$HELP" | grep -qE '^[[:space:]]*zero-touch[[:space:]]' || fail "root help advertises zero-touch"
-! echo "$HELP" | grep -qE '^[[:space:]]*status[[:space:]]' || fail "root help advertises status root"
-pass ROOT_ACTION_FIRST
+! echo "$HELP" | grep -qE '^View$' || fail "root help still flat View category"
+pass ROOT_DOMAIN_ORIENTED
+pass ROOT_ACTION_FIRST_MENTIONED_IN_DOMAIN_HELP
 
 # --- SHOW_TREE / CREATE_TREE ---
 SHOW_CANDS="$(python3 - <<'PY'
@@ -81,12 +83,15 @@ PY
 ! echo "$MENU" | grep -q 'client list' || fail "menu advertises client list"
 ! echo "$MENU" | grep -q 'enrollment create' || fail "menu advertises enrollment create"
 ! echo "$MENU" | grep -q 'zero-touch create' || fail "menu advertises zero-touch create"
-echo "$MENU" | grep -q 'show clients' || fail "menu missing show clients"
-echo "$MENU" | grep -q 'create zero-touch' || fail "menu missing create zero-touch"
+echo "$MENU" | grep -q 'Clients' || fail "menu missing Clients"
+echo "$MENU" | grep -q 'Internet Access' || fail "menu missing Internet Access"
+! echo "$MENU" | grep -q 'Remote Access' || fail "menu still has Remote Access root"
+! echo "$MENU" | grep -q 'Controlled Egress' || fail "menu still has Controlled Egress root"
+! echo "$MENU" | grep -q 'Organize' || fail "menu still has Organize root"
+! echo "$MENU" | grep -q 'Operate' || fail "menu still has Operate root"
 ! echo "$HELP" | grep -q 'client show' || fail "help advertises client show"
 pass NO_PUBLIC_RESOURCE_FIRST_ADVERTISEMENT
-pass MENU_ACTION_FIRST
-
+pass MENU_DOMAIN_ORIENTED
 # --- NO_PUBLIC_LONG_OPTIONS ---
 FLAG_HITS="$(python3 - <<'PY'
 import sys

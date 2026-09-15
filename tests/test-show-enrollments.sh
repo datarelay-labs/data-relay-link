@@ -49,7 +49,10 @@ pass "MANUAL_ENROLLMENT_VISIBLE_IN_SHOW"
 pass "MANUAL_PENDING_STATE"
 ! grep -Fq "$MANUAL_SECRET" "$WORK/list1.out" || fail "ENROLLMENT_SECRET_NOT_SHOWN"
 pass "ENROLLMENT_SECRET_NOT_SHOWN"
-grep -q 'drlink enrollment revoke <ID>' "$WORK/list1.out" || fail "SHOW_ENROLLMENTS_REVOKE_GUIDANCE"
+grep -q 'sudo drlink revoke enrollment <ID>' "$WORK/list1.out" || fail "SHOW_ENROLLMENTS_REVOKE_GUIDANCE"
+! grep -q 'drlink enrollment revoke' "$WORK/list1.out" || fail "SHOW_ENROLLMENTS_OLD_SYNTAX"
+! grep -q 'purge enrollment' "$WORK/list1.out" || fail "PUBLIC_PURGE_VOCABULARY"
+grep -q 'sudo drlink delete enrollment <ID>' "$WORK/list1.out" || fail "SHOW_ENROLLMENTS_DELETE_GUIDANCE"
 pass "SHOW_ENROLLMENTS_REVOKE_GUIDANCE"
 
 # --- Manual completed / expired / revoked states ---

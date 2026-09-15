@@ -133,7 +133,7 @@ assert s['management_only'] is True
 assert s['services']=={}
 PY
 
-# --- F17: the install path must not force a service on a fresh client -----
+# --- F17: interactive initial onboarding requires a service; automation empty OK -
 (
   set -euo pipefail
   INSTALL_WORK="$WORK/install-ux"
@@ -147,23 +147,20 @@ PY
   SERVICES_FILE="$INSTALL_WORK/services.json"
   FRP_VERSION="${FRP_VERSION:-0.71.0}"
 
-  # Interactive: a fresh client can reach "install" with nothing configured.
-  export FRP_CLIENT_TEST_INPUT=$'3\ny\n'
+  # Interactive empty menu: management-only option removed; Cancel exits.
+  export FRP_CLIENT_TEST_INPUT=$'3\n'
   rm -f "$(frp_test_input_path)" 2>/dev/null || true
-  collect_services >"$INSTALL_WORK/interactive.out" 2>&1 \
-    || { cat "$INSTALL_WORK/interactive.out" >&2; echo "FAIL F17 interactive management-only install was refused" >&2; exit 1; }
-  [[ "$(services_count)" == "0" ]] \
-    || { echo "FAIL F17 interactive install invented a service" >&2; exit 1; }
-  grep -qi 'at least one service must be configured' "$INSTALL_WORK/interactive.out" \
-    && { echo "FAIL F17 installer still demands a service" >&2; exit 1; }
-  grep -qi 'management-only' "$INSTALL_WORK/interactive.out" \
-    || { cat "$INSTALL_WORK/interactive.out" >&2; echo "FAIL F17 install summary does not name management-only mode" >&2; exit 1; }
-  grep -qi 'stopped' "$INSTALL_WORK/interactive.out" \
-    || { echo "FAIL F17 install summary does not say frpc stays stopped" >&2; exit 1; }
+  if collect_services >"$INSTALL_WORK/interactive.out" 2>&1; then
+    cat "$INSTALL_WORK/interactive.out" >&2
+    echo "FAIL F17 interactive empty install should cancel" >&2
+    exit 1
+  fi
+  grep -qi 'Install management-only' "$INSTALL_WORK/interactive.out" \
+    && { echo "FAIL F17 management-only still offered" >&2; exit 1; }
   unset FRP_CLIENT_TEST_INPUT
 
-  # Non-interactive: an explicit empty service list is management-only, not an
-  # error. The variable is only consulted when it was deliberately set.
+  # Non-interactive: an explicit empty service list remains valid for
+  # automation / already-authorized management-only tickets.
   export FRP_SERVICES_JSON='[]'
   collect_services >"$INSTALL_WORK/env.out" 2>&1 \
     || { cat "$INSTALL_WORK/env.out" >&2; echo "FAIL F17 FRP_SERVICES_JSON=[] was rejected" >&2; exit 1; }
@@ -185,7 +182,7 @@ assert re.search(
 ), "management-only branch no longer explains the stopped client"
 PY
 ) || exit 1
-pass_f17="PASS F17 fresh install allows management-only enrollment"
+pass_f17="PASS F17 interactive onboarding requires a service; automation empty OK"
 echo "$pass_f17"
 
 # A management-only client can publish a service afterwards.

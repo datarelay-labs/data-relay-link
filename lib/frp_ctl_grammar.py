@@ -352,6 +352,11 @@ def help_text(tokens, role):
         return _legacy_help(role)
     if verb in ("workflow", "workflows"):
         return CATALOG.workflow_help(role)
+    if verb in ("command", "commands"):
+        return CATALOG.commands_help(role)
+    domain = CATALOG.domain_help(verb, role)
+    if domain is not None:
+        return domain
     catalog_topic = _catalog_help_topic(tokens, role)
     if catalog_topic is not None:
         return catalog_topic
@@ -385,27 +390,25 @@ def help_text(tokens, role):
         )
     if verb == "access":
         return (
-            "Access Control\n"
-            "==============\n\n"
-            "Manage Named Access Lists and service source policies.\n\n"
+            "Access Rules\n"
+            "============\n\n"
+            "Control which source IPs may reach published services.\n\n"
             "Usage:\n"
-            "  access\n"
-            "  access list\n"
-            "  access create <name> [--description TEXT]\n"
-            "  access add-source <list> --name NAME --source CIDR [--ttl 4h] [--yes]\n"
-            "  access remove-source <list> --source SELECTOR [--yes]\n"
-            "  access edit-info <list> [--name NAME] [--description TEXT] [--yes]\n"
-            "  access remove-expired <list> [--yes]\n"
-            "  access assign <client> <service> <list>\n"
-            "  access public <client> <service>\n"
-            "  access test <client> <service> <source-ip>\n"
-            "  access menu\n\n"
-            "Passthrough: remaining arguments are forwarded to frp-access.\n"
+            "  show access-lists\n"
+            "  create access-list <name>\n"
+            "  show access-list <list>\n"
+            "  add access-source <list>\n"
+            "  remove access-source <list>\n"
+            "  set access-assign <client> <service> <list>\n"
+            "  set access-public <client> <service>\n"
+            "  test access <client> <service> <source-ip>\n"
+            "  show access-log\n"
         )
     lines = [
         "Unknown help topic: %s" % " ".join(tokens),
         "",
-        "Type 'help' for the command tree, or 'help legacy' for compatibility aliases.",
+        "Type 'help' for work areas, 'help commands' for the full command",
+        "reference, or 'help legacy' for compatibility aliases.",
     ]
     if client or server:
         pass
@@ -772,6 +775,21 @@ def _legacy_help(role):
 
 def _fmt_available(rows):
     parts = ["Available:", ""]
+    names = [name for name, _desc in rows]
+    groups = CATALOG.group_completion_candidates(names)
+    if groups:
+        desc_map = {name: desc for name, desc in rows}
+        for title, members in groups:
+            parts.append(title)
+            width = max((len(n) for n in members), default=8)
+            for name in members:
+                desc = desc_map.get(name) or ""
+                if desc:
+                    parts.append("  %s  %s" % (name.ljust(width), desc))
+                else:
+                    parts.append("  %s" % name)
+            parts.append("")
+        return "\n".join(parts).rstrip() + "\n"
     width = max((len(name) for name, _desc in rows), default=8)
     for name, desc in rows:
         parts.append("  %s  %s" % (name.ljust(width), desc))
@@ -997,7 +1015,7 @@ def context_help(tokens, role, names=None, clients=None):
                 "Usage:\n"
                 "  create zero-touch\n\n"
                 "Starts a guided workflow to generate a one-line Zero-touch\n"
-                "client installation command (SSH, services, or management-only).\n\n"
+                "client installation command (SSH, RDP, or chosen services).\n\n"
                 "Recommended for everyday client onboarding.\n"
             )
         if len(tokens) >= 2 and tokens[1] == "enrollment":
@@ -2894,6 +2912,20 @@ def format_tab_candidates(line, matches, role, names=None, clients=None):
                 % (mid, item.get("label") or "-", item.get("hostname") or "-")
             )
         return "\n".join(lines)
+    # Progressive disclosure: group large resource lists by product domain.
+    groups = CATALOG.group_completion_candidates(matches)
+    if groups and style != "clients" and len(matches) >= 6:
+        out = []
+        for title, members in groups:
+            out.append(title)
+            for mid in members:
+                desc = (descs or {}).get(mid) or ""
+                if desc:
+                    out.append("  %s  %s" % (mid, desc))
+                else:
+                    out.append("  %s" % mid)
+            out.append("")
+        return "\n".join(out).rstrip()
     if style in ("named", "verbs") and any(descs.get(m) for m in matches):
         # Prefer grammar insertion order over readline alphabetical sort.
         seen = set(matches)
@@ -3078,7 +3110,15 @@ def _canonical_completion(
         return catalog_hit
     verb = filled[0]
     if verb == "help":
-        topics = list(canonical_verbs(role)) + ["workflows", "legacy"]
+        topics = list(canonical_verbs(role)) + [
+            "clients",
+            "services",
+            "internet",
+            "system",
+            "workflows",
+            "commands",
+            "legacy",
+        ]
         if len(filled) == 1:
             return _filter(topics, prefix)
         if filled[1] == "show" and len(filled) == 2:

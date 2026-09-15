@@ -264,7 +264,7 @@ ROOTS = (
     ("remove", "server", "Change", "Remove a member, source or destination"),
     ("enable", "any", "Change", "Enable an existing object"),
     ("disable", "any", "Change", "Disable an existing object"),
-    ("apply", "client", "Change", "Apply pending local service changes"),
+    ("apply", "any", "Change", "Apply pending changes or a template"),
     ("discard", "client", "Change", "Discard pending local service changes"),
     ("sync", "client", "Change", "Reconcile local services against server releases"),
     ("revoke", "server", "Security / Lifecycle", "Revoke credentials or management trust"),
@@ -273,6 +273,11 @@ ROOTS = (
     ("restore", "server", "Security / Lifecycle", "Restore a backup"),
     ("update", "any", "Security / Lifecycle", "Update Data Relay Link or the FRP engine"),
     ("test", "server", "Validate", "Test access, egress or target connectivity"),
+    ("explain", "server", "Validate", "Explain policy decisions (policy + DNS)"),
+    ("export", "server", "View", "Export configuration"),
+    ("import", "server", "Create", "Import configuration"),
+    ("diff", "server", "Validate", "Compare configuration with an import file"),
+    ("access", "server", "Change", "Open Access Rules guided tools"),
     ("doctor", "any", "Validate", "Run system health checks"),
     ("help", "any", "Help / Session", "Detailed help"),
     ("menu", "any", "Help / Session", "Guided numbered menu"),
@@ -609,7 +614,7 @@ COMMANDS = (
         "List issued enrollment credentials",
         detail="Lists manual Enrollment Codes and Zero-Touch bootstrap tickets "
         "still on disk. Secrets are never printed.",
-        examples=("enrollment list",),
+        examples=("show enrollments",),
         internal=("show", "enrollments"),
         aliases=(("show", "enrollments"), ("enrollments",)),
     ),
@@ -650,7 +655,7 @@ COMMANDS = (
         detail="Prevents a pending or bound enrollment credential from being "
         "used. Terminal records (expired, completed, revoked) are purged, not "
         "revoked.",
-        examples=("enrollment revoke 0011223344556677",),
+        examples=("revoke enrollment 0011223344556677",),
         args=(_arg("<ENROLLMENT-ID>"),),
         internal=("revoke", "enrollment"),
         aliases=(("revoke", "enrollment"), ("enrollment-revoke",)),
@@ -2712,47 +2717,305 @@ def _fmt_rows(rows, indent="  "):
 
 
 def root_help(role):
-    """Canonical root help. Shows canonical action verbs only."""
-    lines = [
-        "Data Relay Link Commands",
-        "========================",
-        "",
-        "Grammar: <action> <resource> [target] [value]",
-        "",
-        "Design: action-first, guided complex workflows, no user-facing --options.",
-        "Discover commands with Tab. Type 'help <action>' for details,",
-        "'help workflows' for end-to-end examples, or '?' for context help.",
-    ]
-    by_category = {}
-    for name, roles, category, summary in ROOTS:
-        if not role_allows(roles, role):
-            continue
-        if name in ("apply", "discard", "sync") and not _root_has_commands(name, role):
-            continue
-        by_category.setdefault(category, []).append((name, summary))
-    for category in CATEGORY_ORDER:
-        rows = by_category.get(category)
-        if not rows:
-            continue
-        lines.append("")
-        lines.append(category)
-        lines.extend(_fmt_rows(rows))
-    lines.extend(
-        [
-            "",
-            "Official upstream FRP binaries are frps (server) and frpc (client).",
-            "This project does not fork FRP.",
-        ]
-    )
-    return "\n".join(lines) + "\n"
+    """Domain-oriented root help (same mental model as bare '?')."""
+    return domain_overview(role, detailed=True)
 
 
 def concise_root(role):
-    """Short root listing used by a bare '?'."""
-    rows = root_rows(role)
-    lines = ["Available:", ""]
-    lines.extend(_fmt_rows(rows))
+    """Short root listing used by a bare '?' — product domains, not actions."""
+    return domain_overview(role, detailed=False)
+
+
+def domain_overview(role, detailed=False):
+    """Beginner/operator work-area overview for help / '?'."""
+    client, server = role_parts(role)
+    lines = [
+        "Data Relay Link",
+        "===============",
+        "",
+    ]
+    if detailed:
+        lines.extend(
+            [
+                "Direct commands use action-first grammar:",
+                "  <action> <resource> [target] [value]",
+                "",
+                "Interactive navigation is organized by task domain,",
+                "not by parser verbs. Type 'menu' for guided navigation.",
+                "",
+            ]
+        )
+    lines.append("Work areas")
+    lines.append("")
+    if server:
+        lines.extend(
+            [
+                "  Clients",
+                "    Connect and manage client machines",
+                "",
+                "  Services",
+                "    View published services and control who can reach them",
+                "",
+                "  Internet Access",
+                "    Allow clients to reach approved Internet destinations",
+                "",
+                "  System",
+                "    Status, settings, backup, updates and diagnostics",
+                "",
+            ]
+        )
+    elif client:
+        lines.extend(
+            [
+                "  Services",
+                "    Configure services published from this machine",
+                "",
+                "  System",
+                "    Status, connection information, updates and diagnostics",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "  (install a Data Relay Link server or client to see work areas)",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "Guided navigation:",
+            "  menu",
+            "",
+            "Quick commands:",
+        ]
+    )
+    if server:
+        lines.extend(
+            [
+                "  show status",
+                "  show clients",
+                "  show services",
+                "  create zero-touch",
+                "  doctor",
+            ]
+        )
+    elif client:
+        lines.extend(
+            [
+                "  show status",
+                "  show services",
+                "  apply",
+                "  doctor",
+            ]
+        )
+    else:
+        lines.append("  help")
+    lines.extend(["", "Help:"])
+    if server:
+        lines.extend(
+            [
+                "  help clients",
+                "  help services",
+                "  help internet",
+                "  help system",
+                "  help commands",
+            ]
+        )
+    elif client:
+        lines.extend(
+            [
+                "  help services",
+                "  help system",
+                "  help commands",
+            ]
+        )
+    else:
+        lines.append("  help commands")
+    if detailed:
+        lines.extend(
+            [
+                "",
+                "Also: help workflows · help legacy",
+                "",
+                "Official upstream FRP binaries are frps (server) and frpc (client).",
+                "This project does not fork FRP.",
+            ]
+        )
     return "\n".join(lines) + "\n"
+
+
+def domain_help(topic, role):
+    """Conceptual help for product domains (clients/services/internet/system)."""
+    topic = str(topic or "").strip().lower()
+    client, server = role_parts(role)
+    if topic in ("client", "clients"):
+        if not server:
+            return "Clients help is available on a Data Relay Link server.\n"
+        return (
+            "Clients\n"
+            "=======\n\n"
+            "Clients are enrolled machines managed by this server.\n\n"
+            "Guided path:\n"
+            "  menu → Clients\n\n"
+            "  1) Connect a new client   (create zero-touch)\n"
+            "  2) List clients          (show clients)\n"
+            "  3) View or manage a client\n"
+            "  4) Groups\n"
+            "  5) Enrollments\n\n"
+            "Everyday commands:\n"
+            "  show clients\n"
+            "  show client <CLIENT-ID>\n"
+            "  create zero-touch\n"
+            "  set client <CLIENT-ID> label <value>\n"
+            "  revoke client <CLIENT-ID>\n"
+            "  release client <CLIENT-ID>\n\n"
+            "CLIENT ID is the immutable selector. Labels and hostnames are\n"
+            "convenient display shortcuts when unique.\n"
+        )
+    if topic in ("service", "services"):
+        if server:
+            return (
+                "Services\n"
+                "========\n\n"
+                "Published SSH / HTTP / HTTPS / TCP services and who may reach them.\n\n"
+                "Guided path:\n"
+                "  menu → Services\n\n"
+                "  List published services\n"
+                "  View a client's services\n"
+                "  Access Rules (source-IP controls)\n"
+                "  Service Profiles (reusable templates)\n"
+                "  Release a service reservation\n\n"
+                "Service definitions are changed on the client.\n"
+                "Use drlink on that client to add or edit services.\n\n"
+                "Everyday commands:\n"
+                "  show services\n"
+                "  show client <CLIENT-ID> services\n"
+                "  create access-list <NAME>\n"
+                "  create service-profile <NAME>\n"
+                "  release service <CLIENT-ID> <SERVICE-ID>\n"
+            )
+        if client:
+            return (
+                "Services\n"
+                "========\n\n"
+                "Configure services published from this machine.\n\n"
+                "Guided path:\n"
+                "  menu → Services\n\n"
+                "Everyday commands:\n"
+                "  show services\n"
+                "  add service\n"
+                "  set service <ID> ...\n"
+                "  enable service <ID>\n"
+                "  disable service <ID>\n"
+                "  apply\n"
+                "  discard\n"
+                "  sync\n"
+            )
+        return "Services help requires an installed Data Relay Link role.\n"
+    if topic in ("internet", "egress", "internet-access"):
+        if not server:
+            return "Internet Access help is available on a Data Relay Link server.\n"
+        return (
+            "Internet Access\n"
+            "===============\n\n"
+            "Allow clients to reach approved Internet destinations.\n"
+            "Everything else remains denied by default.\n\n"
+            "This is the beginner-facing navigation name for the product's\n"
+            "Controlled Egress capability.\n\n"
+            "Guided path:\n"
+            "  menu → Internet Access\n\n"
+            "  Overview\n"
+            "  Access Profiles\n"
+            "  Fixed TCP\n"
+            "  Templates\n"
+            "  Check policy   (policy + DNS; not a live connection test)\n\n"
+            "Everyday commands:\n"
+            "  show egress\n"
+            "  show egress-profiles\n"
+            "  create egress-profile <NAME>\n"
+            "  explain egress\n"
+            "  show egress-tcp\n"
+            "  show egress-recipes\n"
+        )
+    if topic in ("system", "operate"):
+        lines = [
+            "System",
+            "======",
+            "",
+            "Operate Data Relay Link itself: status, settings, backup,",
+            "updates, and diagnostics.",
+            "",
+            "Guided path:",
+            "  menu → System",
+            "",
+            "Everyday commands:",
+            "  show status",
+            "  show version",
+            "  doctor",
+            "  create support-bundle",
+            "  update product",
+            "  update engine",
+        ]
+        if server:
+            lines.extend(
+                [
+                    "  create backup",
+                    "  restore backup <PATH>",
+                    "  show audit",
+                    "  set server public-hostname <FQDN>",
+                    "  set server bootstrap-hostname <FQDN>",
+                ]
+            )
+        elif client:
+            lines.extend(
+                [
+                    "  show info",
+                ]
+            )
+        return "\n".join(lines) + "\n"
+    if topic in ("command", "commands"):
+        return commands_help(role)
+    return None
+
+
+def commands_help(role):
+    """Complete expert action-first command reference from COMMANDS."""
+    lines = [
+        "Command reference",
+        "=================",
+        "",
+        "Grammar: <action> <resource> [target] [value]",
+        "",
+        "Every public non-hidden command for this host role:",
+        "",
+    ]
+    by_root = {}
+    for cmd in COMMANDS:
+        if cmd.get("hidden"):
+            continue
+        if not role_allows(cmd["roles"], role):
+            continue
+        root = cmd["path"][0]
+        by_root.setdefault(root, []).append(cmd)
+    root_order = [name for name, _roles, _cat, _sum in ROOTS]
+    seen = set()
+    for root in root_order:
+        cmds = by_root.get(root)
+        if not cmds:
+            continue
+        seen.add(root)
+        for cmd in cmds:
+            lines.append("  %s" % usage_line(cmd))
+        lines.append("")
+    for root, cmds in by_root.items():
+        if root in seen:
+            continue
+        for cmd in cmds:
+            lines.append("  %s" % usage_line(cmd))
+        lines.append("")
+    lines.append("Compatibility aliases: help legacy")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def resource_help(root, role):
@@ -2974,7 +3237,10 @@ def shell_usage_lines(role):
         "Canonical grammar:",
         "  <action> <resource> [target] [value]",
         "",
-        "Design: action-first · no user-facing --options · backend hidden",
+        "Design: action-first · guided domains · no user-facing --options",
+        "",
+        "Work areas: menu",
+        "Commands:   help commands",
         "",
     ]
     for root, summary in root_rows(role):
@@ -2993,77 +3259,244 @@ def shell_usage_lines(role):
     return lines
 
 
-# --- Guided numbered menu (single declarative source) ---------------------
-# Server menu is grouped like root help IA. Each section is
-# (category_label, ((action_id, label, canonical_hint), ...)).
-# Client/both stay flat lists of (action_id, label, hint).
-# Numbers are assigned at render time across all choices (not categories).
-GUIDED_MENU = {
+# --- Guided navigation tree (task domains; not flat parser verbs) ---------
+# Each entry: (action_id, label, description, kind, target)
+# kind: submenu | command | workflow | exit | back | help
+# target: submenu key | canonical command string | workflow id | None
+
+NAVIGATION_TREE = {
     "client": (
-        ("client_status", "Status", "show status"),
-        ("client_services", "Service list", "show services"),
-        ("client_info", "Connection information", "show info"),
-        ("client_manage", "Manage services", "add service / set service / apply"),
-        ("client_update", "Update product", "update product"),
-        ("client_doctor", "Doctor", "doctor"),
-        ("client_help", "Commands and workflows", "help / help workflows"),
-        ("exit", "Exit", ""),
+        (
+            "client_services",
+            "Services",
+            "Configure services published from this machine",
+            "submenu",
+            "client.services",
+        ),
+        (
+            "client_system",
+            "System",
+            "Status, connection information, updates and diagnostics",
+            "submenu",
+            "client.system",
+        ),
+        ("client_help", "Help", "", "help", None),
+        ("exit", "Exit", "", "exit", None),
+    ),
+    "client.services": (
+        ("client_svc_list", "List services", "", "command", "show services"),
+        ("client_svc_add", "Add service", "", "command", "add service"),
+        ("client_svc_edit", "Edit service", "", "workflow", "edit_service"),
+        ("client_svc_enable", "Enable service", "", "workflow", "enable_service"),
+        ("client_svc_disable", "Disable service", "", "workflow", "disable_service"),
+        ("client_svc_apply", "Apply pending changes", "", "command", "apply"),
+        ("client_svc_discard", "Discard pending changes", "", "command", "discard"),
+        ("client_svc_sync", "Sync with server", "", "command", "sync"),
+        ("back", "Back", "", "back", None),
+    ),
+    "client.system": (
+        ("client_sys_status", "Status", "", "command", "show status"),
+        ("client_sys_info", "Connection information", "", "command", "show info"),
+        ("client_sys_version", "Version information", "", "command", "show version"),
+        ("client_sys_update_product", "Update Data Relay Link", "", "command", "update product"),
+        ("client_sys_update_engine", "Update Relay Engine (FRP)", "", "command", "update engine"),
+        ("client_sys_doctor", "Diagnostics", "", "command", "doctor"),
+        ("client_sys_support", "Support Bundle", "", "command", "create support-bundle"),
+        ("back", "Back", "", "back", None),
     ),
     "server": (
         (
-            "Remote Access",
-            (
-                ("server_clients", "Clients", "show clients / show client / set client"),
-                ("server_zt", "Enrollment / Zero-Touch", "create zero-touch / create enrollment"),
-                ("server_bulk", "Bulk enrollment", "create enrollments"),
-                ("server_enrollments", "Enrollment list", "show enrollments"),
-                ("server_access", "Access Control", "show access-lists / create access-list"),
-            ),
+            "server_clients",
+            "Clients",
+            "Connect and manage client machines",
+            "submenu",
+            "server.clients",
         ),
         (
-            "Controlled Egress",
-            (
-                ("server_egress", "Profiles / policy", "show egress-profiles / add egress-destination"),
-            ),
+            "server_services",
+            "Services",
+            "View published services and control who can reach them",
+            "submenu",
+            "server.services",
         ),
         (
-            "Organize",
-            (
-                ("server_groups", "Groups", "show groups / create group"),
-                ("server_profiles", "Service profiles", "show service-profiles / create service-profile"),
-            ),
+            "server_internet",
+            "Internet Access",
+            "Allow clients to reach approved Internet destinations",
+            "submenu",
+            "server.internet",
         ),
         (
-            "Operate",
-            (
-                ("server_status", "Status", "show status"),
-                ("server_doctor", "Doctor", "doctor"),
-                ("server_audit", "Audit", "show audit"),
-                ("server_backup", "Backup / Restore", "create backup / restore backup"),
-                ("server_support", "Support bundle", "create support-bundle"),
-                ("server_update_project", "Update product", "update product"),
-                ("server_update_engine", "Update FRP engine", "update engine"),
-                ("server_help", "Commands and workflows", "help / help workflows"),
-            ),
+            "server_system",
+            "System",
+            "Status, settings, backup, updates and diagnostics",
+            "submenu",
+            "server.system",
         ),
-        (
-            None,
-            (
-                ("exit", "Exit", ""),
-            ),
-        ),
+        ("server_help", "Help", "", "help", None),
+        ("exit", "Exit", "", "exit", None),
     ),
-    "both": (
-        ("both_client", "Client operations", ""),
-        ("both_server", "Server operations", ""),
-        ("both_status", "Status (both)", "show status"),
-        ("both_doctor", "System diagnostics", "doctor"),
-        ("both_help", "Commands and workflows", "help / help workflows"),
-        ("exit", "Exit", ""),
+    "server.clients": (
+        ("server_zt", "Connect a new client", "", "workflow", "create_zero_touch"),
+        ("server_clients_list", "List clients", "", "command", "show clients"),
+        ("server_clients_manage", "View or manage a client", "", "workflow", "manage_client"),
+        ("server_groups", "Groups", "", "submenu", "server.clients.groups"),
+        ("server_enrollments", "Enrollments", "", "submenu", "server.clients.enrollments"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.clients.groups": (
+        ("server_groups_list", "List groups", "", "command", "show groups"),
+        ("server_groups_create", "Create group", "", "workflow", "create_group"),
+        ("server_groups_manage", "View or manage a group", "", "workflow", "manage_group"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.clients.enrollments": (
+        ("server_enroll_list", "List enrollments", "", "command", "show enrollments"),
+        ("server_enroll_create", "Create manual enrollment code", "", "workflow", "create_enrollment"),
+        ("server_enroll_bulk", "Create enrollment codes in bulk", "", "command", "create enrollments"),
+        ("server_enroll_revoke", "Revoke active enrollment", "", "workflow", "revoke_enrollment"),
+        ("server_enroll_delete", "Delete terminal enrollment record", "", "workflow", "delete_enrollment"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.services": (
+        ("server_svc_list", "List published services", "", "command", "show services"),
+        ("server_svc_client", "View a client's services", "", "workflow", "client_services"),
+        ("server_access", "Access Rules", "", "submenu", "server.services.access"),
+        ("server_profiles", "Service Profiles", "", "submenu", "server.services.profiles"),
+        ("server_svc_release", "Release a service reservation", "", "workflow", "release_service"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.services.access": (
+        ("server_access_list", "List rules", "", "command", "show access-lists"),
+        ("server_access_create", "Create rule", "", "workflow", "create_access_list"),
+        ("server_access_edit", "View or edit rule", "", "workflow", "manage_access_list"),
+        ("server_access_assign", "Assign rule to a service", "", "workflow", "assign_access"),
+        ("server_access_public", "Set service to public access", "", "workflow", "public_access"),
+        ("server_access_check", "Check access for a source IP", "", "workflow", "test_access"),
+        ("server_access_log", "Recent access decisions", "", "command", "show access-log"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.services.profiles": (
+        ("server_prof_list", "List profiles", "", "command", "show service-profiles"),
+        ("server_prof_create", "Create profile", "", "workflow", "create_service_profile"),
+        ("server_prof_edit", "View or edit profile", "", "workflow", "manage_service_profile"),
+        ("server_prof_delete", "Delete profile", "", "workflow", "delete_service_profile"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.internet": (
+        ("server_egress_overview", "Overview", "", "command", "show egress"),
+        ("server_egress_profiles", "Access Profiles", "", "submenu", "server.internet.profiles"),
+        ("server_egress_tcp", "Fixed TCP", "", "submenu", "server.internet.tcp"),
+        ("server_egress_templates", "Templates", "", "submenu", "server.internet.templates"),
+        ("server_egress_check", "Check policy", "", "workflow", "explain_egress"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.internet.profiles": (
+        ("server_egp_list", "List profiles", "", "command", "show egress-profiles"),
+        ("server_egp_create", "Create profile", "", "workflow", "create_egress_profile"),
+        ("server_egp_manage", "View or manage profile", "", "workflow", "manage_egress_profile"),
+        ("server_egp_import", "Import profile", "", "workflow", "import_egress"),
+        ("server_egp_diff", "Compare with import file", "", "workflow", "diff_egress"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.internet.tcp": (
+        ("server_egt_list", "List Fixed TCP entries", "", "command", "show egress-tcp"),
+        ("server_egt_create", "Create Fixed TCP entry", "", "workflow", "create_egress_tcp"),
+        ("server_egt_manage", "View or manage an entry", "", "workflow", "manage_egress_tcp"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.internet.templates": (
+        ("server_egr_list", "List templates", "", "command", "show egress-recipes"),
+        ("server_egr_view", "View template", "", "workflow", "view_egress_recipe"),
+        ("server_egr_create", "Create configuration from template", "", "workflow", "apply_egress_recipe"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.system": (
+        ("server_sys_status", "Status", "", "command", "show status"),
+        ("server_sys_settings", "Server Settings", "", "submenu", "server.system.settings"),
+        ("server_sys_backup", "Backup & Restore", "", "submenu", "server.system.backup"),
+        ("server_sys_updates", "Updates", "", "submenu", "server.system.updates"),
+        ("server_sys_diag", "Diagnostics", "", "submenu", "server.system.diagnostics"),
+        ("server_sys_audit", "Audit Log", "", "command", "show audit"),
+        ("server_sys_version", "Version Information", "", "command", "show version"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.system.settings": (
+        ("server_set_public", "Published service hostname", "", "workflow", "set_public_hostname"),
+        ("server_set_bootstrap", "Bootstrap hostname", "", "workflow", "set_bootstrap_hostname"),
+        ("server_set_installer", "Client installer URL", "", "workflow", "set_installer_url"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.system.backup": (
+        ("server_bak_create", "Create backup", "", "command", "create backup"),
+        ("server_bak_restore", "Restore backup", "", "workflow", "restore_backup"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.system.updates": (
+        ("server_upd_product", "Update Data Relay Link", "", "command", "update product"),
+        ("server_upd_upstream", "Check upstream relay-engine release", "", "command", "show upstream"),
+        ("server_upd_engine", "Update Relay Engine (FRP)", "", "command", "update engine"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.system.diagnostics": (
+        ("server_diag_doctor", "Run health checks", "", "command", "doctor"),
+        ("server_diag_support", "Create support bundle", "", "command", "create support-bundle"),
+        ("back", "Back", "", "back", None),
     ),
 }
 
-def _guided_menu_key(role):
+# Dual-role hosts use the server product-domain root (not Client/Server ops),
+# and distinguish published vs local services inside Services.
+NAVIGATION_TREE["both"] = (
+    (
+        "both_clients",
+        "Clients",
+        "Connect and manage client machines",
+        "submenu",
+        "server.clients",
+    ),
+    (
+        "both_services",
+        "Services",
+        "View published services and control who can reach them",
+        "submenu",
+        "both.services",
+    ),
+    (
+        "both_internet",
+        "Internet Access",
+        "Allow clients to reach approved Internet destinations",
+        "submenu",
+        "server.internet",
+    ),
+    (
+        "both_system",
+        "System",
+        "Status, settings, backup, updates and diagnostics",
+        "submenu",
+        "server.system",
+    ),
+    ("both_help", "Help", "", "help", None),
+    ("exit", "Exit", "", "exit", None),
+)
+NAVIGATION_TREE["both.services"] = (
+    ("both_svc_published", "Published services", "", "command", "show services"),
+    (
+        "both_svc_local",
+        "Local services on this machine",
+        "",
+        "submenu",
+        "client.services",
+    ),
+    ("server_svc_client", "View a client's services", "", "workflow", "client_services"),
+    ("server_access", "Access Rules", "", "submenu", "server.services.access"),
+    ("server_profiles", "Service Profiles", "", "submenu", "server.services.profiles"),
+    ("server_svc_release", "Release a service reservation", "", "workflow", "release_service"),
+    ("back", "Back", "", "back", None),
+)
+
+
+def _nav_key_for_role(role):
     client, server = role_parts(role)
     if client and server:
         return "both"
@@ -3072,15 +3505,52 @@ def _guided_menu_key(role):
     return "server"
 
 
+def navigation_entries(menu_key):
+    """Return navigation rows for a menu key."""
+    return list(NAVIGATION_TREE.get(menu_key, ()))
+
+
+def render_navigation_menu(menu_key, title=None):
+    """Render one navigation level without backend command hints."""
+    entries = navigation_entries(menu_key)
+    lines = []
+    if title:
+        lines.append(title)
+        lines.append("=" * len(title))
+        lines.append("")
+    n = 0
+    for _action_id, label, description, _kind, _target in entries:
+        n += 1
+        lines.append("%s) %s" % (n, label))
+        if description:
+            lines.append("   %s" % description)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def navigation_resolve(menu_key, choice):
+    """Resolve a numeric choice to (action_id, label, description, kind, target)."""
+    text = str(choice or "").strip()
+    if not text.isdigit():
+        return None
+    n = int(text)
+    entries = navigation_entries(menu_key)
+    if n < 1 or n > len(entries):
+        return None
+    return entries[n - 1]
+
+
+# Backwards-compatible guided-menu helpers (flat listing of root domains).
+GUIDED_MENU = NAVIGATION_TREE
+
+
+def _guided_menu_key(role):
+    return _nav_key_for_role(role)
+
+
 def _guided_menu_sections(role):
-    """Yield (category_or_None, entries) where entries are (action_id, label, hint)."""
     key = _guided_menu_key(role)
-    raw = GUIDED_MENU.get(key, ())
-    if key == "server":
-        for category, entries in raw:
-            yield category, entries
-        return
-    yield None, raw
+    entries = navigation_entries(key)
+    yield None, tuple((a, label, desc) for a, label, desc, _k, _t in entries)
 
 
 def guided_menu_entries(role):
@@ -3095,34 +3565,99 @@ def guided_menu_entries(role):
 
 
 def render_guided_menu(role):
-    """Text block for the numbered guided menu (without catalog overview)."""
-    lines = []
-    n = 0
-    for category, entries in _guided_menu_sections(role):
-        if category:
-            if lines:
-                lines.append("")
-            lines.append(category)
-        elif lines:
-            # Uncategorized trailer (Exit): separate from prior section.
-            lines.append("")
-        for action_id, label, hint in entries:
-            _ = action_id
-            n += 1
-            if hint:
-                lines.append("%s) %-25s (%s)" % (n, label, hint))
-            else:
-                lines.append("%s) %s" % (n, label))
-    return "\n".join(lines) + ("\n" if lines else "")
+    """Text block for the numbered guided menu (root domains only)."""
+    key = _guided_menu_key(role)
+    title = "Data Relay Link"
+    return render_navigation_menu(key, title=title)
 
 
 def guided_menu_action(role, choice):
-    """Resolve a numeric menu choice to action_id, or None."""
-    text = str(choice or "").strip()
-    if not text.isdigit():
+    """Resolve a numeric root-menu choice to action_id, or None."""
+    resolved = navigation_resolve(_guided_menu_key(role), choice)
+    if not resolved:
         return None
-    n = int(text)
-    for idx, action_id, _label, _hint in guided_menu_entries(role):
-        if idx == n:
-            return action_id
-    return None
+    return resolved[0]
+
+
+# Resource-domain grouping for large Tab / context candidate lists.
+COMPLETION_DOMAIN_GROUPS = (
+    (
+        "Clients",
+        (
+            "clients",
+            "client",
+            "groups",
+            "group",
+            "enrollments",
+            "enrollment",
+            "enrollments",
+            "zero-touch",
+        ),
+    ),
+    (
+        "Services",
+        (
+            "services",
+            "service",
+            "service-profiles",
+            "service-profile",
+            "access-lists",
+            "access-list",
+            "access-service",
+            "access-log",
+            "access-assign",
+        ),
+    ),
+    (
+        "Internet Access",
+        (
+            "egress",
+            "egress-profiles",
+            "egress-profile",
+            "egress-tcp",
+            "egress-tcp-entry",
+            "egress-recipes",
+            "egress-recipe",
+            "egress-destination",
+            "egress-source",
+        ),
+    ),
+    (
+        "System",
+        (
+            "status",
+            "version",
+            "server-status",
+            "upstream",
+            "audit",
+            "backup",
+            "support-bundle",
+            "info",
+            "installer-url",
+            "windows-installer-url",
+            "server",
+            "product",
+            "engine",
+        ),
+    ),
+)
+
+
+def group_completion_candidates(candidates):
+    """Group resource tokens by product domain for large Tab/context lists."""
+    items = [str(c) for c in (candidates or []) if str(c).strip()]
+    if len(items) < 6:
+        return None
+    assigned = set()
+    groups = []
+    for title, members in COMPLETION_DOMAIN_GROUPS:
+        hit = [c for c in items if c in members]
+        if hit:
+            groups.append((title, hit))
+            assigned.update(hit)
+    other = [c for c in items if c not in assigned]
+    if other:
+        groups.append(("Other", other))
+    if len(groups) <= 1:
+        return None
+    return groups

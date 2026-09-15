@@ -736,19 +736,327 @@ PY
 }
 
 frpctl_print_client_menu() {
-  frpctl_print_catalog_overview client
-  frpctl_render_guided_menu client
+  frpctl_render_nav_menu client
 }
 
 frpctl_print_server_menu() {
-  frpctl_print_catalog_overview server
-  frpctl_render_guided_menu server
+  frpctl_render_nav_menu server
 }
 
 frpctl_print_both_menu() {
   echo "This host has both a Data Relay Link server and client installed."
+  echo "Navigation uses the server product domains; local client services"
+  echo "are under Services when applicable."
   echo
-  frpctl_render_guided_menu both
+  frpctl_render_nav_menu both
+}
+
+frpctl_render_nav_menu() {
+  local menu_key="$1"
+  local title="${2:-}"
+  local cat
+  cat="$(frpctl_catalog_py)" || return 1
+  python3 - "$cat" "$menu_key" "$title" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+menu_key = sys.argv[2]
+title = sys.argv[3] or None
+spec = importlib.util.spec_from_file_location("frp_cli_catalog", str(path))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+if not title:
+    if menu_key in ("server", "both", "client"):
+        title = "Data Relay Link"
+    elif menu_key.endswith(".clients"):
+        title = "Clients"
+    elif menu_key.endswith(".services") and "internet" not in menu_key:
+        title = "Services"
+    elif "internet" in menu_key and menu_key.count(".") == 1:
+        title = "Internet Access"
+    elif menu_key.endswith(".system"):
+        title = "System"
+    elif menu_key.endswith(".groups"):
+        title = "Groups"
+    elif menu_key.endswith(".enrollments"):
+        title = "Enrollments"
+    elif menu_key.endswith(".access"):
+        title = "Access Rules"
+    elif menu_key.endswith(".profiles") and "internet" in menu_key:
+        title = "Access Profiles"
+    elif menu_key.endswith(".profiles"):
+        title = "Service Profiles"
+    elif menu_key.endswith(".tcp"):
+        title = "Fixed TCP"
+    elif menu_key.endswith(".templates"):
+        title = "Templates"
+    elif menu_key.endswith(".settings"):
+        title = "Server Settings"
+    elif menu_key.endswith(".backup"):
+        title = "Backup & Restore"
+    elif menu_key.endswith(".updates"):
+        title = "Updates"
+    elif menu_key.endswith(".diagnostics"):
+        title = "Diagnostics"
+sys.stdout.write(mod.render_navigation_menu(menu_key, title=title))
+PY
+}
+
+frpctl_nav_resolve() {
+  local menu_key="$1" choice="$2"
+  local cat
+  cat="$(frpctl_catalog_py)" || return 1
+  python3 - "$cat" "$menu_key" "$choice" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+menu_key = sys.argv[2]
+choice = sys.argv[3]
+spec = importlib.util.spec_from_file_location("frp_cli_catalog", str(path))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+row = mod.navigation_resolve(menu_key, choice)
+if not row:
+    raise SystemExit(1)
+action_id, label, description, kind, target = row
+print(action_id)
+print(kind)
+print(target or "")
+print(label)
+PY
+}
+
+frpctl_nav_dispatch_command() {
+  local cmd="$1"
+  local -a toks=()
+  # shellcheck disable=SC2206
+  toks=($cmd)
+  frpctl_dispatch "${toks[@]}" || true
+}
+
+frpctl_nav_prompt_id() {
+  local prompt="$1"
+  local value=""
+  value="$(frpctl_read "$prompt" "")" || return 1
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ -z "$value" ]]; then
+    echo "ERROR: value is required" >&2
+    return 1
+  fi
+  printf '%s' "$value"
+}
+
+frpctl_nav_workflow() {
+  local workflow="$1"
+  local id path value
+  case "$workflow" in
+    create_zero_touch) frpctl_guided_zero_touch ;;
+    create_enrollment) frpctl_guided_manual_enrollment ;;
+    manage_client) frpctl_manage_clients ;;
+    create_group)
+      id="$(frpctl_nav_prompt_id "Group name: ")" || return 1
+      frpctl_dispatch create group "$id" || true
+      ;;
+    manage_group)
+      id="$(frpctl_nav_prompt_id "Group name: ")" || return 1
+      frpctl_dispatch show group "$id" || true
+      ;;
+    revoke_enrollment)
+      id="$(frpctl_nav_prompt_id "Enrollment ID: ")" || return 1
+      frpctl_dispatch revoke enrollment "$id" || true
+      ;;
+    delete_enrollment)
+      id="$(frpctl_nav_prompt_id "Enrollment ID: ")" || return 1
+      frpctl_dispatch delete enrollment "$id" || true
+      ;;
+    client_services)
+      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      frpctl_dispatch show client "$id" services || true
+      ;;
+    release_service)
+      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      frpctl_dispatch release service "$id" "$value" || true
+      ;;
+    create_access_list)
+      id="$(frpctl_nav_prompt_id "Access Rule name: ")" || return 1
+      frpctl_dispatch create access-list "$id" || true
+      ;;
+    manage_access_list)
+      id="$(frpctl_nav_prompt_id "Access Rule name: ")" || return 1
+      frpctl_dispatch show access-list "$id" || true
+      ;;
+    assign_access)
+      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      path="$(frpctl_nav_prompt_id "Access Rule name: ")" || return 1
+      frpctl_dispatch set access-assign "$id" "$value" "$path" || true
+      ;;
+    public_access)
+      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      frpctl_dispatch set access-public "$id" "$value" || true
+      ;;
+    test_access)
+      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      path="$(frpctl_nav_prompt_id "Source IP: ")" || return 1
+      frpctl_dispatch test access "$id" "$value" "$path" || true
+      ;;
+    create_service_profile)
+      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      frpctl_dispatch create service-profile "$id" || true
+      ;;
+    manage_service_profile)
+      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      frpctl_dispatch show service-profile "$id" || true
+      ;;
+    delete_service_profile)
+      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      frpctl_dispatch delete service-profile "$id" || true
+      ;;
+    explain_egress)
+      echo
+      echo "Check whether this access would be allowed"
+      echo "(policy + DNS evaluation; not a live connection test)."
+      echo
+      frpctl_dispatch explain egress || true
+      ;;
+    create_egress_profile)
+      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      frpctl_dispatch create egress-profile "$id" || true
+      ;;
+    manage_egress_profile)
+      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      frpctl_dispatch show egress-profile "$id" || true
+      ;;
+    import_egress)
+      path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
+      frpctl_dispatch import egress "$path" || true
+      ;;
+    diff_egress)
+      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
+      frpctl_dispatch diff egress "$id" "$path" || true
+      ;;
+    create_egress_tcp)
+      id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
+      frpctl_dispatch create egress-tcp "$id" || true
+      ;;
+    manage_egress_tcp)
+      id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
+      frpctl_dispatch show egress-tcp-entry "$id" || true
+      ;;
+    view_egress_recipe)
+      id="$(frpctl_nav_prompt_id "Template name: ")" || return 1
+      frpctl_dispatch show egress-recipe "$id" || true
+      ;;
+    apply_egress_recipe)
+      id="$(frpctl_nav_prompt_id "Template name: ")" || return 1
+      frpctl_dispatch apply egress-recipe "$id" || true
+      ;;
+    set_public_hostname)
+      value="$(frpctl_nav_prompt_id "Published service hostname: ")" || return 1
+      frpctl_dispatch set server public-hostname "$value" || true
+      ;;
+    set_bootstrap_hostname)
+      value="$(frpctl_nav_prompt_id "Bootstrap hostname: ")" || return 1
+      frpctl_dispatch set server bootstrap-hostname "$value" || true
+      ;;
+    set_installer_url)
+      value="$(frpctl_nav_prompt_id "Client installer URL: ")" || return 1
+      frpctl_dispatch set installer-url "$value" || true
+      ;;
+    restore_backup)
+      path="$(frpctl_nav_prompt_id "Backup path: ")" || return 1
+      frpctl_dispatch restore backup "$path" || true
+      ;;
+    edit_service|enable_service|disable_service)
+      id="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      case "$workflow" in
+        edit_service) frpctl_dispatch set service "$id" || true ;;
+        enable_service) frpctl_dispatch enable service "$id" || true ;;
+        disable_service) frpctl_dispatch disable service "$id" || true ;;
+      esac
+      ;;
+    help) frpctl_menu_commands ;;
+    *)
+      echo "ERROR: unsupported guided workflow: $workflow" >&2
+      return 1
+      ;;
+  esac
+}
+
+frpctl_nav_loop() {
+  local menu_key="$1"
+  local choice action_id kind target label top
+  local -a stack=()
+  while true; do
+    echo
+    frpctl_header
+    frpctl_render_nav_menu "$menu_key"
+    echo
+    if [[ "${FRP_CTL_TEST_MENU:-}" == "1" ]]; then
+      return 0
+    fi
+    choice="$(frpctl_read "Select: " "")" || return 1
+    if ! {
+      read -r action_id
+      read -r kind
+      read -r target
+      read -r label
+    } < <(frpctl_nav_resolve "$menu_key" "$choice" 2>/dev/null); then
+      echo "ERROR: select a valid menu number" >&2
+      continue
+    fi
+    case "$kind" in
+      exit)
+        echo "Exit."
+        return 0
+        ;;
+      back)
+        if ((${#stack[@]} == 0)); then
+          return 0
+        fi
+        top=$((${#stack[@]} - 1))
+        menu_key="${stack[$top]}"
+        if ((top == 0)); then
+          stack=()
+        else
+          stack=("${stack[@]:0:$top}")
+        fi
+        ;;
+      submenu)
+        stack+=("$menu_key")
+        menu_key="$target"
+        ;;
+      command)
+        frpctl_nav_dispatch_command "$target"
+        ;;
+      workflow)
+        frpctl_nav_workflow "$target"
+        ;;
+      help)
+        frpctl_menu_commands
+        ;;
+      *)
+        echo "ERROR: select a valid menu number" >&2
+        ;;
+    esac
+  done
+}
+
+frpctl_client_menu() {
+  frpctl_nav_loop client
+}
+
+frpctl_server_menu() {
+  frpctl_nav_loop server
+}
+
+frpctl_both_menu() {
+  frpctl_nav_loop both
 }
 
 frpctl_input_init() {
@@ -824,38 +1132,6 @@ frpctl_read() {
   printf '%s' "$value"
 }
 
-frpctl_client_menu() {
-  local choice action
-  while true; do
-    echo
-    frpctl_header
-    frpctl_print_client_menu
-    echo
-    if [[ "${FRP_CTL_TEST_MENU:-}" == "1" ]]; then
-      return 0
-    fi
-    choice="$(frpctl_read "Select: " "")" || return 1
-    action="$(frpctl_menu_resolve_action client "$choice" 2>/dev/null)" || {
-      echo "ERROR: select a valid menu number" >&2
-      continue
-    }
-    case "$action" in
-      client_status) frpctl_run frp-client status ;;
-      client_services) frpctl_run frp-client list ;;
-      client_info) frpctl_run frp-client info ;;
-      client_manage) frpctl_run frp-client ;;
-      client_update) frpctl_client_update ;;
-      client_doctor) frpctl_dispatch doctor || true ;;
-      client_help) frpctl_menu_commands ;;
-      exit)
-        echo "Exit."
-        return 0
-        ;;
-      *) echo "ERROR: select a valid menu number" >&2 ;;
-    esac
-  done
-}
-
 frpctl_zt_validate_field() {
   # args: kind value -> prints normalized value on success; stderr + rc=1 on failure
   local kind="$1" value="$2"
@@ -916,8 +1192,8 @@ PY
 frpctl_zt_prompt_client_identification() {
   local name="" note=""
   echo
-  echo "Client identification"
-  echo "====================="
+  echo "Client details"
+  echo "=============="
   echo
   while true; do
     name="$(frpctl_read "Client name: " "")" || return 1
@@ -966,19 +1242,23 @@ frpctl_zt_invoke_create_client() {
   if [[ -n "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
     args+=(--client-name "$_FRP_ZT_CLIENT_NAME")
   fi
-  if [[ -n "${_FRP_ZT_NOTE:-}" ]]; then
-    args+=(--note "$_FRP_ZT_NOTE")
+  # Always pass --note after guided identification so a blank description does
+  # not trigger a second Client details prompt in the backend.
+  if [[ -n "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
+    args+=(--note "${_FRP_ZT_NOTE:-}")
   fi
   frpctl_run frp-create-client "${args[@]}"
 }
 
 frpctl_zt_run_ssh() {
-  _FRP_ZT_CLIENT_NAME=""
-  _FRP_ZT_NOTE=""
   _FRP_ZT_SSH_USER=""
   _FRP_ZT_SSH_PORT=""
   _FRP_ZT_PLATFORM="${_FRP_ZT_PLATFORM:-linux}"
-  frpctl_zt_prompt_client_identification || return 1
+  if [[ -z "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
+    _FRP_ZT_CLIENT_NAME=""
+    _FRP_ZT_NOTE=""
+    frpctl_zt_prompt_client_identification || return 1
+  fi
   frpctl_zt_prompt_ssh || return 1
   frpctl_zt_invoke_create_client \
     --one-line \
@@ -989,10 +1269,12 @@ frpctl_zt_run_ssh() {
 
 frpctl_zt_run_rdp() {
   local rdp_port=""
-  _FRP_ZT_CLIENT_NAME=""
-  _FRP_ZT_NOTE=""
   _FRP_ZT_PLATFORM=windows
-  frpctl_zt_prompt_client_identification || return 1
+  if [[ -z "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
+    _FRP_ZT_CLIENT_NAME=""
+    _FRP_ZT_NOTE=""
+    frpctl_zt_prompt_client_identification || return 1
+  fi
   echo
   echo "RDP"
   echo "==="
@@ -1008,9 +1290,11 @@ frpctl_zt_run_rdp() {
 }
 
 frpctl_zt_run_management() {
-  _FRP_ZT_CLIENT_NAME=""
-  _FRP_ZT_NOTE=""
-  frpctl_zt_prompt_client_identification || return 1
+  if [[ -z "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
+    _FRP_ZT_CLIENT_NAME=""
+    _FRP_ZT_NOTE=""
+    frpctl_zt_prompt_client_identification || return 1
+  fi
   frpctl_zt_invoke_create_client --one-line
 }
 
@@ -1108,12 +1392,14 @@ PY
 frpctl_zt_run_services() {
   local choice services_file="" rc=0
   local -a svc_jsons=()
-  _FRP_ZT_CLIENT_NAME=""
-  _FRP_ZT_NOTE=""
   _FRP_ZT_SVC_JSON=""
   _FRP_ZT_PLATFORM="${_FRP_ZT_PLATFORM:-linux}"
 
-  frpctl_zt_prompt_client_identification || return 1
+  if [[ -z "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
+    _FRP_ZT_CLIENT_NAME=""
+    _FRP_ZT_NOTE=""
+    frpctl_zt_prompt_client_identification || return 1
+  fi
 
   while true; do
     echo
@@ -1189,24 +1475,19 @@ frpctl_zt_run_services() {
 frpctl_guided_zero_touch_linux() {
   local choice
   echo
-  echo "Linux Zero-touch enrollment"
-  echo "==========================="
-  echo
   echo "How do you want to configure this client?"
   echo
   echo "1) SSH only"
-  echo "2) Configure services"
-  echo "3) Connect this machine only (management-only; no published services)"
-  echo "4) Back"
+  echo "2) Choose services"
+  echo "3) Back"
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
     1) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_ssh ;;
     2) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_services ;;
-    3) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_management ;;
-    4|"") return 0 ;;
+    3|"") return 0 ;;
     *)
-      echo "ERROR: select 1-4" >&2
+      echo "ERROR: select 1-3" >&2
       return 1
       ;;
   esac
@@ -1215,19 +1496,18 @@ frpctl_guided_zero_touch_linux() {
 frpctl_guided_zero_touch_windows() {
   local choice
   echo
-  echo "Windows Zero-touch enrollment"
-  echo "============================="
+  echo "How do you want to configure this client?"
   echo
   echo "1) RDP only"
-  echo "2) Configure TCP services"
-  echo "3) OpenSSH (SSH)"
+  echo "2) SSH only"
+  echo "3) Choose services"
   echo "4) Back"
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
     1) frpctl_zt_run_rdp ;;
-    2) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_services ;;
-    3) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_ssh ;;
+    2) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_ssh ;;
+    3) _FRP_ZT_PLATFORM=windows; frpctl_zt_run_services ;;
     4|"") return 0 ;;
     *)
       echo "ERROR: select 1-4" >&2
@@ -1239,10 +1519,11 @@ frpctl_guided_zero_touch_windows() {
 frpctl_guided_zero_touch() {
   local choice
   echo
-  echo "Zero-touch enrollment"
-  echo "====================="
+  echo "Connect a new client"
+  echo "===================="
   echo
-  echo "Client platform:"
+  echo "Platform"
+  echo "========"
   echo
   echo "1) Linux"
   echo "2) Windows"
@@ -1250,8 +1531,18 @@ frpctl_guided_zero_touch() {
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
-    1) frpctl_guided_zero_touch_linux ;;
-    2) frpctl_guided_zero_touch_windows ;;
+    1)
+      _FRP_ZT_CLIENT_NAME=""
+      _FRP_ZT_NOTE=""
+      frpctl_zt_prompt_client_identification || return 1
+      frpctl_guided_zero_touch_linux
+      ;;
+    2)
+      _FRP_ZT_CLIENT_NAME=""
+      _FRP_ZT_NOTE=""
+      frpctl_zt_prompt_client_identification || return 1
+      frpctl_guided_zero_touch_windows
+      ;;
     3|"") return 0 ;;
     *)
       echo "ERROR: select 1-3" >&2
@@ -1316,29 +1607,20 @@ frpctl_guided_enroll() {
 }
 
 frpctl_print_manage_client_actions() {
-  echo "Actions"
-  echo
-  echo "1. Show client information"
-  echo "2. Set label"
-  echo "3. Unset label"
-  echo "4. Set description"
-  echo "5. Unset description"
-  echo "6. Set tag"
-  echo "7. Unset tag"
-  echo "8. Show services"
-  echo "9. Revoke management access"
-  echo "10. Release service"
-  echo "11. Release client"
-  echo "12. Back"
+  echo "1) Overview"
+  echo "2) Services"
+  echo "3) Details and tags"
+  echo "4) Groups"
+  echo "5) Revoke management trust"
+  echo "6) Remove client from server"
+  echo "7) Back"
 }
 
 frpctl_manage_one_client() {
-  local mid="$1" action sid label note tag
+  local mid="$1" action sid label note tag sub value
   while true; do
     echo
-    echo "${FRP_CTL_PRODUCT_NAME} — Client Management"
-    echo "==================================="
-    echo
+    echo "Client: $mid"
     frpctl_run frp-client-info "$mid" || return 1
     echo
     frpctl_print_manage_client_actions
@@ -1346,65 +1628,93 @@ frpctl_manage_one_client() {
     action="$(frpctl_read "Select: " "")" || return 1
     case "$action" in
       1)
-        frpctl_run frp-client-info "$mid" || true
+        frpctl_dispatch show client "$mid" || true
         ;;
       2)
-        label="$(frpctl_read "New label: " "")"
-        if [[ -z "$label" ]]; then
-          echo "ERROR: label is required" >&2
-          continue
-        fi
-        frpctl_run frp-client-set "$mid" --label "$label" || true
+        frpctl_dispatch show client "$mid" services || true
+        echo
+        echo "Service definitions are changed on the client."
+        echo "Use drlink on that client to add or edit services."
+        echo
+        echo "1) Release a service reservation"
+        echo "2) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            sid="$(frpctl_read "Service ID: " "")"
+            if [[ -z "$sid" ]]; then
+              echo "ERROR: service ID is required" >&2
+              continue
+            fi
+            frpctl_dispatch release service "$mid" "$sid" || true
+            ;;
+        esac
         ;;
       3)
-        frpctl_run frp-client-set "$mid" --clear-label || true
+        echo
+        echo "1) Set label"
+        echo "2) Unset label"
+        echo "3) Set description"
+        echo "4) Unset description"
+        echo "5) Set tag"
+        echo "6) Unset tag"
+        echo "7) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            label="$(frpctl_read "New label: " "")"
+            [[ -n "$label" ]] || { echo "ERROR: label is required" >&2; continue; }
+            frpctl_dispatch set client "$mid" label "$label" || true
+            ;;
+          2) frpctl_dispatch unset client "$mid" label || true ;;
+          3)
+            note="$(frpctl_read "New description: " "")"
+            frpctl_dispatch set client "$mid" note "$note" || true
+            ;;
+          4) frpctl_dispatch unset client "$mid" note || true ;;
+          5)
+            tag="$(frpctl_read "Tag KEY: " "")"
+            [[ -n "$tag" ]] || { echo "ERROR: tag key is required" >&2; continue; }
+            value="$(frpctl_read "Tag VALUE: " "")"
+            frpctl_dispatch set client "$mid" tag "$tag" "$value" || true
+            ;;
+          6)
+            tag="$(frpctl_read "Tag key to remove: " "")"
+            [[ -n "$tag" ]] || { echo "ERROR: tag key is required" >&2; continue; }
+            frpctl_dispatch unset client "$mid" tag "$tag" || true
+            ;;
+        esac
         ;;
       4)
-        note="$(frpctl_read "New description: " "")"
-        frpctl_run frp-client-set "$mid" --note "$note" || true
+        frpctl_dispatch show client "$mid" groups || true
+        echo
+        echo "1) Add client to group"
+        echo "2) Remove client from group"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            label="$(frpctl_nav_prompt_id "Group name: ")" || continue
+            frpctl_dispatch add client "$mid" group "$label" || true
+            ;;
+          2)
+            label="$(frpctl_nav_prompt_id "Group name: ")" || continue
+            frpctl_dispatch remove client "$mid" group "$label" || true
+            ;;
+        esac
         ;;
       5)
-        frpctl_run frp-client-set "$mid" --clear-note || true
+        frpctl_dispatch revoke client "$mid" || true
         ;;
       6)
-        tag="$(frpctl_read "Tag KEY=VALUE: " "")"
-        if [[ -z "$tag" ]]; then
-          echo "ERROR: tag is required" >&2
-          continue
-        fi
-        frpctl_run frp-client-set "$mid" --tag "$tag" || true
-        ;;
-      7)
-        tag="$(frpctl_read "Tag key to remove: " "")"
-        if [[ -z "$tag" ]]; then
-          echo "ERROR: tag key is required" >&2
-          continue
-        fi
-        frpctl_run frp-client-set "$mid" --remove-tag "$tag" || true
-        ;;
-      8)
-        frpctl_run frp-client-info "$mid" || true
-        ;;
-      9)
-        frpctl_run frp-revoke-client "$mid" || true
-        ;;
-      10)
-        sid="$(frpctl_read "Service ID: " "")"
-        if [[ -z "$sid" ]]; then
-          echo "ERROR: service ID is required" >&2
-          continue
-        fi
-        frpctl_run frp-release-service "$mid" "$sid" || true
-        ;;
-      11)
-        frpctl_run frp-release-client "$mid" || true
+        frpctl_dispatch release client "$mid" || true
         return 0
         ;;
-      12|"")
+      7|"")
         return 0
         ;;
       *)
-        echo "ERROR: select 1-12" >&2
+        echo "ERROR: select 1-7" >&2
         ;;
     esac
   done
@@ -1505,93 +1815,6 @@ PY
   }
   [[ -n "$mid" ]] || return 1
   frpctl_manage_one_client "$mid"
-}
-
-frpctl_server_menu() {
-  local choice client sid action sub path
-  while true; do
-    echo
-    frpctl_header
-    frpctl_print_server_menu
-    echo
-    if [[ "${FRP_CTL_TEST_MENU:-}" == "1" ]]; then
-      return 0
-    fi
-    choice="$(frpctl_read "Select: " "")" || return 1
-    action="$(frpctl_menu_resolve_action server "$choice" 2>/dev/null)" || {
-      echo "ERROR: select a valid menu number" >&2
-      continue
-    }
-    case "$action" in
-      server_status) frpctl_run frp-server-status ;;
-      server_clients) frpctl_manage_clients ;;
-      server_zt) frpctl_guided_enroll ;;
-      server_bulk) frpctl_run frp-enroll-bulk ;;
-      server_enrollments) frpctl_run frp-enrollments ;;
-      server_backup)
-        echo "1) Backup"
-        echo "2) Restore"
-        sub="$(frpctl_read "Select: " "")"
-        case "$sub" in
-          1) frpctl_run frp-backup ;;
-          2)
-            path="$(frpctl_read "Backup path: " "")"
-            if [[ -z "$path" ]]; then
-              echo "ERROR: backup path is required" >&2
-              continue
-            fi
-            frpctl_run frp-restore "$path"
-            ;;
-          *) echo "ERROR: select 1-2" >&2 ;;
-        esac
-        ;;
-      server_access) frpctl_run frp-access menu ;;
-      server_update_project) frpctl_run frp-project-update ;;
-      server_update_engine) frpctl_run frp-update ;;
-      server_doctor) frpctl_dispatch doctor || true ;;
-      server_audit) frpctl_audit_tail ;;
-      server_help) frpctl_menu_commands ;;
-      server_egress) frpctl_invoke frp-egress list ;;
-      server_groups) frpctl_invoke frp-groups ;;
-      server_profiles) frpctl_invoke frp-profile list ;;
-      server_support) frpctl_run frp-support-bundle ;;
-      exit)
-        echo "Exit."
-        return 0
-        ;;
-      *) echo "ERROR: select a valid menu number" >&2 ;;
-    esac
-  done
-}
-
-frpctl_both_menu() {
-  local choice action
-  while true; do
-    echo
-    frpctl_header
-    frpctl_print_both_menu
-    echo
-    if [[ "${FRP_CTL_TEST_MENU:-}" == "1" ]]; then
-      return 0
-    fi
-    choice="$(frpctl_read "Select: " "")" || return 1
-    action="$(frpctl_menu_resolve_action both "$choice" 2>/dev/null)" || {
-      echo "ERROR: select a valid menu number" >&2
-      continue
-    }
-    case "$action" in
-      both_client) frpctl_client_menu ;;
-      both_server) frpctl_server_menu ;;
-      both_status) frpctl_status_both ;;
-      both_doctor) frpctl_dispatch doctor || true ;;
-      both_help) frpctl_menu_commands ;;
-      exit)
-        echo "Exit."
-        return 0
-        ;;
-      *) echo "ERROR: select a valid menu number" >&2 ;;
-    esac
-  done
 }
 
 frpctl_status_both() {

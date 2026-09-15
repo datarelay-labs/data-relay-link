@@ -147,12 +147,13 @@ echo "$all_server" | has_line create || fail "server list create"
 echo "$all_server" | has_line show || fail "server list show"
 echo "$all_server" | has_line doctor || fail "server list doctor"
 echo "$all_server" | has_line revoke || fail "server list revoke"
+echo "$all_server" | has_line explain || fail "server list explain"
+echo "$all_server" | has_line access || fail "server list access"
 if echo "$all_server" | has_line manage; then fail "server offered manage"; fi
 if echo "$all_server" | has_line enroll; then fail "legacy enroll in tab"; fi
 if echo "$all_server" | has_line clients; then fail "legacy clients in tab"; fi
 if echo "$all_server" | has_line enrollment; then fail "server offered enrollment root"; fi
 if echo "$all_server" | has_line egress; then fail "server offered egress root"; fi
-if echo "$all_server" | has_line access; then fail "server offered access root"; fi
 pass "FRPCTL_TAB_SERVER_ROLE_COMMANDS"
 pass "FRPCTL_TAB_CLIENT_COMMAND_NOT_ON_SERVER"
 

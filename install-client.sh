@@ -86,10 +86,18 @@ collect_services_interactive() {
       frp_ux_empty_services_help
       echo "1) Add service"
       echo "2) Remove a service"
-      echo "3) Install management-only (no published services)"
-      echo "4) Cancel"
+      echo "3) Cancel"
       echo
       choice="$(read_tty "Select an option [1]: " "1")"
+      case "$choice" in
+        1) menu_add_service ;;
+        2) menu_remove_service ;;
+        3)
+          echo "Cancelled."
+          return 1
+          ;;
+        *) echo "ERROR: select 1-3" >&2 ;;
+      esac
     else
       echo "Configured services"
       echo "==================="
@@ -102,26 +110,23 @@ collect_services_interactive() {
       echo "4) Cancel"
       echo
       choice="$(read_tty "Select: " "")"
+      case "$choice" in
+        1) menu_add_service ;;
+        2) menu_remove_service ;;
+        3)
+          frp_ux_print_install_summary "$SERVICES_FILE" "$FRP_VERSION"
+          if frp_confirm_yes "Continue? [Y/n]: "; then
+            return 0
+          fi
+          echo "Returning to the service configuration menu."
+          ;;
+        4)
+          echo "Cancelled."
+          return 1
+          ;;
+        *) echo "ERROR: select 1-4" >&2 ;;
+      esac
     fi
-    case "$choice" in
-      1) menu_add_service ;;
-      2) menu_remove_service ;;
-      3)
-        # Management-only enrollment is a supported end state: the machine is
-        # enrolled and manageable, and frpc stays stopped until a service is
-        # added later. Do not force a service just to finish the install.
-        frp_ux_print_install_summary "$SERVICES_FILE" "$FRP_VERSION"
-        if frp_confirm_yes "Continue? [Y/n]: "; then
-          return 0
-        fi
-        echo "Returning to the service configuration menu."
-        ;;
-      4)
-        echo "Cancelled."
-        return 1
-        ;;
-      *) echo "ERROR: select 1-4" >&2 ;;
-    esac
   done
 }
 
