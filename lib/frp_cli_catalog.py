@@ -3543,7 +3543,7 @@ NAVIGATION_TREE["both.system"] = (
     ("both_sys_pause", "Pause client", "", "command", "system pause"),
     ("both_sys_resume", "Resume client", "", "command", "system resume"),
     ("both_sys_restart", "Restart client", "", "command", "system restart"),
-    ("both_sys_autostart", "Autostart", "", "command", "system autostart"),
+    ("both_sys_autostart", "Client autostart", "", "command", "system autostart"),
     ("both_sys_updates", "Updates", "", "submenu", "server.system.updates"),
     ("both_sys_diag", "Diagnostics", "", "submenu", "server.system.diagnostics"),
     ("both_sys_audit", "Audit Log", "", "command", "system audit"),

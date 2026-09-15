@@ -133,7 +133,7 @@ On a throwaway VM only:
 1. Fresh install (server and/or client bootstrap)
 2. `systemctl is-enabled` / `is-active` for `drlink-server`, `drlink-allocator`, `drlink-client` as applicable
 3. Reboot; confirm units and `sudo drlink show status`
-4. `sudo drlink doctor` (read-only)
+4. `sudo drlink system diagnostics` (read-only)
 5. Zero-touch **or** manual enrollment
 6. Publish a service; connect with the **public** host and **public** service port
    (`ssh -p <public-port> <user>@<public-host>`)

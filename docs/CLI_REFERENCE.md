@@ -138,12 +138,11 @@ system support-bundle
 set group <GROUP>
 set service-profile <PROFILE>
 set internet-profile <PROFILE>
-set access-rule <RULE>
-
-set access-source <RULE> <SOURCE>
-set service-access <CLIENT> <SERVICE> <RULE>
-set internet-source <PROFILE> <CIDR>
-set internet-destination <PROFILE> <FQDN> <PORT> <PROTOCOL>
+set acl <ACL>
+set acl <ACL> source <CIDR>
+set acl <ACL> service <CLIENT> <SERVICE>
+set internet-profile <PROFILE> source <CIDR>
+set internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>
 set fixed-tcp <ENTRY>
 set internet-profile <PROFILE> enabled
 set fixed-tcp <ENTRY> enabled
@@ -155,11 +154,11 @@ unset client <CLIENT> group <GROUP>
 unset enrollment <ENROLLMENT>
 unset group <GROUP>
 unset service-profile <PROFILE>
-unset access-rule <RULE>
-unset access-source <RULE> <SELECTOR>
-unset service-access <CLIENT> <SERVICE>
-unset internet-source <PROFILE> <SELECTOR>
-unset internet-destination <PROFILE> <FQDN> <PORT> [PROTOCOL]
+unset acl <ACL> source <CIDR>
+unset acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL>
+unset internet-profile <PROFILE> source <SELECTOR>
+unset internet-profile <PROFILE> destination <FQDN> <PORT> [PROTOCOL]
 unset internet-profile <PROFILE> enabled
 unset internet-profile <PROFILE>
 unset fixed-tcp <ENTRY> enabled
@@ -169,7 +168,7 @@ system restore <path>
 system update product
 system update engine
 system update check-engine
-test access <CLIENT> <SERVICE> <SOURCE-IP>
+test acl <CLIENT> <SERVICE> <SOURCE-IP>
 test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]
 test fixed-tcp <ENTRY> <SOURCE-IP>
 system diagnostics
@@ -207,26 +206,26 @@ Compatibility forms remain available as hidden aliases; prefer the
 canonical forms above (`show clients`, not legacy list verbs).
 
 
-## Access Rules
+## Access Control Lists (ACLs)
 
-Beginner/operator term and direct CLI resource: **Access Rules**
-(`access-rule` / `access-rules`).
+Beginner/operator term and direct CLI resource: **ACL** / **ACLs**
+(`acl` / `acls`).
 
 ```text
-show access-rules
-show access-rule <RULE>
-set access-rule <RULE>
-set access-source <RULE> <SOURCE>
-set service-access <CLIENT> <SERVICE> <RULE>
-unset access-source <RULE> <SELECTOR>
-unset service-access <CLIENT> <SERVICE>
-unset access-rule <RULE>
-test access <CLIENT> <SERVICE> <SOURCE-IP>
+show acls
+show acl <ACL>
+set acl <ACL>
+set acl <ACL> source <CIDR>
+set acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL> source <CIDR>
+unset acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL>
+test acl <CLIENT> <SERVICE> <SOURCE-IP>
 show access-log
 ```
 
-Interactive `drlink` server menu places Access Rules under **Services**.
-Empty allowlist assignment is refused. Deleting a rule that is still
+Interactive `drlink` server menu places ACLs under **Services**.
+Empty allowlist assignment is refused. Deleting an ACL that is still
 referenced is refused. IP allowlisting is defense-in-depth; keep target
 authentication enabled.
 
@@ -241,8 +240,8 @@ show internet-profiles
 show internet-profile <PROFILE>
 set internet-profile <PROFILE>
 set internet-profile <PROFILE> name|description <VALUE>
-set internet-source <PROFILE> <CIDR>
-set internet-destination <PROFILE> <FQDN> <PORT> <PROTOCOL>
+set internet-profile <PROFILE> source <CIDR>
+set internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>
 test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]
 set internet-profile <PROFILE> enabled
 unset internet-profile <PROFILE> enabled
@@ -324,8 +323,8 @@ Full expert grammar is under `help commands`.
 | `egress list` | `show internet-profiles` |
 | `egress create` | `set internet-profile` |
 | `egress status` | `show internet` |
-| `access list` | `show access-rules` |
-| `access assign` | `set service-access` |
+| `access list` | `show acls` |
+| `access assign` | `set acl <ACL> service <CLIENT> <SERVICE>` |
 | `frp-update` / `update frp` | `system update engine` |
 | `support-bundle` | `system support-bundle` |
 | `purge enrollment` / `delete enrollment` | `unset enrollment` |

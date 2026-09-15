@@ -172,6 +172,37 @@ write_server_healthy() {
   write_unit "$tree/etc/systemd/system/drlink-server.service"
   write_unit "$tree/etc/systemd/system/drlink-allocator.service"
   write_unit "$tree/etc/systemd/system/drlink-access.service"
+  # Current runtime expects egress units + effective policy snapshots when active.
+  cat >"$tree/etc/systemd/system/drlink-egress.service" <<'UNIT'
+[Unit]
+Description=fixture egress
+[Service]
+User=drlink-egress
+ExecStart=/bin/true
+UNIT
+  write_unit "$tree/etc/systemd/system/drlink-tcp-egress.service"
+  mkdir -p "$tree/run/drlink/egress" "$tree/run/drlink/tcp-egress"
+  python3 - "$tree/run/drlink/egress/effective.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "policy_healthy": True,
+    "policy_generation": 1,
+    "max_concurrent": 64,
+    "per_source_limit": 16,
+    "dns_pending_limit": 32,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  python3 - "$tree/run/drlink/tcp-egress/effective.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "healthy": True,
+    "policy_generation": 1,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  : >"$tree/var/log/drlink/audit.jsonl"
+  chmod 600 "$tree/var/log/drlink/audit.jsonl"
   echo 'test-frp-token-do-not-use' >"$tree/etc/frp/server_token"
   chmod 600 "$tree/etc/frp/server_token"
   cat >"$tree/etc/frp/frps.toml" <<'EOF'
@@ -718,7 +749,7 @@ cp -a "$SRV" "$FRPMARK"
 echo '{"operation":"frp-update","phase":"commit"}' \
   >"$FRPMARK/var/lib/drlink/server-update-pending.json"
 run_json "$FRPMARK" "$WORKDIR/frpmark.json" || true
-grep -q 'drlink update engine' "$WORKDIR/frpmark.json" || fail "frp-update guidance"
+grep -q 'drlink system update engine' "$WORKDIR/frpmark.json" || fail "frp-update guidance"
 [[ -f "$FRPMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted frp marker"
 pass "DOCTOR_FRP_UPDATE_GUIDANCE"
 
@@ -729,7 +760,7 @@ echo 'PROJECT_VERSION=1.2.0' >"$VM/etc/drlink/version"
 echo 'FRP_VERSION=0.71.0' >>"$VM/etc/drlink/version"
 run_json "$VM" "$WORKDIR/ver.json" || true
 [[ "$(check_status "$WORKDIR/ver.json" project_version)" == "FAIL" ]] || fail "project version mismatch"
-grep -q 'drlink update' "$WORKDIR/ver.json" || fail "version recovery"
+grep -q 'drlink system update product' "$WORKDIR/ver.json" || fail "version recovery"
 pass "PROJECT_VERSION_MISMATCH"
 
 FV="$WORKDIR/frp-mis"
@@ -737,7 +768,7 @@ cp -a "$CL" "$FV"
 write_dummy_bin "$FV/usr/local/bin/frpc" frpc "0.69.0"
 run_json "$FV" "$WORKDIR/fv.json" || true
 [[ "$(check_status "$WORKDIR/fv.json" frp_version)" == "FAIL" ]] || fail "frp version mismatch"
-grep -q 'drlink update engine' "$WORKDIR/fv.json" || fail "client frp-update guidance"
+grep -q 'drlink system update engine' "$WORKDIR/fv.json" || fail "client frp-update guidance"
 pass "FRP_VERSION_MISMATCH"
 
 # Stale lock
@@ -872,9 +903,14 @@ if grep -q '0.0.0.0:443' "$CL/etc/frp/access-info.txt"; then
 fi
 pass "CONNECTION_INFO_PUBLIC_ENDPOINTS"
 
-# Help
+# Help — public UX advertises system diagnostics (doctor remains hidden/internal).
 "$CTL" help >"$WORKDIR/help.out"
-grep -q 'doctor' "$WORKDIR/help.out" || fail "help missing doctor"
+grep -q 'system' "$WORKDIR/help.out" || fail "help missing system"
+"$CTL" help system >"$WORKDIR/help-system.out"
+grep -q 'diagnostics' "$WORKDIR/help-system.out" || fail "help missing system diagnostics"
+if grep -qE '(^|[[:space:]])doctor([[:space:]]|$)' "$WORKDIR/help.out"; then
+  fail "normal help advertises legacy doctor"
+fi
 pass "HELP_UPDATED"
 
 echo

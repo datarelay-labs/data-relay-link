@@ -2105,7 +2105,7 @@ def _match_show(tokens, role, names=None):
     if resource == "enrollments":
         return {"status": "ok", "action": "show_enrollments"}
     if resource == "audit":
-        return {"status": "ok", "action": "show_audit"}
+        return {"status": "ok", "action": "show_audit", "passthrough": list(tokens[2:])}
     if resource == "upstream":
         return {"status": "ok", "action": "show_upstream", "passthrough": tokens[2:]}
     if resource == "services":

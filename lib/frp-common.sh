@@ -1768,6 +1768,23 @@ if ! declare -F frp_emit_failure_class >/dev/null 2>&1; then
   }
 fi
 
+if ! declare -F frp_emit_update_rollback_recovery_guidance >/dev/null 2>&1; then
+  # Operator-facing next actions after UPDATE_ROLLBACK_FAILED. Machine markers
+  # remain the source of truth for automation; this text is for humans.
+  frp_emit_update_rollback_recovery_guidance() {
+    echo >&2
+    echo "Update failed and automatic rollback could not fully recover Data Relay Link." >&2
+    echo >&2
+    echo "Recovery required." >&2
+    echo >&2
+    echo "Next:" >&2
+    echo "  sudo drlink system diagnostics" >&2
+    echo "  sudo drlink system support-bundle" >&2
+    echo >&2
+    echo "Do not re-enroll clients or delete state manually." >&2
+  }
+fi
+
 frp_is_unsafe_delete_path() {
   local path="${1:-}"
   if [[ -z "$path" || "$path" == "/" || "$path" == "." || "$path" == ".." || "$path" == "//" ]]; then

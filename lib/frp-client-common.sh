@@ -5015,6 +5015,7 @@ frp_client_upgrade_rollback() {
   echo "UPGRADE_ROLLBACK=FAIL"
   frp_emit_failure_class UPDATE_ROLLBACK_FAILED
   echo "RECOVERY_REQUIRED" >&2
+  frp_emit_update_rollback_recovery_guidance
   echo "PENDING_MARKER_CLEARED=NO"
   _FRP_CLIENT_UPGRADE_ROLLBACK_RC=1
   _FRP_CLIENT_UPGRADE_ROLLBACK_DONE=1

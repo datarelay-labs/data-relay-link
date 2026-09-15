@@ -1019,10 +1019,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": true,
+    "hidden": false,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": [
       {
         "name": "--one-line",
@@ -1226,10 +1226,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": true,
+    "hidden": false,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": [
       {
         "name": "--count",
@@ -3689,7 +3689,7 @@
     "roles": "server",
     "category": "System",
     "summary": "Restore from a backup archive",
-    "detail": "Keeps archive validation, snapshot, restart, doctor, and rollback behavior.",
+    "detail": "Same-version restore only unless a migration exists. Shows a product-owned preflight and requires confirmation before mutation (or hidden --yes for automation). Creates a pre-restore snapshot, replaces server state, and restarts services with automatic rollback on failure.",
     "examples": [
       "system restore /var/lib/drlink/backups/b.tar.gz"
     ],
@@ -3720,10 +3720,23 @@
     ],
     "destructive": true,
     "hidden": false,
-    "risk": "none",
-    "confirmation": "none",
+    "risk": "outage",
+    "confirmation": "y_n",
     "surface": "",
-    "flags": []
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Skip interactive restore confirmation (automation only)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation after preflight",
+        "risk": "outage"
+      }
+    ]
   },
   {
     "path": [
@@ -4005,12 +4018,15 @@
     "roles": "server",
     "category": "System",
     "summary": "Show recent Data Relay Link audit events",
-    "detail": "",
+    "detail": "Default output is a concise human-readable table of recent events. Lightweight filters: last <N>, client <CLIENT>, event <EVENT>.",
     "examples": [
-      "system audit"
+      "system audit",
+      "system audit last 20",
+      "system audit client dp1",
+      "system audit event backup.created"
     ],
     "args": [],
-    "tail": null,
+    "tail": "any",
     "internal": [
       "show",
       "audit"
@@ -4424,8 +4440,8 @@
     ],
     "roles": "client",
     "category": "System",
-    "summary": "Restart the local Data Relay Link relay runtime",
-    "detail": "Restart only the local relay runtime. Identity, service definitions, public ports, and server registration are preserved.",
+    "summary": "Restart the local Data Relay Link client runtime",
+    "detail": "Restart only the local client relay runtime. Identity, service definitions, public ports, and server registration are preserved.",
     "examples": [
       "system restart"
     ],

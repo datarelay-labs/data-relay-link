@@ -185,4 +185,12 @@ grep -q 'Do \*\*not\*\* tag a tree whose `PROJECT_VERSION` does not match' docs/
   fail "checklist missing release version gate procedure"
 pass "P1_RELEASE_VERSION_GATE"
 
+# Public documentation must describe visible canonical commands only.
+# Hidden compatibility aliases do not satisfy this gate.
+python3 "$ROOT/tests/test-release-recovery-dual-role-audit-docs-closure.py" \
+  ReleaseRecoveryDualRoleAuditDocsClosure.test_public_doc_command_parity \
+  ReleaseRecoveryDualRoleAuditDocsClosure.test_hidden_aliases_not_advertised_in_normal_help \
+  || fail "PUBLIC_DOC_COMMAND_PARITY"
+pass "PUBLIC_DOC_COMMAND_PARITY"
+
 echo "RELEASE_DOCS_TEST=PASS"

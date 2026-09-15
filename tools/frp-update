@@ -345,6 +345,7 @@ fail_update() {
     frp_emit_failure_class UPDATE_ROLLBACK_FAILED
     echo "RECOVERY_REQUIRED" >&2
     echo "FAILURE_CLASS=UPDATE_ROLLBACK_FAILED" >&2
+    frp_emit_update_rollback_recovery_guidance
     report_preservation
     exit 2
   fi

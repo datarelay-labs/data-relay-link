@@ -442,6 +442,7 @@ frp_server_upgrade_rollback() {
   if ! frp_server_upgrade_restore_snapshot_files "$snapshot"; then
     echo "UPGRADE_ROLLBACK=FAIL"
     echo "RECOVERY_REQUIRED=YES"
+    frp_emit_update_rollback_recovery_guidance
     echo "LIVE_PROJECT_FILES_RESTORED=NO"
     echo "PENDING_MARKER_CLEARED=NO"
     _FRP_UPGRADE_ROLLBACK_RC=1
@@ -452,6 +453,7 @@ frp_server_upgrade_rollback() {
   if ! frp_server_upgrade_verify_restored "$snapshot"; then
     echo "UPGRADE_ROLLBACK=FAIL"
     echo "RECOVERY_REQUIRED=YES"
+    frp_emit_update_rollback_recovery_guidance
     echo "LIVE_PROJECT_FILES_RESTORED=NO"
     echo "PENDING_MARKER_CLEARED=NO"
     _FRP_UPGRADE_ROLLBACK_RC=1
@@ -462,6 +464,7 @@ frp_server_upgrade_rollback() {
   if ! frp_server_upgrade_verify_rollback_health; then
     echo "UPGRADE_ROLLBACK=FAIL"
     echo "RECOVERY_REQUIRED=YES"
+    frp_emit_update_rollback_recovery_guidance
     echo "LIVE_PROJECT_FILES_RESTORED=YES"
     echo "PENDING_MARKER_CLEARED=NO"
     _FRP_UPGRADE_ROLLBACK_RC=1

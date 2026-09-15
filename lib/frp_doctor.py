@@ -89,7 +89,7 @@ MARKER_NOTE = 'Do not delete the pending marker by hand unless recovering from a
 
 def _recovery_for_role(role, kind):
     if kind == 'frp':
-        return 'sudo drlink update engine'
+        return 'sudo drlink system update engine'
     if role in ('client', 'partial_client'):
         return 'sudo drlink system update product'
     if role in ('server', 'partial_server', 'dual'):
@@ -103,7 +103,7 @@ def _recovery_for_operation(operation, role):
     if op == 'project-update':
         return 'sudo drlink system update product' + extra
     if op in ('frp-update',):
-        return 'sudo drlink update engine' + extra
+        return 'sudo drlink system update engine' + extra
     if op in ('client-update',):
         return 'sudo drlink system update product' + extra
     if op == 'install':
@@ -117,7 +117,7 @@ def _recovery_for_operation(operation, role):
     if op == 'update':
         if role in ('client', 'partial_client', 'dual'):
             return 'sudo drlink system update product' + extra
-        return 'sudo drlink update engine' + extra
+        return 'sudo drlink system update engine' + extra
     return (
         'inspect the pending transaction marker (server-update-pending.json / '
         'client-update-pending.json / legacy update-pending.json) operation=%s '
@@ -1394,13 +1394,13 @@ def check_versions(report, paths, facts):
         for label, bpath in (('frps', '/usr/local/bin/frps'), ('frpc', '/usr/local/bin/frpc')):
             ver = parse_binary_version(paths, bpath)
             if ver == 'unknown' and not paths.is_file(bpath):
-                report.add('frp_version_%s' % label, FAIL, '%s binary is missing' % label, bpath, 'sudo drlink update engine', 'installation')
+                report.add('frp_version_%s' % label, FAIL, '%s binary is missing' % label, bpath, 'sudo drlink system update engine', 'installation')
             elif ver != pinned:
                 report.add(
                     'frp_version_%s' % label, FAIL,
                     '%s version is not the pinned release' % label,
                     'installed=%s pinned=%s' % (ver, pinned),
-                    'sudo drlink update engine',
+                    'sudo drlink system update engine',
                     'installation',
                 )
             else:
@@ -2013,6 +2013,85 @@ def check_service_profiles(report, paths, facts, cfg):
 
 
 
+
+def check_audit_log(report, paths, facts, cfg):
+    """Read-only audit subsystem health (fail-open writes must still be visible)."""
+    audit_rel = '/var/log/drlink/audit.jsonl'
+    audit_path = paths.p(audit_rel)
+    parent = audit_path.parent
+    if not parent.exists():
+        report.add(
+            'AUDIT_PATH', WARN,
+            'audit log directory is missing',
+            str(audit_rel),
+            'Audit writes are fail-open; create the log directory on the next install/update if needed',
+            'state',
+        )
+        return
+    if not audit_path.exists():
+        report.add(
+            'AUDIT_PATH', INFO,
+            'audit log file not present yet',
+            str(audit_rel),
+            'Appears after the first auditable server operation',
+            'state',
+        )
+        return
+    try:
+        st = audit_path.stat()
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & 0o077:
+            report.add(
+                'AUDIT_PERMISSIONS', WARN,
+                'audit log permissions are too open',
+                oct(mode),
+                'Expected owner-only access (0600); inspect without mutating the log',
+                'state',
+            )
+        else:
+            report.add(
+                'AUDIT_PERMISSIONS', PASS,
+                'audit log permissions look safe',
+                oct(mode),
+                '',
+                'state',
+            )
+        # Rotation consistency: rotated siblings should be files, not hostile types.
+        rotated = sorted(parent.glob('audit.jsonl.*'))
+        bad = [p.name for p in rotated if p.is_symlink() or not p.is_file()]
+        if bad:
+            report.add(
+                'AUDIT_ROTATION', WARN,
+                'audit rotation siblings look inconsistent',
+                ','.join(bad[:5]),
+                'Inspect rotated audit files; doctor does not mutate the audit log',
+                'state',
+            )
+        else:
+            report.add(
+                'AUDIT_ROTATION', PASS if rotated else INFO,
+                'audit rotation state looks consistent' if rotated else 'no rotated audit files yet',
+                'rotated=%d' % len(rotated),
+                '',
+                'state',
+            )
+        report.add(
+            'AUDIT_PATH', PASS,
+            'audit log path exists',
+            str(audit_rel),
+            '',
+            'state',
+        )
+    except OSError as exc:
+        report.add(
+            'AUDIT_PATH', WARN,
+            'audit log path is not readable',
+            str(exc),
+            'Run: sudo drlink system diagnostics',
+            'state',
+        )
+
+
 def check_egress_control(report, paths, facts, cfg):
     """Validate Controlled Egress policy, unit, and listen configuration (read-only)."""
     import importlib.util
@@ -2192,20 +2271,30 @@ def check_egress_control(report, paths, facts, cfg):
 
     unit_active = 'unknown'
     unit_enabled = 'unknown'
-    try:
-        import subprocess
-        proc = subprocess.run(
-            ['systemctl', 'is-active', 'drlink-egress'],
-            capture_output=True, text=True, timeout=5,
+    # Respect the same systemd isolation rules as frp-doctor-common.sh so
+    # fixtures/test roots never observe the host's live egress units.
+    _systemd_ok = (
+        os.environ.get('FRP_SKIP_SYSTEMD') != '1'
+        and (
+            os.environ.get('FRP_DOCTOR_FORCE_SYSTEMD') == '1'
+            or not os.environ.get('FRP_DEPLOY_TEST_ROOT')
         )
-        unit_active = (proc.stdout or '').strip() or 'unknown'
-        proc = subprocess.run(
-            ['systemctl', 'is-enabled', 'drlink-egress'],
-            capture_output=True, text=True, timeout=5,
-        )
-        unit_enabled = (proc.stdout or '').strip() or 'unknown'
-    except Exception:
-        pass
+    )
+    if _systemd_ok:
+        try:
+            import subprocess
+            proc = subprocess.run(
+                ['systemctl', 'is-active', 'drlink-egress'],
+                capture_output=True, text=True, timeout=5,
+            )
+            unit_active = (proc.stdout or '').strip() or 'unknown'
+            proc = subprocess.run(
+                ['systemctl', 'is-enabled', 'drlink-egress'],
+                capture_output=True, text=True, timeout=5,
+            )
+            unit_enabled = (proc.stdout or '').strip() or 'unknown'
+        except Exception:
+            pass
     if unit_enabled in ('enabled', 'static', 'linked'):
         report.add('EGRESS_UNIT_ENABLED', PASS, 'drlink-egress is enabled', unit_enabled, '', 'runtime')
     elif unit_enabled == 'disabled':
@@ -2213,7 +2302,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_UNIT_ENABLED', WARN,
             'drlink-egress is disabled',
             unit_enabled,
-            'enable unit drlink-egress (read-only doctor will not change units)',
+            'Run: sudo drlink system diagnostics\nIf needed: enable unit drlink-egress (doctor will not change units)',
             'runtime',
         )
     else:
@@ -2227,27 +2316,28 @@ def check_egress_control(report, paths, facts, cfg):
     if unit_active == 'active':
         report.add('EGRESS_UNIT', PASS, 'drlink-egress is active', unit_active, '', 'runtime')
     elif unit_active == 'failed':
-        report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_active, 'inspect unit drlink-egress', 'runtime')
+        report.add('EGRESS_UNIT', FAIL, 'drlink-egress failed', unit_active, 'Run: sudo drlink system diagnostics\nIf needed: inspect systemctl status drlink-egress', 'runtime')
     else:
-        report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'inspect unit drlink-egress', 'runtime')
+        report.add('EGRESS_UNIT', WARN, 'drlink-egress is not active', unit_active, 'Run: sudo drlink system diagnostics\nIf needed: inspect systemctl status drlink-egress', 'runtime')
 
     # Fixed TCP Egress unit + listener collision surface (same policy file).
     tcp_unit_active = 'unknown'
     tcp_unit_enabled = 'unknown'
-    try:
-        import subprocess
-        proc = subprocess.run(
-            ['systemctl', 'is-active', 'drlink-tcp-egress'],
-            capture_output=True, text=True, timeout=5,
-        )
-        tcp_unit_active = (proc.stdout or '').strip() or 'unknown'
-        proc = subprocess.run(
-            ['systemctl', 'is-enabled', 'drlink-tcp-egress'],
-            capture_output=True, text=True, timeout=5,
-        )
-        tcp_unit_enabled = (proc.stdout or '').strip() or 'unknown'
-    except Exception:
-        pass
+    if _systemd_ok:
+        try:
+            import subprocess
+            proc = subprocess.run(
+                ['systemctl', 'is-active', 'drlink-tcp-egress'],
+                capture_output=True, text=True, timeout=5,
+            )
+            tcp_unit_active = (proc.stdout or '').strip() or 'unknown'
+            proc = subprocess.run(
+                ['systemctl', 'is-enabled', 'drlink-tcp-egress'],
+                capture_output=True, text=True, timeout=5,
+            )
+            tcp_unit_enabled = (proc.stdout or '').strip() or 'unknown'
+        except Exception:
+            pass
     if tcp_unit_enabled in ('enabled', 'static', 'linked'):
         report.add(
             'EGRESS_TCP_UNIT_ENABLED', PASS,
@@ -2259,7 +2349,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_TCP_UNIT_ENABLED', WARN,
             'drlink-tcp-egress is disabled',
             tcp_unit_enabled,
-            'enable unit drlink-tcp-egress (read-only doctor will not change units)',
+            'Run: sudo drlink system diagnostics\nIf needed: enable unit drlink-tcp-egress (doctor will not change units)',
             'runtime',
         )
     else:
@@ -2279,7 +2369,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_TCP_UNIT', FAIL,
             'drlink-tcp-egress failed',
             tcp_unit_active,
-            'inspect unit drlink-tcp-egress',
+            'Run: sudo drlink system diagnostics\nIf needed: inspect systemctl status drlink-tcp-egress',
             'runtime',
         )
     else:
@@ -2287,7 +2377,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_TCP_UNIT', WARN,
             'drlink-tcp-egress is not active',
             tcp_unit_active,
-            'inspect unit drlink-tcp-egress',
+            'Run: sudo drlink system diagnostics\nIf needed: inspect systemctl status drlink-tcp-egress',
             'runtime',
         )
 
@@ -2406,7 +2496,7 @@ def check_egress_control(report, paths, facts, cfg):
                 'EGRESS_TCP_EFFECTIVE', WARN,
                 'Fixed TCP Egress effective runtime snapshot is unreadable',
                 str(exc),
-                'restart drlink-tcp-egress or inspect journalctl -u drlink-tcp-egress',
+                'Run: sudo drlink system diagnostics\nIf Data Relay Link remains unhealthy: inspect journalctl -u drlink-tcp-egress',
                 'runtime',
             )
     elif tcp_unit_active == 'active':
@@ -2414,7 +2504,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_TCP_EFFECTIVE', WARN,
             'Fixed TCP Egress unit is active but effective snapshot is missing',
             tcp_effective,
-            'restart drlink-tcp-egress or inspect journalctl -u drlink-tcp-egress',
+            'Run: sudo drlink system diagnostics\nIf Data Relay Link remains unhealthy: inspect journalctl -u drlink-tcp-egress',
             'runtime',
         )
 
@@ -2507,7 +2597,7 @@ def check_egress_control(report, paths, facts, cfg):
                 'EGRESS_EFFECTIVE_CONFIG', FAIL,
                 'egress effective runtime snapshot is unreadable',
                 str(exc),
-                'restart drlink-egress or inspect journalctl -u drlink-egress',
+                'Run: sudo drlink system diagnostics\nIf Data Relay Link remains unhealthy: inspect journalctl -u drlink-egress',
                 'runtime',
             )
     elif unit_active == 'active':
@@ -2515,7 +2605,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_EFFECTIVE_CONFIG', FAIL,
             'egress unit is active but effective policy snapshot is missing',
             '/run/drlink/egress/effective.json',
-            'restart drlink-egress or inspect journalctl -u drlink-egress',
+            'Run: sudo drlink system diagnostics\nIf Data Relay Link remains unhealthy: inspect journalctl -u drlink-egress',
             'runtime',
         )
     else:
@@ -2949,6 +3039,7 @@ def check_server(report, paths, facts, skip_network):
     check_access_control(report, paths, facts, cfg if isinstance(cfg, dict) else {}, state if isinstance(state, dict) else {})
     check_service_profiles(report, paths, facts, cfg if isinstance(cfg, dict) else {})
     check_egress_control(report, paths, facts, cfg if isinstance(cfg, dict) else {})
+    check_audit_log(report, paths, facts, cfg)
 
     bootstrap_abs = '/var/lib/drlink/bootstrap'
     enrollments_abs = '/var/lib/drlink/enrollments'

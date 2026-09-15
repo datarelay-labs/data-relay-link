@@ -393,8 +393,8 @@ set client <CLIENT-ID> tag site seoul
 
 show internet-profiles
 set internet-profile vendor-api
-set internet-source vendor-api 10.0.0.0/24
-set internet-destination vendor-api api.example.com 443 https
+set internet-profile vendor-api source 10.0.0.0/24
+set internet-profile vendor-api destination api.example.com 443 https
 set internet-profile vendor-api enabled
 
 unset client <CLIENT-ID> trust
@@ -478,15 +478,15 @@ v2.3.0 includes the lightweight Group model intended for a few to a few dozen cl
 
 Dynamic Group, nested hierarchy, broad destructive fleet operations, canary rollout frameworks, and hundreds/thousands-client orchestration are not current core scope.
 
-## Access Rules
+## Access Control Lists (ACLs)
 
 Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE) and carried forward:
 
-- Reusable Access Rules (IPv4/IPv6 CIDR sources)
-- Service modes: `PUBLIC` (default) and assigned Access Rule
+- Reusable ACLs (IPv4/IPv6 CIDR sources)
+- Service modes: `PUBLIC` (default) and assigned ACL
 - Optional temporary sources with absolute expiry (`expires_at`)
 - Bounded connection ALLOW/DENY log (`show access-log`)
-- Final public CLI family: `show/set/unset/test` Access Rule commands
+- Final public CLI family: `show/set/unset/test` ACL commands
 - Relay Engine (FRP) 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed when a rule is assigned)
 
 IP allowlisting is defense-in-depth. Keep target authentication enabled.
@@ -494,12 +494,15 @@ IP allowlisting is defense-in-depth. Keep target authentication enabled.
 Everyday commands:
 
 ```text
-show access-rules
-set access-rule <RULE>
-set access-source <RULE> <SOURCE>
-set service-access <CLIENT> <SERVICE> <RULE>
-test access <CLIENT> <SERVICE> <SOURCE-IP>
-unset service-access <CLIENT> <SERVICE>
+show acls
+show acl <ACL>
+set acl <ACL>
+set acl <ACL> source <CIDR>
+set acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL> source <CIDR>
+unset acl <ACL>
+test acl <CLIENT> <SERVICE> <SOURCE-IP>
 ```
 
 ---

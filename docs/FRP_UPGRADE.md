@@ -60,7 +60,7 @@ export FRP_NEW_SHA256_ARM64=...
 ./scripts/secret-scan.sh
 ```
 
-Install on a server only with `sudo drlink update engine`, which installs the
+Install on a server only with `sudo drlink system update engine`, which installs the
 **pinned** version, never upstream latest.
 
 Informational check:
@@ -160,7 +160,7 @@ sudo env FRP_RELEASE_CHANNEL=dev FRP_EXPECTED_SOURCE_REF=main \
   FRP_BUNDLE_SHA256="$actual" bash bootstrap-client.sh --upgrade
 ```
 
-`sudo drlink update --check` is read-only. If it reports
+`sudo drlink system update engine --check` is read-only. If it reports
 `LEGACY_CLIENT_SECURE_BRIDGE_REQUIRED` or `Legacy secure bridge required`,
 do not mutate the host until the procedure above succeeds.
 
@@ -186,8 +186,8 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 
 ## Rollback
 
-- Server FRP binary: `drlink update engine` (implementation: `frp-update`) restores the previous binary on health failure.
-- Server project tools: use `drlink update product` rollback / restore from backup (implementation: `frp-project-update`).
+- Server FRP binary: `drlink system update engine` (implementation: `frp-update`) restores the previous binary on health failure.
+- Server project tools: use `drlink system update product` rollback / restore from backup (implementation: `frp-project-update`).
 - Disaster recovery: `sudo drlink restore backup <backup>` after a validated backup.
 
 ## Future release upgrade suite (from v2.3.1 golden baseline)

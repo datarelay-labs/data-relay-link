@@ -49,7 +49,7 @@ Environment equivalents: `FRP_ALLOCATOR_URL`, `FRP_ALLOCATOR_CA_SHA256`, `FRP_BO
 
 ### ENROLL ONCE / RUN MANY TIMES
 
-If identity + config already exist and install completed, zero-touch **refuses** another ticket and tells you to run `frp-client start`. Port reservations and machine identity stay stable across restarts.
+If identity + config already exist and install completed, zero-touch **refuses** another ticket and tells you to run `drlink system resume`. Port reservations and machine identity stay stable across restarts.
 
 If enrollment finished but binary download/start did not (`install_status=enrolled_incomplete`), re-running the installer **resumes** with the same identity and reserved ports — it does not redeem a new ticket or mint a new management key.
 
@@ -63,15 +63,15 @@ Pinned allocator CA verification and hostname/IP SAN checks both apply on the .N
 
 ### Updates, PID, secrets
 
-- `drlink update engine` (and legacy bare `update`) refreshes pinned `frpc.exe` with SHA256 verify; failure restores binary, metadata, config, and prior running/stopped state (`RECOVERY_REQUIRED=YES` if rollback itself fails).
-- `drlink update product` does **not** download a project artifact in this release. On an installed client, re-run the canonical Windows installer to refresh management tools (identity/ports preserved). Developers/CI may set `FRP_WINDOWS_PROJECT_SRC` to a `windows/` tree.
-- Check modes are distinct: `update product -Check` (project only), `update engine -Check` (engine Would download), `update --check` (combined).
+- `drlink system update engine` (and legacy bare `update`) refreshes pinned `frpc.exe` with SHA256 verify; failure restores binary, metadata, config, and prior running/stopped state (`RECOVERY_REQUIRED=YES` if rollback itself fails).
+- `drlink system update product` does **not** download a project artifact in this release. On an installed client, re-run the canonical Windows installer to refresh management tools (identity/ports preserved). Developers/CI may set `FRP_WINDOWS_PROJECT_SRC` to a `windows/` tree.
+- Check modes are distinct: `system update product -Check` (project only), `system update engine -Check` (engine Would download), `system update engine --check` / combined check (combined).
 - Stop kills only a PID whose recorded exe matches the managed `frpc.exe`.
 - Secret ACL application is fail-closed on Windows.
 
 ## RDP
 
-Default Windows preset exposes TCP **3389** (`preset` treated as RDP in `frp-client info`):
+Default Windows preset exposes TCP **3389** (`preset` treated as RDP in `drlink system info`):
 
 ```text
 mstsc /v:PUBLIC_HOST:REMOTE_PORT
@@ -111,7 +111,7 @@ tools\drlink.cmd status
 tools\drlink.cmd info
 tools\drlink.cmd update [--check]
 tools\drlink.cmd uninstall
-tools\drlink.cmd doctor
+tools\drlink.cmd system diagnostics
 tools\drlink.cmd autostart
 ```
 
@@ -128,7 +128,7 @@ tools\drlink.cmd autostart
 Enrollment with enabled services registers a product-owned Scheduled Task
 named **`DataRelayLinkClient`**. Older installs may still have
 `FRPAutoDeployClient`; product-owned legacy tasks are migrated on the next
-autostart register/uninstall. It runs `frp-client start` as **SYSTEM** at
+autostart register/uninstall. It runs `drlink system resume` as **SYSTEM** at
 system boot (ONSTART), so `frpc` comes back without an interactive login.
 Management-only (zero-service) clients do not register the task. Use
 `drlink autostart` to inspect, enable, or disable it. Enrollment state

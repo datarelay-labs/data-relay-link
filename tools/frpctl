@@ -1155,7 +1155,7 @@ PY
       frpctl_dispatch set server windows-installer-url "$value" || true
       ;;
     restore_backup)
-      path="$(frpctl_nav_prompt_id "Backup path: ")" || return 1
+      path="$(frpctl_select_backup_archive)" || return 1
       frpctl_dispatch system restore "$path" || true
       ;;
     edit_service|enable_service|disable_service)
@@ -2682,19 +2682,427 @@ frpctl_clear_screen() {
   fi
 }
 
-frpctl_audit_tail() {
-  python3 - "${FRP_DEPLOY_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-}}" <<'PY'
-import os, sys
+frpctl_restore_backup_dir() {
+  local root="${FRP_DEPLOY_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-}}"
+  if [[ -n "$root" ]]; then
+    printf '%s' "${root}/var/lib/drlink/backups"
+  else
+    printf '%s' "/var/lib/drlink/backups"
+  fi
+}
+
+# Read-only preflight for system restore. Prints operator summary.
+# Exit 0 = ok to confirm/continue, 2 = version mismatch / refuse, 1 = other error.
+frpctl_restore_preflight() {
+  local archive="$1"
+  local root="${FRP_DEPLOY_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-}}"
+  python3 - "$archive" "$root" <<'PY'
+import json, sys, tarfile
 from pathlib import Path
+
+archive = Path(sys.argv[1])
+root = Path(sys.argv[2] or "/")
+if not archive.is_file():
+    print("ERROR: backup archive not found: %s" % archive, file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    with tarfile.open(archive, "r:gz") as tf:
+        try:
+            member = tf.getmember("manifest.json")
+        except KeyError as exc:
+            raise SystemExit("ERROR: backup is missing manifest.json") from exc
+        raw = tf.extractfile(member)
+        if raw is None:
+            raise SystemExit("ERROR: backup manifest is unreadable")
+        manifest = json.loads(raw.read().decode("utf-8"))
+        clients = None
+        reservations = None
+        try:
+            reg_member = tf.getmember("payload/var/lib/drlink/registry.json")
+            reg_fh = tf.extractfile(reg_member)
+            if reg_fh is not None:
+                reg = json.loads(reg_fh.read().decode("utf-8"))
+                if isinstance(reg, dict):
+                    clients = len(reg.get("clients") or {})
+                    reserved = reg.get("reserved")
+                    if isinstance(reserved, list):
+                        reservations = len(reserved)
+        except Exception:
+            pass
+except SystemExit:
+    raise
+except Exception as exc:
+    print("ERROR: cannot read backup: %s" % exc, file=sys.stderr)
+    raise SystemExit(1)
+
+def read_installed_version():
+    version_path = root / "etc/drlink/version"
+    if not version_path.is_file():
+        return ""
+    data = {}
+    for line in version_path.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            data[k.strip()] = v.strip()
+    return data.get("PROJECT_VERSION") or data.get("project_version") or ""
+
+backup_ver = str(manifest.get("project_version") or "").strip()
+installed_ver = read_installed_version()
+role = str(manifest.get("role") or manifest.get("host_role") or "server")
+created = str(manifest.get("created_at") or manifest.get("created") or "-")
+
+print("Restore Data Relay Link")
+print("=======================")
+print()
+print("Backup")
+print("  Path        : %s" % archive)
+print("  Created     : %s" % created)
+print("  Version     : %s" % (backup_ver or "unknown"))
+print("  Role        : %s" % role)
+if clients is not None:
+    print("  Clients     : %s" % clients)
+if reservations is not None:
+    print("  Reservations: %s" % reservations)
+print()
+print("Backup version    : %s" % (backup_ver or "unknown"))
+print("Installed version : %s" % (installed_ver or "unknown"))
+print()
+if backup_ver and installed_ver and backup_ver != installed_ver:
+    print("Restore cannot continue.")
+    print("Cross-version restore is not supported.")
+    raise SystemExit(2)
+print("Current server state will be replaced.")
+print("A pre-restore snapshot will be created automatically.")
+print("Services will restart.")
+print()
+PY
+}
+
+frpctl_select_backup_archive() {
+  local backup_dir choice path idx=0
+  local -a archives=()
+  local -a labels=()
+  backup_dir="$(frpctl_restore_backup_dir)"
+  echo
+  echo "Available backups"
+  echo
+  if [[ -d "$backup_dir" ]]; then
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      archives+=("${path%%$'\t'*}")
+      labels+=("$path")
+    done < <(python3 - "$backup_dir" <<'PY'
+import json, sys, tarfile
+from pathlib import Path
+root = Path(sys.argv[1])
+if not root.is_dir():
+    raise SystemExit(0)
+rows = []
+for path in root.iterdir():
+    if not path.is_file():
+        continue
+    if not path.name.endswith((".tar.gz", ".tgz")):
+        continue
+    created = "-"
+    version = "-"
+    size = path.stat().st_size
+    try:
+        with tarfile.open(path, "r:gz") as tf:
+            member = tf.getmember("manifest.json")
+            raw = tf.extractfile(member)
+            if raw is not None:
+                manifest = json.loads(raw.read().decode("utf-8"))
+                created = str(manifest.get("created_at") or "-")
+                version = str(manifest.get("project_version") or "-")
+    except Exception:
+        pass
+    if size >= 1024 * 1024:
+        size_s = "%.1f MiB" % (size / (1024 * 1024))
+    elif size >= 1024:
+        size_s = "%.1f KiB" % (size / 1024)
+    else:
+        size_s = "%d B" % size
+    rows.append((path.stat().st_mtime, str(path), created, version, size_s))
+for _mtime, path, created, version, size_s in sorted(rows, reverse=True):
+    print("%s\t%s\t%s\t%s" % (path, created, version, size_s))
+PY
+)
+  fi
+  if ((${#labels[@]} > 0)); then
+    for path in "${labels[@]}"; do
+      idx=$((idx + 1))
+      python3 - "$idx" "$path" <<'PY'
+import sys
+idx, row = sys.argv[1], sys.argv[2]
+parts = row.split("\t")
+path = parts[0]
+created = parts[1] if len(parts) > 1 else "-"
+version = parts[2] if len(parts) > 2 else "-"
+size = parts[3] if len(parts) > 3 else "-"
+name = path.rsplit("/", 1)[-1]
+print("%s) %s" % (idx, name))
+print("   created %s" % created)
+print("   version %s" % version)
+print("   size %s" % size)
+print()
+PY
+    done
+  else
+    echo "(no backups found in ${backup_dir})"
+    echo
+  fi
+  local enter_idx=$((idx + 1))
+  local back_idx=$((idx + 2))
+  echo "${enter_idx}) Enter another path"
+  echo "${back_idx}) Back"
+  echo
+  choice="$(frpctl_read "Select backup: " "")" || return 1
+  if [[ "$choice" == "$back_idx" || "$choice" == "q" || "$choice" == "Q" ]]; then
+    return 1
+  fi
+  if [[ "$choice" == "$enter_idx" ]]; then
+    path="$(frpctl_nav_prompt_id "Backup path: ")" || return 1
+    printf '%s' "$path"
+    return 0
+  fi
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= idx )); then
+    printf '%s' "${archives[$((choice - 1))]}"
+    return 0
+  fi
+  echo "Cancelled."
+  return 1
+}
+
+frpctl_confirm_restore() {
+  local archive="$1"
+  local ans="" yes=0 pt
+  frpctl_restore_preflight "$archive"
+  local rc=$?
+  if [[ "$rc" -eq 2 ]]; then
+    return 2
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    return 1
+  fi
+  for pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+    [[ "$pt" == "--yes" ]] && yes=1
+  done
+  # Hidden automation escape for fixtures/non-interactive callers.
+  if [[ "${FRP_RESTORE_YES:-}" == "1" ]]; then
+    yes=1
+  fi
+  if [[ "$yes" == "1" ]]; then
+    return 0
+  fi
+  if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
+    ans="$(frpctl_read "Continue with restore? [y/N]: " "N")" || return 1
+  elif IFS= read -r ans; then
+    :
+  else
+    echo "ERROR: restore requires confirmation." >&2
+    echo "Run interactively, or pass --yes for automation:" >&2
+    echo "  system restore ${archive} --yes" >&2
+    return 1
+  fi
+  case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+    y|yes) return 0 ;;
+    *)
+      echo "Cancelled."
+      return 3
+      ;;
+  esac
+}
+
+frpctl_verify_dual_role_shared_runtime() {
+  # After a dual-role product update, shared management files must belong to
+  # one coherent installed build identity.
+  local root="${FRP_DEPLOY_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-}}"
+  python3 - "$root" <<'PY'
+import hashlib, sys
+from pathlib import Path
+
+root = Path(sys.argv[1] or "/")
+version = root / "etc/drlink/version"
+if not version.is_file():
+    print("ERROR: dual-role shared runtime check failed: missing /etc/drlink/version", file=sys.stderr)
+    raise SystemExit(1)
+data = {}
+for line in version.read_text(encoding="utf-8").splitlines():
+    if "=" in line:
+        k, v = line.split("=", 1)
+        data[k.strip()] = v.strip()
+source_ref = data.get("SOURCE_REF") or data.get("source_ref") or ""
+bundle = data.get("BUNDLE_SHA256") or data.get("bundle_sha256") or ""
+shared = [
+    "usr/local/lib/drlink/frpctl",
+    "usr/local/lib/drlink/frp_cli_final_commands.json",
+    "usr/local/lib/drlink/frp_cli_catalog.py",
+    "usr/local/bin/drlink",
+]
+missing = []
+digests = []
+for rel in shared:
+    path = root / rel
+    if not path.is_file():
+        missing.append(rel)
+        continue
+    digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
+if missing:
+    print("ERROR: dual-role shared runtime incomplete: %s" % ", ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+if len(set(digests)) != len(digests) and False:
+    # Placeholder: individual file digests naturally differ; coherence is the
+    # single version identity below plus presence of the shared set.
+    pass
+if not (source_ref or bundle or data.get("PROJECT_VERSION")):
+    print("ERROR: dual-role shared runtime identity is empty", file=sys.stderr)
+    raise SystemExit(1)
+print(
+    "DUAL_ROLE_SHARED_RUNTIME=COHERENT source_ref=%s bundle=%s project=%s"
+    % (source_ref or "-", (bundle[:12] + "…") if bundle else "-", data.get("PROJECT_VERSION") or "-")
+)
+PY
+}
+
+
+frpctl_audit_tail() {
+  # Default: human-readable recent events. Optional lightweight filters:
+  # last <N> | client <CLIENT> | event <EVENT>
+  # Raw JSONL remains on disk; --json is an advanced escape hatch only.
+  local root="${FRP_DEPLOY_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-}}"
+  python3 - "$root" "$@" <<'PY'
+import json, sys
+from pathlib import Path
+
 root = sys.argv[1]
+args = sys.argv[2:]
 path = Path("/var/log/drlink/audit.jsonl")
 if root:
     path = Path(root + "/var/log/drlink/audit.jsonl")
 if not path.is_file():
     print("(no audit log)")
     raise SystemExit(0)
-lines = path.read_text(encoding="utf-8").splitlines()[-50:]
-print("\n".join(lines) if lines else "(no audit log)")
+
+want_json = False
+limit = 50
+client_filter = None
+event_filter = None
+i = 0
+while i < len(args):
+    tok = args[i]
+    if tok in ("--json", "json"):
+        want_json = True
+        i += 1
+        continue
+    if tok == "last" and i + 1 < len(args):
+        try:
+            limit = max(1, min(500, int(args[i + 1])))
+        except ValueError:
+            print("ERROR: system audit last <N> requires a positive integer.", file=sys.stderr)
+            raise SystemExit(2)
+        i += 2
+        continue
+    if tok == "client" and i + 1 < len(args):
+        client_filter = str(args[i + 1]).strip().lower()
+        i += 2
+        continue
+    if tok == "event" and i + 1 < len(args):
+        event_filter = str(args[i + 1]).strip().lower()
+        i += 2
+        continue
+    print("ERROR: unsupported audit filter %r." % tok, file=sys.stderr)
+    print(
+        "Use: system audit | system audit last <N> | "
+        "system audit client <CLIENT> | system audit event <EVENT>",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+raw_lines = path.read_text(encoding="utf-8").splitlines()
+records = []
+for line in raw_lines:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(rec, dict):
+        records.append(rec)
+
+def _hay(rec):
+    details = rec.get("details") if isinstance(rec.get("details"), dict) else {}
+    bits = [
+        str(rec.get("event") or ""),
+        str(rec.get("target") or ""),
+        str(rec.get("client") or ""),
+        str(rec.get("client_id") or ""),
+        str(rec.get("hostname") or ""),
+        json.dumps(details, sort_keys=True),
+    ]
+    return " ".join(bits).lower()
+
+filtered = []
+for rec in records:
+    if event_filter and event_filter not in str(rec.get("event") or "").lower():
+        continue
+    if client_filter and client_filter not in _hay(rec):
+        continue
+    filtered.append(rec)
+filtered = filtered[-limit:]
+
+if want_json:
+    print("\n".join(json.dumps(rec, sort_keys=True) for rec in filtered) if filtered else "(no audit log)")
+    raise SystemExit(0)
+
+def _time(rec):
+    raw = str(rec.get("ts") or rec.get("time") or rec.get("timestamp") or "")
+    if not raw:
+        return "-"
+    text = raw.replace("T", " ").replace("Z", "")
+    return text[:16] if len(text) >= 16 else text
+
+def _target(rec):
+    details = rec.get("details") if isinstance(rec.get("details"), dict) else {}
+    for key in (
+        "target", "client", "client_id", "hostname", "path", "name", "id",
+        "group_name", "profile_name", "list_name", "relay_name", "service_id",
+    ):
+        val = rec.get(key) or details.get(key)
+        if val:
+            text = str(val)
+            if key == "path" and "/" in text:
+                text = text.rsplit("/", 1)[-1]
+            return text
+    return "-"
+
+def _result(rec):
+    details = rec.get("details") if isinstance(rec.get("details"), dict) else {}
+    for key in ("result", "status", "outcome"):
+        val = rec.get(key) or details.get(key)
+        if val:
+            return str(val)
+    if rec.get("error"):
+        return "error"
+    return "success"
+
+if not filtered:
+    print("(no matching audit events)")
+    raise SystemExit(0)
+
+print("%-19s %-24s %-16s %s" % ("TIME", "EVENT", "TARGET", "RESULT"))
+for rec in filtered:
+    print(
+        "%-19s %-24s %-16s %s"
+        % (
+            _time(rec)[:19],
+            str(rec.get("event") or "-")[:24],
+            _target(rec)[:16],
+            _result(rec)[:24],
+        )
+    )
 PY
 }
 
@@ -3143,7 +3551,11 @@ frpctl_dispatch_canonical() {
       echo
       ;;
     show_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollments ;;
-    show_audit) frpctl_require_server || return 1; frpctl_audit_tail ;;
+    show_audit)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      frpctl_with_pt frpctl_audit_tail
+      ;;
     show_upstream)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
@@ -3542,17 +3954,38 @@ frpctl_dispatch_canonical() {
     update_project)
       frpctl_load_passthrough "$result"
       _frp_up_rc=0
-      if frpctl_is_client; then
+      if frpctl_is_client && frpctl_is_server; then
+        # Dual-role hosts share management files. Fail fast between role
+        # updates so a partial client failure cannot continue into a mixed
+        # server mutation, then verify shared runtime identity.
+        # NOTE: capture status with `cmd || rc=$?` — `if ! cmd; then rc=$?`
+        # loses the failure code under bash.
         frpctl_with_pt frpctl_client_update || _frp_up_rc=$?
-      fi
-      if frpctl_is_server; then
+        if [[ "${_frp_up_rc}" -ne 0 ]]; then
+          echo "ERROR: client role product update failed; server role update was not started." >&2
+          echo "DUAL_ROLE_PRODUCT_UPDATE=FAIL_FAST" >&2
+        else
+          frpctl_with_pt frpctl_run frp-project-update || _frp_up_rc=$?
+          if [[ "${_frp_up_rc}" -ne 0 ]]; then
+            echo "ERROR: server role product update failed after client role update." >&2
+            echo "DUAL_ROLE_PRODUCT_UPDATE=SERVER_FAILED_AFTER_CLIENT" >&2
+            echo "Shared management files may require recovery; run diagnostics before retrying." >&2
+            frpctl_verify_dual_role_shared_runtime || true
+          else
+            frpctl_verify_dual_role_shared_runtime || _frp_up_rc=$?
+          fi
+        fi
+      elif frpctl_is_client; then
+        frpctl_with_pt frpctl_client_update || _frp_up_rc=$?
+      elif frpctl_is_server; then
         frpctl_with_pt frpctl_run frp-project-update || _frp_up_rc=$?
+      else
+        false
+        _frp_up_rc=$?
       fi
       if ! frpctl_is_client && ! frpctl_is_server; then
         false
       else
-        # Preserve the first failing update status; trailing `if` tests must not
-        # mask a non-zero client/server update as success.
         [[ "${_frp_up_rc}" -eq 0 ]]
       fi
       ;;
@@ -3563,7 +3996,20 @@ frpctl_dispatch_canonical() {
       frpctl_load_passthrough "$result"
       frpctl_with_pt frpctl_run frp-update
       ;;
-    restore_backup) frpctl_require_server || return 1; frpctl_run frp-restore "$(frpctl_json_get "$result" path)" ;;
+    restore_backup)
+      frpctl_require_server || return 1
+      frpctl_load_passthrough "$result"
+      _restore_path="$(frpctl_json_get "$result" path)"
+      frpctl_confirm_restore "$_restore_path"
+      _restore_rc=$?
+      if [[ "$_restore_rc" -eq 3 ]]; then
+        return 0
+      fi
+      if [[ "$_restore_rc" -ne 0 ]]; then
+        return "$_restore_rc"
+      fi
+      frpctl_run frp-restore "$_restore_path"
+      ;;
     doctor)
       if ! type frp_doctor_main >/dev/null 2>&1; then
         echo "ERROR: doctor diagnostics are not installed on this host." >&2

@@ -16,7 +16,7 @@ On the FRP server:
 
 ```bash
 sudo drlink show status
-sudo drlink doctor
+sudo drlink system diagnostics
 ```
 
 Read:
@@ -150,7 +150,7 @@ Re-running the installer reuses existing runtime config when present. It preserv
 ## 7. Verify frps and the allocator
 
 ```bash
-sudo drlink doctor
+sudo drlink system diagnostics
 sudo systemctl status drlink-server --no-pager
 sudo systemctl status drlink-allocator --no-pager
 # Post-install on the server (CA file already exists after install-server.sh):
@@ -174,7 +174,7 @@ allocator       : active
 
 ```bash
 sudo drlink
-# then: create enrollment
+# then: set enrollment
 ```
 
 The command prints an enrollment code and a client install one-liner that sets `FRP_ALLOCATOR_URL` via `sudo env`. The enrollment secret is not placed on the command line; the client installer asks for it interactively.

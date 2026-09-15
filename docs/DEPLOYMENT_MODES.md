@@ -221,7 +221,7 @@ Recommended sequence:
    (or type `SWITCH` on a TTY).
 3. On each client, Apply (or otherwise contact the allocator) so
    `frp_transport=wss` is stored and `frpc.toml` is regenerated.
-4. Confirm `sudo drlink show status` / `sudo drlink doctor` on server and client.
+4. Confirm `sudo drlink show status` / `sudo drlink system diagnostics` on server and client.
 
 Rollback of a failed cutover restores the previous `frps.toml` when the
 frontend config is invalid or `drlink-frontend` fails to start, then restarts
@@ -244,7 +244,7 @@ security list is not enough if that host filter remains. Do not flush OCI
 metadata / link-local / block-volume rules. Add explicit ACCEPT rules for the
 public ports this mode documents, or use the image’s supported firewall tool.
 
-`frpctl doctor` classifies `TLS_RESET` when TCP works but TLS is reset, and
+`drlink system diagnostics` classifies `TLS_RESET` when TCP works but TLS is reset, and
 points at single-443 rather than HTTP downgrade.
 
 ## Configuration fields
