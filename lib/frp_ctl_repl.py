@@ -242,6 +242,8 @@ _MUTATING_PUBLIC_PREFIXES = (
     ("unset", "group"),
     ("set", "service-profile"),
     ("unset", "service-profile"),
+    ("set", "acl"),
+    ("unset", "acl"),
     ("set", "access-rule"),
     ("set", "access-source"),
     ("unset", "access-rule"),

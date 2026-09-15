@@ -157,20 +157,17 @@ def main(argv=None):
         print('(none)')
     else:
         print()
-        print('Actions:')
+        print('Enrollment lifecycle:')
         repl = str(os.environ.get('FRP_CTL_REPL') or '').strip() == '1'
-        if repl:
-            print('  pending/bound:')
-            print('    revoke enrollment <ID>')
-            print()
-            print('  expired/completed/revoked:')
-            print('    delete enrollment <ID>')
-        else:
-            print('  pending/bound:')
-            print('    sudo drlink revoke enrollment <ID>')
-            print()
-            print('  expired/completed/revoked:')
-            print('    sudo drlink delete enrollment <ID>')
+        prefix = '' if repl else 'sudo drlink '
+        print('  %sshow enrollments' % prefix)
+        print('  %sunset enrollment <ID>' % prefix)
+        print()
+        print('Active enrollment:')
+        print('  unset revokes it.')
+        print()
+        print('Completed, expired or revoked enrollment:')
+        print('  unset removes the retained record.')
     retention_days = 30
     lifecycle = None
     try:

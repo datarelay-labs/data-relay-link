@@ -126,8 +126,13 @@ def cmd_create(args):
         return gid, group
 
     gid, group = mutate_registry(change)
-    print('Created group %s' % gid)
-    print('Name     : %s' % group['name'])
+    print('Created group: %s' % group['name'])
+    print()
+    print('Add a client:')
+    print('  set client <CLIENT> group %s' % group['name'])
+    print()
+    print('View:')
+    print('  show group %s' % group['name'])
     audit('group.created', group_id=gid, group_name=group['name'])
 
 

@@ -12,8 +12,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = ROOT + '/etc/drlink/config.json'
+def _test_root():
+    return (
+        os.environ.get('FRP_DEPLOY_TEST_ROOT')
+        or os.environ.get('FRP_CTL_TEST_ROOT')
+        or ''
+    )
+
+
+ROOT = _test_root()
+CONFIG = (_test_root() + '/etc/drlink/config.json') if _test_root() else '/etc/drlink/config.json'
 
 
 def iso(ts):
@@ -22,8 +30,9 @@ def iso(ts):
 
 def remap(path):
     path = Path(path)
-    if ROOT and not str(path).startswith(ROOT):
-        return Path(ROOT + str(path))
+    root = _test_root()
+    if root and not str(path).startswith(root):
+        return Path(root + str(path))
     return path
 
 
@@ -139,6 +148,101 @@ def default_windows_client_installer_url():
         'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
         '%s/dist/bootstrap-client.ps1' % ref
     )
+
+
+
+def _is_official_raw_installer_url(url, windows=False):
+    suffix = 'bootstrap-client.ps1' if windows else 'bootstrap-client.sh'
+    prefix = (
+        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
+    )
+    if not str(url or '').startswith(prefix):
+        return False
+    return str(url).endswith('/dist/' + suffix)
+
+
+def resolve_configured_installer_url(cfg, *, windows=False):
+    """Prefer exact SOURCE_REF for official GitHub raw defaults.
+
+    Explicit non-default overrides are preserved. Premature vPROJECT_VERSION
+    URLs on an exact-SHA install are rewritten to the installed SOURCE_REF.
+    """
+    key = 'windows_client_installer_url' if windows else 'client_installer_url'
+    configured = str(cfg.get(key, '') or '').strip()
+    default_fn = (
+        default_windows_client_installer_url if windows else default_client_installer_url
+    )
+    default = default_fn()
+    if not configured:
+        return default
+    ref = installed_source_ref()
+    ver = installed_project_version()
+    premature = '/v%s/' % ver
+    if (
+        ref
+        and len(ref) >= 40
+        and all(c in '0123456789abcdefABCDEF' for c in ref)
+        and _is_official_raw_installer_url(configured, windows=windows)
+        and premature in configured
+    ):
+        return default
+    return configured
+
+
+def preflight_installer_url(url, *, label='Client installer'):
+    """Bounded read-only preflight. Confirmed 404 blocks; uncertain does not."""
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    url = str(url or '').strip()
+    if not url:
+        return
+    req = urllib.request.Request(url, method='HEAD')
+    req.add_header('User-Agent', 'DataRelayLink-InstallerPreflight/2.4')
+    ctx = ssl.create_default_context()
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            code = getattr(resp, 'status', None) or resp.getcode()
+            if int(code) == 404:
+                raise SystemExit(
+                    '%s is unavailable:\n\n'
+                    '  %s\n\n'
+                    'HTTP status: 404\n\n'
+                    'Fix:\n'
+                    '  set server installer-url <URL>\n'
+                    '  set server windows-installer-url <URL>\n\n'
+                    'No enrollment ticket was created.' % (label, url)
+                )
+            return
+    except urllib.error.HTTPError as exc:
+        if int(getattr(exc, 'code', 0) or 0) == 404:
+            raise SystemExit(
+                '%s is unavailable:\n\n'
+                '  %s\n\n'
+                'HTTP status: 404\n\n'
+                'Fix:\n'
+                '  set server installer-url <URL>\n\n'
+                'No enrollment ticket was created.' % (label, url)
+            ) from None
+        # Non-404 HTTP: inconclusive for destroyer semantics.
+        return
+    except Exception:
+        # Network/TLS/timeout: do not block ticket issuance.
+        return
+
+
+def confirm_client_setup():
+    if not is_interactive_stdin():
+        return True
+    entered = read_prompt('Create this client setup? [Y/n]: ')
+    if entered is None:
+        return False
+    text = str(entered).strip().lower()
+    if text in ('', 'y', 'yes'):
+        return True
+    print('Cancelled.')
+    return False
 
 
 def load_allocator():
@@ -593,26 +697,21 @@ def prompt_client_identification(existing_name, existing_note):
 
 
 def _enrollment_track_hints(tracking_id=''):
-    """Action-first enrollment guidance; REPL vs shell-aware."""
+    """Canonical enrollment guidance; REPL vs shell-aware."""
     repl = str(os.environ.get('FRP_CTL_REPL') or '').strip() == '1'
     tid = str(tracking_id or '<ID>').strip() or '<ID>'
-    lines = ['Track or revoke with the Enrollment ID (not the ticket secret):']
-    if repl:
-        lines.extend(
-            [
-                '  show enrollments',
-                '  revoke enrollment %s' % tid,
-                '  delete enrollment %s' % tid,
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                '  sudo drlink show enrollments',
-                '  sudo drlink revoke enrollment %s' % tid,
-                '  sudo drlink delete enrollment %s' % tid,
-            ]
-        )
+    prefix = '' if repl else 'sudo drlink '
+    lines = [
+        'Enrollment lifecycle:',
+        '  %sshow enrollments' % prefix,
+        '  %sunset enrollment %s' % (prefix, tid),
+        '',
+        'Active enrollment:',
+        '  unset revokes it.',
+        '',
+        'Completed, expired or revoked enrollment:',
+        '  unset removes the retained record.',
+    ]
     return lines
 
 
@@ -647,17 +746,49 @@ def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
     return user, port
 
 
-def print_client_configuration(name, note, ssh_user='', ssh_port=None):
+def print_client_configuration(name, note, services=None, ssh_user='', ssh_port=None):
     print()
     print('Client configuration')
-    print('--------------------')
+    print('====================')
+    print()
     print('Client name : %s' % (name or '(hostname after enrollment)'))
     print('Description : %s' % (note or '-'))
-    if ssh_user:
-        print('SSH user    : %s' % ssh_user)
-        print('SSH port    : %s' % ssh_port)
-        print('Target      : 127.0.0.1:%s' % ssh_port)
     print()
+    print('Services')
+    print('--------')
+    print()
+    rows = list(services or [])
+    if not rows and ssh_user:
+        rows = [{
+            'preset': 'ssh',
+            'name': 'SSH',
+            'local_ip': '127.0.0.1',
+            'local_port': ssh_port or 22,
+            'ssh_user': ssh_user,
+        }]
+    if not rows:
+        print('(none — management registration only)')
+        print()
+        return
+    for svc in rows:
+        preset = str(svc.get('preset') or '').strip().lower()
+        title = str(svc.get('name') or svc.get('id') or preset or 'Service').strip()
+        if preset == 'ssh' or str(svc.get('id') or '').lower() == 'ssh':
+            title = 'SSH'
+        elif preset == 'https':
+            title = 'HTTPS'
+        elif preset == 'http':
+            title = 'HTTP'
+        elif preset == 'rdp':
+            title = 'RDP'
+        host = svc.get('local_ip') or svc.get('target_host') or '127.0.0.1'
+        port = svc.get('local_port') or svc.get('target_port') or '-'
+        print(title)
+        print('  Target   : %s:%s' % (host, port))
+        user = str(svc.get('ssh_user') or '').strip()
+        if user:
+            print('  SSH user : %s' % user)
+        print()
 
 
 def resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit):
@@ -811,7 +942,7 @@ def print_one_line_windows(
     print()
     print('The ticket cannot be reused by another machine once bound.')
     print('After reboot, Data Relay Link starts automatically when a service is enabled.')
-    print('Use: drlink service apply  (or legacy: drlink apply)')
+    print('If a pending service change remains, apply with:\n  system services apply')
     if tracking_id:
         print()
         for line in _enrollment_track_hints(tracking_id):
@@ -953,10 +1084,10 @@ def main(argv=None):
     ca_path = remap(str(cfg.get('tls_ca_cert') or '/etc/drlink/pki/ca.crt'))
     ca_fp = fingerprint_from_cert(ca_path) if ca_path.is_file() else ''
     if platform == 'windows':
-        installer = str(cfg.get('windows_client_installer_url', '') or '').strip()
+        installer = resolve_configured_installer_url(cfg, windows=True)
         installer_label = 'Windows client installer URL'
     else:
-        installer = str(cfg.get('client_installer_url', '') or '').strip()
+        installer = resolve_configured_installer_url(cfg, windows=False)
         installer_label = 'client installer URL'
 
     reject_control_chars('--note', a.note)
@@ -1007,11 +1138,11 @@ def main(argv=None):
         if platform == 'windows':
             fail(
                 'Windows client installer URL is not configured; '
-                'set windows_client_installer_url before --one-line --platform windows'
+                'set server windows-installer-url <URL> before creating a Windows Zero-Touch client'
             )
         fail(
             'client installer URL is not configured; '
-            'run sudo drlink set client-installer-url before --one-line'
+            'run: set server installer-url <URL>'
         )
     if not allocator:
         fail('allocator public URL is not configured; cannot generate a zero-touch command')
@@ -1048,7 +1179,12 @@ def main(argv=None):
         fail(str(exc))
 
     ssh_user, ssh_pre_port = first_ssh_preflight(services)
-    print_client_configuration(client_name, note, ssh_user, ssh_pre_port)
+    print_client_configuration(client_name, note, services=services, ssh_user=ssh_user, ssh_port=ssh_pre_port)
+    if not confirm_client_setup():
+        return 0
+
+    installer_label = 'Windows client installer' if platform == 'windows' else 'Client installer'
+    preflight_installer_url(installer, label=installer_label)
 
     bootstrap_cfg = str(cfg.get('bootstrap_dir') or '').strip()
     if bootstrap_cfg:

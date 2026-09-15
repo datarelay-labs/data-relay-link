@@ -1016,15 +1016,21 @@ frp_write_version_file() {
     fi
   fi
   # SOURCE_REF is install provenance (commit SHA or release tag), not
-  # PROJECT_VERSION. Prefer explicit expected/txn refs over channel defaults.
+  # PROJECT_VERSION. Prefer explicit expected/txn refs, then preserve an
+  # already-persisted SOURCE_REF, and only then fall back to channel defaults.
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     source_ref="$FRP_EXPECTED_SOURCE_REF"
   elif [[ -n "${FRP_TXN_SOURCE_REF:-}" ]]; then
     source_ref="$FRP_TXN_SOURCE_REF"
-  elif [[ "$channel" == "dev" ]]; then
-    source_ref="main"
   else
-    source_ref="v${PROJECT_VERSION}"
+    existing_ref="$(frp_read_kv_file "$dest" SOURCE_REF)"
+    if [[ -n "$existing_ref" ]]; then
+      source_ref="$existing_ref"
+    elif [[ "$channel" == "dev" ]]; then
+      source_ref="main"
+    else
+      source_ref="v${PROJECT_VERSION}"
+    fi
   fi
   bundle="${FRP_BUNDLE_SHA256:-}"
   if [[ "${FRP_VERSION_REQUIRE_VERIFIED_BUNDLE:-}" == "1" ]]; then

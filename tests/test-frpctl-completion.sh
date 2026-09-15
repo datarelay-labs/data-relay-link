@@ -662,7 +662,7 @@ os.write(fd, b"\t")
 read_more(1.0)
 show_chunk = bytes(buf[before:])
 vis_show = visible(show_chunk)
-for token in (b"status", b"clients", b"client", b"enrollments", b"internet", b"access-rules"):
+for token in (b"status", b"clients", b"client", b"enrollments", b"internet", b"acls"):
     if token not in vis_show:
         fail_pty("PTY: show tab missing %s" % token.decode(), show_chunk)
 print("TAB_SHOW_CANDIDATES_FIRST_PRESS")

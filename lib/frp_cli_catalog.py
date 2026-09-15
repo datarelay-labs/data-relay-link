@@ -28,7 +28,12 @@ C_PATH = "path"
 C_NONE = None
 
 CLIENT_PROPS = ("label", "note", "tag")
-SERVER_SETTINGS = ("public-hostname", "bootstrap-hostname")
+SERVER_SETTINGS = (
+    "public-hostname",
+    "bootstrap-hostname",
+    "installer-url",
+    "windows-installer-url",
+)
 INSTALLER_URL_SETTINGS = ("installer-url", "windows-installer-url")
 GROUP_PROPS = ("name", "description")
 SERVICE_PROPS = (
@@ -2376,6 +2381,20 @@ def to_internal(tokens):
             return ["create", "service-profile", rest[0]]
         return ["set", "service-profile"] + rest
 
+    if path == ("set", "acl"):
+        if not rest:
+            return ["set", "acl"]
+        if len(rest) == 1:
+            return ["create", "access-list", rest[0]]
+        if len(rest) >= 3 and rest[1] == "source":
+            return ["add", "access-source", rest[0], rest[2]] + rest[3:]
+        if len(rest) >= 4 and rest[1] == "service":
+            # set acl <ACL> service <CLIENT> <SERVICE> → assign list to service
+            return ["set", "access-assign", rest[2], rest[3], rest[0]] + rest[4:]
+        if len(rest) >= 3 and rest[1] in ("name", "description"):
+            return ["set", "access-list", rest[0], rest[1], rest[2]] + rest[3:]
+        return ["set", "access-list"] + rest
+
     if path == ("set", "access-rule"):
         if not rest:
             return ["set", "access-rule"]
@@ -2402,6 +2421,18 @@ def to_internal(tokens):
         if len(rest) >= 3 and rest[1] == "template":
             # egress recipe apply <TEMPLATE> --name <NEW_PROFILE>
             return ["egress", "recipe", "apply", rest[2], "--name", rest[0]] + rest[3:]
+        if len(rest) >= 3 and rest[1] == "source":
+            return ["add", "egress-source", rest[0], rest[2]] + rest[3:]
+        if len(rest) >= 5 and rest[1] == "destination":
+            # Keep positional PROTOCOL for match → backend --protocol mapping.
+            return [
+                "add",
+                "egress-destination",
+                rest[0],
+                rest[2],
+                rest[3],
+                rest[4],
+            ] + rest[5:]
         if len(rest) >= 3 and rest[1] in ("name", "description"):
             return ["set", "egress-profile"] + rest
         return ["set", "egress-profile"] + rest
@@ -2457,6 +2488,15 @@ def to_internal(tokens):
     if path == ("unset", "service-profile"):
         return ["delete", "service-profile"] + rest
 
+    if path == ("unset", "acl"):
+        if not rest:
+            return ["unset", "acl"]
+        if len(rest) >= 3 and rest[1] == "source":
+            return ["remove", "access-source", rest[0], rest[2]] + rest[3:]
+        if len(rest) >= 4 and rest[1] == "service":
+            return ["set", "access-public", rest[2], rest[3]] + rest[4:]
+        return ["delete", "access-list", rest[0]] + rest[1:]
+
     if path == ("unset", "access-rule"):
         return ["delete", "access-list"] + rest
 
@@ -2464,8 +2504,20 @@ def to_internal(tokens):
         return ["remove", "access-source"] + rest
 
     if path == ("unset", "internet-profile"):
+        if not rest:
+            return ["unset", "internet-profile"]
         if len(rest) >= 2 and rest[1] == "enabled":
             return ["disable", "egress-profile", rest[0]] + rest[2:]
+        if len(rest) >= 3 and rest[1] == "source":
+            return ["remove", "egress-source", rest[0], rest[2]] + rest[3:]
+        if len(rest) >= 4 and rest[1] == "destination":
+            return [
+                "remove",
+                "egress-destination",
+                rest[0],
+                rest[2],
+                rest[3],
+            ] + rest[4:]
         return ["delete", "egress-profile"] + rest
 
     if path == ("unset", "internet-source"):
@@ -2482,6 +2534,10 @@ def to_internal(tokens):
     if path == ("unset", "server"):
         return ["unset", "server"] + rest
 
+    if path == ("show", "acls"):
+        return ["show", "access-lists"] + rest
+    if path == ("show", "acl"):
+        return ["show", "access-list"] + rest
     if path == ("show", "access-rules"):
         return ["show", "access-lists"] + rest
     if path == ("show", "access-rule"):
@@ -2506,6 +2562,8 @@ def to_internal(tokens):
         return ["explain", "egress"] + rest
     if path == ("test", "fixed-tcp"):
         return ["egress", "tcp", "explain"] + rest
+    if path == ("test", "acl"):
+        return ["test", "access"] + rest
     if path == ("test", "access"):
         return ["test", "access"] + rest
 
@@ -3288,8 +3346,8 @@ NAVIGATION_TREE = {
         ),
         (
             "server_access",
-            "Access Rules",
-            "Control who can reach published services",
+            "ACLs",
+            "Control which IP addresses or networks may reach published services",
             "submenu",
             "server.services.access",
         ),
@@ -3310,10 +3368,10 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.services.access": (
-        ("server_access_list", "List rules", "", "command", "show access-rules"),
-        ("server_access_create", "Create rule", "", "workflow", "create_access_list"),
-        ("server_access_edit", "View or edit rule", "", "workflow", "manage_access_list"),
-        ("server_access_assign", "Assign rule to a service", "", "workflow", "assign_access"),
+        ("server_access_list", "List ACLs", "", "command", "show acls"),
+        ("server_access_create", "Create ACL", "", "workflow", "create_access_list"),
+        ("server_access_edit", "View or edit ACL", "", "workflow", "manage_access_list"),
+        ("server_access_assign", "Assign ACL to a service", "", "workflow", "assign_access"),
         ("server_access_public", "Set service to public access", "", "workflow", "public_access"),
         ("server_access_check", "Check access for a source IP", "", "workflow", "test_access"),
         ("server_access_log", "Recent access decisions", "", "workflow", "show_access_log"),
@@ -3464,8 +3522,8 @@ NAVIGATION_TREE["both.services"] = (
     ),
     (
         "server_access",
-        "Access Rules",
-        "Control who can reach published services",
+        "ACLs",
+        "Control which IP addresses or networks may reach published services",
         "submenu",
         "server.services.access",
     ),
@@ -3581,8 +3639,6 @@ COMPLETION_DOMAIN_GROUPS = (
             "group",
             "enrollments",
             "enrollment",
-            "enrollments",
-            "zero-touch",
         ),
     ),
     (
@@ -3592,12 +3648,22 @@ COMPLETION_DOMAIN_GROUPS = (
             "service",
             "service-profiles",
             "service-profile",
+        ),
+    ),
+    (
+        "Access Control",
+        (
+            "acls",
+            "acl",
+            "access-log",
+            # Hidden compatibility tokens (must not create "Other").
             "access-rules",
             "access-rule",
             "access-source",
             "service-access",
             "access-service",
-            "access-log",
+            "access-lists",
+            "access-list",
         ),
     ),
     (
@@ -3606,11 +3672,12 @@ COMPLETION_DOMAIN_GROUPS = (
             "internet",
             "internet-profiles",
             "internet-profile",
-            "internet-source",
-            "internet-destination",
-            "fixed-tcp",
             "internet-templates",
             "internet-template",
+            "fixed-tcp",
+            # Hidden compatibility tokens.
+            "internet-source",
+            "internet-destination",
             "egress-destination",
             "egress-source",
         ),
@@ -3649,8 +3716,16 @@ def group_completion_candidates(candidates):
             groups.append((title, hit))
             assigned.update(hit)
     other = [c for c in items if c not in assigned]
+    # Never advertise an "Other" bucket in normal product discovery.
     if other:
-        groups.append(("Other", other))
+        # Attach leftovers to System rather than inventing a catch-all label.
+        for i, (title, members) in enumerate(groups):
+            if title == "System":
+                groups[i] = (title, list(members) + other)
+                other = []
+                break
+        if other:
+            groups.append(("System", other))
     if len(groups) <= 1:
         return None
     return groups

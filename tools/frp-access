@@ -100,7 +100,7 @@ def service_display(registry, mid, sid):
 
 
 def print_shared_list_impact(registry, used):
-    print("This Access List is used by %d services:" % len(used))
+    print("This ACL is used by %d services:" % len(used))
     print()
     for mid, sid in used:
         label, port = service_display(registry, mid, sid)
@@ -130,7 +130,7 @@ def confirm_shared_list_mutation(cfg, list_ref, *, yes=False):
         return lid, lst, used
     if not sys.stdin.isatty():
         raise SystemExit(
-            "ERROR: Access List is used by %d service(s); re-run with --yes to confirm."
+            "ERROR: ACL is used by %d service(s); re-run with confirmation to continue."
             % len(used)
         )
     answer = input("Continue? [y/N]: ").strip().lower()
@@ -150,7 +150,7 @@ def revalidate_shared_list_mutation(cfg, list_ref, used_before):
     used = ACL.list_services_using(state, lid)
     if _shared_impact_fingerprint(used) != _shared_impact_fingerprint(used_before):
         raise SystemExit(
-            "ERROR: Access List impact changed while waiting for confirmation; re-run the command."
+            "ERROR: ACL impact changed while waiting for confirmation; re-run the command."
         )
     return lid, lst, used
 
@@ -162,12 +162,12 @@ def mutate_access_after_confirm(cfg, list_ref, used_before, mut, expected_lid=No
         lid, _lst = ACL.resolve_access_list(state, list_ref)
         if expected_lid is not None and lid != expected_lid:
             raise SystemExit(
-                "ERROR: Access List identity changed while waiting for confirmation; re-run the command."
+                "ERROR: ACL identity changed while waiting for confirmation; re-run the command."
             )
         used = ACL.list_services_using(state, lid)
         if _shared_impact_fingerprint(used) != _shared_impact_fingerprint(used_before):
             raise SystemExit(
-                "ERROR: Access List impact changed while waiting for confirmation; re-run the command."
+                "ERROR: ACL impact changed while waiting for confirmation; re-run the command."
             )
         return mut(state)
 
@@ -177,7 +177,7 @@ def mutate_access_after_confirm(cfg, list_ref, used_before, mut, expected_lid=No
 def cmd_list(cfg, _args):
     state = ACL.load_access_state(cfg=cfg)
     registry = load_registry(cfg)
-    print("Access Lists")
+    print("ACLs")
     print("============")
     print()
     print("%-3s %-18s %-8s %-12s %-10s" % ("#", "NAME", "ENTRIES", "ACTIVE/TEMP", "USED BY"))
@@ -211,9 +211,19 @@ def cmd_create(cfg, args):
         return lid, record
 
     lid, record = ACL.mutate_access_state(mut, cfg=cfg)
-    print("Created Access List")
-    print("  ID   : %s" % lid)
-    print("  Name : %s" % record["name"])
+    name = record["name"]
+    print("Created ACL: %s" % name)
+    print()
+    print("Next:")
+    print()
+    print("1. Add an allowed host or network:")
+    print("   set acl %s source <IP-or-CIDR>" % name)
+    print()
+    print("2. Apply the ACL to a published service:")
+    print("   set acl %s service <CLIENT> <SERVICE>" % name)
+    print()
+    print("3. Check access:")
+    print("   test acl <CLIENT> <SERVICE> <SOURCE-IP>")
     audit(
         ACL.AUDIT_LIST_CREATED,
         list_id=lid,
@@ -226,13 +236,15 @@ def cmd_show(cfg, args):
     state = ACL.load_access_state(cfg=cfg)
     registry = load_registry(cfg)
     lid, lst = ACL.resolve_access_list(state, args.list)
-    print("Access List: %s" % lst.get("name"))
-    print("=" * (14 + len(str(lst.get("name") or ""))))
+    print("ACL: %s" % lst.get("name"))
+    print("=" * (5 + len(str(lst.get("name") or ""))))
     print()
     print("ID          : %s" % lid)
     print("Description :")
     print("  %s" % (lst.get("description") or "(none)"))
     print()
+    print("Allowed sources")
+    print("---------------")
     print("%-3s %-18s %-20s %s" % ("#", "NAME", "CIDR", "EXPIRATION"))
     for idx, entry in enumerate(lst.get("entries") or [], 1):
         exp = ACL.parse_iso_ts(entry.get("expires_at")) if entry.get("expires_at") else None
@@ -248,8 +260,8 @@ def cmd_show(cfg, args):
     if not (lst.get("entries") or []):
         print("(no sources)")
     print()
-    print("Used by")
-    print("-------")
+    print("Assigned services")
+    print("-----------------")
     used = ACL.list_services_using(state, lid)
     if not used:
         print("(none)")
@@ -361,7 +373,7 @@ def cmd_delete(cfg, args):
         lid, name = ACL.mutate_access_state(mut, cfg=cfg)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
-    print("Deleted Access List %s" % name)
+    print("Deleted ACL %s" % name)
     audit(ACL.AUDIT_LIST_DELETED, list_id=lid, list_name=name)
 
 
@@ -380,7 +392,7 @@ def cmd_edit_info(cfg, args):
         lst = mutate_access_after_confirm(cfg, args.list, used, mut, expected_lid=lid)
     except ACL.AccessError as exc:
         raise SystemExit("ERROR: %s" % exc)
-    print("Updated Access List %s" % lst.get("name"))
+    print("Updated ACL %s" % lst.get("name"))
     changed = [
         field
         for field, value in (("name", args.name), ("description", args.description))
@@ -465,11 +477,11 @@ def cmd_assign(cfg, args):
             choice = input("Select [2]: ").strip() or "2"
             if choice == "1":
                 raise SystemExit(
-                    "Use: drlink access add-source %r --name NAME --source CIDR" % args.list
+                    "Use: set acl %r source <IP-or-CIDR>" % args.list
                 )
             raise SystemExit(0)
         raise SystemExit("ERROR: %s" % exc)
-    print("Assigned Access List %s to %s:%s (port %s)" % (
+    print("Assigned ACL %s to %s:%s (port %s)" % (
         lst.get("name"), short_client(registry, mid), sid, svc.get("remote_port"),
     ))
     audit(
@@ -493,22 +505,19 @@ def confirm_public_broadening(cfg, mid, sid, *, yes=False):
     binding = ACL.get_service_binding(state, mid, sid)
     if binding.get("access_mode") != ACL.MODE_ALLOWLIST:
         return False
-    msg = (
-        'This will make service "%s" publicly reachable from any source\n'
-        "that can reach its public port.\n"
-        "\n"
-        "Target authentication such as SSH keys still applies.\n"
-        "\n"
-        "New connections use the new policy immediately.\n"
-        "Existing established connections are not forcibly terminated."
-    ) % sid
-    print(msg)
+    client_label = short_client(load_registry(cfg), mid)
+    print("This will remove ACL protection from %s/%s." % (client_label, sid))
+    print("The published service will become PUBLIC.")
+    print()
+    print("Target authentication such as SSH keys still applies.")
+    print("New connections use the new policy immediately.")
+    print("Existing established connections are not forcibly terminated.")
     print()
     if yes:
         return True
     if not sys.stdin.isatty():
         raise SystemExit(
-            "ERROR: switching ALLOWLIST → PUBLIC requires interactive confirmation "
+            "ERROR: making a service PUBLIC requires interactive confirmation "
             "or --yes for automation."
         )
     confirm = input("Continue? [y/N]: ").strip().lower()
@@ -631,38 +640,36 @@ def cmd_test(cfg, args):
     if binding.get("access_list_id"):
         lst = (state.get("access_lists") or {}).get(binding["access_list_id"]) or {}
         list_name = lst.get("name") or binding["access_list_id"]
-    print("Access Policy Test")
-    print("==================")
+    print("ACL Check")
+    print("=========")
     print()
-    print("Client        : %s" % short_client(registry, mid))
-    print("Service ID    : %s" % sid)
-    print("Public port   : %s" % (svc.get("remote_port") if svc else "-"))
-    print("Mode          : %s" % verdict.get("access_mode"))
-    print("Access list   : %s" % list_name)
-    print("Source IP     : %s" % verdict.get("source_ip"))
+    print("Client  : %s" % short_client(registry, mid))
+    print("Service : %s" % sid)
+    print("Source  : %s" % verdict.get("source_ip"))
     print()
+    print("Decision : %s" % verdict.get("decision"))
+    print("ACL      : %s" % list_name)
+    matched = "-"
+    matched_cidr = "-"
     if verdict.get("matched_entry_name"):
-        print("Matched entry")
-        print("-------------")
-        print("%s" % verdict.get("matched_entry_name"))
-        # find cidr
+        matched = verdict.get("matched_entry_name")
         lst = (state.get("access_lists") or {}).get(binding.get("access_list_id")) or {}
         for entry in lst.get("entries") or []:
             if entry.get("id") == verdict.get("matched_entry_id"):
-                print("%s" % entry.get("cidr"))
+                matched_cidr = entry.get("cidr") or "-"
                 break
-        print()
-    print("Decision      : %s" % verdict.get("decision"))
-    if verdict.get("decision") != ACL.DECISION_ALLOW or verdict.get("reason") != ACL.REASON_PUBLIC:
-        if verdict.get("decision") == ACL.DECISION_DENY or verdict.get("reason") not in (
+    print("Matched  : %s" % (matched_cidr if matched_cidr != "-" else matched))
+    if verdict.get("decision") != ACL.DECISION_ALLOW or verdict.get("reason") not in (
+        ACL.REASON_PUBLIC,
+        ACL.REASON_CIDR_MATCH,
+        None,
+        "",
+    ):
+        if verdict.get("reason") and verdict.get("reason") not in (
             ACL.REASON_PUBLIC,
             ACL.REASON_CIDR_MATCH,
         ):
-            print("Reason        : %s" % verdict.get("reason"))
-        elif verdict.get("reason") == ACL.REASON_CIDR_MATCH:
-            pass
-        else:
-            print("Reason        : %s" % verdict.get("reason"))
+            print("Reason   : %s" % verdict.get("reason"))
 
 
 def cmd_log(cfg, args):
@@ -707,11 +714,11 @@ def interactive_menu(cfg):
         print("Access Control")
         print("==============")
         print()
-        print("1) List access lists")
-        print("2) Create access list")
-        print("3) Edit access list")
-        print("4) Delete access list")
-        print("5) Assign access list to service")
+        print("1) List ACLs")
+        print("2) Create ACL")
+        print("3) Edit ACL")
+        print("4) Delete ACL")
+        print("5) Assign ACL to service")
         print("6) Set service PUBLIC")
         print("7) Show service access")
         print("8) Test source IP")

@@ -226,7 +226,7 @@
     "roles": "server",
     "category": "Onboarding",
     "summary": "List issued enrollment credentials",
-    "detail": "Lists manual Enrollment Codes and Zero-Touch bootstrap tickets still on disk. Secrets are never printed.",
+    "detail": "List issued enrollment credentials.\nActive enrollment: unset enrollment <ID> revokes it.\nCompleted, expired or revoked enrollment: unset removes the retained record.",
     "examples": [
       "show enrollments"
     ],
@@ -336,6 +336,90 @@
   {
     "path": [
       "show",
+      "acls"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "List ACLs",
+    "detail": "Shows named ACLs that control which IP addresses or networks may reach published services.",
+    "examples": [
+      "show acls"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": [
+      "access",
+      "list"
+    ],
+    "aliases": [
+      [
+        "show",
+        "access-lists"
+      ],
+      [
+        "access",
+        "list"
+      ],
+      [
+        "show",
+        "access-rules"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "acl"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Show one ACL",
+    "detail": "Displays ACL name, description, allowed sources, assigned services, and TTL/expiry where applicable.",
+    "examples": [
+      "show acl office-network"
+    ],
+    "args": [
+      {
+        "name": "<ACL>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "access",
+      "show"
+    ],
+    "aliases": [
+      [
+        "show",
+        "access-list"
+      ],
+      [
+        "access",
+        "show"
+      ],
+      [
+        "show",
+        "access-rule"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
       "access-rules"
     ],
     "roles": "server",
@@ -362,10 +446,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -403,10 +487,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -445,10 +529,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -459,16 +543,18 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Show recent authorization decisions",
-    "detail": "",
-    "examples": [],
+    "detail": "Requires a client and service. Guided menu: Recent access decisions → select client → select service.",
+    "examples": [
+      "show access-log dp1 ssh"
+    ],
     "args": [
       {
-        "name": "<CLIENT-ID>",
+        "name": "<CLIENT>",
         "complete": "clients",
         "required": true
       },
       {
-        "name": "<SERVICE-ID>",
+        "name": "<SERVICE>",
         "complete": "client-services",
         "required": true
       }
@@ -536,7 +622,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Show Internet Access status",
-    "detail": "",
+    "detail": "Product-level Internet Access status: readiness, profile counts, default DENY, and proxy endpoint.",
     "examples": [
       "show internet"
     ],
@@ -787,8 +873,8 @@
     ],
     "roles": "server",
     "category": "Change",
-    "summary": "Connect a new client, or set client metadata / group membership",
-    "detail": "Bare 'set client' starts Zero-Touch onboarding. With a client selector, set label/note/tag or ensure group membership.",
+    "summary": "Connect a new client or change client information",
+    "detail": "Bare 'set client' starts client onboarding (Zero-Touch or Manual Enrollment Code). With a client selector, set label/note/tag or group membership.",
     "examples": [
       "set client",
       "set client 24cd7856 label production",
@@ -933,10 +1019,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--one-line",
@@ -1140,10 +1226,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--count",
@@ -1356,7 +1442,7 @@
         "description": "With property=preset ssh, set ssh_user atomically",
         "metavar": "USER",
         "examples": [],
-        "effect": "Required for non-SSH \u2192 SSH transitions",
+        "effect": "Required for non-SSH → SSH transitions",
         "risk": "metadata"
       },
       {
@@ -1428,6 +1514,99 @@
   {
     "path": [
       "set",
+      "acl"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Create an ACL or manage its sources and service assignments",
+    "detail": "Create: set acl <ACL>\nMetadata: set acl <ACL> name|description <VALUE>\nAdd source: set acl <ACL> source <IP-or-CIDR>\nAssign: set acl <ACL> service <CLIENT> <SERVICE>\nMeaning: the ACL may reach that published service.",
+    "examples": [
+      "set acl office-network",
+      "set acl office-network source 10.10.10.0/24",
+      "set acl office-network service dp1 ssh",
+      "set acl office-network description \"Office LAN\""
+    ],
+    "args": [
+      {
+        "name": "<ACL>",
+        "complete": "access-lists",
+        "required": false
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "access",
+      "create"
+    ],
+    "aliases": [
+      [
+        "create",
+        "access-list"
+      ],
+      [
+        "access",
+        "create"
+      ],
+      [
+        "set",
+        "access-list"
+      ],
+      [
+        "set",
+        "access-rule"
+      ],
+      [
+        "access",
+        "edit-info"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--description",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Free-form operator note",
+        "metavar": "TEXT",
+        "examples": [],
+        "effect": "",
+        "risk": "metadata"
+      },
+      {
+        "name": "--name",
+        "arity": 1,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Human-readable name for the entry or object",
+        "metavar": "NAME",
+        "examples": [],
+        "effect": "Sets display name only; selectors stay immutable IDs",
+        "risk": "metadata"
+      },
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "set",
       "access-rule"
     ],
     "roles": "server",
@@ -1468,10 +1647,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "metadata",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--description",
@@ -1550,10 +1729,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "metadata",
     "confirmation": "yes_flag",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--name",
@@ -1668,10 +1847,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "outage",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -1681,12 +1860,14 @@
     ],
     "roles": "server",
     "category": "Policy",
-    "summary": "Create an Internet Access profile (DISABLED) or change/enable it",
-    "detail": "New profiles are DISABLED until explicitly enabled.",
+    "summary": "Create or manage an Internet Access profile",
+    "detail": "Always created DISABLED.\nset internet-profile <PROFILE>\nset internet-profile <PROFILE> name|description <VALUE>\nset internet-profile <PROFILE> source <CIDR>\nset internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>\nset internet-profile <PROFILE> template <TEMPLATE>\nset internet-profile <PROFILE> enabled",
     "examples": [
-      "set internet-profile vendor-api",
-      "set internet-profile vendor-api enabled",
-      "set internet-profile vendor-api template tcp-fixed"
+      "set internet-profile ubuntu-update",
+      "set internet-profile ubuntu-update source 10.10.20.0/24",
+      "set internet-profile ubuntu-update destination archive.ubuntu.com 443 https",
+      "set internet-profile ubuntu-update enabled",
+      "set internet-profile ubuntu-update template ubuntu-apt"
     ],
     "args": [
       {
@@ -1827,10 +2008,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "metadata",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--name",
@@ -1900,10 +2081,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--protocol",
@@ -2043,10 +2224,12 @@
     ],
     "args": [
       {
-        "name": "public-hostname|bootstrap-hostname",
+        "name": "public-hostname|bootstrap-hostname|installer-url|windows-installer-url",
         "complete": [
           "public-hostname",
-          "bootstrap-hostname"
+          "bootstrap-hostname",
+          "installer-url",
+          "windows-installer-url"
         ],
         "required": true
       },
@@ -2240,7 +2423,7 @@
     "roles": "server",
     "category": "Inventory",
     "summary": "Remove client metadata, trust, a service reservation, group membership, or the client",
-    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> \u2014 require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag \u2026\nGroup membership: unset client <CLIENT> group <GROUP>",
+    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> — require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag …\nGroup membership: unset client <CLIENT> group <GROUP>",
     "examples": [
       "unset client 24cd7856 label",
       "unset client 24cd7856 trust",
@@ -2371,8 +2554,8 @@
     ],
     "roles": "server",
     "category": "Onboarding",
-    "summary": "Revoke an active enrollment or delete terminal enrollment metadata",
-    "detail": "State-aware: PENDING/BOUND \u2192 revoke; EXPIRED/COMPLETED/REVOKED \u2192 delete metadata.",
+    "summary": "Revoke an active enrollment or remove a retained enrollment record",
+    "detail": "Active enrollment: unset revokes it.\nCompleted, expired or revoked enrollment: unset removes the retained record.\nUse: unset enrollment <ID>",
     "examples": [
       "unset enrollment 0011223344556677"
     ],
@@ -2464,6 +2647,66 @@
   {
     "path": [
       "unset",
+      "acl"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Remove an ACL, a source, or a service assignment",
+    "detail": "unset acl <ACL> source <IP-or-CIDR>\nunset acl <ACL> service <CLIENT> <SERVICE>  (service becomes PUBLIC; confirmation required)\nunset acl <ACL>",
+    "examples": [
+      "unset acl office-network source 10.10.10.0/24",
+      "unset acl office-network service dp1 ssh",
+      "unset acl office-network"
+    ],
+    "args": [
+      {
+        "name": "<ACL>",
+        "complete": "access-lists",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": [
+      "access",
+      "delete"
+    ],
+    "aliases": [
+      [
+        "delete",
+        "access-list"
+      ],
+      [
+        "access",
+        "delete"
+      ],
+      [
+        "unset",
+        "access-rule"
+      ]
+    ],
+    "destructive": true,
+    "hidden": false,
+    "risk": "security_widening",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips y/N confirmation when the backend requires it",
+        "risk": "security_widening"
+      }
+    ]
+  },
+  {
+    "path": [
+      "unset",
       "access-rule"
     ],
     "roles": "server",
@@ -2496,10 +2739,10 @@
       ]
     ],
     "destructive": true,
-    "hidden": false,
+    "hidden": true,
     "risk": "irreversible",
     "confirmation": "yes_flag",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--yes",
@@ -2550,10 +2793,10 @@
       ]
     ],
     "destructive": true,
-    "hidden": false,
+    "hidden": true,
     "risk": "outage",
     "confirmation": "yes_flag",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--source",
@@ -2621,10 +2864,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "security_widening",
     "confirmation": "y_n",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--yes",
@@ -2648,10 +2891,12 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Disable or delete an Internet Access profile",
-    "detail": "When the profile is enabled, requires interactive confirmation or confirmation. Disabled profiles delete without that confirm.",
+    "detail": "unset internet-profile <PROFILE> enabled\nunset internet-profile <PROFILE> source <CIDR>\nunset internet-profile <PROFILE> destination <FQDN> <PORT> [PROTOCOL]\nunset internet-profile <PROFILE>",
     "examples": [
-      "unset internet-profile vendor-api enabled",
-      "unset internet-profile vendor-api"
+      "unset internet-profile ubuntu-update enabled",
+      "unset internet-profile ubuntu-update source 10.10.20.0/24",
+      "unset internet-profile ubuntu-update destination archive.ubuntu.com 443",
+      "unset internet-profile ubuntu-update"
     ],
     "args": [
       {
@@ -2743,10 +2988,10 @@
       ]
     ],
     "destructive": true,
-    "hidden": false,
+    "hidden": true,
     "risk": "outage",
     "confirmation": "yes_flag",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--yes",
@@ -2816,10 +3061,10 @@
       ]
     ],
     "destructive": true,
-    "hidden": false,
+    "hidden": true,
     "risk": "outage",
     "confirmation": "yes_flag",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--yes",
@@ -2983,6 +3228,57 @@
   {
     "path": [
       "test",
+      "acl"
+    ],
+    "roles": "server",
+    "category": "Policy",
+    "summary": "Check whether a source IP may reach a published service",
+    "detail": "Evaluates ACL policy only. It does not open a live connection.",
+    "examples": [
+      "test acl dp1 ssh 10.10.10.25"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE>",
+        "complete": "client-services",
+        "required": true
+      },
+      {
+        "name": "<SOURCE-IP>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": [
+      "access",
+      "test"
+    ],
+    "aliases": [
+      [
+        "test",
+        "access"
+      ],
+      [
+        "access",
+        "test"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "test",
       "access"
     ],
     "roles": "server",
@@ -3021,10 +3317,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3864,10 +4160,10 @@
       ]
     ],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "metadata",
     "confirmation": "yes_flag",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--yes",
@@ -4118,7 +4414,7 @@
     ],
     "roles": "server",
     "category": "Inventory",
-    "summary": "Rename a group (compatibility alias for 'group set \u2026 name')",
+    "summary": "Rename a group (compatibility alias for 'group set … name')",
     "detail": "",
     "examples": [],
     "args": [

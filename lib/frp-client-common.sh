@@ -3611,6 +3611,14 @@ if mode == 'class':
 if mode == 'pending':
     if overall == 'none':
         raise SystemExit(0)
+    print('Pending change saved.')
+    print()
+    print('Apply:')
+    print('  system services apply')
+    print()
+    print('Discard:')
+    print('  system services discard')
+    print()
     print('Pending changes:')
     print()
     lines = []
@@ -3657,11 +3665,10 @@ elif overall == 'runtime':
 cand_enabled = [sid for sid, item in new.items() if enabled(item)]
 if new and not cand_enabled:
     print()
-    print('Management-only mode')
-    print('  No services are published')
-    print('  Public port reservations remain on the server until release')
-    print('  Management identity remains enrolled')
-    print('  Add a service with: drlink service add')
+    print('No services will be enabled after apply.')
+    print('The client remains registered for management.')
+    print('Public port reservations remain on the server until released.')
+    print('Use the server CLI to release the published service reservation.')
 print()
 PY
 }

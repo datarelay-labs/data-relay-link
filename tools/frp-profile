@@ -143,10 +143,16 @@ def cmd_create(cfg, args):
         pid, record = PROF.mutate_profiles_state(mut, cfg=cfg)
     except PROF.ProfileError as exc:
         fail(str(exc))
-    print("Created profile %s" % pid)
-    print("Name     : %s" % record["name"])
-    print("Preset   : %s" % record["preset"])
-    print("Target   : %s:%s" % (record["local_ip"], record["local_port"]))
+    print("Created Service Profile: %s" % record["name"])
+    print()
+    print("Use this profile when adding a service on a client.")
+    print()
+    print("On the client:")
+    print("  set service")
+    print()
+    print("Then choose:")
+    print("  Use a Service Profile")
+    print("  → %s" % record["name"])
     audit(
         "profile.created",
         profile_id=pid,

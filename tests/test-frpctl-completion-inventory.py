@@ -41,7 +41,7 @@ class CompletionInventoryTests(unittest.TestCase):
     def test_access_rule_completion(self):
         inv = ["office", "acl_office"]
         hits = GRAMMAR.completion_candidates(
-            "show access-rule ",
+            "show acl ",
             "server",
             [],
             {},

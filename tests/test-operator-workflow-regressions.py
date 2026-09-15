@@ -80,7 +80,8 @@ class EgressStagedWorkflowTests(unittest.TestCase):
         """S02: create disabled, stage rules, preview ALLOW, then enable."""
         proc = self._run(["create", "vendor-api", "--description", "Vendor API"])
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("Enabled  : no", proc.stdout)
+        self.assertIn("Created Internet Access profile: vendor-api", proc.stdout)
+        self.assertIn("Status         : Disabled", proc.stdout)
 
         proc = self._run(["add-source", "vendor-api", "203.0.113.10/32"])
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
@@ -109,9 +110,9 @@ class EgressStagedWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         out = proc.stdout
-        self.assertIn("Profile state: DISABLED", out)
-        self.assertIn("Policy decision: ALLOW", out)
-        self.assertIn("No live policy was changed.", out)
+        self.assertIn("Internet Access Check", out)
+        self.assertIn("Decision    : ALLOW", out)
+        self.assertIn("Live connection performed: NO", out)
 
         proc = self._run(["show", "vendor-api"])
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)

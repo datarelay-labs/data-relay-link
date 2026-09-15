@@ -252,17 +252,24 @@ def cmd_create(cfg, args):
         pid, record = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
-    print("Created egress profile %s" % pid)
-    print("Name     : %s" % record["name"])
-    print("Enabled  : %s" % ("yes" if record["enabled"] else "no"))
-    print("")
-    print("The profile is disabled. Default egress policy stays DENY.")
-    print("Preferred workflow: create → add-source → add-destination → explain → enable")
-    print("Next steps:")
-    print("  egress add-source %s <CIDR>" % record["name"])
-    print("  egress add-destination %s <FQDN> <PORT> --protocol http|https|tcp" % record["name"])
-    print("  egress explain <SOURCE-IP> <FQDN> <PORT>")
-    print("  egress enable %s" % record["name"])
+    print("Created Internet Access profile: %s" % record["name"])
+    print()
+    print("Status         : Disabled")
+    print("Default policy : DENY")
+    print()
+    print("Next:")
+    print()
+    print("1. Allow a client network:")
+    print("   set internet-profile %s source <CIDR>" % record["name"])
+    print()
+    print("2. Allow an Internet destination:")
+    print("   set internet-profile %s destination <FQDN> <PORT> <PROTOCOL>" % record["name"])
+    print()
+    print("3. Check the policy:")
+    print("   test internet <SOURCE-IP> <FQDN> <PORT> <PROTOCOL>")
+    print()
+    print("4. Enable the profile:")
+    print("   set internet-profile %s enabled" % record["name"])
     audit(
         "egress.profile.created",
         profile_id=pid,
@@ -509,21 +516,22 @@ def cmd_explain(cfg, args):
         profile = (state.get("egress_profiles") or {}).get(profile_id)
         if isinstance(profile, dict):
             profile_state = "ENABLED" if profile.get("enabled") else "DISABLED"
-    print("Profile state: %s" % profile_state)
-    print("Mode: PREVIEW")
-    print("Policy decision: %s" % policy)
-    print("Reason: %s" % decision.get("reason"))
-    print("Source IP: %s" % decision.get("source_ip"))
-    print("Hostname: %s" % decision.get("hostname"))
-    print("Port: %s" % decision.get("port"))
-    print("Protocol: %s" % (decision.get("protocol") or protocol))
-    print("Profile ID: %s" % (profile_id or "-"))
-    print("Profile Name: %s" % (decision.get("profile_name") or "-"))
+    proto_disp = str(decision.get("protocol") or protocol or "").upper()
+    print("Internet Access Check")
+    print("=====================")
+    print()
+    print("Source      : %s" % decision.get("source_ip"))
+    print("Destination : %s:%s" % (decision.get("hostname"), decision.get("port")))
+    print("Protocol    : %s" % (proto_disp or "-"))
+    print()
+    print("Decision    : %s" % policy)
+    print("Profile     : %s" % (decision.get("profile_name") or "-"))
+    if decision.get("reason") and policy != EG.DECISION_ALLOW:
+        print("Reason      : %s" % decision.get("reason"))
     if policy != EG.DECISION_ALLOW:
-        print("DNS safety: skipped (policy deny)")
-        print("Resolved IPs: -")
-        print("Live connect: NOT TESTED")
-        print("No live policy was changed.")
+        print("DNS         : SKIPPED")
+        print()
+        print("Live connection performed: NO")
         raise SystemExit(2)
 
     try:
@@ -537,21 +545,20 @@ def cmd_explain(cfg, args):
             seen.add(ip)
             raw.append(ip)
         validated = EG.validate_resolved_addresses(raw)
-        print("DNS safety: ALLOW (%d address(es))" % len(raw))
-        print("Resolved IPs: %s" % (", ".join(validated) if validated else "-"))
-        print("Live connect: NOT TESTED")
-        print("No live policy was changed.")
+        print("DNS         : PASS")
+        if validated:
+            print("Resolved    : %s" % (", ".join(validated)))
+        print()
+        print("Live connection performed: NO")
     except EG.EgressError as exc:
-        print("DNS safety: DENY (%s)" % exc)
-        print("Resolved IPs: -")
-        print("Live connect: NOT TESTED")
-        print("No live policy was changed.")
+        print("DNS         : FAIL (%s)" % exc)
+        print()
+        print("Live connection performed: NO")
         raise SystemExit(2) from None
     except OSError as exc:
-        print("DNS safety: DENY (%s)" % exc)
-        print("Resolved IPs: -")
-        print("Live connect: NOT TESTED")
-        print("No live policy was changed.")
+        print("DNS         : FAIL (%s)" % exc)
+        print()
+        print("Live connection performed: NO")
         raise SystemExit(2) from None
 
 
@@ -627,10 +634,16 @@ def cmd_tcp_create(cfg, args):
         rid, record = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
-    print("Created tcp relay %s (disabled)" % rid)
-    print("Name   : %s" % record.get("name"))
-    print("Listen : %s:%s" % (record.get("listen_addr"), record.get("listen_port")))
-    print("Enable after profile is complete: egress tcp enable %s" % record.get("name"))
+    print("Created Fixed TCP: %s" % record.get("name"))
+    print("Status: Disabled")
+    print()
+    print("Next:")
+    print()
+    print("1. Check source authorization:")
+    print("   test fixed-tcp %s <SOURCE-IP>" % record.get("name"))
+    print()
+    print("2. Enable:")
+    print("   set fixed-tcp %s enabled" % record.get("name"))
     audit(
         "egress.tcp_relay.created",
         details={
@@ -776,14 +789,31 @@ def cmd_recipe_apply(cfg, args):
         result = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
-    print("Applied recipe %s (left DISABLED)" % args.selector)
-    print("Profile ID  : %s" % result.get("profile_id"))
-    print("Profile Name: %s" % result.get("profile_name"))
-    if result.get("relay_id"):
-        print("Relay ID    : %s" % result.get("relay_id"))
-        print("Relay Name  : %s" % result.get("relay_name"))
-    print("Enabled     : no")
-    print("No profile or relay was auto-enabled.")
+    pname = result.get("profile_name") or "<PROFILE>"
+    print("Created Internet Access profile: %s" % pname)
+    print("Template: %s" % args.selector)
+    print("Status: Disabled")
+    print()
+    print("Next:")
+    print("  show internet-profile %s" % pname)
+    print("  test internet <SOURCE-IP> <FQDN> <PORT> <PROTOCOL>")
+    print("  set internet-profile %s enabled" % pname)
+    try:
+        state = EG.load_egress_state(cfg=cfg)
+        _pid, profile = EG.resolve_profile(state, pname)
+        if not (profile.get("sources") or []):
+            print()
+            print("Add a source network:")
+            print("  set internet-profile %s source <CIDR>" % pname)
+        if not (profile.get("destinations") or []):
+            print()
+            print("Add a destination:")
+            print(
+                "  set internet-profile %s destination <FQDN> <PORT> <PROTOCOL>"
+                % pname
+            )
+    except EG.EgressError:
+        pass
     audit("egress.recipe.applied", details=result)
 
 
@@ -828,8 +858,13 @@ def cmd_import(cfg, args):
         pid, profile, diff = EG.mutate_egress_state(mut, cfg=cfg)
     except (EG.EgressError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(str(exc))
-    print("Imported into %s (%s) — left DISABLED" % (pid, profile.get("name")))
-    print(json.dumps(diff, indent=2, sort_keys=True))
+    print("Imported Internet Access profile: %s" % profile.get("name"))
+    print("Status: Disabled")
+    print()
+    print("Next:")
+    print("  show internet-profile %s" % profile.get("name"))
+    print("  test internet <SOURCE-IP> <FQDN> <PORT> <PROTOCOL>")
+    print("  set internet-profile %s enabled" % profile.get("name"))
     audit(
         "egress.profile.imported",
         profile_id=pid,
@@ -840,23 +875,54 @@ def cmd_import(cfg, args):
 
 def cmd_status(cfg, _args):
     path = EG.egress_control_path(cfg)
-    print("Egress control file : %s" % path)
-    print("Exists              : %s" % ("yes" if path.is_file() else "no"))
     try:
         host, port = EG.listen_bind(cfg)
-        print("Listen              : %s:%s" % (host, port))
+        proxy = "%s:%s" % (host, port)
+        listen_ok = True
     except EG.EgressError as exc:
-        print("Listen              : ERROR %s" % exc)
+        proxy = "unavailable (%s)" % exc
+        listen_ok = False
     try:
         state = EG.load_egress_state(cfg=cfg)
         rows = EG.list_profiles(state)
         enabled = sum(1 for _pid, p in rows if p.get("enabled"))
-        print("Profiles            : %d (%d enabled)" % (len(rows), enabled))
-        print("Default             : DENY")
-        for issue in EG.doctor_issues(state):
-            print("Doctor %-5s        : %s" % (issue.get("severity"), issue.get("message")))
+        issues = list(EG.doctor_issues(state))
+        status = "Ready"
+        if not listen_ok or not path.is_file():
+            status = "Attention"
+        if any((i.get("severity") or "").lower() == "error" for i in issues):
+            status = "Attention"
+        print("Internet Access")
+        print("===============")
+        print()
+        print("Status            : %s" % status)
+        print("Profiles          : %d" % len(rows))
+        print("Enabled profiles  : %d" % enabled)
+        print("Default policy    : DENY")
+        print("Proxy endpoint    : %s" % proxy)
+        warnings = [
+            i
+            for i in issues
+            if (i.get("severity") or "").lower() in ("warn", "warning", "error")
+        ]
+        if warnings:
+            print()
+            for issue in warnings[:3]:
+                print(
+                    "Note: %s"
+                    % (issue.get("message") or issue.get("code") or "check diagnostics")
+                )
     except EG.EgressError as exc:
-        print("Policy              : FAIL-CLOSED (%s)" % exc)
+        print("Internet Access")
+        print("===============")
+        print()
+        print("Status            : Fail-closed")
+        print("Profiles          : 0")
+        print("Enabled profiles  : 0")
+        print("Default policy    : DENY")
+        print("Proxy endpoint    : %s" % proxy)
+        print()
+        print("Note: %s" % exc)
 
 
 def build_parser():

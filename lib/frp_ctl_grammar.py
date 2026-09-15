@@ -1137,6 +1137,8 @@ def context_help(tokens, role, names=None, clients=None):
                     [
                         ("public-hostname", "Optional public DNS hostname for published services"),
                         ("bootstrap-hostname", "Optional Zero-Touch public TLS bootstrap hostname"),
+                        ("installer-url", "Linux client installer URL"),
+                        ("windows-installer-url", "Windows client installer URL"),
                     ]
                 )
             if tokens[2] == "bootstrap-hostname":
@@ -1733,7 +1735,20 @@ def _match_test(tokens, role, names=None):
             avail,
         )
     target = tokens[1]
-    if target == "access":
+    if target in ("access", "acl"):
+        if len(tokens) < 5:
+            return {
+                "status": "incomplete",
+                "message": (
+                    "Missing arguments.\n\n"
+                    "Usage:\n"
+                    "  test acl <CLIENT> <SERVICE> <SOURCE-IP>\n\n"
+                    "Example:\n"
+                    "  test acl dp1 ssh 10.10.10.25\n\n"
+                    "This checks ACL policy only.\n"
+                    "It does not open a live connection."
+                ),
+            }
         return {
             "status": "ok",
             "action": "access_cmd",
@@ -1742,6 +1757,12 @@ def _match_test(tokens, role, names=None):
     if target == "internet":
         return _egress_explain_passthrough(list(tokens[2:]))
     if target == "fixed-tcp":
+        if len(tokens) < 4:
+            return incomplete(
+                "Missing arguments.",
+                ["test fixed-tcp <ENTRY> <SOURCE-IP>"],
+                examples=["test fixed-tcp vendor-license 10.10.30.25"],
+            )
         return {
             "status": "ok",
             "action": "egress_cmd",
@@ -1756,6 +1777,19 @@ def _match_test(tokens, role, names=None):
 def _egress_explain_passthrough(args):
     """Map optional trailing PROTOCOL to backend --protocol for explain."""
     args = list(args or [])
+    if len(args) < 3:
+        return {
+            "status": "incomplete",
+            "message": (
+                "Missing arguments.\n\n"
+                "Usage:\n"
+                "  test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]\n\n"
+                "Example:\n"
+                "  test internet 10.10.20.25 archive.ubuntu.com 443 https\n\n"
+                "This checks policy and DNS safety.\n"
+                "It does not make a live Internet connection."
+            ),
+        }
     if len(args) >= 4 and not str(args[3]).startswith("-"):
         proto = str(args[3]).lower()
         if proto not in ("http", "https", "tcp"):
@@ -1786,7 +1820,7 @@ def _match_access_root(tokens, role, names=None):
     if pt and pt[0] == "remove-expired":
         if len(pt) < 2:
             return incomplete(
-                "Missing Access Rule.",
+                "Missing ACL.",
                 ["system cleanup access-rule <RULE> expired"],
             )
         return {
@@ -1795,6 +1829,18 @@ def _match_access_root(tokens, role, names=None):
             "passthrough": ["remove-expired", pt[1]] + list(pt[2:]),
             "confirm_expired": True,
         }
+    if pt and pt[0] == "log" and len(pt) < 3:
+        return incomplete(
+            "Missing arguments.",
+            ["show access-log <CLIENT> <SERVICE>"],
+            examples=["show access-log dp1 ssh"],
+        )
+    if pt and pt[0] == "test" and len(pt) < 4:
+        return incomplete(
+            "Missing arguments.",
+            ["test acl <CLIENT> <SERVICE> <SOURCE-IP>"],
+            examples=["test acl dp1 ssh 10.10.10.25"],
+        )
     return {"status": "ok", "action": "access_cmd", "passthrough": pt}
 
 
@@ -1825,6 +1871,19 @@ def _match_egress_root(tokens, role, names=None):
             "name": pt[2],
             "passthrough": list(pt[3:]),
         }
+    if len(pt) >= 2 and pt[0] == "tcp" and pt[1] == "explain":
+        if len(pt) < 4:
+            return incomplete(
+                "Missing arguments.",
+                ["test fixed-tcp <ENTRY> <SOURCE-IP>"],
+                examples=["test fixed-tcp vendor-license 10.10.30.25"],
+            )
+    if len(pt) >= 1 and pt[0] == "explain" and len(pt) < 4:
+        return incomplete(
+            "Missing arguments.",
+            ["test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]"],
+            examples=["test internet 10.10.20.25 archive.ubuntu.com 443 https"],
+        )
     return {"status": "ok", "action": "egress_cmd", "passthrough": pt}
 
 
@@ -1857,6 +1916,8 @@ def _match_show(tokens, role, names=None):
     resource = tokens[1]
     # Final public terminology → existing actions (also covered by to_internal).
     _show_alias = {
+        "acls": "access-lists",
+        "acl": "access-list",
         "access-rules": "access-lists",
         "access-rule": "access-list",
         "internet": "egress",
@@ -1924,7 +1985,7 @@ def _match_show(tokens, role, names=None):
         return {"status": "ok", "action": "access_cmd", "passthrough": ["list"] + list(tokens[2:])}
     if resource == "access-list":
         if len(tokens) < 3:
-            return incomplete("Missing access list.", ["show access-list <LIST>"])
+            return incomplete("Missing ACL.", ["show acl <ACL>"])
         return {
             "status": "ok",
             "action": "access_cmd",
@@ -1937,6 +1998,12 @@ def _match_show(tokens, role, names=None):
             "passthrough": ["show-service"] + list(tokens[2:]),
         }
     if resource == "access-log":
+        if len(tokens) < 4:
+            return incomplete(
+                "Missing arguments.",
+                ["show access-log <CLIENT> <SERVICE>"],
+                examples=["show access-log dp1 ssh"],
+            )
         return {
             "status": "ok",
             "action": "access_cmd",
@@ -2197,17 +2264,45 @@ def _match_set(tokens, role, names=None):
     if resource == "access-list":
         if len(tokens) < 3:
             return incomplete(
-                "Missing access list.",
-                ["set access-list <LIST>"],
+                "Missing ACL.",
+                ["set acl <ACL>"],
+                examples=["set acl office-network"],
             )
         return {
             "status": "ok",
             "action": "access_cmd",
             "passthrough": ["edit-info"] + list(tokens[2:]),
         }
+    if resource == "acl":
+        if len(tokens) < 3:
+            return incomplete(
+                "Missing ACL.",
+                [
+                    "set acl <ACL>",
+                    "set acl <ACL> source <IP-or-CIDR>",
+                    "set acl <ACL> service <CLIENT> <SERVICE>",
+                ],
+                examples=[
+                    "set acl office-network",
+                    "set acl office-network source 10.10.10.0/24",
+                    "set acl office-network service dp1 ssh",
+                ],
+            )
+        # Name-only create is rewritten before match; leftover nested forms
+        # should not reach here without rewrite.
+        return incomplete(
+            "Unknown ACL operation.",
+            [
+                "set acl <ACL>",
+                "set acl <ACL> name <VALUE>",
+                "set acl <ACL> description <VALUE>",
+                "set acl <ACL> source <IP-or-CIDR>",
+                "set acl <ACL> service <CLIENT> <SERVICE>",
+            ],
+        )
     if resource == "access-source":
         if len(tokens) < 3:
-            return incomplete("Missing access list.", ["set access-source <LIST>"])
+            return incomplete("Missing ACL.", ["set acl <ACL> source <IP-or-CIDR>"])
         return {
             "status": "ok",
             "action": "access_cmd",
@@ -2227,13 +2322,19 @@ def _match_set(tokens, role, names=None):
         }
     if resource == "egress-profile":
         if not server:
-            return {"status": "role", "need": "server", "command": "set egress-profile"}
+            return {"status": "role", "need": "server", "command": "set internet-profile"}
         if len(tokens) < 3:
             return incomplete(
-                "Missing egress profile selector.",
+                "Missing Internet Access profile.",
                 [
-                    "set egress-profile <PROFILE> name <VALUE>",
-                    "set egress-profile <PROFILE> description <VALUE>",
+                    "set internet-profile <PROFILE>",
+                    "set internet-profile <PROFILE> source <CIDR>",
+                    "set internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>",
+                    "set internet-profile <PROFILE> enabled",
+                ],
+                examples=[
+                    "set internet-profile ubuntu-update",
+                    "set internet-profile ubuntu-update source 10.10.20.0/24",
                 ],
             )
         # Canonical property form.
@@ -2241,7 +2342,7 @@ def _match_set(tokens, role, names=None):
             if len(tokens) < 5:
                 return incomplete(
                     "Missing value.",
-                    ["set egress-profile <PROFILE> %s <value>" % tokens[3]],
+                    ["set internet-profile <PROFILE> %s <value>" % tokens[3]],
                 )
             if len(tokens) > 5:
                 return {
@@ -2260,6 +2361,22 @@ def _match_set(tokens, role, names=None):
             "profile": tokens[2],
             "passthrough": tokens[3:],
         }
+    if resource == "internet-profile":
+        if not server:
+            return {"status": "role", "need": "server", "command": "set internet-profile"}
+        return incomplete(
+            "Missing Internet Access profile.",
+            [
+                "set internet-profile <PROFILE>",
+                "set internet-profile <PROFILE> source <CIDR>",
+                "set internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>",
+                "set internet-profile <PROFILE> enabled",
+            ],
+            examples=[
+                "set internet-profile ubuntu-update",
+                "set internet-profile ubuntu-update source 10.10.20.0/24",
+            ],
+        )
     if resource == "installer-url":
         if not server:
             return {"status": "role", "need": "server", "command": "set installer-url"}
@@ -2282,14 +2399,22 @@ def _match_set(tokens, role, names=None):
     if resource == "server":
         if not server:
             return {"status": "role", "need": "server", "command": "set server"}
-        # Canonical: public-hostname. Hidden compat: hostname.
-        server_settings = ["public-hostname", "bootstrap-hostname"]
+        # Canonical: public-hostname / bootstrap-hostname / installer URLs.
+        # Hidden compat: hostname → public-hostname.
+        server_settings = [
+            "public-hostname",
+            "bootstrap-hostname",
+            "installer-url",
+            "windows-installer-url",
+        ]
         if len(tokens) < 3:
             return incomplete(
                 "Missing server setting.",
                 [
                     "set server public-hostname <fqdn>",
                     "set server bootstrap-hostname <fqdn>",
+                    "set server installer-url <URL>",
+                    "set server windows-installer-url <URL>",
                 ],
                 server_settings,
                 tip="drlink help set",
@@ -2297,12 +2422,46 @@ def _match_set(tokens, role, names=None):
         setting = tokens[2]
         if setting == "hostname":
             setting = "public-hostname"
-        if setting not in server_settings:
+        if setting == "installer-url":
+            if len(tokens) < 4:
+                return incomplete(
+                    "Missing installer URL.",
+                    ["set server installer-url <URL>"],
+                )
+            if len(tokens) > 4:
+                return {
+                    "status": "error",
+                    "message": "Too many arguments. Quote values that contain spaces.",
+                }
+            return {
+                "status": "ok",
+                "action": "set_installer_url",
+                "value": tokens[3],
+            }
+        if setting == "windows-installer-url":
+            if len(tokens) < 4:
+                return incomplete(
+                    "Missing Windows installer URL.",
+                    ["set server windows-installer-url <URL>"],
+                )
+            if len(tokens) > 4:
+                return {
+                    "status": "error",
+                    "message": "Too many arguments. Quote values that contain spaces.",
+                }
+            return {
+                "status": "ok",
+                "action": "set_windows_installer_url",
+                "value": tokens[3],
+            }
+        if setting not in ("public-hostname", "bootstrap-hostname"):
             return incomplete(
                 "Unknown server setting.",
                 [
                     "set server public-hostname <fqdn>",
                     "set server bootstrap-hostname <fqdn>",
+                    "set server installer-url <URL>",
+                    "set server windows-installer-url <URL>",
                 ],
                 server_settings,
             )
@@ -2466,6 +2625,27 @@ def _match_unset(tokens, role, names=None):
             "property": prop,
             "value": tokens[4] if prop == "tag" else "",
         }
+    if resource in ("acl", "access-rule", "access-list"):
+        return incomplete(
+            "Missing ACL.",
+            [
+                "unset acl <ACL>",
+                "unset acl <ACL> source <IP-or-CIDR>",
+                "unset acl <ACL> service <CLIENT> <SERVICE>",
+            ],
+            examples=["unset acl office-network"],
+        )
+    if resource in ("internet-profile", "egress-profile"):
+        return incomplete(
+            "Missing Internet Access profile.",
+            [
+                "unset internet-profile <PROFILE>",
+                "unset internet-profile <PROFILE> enabled",
+                "unset internet-profile <PROFILE> source <CIDR>",
+                "unset internet-profile <PROFILE> destination <FQDN> <PORT> [PROTOCOL]",
+            ],
+            examples=["unset internet-profile ubuntu-update"],
+        )
     # Other unset forms should normally be rewritten by to_internal.
     return incomplete(
         "Unknown unset resource.",
@@ -2530,8 +2710,9 @@ def _match_create(tokens, role, names=None):
     if resource == "access-list":
         if len(tokens) < 3:
             return incomplete(
-                "Missing access list name.",
-                ["create access-list <NAME>"],
+                "Missing ACL name.",
+                ["set acl <ACL>"],
+                examples=["set acl office-network"],
             )
         return {
             "status": "ok",
@@ -2541,8 +2722,9 @@ def _match_create(tokens, role, names=None):
     if resource == "egress-profile":
         if len(tokens) < 3:
             return incomplete(
-                "Missing egress profile name.",
-                ["create egress-profile <name>"],
+                "Missing Internet Access profile name.",
+                ["set internet-profile <PROFILE>"],
+                examples=["set internet-profile ubuntu-update"],
             )
         description = ""
         if len(tokens) > 3:

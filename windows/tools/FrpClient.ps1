@@ -949,7 +949,7 @@ function Invoke-FrpAddServiceCli {
             Write-Host $_.Exception.Message
             return 1
         }
-        Write-Host ("Pending service {0} added. Run apply to make it live." -f $sid)
+        Write-Host "Pending change saved."; Write-Host ""; Write-Host "Apply:"; Write-Host "  system services apply"; Write-Host ""; Write-Host "Discard:"; Write-Host "  system services discard"
         return 0
     })
 }
@@ -967,7 +967,7 @@ function Invoke-FrpSetServiceCli {
             Write-Host $_.Exception.Message
             return 1
         }
-        Write-Host ("Pending service {0} {1} updated. Run apply to make it live." -f $Id, $Property)
+        Write-Host "Pending change saved."; Write-Host ""; Write-Host "Apply:"; Write-Host "  system services apply"; Write-Host ""; Write-Host "Discard:"; Write-Host "  system services discard"
         return 0
     })
 }
@@ -992,7 +992,7 @@ function Invoke-FrpEnableServiceCli {
             return 1
         }
         if ($Enable) {
-            Write-Host ("Service {0} will be enabled (same public port reused). Run apply to make it live." -f $Id)
+            Write-Host ("Service {0} will be enabled (same public port reused)." -f $Id); Write-Host ""; Write-Host "Apply:"; Write-Host "  system services apply"; Write-Host ""; Write-Host "Discard:"; Write-Host "  system services discard"
         } elseif ($wasEnabled) {
             Write-Host ("Service {0} will be disabled. The public reservation remains until released server-side." -f $Id)
         } else {
