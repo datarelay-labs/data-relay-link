@@ -297,6 +297,25 @@ menu_add_service() {
   if [[ -z "$payload" ]]; then
     return 0
   fi
+  if [[ "$payload" == "__FRP_USE_SERVICE_PROFILE__" ]]; then
+    local selector sid name
+    echo
+    echo "Use a Service Profile"
+    echo "====================="
+    echo
+    echo "Enter the Service Profile name or PROFILE ID from the server."
+    echo "Example: e2e240-closure-http"
+    echo
+    selector="$(read_tty "Service Profile: " "")"
+    [[ -n "$selector" ]] || {
+      echo "ERROR: Service Profile is required" >&2
+      return 0
+    }
+    sid="$(read_tty "Service ID (blank = profile default): " "")"
+    name="$(read_tty "Display name (blank = profile default): " "")"
+    frp_client_add_service_from_profile "$selector" "$sid" "$name" || return 0
+    return 0
+  fi
   if ! frp_state_add_payload "$payload"; then
     return 0
   fi
@@ -1237,6 +1256,22 @@ PY
 
 frp_client_add_service_cli() {
   local preset="custom" sid="" name="" host="127.0.0.1" port="" user="" profile=""
+  if [[ $# -eq 0 ]]; then
+    if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -n "${FRP_CLIENT_TEST_INPUT+x}" || -t 0 ]]; then
+      # Allow drlink FRP_CTL_TEST_INPUT to drive client prompts.
+      if [[ -n "${FRP_CTL_TEST_INPUT:-}" && -z "${FRP_CLIENT_TEST_INPUT+x}" ]]; then
+        export FRP_CLIENT_TEST_INPUT="${FRP_CTL_TEST_INPUT}"
+      fi
+      frp_client_ensure_pending
+      menu_add_service
+      return $?
+    fi
+    echo "ERROR: set service requires an interactive session." >&2
+    echo "Run: sudo drlink" >&2
+    echo "Then: set service" >&2
+    echo "Or use a Service Profile non-interactively via the guided client menu." >&2
+    return 2
+  fi
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --profile) profile="$2"; shift 2 ;;

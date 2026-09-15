@@ -1132,7 +1132,10 @@ Select the type of service you want to publish.
    Any other TCP service.
    Examples: Grafana :3000, API :8080, PostgreSQL :5432
 
-5) Back
+5) Use a Service Profile
+   Apply a Service Profile created on the server.
+
+6) Back
 
 For normal remote SSH access, choose 1.
 
@@ -1276,12 +1279,21 @@ frp_ux_prompt_new_service() {
         _frp_new_payload="$(service_payload custom "$sid" "$name" "$host" "$port")"
         ;;
       5)
+        # Signal guided Service Profile selection to the caller (frp-client).
+        if [[ -n "$dest" ]]; then
+          printf -v "$dest" '%s' "__FRP_USE_SERVICE_PROFILE__"
+        else
+          printf '%s\n' "__FRP_USE_SERVICE_PROFILE__"
+        fi
+        return 0
+        ;;
+      6)
         if [[ -n "$dest" ]]; then
           printf -v "$dest" '%s' ""
         fi
         return 0
         ;;
-      *) echo "ERROR: select 1-5" >&2; continue ;;
+      *) echo "ERROR: select 1-6" >&2; continue ;;
     esac
     if [[ -n "$dest" ]]; then
       printf -v "$dest" '%s' "$_frp_new_payload"
@@ -4429,6 +4441,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_cli_final_commands.json" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_service_profiles.py" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_service_profiles.py" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp_ctl_repl.py" ]] || {
     echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
     return 1
@@ -4456,6 +4472,7 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
   install -m 0644 "${source}/lib/frp_cli_catalog.py" "${libdir}/frp_cli_catalog.py"
   install -m 0644 "${source}/lib/frp_cli_final_commands.json" "${libdir}/frp_cli_final_commands.json"
+  install -m 0644 "${source}/lib/frp_service_profiles.py" "${libdir}/frp_service_profiles.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${libdir}/frpctl"
@@ -4496,6 +4513,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
     "usr/local/lib/drlink/frp_cli_catalog.py:0644:lib/frp_cli_catalog.py" \
     "usr/local/lib/drlink/frp_cli_final_commands.json:0644:lib/frp_cli_final_commands.json" \
+    "usr/local/lib/drlink/frp_service_profiles.py:0644:lib/frp_service_profiles.py" \
     "usr/local/lib/drlink/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
