@@ -363,11 +363,31 @@ def cmd_replace_source(cfg, args):
 
 
 def cmd_delete(cfg, args):
+    state = ACL.load_access_state(cfg=cfg)
+    lid, lst = ACL.resolve_access_list(state, args.list)
+    used = ACL.list_services_using(state, lid)
+    if used:
+        registry = load_registry(cfg)
+        acl_name = lst.get("name") or lid
+        print('Cannot delete ACL "%s" because it is still assigned to:' % acl_name)
+        print()
+        for mid, sid in used:
+            print("  %s:%s" % (short_client(registry, mid), sid))
+        print()
+        print("Remove the assignment first:")
+        print()
+        for mid, sid in used:
+            print(
+                "  unset acl %s service %s %s"
+                % (acl_name, short_client(registry, mid), sid)
+            )
+        raise SystemExit(2)
+
     def mut(state):
-        lid, lst = ACL.resolve_access_list(state, args.list)
-        name = lst.get("name")
-        ACL.delete_access_list(state, lid)
-        return lid, name
+        lid2, lst2 = ACL.resolve_access_list(state, args.list)
+        name = lst2.get("name")
+        ACL.delete_access_list(state, lid2)
+        return lid2, name
 
     try:
         lid, name = ACL.mutate_access_state(mut, cfg=cfg)
@@ -584,7 +604,7 @@ def cmd_show_service(cfg, args):
         lst = (state.get("access_lists") or {}).get(binding["access_list_id"]) or {}
         list_name = lst.get("name") or binding["access_list_id"]
         entries = lst.get("entries") or []
-    print("Access list   : %s" % list_name)
+    print("ACL           : %s" % list_name)
     print()
     print("Allowed sources")
     print("---------------")
@@ -737,12 +757,12 @@ def interactive_menu(cfg):
             elif choice == "3":
                 interactive_edit_list(cfg)
             elif choice == "4":
-                sel = input("Access list: ").strip()
+                sel = input("ACL: ").strip()
                 cmd_delete(cfg, argparse.Namespace(list=sel))
             elif choice == "5":
                 client = input("Client: ").strip()
                 service = input("Service ID: ").strip()
-                lst = input("Access list: ").strip()
+                lst = input("ACL: ").strip()
                 cmd_assign(cfg, argparse.Namespace(client=client, service=service, list=lst))
             elif choice == "6":
                 client = input("Client: ").strip()
@@ -776,7 +796,7 @@ def interactive_menu(cfg):
 
 
 def interactive_edit_list(cfg):
-    sel = input("Access list: ").strip()
+    sel = input("ACL: ").strip()
     state = ACL.load_access_state(cfg=cfg)
     lid, lst = ACL.resolve_access_list(state, sel)
     while True:

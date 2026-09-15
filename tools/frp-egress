@@ -300,7 +300,7 @@ def cmd_set(cfg, args):
         pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
-    print("Updated egress profile %s" % pid)
+    print("Updated Internet Access profile: %s" % (profile.get("name") or pid))
     print_profile(pid, profile)
     audit(
         "egress.profile.updated",
@@ -322,7 +322,12 @@ def cmd_enable(cfg, args):
         pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
-    print("Enabled egress profile %s (%s)" % (pid, profile.get("name")))
+    name = profile.get("name") or pid
+    print("Internet Access profile enabled")
+    print("===============================")
+    print()
+    print("Profile : %s" % name)
+    print("Status  : Enabled")
     audit("egress.profile.enabled", profile_id=pid, profile_name=profile.get("name"))
 
 
@@ -334,7 +339,12 @@ def cmd_disable(cfg, args):
         pid, profile = EG.mutate_egress_state(mut, cfg=cfg)
     except EG.EgressError as exc:
         fail(str(exc))
-    print("Disabled egress profile %s (%s)" % (pid, profile.get("name")))
+    name = profile.get("name") or pid
+    print("Internet Access profile disabled")
+    print("================================")
+    print()
+    print("Profile : %s" % name)
+    print("Status  : Disabled")
     audit("egress.profile.disabled", profile_id=pid, profile_name=profile.get("name"))
 
 
@@ -352,7 +362,7 @@ def cmd_delete(cfg, args):
         fail(str(exc))
     if pid != confirmed_pid:
         fail("Target changed while waiting for confirmation; rerun the command")
-    print("Deleted egress profile %s (%s)" % (pid, profile.get("name")))
+    print("Deleted Internet Access profile: %s" % (profile.get("name") or pid))
     audit("egress.profile.deleted", profile_id=pid, profile_name=profile.get("name"))
 
 
@@ -510,27 +520,57 @@ def cmd_explain(cfg, args):
         preview=True,
     )
     policy = decision.get("decision")
-    profile_state = "-"
+    profile_enabled = None
     profile_id = decision.get("profile_id")
     if profile_id:
         profile = (state.get("egress_profiles") or {}).get(profile_id)
         if isinstance(profile, dict):
-            profile_state = "ENABLED" if profile.get("enabled") else "DISABLED"
+            profile_enabled = bool(profile.get("enabled"))
+    elif decision.get("preview") and decision.get("profile_name"):
+        # preview ALLOW from a disabled profile still carries profile_id above;
+        # keep fallback defensive.
+        profile_enabled = False
     proto_disp = str(decision.get("protocol") or protocol or "").upper()
+    profile_name = decision.get("profile_name") or "-"
+    profile_state = "-"
+    if profile_enabled is True:
+        profile_state = "Enabled"
+    elif profile_enabled is False:
+        profile_state = "Disabled"
+
     print("Internet Access Check")
     print("=====================")
     print()
-    print("Source      : %s" % decision.get("source_ip"))
-    print("Destination : %s:%s" % (decision.get("hostname"), decision.get("port")))
-    print("Protocol    : %s" % (proto_disp or "-"))
+    print("Source        : %s" % decision.get("source_ip"))
+    print("Destination   : %s:%s" % (decision.get("hostname"), decision.get("port")))
+    print("Protocol      : %s" % (proto_disp or "-"))
+    print("Profile       : %s" % profile_name)
+    print("Profile state : %s" % profile_state)
     print()
-    print("Decision    : %s" % policy)
-    print("Profile     : %s" % (decision.get("profile_name") or "-"))
-    if decision.get("reason") and policy != EG.DECISION_ALLOW:
-        print("Reason      : %s" % decision.get("reason"))
-    if policy != EG.DECISION_ALLOW:
-        print("DNS         : SKIPPED")
+
+    disabled_preview_allow = (
+        policy == EG.DECISION_ALLOW and profile_enabled is False
+    )
+    if disabled_preview_allow:
+        print("Policy preview : ALLOW")
+        print("Current state  : BLOCKED")
         print()
+        print("The policy would allow this traffic if the profile were enabled.")
+        print()
+        print("Enable:")
+        print("  set internet-profile %s enabled" % profile_name)
+        print()
+    elif policy == EG.DECISION_ALLOW:
+        print("Decision    : ALLOW")
+    else:
+        print("Policy preview : DENY")
+        print("Current state  : BLOCKED")
+        if decision.get("reason"):
+            print("Reason         : %s" % decision.get("reason"))
+
+    if policy != EG.DECISION_ALLOW:
+        print()
+        print("DNS safety    : SKIPPED")
         print("Live connection performed: NO")
         raise SystemExit(2)
 
@@ -545,18 +585,18 @@ def cmd_explain(cfg, args):
             seen.add(ip)
             raw.append(ip)
         validated = EG.validate_resolved_addresses(raw)
-        print("DNS         : PASS")
-        if validated:
-            print("Resolved    : %s" % (", ".join(validated)))
+        print("DNS safety    : PASS")
+        if validated and not disabled_preview_allow:
+            print("Resolved      : %s" % (", ".join(validated)))
         print()
         print("Live connection performed: NO")
     except EG.EgressError as exc:
-        print("DNS         : FAIL (%s)" % exc)
+        print("DNS safety    : FAIL (%s)" % exc)
         print()
         print("Live connection performed: NO")
         raise SystemExit(2) from None
     except OSError as exc:
-        print("DNS         : FAIL (%s)" % exc)
+        print("DNS safety    : FAIL (%s)" % exc)
         print()
         print("Live connection performed: NO")
         raise SystemExit(2) from None
@@ -714,22 +754,49 @@ def cmd_tcp_explain(cfg, args):
         source_ip=args.source_ip,
         preview=True,
     )
-    print("Mode: PREVIEW")
-    print("Relay ID: %s" % (decision.get("relay_id") or "-"))
-    print("Relay Name: %s" % (decision.get("relay_name") or "-"))
-    print("Policy decision: %s" % decision.get("decision"))
-    print("Reason: %s" % decision.get("reason"))
-    print("Source IP: %s" % decision.get("source_ip"))
-    print("Hostname: %s" % (decision.get("hostname") or "-"))
-    print("Port: %s" % (decision.get("port") or "-"))
-    print("Protocol: tcp")
-    print("Profile ID: %s" % (decision.get("profile_id") or "-"))
-    print("No live policy was changed.")
-    if decision.get("decision") != EG.DECISION_ALLOW:
+    rid = decision.get("relay_id")
+    relay = (state.get("tcp_relays") or {}).get(rid) if rid else None
+    if not isinstance(relay, dict):
+        try:
+            rid, relay = EG.resolve_tcp_relay(state, args.selector)
+        except EG.EgressError as exc:
+            fail(str(exc))
+    entry_name = decision.get("relay_name") or (relay.get("name") if relay else args.selector)
+    enabled = bool(relay.get("enabled")) if isinstance(relay, dict) else False
+    status = "Enabled" if enabled else "Disabled"
+    host = decision.get("hostname") or "-"
+    port = decision.get("port") or "-"
+    policy = decision.get("decision")
+
+    print("Fixed TCP Check")
+    print("===============")
+    print()
+    print("Entry       : %s" % entry_name)
+    print("Status      : %s" % status)
+    print("Source      : %s" % (decision.get("source_ip") or args.source_ip))
+    print("Destination : %s:%s" % (host, port))
+    print()
+
+    if policy != EG.DECISION_ALLOW:
+        print("Policy preview : DENY")
+        print("Current state  : BLOCKED")
+        if decision.get("reason"):
+            print()
+            print("Reason:")
+            print("  %s" % decision.get("reason"))
+        print()
+        print("Live connection performed: NO")
         raise SystemExit(2)
-    host = decision.get("hostname")
-    if not host:
+
+    if not host or host == "-":
+        print("Policy preview : DENY")
+        print("Current state  : BLOCKED")
+        print()
+        print("Live connection performed: NO")
         raise SystemExit(2)
+
+    dns_ok = False
+    dns_err = None
     try:
         results = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
         seen = set()
@@ -740,15 +807,48 @@ def cmd_tcp_explain(cfg, args):
                 continue
             seen.add(ip)
             raw.append(ip)
-        validated = EG.validate_resolved_addresses(raw)
-        print("DNS safety: ALLOW (%d address(es))" % len(raw))
-        print("Resolved IPs: %s" % (", ".join(validated) if validated else "-"))
-        print("Live connect: NOT TESTED")
+        EG.validate_resolved_addresses(raw)
+        dns_ok = True
     except (EG.EgressError, OSError) as exc:
-        print("DNS safety: DENY (%s)" % exc)
-        print("Resolved IPs: -")
-        print("Live connect: NOT TESTED")
-        raise SystemExit(2) from None
+        dns_err = exc
+
+    if not dns_ok:
+        if enabled:
+            print("Policy preview : ALLOW")
+            print("DNS safety     : FAIL")
+            print("Current state  : NOT READY")
+        else:
+            print("Policy preview : ALLOW")
+            print("DNS safety     : FAIL")
+            print("Current state  : NOT READY")
+        print()
+        print("Reason:")
+        print("  Destination hostname could not be resolved.")
+        if dns_err and str(dns_err).strip():
+            detail = str(dns_err).strip()
+            if "could not be resolved" not in detail.lower():
+                print("  (%s)" % detail)
+        print()
+        print("Live connection performed: NO")
+        raise SystemExit(2)
+
+    if not enabled:
+        print("Policy preview : ALLOW")
+        print("DNS safety     : PASS")
+        print("Current state  : BLOCKED")
+        print()
+        print("The Fixed TCP entry is disabled.")
+        print()
+        print("Enable:")
+        print("  set fixed-tcp %s enabled" % entry_name)
+        print()
+        print("Live connection performed: NO")
+        return
+
+    print("Decision    : ALLOW")
+    print("DNS safety  : PASS")
+    print()
+    print("Live connection performed: NO")
 
 
 def cmd_recipe_list(cfg, _args):

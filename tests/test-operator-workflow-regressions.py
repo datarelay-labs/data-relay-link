@@ -111,7 +111,10 @@ class EgressStagedWorkflowTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         out = proc.stdout
         self.assertIn("Internet Access Check", out)
-        self.assertIn("Decision    : ALLOW", out)
+        self.assertIn("Profile state : Disabled", out)
+        self.assertIn("Policy preview : ALLOW", out)
+        self.assertIn("Current state  : BLOCKED", out)
+        self.assertNotRegex(out, r"(?m)^Decision\s*:\s*ALLOW\s*$")
         self.assertIn("Live connection performed: NO", out)
 
         proc = self._run(["show", "vendor-api"])
@@ -120,6 +123,23 @@ class EgressStagedWorkflowTests(unittest.TestCase):
 
         proc = self._run(["enable", "vendor-api"])
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("Internet Access profile enabled", proc.stdout)
+        self.assertNotIn("egress profile", proc.stdout.lower())
+
+        proc = self._run(
+            [
+                "test",
+                "203.0.113.10",
+                "security.ubuntu.com",
+                "443",
+                "--protocol",
+                "https",
+            ]
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        enabled_out = proc.stdout
+        self.assertIn("Profile state : Enabled", enabled_out)
+        self.assertIn("Decision    : ALLOW", enabled_out)
 
         proc = self._run(["show", "vendor-api"])
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)

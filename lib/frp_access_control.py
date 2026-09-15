@@ -73,7 +73,10 @@ PUBLIC_EXPOSURE_LINES = (
     "Target auth   : SSH/application authentication is still required",
     "",
     "Recommended:",
-    "  Restrict this service with an Access List if public access is not intended.",
+    "  Restrict this service with an ACL if public access is not intended.",
+    "",
+    "Example:",
+    "  set acl <ACL> service <CLIENT> <SERVICE>",
 )
 
 
@@ -831,11 +834,21 @@ def update_access_list_info(state: dict, list_id: str, name=None, description=No
 def delete_access_list(state: dict, list_id: str) -> None:
     used = list_services_using(state, list_id)
     if used:
-        lines = ["Cannot delete Access List that is still referenced.", "", "Used by:"]
+        lst = (state.get("access_lists") or {}).get(list_id) or {}
+        acl_name = lst.get("name") or list_id
+        lines = [
+            'Cannot delete ACL "%s" because it is still assigned to:' % acl_name,
+            "",
+        ]
         for mid, sid in used:
-            lines.append("  %s:%s" % (mid[:12], sid))
+            display = mid[:12] if len(str(mid)) > 12 else mid
+            lines.append("  %s:%s" % (display, sid))
         lines.append("")
-        lines.append("Change those services to PUBLIC or another Access List first.")
+        lines.append("Remove the assignment first:")
+        lines.append("")
+        for mid, sid in used:
+            display = mid[:12] if len(str(mid)) > 12 else mid
+            lines.append("  unset acl %s service %s %s" % (acl_name, display, sid))
         raise AccessError("\n".join(lines))
     lists = state.get("access_lists") or {}
     if list_id not in lists:

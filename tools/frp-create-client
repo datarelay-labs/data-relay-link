@@ -267,6 +267,7 @@ def remapped_server_cfg(cfg):
     Returns the whole cfg, never a synthesized subset: retention, lock, and
     path policy must all come from the administrator's configuration.
     """
+    require_onboarding_config(cfg)
     out = dict(cfg)
     out['enrollments_dir'] = str(remap(cfg['enrollments_dir']))
     out['bootstrap_dir'] = str(
@@ -276,6 +277,31 @@ def remapped_server_cfg(cfg):
         remap(cfg.get('registry_file') or str(Path(cfg['enrollments_dir']).parent / 'registry.json'))
     )
     return out
+
+
+def require_onboarding_config(cfg):
+    """Fail with a product-owned error when enrollment config is incomplete."""
+    if not isinstance(cfg, dict):
+        fail(
+            "Client onboarding cannot continue because the server configuration is incomplete.\n"
+            "\n"
+            "Missing setting:\n"
+            "  enrollments_dir\n"
+            "\n"
+            "Run:\n"
+            "  system diagnostics"
+        )
+    value = cfg.get('enrollments_dir')
+    if value is None or not str(value).strip():
+        fail(
+            "Client onboarding cannot continue because the server configuration is incomplete.\n"
+            "\n"
+            "Missing setting:\n"
+            "  enrollments_dir\n"
+            "\n"
+            "Run:\n"
+            "  system diagnostics"
+        )
 
 
 def run_enrollment_retention_cleanup(cfg):
@@ -1071,6 +1097,7 @@ def main(argv=None):
             fail('invalid --rdp-port; must be an integer 1-65535')
 
     cfg = json.loads(Path(CONFIG).read_text())
+    require_onboarding_config(cfg)
     enroll_dir = remap(cfg['enrollments_dir'])
     enroll_dir.mkdir(parents=True, exist_ok=True)
     try:
