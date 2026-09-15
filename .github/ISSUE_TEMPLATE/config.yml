@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://link.datarelay.run/
+    about: Check the Data Relay Link documentation before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/datarelay-labs/data-relay-link/security/policy
+    about: Do not post sensitive vulnerability details in a public issue. Read the security policy first.
