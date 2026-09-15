@@ -2034,7 +2034,7 @@ frp_server_health_allocator() {
 
 frp_server_health_access() {
   # Access plugin readiness: unit active AND GET /healthz == 200.
-  local addr url code
+  local addr url code attempt
   if [[ "${FRP_INSTALL_HOOK_HEALTH_FAIL:-}" == "1" ]]; then
     echo "ERROR: simulated health check failure" >&2
     return 1
@@ -2058,12 +2058,17 @@ PY
   fi
   [[ -n "$addr" ]] || addr="127.0.0.1:6101"
   url="http://${addr}/healthz"
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$url" 2>/dev/null || echo 000)"
-  if [[ "$code" != "200" ]]; then
-    echo "ERROR: access plugin /healthz returned ${code} (expected 200)" >&2
-    return 1
-  fi
-  return 0
+  # systemd can report active before the plugin binds; retry briefly.
+  code="000"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$url" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "ERROR: access plugin /healthz returned ${code} (expected 200)" >&2
+  return 1
 }
 
 frp_server_health_egress() {
