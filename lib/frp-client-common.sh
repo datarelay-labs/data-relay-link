@@ -4460,11 +4460,19 @@ frp_client_install_management_files() {
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${libdir}/frpctl"
   install -m 0755 "${source}/tools/drlink" "${bindir}/drlink"
+  # RHEL/Rocky sudo defaults omit /usr/local/bin from secure_path.
+  # Keep a copy on the secure_path so `sudo drlink` works after install.
+  if [[ "$(frp_client_path /usr/bin)" != "$bindir" ]]; then
+    install -m 0755 "${source}/tools/drlink" "$(frp_client_path /usr/bin/drlink)"
+  fi
   install -m 0755 "${source}/tools/frp-support-bundle" "${bindir}/frp-support-bundle"
   install -m 0755 "${source}/tools/frp-update" "${bindir}/frp-update"
   # Retire legacy PATH entry points from prior product identity.
   rm -f "${bindir}/frpctl" "$(frp_client_path /usr/local/sbin/frpctl)" 2>/dev/null || true
   chmod 0755 "${bindir}/drlink" "${libdir}/frpctl"
+  if [[ -x "$(frp_client_path /usr/bin/drlink)" ]]; then
+    chmod 0755 "$(frp_client_path /usr/bin/drlink)"
+  fi
   if [[ -f "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" ]]; then
     install -m 0644 "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" \
       "${libdir}/${FRP_MACOS_LAUNCHD_LABEL}.plist"
@@ -4492,6 +4500,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/drlink:0755:tools/drlink" \
+    "usr/bin/drlink:0755:tools/drlink" \
     "usr/local/lib/drlink/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
