@@ -586,6 +586,93 @@ def cmd_public(cfg, args):
     print_access_session_semantics()
 
 
+def cmd_unassign(cfg, args):
+    """Remove a specific ACL assignment from a service (fail closed).
+
+    Unlike bare ``public``, the supplied ACL selector must exist and the
+    service must currently be assigned to that ACL. A typo must never
+    silently broaden access.
+    """
+    registry, mid, _client, sid, svc = resolve_service(cfg, args.client, args.service)
+    state = ACL.load_access_state(cfg=cfg)
+    try:
+        lid, lst = ACL.resolve_access_list(state, args.list)
+    except ACL.AccessError:
+        raise SystemExit('ERROR: ACL not found: %s' % args.list)
+    binding = ACL.get_service_binding(state, mid, sid)
+    acl_name = lst.get("name") or lid
+    display = "%s:%s" % (short_client(registry, mid), sid)
+    if binding.get("access_mode") != ACL.MODE_ALLOWLIST or binding.get("access_list_id") != lid:
+        current = "-"
+        if binding.get("access_mode") == ACL.MODE_ALLOWLIST and binding.get("access_list_id"):
+            cur = (state.get("access_lists") or {}).get(binding.get("access_list_id")) or {}
+            current = cur.get("name") or binding.get("access_list_id")
+        elif binding.get("access_mode") == ACL.MODE_PUBLIC:
+            current = "PUBLIC"
+        raise SystemExit(
+            'ERROR: service %s is not assigned to ACL "%s" (current: %s). '
+            "Access unchanged."
+            % (display, acl_name, current)
+        )
+    print('Removing ACL "%s" from %s will make this published service PUBLIC.' % (
+        acl_name, display,
+    ))
+    print()
+    print("Target authentication such as SSH keys still applies.")
+    print("New connections use the new policy immediately.")
+    print("Existing established connections are not forcibly terminated.")
+    print()
+    yes = bool(getattr(args, "yes", False))
+    if not yes:
+        if not sys.stdin.isatty():
+            raise SystemExit(
+                "ERROR: making a service PUBLIC requires interactive confirmation "
+                "or --yes for automation."
+            )
+        confirm = input("Continue? [y/N]: ").strip().lower()
+        if confirm not in ("y", "yes"):
+            raise SystemExit(0)
+
+    def mut(state):
+        previous = ACL.get_service_binding(state, mid, sid)
+        # Re-validate under the lock so a concurrent reassignment cannot
+        # silently broaden a different ACL than the operator named.
+        if (
+            previous.get("access_mode") != ACL.MODE_ALLOWLIST
+            or previous.get("access_list_id") != lid
+        ):
+            raise ACL.AccessError(
+                'service is no longer assigned to ACL "%s"; access unchanged'
+                % acl_name
+            )
+        previous_list = (state.get("access_lists") or {}).get(
+            previous.get("access_list_id")
+        ) or {}
+        ACL.set_service_binding(state, mid, sid, ACL.MODE_PUBLIC, None)
+        return previous, previous_list.get("name")
+
+    previous, previous_list_name = ACL.mutate_access_state(mut, cfg=cfg)
+    print("Set %s:%s to PUBLIC (port %s)" % (
+        short_client(registry, mid), sid, svc.get("remote_port"),
+    ))
+    audit(
+        ACL.AUDIT_SERVICE_PUBLIC,
+        client_id=mid,
+        service_id=sid,
+        public_port=svc.get("remote_port"),
+        access_mode=ACL.MODE_PUBLIC,
+        details={
+            "previous_mode": previous.get("access_mode"),
+            "previous_list_id": previous.get("access_list_id"),
+            "previous_list_name": previous_list_name,
+            "requested_list": acl_name,
+        },
+    )
+    print()
+    ACL.print_public_exposure_notice()
+    print_access_session_semantics()
+
+
 def cmd_show_service(cfg, args):
     registry, mid, client, sid, svc = resolve_service(cfg, args.client, args.service)
     state = ACL.load_access_state(cfg=cfg)
@@ -945,6 +1032,12 @@ def build_parser():
     p.add_argument("service")
     p.add_argument("--yes", action="store_true")
 
+    p = sub.add_parser("unassign", help="Remove a specific ACL assignment (fail closed)")
+    p.add_argument("list")
+    p.add_argument("client")
+    p.add_argument("service")
+    p.add_argument("--yes", action="store_true")
+
     p = sub.add_parser("show-service", help="Show service access")
     p.add_argument("client")
     p.add_argument("service")
@@ -998,6 +1091,8 @@ def main(argv=None):
             cmd_assign(cfg, args)
         elif args.cmd == "public":
             cmd_public(cfg, args)
+        elif args.cmd == "unassign":
+            cmd_unassign(cfg, args)
         elif args.cmd == "show-service":
             cmd_show_service(cfg, args)
         elif args.cmd == "test":

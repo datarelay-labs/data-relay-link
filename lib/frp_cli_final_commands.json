@@ -1327,11 +1327,33 @@
     "args": [
       {
         "name": "<name>",
-        "complete": null,
+        "complete": "service-profiles",
         "required": true
+      },
+      {
+        "name": "<PROPERTY>",
+        "complete": [
+          "name",
+          "description",
+          "preset",
+          "target-host",
+          "target-port",
+          "ssh-user",
+          "health-type",
+          "health-timeout",
+          "health-interval",
+          "health-max-failed",
+          "health-path"
+        ],
+        "required": false
+      },
+      {
+        "name": "<VALUE>",
+        "complete": null,
+        "required": false
       }
     ],
-    "tail": "flags",
+    "tail": "any",
     "internal": [
       "create",
       "profile"
@@ -2281,8 +2303,35 @@
       "set service ssh target-port 2222",
       "set service ssh enabled"
     ],
-    "args": [],
-    "tail": "flags",
+    "args": [
+      {
+        "name": "<SERVICE-ID>",
+        "complete": "local-services",
+        "required": false
+      },
+      {
+        "name": "<PROPERTY|enabled>",
+        "complete": [
+          "target-host",
+          "target-port",
+          "ssh-user",
+          "name",
+          "health-type",
+          "health-timeout",
+          "health-interval",
+          "health-max-failed",
+          "health-path",
+          "enabled"
+        ],
+        "required": false
+      },
+      {
+        "name": "<VALUE>",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": "any",
     "internal": [
       "add",
       "service"
@@ -3165,18 +3214,22 @@
     ],
     "roles": "server",
     "category": "Server",
-    "summary": "Clear optional server hostname settings",
-    "detail": "Unsetting public-hostname falls back to Public IP access. Unsetting bootstrap-hostname falls back to zt1 Zero-Touch commands.",
+    "summary": "Clear optional server hostname and installer URL settings",
+    "detail": "Unsetting public-hostname falls back to Public IP access. Unsetting bootstrap-hostname falls back to zt1 Zero-Touch commands. Unsetting installer URLs restores automatic/default installer sources.",
     "examples": [
       "unset server public-hostname",
-      "unset server bootstrap-hostname"
+      "unset server bootstrap-hostname",
+      "unset server installer-url",
+      "unset server windows-installer-url"
     ],
     "args": [
       {
-        "name": "public-hostname|bootstrap-hostname",
+        "name": "public-hostname|bootstrap-hostname|installer-url|windows-installer-url",
         "complete": [
           "public-hostname",
-          "bootstrap-hostname"
+          "bootstrap-hostname",
+          "installer-url",
+          "windows-installer-url"
         ],
         "required": true
       }
@@ -3213,9 +3266,16 @@
         "name": "<SERVICE-ID>",
         "complete": "local-services",
         "required": true
+      },
+      {
+        "name": "enabled",
+        "complete": [
+          "enabled"
+        ],
+        "required": true
       }
     ],
-    "tail": "any",
+    "tail": null,
     "internal": [
       "disable",
       "service"

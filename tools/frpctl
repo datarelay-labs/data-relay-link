@@ -852,9 +852,138 @@ frpctl_nav_prompt_id() {
   printf '%s' "$value"
 }
 
+# Prefer numbered inventory selection; still allow typing a selector.
+# kind: clients | groups | acls | service-profiles | egress-profiles | fixed-tcp | local-services
+frpctl_select_inventory() {
+  local kind="$1"
+  local prompt="${2:-Select: }"
+  local payload key choice
+  case "$kind" in
+    clients) key="names" ;;
+    groups) key="groups" ;;
+    acls) key="access_lists" ;;
+    service-profiles) key="service_profiles" ;;
+    egress-profiles) key="egress" ;;
+    local-services) key="local_services" ;;
+    fixed-tcp) key="fixed_tcp" ;;
+    *) key="" ;;
+  esac
+  payload="$(frpctl_grammar_payload 2>/dev/null || true)"
+  mapfile -t _frpctl_inv_items < <(python3 - "$payload" "$key" "$kind" <<'PY'
+import json, sys
+payload = sys.argv[1] or '{}'
+key = sys.argv[2]
+kind = sys.argv[3]
+try:
+    data = json.loads(payload) if payload else {}
+except Exception:
+    data = {}
+items = []
+if key and key != 'fixed_tcp':
+    raw = data.get(key) or []
+    if key == 'names':
+        meta = {str(c.get('id')): c for c in (data.get('clients') or []) if isinstance(c, dict)}
+        for mid in raw:
+            mid = str(mid)
+            info = meta.get(mid) or {}
+            label = str(info.get('label') or info.get('hostname') or '').strip()
+            items.append(label or mid)
+    else:
+        items = [str(x) for x in raw if str(x).strip()]
+elif kind == 'fixed_tcp':
+    import os
+    from pathlib import Path
+    root = os.environ.get('FRP_CTL_TEST_ROOT') or os.environ.get('FRP_DEPLOY_TEST_ROOT') or ''
+    cfg_path = Path(root + '/etc/drlink/config.json') if root else Path('/etc/drlink/config.json')
+    cfg = {}
+    if cfg_path.is_file():
+        cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+    raw_path = str(cfg.get('egress_control_file') or '/var/lib/drlink/egress-control.json')
+    path = Path(raw_path)
+    if root and not str(path).startswith(root):
+        path = Path(root + str(path))
+    if path.is_file():
+        state = json.loads(path.read_text(encoding='utf-8'))
+        for rid, relay in sorted((state.get('tcp_relays') or {}).items(), key=lambda kv: str((kv[1] or {}).get('name') or kv[0])):
+            if isinstance(relay, dict):
+                items.append(str(relay.get('name') or rid))
+            else:
+                items.append(str(rid))
+seen = set()
+out = []
+for item in items:
+    if item in seen:
+        continue
+    seen.add(item)
+    out.append(item)
+for item in out:
+    print(item)
+PY
+)
+  if ((${#_frpctl_inv_items[@]} > 0)); then
+    local i=1
+    for item in "${_frpctl_inv_items[@]}"; do
+      echo "$i) $item"
+      i=$((i + 1))
+    done
+    echo "Or type a selector."
+  fi
+  choice="$(frpctl_read "$prompt" "")" || return 1
+  choice="${choice#"${choice%%[![:space:]]*}"}"
+  choice="${choice%"${choice##*[![:space:]]}"}"
+  [[ -n "$choice" ]] || return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#_frpctl_inv_items[@]} )); then
+    printf '%s' "${_frpctl_inv_items[$((choice - 1))]}"
+    return 0
+  fi
+  printf '%s' "$choice"
+}
+
+frpctl_select_client_service() {
+  local client="$1"
+  local prompt="${2:-SERVICE: }"
+  local payload choice
+  payload="$(frpctl_grammar_payload 2>/dev/null || true)"
+  mapfile -t _frpctl_svc_items < <(python3 - "$payload" "$client" <<'PY'
+import json, sys
+try:
+    data = json.loads(sys.argv[1] or '{}')
+except Exception:
+    data = {}
+client = sys.argv[2]
+services = data.get('services') or {}
+hits = services.get(client)
+if hits is None:
+    for key, vals in services.items():
+        if str(key).startswith(client) or str(key) == client:
+            hits = vals
+            break
+for sid in sorted(hits or []):
+    print(sid)
+PY
+)
+  if ((${#_frpctl_svc_items[@]} > 0)); then
+    local i=1
+    for sid in "${_frpctl_svc_items[@]}"; do
+      echo "$i) $sid"
+      i=$((i + 1))
+    done
+    echo "Or type a service id."
+  fi
+  choice="$(frpctl_read "$prompt" "")" || return 1
+  choice="${choice#"${choice%%[![:space:]]*}"}"
+  choice="${choice%"${choice##*[![:space:]]}"}"
+  [[ -n "$choice" ]] || return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#_frpctl_svc_items[@]} )); then
+    printf '%s' "${_frpctl_svc_items[$((choice - 1))]}"
+    return 0
+  fi
+  printf '%s' "$choice"
+}
+
 frpctl_nav_workflow() {
   local workflow="$1"
-  local id path value
+  local id path value profile
   case "$workflow" in
     create_zero_touch) frpctl_guided_client_onboarding ;;
     create_enrollment) frpctl_guided_manual_enrollment ;;
@@ -864,7 +993,7 @@ frpctl_nav_workflow() {
       frpctl_dispatch set group "$id" || true
       ;;
     manage_group)
-      id="$(frpctl_nav_prompt_id "Group name: ")" || return 1
+      id="$(frpctl_select_inventory groups "Group: ")" || return 1
       frpctl_manage_one_group "$id"
       ;;
     revoke_enrollment)
@@ -876,12 +1005,12 @@ frpctl_nav_workflow() {
       frpctl_dispatch delete enrollment "$id" || true
       ;;
     client_services)
-      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      id="$(frpctl_select_inventory clients "CLIENT: ")" || return 1
       frpctl_dispatch show client "$id" services || true
       ;;
     release_service)
-      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
-      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      id="$(frpctl_select_inventory clients "CLIENT: ")" || return 1
+      value="$(frpctl_select_client_service "$id" "SERVICE: ")" || return 1
       frpctl_dispatch unset client "$id" service "$value" || true
       ;;
     create_access_list)
@@ -889,24 +1018,65 @@ frpctl_nav_workflow() {
       frpctl_dispatch set acl "$id" || true
       ;;
     manage_access_list)
-      id="$(frpctl_nav_prompt_id "ACL name: ")" || return 1
-      frpctl_dispatch show acl "$id" || true
+      id="$(frpctl_select_inventory acls "ACL: ")" || return 1
+      frpctl_manage_one_acl "$id"
       ;;
     assign_access)
-      path="$(frpctl_nav_prompt_id "ACL name: ")" || return 1
-      id="$(frpctl_nav_prompt_id "CLIENT: ")" || return 1
-      value="$(frpctl_nav_prompt_id "SERVICE: ")" || return 1
+      path="$(frpctl_select_inventory acls "ACL: ")" || return 1
+      id="$(frpctl_select_inventory clients "CLIENT: ")" || return 1
+      value="$(frpctl_select_client_service "$id" "SERVICE: ")" || return 1
       frpctl_dispatch set acl "$path" service "$id" "$value" || true
       ;;
     public_access)
-      path="$(frpctl_nav_prompt_id "ACL name: ")" || return 1
-      id="$(frpctl_nav_prompt_id "CLIENT: ")" || return 1
-      value="$(frpctl_nav_prompt_id "SERVICE: ")" || return 1
-      frpctl_dispatch unset acl "$path" service "$id" "$value" || true
+      id="$(frpctl_select_inventory clients "CLIENT: ")" || return 1
+      value="$(frpctl_select_client_service "$id" "SERVICE: ")" || return 1
+      echo
+      echo "Current ACL assignment:"
+      frpctl_dispatch show access-service "$id" "$value" || true
+      echo
+      echo "This will make the published service PUBLIC."
+      path="$(frpctl_read "Continue? [y/N]: " "N")" || return 1
+      case "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')" in
+        y|yes)
+          path="$(python3 - "$(frpctl_path /etc/drlink/config.json)" "${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}" "$id" "$value" <<'PY'
+import json, sys
+from pathlib import Path
+cfg_path = Path(sys.argv[1]); root = sys.argv[2] or ''; client = sys.argv[3]; service = sys.argv[4]
+cfg = json.loads(cfg_path.read_text(encoding='utf-8')) if cfg_path.is_file() else {}
+access = Path(str(cfg.get('access_control_file') or '/var/lib/drlink/access-control.json'))
+reg = Path(str(cfg.get('registry_file') or ''))
+if root:
+    if str(access) and not str(access).startswith(root):
+        access = Path(root + str(access))
+    if str(reg) and not str(reg).startswith(root):
+        reg = Path(root + str(reg))
+reg_state = json.loads(reg.read_text(encoding='utf-8')) if reg.is_file() else {}
+clients = reg_state.get('clients') or {}
+mid = client if client in clients else None
+if mid is None:
+    for cand, rec in clients.items():
+        if cand.startswith(client) or str((rec or {}).get('label') or '') == client or str((rec or {}).get('hostname') or '') == client:
+            mid = cand
+            break
+state = json.loads(access.read_text(encoding='utf-8')) if access.is_file() else {}
+binding = ((state.get('service_access') or {}).get(mid) or {}).get(service) or {}
+lid = binding.get('access_list_id')
+lst = (state.get('access_lists') or {}).get(lid) or {}
+print(lst.get('name') or lid or '')
+PY
+)" || true
+          if [[ -z "$path" ]]; then
+            echo "ERROR: service is already PUBLIC or has no ACL assignment." >&2
+            return 1
+          fi
+          frpctl_dispatch unset acl "$path" service "$id" "$value" || true
+          ;;
+        *) echo "Cancelled." ;;
+      esac
       ;;
     test_access)
-      id="$(frpctl_nav_prompt_id "CLIENT: ")" || return 1
-      value="$(frpctl_nav_prompt_id "SERVICE: ")" || return 1
+      id="$(frpctl_select_inventory clients "CLIENT: ")" || return 1
+      value="$(frpctl_select_client_service "$id" "SERVICE: ")" || return 1
       path="$(frpctl_nav_prompt_id "Source IP: ")" || return 1
       frpctl_dispatch test acl "$id" "$value" "$path" || true
       ;;
@@ -915,11 +1085,11 @@ frpctl_nav_workflow() {
       frpctl_dispatch set service-profile "$id" || true
       ;;
     manage_service_profile)
-      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
-      frpctl_dispatch show service-profile "$id" || true
+      id="$(frpctl_select_inventory service-profiles "Profile: ")" || return 1
+      frpctl_manage_one_service_profile "$id"
       ;;
     delete_service_profile)
-      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      id="$(frpctl_select_inventory service-profiles "Profile: ")" || return 1
       frpctl_dispatch unset service-profile "$id" || true
       ;;
     explain_egress)
@@ -934,15 +1104,15 @@ frpctl_nav_workflow() {
       frpctl_dispatch set internet-profile "$id" || true
       ;;
     manage_egress_profile)
-      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
-      frpctl_dispatch show internet-profile "$id" || true
+      id="$(frpctl_select_inventory egress-profiles "Profile: ")" || return 1
+      frpctl_manage_one_egress_profile "$id"
       ;;
     import_egress)
       path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
       frpctl_dispatch system import internet-profile "$path" || true
       ;;
     diff_egress)
-      id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
+      id="$(frpctl_select_inventory egress-profiles "Profile: ")" || return 1
       path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
       frpctl_dispatch system diff internet-profile "$id" "$path" || true
       ;;
@@ -951,13 +1121,13 @@ frpctl_nav_workflow() {
       frpctl_dispatch set fixed-tcp "$id" || true
       ;;
     show_access_log)
-      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
-      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      id="$(frpctl_select_inventory clients "CLIENT: ")" || return 1
+      value="$(frpctl_select_client_service "$id" "SERVICE: ")" || return 1
       frpctl_dispatch show access-log "$id" "$value" || true
       ;;
     manage_egress_tcp)
-      id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
-      frpctl_dispatch show fixed-tcp "$id" || true
+      id="$(frpctl_select_inventory fixed-tcp "Fixed TCP: ")" || return 1
+      frpctl_manage_one_fixed_tcp "$id"
       ;;
     view_egress_recipe)
       id="$(frpctl_nav_prompt_id "Template name: ")" || return 1
@@ -977,17 +1147,42 @@ frpctl_nav_workflow() {
       frpctl_dispatch set server bootstrap-hostname "$value" || true
       ;;
     set_installer_url)
-      value="$(frpctl_nav_prompt_id "Client installer URL: ")" || return 1
-      frpctl_dispatch set installer-url "$value" || true
+      value="$(frpctl_nav_prompt_id "Linux/macOS client installer URL: ")" || return 1
+      frpctl_dispatch set server installer-url "$value" || true
+      ;;
+    set_windows_installer_url)
+      value="$(frpctl_nav_prompt_id "Windows client installer URL: ")" || return 1
+      frpctl_dispatch set server windows-installer-url "$value" || true
       ;;
     restore_backup)
       path="$(frpctl_nav_prompt_id "Backup path: ")" || return 1
       frpctl_dispatch system restore "$path" || true
       ;;
     edit_service|enable_service|disable_service)
-      id="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      id="$(frpctl_select_inventory local-services "Service: ")" || return 1
       case "$workflow" in
-        edit_service) frpctl_dispatch set service "$id" || true ;;
+        edit_service)
+          echo
+          echo "1) target-host"
+          echo "2) target-port"
+          echo "3) ssh-user"
+          echo "4) name"
+          echo "5) health-type"
+          echo "6) Back"
+          path="$(frpctl_read "Select property: " "")" || return 1
+          case "$path" in
+            1) path="target-host" ;;
+            2) path="target-port" ;;
+            3) path="ssh-user" ;;
+            4) path="name" ;;
+            5) path="health-type" ;;
+            *) return 0 ;;
+          esac
+          value="$(frpctl_nav_prompt_id "New value: ")" || return 1
+          frpctl_dispatch set service "$id" "$path" "$value" || true
+          echo
+          echo "Pending change recorded. Run: system services apply"
+          ;;
         enable_service) frpctl_dispatch set service "$id" enabled || true ;;
         disable_service) frpctl_dispatch unset service "$id" enabled || true ;;
       esac
@@ -1996,11 +2191,11 @@ frpctl_manage_one_group() {
         frpctl_dispatch show clients "$gid" || true
         ;;
       4)
-        mid="$(frpctl_nav_prompt_id "CLIENT ID: ")" || continue
+        mid="$(frpctl_select_inventory clients "CLIENT: ")" || continue
         frpctl_dispatch set client "$mid" group "$gid" || true
         ;;
       5)
-        mid="$(frpctl_nav_prompt_id "CLIENT ID: ")" || continue
+        mid="$(frpctl_select_inventory clients "CLIENT: ")" || continue
         frpctl_dispatch unset client "$mid" group "$gid" || true
         ;;
       6)
@@ -2012,6 +2207,309 @@ frpctl_manage_one_group() {
         ;;
       *)
         echo "ERROR: select 1-7" >&2
+        ;;
+    esac
+  done
+}
+
+frpctl_manage_one_acl() {
+  local acl="$1" action sub value client service
+  if ! frpctl_dispatch show acl "$acl" >/dev/null; then
+    return 1
+  fi
+  while true; do
+    echo
+    echo "ACL: $acl"
+    echo
+    echo "1) Overview"
+    echo "2) Rename / description"
+    echo "3) Sources"
+    echo "4) Services"
+    echo "5) Delete ACL"
+    echo "6) Back"
+    echo
+    action="$(frpctl_read "Select: " "")" || return 1
+    case "$action" in
+      1)
+        frpctl_dispatch show acl "$acl" || true
+        ;;
+      2)
+        echo
+        echo "1) Rename"
+        echo "2) Set description"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            value="$(frpctl_nav_prompt_id "New name: ")" || continue
+            frpctl_dispatch set acl "$acl" name "$value" || true
+            acl="$value"
+            ;;
+          2)
+            value="$(frpctl_read "New description: " "")"
+            frpctl_dispatch set acl "$acl" description "$value" || true
+            ;;
+        esac
+        ;;
+      3)
+        echo
+        echo "1) Add source"
+        echo "2) Remove source"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            value="$(frpctl_nav_prompt_id "Source IP or CIDR: ")" || continue
+            frpctl_dispatch set acl "$acl" source "$value" || true
+            ;;
+          2)
+            value="$(frpctl_nav_prompt_id "Source IP or CIDR: ")" || continue
+            frpctl_dispatch unset acl "$acl" source "$value" || true
+            ;;
+        esac
+        ;;
+      4)
+        echo
+        echo "1) Assign service"
+        echo "2) Remove assignment"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            client="$(frpctl_select_inventory clients "CLIENT: ")" || continue
+            service="$(frpctl_select_client_service "$client" "SERVICE: ")" || continue
+            frpctl_dispatch set acl "$acl" service "$client" "$service" || true
+            ;;
+          2)
+            client="$(frpctl_select_inventory clients "CLIENT: ")" || continue
+            service="$(frpctl_select_client_service "$client" "SERVICE: ")" || continue
+            frpctl_dispatch unset acl "$acl" service "$client" "$service" || true
+            ;;
+        esac
+        ;;
+      5)
+        frpctl_dispatch unset acl "$acl" || true
+        return 0
+        ;;
+      6|"")
+        return 0
+        ;;
+      *)
+        echo "ERROR: select 1-6" >&2
+        ;;
+    esac
+  done
+}
+
+frpctl_manage_one_service_profile() {
+  local profile="$1" action prop value
+  if ! frpctl_dispatch show service-profile "$profile" >/dev/null; then
+    return 1
+  fi
+  while true; do
+    echo
+    echo "Service Profile: $profile"
+    echo
+    echo "1) Overview"
+    echo "2) Edit properties"
+    echo "3) Delete"
+    echo "4) Back"
+    echo
+    action="$(frpctl_read "Select: " "")" || return 1
+    case "$action" in
+      1)
+        frpctl_dispatch show service-profile "$profile" || true
+        ;;
+      2)
+        echo
+        echo "1) name"
+        echo "2) description"
+        echo "3) preset"
+        echo "4) target-host"
+        echo "5) target-port"
+        echo "6) ssh-user"
+        echo "7) Back"
+        prop="$(frpctl_read "Select property: " "")" || continue
+        case "$prop" in
+          1) prop="name" ;;
+          2) prop="description" ;;
+          3) prop="preset" ;;
+          4) prop="target-host" ;;
+          5) prop="target-port" ;;
+          6) prop="ssh-user" ;;
+          *) continue ;;
+        esac
+        value="$(frpctl_nav_prompt_id "New value: ")" || continue
+        frpctl_dispatch set service-profile "$profile" "$prop" "$value" || true
+        if [[ "$prop" == "name" ]]; then
+          profile="$value"
+        fi
+        ;;
+      3)
+        frpctl_dispatch unset service-profile "$profile" || true
+        return 0
+        ;;
+      4|"")
+        return 0
+        ;;
+      *)
+        echo "ERROR: select 1-4" >&2
+        ;;
+    esac
+  done
+}
+
+frpctl_manage_one_egress_profile() {
+  local profile="$1" action sub value host port proto
+  if ! frpctl_dispatch show internet-profile "$profile" >/dev/null; then
+    return 1
+  fi
+  while true; do
+    echo
+    echo "Internet Profile: $profile"
+    echo
+    echo "1) Overview"
+    echo "2) Rename / description"
+    echo "3) Sources"
+    echo "4) Destinations"
+    echo "5) Enable / disable"
+    echo "6) Export"
+    echo "7) Delete"
+    echo "8) Back"
+    echo
+    action="$(frpctl_read "Select: " "")" || return 1
+    case "$action" in
+      1)
+        frpctl_dispatch show internet-profile "$profile" || true
+        ;;
+      2)
+        echo
+        echo "1) Rename"
+        echo "2) Set description"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            value="$(frpctl_nav_prompt_id "New name: ")" || continue
+            frpctl_dispatch set internet-profile "$profile" name "$value" || true
+            profile="$value"
+            ;;
+          2)
+            value="$(frpctl_read "New description: " "")"
+            frpctl_dispatch set internet-profile "$profile" description "$value" || true
+            ;;
+        esac
+        ;;
+      3)
+        echo
+        echo "1) Add source"
+        echo "2) Remove source"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            value="$(frpctl_nav_prompt_id "Source IP or CIDR: ")" || continue
+            frpctl_dispatch set internet-profile "$profile" source "$value" || true
+            ;;
+          2)
+            value="$(frpctl_nav_prompt_id "Source IP or CIDR: ")" || continue
+            frpctl_dispatch unset internet-profile "$profile" source "$value" || true
+            ;;
+        esac
+        ;;
+      4)
+        echo
+        echo "1) Add destination"
+        echo "2) Remove destination"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1)
+            host="$(frpctl_nav_prompt_id "Host: ")" || continue
+            port="$(frpctl_nav_prompt_id "Port: ")" || continue
+            proto="$(frpctl_nav_prompt_id "Protocol [https]: ")" || continue
+            [[ -n "$proto" ]] || proto="https"
+            frpctl_dispatch set internet-profile "$profile" destination "$host" "$port" "$proto" || true
+            ;;
+          2)
+            host="$(frpctl_nav_prompt_id "Host: ")" || continue
+            port="$(frpctl_nav_prompt_id "Port: ")" || continue
+            frpctl_dispatch unset internet-profile "$profile" destination "$host" "$port" || true
+            ;;
+        esac
+        ;;
+      5)
+        echo
+        echo "1) Enable"
+        echo "2) Disable"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1) frpctl_dispatch set internet-profile "$profile" enabled || true ;;
+          2) frpctl_dispatch unset internet-profile "$profile" enabled || true ;;
+        esac
+        ;;
+      6)
+        frpctl_dispatch system export internet-profile "$profile" || true
+        ;;
+      7)
+        frpctl_dispatch unset internet-profile "$profile" || true
+        return 0
+        ;;
+      8|"")
+        return 0
+        ;;
+      *)
+        echo "ERROR: select 1-8" >&2
+        ;;
+    esac
+  done
+}
+
+frpctl_manage_one_fixed_tcp() {
+  local name="$1" action sub value
+  if ! frpctl_dispatch show fixed-tcp "$name" >/dev/null; then
+    return 1
+  fi
+  while true; do
+    echo
+    echo "Fixed TCP: $name"
+    echo
+    echo "1) Overview"
+    echo "2) Enable / disable"
+    echo "3) Policy test"
+    echo "4) Delete"
+    echo "5) Back"
+    echo
+    action="$(frpctl_read "Select: " "")" || return 1
+    case "$action" in
+      1)
+        frpctl_dispatch show fixed-tcp "$name" || true
+        ;;
+      2)
+        echo
+        echo "1) Enable"
+        echo "2) Disable"
+        echo "3) Back"
+        sub="$(frpctl_read "Select: " "")" || continue
+        case "$sub" in
+          1) frpctl_dispatch set fixed-tcp "$name" enabled || true ;;
+          2) frpctl_dispatch unset fixed-tcp "$name" enabled || true ;;
+        esac
+        ;;
+      3)
+        value="$(frpctl_nav_prompt_id "Source IP: ")" || continue
+        frpctl_dispatch test fixed-tcp "$name" "$value" || true
+        ;;
+      4)
+        frpctl_dispatch unset fixed-tcp "$name" || true
+        return 0
+        ;;
+      5|"")
+        return 0
+        ;;
+      *)
+        echo "ERROR: select 1-5" >&2
         ;;
     esac
   done
@@ -2707,6 +3205,14 @@ frpctl_dispatch_canonical() {
       frpctl_require_server || return 1
       frpctl_invoke frp-server-set bootstrap-hostname --unset
       ;;
+    unset_installer_url)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-set-client-installer-url --unset
+      ;;
+    unset_windows_installer_url)
+      frpctl_require_server || return 1
+      frpctl_invoke frp-set-client-installer-url --windows --unset
+      ;;
     set_service)
       frpctl_require_client || return 1
       frpctl_invoke frp-client set-service \
@@ -2730,9 +3236,33 @@ frpctl_dispatch_canonical() {
     apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
     sync) frpctl_require_client || return 1; frpctl_invoke frp-client sync ;;
-    client_pause) frpctl_require_client || return 1; frpctl_invoke frp-client pause ;;
-    client_resume) frpctl_require_client || return 1; frpctl_invoke frp-client resume ;;
-    client_restart) frpctl_require_client || return 1; frpctl_invoke frp-client restart ;;
+    client_pause)
+      frpctl_require_client || return 1
+      if frpctl_is_server; then
+        echo
+        echo "Scope: CLIENT role only (server remains running)."
+        echo
+      fi
+      frpctl_invoke frp-client pause
+      ;;
+    client_resume)
+      frpctl_require_client || return 1
+      if frpctl_is_server; then
+        echo
+        echo "Scope: CLIENT role only."
+        echo
+      fi
+      frpctl_invoke frp-client resume
+      ;;
+    client_restart)
+      frpctl_require_client || return 1
+      if frpctl_is_server; then
+        echo
+        echo "Scope: CLIENT role only (server is not restarted)."
+        echo
+      fi
+      frpctl_invoke frp-client restart
+      ;;
     client_autostart)
       frpctl_require_client || return 1
       frpctl_invoke frp-client autostart "$(frpctl_json_get "$result" mode)"

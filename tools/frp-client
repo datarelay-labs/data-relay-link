@@ -218,6 +218,17 @@ for (sid, item), target in zip(ordered, targets):
     print(f"  TARGET        : {target}")
     print()
 PY
+  # Pending draft discoverability (read-only).
+  if [[ -f "$(frp_client_draft_path)" ]]; then
+    if ! frp_state_has_no_diff "$(frp_client_state_path)" "$(frp_client_draft_path)"; then
+      echo "Pending service changes : YES"
+      echo
+      echo "Next:"
+      echo "  system services apply"
+      echo "  system services discard"
+      echo
+    fi
+  fi
   frp_lifecycle_report
   pending="$(frp_client_pending_path)"
   if [[ -f "$pending" ]]; then
@@ -242,6 +253,12 @@ frp_client_list() {
   # list is read-only: do not contact the allocator or mutate local state.
   # Use `frp-client sync` (or apply) to reconcile released services.
   frp_load_client_state "$path"
+  if [[ -f "$(frp_client_draft_path)" ]] \
+    && ! frp_state_has_no_diff "$path" "$(frp_client_draft_path)"; then
+    echo "Pending service changes : YES"
+    echo "Live inventory below. Apply with: system services apply"
+    echo
+  fi
   frp_print_state_services "$path"
 }
 
@@ -457,7 +474,7 @@ frp_apply_candidate() {
       frp_pending_clear
     fi
   fi
-  if frp_state_has_diff "$current" "$candidate"; then
+  if frp_state_has_no_diff "$current" "$candidate"; then
     echo "No pending changes."
     return 0
   fi
@@ -501,7 +518,7 @@ frp_apply_candidate() {
     echo "ERROR: cannot apply because client synchronization failed." >&2
     return 1
   fi
-  if frp_state_has_diff "$current" "$candidate"; then
+  if frp_state_has_no_diff "$current" "$candidate"; then
     echo "No pending changes."
     return 0
   fi
@@ -914,7 +931,7 @@ print('Current services:')
 print()
 PY
     frp_print_state_services "$CANDIDATE_FILE"
-    if ! frp_state_has_diff "$(frp_client_state_path)" "$CANDIDATE_FILE"; then
+    if ! frp_state_has_no_diff "$(frp_client_state_path)" "$CANDIDATE_FILE"; then
       echo
       frp_state_diff "$(frp_client_state_path)" "$CANDIDATE_FILE" || true
       echo

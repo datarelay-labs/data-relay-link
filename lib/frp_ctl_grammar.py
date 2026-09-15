@@ -1900,6 +1900,43 @@ def _match_egress_root(tokens, role, names=None):
     return {"status": "ok", "action": "egress_cmd", "passthrough": pt}
 
 
+def _catalog_child_tokens(tokens, role):
+    """Return next public catalog tokens when ``tokens`` is an incomplete parent."""
+    probe = [str(t) for t in tokens]
+    nxt = []
+    rows = []
+    for row in CATALOG.COMMANDS:
+        if row.get("hidden"):
+            continue
+        if not CATALOG.role_allows(row["roles"], role):
+            continue
+        path = list(row["path"])
+        if len(path) > len(probe) and path[: len(probe)] == probe:
+            tok = path[len(probe)]
+            if tok not in nxt:
+                nxt.append(tok)
+                summary = str(row.get("summary") or "").strip()
+                rows.append((tok, summary))
+    return nxt, rows
+
+
+def _parent_discovery(tokens, role, *, title=None):
+    """Treat a valid public parent as discovery, never 'Unknown'."""
+    children, rows = _catalog_child_tokens(tokens, role)
+    if not children:
+        return None
+    label = title or " ".join(str(t) for t in tokens)
+    heading = label[:1].upper() + label[1:] if label else "Available"
+    lines = [heading, "=" * len(heading), "", "Available:"]
+    width = max((len(tok) for tok, _ in rows), default=0)
+    for tok, summary in rows:
+        if summary:
+            lines.append("  %s  %s" % (tok.ljust(width), summary))
+        else:
+            lines.append("  %s" % tok)
+    return {"status": "incomplete", "message": "\n".join(lines)}
+
+
 def _match_system(tokens, role, names=None):
     avail = _system_resources(role)
     if len(tokens) == 1:
@@ -1908,6 +1945,9 @@ def _match_system(tokens, role, names=None):
             ["system <operation>"],
             avail,
         )
+    discovery = _parent_discovery(tokens, role)
+    if discovery is not None:
+        return discovery
     # Prefer catalog-driven rewrite via to_internal; if we still see system *,
     # the rewrite missed — guide the operator.
     return incomplete(
@@ -2556,27 +2596,47 @@ def _match_unset(tokens, role, names=None):
     if not server:
         return {"status": "role", "need": "server", "command": "unset %s" % resource}
     if resource == "server":
+        settings = [
+            "public-hostname",
+            "bootstrap-hostname",
+            "installer-url",
+            "windows-installer-url",
+        ]
         if len(tokens) < 3:
             return incomplete(
                 "Missing server setting.",
-                ["unset server public-hostname", "unset server bootstrap-hostname"],
-                ["public-hostname", "bootstrap-hostname"],
+                [
+                    "unset server public-hostname",
+                    "unset server bootstrap-hostname",
+                    "unset server installer-url",
+                    "unset server windows-installer-url",
+                ],
+                settings,
                 tip="drlink help unset",
             )
         setting = tokens[2]
         if setting == "hostname":
             setting = "public-hostname"
-        if setting not in ("public-hostname", "bootstrap-hostname"):
+        if setting not in settings:
             return incomplete(
                 "Unknown server setting.",
-                ["unset server public-hostname", "unset server bootstrap-hostname"],
-                ["public-hostname", "bootstrap-hostname"],
+                [
+                    "unset server public-hostname",
+                    "unset server bootstrap-hostname",
+                    "unset server installer-url",
+                    "unset server windows-installer-url",
+                ],
+                settings,
             )
         if len(tokens) > 3:
             return {"status": "error", "message": "Too many arguments."}
         if setting == "public-hostname":
             return {"status": "ok", "action": "unset_server_hostname"}
-        return {"status": "ok", "action": "unset_server_bootstrap_hostname"}
+        if setting == "bootstrap-hostname":
+            return {"status": "ok", "action": "unset_server_bootstrap_hostname"}
+        if setting == "installer-url":
+            return {"status": "ok", "action": "unset_installer_url"}
+        return {"status": "ok", "action": "unset_windows_installer_url"}
     if resource == "enrollment":
         if len(tokens) < 3:
             return incomplete(

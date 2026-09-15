@@ -3149,7 +3149,7 @@ def check_client(report, paths, facts, skip_network):
             'client_identity', INFO,
             'management identity is not established',
             '',
-            'Create a short-lived Enrollment Code on the server with sudo drlink create enrollment (or create zero-touch), then enroll this client.',
+            'Create a short-lived Enrollment Code on the server with sudo drlink set enrollment (or sudo drlink set client), then enroll this client.',
             'security',
         )
     elif missing_ident:
@@ -3157,7 +3157,7 @@ def check_client(report, paths, facts, skip_network):
             'client_identity', FAIL,
             'management identity files are incomplete',
             'missing %s' % ', '.join(missing_ident),
-            'Do not regenerate identity automatically. Create a new Enrollment Code with sudo drlink create enrollment (or create zero-touch) and re-enroll this client.',
+            'Do not regenerate identity automatically. Create a new Enrollment Code with sudo drlink set enrollment (or sudo drlink set client) and re-enroll this client.',
             'security',
         )
     else:

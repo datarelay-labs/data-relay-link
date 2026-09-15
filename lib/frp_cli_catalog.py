@@ -2494,7 +2494,10 @@ def to_internal(tokens):
         if len(rest) >= 3 and rest[1] == "source":
             return ["remove", "access-source", rest[0], rest[2]] + rest[3:]
         if len(rest) >= 4 and rest[1] == "service":
-            return ["set", "access-public", rest[2], rest[3]] + rest[4:]
+            # Preserve the ACL selector so the backend can fail closed when the
+            # service is not actually assigned to that ACL (never silently
+            # broaden via a typo'd selector).
+            return ["access", "unassign", rest[0], rest[2], rest[3]] + rest[4:]
         return ["delete", "access-list", rest[0]] + rest[1:]
 
     if path == ("unset", "access-rule"):
@@ -2570,7 +2573,8 @@ def to_internal(tokens):
     if path == ("system", "version"):
         return ["show", "version"] + rest
     if path == ("system", "server-status"):
-        return ["show", "server-status"] + rest
+        # Top-level server-status action (detailed server host view).
+        return ["server-status"] + rest
     if path == ("system", "info"):
         return ["show", "info"] + rest
     if path == ("system", "backup"):
@@ -3396,9 +3400,9 @@ NAVIGATION_TREE = {
     "server.services.access": (
         ("server_access_list", "List ACLs", "", "command", "show acls"),
         ("server_access_create", "Create ACL", "", "workflow", "create_access_list"),
-        ("server_access_edit", "View or edit ACL", "", "workflow", "manage_access_list"),
+        ("server_access_edit", "View or manage ACL", "", "workflow", "manage_access_list"),
         ("server_access_assign", "Assign ACL to a service", "", "workflow", "assign_access"),
-        ("server_access_public", "Set service to public access", "", "workflow", "public_access"),
+        ("server_access_public", "Set published service to public", "", "workflow", "public_access"),
         ("server_access_check", "Check access for a source IP", "", "workflow", "test_access"),
         ("server_access_log", "Recent access decisions", "", "workflow", "show_access_log"),
         ("back", "Back", "", "back", None),
@@ -3406,7 +3410,7 @@ NAVIGATION_TREE = {
     "server.services.profiles": (
         ("server_prof_list", "List profiles", "", "command", "show service-profiles"),
         ("server_prof_create", "Create profile", "", "workflow", "create_service_profile"),
-        ("server_prof_edit", "View or edit profile", "", "workflow", "manage_service_profile"),
+        ("server_prof_edit", "View or manage profile", "", "workflow", "manage_service_profile"),
         ("server_prof_delete", "Delete profile", "", "workflow", "delete_service_profile"),
         ("back", "Back", "", "back", None),
     ),
@@ -3476,7 +3480,8 @@ NAVIGATION_TREE = {
     "server.system.settings": (
         ("server_set_public", "Published service hostname", "", "workflow", "set_public_hostname"),
         ("server_set_bootstrap", "Bootstrap hostname", "", "workflow", "set_bootstrap_hostname"),
-        ("server_set_installer", "Client installer URL", "", "workflow", "set_installer_url"),
+        ("server_set_installer", "Linux/macOS client installer URL", "", "workflow", "set_installer_url"),
+        ("server_set_win_installer", "Windows client installer URL", "", "workflow", "set_windows_installer_url"),
         ("back", "Back", "", "back", None),
     ),
     "server.system.backup": (

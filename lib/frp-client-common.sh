@@ -257,7 +257,7 @@ frp_bootstrap_allocator_ca() {
 
   if [[ -z "$expected" ]]; then
     echo "ERROR: allocator CA SHA256 fingerprint is required for first enrollment" >&2
-    echo "Set FRP_ALLOCATOR_CA_SHA256 from sudo drlink create enrollment, or supply FRP_ALLOCATOR_CA_FILE." >&2
+    echo "Set FRP_ALLOCATOR_CA_SHA256 from sudo drlink set enrollment, or supply FRP_ALLOCATOR_CA_FILE." >&2
     return 1
   fi
   expected="$(frp_normalize_ca_fingerprint "$expected")" || {
@@ -491,8 +491,8 @@ frp_identity_ensure() {
   if [[ "$status" == corrupt ]]; then
     echo "ERROR: this client's management identity is unusable." >&2
     echo "The local identity file exists but cannot be used." >&2
-    echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink create zero-touch" >&2
-    echo "(or sudo drlink create enrollment), move the damaged identity aside, then re-enroll this client." >&2
+    echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink set client" >&2
+    echo "(or sudo drlink set enrollment), move the damaged identity aside, then re-enroll this client." >&2
     echo "Do not overwrite ${key} automatically." >&2
     return 1
   fi
@@ -971,8 +971,8 @@ Before continuing, you need an Enrollment Code.
 
 Generate one on the Data Relay Link server with:
 
-  sudo drlink create zero-touch
-  # or: sudo drlink create enrollment
+  sudo drlink set client
+  # or: sudo drlink set enrollment
 
 The Enrollment Code is short-lived. Enter it only here.
 It authorizes this first enrollment (or a later recovery).
@@ -990,8 +990,8 @@ EOF
 frp_ux_enrollment_help() {
   cat <<'EOF'
 Enrollment Code
-  Generated on the Data Relay Link server with: sudo drlink create zero-touch
-  (or: sudo drlink create enrollment)
+  Generated on the Data Relay Link server with: sudo drlink set client
+  (or: sudo drlink set enrollment)
   Short-lived bootstrap/recovery credential. Entered interactively.
   Not stored. Not the FRP token.
   Needed for first enrollment, recovering a lost local identity,
@@ -3693,10 +3693,15 @@ frp_state_change_class() {
   frp_state_diff_engine class "$1" "$2"
 }
 
-frp_state_has_diff() {
+frp_state_has_no_diff() {
   local cls
   cls="$(frp_state_change_class "$1" "$2")"
   [[ "$cls" == none ]]
+}
+
+# Compatibility alias — historical name returned success when there was NO diff.
+frp_state_has_diff() {
+  frp_state_has_no_diff "$1" "$2"
 }
 
 frp_apply_local_metadata() {
@@ -4120,7 +4125,7 @@ frp_lifecycle_recover() {
       frp_pending_clear
     else
       echo "ERROR: an Apply was interrupted and local state needs recovery." >&2
-      echo "RECOVERY_REQUIRED: run frp-client apply with the desired configuration." >&2
+      echo "RECOVERY_REQUIRED: run: sudo drlink system services apply" >&2
       frp_emit_failure_class RECOVERY_REQUIRED
       return 2
     fi
