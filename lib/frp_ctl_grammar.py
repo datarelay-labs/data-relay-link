@@ -866,6 +866,155 @@ def context_help(tokens, role, names=None, clients=None):
     tokens = [t for t in (tokens or []) if t != "?"]
     if not tokens:
         return _concise_root(role)
+    hidden_roots = {
+        "create": (
+            '"create" is a legacy compatibility command.\n\n'
+            "Current commands:\n"
+            "  set client\n"
+            "  set enrollment\n"
+            "  set group <NAME>\n"
+            "  set service-profile <NAME>\n"
+            "  set internet-profile <NAME>\n"
+            "  set access-rule <NAME>\n"
+            "  system backup\n"
+            "  system support-bundle\n\n"
+            "Use:\n"
+            "  ?\n"
+            "  help commands\n"
+            "  help legacy\n"
+        ),
+        "add": (
+            '"add" is a legacy compatibility command.\n\n'
+            "Current commands:\n"
+            "  set service\n"
+            "  set client <CLIENT> group <GROUP>\n"
+            "  set internet-source …\n"
+            "  set internet-destination …\n"
+            "  set access-source …\n\n"
+            "Use:\n"
+            "  ?\n"
+            "  help commands\n"
+            "  help legacy\n"
+        ),
+        "remove": (
+            '"remove" is a legacy compatibility command.\n\n'
+            "Prefer unset … forms. See: help commands / help legacy\n"
+        ),
+        "enable": (
+            '"enable" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  set service <ID> enabled\n"
+            "  set internet-profile <PROFILE> enabled\n"
+            "  set fixed-tcp <ENTRY> enabled\n\n"
+            "See: help commands / help legacy\n"
+        ),
+        "disable": (
+            '"disable" is a legacy compatibility command.\n\n'
+            "Prefer unset … enabled forms. See: help commands / help legacy\n"
+        ),
+        "delete": (
+            '"delete" is a legacy compatibility command.\n\n'
+            "Prefer unset …. See: help commands / help legacy\n"
+        ),
+        "revoke": (
+            '"revoke" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  unset client <CLIENT> trust\n"
+            "  unset enrollment <ENROLLMENT>\n\n"
+            "See: help legacy\n"
+        ),
+        "release": (
+            '"release" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  unset client <CLIENT>\n"
+            "  unset client <CLIENT> service <SERVICE>\n\n"
+            "See: help legacy\n"
+        ),
+        "update": (
+            '"update" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  system update product\n"
+            "  system update engine\n"
+            "  system update check-engine\n\n"
+            "See: help commands\n"
+        ),
+        "doctor": (
+            '"doctor" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  system diagnostics\n\n"
+            "See: help commands / help legacy\n"
+        ),
+        "history": (
+            '"history" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  system history\n"
+        ),
+        "clear": (
+            '"clear" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  system clear\n"
+        ),
+        "access": (
+            '"access" is a legacy compatibility command.\n\n'
+            "Prefer Access Rules commands:\n"
+            "  show access-rules\n"
+            "  set access-rule …\n"
+            "  set access-source …\n"
+            "  set service-access …\n\n"
+            "See: help commands / help legacy\n"
+        ),
+        "egress": (
+            '"egress" is a legacy compatibility command.\n\n'
+            "Prefer Internet Access commands:\n"
+            "  show internet\n"
+            "  set internet-profile …\n"
+            "  set fixed-tcp …\n\n"
+            "See: help commands / help legacy\n"
+        ),
+        "client": (
+            '"client" is a legacy compatibility command.\n\n'
+            "Prefer:\n"
+            "  show clients / show client …\n"
+            "  set client …\n"
+            "  unset client …\n\n"
+            "See: help commands / help legacy\n"
+        ),
+        "service": (
+            '"service" is a legacy compatibility command.\n\n'
+            "Prefer set service / show services. See: help commands / help legacy\n"
+        ),
+        "group": (
+            '"group" is a legacy compatibility command.\n\n'
+            "Prefer show groups / set group …. See: help commands / help legacy\n"
+        ),
+        "enrollment": (
+            '"enrollment" is a legacy compatibility command.\n\n'
+            "Prefer set enrollment / show enrollments / unset enrollment.\n"
+            "See: help commands / help legacy\n"
+        ),
+        "apply": (
+            '"apply" is a legacy compatibility command.\n\n'
+            "Prefer: system services apply\n"
+        ),
+        "discard": (
+            '"discard" is a legacy compatibility command.\n\n'
+            "Prefer: system services discard\n"
+        ),
+        "sync": (
+            '"sync" is a legacy compatibility command.\n\n'
+            "Prefer: system services sync\n"
+        ),
+        "restore": (
+            '"restore" is a legacy compatibility command.\n\n'
+            "Prefer: system restore <PATH>\n"
+        ),
+        "support-bundle": (
+            '"support-bundle" is a legacy compatibility command.\n\n'
+            "Prefer: system support-bundle\n"
+        ),
+    }
+    if tokens and tokens[0] in hidden_roots:
+        return hidden_roots[tokens[0]]
     if tokens == ["release"] and server:
         return (
             "release client <CLIENT>\n"
@@ -1536,8 +1685,8 @@ def match(tokens, role, names=None, clients=None):
         "sync": lambda toks, role, names=None: {"status": "ok", "action": "sync"},
         "doctor": lambda toks, role, names=None: {"status": "ok", "action": "doctor", "passthrough": toks[1:]},
         "support-bundle": lambda toks, role, names=None: {"status": "ok", "action": "support_bundle", "passthrough": toks[1:]},
-        "access": lambda toks, role, names=None: {"status": "ok", "action": "access_cmd", "passthrough": toks[1:]},
-        "egress": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": toks[1:]},
+        "access": _match_access_root,
+        "egress": _match_egress_root,
         "help": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "?": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
         "menu": lambda toks, role, names=None: {"status": "ok", "action": "menu"},
@@ -1550,7 +1699,7 @@ def match(tokens, role, names=None, clients=None):
         "server-status": lambda toks, role, names=None: {"status": "ok", "action": "show_server_status", "passthrough": toks[1:]},
         "version": lambda toks, role, names=None: {"status": "ok", "action": "show_version"},
         "test": _match_test,
-        "explain": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["explain"] + list(toks[2:])},
+        "explain": _match_explain_egress,
         "export": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["export"] + list(toks[2:])},
         "import": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["import"] + list(toks[2:])},
         "diff": lambda toks, role, names=None: {"status": "ok", "action": "egress_cmd", "passthrough": ["diff"] + list(toks[2:])},
@@ -1591,11 +1740,7 @@ def _match_test(tokens, role, names=None):
             "passthrough": ["test"] + list(tokens[2:]),
         }
     if target == "internet":
-        return {
-            "status": "ok",
-            "action": "egress_cmd",
-            "passthrough": ["explain"] + list(tokens[2:]),
-        }
+        return _egress_explain_passthrough(list(tokens[2:]))
     if target == "fixed-tcp":
         return {
             "status": "ok",
@@ -1604,12 +1749,83 @@ def _match_test(tokens, role, names=None):
         }
     # Legacy absorbed forms after to_internal may already be explain/egress.
     if target == "egress":
+        return _egress_explain_passthrough(list(tokens[2:]))
+    return incomplete("Unknown test target.", ["test <target> ..."], avail)
+
+
+def _egress_explain_passthrough(args):
+    """Map optional trailing PROTOCOL to backend --protocol for explain."""
+    args = list(args or [])
+    if len(args) >= 4 and not str(args[3]).startswith("-"):
+        proto = str(args[3]).lower()
+        if proto not in ("http", "https", "tcp"):
+            return {
+                "status": "error",
+                "exit_code": 2,
+                "message": (
+                    "Invalid PROTOCOL %r.\n\n"
+                    "PROTOCOL must be one of: http, https, tcp"
+                )
+                % args[3],
+            }
+        args = args[:3] + ["--protocol", proto] + args[4:]
+    return {
+        "status": "ok",
+        "action": "egress_cmd",
+        "passthrough": ["explain"] + args,
+    }
+
+
+def _match_explain_egress(tokens, role, names=None):
+    # explain egress SOURCE HOST PORT [PROTOCOL]
+    return _egress_explain_passthrough(list(tokens[2:]))
+
+
+def _match_access_root(tokens, role, names=None):
+    pt = list(tokens[1:])
+    if pt and pt[0] == "remove-expired":
+        if len(pt) < 2:
+            return incomplete(
+                "Missing Access Rule.",
+                ["system cleanup access-rule <RULE> expired"],
+            )
         return {
             "status": "ok",
-            "action": "egress_cmd",
-            "passthrough": list(tokens[1:]),
+            "action": "access_cmd",
+            "passthrough": ["remove-expired", pt[1]] + list(pt[2:]),
+            "confirm_expired": True,
         }
-    return incomplete("Unknown test target.", ["test <target> ..."], avail)
+    return {"status": "ok", "action": "access_cmd", "passthrough": pt}
+
+
+def _match_egress_root(tokens, role, names=None):
+    pt = list(tokens[1:])
+    # Guided Fixed TCP create: egress tcp create <NAME>
+    if len(pt) >= 2 and pt[0] == "tcp" and pt[1] == "create":
+        if len(pt) < 3:
+            return incomplete(
+                "Missing Fixed TCP name.",
+                ["set fixed-tcp <NAME>"],
+            )
+        return {
+            "status": "ok",
+            "action": "create_egress_tcp",
+            "name": pt[2],
+            "passthrough": list(pt[3:]),
+        }
+    if len(pt) >= 2 and pt[0] == "tcp" and pt[1] == "delete":
+        if len(pt) < 3:
+            return incomplete(
+                "Missing Fixed TCP entry.",
+                ["unset fixed-tcp <ENTRY>"],
+            )
+        return {
+            "status": "ok",
+            "action": "delete_egress_tcp",
+            "name": pt[2],
+            "passthrough": list(pt[3:]),
+        }
+    return {"status": "ok", "action": "egress_cmd", "passthrough": pt}
 
 
 def _match_system(tokens, role, names=None):
@@ -2499,13 +2715,36 @@ def _match_add(tokens, role, names=None):
                 "profile": tokens[2],
                 "host": "",
                 "port": "",
+                "protocol": "",
                 "passthrough": [],
                 "guided": True,
             }
         if len(tokens) < 5:
             return incomplete(
                 "Destination FQDN and port required.",
-                ["add egress-destination <PROFILE> <FQDN> <PORT>"],
+                ["set internet-destination <PROFILE> <FQDN> <PORT> <PROTOCOL>"],
+            )
+        protocol = ""
+        passthrough = list(tokens[5:])
+        if passthrough and not str(passthrough[0]).startswith("-"):
+            proto = str(passthrough[0]).lower()
+            if proto not in ("http", "https", "tcp"):
+                return {
+                    "status": "error",
+                    "exit_code": 2,
+                    "message": (
+                        "Invalid PROTOCOL %r.\n\n"
+                        "PROTOCOL must be one of: http, https, tcp"
+                    )
+                    % passthrough[0],
+                }
+            protocol = proto
+            passthrough = passthrough[1:]
+        elif len(tokens) >= 5 and len(tokens) == 5:
+            return incomplete(
+                "PROTOCOL is required.",
+                ["set internet-destination <PROFILE> <FQDN> <PORT> <PROTOCOL>"],
+                ["http", "https", "tcp"],
             )
         return {
             "status": "ok",
@@ -2513,7 +2752,8 @@ def _match_add(tokens, role, names=None):
             "profile": tokens[2],
             "host": tokens[3],
             "port": tokens[4],
-            "passthrough": tokens[5:],
+            "protocol": protocol,
+            "passthrough": passthrough,
         }
     if len(tokens) >= 2 and tokens[1] == "egress-source" and server:
         if len(tokens) < 3:
@@ -2540,14 +2780,30 @@ def _match_add(tokens, role, names=None):
     if len(tokens) >= 2 and tokens[1] == "access-source" and server:
         if len(tokens) < 3:
             return incomplete(
-                "Missing access list.",
-                ["add access-source <LIST>"],
+                "Missing Access Rule.",
+                ["set access-source <RULE> <SOURCE>"],
             )
+        if len(tokens) == 3:
+            return {
+                "status": "ok",
+                "action": "access_cmd",
+                "passthrough": ["add-source", tokens[2]],
+                "guided": True,
+            }
+        source = tokens[3]
         return {
             "status": "ok",
             "action": "access_cmd",
-            "passthrough": ["add-source", tokens[2]] + list(tokens[3:]),
-            "guided": len(tokens) == 3,
+            "passthrough": [
+                "add-source",
+                tokens[2],
+                "--name",
+                source,
+                "--source",
+                source,
+            ]
+            + list(tokens[4:]),
+            "guided": False,
         }
     if len(tokens) >= 2 and tokens[1] == "client" and server:
         if len(tokens) < 5 or tokens[3] != "group":
@@ -2650,22 +2906,60 @@ def _match_remove(tokens, role, names=None):
     _, server = _role_parts(role)
     if len(tokens) >= 2 and tokens[1] == "egress-destination" and server:
         if len(tokens) < 3:
-            return incomplete("Missing egress profile.", ["remove egress-destination <PROFILE> <SELECTOR>"])
+            return incomplete(
+                "Missing Internet Access profile.",
+                ["unset internet-destination <PROFILE> <FQDN> <PORT> [PROTOCOL]"],
+            )
         if len(tokens) < 4:
             return {
                 "status": "ok",
                 "action": "remove_egress_destination",
                 "profile": tokens[2],
                 "destination": "",
+                "host": "",
+                "port": "",
+                "protocol": "",
                 "passthrough": [],
                 "guided": True,
             }
+        # Legacy selector form: remove egress-destination PROFILE SELECTOR
+        if len(tokens) == 4:
+            return {
+                "status": "ok",
+                "action": "remove_egress_destination",
+                "profile": tokens[2],
+                "destination": tokens[3],
+                "host": "",
+                "port": "",
+                "protocol": "",
+                "passthrough": [],
+            }
+        # Public form: PROFILE FQDN PORT [PROTOCOL]
+        protocol = ""
+        extra = list(tokens[5:])
+        if extra and not str(extra[0]).startswith("-"):
+            proto = str(extra[0]).lower()
+            if proto not in ("http", "https", "tcp"):
+                return {
+                    "status": "error",
+                    "exit_code": 2,
+                    "message": (
+                        "Invalid PROTOCOL %r.\n\n"
+                        "PROTOCOL must be one of: http, https, tcp"
+                    )
+                    % extra[0],
+                }
+            protocol = proto
+            extra = extra[1:]
         return {
             "status": "ok",
             "action": "remove_egress_destination",
             "profile": tokens[2],
-            "destination": tokens[3],
-            "passthrough": tokens[4:],
+            "destination": "%s:%s" % (tokens[3], tokens[4]),
+            "host": tokens[3],
+            "port": tokens[4],
+            "protocol": protocol,
+            "passthrough": extra,
         }
     if len(tokens) >= 2 and tokens[1] == "egress-source" and server:
         if len(tokens) < 3:
@@ -2688,12 +2982,20 @@ def _match_remove(tokens, role, names=None):
         }
     if len(tokens) >= 2 and tokens[1] == "access-source" and server:
         if len(tokens) < 3:
-            return incomplete("Missing access list.", ["remove access-source <LIST>"])
+            return incomplete("Missing Access Rule.", ["unset access-source <RULE> <SOURCE>"])
+        if len(tokens) == 3:
+            return {
+                "status": "ok",
+                "action": "access_cmd",
+                "passthrough": ["remove-source", tokens[2]],
+                "guided": True,
+            }
+        source = tokens[3]
         return {
             "status": "ok",
             "action": "access_cmd",
-            "passthrough": ["remove-source", tokens[2]] + list(tokens[3:]),
-            "guided": len(tokens) == 3,
+            "passthrough": ["remove-source", tokens[2], "--source", source] + list(tokens[4:]),
+            "guided": False,
         }
     if len(tokens) >= 2 and tokens[1] == "egress-profile" and server:
         if len(tokens) < 5:

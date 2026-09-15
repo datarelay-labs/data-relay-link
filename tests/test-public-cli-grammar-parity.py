@@ -240,6 +240,34 @@ def main() -> int:
         ):
             scan_help(label, text, failures)
 
+    # Public command metadata must not teach backend --options.
+    flag_leak = re.compile(
+        r"(?i)(--protocol|--ttl|--yes|--force|--preset|--target-host|--target-port)\b"
+    )
+    for cmd in catalog.COMMANDS:
+        if cmd.get("hidden"):
+            continue
+        blob = "\n".join(
+            [
+                str(cmd.get("summary") or ""),
+                str(cmd.get("detail") or ""),
+                "\n".join(cmd.get("examples") or ()),
+                catalog.command_help(cmd),
+            ]
+        )
+        for m in flag_leak.finditer(blob):
+            if _allowed(blob, m.start()):
+                continue
+            failures.append(
+                "public cmd %s leaked %r" % (" ".join(cmd["path"]), m.group(1))
+            )
+
+    # Normal composed help must not advertise hidden roots/aliases.
+    bare_help = grammar.help_text([], "server") or ""
+    for bad in ("\ncreate\n", "\ndoctor\n", "\nhistory\n", "\nclear\n", "exit, quit", "quit, q"):
+        if bad.lower() in bare_help.lower():
+            failures.append("normal help leaked hidden form near %r" % bad.strip())
+
     unset_q = grammar.context_help(["unset", "client"], "server") or ""
     for needle in (
         "unset client <CLIENT> trust",

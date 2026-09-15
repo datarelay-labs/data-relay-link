@@ -60,9 +60,20 @@ class LineEditor:
         self.services = payload.get("services") or {}
         self.local_services = payload.get("local_services") or []
         self.groups = payload.get("groups") or []
+        self.egress_profiles = payload.get("egress") or []
+        self.access_lists = payload.get("access_lists") or []
+        self.service_profiles = payload.get("service_profiles") or []
         self._matches = []
         self._last_display_key = None
         self.prompt = os.environ.get("FRP_CTL_PROMPT") or "drlink> "
+
+    def _completion_kwargs(self):
+        return {
+            "groups": self.groups,
+            "egress_profiles": self.egress_profiles,
+            "access_lists": self.access_lists,
+            "service_profiles": self.service_profiles,
+        }
 
     def completer(self, text, state):
         if state == 0:
@@ -75,7 +86,7 @@ class LineEditor:
                 self.services,
                 self.local_services,
                 trailing=trailing,
-                groups=self.groups,
+                **self._completion_kwargs(),
             )
             # Unique -> replace current word (append space). Longer common
             # prefix -> extend only. Fully ambiguous -> return candidates so
@@ -126,7 +137,7 @@ class LineEditor:
             self.services,
             self.local_services,
             trailing=bool(line) and line[-1:] in " \t",
-            groups=self.groups,
+            **self._completion_kwargs(),
         )
         if preferred:
             rank = {name: idx for idx, name in enumerate(preferred)}
@@ -224,11 +235,55 @@ def _looks_secret(grammar, line):
         return False
 
 
-_MUTATING_VERBS = frozenset(
-    {
+_MUTATING_PUBLIC_PREFIXES = (
+    ("set", "client"),
+    ("unset", "client"),
+    ("set", "group"),
+    ("unset", "group"),
+    ("set", "service-profile"),
+    ("unset", "service-profile"),
+    ("set", "access-rule"),
+    ("set", "access-source"),
+    ("unset", "access-rule"),
+    ("unset", "access-source"),
+    ("set", "service-access"),
+    ("unset", "service-access"),
+    ("set", "internet-profile"),
+    ("set", "internet-source"),
+    ("set", "internet-destination"),
+    ("unset", "internet-profile"),
+    ("unset", "internet-source"),
+    ("unset", "internet-destination"),
+    ("set", "fixed-tcp"),
+    ("unset", "fixed-tcp"),
+    ("set", "enrollment"),
+    ("unset", "enrollment"),
+    ("set", "service"),
+    ("unset", "service"),
+    ("system", "restore"),
+    ("system", "import"),
+    ("system", "backup"),
+    ("system", "cleanup"),
+    ("system", "services", "apply"),
+    ("system", "services", "discard"),
+    ("system", "services", "sync"),
+)
+
+
+def _should_refresh_inventory(tokens):
+    if not tokens:
+        return False
+    root = tokens[0]
+    # Read-only / discovery — never refresh.
+    if root in ("show", "test", "help", "?", "menu", "exit", "quit", "q"):
+        return False
+    for prefix in _MUTATING_PUBLIC_PREFIXES:
+        if tuple(tokens[: len(prefix)]) == prefix:
+            return True
+    # Hidden compatibility mutations that still change inventory.
+    if root in (
         "create",
         "delete",
-        "set",
         "add",
         "remove",
         "rename",
@@ -239,28 +294,10 @@ _MUTATING_VERBS = frozenset(
         "purge",
         "import",
         "restore",
-        "update",
-    }
-)
-_MUTATING_ROOTS = frozenset(
-    {
-        "group",
-        "client",
-        "service",
-        "service-profile",
-        "egress",
-        "enrollment",
-        "access",
-        "backup",
-    }
-)
-
-
-def _should_refresh_inventory(tokens):
-    if not tokens:
-        return False
-    root = tokens[0]
-    if root in _MUTATING_VERBS or root in _MUTATING_ROOTS:
+        "apply",
+        "discard",
+        "sync",
+    ):
         return True
     return False
 
@@ -296,6 +333,9 @@ def _refresh_editor_inventory(editor, frpctl_bin):
     editor.services = payload.get("services") or {}
     editor.local_services = payload.get("local_services") or []
     editor.groups = payload.get("groups") or []
+    editor.egress_profiles = payload.get("egress") or []
+    editor.access_lists = payload.get("access_lists") or []
+    editor.service_profiles = payload.get("service_profiles") or []
 
 
 def run_repl(frpctl_bin, payload):

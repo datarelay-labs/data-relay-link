@@ -1519,7 +1519,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Add or update an allowed inbound source",
-    "detail": "--ttl accepts Ns/Nm/Nh/Nd up to 3650d (10 years); larger values are rejected.",
+    "detail": "Add an allowed inbound source to an Access Rule.\nSOURCE is a CIDR or IP. The guided flow may assign an optional lifetime.\nTemporary lifetimes use Ns/Nm/Nh/Nd up to 3650d (10 years); larger values are rejected.",
     "examples": [
       "set access-source office 203.0.113.10"
     ],
@@ -1854,7 +1854,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Add an approved Internet Access destination",
-    "detail": "Require an explicit --protocol http|https|tcp. HTTP destinations accept absolute-form proxy requests only; HTTPS destinations require CONNECT plus ClientHello SNI binding on every https port; TCP destinations are exact-FQDN only and used by Fixed TCP Egress relays.",
+    "detail": "PROTOCOL must be one of: http, https, tcp.\nHTTP destinations accept absolute-form proxy requests only; HTTPS destinations require CONNECT plus ClientHello SNI binding on every https port; TCP destinations are exact-FQDN only and used by Fixed TCP relays.",
     "examples": [
       "set internet-destination vendor-api api.example.com 443 https"
     ],
@@ -3585,8 +3585,14 @@
       "system support-bundle",
       "system support-bundle /tmp/bundle.tgz"
     ],
-    "args": [],
-    "tail": "flags",
+    "args": [
+      {
+        "name": "[PATH]",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": "any",
     "internal": [
       "support-bundle"
     ],

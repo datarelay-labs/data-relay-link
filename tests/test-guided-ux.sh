@@ -187,7 +187,7 @@ need "$WORKDIR/complete.out" 'ssh -p 6002 aella@203.0.113.10' 'complete ssh'
 need "$WORKDIR/complete.out" 'sudo drlink' 'complete drlink'
 need "$WORKDIR/complete.out" 'sudo drlink' 'complete manage'
 need "$WORKDIR/complete.out" 'sudo drlink show status' 'complete status'
-need "$WORKDIR/complete.out" 'sudo drlink show info' 'complete info'
+need "$WORKDIR/complete.out" 'sudo drlink system info' 'complete info'
 pass "installation complete screen"
 
 # --- Apply summary ---------------------------------------------------------

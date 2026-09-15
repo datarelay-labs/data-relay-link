@@ -933,16 +933,21 @@ frpctl_nav_workflow() {
       ;;
     import_egress)
       path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
-      frpctl_dispatch import egress "$path" || true
+      frpctl_dispatch system import internet-profile "$path" || true
       ;;
     diff_egress)
       id="$(frpctl_nav_prompt_id "Profile name: ")" || return 1
       path="$(frpctl_nav_prompt_id "Import file path: ")" || return 1
-      frpctl_dispatch diff egress "$id" "$path" || true
+      frpctl_dispatch system diff internet-profile "$id" "$path" || true
       ;;
     create_egress_tcp)
       id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
       frpctl_dispatch set fixed-tcp "$id" || true
+      ;;
+    show_access_log)
+      id="$(frpctl_nav_prompt_id "CLIENT ID: ")" || return 1
+      value="$(frpctl_nav_prompt_id "Service ID: ")" || return 1
+      frpctl_dispatch show access-log "$id" "$value" || true
       ;;
     manage_egress_tcp)
       id="$(frpctl_nav_prompt_id "Fixed TCP name: ")" || return 1
@@ -1910,7 +1915,7 @@ frpctl_manage_one_group() {
           1)
             name="$(frpctl_read "New name: " "")"
             [[ -n "$name" ]] || { echo "ERROR: name is required" >&2; continue; }
-            frpctl_dispatch rename group "$gid" "$name" || true
+            frpctl_dispatch set group "$gid" name "$name" || true
             display="$(frpctl_group_display_name "$gid" 2>/dev/null || true)"
             [[ -n "$display" ]] || display="$name"
             ;;
@@ -2043,14 +2048,14 @@ frpctl_help_navigation() {
 Navigation
   menu                  Open guided menu
   help                  Detailed help
-  help <action>         Action-specific help
+  help <topic>          Domain or command help
   help workflows        End-to-end examples
   help legacy           Hidden compatibility aliases
   ?                     Context-sensitive help
   Tab                   Show/complete next tokens (first press)
-  history               This session only
-  clear                 Clear the screen
-  exit, quit            Leave the Data Relay Link CLI
+  system history        This session only
+  system clear          Clear the screen
+  exit                  Leave the Data Relay Link CLI
 EOF
 }
 
@@ -2131,8 +2136,7 @@ PY
 frpctl_known_commands() {
   local role catalog_py catalog_dir=""
   role="$(frpctl_role_token)"
-  # Canonical roots from the catalog, then a small set of compatibility
-  # aliases so "Did you mean" still helps muscle-memory typos.
+  # Public roots only — never advertise hidden compatibility grammar here.
   if catalog_py="$(frpctl_lib_candidate frp_cli_catalog.py)"; then
     catalog_dir="$(dirname "$catalog_py")"
     python3 - "$catalog_dir" "$role" <<'PY' 2>/dev/null || true
@@ -2142,16 +2146,10 @@ import frp_cli_catalog as catalog
 role = sys.argv[2]
 for name in catalog.suggestion_roots(role):
     print(name)
-for name in (
-    "quit", "q", "show", "set", "unset", "create", "add", "remove",
-    "delete", "rename", "enable", "disable", "apply", "discard",
-    "clients", "enroll", "support-bundle", "server-status",
-):
-    print(name)
 PY
     return 0
   fi
-  printf '%s\n' status version client doctor help menu exit quit q show
+  printf '%s\n' show set unset test system menu help exit
 }
 
 frpctl_completable_commands() {
@@ -2699,9 +2697,7 @@ frpctl_dispatch_canonical() {
       ;;
     create_profile)
       frpctl_require_server || return 1
-      frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-profile create \
-        "$(frpctl_json_get "$result" name)"
+      frpctl_guided_service_profile_create "$(frpctl_json_get "$result" name)"
       ;;
     create_egress_profile)
       # CLI-008: a new egress profile is always created disabled so an
@@ -2732,10 +2728,11 @@ frpctl_dispatch_canonical() {
       _eg_profile="$(frpctl_json_get "$result" profile)"
       _eg_host="$(frpctl_json_get "$result" host)"
       _eg_port="$(frpctl_json_get "$result" port)"
+      _eg_proto="$(frpctl_json_get "$result" protocol)"
       if [[ -z "$_eg_host" || -z "$_eg_port" ]]; then
         echo
-        echo "Add Egress Destination"
-        echo "======================"
+        echo "Add Internet Access Destination"
+        echo "==============================="
         echo
         _eg_host="$(frpctl_read "Destination FQDN: " "")" || return 1
         [[ -n "$_eg_host" ]] || { echo "ERROR: destination FQDN is required" >&2; return 1; }
@@ -2761,10 +2758,16 @@ frpctl_dispatch_canonical() {
         frpctl_invoke frp-egress add-destination \
           "$_eg_profile" "$_eg_host" "$_eg_port" --protocol "$_eg_proto"
       else
+        if [[ -z "$_eg_proto" ]]; then
+          echo "ERROR: PROTOCOL is required (http, https, or tcp)." >&2
+          return 2
+        fi
         frpctl_with_pt frpctl_invoke frp-egress add-destination \
           "$_eg_profile" \
           "$_eg_host" \
-          "$_eg_port"
+          "$_eg_port" \
+          --protocol \
+          "$_eg_proto"
       fi
       ;;
     add_egress_source)
@@ -2777,9 +2780,15 @@ frpctl_dispatch_canonical() {
     remove_egress_destination)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-egress remove-destination \
-        "$(frpctl_json_get "$result" profile)" \
-        "$(frpctl_json_get "$result" destination)"
+      frpctl_remove_internet_destination "$result"
+      ;;
+    create_egress_tcp)
+      frpctl_require_server || return 1
+      frpctl_guided_fixed_tcp_create "$(frpctl_json_get "$result" name)"
+      ;;
+    delete_egress_tcp)
+      frpctl_require_server || return 1
+      frpctl_delete_fixed_tcp "$(frpctl_json_get "$result" name)"
       ;;
     remove_egress_source)
       frpctl_require_server || return 1
@@ -2909,7 +2918,20 @@ frpctl_dispatch_canonical() {
     access_cmd)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-access
+      _acl_confirm="$(frpctl_json_get "$result" confirm_expired)"
+      if [[ "$_acl_confirm" == "True" || "$_acl_confirm" == "true" ]]; then
+        _acl_rule="$(python3 -c 'import json,sys; pt=json.loads(sys.argv[1]).get("passthrough") or []; print(pt[1] if len(pt)>1 else "")' "$result")"
+        echo
+        echo "Remove expired sources from Access Rule \"${_acl_rule}\"?"
+        _acl_ans="$(frpctl_read "Continue? [y/N]: " "N")" || return 1
+        case "$(printf '%s' "$_acl_ans" | tr '[:upper:]' '[:lower:]')" in
+          y|yes) ;;
+          *) echo "Cancelled."; return 0 ;;
+        esac
+        frpctl_invoke frp-access remove-expired "$_acl_rule" --yes
+      else
+        frpctl_with_pt frpctl_invoke frp-access
+      fi
       ;;
     egress_cmd)
       frpctl_require_server || return 1
@@ -2942,6 +2964,134 @@ frpctl_dispatch_canonical() {
   return 0
 }
 
+
+frpctl_guided_service_profile_create() {
+  local name="$1" preset target_host target_port ssh_user confirm
+  echo
+  echo "Create Service Profile"
+  echo "======================"
+  echo
+  echo "Name: $name"
+  echo
+  echo "Preset:"
+  echo "  1) ssh"
+  echo "  2) http"
+  echo "  3) https"
+  echo "  4) custom"
+  echo
+  preset="$(frpctl_read "Select [1]: " "1")" || return 1
+  case "$preset" in
+    2) preset=http ;;
+    3) preset=https ;;
+    4) preset=custom ;;
+    *) preset=ssh ;;
+  esac
+  target_host="$(frpctl_read "Target host [127.0.0.1]: " "127.0.0.1")" || return 1
+  [[ -n "$target_host" ]] || target_host=127.0.0.1
+  target_port="$(frpctl_read "Target port: " "")" || return 1
+  [[ -n "$target_port" ]] || { echo "ERROR: target port is required" >&2; return 1; }
+  ssh_user=""
+  if [[ "$preset" == "ssh" ]]; then
+    ssh_user="$(frpctl_read "SSH user (optional): " "")" || return 1
+  fi
+  echo
+  echo "Review"
+  echo "------"
+  echo "  name:        $name"
+  echo "  preset:      $preset"
+  echo "  target-host: $target_host"
+  echo "  target-port: $target_port"
+  [[ -n "$ssh_user" ]] && echo "  ssh-user:    $ssh_user"
+  echo
+  confirm="$(frpctl_read "Create profile? [Y/n]: " "Y")" || return 1
+  case "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" in
+    n|no) echo "Cancelled."; return 0 ;;
+  esac
+  if [[ -n "$ssh_user" ]]; then
+    frpctl_invoke frp-profile create "$name" \
+      --preset "$preset" \
+      --target-host "$target_host" \
+      --target-port "$target_port" \
+      --ssh-user "$ssh_user"
+  else
+    frpctl_invoke frp-profile create "$name" \
+      --preset "$preset" \
+      --target-host "$target_host" \
+      --target-port "$target_port"
+  fi
+}
+
+frpctl_guided_fixed_tcp_create() {
+  local name="$1" profile dest listen_port confirm
+  echo
+  echo "Create Fixed TCP entry"
+  echo "======================"
+  echo
+  echo "Name: $name"
+  echo
+  echo "New Fixed TCP entries are created DISABLED."
+  echo
+  profile="$(frpctl_read "Internet Access profile: " "")" || return 1
+  [[ -n "$profile" ]] || { echo "ERROR: profile is required" >&2; return 1; }
+  dest="$(frpctl_read "TCP destination ID or host:port: " "")" || return 1
+  [[ -n "$dest" ]] || { echo "ERROR: destination is required" >&2; return 1; }
+  listen_port="$(frpctl_read "Listen port (blank = auto): " "")" || return 1
+  echo
+  echo "Review"
+  echo "------"
+  echo "  name:        $name"
+  echo "  profile:     $profile"
+  echo "  destination: $dest"
+  echo "  listen-port: ${listen_port:-auto}"
+  echo "  state:       DISABLED"
+  echo
+  confirm="$(frpctl_read "Create Fixed TCP entry? [Y/n]: " "Y")" || return 1
+  case "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" in
+    n|no) echo "Cancelled."; return 0 ;;
+  esac
+  if [[ -n "$listen_port" ]]; then
+    frpctl_invoke frp-egress tcp create "$name" \
+      --profile "$profile" \
+      --destination "$dest" \
+      --listen-port "$listen_port"
+  else
+    frpctl_invoke frp-egress tcp create "$name" \
+      --profile "$profile" \
+      --destination "$dest"
+  fi
+}
+
+frpctl_delete_fixed_tcp() {
+  local name="$1" confirm
+  echo
+  echo "Delete Fixed TCP entry \"$name\"?"
+  confirm="$(frpctl_read "Type DELETE to confirm: " "")" || return 1
+  [[ "$confirm" == "DELETE" ]] || { echo "Cancelled."; return 0; }
+  frpctl_invoke frp-egress tcp delete "$name" --yes
+}
+
+frpctl_remove_internet_destination() {
+  local spec="$1" profile destination host port protocol
+  profile="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile",""))' "$spec")"
+  destination="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("destination",""))' "$spec")"
+  host="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("host",""))' "$spec")"
+  port="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("port",""))' "$spec")"
+  protocol="$(python3 -c 'import json,sys; print((json.loads(sys.argv[1]).get("protocol") or "").lower())' "$spec")"
+  if [[ -n "$host" && -n "$port" ]]; then
+    destination="${host}:${port}"
+  fi
+  if [[ -z "$destination" ]]; then
+    echo "ERROR: destination selector is required" >&2
+    return 1
+  fi
+  if [[ -n "$protocol" ]]; then
+    frpctl_with_pt frpctl_invoke frp-egress remove-destination \
+      "$profile" "$destination" --protocol "$protocol"
+  else
+    frpctl_with_pt frpctl_invoke frp-egress remove-destination \
+      "$profile" "$destination"
+  fi
+}
 
 frpctl_set_client_from_canon() {
   local spec="$1" client prop value

@@ -120,10 +120,13 @@ def _resolve_source_id(profile, source_selector: str) -> str:
     return matches[0]["id"]
 
 
-def _resolve_destination_id(profile, dest_selector: str) -> str:
+def _resolve_destination_id(profile, dest_selector: str, protocol: str | None = None) -> str:
     needle = str(dest_selector or "").strip()
     if not needle:
         fail("destination selector is required")
+    want_proto = str(protocol or "").strip().lower() or None
+    if want_proto and want_proto not in ("http", "https", "tcp"):
+        fail("invalid protocol: %s" % protocol)
     destinations = profile.get("destinations") or []
     matches = []
     host_part = needle
@@ -137,6 +140,9 @@ def _resolve_destination_id(profile, dest_selector: str) -> str:
         except ValueError:
             pass
     for entry in destinations:
+        entry_proto = str(entry.get("protocol") or "").lower()
+        if want_proto and entry_proto and entry_proto != want_proto:
+            continue
         if entry.get("id") == needle:
             matches.append(entry)
             continue
@@ -384,7 +390,11 @@ def cmd_remove_destination(cfg, args):
     confirmed_pid, confirmed_profile = confirm_enabled_profile_mutation(
         cfg, args.selector, yes=bool(getattr(args, "yes", False))
     )
-    confirmed_dest_id = _resolve_destination_id(confirmed_profile, args.destination)
+    confirmed_dest_id = _resolve_destination_id(
+        confirmed_profile,
+        args.destination,
+        protocol=getattr(args, "protocol", None),
+    )
     try:
         def mut(state):
             _pid, profile = _require_confirmed_profile(state, confirmed_pid)
@@ -921,6 +931,11 @@ def build_parser():
     p = sub.add_parser("remove-destination", help="Remove a destination")
     p.add_argument("selector")
     p.add_argument("destination")
+    p.add_argument(
+        "--protocol",
+        choices=["http", "https", "tcp"],
+        help="Disambiguate when host:port matches multiple destinations",
+    )
     p.add_argument(
         "--yes",
         action="store_true",

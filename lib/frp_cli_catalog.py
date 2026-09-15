@@ -2413,18 +2413,17 @@ def to_internal(tokens):
 
     if path == ("set", "internet-destination"):
         if len(rest) >= 4:
-            # PROFILE FQDN PORT PROTOCOL → add egress-destination shape
+            # Keep positional PROTOCOL for match → backend --protocol mapping.
             return ["add", "egress-destination", rest[0], rest[1], rest[2], rest[3]] + rest[4:]
         return ["add", "egress-destination"] + rest
 
     if path == ("set", "fixed-tcp"):
         if not rest:
             return ["set", "fixed-tcp"]
-        if len(rest) == 1:
-            return ["create", "egress-tcp", rest[0]]
         if len(rest) >= 2 and rest[1] == "enabled":
-            return ["enable", "egress-tcp", rest[0]] + rest[2:]
-        return ["create", "egress-tcp"] + rest
+            return ["egress", "tcp", "enable", rest[0]] + rest[2:]
+        # Name-only create is handled as a guided product action.
+        return ["egress", "tcp", "create"] + rest
 
     if path == ("set", "server"):
         if not rest:
@@ -2477,8 +2476,8 @@ def to_internal(tokens):
 
     if path == ("unset", "fixed-tcp"):
         if len(rest) >= 2 and rest[1] == "enabled":
-            return ["disable", "egress-tcp", rest[0]] + rest[2:]
-        return ["delete", "egress-tcp"] + rest
+            return ["egress", "tcp", "disable", rest[0]] + rest[2:]
+        return ["egress", "tcp", "delete"] + rest
 
     if path == ("unset", "server"):
         return ["unset", "server"] + rest
@@ -2503,9 +2502,10 @@ def to_internal(tokens):
         return ["egress", "tcp", "list"]
 
     if path == ("test", "internet"):
+        # Optional trailing PROTOCOL is remapped in the matcher.
         return ["explain", "egress"] + rest
     if path == ("test", "fixed-tcp"):
-        return ["explain", "egress-tcp"] + rest
+        return ["egress", "tcp", "explain"] + rest
     if path == ("test", "access"):
         return ["test", "access"] + rest
 
@@ -2528,20 +2528,24 @@ def to_internal(tokens):
     if path == ("system", "diagnostics"):
         return ["doctor"] + rest
     if path == ("system", "support-bundle"):
-        return ["create", "support-bundle"] + rest
+        # Direct dispatcher action (not create support-bundle).
+        if rest:
+            return ["support-bundle", "--output", rest[0]] + list(rest[1:])
+        return ["support-bundle"]
     if path == ("system", "audit"):
         return ["show", "audit"] + rest
     if path == ("system", "export", "internet-profile"):
+        if len(rest) >= 2:
+            return ["export", "egress", rest[0], "--output", rest[1]] + list(rest[2:])
         return ["export", "egress"] + rest
     if path == ("system", "import", "internet-profile"):
         return ["import", "egress"] + rest
     if path == ("system", "diff", "internet-profile"):
         return ["diff", "egress"] + rest
     if path == ("system", "cleanup", "access-rule"):
-        # system cleanup access-rule <RULE> expired
-        if rest and rest[-1] == "expired":
-            return ["remove", "access-expired"] + rest[:-1]
-        return ["remove", "access-expired"] + rest
+        # system cleanup access-rule <RULE> expired → frp-access remove-expired
+        rule_tokens = [t for t in rest if t != "expired"]
+        return ["access", "remove-expired"] + rule_tokens
     if path == ("system", "services", "apply"):
         return ["apply"] + rest
     if path == ("system", "services", "discard"):
@@ -3194,18 +3198,18 @@ NAVIGATION_TREE = {
     ),
     "client.services": (
         ("client_svc_list", "List services", "", "command", "show services"),
-        ("client_svc_add", "Add service", "", "command", "add service"),
+        ("client_svc_add", "Add service", "", "command", "set service"),
         ("client_svc_edit", "Edit service", "", "workflow", "edit_service"),
         ("client_svc_enable", "Enable service", "", "workflow", "enable_service"),
         ("client_svc_disable", "Disable service", "", "workflow", "disable_service"),
-        ("client_svc_apply", "Apply pending changes", "", "command", "apply"),
-        ("client_svc_discard", "Discard pending changes", "", "command", "discard"),
-        ("client_svc_sync", "Sync with server", "", "command", "sync"),
+        ("client_svc_apply", "Apply pending changes", "", "command", "system services apply"),
+        ("client_svc_discard", "Discard pending changes", "", "command", "system services discard"),
+        ("client_svc_sync", "Sync with server", "", "command", "system services sync"),
         ("back", "Back", "", "back", None),
     ),
     "client.system": (
         ("client_sys_status", "Status", "", "command", "show status"),
-        ("client_sys_info", "Connection information", "", "command", "show info"),
+        ("client_sys_info", "Connection information", "", "command", "system info"),
         ("client_sys_version", "Version information", "", "command", "system version"),
         ("client_sys_update_product", "Update Data Relay Link", "", "command", "system update product"),
         ("client_sys_update_engine", "Update Relay Engine (FRP)", "", "command", "system update engine"),
@@ -3262,7 +3266,7 @@ NAVIGATION_TREE = {
     "server.clients.enrollments": (
         ("server_enroll_list", "List enrollments", "", "command", "show enrollments"),
         ("server_enroll_create", "Create manual enrollment code", "", "workflow", "create_enrollment"),
-        ("server_enroll_bulk", "Create enrollment codes in bulk", "", "command", "create enrollments"),
+        ("server_enroll_bulk", "Create enrollment codes in bulk", "", "command", "set enrollment bulk"),
         ("server_enroll_revoke", "Revoke active enrollment", "", "workflow", "revoke_enrollment"),
         ("server_enroll_delete", "Delete terminal enrollment record", "", "workflow", "delete_enrollment"),
         ("back", "Back", "", "back", None),
@@ -3312,7 +3316,7 @@ NAVIGATION_TREE = {
         ("server_access_assign", "Assign rule to a service", "", "workflow", "assign_access"),
         ("server_access_public", "Set service to public access", "", "workflow", "public_access"),
         ("server_access_check", "Check access for a source IP", "", "workflow", "test_access"),
-        ("server_access_log", "Recent access decisions", "", "command", "show access-log"),
+        ("server_access_log", "Recent access decisions", "", "workflow", "show_access_log"),
         ("back", "Back", "", "back", None),
     ),
     "server.services.profiles": (
