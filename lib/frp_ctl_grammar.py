@@ -724,11 +724,11 @@ def _verb_help(verb, role):
             "Complex source/destination parameters use guided prompts.\n"
             "Pending client service changes apply with apply.\n"
         ),
-        "enable": "Enable\n======\n\nUsage:\n  enable service <SERVICE>\n  enable egress-profile <PROFILE>\n",
+        "enable": "Enable\n======\n\nUsage:\n  enable service <SERVICE>\n  enable internet-profile <PROFILE>\n",
         "disable": (
             "Disable\n=======\n\nUsage:\n"
             "  disable service <SERVICE>\n"
-            "  disable egress-profile <PROFILE>\n\n"
+            "  disable internet-profile <PROFILE>\n\n"
             "Service public reservations remain until release service.\n"
         ),
         "remove": (
@@ -910,7 +910,11 @@ def context_help(tokens, role, names=None, clients=None):
         ),
         "disable": (
             '"disable" is a legacy compatibility command.\n\n'
-            "Prefer unset … enabled forms. See: help commands / help legacy\n"
+            "Prefer:\n"
+            "  unset service <ID> enabled\n"
+            "  unset internet-profile <PROFILE> enabled\n"
+            "  unset fixed-tcp <ENTRY> enabled\n\n"
+            "See: help commands / help legacy\n"
         ),
         "delete": (
             '"delete" is a legacy compatibility command.\n\n'
@@ -2573,6 +2577,13 @@ def _match_unset(tokens, role, names=None):
                 "passthrough": [],
             }
         prop = tokens[3]
+        if prop.startswith("-"):
+            return {
+                "status": "ok",
+                "action": "release_client",
+                "client": tokens[2],
+                "passthrough": list(tokens[3:]),
+            }
         if prop == "trust":
             return {
                 "status": "ok",
@@ -3350,11 +3361,15 @@ def _match_rename(tokens, role, names=None):
 def _match_enable_disable(tokens, role, names=None):
     verb = tokens[0]
     client_role, server = _role_parts(role)
-    if len(tokens) >= 2 and tokens[1] == "egress-profile" and server:
+    profile_resource = None
+    if len(tokens) >= 2 and tokens[1] in ("internet-profile", "egress-profile") and server:
+        profile_resource = tokens[1]
+    if profile_resource is not None:
+        public_resource = "internet-profile"
         if len(tokens) < 3:
             return incomplete(
-                "Missing egress profile selector.",
-                ["%s egress-profile <PROFILE>" % verb],
+                "Missing Internet Access profile selector.",
+                ["%s internet-profile <PROFILE>" % verb],
             )
         return {
             "status": "ok",
@@ -3363,13 +3378,16 @@ def _match_enable_disable(tokens, role, names=None):
         }
     if len(tokens) < 2 or tokens[1] != "service":
         avail = []
+        usage = []
         if client_role:
             avail.append("service")
+            usage.append("%s service <service-id>" % verb)
         if server:
-            avail.append("egress-profile")
+            avail.append("internet-profile")
+            usage.append("%s internet-profile <PROFILE>" % verb)
         return incomplete(
             "Missing resource.",
-            ["%s service <service-id>" % verb, "%s egress-profile <PROFILE>" % verb],
+            usage or ["%s internet-profile <PROFILE>" % verb],
             avail,
         )
     if not client_role:
@@ -4022,9 +4040,11 @@ def _canonical_completion(
         return []
     if verb in ("enable", "disable"):
         if len(filled) == 1:
-            return _filter(["service"], prefix)
+            return _filter(["service", "internet-profile"], prefix)
         if filled[1] == "service" and len(filled) == 2:
             return _filter(local_services, prefix)
+        if filled[1] in ("internet-profile", "egress-profile") and len(filled) == 2:
+            return _filter(egress_profiles or [], prefix)
         return []
     if verb == "remove":
         if len(filled) == 1:

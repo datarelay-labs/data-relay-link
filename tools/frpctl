@@ -248,11 +248,16 @@ if not text:
     raise SystemExit(0)
 out = []
 for line in text.splitlines(True):
-    raw = line
     if re.match(r"(?i)^\s*usage:\s*frp-", line):
-        line = "Command failed. Run help for Data Relay Link usage.\\n"
-    line = re.sub(r"(?i)\\bfrp-[a-z0-9_-]+\\b", "backend tool", line)
-    line = re.sub(r"(?i)usage:\\s*backend tool", "usage: drlink", line)
+        line = "Command failed. Run help for Data Relay Link usage.\n"
+    elif re.search(r"(?i)\bfrp-[a-z0-9_-]+\b.*\berror:\s*argument\b", line):
+        line = "Command failed. Run help for Data Relay Link usage.\n"
+    elif re.match(r"(?i)^\s*\[--[a-z0-9_-]+", line) or re.match(r"(?i)^\s*--[a-z0-9_-]+\s", line):
+        # Drop bare argparse option remnant lines.
+        continue
+    else:
+        line = re.sub(r"(?i)\bfrp-[a-z0-9_-]+\b", "backend tool", line)
+        line = re.sub(r"(?i)usage:\s*backend tool", "usage: drlink", line)
     out.append(line)
 sys.stdout.write("".join(out))
 '
@@ -275,13 +280,8 @@ frpctl_run() {
     python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1]]+sys.argv[2:], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
-  # Keep interactive TTY backends live. Sanitize captured stderr for scripts
-  # and any output that still leaks backend command names.
-  if [[ -t 2 ]]; then
-    "$bin" "$@"
-    rc=$?
-    return "$rc"
-  fi
+  # Keep interactive TTY backends live on stdout. Always sanitize stderr so
+  # public failures never leak backend argparse / frp-* command names.
   err="$(mktemp)"
   "$bin" "$@" 2>"$err"
   rc=$?
@@ -342,13 +342,9 @@ frpctl_exec() {
   exec "$bin" "$@"
 }
 
-# Direct mode may replace the process. Persistent-shell mode must return.
+# Direct and persistent-shell modes both return so stderr can be sanitized.
 frpctl_invoke() {
-  if [[ "${FRP_CTL_REPL:-}" == "1" ]]; then
-    frpctl_run "$@"
-  else
-    frpctl_exec "$@"
-  fi
+  frpctl_run "$@"
 }
 
 frpctl_lib_candidate() {
@@ -2842,22 +2838,33 @@ frpctl_dispatch_canonical() {
     delete_group)
       frpctl_require_server || return 1
       _del_group="$(frpctl_json_get "$result" group)"
-      # Product-owned confirmation (no public --yes). Backend still receives
-      # --yes only after the operator confirms here.
+      frpctl_load_passthrough "$result"
+      # Product-owned confirmation. Public --yes (when present) skips the prompt;
+      # backend still receives --yes only after confirmation here.
       _del_ans=""
-      if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
+      _del_yes=0
+      for _pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+        [[ "$_pt" == "--yes" ]] && _del_yes=1
+      done
+      if [[ "$_del_yes" == "1" ]]; then
+        _del_ans="y"
+      elif [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
         echo
         echo "Delete group \"${_del_group}\"?"
         echo "Group membership is removed. Client identity, services, and ports"
         echo "are not changed."
-        _del_ans="$(frpctl_read "Delete group? [y/N]: " "N")" || return 1
+        _del_ans="$(frpctl_read "Delete group? [y/N]: " "N")" || {
+          _FRP_CTL_RC=1
+          return 0
+        }
       elif IFS= read -r _del_ans; then
         :
       else
         echo "ERROR: deleting a group requires confirmation." >&2
-        echo "Run interactively:" >&2
-        echo "  delete group ${_del_group}" >&2
-        return 1
+        echo "Run interactively, or pass --yes:" >&2
+        echo "  unset group ${_del_group} --yes" >&2
+        _FRP_CTL_RC=1
+        return 0
       fi
       case "$(printf '%s' "$_del_ans" | tr '[:upper:]' '[:lower:]')" in
         y|yes) ;;
@@ -2896,7 +2903,49 @@ frpctl_dispatch_canonical() {
     release_client)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"
-      frpctl_with_pt frpctl_invoke frp-release-client "$(frpctl_json_get "$result" client)"
+      _rel_client="$(frpctl_json_get "$result" client)"
+      _rel_ans=""
+      _rel_yes=0
+      for _pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+        [[ "$_pt" == "--yes" ]] && _rel_yes=1
+      done
+      if [[ "$_rel_yes" != "1" ]]; then
+        if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
+          # Backend prints the release summary; only collect confirmation here
+          # when stdin is interactive so one-shot non-TTY can require --yes.
+          :
+        elif IFS= read -r _rel_ans; then
+          if [[ "$_rel_ans" != "RELEASE" ]]; then
+            echo "Cancelled."
+            return 0
+          fi
+          _rel_yes=1
+        else
+          echo "ERROR: releasing a client requires confirmation." >&2
+          echo "Run interactively, or pass --yes:" >&2
+          echo "  unset client ${_rel_client} --yes" >&2
+          _FRP_CTL_RC=1
+          return 0
+        fi
+      fi
+      # Rebuild passthrough without a duplicated public --yes; backend receives
+      # --yes after product-owned confirmation (or when already passed).
+      _rel_pt=()
+      for _pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+        [[ "$_pt" == "--yes" ]] && continue
+        _rel_pt+=("$_pt")
+      done
+      if [[ "$_rel_yes" == "1" ]]; then
+        _frpctl_pt=("--yes")
+        if ((${#_rel_pt[@]} > 0)); then
+          _frpctl_pt+=("${_rel_pt[@]}")
+        fi
+        frpctl_with_pt frpctl_invoke frp-release-client "$_rel_client"
+      else
+        # Interactive TTY: let the backend prompt for RELEASE (no --yes).
+        _frpctl_pt=("${_rel_pt[@]+"${_rel_pt[@]}"}")
+        frpctl_with_pt frpctl_invoke frp-release-client "$_rel_client"
+      fi
       ;;
     release_service)
       frpctl_require_server || return 1
@@ -3151,8 +3200,14 @@ frpctl_unset_client_from_canon() {
 frpctl_dispatch() {
   local cmd="${1:-}"
   _FRP_CTL_RC=0
+  _FRP_CTL_CANON=""
   if [[ -n "$cmd" ]] && frpctl_dispatch_canonical "$@"; then
     return "${_FRP_CTL_RC:-0}"
+  fi
+  # Canonical grammar matched an action but the handler failed with return 1.
+  # Do not fall through to legacy "unknown command" (double-error).
+  if [[ -n "${_FRP_CTL_CANON:-}" ]]; then
+    return "${_FRP_CTL_RC:-1}"
   fi
   shift || true
   case "$cmd" in

@@ -543,7 +543,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Show recent authorization decisions",
-    "detail": "Requires a client and service. Guided menu: Recent access decisions → select client → select service.",
+    "detail": "Requires a client and service. Guided menu: Recent access decisions \u2192 select client \u2192 select service.",
     "examples": [
       "show access-log dp1 ssh"
     ],
@@ -1442,7 +1442,7 @@
         "description": "With property=preset ssh, set ssh_user atomically",
         "metavar": "USER",
         "examples": [],
-        "effect": "Required for non-SSH → SSH transitions",
+        "effect": "Required for non-SSH \u2192 SSH transitions",
         "risk": "metadata"
       },
       {
@@ -2423,7 +2423,7 @@
     "roles": "server",
     "category": "Inventory",
     "summary": "Remove client metadata, trust, a service reservation, group membership, or the client",
-    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> — require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag …\nGroup membership: unset client <CLIENT> group <GROUP>",
+    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> \u2014 require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag \u2026\nGroup membership: unset client <CLIENT> group <GROUP>",
     "examples": [
       "unset client 24cd7856 label",
       "unset client 24cd7856 trust",
@@ -2490,6 +2490,18 @@
         "examples": [],
         "effect": "Overrides the active-publish safety gate",
         "risk": "outage"
+      },
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips RELEASE confirmation when releasing a client",
+        "risk": "irreversible"
       }
     ]
   },
@@ -4414,7 +4426,7 @@
     ],
     "roles": "server",
     "category": "Inventory",
-    "summary": "Rename a group (compatibility alias for 'group set … name')",
+    "summary": "Rename a group (compatibility alias for 'group set \u2026 name')",
     "detail": "",
     "examples": [],
     "args": [
@@ -4575,6 +4587,18 @@
         "examples": [],
         "effect": "Overrides the active-publish safety gate",
         "risk": "outage"
+      },
+      {
+        "name": "--yes",
+        "arity": 0,
+        "choices": [],
+        "hidden": true,
+        "required": false,
+        "description": "Confirm without an interactive prompt (automation)",
+        "metavar": "",
+        "examples": [],
+        "effect": "Skips RELEASE confirmation when releasing a client",
+        "risk": "irreversible"
       }
     ]
   },

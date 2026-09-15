@@ -4425,6 +4425,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_cli_catalog.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_cli_final_commands.json" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_cli_final_commands.json" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp_ctl_repl.py" ]] || {
     echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
     return 1
@@ -4451,6 +4455,7 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
   install -m 0644 "${source}/lib/frp_cli_catalog.py" "${libdir}/frp_cli_catalog.py"
+  install -m 0644 "${source}/lib/frp_cli_final_commands.json" "${libdir}/frp_cli_final_commands.json"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${libdir}/frpctl"
@@ -4482,6 +4487,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
     "usr/local/lib/drlink/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
     "usr/local/lib/drlink/frp_cli_catalog.py:0644:lib/frp_cli_catalog.py" \
+    "usr/local/lib/drlink/frp_cli_final_commands.json:0644:lib/frp_cli_final_commands.json" \
     "usr/local/lib/drlink/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
