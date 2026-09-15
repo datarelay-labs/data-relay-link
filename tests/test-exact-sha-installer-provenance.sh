@@ -185,6 +185,27 @@ export FRP_WINDOWS_CLIENT_INSTALLER_URL='https://example.test/custom-bootstrap-c
 )
 pass "EXPLICIT_INSTALLER_URL_OVERRIDE_PRESERVED"
 
+# --- exact SHA expected_ref accepted against stable manifest git_ref ---
+reset_provenance_env
+meta="$(frp_validate_release_source_metadata "$ROOT" "$FAKE_SHA" stable)" \
+  || fail "exact SHA expected_ref rejected by metadata validate"
+got_ref="$(printf '%s' "$meta" | awk -F'\t' '{print $3}')"
+[[ "$got_ref" == "$FAKE_SHA" ]] || fail "validate did not return exact SHA provenance: $got_ref"
+pass "VALIDATE_ACCEPTS_EXACT_SHA_PROVENANCE"
+
+# --- local git source inference ---
+reset_provenance_env
+frp_infer_expected_source_ref_from_git_source "$ROOT"
+[[ "${FRP_EXPECTED_SOURCE_REF:-}" =~ ^[0-9a-fA-F]{40}$ ]] \
+  || fail "git source did not set exact SHA: ${FRP_EXPECTED_SOURCE_REF:-}"
+case "$(frp_default_client_installer_url)" in
+  *"/${FRP_EXPECTED_SOURCE_REF}/dist/bootstrap-client.sh") ;;
+  *) fail "git HEAD default URL: $(frp_default_client_installer_url)" ;;
+esac
+grep -q "/v${PROJECT_VERSION}/" <<<"$(frp_default_client_installer_url)" && \
+  fail "git HEAD path still used premature tag"
+pass "LOCAL_GIT_SOURCE_REF_EXACT_SHA"
+
 echo "PREMATURE_V240_TAG_SUBSTITUTION=NO"
 echo "SOURCE_REF_PRESERVED=YES"
 echo "EXACT_SHA_INSTALLER_PROVENANCE_TEST=PASS"

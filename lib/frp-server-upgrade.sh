@@ -645,6 +645,8 @@ frp_server_apply_project_upgrade() {
   export FRP_TXN_ROLE
 
   [[ -d "$source" ]] || { echo "ERROR: update source directory is required" >&2; return 1; }
+  # Local git checkouts persist exact HEAD as SOURCE_REF (pretags-safe Zero-Touch).
+  frp_infer_expected_source_ref_from_git_source "$source"
   if [[ ${EUID} -ne 0 && -z "${FRP_SERVER_TEST_ROOT:-}" ]]; then
     echo "ERROR: run with sudo" >&2
     return 1

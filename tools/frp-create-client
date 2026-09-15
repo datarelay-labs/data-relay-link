@@ -657,6 +657,8 @@ def read_prompt(prompt):
         sys.stdout.flush()
         return value
     try:
+        # Always pass the prompt to input()/readline so Backspace cannot walk
+        # into a separately written prompt prefix.
         return input(prompt)
     except EOFError:
         fail('required interactive input was not completed')

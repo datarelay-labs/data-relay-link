@@ -134,6 +134,17 @@ grep -q 'DISPATCH frp-create-client --platform linux --one-line --ssh --ssh-user
   "$WORKDIR/zt-ssh.out" || fail "ssh only dispatch"
 pass "ZERO_TOUCH_SSH_GUIDED"
 
+# --- Guided: macOS uses the real bash Zero-Touch path (same installer as Linux) ---
+run_repl "$SERVER" "$WORKDIR/zt-macos.out" \
+  "create zero-touch" 3 office-mac "Mac lab" 1 aella 22 exit \
+  || fail "zero-touch macOS guided"
+grep -q '3) macOS' "$WORKDIR/zt-macos.out" || fail "macOS platform option missing"
+grep -q '4) Back' "$WORKDIR/zt-macos.out" || fail "platform Back must be option 4"
+grep -q 'DISPATCH frp-create-client --platform linux --one-line --ssh --ssh-user aella --ssh-port 22 --client-name office-mac --note Mac lab' \
+  "$WORKDIR/zt-macos.out" || fail "macOS must use bash/linux Zero-Touch dispatch"
+pass "MACOS_PUBLIC_ONBOARDING_DISCOVERABLE"
+pass "MACOS_MENU_DEAD_END_NO"
+
 # --- Guided: Windows RDP custom TCP preset ---
 run_repl "$SERVER" "$WORKDIR/zt-rdp.out" \
   "create zero-touch" 2 office-rdp "Windows desktop" 1 3389 exit \

@@ -1121,7 +1121,10 @@ frpctl_try_read() {
     value="$(sed -n "${pos}p" "${_FRP_CTL_INPUT_FILE}")"
     printf '%s\n' "$pos" >"${_FRP_CTL_INPUT_POS_FILE}"
   elif [[ -t 0 ]]; then
-    if ! IFS= read -r -p "$prompt" value; then
+    # Use readline (-e) with -p so Backspace edits only the input buffer.
+    # Never print the prompt separately then read: that allows the cursor to
+    # walk into the immutable prompt text on some terminals/SSH clients.
+    if ! IFS= read -e -r -p "$prompt" value; then
       return 1
     fi
   else
@@ -1528,6 +1531,29 @@ frpctl_guided_zero_touch_windows() {
   esac
 }
 
+frpctl_guided_zero_touch_macos() {
+  # macOS uses the same bash Zero-Touch installer as Linux; bootstrap detects Darwin
+  # and installs launchd. Do not add a dead menu entry — this is the real path.
+  local choice
+  echo
+  echo "How do you want to configure this client?"
+  echo
+  echo "1) SSH only"
+  echo "2) Choose services"
+  echo "3) Back"
+  echo
+  choice="$(frpctl_read "Select: " "")" || return 1
+  case "$choice" in
+    1) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_ssh ;;
+    2) _FRP_ZT_PLATFORM=linux; frpctl_zt_run_services ;;
+    3|"") return 0 ;;
+    *)
+      echo "ERROR: select 1-3" >&2
+      return 1
+      ;;
+  esac
+}
+
 frpctl_guided_zero_touch() {
   local choice
   echo
@@ -1539,7 +1565,8 @@ frpctl_guided_zero_touch() {
   echo
   echo "1) Linux"
   echo "2) Windows"
-  echo "3) Back"
+  echo "3) macOS"
+  echo "4) Back"
   echo
   choice="$(frpctl_read "Select: " "")" || return 1
   case "$choice" in
@@ -1555,9 +1582,15 @@ frpctl_guided_zero_touch() {
       frpctl_zt_prompt_client_identification || return 1
       frpctl_guided_zero_touch_windows
       ;;
-    3|"") return 0 ;;
+    3)
+      _FRP_ZT_CLIENT_NAME=""
+      _FRP_ZT_NOTE=""
+      frpctl_zt_prompt_client_identification || return 1
+      frpctl_guided_zero_touch_macos
+      ;;
+    4|"") return 0 ;;
     *)
-      echo "ERROR: select 1-3" >&2
+      echo "ERROR: select 1-4" >&2
       return 1
       ;;
   esac

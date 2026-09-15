@@ -905,7 +905,11 @@ resolve_server_settings() {
   FRP_PORT_END="${FRP_PORT_END:-${EXISTING_PORT_END:-}}"
   # Re-infer after env/existing installer URLs are visible so exact-SHA RC
   # installs persist SOURCE_REF and matching default client installer URLs.
+  # Precedence: explicit env URL provenance → local git HEAD → config URLs →
+  # channel default. Git HEAD must beat a stale premature vPROJECT_VERSION
+  # URL left in config from an earlier pretags install.
   frp_infer_expected_source_ref
+  frp_infer_expected_source_ref_from_git_source "$BASE_DIR"
   DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
   DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
   CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
@@ -914,7 +918,7 @@ resolve_server_settings() {
   if frp_is_former_product_installer_url "${WINDOWS_CLIENT_INSTALLER_URL:-}"; then
     WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
   fi
-  # Existing config installer URLs are also provenance when env overrides are absent.
+  # Existing config installer URLs are also provenance when env/git overrides are absent.
   if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     _frp_resolved_ref=""
     for _frp_resolved_url in "$CLIENT_INSTALLER_URL" "$WINDOWS_CLIENT_INSTALLER_URL"; do
@@ -2680,6 +2684,7 @@ PY
 
   # Version metadata is written only after a successful install/reinstall.
   frp_infer_expected_source_ref
+  frp_infer_expected_source_ref_from_git_source "$BASE_DIR"
   frp_write_version_file "$(frp_server_fs /etc/drlink/version)"
   frp_txn_clear server
   frp_prune_backup_dirs "$backups_dir" "$FRP_BACKUP_KEEP"

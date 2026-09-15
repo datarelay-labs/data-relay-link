@@ -8,6 +8,8 @@ unset FRP_UPDATE_ROOT FRP_DEPLOY_TEST_ROOT FRP_SERVER_TEST_ROOT \
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TREE_CHANNEL="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["channel"])')"
 TREE_REF="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/release-manifest.json"))["git_ref"])')"
+# Local --source from a git checkout persists exact HEAD (pretags-safe Zero-Touch).
+TREE_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 # shellcheck source=../lib/frp-common.sh
 . "$ROOT/lib/frp-common.sh"
 # shellcheck disable=SC1091
@@ -497,13 +499,13 @@ if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$TXN" FRP_SERVE
   "$UPDATE" --source "$ROOT" >"$WORKDIR/txn.out" 2>"$WORKDIR/txn.err"; then
   fail "txn fixture should fail after writing marker"
 fi
-python3 - "$TXN/var/lib/drlink/server-update-pending.json" "$TREE_CHANNEL" "$TREE_REF" <<'PY'
+python3 - "$TXN/var/lib/drlink/server-update-pending.json" "$TREE_CHANNEL" "$TREE_HEAD" <<'PY'
 import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
 assert data.get("schema_version") == 2
 assert data.get("operation") == "project-update"
-# Working-tree source channel/ref come from release-manifest.json.
+# Local --source from a git checkout records exact HEAD as source_ref.
 assert data.get("release_channel") == sys.argv[2], data.get("release_channel")
 assert data.get("source_ref") == sys.argv[3], data.get("source_ref")
 assert data.get("snapshot_path")
@@ -609,7 +611,7 @@ env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$OCI" \
 grep -q 'Server project update completed successfully' "$WORKDIR/oci.out" || fail "OCI success"
 [[ ! -f "$OCI/var/lib/drlink/update-pending.json" ]] || fail "OCI pending remains"
 grep -q "RELEASE_CHANNEL=${TREE_CHANNEL}" "$OCI/etc/drlink/version" || fail "OCI channel"
-grep -q "SOURCE_REF=${TREE_REF}" "$OCI/etc/drlink/version" || fail "OCI source ref"
+grep -q "SOURCE_REF=${TREE_HEAD}" "$OCI/etc/drlink/version" || fail "OCI source ref"
 cmp "$ROOT/tools/frp-backup" "$OCI/usr/local/lib/drlink/frp-backup" >/dev/null || fail "OCI backup tool not reconciled"
 [[ "$(sha "$OCI/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "OCI token changed"
 [[ "$(sha "$OCI/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "OCI registry changed"
@@ -695,7 +697,7 @@ grep -q "Target bundle SHA256      : ${OCI_CANDIDATE_SHA}" "$WORKDIR/diff-check.
 grep -q "Installed release channel : stable" "$WORKDIR/diff-check.out" || fail "oci installed channel"
 grep -q "Target release channel    : ${TREE_CHANNEL}" "$WORKDIR/diff-check.out" || fail "oci target channel"
 grep -q "Installed source ref      : v${PROJECT_VERSION}" "$WORKDIR/diff-check.out" || fail "oci installed ref"
-grep -q "Target source ref         : ${TREE_REF}" "$WORKDIR/diff-check.out" || fail "oci target ref"
+grep -q "Target source ref         : ${TREE_HEAD}" "$WORKDIR/diff-check.out" || fail "oci target ref"
 grep -q 'Update                    : available' "$WORKDIR/diff-check.out" || fail "different build should be available"
 grep -q 'State mutation             : NO' "$WORKDIR/diff-check.out" || fail "different-build check mutation"
 [[ "$(state_digest "$DIFF")" == "$DIFF_BEFORE" ]] || fail "different-build --check mutated state"
@@ -732,7 +734,7 @@ grep -q "BUNDLE_SHA256=${OCI_CANDIDATE_SHA}" "$REFRESH/etc/drlink/version" || fa
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$REFRESH/etc/drlink/version" || fail "project version lost"
 grep -q 'FRP_VERSION=0.71.0' "$REFRESH/etc/drlink/version" || fail "frp version changed"
 grep -q "RELEASE_CHANNEL=${TREE_CHANNEL}" "$REFRESH/etc/drlink/version" || fail "channel not preserved"
-grep -q "SOURCE_REF=${TREE_REF}" "$REFRESH/etc/drlink/version" || fail "source ref not preserved"
+grep -q "SOURCE_REF=${TREE_HEAD}" "$REFRESH/etc/drlink/version" || fail "source ref not preserved"
 [[ "$(state_digest "$REFRESH")" == "$REFRESH_STATE" ]] || fail "oci refresh changed protected state"
 [[ "$(sha "$REFRESH/usr/local/bin/frps")" == "$REFRESH_FRP" ]] || fail "oci refresh changed frps"
 grep -q 'project_update.completed' "$REFRESH/var/log/drlink/audit.jsonl" || fail "refresh missing audit"

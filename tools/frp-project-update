@@ -61,11 +61,18 @@ echo "Resolved release channel : ${FRP_RESOLVED_RELEASE_CHANNEL}"
 echo "Resolved source ref      : ${FRP_RESOLVED_SOURCE_REF}"
 
 if [[ -n "$SOURCE" ]]; then
+  # Prefer exact git HEAD for local --source so pretags installs do not emit
+  # nonexistent vPROJECT_VERSION Zero-Touch URLs.
+  frp_infer_expected_source_ref_from_git_source "$SOURCE"
   source_args=(--upgrade --source "$SOURCE")
   if [[ "$CHECK_ONLY" == "1" ]]; then
     source_args+=(--check)
   fi
-  exec bash "${SOURCE}/install-server.sh" "${source_args[@]}"
+  exec env \
+    FRP_EXPECTED_SOURCE_REF="${FRP_EXPECTED_SOURCE_REF:-}" \
+    FRP_EXPECTED_RELEASE_CHANNEL="$FRP_RESOLVED_RELEASE_CHANNEL" \
+    FRP_RELEASE_CHANNEL="$FRP_RESOLVED_RELEASE_CHANNEL" \
+    bash "${SOURCE}/install-server.sh" "${source_args[@]}"
 fi
 
 tmp="$(frp_secure_mktemp_dir)"

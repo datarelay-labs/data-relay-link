@@ -335,6 +335,36 @@ print(ref)
 PY
 }
 
+frp_git_head_source_ref() {
+  # Exact immutable commit for a local git checkout. Empty when not a git tree.
+  local source="${1:-}"
+  local ref=""
+  [[ -n "$source" && -d "$source" ]] || return 1
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+  ref="$(git -C "$source" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s' "$ref"
+    return 0
+  fi
+  return 1
+}
+
+frp_infer_expected_source_ref_from_git_source() {
+  # Local --source / worktree installs: prefer exact HEAD SHA over a premature
+  # release-line tag so Zero-Touch URLs remain fetchable before the tag exists.
+  local source="${1:-}" ref=""
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    return 0
+  fi
+  if ref="$(frp_git_head_source_ref "$source")"; then
+    FRP_EXPECTED_SOURCE_REF="$ref"
+    export FRP_EXPECTED_SOURCE_REF
+  fi
+  return 0
+}
+
 frp_infer_expected_source_ref() {
   # Populate FRP_EXPECTED_SOURCE_REF from existing provenance signals only.
   # Never invent a second provenance mechanism or guess from PROJECT_VERSION.
@@ -404,13 +434,17 @@ expected_git_ref = "main" if channel == "dev" else "v%s" % project
 if git_ref != expected_git_ref:
     sys.stderr.write("ERROR: release metadata channel/ref disagreement\n")
     raise SystemExit(1)
-if expected_ref and git_ref != expected_ref:
+# Exact SHA is install provenance for pretags / local git checkouts. The
+# manifest git_ref remains the eventual release-line label (main / vX.Y.Z).
+is_exact_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", expected_ref or ""))
+if expected_ref and not is_exact_sha and git_ref != expected_ref:
     sys.stderr.write("ERROR: release metadata source ref mismatch\n")
     raise SystemExit(1)
 if expected_channel and channel != expected_channel:
     sys.stderr.write("ERROR: release metadata channel mismatch\n")
     raise SystemExit(1)
-sys.stdout.write("%s\t%s\t%s\n" % (project, channel, git_ref))
+out_ref = expected_ref if is_exact_sha else git_ref
+sys.stdout.write("%s\t%s\t%s\n" % (project, channel, out_ref))
 PY
 }
 
