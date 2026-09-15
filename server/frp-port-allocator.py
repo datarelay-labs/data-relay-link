@@ -20,7 +20,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -46,6 +46,11 @@ MACHINE_ID_MAX_LEN = 128
 HOSTNAME_MAX_LEN = 253
 # Request body already caps at 64KiB; also bound idle reads and fan-out.
 ALLOCATOR_REQUEST_TIMEOUT_SEC = 30
+# TLS handshake runs in a worker after accept(); keep this short so stalled
+# ClientHello cannot monopolize the accept loop or hold slots for long.
+ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC = float(
+    os.environ.get('FRP_ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC', '8')
+)
 ALLOCATOR_MAX_CONCURRENT = 32
 _REQUEST_SLOTS = threading.BoundedSemaphore(ALLOCATOR_MAX_CONCURRENT)
 
@@ -87,7 +92,7 @@ def _load_client_registry():
     candidates = [
         Path(__file__).resolve().parent / 'frp_client_registry.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_client_registry.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_client_registry.py'),
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
     ]
     for path in candidates:
         if path.is_file():
@@ -101,15 +106,51 @@ def _load_client_registry():
 CREG = _load_client_registry()
 
 
+def _load_machine_id():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_machine_id.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_machine_id.py',
+        Path('/usr/local/lib/drlink/frp_machine_id.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_machine_id', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+MID = _load_machine_id()
+
+def _load_bounded():
+    for path in (
+        Path(__file__).resolve().parent / 'frp_bounded_server.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_bounded_server.py',
+        Path('/usr/local/lib/drlink/frp_bounded_server.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_bounded_server', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+BOUNDED = _load_bounded()
+BOUNDED_LOAD_ERROR = (
+    None if BOUNDED is not None else "ERROR: missing frp_bounded_server.py; refusing unbounded server"
+)
+
+
+
 def _load_health_check():
     candidates = [
         Path(__file__).resolve().parent / 'frp_health_check.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_health_check.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_health_check.py'),
+        Path('/usr/local/lib/drlink/frp_health_check.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_health_check.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_health_check.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_health_check.py')
     for path in candidates:
         if path.is_file():
@@ -127,11 +168,11 @@ def _load_enrollment_lifecycle():
     candidates = [
         Path(__file__).resolve().parent / 'frp_enrollment_lifecycle.py',
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_enrollment_lifecycle.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py'),
+        Path('/usr/local/lib/drlink/frp_enrollment_lifecycle.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_enrollment_lifecycle.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_enrollment_lifecycle.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_enrollment_lifecycle.py')
     for path in candidates:
         if path.is_file():
@@ -145,14 +186,36 @@ def _load_enrollment_lifecycle():
 ELC = _load_enrollment_lifecycle()
 
 
-def _load_zero_touch():
+def _load_control_locks():
     candidates = [
-        Path(__file__).resolve().parent.parent / 'lib' / 'frp_zero_touch.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_zero_touch.py'),
+        Path(__file__).resolve().parent / 'frp_control_locks.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_control_locks.py',
+        Path('/usr/local/lib/drlink/frp_control_locks.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_zero_touch.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_control_locks.py')
+        candidates.insert(0, Path(root) / 'lib' / 'frp_control_locks.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_control_locks', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise RuntimeError('missing frp_control_locks.py')
+
+
+CLOCKS = _load_control_locks()
+
+
+def _load_zero_touch():
+    candidates = [
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_zero_touch.py',
+        Path('/usr/local/lib/drlink/frp_zero_touch.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_zero_touch.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_zero_touch.py')
     for path in candidates:
         if path.is_file():
@@ -169,11 +232,11 @@ ZT = _load_zero_touch()
 def _load_pki():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_pki.py',
-        Path('/usr/local/lib/frp-auto-deploy/frp_pki.py'),
+        Path('/usr/local/lib/drlink/frp_pki.py'),
     ]
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     if root:
-        candidates.insert(0, Path(root) / 'usr/local/lib/frp-auto-deploy' / 'frp_pki.py')
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_pki.py')
         candidates.insert(0, Path(root) / 'lib' / 'frp_pki.py')
     for path in candidates:
         if path.is_file():
@@ -265,6 +328,35 @@ def _test_before_registry_write(path):
     return None
 
 
+def _test_before_nonce_write(path):
+    """Production no-op. Unit tests may replace this symbol to fail nonce persist."""
+    return None
+
+
+def _test_enrollment_failure_point(point):
+    """Production no-op. Unit tests may raise to inject AFTER_* failures."""
+    return None
+
+
+def _pair_write_pause_hook():
+    """Pause between the two durable writes of an enrollment pair.
+
+    Production no-op unless both hook paths are set. Tests use it to prove a
+    concurrent backup cannot observe a half-written pair: the writer signals
+    readiness while still holding the control locks and waits for a go file.
+    """
+    ready = os.environ.get('FRP_ENROLLMENT_PAIR_HOOK_READY', '')
+    go = os.environ.get('FRP_ENROLLMENT_PAIR_HOOK_GO', '')
+    if not ready or not go:
+        return
+    Path(ready).write_text('ready\n', encoding='utf-8')
+    deadline = time.time() + float(os.environ.get('FRP_ENROLLMENT_PAIR_HOOK_WAIT', '10'))
+    while time.time() < deadline:
+        if Path(go).is_file():
+            return
+        time.sleep(0.05)
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
@@ -289,7 +381,11 @@ def load_json(path, default=None):
 
 def atomic_write_json(path, data, mode=0o600):
     p = Path(path)
-    _test_before_registry_write(str(p))
+    path_s = str(p)
+    if path_s.endswith('mgmt-nonces.json') or path_s.endswith('mgmt-nonces.json.tmp') or p.name.startswith('mgmt-nonces.json.'):
+        _test_before_nonce_write(path_s)
+    else:
+        _test_before_registry_write(path_s)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=p.name + '.', suffix='.tmp', dir=str(p.parent))
     try:
@@ -299,9 +395,14 @@ def atomic_write_json(path, data, mode=0o600):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, p)
+        try:
+            CLOCKS.durable_replace(tmp, p)
+        except Exception:
+            # Fallback keeps prior semantics on exotic/unsupported filesystems.
+            os.replace(tmp, p)
+        tmp = None  # durable_replace/replace consumed the temp path
     finally:
-        if os.path.exists(tmp):
+        if tmp and os.path.exists(tmp):
             os.unlink(tmp)
 
 
@@ -313,10 +414,10 @@ def read_project_version(root=''):
     """Return installed PROJECT_VERSION for health/compatibility checks."""
     candidates = []
     if root:
-        candidates.append(Path(root) / 'etc/frp-auto-deploy/version')
+        candidates.append(Path(root) / 'etc/drlink/version')
     candidates.extend(
         [
-            Path('/etc/frp-auto-deploy/version'),
+            Path('/etc/drlink/version'),
             Path(__file__).resolve().parent.parent / 'VERSION',
         ]
     )
@@ -395,7 +496,7 @@ def bootstrap_dir_from_cfg(cfg):
     enrollments = str((cfg or {}).get('enrollments_dir') or '').strip()
     if enrollments:
         return Path(enrollments).resolve().parent / 'bootstrap'
-    return Path('/var/lib/frp-auto-deploy/bootstrap')
+    return Path('/var/lib/drlink/bootstrap')
 
 
 def ensure_secret_dir(path, mode=0o700):
@@ -432,6 +533,9 @@ def cleanup_expired_bootstrap_tickets(
 
     already_locked=True when the caller already holds registry.lock (e.g.
     /bootstrap/redeem). Retention must not reacquire the flock in that case.
+
+    cfg carries the retention policy. Without it there is nothing to enforce, so
+    cleanup is skipped rather than run against a substituted default.
     """
     del keep_id
     if ELC is None or not cfg:
@@ -448,12 +552,31 @@ def cleanup_expired_bootstrap_tickets(
         return
 
 
+def enrollment_state_dir(enrollments_dir, cfg=None):
+    """Directory holding registry.json and the control-state lock files."""
+    registry_file = str((cfg or {}).get('registry_file') or '').strip()
+    if registry_file:
+        return Path(registry_file).resolve().parent
+    return Path(enrollments_dir).resolve().parent
+
+
 def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='', label='', cfg=None):
     """Create a hashed bootstrap ticket plus a normal enrollment record.
 
     Does not allocate a public port. Caller must have already validated
-    `services` with normalize_services().
+    `services` with normalize_services(); re-normalizing here keeps the ticket
+    scope byte-identical to what /enroll compares a request against.
+
+    The enrollment record and the bootstrap ticket are one logical pair. Both
+    durable writes happen under lifecycle → control-state → registry locks (the
+    documented order backup and restore use), so a concurrent backup archives
+    either the pre-create state or the complete pair, never one half.
+
+    Retention cleanup uses the caller's server cfg. Callers must pass cfg= to
+    get their configured enrollment_retention_days; a cfg synthesized here
+    would silently fall back to the 30-day default.
     """
+    services = normalize_services(services)
     ttl = int(ttl)
     note = str(note or '')
     label = str(label or '')
@@ -475,6 +598,9 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
         'used_at': None,
         'note': note,
         'label': label,
+        # Ticket scope is authoritative: /enroll must refuse any service set
+        # the administrator did not authorize when issuing this ticket.
+        'authorized_services': services,
     }
     ticket_record = {
         'schema': 1,
@@ -499,33 +625,43 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
             os.chmod(str(enrollments_dir), 0o700)
         except OSError:
             pass
-    cleanup_cfg = cfg
-    if cleanup_cfg is None:
-        cleanup_cfg = {
-            'enrollments_dir': str(enrollments_dir),
-            'bootstrap_dir': str(bootstrap_dir),
-            'registry_file': str(Path(enrollments_dir).parent / 'registry.json'),
-        }
-    cleanup_expired_bootstrap_tickets(bootstrap_dir, now, cfg=cleanup_cfg, force=True)
+    # Retention policy lives in the server cfg; keep it and only realign the
+    # paths this call is actually writing.
+    cleanup_cfg = None
+    if cfg:
+        cleanup_cfg = dict(cfg)
+        cleanup_cfg['enrollments_dir'] = str(enrollments_dir)
+        cleanup_cfg['bootstrap_dir'] = str(bootstrap_dir)
     enroll_path = enrollment_file_path(enrollments_dir, enrollment_id)
     ticket_path = bootstrap_file_path(bootstrap_dir, ticket_id)
     if enroll_path is None or ticket_path is None:
         raise RuntimeError('failed to allocate bootstrap ticket paths')
-    try:
-        atomic_write_json(enroll_path, enroll_record, mode=0o600)
+    state_dir = enrollment_state_dir(enrollments_dir, cfg)
+    lock_timeout = float(
+        os.environ.get('FRP_ENROLLMENT_LOCK_TIMEOUT')
+        or CLOCKS.DEFAULT_TIMEOUT_SEC
+    )
+    with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
+        # registry.lock is already held here: retention must not reacquire it.
+        cleanup_expired_bootstrap_tickets(
+            bootstrap_dir, now, cfg=cleanup_cfg, force=True, already_locked=True
+        )
         try:
-            os.chmod(str(enroll_path), 0o600)
-        except OSError:
-            pass
-        atomic_write_json(ticket_path, ticket_record, mode=0o600)
-        try:
-            os.chmod(str(ticket_path), 0o600)
-        except OSError:
-            pass
-    except Exception:
-        unlink_quiet(ticket_path)
-        unlink_quiet(enroll_path)
-        raise
+            atomic_write_json(enroll_path, enroll_record, mode=0o600)
+            try:
+                os.chmod(str(enroll_path), 0o600)
+            except OSError:
+                pass
+            _pair_write_pause_hook()
+            atomic_write_json(ticket_path, ticket_record, mode=0o600)
+            try:
+                os.chmod(str(ticket_path), 0o600)
+            except OSError:
+                pass
+        except Exception:
+            unlink_quiet(ticket_path)
+            unlink_quiet(enroll_path)
+            raise
     ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
     return ticket, enroll_record, ticket_record
 
@@ -674,9 +810,63 @@ def require_registry_v2(state):
     return state
 
 
+def _load_infrastructure_ports():
+    candidates = [
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_infrastructure_ports.py',
+        Path('/usr/local/lib/drlink/frp_infrastructure_ports.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'frp_infrastructure_ports.py')
+        candidates.insert(0, Path(root) / 'lib' / 'frp_infrastructure_ports.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_infrastructure_ports', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+INFRA = _load_infrastructure_ports()
+
+
+def infrastructure_protected_ports(cfg):
+    """Canonical infrastructure ports that must never be allocated as services."""
+    if INFRA is not None:
+        return set(INFRA.infrastructure_ports(cfg))
+    protected = set()
+    for port in (
+        cfg_allocator_listen_port(cfg) if cfg else None,
+        cfg_frp_control_listen_port(cfg) if cfg else None,
+        coerce_port((cfg or {}).get('listen_port')) if cfg else None,
+        coerce_port((cfg or {}).get('egress_listen_port')) if cfg else None,
+    ):
+        if port is not None:
+            protected.add(port)
+    if cfg:
+        addr = str(cfg.get('access_plugin_addr') or '127.0.0.1:6101').strip()
+        if ':' in addr:
+            port = coerce_port(addr.rsplit(':', 1)[-1])
+            if port is not None:
+                protected.add(port)
+    return protected
+
+
 def validate_registry_invariants(state, cfg=None):
     """Fail closed on severe registry corruption. Do not silently repair."""
     state = require_registry_v2(state)
+    # Group structure / membership referential integrity (canonical helper
+    # shared with doctor, restore preflight, and the group tooling).
+    creg = _load_client_registry_for_invariants()
+    if creg is None:
+        raise RegistrySchemaError(
+            'REGISTRY_INVALID: frp_client_registry.py is unavailable'
+        )
+    try:
+        creg.validate_group_invariants(state)
+    except creg.GroupInvariantError as exc:
+        raise RegistrySchemaError('REGISTRY_INVALID: %s' % exc) from exc
     seen_ports = {}
     port_start = None
     port_end = None
@@ -688,10 +878,7 @@ def validate_registry_invariants(state, cfg=None):
         except (TypeError, ValueError):
             port_start = None
             port_end = None
-        for key in ('allocator_listen_port', 'frp_control_listen_port', 'listen_port'):
-            port = coerce_port(cfg.get(key))
-            if port is not None:
-                protected.add(port)
+        protected = infrastructure_protected_ports(cfg)
     for item in state.get('reserved') or []:
         port = coerce_port(item)
         if port is not None:
@@ -716,7 +903,10 @@ def validate_registry_invariants(state, cfg=None):
             port = coerce_port(svc.get('remote_port'))
             if port is None:
                 continue
-            if port in seen_ports:
+            # reserved[] is the held-port bookkeeping list and commonly overlaps
+            # active service remote_ports. Collision is only when another
+            # non-reserved owner already claims the port (doctor parity).
+            if port in seen_ports and seen_ports[port][0] != 'reserved':
                 raise RegistrySchemaError('REGISTRY_INVALID: duplicate public port ownership')
             seen_ports[port] = (mid, key)
             if port_start is not None and port_end is not None:
@@ -724,7 +914,55 @@ def validate_registry_invariants(state, cfg=None):
                     raise RegistrySchemaError('REGISTRY_INVALID: allocated port outside configured range')
             if port in protected:
                 raise RegistrySchemaError('REGISTRY_INVALID: allocated port collides with a reserved control port')
+    # Derived FRP proxy names must be unique (hostname + machine_id[:8] + service).
+    # Last-write-wins map assignment would silently mis-authorize.
+    acl = _load_access_control_for_invariants()
+    if acl is not None:
+        try:
+            acl.validate_proxy_name_uniqueness(state)
+        except acl.AccessError as exc:
+            raise RegistrySchemaError('REGISTRY_INVALID: %s' % exc) from exc
     return state
+
+
+_ACL_FOR_INVARIANTS = None
+_CREG_FOR_INVARIANTS = None
+
+
+def _load_client_registry_for_invariants():
+    global _CREG_FOR_INVARIANTS
+    if _CREG_FOR_INVARIANTS is not None:
+        return _CREG_FOR_INVARIANTS
+    for path in (
+        Path(__file__).resolve().parent / 'frp_client_registry.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_client_registry.py',
+        Path('/usr/local/lib/drlink/frp_client_registry.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_client_registry', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _CREG_FOR_INVARIANTS = mod
+            return mod
+    return None
+
+
+def _load_access_control_for_invariants():
+    global _ACL_FOR_INVARIANTS
+    if _ACL_FOR_INVARIANTS is not None:
+        return _ACL_FOR_INVARIANTS
+    for path in (
+        Path(__file__).resolve().parent / 'frp_access_control.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'frp_access_control.py',
+        Path('/usr/local/lib/drlink/frp_access_control.py'),
+    ):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('frp_access_control', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _ACL_FOR_INVARIANTS = mod
+            return mod
+    return None
 
 
 def used_ports_from_state(state):
@@ -851,6 +1089,57 @@ def normalize_services(raw_services):
     return normalized
 
 
+SERVICE_SCOPE_FIELDS = (
+    'id',
+    'name',
+    'protocol',
+    'local_ip',
+    'local_port',
+    'preset',
+    'ssh_user',
+    'health_check',
+)
+
+
+def service_scope_key(service):
+    """Canonical comparable form of one service for authorization scope checks."""
+    if not isinstance(service, dict):
+        return None
+    canonical = {
+        field: service[field]
+        for field in SERVICE_SCOPE_FIELDS
+        if field in service
+    }
+    return canonical_json(canonical)
+
+
+def services_match_authorized(requested, authorized):
+    """Exact (order-independent) match of requested services against ticket scope."""
+    if not isinstance(requested, list) or not isinstance(authorized, list):
+        return False
+    if len(requested) != len(authorized):
+        return False
+    want = {}
+    for svc in authorized:
+        key = service_scope_key(svc)
+        if key is None:
+            return False
+        sid = str(svc.get('id', ''))
+        if sid in want:
+            return False
+        want[sid] = key
+    got = {}
+    for svc in requested:
+        key = service_scope_key(svc)
+        if key is None:
+            return False
+        sid = str(svc.get('id', ''))
+        if sid in got:
+            return False
+        got[sid] = key
+    return got == want
+
+
 class Allocator:
     def __init__(self, config_path):
         self.config_path = config_path
@@ -930,15 +1219,7 @@ class Allocator:
         return used_ports_from_state(state)
 
     def protected_ports(self):
-        protected = set()
-        for port in (
-            cfg_allocator_listen_port(self.cfg),
-            cfg_frp_control_listen_port(self.cfg),
-            coerce_port(self.cfg.get('listen_port')),
-        ):
-            if port is not None:
-                protected.add(port)
-        return protected
+        return infrastructure_protected_ports(self.cfg)
 
     def allocate_port(self, used):
         protected = self.protected_ports()
@@ -1091,10 +1372,17 @@ class Allocator:
         parsed = parse_bootstrap_ticket(raw_ticket if isinstance(raw_ticket, str) else '')
         machine_id = str(payload.get('machine_id', '') or '').strip()
         hostname = str(payload.get('hostname', '') or '').strip()
-        if not machine_id:
-            return 400, api_error('machine_id is required', 'ZERO_TOUCH_INPUT_INVALID')
-        if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
-            return 400, api_error('invalid machine_id', 'ZERO_TOUCH_INPUT_INVALID')
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                code = 'ZERO_TOUCH_INPUT_INVALID'
+                return 400, api_error(str(exc), code)
+        else:
+            if not machine_id:
+                return 400, api_error('machine_id is required', 'ZERO_TOUCH_INPUT_INVALID')
+            if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
+                return 400, api_error('invalid machine_id', 'ZERO_TOUCH_INPUT_INVALID')
         try:
             hostname = CREG.validate_hostname(hostname)
         except ValueError:
@@ -1305,7 +1593,13 @@ class Allocator:
         return None
 
     def commit_nonce(self, machine_id, nonce, now):
-        """Persist a nonce after the matching mutation has been committed."""
+        """Persist a nonce after the matching mutation has been committed.
+
+        Never evict a nonce that is still inside the replay-protection horizon
+        (MAX_CLOCK_SKEW). When the per-client cap is exhausted by still-valid
+        entries, reject new signed requests with a bounded-resource error
+        instead of re-enabling replay of an earlier request.
+        """
         if not NONCE_RE.fullmatch(nonce or ''):
             return 'invalid nonce'
         data = self.expire_nonces(now)
@@ -1314,12 +1608,22 @@ class Allocator:
         if key in nonces:
             return 'replayed request'
         prefix = machine_id + ':'
+        # Expiry timestamps are absolute; an entry remains replay-blocking while
+        # now < exp. A signed request accepted with future skew can remain
+        # cryptographically valid for up to 2*MAX_CLOCK_SKEW after commit, so
+        # never drop entries younger than that under size pressure.
+        protect_after_commit = 2 * MAX_CLOCK_SKEW
+        horizon_floor = now + (MGMT_NONCE_TTL - protect_after_commit)
         owned = sorted(
             ((k, nonces[k]) for k in list(nonces) if k.startswith(prefix)),
             key=lambda item: item[1],
         )
         while len(owned) >= MAX_NONCES_PER_CLIENT:
-            old_key, _exp = owned.pop(0)
+            old_key, old_exp = owned[0]
+            # Still inside the signature acceptance window → refuse eviction.
+            if old_exp > horizon_floor:
+                return 'nonce store full; retry later'
+            owned.pop(0)
             nonces.pop(old_key, None)
         nonces[key] = now + MGMT_NONCE_TTL
         self.save_nonces(data)
@@ -1331,7 +1635,8 @@ class Allocator:
         Nonces are stored as machine_id:nonce -> expiry. Entries expire after
         MGMT_NONCE_TTL seconds (900), which is longer than MAX_CLOCK_SKEW so a
         request stays non-replayable for its entire accepted timestamp window.
-        Per-client count is capped; oldest entries are dropped first.
+        Per-client count is capped; entries still inside the skew window are
+        never evicted — capacity exhaustion returns a transient error instead.
 
         Callers that need check-then-commit around a registry mutation should
         use check_nonce() + commit_nonce() instead.
@@ -1596,10 +1901,18 @@ class Allocator:
 
         machine_id = str(payload.get('machine_id', '')).strip()
         hostname = str(payload.get('hostname', '')).strip()
-        if not machine_id:
-            return 400, api_error('machine_id is required', 'AUTH_FAILED')
-        if any(c in machine_id for c in '\r\n/\\'):
-            return 400, api_error('invalid machine_id', 'AUTH_FAILED')
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                return 400, api_error(str(exc), 'AUTH_FAILED')
+        else:
+            if not machine_id:
+                return 400, api_error('machine_id is required', 'AUTH_FAILED')
+            if len(machine_id) > MACHINE_ID_MAX_LEN or any(c in machine_id for c in '\r\n/\\'):
+                return 400, api_error('invalid machine_id', 'AUTH_FAILED')
+            if any(ord(c) < 0x20 or (0x7F <= ord(c) <= 0x9F) for c in machine_id):
+                return 400, api_error('invalid machine_id', 'AUTH_FAILED')
         try:
             hostname = CREG.validate_hostname(hostname)
         except ValueError:
@@ -1632,6 +1945,21 @@ class Allocator:
                                 'enrollment code is already bound to another machine',
                                 'AUTH_FAILED',
                             )
+                        # Bootstrap-ticket enrollments carry an authorized
+                        # service scope. The Enrollment Code proves possession,
+                        # not authority to widen that scope (an empty list is a
+                        # management-only ticket and is enforced as such).
+                        # Manual enrollment records have no scope and keep the
+                        # client-supplied service set.
+                        if 'authorized_services' in record:
+                            if not services_match_authorized(
+                                requested, record.get('authorized_services')
+                            ):
+                                return 403, api_error(
+                                    'enrollment services do not match authorized '
+                                    'ticket scope',
+                                    'SERVICE_SCOPE_VIOLATION',
+                                )
 
                     state = self.load_registry()
                     clients = state.setdefault('clients', {})
@@ -1673,6 +2001,7 @@ class Allocator:
                                 )
                         if client is None:
                             return 403, api_error('unknown client identity', 'AUTH_FAILED')
+                        previous_client = json.loads(json.dumps(client))
                         client['hostname'] = hostname or client.get('hostname', '')
                         client['last_enrolled_at'] = now_iso
                         if not isinstance(client.get('services'), dict):
@@ -1731,10 +2060,29 @@ class Allocator:
                         self.save_registry(state)
 
                         if pending_nonce:
-                            nonce_error = self.commit_nonce(
-                                machine_id, pending_nonce, int(time.time())
-                            )
+                            try:
+                                nonce_error = self.commit_nonce(
+                                    machine_id, pending_nonce, int(time.time())
+                                )
+                            except OSError as exc:
+                                # Registry mutation must not stick when nonce
+                                # persistence fails: otherwise the caller sees
+                                # failure while the signed request remains
+                                # replayable against the new authority state.
+                                clients[machine_id] = previous_client
+                                self.save_registry(state)
+                                print(
+                                    'allocator nonce persist error after mutation: %s'
+                                    % exc,
+                                    flush=True,
+                                )
+                                return 500, api_error(
+                                    'failed to persist management nonce',
+                                    'SERVER_MUTATION_FAILED',
+                                )
                             if nonce_error:
+                                clients[machine_id] = previous_client
+                                self.save_registry(state)
                                 return 403, api_error(
                                     nonce_error, classify_auth_error(nonce_error)
                                 )
@@ -1843,11 +2191,44 @@ class Allocator:
                         client['services'] = updated
                         self.save_registry(state)
 
+                        def _rollback_enrollment_attempt():
+                            if previous_client is None:
+                                clients.pop(machine_id, None)
+                            else:
+                                clients[machine_id] = previous_client
+                            self.save_registry(state)
+                            if (
+                                previous_enrollment is not None
+                                and enroll_path is not None
+                            ):
+                                self.save_enrollment(enroll_path, previous_enrollment)
+
+                        try:
+                            _test_enrollment_failure_point('AFTER_REGISTRY_COMMIT')
+                        except Exception:
+                            _rollback_enrollment_attempt()
+                            raise
+
                         if record is not None and enroll_path is not None:
                             record['bound_machine_id'] = machine_id
                             record['used_at'] = record.get('used_at') or now_iso
                             record['last_used_at'] = now_iso
-                            self.save_enrollment(enroll_path, record)
+                            try:
+                                self.save_enrollment(enroll_path, record)
+                            except Exception:
+                                # Fail closed: never leave registry enrolled while
+                                # the enrollment record remains unused/unbound.
+                                _rollback_enrollment_attempt()
+                                raise
+                            try:
+                                _test_enrollment_failure_point(
+                                    'AFTER_ENROLLMENT_RECORD_COMMIT'
+                                )
+                            except Exception:
+                                # Enrollment record already committed with registry.
+                                # Leave recoverable committed generation; do not
+                                # resurrect an unused enrollment code.
+                                raise
                             completed = self.complete_bootstrap_for_enrollment(
                                 record.get('id') or enrollment_id, machine_id
                             )
@@ -1855,16 +2236,17 @@ class Allocator:
                                 # Fail closed: never report enrollment success while the
                                 # bootstrap ticket remains reusable. Roll back registry
                                 # and enrollment mutations from this attempt.
-                                if previous_client is None:
-                                    clients.pop(machine_id, None)
-                                else:
-                                    clients[machine_id] = previous_client
-                                self.save_registry(state)
-                                if previous_enrollment is not None:
-                                    self.save_enrollment(enroll_path, previous_enrollment)
+                                _rollback_enrollment_attempt()
                                 raise OSError(
                                     'failed to consume bootstrap ticket after enrollment'
                                 )
+                            try:
+                                _test_enrollment_failure_point('AFTER_BOOTSTRAP_CONSUME')
+                            except Exception:
+                                # Bootstrap already consumed; leave recoverable committed
+                                # generation (registry + enrollment bound). Do not resurrect
+                                # an unused enrollment code after bootstrap was spent.
+                                raise
                         response_mac_key = None
         except RegistrySchemaError as exc:
             print('allocator registry error: %s' % exc, flush=True)
@@ -1926,7 +2308,12 @@ class Allocator:
             or headers.get('X-Client-Id')
             or ''
         ).strip()
-        if not machine_id:
+        if MID is not None:
+            try:
+                machine_id = MID.validate_machine_id(machine_id, required=True)
+            except MID.MachineIdError as exc:
+                return None, str(exc)
+        elif not machine_id:
             return None, 'missing machine id'
         with self.registry_lock():
             state = self.load_registry()
@@ -1959,7 +2346,7 @@ class Allocator:
 
 def make_handler(allocator):
     class Handler(BaseHTTPRequestHandler):
-        server_version = 'frp-auto-deploy/1.2'
+        server_version = 'drlink/1.2'
         timeout = ALLOCATOR_REQUEST_TIMEOUT_SEC
         protocol_version = 'HTTP/1.1'
 
@@ -2048,17 +2435,21 @@ def make_handler(allocator):
             return True
 
         def _with_slot(self, fn):
-            acquired = _REQUEST_SLOTS.acquire(blocking=False)
-            if not acquired:
-                self.send_json(
-                    503,
-                    api_error('server is busy; retry later', 'SERVER_BUSY'),
-                )
-                return
-            try:
-                return fn()
-            finally:
-                _REQUEST_SLOTS.release()
+            # Connection-level bounding is enforced by BoundedThreadingMixIn
+            # before the worker thread starts. A second semaphore here deadlocks.
+            if BOUNDED is None:
+                acquired = _REQUEST_SLOTS.acquire(blocking=False)
+                if not acquired:
+                    self.send_json(
+                        503,
+                        api_error('server is busy; retry later', 'SERVER_BUSY'),
+                    )
+                    return
+                try:
+                    return fn()
+                finally:
+                    _REQUEST_SLOTS.release()
+            return fn()
 
         def do_GET(self):
             def _handle():
@@ -2274,8 +2665,56 @@ def main():
     if port is None:
         raise SystemExit('ERROR: allocator_listen_port is not configured')
     context = allocator_ssl_context(allocator.cfg)
-    server = ThreadingHTTPServer((host, port), make_handler(allocator))
-    server.socket = context.wrap_socket(server.socket, server_side=True)
+    handler = make_handler(allocator)
+    if BOUNDED is None:
+        raise SystemExit(BOUNDED_LOAD_ERROR)
+
+    def _reject(request, _addr):
+        # Overload path receives a raw TCP socket (TLS is deferred to workers).
+        # Close without attempting an HTTP reply — clients expect TLS.
+        try:
+            request.close()
+        except OSError:
+            pass
+
+    class AllocatorServer(BOUNDED.BoundedThreadingMixIn, HTTPServer):
+        max_concurrent = ALLOCATOR_MAX_CONCURRENT
+        request_timeout = float(ALLOCATOR_REQUEST_TIMEOUT_SEC)
+        handshake_timeout = float(ALLOCATOR_TLS_HANDSHAKE_TIMEOUT_SEC)
+        daemon_threads = True
+        reject_callback = staticmethod(_reject)
+        ssl_context = context
+
+        def prepare_request(self, request, client_address):
+            """Wrap + handshake in the worker so accept() stays non-blocking."""
+            del client_address
+            ctx = self.ssl_context
+            hs_timeout = float(self.handshake_timeout)
+            try:
+                request.settimeout(hs_timeout)
+            except (OSError, AttributeError):
+                pass
+            ssl_sock = ctx.wrap_socket(
+                request,
+                server_side=True,
+                do_handshake_on_connect=False,
+            )
+            try:
+                ssl_sock.settimeout(hs_timeout)
+                ssl_sock.do_handshake()
+                ssl_sock.settimeout(float(self.request_timeout))
+            except Exception:
+                try:
+                    ssl_sock.close()
+                except OSError:
+                    pass
+                raise
+            return ssl_sock
+
+    # Plain listen → accept raw → worker does bounded TLS handshake.
+    # Wrapping the listening socket would run handshake inside accept() and
+    # starve healthy clients when peers stall mid-ClientHello (AUDIT-004).
+    server = AllocatorServer((host, port), handler)
     print(f'FRP allocator listening on https://{host}:{port}', flush=True)
     server.serve_forever()
 

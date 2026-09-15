@@ -1,0 +1,16 @@
+{
+  "id": "http-update",
+  "name": "http-update",
+  "kind": "profile",
+  "description": "Generic HTTP update-mirror template (exact FQDN). Replace host before enable.",
+  "profile_name": "http-update",
+  "sources": [],
+  "destinations": [
+    {
+      "host": "updates.example.com",
+      "port": 80,
+      "protocol": "http",
+      "match": "exact"
+    }
+  ]
+}

@@ -8,7 +8,7 @@ fi
 FRP_COMMON_LOADED=1
 
 # Defaults match VERSION. A sibling VERSION file overrides project/FRP versions.
-PROJECT_VERSION="${PROJECT_VERSION:-2.3.0}"
+PROJECT_VERSION="${PROJECT_VERSION:-2.4.0}"
 FRP_VERSION="${FRP_VERSION:-0.71.0}"
 # FRP 0.71.0 pkg/util/net/websocket.go FrpWebsocketPath. Not configurable.
 FRP_WEBSOCKET_PATH="${FRP_WEBSOCKET_PATH:-/~!frp}"
@@ -24,9 +24,14 @@ if [[ -f "${_FRP_COMMON_DIR}/../VERSION" ]]; then
   . "${_FRP_COMMON_DIR}/../VERSION"
 fi
 
-FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-xdr-labs}"
-FRP_GITHUB_REPO="${FRP_GITHUB_REPO:-frp-auto-deploy}"
-FRP_GITHUB_RAW_HOST="${FRP_GITHUB_RAW_HOST:-raw.githubusercontent.com}"
+# Canonical Data Relay Link repository identity (product/project, not upstream FRP).
+DRLINK_GITHUB_OWNER="${DRLINK_GITHUB_OWNER:-datarelay-labs}"
+DRLINK_GITHUB_REPO="${DRLINK_GITHUB_REPO:-data-relay-link}"
+DRLINK_GITHUB_RAW_HOST="${DRLINK_GITHUB_RAW_HOST:-raw.githubusercontent.com}"
+# Internal aliases: prefer DRLINK_*; accept explicit FRP_GITHUB_* overrides for tests/tools.
+FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-$DRLINK_GITHUB_OWNER}"
+FRP_GITHUB_REPO="${FRP_GITHUB_REPO:-$DRLINK_GITHUB_REPO}"
+FRP_GITHUB_RAW_HOST="${FRP_GITHUB_RAW_HOST:-$DRLINK_GITHUB_RAW_HOST}"
 
 frp_os() {
   local raw="${FRP_TEST_UNAME_S:-}"
@@ -72,7 +77,7 @@ frp_normalize_release_channel() {
 frp_version_state_file() {
   local root="${FRP_DEPLOY_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_SERVER_TEST_ROOT:-}}}}}"
   local p
-  p="$(frp_platform_map_path /etc/frp-auto-deploy/version)"
+  p="$(frp_platform_map_path /etc/drlink/version)"
   if [[ -n "$root" ]]; then
     printf '%s' "${root}${p}"
   else
@@ -197,6 +202,23 @@ frp_release_channel() {
 }
 
 frp_release_git_ref() {
+  # Installer/update artifact refs prefer explicit provenance, then the
+  # persisted SOURCE_REF from /etc/drlink/version. Only fall back to the
+  # channel-derived tag/main default when no install provenance exists.
+  local persisted=""
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    printf '%s' "$FRP_EXPECTED_SOURCE_REF"
+    return 0
+  fi
+  if [[ -n "${FRP_TXN_SOURCE_REF:-}" ]]; then
+    printf '%s' "$FRP_TXN_SOURCE_REF"
+    return 0
+  fi
+  persisted="$(frp_read_kv_file "$(frp_version_state_file)" SOURCE_REF)"
+  if [[ -n "$persisted" ]]; then
+    printf '%s' "$persisted"
+    return 0
+  fi
   if [[ "$(frp_release_channel)" == "dev" ]]; then
     printf 'main'
   else
@@ -288,6 +310,81 @@ raise SystemExit(0 if sys.argv[2] in parts else 1)
 PY
 }
 
+frp_source_ref_from_github_raw_url() {
+  # Extract owner/repo/<ref>/... from an official GitHub raw URL.
+  # Prints the ref on success; returns non-zero when the URL is not official.
+  local url="${1:-}"
+  python3 - "$url" "$FRP_GITHUB_RAW_HOST" "$FRP_GITHUB_OWNER" "$FRP_GITHUB_REPO" <<'PY'
+import sys
+from urllib.parse import unquote, urlsplit
+
+url, host, owner, repo = sys.argv[1:5]
+try:
+    parsed = urlsplit(url)
+except ValueError:
+    raise SystemExit(1)
+if parsed.scheme != "https" or parsed.hostname != host:
+    raise SystemExit(1)
+parts = [unquote(part) for part in parsed.path.split("/") if part]
+if len(parts) < 3 or parts[0] != owner or parts[1] != repo:
+    raise SystemExit(1)
+ref = parts[2]
+if not ref or ref in (".", "..") or "/" in ref:
+    raise SystemExit(1)
+print(ref)
+PY
+}
+
+frp_git_head_source_ref() {
+  # Exact immutable commit for a local git checkout. Empty when not a git tree.
+  local source="${1:-}"
+  local ref=""
+  [[ -n "$source" && -d "$source" ]] || return 1
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+  ref="$(git -C "$source" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s' "$ref"
+    return 0
+  fi
+  return 1
+}
+
+frp_infer_expected_source_ref_from_git_source() {
+  # Local --source / worktree installs: prefer exact HEAD SHA over a premature
+  # release-line tag so Zero-Touch URLs remain fetchable before the tag exists.
+  local source="${1:-}" ref=""
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    return 0
+  fi
+  if ref="$(frp_git_head_source_ref "$source")"; then
+    FRP_EXPECTED_SOURCE_REF="$ref"
+    export FRP_EXPECTED_SOURCE_REF
+  fi
+  return 0
+}
+
+frp_infer_expected_source_ref() {
+  # Populate FRP_EXPECTED_SOURCE_REF from existing provenance signals only.
+  # Never invent a second provenance mechanism or guess from PROJECT_VERSION.
+  local ref="" url=""
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    return 0
+  fi
+  for url in \
+    "${FRP_BOOTSTRAP_URL:-}" \
+    "${FRP_CLIENT_INSTALLER_URL:-}" \
+    "${FRP_WINDOWS_CLIENT_INSTALLER_URL:-}"; do
+    if [[ -n "$url" ]] && ref="$(frp_source_ref_from_github_raw_url "$url")"; then
+      FRP_EXPECTED_SOURCE_REF="$ref"
+      export FRP_EXPECTED_SOURCE_REF
+      return 0
+    fi
+  done
+  return 0
+}
+
 frp_is_official_main_installer_url() {
   local url="${1:-}"
   [[ "$url" == "https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/main/dist/bootstrap-client.sh" ]]
@@ -337,13 +434,17 @@ expected_git_ref = "main" if channel == "dev" else "v%s" % project
 if git_ref != expected_git_ref:
     sys.stderr.write("ERROR: release metadata channel/ref disagreement\n")
     raise SystemExit(1)
-if expected_ref and git_ref != expected_ref:
+# Exact SHA is install provenance for pretags / local git checkouts. The
+# manifest git_ref remains the eventual release-line label (main / vX.Y.Z).
+is_exact_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", expected_ref or ""))
+if expected_ref and not is_exact_sha and git_ref != expected_ref:
     sys.stderr.write("ERROR: release metadata source ref mismatch\n")
     raise SystemExit(1)
 if expected_channel and channel != expected_channel:
     sys.stderr.write("ERROR: release metadata channel mismatch\n")
     raise SystemExit(1)
-sys.stdout.write("%s\t%s\t%s\n" % (project, channel, git_ref))
+out_ref = expected_ref if is_exact_sha else git_ref
+sys.stdout.write("%s\t%s\t%s\n" % (project, channel, out_ref))
 PY
 }
 
@@ -356,8 +457,8 @@ frp_release_manifest_path() {
     printf '%s' "${_FRP_COMMON_DIR}/../release-manifest.json"
     return 0
   fi
-  if [[ -f /usr/local/lib/frp-auto-deploy/release-manifest.json ]]; then
-    printf '%s' /usr/local/lib/frp-auto-deploy/release-manifest.json
+  if [[ -f /usr/local/lib/drlink/release-manifest.json ]]; then
+    printf '%s' /usr/local/lib/drlink/release-manifest.json
     return 0
   fi
   return 1
@@ -409,6 +510,397 @@ frp_platform_map_path() {
   else
     printf '%s' "$p"
   fi
+}
+
+# Legacy FRP Auto Deploy filesystem roots (pre Data Relay Link rename).
+
+# Prefer canonical DRLINK_* operator env vars; accept legacy FRP_* as upgrade compat.
+frp_env_prefer() {
+  # frp_env_prefer CANONICAL_NAME LEGACY_NAME
+  local canon="$1" legacy="$2"
+  local cval lval
+  eval "cval=\"\${${canon}:-}\""
+  eval "lval=\"\${${legacy}:-}\""
+  if [[ -n "$cval" && -n "$lval" && "$cval" != "$lval" ]]; then
+    echo "WARNING: ${canon} and ${legacy} both set; using ${canon}" >&2
+  fi
+  if [[ -n "$cval" ]]; then
+    printf '%s' "$cval"
+  else
+    printf '%s' "$lval"
+  fi
+}
+
+frp_export_drlink_env_aliases() {
+  # User-facing DRLINK_* wins and is copied into internal FRP_* names.
+  # Do not invent DRLINK_* from FRP_* into the environment — that leaks across
+  # tests and installer phases that intentionally unset FRP_*.
+  local v
+  v="${DRLINK_PUBLIC_HOST:-}"
+  if [[ -n "$v" ]]; then export FRP_PUBLIC_HOST="$v"; fi
+  v="${DRLINK_DEPLOYMENT_MODE:-}"
+  if [[ -n "$v" ]]; then export FRP_DEPLOYMENT_MODE="$v"; fi
+  v="${DRLINK_ALLOCATOR_URL:-}"
+  if [[ -n "$v" ]]; then export FRP_ALLOCATOR_URL="$v"; fi
+  v="${DRLINK_ALLOCATOR_CA_SHA256:-}"
+  if [[ -n "$v" ]]; then export FRP_ALLOCATOR_CA_SHA256="$v"; fi
+  v="${DRLINK_BOOTSTRAP_TICKET:-}"
+  if [[ -n "$v" ]]; then export FRP_BOOTSTRAP_TICKET="$v"; fi
+  v="${DRLINK_SSH_USER:-}"
+  if [[ -n "$v" ]]; then export FRP_SSH_USER="$v"; fi
+  v="${DRLINK_ZERO_TOUCH:-}"
+  if [[ -n "$v" ]]; then export FRP_ZERO_TOUCH="$v"; fi
+  v="${DRLINK_RELEASE_CHANNEL:-}"
+  if [[ -n "$v" ]]; then export FRP_RELEASE_CHANNEL="$v"; fi
+  v="${DRLINK_RELEASE_MANIFEST:-}"
+  if [[ -n "$v" ]]; then export FRP_RELEASE_MANIFEST="$v"; fi
+  v="${DRLINK_GITHUB_OWNER:-}"
+  if [[ -n "$v" ]]; then export FRP_GITHUB_OWNER="$v"; fi
+  v="${DRLINK_GITHUB_REPO:-}"
+  if [[ -n "$v" ]]; then export FRP_GITHUB_REPO="$v"; fi
+  v="${DRLINK_GITHUB_RAW_HOST:-}"
+  if [[ -n "$v" ]]; then export FRP_GITHUB_RAW_HOST="$v"; fi
+  return 0
+}
+
+FRP_LEGACY_ETC="${FRP_LEGACY_ETC:-/etc/frp-auto-deploy}"
+FRP_LEGACY_STATE="${FRP_LEGACY_STATE:-/var/lib/frp-auto-deploy}"
+FRP_LEGACY_LOG="${FRP_LEGACY_LOG:-/var/log/frp-auto-deploy}"
+FRP_LEGACY_LIB="${FRP_LEGACY_LIB:-/usr/local/lib/frp-auto-deploy}"
+
+frp_migrate_legacy_tree() {
+  # Move legacy product tree to canonical Data Relay Link path when needed.
+  # Never deletes the source until the destination exists and is non-empty.
+  local legacy="$1" canonical="$2" label="${3:-path}"
+  local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-}}}}"
+  local src dst
+  if [[ -n "$root" ]]; then
+    src="${root}${legacy}"
+    dst="${root}${canonical}"
+  else
+    src="$legacy"
+    dst="$canonical"
+  fi
+  if [[ -e "$dst" ]]; then
+    return 0
+  fi
+  if [[ ! -e "$src" ]]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$dst")"
+  if mv "$src" "$dst" 2>/dev/null; then
+    echo "Migrated legacy ${label}: ${legacy} -> ${canonical}"
+    return 0
+  fi
+  if cp -a "$src" "$dst"; then
+    echo "Copied legacy ${label}: ${legacy} -> ${canonical}"
+    return 0
+  fi
+  echo "ERROR: failed to migrate legacy ${label} from ${src} to ${dst}" >&2
+  return 1
+}
+
+frp_migrate_legacy_product_paths() {
+  frp_migrate_legacy_tree /etc/frp-auto-deploy /etc/drlink config || return 1
+  frp_migrate_legacy_tree /var/lib/frp-auto-deploy /var/lib/drlink state || return 1
+  frp_migrate_legacy_tree /var/log/frp-auto-deploy /var/log/drlink logs || return 1
+  frp_migrate_legacy_tree /usr/local/lib/frp-auto-deploy /usr/local/lib/drlink lib || return 1
+  frp_migrate_legacy_tree /run/frp-auto-deploy /run/drlink runtime || return 1
+  return 0
+}
+
+# Historical Linux client supervisor before the drlink-client rename.
+# frpc.service is a generic name — only retire units that match product fingerprints.
+frp_legacy_client_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  # Canonical product ExecStart from client/frpc.service (historical + current).
+  case "$exec_line" in
+    */usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|*/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    /usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Client'|'Data Relay Link Client'|'Data Relay Link Client (legacy unit name; use drlink-client)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+frp_legacy_server_unit_is_product_owned() {
+  local unit_file="${1:-}"
+  local desc="" exec_line="" line
+  [[ -n "$unit_file" && -f "$unit_file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Description=*) desc="${line#Description=}" ;;
+      ExecStart=*) exec_line="${line#ExecStart=}" ;;
+    esac
+  done <"$unit_file"
+  # Canonical product ExecStart from server/frps.service (historical + current).
+  case "$exec_line" in
+    */usr/local/bin/frps\ -c\ /etc/frp/frps.toml|*/usr/local/bin/frps\ -c\ /etc/frp/frps.toml\ *) ;;
+    /usr/local/bin/frps\ -c\ /etc/frp/frps.toml|/usr/local/bin/frps\ -c\ /etc/frp/frps.toml\ *) ;;
+    *) return 1 ;;
+  esac
+  case "$desc" in
+    'FRP Server'|'Data Relay Link Server'|'Data Relay Link Server (legacy unit name; use drlink-server)')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+frp_client_systemd_unit_root() {
+  local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
+  if [[ -n "$root" ]]; then
+    printf '%s' "$root"
+  fi
+}
+
+# Optional FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL replaces systemctl for fail-closed tests.
+frp_legacy_retire_systemctl() {
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL:-}" ]]; then
+    "${FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL}" "$@"
+    return $?
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl "$@"
+}
+
+frp_legacy_retire_use_systemd() {
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_SYSTEMCTL:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "$(frp_client_systemd_unit_root)" ]]; then
+    return 1
+  fi
+  [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" != "1" ]] \
+    && command -v systemctl >/dev/null 2>&1
+}
+
+frp_legacy_unit_is_active() {
+  local st
+  st="$(frp_legacy_retire_systemctl is-active frpc.service 2>/dev/null || true)"
+  [[ "$st" == "active" || "$st" == "activating" || "$st" == "reloading" ]]
+}
+
+# True when MainPID (or hook) still represents a live product-owned frpc process.
+frp_legacy_unit_owns_product_frpc() {
+  local main_pid="" exe=""
+  if [[ -n "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC:-}" ]]; then
+    "${FRP_LEGACY_RETIRE_HOOK_OWNS_FRPC}"
+    return $?
+  fi
+  main_pid="$(frp_legacy_retire_systemctl show -p MainPID --value frpc.service 2>/dev/null || true)"
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! kill -0 "$main_pid" 2>/dev/null; then
+    return 1
+  fi
+  if [[ -e "/proc/${main_pid}/exe" ]]; then
+    exe="$(readlink -f "/proc/${main_pid}/exe" 2>/dev/null || true)"
+    case "$exe" in
+      /usr/local/bin/frpc|/usr/local/bin/frpc\ \(deleted\)) return 0 ;;
+    esac
+    return 1
+  fi
+  # Fallback when /proc is unavailable: treat a live MainPID as still owning.
+  return 0
+}
+
+frp_legacy_retire_fail() {
+  local class="$1" msg="$2"
+  echo "ERROR: ${msg}" >&2
+  if declare -F frp_emit_failure_class >/dev/null 2>&1; then
+    frp_emit_failure_class "$class"
+  else
+    echo "FAILURE_CLASS=${class}" >&2
+  fi
+  return 1
+}
+
+# Retire a product-owned historical frpc.service so only drlink-client supervises frpc.
+# Must run before restoring /usr/local/bin/frpc: a leftover enabled legacy unit with
+# Restart=always will immediately respawn once the binary reappears.
+#
+# Fail-closed for an active product-owned unit: stop → verify inactive → verify the
+# legacy MainPID no longer owns product frpc → disable → remove unit → daemon-reload.
+# Do not proceed to start drlink-client when stop/verification fails.
+frp_retire_legacy_client_unit() {
+  local root unitdir unit attempt max_attempts=3 enabled=""
+  root="$(frp_client_systemd_unit_root)"
+  if [[ -n "$root" ]]; then
+    unitdir="${root}/etc/systemd/system"
+  else
+    unitdir=/etc/systemd/system
+  fi
+  unit="${unitdir}/frpc.service"
+  [[ -f "$unit" ]] || return 0
+  if ! frp_legacy_client_unit_is_product_owned "$unit"; then
+    echo "WARNING: leaving non-product frpc.service in place at ${unit}" >&2
+    return 0
+  fi
+
+  if frp_legacy_retire_use_systemd; then
+    if frp_legacy_unit_is_active || frp_legacy_unit_owns_product_frpc; then
+      attempt=1
+      while (( attempt <= max_attempts )); do
+        if frp_legacy_retire_systemctl stop frpc.service >/dev/null 2>&1; then
+          break
+        fi
+        if (( attempt == max_attempts )); then
+          frp_legacy_retire_fail LEGACY_UNIT_STOP_FAILED \
+            "failed to stop product-owned legacy frpc.service; refusing to start drlink-client"
+          return 1
+        fi
+        sleep 0.2
+        attempt=$((attempt + 1))
+      done
+      if frp_legacy_unit_is_active; then
+        frp_legacy_retire_fail LEGACY_UNIT_STILL_ACTIVE \
+          "product-owned legacy frpc.service remains active after stop; refusing to start drlink-client"
+        return 1
+      fi
+      if frp_legacy_unit_owns_product_frpc; then
+        frp_legacy_retire_fail LEGACY_UNIT_PROCESS_REMAINS \
+          "product-owned legacy frpc.service MainPID still owns frpc after stop; refusing to start drlink-client"
+        return 1
+      fi
+    fi
+
+    if ! frp_legacy_retire_systemctl disable frpc.service >/dev/null 2>&1; then
+      enabled="$(frp_legacy_retire_systemctl is-enabled frpc.service 2>/dev/null || true)"
+      case "$enabled" in
+        enabled|enabled-runtime|linked|linked-runtime)
+          frp_legacy_retire_fail LEGACY_UNIT_DISABLE_FAILED \
+            "failed to disable product-owned legacy frpc.service; refusing to start drlink-client"
+          return 1
+          ;;
+      esac
+    fi
+  fi
+
+  rm -f "$unit"
+
+  if frp_legacy_retire_use_systemd; then
+    if ! frp_legacy_retire_systemctl daemon-reload >/dev/null 2>&1; then
+      frp_legacy_retire_fail LEGACY_UNIT_RELOAD_FAILED \
+        "daemon-reload failed after removing legacy frpc.service; refusing to start drlink-client"
+      return 1
+    fi
+    frp_legacy_retire_systemctl reset-failed frpc.service >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+frp_migrate_legacy_systemd_units() {
+  # Stop/disable old product unit names and remove unit files after new ones exist.
+  local root="${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_UPDATE_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
+  local unitdir sourcedir
+  if [[ -n "$root" ]]; then
+    unitdir="${root}/etc/systemd/system"
+    sourcedir="${root}"
+  else
+    unitdir=/etc/systemd/system
+    sourcedir=""
+  fi
+  local pair old new
+  for pair in \
+    "frps:drlink-server" \
+    "frpc:drlink-client" \
+    "frp-port-allocator:drlink-allocator" \
+    "frp-access-plugin:drlink-access" \
+    "frp-egress-gateway:drlink-egress" \
+    "frp-frontend:drlink-frontend"; do
+    old="${pair%%:*}"
+    new="${pair##*:}"
+    # Dual-role upgrade: server packages do not ship drlink-client.service, so an
+    # existing frpc.service would otherwise remain as a legacy unit forever.
+    if [[ "$old" == "frpc" && -f "${unitdir}/frpc.service" && ! -f "${unitdir}/drlink-client.service" ]]; then
+      if frp_legacy_client_unit_is_product_owned "${unitdir}/frpc.service"; then
+        local client_state
+        if [[ -n "$root" ]]; then
+          client_state="${root}/etc/frp/client-state.json"
+        else
+          client_state=/etc/frp/client-state.json
+        fi
+        if [[ -f "$client_state" ]]; then
+          local unit_src=""
+          for cand in \
+            "${FRP_SERVER_SOURCE:-}/client/drlink-client.service" \
+            "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/client/drlink-client.service" \
+            "/tmp/drlink-src/client/drlink-client.service"; do
+            if [[ -n "$cand" && -f "$cand" ]]; then
+              unit_src="$cand"
+              break
+            fi
+          done
+          if [[ -n "$unit_src" ]]; then
+            cp -a "$unit_src" "${unitdir}/drlink-client.service"
+          else
+            # Fallback: rewrite Description/name on the existing unit file.
+            sed 's/^Description=.*/Description=Data Relay Link Client/' \
+              "${unitdir}/frpc.service" >"${unitdir}/drlink-client.service"
+          fi
+          chmod 0644 "${unitdir}/drlink-client.service" 2>/dev/null || true
+        fi
+      fi
+    fi
+    if [[ -f "${unitdir}/${new}.service" && -f "${unitdir}/${old}.service" ]]; then
+      if [[ "$old" == "frpc" ]] && ! frp_legacy_client_unit_is_product_owned "${unitdir}/frpc.service"; then
+        echo "WARNING: leaving non-product frpc.service in place at ${unitdir}/frpc.service" >&2
+        continue
+      fi
+      if [[ "$old" == "frps" ]] && ! frp_legacy_server_unit_is_product_owned "${unitdir}/frps.service"; then
+        echo "WARNING: leaving non-product frps.service in place at ${unitdir}/frps.service" >&2
+        continue
+      fi
+      if [[ -z "$root" ]] && command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now "$old" >/dev/null 2>&1 || true
+        systemctl enable "$new" >/dev/null 2>&1 || true
+        systemctl restart "$new" >/dev/null 2>&1 || true
+      fi
+      rm -f "${unitdir}/${old}.service"
+    fi
+  done
+  # Retire legacy CLI PATH entry points once drlink is installed.
+  # Management helpers live under /usr/local/lib/drlink; remove old sbin copies.
+  local legacy_tools=(
+    frpctl frp-create-client frp-enrollments frp-enrollment-revoke frp-enrollment-purge
+    frp-enroll-bulk frp-clients frp-client-info frp-client-set frp-groups frp-group-set
+    frp-release-client frp-release-service frp-access frp-egress frp-profile frp-revoke-client
+    frp-set-client-installer-url frp-server-set frp-server-status frp-project-update
+    frp-backup frp-restore frp-support-bundle frp-update frp-upstream
+  )
+  local tool
+  if [[ -n "$root" ]]; then
+    if [[ -x "${root}/usr/local/bin/drlink" ]]; then
+      rm -f "${root}/usr/local/bin/frpctl" "${root}/usr/local/sbin/frpctl"
+      for tool in "${legacy_tools[@]}"; do
+        rm -f "${root}/usr/local/sbin/${tool}" "${root}/usr/local/bin/${tool}"
+      done
+    fi
+  else
+    if [[ -x /usr/local/bin/drlink ]]; then
+      rm -f /usr/local/bin/frpctl /usr/local/sbin/frpctl
+      for tool in "${legacy_tools[@]}"; do
+        rm -f "/usr/local/sbin/${tool}" "/usr/local/bin/${tool}"
+      done
+    fi
+  fi
+  return 0
 }
 
 frp_detect_arch() {
@@ -539,7 +1031,7 @@ frp_atomic_install() {
   if [[ ${EUID} -eq 0 ]]; then
     chown root:root "$tmp" 2>/dev/null || true
   fi
-  mv -f "$tmp" "$dest"
+  frp_durable_replace "$tmp" "$dest"
 }
 
 frp_write_version_file() {
@@ -557,10 +1049,22 @@ frp_write_version_file() {
       channel="$(frp_release_channel)"
     fi
   fi
-  if [[ "$channel" == "dev" ]]; then
-    source_ref="main"
+  # SOURCE_REF is install provenance (commit SHA or release tag), not
+  # PROJECT_VERSION. Prefer explicit expected/txn refs, then preserve an
+  # already-persisted SOURCE_REF, and only then fall back to channel defaults.
+  if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    source_ref="$FRP_EXPECTED_SOURCE_REF"
+  elif [[ -n "${FRP_TXN_SOURCE_REF:-}" ]]; then
+    source_ref="$FRP_TXN_SOURCE_REF"
   else
-    source_ref="v${PROJECT_VERSION}"
+    existing_ref="$(frp_read_kv_file "$dest" SOURCE_REF)"
+    if [[ -n "$existing_ref" ]]; then
+      source_ref="$existing_ref"
+    elif [[ "$channel" == "dev" ]]; then
+      source_ref="main"
+    else
+      source_ref="v${PROJECT_VERSION}"
+    fi
   fi
   bundle="${FRP_BUNDLE_SHA256:-}"
   if [[ "${FRP_VERSION_REQUIRE_VERIFIED_BUNDLE:-}" == "1" ]]; then
@@ -783,7 +1287,7 @@ frp_upstream_latest() {
   python3 - <<'PY'
 import json, sys, urllib.request
 url = "https://api.github.com/repos/fatedier/frp/releases/latest"
-req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "frp-auto-deploy"})
+req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "data-relay-link"})
 try:
     with urllib.request.urlopen(req, timeout=3) as resp:
         data = json.loads(resp.read().decode())
@@ -983,7 +1487,7 @@ frp_write_compatible_systemd_unit() {
     return 0
   fi
   tmp="$(mktemp)"
-  grep -vE '^(NoNewPrivileges|ProtectSystem|ReadWritePaths)=' "$src" >"$tmp"
+  grep -vE '^(NoNewPrivileges|ProtectSystem|ReadWritePaths|ReadOnlyPaths)=' "$src" >"$tmp"
   install -m 0644 "$tmp" "$dest"
   rm -f "$tmp"
 }
@@ -1016,7 +1520,7 @@ frp_require_python() {
   fi
   if ! frp_invoke python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (${FRP_PYTHON_MIN_MAJOR}, ${FRP_PYTHON_MIN_MINOR}) else 1)"; then
     echo "ERROR: python3 ${FRP_PYTHON_MIN_MAJOR}.${FRP_PYTHON_MIN_MINOR} or newer is required." >&2
-    echo "This host's python3 is too old for frp-auto-deploy." >&2
+    echo "This host's python3 is too old for Data Relay Link." >&2
     return 1
   fi
 }
@@ -1264,6 +1768,23 @@ if ! declare -F frp_emit_failure_class >/dev/null 2>&1; then
   }
 fi
 
+if ! declare -F frp_emit_update_rollback_recovery_guidance >/dev/null 2>&1; then
+  # Operator-facing next actions after UPDATE_ROLLBACK_FAILED. Machine markers
+  # remain the source of truth for automation; this text is for humans.
+  frp_emit_update_rollback_recovery_guidance() {
+    echo >&2
+    echo "Update failed and automatic rollback could not fully recover Data Relay Link." >&2
+    echo >&2
+    echo "Recovery required." >&2
+    echo >&2
+    echo "Next:" >&2
+    echo "  sudo drlink system diagnostics" >&2
+    echo "  sudo drlink system support-bundle" >&2
+    echo >&2
+    echo "Do not re-enroll clients or delete state manually." >&2
+  }
+fi
+
 frp_is_unsafe_delete_path() {
   local path="${1:-}"
   if [[ -z "$path" || "$path" == "/" || "$path" == "." || "$path" == ".." || "$path" == "//" ]]; then
@@ -1336,6 +1857,36 @@ frp_safe_rm_rf() {
   rm -rf "$path"
 }
 
+frp_durable_replace() {
+  # Rename tmp over dest so both the contents and the name survive a power
+  # failure: fsync the staged file, rename, then fsync the parent directory.
+  # Mirrors lib/frp_control_locks.py durable_replace() for shell writers.
+  # Filesystems that reject a directory fsync (NFS, FAT, some overlays) still
+  # get the atomic rename; the command does not fail over a durability gap.
+  local tmp="$1" dest="$2"
+  python3 - "$tmp" "$dest" <<'PY'
+import os, sys
+tmp, dest = sys.argv[1], sys.argv[2]
+fd = os.open(tmp, os.O_RDONLY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+os.replace(tmp, dest)
+parent = os.path.dirname(os.path.abspath(dest)) or "."
+try:
+    dfd = os.open(parent, getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY)
+except OSError:
+    raise SystemExit(0)
+try:
+    os.fsync(dfd)
+except OSError:
+    pass
+finally:
+    os.close(dfd)
+PY
+}
+
 frp_atomic_write() {
   local dest="$1" mode="${2:-0600}"
   local dir tmp
@@ -1348,7 +1899,7 @@ frp_atomic_write() {
   if [[ ${EUID} -eq 0 ]]; then
     chown root:root "$tmp" 2>/dev/null || true
   fi
-  mv -f "$tmp" "$dest"
+  frp_durable_replace "$tmp" "$dest"
 }
 
 frp_secure_mktemp_dir() {
@@ -1517,10 +2068,10 @@ frp_txn_marker_path() {
       ;;
   esac
   if [[ -n "$root" ]]; then
-    canonical="$(frp_platform_map_path /var/lib/frp-auto-deploy)"
+    canonical="$(frp_platform_map_path /var/lib/drlink)"
     dir="${root}${canonical}"
   else
-    dir="$(frp_platform_map_path /var/lib/frp-auto-deploy)"
+    dir="$(frp_platform_map_path /var/lib/drlink)"
   fi
   printf '%s/%s' "$dir" "$base"
 }
@@ -1528,7 +2079,7 @@ frp_txn_marker_path() {
 frp_txn_legacy_marker_path() {
   local root="${FRP_UPDATE_ROOT:-${FRP_DEPLOY_TEST_ROOT:-${FRP_SERVER_TEST_ROOT:-${FRP_CLIENT_TEST_ROOT:-${FRP_UNINSTALL_TEST_ROOT:-}}}}}"
   local p
-  p="$(frp_platform_map_path /var/lib/frp-auto-deploy/update-pending.json)"
+  p="$(frp_platform_map_path /var/lib/drlink/update-pending.json)"
   if [[ -n "$root" ]]; then
     printf '%s' "${root}${p}"
   else
@@ -1682,8 +2233,8 @@ frp_audit_emit() {
   local event="$1" py=""
   if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_audit.py" ]]; then
     py="$BASE_DIR/lib/frp_audit.py"
-  elif [[ -f /usr/local/lib/frp-auto-deploy/frp_audit.py ]]; then
-    py=/usr/local/lib/frp-auto-deploy/frp_audit.py
+  elif [[ -f /usr/local/lib/drlink/frp_audit.py ]]; then
+    py=/usr/local/lib/drlink/frp_audit.py
   else
     local here
     here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1708,12 +2259,12 @@ frp_detect_host_role() {
   local server_signals=0 client_signals=0
   local has_server_config=0 has_client_state=0
   FRP_HOST_ROLE=absent
-  [[ -f "$(frp_role_fs /etc/frp-auto-deploy/config.json)" ]] && { has_server_config=1; server_signals=$((server_signals + 1)); }
+  [[ -f "$(frp_role_fs /etc/drlink/config.json)" ]] && { has_server_config=1; server_signals=$((server_signals + 1)); }
   [[ -f "$(frp_role_fs /etc/frp/server_token)" ]] && server_signals=$((server_signals + 1))
-  [[ -f "$(frp_role_fs /var/lib/frp-auto-deploy/registry.json)" ]] && server_signals=$((server_signals + 1))
+  [[ -f "$(frp_role_fs /var/lib/drlink/registry.json)" ]] && server_signals=$((server_signals + 1))
   [[ -f "$(frp_role_fs /etc/frp/frps.toml)" ]] && server_signals=$((server_signals + 1))
   [[ -x "$(frp_role_fs /usr/local/bin/frps)" ]] && server_signals=$((server_signals + 1))
-  [[ -x "$(frp_role_fs /usr/local/sbin/frp-create-client)" ]] && server_signals=$((server_signals + 1))
+  [[ -x "$(frp_role_fs /usr/local/lib/drlink/frp-create-client)" || -x "$(frp_role_fs /usr/local/sbin/frp-create-client)" ]] && server_signals=$((server_signals + 1))
   [[ -f "$(frp_role_fs /etc/frp/client-state.json)" ]] && { has_client_state=1; client_signals=$((client_signals + 1)); }
   [[ -f "$(frp_role_fs /etc/frp/frpc.toml)" ]] && client_signals=$((client_signals + 1))
   [[ -f "$(frp_role_fs /etc/frp/client-identity.key)" ]] && client_signals=$((client_signals + 1))
@@ -1742,8 +2293,8 @@ frp_detect_host_role() {
 if [[ -z "${FRP_MACOS_LOADED:-}" ]]; then
   for _frp_macos_candidate in \
     "${_FRP_COMMON_DIR}/frp-macos.sh" \
-    /usr/local/lib/frp-auto-deploy/frp-macos.sh \
-    '/Library/Application Support/frp-auto-deploy/lib/frp-macos.sh'; do
+    /usr/local/lib/drlink/frp-macos.sh \
+    '/Library/Application Support/drlink/lib/frp-macos.sh'; do
     if [[ -f "$_frp_macos_candidate" ]]; then
       # shellcheck disable=SC1090
       . "$_frp_macos_candidate"

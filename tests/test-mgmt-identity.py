@@ -310,6 +310,48 @@ def main():
             fail('retry after write-fail reallocated ssh')
         pass_('failed mutation does not burn nonce')
 
+        # Finding N: nonce persist failure after registry mutation must roll back
+        # authority changes and leave the signed request replayable once.
+        edit_body = env.body(include_pub=False, services=[{
+            'id': 'ssh', 'name': 'SSH', 'protocol': 'tcp',
+            'local_ip': '127.0.0.1', 'local_port': 2222, 'preset': 'ssh', 'ssh_user': 'aella',
+        }, {
+            'id': 'grafana', 'name': 'Grafana', 'protocol': 'tcp',
+            'local_ip': '127.0.0.1', 'local_port': 3000, 'preset': 'custom',
+        }])
+        headers, ts, nonce, signature = env.signed_headers(edit_body)
+        before = env.registry.read_bytes()
+        before_client = env.load_client()
+
+        def boom_nonce(path):
+            if 'mgmt-nonces.json' in str(path):
+                raise OSError('simulated nonce write failure')
+
+        original_nonce = MOD._test_before_nonce_write
+        MOD._test_before_nonce_write = boom_nonce
+        try:
+            code, result = env.allocator.enroll('', str(ts), '', edit_body, headers=headers)
+        finally:
+            MOD._test_before_nonce_write = original_nonce
+        if code not in (403, 500):
+            fail('nonce persist-fail status', result)
+        if env.registry.read_bytes() != before:
+            fail('nonce persist-fail left mutated registry')
+        after_client = env.load_client()
+        if after_client['services']['ssh']['local_port'] != before_client['services']['ssh']['local_port']:
+            fail('nonce persist-fail changed ssh local_port')
+        # Same signed request must still apply exactly once after recovery.
+        code, result = env.allocator.enroll('', str(ts), '', edit_body, headers=headers)
+        if code != 200:
+            fail('same nonce after nonce persist-fail', result)
+        if env.load_client()['services']['ssh']['local_port'] != 2222:
+            fail('retry after nonce persist-fail did not apply')
+        # Replay of the same signed request must now be rejected.
+        code, result = env.allocator.enroll('', str(ts), '', edit_body, headers=headers)
+        if code != 403 or 'replay' not in str(result.get('error', '')).lower():
+            fail('replay after successful nonce commit', result)
+        pass_('nonce persist failure rolls back mutation')
+
         env.allocator.load_registry()
         state = json.loads(env.registry.read_text())
         state['clients']['machine-id-p23']['mgmt_status'] = 'revoked'

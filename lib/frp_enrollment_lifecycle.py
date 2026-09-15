@@ -676,7 +676,7 @@ def load_audit_emit():
         here = Path(__file__).resolve()
         for path in (
             here.parent / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))

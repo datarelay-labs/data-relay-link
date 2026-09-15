@@ -22,10 +22,10 @@ function Get-FrpWindowsRoot {
         return $env:FRP_WINDOWS_ROOT.Trim().TrimEnd('\', '/')
     }
     if (-not (Test-FrpIsWindowsHost)) {
-        $fallback = '/tmp/frp-auto-deploy-windows-test'
+        $fallback = '/tmp/drlink-windows-test'
         return $fallback
     }
-    return (Join-Path $env:ProgramData 'frp-auto-deploy')
+    return (Join-Path $env:ProgramData 'drlink')
 }
 
 function Get-FrpBinDir { Join-Path (Get-FrpWindowsRoot) 'bin' }
@@ -57,6 +57,25 @@ function Get-FrpIdentityMacPath { Join-Path (Get-FrpStateDir) 'client-identity.m
 function Get-FrpAllocatorCaPath { Join-Path (Get-FrpCertsDir) 'allocator-ca.crt' }
 function Get-FrpLogPath { Join-Path (Get-FrpLogsDir) 'frpc.log' }
 function Get-FrpPidPath { Join-Path (Get-FrpLogsDir) 'frpc.pid' }
+
+function Get-FrpLogMaxDays {
+    # frpc rotates its own log daily and keeps this many days.
+    if ($env:FRP_WINDOWS_LOG_MAX_DAYS -match '^[0-9]+$') {
+        $v = [int]$env:FRP_WINDOWS_LOG_MAX_DAYS
+        if ($v -ge 1) { return $v }
+    }
+    return 7
+}
+
+function Get-FrpLogMaxBytes {
+    # Product-side ceiling so a fast-failing frpc cannot fill the disk between
+    # daily rotations. The tail is preserved when the ceiling is exceeded.
+    if ($env:FRP_WINDOWS_LOG_MAX_BYTES -match '^[0-9]+$') {
+        $v = [int64]$env:FRP_WINDOWS_LOG_MAX_BYTES
+        if ($v -ge 4096) { return $v }
+    }
+    return 8388608
+}
 function Get-FrpVersionPath { Join-Path (Get-FrpWindowsRoot) 'version' }
 
 function Get-FrpProjectVersion {
@@ -76,7 +95,7 @@ function Get-FrpProjectVersion {
         }
     } catch { }
     # Packaged fallback must track canonical VERSION (do not hardcode stale releases).
-    return '2.3.0'
+    return '2.4.0'
 }
 
 function Get-FrpUpstreamVersion {

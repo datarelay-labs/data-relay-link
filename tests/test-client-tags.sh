@@ -10,8 +10,8 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy" "$TREE/var/lib/frp-auto-deploy"
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY'
+mkdir -p "$TREE/etc/drlink" "$TREE/var/lib/drlink"
+python3 - "$TREE/etc/drlink/config.json" "$TREE/var/lib/drlink/registry.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -47,13 +47,13 @@ reg_path.write_text(json.dumps({
     },
 }, indent=2) + '\n')
 PY
-chmod 600 "$TREE/var/lib/frp-auto-deploy/registry.json"
+chmod 600 "$TREE/var/lib/drlink/registry.json"
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 
 python3 "$ROOT/tools/frp-client-set" aaaaaaaa \
   --tag customer=lotte --tag site=seoul --tag role=dp --tag environment=production \
   >"$WORKDIR/set.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "tag update mutated protected fields"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "tag update mutated protected fields"
 import json
 import sys
 from pathlib import Path
@@ -85,7 +85,7 @@ grep -q 'multiple --tag filters use AND' "$WORKDIR/help.out" || fail "AND semant
 pass "TAG_FILTER_AND_SEMANTICS"
 
 python3 "$ROOT/tools/frp-client-set" aaaaaaaa --remove-tag site >"$WORKDIR/remove.out"
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "tag removal failed"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "tag removal failed"
 import json
 import sys
 from pathlib import Path

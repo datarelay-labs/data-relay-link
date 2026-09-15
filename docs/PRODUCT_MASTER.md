@@ -1,15 +1,17 @@
-# FRP Auto Deploy — Product Master Document
+# Data Relay Link — Product Master Document
 
-> **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap  
-> **Repository:** `xdr-labs/frp-auto-deploy`
-> **Canonical repository path:** `docs/PRODUCT_MASTER.md`  
-> **Document status:** Master / Living Document  
-> **Last updated:** 2026-09-09
-> **Current release:** Project `2.3.0` / FRP `0.71.0` — **FINAL AUDIT CLOSURE** (recreate/move premature `v2.3.0` tag on final HEAD)
-> **Release commit:** _(set when the final `v2.3.0` tag is moved/recreated)_
+> **Document role:** Product Charter + Product Specification + Architecture Principles + Roadmap
+> **Repository:** `datarelay-labs/data-relay-link`
+> **Canonical repository path:** `docs/PRODUCT_MASTER.md`
+> **Document status:** Master / Living Document
+> **Last updated:** 2026-09-13
+> **Current release:** Project `2.4.0` / FRP `0.71.0` — release candidate (historical `v2.3.1` / `v2.3.0` / `v2.2.x` untouched)
+> **Release commit:** _(set when the `v2.4.0` tag is created)_
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
-> **Primary management interface:** `sudo frpctl`
+> **Primary management interface:** `sudo drlink` (canonical CLI; catalog-owned)
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen
+> **Controlled Egress default listen port:** `6102` (outside published service pool `6000–6098`)
+> **Fixed TCP Egress listen pool:** `6200–6299`
 
 ## 2026-09-07 Consolidation Notice
 
@@ -28,18 +30,20 @@
 - 목표 규모는 **1~50 Clients**, 특히 few to a few dozen 중심이다.
 - 대형 fleet orchestration, Web UI, Database, HA orchestrator는 현재 제품 목표가 아니다.
 - official FRP만 사용하고 exact version으로 pin한다.
-- 현재 준비 중인 release는 `v2.3.0` FINAL AUDIT CLOSURE이며 pinned FRP는 `0.71.0`이다. 조기 GitHub `v2.3.0` tag는 final audit HEAD로 재생성/이동한다.
-- `v2.2.0`은 FRP `0.71.0`을 처음 stable로 채택한 historical release이며, `v2.2.1`은 그 이후 hardening patch release다. `v2.3.0`은 Access Control Pack, Target Health Check, Support Bundle, Service Profiles를 포함한 feature-complete release다.
+- **현재 준비 중인 release는 `v2.4.0` RC**이며 pinned FRP는 `0.71.0`이다. Fixed TCP Egress, Explain/Recipes, evidence integrity, SBOM/attestation이 이 line의 핵심 추가분이다. `v2.3.1`은 Controlled Egress HTTP/HTTPS + resource-first `drlink` CLI의 historical RC line이다.
+- `v2.3.0`은 Access Control Pack, Target Health Check, Support Bundle, Service Profiles를 포함한 **historical feature-complete inbound line**이다 (FINAL AUDIT CLOSURE 기록은 §50 / §71.1에 historical로 유지).
+- `v2.2.0`은 FRP `0.71.0`을 처음 stable로 채택한 historical release이며, `v2.2.1`은 그 이후 hardening patch release다.
 - Zero-Touch Short URL은 Option B(operator-owned reverse proxy + optional `bootstrap_hostname`) 모델로 `v2.1.3`에 stable 도입됐다.
 - `public_hostname`은 published service용 optional user-facing alias이며 control identity가 아니다.
 - Group은 몇십 대 관리를 위한 **Simple Manual Group + multiple membership + Tags + basic filters** 범위가 기준이다.
-- macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.0` validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
+- Canonical operator CLI는 **canonical** (`drlink <action> <resource> …`). 구 resource-first (`client list`, `enrollment create`, …)는 hidden compatibility alias로만 유지한다.
+- macOS, Windows, Rocky 8/9, Amazon Linux 2023 등은 `v2.3.x` validation matrix에 포함된다. Amazon Linux 2와 PowerShell 7은 실제 validation level을 별도로 구분한다.
 
 ---
 
 # 1. 문서의 목적
 
-이 문서는 **FRP Auto Deploy 프로젝트의 최상위 제품 기준 문서**다.
+이 문서는 **Data Relay Link 프로젝트의 최상위 제품 기준 문서**다.
 
 다음 질문에 대한 최종 답은 이 문서를 기준으로 한다.
 
@@ -74,25 +78,43 @@ README, CLI Reference, Security 문서, Deployment Mode 문서 등 세부 문서
 
 ## 2.1 제품명
 
-**FRP Auto Deploy**
+**Data Relay Link**
+
+Product family: **Data Relay**
+Primary CLI: `drlink`
+Upstream inbound relay engine: official `fatedier/frp` (not the product identity)
+
+Broad source rename is deferred for internals. Operators use `sudo drlink`.
 
 ---
 
 ## 2.2 제품 정의
 
-FRP Auto Deploy는 공식 `fatedier/frp`를 수정하거나 fork하지 않고 그 위에 구축하는:
+Data Relay는 폐쇄망/제한망을 위한 경량 보안 연결 게이트웨이다.
+
+```text
+Data Relay
+  ├── Secure Remote Access  (official FRP — inbound)
+  └── Controlled Egress     (agentless HTTP/HTTPS forward proxy — outbound)
+```
+
+> **필요한 연결만 안전하게 열어주는 폐쇄망/제한망용 경량 연결 게이트웨이**
+
+Data Relay Link라는 기술 명칭은 공식 `fatedier/frp`를 수정하거나 fork하지 않고 그 위에 구축하는:
 
 > **Lightweight FRP Deployment & Operations Layer**
 
-이다.
+를 가리키며, 현재는 Data Relay의 **Secure Remote Access** 기둥으로 유지된다.
 
-보다 사용자 관점에서 정의하면:
+보다 사용자 관점에서 inbound 기능을 정의하면:
 
 > **방화벽 또는 NAT 뒤에 있는 서버와 서비스를 VPN이나 복잡한 NAT 설정 없이 외부에서 안전하고 쉽게 연결하고 관리하기 위한 Zero-Touch Remote Access Management 도구**
 
 이다.
 
-FRP 자체가 터널링 엔진이라면 FRP Auto Deploy는 그 위에서 다음을 담당한다.
+Outbound Controlled Egress는 보호 호스트에 agent를 설치하지 않고 `HTTP_PROXY` / `HTTPS_PROXY`만으로 승인된 FQDN만 허용한다. 기본 listen 포트는 **`6102`**(published service pool `6000–6098` 밖)이다. Destination은 명시적 `--protocol http|https`를 요구하며, wildcard는 Public Suffix List로 안전성을 검사한다. 상세는 `docs/CONTROLLED_EGRESS.md`, `docs/SECURITY.md`, `docs/DATA_RELAY_ROADMAP.md`.
+
+FRP 자체가 터널링 엔진이라면 Data Relay Link(inbound 운영 계층)는 그 위에서 다음을 담당한다.
 
 - 설치
 - 초기 등록
@@ -117,7 +139,7 @@ Official FRP
 =
 Tunnel Engine
 
-FRP Auto Deploy
+Data Relay Link
 =
 Deployment
 + Enrollment
@@ -133,7 +155,7 @@ Deployment
 
 ## 2.3 Target Operating Scale — 2026-09-04 Current Direction
 
-FRP Auto Deploy는 수백~수천 대를 운영하는 Fleet Management 제품을 목표로 하지 않는다.
+Data Relay Link는 수백~수천 대를 운영하는 Fleet Management 제품을 목표로 하지 않는다.
 
 현실적인 target 규모는 다음과 같다.
 
@@ -209,7 +231,7 @@ NAT / Port Forwarding
 
 # 4. 제품이 제공하는 해결 방식
 
-FRP Auto Deploy는 공인 IP를 가진 하나의 FRP Server와 방화벽 뒤 Client 사이에 outbound tunnel을 생성한다.
+Data Relay Link는 공인 IP를 가진 하나의 FRP Server와 방화벽 뒤 Client 사이에 outbound tunnel을 생성한다.
 
 ```text
                      Internet
@@ -217,7 +239,7 @@ FRP Auto Deploy는 공인 IP를 가진 하나의 FRP Server와 방화벽 뒤 Cli
                          │
                          ▼
                 ┌────────────────┐
-                │ FRP Auto Deploy│
+                │ Data Relay Link│
                 │     Server     │
                 │   Public IP    │
                 └───────┬────────┘
@@ -252,12 +274,12 @@ Client는 Server로 outbound connection을 생성한다.
 
 그리고:
 
-> **Client는 한 줄로 연결하고 `frpctl` 하나로 관리한다.**
+> **Client는 한 줄로 연결하고 `drlink` 하나로 관리한다.**
 
 운영자는 이후 대부분의 작업을:
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 에서 수행한다.
@@ -304,7 +326,7 @@ powershell.exe -File
 
 # 6. Product Principles
 
-FRP Auto Deploy의 모든 기능은 다음 원칙을 따라야 한다.
+Data Relay Link의 모든 기능은 다음 원칙을 따라야 한다.
 
 ## 6.1 Lightweight First
 
@@ -331,7 +353,7 @@ CLI
 제품의 기본 관리 인터페이스는:
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 이다.
@@ -381,7 +403,7 @@ fatedier/frp
     ↓
 official frps / frpc
     ↓
-FRP Auto Deploy management layer
+Data Relay Link management layer
 ```
 
 FRP 버전을 자동으로 최신 버전으로 따라가지 않는다.
@@ -402,9 +424,16 @@ Validated
 
 ```text
 Current prepared FRP          = 0.71.0
-Current project version       = 2.3.0 (FINAL AUDIT CLOSURE)
+Current project version       = 2.4.0 (FINAL PRODUCT CLOSURE)
+Historical v2.3.0 project     = 2.3.0 (FINAL AUDIT CLOSURE, historical)
 Historical v2.1.3 FRP        = 0.70.1
 ```
+
+Current project version: **2.4.0**
+Current pinned FRP version: **v0.71.0**
+
+이 값들은 `VERSION`이 single source of truth이며
+`./scripts/check-version-consistency.sh`가 문서와의 일치를 자동 검증한다.
 
 향후 FRP bump도 exact tested version으로 pin하며 자동으로 latest를 추적하지 않는다.
 
@@ -653,7 +682,7 @@ HTTP application을 TCP 그대로 전달한다.
 
 HTTPS 역시 TCP passthrough다.
 
-Application TLS를 FRP Auto Deploy가 종료하지 않는다.
+Application TLS를 Data Relay Link가 종료하지 않는다.
 
 ---
 
@@ -781,14 +810,27 @@ Public port pool 반환
 
 ```text
 서비스 일시 중지
-Port 유지
+Port 유지 (reserved)
 Identity 유지
 ```
 
-## Release
+## Release service
 
 ```text
-Port reservation 반환
+client release <CLIENT-ID> <SERVICE-ID>
+한 Service의 Port reservation만 반환
+Client registry record / management identity 유지
+(남은 Service가 없으면 management-only Client로 유지)
+```
+
+## Release client
+
+```text
+client release <CLIENT-ID>
+Client registry record 제거
+management identity 제거
+모든 Service reservation / public port 반환
+원격 호스트 삭제 없음 / 로컬 소프트웨어 uninstall 없음
 ```
 
 ## Revoke
@@ -796,12 +838,14 @@ Port reservation 반환
 ```text
 Client management identity 차단
 Port reservation 유지
+Client registry record 유지
 ```
 
 따라서:
 
 ```text
 disable != release
+unset client != release client
 release != revoke
 revoke != delete
 ```
@@ -823,7 +867,7 @@ Client uninstall 역시 Server reservation을 자동으로 release하지 않는�
 ```text
 Server
   ↓
-create enrollment / Zero-Touch profile
+set enrollment / Zero-Touch profile
   ↓
 Short-lived bootstrap ticket
   ↓
@@ -879,7 +923,7 @@ ZERO_TOUCH_SHORT_URL_TRUST_MODEL
 의미:
 
 - operator가 DNS, public certificate, reverse proxy를 관리한다.
-- FRP Auto Deploy는 `bootstrap_hostname`을 소비한다.
+- Data Relay Link는 `bootstrap_hostname`을 소비한다.
 - private CA 기반 management trust는 유지한다.
 - `GET /i/<ticket>` 자체는 ticket을 consume/bind하지 않으며, 실제 binding은 secure redeem 단계에서 수행한다.
 - `bootstrap_hostname`이 없으면 transitional fallback을 유지한다.
@@ -998,7 +1042,7 @@ Internet
 Firewall / NAT
    | DNAT
 10.10.10.10
-FRP Auto Deploy Server
+Data Relay Link Server
 ```
 
 권장 방식은 service port의 의미를 유지하기 위해 1:1 port mapping을 사용하는 것이다.
@@ -1013,13 +1057,13 @@ Public 6001 -> Internal 6001
 Public 16001 -> Internal 6001
 ```
 
-FRP Auto Deploy의 persistent public-port reservation과 실제 Internet endpoint의 의미가 달라질 수 있으므로 현재 product model에서는 권장하지 않는다.
+Data Relay Link의 persistent public-port reservation과 실제 Internet endpoint의 의미가 달라질 수 있으므로 현재 product model에서는 권장하지 않는다.
 
 ---
 
 # 17. Network Responsibility Boundary
 
-FRP Auto Deploy가 자동으로 변경하지 않는 것:
+Data Relay Link가 자동으로 변경하지 않는 것:
 
 - OCI Security List
 - AWS Security Group
@@ -1036,7 +1080,7 @@ FRP Auto Deploy가 자동으로 변경하지 않는 것:
 
 ## 17.1 DNS Provider Responsibility
 
-FRP Auto Deploy는 DNS Provider가 아니다. 다음을 자동 수행하지 않는다.
+Data Relay Link는 DNS Provider가 아니다. 다음을 자동 수행하지 않는다.
 
 ```text
 Route53 API
@@ -1046,7 +1090,7 @@ DDNS lifecycle
 ACME / Let's Encrypt lifecycle
 ```
 
-관리자가 외부 DNS에서 필요한 record를 구성하고 FRP Auto Deploy는 hostname을 **소비하고 표시**한다.
+관리자가 외부 DNS에서 필요한 record를 구성하고 Data Relay Link는 hostname을 **소비하고 표시**한다.
 
 ## 17.2 bootstrap_hostname과 public_hostname은 다르다
 
@@ -1107,7 +1151,7 @@ ssh -p 6000 admin@203.0.113.10
 
 ## 17.5 Hairpin NAT / Split DNS
 
-같은 내부 LAN에서 public hostname을 사용해 같은 firewall의 public IP로 되돌아가는 접속은 firewall의 hairpin NAT 지원 여부에 영향을 받을 수 있다. 이는 FRP Auto Deploy 자체 bug로 보지 않는다.
+같은 내부 LAN에서 public hostname을 사용해 같은 firewall의 public IP로 되돌아가는 접속은 firewall의 hairpin NAT 지원 여부에 영향을 받을 수 있다. 이는 Data Relay Link 자체 bug로 보지 않는다.
 
 필요 시:
 
@@ -1127,26 +1171,141 @@ NAT topology는 지원할 수 있으나 network topology이며 deployment mode�
 
 # 18. CLI Product Specification
 
-CLI의 canonical grammar:
+## 18.0 Canonical CLI Information Architecture
+
+Data Relay Link exposes **two** operator surfaces. They must not be collapsed
+into one flat list of parser verbs.
+
+### Direct expert grammar (scriptable)
 
 ```text
-<verb> <resource> [target] [property] [value]
+drlink <action> <resource> [target] [value]
 ```
 
-예:
+Examples: `show clients`, `set client`, `unset enrollment <ID>`.
+
+### Interactive guided navigation (human)
+
+Root navigation is organized by **user task domain**, not by action verbs:
+
+```text
+Server / dual-role root:
+  Clients
+  Services
+  Internet Access
+  System
+  Help
+  Exit
+
+Client-only root:
+  Services
+  System
+  Help
+  Exit
+```
+
+Domain placement (normative):
+
+```text
+Groups            → under Clients
+Service Profiles  → under Services
+Access Rules      → under Services
+Internet Access   = beginner-facing navigation name for Controlled Egress
+```
+
+Product/architecture documents may still use **Secure Remote Access** and
+**Controlled Egress** as capability names. Those names are **not** interactive
+root menu labels.
+
+Bare `?` lists executable public roots (`show` / `set` / `unset` / `test` /
+`system` / `menu` / `help` / `exit`). Bare `help` explains domains and
+concepts. The complete expert command reference lives under `help commands`.
+`menu` opens the guided domain UI. Resource-first forms remain hidden
+compatibility aliases (`help legacy`).
+
+Do not confuse:
+
+```text
+?     = executable command discovery
+help  = conceptual / domain help
+menu  = guided numbered UI
+```
+
+## 18.1 Current canonical grammar (v2.4.0) — canonical
+
+Canonical operator grammar:
+
+```text
+<action> <resource> [target] [value]
+```
+
+Single source of truth: `lib/frp_cli_catalog.py`. Root help, resource help,
+context `?`, Tab completion, guided menu, and “Did you mean” suggestions are
+all derived from that catalog. Hidden compatibility aliases exist for scripts
+but are not advertised.
+
+The guided menu uses `NAVIGATION_TREE` (task domains). `COMMANDS` remains the
+canonical scriptable grammar. They are related but not the same structure.
+
+Examples (current):
 
 ```text
 show clients
-
 show client 24cd7856
-
 set client 24cd7856 label branch-a
 
-create enrollment
+set client
+set enrollment
+unset client 24cd7856 trust
+unset client 24cd7856 service ssh
+unset client 24cd7856
+unset enrollment 0011223344556677
 
-revoke client 24cd7856
+show groups
+set client 24cd7856 group edge
+set group edge description "Edge sites"
 
-release service 24cd7856 ssh
+show internet-profiles
+set internet-profile vendor-api
+set internet-source vendor-api 10.0.0.0/24
+set internet-destination vendor-api api.example.com 443 https
+test internet 10.0.0.5 api.example.com 443 https
+set internet-profile vendor-api enabled
+
+system diagnostics
+system update product
+system update engine
+system update check-engine
+```
+
+Safe Internet Access workflow (new profiles are always DISABLED):
+
+```text
+set internet-profile <name>
+→ set internet-source …
+→ set internet-destination …
+→ test internet …
+→ set internet-profile <name> enabled
+```
+
+## 18.2 Historical — resource-first grammar (hidden compatibility only)
+
+> **Status: HISTORICAL / COMPATIBILITY.** Not the current advertised CLI.
+> Resource-first forms still run for scripts and muscle memory (`help legacy`).
+
+```text
+<resource> <action> [target] [property] [value]
+```
+
+예 (hidden alias):
+
+```text
+client list
+client show 24cd7856
+client set 24cd7856 label branch-a
+enrollment create
+client revoke 24cd7856
+client release 24cd7856 ssh
 ```
 
 ---
@@ -1156,7 +1315,7 @@ release service 24cd7856 ssh
 ## Persistent REPL
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 로 persistent CLI에 진입한다.
@@ -1282,7 +1441,7 @@ http://access.example.com:6001
 http://203.0.113.10:6001          # fallback
 ```
 
-HTTPS는 TCP passthrough이므로 target Web Server certificate가 해당 hostname을 cover해야 정상적인 browser certificate validation이 가능하다. FRP Auto Deploy가 application TLS certificate lifecycle을 자동 관리하지 않는다.
+HTTPS는 TCP passthrough이므로 target Web Server certificate가 해당 hostname을 cover해야 정상적인 browser certificate validation이 가능하다. Data Relay Link가 application TLS certificate lifecycle을 자동 관리하지 않는다.
 
 ---
 
@@ -1490,34 +1649,41 @@ show clients --status offline
 
 # 27. Group CLI
 
-목표 CLI:
+## 27.1 Current canonical (v2.3.1)
+
+```text
+group list
+group show <GROUP>
+group create <NAME>
+group set <GROUP> name <VALUE>
+group set <GROUP> description <VALUE>
+group delete <GROUP>
+group add-client <GROUP> <CLIENT>
+group remove-client <GROUP> <CLIENT>
+```
+
+`group rename` / `group add-member` / `group remove-member`는 hidden compatibility alias다.
+
+Related views:
+
+```text
+show clients --group <GROUP>
+show client <CLIENT-ID> groups
+```
+
+## 27.2 Historical verb-first (compatibility)
+
+> **Status: HISTORICAL / COMPATIBILITY.**
 
 ```text
 show groups
-
 show group customer-acme
-
-show group customer-acme clients
-
-show client 24cd7856 groups
-
 show clients --group customer-acme
-```
-
-Manual Group:
-
-```text
-create group customer-acme
-
+set group customer-acme
 set group customer-acme description "ACME customer systems"
-```
-
-Membership:
-
-```text
 add client 24cd7856 group customer-acme
-
 remove client 24cd7856 group customer-acme
+rename group <GROUP> <name>
 ```
 
 ---
@@ -1531,7 +1697,7 @@ Dynamic Group CLI는 현재 제품의 필수 구현 요구사항이 아니다.
 장기 후보 예:
 
 ```text
-create group prod-seoul \
+set group prod-seoul \
   --dynamic \
   --match-tag env=prod \
   --match-tag site=seoul
@@ -1593,7 +1759,7 @@ Manual Group CRUD
 향후 필요 시:
 
 ```text
-create enrollment --group customer-acme
+set enrollment --group customer-acme
 ```
 
 같은 server-owned assignment를 추가할 수 있다. Client가 privileged Group metadata를 self-assign해서는 안 된다.
@@ -1664,7 +1830,8 @@ show group ACME
 향후 반복 수요가 확인된 제한적 read-only/safe bulk operation 후보:
 
 ```text
-doctor clients --group customer-acme
+# future candidate (not current public CLI)
+# doctor clients --group customer-acme
 show services --group customer-acme
 ```
 
@@ -1847,7 +2014,7 @@ archive validation
 snapshot
 restore
 service restart
-doctor
+system diagnostics
 rollback on failure
 ```
 
@@ -1857,7 +2024,7 @@ rollback on failure
 
 # 40. Doctor
 
-`frpctl doctor`는 대표적인 문제 진단 도구다.
+`drlink system diagnostics`는 대표적인 문제 진단 도구다 (internal entrypoint may still be named doctor/frpctl).
 
 중요한 원칙:
 
@@ -1878,6 +2045,14 @@ rollback on failure
 - single-443 frontend
 - TLS 문제
 - port state
+- Controlled Egress policy / listen (`6102`) / gateway unit
+
+Controlled Egress 점검 후 운영자가 볼 권장 명령:
+
+```text
+drlink egress list
+drlink egress status
+```
 
 향후 Group이 추가되어도 Doctor의 기본 동작은 state를 변경하지 않는다.
 
@@ -1888,7 +2063,7 @@ rollback on failure
 Project update와 upstream FRP update를 구분한다.
 
 ```text
-update project
+system update product
 update frp
 ```
 
@@ -2262,7 +2437,7 @@ OCI Free Tier
 +
 Reserved Public IP
 +
-FRP Auto Deploy Server
+Data Relay Link Server
 ```
 
 장점:
@@ -2280,7 +2455,7 @@ FRP Auto Deploy Server
 - public IP
 - routing
 
-은 FRP Auto Deploy가 자동 관리하지 않는다.
+은 Data Relay Link가 자동 관리하지 않는다.
 
 OCI deployment는 제품의 reference environment이지 제품 자체의 필수 구성요소는 아니다.
 
@@ -2299,7 +2474,7 @@ OCI deployment는 제품의 reference environment이지 제품 자체의 필수 
 관리자가 대부분의 일상 작업을:
 
 ```text
-sudo frpctl
+sudo drlink
 ```
 
 하나로 수행할 수 있다.
@@ -2356,18 +2531,71 @@ Bulk Operation
 
 # 50. Current Product Status
 
-## 50.1 Current release — v2.3.0 FINAL AUDIT CLOSURE
+## 50.0 Current release — v2.4.0 RC (Fixed TCP Egress + evidence freeze)
 
-현재 준비 중인 release (premature GitHub `v2.3.0` tag는 final audit HEAD로 재생성/이동):
+현재 준비 중인 release:
+
+```text
+Project:              2.4.0
+Tag:                  v2.4.0 (create on final audit HEAD — not yet published)
+FRP:                  0.71.0
+Feature focus:        Fixed TCP Egress + Explain/Recipes + release evidence integrity
+Release qualification: Double Full Real E2E on exact final HEAD
+Current candidate Real E2E: REQUIRED / PENDING FINAL SAME-HEAD VALIDATION
+FEATURE_FREEZE:       ACTIVE after this phase PASS
+```
+
+`v2.4.0` 주요 사항 (`v2.3.1` capability 유지 + 추가):
+
+- Fixed TCP Egress (destination-pinned listeners **6200–6299**; schema v3 `protocol=tcp`)
+- `drlink egress explain` / Fixed TCP explain (preview; no live connect; no mutation)
+- Small egress recipe framework (apply never auto-enables)
+- Production-realistic performance evidence: canonical `perf/baseline.json` required for PASS
+- Short URL Real E2E is a hard release gate
+- SPDX SBOM generator + GitHub Artifact Attestation workflow
+- Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+- Action-first `drlink` operator grammar (verb → resource → target → property)
+
+Historical `v2.3.1` / `v2.3.0` / `v2.2.x` tags remain immutable. Historical Real E2E
+PASS evidence for those tags is **not** same-HEAD evidence for this candidate.
+
+## 50.0a Historical — v2.3.1 RC (Controlled Egress + resource-first CLI)
+
+> **Status: HISTORICAL.** Superseded as *current* prepared release by §50.0 `v2.4.0` RC.
+
+```text
+Project:              2.3.1
+Tag:                  v2.3.1
+FRP:                  0.71.0
+Feature focus:        Controlled Egress + CLI catalog / resource-first hardening
+```
+
+`v2.3.1` 주요 사항 (inbound `v2.3.0` capability 유지 + 추가):
+
+- Controlled Egress agentless HTTP/HTTPS forward proxy (default listen **6102**)
+- Protocol-aware destinations (`--protocol http|https`); HTTP absolute-form vs HTTPS CONNECT+SNI
+- Public Suffix List wildcard safety (`lib/frp_public_suffix.py` + pinned `lib/data/public_suffix_list.dat`)
+- Resource-first `drlink` CLI; `lib/frp_cli_catalog.py` single-source discovery
+- Create-disabled egress profiles; safe workflow create → source → destination+protocol → test → enable
+- Management-only / platform status semantics for operator honesty
+- Shared `frp_machine_id` validation and bounded concurrency helpers for server daemons
+
+## 50.1 Historical — v2.3.0 FINAL AUDIT CLOSURE
+
+> **Status: HISTORICAL.** Inbound feature-complete line under FINAL AUDIT CLOSURE.
+> Superseded as *current* prepared release by §50.0 `v2.4.0` RC.
 
 ```text
 Project:              2.3.0
-Tag:                  v2.3.0 (recreate/move on final HEAD)
+Tag:                  v2.3.0 (published; immutable, left as published)
 FRP:                  0.71.0
-Feature freeze:       ACTIVE
-Product feature complete: YES
-FINAL_AUDIT_CLOSURE:  IN PROGRESS
+Feature freeze:       ACTIVE (for that line)
+Product feature complete: YES (inbound pack)
+FINAL_AUDIT_CLOSURE:  recorded for that line
 ```
+
+`v2.3.0`은 published 시점의 commit에 그대로 고정된다. Audit-closure 이후의
+변경분은 tag를 옮기지 않고 후속 version tag (`v2.3.1`, `v2.4.0`)로 제공한다.
 
 `v2.3.0` 주요 사항:
 
@@ -2491,17 +2719,20 @@ UNRESOLVED_RELEASE_BLOCKERS=0
 FEATURE_FREEZE_ACTIVE=YES
 ```
 
-Final tag move/recreate 이후 code/runtime 변경이 필요하면 이미 확정된 tag를 움직이지 않고 새로운 patch release를 사용한다. Historical `v2.2.1` 및 이전 tag는 그대로 immutable이다.
+Release 이후 code/runtime 변경이 필요하면 이미 published된 tag를 움직이지 않고 새로운 patch release를 사용한다. Historical `v2.2.1` 및 이전 tag는 그대로 immutable이다.
 
 ---
 
 # 51. Main / Development State
 
-현재 release line은 `v2.3.0` FINAL AUDIT CLOSURE로 준비 중이며, premature GitHub tag를 final HEAD로 맞춘 뒤에야 field install의 최종 기준으로 취급한다.
+현재 준비 중인 release line은 `v2.4.0` FINAL PRODUCT CLOSURE이며 pinned FRP는
+`0.71.0`이다. Published `v2.3.0` tag는 published commit에 immutable하게 남고,
+closure 결과물은 새 `v2.4.0` tag로 published된다.
 
 ```text
-Prepared release = v2.3.0 FINAL AUDIT CLOSURE
+Prepared release = v2.4.0 FINAL PRODUCT CLOSURE
 Pinned FRP       = 0.71.0
+Historical line  = v2.3.0 FINAL AUDIT CLOSURE (published; immutable)
 ```
 
 `v2.3.0`에 포함된 주요 capability:
@@ -2510,7 +2741,7 @@ Pinned FRP       = 0.71.0
 - Target Health Check (CLIENT / TUNNEL / TARGET)
 - Support Bundle (sanitized diagnostics)
 - Service Profiles (server-owned creation templates)
-- canonical `frpctl` grammar / REPL hardening
+- canonical `drlink` canonical grammar / REPL hardening (`frpctl` remains the internal binary name)
 - GNU Readline + macOS libedit completion portability
 - Client ID selector hardening
 - `public_hostname` alias
@@ -2610,7 +2841,7 @@ branch 또는 development 작업 중.
 
 목표:
 
-> 일상 운영을 `frpctl` 하나로 통합한다.
+> 일상 운영을 `drlink` 하나로 통합한다.
 
 Stable/core:
 
@@ -2716,7 +2947,8 @@ canary/staged rollout
 후보:
 
 ```text
-doctor clients --group ...
+# future candidate (not current public CLI)
+# doctor clients --group ...
 show services --group ...
 ```
 
@@ -3010,7 +3242,8 @@ Dynamic Group tests는 해당 기능이 실제 scope에 들어올 때만 require
 macOS CI에는 실제 readline backend에서 최소:
 
 ```text
-statu<Tab> → status
+sho<Tab> → show
+show statu<Tab> → show status
 ```
 
 같은 PTY completion regression을 포함한다.
@@ -3113,126 +3346,126 @@ Impact:
 
 ## 2026-08 — Official FRP Layer
 
-**Decision**  
+**Decision**
 FRP를 fork하지 않고 official binary 위에 운영 layer를 제공한다.
 
-**Reason**  
+**Reason**
 Upstream 호환성과 유지보수성을 유지한다.
 
 ---
 
 ## 2026-08 — CLI First
 
-**Decision**  
-Web UI/DB보다 `sudo frpctl`을 제품 중심 interface로 유지한다.
+**Decision**
+Web UI/DB보다 `sudo drlink`을 제품 중심 interface로 유지한다.
 
 ---
 
 ## 2026-08 — CLIENT ID First
 
-**Decision**  
+**Decision**
 hostname/IP 대신 immutable CLIENT ID를 canonical identity로 사용한다.
 
 ---
 
 ## 2026-08 — Zero-Touch + Manual Enrollment
 
-**Decision**  
+**Decision**
 Zero-Touch를 기본 UX로 제공하되 Manual Enrollment도 유지한다.
 
 ---
 
 ## 2026-08 — Multi-Service Client / LAN Gateway
 
-**Decision**  
+**Decision**
 한 Client는 여러 TCP service를 publish할 수 있고 Client가 접근 가능한 LAN target도 service로 제공할 수 있다.
 
 ---
 
 ## 2026-08 — Enterprise single-443
 
-**Decision**  
+**Decision**
 기업 firewall 환경을 위해 HTTPS enrollment와 FRP WSS control을 single TCP/443 mode로 제공할 수 있다.
 
 ---
 
 ## 2026-09 — Few-to-Few-Dozen Product Scale
 
-**Decision**  
+**Decision**
 현실적인 target을 1~50 Clients로 명확히 한다.
 
-**Impact**  
+**Impact**
 Fleet orchestration, nested groups, broad bulk mutation, canary framework는 현재 scope가 아니다.
 
 ---
 
 ## 2026-09 — Public Hostname as Optional User-Facing Alias
 
-**Decision**  
+**Decision**
 Public IP는 infrastructure/control primary이며 `public_hostname`은 published-service용 optional alias다.
 
 ---
 
 ## 2026-09 — Simple Group Scope
 
-**Decision**  
+**Decision**
 Manual Group + multiple membership + Tags + basic filters를 current Group scope로 한다.
 
 ---
 
 ## 2026-09 — Zero-Touch Short URL Option B
 
-**Decision**  
+**Decision**
 `v2.1.3`에서 optional `bootstrap_hostname` + operator-owned reverse proxy 기반 Short URL을 stable로 채택한다.
 
-**Impact**  
+**Impact**
 DNS/TLS/reverse proxy lifecycle은 operator-owned이며 private CA management trust를 유지한다.
 
 ---
 
 ## 2026-09 — Windows Bootstrap Hash-Before-Execute
 
-**Decision**  
+**Decision**
 Windows production Zero-Touch에서 `irm | iex`를 사용하지 않는다.
 
-**Impact**  
+**Impact**
 Short URL UX에서도 download → SHA256 verify → `powershell.exe -File` 순서를 지킨다.
 
 ---
 
 ## 2026-09 — Double Full Real E2E Release Gate
 
-**Decision**  
+**Decision**
 최종 candidate는 동일 exact HEAD에서 전체 Real E2E를 2회 통과해야 한다.
 
-**Impact**  
+**Impact**
 중간 code change 발생 시 pass counter를 0으로 reset한다.
 
 ---
 
 ## 2026-09 — FRP 0.71.0 Stable Adoption
 
-**Decision**  
+**Decision**
 `v2.2.0`에서 official FRP `0.71.0`을 exact pin으로 stable 채택했고, `v2.2.1`에서도 동일 pin을 유지한다. 향후 bump는 별도 compatibility qualification을 요구한다.
 
 ---
 
 ## 2026-09 — Single Canonical Product Master
 
-**Decision**  
+**Decision**
 앞으로 Product Master는 repository의 `docs/PRODUCT_MASTER.md` 하나만 canonical living document로 관리한다.
 
-**Reason**  
+**Reason**
 복수 파생본으로 인한 상태 drift와 문서 corruption을 방지한다.
 
 ---
 
 ## 2026-09 — v2.2.1 Post-v2.2.0 Hardening Release
 
-**Decision**  
+**Decision**
 이미 published 된 `v2.2.0`을 rewrite/retag하지 않고 hardening 변경을 `v2.2.1` patch release로 제공한다.
 
-**Impact**  
+**Impact**
 `v2.2.1`은 FRP `0.71.0` pin을 유지하며 macOS libedit completion, FRP compatibility gate fail-closed, public metadata/docs hardening 및 correctness fixes를 포함한다. Double Full Real E2E를 동일 exact candidate HEAD에서 통과했다.
 
 ---
@@ -3256,7 +3489,7 @@ Dynamic Group, broad Safe Fleet Operations, Controlled Rollout, Web UI/DB/HA 등
 
 # 69. 제품의 장기 모습
 
-FRP Auto Deploy의 목표는 거대한 Remote Management Platform이 아니다.
+Data Relay Link의 목표는 거대한 Remote Management Platform이 아니다.
 
 장기적인 모습은 다음과 같다.
 
@@ -3265,7 +3498,7 @@ FRP Auto Deploy의 목표는 거대한 Remote Management Platform이 아니다.
                        │
                        ▼
              ┌───────────────────┐
-             │ FRP Auto Deploy   │
+             │ Data Relay Link   │
              │ Server            │
              └─────────┬─────────┘
                        │
@@ -3279,7 +3512,7 @@ FRP Auto Deploy의 목표는 거대한 Remote Management Platform이 아니다.
 Management
 ────────────────────────────────────
 
-sudo frpctl
+sudo drlink
 
 Clients
 Services
@@ -3301,7 +3534,8 @@ show clients
 show groups
 show clients --group customer-acme
 show clients --tag env=prod
-doctor clients --group production
+# future candidate (not current public CLI)
+# doctor clients --group production
 ```
 
 같은 단순한 command로 관리한다.
@@ -3313,7 +3547,7 @@ doctor clients --group production
 
 # 70. 최종 Product Vision
 
-FRP Auto Deploy가 궁극적으로 제공해야 하는 경험은 다음과 같다.
+Data Relay Link가 궁극적으로 제공해야 하는 경험은 다음과 같다.
 
 기존 방식:
 
@@ -3328,7 +3562,7 @@ Manual Port Tracking
 Manual Client Tracking
 ```
 
-FRP Auto Deploy:
+Data Relay Link:
 
 ```text
 Install Server Once
@@ -3341,7 +3575,7 @@ Automatic Secure Enrollment
         ↓
 Publish Required Services
         ↓
-Manage Everything with frpctl
+Manage Everything with drlink
         ↓
 Group / Tag / Filter at Scale
 ```
@@ -3362,7 +3596,7 @@ Required SSH/HTTP/HTTPS/TCP services published
         ↓
 Connect with Public IP or friendly DNS hostname
         ↓
-Manage a few to a few dozen clients with frpctl
+Manage a few to a few dozen clients with drlink
 ```
 
 여기서 “at scale”은 대형 fleet orchestration이 아니라 제품의 realistic target인 몇십 대 운영을 의미한다.
@@ -3375,9 +3609,9 @@ Manage a few to a few dozen clients with frpctl
 
 그리고 이 프로젝트가 앞으로 기능을 추가하면서 반드시 유지해야 할 가장 중요한 제품 원칙은:
 
-> **Simple to deploy.  
-> Simple to understand.  
-> Safe to operate.  
+> **Simple to deploy.
+> Simple to understand.
+> Safe to operate.
 > Lightweight by design.**
 
 이다.
@@ -3388,7 +3622,9 @@ Manage a few to a few dozen clients with frpctl
 
 | 영역 | 현재 상태 / 방향 |
 |---|---|
-| Prepared release (FINAL AUDIT CLOSURE) | **v2.3.0 / FRP 0.71.0** (recreate/move premature tag on final HEAD) |
+| Prepared release (current RC) | **v2.4.0 / FRP 0.71.0** (tag on final audit HEAD) |
+| Historical Controlled Egress RC | **v2.3.1** (immutable when tagged) |
+| Historical inbound line | **v2.3.0** FINAL AUDIT CLOSURE (immutable when finalized) |
 | Zero-Touch Short URL Option B | **STABLE** |
 | Public Hostname / DNS alias | **STABLE** |
 | Simple Manual Group MVP | **STABLE** |
@@ -3396,10 +3632,14 @@ Manage a few to a few dozen clients with frpctl
 | Target Health Check | **STABLE** |
 | Support Bundle | **STABLE** |
 | Service Profiles | **STABLE** |
-| FEATURE FREEZE | **ACTIVE** |
-| macOS Apple Silicon | **STABLE / Real E2E validated** |
-| Windows 10 / PS5.1 Client | **STABLE / Real E2E validated** |
-| Rocky 8 / Rocky 9 / AL2023 | **STABLE / Real E2E validated** |
+| Controlled Egress HTTP/HTTPS (port **6102**) | **STABLE (from v2.3.1)** |
+| Fixed TCP Egress (pool **6200–6299**) | **IN v2.4.0 RC** |
+| Egress Explain / Recipes | **IN v2.4.0 RC** |
+| Action-first `drlink` CLI / catalog | **IN v2.4.0 RC** (resource-first was v2.3.1) |
+| FEATURE FREEZE | **ACTIVE after v2.4.0 final product closure PASS** |
+| macOS Apple Silicon | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** (v2.4.0 candidate) |
+| Windows 10 / PS5.1 Client | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** (v2.4.0 candidate) |
+| Rocky 8 / Rocky 9 / AL2023 | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** (v2.4.0 candidate) |
 | Amazon Linux 2 | **Portability/CI only; no live Real E2E host** |
 | PowerShell 7 | **CI validated; same-host depends on `pwsh` availability** |
 | Dynamic Group | OPTIONAL / LATER |
@@ -3410,9 +3650,12 @@ Manage a few to a few dozen clients with frpctl
 
 ---
 
-# 71.1 Current Release Closure — v2.3.0 FINAL AUDIT CLOSURE
+# 71.1 Historical Release Closure — v2.3.0 FINAL AUDIT CLOSURE
 
-Current release closure:
+> **Status: HISTORICAL** for the inbound feature-complete line. Current prepared
+> release tracking is §50.0 (`v2.4.0` RC).
+
+Current release closure (historical record for `v2.3.0`):
 
 ```text
 PROJECT_VERSION=2.3.0
@@ -3426,9 +3669,9 @@ FULL_REAL_E2E_PASS_1=(set during final qualification)
 FULL_REAL_E2E_PASS_2=(set during final qualification)
 PASS_HEADS_IDENTICAL=(set during final qualification)
 
-TAG_V2_3_0_PREMATURE=YES (exists; recreate/move onto final audit HEAD)
-TAG_V2_3_0_FINAL=(set when tag is moved/recreated on final HEAD)
-GITHUB_RELEASE_V2_3_0_FINAL=(set at final release time)
+TAG_V2_3_0_PUBLISHED=YES (immutable; stays on its published commit)
+TAG_V2_4_0_PLANNED=YES (new tag on the closure HEAD; supersedes v2.3.0)
+GITHUB_RELEASE_V2_4_0=(set at final release time)
 
 UNRESOLVED_RELEASE_BLOCKERS=0
 ```
@@ -3520,7 +3763,7 @@ https://access.example.com:6002
 
 IP fallback is always preserved.
 
-FRP Auto Deploy does not own:
+Data Relay Link does not own:
 
 ```text
 DNS provider records
@@ -3571,7 +3814,7 @@ Group은 대형 fleet framework가 아니라 few-to-few-dozen clients를 정리�
 
 새 기능 또는 코드 변경을 검토할 때 마지막으로 항상 다음 질문을 한다.
 
-> **“이 변경이 FRP Auto Deploy를 방화벽 뒤 여러 서버를 쉽고 안전하게 연결하고 관리하는 더 좋은 lightweight 제품으로 만드는가?”**
+> **“이 변경이 Data Relay Link를 방화벽 뒤 여러 서버를 쉽고 안전하게 연결하고 관리하는 더 좋은 lightweight 제품으로 만드는가?”**
 
 YES라면 이 문서의 Architecture Guardrail과 Security Model을 만족하는지 확인한 뒤 개발한다.
 
@@ -3596,7 +3839,7 @@ NO라면 제품 범위에 추가하지 않는다.
    - 일부 신규 상태 정보 포함
    - 다수 섹션 누락 / Markdown corruption 확인
 
-2. `FRP Auto Deploy — Product Master Document v2026-09-04 (1)`
+2. `Data Relay Link — Product Master Document v2026-09-04 (1)`
    - 3,728 lines
    - SHA-256 `324f74446e65da751b96e9b1ce035b9be627e35557c9aa80188ae8cd0099077e`
    - 완전한 2026-09-04 authoritative baseline
@@ -3682,8 +3925,9 @@ FEATURE FREEZE = ACTIVE
 ```
 
 No further product feature development until the next explicitly approved release scope.
-`v2.3.0` is the feature-complete product line under FINAL AUDIT CLOSURE; treat the
-GitHub tag as final only after it is recreated or moved onto the audit-closure HEAD.
+`v2.3.0` is the historical feature-complete inbound line and its published tag is
+immutable. Closure work ships as the new `v2.4.0` tag; published tags are never
+moved, recreated, or retargeted.
 
 ---
 

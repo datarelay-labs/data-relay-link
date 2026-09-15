@@ -178,15 +178,20 @@ def decrypt_token_pbkdf2(ciphertext, secret, iterations=OPENSSL_PBKDF2_ITER):
 
 
 def generate_keypair(key_path, pub_path):
-    """Create an ECDSA P-256 key pair atomically. Never overwrites key_path."""
+    """Create an ECDSA P-256 key pair atomically. Never overwrites key_path.
+
+    key_path only ever appears with complete key material: generation happens in
+    a temp file that is linked into place, so a failed or killed run leaves no
+    key file at all instead of a zero-byte placeholder that would make the
+    identity permanently unusable. link() keeps the no-overwrite guarantee — it
+    fails if the name already exists.
+    """
     key_path = Path(key_path)
     pub_path = Path(pub_path)
     key_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        placeholder = os.open(str(key_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(placeholder)
-    except FileExistsError as exc:
-        raise FileExistsError(str(key_path)) from exc
+    _discard_empty_key(key_path)
+    if key_path.exists():
+        raise FileExistsError(str(key_path))
     fd, tmp_key = tempfile.mkstemp(prefix=key_path.name + '.', suffix='.tmp', dir=str(key_path.parent))
     os.close(fd)
     fd, tmp_pub = tempfile.mkstemp(prefix=pub_path.name + '.', suffix='.tmp', dir=str(key_path.parent))
@@ -198,16 +203,11 @@ def generate_keypair(key_path, pub_path):
         pub_pem = canonicalize_pubkey_from_private(tmp_key)
         Path(tmp_pub).write_text(pub_pem, encoding='utf-8')
         os.chmod(tmp_pub, 0o644)
-        os.replace(tmp_key, key_path)
+        # Claim the final key path last: a loser of this race must not publish
+        # its public key over the winner's.
+        _link_exclusive(tmp_key, key_path)
         os.replace(tmp_pub, pub_path)
         os.chmod(key_path, 0o600)
-    except Exception:
-        try:
-            if key_path.exists() and key_path.stat().st_size == 0:
-                key_path.unlink()
-        except OSError:
-            pass
-        raise
     finally:
         for tmp in (tmp_key, tmp_pub):
             if os.path.exists(tmp):
@@ -215,6 +215,48 @@ def generate_keypair(key_path, pub_path):
                     os.unlink(tmp)
                 except OSError:
                     pass
+
+
+def _discard_empty_key(key_path):
+    """Drop a zero-byte key file left behind by an interrupted older run.
+
+    A complete private key is never empty, so a zero-length file is a stale
+    placeholder rather than an identity: keeping it would block regeneration
+    forever. Anything with content is left alone and still refuses overwrite.
+    """
+    try:
+        if key_path.is_file() and key_path.stat().st_size == 0:
+            key_path.unlink()
+    except OSError:
+        pass
+
+
+def _link_exclusive(tmp_path, final_path):
+    """Publish tmp_path as final_path without ever overwriting or truncating."""
+    try:
+        os.link(tmp_path, final_path)
+        return
+    except FileExistsError as exc:
+        raise FileExistsError(str(final_path)) from exc
+    except OSError:
+        # Filesystem without hard links: create exclusively and write in one go.
+        pass
+    data = Path(tmp_path).read_bytes()
+    try:
+        fd = os.open(str(final_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise FileExistsError(str(final_path)) from exc
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    except Exception:
+        os.close(fd)
+        try:
+            os.unlink(final_path)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
 
 
 def canonicalize_pubkey_from_private(key_path):

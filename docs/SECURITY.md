@@ -1,11 +1,16 @@
 # Security architecture
 
-This document describes the security model of `frp-auto-deploy` **2.3.0**.
+This document describes the security model of `Data Relay Link` **2.4.0**.
 It is not a certification, audit report, or guarantee against a compromised
 root account.
 
 Pinned FRP version: **0.71.0**. Product version is independent of the
 management protocol version (`schema: 1` in signed requests) and of FRP.
+
+**Product framing:** Data Relay is the family; Data Relay Link delivers
+**Secure Remote Access** (inbound FRP ops) plus **Controlled Egress**
+(outbound agentless proxy). See `docs/PRODUCT_MASTER.md` §2.2 and
+`docs/CONTROLLED_EGRESS.md`.
 
 ## 1. FRP tunnel authentication
 
@@ -42,10 +47,10 @@ with a persistent ECDSA P-256 identity.
 The server installer creates a project-managed private CA:
 
 ```text
-/etc/frp-auto-deploy/pki/ca.key     # secret
-/etc/frp-auto-deploy/pki/ca.crt     # public certificate
-/etc/frp-auto-deploy/pki/server.key # secret
-/etc/frp-auto-deploy/pki/server.crt # public certificate
+/etc/drlink/pki/ca.key     # secret
+/etc/drlink/pki/ca.crt     # public certificate
+/etc/drlink/pki/server.key # secret
+/etc/drlink/pki/server.crt # public certificate
 ```
 
 The allocator presents `server.crt`. Clients verify it with the pinned CA.
@@ -61,7 +66,7 @@ allocator URL **without** using a `--cacert` file that does not exist yet.
 It parses the body as X.509 and checks the SHA256 fingerprint of the
 **canonical DER** encoding against `FRP_ALLOCATOR_CA_SHA256`. That hash is the
 **CA** certificate, not the nginx/allocator leaf. On success it stores
-`/etc/frp-auto-deploy/allocator-ca.crt`. Later allocator calls use
+`/etc/drlink/allocator-ca.crt`. Later allocator calls use
 verified HTTPS (`curl --cacert` with that stored CA). This is not TOFU and not
 self-verification of a file against itself.
 
@@ -71,7 +76,7 @@ separate trust domains (see below).
 
 ## 5. Enrollment Code
 
-A short-lived secret created on the server (`sudo frp-create-client`).
+A short-lived secret created on the server (`sudo drlink` → `set enrollment`).
 
 - Default TTL: 10 minutes
 - Bound to the first machine (`machine-id`) that uses it
@@ -92,7 +97,7 @@ A short-lived secret created on the server (`sudo frp-create-client`).
 - The enrollment secret is not sent in the HTTPS request body
 - The FRP token is returned encrypted (AES-256-CBC / PBKDF2) over verified HTTPS
 - Server storage: root-owned mode-0600 JSON under
-  `/var/lib/frp-auto-deploy/enrollments/*.json` (secret field stored as issued;
+  `/var/lib/drlink/enrollments/*.json` (secret field stored as issued;
   not hashed or wrapped at rest in the current release)
 
 Needed again only to enroll a new client, recover a lost local identity, or
@@ -110,6 +115,11 @@ Shared ticket properties (both delivery modes):
 - After successful enrollment the ticket is marked completed; further redeem
   attempts fail with `BOOTSTRAP_TICKET_USED`
 - A different machine is rejected with `BOOTSTRAP_TICKET_BOUND`
+- The ticket defines the authorized service scope. `/enroll` requires the
+  Enrollment Code request to match it exactly (an empty list is a
+  management-only ticket); anything else is rejected with
+  `SERVICE_SCOPE_VIOLATION`. Later service changes go through the management
+  identity, not the Enrollment Code.
 - TTL enforced; revocable before use
 - Not persisted on the client as the raw ticket
 - Must not be logged
@@ -173,7 +183,7 @@ eligible for automatic cleanup during enrollment issuance or allocator startup.
 - `revoke enrollment` — security lifecycle; blocks pending/bound credentials
 - `purge enrollment` — housekeeping lifecycle; permanently removes terminal metadata
 - Automatic cleanup is pair-aware for zero-touch (bootstrap ticket + paired enrollment)
-- Malformed or inconsistent pairs are never silently deleted (fail closed; see `doctor`)
+- Malformed or inconsistent pairs are never silently deleted (fail closed; see `system diagnostics`)
 - Audit log retention is independent; purging enrollment JSON does not delete audit events
 - Non-interactive purge requires `FRP_ENROLLMENT_PURGE_YES=yes`
 
@@ -213,16 +223,19 @@ MAX_NONCES_PER_CLIENT=256
 Replayed nonces and stale timestamps are rejected. A retry of the same logical
 Apply uses a new timestamp/nonce/signature and reuses existing public ports.
 
-`frpctl doctor` is read-only and does not consume a nonce.
+`drlink system diagnostics` is read-only and does not consume a nonce.
 
 ## 9. Revoke vs release
 
-| Action | Management identity | Port reservations |
-| --- | --- | --- |
-| `frp-revoke-client` | blocked | kept |
-| `frp-release-client` / `frp-release-service` | unchanged | freed |
+| Action | Management identity | Port reservations | Client registry record |
+| --- | --- | --- | --- |
+| `client revoke` / `frp-revoke-client` | blocked | kept | kept |
+| `client release <ID> <SERVICE>` / `frp-release-service` | unchanged | that service freed | kept |
+| `client release <ID>` / `frp-release-client` | removed | all freed | **removed** |
 
 Revoke is not release. An administrator can still release after revoke.
+`client release <CLIENT-ID>` is irreversible for that server-side client record;
+it does not uninstall software on the remote host.
 
 ## 10. Disable vs release
 
@@ -242,21 +255,21 @@ Disable is not release.
 | Item | Typical path |
 | --- | --- |
 | FRP server token | `/etc/frp/server_token` |
-| Enrollment Code secret | `/var/lib/frp-auto-deploy/enrollments/*.json` (root-owned `0600`; secret stored as issued, not hashed/wrapped) |
-| Bootstrap Ticket while valid | `/var/lib/frp-auto-deploy/bootstrap/` (hashed at rest) |
+| Enrollment Code secret | `/var/lib/drlink/enrollments/*.json` (root-owned `0600`; secret stored as issued, not hashed/wrapped) |
+| Bootstrap Ticket while valid | `/var/lib/drlink/bootstrap/` (hashed at rest) |
 | Client management private key | `/etc/frp/client-identity.key` |
 | Management MAC secret | `/etc/frp/client-identity.mac` (server copy on the client record) |
-| CA private key | `/etc/frp-auto-deploy/pki/ca.key` |
-| TLS server private key | `/etc/frp-auto-deploy/pki/server.key` |
+| CA private key | `/etc/drlink/pki/ca.key` |
+| TLS server private key | `/etc/drlink/pki/server.key` |
 | Generated `frps.toml` / `frpc.toml` | contain the FRP token |
 
 **Public / non-secret metadata**
 
 | Item | Typical path |
 | --- | --- |
-| CA certificate | `/etc/frp-auto-deploy/pki/ca.crt` |
+| CA certificate | `/etc/drlink/pki/ca.crt` |
 | CA SHA256 fingerprint | printed by `frp-create-client` |
-| Server certificate | `/etc/frp-auto-deploy/pki/server.crt` |
+| Server certificate | `/etc/drlink/pki/server.crt` |
 | Management public key | `/etc/frp/client-identity.pub` |
 | Service ID, public service port, public hostname (optional DNS alias) | `frp-client-info`, `access-info.txt` |
 | Client desired state (no secrets) | `/etc/frp/client-state.json` |
@@ -270,20 +283,20 @@ document to edit.
 | Path | Mode |
 | --- | --- |
 | `/etc/frp/server_token` | `0600` |
-| `/etc/frp-auto-deploy/pki/` | `0700` |
-| `/etc/frp-auto-deploy/pki/ca.key` | `0600` |
-| `/etc/frp-auto-deploy/pki/ca.crt` | `0644` |
-| `/etc/frp-auto-deploy/pki/server.key` | `0600` |
-| `/etc/frp-auto-deploy/pki/server.crt` | `0644` |
+| `/etc/drlink/pki/` | `0700` |
+| `/etc/drlink/pki/ca.key` | `0600` |
+| `/etc/drlink/pki/ca.crt` | `0644` |
+| `/etc/drlink/pki/server.key` | `0600` |
+| `/etc/drlink/pki/server.crt` | `0644` |
 | `/etc/frp/client-identity.key` | `0600` |
 | `/etc/frp/client-identity.mac` | `0600` |
 | `/etc/frp/client-state.json` | `0600` |
 | `/etc/frp/frpc.toml` | `0600` |
 | `/etc/frp/frps.toml` | `0600` |
-| `/var/lib/frp-auto-deploy/registry.json` | `0600` |
-| `/etc/frp-auto-deploy/allocator-ca.crt` | `0644` |
+| `/var/lib/drlink/registry.json` | `0600` |
+| `/etc/drlink/allocator-ca.crt` | `0644` |
 | `/etc/frp/access-info.txt` | `0644` |
-| `/etc/frp-auto-deploy/version` | `0644` |
+| `/etc/drlink/version` | `0644` |
 
 Do not manually edit the registry, `client-state.json`, `frpc.toml`, or
 identity files unless performing advanced recovery.
@@ -300,16 +313,41 @@ bootstrap script.
 Checksums:
 
 - Official FRP archives are checked against pinned SHA256 values
-- Repository `SHA256SUMS` covers tracked source/release files
+- Repository `SHA256SUMS` covers tracked source/release files, excluding the
+  three derived metadata files that would make the relation circular
+  (`SHA256SUMS`, `release-manifest.json`, `dist/sbom.spdx.json`)
 - `scripts/check-frp-compatibility.sh` verifies digests **before** extract/execute
   and writes an atomic PASS report only after required checks succeed
 
-This project does **not** currently ship cryptographic signatures or GitHub
-artifact attestations of its own bundles (`release-manifest.json` records
-`"signing": false`). SHA256 verification protects against accidental corruption
-and many tampering cases when the checksum channel is trusted, but it is **not**
-the same as an independently signed release. Residual supply-chain risk remains
-accepted for v2.2.x until a low-risk signing/attestation path is added.
+Three distinct evidence classes, in increasing strength:
+
+| Class | Artifact | What it proves |
+| --- | --- | --- |
+| Integrity | `SHA256SUMS` | bytes were not altered **if** the checksum channel is trusted |
+| Inventory | `dist/sbom.spdx.json` | what the release contains, bound to one source commit |
+| Provenance | GitHub Artifact Attestation | which workflow, at which commit, produced these exact bytes |
+
+A checksum is not provenance, and provenance is not a commit signature.
+
+`release-manifest.json` records `"signing": false`: this project does **not**
+ship its own detached cryptographic signatures (GPG/cosign) of its bundles.
+It **does** produce GitHub Artifact Attestations via
+`.github/workflows/release-attest.yml`, which signs a provenance statement over
+the release subjects using workflow OIDC identity. That workflow verifies its
+own attestation before the release passes; verification failure fails the
+release. Consumers can check it independently:
+
+```bash
+gh attestation verify <artifact> --repo datarelay-labs/data-relay-link
+```
+
+Developer commit signing is not part of this release evidence set. Residual
+supply-chain risk from the absence of detached release signatures remains
+accepted for the 2.4.x line.
+
+Published tags are immutable and are never moved, recreated, or retargeted.
+Attestation binds a tag to a commit to a set of artifact digests, so repointing
+a tag would invalidate evidence a consumer has already verified.
 
 ## 14. Threat boundaries
 
@@ -336,10 +374,10 @@ from root.
 **Server backup (minimum)**
 
 ```text
-/etc/frp-auto-deploy/pki/
+/etc/drlink/pki/
 /etc/frp/server_token
-/etc/frp-auto-deploy/config.json
-/var/lib/frp-auto-deploy/registry.json
+/etc/drlink/config.json
+/var/lib/drlink/registry.json
 ```
 
 Also consider enrollments, bootstrap tickets, and `mgmt-nonces.json`. Store
@@ -360,7 +398,7 @@ old reservation.
 | Server host completely lost | Restore the backups above, then reinstall |
 | Client local state lost | New enrollment or Enrollment Code recovery |
 | Client identity lost | Enrollment Code recovery (`frp-revoke-client` if the old key must be blocked) |
-| CA lost or compromised | Advanced manual recovery; **not** solved by `frpctl update` |
+| CA lost or compromised | Advanced manual recovery; **not** solved by `drlink update` |
 | Registry lost | Restore `registry.json` from backup; the installer will not invent reservations |
 
 Token rotation is not automatic. Reinstall preserves the existing FRP token.
@@ -380,13 +418,62 @@ frontend itself. Unmapped or drifted published-service proxy names fail
 closed (DENY); they must never fall back to PUBLIC.
 
 Connection authorization events are written to a bounded local log
-(`/var/log/frp-auto-deploy/access-conn.jsonl`). Enrollment tickets, FRP
+(`/var/log/drlink/access-conn.jsonl`). Enrollment tickets, FRP
 tokens, CA keys, and passwords are not logged.
+
+Access Control mutations emit structured audit events to `audit.jsonl`
+(`access.list.created|updated|deleted`, `access.source.added|updated|removed`,
+`access.service.assigned|public`). Audit payloads use a field allowlist:
+identifiers, list/source names, CIDRs, and expiry only — never descriptions,
+tickets, or other operator free text.
+
+Input bounds for Access Control policy:
+
+- Temporary source TTL accepts `Ns/Nm/Nh/Nd` up to **3650d** (10 years);
+  larger values are a user-facing error, not an arithmetic overflow
+- Access List descriptions are limited to 1024 characters and reject C0/C1
+  control characters, CR/LF, and ANSI escapes so policy text cannot forge
+  terminal output or log lines
 
 If an upstream device SNATs clients, allowlists must use the source address
 observed by `frps`.
 
-## 17. Mixed product versions
+## 17. Controlled Egress (agentless outbound)
+
+Controlled Egress is a **separate policy plane** from inbound Access Control.
+
+Authoritative state: `/var/lib/drlink/egress-control.json`
+Connection log: `/var/log/drlink/egress-conn.jsonl`
+Daemon: `drlink-egress.service` (default listen `0.0.0.0:6102`, outside published pool `6000–6098`)
+
+Security contract:
+
+- Default DENY; missing/corrupt/invalid policy fails closed
+- Primary caller authorization is source IP/CIDR (no agent on protected hosts)
+- Destinations are FQDN + port + **required protocol** `http|https`
+  - `http`: absolute-form proxy requests only
+  - `https`: `CONNECT` + TLS ClientHello SNI binding; ECH denied; no TLS interception
+- Wildcard hosts are checked against a **pinned Public Suffix List**
+  (`lib/frp_public_suffix.py`, `lib/data/public_suffix_list.dat`); bare public-suffix wildcards are rejected
+  - PSL rules are indexed in both their Unicode and IDNA/punycode spellings, so
+    `*.公司.cn` and `*.xn--55qx5d.cn` are rejected identically
+- IP literals denied by default
+- Server-side DNS; every resolved candidate IP is validated before connect
+- Reject loopback, RFC1918, link-local, ULA, metadata (`169.254.169.254`), multicast/reserved
+- Resolve once → validate → connect to that exact IP (rebinding-safe)
+- Policy reload Option B: gateway reloads policy on file mtime change; new authorizations always use current policy (no stale-while-revalidate for allow decisions)
+- Do not log Proxy-Authorization, cookies, bodies, or TLS payloads
+- Egress failure must not take down inbound `frps`; inbound Access Control remains independent
+- Service unit runs as dedicated non-root user `drlink-egress` with systemd hardening; registry/enrollment secrets stay root-owned and outside egress write paths
+
+Windows Update over the proxy is possible with an explicit destination set. **Delivery Optimization peer traffic is out of Controlled Egress scope** — keep DO disabled or use WSUS/managed update paths on closed hosts.
+
+Operator CLI (final public grammar): `show internet` /
+`set internet-profile` / guided
+`set internet-source` → `set internet-destination` → `test internet` →
+`set internet-profile … enabled`. See `docs/CONTROLLED_EGRESS.md`.
+
+## 18. Mixed product versions
 
 Project **2.1.0** does not change management protocol schema `1`. An already
 enrolled **1.9.1** or **2.0.0** client is expected to keep its tunnel and signed

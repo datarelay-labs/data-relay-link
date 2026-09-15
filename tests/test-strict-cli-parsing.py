@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+import unittest
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "lib"))
+import frp_cli_catalog as cat  # noqa: E402
+
+
+class StrictCliParsingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.cat = cat
+
+    def test_system_version_rejects_extra(self):
+        err = self.cat.strict_error(["system", "version", "abc"])
+        self.assertIsNotNone(err)
+        self.assertIn("unexpected argument", err)
+
+    def test_show_status_rejects_extra(self):
+        err = self.cat.strict_error(["show", "status", "extra"])
+        self.assertIsNotNone(err)
+        self.assertIn("unexpected argument", err)
+
+    def test_status_alone_ok(self):
+        self.assertIsNone(self.cat.strict_error(["show", "status"]))
+
+    def test_guided_menu_categories(self):
+        text = self.cat.render_guided_menu("server")
+        self.assertIn("Clients", text)
+        self.assertIn("Services", text)
+        self.assertIn("Internet Access", text)
+        self.assertIn("System", text)
+        self.assertNotIn("Remote Access", text)
+        self.assertNotIn("Controlled Egress", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

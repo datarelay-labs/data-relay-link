@@ -15,6 +15,12 @@ client-identity.mac
 mgmt-nonces.json
 .frp-compat-stage/
 
+# Generated at release time from the checked-out release commit. A committed
+# SBOM cannot record the hash of the commit that contains it, and checksumming
+# it into SHA256SUMS (which the SBOM itself inventories) is circular.
+# Produced by ./scripts/build-release-artifacts.sh and attested in CI.
+dist/sbom.spdx.json
+
 # Runtime Real E2E / overnight validation output (harness source stays in tests/)
 e2e-reports/
 OVERNIGHT_*.md

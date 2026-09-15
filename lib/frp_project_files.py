@@ -35,7 +35,7 @@ def manifest_path(explicit=None):
     candidate = here / MANIFEST_NAME
     if candidate.is_file():
         return candidate
-    installed = Path("/usr/local/lib/frp-auto-deploy") / MANIFEST_NAME
+    installed = Path("/usr/local/lib/drlink") / MANIFEST_NAME
     if installed.is_file():
         return installed
     env = os.environ.get("FRP_PROJECT_FILE_MANIFEST", "")

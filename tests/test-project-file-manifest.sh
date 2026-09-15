@@ -37,21 +37,30 @@ if "server-project-files.manifest" not in (root / "scripts" / "build-bundles.py"
     raise SystemExit("bundle builder missing canonical manifest")
 
 required = {
-    "usr/local/lib/frp-auto-deploy/frp_audit.py",
-    "usr/local/lib/frp-auto-deploy/frp_support_bundle.py",
-    "usr/local/sbin/frp-enrollments",
-    "usr/local/sbin/frp-enrollment-revoke",
-    "usr/local/sbin/frp-enroll-bulk",
-    "usr/local/sbin/frp-backup",
-    "usr/local/sbin/frp-restore",
-    "usr/local/sbin/frp-support-bundle",
-    "usr/local/sbin/frp-upstream",
+    "usr/local/lib/drlink/frp_audit.py",
+    "usr/local/lib/drlink/frp_support_bundle.py",
+    "usr/local/lib/drlink/frp-enrollments",
+    "usr/local/lib/drlink/frp-enrollment-revoke",
+    "usr/local/lib/drlink/frp-enroll-bulk",
+    "usr/local/lib/drlink/frp-backup",
+    "usr/local/lib/drlink/frp-restore",
+    "usr/local/lib/drlink/frp-support-bundle",
+    "usr/local/lib/drlink/frp-upstream",
+    "usr/local/lib/drlink/frpctl",
+    "usr/local/bin/drlink",
+    "usr/local/lib/drlink/data/public_suffix_list.dat",
 }
 missing = sorted(required - managed)
 if missing:
     raise SystemExit("managed set missing %s" % missing)
+# Nested lib paths must not be flattened by basename() during install.
+if "basename \"$rel\"" in install_server or 'basename "$rel"' in install_server:
+    raise SystemExit("install-server.sh still flattens manifest destinations with basename")
+if 'dest_rel="${rel#usr/local/lib/drlink/}"' not in install_server:
+    raise SystemExit("install-server.sh missing nested lib destination handling")
 print("PARITY_OK")
 PY
 pass "PROJECT_FILE_MANIFEST_PARITY"
 pass "P1_MANIFEST_PARITY_GATE"
+pass "NESTED_LIB_PATH_INSTALL"
 echo "PROJECT_FILE_MANIFEST_TEST=PASS"

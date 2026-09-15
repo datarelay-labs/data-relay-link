@@ -1,5 +1,5 @@
 [Unit]
-Description=FRP Server
+Description=Data Relay Link Server (legacy unit name; use drlink-server)
 After=network-online.target
 Wants=network-online.target
 

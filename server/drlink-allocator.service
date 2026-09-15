@@ -1,0 +1,26 @@
+[Unit]
+Description=Data Relay Link Port Allocator
+After=network-online.target drlink-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+RuntimeDirectory=drlink/allocator
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-port-allocator.py --config /etc/drlink/config.json
+Restart=always
+RestartSec=5
+User=root
+Group=root
+# Hardening below requires systemd 232+. The installer strips these lines on
+# older systemd (Amazon Linux 2 is 219) rather than failing unit load.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Do not list /run/drlink here: ReadWritePaths must exist before
+# RuntimeDirectory creates it and causes status=226/NAMESPACE.
+# RuntimeDirectory=drlink already grants write under ProtectSystem=strict.
+ReadWritePaths=/var/lib/drlink /var/log/drlink /etc/drlink /etc/frp
+
+[Install]
+WantedBy=multi-user.target

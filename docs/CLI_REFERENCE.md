@@ -1,17 +1,53 @@
-# frpctl command reference
+# drlink command reference
 
-`frpctl` is the everyday operator CLI. It does not add new backend behavior.
-Existing tools (`frp-clients`, `frp-client-set`, `frp-create-client`, …) remain
-the implementation.
+`drlink` is the everyday operator CLI for **Data Relay Link**. It does not add
+new backend behavior. Existing tools (`frp-clients`, `frp-client-set`,
+`frp-create-client`, …) remain the implementation.
 
-Grammar:
+Product framing (see `docs/PRODUCT_MASTER.md` §2.2): **Data Relay** is the
+family; this CLI operates **Secure Remote Access** (inbound) and
+**Controlled Egress** (outbound) on a Data Relay Link server.
+
+Interactive root navigation uses beginner domains (**Clients**, **Services**,
+**Internet Access**, **System**). Those labels are not the same as the
+capability names above. See `docs/PRODUCT_MASTER.md` §18.0.
+
+## Canonical grammar (current)
+
+Public roots:
+
+```text
+show
+set
+unset
+test
+system
+menu
+help
+exit
+```
+
+Typical form:
+
+```text
+<action> <resource> [target] [value]
+```
+
+Single source of truth: `lib/frp_cli_final_commands.json` via
+`lib/frp_cli_catalog.py` (`PUBLIC_COMMANDS` / `COMMANDS`). Root help,
+resource help, context `?`, Tab, guided menu (`NAVIGATION_TREE`), and
+suggestions are generated from that catalog. Host role decides which
+resources appear. Dual-role hosts use the server product-domain root.
+
+### Historical / compatibility grammar
+
+Older resource-first forms still run for scripts as hidden compatibility:
 
 ```text
 <verb> <resource> [target] [property] [value]
 ```
 
-Host role decides which commands appear in Tab and help. Dual-role hosts see
-the union. There is no `server …` / `client …` top-level namespace.
+See `help legacy`. Do not treat resource-first as the advertised current CLI.
 
 Interactive keys:
 
@@ -29,7 +65,7 @@ reprint the list. Tab never runs the command and never clears the screen.
 Type `?` (then Enter) for detailed context help when needed.
 
 `↑` / `↓` walk this session only. History is never written to disk
-(`~/.bash_history`, `~/.frpctl_history`, or `HISTFILE`).
+(`~/.bash_history`, `~/.drlink_history`, or `HISTFILE`).
 
 The canonical client selector is **CLIENT ID**: the immutable short machine
 identity (usually 8 hex characters; longer when that prefix is not unique).
@@ -39,297 +75,256 @@ CLIENT ID only. A unique label or unique hostname still works when typed by
 hand. An SSH connection string such as `user@host:port` is not a selector.
 An ambiguous prefix fails closed; use a longer CLIENT ID prefix.
 
-`unset` removes stored metadata. `release` returns public port reservations.
-`revoke` removes management identity. Those three are never aliases of each
-other. There is no `delete client`.
+Client removal model (three distinct operations):
 
----
+```text
+unset client <CLIENT> trust
+  Block management trust. Registry record and public ports stay reserved.
 
-## show
+unset client <CLIENT> service <SERVICE>
+  Release one service reservation / public port. Client identity stays.
+
+unset client <CLIENT>
+  Remove the client registry record, management identity, and all
+  service reservations / public ports. Does not delete the remote host
+  or uninstall Data Relay Link on the remote machine.
+```
+
+Metadata helpers remain separate:
+
+```text
+unset client <CLIENT> label
+unset client <CLIENT> note
+unset client <CLIENT> tag <KEY>
+unset client <CLIENT> group <GROUP>
+```
+
+Those forms are never aliases of each other. There is no public
+`unset client <CLIENT> <SERVICE>` shorthand and no `delete client`.
+
+
+## Everyday canonical commands
 
 ```text
 show status
-show version
+system version
 show clients
-show clients --group <GROUP>
-show client <ID>
-show client <ID> services
-show client <ID> tags
-show client <ID> groups
+show client <CLIENT>
+show client <CLIENT> services
+show client <CLIENT> tags
+show client <CLIENT> groups
 show groups
 show group <GROUP>
 show enrollments
-show audit
-show upstream
+system audit
+system update check-engine
 show services
-show info
-```
+system info
 
-`status` and `version` remain shortcuts for `show status` / `show version`.
-Canonical help prefers the `show` form.
-
-`show clients` reuses the existing client table. The identity columns are
-CLIENT ID, LABEL, and HOSTNAME. `show client <ID>` is the overview.
-`show client <ID> services` and `show client <ID> tags` print only that view.
-
-`show enrollments` lists every issued enrollment credential that is still on
-disk: manual Enrollment Code records and zero-touch bootstrap tickets. Secrets
-are never printed. Zero-touch issuance that creates both an enrollment file and
-a bootstrap ticket appears once (ticket ID). Lifecycle states are normalized to
-`pending`, `bound`, `completed`, `expired`, or `revoked`. Terminal records
-(`expired`, `completed`, `revoked`) are retained for
-`enrollment_retention_days` (default 30) and then removed automatically during
-enrollment issuance or allocator startup. Use `revoke enrollment <ID>` for active
-(`pending`/`bound`) credentials and `purge enrollment <ID>` for terminal records.
-
-## set
-
-Server:
-
-```text
-set client <ID> label <value>
-set client <ID> note <value>
-set client <ID> tag <key> <value>
-set installer-url <url>
-set server hostname <fqdn>
+set client
+set client <CLIENT> label <value>
+set client <CLIENT> note <value>
+set client <CLIENT> tag <key> <value>
+set client <CLIENT> group <GROUP>
+set server public-hostname <fqdn>
 set server bootstrap-hostname <fqdn>
+set server installer-url <url>
+set server windows-installer-url <url>
+
+set enrollment
+set enrollment bulk
+system backup
+system support-bundle
+set group <GROUP>
+set service-profile <PROFILE>
+set internet-profile <PROFILE>
+set acl <ACL>
+set acl <ACL> source <CIDR>
+set acl <ACL> service <CLIENT> <SERVICE>
+set internet-profile <PROFILE> source <CIDR>
+set internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>
+set fixed-tcp <ENTRY>
+set internet-profile <PROFILE> enabled
+set fixed-tcp <ENTRY> enabled
+
+unset client <CLIENT> trust
+unset client <CLIENT> service <SERVICE>
+unset client <CLIENT>
+unset client <CLIENT> group <GROUP>
+unset enrollment <ENROLLMENT>
+unset group <GROUP>
+unset service-profile <PROFILE>
+unset acl <ACL> source <CIDR>
+unset acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL>
+unset internet-profile <PROFILE> source <SELECTOR>
+unset internet-profile <PROFILE> destination <FQDN> <PORT> [PROTOCOL]
+unset internet-profile <PROFILE> enabled
+unset internet-profile <PROFILE>
+unset fixed-tcp <ENTRY> enabled
+unset fixed-tcp <ENTRY>
+
+system restore <path>
+system update product
+system update engine
+system update check-engine
+test acl <CLIENT> <SERVICE> <SOURCE-IP>
+test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]
+test fixed-tcp <ENTRY> <SOURCE-IP>
+system diagnostics
+system export internet-profile <PROFILE> [PATH]
+system import internet-profile <FILE> [PROFILE]
+system diff internet-profile <PROFILE> <FILE>
 ```
 
-`set server hostname` configures an optional DNS alias for published-service
-access. It does not change FRP control (`frp_server` / `serverAddr`), CLIENT ID,
-public ports, or the CA. DNS records are managed outside FRP Auto Deploy.
+Public UX does not advertise GNU-style `--options`. Complex create flows
+use guided prompts. Backend tools may still use flags internally.
 
-`set server bootstrap-hostname` configures the optional publicly trusted
-Zero-Touch short URL hostname. FRP Auto Deploy does not create DNS records,
-issue certificates, or configure ACME. See `docs/ZERO_TOUCH_SHORT_URL.md`.
-
-The backend still accepts `--tag key=value`. The parser converts
-`tag <key> <value>` to that form. Quoted values work
-(`tag location "OCI Osaka"`). The older `tag key=value` token is still
-accepted.
-
-Client:
+Session helpers:
 
 ```text
-set service <service-id> target-host <host>
-set service <service-id> target-port <port>
-set service <service-id> ssh-user <user>
-set service <service-id> name <value>
-set service <service-id> health-type <tcp|http|disabled>
-set service <service-id> health-timeout <seconds>
-set service <service-id> health-interval <seconds>
-set service <service-id> health-max-failed <count>
-set service <service-id> health-path </path>
+help
+help clients
+help services
+help internet
+help system
+help commands
+help workflows
+help legacy
+menu
+system history
+system clear
+exit
 ```
 
-Service IDs are immutable. Pending service edits become live only after
-`apply`. Disable/enable reuse the same public port. Client-side disable does
-not release the server reservation. Health checks are disabled by default;
-when enabled, FRP `healthCheck` settings are written into `frpc.toml`.
-`show services` / `status` report CLIENT / TUNNEL / TARGET separately.
+Enrollment lifetime is collected by guided prompts (or hidden automation
+paths). An enrollment credential is a short-lived hand-off, so the ceiling is
+deliberately far below the `enrollment_retention_days` maximum; larger values
+are rejected rather than silently clamped.
 
-## unset
+Compatibility forms remain available as hidden aliases; prefer the
+canonical forms above (`show clients`, not legacy list verbs).
+
+
+## Access Control Lists (ACLs)
+
+Beginner/operator term and direct CLI resource: **ACL** / **ACLs**
+(`acl` / `acls`).
 
 ```text
-unset client <ID> label
-unset client <ID> note
-unset client <ID> tag <key>
-unset server hostname
-unset server bootstrap-hostname
+show acls
+show acl <ACL>
+set acl <ACL>
+set acl <ACL> source <CIDR>
+set acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL> source <CIDR>
+unset acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL>
+test acl <CLIENT> <SERVICE> <SOURCE-IP>
+show access-log
 ```
 
-Removes administrator metadata only (or the optional public / bootstrap
-hostname). Display label falls back to hostname. Does not change identity,
-machine-id, ports, or enrollment. Unsetting the public hostname falls back to
-Public IP access. Unsetting the bootstrap hostname falls back to `zt1` Zero-Touch
-commands.
+Interactive `drlink` server menu places ACLs under **Services**.
+Empty allowlist assignment is refused. Deleting an ACL that is still
+referenced is refused. IP allowlisting is defense-in-depth; keep target
+authentication enabled.
 
-## create / add
+## Internet Access (Controlled Egress)
+
+Beginner/operator navigation term: **Internet Access**.
+Capability / architecture term: **Controlled Egress**.
 
 ```text
-create group <name> [--description TEXT]
-add client <CLIENT> group <GROUP>
-create zero-touch
-create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]
-create enrollments --count N
-create enrollments --csv clients.csv
-create backup [path]
-add service [--preset ssh|http|https|custom] ...
+show internet
+show internet-profiles
+show internet-profile <PROFILE>
+set internet-profile <PROFILE>
+set internet-profile <PROFILE> name|description <VALUE>
+set internet-profile <PROFILE> source <CIDR>
+set internet-profile <PROFILE> destination <FQDN> <PORT> <PROTOCOL>
+test internet <SOURCE-IP> <HOST> <PORT> [PROTOCOL]
+set internet-profile <PROFILE> enabled
+unset internet-profile <PROFILE> enabled
+system import internet-profile <FILE> [PROFILE]
+system export internet-profile <PROFILE> [PATH]
+system diff internet-profile <PROFILE> <FILE>
+show fixed-tcp
+show fixed-tcp <ENTRY>
+set fixed-tcp <ENTRY>
+set fixed-tcp <ENTRY> enabled
+unset fixed-tcp <ENTRY> enabled
+unset fixed-tcp <ENTRY>
+test fixed-tcp <ENTRY> <SOURCE-IP>
+show internet-templates
+show internet-template <TEMPLATE>
+set internet-profile <NEW_PROFILE> template <TEMPLATE>
 ```
 
-Manual groups have immutable IDs (`grp_` plus eight lowercase hex digits),
-mutable names and descriptions, and multiple client memberships. Group
-selectors resolve in this order: exact ID, unique ID prefix, unique exact
-name. `all` and `ungrouped` are reserved virtual selectors, not stored group
-objects.
+`test internet` evaluates policy + DNS. It is **not** a live destination
+connection test (menu label: **Check policy**).
+
+Safe workflow: create profile (disabled) → set source → set destination +
+protocol → check policy → enable. See `docs/CONTROLLED_EGRESS.md`.
+
+## Updates
+
+Public update commands:
 
 ```text
-rename group <GROUP> <name>
-set group <GROUP> name <name>
-set group <GROUP> description <text>
-delete group <GROUP>
-remove client <CLIENT> group <GROUP>
+system update product
+system update engine
+system update check-engine
 ```
 
-Deleting a group removes its membership references but does not change client
-identity, services, or ports. Enrollment-time group assignment is deferred.
-
-`create zero-touch` is the recommended everyday client onboarding path.
-Enrollment Code and bootstrap ticket secrets are never completed or shown by
-`show` / `?` / Tab.
-
-## enable / disable / apply / discard
-
-```text
-enable service <service-id>
-disable service <service-id>
-apply
-discard
-```
-
-Client-local pending changes. `apply` does not release server ports.
-
-## revoke / purge / release / restore
-
-```text
-revoke client <ID>
-revoke enrollment <ID>
-purge enrollment <ID>
-purge enrollments --older-than <days>
-release service <ID> <service-id>
-release client <ID>
-restore backup <path>
-```
-
-`revoke enrollment` prevents a pending or bound enrollment credential from being
-used. It does not apply to terminal records (`expired`, `completed`, `revoked`).
-
-`purge enrollment` permanently removes terminal enrollment metadata. Active
-pending or bound enrollments must be revoked first. Bulk purge matches terminal
-records whose terminal timestamp is older than the requested threshold.
-Non-interactive purge requires `FRP_ENROLLMENT_PURGE_YES=yes`.
-
-Terminal enrollment JSON retention and audit log retention are separate.
-Purging enrollment metadata does not delete audit events.
-
-`release` keeps the existing confirmation, locking, and passive port recheck.
-`restore` keeps archive validation, snapshot, restart, doctor, and rollback.
-
-
-## profiles (server)
-
-Reusable server-owned service creation templates. Profiles seed client drafts
-only; they never store public ports, CLIENT IDs, Service IDs, or ACL
-assignments. Editing or deleting a profile does not mutate existing services.
-
-```text
-show profiles
-show profile <PROFILE>
-create profile <name> --preset ssh|http|https|custom --target-host HOST --target-port PORT
-                 [--description TEXT] [--ssh-user USER]
-set profile <PROFILE> name|description|preset|target-host|target-port|ssh-user <value>
-delete profile <PROFILE>
-```
-
-On a client host, seed a pending service from a profile, then run `apply`:
-
-```text
-add service --profile <PROFILE|NAME> [--id ID] [--name NAME]
-apply
-```
-
-## access (server)
-
-Named reusable Service Access Lists, optional TTL entries, and recent
-connection authorization history. Access is keyed by CLIENT ID + Service ID
-(not by public port). Modes are `PUBLIC` (default for existing services) and
-`ALLOWLIST`.
-
-```text
-access
-access list
-access create <name> [--description TEXT]
-access add-source <list> --name <name> --source <ip|cidr> [--ttl 30m|1h|4h|1d]
-access remove-source <list> --source <ip|cidr|name|id>
-access show <list>
-access delete <list>
-access assign <client> <service-id> <list>
-access public <client> <service-id>
-access show-service <client> <service-id>
-access test <client> <service-id> <source-ip>
-access log <client> <service-id> [--limit N] [--allow|--deny]
-```
-
-Interactive `frpctl` server menu includes Access Control. Empty ALLOWLIST
-assignment is refused. Deleting a list that is still referenced is refused.
-IP allowlisting is defense-in-depth; keep target authentication enabled.
-
-## update
-
-```text
-update project [--check]
-update frp [--check]
-```
-
-`update` with no resource keeps the previous role default (client project
-tools on a client; `frp-update` on a server). Updater security is unchanged:
-stable tag, verified SHA256SUMS, fail-closed, rollback, no re-enrollment, no
-CA/token/port loss. FRP stays pinned at 0.71.0.
+Updater security is unchanged: stable tag, verified SHA256SUMS, fail-closed,
+rollback, no re-enrollment, no CA/token/port loss. Relay Engine (FRP) stays
+pinned at the explicitly qualified version.
 
 ## Other
 
 ```text
-doctor
-support-bundle
-support-bundle --output <path>
+system diagnostics
+system support-bundle
+system history
+system clear
 help
-help show
-help set client
+help commands
+help workflows
 help legacy
 ?
-show ?
-set client <ID> ?
 menu
-history
-clear
 exit
 ```
 
-`support-bundle` writes a sanitized read-only diagnostic archive
+`system support-bundle` writes a sanitized read-only diagnostic archive
 (`frp-support-<hostname>-<YYYYMMDDTHHMMSSZ>.tar.gz`). Private keys, tokens,
 enrollment secrets, and auth material are omitted or redacted. It does not
 restart services.
 
-Root `?` lists verbs only. Detailed syntax is under `help` / `help <verb>`
-or a context `?`. `menu` is the guided numbered interface using the same
-vocabulary (Show / Set / Unset / Create / Update / Revoke / Release).
+Three discovery surfaces (do not conflate them):
 
----
+```text
+?     = executable root / next-token discovery
+help  = conceptual / domain help (and help commands)
+menu  = guided numbered UI (Clients / Services / Internet Access / System)
+```
 
-## Compatibility aliases
+Bare `?` lists executable roots: `show set unset test system menu help exit`.
+Full expert grammar is under `help commands`.
 
-These still work for scripts and muscle memory. Tab and canonical help hide
-them. `help legacy` lists them.
 
-| Alias | Canonical |
-| --- | --- |
-| `clients` | `show clients` |
-| `client` / `client-info` | `show client` |
-| `client-set` / `edit-client` | `set client` / `unset client` |
-| `enroll` / `create-client` | `create enrollment` |
-| `enroll-bulk` | `create enrollments` |
-| `enrollments` | `show enrollments` |
-| `enrollment-revoke` | `revoke enrollment` |
-| `revoke` / `revoke-client` | `revoke client` |
-| `release-service` | `release service` |
-| `release-client` | `release client` |
-| `project-update` / `client-update` | `update project` |
-| `frp-update` / `server-update` | `update frp` |
-| `backup` | `create backup` |
-| `restore PATH` | `restore backup PATH` |
-| `upstream` | `show upstream` |
-| `audit` | `show audit` |
-| `services` / `manage` / `info` | `show services` / `add`+`set service` / `show info` |
-| `status` / `version` | `show status` / `show version` |
+## Compatibility cheat sheet (legacy → canonical)
 
-Direct `/usr/local/sbin/frp-*` tools are unchanged.
+| Older / legacy form | Prefer |
+|---|---|
+| `client list` | `show clients` |
+| `enrollment list` | `show enrollments` |
+| `enrollment revoke` | `unset enrollment` |
+| `egress list` | `show internet-profiles` |
+| `egress create` | `set internet-profile` |
+| `egress status` | `show internet` |
+| `access list` | `show acls` |
+| `access assign` | `set acl <ACL> service <CLIENT> <SERVICE>` |
+| `frp-update` / `update frp` | `system update engine` |
+| `support-bundle` | `system support-bundle` |
+| `purge enrollment` / `delete enrollment` | `unset enrollment` |

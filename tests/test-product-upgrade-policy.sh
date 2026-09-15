@@ -61,7 +61,7 @@ text = Path(sys.argv[1]).read_text()
 start = text.index('frp_client_require_server_compatible_for_upgrade()')
 end = text.index('\n}', start)
 body = text[start:end]
-if '/etc/frp-auto-deploy/allocator-ca.crt' not in body:
+if '/etc/drlink/allocator-ca.crt' not in body:
     raise SystemExit('missing canonical CA path in version gate')
 print('OK')
 PY

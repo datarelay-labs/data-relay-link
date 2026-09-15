@@ -25,53 +25,56 @@ for f in \
   lib/frp_client_registry.py \
   tools/frp-backup \
   tools/frp-restore \
-  tools/frpctl
+  tools/frpctl \
+  tools/drlink
 do
   scp -o BatchMode=yes -o ConnectTimeout=15 "$ROOT/$f" "$SERVER:$TMP/$(basename "$f")"
 done
-sshx "$SERVER" "sudo install -m 0644 $TMP/frp_access_control.py /usr/local/lib/frp-auto-deploy/frp_access_control.py
-sudo install -m 0644 $TMP/frp_service_profiles.py /usr/local/lib/frp-auto-deploy/frp_service_profiles.py
-sudo install -m 0644 $TMP/frp_client_registry.py /usr/local/lib/frp-auto-deploy/frp_client_registry.py
+sshx "$SERVER" "sudo install -m 0644 $TMP/frp_access_control.py /usr/local/lib/drlink/frp_access_control.py
+sudo install -m 0644 $TMP/frp_service_profiles.py /usr/local/lib/drlink/frp_service_profiles.py
+sudo install -m 0644 $TMP/frp_client_registry.py /usr/local/lib/drlink/frp_client_registry.py
 sudo install -m 0755 $TMP/frp-backup /usr/local/sbin/frp-backup
 sudo install -m 0755 $TMP/frp-restore /usr/local/sbin/frp-restore
-sudo install -m 0755 $TMP/frpctl /usr/local/sbin/frpctl
+sudo install -m 0755 $TMP/frpctl /usr/local/lib/drlink/frpctl
+sudo install -m 0755 $TMP/drlink /usr/local/bin/drlink
+sudo rm -f /usr/local/sbin/frpctl /usr/local/bin/frpctl
 sudo rm -rf $TMP"
 
-sshx "$SERVER" 'sudo test -f /var/lib/frp-auto-deploy/access-control.json' || blocker "ACL file missing before test"
-sshx "$SERVER" 'sudo test -f /var/lib/frp-auto-deploy/registry.json' || blocker "registry missing before test"
-sshx "$SERVER" 'sudo test -f /var/lib/frp-auto-deploy/service-profiles.json' || blocker "profiles missing before test"
+sshx "$SERVER" 'sudo test -f /var/lib/drlink/access-control.json' || blocker "ACL file missing before test"
+sshx "$SERVER" 'sudo test -f /var/lib/drlink/registry.json' || blocker "registry missing before test"
+sshx "$SERVER" 'sudo test -f /var/lib/drlink/service-profiles.json' || blocker "profiles missing before test"
 
-BAK_OK="/var/lib/frp-auto-deploy/backups/e2e-integrity-ok.tar.gz"
-BAK_DIR="/var/lib/frp-auto-deploy/backups"
+BAK_OK="/var/lib/drlink/backups/e2e-integrity-ok.tar.gz"
+BAK_DIR="/var/lib/drlink/backups"
 sshx "$SERVER" "sudo mkdir -p $BAK_DIR && sudo rm -f $BAK_OK"
 
 echo "=== normal backup PASS ==="
-sshx "$SERVER" "sudo frpctl create backup $BAK_OK" | tee "$OUT_DIR/backup-ok.txt"
+sshx "$SERVER" "sudo drlink create backup $BAK_OK" | tee "$OUT_DIR/backup-ok.txt"
 sshx "$SERVER" "sudo test -s $BAK_OK" || fail "normal backup archive missing"
 pass NORMAL_BACKUP
 
 echo "=== backup fails when ACL missing ==="
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json /var/lib/frp-auto-deploy/access-control.json.bak-integrity"
+sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json /var/lib/drlink/access-control.json.bak-integrity"
 set +e
-sshx "$SERVER" "sudo frpctl create backup $BAK_DIR/e2e-integrity-missing-acl.tar.gz" >"$OUT_DIR/backup-missing-acl.txt" 2>&1
+sshx "$SERVER" "sudo drlink create backup $BAK_DIR/e2e-integrity-missing-acl.tar.gz" >"$OUT_DIR/backup-missing-acl.txt" 2>&1
 rc=$?
 set -e
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/access-control.json.bak-integrity /var/lib/frp-auto-deploy/access-control.json"
+sshx "$SERVER" "sudo mv /var/lib/drlink/access-control.json.bak-integrity /var/lib/drlink/access-control.json"
 [[ "$rc" -ne 0 ]] || fail "backup should FAIL when ACL missing"
 grep -qiE 'access-control|ACL|authoritative|missing|required' "$OUT_DIR/backup-missing-acl.txt" \
   || echo "WARN: backup failed without clear ACL diagnostic (rc=$rc)"
-sshx "$SERVER" 'sudo test -s /var/lib/frp-auto-deploy/access-control.json' || fail "ACL missing after restore of original"
+sshx "$SERVER" 'sudo test -s /var/lib/drlink/access-control.json' || fail "ACL missing after restore of original"
 pass BACKUP_MISSING_ACL_FAIL
 
 echo "=== backup fails when registry missing ==="
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/registry.json /var/lib/frp-auto-deploy/registry.json.bak-integrity"
+sshx "$SERVER" "sudo mv /var/lib/drlink/registry.json /var/lib/drlink/registry.json.bak-integrity"
 set +e
-sshx "$SERVER" "sudo frpctl create backup $BAK_DIR/e2e-integrity-missing-reg.tar.gz" >"$OUT_DIR/backup-missing-reg.txt" 2>&1
+sshx "$SERVER" "sudo drlink create backup $BAK_DIR/e2e-integrity-missing-reg.tar.gz" >"$OUT_DIR/backup-missing-reg.txt" 2>&1
 rc=$?
 set -e
-sshx "$SERVER" "sudo mv /var/lib/frp-auto-deploy/registry.json.bak-integrity /var/lib/frp-auto-deploy/registry.json"
+sshx "$SERVER" "sudo mv /var/lib/drlink/registry.json.bak-integrity /var/lib/drlink/registry.json"
 [[ "$rc" -ne 0 ]] || fail "backup should FAIL when registry missing"
-sshx "$SERVER" 'sudo python3 -c "import json; r=json.load(open(\"/var/lib/frp-auto-deploy/registry.json\")); assert r.get(\"clients\"), \"empty registry\""' \
+sshx "$SERVER" 'sudo python3 -c "import json; r=json.load(open(\"/var/lib/drlink/registry.json\")); assert r.get(\"clients\"), \"empty registry\""' \
   || fail "registry empty/corrupt after recovery"
 pass BACKUP_MISSING_REGISTRY_FAIL
 
@@ -86,14 +89,14 @@ work = Path(tempfile.mkdtemp(prefix='frp-e2e-craft-'))
 try:
     with tarfile.open(src, 'r:gz') as tin:
         tin.extractall(work)
-    acl = work / 'payload' / 'var' / 'lib' / 'frp-auto-deploy' / 'access-control.json'
+    acl = work / 'payload' / 'var' / 'lib' / 'drlink' / 'access-control.json'
     if acl.exists():
         acl.unlink()
     man_path = work / 'manifest.json'
     man = json.loads(man_path.read_text())
     man['files'] = [
         e for e in (man.get('files') or [])
-        if e.get('path') != 'var/lib/frp-auto-deploy/access-control.json'
+        if e.get('path') != 'var/lib/drlink/access-control.json'
     ]
     man_path.write_text(json.dumps(man, indent=2, sort_keys=True) + '\n')
     sums = work / 'checksums.sha256'
@@ -124,7 +127,7 @@ for i in $(seq 1 30); do
   sleep 2
 done
 [[ "$CODE" == "200" ]] || fail "access plugin healthz not 200 after restore (got $CODE, before=$CODE_BEFORE)"
-sshx "$SERVER" 'systemctl is-active frp-access-plugin' | grep -qx active || fail "access plugin inactive after restore"
+sshx "$SERVER" 'systemctl is-active drlink-access' | grep -qx active || fail "access plugin inactive after restore"
 pass RESTORE_ACCESS_PLUGIN_READY
 
 cat >"$OUT_DIR/result.env" <<EOF

@@ -1,44 +1,69 @@
-# FRP Auto Deploy
+# Data Relay Link
 
-**Lightweight, CLI-first, Zero-Touch remote access management on top of official FRP.**
+**Data Relay Labs — secure connectivity for restricted and isolated environments.**
 
-FRP Auto Deploy helps you securely reach servers and services behind NAT or firewalls without building a full VPN, RMM platform, or custom FRP fork.
+**Data Relay** is the product family. **Data Relay Link** ships both pillars:
 
-- Official [`fatedier/frp`](https://github.com/fatedier/frp) only
+- **Secure Remote Access** (inbound) — lightweight, CLI-first Zero-Touch remote access over official pinned FRP
+- **Controlled Egress** (outbound) — agentless HTTP/HTTPS forward proxy for approved destinations only
+
+Canonical hierarchy (see `docs/PRODUCT_MASTER.md` §2.2):
+
+```text
+Data Relay
+  ├── Secure Remote Access  (Data Relay Link / FRP ops layer — inbound)
+  └── Controlled Egress     (agentless forward proxy — outbound)
+```
+
+Primary CLI: `sudo drlink`
+
+Documentation: **https://link.datarelay.run**
+
+Repository: **https://github.com/datarelay-labs/data-relay-link**
+
+Data Relay Link helps you securely reach servers behind NAT or firewalls **and** allow closed networks to reach only the Internet destinations they need — without a full VPN, RMM platform, SWG/SASE stack, or custom FRP fork.
+
+- Official [`fatedier/frp`](https://github.com/fatedier/frp) only (inbound)
 - Exact pinned/tested FRP version
 - Zero-Touch and manual enrollment
 - Immutable client identity
 - Persistent public-port reservations
 - SSH, HTTP, HTTPS passthrough, and Custom TCP
-- Named Access Lists / temporary TTL / connection access log
+- Access Rules / temporary TTL / connection access log
+- Agentless Controlled Egress profiles (FQDN + port + protocol http|https|tcp, source CIDR, default DENY, HTTP listen **6102**, Fixed TCP pool **6200–6299**)
 - Local and internal-LAN targets
 - Linux, macOS, and Windows client support according to the validation matrix below
-- One primary operator interface: `sudo frpctl`
+- One primary operator interface: `sudo drlink` (canonical CLI)
 
-Documentation: **https://frp.xdr.ooo**
+Controlled Egress guide: [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md)
+Product direction: [`docs/DATA_RELAY_ROADMAP.md`](docs/DATA_RELAY_ROADMAP.md)
+
+Inbound relay engine (implementation dependency): [`fatedier/frp`](https://github.com/fatedier/frp) **0.71.0**
 
 ---
 
-## Current release — v2.3.0 FINAL AUDIT CLOSURE
+## Prepared release — v2.4.0 (tag pending)
 
 | Item | Current |
 | --- | --- |
-| FRP Auto Deploy | **v2.3.0** |
+| Data Relay Link | **v2.4.0** (prepared / RC) |
 | Pinned upstream FRP | **v0.71.0** |
-| Intended install source | immutable `v2.3.0` tag (recreate/move on final audit HEAD) |
+| Intended install source | immutable `v2.4.0` tag **after** final audit freeze |
 | Default deployment mode | **Direct** |
 | Optional enterprise mode | **single-443** |
 | Intended scale | approximately **1–50 clients** |
 
-Current project version: **2.3.0**
+Current project version: **2.4.0**
 Current pinned FRP version: **v0.71.0**
 
-`v2.2.1` and earlier tags remain immutable historical releases. This tree
-prepares **v2.3.0 FINAL AUDIT CLOSURE** with FRP pinned at `0.71.0`. A
-premature GitHub `v2.3.0` tag/release already exists; after this PR lands,
-recreate or move that tag onto the final audit-closure HEAD before treating
-field installs as final. Following mutable `main` is explicit opt-in only,
-for example `FRP_RELEASE_CHANNEL=dev`.
+`v2.3.1`, `v2.3.0`, `v2.2.1` and earlier tags remain immutable historical releases. This tree
+prepares **v2.4.0** with FRP pinned at `0.71.0`. Historical tags must not be moved or recreated. Following mutable `main` is
+explicit opt-in only, for example `FRP_RELEASE_CHANNEL=dev`.
+
+Until the `v2.4.0` Git tag exists, do **not** install from a
+`raw.githubusercontent.com/.../v2.4.0/...` URL (it would 404). Use a verified
+local checkout, a release candidate bundle, or an explicit
+`FRP_RELEASE_CHANNEL=dev` / source-ref workflow instead.
 
 On development builds, use release channel, source ref, and verified bundle SHA256 to identify the exact build.
 
@@ -51,32 +76,40 @@ The post-**v2.2.1** documentation restoration phase
 **PASS**. That work restored [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md)
 without moving the immutable `v2.2.1` tag or changing runtime artifacts. It is
 historical context only; current product version and platform claims are under
-**v2.3.0 FINAL AUDIT CLOSURE** above.
+**v2.4.0** above.
 
 ---
 
-## Supported client platforms — v2.3.0
+## Supported client platforms — v2.4.0
 
 Real-host validation and container/CI portability are deliberately reported separately.
 
-| Platform | v2.3.0 validation claim |
+v2.4.0 is still an **untagged release candidate**. Platform rows below are the
+**required validation target** for the eventual stable tag, not a claim that the
+current candidate HEAD has already completed same-HEAD Real E2E PASS.
+
+| Platform | v2.4.0 candidate status |
 | --- | --- |
-| **Ubuntu 24 physical host** | **Real E2E validated** |
-| **Rocky Linux 8.10** | **Real E2E validated** |
-| **Rocky Linux 9.4** | **Real E2E validated** |
-| **Amazon Linux 2023** | **Real E2E validated** |
-| **macOS Apple Silicon** | **Real E2E validated** |
-| **Windows 10 / PowerShell 5.1** | **Real E2E validated** |
+| **Ubuntu 24 physical host** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Rocky Linux 8.10** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Rocky Linux 9.4** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Amazon Linux 2023** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **macOS Apple Silicon** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
+| **Windows 10 / PowerShell 5.1** | **REQUIRED / PENDING FINAL SAME-HEAD VALIDATION** |
 | **Amazon Linux 2** | **Container / CI portability only** — no live-host Real E2E claim |
 | **PowerShell 7** | **CI validated** — same-host Real E2E is claimed only where `pwsh` is actually installed |
 
 Additional automated Linux portability coverage includes Ubuntu 22.04/24.04, Rocky Linux 8/9, AlmaLinux 9, Amazon Linux 2023, and Amazon Linux 2.
 
-The FRP Auto Deploy **server remains Linux-based**. macOS and Windows are client platforms; a Windows FRP Auto Deploy server is not part of the current product scope.
+The Data Relay Link **server remains Linux-based**. macOS and Windows are client platforms; a Windows Data Relay Link server is not part of the current product scope.
 
-### What the final Real E2E covered
+Historical Real E2E PASS evidence for earlier releases (`v2.3.x` and before) remains
+valid for those immutable tags only. It is **not** same-HEAD evidence for this
+v2.4.0 candidate.
 
-Across applicable platforms, the v2.3.0 release path validated the actual product lifecycle, including:
+### What the final Real E2E must cover (required target)
+
+Across applicable platforms, the v2.4.0 release path must validate the actual product lifecycle, including:
 
 - install and Zero-Touch enrollment
 - persistent `CLIENT ID`
@@ -98,7 +131,7 @@ Across applicable platforms, the v2.3.0 release path validated the actual produc
 
 Amazon Linux 2 and PowerShell 7 remain intentionally narrower claims as shown in the table above.
 
-See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) and the full documentation at https://frp.xdr.ooo/reference/platforms.
+See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) and the full documentation at https://link.datarelay.run/reference/platforms.
 
 ---
 
@@ -118,12 +151,12 @@ Server
 
 Traditional support access often means requesting a VPN account, changing firewall/NAT rules, configuring a bastion, or deploying a separate remote-management product.
 
-FRP Auto Deploy instead lets the client initiate an outbound FRP tunnel to a server you control:
+Data Relay Link lets the client initiate an outbound FRP tunnel to a server you control:
 
 ```text
                     Internet
                         |
-              FRP Auto Deploy Server
+              Data Relay Link Server
                   Public endpoint
                         |
                  outbound FRP tunnel
@@ -159,23 +192,26 @@ This project is intentionally **not** a Web UI, database-backed RMM, Kubernetes 
 
 ## Install the server
 
-For normal field installation, use the immutable stable tag:
+After the immutable `v2.4.0` tag is published (final audit freeze), install with:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.3.0/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.4.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
+
+Until that tag exists, use a verified local checkout of this repository (or a
+signed/checked release-candidate bundle) instead of the raw tag URL above.
 
 Then verify:
 
 ```bash
-sudo frpctl show version
-sudo frpctl show status
-sudo frpctl doctor
+sudo drlink version
+sudo drlink show status
+sudo drlink system diagnostics
 ```
 
-FRP Auto Deploy does **not** automatically modify external firewall/NAT rules, cloud security groups, UFW, firewalld, iptables, or DNS-provider records.
+Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, UFW, firewalld, iptables, or DNS-provider records.
 
 ---
 
@@ -223,19 +259,19 @@ See [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md).
 On the server:
 
 ```bash
-sudo frpctl
+sudo drlink
 ```
 
-Then use the guided command:
+Guided path: **Clients → Connect a new client**, or run the expert command:
 
 ```text
-create zero-touch
+set client
 ```
 
-Or create an explicit SSH profile:
+Or create an explicit SSH enrollment (automation / advanced):
 
 ```bash
-sudo frpctl create enrollment \
+sudo drlink set enrollment \
   --one-line \
   --ssh \
   --ssh-user admin \
@@ -325,43 +361,55 @@ Supported service model:
 - HTTPS passthrough
 - Custom TCP
 
-HTTPS is TCP passthrough; FRP Auto Deploy does not terminate the application's TLS session or manage the application certificate.
+HTTPS is TCP passthrough; Data Relay Link does not terminate the application's TLS session or manage the application certificate.
 
 ---
 
-## `frpctl` — primary management interface
+## `drlink` — primary management interface
 
 Start the persistent operator CLI:
 
 ```bash
-sudo frpctl
+sudo drlink
 ```
 
 Typical server operations:
 
 ```text
 show status
-show version
+system version
 show clients
 show client <CLIENT-ID>
 show enrollments
 show groups
-show audit
+system audit
 
-create enrollment
-create backup
+set client
+set enrollment
+system backup
 
 set client <CLIENT-ID> label branch-a
 set client <CLIENT-ID> tag site seoul
 
-revoke client <CLIENT-ID>
-release service <CLIENT-ID> <SERVICE-ID>
-release client <CLIENT-ID>
+show internet-profiles
+set internet-profile vendor-api
+set internet-profile vendor-api source 10.0.0.0/24
+set internet-profile vendor-api destination api.example.com 443 https
+set internet-profile vendor-api enabled
 
-doctor
-update project --check
-update frp --check
+unset client <CLIENT-ID> trust
+unset client <CLIENT-ID> service <SERVICE-ID>
+unset client <CLIENT-ID>
+unset enrollment <ENROLLMENT-ID>
+
+system diagnostics
+system update product
+system update engine
+system update check-engine
 ```
+
+Older resource-first forms (`client list`, `enrollment create`, …) still work as
+hidden compatibility aliases. Prefer the canonical forms above.
 
 The canonical client identity is immutable `CLIENT ID`. Label, hostname, note, tags, and groups are metadata and do not replace identity.
 
@@ -380,14 +428,14 @@ uninstall != release
 update    != re-enrollment
 ```
 
-| Operation | Identity | Public port |
+| Operation | Identity / trust | Public port |
 | --- | --- | --- |
-| disable service | kept | **reserved** |
-| enable service | kept | **same port reused** |
-| edit service | kept | **preserved** |
-| revoke client | management blocked | **reserved** |
-| release service | kept | **released for that service** |
-| release client | removed | **released** |
+| unset service <SERVICE> enabled | kept | **reserved** |
+| set service <SERVICE> enabled | kept | **same port reused** |
+| set service <SERVICE> … | kept | **preserved** |
+| unset client <CLIENT> trust | management blocked | **reserved** |
+| unset client <CLIENT> service <SERVICE> | kept | **released for that service** |
+| unset client <CLIENT> | client record and management identity removed | **all ports released** |
 | local client uninstall | server identity remains | **reserved** |
 | normal update | preserved | **preserved** |
 
@@ -411,7 +459,7 @@ ssh -p 6000 admin@access.example.com
 ssh -p 6000 admin@203.0.113.10
 ```
 
-IP fallback is preserved. FRP Auto Deploy does not automatically manage DNS-provider records, ACME/Let's Encrypt, external NAT, or application certificates.
+IP fallback is preserved. Data Relay Link does not automatically manage DNS-provider records, ACME/Let's Encrypt, external NAT, or application certificates.
 
 ---
 
@@ -430,18 +478,32 @@ v2.3.0 includes the lightweight Group model intended for a few to a few dozen cl
 
 Dynamic Group, nested hierarchy, broad destructive fleet operations, canary rollout frameworks, and hundreds/thousands-client orchestration are not current core scope.
 
-## Access Control Pack
+## Access Control Lists (ACLs)
 
-Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE):
+Included in prepared `v2.3.0` (FINAL AUDIT CLOSURE) and carried forward:
 
-- Named reusable Access Lists (IPv4/IPv6 CIDR)
-- Service modes: `PUBLIC` (default) and `ALLOWLIST`
+- Reusable ACLs (IPv4/IPv6 CIDR sources)
+- Service modes: `PUBLIC` (default) and assigned ACL
 - Optional temporary sources with absolute expiry (`expires_at`)
-- Bounded connection ALLOW/DENY log
-- `frpctl access ...` interactive menu and scriptable CLI
-- FRP 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed for ALLOWLIST)
+- Bounded connection ALLOW/DENY log (`show access-log`)
+- Final public CLI family: `show/set/unset/test` ACL commands
+- Relay Engine (FRP) 0.71.0 NewUserConn plugin enforcement (loopback-only; fail-closed when a rule is assigned)
 
 IP allowlisting is defense-in-depth. Keep target authentication enabled.
+
+Everyday commands:
+
+```text
+show acls
+show acl <ACL>
+set acl <ACL>
+set acl <ACL> source <CIDR>
+set acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL> service <CLIENT> <SERVICE>
+unset acl <ACL> source <CIDR>
+unset acl <ACL>
+test acl <CLIENT> <SERVICE> <SOURCE-IP>
+```
 
 ---
 
@@ -470,17 +532,15 @@ See [`docs/SECURITY.md`](docs/SECURITY.md).
 ## Backup, restore, and updates
 
 ```bash
-sudo frpctl create backup
-sudo frpctl restore backup <path>
+sudo drlink system backup
+sudo drlink system restore <path>
 
-sudo frpctl update project --check
-sudo frpctl update project
-
-sudo frpctl show upstream
-sudo frpctl update frp --check
+sudo drlink system update product
+sudo drlink system update engine
+sudo drlink system update check-engine
 ```
 
-`show upstream` is informational. FRP Auto Deploy does not automatically follow the newest upstream FRP release; it stays on the explicitly qualified pinned version.
+`system update check-engine` is informational. Data Relay Link does not automatically follow the newest upstream Relay Engine (FRP) release; it stays on the explicitly qualified pinned version.
 
 Legacy clients that do not have persisted release identity fail closed on remote update. Use the **one-time verified bridge** documented in [`docs/FRP_UPGRADE.md`](docs/FRP_UPGRADE.md); do not guess or silently switch a legacy install to a release channel.
 
@@ -504,9 +564,9 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 | Topic | Link |
 | --- | --- |
-| Full documentation | **https://frp.xdr.ooo** |
-| Supported platforms | https://frp.xdr.ooo/reference/platforms |
-| Quick Start | https://frp.xdr.ooo/getting-started/quickstart |
+| Full documentation | **https://link.datarelay.run** |
+| Supported platforms | https://link.datarelay.run/reference/platforms |
+| Quick Start | https://link.datarelay.run/getting-started/quickstart |
 | CLI Reference | [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
 | Deployment modes | [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md) |
 | Security | [`docs/SECURITY.md`](docs/SECURITY.md) |
@@ -519,4 +579,4 @@ Legacy clients that do not have persisted release identity fail closed on remote
 
 ## Product definition in one sentence
 
-> FRP Auto Deploy v2.3.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations without requiring a Web UI, database, or large-scale fleet orchestration.
+> Data Relay Link v2.4.0 is a lightweight, CLI-first, Zero-Touch deployment and operations layer over official pinned FRP 0.71.0 for securely connecting and managing roughly 1–50 NAT/firewall-behind Linux, macOS, and Windows clients while preserving immutable client identity, service identity, and public-port reservations — with Controlled HTTP/HTTPS Egress and Fixed TCP Egress — without requiring a Web UI, database, or large-scale fleet orchestration.

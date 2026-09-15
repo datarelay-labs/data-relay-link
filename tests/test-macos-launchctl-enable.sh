@@ -47,7 +47,7 @@ frp_launchd_usable
 
 : >"$FRP_TEST_LAUNCHCTL_LOG"
 frp_macos_launchd_set_enabled enable
-grep -q 'enable system/com.datarelay.frp-auto-deploy.frpc' "$FRP_TEST_LAUNCHCTL_LOG"
+grep -q 'enable system/com.datarelay.drlink.frpc' "$FRP_TEST_LAUNCHCTL_LOG"
 
 export FRP_TEST_LAUNCHCTL_ENABLE_FAIL=1
 if frp_macos_launchd_set_enabled enable >/dev/null 2>"$TMP/enable.err"; then

@@ -15,8 +15,8 @@ def load_module(name, relative):
     here = Path(__file__).resolve()
     candidates = [
         here.parent.parent / 'lib' / relative,
-        Path(ROOT) / 'usr/local/lib/frp-auto-deploy' / relative if ROOT else None,
-        Path('/usr/local/lib/frp-auto-deploy') / relative,
+        Path(ROOT) / 'usr/local/lib/drlink' / relative if ROOT else None,
+        Path('/usr/local/lib/drlink') / relative,
     ]
     for path in candidates:
         if path is not None and path.is_file():
@@ -37,11 +37,39 @@ def fail(message):
 
 
 def registry_path():
-    cfg = json.loads(Path(ROOT + '/etc/frp-auto-deploy/config.json').read_text())
+    cfg = json.loads(Path(ROOT + '/etc/drlink/config.json').read_text())
     path = Path(cfg['registry_file'])
     if ROOT and not str(path).startswith(ROOT):
         path = Path(ROOT + str(path))
     return path
+
+
+def parse_registry(state):
+    """Shared schema + group invariant gate for every group tooling read."""
+    if state.get('schema_version') != 2:
+        fail('unsupported registry schema version')
+    if not isinstance(state.get('clients', {}), dict):
+        fail('registry clients must be an object')
+    try:
+        groups = CREG.ensure_groups_map(state)
+        CREG.validate_group_invariants(state)
+    except ValueError as exc:
+        fail(str(exc))
+    if state.get('groups') is None:
+        state['groups'] = groups
+    return state
+
+
+def read_registry():
+    """Read-only load used for confirmation previews (no lock held)."""
+    path = registry_path()
+    if not path.exists():
+        fail('registry.json is missing (authoritative registry state required)')
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        fail('unable to read registry.json: %s' % exc)
+    return parse_registry(state)
 
 
 def mutate_registry(callback):
@@ -57,17 +85,12 @@ def mutate_registry(callback):
             state = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             fail('unable to read registry.json: %s' % exc)
-        if state.get('schema_version') != 2:
-            fail('unsupported registry schema version')
-        if not isinstance(state.get('clients', {}), dict):
-            fail('registry clients must be an object')
-        try:
-            groups = CREG.ensure_groups_map(state)
-        except ValueError as exc:
-            fail(str(exc))
-        if state.get('groups') is None:
-            state['groups'] = groups
+        parse_registry(state)
         result = callback(state)
+        try:
+            CREG.validate_group_invariants(state)
+        except ValueError as exc:
+            fail('refusing to write registry: %s' % exc)
         CREG.atomic_write_json(path, state)
         return result
     finally:
@@ -103,8 +126,13 @@ def cmd_create(args):
         return gid, group
 
     gid, group = mutate_registry(change)
-    print('Created group %s' % gid)
-    print('Name     : %s' % group['name'])
+    print('Created group: %s' % group['name'])
+    print()
+    print('Add a client:')
+    print('  set client <CLIENT> group %s' % group['name'])
+    print()
+    print('View:')
+    print('  show group %s' % group['name'])
     audit('group.created', group_id=gid, group_name=group['name'])
 
 
@@ -145,9 +173,56 @@ def cmd_set(args):
     )
 
 
+def group_member_ids(state, gid):
+    return [
+        mid
+        for mid, client in (state.get('clients') or {}).items()
+        if isinstance(client, dict) and gid in (client.get('group_ids') or [])
+    ]
+
+
+def confirm_group_delete(selector, yes=False):
+    """Show delete impact and confirm before mutating.
+
+    The prompt happens without the registry lock, so the immutable GROUP ID
+    (never the selector) is returned and the impact is revalidated under the
+    lock: a rename or membership change during the prompt must not silently
+    redirect or widen the delete.
+    """
+    state = read_registry()
+    gid, group = CREG.resolve_manual_group_or_exit(state, selector)
+    name = CREG.sanitize_display(group.get('name') or gid, 64)
+    members = group_member_ids(state, gid)
+    if yes:
+        return gid, name, members
+    if not sys.stdin.isatty():
+        fail(
+            'deleting group "%s" affects %d client(s); re-run with --yes to '
+            'confirm non-interactively.' % (name, len(members))
+        )
+    print('Group ID      : %s' % gid)
+    print('Name          : %s' % name)
+    print('Client count  : %d' % len(members))
+    print('Group membership is removed. Client identity, services, and ports')
+    print('are not changed.')
+    answer = input(
+        'Delete group "%s" from %d clients? [y/N]: ' % (name, len(members))
+    ).strip().lower()
+    if answer not in ('y', 'yes'):
+        raise SystemExit('Aborted.')
+    return gid, name, members
+
+
 def cmd_delete(args):
+    gid, name, members_before = confirm_group_delete(args.selector, yes=args.yes)
+    expected = sorted(str(mid) for mid in members_before)
+
     def change(state):
-        gid, group = CREG.resolve_manual_group_or_exit(state, args.selector)
+        group = state['groups'].get(gid)
+        if not isinstance(group, dict):
+            fail('group %s changed while waiting for confirmation; re-run the command' % gid)
+        if sorted(str(mid) for mid in group_member_ids(state, gid)) != expected:
+            fail('group membership changed while waiting for confirmation; re-run the command')
         for client in state['clients'].values():
             if not isinstance(client, dict):
                 continue
@@ -157,12 +232,18 @@ def cmd_delete(args):
                 fail('client has malformed group_ids')
             CREG.set_client_group_ids(client, [item for item in ids if item != gid])
         state['groups'].pop(gid)
-        return gid, str(group.get('name') or '')
+        return str(group.get('name') or '')
 
-    gid, name = mutate_registry(change)
+    name = mutate_registry(change) or name
     print('Deleted group %s (%s)' % (gid, name))
+    print('Removed group membership from %d client(s).' % len(expected))
     print('Client identity, services, and ports were not changed.')
-    audit('group.deleted', group_id=gid, group_name=name)
+    audit(
+        'group.deleted',
+        group_id=gid,
+        group_name=name,
+        details={'client_count': len(expected)},
+    )
 
 
 def change_membership(args, adding):
@@ -211,6 +292,11 @@ def build_parser():
     set_cmd.set_defaults(func=cmd_set)
     delete = subs.add_parser('delete')
     delete.add_argument('selector')
+    delete.add_argument(
+        '--yes',
+        action='store_true',
+        help='confirm the delete without an interactive prompt',
+    )
     delete.set_defaults(func=cmd_delete)
     for command, adding in (('add-member', True), ('remove-member', False)):
         member = subs.add_parser(command)

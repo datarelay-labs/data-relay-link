@@ -30,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 
 function Show-FrpInstallHelp {
     @'
-frp-auto-deploy Windows client installer
+Data Relay Link Windows client installer
 
 Zero-touch:
   .\install-client.ps1 -ZeroTouch -AllocatorUrl https://HOST/enroll `
@@ -40,7 +40,8 @@ Environment equivalents:
   FRP_ALLOCATOR_URL, FRP_ALLOCATOR_CA_SHA256, FRP_BOOTSTRAP_TICKET
 
 After enrollment:
-  tools\frp-client.cmd start|stop|status|info|update|uninstall|doctor
+  tools\drlink.cmd start|stop|status|info|update|uninstall|doctor
+  (compatibility: tools\frp-client.cmd)
 
 Notes:
   - ENROLL ONCE: if already enrolled, refuse ticket re-use; run frp-client start
@@ -54,7 +55,7 @@ if ($Help) { Show-FrpInstallHelp; exit 0 }
 $libDir = Join-Path $PSScriptRoot 'lib'
 foreach ($mod in @(
         'FrpPaths.ps1', 'FrpLock.ps1', 'FrpCrypto.ps1', 'FrpTls.ps1', 'FrpState.ps1', 'FrpDraft.ps1',
-        'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpAutostart.ps1', 'FrpBootstrap.ps1'
+        'FrpConfig.ps1', 'FrpProcess.ps1', 'FrpShim.ps1', 'FrpAutostart.ps1', 'FrpBootstrap.ps1'
     )) {
     $path = Join-Path $libDir $mod
     if (-not (Test-Path -LiteralPath $path)) {
@@ -84,38 +85,53 @@ if (-not $ZeroTouch) {
     exit 1
 }
 
-# Finding A: Zero-Touch lost-response recovery. If a prior enrollment
-# attempt on this host redeemed a ticket and/or enrolled but crashed (or the
-# HTTP response was lost) before local state was committed, a matching
-# crash-safe pending-enrollment transaction lets Invoke-FrpZeroTouch resume
-# without a Bootstrap Ticket or CA hash. Do not require them up front in
-# that case (the ticket is single-use and must not be re-supplied/re-used).
-Initialize-FrpDirectories
-$__frpResumeMachineId = Get-FrpOrCreateClientId
-$__frpResumePending = (-not (Test-FrpIsEnrolled)) -and (Test-FrpPendingEnrollMatches -MachineId $__frpResumeMachineId)
-if ($__frpResumePending -and -not $AllocatorUrl) {
-    $__frpPendingPeek = Get-FrpPendingEnrollRaw
-    if ($__frpPendingPeek -and $__frpPendingPeek.allocator_url) {
-        $AllocatorUrl = [string]$__frpPendingPeek.allocator_url
-    }
-}
-
-if (-not $AllocatorUrl) {
-    Write-Host 'ERROR: -AllocatorUrl / FRP_ALLOCATOR_URL is required'
+# The installer's pre-flight already reads and can write identity state (it
+# materializes the immutable client id), so it runs inside the same client
+# lifecycle lock that Invoke-FrpZeroTouch holds. The lock is re-entrant per
+# process; a second concurrent installer is refused here rather than racing
+# the first one into a split identity.
+if (-not (Enter-FrpClientLock)) {
+    Write-Host 'ERROR: another Data Relay Link client lifecycle operation is already running on this host.'
+    Write-Host 'FAILURE_CLASS=CLIENT_LOCK_BUSY'
+    Write-Host 'Wait for it to finish, then check status with: drlink status'
     exit 1
 }
-if (-not $__frpResumePending) {
-    if (-not $CaSha256) {
-        Write-Host 'ERROR: -CaSha256 / FRP_ALLOCATOR_CA_SHA256 is required'
-        exit 1
+try {
+    # Finding A: Zero-Touch lost-response recovery. If a prior enrollment
+    # attempt on this host redeemed a ticket and/or enrolled but crashed (or the
+    # HTTP response was lost) before local state was committed, a matching
+    # crash-safe pending-enrollment transaction lets Invoke-FrpZeroTouch resume
+    # without a Bootstrap Ticket or CA hash. Do not require them up front in
+    # that case (the ticket is single-use and must not be re-supplied/re-used).
+    Initialize-FrpDirectories
+    $__frpResumeMachineId = Get-FrpOrCreateClientId
+    $__frpResumePending = (-not (Test-FrpIsEnrolled)) -and (Test-FrpPendingEnrollMatches -MachineId $__frpResumeMachineId)
+    if ($__frpResumePending -and -not $AllocatorUrl) {
+        $__frpPendingPeek = Get-FrpPendingEnrollRaw
+        if ($__frpPendingPeek -and $__frpPendingPeek.allocator_url) {
+            $AllocatorUrl = [string]$__frpPendingPeek.allocator_url
+        }
     }
-    if (-not $BootstrapTicket) {
-        Write-Host 'ERROR: -BootstrapTicket / FRP_BOOTSTRAP_TICKET is required'
-        exit 1
-    }
-}
 
-$rc = Invoke-FrpZeroTouch -AllocatorUrl $AllocatorUrl -CaSha256 $CaSha256 `
-    -BootstrapTicket $BootstrapTicket -Platform $Platform -ServicesJson $ServicesJson `
-    -SshUser $SshUser -Hostname $Hostname -SkipStart:$SkipStart -SkipDownload:$SkipDownload
-exit [int]$rc
+    if (-not $AllocatorUrl) {
+        Write-Host 'ERROR: -AllocatorUrl / FRP_ALLOCATOR_URL is required'
+        exit 1
+    }
+    if (-not $__frpResumePending) {
+        if (-not $CaSha256) {
+            Write-Host 'ERROR: -CaSha256 / FRP_ALLOCATOR_CA_SHA256 is required'
+            exit 1
+        }
+        if (-not $BootstrapTicket) {
+            Write-Host 'ERROR: -BootstrapTicket / FRP_BOOTSTRAP_TICKET is required'
+            exit 1
+        }
+    }
+
+    $rc = Invoke-FrpZeroTouch -AllocatorUrl $AllocatorUrl -CaSha256 $CaSha256 `
+        -BootstrapTicket $BootstrapTicket -Platform $Platform -ServicesJson $ServicesJson `
+        -SshUser $SshUser -Hostname $Hostname -SkipStart:$SkipStart -SkipDownload:$SkipDownload
+    exit [int]$rc
+} finally {
+    Exit-FrpClientLock
+}

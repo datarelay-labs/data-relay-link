@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+## 2.4.0 — candidate
+
+Feature expansion on pinned FRP **0.71.0** before FEATURE FREEZE. Does **not**
+move, delete, or recreate published **v2.3.1** / **v2.3.0**.
+
+- Fixed TCP Egress (destination-pinned listeners on 6200–6299; schema v3)
+- `drlink egress explain` (policy + DNS preview; no live connect / no mutation)
+- Small egress recipe framework (`drlink egress recipe …`; apply never auto-enables)
+- Production-realistic evidence contract: canonical `perf/baseline.json` required for PASS
+- Short URL Real E2E is a hard release gate (channel matched to tree identity)
+- SPDX SBOM generator + GitHub Artifact Attestation workflow
+- Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+- Attestation verification is authoritative: `gh attestation verify` failure fails
+  the release-integrity gate (no `DEFERRED` outcome)
+- Attestation binds tag → commit → checked-out HEAD → attested subjects, and
+  rejects a mutable or non-immutable `ref` input
+- Single authoritative artifact ordering via `scripts/build-release-artifacts.sh`
+  (build → `SHA256SUMS` → SBOM → verify); derived metadata is excluded from
+  `SHA256SUMS`, removing the SBOM/checksum circularity
+- SBOM is deterministic per source commit and binds to it; `scripts/verify-sbom.sh`
+  gates that binding. `dist/sbom.spdx.json` is generated, no longer committed
+- `scripts/check-version-consistency.sh` derives release-doc assertions from
+  `VERSION` and enforces published-tag immutability in documentation
+
+## 2.3.1 — 2026-09-10
+
+Patch release on pinned FRP **0.71.0**. Does **not** move, delete, or recreate
+published **v2.3.0**.
+
+- Repository identity: `datarelay-labs/data-relay-link` with primary CLI `drlink`
+- Fix Zero-Touch client install false `HEALTH_CHECK_FAILED` caused by polling the
+  legacy `frpc` systemd unit after rename to `drlink-client` (bounded retry/backoff)
+- Fix macOS Zero-Touch false `HEALTH_CHECK_FAILED` when `wait_for_proxies` used a
+  UTC ISO log cursor that never appears in local-time frpc file logs (byte-offset
+  `logpos` cursor with rotation/truncation safety)
+- Ensure successful client install finishes with `drlink` on PATH and no PATH `frpctl`
+- Homebrew formula renamed to `packaging/homebrew/Formula/data-relay-link.rb`
+- Access Control Real E2E harness no longer hard-requires an AL2023 inventory client
+
 ## 2.3.0 — 2026-09-09
 
 Feature-complete product release on pinned FRP **0.71.0**. Does not move or
@@ -56,8 +95,8 @@ this release.
 ### Audit closure
 
 - FINAL AUDIT CLOSURE hardening and release-documentation sync for prepared
-  **2.3.0** (recreate or move the premature GitHub `v2.3.0` tag onto final
-  audit-closure HEAD; no new product features)
+  **2.3.0**; no new product features. The published `v2.3.0` tag is immutable
+  and was never moved — closure work shipped in later version tags instead.
 
 ## 2.2.1 — 2026-09-08
 
