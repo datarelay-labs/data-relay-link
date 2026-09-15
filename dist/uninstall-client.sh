@@ -357,6 +357,7 @@ fi
 # preserve them when the server role remains on this host.
 if [[ "$SERVER_PRESENT" != "1" ]]; then
   frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
+  frp_u_rm_file "$(frp_u_path /usr/bin/drlink)"
   frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
   frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-support-bundle)"
 fi
