@@ -82,6 +82,7 @@ seed_server() {
   : >"$tree/usr/local/bin/drlink"
   cp "$ROOT/lib/frp-role-ownership.sh" "$tree/usr/local/lib/drlink/frp-role-ownership.sh"
   cp "$ROOT/lib/frp_project_files.py" "$tree/usr/local/lib/drlink/frp_project_files.py"
+  mkdir -p "$tree/usr/local/lib/drlink/data/egress-recipes"
   : >"$tree/etc/systemd/system/drlink-server.service"
 }
 
@@ -140,6 +141,7 @@ if ! "$ROOT/dist/uninstall-server.sh" --purge --yes \
 fi
 assert_no_bash_source_error "$WORKDIR/server-file.err"
 [[ ! -f "$TREE/usr/local/bin/drlink" ]] || fail "server file uninstall left drlink"
+[[ ! -e "$TREE/usr/local/lib/drlink" ]] || fail "server file uninstall left library tree"
 pass "SERVER_FILE_EXECUTION"
 
 # --- server: stdin execution ---
@@ -160,6 +162,7 @@ assert_no_bash_source_error "$WORKDIR/server-stdin.err"
 grep -q 'BASH_SOURCE\[0\]: unbound variable' "$WORKDIR/server-stdin.err" && \
   fail "server stdin still hits BASH_SOURCE unbound"
 [[ ! -f "$TREE/etc/frp/server_token" ]] || fail "server stdin purge left token"
+[[ ! -e "$TREE/usr/local/lib/drlink" ]] || fail "server stdin purge left library tree"
 pass "SERVER_STDIN_EXECUTION"
 
 # --- client: file execution ---
@@ -176,6 +179,8 @@ if ! "$ROOT/dist/uninstall-client.sh" \
 fi
 assert_no_bash_source_error "$WORKDIR/client-file.err"
 [[ ! -f "$TREE/etc/frp/client-state.json" ]] || fail "client file left state"
+[[ ! -e "$TREE/usr/local/lib/drlink" ]] || fail "client file left library tree"
+[[ ! -e "$TREE/etc/frp" ]] || fail "client file left /etc/frp"
 pass "CLIENT_FILE_EXECUTION"
 
 # --- client: stdin execution ---

@@ -679,8 +679,10 @@ if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/s443-un.out" 2>"$WORKDIR/s443-un.err
 fi
 [[ ! -f "$SWITCH/etc/systemd/system/drlink-frontend.service" ]] || fail "frontend unit left after uninstall"
 [[ ! -f "$SWITCH/etc/drlink/frontend.conf" ]] || fail "frontend.conf left after uninstall"
-[[ -s "$SWITCH/etc/frp/server_token" ]] || fail "single443 uninstall dropped token"
-[[ -f "$SWITCH/etc/drlink/pki/ca.key" ]] || fail "single443 uninstall dropped CA"
+[[ ! -e "$SWITCH/etc/frp/server_token" ]] || fail "single443 uninstall left token"
+[[ ! -e "$SWITCH/etc/drlink/pki/ca.key" ]] || fail "single443 uninstall left CA"
+[[ ! -e "$SWITCH/etc/frp" ]] || fail "single443 uninstall left /etc/frp"
+[[ ! -e "$SWITCH/etc/drlink" ]] || fail "single443 uninstall left /etc/drlink"
 if grep -nE '(^|[[:space:]])(apt-get|apt|dnf|yum)[[:space:]]+(remove|purge)([[:space:]]|$)' "$ROOT/uninstall-server.sh"; then
   fail "uninstall removes packages"
 fi
@@ -803,16 +805,26 @@ if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/suninst.out" 2>"$WORKDIR/suninst.err
   fail "default server uninstall"
 fi
 [[ ! -x "$SRV/usr/local/bin/frps" ]] || fail "frps still present"
-[[ -s "$SRV/etc/frp/server_token" ]] || fail "token not preserved"
-[[ -f "$SRV/etc/drlink/pki/ca.key" ]] || fail "CA not preserved"
-[[ -f "$SRV/var/lib/drlink/registry.json" ]] || fail "registry not preserved"
-grep -q 'Configuration, token, and registry were preserved' "$WORKDIR/suninst.out" || fail "preserve message"
-pass "SERVER_UNINSTALL_PRESERVES_STATE"
+[[ ! -e "$SRV/etc/frp/server_token" ]] || fail "token preserved after default uninstall"
+[[ ! -e "$SRV/etc/drlink/pki/ca.key" ]] || fail "CA preserved after default uninstall"
+[[ ! -e "$SRV/var/lib/drlink/registry.json" ]] || fail "registry preserved after default uninstall"
+[[ ! -e "$SRV/usr/local/lib/drlink" ]] || fail "library tree preserved after default uninstall"
+[[ ! -e "$SRV/etc/frp" ]] || fail "/etc/frp preserved after default uninstall"
+[[ ! -e "$SRV/etc/drlink" ]] || fail "/etc/drlink preserved after default uninstall"
+[[ ! -e "$SRV/var/lib/drlink" ]] || fail "/var/lib/drlink preserved after default uninstall"
+grep -q 'Data Relay Link server removed from this host' "$WORKDIR/suninst.out" || fail "complete-removal message"
+if grep -qi 'preserved' "$WORKDIR/suninst.out"; then
+  fail "default uninstall claimed state was preserved"
+fi
+pass "SERVER_UNINSTALL_REMOVES_STATE"
 
-# idempotent second uninstall
+# idempotent second uninstall must not recreate product directories
 "$ROOT/uninstall-server.sh" >"$WORKDIR/suninst2.out" 2>"$WORKDIR/suninst2.err" || fail "second server uninstall"
+[[ ! -e "$SRV/usr/local/lib/drlink" ]] || fail "second uninstall recreated libdir"
+[[ ! -e "$SRV/var/lib/drlink" ]] || fail "second uninstall recreated var/lib"
+pass "SERVER_UNINSTALL_IDEMPOTENT"
 
-# Reinstall after uninstall
+# Reinstall after complete uninstall must behave like a new machine
 unset FRP_UNINSTALL_TEST_ROOT
 export FRP_SERVER_TEST_ROOT="$SRV"
 export FRP_INSTALL_HOOK_NEW_BINARY="$WORKDIR/frps-0.71.0"
@@ -821,33 +833,44 @@ if ! frp_server_main >"$WORKDIR/re-after.out" 2>"$WORKDIR/re-after.err"; then
   cat "$WORKDIR/re-after.out" "$WORKDIR/re-after.err" >&2
   fail "reinstall after uninstall"
 fi
-CA_FP3="$(python3 - "$SRV/etc/drlink/pki/ca.crt" <<'PY'
-import hashlib, subprocess, sys, tempfile
-from pathlib import Path
-src = Path(sys.argv[1])
-der = tempfile.NamedTemporaryFile(delete=False)
-der.close()
-subprocess.check_call(["openssl", "x509", "-in", str(src), "-outform", "DER", "-out", der.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-print(hashlib.sha256(Path(der.name).read_bytes()).hexdigest())
-Path(der.name).unlink()
-PY
-)"
-[[ "$CA_FP" == "$CA_FP3" ]] || fail "CA changed after uninstall/reinstall"
-[[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "token changed after uninstall/reinstall"
-[[ "$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "registry changed after uninstall/reinstall"
+[[ -s "$SRV/etc/frp/server_token" ]] || fail "fresh reinstall missing token"
+[[ -f "$SRV/etc/drlink/pki/ca.key" ]] || fail "fresh reinstall missing CA"
+[[ -f "$SRV/var/lib/drlink/registry.json" ]] || fail "fresh reinstall missing registry"
+[[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" != "$TOKEN_SHA" ]] \
+  || fail "fresh reinstall reused old token"
+if grep -qi 'already installed\|partial install\|resume pending' "$WORKDIR/re-after.out" "$WORKDIR/re-after.err"; then
+  fail "fresh reinstall classified as existing/partial"
+fi
 pass "SERVER_REINSTALL_AFTER_UNINSTALL"
 
-# Purge without --yes refused
-export FRP_UNINSTALL_TEST_ROOT="$SRV"
-if "$ROOT/uninstall-server.sh" --purge >"$WORKDIR/purge-no.out" 2>"$WORKDIR/purge-no.err"; then
-  fail "purge without --yes should fail"
+# --purge without --yes is a compatibility alias and must still complete
+PURGE_ALIAS="$WORKDIR/purge-alias"
+mkdir -p "$PURGE_ALIAS/etc/frp" "$PURGE_ALIAS/etc/drlink/pki" "$PURGE_ALIAS/var/lib/drlink" \
+  "$PURGE_ALIAS/usr/local/lib/drlink" "$PURGE_ALIAS/usr/local/bin"
+echo token >"$PURGE_ALIAS/etc/frp/server_token"
+echo cakey >"$PURGE_ALIAS/etc/drlink/pki/ca.key"
+echo '{"clients":{}}' >"$PURGE_ALIAS/var/lib/drlink/registry.json"
+echo cfg >"$PURGE_ALIAS/etc/drlink/config.json"
+cp "$ROOT/lib/frp_project_files.py" "$PURGE_ALIAS/usr/local/lib/drlink/"
+cp "$ROOT/lib/server-project-files.manifest" "$PURGE_ALIAS/usr/local/lib/drlink/"
+export FRP_UNINSTALL_TEST_ROOT="$PURGE_ALIAS"
+if ! "$ROOT/uninstall-server.sh" --purge >"$WORKDIR/purge-no.out" 2>"$WORKDIR/purge-no.err"; then
+  cat "$WORKDIR/purge-no.out" "$WORKDIR/purge-no.err" >&2
+  fail "purge alias without --yes should succeed"
 fi
-grep -q 'FAILURE_CLASS=PURGE_CONFIRMATION_REQUIRED' "$WORKDIR/purge-no.err" || fail "purge confirm class"
-[[ -f "$SRV/etc/frp/server_token" ]] || fail "purge without yes deleted token"
-pass "SERVER_PURGE_EXPLICIT_ONLY"
+[[ ! -e "$PURGE_ALIAS/etc/frp/server_token" ]] || fail "purge alias left token"
+pass "SERVER_PURGE_COMPAT_ALIAS"
 
 PURGE_TREE="$WORKDIR/purge-ok"
-cp -a "$SRV" "$PURGE_TREE"
+# Rebuild a server-shaped tree for --purge --yes compatibility.
+mkdir -p "$PURGE_TREE/etc/frp" "$PURGE_TREE/etc/drlink/pki" "$PURGE_TREE/var/lib/drlink" \
+  "$PURGE_TREE/usr/local/lib/drlink/data/egress-recipes" "$PURGE_TREE/usr/local/bin"
+echo token >"$PURGE_TREE/etc/frp/server_token"
+echo cakey >"$PURGE_TREE/etc/drlink/pki/ca.key"
+echo '{"clients":{}}' >"$PURGE_TREE/var/lib/drlink/registry.json"
+echo cfg >"$PURGE_TREE/etc/drlink/config.json"
+cp "$ROOT/lib/frp_project_files.py" "$PURGE_TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/server-project-files.manifest" "$PURGE_TREE/usr/local/lib/drlink/"
 export FRP_UNINSTALL_TEST_ROOT="$PURGE_TREE"
 if ! "$ROOT/uninstall-server.sh" --purge --yes >"$WORKDIR/purge.out" 2>"$WORKDIR/purge.err"; then
   cat "$WORKDIR/purge.out" "$WORKDIR/purge.err" >&2
@@ -856,10 +879,18 @@ fi
 [[ ! -e "$PURGE_TREE/etc/frp/server_token" ]] || fail "purge left token"
 [[ ! -e "$PURGE_TREE/etc/drlink/pki/ca.key" ]] || fail "purge left CA"
 [[ ! -e "$PURGE_TREE/var/lib/drlink/registry.json" ]] || fail "purge left registry"
+[[ ! -e "$PURGE_TREE/usr/local/lib/drlink" ]] || fail "purge left library tree"
 pass "SERVER_PURGE_COMPLETE"
 
 PARTIAL="$WORKDIR/purge-partial"
-cp -a "$SRV" "$PARTIAL"
+mkdir -p "$PARTIAL/etc/frp" "$PARTIAL/etc/drlink/pki" "$PARTIAL/var/lib/drlink" \
+  "$PARTIAL/usr/local/lib/drlink" "$PARTIAL/usr/local/bin"
+echo token >"$PARTIAL/etc/frp/server_token"
+echo cakey >"$PARTIAL/etc/drlink/pki/ca.key"
+echo '{"clients":{}}' >"$PARTIAL/var/lib/drlink/registry.json"
+echo cfg >"$PARTIAL/etc/drlink/config.json"
+cp "$ROOT/lib/frp_project_files.py" "$PARTIAL/usr/local/lib/drlink/"
+cp "$ROOT/lib/server-project-files.manifest" "$PARTIAL/usr/local/lib/drlink/"
 export FRP_UNINSTALL_TEST_ROOT="$PARTIAL"
 export FRP_UNINSTALL_HOOK_PURGE_FAIL_PATH="$PARTIAL/var/lib/drlink/registry.json"
 if "$ROOT/uninstall-server.sh" --purge --yes >"$WORKDIR/purge-part.out" 2>"$WORKDIR/purge-part.err"; then
@@ -889,7 +920,8 @@ pass "CLIENT_UNINSTALL_SYMLINK_REFUSED"
 # ---------------------------------------------------------------------------
 CL="$WORKDIR/client"
 mkdir -p "$CL/etc/frp" "$CL/etc/drlink" "$CL/usr/local/bin" \
-  "$CL/usr/local/lib/drlink" "$CL/etc/systemd/system"
+  "$CL/usr/local/lib/drlink/data/empty-nested" "$CL/etc/systemd/system" \
+  "$CL/var/lib/drlink/client-upgrades"
 write_dummy_frpc "$CL/usr/local/bin/frpc"
 echo 'old' >"$CL/usr/local/bin/frp-client"
 echo 'old' >"$CL/usr/local/bin/drlink"
@@ -905,8 +937,10 @@ chmod 600 "$CL/etc/frp/client-identity.key"
 echo pub >"$CL/etc/frp/client-identity.pub"
 echo mac >"$CL/etc/frp/client-identity.mac"
 chmod 600 "$CL/etc/frp/client-identity.mac"
+echo pending >"$CL/etc/frp/enroll-pending.json"
 echo ca >"$CL/etc/drlink/allocator-ca.crt"
 echo 'PROJECT_VERSION=1.9.1' >"$CL/etc/drlink/version"
+echo draft >"$CL/var/lib/drlink/client-draft.json"
 touch "$CL/etc/systemd/system/drlink-client.service"
 # mock release API detector
 : >"$WORKDIR/curl-wrap.log"
@@ -919,6 +953,10 @@ fi
 [[ ! -e "$CL/etc/frp/client-state.json" ]] || fail "state remains"
 [[ ! -e "$CL/etc/frp/client-identity.key" ]] || fail "identity remains"
 [[ ! -e "$CL/etc/drlink/allocator-ca.crt" ]] || fail "client CA remains"
+[[ ! -e "$CL/etc/frp" ]] || fail "client /etc/frp remains"
+[[ ! -e "$CL/etc/drlink" ]] || fail "client /etc/drlink remains"
+[[ ! -e "$CL/var/lib/drlink" ]] || fail "client /var/lib/drlink remains"
+[[ ! -e "$CL/usr/local/lib/drlink" ]] || fail "client library tree remains"
 grep -q 'Server-side reservations remain' "$WORKDIR/cu.out" || fail "reservation warning"
 grep -q 'does not contact the server' "$WORKDIR/cu.out" || fail "no-server-call message"
 if grep -E 'curl|https://' "$WORKDIR/cu.out" "$WORKDIR/cu.err" | grep -v 'intentionally' >/dev/null; then
@@ -927,6 +965,8 @@ fi
 pass "CLIENT_UNINSTALL_NO_SERVER_RELEASE"
 
 "$ROOT/uninstall-client.sh" >"$WORKDIR/cu2.out" 2>"$WORKDIR/cu2.err" || fail "client uninstall twice"
+[[ ! -e "$CL/usr/local/lib/drlink" ]] || fail "second client uninstall recreated libdir"
+[[ ! -e "$CL/var/lib/drlink" ]] || fail "second client uninstall recreated var/lib"
 pass "CLIENT_UNINSTALL_IDEMPOTENT"
 
 # Dual-role: client uninstall must not delete server token / shared CLI
@@ -1004,12 +1044,14 @@ echo 'client-only' >"$DUAL2/usr/local/lib/drlink/frp-client-common.sh"
 echo 'shared' >"$DUAL2/usr/local/lib/drlink/frp_doctor.py"
 export FRP_UNINSTALL_TEST_ROOT="$DUAL2"
 "$ROOT/uninstall-server.sh" >"$WORKDIR/dual2.out" 2>"$WORKDIR/dual2.err" || fail "dual-role server uninstall"
-# Default server uninstall preserves token/registry; assert client CLI remains.
 [[ -f "$DUAL2/etc/frp/client-state.json" ]] || fail "dual-role server uninstall removed client state"
 [[ -x "$DUAL2/usr/local/bin/drlink" ]] || fail "dual-role server uninstall removed client drlink"
 [[ -x "$DUAL2/usr/local/bin/frpc" ]] || fail "dual-role server uninstall removed frpc"
+[[ -f "$DUAL2/usr/local/lib/drlink/frp-client-common.sh" ]] || fail "dual-role server uninstall removed client-common"
+[[ ! -f "$DUAL2/etc/frp/server_token" ]] || fail "dual-role server uninstall left server token"
+[[ ! -f "$DUAL2/etc/drlink/config.json" ]] || fail "dual-role server uninstall left server config"
+[[ ! -f "$DUAL2/var/lib/drlink/registry.json" ]] || fail "dual-role server uninstall left registry"
 "$DUAL2/usr/local/bin/drlink" version | grep -q 'drlink client' || fail "dual-role client drlink broken after server uninstall"
-grep -qi 'preserved\|client' "$WORKDIR/dual2.out" "$WORKDIR/dual2.err" || true
 pass "DUAL_ROLE_SERVER_UNINSTALL_PRESERVES_CLIENT_CLI"
 
 # ---------------------------------------------------------------------------

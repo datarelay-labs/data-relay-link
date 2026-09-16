@@ -99,7 +99,7 @@ seed() {
     "$tree/var/lib/drlink" \
     "$tree/usr/local/sbin" \
     "$tree/usr/local/bin" \
-    "$tree/usr/local/lib/drlink" \
+    "$tree/usr/local/lib/drlink/data/egress-recipes" \
     "$tree/etc/systemd/system"
   printf '{"deployment_mode":"direct"}\n' >"$tree/etc/drlink/config.json"
   printf 'token-secret\n' >"$tree/etc/frp/server_token"
@@ -137,14 +137,19 @@ export FRP_PURGE_CONFIRM=yes
 if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/inactive.out" 2>"$WORKDIR/inactive.err"; then
   fail "inactive uninstall: $(cat "$WORKDIR/inactive.err")"
 fi
-assert_state_present "$TREE"
-grep -q 'preserved' "$WORKDIR/inactive.out" || fail "inactive preserve message"
+[[ ! -f "$TREE/etc/frp/server_token" ]] || fail "inactive uninstall left token"
+[[ ! -f "$TREE/etc/drlink/pki/ca.key" ]] || fail "inactive uninstall left CA"
+[[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "inactive uninstall left registry"
+grep -q 'Data Relay Link server removed from this host' "$WORKDIR/inactive.out" \
+  || fail "inactive complete-removal message"
 pass "UNINSTALL_INACTIVE"
 
 # 2. already-uninstalled idempotent
 if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/idemp.out" 2>"$WORKDIR/idemp.err"; then
   fail "idempotent uninstall: $(cat "$WORKDIR/idemp.err")"
 fi
+[[ ! -e "$TREE/var/lib/drlink" ]] || fail "idempotent uninstall recreated var/lib"
+[[ ! -e "$TREE/usr/local/lib/drlink" ]] || fail "idempotent uninstall recreated libdir"
 pass "UNINSTALL_IDEMPOTENT"
 
 # 3. service stop failure
@@ -245,20 +250,23 @@ assert_state_present "$TREE"
 pass "PURGE_FAIL_CLOSED"
 unset FRP_MOCK_STOP_FAIL
 
-# 9. default uninstall preserves secrets
-TREE="$WORKDIR/preserve"
+# 9. default uninstall removes secrets
+TREE="$WORKDIR/complete"
 seed "$TREE"
-UNIT="$WORKDIR/units-preserve"
+UNIT="$WORKDIR/units-complete"
 mkdir -p "$UNIT"
 export FRP_UNINSTALL_TEST_ROOT="$TREE"
 export FRP_MOCK_UNIT_DIR="$UNIT"
-if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/preserve.out" 2>"$WORKDIR/preserve.err"; then
-  fail "preserve uninstall: $(cat "$WORKDIR/preserve.err")"
+if ! "$ROOT/uninstall-server.sh" >"$WORKDIR/complete.out" 2>"$WORKDIR/complete.err"; then
+  fail "complete uninstall: $(cat "$WORKDIR/complete.err")"
 fi
-assert_state_present "$TREE"
-pass "UNINSTALL_PRESERVES_STATE"
+[[ ! -f "$TREE/etc/frp/server_token" ]] || fail "complete uninstall left token"
+[[ ! -f "$TREE/etc/drlink/pki/ca.key" ]] || fail "complete uninstall left CA"
+[[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "complete uninstall left registry"
+[[ ! -e "$TREE/usr/local/lib/drlink" ]] || fail "complete uninstall left library tree"
+pass "UNINSTALL_REMOVES_STATE"
 
-# 10. purge success removes intended state
+# 10. purge success is a compatibility alias for the same complete removal
 TREE="$WORKDIR/purgesuccess"
 seed "$TREE"
 UNIT="$WORKDIR/units-purgeok"
@@ -271,6 +279,7 @@ fi
 [[ ! -f "$TREE/etc/frp/server_token" ]] || fail "purge left token"
 [[ ! -f "$TREE/etc/drlink/pki/ca.key" ]] || fail "purge left CA"
 [[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "purge left registry"
+[[ ! -e "$TREE/usr/local/lib/drlink" ]] || fail "purge left library tree"
 pass "PURGE_SUCCESS"
 
 # 11. dual-role server uninstall preserves client
@@ -291,6 +300,9 @@ fi
 [[ -f "$TREE/etc/frp/client-state.json" ]] || fail "dual-role removed client state"
 [[ -x "$TREE/usr/local/bin/drlink" ]] || fail "dual-role removed client frpctl"
 [[ -f "$TREE/usr/local/lib/drlink/frp-common.sh" ]] || fail "dual-role removed shared lib"
+[[ ! -f "$TREE/etc/frp/server_token" ]] || fail "dual-role left server token"
+[[ ! -f "$TREE/etc/drlink/config.json" ]] || fail "dual-role left server config"
+[[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "dual-role left registry"
 pass "DUAL_ROLE_SERVER_UNINSTALL"
 
 # 12. second uninstall remains safe
@@ -318,7 +330,7 @@ if ! (
   fail "uninstall without flock CLI: $(cat "$WORKDIR/noflock.err")"
 fi
 grep -q flock-should-not-run "$WORKDIR/noflock.err" && fail "uninstall invoked flock CLI"
-assert_state_present "$TREE"
+[[ ! -f "$TREE/etc/frp/server_token" ]] || fail "noflock uninstall left token"
 pass "UNINSTALL_WITHOUT_FLOCK_CLI"
 
 # 12. control-state.lock contention (NEW-002)

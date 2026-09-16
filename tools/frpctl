@@ -4248,7 +4248,7 @@ frpctl_client_uninstall_flow() {
 }
 
 frpctl_server_uninstall_flow() {
-  local script choice ans yes=0 pt
+  local script ans yes=0 pt
   script="$(frpctl_find_uninstaller server)" || {
     echo "ERROR: server uninstaller is not installed on this host." >&2
     echo "Install or update Data Relay Link, then retry: system uninstall" >&2
@@ -4258,75 +4258,34 @@ frpctl_server_uninstall_flow() {
     [[ "$pt" == "--yes" ]] && yes=1
   done
   echo
-  echo "Uninstall Data Relay Link"
-  echo "========================"
+  echo "Uninstall Data Relay Link server"
+  echo "==============================="
   echo
-  echo "1) Remove software"
-  echo "   Preserve server configuration and state for reinstall"
+  echo "WHAT WILL BE REMOVED"
   echo
-  echo "2) Completely remove Data Relay Link"
-  echo "   Remove software and all Data Relay Link server state"
+  echo "Data Relay Link server software"
+  echo "Runtime services"
+  echo "Server configuration"
+  echo "CA / PKI state"
+  echo "Client registry"
+  echo "Enrollment state"
+  echo "Service reservations"
+  echo "Public port reservations"
+  echo "ACLs"
+  echo "Internet Access configuration"
+  echo "Other Data Relay Link server-owned local state"
+  echo "Empty product directories"
   echo
-  echo "3) Back"
+  echo "This cannot be undone. Back up the server first if you need to restore later."
   echo
-  choice="$(frpctl_read "Select [3]: " "3")" || return 1
-  case "$choice" in
-    1)
-      echo
-      echo "WHAT WILL BE REMOVED"
-      echo
-      echo "Data Relay Link server software"
-      echo "Runtime services"
-      echo
-      echo "WHAT WILL BE PRESERVED"
-      echo
-      echo "Server configuration"
-      echo "CA / PKI state"
-      echo "Client registry"
-      echo "Enrollment state"
-      echo "Service reservations"
-      echo "Public port reservations"
-      echo "ACLs"
-      echo "Internet Access configuration"
-      echo
-      if [[ "$yes" != "1" ]]; then
-        ans="$(frpctl_read "Remove server software and preserve state? [y/N]: " "N")" || return 1
-        case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
-          y|yes) ;;
-          *) echo "Cancelled."; return 0 ;;
-        esac
-      fi
-      frpctl_run_uninstaller "$script"
-      ;;
-    2)
-      echo
-      echo "WHAT WILL BE REMOVED"
-      echo
-      echo "Data Relay Link server software"
-      echo "Server configuration"
-      echo "CA / PKI state"
-      echo "Client registry"
-      echo "Enrollment state"
-      echo "Service reservations"
-      echo "Public port reservations"
-      echo "ACLs"
-      echo "Internet Access configuration"
-      echo "Other Data Relay Link server-owned state"
-      echo
-      echo "This cannot be undone."
-      echo
-      ans="$(frpctl_read "Type PURGE to permanently delete all server state: " "")" || return 1
-      if [[ "$ans" != "PURGE" ]]; then
-        echo "Cancelled."
-        return 0
-      fi
-      frpctl_run_uninstaller "$script" --purge --yes
-      ;;
-    *)
-      echo "Cancelled."
-      return 0
-      ;;
-  esac
+  if [[ "$yes" != "1" ]]; then
+    ans="$(frpctl_read "Remove the Data Relay Link server role from this host? [y/N]: " "N")" || return 1
+    case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+      y|yes) ;;
+      *) echo "Cancelled."; return 0 ;;
+    esac
+  fi
+  frpctl_run_uninstaller "$script"
 }
 
 frpctl_system_uninstall() {

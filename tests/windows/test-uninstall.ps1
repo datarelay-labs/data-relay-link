@@ -28,6 +28,10 @@ try {
     Install-FrpAutostartTask | Out-Null
     Assert-FrpTrue (Test-FrpAutostartTaskExists) 'autostart present before uninstall'
 
+    $emptyDir = Join-Path $root 'lib\data\egress-recipes'
+    New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+    Assert-FrpTrue (Test-Path -LiteralPath $emptyDir) 'empty product subdirectory exists before uninstall'
+
     $env:FRP_WINDOWS_FAIL_AUTOSTART = '1'
     $failOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath uninstall 2>&1 | Out-String
     $rcFail = $LASTEXITCODE
@@ -40,16 +44,16 @@ try {
     $okOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath uninstall 2>&1 | Out-String
     $rc = $LASTEXITCODE
     Assert-FrpEqual 0 $rc 'uninstall succeeds after autostart can be removed'
-    Assert-FrpTrue ($okOut -match 'SERVER RESERVATIONS PRESERVED') 'uninstall reservation message'
+    Assert-FrpTrue ($okOut -match 'SERVER-SIDE RESERVATIONS PRESERVED') 'uninstall reservation message'
     Assert-FrpTrue (-not (Test-Path -LiteralPath $root)) 'root removed after successful uninstall'
     Assert-FrpTrue (-not (Test-FrpAutostartTaskExists)) 'autostart gone after successful uninstall'
 
     $client = Get-Content -LiteralPath $clientPath -Raw
-    Assert-FrpTrue ($client -match 'SERVER RESERVATIONS PRESERVED') 'uninstall message in tool'
+    Assert-FrpTrue ($client -match 'SERVER-SIDE RESERVATIONS PRESERVED') 'uninstall message in tool'
     Assert-FrpTrue ($client -match 'leaving product files in place') 'fail-closed uninstall message in tool'
-    Assert-FrpTrue ($client -match 'Server-side public port reservations are preserved') 'canonical reservation wording'
-    Assert-FrpTrue ($client -match 'drlink client release <CLIENT-ID> <SERVICE-ID>') 'service release guidance'
-    Assert-FrpTrue ($client -match 'drlink client release <CLIENT-ID>') 'client release guidance'
+    Assert-FrpTrue ($client -match 'unset client <CLIENT> service <SERVICE>') 'service release guidance'
+    Assert-FrpTrue ($client -match 'unset client <CLIENT>') 'client release guidance'
+    Assert-FrpTrue ($client -notmatch 'drlink client release') 'no obsolete release grammar'
     Assert-FrpTrue ($client -notmatch 'remain until an administrator revokes them') 'no revoke-for-ports wording'
 
     Write-FrpTestPass 'test-uninstall'

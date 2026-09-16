@@ -164,8 +164,8 @@ FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
 [[ ! -f "$TREE/var/lib/drlink/client-update-pending.json" ]] || fail "client uninstall left client marker"
 pass "client uninstall preserves server pending marker"
 
-# --- Purge confirmation ---
-# Restore minimal server+client dual role for purge tests
+# --- Purge compatibility: --purge is an alias for complete uninstall ---
+# Restore minimal server+client dual role for complete-removal tests
 mkdir -p "$TREE/usr/local/lib/drlink" \
   "$TREE/var/lib/drlink/client-upgrades" \
   "$TREE/etc/frp" \
@@ -181,27 +181,31 @@ echo 'cfg' >"$TREE/etc/drlink/config.json"
 cp "$ROOT/lib/frp_project_files.py" "$TREE/usr/local/lib/drlink/"
 cp "$ROOT/lib/server-project-files.manifest" "$TREE/usr/local/lib/drlink/"
 
-for bad in no false 0 YESSS ""; do
-  if FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
-      FRP_PURGE_CONFIRM="$bad" bash "$ROOT/uninstall-server.sh" --purge >/dev/null 2>"$WORK/purge-bad.err"; then
-    fail "FRP_PURGE_CONFIRM=$bad should reject"
-  fi
-done
-# unset
-if FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
-    env -u FRP_PURGE_CONFIRM bash "$ROOT/uninstall-server.sh" --purge >/dev/null 2>"$WORK/purge-unset.err"; then
-  fail "unset FRP_PURGE_CONFIRM should reject"
+if ! FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
+    env -u FRP_PURGE_CONFIRM bash "$ROOT/uninstall-server.sh" --purge >/dev/null 2>"$WORK/purge-alias.err"; then
+  fail "uninstall --purge alias should succeed without FRP_PURGE_CONFIRM"
 fi
-pass "PURGE_CONFIRMATION_FAIL_CLOSED"
+pass "PURGE_COMPAT_ALIAS"
 
-# Dual-role purge preserves client state
+# Dual-role complete uninstall preserves client state
+mkdir -p "$TREE/usr/local/lib/drlink" \
+  "$TREE/var/lib/drlink/client-upgrades/x" \
+  "$TREE/etc/frp" \
+  "$TREE/etc/drlink"
+echo 'shared' >"$TREE/usr/local/lib/drlink/frp-common.sh"
+echo '{}' >"$TREE/var/lib/drlink/registry.json"
+echo 'draft' >"$TREE/var/lib/drlink/client-draft.json"
+echo '{"machine_id":"m1"}' >"$TREE/etc/frp/client-state.json"
+echo 'cfg' >"$TREE/etc/drlink/config.json"
+cp "$ROOT/lib/frp_project_files.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/server-project-files.manifest" "$TREE/usr/local/lib/drlink/"
 FRP_UNINSTALL_TEST_ROOT="$TREE" FRP_UNINSTALL_HOOK_SKIP_SYSTEMD=1 \
-  FRP_PURGE_CONFIRM=yes bash "$ROOT/uninstall-server.sh" --purge >/dev/null 2>"$WORK/purge.out" || true
-[[ -f "$TREE/etc/frp/client-state.json" ]] || fail "purge removed client-state"
-[[ -f "$TREE/var/lib/drlink/client-draft.json" ]] || fail "purge removed client-draft"
-[[ -d "$TREE/var/lib/drlink/client-upgrades" ]] || fail "purge removed client-upgrades"
-[[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "purge left registry"
-pass "SERVER_PURGE_PRESERVES_CLIENT_ROLE"
+  bash "$ROOT/uninstall-server.sh" --purge --yes >/dev/null 2>"$WORK/purge.out" || true
+[[ -f "$TREE/etc/frp/client-state.json" ]] || fail "uninstall removed client-state"
+[[ -f "$TREE/var/lib/drlink/client-draft.json" ]] || fail "uninstall removed client-draft"
+[[ -d "$TREE/var/lib/drlink/client-upgrades" ]] || fail "uninstall removed client-upgrades"
+[[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "uninstall left registry"
+pass "SERVER_UNINSTALL_PRESERVES_CLIENT_ROLE"
 
 # --- Dual-role shared lib ownership ---
 mkdir -p "$TREE/usr/local/lib/drlink" "$TREE/usr/local/bin" \

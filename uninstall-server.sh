@@ -11,11 +11,17 @@ while [[ $# -gt 0 ]]; do
       cat <<'EOF'
 Usage: uninstall-server.sh [--purge] [--yes]
 
-Default uninstall removes Data Relay Link server software and runtime units.
-Token, private CA, registry, and reservations are preserved.
+Remove the Data Relay Link server role completely from this host.
 
-  --purge   Permanently delete preserved state (token, CA, registry, config)
-  --yes     Required with --purge for noninteractive confirmation
+Product-owned binaries, services, configuration, identity, tokens, CA
+material, registry, reservations, backups, caches, locks, and empty
+product directories are deleted. Backup/restore is the way to keep data.
+
+  --purge   Compatibility alias; same as default complete uninstall
+  --yes     Compatibility alias; accepted and ignored
+
+If a client role is also installed, only server-owned artifacts are
+removed. Shared files required by the remaining client role are kept.
 EOF
       exit 0
       ;;
@@ -105,6 +111,52 @@ frp_u_rm_file() {
   rm -f "$path"
 }
 
+# Remove empty directories under a product-owned root, deepest first.
+# Never follow symlinks. rmdir is used so non-empty dirs are left intact.
+frp_u_prune_empty_dirs() {
+  local root="${1:-}" dir
+  if frp_u_unsafe_path "$root"; then
+    echo "ERROR: refusing unsafe recursive deletion" >&2
+    echo "FAILURE_CLASS=PATH_DELETION_REFUSED" >&2
+    return 1
+  fi
+  if [[ -L "$root" ]]; then
+    echo "ERROR: refusing to recursively delete through a symlink" >&2
+    echo "FAILURE_CLASS=SYMLINK_REFUSED" >&2
+    return 1
+  fi
+  [[ -d "$root" ]] || return 0
+  while IFS= read -r dir; do
+    [[ -n "$dir" ]] || continue
+    [[ -L "$dir" ]] && continue
+    rmdir "$dir" 2>/dev/null || true
+  done < <(find "$root" -depth -type d -print 2>/dev/null || true)
+  return 0
+}
+
+frp_u_has_server_control_state() {
+  [[ -d "$(frp_u_path /var/lib/drlink)" ]] \
+    || [[ -e "$(frp_u_path /etc/drlink/config.json)" ]] \
+    || [[ -e "$(frp_u_path /etc/frp/server_token)" ]] \
+    || [[ -e "$(frp_u_path /var/lib/drlink/registry.json)" ]]
+}
+
+frp_u_remove_legacy_sbin_wrappers() {
+  local tool
+  frp_u_rm_file "$(frp_u_path /usr/local/sbin/frpctl)"
+  if [[ "${1:-}" != "1" ]]; then
+    frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
+    frp_u_rm_file "$(frp_u_path /usr/bin/drlink)"
+  fi
+  for tool in frp-create-client frp-enrollments frp-enrollment-revoke frp-enrollment-purge frp-enroll-bulk \
+    frp-clients frp-client-info frp-client-set frp-release-client \
+    frp-release-service frp-access frp-egress frp-profile frp-revoke-client frp-set-client-installer-url \
+    frp-server-set frp-server-status frp-update frp-upstream frp-project-update frp-backup frp-restore frp-support-bundle \
+    frp-groups frp-group-set; do
+    frp_u_rm_file "$(frp_u_path /usr/local/sbin/${tool})"
+  done
+}
+
 frp_u_client_present() {
   [[ -f "$(frp_u_path /etc/frp/client-state.json)" || -x "$(frp_u_path /usr/local/bin/frp-client)" ]]
 }
@@ -170,17 +222,6 @@ PY
     install|project-update|frp-update) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-frp_u_purge_confirm_ok() {
-  local confirm
-  if [[ "$PURGE_YES" == true ]]; then
-    return 0
-  fi
-  confirm="$(printf '%s' "${FRP_PURGE_CONFIRM:-}" | tr '[:upper:]' '[:lower:]')"
-  confirm="${confirm#"${confirm%%[![:space:]]*}"}"
-  confirm="${confirm%"${confirm##*[![:space:]]}"}"
-  [[ "$confirm" == "yes" ]]
 }
 
 frp_u_release_control_locks() {
@@ -439,7 +480,11 @@ frp_u_disable_product_units() {
   return 0
 }
 
-frp_u_acquire_control_locks
+# Do not recreate /var/lib/drlink merely to take locks. Leftover empty library
+# trees can be removed without control-plane serialization.
+if frp_u_has_server_control_state; then
+  frp_u_acquire_control_locks
+fi
 
 SKIP_SYSTEMD=0
 if [[ "${FRP_UNINSTALL_HOOK_SKIP_SYSTEMD:-}" == "1" ]]; then
@@ -511,9 +556,9 @@ else
     frp_u_rm_file "$(frp_u_path /usr/local/lib/drlink/${tool})"
   done
   frp_u_rm_file "$(frp_u_path /usr/local/sbin/frpctl)"
-  frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
   # Shared everyday CLI: keep for dual-role client installs.
   if [[ "$CLIENT_PRESENT" != "1" ]]; then
+    frp_u_rm_file "$(frp_u_path /usr/local/bin/frpctl)"
     frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
     frp_u_rm_file "$(frp_u_path /usr/local/lib/drlink/frpctl)"
   fi
@@ -544,11 +589,10 @@ if [[ "$CLIENT_PRESENT" != "1" ]]; then
   frp_u_rm_file "$(frp_u_path /usr/local/bin/drlink)"
 fi
 frp_u_rm_file "$(frp_u_path /etc/drlink/frontend.conf)"
+frp_u_remove_legacy_sbin_wrappers "$CLIENT_PRESENT"
 
 libdir="$(frp_u_path /usr/local/lib/drlink)"
-if [[ -d "$libdir" && ! -L "$libdir" ]]; then
-  rmdir "$libdir" 2>/dev/null || true
-elif [[ -L "$libdir" ]]; then
+if [[ -L "$libdir" ]]; then
   echo "ERROR: refusing to delete symlink library directory" >&2
   echo "FAILURE_CLASS=SYMLINK_REFUSED" >&2
   echo "FAILURE_CLASS=UNINSTALL_PARTIAL" >&2
@@ -564,101 +608,105 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
   frp_u_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
-if [[ "$PURGE" == true ]]; then
-  if ! frp_u_purge_confirm_ok; then
-    echo "ERROR: --purge permanently deletes the CA, token, registry, and reservations." >&2
-    echo "Re-run with --purge --yes, or set FRP_PURGE_CONFIRM=yes exactly." >&2
-    echo "FAILURE_CLASS=PURGE_CONFIRMATION_REQUIRED" >&2
-    exit 1
-  fi
-
-  PURGE_FAILED=0
-  PURGE_REMAINING=""
-  record_remaining() {
-    local p="$1"
-    PURGE_FAILED=1
-    if [[ -n "$PURGE_REMAINING" ]]; then
-      PURGE_REMAINING="${PURGE_REMAINING}
+# Default uninstall is complete local removal. --purge/--yes are aliases.
+PURGE_FAILED=0
+PURGE_REMAINING=""
+record_remaining() {
+  local p="$1"
+  PURGE_FAILED=1
+  if [[ -n "$PURGE_REMAINING" ]]; then
+    PURGE_REMAINING="${PURGE_REMAINING}
 ${p}"
-    else
-      PURGE_REMAINING="$p"
-    fi
-  }
+  else
+    PURGE_REMAINING="$p"
+  fi
+}
 
-  try_rm_file() {
-    local path="$1"
-    if [[ -e "$path" || -L "$path" ]]; then
-      if [[ "${FRP_UNINSTALL_HOOK_PURGE_FAIL_PATH:-}" == "$path" ]]; then
-        record_remaining "$path"
-        return 0
-      fi
-      frp_u_rm_file "$path" || record_remaining "$path"
-    fi
-  }
-
-  try_rm_rf() {
-    local path="$1"
+try_rm_file() {
+  local path="$1"
+  if [[ -e "$path" || -L "$path" ]]; then
     if [[ "${FRP_UNINSTALL_HOOK_PURGE_FAIL_PATH:-}" == "$path" ]]; then
       record_remaining "$path"
       return 0
     fi
-    if [[ -L "$path" ]]; then
-      frp_u_rm_file "$path" || record_remaining "$path"
-      return 0
-    fi
-    if [[ -e "$path" ]]; then
-      frp_u_safe_rm_rf "$path" || record_remaining "$path"
-    fi
-  }
+    frp_u_rm_file "$path" || record_remaining "$path"
+  fi
+}
 
-  var_lib="$(frp_u_path /var/lib/drlink)"
-  # Server-owned pending marker only; never clear client-update-pending.json.
-  try_rm_file "${var_lib}/server-update-pending.json"
-  legacy_marker="${var_lib}/update-pending.json"
-  if frp_u_legacy_marker_is_server "$legacy_marker"; then
-    try_rm_file "$legacy_marker"
+try_rm_rf() {
+  local path="$1"
+  if [[ "${FRP_UNINSTALL_HOOK_PURGE_FAIL_PATH:-}" == "$path" ]]; then
+    record_remaining "$path"
+    return 0
   fi
-  try_rm_rf "${var_lib}/enrollments"
-  try_rm_rf "${var_lib}/bootstrap"
-  try_rm_rf "${var_lib}/backups"
-  try_rm_file "${var_lib}/registry.json"
-  try_rm_file "${var_lib}/access-control.json"
-  try_rm_file "${var_lib}/egress-control.json"
-  try_rm_file "${var_lib}/service-profiles.json"
-  try_rm_file "${var_lib}/service-profiles.json.lock"
-  try_rm_file "${var_lib}/mgmt-nonces.json"
-  try_rm_file "${var_lib}/registry.lock"
+  if [[ -L "$path" ]]; then
+    frp_u_rm_file "$path" || record_remaining "$path"
+    return 0
+  fi
+  if [[ -e "$path" ]]; then
+    frp_u_safe_rm_rf "$path" || record_remaining "$path"
+  fi
+}
 
-  if [[ "$CLIENT_PRESENT" == "1" ]]; then
-    # Dual-role: never wipe the whole var/lib tree. Preserve client-upgrades/,
-    # client-draft.json, client-update-pending.json, and client identity under /etc/frp.
-    try_rm_file "$(frp_u_path /etc/frp/server_token)"
-    try_rm_file "$(frp_u_path /etc/frp/frps.toml)"
-  else
-    try_rm_rf "$(frp_u_path /etc/frp)"
-  fi
-  try_rm_rf "$(frp_u_path /etc/drlink/pki)"
-  try_rm_file "$(frp_u_path /etc/drlink/config.json)"
-  if [[ "$CLIENT_PRESENT" != "1" && ! -f "$(frp_u_path /etc/drlink/allocator-ca.crt)" ]]; then
-    try_rm_file "$(frp_u_path /etc/drlink/version)"
-    try_rm_rf "$(frp_u_path /etc/drlink)"
-  fi
-  if [[ "$CLIENT_PRESENT" == "1" ]]; then
-    rmdir "$var_lib" 2>/dev/null || true
-  else
-    try_rm_rf "$var_lib"
-  fi
+var_lib="$(frp_u_path /var/lib/drlink)"
+# Server-owned pending marker only; never clear client-update-pending.json.
+try_rm_file "${var_lib}/server-update-pending.json"
+legacy_marker="${var_lib}/update-pending.json"
+if frp_u_legacy_marker_is_server "$legacy_marker"; then
+  try_rm_file "$legacy_marker"
+fi
+try_rm_rf "${var_lib}/enrollments"
+try_rm_rf "${var_lib}/bootstrap"
+try_rm_rf "${var_lib}/backups"
+try_rm_file "${var_lib}/registry.json"
+try_rm_file "${var_lib}/access-control.json"
+try_rm_file "${var_lib}/egress-control.json"
+try_rm_file "${var_lib}/service-profiles.json"
+try_rm_file "${var_lib}/service-profiles.json.lock"
+try_rm_file "${var_lib}/mgmt-nonces.json"
+try_rm_file "${var_lib}/registry.lock"
+try_rm_file "${var_lib}/control-state.lock"
+try_rm_file "${var_lib}/server-lifecycle.lock"
+try_rm_file "${var_lib}/nginx-ownership"
+try_rm_file "${var_lib}/install-actions.log"
 
-  if [[ "$PURGE_FAILED" == "1" ]]; then
-    echo "ERROR: server purge did not complete." >&2
-    echo "FAILURE_CLASS=PURGE_PARTIAL" >&2
-    echo "Remaining paths:" >&2
-    printf '%s\n' "$PURGE_REMAINING" >&2
-    exit 1
-  fi
-  echo 'Data Relay Link server removed and state/secrets purged.'
+if [[ "$CLIENT_PRESENT" == "1" ]]; then
+  # Dual-role: never wipe the whole var/lib or /etc/frp trees.
+  try_rm_file "$(frp_u_path /etc/frp/server_token)"
+  try_rm_file "$(frp_u_path /etc/frp/frps.toml)"
 else
-  echo 'Data Relay Link server binaries/services removed. Configuration, token, and registry were preserved.'
-  echo 'Use --purge only if you intentionally want to delete all reservations and secrets.'
-  echo 'Reinstalling the server later reuses the same CA, token, and port reservations.'
+  try_rm_rf "$(frp_u_path /etc/frp)"
+fi
+try_rm_rf "$(frp_u_path /etc/drlink/pki)"
+try_rm_file "$(frp_u_path /etc/drlink/config.json)"
+try_rm_rf "$(frp_u_path /var/log/drlink)"
+if [[ "$CLIENT_PRESENT" != "1" && ! -f "$(frp_u_path /etc/drlink/allocator-ca.crt)" ]]; then
+  try_rm_file "$(frp_u_path /etc/drlink/version)"
+  try_rm_rf "$(frp_u_path /etc/drlink)"
+fi
+if [[ "$CLIENT_PRESENT" == "1" ]]; then
+  # Dual-role: keep client-owned directories even if they are currently empty.
+  # Only prune leftover empty server library subtrees (e.g. data/egress-recipes).
+  frp_u_prune_empty_dirs "$libdir" || true
+  rmdir "$var_lib" 2>/dev/null || true
+  rmdir "$(frp_u_path /etc/drlink)" 2>/dev/null || true
+else
+  try_rm_rf "$var_lib"
+  try_rm_rf "$libdir"
+  try_rm_rf "$(frp_u_path /etc/drlink)"
+  try_rm_rf "$(frp_u_path /var/log/drlink)"
+fi
+
+if [[ "$PURGE_FAILED" == "1" ]]; then
+  echo "ERROR: server uninstall did not complete." >&2
+  echo "FAILURE_CLASS=PURGE_PARTIAL" >&2
+  echo "Remaining paths:" >&2
+  printf '%s\n' "$PURGE_REMAINING" >&2
+  exit 1
+fi
+
+if [[ "$CLIENT_PRESENT" == "1" ]]; then
+  echo 'Data Relay Link server removed from this host. Client role was left in place.'
+else
+  echo 'Data Relay Link server removed from this host.'
 fi

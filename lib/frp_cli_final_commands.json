@@ -4632,7 +4632,7 @@
     "roles": "any",
     "category": "System",
     "summary": "Uninstall Data Relay Link on this host",
-    "detail": "Guided uninstall for the installed role(s). Client uninstall removes local software and state while preserving server-side reservations. Server uninstall can preserve or purge server state.",
+    "detail": "Guided uninstall for the installed role(s). Completely removes local Data Relay Link software and product-owned state for that role. Client uninstall does not contact the server; remote records and reservations remain until removed with unset client.",
     "examples": [
       "system uninstall"
     ],
@@ -4658,10 +4658,10 @@
         "choices": [],
         "hidden": true,
         "required": false,
-        "description": "Skip interactive confirmation for non-purge uninstall",
+        "description": "Skip interactive confirmation",
         "metavar": "",
         "examples": [],
-        "effect": "Skips y/N confirmation when uninstalling without purge",
+        "effect": "Skips y/N confirmation for complete local uninstall",
         "risk": "irreversible"
       }
     ]

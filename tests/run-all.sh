@@ -95,6 +95,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-partial-client-install-recovery.sh
 ./tests/test-uninstall-owned-frpc.sh
 ./tests/test-uninstall-stdin-execution.sh
+./tests/test-uninstall-zero-residue.sh
 ./tests/test-frpctl.sh
 ./tests/test-frpctl-suggest-portable.sh
 ./tests/test-frpctl-completion.sh

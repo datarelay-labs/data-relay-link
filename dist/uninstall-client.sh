@@ -107,6 +107,29 @@ frp_u_rm_file() {
   rm -f "$path"
 }
 
+# Remove empty directories under a product-owned root, deepest first.
+# Never follow symlinks. Portable to macOS Bash 3.2 (no -empty / mapfile).
+frp_u_prune_empty_dirs() {
+  local root="${1:-}" dir
+  if frp_u_unsafe_path "$root"; then
+    echo "ERROR: refusing unsafe recursive deletion" >&2
+    echo "FAILURE_CLASS=PATH_DELETION_REFUSED" >&2
+    return 1
+  fi
+  if [[ -L "$root" ]]; then
+    echo "ERROR: refusing to recursively delete through a symlink" >&2
+    echo "FAILURE_CLASS=SYMLINK_REFUSED" >&2
+    return 1
+  fi
+  [[ -d "$root" ]] || return 0
+  find "$root" -depth -type d -print 2>/dev/null | while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    [ -L "$dir" ] && continue
+    rmdir "$dir" 2>/dev/null || true
+  done
+  return 0
+}
+
 frp_u_pid_executable() {
   local pid="$1"
   if [[ -e "/proc/${pid}/exe" ]]; then
@@ -346,6 +369,7 @@ frp_u_stop_owned_frpc
 
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frpc)"
 frp_u_rm_file "$(frp_u_path /usr/local/bin/frp-client)"
+frp_u_rm_file "$(frp_u_path /usr/local/sbin/frp-client)"
 
 libdir="$(frp_u_path /usr/local/lib/drlink)"
 SERVER_PRESENT=0
@@ -393,7 +417,6 @@ if [[ -d "$libdir" && ! -L "$libdir" ]]; then
       frp_u_rm_file "${libdir}/${f}"
     done
   fi
-  rmdir "$libdir" 2>/dev/null || true
 elif [[ -L "$libdir" ]]; then
   echo "ERROR: refusing to delete symlink library directory" >&2
   echo "FAILURE_CLASS=SYMLINK_REFUSED" >&2
@@ -412,16 +435,11 @@ fi
 if [[ -d "$etc_frp" ]]; then
   for f in client-state.json frpc.toml access-info.txt client-id \
     client-identity.key client-identity.pub client-identity.mac \
-    apply-pending.json; do
+    apply-pending.json enroll-pending.json \
+    client-manage.lock client-manage.lock.pid; do
     frp_u_rm_file "${etc_frp}/${f}"
   done
   frp_u_safe_rm_rf "${etc_frp}/backups"
-  frp_u_rm_file "${etc_frp}/client-manage.lock"
-  if [[ -f "${etc_frp}/server_token" || -f "${etc_frp}/frps.toml" ]]; then
-    :
-  else
-    frp_u_safe_rm_rf "$etc_frp"
-  fi
 fi
 
 frp_u_rm_file "$(frp_u_path /etc/drlink/allocator-ca.crt)"
@@ -444,12 +462,20 @@ PY
   fi
 fi
 frp_u_rm_file "$(frp_u_path /var/lib/drlink/client-draft.json)"
+frp_u_rm_file "$(frp_u_path /var/lib/drlink/update-actions.log)"
 frp_u_safe_rm_rf "$(frp_u_path /var/lib/drlink/client-upgrades)"
 
 # Dual-role guard: if [[ ! -f /etc/drlink/config.json ]]
 if [[ ! -f "$(frp_u_path /etc/drlink/config.json)" ]]; then
   frp_u_rm_file "$(frp_u_path /etc/drlink/version)"
-  rmdir "$(frp_u_path /etc/drlink)" 2>/dev/null || true
+  frp_u_safe_rm_rf "$(frp_u_path /usr/local/lib/drlink)"
+  frp_u_safe_rm_rf "$(frp_u_path /etc/frp)"
+  frp_u_safe_rm_rf "$(frp_u_path /etc/drlink)"
+  frp_u_safe_rm_rf "$(frp_u_path /var/lib/drlink)"
+  frp_u_safe_rm_rf "$(frp_u_path /var/log/drlink)"
+else
+  # Dual-role: do not prune /var/lib or /etc trees still owned by the server.
+  frp_u_prune_empty_dirs "$(frp_u_path /usr/local/lib/drlink)" || true
 fi
 
 if frp_u_use_systemd; then
@@ -461,8 +487,9 @@ if frp_u_use_systemd; then
   frp_u_legacy_systemctl reset-failed >/dev/null 2>&1 || true
 fi
 
-echo 'Data Relay Link client removed locally. The central port reservation is intentionally preserved.'
+echo 'Data Relay Link client removed locally.'
 echo 'This uninstall does not contact the server and does not release ports.'
+echo 'Remote client records and reservations remain until removed on the server.'
 echo 'To release a published service on the server:'
 echo '  unset client <CLIENT> service <SERVICE>'
 echo 'To remove the client record and all of its reservations on the server:'

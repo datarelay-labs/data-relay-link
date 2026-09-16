@@ -290,22 +290,24 @@ grep -q 'Enrollment Code : NOT REQUIRED' "$ROOT/tests/test-client-upgrade.sh" \
   || fail "upgrade tests"
 pass "CLIENT_SAFE_UPGRADE_PORTABILITY"
 
-# Uninstall must not purge server registry/token unless --purge.
-python3 - "$ROOT/uninstall-server.sh" <<'PY' || fail "default uninstall deletes state"
+# Uninstall completely removes product-owned server state by default.
+python3 - "$ROOT/uninstall-server.sh" <<'PY' || fail "default uninstall does not delete state"
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text(encoding='utf-8')
-idx_purge = text.find('if [[ "$PURGE" == true ]]; then')
-if idx_purge < 0:
+if 'Configuration, token, and registry were preserved' in text:
     raise SystemExit(1)
-before = text[:idx_purge]
-if 'try_rm_rf "$(frp_u_path /etc/frp)"' in before or 'frp_u_safe_rm_rf "$(frp_u_path /etc/frp)"' in before:
+if 'try_rm_rf "$(frp_u_path /etc/frp)"' not in text and 'frp_u_safe_rm_rf "$(frp_u_path /etc/frp)"' not in text:
     raise SystemExit(1)
-if '--purge' not in text or 'PURGE_CONFIRMATION_REQUIRED' not in text:
+if 'try_rm_rf "$libdir"' not in text:
+    raise SystemExit(1)
+if '--purge' not in text:
+    raise SystemExit(1)
+if 'PURGE_CONFIRMATION_REQUIRED' in text:
     raise SystemExit(1)
 PY
-grep -q "Configuration, token, and registry were preserved" "$ROOT/uninstall-server.sh" \
-  || fail "server preserve message"
+grep -q "Data Relay Link server removed from this host" "$ROOT/uninstall-server.sh" \
+  || fail "server complete-removal message"
 grep -qF 'if [[ ! -f /etc/drlink/config.json ]]' "$ROOT/uninstall-client.sh" \
   || fail "client uninstall dual-role guard"
 grep -q 'command -v systemctl' "$ROOT/uninstall-server.sh" || fail "server uninstall systemd guard"
