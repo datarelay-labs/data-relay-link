@@ -276,10 +276,13 @@ For each client claimed supported, record exact product/version and transport/au
 Target matrix:
 
 ```text
-ChatGPT=
-Claude=
-Cursor=
-Other supported MCP host=
+MCP_SPEC_VERSION=2026-07-28
+OFFICIAL_SPEC_SOURCE=https://modelcontextprotocol.io/specification/2026-07-28/
+REFERENCE_SDK=Python mcp 2.2.0 Streamable HTTP
+ChatGPT=not claimed (no custom MCP developer surface in this environment)
+Claude=not claimed (no remote custom connector UI/account in this environment)
+Cursor=not claimed (this Cursor agent session has no remote HTTP MCP namespace; live host is Direct mode without a Data Relay Link 443 /mcp frontend)
+Official SDK E2E=PASS (HTTPS /mcp through product frontend in tests)
 ```
 
 A claim is not made merely because a generic MCP test client works.

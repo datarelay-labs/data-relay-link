@@ -38,6 +38,7 @@ def run_cli(root, tokens):
 def rpc(url, body, token, method=None, name=None, extra_headers=None):
     headers = {
         "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
         "Authorization": "Bearer %s" % token,
         "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
     }
@@ -45,6 +46,22 @@ def rpc(url, body, token, method=None, name=None, extra_headers=None):
         headers["Mcp-Method"] = method
     if name:
         headers["Mcp-Name"] = name
+    params = body.get("params")
+    if isinstance(params, dict):
+        meta = dict(params.get("_meta") or {})
+        meta.setdefault("io.modelcontextprotocol/protocolVersion", MCP_PROTOCOL_VERSION)
+        meta.setdefault("io.modelcontextprotocol/clientCapabilities", {})
+        params["_meta"] = meta
+        body = dict(body)
+        body["params"] = params
+    else:
+        body = dict(body)
+        body["params"] = {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        }
     if extra_headers:
         headers.update(extra_headers)
     req = urllib.request.Request(
@@ -55,7 +72,9 @@ def rpc(url, body, token, method=None, name=None, extra_headers=None):
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return resp.status, parsed
     except urllib.error.HTTPError as exc:
         payload = exc.read().decode("utf-8")
         try:
@@ -224,7 +243,10 @@ class ControlPlaneAITests(unittest.TestCase):
     def test_path_traversal_and_symlink(self):
         self.assertFalse(path_allowed("/var/log/vendor/../../etc/shadow", ["/var/log/vendor/**"]))
         self.assertFalse(path_allowed("/var/log/vendor/%2e%2e/%2e%2e/etc/shadow", ["/var/log/vendor/**"]))
+        self.assertFalse(path_allowed("/var/log/vendor/%252e%252e/etc/shadow", ["/var/log/vendor/**"]))
         self.assertFalse(path_allowed("var/log/vendor/app.log", [self.vendor_glob]))
+        self.assertFalse(path_allowed("/var/log/vendor/app.log", [self.vendor_glob]))
+        self.assertTrue(path_allowed(str(self.vendor / "app.log"), [self.vendor_glob]))
         shadow = Path(self.tmp) / "etc" / "shadow"
         shadow.parent.mkdir(parents=True, exist_ok=True)
         shadow.write_text("root:secret\n", encoding="utf-8")
@@ -235,6 +257,13 @@ class ControlPlaneAITests(unittest.TestCase):
             execute_local(
                 "read_file",
                 {"path": str(link)},
+                patterns=[self.vendor_glob],
+                timeout=5,
+            )
+        with self.assertRaises(Exception):
+            execute_local(
+                "read_file",
+                {"path": str(self.vendor / ".." / ".." / "etc" / "shadow")},
                 patterns=[self.vendor_glob],
                 timeout=5,
             )
@@ -310,14 +339,19 @@ class MCPBridgeE2ETests(unittest.TestCase):
         run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "enabled"])
         self.chatgpt = self._token("chatgpt-support")
         self.cursor = self._token("cursor-dev")
-        self.bridge = MCPBridge(root=self.tmp, plane=self.plane)
+        self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.bridge))
         self.port = self.httpd.server_address[1]
+        self.bridge.listen_host = "127.0.0.1"
+        self.bridge.listen_port = self.port
         self.url = "http://127.0.0.1:%s/mcp" % self.port
+        self.base = "http://127.0.0.1:%s" % self.port
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
+        self.bridge.refresh_local_agents(self.base)
 
     def tearDown(self):
+        self.bridge.close()
         self.httpd.shutdown()
         self.httpd.server_close()
         self.plane.close()
@@ -354,12 +388,21 @@ class MCPBridgeE2ETests(unittest.TestCase):
     def test_protocol_discovery_auth_and_tools(self):
         status, payload = rpc(
             self.url,
+            {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}},
+            self.chatgpt,
+            method="server/discover",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
+        self.assertEqual(payload["result"]["resultType"], "complete")
+        status, payload = rpc(
+            self.url,
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             self.chatgpt,
             method="initialize",
         )
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["result"]["protocolVersion"], MCP_PROTOCOL_VERSION)
+        self.assertEqual(status, 404)
+        self.assertEqual(payload.get("error", {}).get("code"), -32601)
         status, payload = rpc(
             self.url,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
@@ -566,6 +609,128 @@ class MCPBridgeE2ETests(unittest.TestCase):
             name="read_file",
         )
         self.assertEqual(payload.get("error", {}).get("code"), -32020)
+        self.assertEqual(status, 400)
+
+    def test_rfc9728_prm_and_oauth_token(self):
+        req = urllib.request.Request(self.base + "/.well-known/oauth-protected-resource")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            meta = json.loads(resp.read().decode("utf-8"))
+        self.assertIn("authorization_servers", meta)
+        self.assertIn("bearer_methods_supported", meta)
+        self.assertEqual(meta["bearer_methods_supported"], ["header"])
+        req = urllib.request.Request(
+            self.base + "/oauth/token",
+            data=(
+                "grant_type=client_credentials&client_id=chatgpt-support&client_secret="
+                + self.chatgpt
+                + "&resource="
+                + self.url
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            token = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(token.get("token_type"), "Bearer")
+        self.assertTrue(str(token.get("access_token") or "").startswith("drauth_"))
+        self.assertNotEqual(token.get("access_token"), self.chatgpt)
+        status, payload = rpc(
+            self.url,
+            {"jsonrpc": "2.0", "id": 8, "method": "tools/list", "params": {}},
+            token["access_token"],
+            method="tools/list",
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["result"]["tools"])
+
+    def test_spec_streamable_http_client(self):
+        """Protocol client distinct from ad-hoc urllib helpers: required 2026-07-28 headers."""
+        body = {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            },
+        }
+        req = urllib.request.Request(
+            self.url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": "Bearer %s" % self.chatgpt,
+                "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+                "Mcp-Method": "tools/list",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/json", resp.headers.get("Content-Type", ""))
+            payload = json.loads(resp.read().decode("utf-8"))
+        names = [t["name"] for t in payload["result"]["tools"]]
+        self.assertIn("list_hosts", names)
+        self.assertIn("read_file", names)
+
+    def test_official_mcp_sdk_client(self):
+        sdk_py = os.environ.get("DRLINK_MCP_SDK_PYTHON") or "/tmp/mcp-sdk-venv/bin/python"
+        if not os.path.isfile(sdk_py):
+            try:
+                import mcp  # noqa: F401
+
+                sdk_py = sys.executable
+            except Exception:
+                print("OFFICIAL_MCP_SDK=NOT_INSTALLED")
+                print("MCP_PROTOCOL_CLIENT=spec-streamable-http")
+                return
+        helper = ROOT / "tests" / "mcp_sdk_interop_client.py"
+        proc = __import__("subprocess").run(
+            [
+                sdk_py,
+                str(helper),
+                "--url",
+                self.url,
+                "--token",
+                self.chatgpt,
+                "--endpoint",
+                "Expernet-DP1",
+                "--path",
+                str(self.vendor / "app.log"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=40,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.splitlines()[-1])
+        self.assertEqual(payload.get("protocol"), MCP_PROTOCOL_VERSION)
+        for required in (
+            "list_hosts",
+            "get_host",
+            "get_system_info",
+            "exec",
+            "read_file",
+            "write_file",
+            "upload_file",
+            "download_file",
+            "list_processes",
+        ):
+            self.assertIn(required, payload.get("tools") or [])
+        self.assertIn("Expernet-DP1", payload.get("list_hosts") or "")
+        self.assertIn("sysname", payload.get("system") or "")
+        read_text = payload.get("read") or ""
+        if "content_b64" in read_text:
+            data = json.loads(read_text)
+            read_text = base64.b64decode(data["content_b64"]).decode("utf-8", "replace")
+        self.assertIn("log-ok", read_text)
+        self.assertIn("DENY", payload.get("denied") or "")
+        print("OFFICIAL_MCP_SDK=PASS")
+        print("MCP_PROTOCOL_CLIENT=official-python-sdk")
 
     def test_canonical_grammar_accepts_ai_cli(self):
         import frp_ctl_grammar as grammar
@@ -579,6 +744,8 @@ class MCPBridgeE2ETests(unittest.TestCase):
             ["show", "ai-access", "readonly-support", "impact"],
             ["show", "ai-activity", "principal", "chatgpt-support"],
             ["system", "credential", "rotate", "ai-principal", "chatgpt-support"],
+            ["system", "credential", "configure", "ai-principal", "chatgpt-support", "authentication", "static-bearer"],
+            ["system", "diagnostics", "mcp"],
         ]
         for tokens in cases:
             result = grammar.match(tokens, "server")
@@ -594,11 +761,21 @@ class MCPBridgeE2ETests(unittest.TestCase):
         print("CLAUDE_MCP_REAL_E2E=%s" % ("PASS" if claude == "pass" else "BLOCKED"))
         print("CHATGPT_MCP_REAL_E2E=%s" % ("PASS" if chatgpt == "pass" else "BLOCKED"))
         if not cursor:
-            print("EXTERNAL_INTEROP_BLOCKER=Cursor account/UI not available in this environment")
+            print(
+                "CURSOR_BLOCKER=This Cursor agent session has no remote HTTP MCP namespace; "
+                "GetDynamicTools lists only first-party cursor tools. Live host is Direct mode "
+                "(no Data Relay Link 443 frontend), so https://<control-host>/mcp is not installed here."
+            )
         if not claude:
-            print("EXTERNAL_INTEROP_BLOCKER=Claude account/UI not available in this environment")
+            print(
+                "CLAUDE_BLOCKER=ACCOUNT_OR_PRODUCT_PLAN: Claude remote custom connector UI/account "
+                "is not available in this Cursor agent environment."
+            )
         if not chatgpt:
-            print("EXTERNAL_INTEROP_BLOCKER=ChatGPT account/UI not available in this environment")
+            print(
+                "CHATGPT_BLOCKER=ACCOUNT_OR_PRODUCT_PLAN: ChatGPT custom MCP/App developer surface "
+                "is not available in this Cursor agent environment."
+            )
 
 
 if __name__ == "__main__":

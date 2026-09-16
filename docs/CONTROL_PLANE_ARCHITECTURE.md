@@ -811,7 +811,7 @@ MCP is part of the v2.4.0 target architecture.
 The server hosts a small MCP bridge/control component. Internal endpoints do not each run a separate MCP server.
 
 ```text
-ChatGPT / Claude / Cursor / MCP Host
+ChatGPT / Claude / Cursor / MCP Host (target examples until host E2E is evidenced)
                 │
           MCP over HTTPS
                 │
@@ -1010,6 +1010,55 @@ Requirements:
 - Audit attribution to the effective AI Principal.
 
 Exact OAuth/OIDC/token mechanics are selected during implementation after verifying current MCP host support for ChatGPT, Claude, Cursor, and other supported clients.
+
+Authorization-server strategy (v2.4.0 MCP public-endpoint closure):
+
+```text
+Strategy A — Data Relay Link built-in minimal OAuth 2.1 authorization service
+plus Static Bearer as a separately named authentication mode.
+```
+
+Why A, not only an external AS:
+
+```text
+lightweight
+no extra DB daemon
+1–50 clients
+CLI-first operator consent
+strong AI Principal binding
+no general identity-management product
+```
+
+Mechanics:
+
+```text
+Static Bearer     operator-issued drk_ token in Authorization: Bearer
+                  (not OAuth)
+
+OAuth             built-in AS at the public control host
+                  RFC 9728 Protected Resource Metadata
+                  RFC 8414 authorization-server metadata
+                  authorization_code + PKCE S256
+                  client_credentials with RFC 8707 resource
+                  resource-bound expiring drauth_ access tokens
+                  AI Principal mapping is explicit and revocable
+```
+
+Threat model (must remain fail-closed):
+
+```text
+public MCP only at https://<control-host>/mcp
+backend remains 127.0.0.1:6103
+do not bind 0.0.0.0:6103
+do not expose MCP /healthz publicly
+TLS terminates on the existing single-443 frontend
+Host/X-Forwarded-* are informational; authorization uses credentials
+Origin is validated to block loopback DNS rebinding
+Bearer tokens never appear in show/status/audit/support bundles
+OAuth codes are one-time; tokens expire and are resource-bound
+issuer and audience/resource mismatches are rejected
+authenticated != authorized; AI Access still first-match DENY
+```
 
 ## 44. Runtime health and consistency
 
@@ -1297,6 +1346,6 @@ docs/MORNING_REAL_E2E_FINAL_CHECKLIST.md
 
 If implementation changes make commands or state references in those files stale, update or archive them during the implementation/qualification phase. They must not override the canonical documents above.
 
-### Release metadata/code intentionally not changed in the docs-first phase
+### Release metadata after MCP implementation
 
-The current development implementation still contains legacy MCP-exclusion enforcement in release-manifest/schema/generator/checker/test code. That implementation must be changed in the subsequent implementation phase. This docs-first phase does not flip release metadata to `mcp_included=true` before MCP is actually present in the candidate bytes.
+The old `MCP_V2_4_EXCLUSION` / `features.mcp_included=false` guard is retired. Qualified v2.4.0 candidate metadata uses `MCP_V2_4_INCLUDED_AND_QUALIFIED` and `features.mcp_included=true` only when the MCP Bridge and AI Access plane are present in the candidate bytes.

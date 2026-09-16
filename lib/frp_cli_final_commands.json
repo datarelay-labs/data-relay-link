@@ -3958,9 +3958,17 @@
     "summary": "Run read-only health diagnostics",
     "detail": "",
     "examples": [
-      "system diagnostics"
+      "system diagnostics",
+      "system diagnostics mcp",
+      "system diagnostics control-plane"
     ],
-    "args": [],
+    "args": [
+      {
+        "name": "<SCOPE>",
+        "complete": ["control-plane", "runtime", "mcp"],
+        "required": false
+      }
+    ],
     "tail": "flags",
     "internal": [
       "doctor"
@@ -6265,6 +6273,79 @@
       {
         "name": "<PRINCIPAL>",
         "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "credential",
+      "configure",
+      "ai-principal"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Configure AI Principal authentication",
+    "detail": "Set Static Bearer or OAuth authentication for an AI Principal, or register an OAuth redirect URI. Authentication type names the protocol; Static Bearer is not OAuth.",
+    "examples": [
+      "system credential configure ai-principal lab authentication static-bearer",
+      "system credential configure ai-principal lab authentication oauth",
+      "system credential configure ai-principal lab oauth-redirect https://localhost/callback"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      },
+      {
+        "name": "<FIELD>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<VALUE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "credential",
+      "approve-oauth"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Approve a pending OAuth authorization request",
+    "detail": "Operator consent for the built-in authorization server. Issues a one-time authorization code. Does not display access or refresh tokens.",
+    "examples": [
+      "system credential approve-oauth <PENDING-ID>"
+    ],
+    "args": [
+      {
+        "name": "<PENDING-ID>",
+        "complete": null,
         "required": true
       }
     ],

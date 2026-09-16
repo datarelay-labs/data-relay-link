@@ -2676,7 +2676,7 @@ def to_internal(tokens):
     if path == ("system", "update", "check-engine"):
         return ["show", "upstream"] + rest
     if path == ("system", "diagnostics"):
-        if rest and rest[0] in ("control-plane", "runtime"):
+        if rest and rest[0] in ("control-plane", "runtime", "mcp"):
             return ["system", "diagnostics"] + rest
         return ["doctor"] + rest
     if path == ("system", "support-bundle"):
@@ -3054,7 +3054,9 @@ def domain_help(topic, role):
             "  set ai-access <RULE> principal <PRINCIPAL>\n"
             "  test ai-access <PRINCIPAL> <ENDPOINT> <CAPABILITY> [OPERAND]\n"
             "  show ai-activity\n"
-            "  system credential rotate ai-principal <PRINCIPAL>\n\n"
+            "  system credential rotate ai-principal <PRINCIPAL>\n"
+            "  system credential configure ai-principal <PRINCIPAL> authentication static-bearer\n"
+            "  system credential configure ai-principal <PRINCIPAL> authentication oauth\n\n"
             "True read-only requires exec=false. Granting exec is not a read-only role.\n"
         )
     if topic in ("system", "operate"):
@@ -3088,6 +3090,10 @@ def domain_help(topic, role):
                     "  system audit",
                     "  system credential rotate ai-principal <PRINCIPAL>",
                     "  system credential revoke ai-principal <PRINCIPAL>",
+                    "  system credential configure ai-principal <PRINCIPAL> authentication static-bearer",
+                    "  system credential configure ai-principal <PRINCIPAL> authentication oauth",
+                    "  system credential approve-oauth <PENDING-ID>",
+                    "  system diagnostics mcp",
                     "  set server public-hostname <FQDN>",
                     "  set server bootstrap-hostname <FQDN>",
                 ]

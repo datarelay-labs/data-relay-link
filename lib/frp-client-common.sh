@@ -4785,6 +4785,15 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_cli_final_commands.json" "${libdir}/frp_cli_final_commands.json"
   install -m 0644 "${source}/lib/frp_service_profiles.py" "${libdir}/frp_service_profiles.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
+  if [[ -f "${source}/lib/drlink_ai_agent.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_ai_agent.py" "${libdir}/drlink_ai_agent.py"
+  fi
+  if [[ -f "${source}/lib/drlink_control_db.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_control_db.py" "${libdir}/drlink_control_db.py"
+  fi
+  if [[ -f "${source}/lib/drlink_control_plane.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_control_plane.py" "${libdir}/drlink_control_plane.py"
+  fi
   if [[ -f "${source}/lib/frp-role-ownership.sh" ]]; then
     install -m 0644 "${source}/lib/frp-role-ownership.sh" "${libdir}/frp-role-ownership.sh"
   fi
@@ -4838,6 +4847,9 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/frp_cli_final_commands.json:0644:lib/frp_cli_final_commands.json" \
     "usr/local/lib/drlink/frp_service_profiles.py:0644:lib/frp_service_profiles.py" \
     "usr/local/lib/drlink/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
+    "usr/local/lib/drlink/drlink_ai_agent.py:0644:lib/drlink_ai_agent.py" \
+    "usr/local/lib/drlink/drlink_control_db.py:0644:lib/drlink_control_db.py" \
+    "usr/local/lib/drlink/drlink_control_plane.py:0644:lib/drlink_control_plane.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \

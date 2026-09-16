@@ -83,6 +83,16 @@ def test_backend_identity_ip_and_dns():
             fail('WSS path')
         if 'ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+' not in conf:
             fail('allocator allowlist')
+        if 'location = /mcp {' not in conf:
+            fail('exact /mcp location')
+        if 'location ^~ /mcp' in conf:
+            fail('prefix /mcp still present')
+        if 'proxy_pass http://127.0.0.1:6103;' not in conf:
+            fail('mcp loopback proxy')
+        if 'location = /oauth/token {' not in conf:
+            fail('oauth token route')
+        if 'location = /.well-known/oauth-protected-resource {' not in conf:
+            fail('prm route')
         pass_('NGINX_BACKEND_DNS_IDENTITY')
         pass_('NGINX_NO_PUBLIC_IP_PROXY_SSL_NAME')
         pass_('NGINX_BACKEND_VERIFY_ON')

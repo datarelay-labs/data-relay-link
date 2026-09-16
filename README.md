@@ -109,17 +109,25 @@ Technical capability name: **Controlled Egress**. Normal CLI/resource name: **In
 
 ## AI Access / MCP
 
-MCP is included in the v2.4.0 target architecture.
+MCP is included in the v2.4.0 architecture.
+
+Public remote MCP is `https://<canonical-control-host>/mcp` through the
+single-443 HTTPS frontend. The MCP backend stays on `127.0.0.1:6103`.
 
 ```text
-ChatGPT / Claude / Cursor / MCP host
-    ↓ authenticated HTTPS / current MCP standard
-Data Relay Link MCP Bridge
+MCP host (Cursor / Claude / ChatGPT are target examples)
+    ↓ authenticated HTTPS / MCP 2026-07-28 Streamable HTTP
+Data Relay Link public /mcp
+    ↓ loopback
+MCP Bridge 127.0.0.1:6103
     ↓ AI Access authorization
 Managed Endpoint / Client Group
     ↓
 private host
 ```
+
+Support claims are evidence-based. Protocol and official SDK coverage do not
+imply Cursor, Claude, or ChatGPT product support until those hosts are tested.
 
 No separate MCP server is required on every internal host.
 
@@ -271,6 +279,8 @@ There is no stable `v2.4.0` tag until exact-HEAD qualification is complete.
 Pre-tag installers/bootstrap must use an immutable exact SHA or immutable candidate artifact, never a future nonexistent stable tag.
 
 ## Documentation
+
+Public docs: https://link.datarelay.run
 
 Start here:
 

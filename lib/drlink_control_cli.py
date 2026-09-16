@@ -280,9 +280,31 @@ def _show(plane: ControlPlane, rest):
                 sys.stdout.write("ai-access %s\n" % r["name"])
             return 0
         sys.stdout.write(
-            "AI Principal: %s\nDescription: %s\nEnabled: %s\nCredential: %s\nFingerprint: %s\n"
-            % (p["name"], p["description"], "yes" if p["enabled"] else "no", p["credential_status"], p["credential_fingerprint"] or "-")
+            "AI Principal: %s\n\n"
+            "Status              : %s\n"
+            "Authentication      : %s\n"
+            "Credential Status   : %s\n"
+            "Last Seen           : %s\n"
+            "Issuer              : %s\n"
+            "Subject Binding     : %s\n"
+            "Fingerprint         : %s\n"
+            "Rules               : %s\n"
+            % (
+                p["name"],
+                "Enabled" if p["enabled"] else "Disabled",
+                "OAuth" if str(p["auth_mode"] or "") == "oauth" else "Static Bearer",
+                p["credential_status"],
+                p["last_seen"] or "-",
+                p["oauth_issuer"] or ("built-in" if str(p["auth_mode"] or "") == "oauth" else "-"),
+                p["oauth_subject"] or ("Configured" if str(p["auth_mode"] or "") == "oauth" else "-"),
+                p["credential_fingerprint"] or "-",
+                plane.conn.execute(
+                    "SELECT COUNT(*) FROM ai_access_rules WHERE principal_id = ?", (p["id"],)
+                ).fetchone()[0],
+            )
         )
+        if p["description"]:
+            sys.stdout.write("Description         : %s\n" % p["description"])
         return 0
     if res == "ai-access":
         if len(rest) == 1:
@@ -727,6 +749,8 @@ def _system(plane: ControlPlane, rest):
             sys.stdout.write(plane.diagnostics_control_plane())
         if kind in ("runtime", "all"):
             sys.stdout.write(plane.diagnostics_runtime())
+        if kind in ("mcp", "all"):
+            sys.stdout.write(plane.diagnostics_mcp())
         return 0
     if rest[0] == "backup":
         if len(rest) >= 2 and rest[1] == "validate":
@@ -772,19 +796,40 @@ def _system(plane: ControlPlane, rest):
         _run(plane.remove_client, rest[2], revoke_only=True)
         return 0
     if rest[0] == "credential":
+        if len(rest) < 4:
+            raise SystemExit("usage: system credential rotate|revoke|configure|approve-oauth ai-principal ...")
         if rest[1] == "rotate":
             result = _run(plane.rotate_ai_credential, rest[3])
             token = result.get("token") if isinstance(result, dict) else None
             if token:
                 sys.stdout.write("Credential issued once. Store it now; it will not be shown again.\n")
                 sys.stdout.write("Fingerprint: %s\n" % result.get("fingerprint"))
-                # Print token to stdout only at issuance (not via show).
                 sys.stdout.write("Token: %s\n" % token)
             return 0
         if rest[1] == "revoke":
             _run(plane.revoke_ai_credential, rest[3])
             sys.stdout.write("Credential revoked.\n")
             return 0
+        if rest[1] == "configure":
+            principal = rest[3]
+            if len(rest) >= 6 and rest[4] == "authentication":
+                _run(plane.configure_ai_auth, principal, rest[5])
+                sys.stdout.write("Authentication configured.\n")
+                return 0
+            if len(rest) >= 6 and rest[4] == "oauth-redirect":
+                _run(plane.add_oauth_redirect, principal, rest[5])
+                sys.stdout.write("OAuth redirect registered.\n")
+                return 0
+            raise SystemExit(
+                "usage: system credential configure ai-principal <PRINCIPAL> authentication <static-bearer|oauth>\n"
+                "       system credential configure ai-principal <PRINCIPAL> oauth-redirect <URI>"
+            )
+        if rest[1] == "approve-oauth":
+            result = _run(plane.approve_oauth_pending, rest[2] if rest[2] != "ai-principal" else rest[3])
+            sys.stdout.write("Authorization code issued. It is shown once.\n")
+            sys.stdout.write("code=%s\n" % result.get("code"))
+            return 0
+        raise SystemExit("Unknown credential operation.")
     raise SystemExit("Unknown system operation.")
 
 

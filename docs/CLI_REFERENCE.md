@@ -395,9 +395,20 @@ Credential revocation/rotation is exposed through a dedicated safe workflow, for
 ```text
 system credential revoke ai-principal <PRINCIPAL>
 system credential rotate ai-principal <PRINCIPAL>
+system credential configure ai-principal <PRINCIPAL> authentication static-bearer
+system credential configure ai-principal <PRINCIPAL> authentication oauth
+system credential configure ai-principal <PRINCIPAL> oauth-redirect <URI>
+system credential approve-oauth <PENDING-ID>
 ```
 
-Exact auth-provider mechanics are finalized only after current MCP host interoperability validation.
+Authentication modes:
+
+```text
+Static Bearer    operator-issued token in Authorization: Bearer
+OAuth            built-in OAuth 2.1 authorization server (authorization_code+PKCE S256, client_credentials)
+```
+
+Do not call Static Bearer "OAuth". Raw tokens are shown only at issuance.
 
 ## 17. AI Access rules
 
@@ -543,10 +554,26 @@ DB Revision      : 42
 Remote Policy    : 42 active
 Internet Policy  : 42 active
 AI Policy        : 42 active
-MCP Bridge       : Healthy
+
+MCP Bridge
+----------
+Backend       : Healthy
+Backend Bind  : 127.0.0.1:6103
+Public URL    : https://<control-host>/mcp
+Protocol      : 2026-07-28
+Transport     : Streamable HTTP
+Authentication: Static Bearer / OAuth
 ```
 
+Public URL is `Not configured` in Direct mode because there is no Data Relay Link HTTPS frontend on TCP/443. Remote MCP requires Enterprise single-443.
+
 A mismatch is surfaced as warning/critical/error according to the canonical health model.
+
+```text
+system diagnostics mcp
+```
+
+reports backend health, loopback bind, public URL, frontend `/mcp` routing, and authentication modes. Backend Healthy does not imply remote MCP is healthy.
 
 ## 25. Version
 

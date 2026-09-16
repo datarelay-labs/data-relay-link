@@ -2008,7 +2008,7 @@ def _match_system(tokens, role, names=None):
     op = tokens[1]
     if op in CONTROL_PLANE_SYSTEM:
         return _control_plane_ok(tokens)
-    if op == "diagnostics" and len(tokens) > 2 and tokens[2] in ("control-plane", "runtime"):
+    if op == "diagnostics" and len(tokens) > 2 and tokens[2] in ("control-plane", "runtime", "mcp"):
         return _control_plane_ok(tokens)
     if op == "audit" and len(tokens) > 2 and tokens[2] in (
         "ai-principal",

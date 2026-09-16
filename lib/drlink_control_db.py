@@ -356,6 +356,9 @@ CREATE TABLE ai_principals (
   credential_fingerprint TEXT,
   credential_status TEXT NOT NULL DEFAULT 'none',
   last_seen TEXT,
+  auth_mode TEXT NOT NULL DEFAULT 'static-bearer',
+  oauth_issuer TEXT NOT NULL DEFAULT '',
+  oauth_subject TEXT NOT NULL DEFAULT '',
   row_version INTEGER NOT NULL DEFAULT 1,
   created_revision INTEGER,
   updated_revision INTEGER,
@@ -414,6 +417,51 @@ CREATE TABLE ai_sessions (
   credential_fingerprint TEXT,
   created_at TEXT NOT NULL,
   revoked_at TEXT,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+
+CREATE TABLE ai_oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+
+CREATE TABLE ai_oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  resource TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+
+CREATE TABLE ai_oauth_tokens (
+  token_hash TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  client_id TEXT,
+  resource TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  fingerprint TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+
+CREATE TABLE ai_oauth_pending (
+  id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  resource TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
   FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
 );
 
@@ -511,11 +559,71 @@ def connect(path: Optional[Path] = None, root: Optional[str] = None, *, create: 
     return conn
 
 
+AI_AUTH_SQL = r"""
+CREATE TABLE IF NOT EXISTS ai_oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+CREATE TABLE IF NOT EXISTS ai_oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  resource TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+CREATE TABLE IF NOT EXISTS ai_oauth_tokens (
+  token_hash TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  client_id TEXT,
+  resource TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  fingerprint TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+CREATE TABLE IF NOT EXISTS ai_oauth_pending (
+  id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  resource TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
+);
+"""
+
+
+def ensure_ai_auth_schema(conn: sqlite3.Connection) -> None:
+    """Additive AI auth tables/columns without bumping SCHEMA_VERSION."""
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_principals)")}
+    if cols and "auth_mode" not in cols:
+        conn.execute(
+            "ALTER TABLE ai_principals ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'static-bearer'"
+        )
+    if cols and "oauth_issuer" not in cols:
+        conn.execute("ALTER TABLE ai_principals ADD COLUMN oauth_issuer TEXT NOT NULL DEFAULT ''")
+    if cols and "oauth_subject" not in cols:
+        conn.execute("ALTER TABLE ai_principals ADD COLUMN oauth_subject TEXT NOT NULL DEFAULT ''")
+    conn.executescript(AI_AUTH_SQL)
+
+
 def initialize(conn: sqlite3.Connection) -> None:
     found = current_schema_version(conn)
     if found > SCHEMA_VERSION:
         raise SchemaTooNewError(found, SCHEMA_VERSION)
     if found == SCHEMA_VERSION:
+        ensure_ai_auth_schema(conn)
         integrity_check(conn)
         return
     if found == 0:
@@ -554,6 +662,7 @@ def initialize(conn: sqlite3.Connection) -> None:
             except sqlite3.Error:
                 pass
             raise
+        ensure_ai_auth_schema(conn)
         return
     raise ControlPlaneError("Unknown control DB schema %s" % found)
 

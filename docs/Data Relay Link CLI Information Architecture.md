@@ -965,16 +965,14 @@ Do not call the same concept Object Group in one surface and ACL Group in anothe
 
 Operations requiring clear confirmation include:
 
-```text
-remove client
-release service reservation
-delete referenced policy resource after references are cleared
-widen network access
-grant AI exec/write/upload/download
-restore backup
-rollback revision
-disable policy enforcement component
-```
+- unset client
+- release a Published Service reservation
+- delete a referenced policy resource after references are cleared
+- widen network access
+- grant AI exec/write/upload/download
+- restore backup
+- rollback revision
+- disable a policy enforcement component
 
 Confirmation describes user-visible effect, not merely internal implementation.
 

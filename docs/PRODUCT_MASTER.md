@@ -147,7 +147,7 @@ The base HTTP/HTTPS path remains agentless for the protected host.
 AI Access provides policy-controlled remote operations through a Data Relay Link MCP Bridge.
 
 ```text
-ChatGPT / Claude / Cursor / other MCP host
+ChatGPT / Claude / Cursor / other MCP host (target examples; support is evidence-based)
     ↓
 MCP over authenticated HTTPS
     ↓

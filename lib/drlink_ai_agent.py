@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Endpoint-side AI operation executor with fail-closed path and exec safety."""
+"""Endpoint-side AI operation executor with fail-closed path and exec safety.
+
+This module is installed on Data Relay Link clients. It is not an MCP server.
+The server-side MCP Bridge dispatches authorized jobs here over the agent RPC.
+"""
 from __future__ import annotations
 
+import json
 import os
 import signal
 import stat
 import subprocess
+import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -36,20 +44,16 @@ def _is_unsafe_file(path: Path) -> bool:
     return True
 
 
+def _b64(data: bytes) -> str:
+    import base64
+
+    return base64.b64encode(data).decode("ascii")
+
+
 def read_file(path: str, patterns: list[str]) -> dict:
     resolved = validate_safe_path(path, patterns)
     if resolved.is_symlink() or Path(path).is_symlink():
-        # Followed realpath must still be in scope (validate_safe_path). If the
-        # original path is a symlink, require the symlink itself to live in-tree
-        # AND the target to stay in-tree.
-        link_parent = Path(os.path.realpath(str(Path(path).parent)))
-        if not path_allowed(str(resolved), patterns) or not path_allowed(str(link_parent), patterns):
-            raise ControlPlaneError("symlink escape denied")
-        if not path_allowed(str(Path(path).parent / Path(path).name), patterns):
-            # original location
-            orig = Path(path)
-            if not path_allowed(str(orig.parent), patterns):
-                raise ControlPlaneError("symlink escape denied")
+        raise ControlPlaneError("symlink escape denied")
     if _is_unsafe_file(resolved):
         raise ControlPlaneError("special file denied")
     if not resolved.is_file():
@@ -66,36 +70,42 @@ def write_file(path: str, content: bytes, patterns: list[str]) -> dict:
     if len(content) > MAX_FILE_BYTES:
         raise ControlPlaneError("payload too large")
     raw = Path(path)
-    if not str(path).startswith("/"):
-        raise ControlPlaneError("path must be absolute")
-    parent = Path(os.path.realpath(str(raw.parent)))
-    if not path_allowed(str(parent), patterns) and not path_allowed(str(parent) + "/", patterns):
-        # allow writing a new file whose parent matches a /** prefix
-        if not path_allowed(str(raw), patterns) and not _parent_in_scope(parent, patterns):
+    decoded_ok = path_allowed(str(path), patterns)
+    if not decoded_ok:
+        # New files: parent must be in scope after canonicalization.
+        parent = Path(os.path.realpath(str(raw.parent)))
+        if not path_allowed(str(parent / raw.name), patterns) and not path_allowed(str(parent), patterns):
             raise ControlPlaneError("path is outside allowed scope")
-    dest_dir = parent
+    dest_dir = Path(os.path.realpath(str(raw.parent)))
     dest_dir.mkdir(parents=True, exist_ok=True)
+    if dest_dir.is_symlink():
+        raise ControlPlaneError("symlink escape denied")
     tmp = dest_dir / (".drlink-ai-" + raw.name + ".tmp")
-    tmp.write_bytes(content)
-    os.replace(str(tmp), str(dest_dir / raw.name))
-    final = Path(os.path.realpath(str(dest_dir / raw.name)))
-    if not path_allowed(str(final), patterns):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    fd = os.open(str(tmp), flags, 0o600)
+    try:
+        os.write(fd, content)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    dest = dest_dir / raw.name
+    if dest.exists() or dest.is_symlink():
+        try:
+            st = dest.lstat()
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                os.unlink(str(tmp))
+                raise ControlPlaneError("unsafe overwrite denied")
+        except FileNotFoundError:
+            pass
+    os.replace(str(tmp), str(dest))
+    final = Path(os.path.realpath(str(dest)))
+    if final.is_symlink() or not path_allowed(str(final), patterns):
         try:
             final.unlink()
         except OSError:
             pass
         raise ControlPlaneError("path is outside allowed scope")
     return {"path": str(final), "bytes": len(content)}
-
-
-def _parent_in_scope(parent: Path, patterns: list[str]) -> bool:
-    return path_allowed(str(parent), patterns) or path_allowed(str(parent / ".drlink-scope"), patterns)
-
-
-def _b64(data: bytes) -> str:
-    import base64
-
-    return base64.b64encode(data).decode("ascii")
 
 
 def exec_command(command: str, timeout: int) -> dict:
@@ -185,3 +195,82 @@ def execute_local(capability: str, arguments: dict, *, patterns: list[str], time
     if cap == "exec":
         return exec_command(arguments.get("command") or arguments.get("operand") or "", timeout or DEFAULT_EXEC_TIMEOUT)
     raise ControlPlaneError("unsupported local capability %s" % cap)
+
+
+def _agent_post(url: str, token: str, body: dict, timeout: float = 10) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer %s" % token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        payload = exc.read().decode("utf-8", "replace")
+        try:
+            return json.loads(payload)
+        except Exception:
+            raise ControlPlaneError("agent RPC HTTP %s" % exc.code) from exc
+
+
+class AgentLoop:
+    """Poll the MCP Bridge for authorized jobs and execute them locally."""
+
+    def __init__(self, base_url: str, token: str, stop_event: Optional[threading.Event] = None):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.stop_event = stop_event or threading.Event()
+
+    def run_once(self) -> int:
+        payload = _agent_post(self.base_url + "/agent/v1/claim", self.token, {"limit": 4})
+        jobs = payload.get("jobs") or []
+        for job in jobs:
+            try:
+                result = execute_local(
+                    job.get("capability") or "",
+                    job.get("arguments") or {},
+                    patterns=job.get("patterns") or [],
+                    timeout=job.get("timeout"),
+                )
+            except ControlPlaneError as exc:
+                result = {"result": "DENY", "error": str(exc)}
+            except Exception as exc:
+                result = {"result": "ERROR", "error": str(exc)}
+            _agent_post(
+                self.base_url + "/agent/v1/complete",
+                self.token,
+                {"id": job.get("id"), "result": result},
+            )
+        return len(jobs)
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.run_once()
+            except Exception:
+                pass
+            self.stop_event.wait(0.05)
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Data Relay Link AI agent (not an MCP server)")
+    parser.add_argument("--url", default=os.environ.get("DRLINK_MCP_URL", "http://127.0.0.1:6103"))
+    parser.add_argument("--token-file", default=os.environ.get("DRLINK_AI_AGENT_TOKEN_FILE", "/etc/drlink/ai-agent.token"))
+    args = parser.parse_args(argv)
+    token = os.environ.get("DRLINK_AI_AGENT_TOKEN") or ""
+    if not token and args.token_file and os.path.isfile(args.token_file):
+        token = Path(args.token_file).read_text(encoding="utf-8").strip()
+    if not token:
+        raise SystemExit("ERROR: missing AI agent token")
+    AgentLoop(args.url, token).run()
+
+
+if __name__ == "__main__":
+    main()

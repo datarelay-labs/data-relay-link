@@ -245,9 +245,9 @@ Remote MCP calls terminate at a Data Relay Link server-side bridge. Internal end
 
 ```text
 MCP host
-→ authenticated HTTPS
-→ DRLink MCP Bridge
-→ AI Principal
+→ authenticated HTTPS https://<control-host>/mcp
+→ loopback MCP Bridge 127.0.0.1:6103
+→ AI Principal (Static Bearer or OAuth)
 → AI Access authorization
 → managed client control path
 → target OS boundary

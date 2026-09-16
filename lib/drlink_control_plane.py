@@ -5,6 +5,7 @@ SQLite is the SSOT. Runtime artifacts under /var/lib/drlink/runtime/ are derived
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -15,6 +16,8 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
+import time
+from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -179,11 +182,37 @@ class ControlPlane:
         self.db_file = db_path(root)
         self.runtime = runtime_dir(root)
         self.conn = conn or open_control_db(root)
+        self._db_ident = self._db_file_ident()
 
     def close(self) -> None:
         if self.conn is not None:
             self.conn.close()
             self.conn = None
+
+    def _db_file_ident(self):
+        try:
+            st = os.stat(self.db_file)
+            return (st.st_dev, st.st_ino)
+        except OSError:
+            return None
+
+    def _ensure_live_conn(self) -> None:
+        """Reopen SQLite when backup/restore replaced the database file.
+
+        The long-lived MCP Bridge keeps a connection. Replacing drlink.db under
+        that fd would otherwise keep serving the unlinked inode, and leftover
+        WAL files from the old connection would replay onto the restored image.
+        """
+        ident = self._db_file_ident()
+        if ident is None or ident == getattr(self, "_db_ident", None):
+            return
+        try:
+            if self.conn is not None:
+                self.conn.close()
+        except Exception:
+            pass
+        self.conn = open_control_db(self.root)
+        self._db_ident = ident
 
     # --- revision / audit -------------------------------------------------
     def current_revision(self) -> int:
@@ -2290,9 +2319,11 @@ class ControlPlane:
             )
             self.conn.execute(
                 "UPDATE ai_principals SET credential_hash = ?, credential_fingerprint = ?, "
-                "credential_status = 'active', row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                "credential_status = 'active', auth_mode = COALESCE(NULLIF(auth_mode, ''), 'static-bearer'), "
+                "row_version = row_version + 1, updated_at = ? WHERE id = ?",
                 (digest, fp, now, principal["id"]),
             )
+            self._revoke_oauth_tokens(principal["id"], now)
             sid = _new_id("sess")
             self.conn.execute(
                 "INSERT INTO ai_sessions(id, principal_id, credential_fingerprint, created_at) VALUES (?, ?, ?, ?)",
@@ -2301,11 +2332,14 @@ class ControlPlane:
             return {
                 "entity": {"type": "ai-principal", "id": principal["id"], "name": name},
                 "operation": "rotate",
-                "token": token,
                 "fingerprint": fp,
+                "after": "credential rotated fingerprint=%s" % fp,
             }
 
-        return self._mutate("system credential rotate ai-principal %s" % name, "rotate credential", write)
+        result = self._mutate("system credential rotate ai-principal %s" % name, "rotate credential", write)
+        if isinstance(result, dict):
+            result["token"] = token
+        return result
 
     def revoke_ai_credential(self, name: str) -> dict:
         principal = self.get_principal(name)
@@ -2323,17 +2357,402 @@ class ControlPlane:
                 "row_version = row_version + 1, updated_at = ? WHERE id = ?",
                 (now, principal["id"]),
             )
+            self._revoke_oauth_tokens(principal["id"], now)
             return {"entity": {"type": "ai-principal", "id": principal["id"], "name": name}, "operation": "revoke"}
 
         return self._mutate("system credential revoke ai-principal %s" % name, "revoke credential", write)
 
-    def authenticate_principal(self, token: str) -> Optional[sqlite3.Row]:
-        digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+    def _revoke_oauth_tokens(self, principal_id: str, now: Optional[str] = None) -> None:
+        stamp = now or utc_now_iso()
+        self.conn.execute(
+            "UPDATE ai_oauth_tokens SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL",
+            (stamp, principal_id),
+        )
+        self.conn.execute("DELETE FROM ai_oauth_codes WHERE principal_id = ?", (principal_id,))
+        self.conn.execute("DELETE FROM ai_oauth_pending WHERE principal_id = ?", (principal_id,))
+
+    def _touch_principal(self, principal_id: str) -> None:
+        self.conn.execute(
+            "UPDATE ai_principals SET last_seen = ? WHERE id = ?",
+            (utc_now_iso(), principal_id),
+        )
+
+    def _iso_plus_seconds(self, seconds: int) -> str:
+        return (
+            datetime.now(timezone.utc) + timedelta(seconds=int(seconds))
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _pkce_s256(self, verifier: str) -> str:
+        digest = hashlib.sha256(str(verifier).encode("ascii")).digest()
+        return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+    def configure_ai_auth(self, name: str, mode: str) -> dict:
+        principal = self.get_principal(name)
+        if principal is None:
+            raise ControlPlaneError("AI Principal not found: %s" % name)
+        normalized = str(mode or "").strip().lower().replace("_", "-")
+        if normalized in ("static", "static-bearer", "bearer"):
+            normalized = "static-bearer"
+        elif normalized == "oauth":
+            normalized = "oauth"
+        else:
+            raise ControlPlaneError("Authentication type must be static-bearer or oauth")
+
+        def write():
+            now = utc_now_iso()
+            subject = principal["name"] if normalized == "oauth" else ""
+            self.conn.execute(
+                "UPDATE ai_principals SET auth_mode = ?, oauth_subject = ?, row_version = row_version + 1, "
+                "updated_at = ? WHERE id = ?",
+                (normalized, subject, now, principal["id"]),
+            )
+            if normalized == "oauth":
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO ai_oauth_clients(client_id, principal_id, redirect_uris, created_at) "
+                    "VALUES (?, ?, COALESCE((SELECT redirect_uris FROM ai_oauth_clients WHERE client_id = ?), ''), ?)",
+                    (principal["name"], principal["id"], principal["name"], now),
+                )
+            return {
+                "entity": {"type": "ai-principal", "id": principal["id"], "name": name},
+                "operation": "configure-auth",
+                "after": "authentication=%s" % normalized,
+            }
+
+        return self._mutate("system credential configure ai-principal %s" % name, "configure credential", write)
+
+    def add_oauth_redirect(self, name: str, uri: str) -> dict:
+        principal = self.get_principal(name)
+        if principal is None:
+            raise ControlPlaneError("AI Principal not found: %s" % name)
+        text = str(uri or "").strip()
+        if not (text.startswith("https://") or text.startswith("http://127.0.0.1") or text.startswith("http://localhost")):
+            raise ControlPlaneError("OAuth redirect URI must be https or loopback http")
+
+        def write():
+            now = utc_now_iso()
+            row = self.conn.execute(
+                "SELECT redirect_uris FROM ai_oauth_clients WHERE client_id = ?",
+                (principal["name"],),
+            ).fetchone()
+            existing = [p for p in str(row["redirect_uris"] if row else "").split("\n") if p]
+            if text not in existing:
+                existing.append(text)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO ai_oauth_clients(client_id, principal_id, redirect_uris, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (principal["name"], principal["id"], "\n".join(existing), now),
+            )
+            self.conn.execute(
+                "UPDATE ai_principals SET auth_mode = 'oauth', oauth_subject = ?, row_version = row_version + 1, "
+                "updated_at = ? WHERE id = ?",
+                (principal["name"], now, principal["id"]),
+            )
+            return {
+                "entity": {"type": "ai-principal", "id": principal["id"], "name": name},
+                "operation": "configure-oauth-redirect",
+            }
+
+        return self._mutate("system credential configure ai-principal %s oauth-redirect" % name, "configure credential", write)
+
+    def create_oauth_pending(self, *, client_id: str, redirect_uri: str, code_challenge: str, resource: str, state: str = "") -> dict:
+        client = self.conn.execute(
+            "SELECT * FROM ai_oauth_clients WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        if client is None:
+            raise ControlPlaneError("unknown OAuth client")
+        allowed = [p for p in str(client["redirect_uris"] or "").split("\n") if p]
+        if redirect_uri not in allowed:
+            raise ControlPlaneError("redirect_uri is not registered")
+        principal = self.conn.execute(
+            "SELECT * FROM ai_principals WHERE id = ? AND enabled = 1", (client["principal_id"],)
+        ).fetchone()
+        if principal is None:
+            raise ControlPlaneError("AI Principal disabled or missing")
+        pending_id = _new_id("oap")
+        now = utc_now_iso()
+        self.conn.execute(
+            "INSERT INTO ai_oauth_pending(id, principal_id, client_id, redirect_uri, code_challenge, resource, state, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (pending_id, principal["id"], client_id, redirect_uri, code_challenge, resource or "", state or "", now),
+        )
+        return {"id": pending_id, "principal": principal["name"], "client_id": client_id}
+
+    def approve_oauth_pending(self, pending_id: str) -> dict:
+        row = self.conn.execute("SELECT * FROM ai_oauth_pending WHERE id = ?", (pending_id,)).fetchone()
+        if row is None:
+            raise ControlPlaneError("OAuth request not found")
+        code = "drc_" + secrets.token_urlsafe(24)
+        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        now = utc_now_iso()
+        self.conn.execute(
+            "INSERT INTO ai_oauth_codes(code_hash, principal_id, client_id, redirect_uri, code_challenge, resource, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                digest,
+                row["principal_id"],
+                row["client_id"],
+                row["redirect_uri"],
+                row["code_challenge"],
+                row["resource"],
+                self._iso_plus_seconds(300),
+                now,
+            ),
+        )
+        self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (pending_id,))
+        return {
+            "code": code,
+            "redirect_uri": row["redirect_uri"],
+            "state": row["state"],
+            "resource": row["resource"],
+        }
+
+    def issue_oauth_access_token(
+        self, *, principal_id: str, client_id: str, resource: str, ttl: int = 3600
+    ) -> dict:
+        token = "drauth_" + secrets.token_urlsafe(32)
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        fp = digest[:12]
+        now = utc_now_iso()
+        self.conn.execute(
+            "INSERT INTO ai_oauth_tokens(token_hash, principal_id, client_id, resource, expires_at, fingerprint, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (digest, principal_id, client_id, resource or "", self._iso_plus_seconds(ttl), fp, now),
+        )
+        return {
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": int(ttl),
+            "scope": "drlink.ai",
+        }
+
+    def client_credentials_token(self, client_id: str, client_secret: str, resource: str) -> Optional[dict]:
+        principal = self.authenticate_static_bearer(client_secret)
+        if principal is None:
+            return None
+        if str(principal["name"]).lower() != str(client_id or "").lower():
+            return None
+        if not resource:
+            raise ControlPlaneError("resource is required")
+        return self.issue_oauth_access_token(
+            principal_id=principal["id"], client_id=client_id, resource=resource
+        )
+
+    def exchange_authorization_code(
+        self, *, code: str, verifier: str, redirect_uri: str, resource: str, client_id: str
+    ) -> Optional[dict]:
+        digest = hashlib.sha256(str(code or "").encode("utf-8")).hexdigest()
         row = self.conn.execute(
+            "SELECT * FROM ai_oauth_codes WHERE code_hash = ? AND used_at IS NULL", (digest,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["expires_at"] <= utc_now_iso():
+            return None
+        if row["client_id"] != client_id or row["redirect_uri"] != redirect_uri:
+            return None
+        if resource and row["resource"] and resource != row["resource"]:
+            return None
+        if self._pkce_s256(verifier) != row["code_challenge"]:
+            return None
+        self.conn.execute(
+            "UPDATE ai_oauth_codes SET used_at = ? WHERE code_hash = ?",
+            (utc_now_iso(), digest),
+        )
+        return self.issue_oauth_access_token(
+            principal_id=row["principal_id"],
+            client_id=client_id,
+            resource=row["resource"] or resource,
+        )
+
+    def authenticate_static_bearer(self, token: str) -> Optional[sqlite3.Row]:
+        digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+        return self.conn.execute(
             "SELECT * FROM ai_principals WHERE credential_hash = ? AND credential_status = 'active' AND enabled = 1",
             (digest,),
         ).fetchone()
+
+    def authenticate_oauth_token(self, token: str, resource: Optional[str] = None) -> Optional[sqlite3.Row]:
+        digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+        now = utc_now_iso()
+        row = self.conn.execute(
+            "SELECT t.* FROM ai_oauth_tokens t "
+            "JOIN ai_principals p ON p.id = t.principal_id "
+            "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND p.enabled = 1 "
+            "AND p.credential_status != 'revoked'",
+            (digest, now),
+        ).fetchone()
+        if row is None:
+            return None
+        stored = str(row["resource"] or "")
+        if resource and stored and stored.rstrip("/") != str(resource).rstrip("/"):
+            return None
+        return self.conn.execute("SELECT * FROM ai_principals WHERE id = ?", (row["principal_id"],)).fetchone()
+
+    def authenticate_principal(self, token: str, resource: Optional[str] = None) -> Optional[sqlite3.Row]:
+        self._ensure_live_conn()
+        text = str(token or "")
+        if text.startswith("drauth_"):
+            row = self.authenticate_oauth_token(text, resource=resource)
+        else:
+            row = self.authenticate_static_bearer(text)
+            if row is None:
+                row = self.authenticate_oauth_token(text, resource=resource)
+        if row is not None:
+            self._touch_principal(row["id"])
         return row
+
+    def issue_agent_credential(self, client_id: str, *, rotate: bool = False) -> Optional[str]:
+        key = "ai_agent_hash:%s" % client_id
+        existing = self.conn.execute("SELECT value FROM system_meta WHERE key = ?", (key,)).fetchone()
+        if existing and not rotate:
+            return None
+        token = "dra_" + secrets.token_urlsafe(32)
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        self.conn.execute(
+            "INSERT OR REPLACE INTO system_meta(key, value) VALUES (?, ?)",
+            (key, digest),
+        )
+        return token
+
+    def authenticate_agent(self, token: str) -> Optional[str]:
+        digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+        row = self.conn.execute(
+            "SELECT key FROM system_meta WHERE value = ? AND key LIKE 'ai_agent_hash:%'",
+            (digest,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["key"]).split(":", 1)[1]
+
+    def enqueue_ai_job(
+        self,
+        *,
+        principal_id: Optional[str],
+        endpoint_object_id: str,
+        client_id: str,
+        capability: str,
+        arguments: dict,
+        patterns: list[str],
+        timeout: Optional[int],
+    ) -> str:
+        job_id = _new_id("job")
+        now = utc_now_iso()
+        payload = {
+            "client_id": client_id,
+            "arguments": arguments,
+            "patterns": list(patterns or []),
+            "timeout": timeout,
+        }
+        self.conn.execute(
+            "INSERT INTO ai_jobs(id, principal_id, endpoint_object_id, capability, payload_json, "
+            "status, result_json, created_at, updated_at, timeout_seconds) "
+            "VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?)",
+            (
+                job_id,
+                principal_id,
+                endpoint_object_id,
+                capability,
+                json.dumps(payload, sort_keys=True),
+                now,
+                now,
+                int(timeout or 30),
+            ),
+        )
+        return job_id
+
+    def claim_ai_jobs(self, client_id: str, limit: int = 4) -> list[dict]:
+        rows = list(
+            self.conn.execute(
+                "SELECT * FROM ai_jobs WHERE status = 'queued' ORDER BY created_at LIMIT ?",
+                (max(1, int(limit)),),
+            )
+        )
+        claimed = []
+        now = utc_now_iso()
+        for row in rows:
+            payload = json.loads(row["payload_json"] or "{}")
+            if payload.get("client_id") != client_id:
+                continue
+            self.conn.execute(
+                "UPDATE ai_jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
+                (now, row["id"]),
+            )
+            if self.conn.execute("SELECT changes()").fetchone()[0]:
+                claimed.append(
+                    {
+                        "id": row["id"],
+                        "capability": row["capability"],
+                        "arguments": payload.get("arguments") or {},
+                        "patterns": payload.get("patterns") or [],
+                        "timeout": payload.get("timeout") or row["timeout_seconds"],
+                    }
+                )
+        return claimed
+
+    def complete_ai_job(self, job_id: str, client_id: str, result: dict) -> None:
+        row = self.conn.execute("SELECT payload_json, status FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise ControlPlaneError("AI job not found")
+        payload = json.loads(row["payload_json"] or "{}")
+        if payload.get("client_id") != client_id:
+            raise ControlPlaneError("AI job does not belong to this client")
+        safe = dict(result or {})
+        # Never persist file contents or unbounded streams in SQLite.
+        safe.pop("content_b64", None)
+        stdout = str(safe.get("stdout") or "")
+        stderr = str(safe.get("stderr") or "")
+        if len(stdout) > 256:
+            safe["stdout"] = stdout[:256]
+            safe["stdout_truncated"] = True
+        if len(stderr) > 256:
+            safe["stderr"] = stderr[:256]
+            safe["stderr_truncated"] = True
+        self.conn.execute(
+            "UPDATE ai_jobs SET status = 'done', result_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(safe, sort_keys=True)[:8000], utc_now_iso(), job_id),
+        )
+
+    def get_ai_job(self, job_id: str) -> Optional[dict]:
+        row = self.conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        if out.get("result_json"):
+            try:
+                out["result"] = json.loads(out["result_json"])
+            except Exception:
+                out["result"] = {}
+        return out
+
+    def wait_ai_job(self, job_id: str, timeout: float) -> dict:
+        deadline = time.monotonic() + max(0.2, float(timeout))
+        while time.monotonic() < deadline:
+            job = self.get_ai_job(job_id)
+            if job and job.get("status") == "done":
+                return job
+            time.sleep(0.05)
+        job = self.get_ai_job(job_id) or {"id": job_id, "status": "timeout"}
+        if job.get("status") != "done":
+            self.conn.execute(
+                "UPDATE ai_jobs SET status = 'timeout', updated_at = ? WHERE id = ? AND status != 'done'",
+                (utc_now_iso(), job_id),
+            )
+            job["status"] = "timeout"
+        return job
+
+    def connected_clients(self) -> list[dict]:
+        return [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT id, label, connected, status FROM clients WHERE connected = 1 AND trust_status = 'trusted'"
+            )
+        ]
+
+    def client_for_endpoint(self, endpoint_obj_id: str) -> Optional[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT c.* FROM clients c JOIN managed_endpoints e ON e.client_id = c.id WHERE e.object_id = ?",
+            (endpoint_obj_id,),
+        ).fetchone()
 
     def _get_ai_rule(self, name: str) -> Optional[sqlite3.Row]:
         return self.conn.execute(
@@ -2616,6 +3035,7 @@ class ControlPlane:
         return bool(row)
 
     def evaluate_ai_access(self, principal: str, endpoint: str, capability: str, operand: Optional[str] = None) -> dict:
+        self._ensure_live_conn()
         cap = str(capability).strip()
         p = self.get_principal(principal)
         ep = self.get_object(endpoint)
@@ -2985,7 +3405,7 @@ class ControlPlane:
         db_line = "Healthy" if st["db_healthy"] and not st["mismatch"] else (
             "Critical" if not st["db_healthy"] else "Warning"
         )
-        mcp = "Healthy" if st["mcp_configured"] else "Not configured"
+        mcp = self.mcp_endpoint_status()
         lines = [
             "Data Relay Link",
             "",
@@ -2996,11 +3416,106 @@ class ControlPlane:
             plane_line("internet", "Internet Policy"),
             plane_line("ai", "AI Policy"),
             "",
-            "MCP Bridge       : %s" % mcp,
+            "MCP Bridge",
+            "----------",
+            "Backend       : %s" % mcp["backend"],
+            "Backend Bind  : %s" % mcp["bind"],
+            "Public URL    : %s" % mcp["public_url"],
+            "Protocol      : %s" % mcp["protocol"],
+            "Transport     : %s" % mcp["transport"],
+            "Authentication: %s" % mcp["authentication"],
             "",
             "Clients          : %s" % st["clients"],
             "Published Service: %s" % st["services"],
         ]
+        return "\n".join(lines) + "\n"
+
+    def _read_server_config(self) -> dict:
+        env = os.environ.get("DRLINK_SERVER_CONFIG") or ""
+        candidates = []
+        if env:
+            candidates.append(Path(env))
+        if self.root:
+            candidates.append(Path(self.root) / "etc" / "drlink" / "config.json")
+        candidates.append(Path("/etc/drlink/config.json"))
+        for path in candidates:
+            try:
+                if path.is_file():
+                    return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+        return {}
+
+    def mcp_public_url(self, cfg: Optional[dict] = None) -> str:
+        override = (os.environ.get("DRLINK_MCP_PUBLIC_URL") or "").strip().rstrip("/")
+        if override:
+            return override if override.endswith("/mcp") else override + "/mcp"
+        data = cfg if cfg is not None else self._read_server_config()
+        mode = str(data.get("deployment_mode") or "direct").strip().lower().replace("-", "").replace("_", "")
+        if mode not in ("single443", "enterprise", "enterprisesingle443"):
+            return "Not configured"
+        host = str(data.get("public_ip") or data.get("public_host") or "").strip()
+        if not host:
+            return "Not configured"
+        port = str(data.get("frp_control_public_port") or data.get("frontend_port") or "443")
+        if port in ("443", "443.0"):
+            return "https://%s/mcp" % host
+        return "https://%s:%s/mcp" % (host, port)
+
+    def mcp_endpoint_status(self) -> dict:
+        st = self.status()
+        cfg = self._read_server_config()
+        public_url = self.mcp_public_url(cfg)
+        bind = "127.0.0.1:6103"
+        backend = "Healthy" if st.get("mcp_configured") else "Not configured"
+        frontend_conf = None
+        if self.root:
+            frontend_conf = Path(self.root) / "etc" / "drlink" / "frontend.conf"
+        else:
+            frontend_conf = Path("/etc/drlink/frontend.conf")
+        routed = False
+        try:
+            text = frontend_conf.read_text(encoding="utf-8")
+            routed = "location = /mcp" in text or 'location = "/mcp"' in text
+        except Exception:
+            routed = False
+        modes = []
+        if self.conn.execute("SELECT 1 FROM ai_principals WHERE credential_status = 'active' LIMIT 1").fetchone():
+            modes.append("Static Bearer")
+        if self.conn.execute("SELECT 1 FROM ai_principals WHERE auth_mode = 'oauth' LIMIT 1").fetchone():
+            modes.append("OAuth")
+        return {
+            "backend": backend,
+            "bind": bind,
+            "public_url": public_url,
+            "protocol": "2026-07-28",
+            "transport": "Streamable HTTP",
+            "authentication": " / ".join(modes) or "Not configured",
+            "frontend_routed": routed,
+            "remote_ready": bool(routed and public_url != "Not configured" and st.get("mcp_configured")),
+        }
+
+    def diagnostics_mcp(self) -> str:
+        mcp = self.mcp_endpoint_status()
+        lines = ["MCP diagnostics", "===============", ""]
+        public_ok = mcp["public_url"] != "Not configured" and mcp["frontend_routed"]
+        if not mcp["frontend_routed"]:
+            lines.append("MCP Public Endpoint : Critical")
+            lines.append("Reason              : /mcp is not routed by HTTPS frontend")
+        elif mcp["public_url"] == "Not configured":
+            lines.append("MCP Public Endpoint : Warning")
+            lines.append("Reason              : Public URL is not configured (direct mode has no 443 MCP frontend)")
+        else:
+            lines.append("MCP Public Endpoint : %s" % ("Healthy" if public_ok else "Warning"))
+        lines.append("Backend             : %s" % mcp["backend"])
+        lines.append("Backend Bind        : %s" % mcp["bind"])
+        lines.append("Public URL          : %s" % mcp["public_url"])
+        lines.append("Protocol            : %s" % mcp["protocol"])
+        lines.append("Transport           : %s" % mcp["transport"])
+        lines.append("Authentication      : %s" % mcp["authentication"])
+        if mcp["backend"] == "Healthy" and not mcp["remote_ready"]:
+            lines.append("")
+            lines.append("Backend Healthy alone does not imply MCP Remote Access = Healthy.")
         return "\n".join(lines) + "\n"
 
     def diagnostics_control_plane(self) -> str:
@@ -3090,13 +3605,29 @@ class ControlPlane:
         with tarfile.open(src, "r") as tar:
             db_member = tar.extractfile("drlink.db")
             payload = db_member.read()
-        target = self.db_file
-        self.conn.close()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = str(target) + ".restore-tmp"
-        Path(tmp).write_bytes(payload)
-        os.replace(tmp, target)
-        self.conn = open_control_db(self.root)
+        fd, tmp = tempfile.mkstemp(prefix="drlink-restore-", suffix=".db")
+        os.close(fd)
+        try:
+            Path(tmp).write_bytes(payload)
+            src_conn = sqlite3.connect(tmp)
+            try:
+                if self.conn is None:
+                    self.conn = open_control_db(self.root)
+                src_conn.backup(self.conn)
+            finally:
+                src_conn.close()
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            for suffix in ("-wal", "-shm"):
+                extra = Path(tmp + suffix)
+                try:
+                    extra.unlink()
+                except FileNotFoundError:
+                    pass
+        self._db_ident = self._db_file_ident()
         self.compile_runtime()
         st = self.status()
         return {"ok": True, "revision": st["revision"]}
@@ -3123,51 +3654,95 @@ class ControlPlane:
         return [dict(r) for r in self.conn.execute(sql, args)]
 
 
-def path_allowed(operand: str, patterns: list[str]) -> bool:
-    """Fail-closed path match using canonicalization, not string prefix."""
+def _decoded_absolute_path(operand: str) -> Optional[str]:
     from urllib.parse import unquote
 
-    raw = unquote(str(operand or ""))
-    if not raw:
-        return False
+    raw = unquote(unquote(str(operand or "")))
+    if not raw or "\x00" in raw:
+        return None
+    if not raw.startswith("/"):
+        return None
+    parts = raw.split("/")
+    for part in parts[1:]:
+        if part == "..":
+            return None
+        if "%" in part:
+            # Remaining encodings after double-unquote are fail-closed.
+            lowered = part.lower()
+            if "%2e" in lowered or "%2f" in lowered or "%5c" in lowered:
+                return None
+    return raw
+
+
+def _walk_no_symlink(raw: str) -> Optional[Path]:
+    """Resolve a path without following any symlink component.
+
+    Returns None when a symlink is present. Missing leaf files are allowed so
+    writes can create a new regular file inside an in-scope parent.
+    """
+    import stat as statmod
+
     try:
-        candidate = Path(raw)
-        if not candidate.is_absolute():
-            return False
-        resolved = Path(os.path.realpath(str(candidate)))
-    except Exception:
-        return False
-    text = str(resolved)
+        current = Path("/")
+        parts = [p for p in Path(raw).parts if p not in ("/", "")]
+        for idx, part in enumerate(parts):
+            current = current / part
+            try:
+                st = current.lstat()
+            except FileNotFoundError:
+                if idx == len(parts) - 1:
+                    parent = Path(os.path.realpath(str(current.parent)))
+                    return parent / part
+                return Path(os.path.realpath(str(Path(raw))))
+            if statmod.S_ISLNK(st.st_mode):
+                return None
+        return Path(os.path.realpath(str(Path(raw))))
+    except OSError:
+        return None
+
+
+def _pattern_prefixes(patterns: list[str]) -> list[tuple[str, str]]:
+    out = []
     for pattern in patterns:
-        patt = str(pattern)
+        patt = str(pattern or "")
         if patt.endswith("/**"):
             prefix = patt[:-3].rstrip("/")
-            prefix_res = os.path.realpath(prefix) if os.path.exists(prefix) else prefix
-            prefix_res = str(prefix_res).rstrip("/")
-            if text == prefix_res or text.startswith(prefix_res + "/"):
-                return True
-        elif fnmatch(text, patt.rstrip("/")):
-            return True
+            kind = "tree"
         else:
-            try:
-                exact = os.path.realpath(patt) if os.path.exists(patt) else patt
-            except Exception:
-                exact = patt
-            if text == str(exact):
+            prefix = patt.rstrip("/")
+            kind = "exact"
+        prefix_res = os.path.realpath(prefix) if prefix else prefix
+        out.append((kind, str(prefix_res).rstrip("/") or "/"))
+    return out
+
+
+def path_allowed(operand: str, patterns: list[str]) -> bool:
+    """Fail-closed path match using canonicalization, not string prefix."""
+    raw = _decoded_absolute_path(operand)
+    if not raw or not patterns:
+        return False
+    walked = _walk_no_symlink(raw)
+    if walked is None:
+        return False
+    text = str(walked)
+    for kind, prefix in _pattern_prefixes(patterns):
+        if kind == "tree":
+            if text == prefix or text.startswith(prefix + "/"):
                 return True
+        elif text == prefix or fnmatch(text, prefix):
+            return True
     return False
 
 
 def validate_safe_path(operand: str, patterns: list[str], *, must_exist: bool = False) -> Path:
-    from urllib.parse import unquote
-
-    raw = unquote(str(operand or ""))
-    if not raw.startswith("/"):
+    raw = _decoded_absolute_path(operand)
+    if not raw:
         raise ControlPlaneError("path must be absolute")
-    if "\x00" in raw:
-        raise ControlPlaneError("invalid path")
-    requested = Path(raw)
-    resolved = Path(os.path.realpath(str(requested)))
-    if not path_allowed(str(resolved), patterns):
+    walked = _walk_no_symlink(raw)
+    if walked is None:
         raise ControlPlaneError("path is outside allowed scope")
-    return resolved
+    if not path_allowed(str(walked), patterns):
+        raise ControlPlaneError("path is outside allowed scope")
+    if must_exist and not walked.exists():
+        raise ControlPlaneError("path does not exist")
+    return walked
