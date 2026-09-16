@@ -2,6 +2,8 @@
 
 **Lightweight, CLI-first, Zero-Touch remote access management on top of official FRP.**
 
+> **License — Source Available:** Data Relay Link is free for personal use and for an organization's own internal commercial operations. Internal source modifications are allowed. Resale, commercial redistribution, OEM/white-label use, competing or derivative commercial products, and SaaS/hosted/managed-service offerings require a separate written commercial license. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
+
 FRP Auto Deploy helps you securely reach servers and services behind NAT or firewalls without building a full VPN, RMM platform, or custom FRP fork.
 
 - Official [`fatedier/frp`](https://github.com/fatedier/frp) only
