@@ -437,14 +437,21 @@ server_install_env() {
 
 create_zero_touch() {
   local out="$1" cmd_out="$2" name="$3" note_text="$4"
-  local start rc=0 payload
+  local start rc=0 payload platform_choice=1
   start="$(date +%s)"
   set +e
+  # Public guided onboarding (set client):
+  #   method(Zero-Touch) → platform → name → note → SSH only → user → port
+  # Platform: 1=Linux, 3=macOS (same bash installer path).
+  case "$PLATFORM_KIND" in
+    macos) platform_choice=3 ;;
+    *) platform_choice=1 ;;
+  esac
   # Guided create under sudo use_pty cannot consume a pipe. Deliver answers via
   # FRP_CTL_TEST_INPUT using base64 so remote /bin/sh does not mangle newlines.
-  payload="$(printf '%s\n' '1' '1' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64 -w0 2>/dev/null || printf '%s\n' '1' '1' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64)"
+  payload="$(printf '%s\n' '1' "$platform_choice" "$CLIENT_LABEL" "$note_text" '1' "$TUNNEL_SSH_USER" '22' | base64 -w0 2>/dev/null || printf '%s\n' '1' "$platform_choice" "$CLIENT_LABEL" "$note_text" '1' "$TUNNEL_SSH_USER" '22' | base64)"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo env FRP_CTL_TEST_INPUT=\"\$(printf '%s' '$payload' | base64 -d)\" /usr/local/bin/drlink create zero-touch" \
+    "sudo env FRP_CTL_TEST_INPUT=\"\$(printf '%s' '$payload' | base64 -d)\" /usr/local/bin/drlink set client" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
@@ -476,9 +483,10 @@ create_zero_touch_windows() {
   local start rc=0 payload
   start="$(date +%s)"
   set +e
-  payload="$(printf '%s\n' '2' '3' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64 -w0 2>/dev/null || printf '%s\n' '2' '3' "$CLIENT_LABEL" "$note_text" "$TUNNEL_SSH_USER" '22' | base64)"
+  # Windows Zero-Touch SSH: method → Windows → name → note → SSH only → user → port
+  payload="$(printf '%s\n' '1' '2' "$CLIENT_LABEL" "$note_text" '2' "$TUNNEL_SSH_USER" '22' | base64 -w0 2>/dev/null || printf '%s\n' '1' '2' "$CLIENT_LABEL" "$note_text" '2' "$TUNNEL_SSH_USER" '22' | base64)"
   ssh "${SSH_OPTS[@]}" "$SERVER_ALIAS" \
-    "sudo env FRP_CTL_TEST_INPUT=\"\$(printf '%s' '$payload' | base64 -d)\" /usr/local/bin/drlink create zero-touch" \
+    "sudo env FRP_CTL_TEST_INPUT=\"\$(printf '%s' '$payload' | base64 -d)\" /usr/local/bin/drlink set client" \
     >"$out" 2>&1
   rc=$?
   set -uo pipefail
