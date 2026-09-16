@@ -623,7 +623,8 @@ PY
     echo "then re-enroll this client." >&2
     if [[ -z "${FRP_ENROLLMENT_CODE:-}" && -n "${FRP_CLIENT_CANDIDATE:-}" ]]; then
       rm -rf "$work"
-      unset enroll_secret
+      unset enroll_secret FRP_CLIENT_OPERATION_ID || true
+      frp_emit_failure_class MANAGEMENT_IDENTITY
       return 1
     fi
     echo
@@ -636,6 +637,8 @@ PY
       echo "ERROR: invalid enrollment code format" >&2
       unset FRP_ENROLLMENT_CODE
       rm -rf "$work"
+      unset enroll_secret FRP_CLIENT_OPERATION_ID || true
+      frp_emit_failure_class MANAGEMENT_IDENTITY
       return 1
     fi
     enroll_id="${FRP_ENROLLMENT_CODE%%.*}"
@@ -651,19 +654,22 @@ PY
   fi
   if [[ "$enroll_rc" -ne 0 ]]; then
     rm -rf "$work"
-    unset enroll_secret FRP_CLIENT_OPERATION_ID
-    frp_pending_clear
+    unset enroll_secret FRP_CLIENT_OPERATION_ID || true
+    frp_pending_clear || true
     echo "ERROR: enrollment failed; local configuration was not changed." >&2
     frp_emit_failure_class SERVER_MUTATION_FAILED
     return 1
   fi
   if ! frp_client_test_hook AFTER_SERVER_MUTATION; then
-    frp_pending_write server_mutation "$operation_id" ok
-    rm -rf "$work"
-    unset enroll_secret FRP_CLIENT_OPERATION_ID
+    # Emit the failure class before any best-effort bookkeeping. Under set -e,
+    # a failing pending-marker write must not abort before FAILURE_CLASS is
+    # reported (lifecycle tests and operators both depend on the marker).
     echo "ERROR: apply interrupted after the server accepted the change; local configuration was not changed." >&2
     echo "The server reservation is preserved. Retry Apply to reconcile." >&2
     frp_emit_failure_class FAILED_WITH_RESERVATION_PRESERVED
+    frp_pending_write server_mutation "$operation_id" ok || true
+    rm -rf "$work"
+    unset enroll_secret FRP_CLIENT_OPERATION_ID || true
     echo "LOCAL_ROLLBACK=PASS"
     echo "SERVER_ROLLBACK=N/A"
     return 1
@@ -744,11 +750,11 @@ PY
   if ! frp_client_test_hook BEFORE_STATE_COMMIT; then
     echo "ERROR: apply stopped before local state commit; previous local configuration was kept." >&2
     echo "The server reservation is preserved. Retry Apply to reconcile." >&2
+    frp_emit_failure_class FAILED_WITH_RESERVATION_PRESERVED
     rm -rf "$work"
-    unset enroll_secret token FRP_CLIENT_OPERATION_ID
+    unset enroll_secret token FRP_CLIENT_OPERATION_ID || true
     echo "LOCAL_ROLLBACK=PASS"
     echo "SERVER_ROLLBACK=N/A"
-    frp_emit_failure_class FAILED_WITH_RESERVATION_PRESERVED
     return 1
   fi
 
