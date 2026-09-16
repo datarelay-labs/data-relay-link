@@ -2218,7 +2218,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_tcp_egress unit_frontend sbin_dir bin_dir
+  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_tcp_egress unit_mcp_bridge unit_frontend sbin_dir bin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/drlink)"
@@ -2237,6 +2237,7 @@ frp_server_main() {
   unit_access="$(frp_server_fs /etc/systemd/system/drlink-access.service)"
   unit_egress="$(frp_server_fs /etc/systemd/system/drlink-egress.service)"
   unit_tcp_egress="$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)"
+  unit_mcp_bridge="$(frp_server_fs /etc/systemd/system/drlink-mcp-bridge.service)"
   unit_frontend="$(frp_server_fs /etc/systemd/system/drlink-frontend.service)"
   sbin_dir="$(frp_server_fs /usr/local/sbin)"
   bin_dir="$(frp_server_fs /usr/local/bin)"
@@ -2506,6 +2507,9 @@ PY
   frp_write_compatible_systemd_unit \
     "$BASE_DIR/server/drlink-tcp-egress.service" \
     "$unit_tcp_egress"
+  frp_write_compatible_systemd_unit \
+    "$BASE_DIR/server/drlink-mcp-bridge.service" \
+    "$unit_mcp_bridge"
   if frp_mode_is_single443; then
     write_frontend_config "$frontend_conf"
     write_frontend_unit "$unit_frontend"

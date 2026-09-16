@@ -260,6 +260,11 @@ if grep -q 'bindAddr' "$SRV/etc/frp/frps.toml"; then
   fail "direct mode should not set bindAddr"
 fi
 [[ ! -f "$SRV/etc/drlink/frontend.conf" ]] || fail "direct mode wrote frontend.conf"
+[[ -f "$SRV/etc/systemd/system/drlink-mcp-bridge.service" ]] || fail "mcp bridge unit missing after fresh install"
+[[ -x "$SRV/usr/local/lib/drlink/drlink-mcp-bridge.py" ]] || fail "mcp bridge launcher missing after fresh install"
+[[ -f "$SRV/usr/local/lib/drlink/drlink_mcp_bridge.py" ]] || fail "mcp bridge library missing after fresh install"
+grep -q 'enable .*drlink-mcp-bridge' "$SRV/var/lib/drlink/install-actions.log" || fail "mcp bridge not enabled"
+grep -q 'restart drlink-mcp-bridge' "$SRV/var/lib/drlink/install-actions.log" || fail "mcp bridge not restarted"
 python3 - "$SRV/etc/drlink/config.json" <<'PY' || fail "direct config mode"
 import json,sys
 from pathlib import Path
@@ -275,6 +280,7 @@ assert_project_state_dir_mode "$SRV/var/lib/drlink"
 assert_project_state_dir_mode "$SRV/etc/drlink"
 assert_mode "$SRV/etc/frp" "0o700"
 pass "SERVER_FRESH_INSTALL"
+pass "MCP_BRIDGE_UNIT_INSTALLED"
 pass "DIRECT_MODE_REGRESSION"
 pass "TEMP_FILE_SECURITY"
 pass "UPDATE_TRANSACTION_CLEANUP"
@@ -359,6 +365,7 @@ grep -q 'proxyBindAddr = "0.0.0.0"' "$S443/etc/frp/frps.toml" || fail "s443 prox
 grep -q 'transport.tls.force = false' "$S443/etc/frp/frps.toml" || fail "s443 tls.force"
 [[ -f "$S443/etc/drlink/frontend.conf" ]] || fail "s443 frontend.conf"
 [[ -f "$S443/etc/systemd/system/drlink-frontend.service" ]] || fail "s443 frontend unit"
+[[ -f "$S443/etc/systemd/system/drlink-mcp-bridge.service" ]] || fail "s443 mcp bridge unit"
 grep -q 'location = "/~!frp"' "$S443/etc/drlink/frontend.conf" || fail "s443 websocket path"
 python3 - "$S443/etc/drlink/config.json" <<'PY' || fail "s443 config"
 import json,sys

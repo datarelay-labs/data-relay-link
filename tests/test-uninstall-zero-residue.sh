@@ -34,6 +34,7 @@ assert_server_zero_residue() {
     /etc/systemd/system/drlink-access.service \
     /etc/systemd/system/drlink-egress.service \
     /etc/systemd/system/drlink-tcp-egress.service \
+    /etc/systemd/system/drlink-mcp-bridge.service \
     /etc/systemd/system/drlink-frontend.service \
     /etc/systemd/system/frp-port-allocator.service \
     /etc/systemd/system/frp-access-plugin.service \
