@@ -553,7 +553,7 @@ printf '{"schema_version":2,"operation":"project-update","phase":"commit","relea
   >"$PENDDEV/var/lib/drlink/update-pending.json"
 # Pending channel=dev requires a matching --source tree even when the RC working tree is stable.
 PEND_SRC="$ROOT"
-if [[ "$TREE_CHANNEL" != "dev" ]]; then
+if [[ "$TREE_CHANNEL" != "development" && "$TREE_CHANNEL" != "dev" ]]; then
   PEND_SRC="$WORKDIR/pend-dev-src"
   frp_test_copy_repo_tree "$ROOT" "$PEND_SRC"
   python3 - "$PEND_SRC/release-manifest.json" <<'PY'
@@ -561,7 +561,7 @@ import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
 d = json.loads(p.read_text())
-d["channel"] = "dev"
+d["channel"] = "development"
 d["git_ref"] = "main"
 p.write_text(json.dumps(d, indent=2) + "\n")
 PY
@@ -569,7 +569,7 @@ fi
 env -u FRP_RELEASE_CHANNEL FRP_SERVER_TEST_ROOT="$PENDDEV" \
   "$UPDATE" --source "$PEND_SRC" --check >"$WORKDIR/penddev.out" 2>"$WORKDIR/penddev.err" ||
   fail "pending dev --check"
-grep -q 'Resolved release channel : dev' "$WORKDIR/penddev.out" || fail "pending stayed on dev"
+grep -q 'Resolved release channel : development' "$WORKDIR/penddev.out" || fail "pending stayed on dev"
 pass "PENDING_DEV_RETRY_STAYS_DEV"
 
 # Real OCI partial-state fixture: unknown version metadata + schema-1 pending + mixed files.

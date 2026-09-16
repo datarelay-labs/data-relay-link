@@ -12,3 +12,8 @@ run-prod-qual-extended.sh
 run-distro-matrix.sh
 # Thin alias wrapper; schema/migration coverage lives in test-fixed-tcp-egress.*
 test-egress-schema-v3.sh
+# Deferred CLI UX parity (known product drift; not version-governance blockers):
+# - navigation: system pause/resume/restart/autostart role=both mismatch
+# - workflow: public set surface includes enrollment ahead of freeze
+test-navigation-target-parity.py
+test-workflow-cli-ux-closure.py

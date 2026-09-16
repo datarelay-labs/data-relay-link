@@ -1541,7 +1541,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Create an ACL or manage its sources and service assignments",
-    "detail": "Create: set acl <ACL>\nMetadata: set acl <ACL> name|description <VALUE>\nAdd source: set acl <ACL> source <IP-or-CIDR>\nAssign: set acl <ACL> service <CLIENT> <SERVICE>\nMeaning: the ACL may reach that published service.",
+    "detail": "Create: set acl <ACL>\nMetadata: set acl <ACL> name|description <VALUE>\nAdd source: set acl <ACL> source <IP-or-CIDR>\nAssign: set acl <ACL> service <CLIENT> <SERVICE>\nMeaning: the ACL may reach that published service.\nDescriptions are limited to 1024 characters; control characters, newlines, and ANSI escapes are rejected.",
     "examples": [
       "set acl office-network",
       "set acl office-network source 10.10.10.0/24",
@@ -2237,21 +2237,17 @@
     "roles": "server",
     "category": "Server",
     "summary": "Change server settings",
-    "detail": "public-hostname is a published-service alias only; never allocator identity.",
+    "detail": "public-hostname is a published-service alias only; never allocator identity. Client installer URLs use: set installer-url / set windows-installer-url.",
     "examples": [
       "set server public-hostname frp.example.com",
-      "set server bootstrap-hostname bootstrap.example.com",
-      "set server installer-url https://example.com/install-client.sh",
-      "set server windows-installer-url https://example.com/install-client.ps1"
+      "set server bootstrap-hostname bootstrap.example.com"
     ],
     "args": [
       {
-        "name": "public-hostname|bootstrap-hostname|installer-url|windows-installer-url",
+        "name": "public-hostname|bootstrap-hostname",
         "complete": [
           "public-hostname",
-          "bootstrap-hostname",
-          "installer-url",
-          "windows-installer-url"
+          "bootstrap-hostname"
         ],
         "required": true
       },
@@ -2267,19 +2263,92 @@
       [
         "server",
         "set"
-      ],
-      [
-        "set",
-        "installer-url"
-      ],
-      [
-        "set",
-        "windows-installer-url"
-      ],
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "installer-url"
+    ],
+    "roles": "server",
+    "category": "Server",
+    "summary": "Set the Linux client installer URL",
+    "detail": "installer-url is the client installer URL handed to new Linux clients.",
+    "examples": [
+      "set installer-url https://example.com/install-client.sh"
+    ],
+    "args": [
+      {
+        "name": "<url>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "none",
+    "internal": [
+      "set",
+      "installer-url"
+    ],
+    "aliases": [
       [
         "server",
         "set",
         "installer-url"
+      ],
+      [
+        "set",
+        "server",
+        "installer-url"
+      ]
+    ],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "windows-installer-url"
+    ],
+    "roles": "server",
+    "category": "Server",
+    "summary": "Set the Windows client installer URL",
+    "detail": "windows-installer-url is handed to new Windows clients.",
+    "examples": [
+      "set windows-installer-url https://example.com/install-client.ps1"
+    ],
+    "args": [
+      {
+        "name": "<url>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "none",
+    "internal": [
+      "set",
+      "windows-installer-url"
+    ],
+    "aliases": [
+      [
+        "server",
+        "set",
+        "windows-installer-url"
+      ],
+      [
+        "set",
+        "server",
+        "windows-installer-url"
       ]
     ],
     "destructive": false,

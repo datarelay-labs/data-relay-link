@@ -14,6 +14,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Version consistency
         run: ./scripts/check-version-consistency.sh
+      - name: Release governance
+        run: ./scripts/check-release-governance.sh
       - name: Full local non-Docker suite
         run: ./tests/run-all.sh
       # Live distro containers cannot validate systemd unless PID 1 is systemd.

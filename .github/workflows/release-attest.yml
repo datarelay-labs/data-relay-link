@@ -82,7 +82,7 @@ jobs:
           echo "WORKFLOW_SHA=$WORKFLOW_SHA"
 
           test "$PROJECT_VERSION" = "$MANIFEST_VERSION"
-          test "$CHANNEL" = "stable" -o "$CHANNEL" = "dev"
+          test "$CHANNEL" = "stable" -o "$CHANNEL" = "development" -o "$CHANNEL" = "preview"
 
           if [[ "$CHANNEL" == "stable" ]]; then
             # 1. release-manifest must name the expected immutable tag.
@@ -117,10 +117,22 @@ jobs:
               exit 1
             fi
           else
-            # Dev channel: no tag, but still never a mutable ref.
-            test "$GIT_REF" = "main"
-            if [[ "$INPUT_REF" != "$HEAD" ]]; then
-              echo "ERROR: dev-channel ref must be the full commit SHA ${HEAD}" >&2
+            # development/preview: require an immutable SHA (or RC tag), never a branch.
+            SOURCE_HEAD="$(python3 -c 'import json;print(json.load(open("release-manifest.json")).get("source_head",""))')"
+            if [[ ! "$GIT_REF" =~ ^[0-9a-f]{40}$ && ! "$GIT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+              echo "ERROR: ${CHANNEL} git_ref must be a 40-char SHA or RC tag, got '$GIT_REF'" >&2
+              exit 1
+            fi
+            if [[ "$GIT_REF" =~ ^[0-9a-f]{40}$ && "$GIT_REF" != "$HEAD" ]]; then
+              echo "ERROR: ${CHANNEL} git_ref '$GIT_REF' != checked-out HEAD ${HEAD}" >&2
+              exit 1
+            fi
+            if [[ -n "$SOURCE_HEAD" && "$SOURCE_HEAD" != "$HEAD" ]]; then
+              echo "ERROR: source_head '$SOURCE_HEAD' != checked-out HEAD ${HEAD}" >&2
+              exit 1
+            fi
+            if [[ "$INPUT_REF" != "$HEAD" && "$INPUT_REF" != "$GIT_REF" ]]; then
+              echo "ERROR: ${CHANNEL}-channel ref must be the full commit SHA ${HEAD} (or matching RC tag)" >&2
               exit 1
             fi
             if [[ "$WORKFLOW_SHA" != "$HEAD" ]]; then

@@ -41,6 +41,7 @@ for f in \
   "$BASE_DIR/lib/frp_support_bundle.py" \
   "$BASE_DIR/lib/frp_ctl_grammar.py" \
   "$BASE_DIR/lib/frp_cli_catalog.py" \
+  "$BASE_DIR/lib/frp_version_identity.py" \
   "$BASE_DIR/lib/frp_cli_final_commands.json" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
   "$BASE_DIR/lib/frp_machine_id.py" \

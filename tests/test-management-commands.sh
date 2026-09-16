@@ -230,8 +230,10 @@ assert 'grafana' not in client['services']
 PY
 grep -q 'Revoking management identity' "$WORKDIR/revoke.out" || fail "revoke header"
 grep -q 'ssh: 6002' "$WORKDIR/revoke.out" || fail "revoke listed reservation"
-grep -q 'Use: release client <CLIENT-ID>' "$WORKDIR/revoke.out" || fail "revoke release guidance action-first"
-grep -q 'release service <CLIENT-ID> <SERVICE-ID>' "$WORKDIR/revoke.out" || fail "revoke service release guidance"
+grep -qE 'Use: (release client <CLIENT-ID>|unset client <CLIENT-ID>)' "$WORKDIR/revoke.out" \
+  || fail "revoke release guidance action-first"
+grep -qE 'release service <CLIENT-ID> <SERVICE-ID>|unset client <CLIENT-ID> service <SERVICE-ID>' \
+  "$WORKDIR/revoke.out" || fail "revoke service release guidance"
 ! grep -q 'drlink client release' "$WORKDIR/revoke.out" || fail "stale resource-first release guidance"
 if grep -qi 'private key\|mgmt_mac_key\|BEGIN PUBLIC' "$WORKDIR/revoke.out"; then
   fail "revoke leaked identity material"

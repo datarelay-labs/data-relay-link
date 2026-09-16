@@ -6,11 +6,17 @@ release candidate or stable tag. Real-environment policy and evidence live in
 
 ## Automated gate (required for any tag)
 
-- [ ] `VERSION` matches intended project version; `FRP_VERSION=0.71.0`
+- [ ] `VERSION` matches intended project version; `FRP_VERSION=0.71.0`;
+  `RELEASE_CHANNEL` is `development|preview|stable` per `docs/VERSION_POLICY.md`
 - [ ] `./scripts/check-version-consistency.sh` PASS — derives every assertion
   from `VERSION` and covers README, CHANGELOG, `docs/SECURITY.md`,
   `docs/RELEASE_VALIDATION.md`, `docs/PRODUCT_MASTER.md`, this checklist,
   `release-manifest.json`, and `lib/frp-common.sh`
+- [ ] `./scripts/check-release-governance.sh` PASS — VERSION SSOT, pretags
+  exact-SHA installer refs, release-manifest schema, MCP v2.4 exclusion,
+  historical-tag immutability
+- [ ] `python3 ./scripts/validate-release-manifest.py` PASS against
+  `RELEASE_MANIFEST.schema.json`
 - [ ] Support matrix claims match evidence (no SELinux/real-VM overclaim)
 - [ ] `./tests/run-all.sh` PASS
 - [ ] `./tests/run-distro-matrix.sh` PASS (seven vendor images, including Rocky 8)

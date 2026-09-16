@@ -91,7 +91,8 @@ class EgressCreateSafeDefaultTests(unittest.TestCase):
             env=env,
             text=True,
         )
-        self.assertIn("Enabled  : no", out)
+        self.assertIn("Status         : Disabled", out)
+        self.assertIn("Default policy : DENY", out)
         state = EG.load_egress_state(cfg=self.cfg)
         profiles = list((state.get("egress_profiles") or {}).values())
         self.assertEqual(len(profiles), 1)

@@ -75,7 +75,7 @@ PY
 )"
 echo "$SET_CANDS" | grep -qx 'client' || fail "set tree missing client"
 echo "$SET_CANDS" | grep -qx 'acl' || fail "set tree missing acl"
-! echo "$SET_CANDS" | grep -qx 'enrollment' || fail "set tree still advertises enrollment"
+echo "$SET_CANDS" | grep -qx 'enrollment' || fail "set tree missing enrollment"
 echo "$SET_CANDS" | grep -qx 'server' || fail "set tree missing server"
 pass SHOW_TREE
 pass SET_TREE

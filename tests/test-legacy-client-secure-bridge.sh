@@ -242,16 +242,17 @@ fi
 grep -qi 'channel/ref disagreement\|channel mismatch' "$WORKDIR/bad-channel.err" ||
   fail "channel disagreement message"
 # Expect the opposite channel of the working tree.
-if [[ "$WANT_CHANNEL" == "dev" ]]; then
+# Canonical channels are development|preview|stable; "dev" is a legacy alias.
+if [[ "$WANT_CHANNEL" == "development" || "$WANT_CHANNEL" == "dev" ]]; then
   if FRP_EXPECTED_RELEASE_CHANNEL=stable \
     frp_validate_release_source_metadata "$ROOT" >/dev/null 2>"$WORKDIR/expected-stable.err"; then
-    fail "expected stable accepted a dev candidate"
+    fail "expected stable accepted a development candidate"
   fi
   grep -qi 'channel mismatch' "$WORKDIR/expected-stable.err" || fail "expected channel mismatch"
 else
-  if FRP_EXPECTED_RELEASE_CHANNEL=dev \
+  if FRP_EXPECTED_RELEASE_CHANNEL=development \
     frp_validate_release_source_metadata "$ROOT" >/dev/null 2>"$WORKDIR/expected-dev.err"; then
-    fail "expected dev accepted a stable candidate"
+    fail "expected development accepted a ${WANT_CHANNEL} candidate"
   fi
   grep -qi 'channel mismatch' "$WORKDIR/expected-dev.err" || fail "expected channel mismatch"
 fi
@@ -261,8 +262,8 @@ BADREF="$WORKDIR/bad-ref"
 mkdir -p "$BADREF"
 cp "$ROOT/VERSION" "$BADREF/VERSION"
 cp "$ROOT/release-manifest.json" "$BADREF/release-manifest.json"
-if [[ "$WANT_CHANNEL" == "dev" ]]; then
-  BAD_EXPECT_CHANNEL=dev
+if [[ "$WANT_CHANNEL" == "development" || "$WANT_CHANNEL" == "dev" ]]; then
+  BAD_EXPECT_CHANNEL=development
   BAD_EXPECT_REF="v${PROJECT_VERSION}"
 else
   BAD_EXPECT_CHANNEL=stable
@@ -382,7 +383,7 @@ import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
 d = json.loads(p.read_text())
-d["channel"] = "dev"
+d["channel"] = "development"
 d["git_ref"] = "main"
 p.write_text(json.dumps(d, indent=2) + "\n")
 PY
@@ -409,7 +410,7 @@ if ! FRP_CLIENT_TEST_ROOT="$DEV_TREE" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   fail "verified dev/main bridge"
 fi
 assert_preserved_state "$DEV_TREE" "$WORKDIR/dev-bridge.before"
-grep -q 'RELEASE_CHANNEL=dev' "$DEV_TREE/etc/drlink/version" || fail "dev bridge channel"
+grep -q 'RELEASE_CHANNEL=development' "$DEV_TREE/etc/drlink/version" || fail "dev bridge channel"
 grep -q 'SOURCE_REF=main' "$DEV_TREE/etc/drlink/version" || fail "dev bridge ref"
 grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$DEV_TREE/etc/drlink/version" || fail "dev bridge sha"
 grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$DEV_TREE/etc/drlink/version" || fail "dev bridge version"
@@ -512,7 +513,7 @@ if ! FRP_CLIENT_TEST_ROOT="$BUG" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   fail "explicit verified dev recovery"
 fi
 assert_preserved_state "$BUG" "$WORKDIR/bug.before"
-grep -q 'RELEASE_CHANNEL=dev' "$BUG/etc/drlink/version" || fail "recovery channel"
+grep -q 'RELEASE_CHANNEL=development' "$BUG/etc/drlink/version" || fail "recovery channel"
 grep -q 'SOURCE_REF=main' "$BUG/etc/drlink/version" || fail "recovery ref"
 grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$BUG/etc/drlink/version" || fail "recovery sha"
 if grep -Eq '^(enroll|bootstrap_redeem|restart)$' "$FRP_CLIENT_HOOK_LOG"; then
@@ -522,7 +523,7 @@ pass "BUG_STATE_EXPLICIT_DEV_RECOVERY"
 
 # Environment disappearance must not erase persisted identity.
 unset FRP_RELEASE_CHANNEL FRP_EXPECTED_SOURCE_REF FRP_BUNDLE_SHA256 FRP_BUNDLE_FILE || true
-grep -q 'RELEASE_CHANNEL=dev' "$BUG/etc/drlink/version" || fail "identity lost after env unset"
+grep -q 'RELEASE_CHANNEL=development' "$BUG/etc/drlink/version" || fail "identity lost after env unset"
 grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$BUG/etc/drlink/version" || fail "sha lost after env unset"
 
 # ---------------------------------------------------------------------------
@@ -560,8 +561,8 @@ if ! "$ROOT/tools/frp-client" update --source "$DEV_SRC" --check \
 fi
 grep -q "Installed project version : ${PROJECT_VERSION}" "$WORKDIR/modern-check.out" || fail "check installed version"
 grep -q "Target project version    : ${PROJECT_VERSION}" "$WORKDIR/modern-check.out" || fail "check target version"
-grep -q 'Installed release channel : dev' "$WORKDIR/modern-check.out" || fail "check installed channel"
-grep -q 'Target release channel    : dev' "$WORKDIR/modern-check.out" || fail "check target channel"
+grep -q 'Installed release channel : development' "$WORKDIR/modern-check.out" || fail "check installed channel"
+grep -q 'Target release channel    : development' "$WORKDIR/modern-check.out" || fail "check target channel"
 grep -q 'Installed source ref      : main' "$WORKDIR/modern-check.out" || fail "check installed ref"
 grep -q 'Target source ref         : main' "$WORKDIR/modern-check.out" || fail "check target ref"
 grep -q 'Installed bundle SHA256   : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
@@ -588,7 +589,7 @@ if ! FRP_CLIENT_TEST_ROOT="$MODERN" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
 fi
 assert_preserved_state "$MODERN" "$WORKDIR/modern.before"
 grep -q "BUNDLE_SHA256=$DEV_BUNDLE_SHA" "$MODERN/etc/drlink/version" || fail "different build sha not persisted"
-grep -q 'RELEASE_CHANNEL=dev' "$MODERN/etc/drlink/version" || fail "dev changed on different build"
+grep -q 'RELEASE_CHANNEL=development' "$MODERN/etc/drlink/version" || fail "dev changed on different build"
 pass "SAME_VERSION_DIFFERENT_BUILD"
 
 snapshot_preserved_state "$MODERN" "$WORKDIR/same.before"

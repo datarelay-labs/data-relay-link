@@ -2,8 +2,8 @@
   "schema_version": 1,
   "project_version": "2.4.0",
   "frp_version": "0.71.0",
-  "channel": "stable",
-  "git_ref": "v2.4.0",
+  "channel": "development",
+  "git_ref": "e30a1342b4d2e6780f1b23163a1c575d8944a535",
   "owner": "datarelay-labs",
   "repo": "data-relay-link",
   "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link",
@@ -42,7 +42,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes. Pretags / development trees pin git_ref and source_head to the exact HEAD SHA; never advertise a future stable tag before it exists. features.mcp_included=false for the v2.4.0 line.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "tag_policy": "Published tags are immutable and are never moved, deleted, recreated, retargeted, or force-pushed. A wrong tag is superseded by a new version tag.",
@@ -66,27 +66,32 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "4bb4a20c965ae58788854760510d851012c90eee632cbc3b2091ac3d37efcc90"
+      "sha256": "c4d278338f929ea3f1e4012f43bb5b021efa5df20369223dc6a586bcafbf6580"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "2ca988cc47e1c7af4046b325034b63df2d89ea609fdd92d3df7c8269b4b106ad"
+      "sha256": "c05522dad3ec2aa44b2f5d59b03ff3b9b29c727974f5873c57c995198db7a983"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "782213cd47d6b5b824c602c1a098112375efc147c2193b137a61a5c0d898914b"
+      "sha256": "2ed22d330a416f533c0f7647c8affdb6f92cb618f40c92353998a86eaa1daceb"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",
       "url_path": "dist/uninstall-client.sh",
-      "sha256": "c092dac34070955e4009a14861ce5a5cf2852bf557c4a7abe7795ea19da3f7e5"
+      "sha256": "1341f753fbaeebe30f781bf9756df35f9376d7066fe86d9b1a0db5e09418590e"
     },
     "uninstall-server.sh": {
       "path": "dist/uninstall-server.sh",
       "url_path": "dist/uninstall-server.sh",
-      "sha256": "72c3abba5cd23e862f724439021c86b051b8bd7b5223be202a1861566fec2b77"
+      "sha256": "dd7267e724d8c3fbac3124614904cc8551939fad9ce96f5a22bbd2118434fde3"
     }
-  }
+  },
+  "source_head": "e30a1342b4d2e6780f1b23163a1c575d8944a535",
+  "features": {
+    "mcp_included": false
+  },
+  "immutable_source_ref": "e30a1342b4d2e6780f1b23163a1c575d8944a535"
 }

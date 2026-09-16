@@ -173,7 +173,17 @@ PY
 import re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
-start = text.index('echo "Starting FRP client ..."')
+markers = (
+    'echo "Starting Data Relay Link client ..."',
+    'echo "Starting FRP client ..."',
+)
+start = -1
+for marker in markers:
+    idx = text.find(marker)
+    if idx >= 0:
+        start = idx
+        break
+assert start >= 0, "client start echo missing"
 guard = text.rindex('if [[ "$(services_count)" != "0"', 0, start)
 assert 'FRP_SKIP_SYSTEMD' in text[guard:start], "start guard lost its systemd condition"
 assert re.search(

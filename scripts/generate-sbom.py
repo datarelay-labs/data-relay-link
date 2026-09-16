@@ -91,14 +91,16 @@ def _parse_sha256sums(path: Path) -> list[tuple[str, str]]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        parts = line.split()
-        if len(parts) >= 2:
-            digest, rel = parts[0], parts[-1]
-            if rel.startswith("*"):
-                rel = rel[1:]
-            if rel in METADATA_PATHS:
-                continue
-            rows.append((digest, rel))
+        # Paths may contain spaces; split once after the digest only.
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        digest, rel = parts[0], parts[1].strip()
+        if rel.startswith("*"):
+            rel = rel[1:]
+        if rel in METADATA_PATHS:
+            continue
+        rows.append((digest, rel))
     return rows
 
 
@@ -169,7 +171,7 @@ def build_sbom(root: Path, source_commit: str | None = None) -> dict:
     # Release artifacts + SHA256SUMS inventory as files/packages.
     file_ids = []
     for digest, rel in _parse_sha256sums(root / "SHA256SUMS"):
-        safe = rel.replace("/", "-").replace(".", "_")
+        safe = rel.replace("/", "-").replace(".", "_").replace(" ", "_")
         fid = "SPDXRef-File-%s" % safe[:120]
         # Prefer package-like entries for top-level release artifacts.
         packages.append(

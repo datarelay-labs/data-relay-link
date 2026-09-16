@@ -4639,6 +4639,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_cli_catalog.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_version_identity.py" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_version_identity.py" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp_cli_final_commands.json" ]] || {
     echo "ERROR: missing ${source}/lib/frp_cli_final_commands.json" >&2
     return 1
@@ -4673,6 +4677,7 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
   install -m 0644 "${source}/lib/frp_cli_catalog.py" "${libdir}/frp_cli_catalog.py"
+  install -m 0644 "${source}/lib/frp_version_identity.py" "${libdir}/frp_version_identity.py"
   install -m 0644 "${source}/lib/frp_cli_final_commands.json" "${libdir}/frp_cli_final_commands.json"
   install -m 0644 "${source}/lib/frp_service_profiles.py" "${libdir}/frp_service_profiles.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
@@ -4688,6 +4693,7 @@ frp_client_install_management_files() {
   # RHEL/Rocky sudo defaults omit /usr/local/bin from secure_path.
   # Keep a copy on the secure_path so `sudo drlink` works after install.
   if [[ "$(frp_client_path /usr/bin)" != "$bindir" ]]; then
+    mkdir -p "$(frp_client_path /usr/bin)"
     install -m 0755 "${source}/tools/drlink" "$(frp_client_path /usr/bin/drlink)"
   fi
   install -m 0755 "${source}/tools/frp-support-bundle" "${bindir}/frp-support-bundle"
@@ -4724,6 +4730,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
     "usr/local/lib/drlink/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
     "usr/local/lib/drlink/frp_cli_catalog.py:0644:lib/frp_cli_catalog.py" \
+    "usr/local/lib/drlink/frp_version_identity.py:0644:lib/frp_version_identity.py" \
     "usr/local/lib/drlink/frp_cli_final_commands.json:0644:lib/frp_cli_final_commands.json" \
     "usr/local/lib/drlink/frp_service_profiles.py:0644:lib/frp_service_profiles.py" \
     "usr/local/lib/drlink/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
@@ -4836,6 +4843,8 @@ frp_client_upgrade_validate_staged() {
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_support_bundle.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_ctl_grammar.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_cli_catalog.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_version_identity.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_service_profiles.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_ctl_repl.py" || return 1
   python3 -m py_compile "${staged}/usr/local/bin/frp-support-bundle" || return 1
   rm -rf "${staged}/usr/local/lib/drlink/__pycache__" \
@@ -5477,8 +5486,10 @@ frp_client_fetch_and_upgrade() {
   fi
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     source_ref="$FRP_EXPECTED_SOURCE_REF"
-  elif [[ "$channel" == "dev" ]]; then
+  elif [[ "$channel" == "development" || "$channel" == "dev" ]]; then
     source_ref="main"
+  elif [[ "$channel" == "preview" ]]; then
+    source_ref="v${PROJECT_VERSION}-rc.1"
   else
     source_ref="v${PROJECT_VERSION}"
   fi

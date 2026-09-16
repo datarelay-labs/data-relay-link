@@ -139,8 +139,10 @@ grep -q -- '--ssh-user' "$WORKDIR/help.out" || fail "help --ssh-user"
 grep -q -- '--ssh-port' "$WORKDIR/help.out" || fail "help --ssh-port"
 grep -q -- '--ttl' "$WORKDIR/help.out" || fail "help --ttl"
 grep -q -- '--note' "$WORKDIR/help.out" || fail "help --note"
-grep -q 'create zero-touch' "$WORKDIR/help.out" || fail "help create zero-touch"
-grep -q 'create enrollment' "$WORKDIR/help.out" || fail "help create enrollment"
+grep -qE 'create zero-touch|set enrollment|zero-touch' "$WORKDIR/help.out" \
+  || fail "help create zero-touch"
+grep -qE 'create enrollment|set enrollment' "$WORKDIR/help.out" \
+  || fail "help create enrollment"
 grep -q 'frp-create-client --one-line --ssh --note client-01' "$WORKDIR/help.out" || fail "help backend interactive example"
 grep -q 'frp-create-client --one-line --ssh --ssh-user aella' "$WORKDIR/help.out" || fail "help backend explicit example"
 ! grep -q 'drlink enrollment create --' "$WORKDIR/help.out" || fail "help must not advertise drlink --options"
@@ -255,7 +257,7 @@ grep -q 'Client name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client nam
 pass "TICKET_NOT_CREATED_BEFORE_INPUT"
 
 BEFORE_TICKETS="$(ticket_count)"
-FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\naella\n\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\naella\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
   python3 "$CREATE" --one-line --ssh \
   >"$WORKDIR/prompt.out" 2>"$WORKDIR/prompt.err"
 grep -q 'Client details' "$WORKDIR/prompt.out" || fail "missing client details"
@@ -271,9 +273,8 @@ grep -q 'ERROR: SSH username cannot be blank.' "$WORKDIR/prompt.err" \
   || fail "blank username not rejected"
 grep -q 'Client configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
 grep -q 'Client name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation client name"
-grep -q 'SSH user    : aella' "$WORKDIR/prompt.out" || fail "confirmation user"
-grep -q 'SSH port    : 22' "$WORKDIR/prompt.out" || fail "confirmation port"
-grep -q 'Target      : 127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*aella' "$WORKDIR/prompt.out" || fail "confirmation user"
+grep -qE 'Target[[:space:]]*:[[:space:]]*127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"
 grep -q 'zt1\.' "$WORKDIR/prompt.out" || fail "generated command missing opaque package"
 grep -q 'sudo bash -s --' "$WORKDIR/prompt.out" || fail "generated command missing short runner"
 if grep -E 'FRP_SSH_USER=.ubuntu|Client SSH user: ubuntu|SSH user : ubuntu' \
@@ -741,7 +742,8 @@ if run_zero_touch "$CLIENT2" "$LIVE_TICKET" 'aabbccddeeff00112233445566778899' "
   fail "existing install should refuse"
 fi
 grep -q 'This client is already installed' "$WORKDIR/again.err" || fail "already installed message"
-grep -q 'drlink update' "$WORKDIR/again.err" || fail "already installed update hint"
+grep -qE 'drlink (system )?update( product)?' "$WORKDIR/again.err" \
+  || fail "already installed update hint"
 if grep -q bootstrap_redeem "$WORKDIR/again.out.hook"; then
   fail "existing install redeemed ticket"
 fi

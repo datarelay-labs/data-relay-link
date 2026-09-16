@@ -95,7 +95,7 @@ CTL="$ROOT/tools/frpctl"
 chmod +x "$ROOT/tools/frpctl" "$ROOT/tools/frp-access"
 
 "$CTL" access list >"$WORKDIR/list.out"
-grep -q 'Access Lists' "$WORKDIR/list.out" || fail "access list header"
+grep -qE 'Access Lists|ACLs' "$WORKDIR/list.out" || fail "access list header"
 grep -q '(none)' "$WORKDIR/list.out" || fail "empty access list"
 
 "$CTL" access create Office --description 'corp' >"$WORKDIR/create.out"
@@ -117,7 +117,7 @@ fi
 grep -qi '\-\-yes\|confirmation' "$WORKDIR/public-no.err" "$WORKDIR/public-no.out" \
   || fail "ALLOWLIST→PUBLIC must mention --yes/confirmation"
 "$CTL" access public demo ssh --yes >"$WORKDIR/public-yes.out"
-grep -qi 'publicly reachable' "$WORKDIR/public-yes.out" || fail "broadening warning shown with --yes"
+grep -qi 'become PUBLIC\|publicly reachable' "$WORKDIR/public-yes.out" || fail "broadening warning shown with --yes"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-public.out"
 grep -qi 'ALLOW' "$WORKDIR/test-public.out" || fail "public allow"
 pass "frpctl access list/create/add-source/assign/test/public"
@@ -129,7 +129,7 @@ if "$CTL" access add-source Office --name other --source 198.51.100.20 \
   fail "shared add-source without --yes should fail"
 fi
 grep -qi '\-\-yes' "$WORKDIR/shared-add.err" || fail "shared add-source --yes hint"
-grep -q 'This Access List is used by' "$WORKDIR/shared-add.out" \
+grep -qE 'This (Access List|ACL) is used by' "$WORKDIR/shared-add.out" \
   || fail "shared add-source should show impacted services before fail"
 if "$CTL" access remove-source Office --source 198.51.100.10 \
   >"$WORKDIR/shared-rm.out" 2>"$WORKDIR/shared-rm.err"; then
@@ -168,7 +168,7 @@ fi
 grep -qi '\-\-yes' "$WORKDIR/shared-exp.err" || fail "shared remove-expired --yes hint"
 "$CTL" access remove-expired Office --yes >"$WORKDIR/shared-exp-yes.out"
 "$CTL" access add-source Office --name other --source 198.51.100.20 --yes >"$WORKDIR/shared-add-yes.out"
-grep -q 'This Access List is used by' "$WORKDIR/shared-add-yes.out" || fail "shared add with --yes shows impact"
+grep -qE 'This (Access List|ACL) is used by' "$WORKDIR/shared-add-yes.out" || fail "shared add with --yes shows impact"
 "$CTL" access edit-info Office --description 'updated' --yes >"$WORKDIR/shared-edit-yes.out"
 "$CTL" access remove-source Office --source 198.51.100.20 --yes >"$WORKDIR/shared-rm-yes.out"
 pass "shared list confirmation + --yes automation"

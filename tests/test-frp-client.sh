@@ -766,7 +766,8 @@ if frp_client_main >"$WORKDIR/reinstall.out" 2>"$WORKDIR/reinstall.err"; then
   fail "installer should refuse an existing client"
 fi
 grep -q 'already has a Data Relay Link client installed' "$WORKDIR/reinstall.err" || fail "existing-install refusal message"
-grep -q 'drlink update' "$WORKDIR/reinstall.err" || fail "existing-install should point at upgrade"
+grep -qE 'drlink (system )?update( product)?' "$WORKDIR/reinstall.err" \
+  || fail "existing-install should point at upgrade"
 fp_after="$(python3 "$ROOT/lib/frp_mgmt_auth.py" fingerprint "$TREE/etc/frp/client-identity.pub")"
 [[ "$fp_before" == "$fp_after" ]] || fail "refused reinstall rotated identity"
 cmp -s "$TREE/etc/frp/client-identity.key" "$WORKDIR/key.before" || fail "refused reinstall replaced key"

@@ -94,8 +94,12 @@ project = values["PROJECT_VERSION"]
 assert data.get("project_version") == project, data.get("project_version")
 channel = data.get("channel")
 ref = data.get("git_ref")
-if channel == "dev":
-    assert ref == "main", ref
+if channel in ("development", "dev"):
+    import re
+    assert re.fullmatch(r"[0-9a-fA-F]{40}", ref) or ref == "main", ref
+elif channel == "preview":
+    import re
+    assert re.fullmatch(r"[0-9a-fA-F]{40}", ref) or re.fullmatch(r"v\d+\.\d+\.\d+-rc\.\d+", ref), ref
 elif channel == "stable":
     assert ref == "v%s" % project, ref
 else:
@@ -147,17 +151,17 @@ unset FRP_RELEASE_CHANNEL || true
 export FRP_RELEASE_CHANNEL=dev
 export FRP_BUNDLE_SHA256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 frp_write_version_file "$persist/etc/drlink/version"
-grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/drlink/version" || fail "dev channel not written"
+grep -q 'RELEASE_CHANNEL=development' "$persist/etc/drlink/version" || fail "development channel not written"
 grep -q 'SOURCE_REF=main' "$persist/etc/drlink/version" || fail "dev source ref"
 grep -q 'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
   "$persist/etc/drlink/version" || fail "bundle sha not written"
 unset FRP_RELEASE_CHANNEL FRP_BUNDLE_SHA256 || true
 frp_write_version_file "$persist/etc/drlink/version"
-grep -q 'RELEASE_CHANNEL=dev' "$persist/etc/drlink/version" || fail "dev channel lost on re-run"
+grep -q 'RELEASE_CHANNEL=development' "$persist/etc/drlink/version" || fail "development channel lost on re-run"
 grep -q 'SOURCE_REF=main' "$persist/etc/drlink/version" || fail "dev source ref lost"
 grep -q 'BUNDLE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
   "$persist/etc/drlink/version" || fail "bundle sha lost"
-[[ "$(frp_release_channel)" == "dev" ]] || fail "persisted channel not used for URLs"
+[[ "$(frp_release_channel)" == "development" ]] || fail "persisted channel not used for URLs"
 case "$(frp_default_client_installer_url)" in
   */main/dist/bootstrap-client.sh) ;;
   *) fail "persisted dev still not following main" ;;

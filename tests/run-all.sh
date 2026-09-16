@@ -8,7 +8,11 @@ export PYTHONDONTWRITEBYTECODE=1
 # Leaked interactive/debug roots divert role-specific txn markers via frp_txn_marker_path
 # precedence and produce false rollback-marker failures across the suite.
 unset FRP_UPDATE_ROOT FRP_DEPLOY_TEST_ROOT FRP_SERVER_TEST_ROOT \
-  FRP_CLIENT_TEST_ROOT FRP_UNINSTALL_TEST_ROOT FRP_ROLE_TEST_ROOT || true
+  FRP_CLIENT_TEST_ROOT FRP_UNINSTALL_TEST_ROOT FRP_ROLE_TEST_ROOT \
+  FRP_EXPECTED_SOURCE_REF FRP_TXN_SOURCE_REF FRP_EXPECTED_SOURCE_HEAD \
+  FRP_RELEASE_CHANNEL FRP_EXPECTED_RELEASE_CHANNEL \
+  FRP_BOOTSTRAP_URL FRP_CLIENT_INSTALLER_URL FRP_WINDOWS_CLIENT_INSTALLER_URL \
+  FRP_CTL_TEST_INPUT FRP_CTL_TEST_ROOT || true
 
 echo "=== shell syntax ==="
 git ls-files '*.sh' | xargs -r bash -n
@@ -16,7 +20,7 @@ git ls-files -o --exclude-standard '*.sh' | xargs -r bash -n
 bash -n tools/frp-server-status tools/frp-project-update tools/frp-update tools/frp-upstream tools/frp-client tools/frpctl
 
 echo "=== Python compile ==="
-python3 -m py_compile server/frp-port-allocator.py server/frp-access-plugin.py server/frp-egress-gateway.py server/drlink-tcp-egress.py server/migrate_token.py scripts/build-bundles.py scripts/generate-sbom.py lib/frp_mgmt_auth.py lib/frp_pki.py lib/frp_frontend.py lib/frp_doctor.py lib/frp_install_txn.py lib/frp_client_registry.py lib/frp_audit.py lib/frp_project_files.py lib/frp_control_locks.py lib/frp_server_config.py lib/frp_zero_touch.py lib/frp_ctl_grammar.py lib/frp_cli_catalog.py lib/frp_ctl_repl.py lib/frp_enrollment_lifecycle.py lib/frp_access_control.py lib/frp_egress_control.py lib/frp_egress_runtime.py lib/frp_infrastructure_ports.py lib/frp_health_check.py lib/frp_service_profiles.py lib/frp_machine_id.py lib/frp_bounded_server.py lib/frp_public_suffix.py lib/frp_policy_fingerprint.py lib/frp_state_paths.py
+python3 -m py_compile server/frp-port-allocator.py server/frp-access-plugin.py server/frp-egress-gateway.py server/drlink-tcp-egress.py server/migrate_token.py scripts/build-bundles.py scripts/generate-sbom.py lib/frp_mgmt_auth.py lib/frp_pki.py lib/frp_frontend.py lib/frp_doctor.py lib/frp_install_txn.py lib/frp_client_registry.py lib/frp_audit.py lib/frp_project_files.py lib/frp_control_locks.py lib/frp_server_config.py lib/frp_zero_touch.py lib/frp_ctl_grammar.py lib/frp_cli_catalog.py lib/frp_version_identity.py lib/frp_ctl_repl.py lib/frp_enrollment_lifecycle.py lib/frp_access_control.py lib/frp_egress_control.py lib/frp_egress_runtime.py lib/frp_infrastructure_ports.py lib/frp_health_check.py lib/frp_service_profiles.py lib/frp_machine_id.py lib/frp_bounded_server.py lib/frp_public_suffix.py lib/frp_policy_fingerprint.py lib/frp_state_paths.py
 python3 -m py_compile tools/frp-create-client tools/frp-enrollments tools/frp-enrollment-revoke tools/frp-enrollment-purge tools/frp-enroll-bulk tools/frp-clients tools/frp-client-info tools/frp-client-set tools/frp-release-client tools/frp-release-service tools/frp-access tools/frp-profile tools/frp-revoke-client tools/frp-set-client-installer-url tools/frp-server-set tools/frp-backup tools/frp-restore tools/frp-egress
 python3 -m py_compile tests/test-allocator.py tests/test-enrollment-security.py tests/test-mgmt-identity.py tests/test-pki-https.py tests/test-bootstrap-ticket.py tests/test-frontend-proxy.py tests/test-client-registry.py tests/test-access-control.py tests/test-egress-control.py tests/test-service-profiles.py tests/test-destructive-selector-toctou.py tests/test-egress-create-safe-default.py tests/test-policy-fingerprint.py tests/test-strict-cli-parsing.py tests/test-cli-backend-reverse-parity.py tests/test-enabled-egress-mutation-confirm.py tests/test-lifecycle-contract-matrix.py tests/test-allocator-tls-slow-handshake.py tests/test-http-relay-half-close-idle.py tests/test-http-connection-critical-headers.py tests/test-nonce-capacity-replay.py tests/test-restore-corrupt-current.py tests/test-egress-confirm-toctou.py tests/test-state-paths-backup-restore.py tests/test-enrollment-ttl-help.py tests/test-enrollment-pair-atomicity.py tests/test-enrollment-retention-policy.py tests/test-frpctl-completion-inventory.py tests/test-cli-flag-metadata.py tests/test-operator-workflow-regressions.py
 
@@ -75,6 +79,13 @@ python3 tests/test-restore-readiness.py
 ./tests/test-lifecycle.sh
 ./tests/test-guided-ux.sh
 ./tests/test-verb-first-cli-ux.sh
+./tests/test-cli-information-architecture.sh
+python3 tests/test-public-cli-grammar-parity.py
+python3 tests/test-public-cli-runtime-matrix.py
+python3 tests/test-lifecycle-cli-ux.py
+python3 tests/test-operational-ux-cli-recovery-closure.py
+python3 tests/test-release-recovery-dual-role-audit-docs-closure.py
+python3 tests/test-repl-live-inventory.py
 ./tests/test-real-e2e-canonical-cli.sh
 ./tests/test-client-upgrade.sh
 ./tests/test-safe-repo-copy.sh
@@ -82,10 +93,12 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-legacy-client-secure-bridge.sh
 ./tests/test-install-lifecycle.sh
 ./tests/test-uninstall-owned-frpc.sh
+./tests/test-uninstall-stdin-execution.sh
 ./tests/test-frpctl.sh
 ./tests/test-frpctl-suggest-portable.sh
 ./tests/test-frpctl-completion.sh
 ./tests/test-frpctl-pty-completion.sh
+./tests/test-frpctl-pty-prompt-backspace.sh
 ./tests/test-frp-compat-gate.sh
 ./tests/test-create-zero-touch.sh
 ./tests/test-zero-touch-short-command.sh
@@ -152,6 +165,10 @@ python3 tests/test-frontend-proxy.py
 ./tests/test-release-artifact-ordering.sh
 ./tests/test-probe-tcp-injection.sh
 ./tests/test-immutable-release-channel.sh
+./tests/test-exact-sha-installer-provenance.sh
+./tests/test-version-governance.sh
+python3 tests/test-release-manifest-schema.py
+./scripts/check-release-governance.sh
 ./tests/test-install-txn-rollback.sh
 ./tests/test-fresh-install-sandbox-rollback.sh
 python3 tests/test-audit-log.py

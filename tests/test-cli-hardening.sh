@@ -47,24 +47,28 @@ printf 'PROJECT_VERSION=2.1.0\n' >"$CTLROOT/etc/drlink/version"
 unset FRP_DEPLOY_TEST_ROOT
 export FRP_CTL_TEST_ROOT="$CTLROOT"
 "$ROOT/tools/frpctl" version >"$WORK/version-unknown.out"
-grep -q '^FRP version     : legacy / unknown$' "$WORK/version-unknown.out" || fail "unknown version not truthful"
+grep -qE '^(FRP version     |Relay Engine \(FRP\): )legacy / unknown$' "$WORK/version-unknown.out" \
+  || fail "unknown version not truthful"
 cat >"$CTLROOT/usr/local/bin/frpc" <<'EOF'
 #!/usr/bin/env bash
 printf 'v0.69.9\n'
 EOF
 chmod +x "$CTLROOT/usr/local/bin/frpc"
 "$ROOT/tools/frpctl" version >"$WORK/version-binary.out"
-grep -q '^FRP version     : 0.69.9$' "$WORK/version-binary.out" || fail "binary version fallback"
+grep -qE '^(FRP version     |Relay Engine \(FRP\): )0\.69\.9$' "$WORK/version-binary.out" \
+  || fail "binary version fallback"
 printf 'PROJECT_VERSION=2.1.0\nFRP_VERSION=0.71.0\n' >"$CTLROOT/etc/drlink/version"
 printf '#!/usr/bin/env bash\nprintf "9.9.9\\n"\n' >"$CTLROOT/usr/local/bin/frpc"
 chmod +x "$CTLROOT/usr/local/bin/frpc"
 "$ROOT/tools/frpctl" version >"$WORK/version-meta.out"
-grep -q '^FRP version     : 0.71.0$' "$WORK/version-meta.out" || fail "metadata precedence"
+grep -qE '^(FRP version     |Relay Engine \(FRP\): )0\.71\.0$' "$WORK/version-meta.out" \
+  || fail "metadata precedence"
 printf 'PROJECT_VERSION=2.1.0\n' >"$CTLROOT/etc/drlink/version"
 printf '#!/usr/bin/env bash\nprintf "0.69.9\\033[31m\\n"\n' >"$CTLROOT/usr/local/bin/frpc"
 chmod +x "$CTLROOT/usr/local/bin/frpc"
 "$ROOT/tools/frpctl" version >"$WORK/version-unsafe.out"
-grep -q '^FRP version     : legacy / unknown$' "$WORK/version-unsafe.out" || fail "unsafe version output trusted"
+grep -qE '^(FRP version     |Relay Engine \(FRP\): )legacy / unknown$' "$WORK/version-unsafe.out" \
+  || fail "unsafe version output trusted"
 pass FRP_VERSION_METADATA_PRESERVED
 pass FRP_VERSION_BINARY_FALLBACK
 pass FRP_VERSION_UNKNOWN_TRUTHFUL
@@ -74,7 +78,7 @@ printf 'exit\n' | python3 "$ROOT/lib/frp_ctl_repl.py" --frpctl /bin/true \
   >"$WORK/inventory.out" 2>"$WORK/inventory.err" || fail "inventory-warning REPL failure"
 unset FRP_CTL_GRAMMAR_PAYLOAD
 [[ "$(grep -c 'completion inventory could not be loaded' "$WORK/inventory.err" || true)" -eq 1 ]] || fail "inventory warning count"
-grep -q 'Run: doctor' "$WORK/inventory.err" || fail "inventory doctor hint"
+grep -qE 'Run: (doctor|system diagnostics)' "$WORK/inventory.err" || fail "inventory doctor hint"
 ! grep -Eq 'Traceback|JSONDecodeError|registry.json' "$WORK/inventory.err" || fail "inventory details leaked"
 pass COMPLETION_INVENTORY_WARNING_SAFE
 
@@ -123,8 +127,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / 'lib'))
 import frp_ctl_repl as repl
 assert repl._should_refresh_inventory(['restore', 'backup', '/tmp/x.tar'])
-assert repl._should_refresh_inventory(['update', 'project'])
-assert repl._should_refresh_inventory(['backup', 'create'])
+assert repl._should_refresh_inventory(['system', 'update', 'product'])
+assert repl._should_refresh_inventory(['system', 'backup', 'create'])
 assert not repl._should_refresh_inventory(['status'])
 assert not repl._should_refresh_inventory(['help'])
 PY

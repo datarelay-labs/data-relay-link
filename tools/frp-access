@@ -130,7 +130,7 @@ def confirm_shared_list_mutation(cfg, list_ref, *, yes=False):
         return lid, lst, used
     if not sys.stdin.isatty():
         raise SystemExit(
-            "ERROR: ACL is used by %d service(s); re-run with confirmation to continue."
+            "ERROR: ACL is used by %d service(s); re-run with --yes to continue."
             % len(used)
         )
     answer = input("Continue? [y/N]: ").strip().lower()

@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import select
+import shutil
 import socket
 import tempfile
 import threading
@@ -1332,7 +1333,7 @@ class EgressHardeningFeatureTests(unittest.TestCase):
     """Option B, DNS, HE, streaming, ECH, limits, import/export."""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name)
         os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
         libdir = self.root / "usr/local/lib/drlink"
@@ -1432,10 +1433,17 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         except Exception:
             pass
         try:
+            self.server.server_close()
+        except Exception:
+            pass
+        try:
             self.origin.stop()
         except Exception:
             pass
-        self.tmp.cleanup()
+        try:
+            self.tmp.cleanup()
+        except OSError:
+            shutil.rmtree(self.tmp.name, ignore_errors=True)
         os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
 
     def _conn_log(self) -> str:

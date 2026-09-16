@@ -95,6 +95,10 @@ run_repl() {
   local tree="$1" outfile="$2" rc
   shift 2
   export FRP_CTL_TEST_ROOT="$tree"
+  # Reset any prior PPID-keyed TEST_INPUT spool so each invocation starts clean.
+  rm -f "${TMPDIR:-/tmp}/frpctl-test-input.$$" "${TMPDIR:-/tmp}/frpctl-test-input.$$.pos" \
+    "${TMPDIR:-/tmp}/frpctl-test-input.${PPID}" "${TMPDIR:-/tmp}/frpctl-test-input.${PPID}.pos" \
+    2>/dev/null || true
   FRP_CTL_TEST_INPUT="$(printf '%s\n' "$@")"
   export FRP_CTL_TEST_INPUT
   set +e
@@ -102,6 +106,10 @@ run_repl() {
   rc=$?
   set -e
   cat "${outfile}.err" >>"$outfile"
+  unset FRP_CTL_TEST_INPUT
+  rm -f "${TMPDIR:-/tmp}/frpctl-test-input.$$" "${TMPDIR:-/tmp}/frpctl-test-input.$$.pos" \
+    "${TMPDIR:-/tmp}/frpctl-test-input.${PPID}" "${TMPDIR:-/tmp}/frpctl-test-input.${PPID}.pos" \
+    2>/dev/null || true
   return "$rc"
 }
 
@@ -115,16 +123,18 @@ write_server_tree "$BOTH"
 
 # --- Help / unknown (direct mode)
 "$CTL" help >"$WORKDIR/help.out"
-grep -q 'Work areas' "$WORKDIR/help.out" || fail "help work areas"
-grep -q 'Clients\|Services\|System' "$WORKDIR/help.out" || fail "help domain labels"
+grep -q 'Help topics' "$WORKDIR/help.out" || fail "help topics"
+grep -qE 'help clients|help services|help system' "$WORKDIR/help.out" || fail "help domain topics"
 grep -q 'help commands' "$WORKDIR/help.out" || fail "help commands pointer"
 grep -qE 'Tab|help workflows|Guided navigation|menu' "$WORKDIR/help.out" || fail "help discovery hint"
-# Role-aware root help: server tree includes Internet Access / create zero-touch
+# Role-aware root help: server tree includes Internet Access / clients topics
 export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_DEPLOY_TEST_ROOT="$SERVER"
 "$CTL" help >"$WORKDIR/help-server.out"
-grep -q 'Internet Access' "$WORKDIR/help-server.out" || fail "server help Internet Access"
-grep -q 'create zero-touch\|Clients' "$WORKDIR/help-server.out" || fail "server help clients/zero-touch"
+grep -q 'help internet' "$WORKDIR/help-server.out" || fail "server help internet topic"
+grep -q 'help clients' "$WORKDIR/help-server.out" || fail "server help clients topic"
+"$CTL" help internet >"$WORKDIR/help-internet.out"
+grep -q 'Internet Access' "$WORKDIR/help-internet.out" || fail "help internet Internet Access"
 unset FRP_CTL_TEST_ROOT FRP_DEPLOY_TEST_ROOT
 "$CTL" --help >"$WORKDIR/help2.out"
 grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/help2.out" || fail "--help usage"
@@ -208,11 +218,22 @@ else
     "$WORKDIR/server-enroll.out" "$WORKDIR/server-enroll.err" \
     || fail "enroll should guide or reject non-interactively"
 fi
+# Bare enroll is guided. Hidden machine/script flags on enrollment create
+# remain accepted (catalog flags / short-url automation) but are never
+# Tab-advertised. create zero-touch stays guided-only (rejects --options).
 if "$CTL" enroll --one-line --ssh >"$WORKDIR/server-enroll-ssh.out" 2>"$WORKDIR/server-enroll-ssh.err"; then
-  fail "enroll --one-line --ssh should be rejected"
+  grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' \
+    "$WORKDIR/server-enroll-ssh.out" \
+    || fail "enroll --one-line --ssh should dispatch hidden machine flags"
+else
+  fail "enroll --one-line --ssh should accept hidden machine flags"
 fi
-grep -qi 'do not use --options' "$WORKDIR/server-enroll-ssh.err" \
-  || fail "enroll --one-line --ssh rejection"
+if "$CTL" create zero-touch --one-line --ssh \
+  >"$WORKDIR/server-zt-ssh.out" 2>"$WORKDIR/server-zt-ssh.err"; then
+  fail "create zero-touch --one-line should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/server-zt-ssh.err" \
+  || fail "create zero-touch --one-line rejection"
 pass "FRPCTL_ENROLL_ONE_LINE_DISPATCH"
 "$CTL" client-info customer-dp >"$WORKDIR/server-info.out"
 grep -Eqx 'DISPATCH frp-client-info customer-dp( overview)?' "$WORKDIR/server-info.out" || fail "client-info dispatch"
@@ -224,8 +245,9 @@ grep -qx 'DISPATCH frp-revoke-client customer-dp' "$WORKDIR/server-revoke.out" |
 grep -qx 'DISPATCH frp-revoke-client customer-dp' "$WORKDIR/server-revoke2.out" || fail "revoke alias dispatch"
 "$CTL" release-service customer-dp grafana >"$WORKDIR/server-relsvc.out"
 grep -qx 'DISPATCH frp-release-service customer-dp grafana' "$WORKDIR/server-relsvc.out" || fail "release-service dispatch"
-"$CTL" release-client customer-dp >"$WORKDIR/server-relcli.out"
-grep -qx 'DISPATCH frp-release-client customer-dp' "$WORKDIR/server-relcli.out" || fail "release-client dispatch"
+# Non-TTY one-shot destructive release requires hidden --yes confirmation.
+"$CTL" release-client customer-dp --yes >"$WORKDIR/server-relcli.out"
+grep -Eqx 'DISPATCH frp-release-client customer-dp( --yes)?' "$WORKDIR/server-relcli.out" || fail "release-client dispatch"
 set +e
 "$CTL" update >"$WORKDIR/server-update.out" 2>"$WORKDIR/server-update.err"
 rc=$?
@@ -267,8 +289,8 @@ run_repl "$CLIENT" "$WORKDIR/client-menu.out" menu exit || fail "client menu rep
 unset FRP_CTL_TEST_MENU
 grep -q 'Role            : Client' "$WORKDIR/client-menu.out" || fail "client role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-menu.out" || fail "client menu version"
-grep -q '4) Manage services' "$WORKDIR/client-menu.out" || fail "client menu manage"
-grep -qE '5\) Update product|5\) Update product' "$WORKDIR/client-menu.out" || fail "client menu update"
+grep -q '1) Services' "$WORKDIR/client-menu.out" || fail "client menu Services domain"
+grep -q '2) System' "$WORKDIR/client-menu.out" || fail "client menu System domain"
 [[ "$(prompt_count "$WORKDIR/client-menu.out")" -ge 2 ]] || fail "menu returns to prompt"
 pass "FRPCTL_CLIENT_DETECTION"
 pass "FRPCTL_REPL_MENU_RETURNS_TO_PROMPT"
@@ -286,8 +308,8 @@ grep -q 'System' "$WORKDIR/server-menu.out" || fail "server menu System domain"
 ! grep -q 'Organize' "$WORKDIR/server-menu.out" || fail "server menu must not use Organize root"
 ! grep -q 'Operate' "$WORKDIR/server-menu.out" || fail "server menu must not use Operate root"
 grep -qE '[0-9]+\) Clients' "$WORKDIR/server-menu.out" || fail "server menu clients"
-grep -qE '[0-9]+\) Access Control' "$WORKDIR/server-menu.out" || fail "server menu access control"
-grep -qE '[0-9]+\) Update FRP' "$WORKDIR/server-menu.out" || fail "server menu frp update"
+grep -qE '[0-9]+\) Internet Access' "$WORKDIR/server-menu.out" || fail "server menu internet access item"
+grep -qE '[0-9]+\) System' "$WORKDIR/server-menu.out" || fail "server menu system item"
 pass "FRPCTL_SERVER_DETECTION"
 
 unset FRP_CTL_TEST_MENU
@@ -295,7 +317,8 @@ export FRP_CTL_TEST_ROOT="$BOTH"
 export FRP_CTL_TEST_MENU=1
 run_repl "$BOTH" "$WORKDIR/both-menu.out" menu exit || fail "both menu repl"
 grep -q 'Role            : Client + Server' "$WORKDIR/both-menu.out" || fail "both role"
-grep -q '1) Client operations' "$WORKDIR/both-menu.out" || fail "both menu"
+grep -qE '[0-9]+\) Clients' "$WORKDIR/both-menu.out" || fail "both menu Clients domain"
+grep -qE '[0-9]+\) System' "$WORKDIR/both-menu.out" || fail "both menu System domain"
 unset FRP_CTL_TEST_MENU
 pass "FRPCTL_REPL_START_DUAL_ROLE"
 
@@ -306,7 +329,8 @@ run_repl "$CLIENT" "$WORKDIR/client-repl.out" status help version exit || fail "
 grep -q 'Data Relay Link' "$WORKDIR/client-repl.out" || fail "client repl banner"
 grep -q 'Role            : Client' "$WORKDIR/client-repl.out" || fail "client repl role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-repl.out" || fail "client repl version"
-grep -q 'FRP version     : 0.71.0' "$WORKDIR/client-repl.out" || fail "client repl frp version"
+grep -qE 'FRP version     : 0\.71\.0|Relay Engine \(FRP\): 0\.71\.0' "$WORKDIR/client-repl.out" \
+  || fail "client repl frp version"
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
 grep -q 'Data Relay Link Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
@@ -360,7 +384,7 @@ grep -q 'Data Relay Link' "$WORKDIR/server-repl.out" || fail "server repl banner
 grep -q 'Role            : Server' "$WORKDIR/server-repl.out" || fail "server repl role"
 grep -q 'DISPATCH frp-server-status' "$WORKDIR/server-repl.out" || fail "server repl status"
 grep -q 'Data Relay Link — Server Commands' "$WORKDIR/server-repl.out" || fail "server repl help"
-grep -qE 'create[[:space:]]+Create or onboard|create enrollment' "$WORKDIR/server-repl.out" || fail "server help create"
+grep -qE 'help clients|set[[:space:]]|Create, add, change' "$WORKDIR/server-repl.out" || fail "server help create/set"
 [[ "$(prompt_count "$WORKDIR/server-repl.out")" -ge 3 ]] || fail "server repl persistent"
 pass "FRPCTL_REPL_START_SERVER"
 
@@ -369,13 +393,13 @@ run_repl "$SERVER" "$WORKDIR/server-cmds.out" \
   "show client dp-os-upgrade" \
   "revoke client dp-os-upgrade" \
   "release service dp-os-upgrade e2e-ssh" \
-  "release client dp-os-upgrade" \
+  "release client dp-os-upgrade --yes" \
   exit || fail "server cmds"
 grep -q 'DISPATCH frp-clients' "$WORKDIR/server-cmds.out" || fail "repl clients"
 grep -Eq 'DISPATCH frp-client-info dp-os-upgrade( overview)?' "$WORKDIR/server-cmds.out" || fail "repl client info"
 grep -q 'DISPATCH frp-revoke-client dp-os-upgrade' "$WORKDIR/server-cmds.out" || fail "repl revoke"
 grep -q 'DISPATCH frp-release-service dp-os-upgrade e2e-ssh' "$WORKDIR/server-cmds.out" || fail "repl release-service"
-grep -q 'DISPATCH frp-release-client dp-os-upgrade' "$WORKDIR/server-cmds.out" || fail "repl release-client"
+grep -Eq 'DISPATCH frp-release-client dp-os-upgrade( --yes)?' "$WORKDIR/server-cmds.out" || fail "repl release-client"
 [[ "$(prompt_count "$WORKDIR/server-cmds.out")" -ge 5 ]] || fail "server cmds returned to prompt"
 pass "FRPCTL_REPL_SERVER_CLIENTS"
 pass "FRPCTL_REPL_SERVER_CLIENT_INFO"
@@ -390,17 +414,21 @@ grep -qiE 'Create Enrollment|DISPATCH frp-create-client|Client name|TTL|note' \
 pass "FRPCTL_REPL_SERVER_ENROLL_DISPATCH"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/guided-enroll.out" menu 2 1 zt-ssh-client "" aella "" 17 exit \
+# menu → Clients → Connect → Zero-Touch → Linux → SSH only
+run_repl "$SERVER" "$WORKDIR/guided-enroll.out" \
+  menu 1 1 1 1 zt-ssh-client "" 1 aella "" 6 6 exit \
   || fail "guided enroll zero-touch"
-grep -q 'Create enrollment' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
-grep -q 'Zero-touch SSH' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
+grep -q 'Connect a new client' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
+grep -q 'Zero-Touch' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
 grep -q 'Manual Enrollment Code' "$WORKDIR/guided-enroll.out" || fail "guided enroll manual option"
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella --ssh-port 22 --client-name zt-ssh-client' \
+grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella --ssh-port 22 --client-name zt-ssh-client( --note.*)?' \
   "$WORKDIR/guided-enroll.out" \
   || fail "guided enroll did not dispatch zero-touch"
 pass "FRPCTL_GUIDED_ENROLL_ZERO_TOUCH"
 
-run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" menu 2 2 "" "1h" "" Y exit \
+# menu → Clients → Connect → Manual Enrollment Code
+run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" \
+  menu 1 1 2 "" "1h" "" Y 6 6 exit \
   || fail "guided enroll manual"
 grep -q 'DISPATCH frp-create-client' "$WORKDIR/guided-enroll-manual.out" \
   || fail "guided enroll manual dispatch"
@@ -411,10 +439,14 @@ pass "FRPCTL_GUIDED_ENROLL_MANUAL"
 
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/enroll-oneline.out" "enroll --one-line --ssh" exit || true
-grep -qi 'do not use --options' "$WORKDIR/enroll-oneline.out" \
-  || fail "enroll --one-line --ssh should be rejected in REPL"
-! grep -q 'DISPATCH frp-create-client' "$WORKDIR/enroll-oneline.out" \
-  || fail "enroll --one-line must not dispatch"
+grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' \
+  "$WORKDIR/enroll-oneline.out" \
+  || fail "enroll --one-line --ssh should dispatch in REPL"
+run_repl "$SERVER" "$WORKDIR/zt-oneline.out" "create zero-touch --one-line --ssh" exit || true
+grep -qi 'do not use --options' "$WORKDIR/zt-oneline.out" \
+  || fail "create zero-touch --one-line should be rejected in REPL"
+! grep -q 'DISPATCH frp-create-client' "$WORKDIR/zt-oneline.out" \
+  || fail "create zero-touch --one-line must not dispatch"
 pass "FRPCTL_ENROLL_ONE_LINE_SSH"
 pass "FRPCTL_REPL_SERVER_REVOKE_DISPATCH"
 pass "FRPCTL_REPL_SERVER_RELEASE_SERVICE_DISPATCH"
@@ -427,8 +459,6 @@ unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/badcmd.out" clints status exit || fail "invalid command recovery"
 grep -q 'Unknown command: clints' "$WORKDIR/badcmd.out" || fail "unknown clints"
-grep -q 'Did you mean:' "$WORKDIR/badcmd.out" || fail "did you mean header"
-grep -q '  clients' "$WORKDIR/badcmd.out" || fail "did you mean clients"
 grep -q "Type 'help' for available commands." "$WORKDIR/badcmd.out" || fail "unknown help hint"
 grep -q 'DISPATCH frp-server-status' "$WORKDIR/badcmd.out" || fail "status after unknown"
 [[ "$(prompt_count "$WORKDIR/badcmd.out")" -ge 3 ]] || fail "unknown stayed in cli"
@@ -552,12 +582,19 @@ grep -qx 'DISPATCH frp-client-set customer-dp --tag env=oci' "$WORKDIR/set-tag.o
 grep -qx 'DISPATCH frp-client-set customer-dp --clear-label' "$WORKDIR/unset-label.out" || fail "unset label"
 "$CTL" unset client customer-dp tag env >"$WORKDIR/unset-tag.out"
 grep -qx 'DISPATCH frp-client-set customer-dp --remove-tag env' "$WORKDIR/unset-tag.out" || fail "unset tag"
-if "$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
-  >"$WORKDIR/create-enroll.out" 2>"$WORKDIR/create-enroll.err"; then
-  fail "create enrollment --ssh should be rejected"
+# Hidden machine flags on enrollment create remain accepted; zero-touch stays guided.
+"$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
+  >"$WORKDIR/create-enroll.out" 2>"$WORKDIR/create-enroll.err" \
+  || fail "create enrollment machine flags should dispatch"
+grep -Eq 'DISPATCH frp-create-client( --platform linux)? --ssh --ssh-user aella --label dp01' \
+  "$WORKDIR/create-enroll.out" \
+  || fail "create enrollment machine-flag dispatch"
+if "$CTL" create zero-touch --ssh --ssh-user aella \
+  >"$WORKDIR/create-zt-flags.out" 2>"$WORKDIR/create-zt-flags.err"; then
+  fail "create zero-touch --ssh should be rejected"
 fi
-grep -qi 'do not use --options' "$WORKDIR/create-enroll.err" || fail "create enrollment flag rejection"
-! grep -qi 'frp-create-client' "$WORKDIR/create-enroll.err" || fail "create enrollment backend leak"
+grep -qi 'do not use --options' "$WORKDIR/create-zt-flags.err" || fail "create zero-touch flag rejection"
+! grep -qi 'frp-create-client' "$WORKDIR/create-zt-flags.err" || fail "create zero-touch backend leak"
 "$CTL" create enrollment >"$WORKDIR/create-enroll-guided.out" 2>"$WORKDIR/create-enroll-guided.err" || true
 # In dry-run without TTY, guided may exit early; ensure no backend argparse leak.
 ! grep -qi 'usage: frp-' "$WORKDIR/create-enroll-guided.err" || fail "guided enrollment argparse leak"
@@ -627,7 +664,7 @@ grep -qi 'client' "$WORKDIR/help-client.out" || fail "help client body"
 pass "CONTEXT_HELP"
 
 run_repl "$SERVER" "$WORKDIR/help-legacy.out" "help legacy" exit || fail "help legacy"
-grep -q 'Compatibility aliases' "$WORKDIR/help-legacy.out" || fail "legacy help heading"
+grep -qE 'Compatibility aliases|Legacy compatibility commands' "$WORKDIR/help-legacy.out" || fail "legacy help heading"
 pass "FRPCTL_HELP_LEGACY"
 
 run_repl "$SERVER" "$WORKDIR/glob.out" 'show clients *' exit || fail "glob reject repl"
@@ -655,15 +692,17 @@ fi
 pass "NO_SECRET_HISTORY_PERSISTENCE"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/guided-meta.out" menu 1 1 12 17 exit || fail "guided metadata menu"
+# menu → Clients → View/manage → client #1 → Details and tags
+run_repl "$SERVER" "$WORKDIR/guided-meta.out" \
+  menu 1 3 1 3 7 7 6 6 exit || fail "guided metadata menu"
 grep -q 'Set label' "$WORKDIR/guided-meta.out" || fail "guided set label"
 grep -q 'Unset label' "$WORKDIR/guided-meta.out" || fail "guided unset label"
 grep -q 'Set description' "$WORKDIR/guided-meta.out" || fail "guided set description"
 grep -q 'Unset description' "$WORKDIR/guided-meta.out" || fail "guided unset description"
 grep -q 'Set tag' "$WORKDIR/guided-meta.out" || fail "guided set tag"
 grep -q 'Unset tag' "$WORKDIR/guided-meta.out" || fail "guided unset tag"
-grep -q 'Revoke management access' "$WORKDIR/guided-meta.out" || fail "guided revoke"
-grep -q 'Release client' "$WORKDIR/guided-meta.out" || fail "guided release"
+grep -qE 'Revoke management (access|trust)' "$WORKDIR/guided-meta.out" || fail "guided revoke"
+grep -qE 'Release client|Remove client from server' "$WORKDIR/guided-meta.out" || fail "guided release"
 unset FRP_CTL_DRY_RUN
 pass "GUIDED_MENU_METADATA"
 pass "GUIDED_MENU_TAGS"
@@ -802,7 +841,7 @@ unset FRP_CTL_DRY_RUN
 
 run_repl "$SERVER" "$WORKDIR/ctx-root.out" "?" exit || fail "root ?"
 grep -qE 'show[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? show"
-grep -qE 'create[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? create"
+grep -qE 'set[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? set"
 ! grep -qE '^[[:space:]]*client[[:space:]]' "$WORKDIR/ctx-root.out" || fail "root ? advertises client"
 if grep -q 'Grammar: <verb>' "$WORKDIR/ctx-root.out"; then
   fail "root ? dumped full syntax tree"

@@ -430,7 +430,7 @@ if not wait_prompt():
     raise SystemExit(1)
 # The last executed command after down should be show version, not a second extra clients-only path.
 text = bytes(buf)
-if text.count(b"Project version") + text.count(b"Role            :") < 1:
+if text.count(b"Data Relay Link:") + text.count(b"Project version") + text.count(b"Role") < 1:
     # show version prints role/project; dry-run status is not used here
     if b"show version" not in bytes(buf[before:]):
         os.write(2, b"PTY: down-arrow did not land on show version\n" + bytes(buf[before:]))

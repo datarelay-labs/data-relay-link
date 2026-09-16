@@ -77,9 +77,9 @@ if ! env \
   fail "status exited non-zero"
 fi
 
-grep -q "Project version : 1.0.0" "$OUT" || fail "project version"
-grep -q "Installed FRP   : 0.70.0" "$OUT" || fail "installed frp"
-grep -q "Tested FRP      : 0.71.0" "$OUT" || fail "tested frp"
+grep -qE "Data Relay Link[: ].*1\.0\.0" "$OUT" || fail "project version"
+grep -qE "Relay Engine \(FRP\) installed : 0\.70\.0|Installed FRP   : 0.70.0" "$OUT" || fail "installed frp"
+grep -qE "Relay Engine \(FRP\) tested    : 0\.71\.0|Tested FRP      : 0.71.0" "$OUT" || fail "tested frp"
 grep -q "Upstream latest : unavailable" "$OUT" || fail "upstream unavailable"
 grep -q "Update status   : update available" "$OUT" || fail "update available"
 grep -q "FRP public      : TCP/443" "$OUT" || fail "control port"
@@ -115,7 +115,7 @@ env \
   FRP_STATUS_SKIP_UPSTREAM=1 \
   FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
   "$STATUS" >"$WORKDIR/status-unknown.out"
-grep -q "Installed FRP   : unknown" "$WORKDIR/status-unknown.out" || fail "unknown installed version"
+grep -qE "Relay Engine \(FRP\) installed : unknown|Installed FRP   : unknown" "$WORKDIR/status-unknown.out" || fail "unknown installed version"
 pass "status missing binary"
 
 # Current version

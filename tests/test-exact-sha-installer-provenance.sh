@@ -185,9 +185,9 @@ export FRP_WINDOWS_CLIENT_INSTALLER_URL='https://example.test/custom-bootstrap-c
 )
 pass "EXPLICIT_INSTALLER_URL_OVERRIDE_PRESERVED"
 
-# --- exact SHA expected_ref accepted against stable manifest git_ref ---
+# --- exact SHA expected_ref accepted against development manifest git_ref ---
 reset_provenance_env
-meta="$(frp_validate_release_source_metadata "$ROOT" "$FAKE_SHA" stable)" \
+meta="$(frp_validate_release_source_metadata "$ROOT" "$FAKE_SHA" development)" \
   || fail "exact SHA expected_ref rejected by metadata validate"
 got_ref="$(printf '%s' "$meta" | awk -F'\t' '{print $3}')"
 [[ "$got_ref" == "$FAKE_SHA" ]] || fail "validate did not return exact SHA provenance: $got_ref"

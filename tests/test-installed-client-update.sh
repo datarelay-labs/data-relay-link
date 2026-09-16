@@ -165,7 +165,7 @@ import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
 d = json.loads(p.read_text())
-d["channel"] = "dev"
+d["channel"] = "development"
 d["git_ref"] = "main"
 p.write_text(json.dumps(d, indent=2) + "\n")
 PY
@@ -190,7 +190,7 @@ FRP_CLIENT_TEST_ROOT="$CLIENT" FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
   FRP_RELEASE_CHANNEL=dev FRP_BUNDLE_SHA256="$A_SHA" \
   bash "$BUNDLE_A" --upgrade >"$WORKDIR/initial-install.out"
 [[ -x "$CLIENT/usr/local/bin/drlink" ]] || fail "installed frpctl missing"
-grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/drlink/version" || fail "initial dev channel"
+grep -q 'RELEASE_CHANNEL=development' "$CLIENT/etc/drlink/version" || fail "initial dev channel"
 grep -q 'SOURCE_REF=main' "$CLIENT/etc/drlink/version" || fail "initial dev ref"
 grep -q "BUNDLE_SHA256=$A_SHA" "$CLIENT/etc/drlink/version" || fail "initial bundle identity"
 pass "INSTALLED_METADATA_AVAILABLE"
@@ -263,7 +263,7 @@ pass "CHECK_ONLY_READONLY"
 
 "$CLIENT/usr/local/bin/drlink" update product >"$WORKDIR/update.out" 2>"$WORKDIR/update.err"
 assert_preserved_state "$CLIENT" "$WORKDIR/runtime.before"
-grep -q 'RELEASE_CHANNEL=dev' "$CLIENT/etc/drlink/version" || fail "dev channel changed"
+grep -q 'RELEASE_CHANNEL=development' "$CLIENT/etc/drlink/version" || fail "dev channel changed"
 grep -q 'SOURCE_REF=main' "$CLIENT/etc/drlink/version" || fail "dev source ref changed"
 grep -q "BUNDLE_SHA256=$B_SHA" "$CLIENT/etc/drlink/version" || fail "verified build identity not persisted"
 grep -q 'P2.20 same-version remote build marker' "$CLIENT/usr/local/lib/drlink/frpctl" || fail "remote management tool not applied"
@@ -300,7 +300,7 @@ import sys
 from pathlib import Path
 p = Path(sys.argv[1])
 ver = sys.argv[2]
-text = p.read_text().replace("RELEASE_CHANNEL=dev", "RELEASE_CHANNEL=stable")
+text = p.read_text().replace("RELEASE_CHANNEL=development", "RELEASE_CHANNEL=stable").replace("RELEASE_CHANNEL=dev", "RELEASE_CHANNEL=stable")
 text = text.replace("SOURCE_REF=main", "SOURCE_REF=v%s" % ver)
 p.write_text(text)
 PY

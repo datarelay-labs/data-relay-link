@@ -266,6 +266,8 @@ _MUTATING_PUBLIC_PREFIXES = (
     ("system", "import"),
     ("system", "backup"),
     ("system", "cleanup"),
+    ("system", "update", "product"),
+    ("system", "update", "engine"),
     ("system", "services", "apply"),
     ("system", "services", "discard"),
     ("system", "services", "sync"),

@@ -7,6 +7,7 @@
 > **Last updated:** 2026-09-13
 > **Current release:** Project `2.4.0` / FRP `0.71.0` — release candidate (historical `v2.3.1` / `v2.3.0` / `v2.2.x` untouched)
 > **Release commit:** _(set when the `v2.4.0` tag is created)_
+> **Version / release governance:** `docs/VERSION_POLICY.md` (SSOT, channels, pretags SHA, MCP exclusion)
 > **Release qualification:** Double Full Real E2E required on the exact audit-closure HEAD
 > **Primary management interface:** `sudo drlink` (canonical CLI; catalog-owned)
 > **Primary operating scale:** approximately `1–50 clients`, especially a few to a few dozen

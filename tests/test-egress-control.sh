@@ -54,39 +54,37 @@ EGRESS="$TMP/usr/local/sbin/frp-egress"
 "$EGRESS" add-source ubuntu-update 203.0.113.10/32
 # Preview shows prospective ALLOW while the profile remains disabled.
 out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https)"
-grep -q 'Profile state: DISABLED' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'No live policy was changed.' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Profile state : Disabled' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Policy preview : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Current state  : BLOCKED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connection performed: NO' <<<"$out" || { echo "$out"; exit 1; }
 "$EGRESS" show ubuntu-update | grep -q 'Enabled       : no' || { echo "create/add must leave profile disabled"; exit 1; }
 "$EGRESS" enable ubuntu-update
 "$EGRESS" show ubuntu-update | grep -q security.ubuntu.com
 out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https)"
-grep -q 'Profile state: ENABLED' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Mode: PREVIEW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'DNS safety: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Resolved IPs:' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Live connect: NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'No live policy was changed.' <<<"$out" || { echo "$out"; exit 1; }
-! grep -q 'Final' <<<"$out" || { echo "misleading Final line: $out"; exit 1; }
+grep -q 'Profile state : Enabled' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Decision    : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'DNS safety    : PASS' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Resolved      :' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connection performed: NO' <<<"$out" || { echo "$out"; exit 1; }
+! grep -qE '^Final' <<<"$out" || { echo "misleading Final line: $out"; exit 1; }
 ! "$EGRESS" test 203.0.113.10 evil.example.com 443 --protocol https
 ! "$EGRESS" test 198.51.100.1 security.ubuntu.com 443 --protocol https
 "$EGRESS" disable ubuntu-update
 out="$("$EGRESS" test 203.0.113.10 security.ubuntu.com 443 --protocol https 2>&1 || true)"
-grep -q 'Profile state: DISABLED' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Mode: PREVIEW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Live connect: NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Protocol: https' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'No live policy was changed.' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Profile state : Disabled' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Policy preview : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Current state  : BLOCKED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connection performed: NO' <<<"$out" || { echo "$out"; exit 1; }
+grep -qi 'Protocol.*HTTPS' <<<"$out" || { echo "$out"; exit 1; }
 "$EGRESS" show ubuntu-update | grep -q 'Enabled       : no' || { echo "disable must leave profile disabled"; exit 1; }
 "$EGRESS" enable ubuntu-update
 # DNS unsafe parity: ALLOW policy + private resolution must DENY DNS.
 "$EGRESS" add-destination ubuntu-update localhost 443 --protocol https
 out="$("$EGRESS" test 203.0.113.10 localhost 443 --protocol https 2>&1 || true)"
-grep -q 'Policy decision: ALLOW' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'DNS safety: DENY' <<<"$out" || { echo "$out"; exit 1; }
-grep -q 'Live connect: NOT TESTED' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Decision    : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'DNS safety    : FAIL' <<<"$out" || { echo "$out"; exit 1; }
+grep -q 'Live connection performed: NO' <<<"$out" || { echo "$out"; exit 1; }
 ! grep -q 'Final        : ALLOW' <<<"$out" || { echo "$out"; exit 1; }
 echo "PASS EGRESS_TEST_TRUTHFUL_OUTPUT"
 "$EGRESS" remove-destination ubuntu-update localhost:443 --yes

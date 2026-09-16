@@ -5,7 +5,10 @@
 ## 2.4.0 — candidate
 
 Feature expansion on pinned FRP **0.71.0** before FEATURE FREEZE. Does **not**
-move, delete, or recreate published **v2.3.1** / **v2.3.0**.
+move, delete, or recreate published **v2.3.1** / **v2.3.0**. MCP is **excluded**
+from the v2.4.0 product line (`features.mcp_included=false`).
+
+### Added
 
 - Fixed TCP Egress (destination-pinned listeners on 6200–6299; schema v3)
 - `drlink egress explain` (policy + DNS preview; no live connect / no mutation)
@@ -14,6 +17,13 @@ move, delete, or recreate published **v2.3.1** / **v2.3.0**.
 - Short URL Real E2E is a hard release gate (channel matched to tree identity)
 - SPDX SBOM generator + GitHub Artifact Attestation workflow
 - Release-manifest integrity / SBOM / provenance evidence fields (distinct from signing)
+- Version and release governance: `docs/VERSION_POLICY.md`, `RELEASE_MANIFEST.schema.json`,
+  canonical `VERSION` SSOT with `RELEASE_CHANNEL=development|preview|stable`, exact-SHA
+  pretags installer refs, and `show version` display identities
+  (`2.4.0-dev+gSHORT` / `2.4.0-rc.N` / `2.4.0`)
+
+### Changed
+
 - Attestation verification is authoritative: `gh attestation verify` failure fails
   the release-integrity gate (no `DEFERRED` outcome)
 - Attestation binds tag → commit → checked-out HEAD → attested subjects, and
@@ -25,6 +35,27 @@ move, delete, or recreate published **v2.3.1** / **v2.3.0**.
   gates that binding. `dist/sbom.spdx.json` is generated, no longer committed
 - `scripts/check-version-consistency.sh` derives release-doc assertions from
   `VERSION` and enforces published-tag immutability in documentation
+- Pretags / development trees pin installer and Zero-Touch URLs to an exact
+  40-character SHA; they must not advertise a future `v2.4.0` tag before it exists
+
+### Fixed
+
+_(candidate; see Git history for pre-tag fixes — these do not become 2.4.1)_
+
+### Security
+
+- Fail-closed release metadata validation when channel/ref provenance disagrees
+- No silent fallback from a missing immutable installer ref to `main` / `latest`
+
+### Known limits
+
+- Stable `v2.4.0` tag, GitHub Release, and stable-channel publication are **not**
+  part of this candidate tree until a separate release-qualification phase
+
+### Excluded
+
+- MCP commands, MCP runtime dependency, MCP installer payload, and MCP stable
+  support claims
 
 ## 2.3.1 — 2026-09-10
 

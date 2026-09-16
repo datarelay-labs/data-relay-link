@@ -23,8 +23,9 @@ need() {
 # --- Guidance text ----------------------------------------------------------
 frp_ux_print_all_guidance >"$WORKDIR/guide.out"
 need "$WORKDIR/guide.out" 'Enrollment Code' 'enrollment heading'
-need "$WORKDIR/guide.out" 'sudo drlink create zero-touch' 'enrollment source command'
-need "$WORKDIR/guide.out" 'sudo drlink create enrollment' 'enrollment alternate command'
+need "$WORKDIR/guide.out" 'sudo drlink set enrollment' 'enrollment source command'
+grep -qE 'sudo drlink (create zero-touch|create enrollment|set enrollment|set client)' \
+  "$WORKDIR/guide.out" || fail "enrollment alternate command"
 need "$WORKDIR/guide.out" 'short-lived' 'short-lived enrollment'
 need "$WORKDIR/guide.out" 'not stored' 'code not stored'
 need "$WORKDIR/guide.out" 'not the FRP token' 'not the FRP token'

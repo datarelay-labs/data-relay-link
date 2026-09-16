@@ -23,6 +23,7 @@ install -m 0644 "$ROOT/lib/frp-macos.sh" "$TMP/prefix/lib/frp-macos.sh"
 # Grammar lives only in the macOS state lib, matching a real install.
 install -m 0644 "$ROOT/lib/frp_ctl_grammar.py" "$TMP/state/lib/frp_ctl_grammar.py"
 install -m 0644 "$ROOT/lib/frp_cli_catalog.py" "$TMP/state/lib/frp_cli_catalog.py"
+install -m 0644 "$ROOT/lib/frp_cli_final_commands.json" "$TMP/state/lib/frp_cli_final_commands.json"
 install -m 0644 "$ROOT/lib/frp_ctl_repl.py" "$TMP/state/lib/frp_ctl_repl.py"
 
 # Client marker so role detection is client, not unknown.
@@ -41,7 +42,7 @@ out="$("$TMP/prefix/bin/frpctl" help 2>&1)" || {
   echo "FAIL: frpctl help exited nonzero on Darwin layout" >&2
   exit 1
 }
-printf '%s\n' "$out" | grep -Eq 'Grammar: <action> <resource>|show[[:space:]]+View current state' || {
+printf '%s\n' "$out" | grep -Eq 'Grammar: <action> <resource>|show[[:space:]]|View current clients, services' || {
   printf '%s\n' "$out" >&2
   echo "FAIL: frpctl help missing grammar text" >&2
   exit 1

@@ -482,6 +482,23 @@ frp_apply_candidate() {
   echo
   frp_state_diff "$current" "$candidate" || true
   frp_ux_print_apply_summary "$current" "$candidate"
+  if python3 - "$candidate" <<'PY'
+import json, sys
+from pathlib import Path
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+services = state.get("services") or {}
+enabled = [
+    1
+    for rec in services.values()
+    if isinstance(rec, dict) and rec.get("enabled", True) is not False
+]
+raise SystemExit(0 if enabled else 1)
+PY
+  then
+    :
+  else
+    echo "Management-only mode: no enabled services remain after apply."
+  fi
 
   local change_class ident_status auth_mode="enrollment"
   change_class="$(frp_state_change_class "$current" "$candidate")"

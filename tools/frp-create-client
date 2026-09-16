@@ -110,6 +110,34 @@ def installed_project_version():
     return '2.3.1'
 
 
+def installed_release_channel():
+    env = str(os.environ.get('FRP_RELEASE_CHANNEL') or '').strip().lower()
+    if env in ('development', 'dev', 'main'):
+        return 'development'
+    if env in ('preview', 'rc', 'candidate', 'prerelease'):
+        return 'preview'
+    if env == 'stable':
+        return 'stable'
+    for candidate in (
+        remap('/etc/drlink/version'),
+        Path(__file__).resolve().parent.parent / 'VERSION',
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('RELEASE_CHANNEL='):
+                value = line.split('=', 1)[1].strip().lower()
+                if value in ('development', 'dev', 'main'):
+                    return 'development'
+                if value in ('preview', 'rc', 'candidate', 'prerelease'):
+                    return 'preview'
+                if value == 'stable':
+                    return 'stable'
+    return ''
+
+
 def installed_source_ref():
     """Install provenance ref (commit SHA or release tag), never PROJECT_VERSION."""
     env = str(os.environ.get('FRP_EXPECTED_SOURCE_REF') or '').strip()
@@ -131,9 +159,18 @@ def installed_source_ref():
 
 
 def default_client_installer_url():
+    """Default GitHub raw installer URL from real provenance only.
+
+    Never invent a future stable tag such as vPROJECT_VERSION when SOURCE_REF is
+    missing. Empty means "not configured" so callers fail closed.
+    """
     ref = installed_source_ref()
     if not ref:
-        ref = 'v%s' % installed_project_version()
+        channel = installed_release_channel()
+        if channel == 'stable':
+            ref = 'v%s' % installed_project_version()
+        else:
+            return ''
     return (
         'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
         '%s/dist/bootstrap-client.sh' % ref
@@ -143,7 +180,11 @@ def default_client_installer_url():
 def default_windows_client_installer_url():
     ref = installed_source_ref()
     if not ref:
-        ref = 'v%s' % installed_project_version()
+        channel = installed_release_channel()
+        if channel == 'stable':
+            ref = 'v%s' % installed_project_version()
+        else:
+            return ''
     return (
         'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
         '%s/dist/bootstrap-client.ps1' % ref
@@ -210,8 +251,8 @@ def preflight_installer_url(url, *, label='Client installer'):
                     '  %s\n\n'
                     'HTTP status: 404\n\n'
                     'Fix:\n'
-                    '  set server installer-url <URL>\n'
-                    '  set server windows-installer-url <URL>\n\n'
+                    '  set installer-url <URL>\n'
+                    '  set windows-installer-url <URL>\n\n'
                     'No enrollment ticket was created.' % (label, url)
                 )
             return
@@ -222,7 +263,8 @@ def preflight_installer_url(url, *, label='Client installer'):
                 '  %s\n\n'
                 'HTTP status: 404\n\n'
                 'Fix:\n'
-                '  set server installer-url <URL>\n\n'
+                '  set installer-url <URL>\n'
+                '  set windows-installer-url <URL>\n\n'
                 'No enrollment ticket was created.' % (label, url)
             ) from None
         # Non-404 HTTP: inconclusive for destroyer semantics.
@@ -868,10 +910,11 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
         print('Set FRP_ALLOCATOR_URL on the client, or re-run the server installer.')
     else:
         print('Set the client installer URL, then re-run this command:')
-        print(
-            '  sudo drlink set client-installer-url '
-            '%s' % default_client_installer_url()
-        )
+        print('  sudo drlink set installer-url <URL>')
+        suggested = default_client_installer_url()
+        if suggested:
+            print('Example:')
+            print('  sudo drlink set installer-url %s' % suggested)
         if not allocator:
             print()
             print('WARNING: allocator public URL is not configured.')
@@ -1167,11 +1210,11 @@ def main(argv=None):
         if platform == 'windows':
             fail(
                 'Windows client installer URL is not configured; '
-                'set server windows-installer-url <URL> before creating a Windows Zero-Touch client'
+                'set windows-installer-url <URL> before creating a Windows Zero-Touch client'
             )
         fail(
             'client installer URL is not configured; '
-            'run: set server installer-url <URL>'
+            'run: set installer-url <URL>'
         )
     if not allocator:
         fail('allocator public URL is not configured; cannot generate a zero-touch command')

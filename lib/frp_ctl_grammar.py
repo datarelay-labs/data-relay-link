@@ -1541,15 +1541,20 @@ def _canonical_result(tokens, role, names=None):
     if not tokens:
         return None, None
 
-    opt_err = public_option_error(tokens)
-    if opt_err is not None:
-        return None, opt_err
-
     # Hidden resource-first compatibility → action-first.
+    # Keep the caller's original tokens for to_internal so aliases that share a
+    # public path (access create vs access edit-info → set acl) stay distinct.
+    original = [str(t) for t in tokens]
     expanded = None
     if hasattr(CATALOG, "expand_compat_alias"):
         expanded = CATALOG.expand_compat_alias(tokens)
     work = list(expanded) if expanded is not None else list(tokens)
+    # Option policy applies to the canonical/expanded form so hidden machine
+    # flags declared on the public target (e.g. set enrollment) are accepted
+    # when invoked via create enrollment / enroll aliases.
+    opt_err = public_option_error(work)
+    if opt_err is not None:
+        return None, opt_err
 
     cmd = CATALOG.find(work)
     if cmd is None:
@@ -1578,7 +1583,7 @@ def _canonical_result(tokens, role, names=None):
                 ),
             }
         return None, {"status": "error", "message": problem}
-    internal = CATALOG.to_internal(work)
+    internal = CATALOG.to_internal(original)
     if internal is None:
         return None, None
     return internal, None
@@ -1601,6 +1606,9 @@ def match(tokens, role, names=None, clients=None):
     # Bang-prefix is always shell — check before option scanning.
     if str(tokens[0]).startswith("!"):
         return {"status": "shell"}
+    # Keep pre-resolve tokens so to_internal can preserve create vs edit-info
+    # (both alias to set acl) and similar distinct safety semantics.
+    raw_tokens = [str(t) for t in tokens]
     # Hidden resource-first compatibility → canonical action-first tokens.
     tokens = CATALOG.resolve_tokens(tokens, role=role)
     opt_err = public_option_error(tokens)
@@ -1627,7 +1635,7 @@ def match(tokens, role, names=None, clients=None):
     if opt_err is not None:
         return opt_err
     verb = tokens[0]
-    internal, problem = _canonical_result(tokens, role, names=names)
+    internal, problem = _canonical_result(raw_tokens, role, names=names)
     if problem is not None:
         return problem
     rewritten = internal is not None
@@ -3078,6 +3086,15 @@ def _match_add(tokens, role, names=None):
                 "passthrough": ["add-source", tokens[2]],
                 "guided": True,
             }
+        # Flag form: add access-source <LIST> --name … --source …
+        if str(tokens[3]).startswith("-"):
+            return {
+                "status": "ok",
+                "action": "access_cmd",
+                "passthrough": ["add-source", tokens[2]] + list(tokens[3:]),
+                "guided": False,
+            }
+        # Positional: add access-source <LIST> <SOURCE> [flags…]
         source = tokens[3]
         return {
             "status": "ok",
@@ -3277,6 +3294,14 @@ def _match_remove(tokens, role, names=None):
                 "action": "access_cmd",
                 "passthrough": ["remove-source", tokens[2]],
                 "guided": True,
+            }
+        # Flag form: remove access-source <LIST> --source …
+        if str(tokens[3]).startswith("-"):
+            return {
+                "status": "ok",
+                "action": "access_cmd",
+                "passthrough": ["remove-source", tokens[2]] + list(tokens[3:]),
+                "guided": False,
             }
         source = tokens[3]
         return {
@@ -3906,6 +3931,17 @@ def _catalog_candidates(
         return _filter(nxt, prefix)
 
     index = len(probe) - len(cmd["path"])
+    # Hidden / arity-1 flags take precedence over positional arg completion so
+    # Tab never advertises preset/property overlays after `--preset `.
+    pending = _pending_flag_value(tokens or filled, cmd, trailing=trailing)
+    if pending is not None:
+        flag_meta, value_prefix = pending
+        if flag_meta.get("hidden"):
+            return []
+        choices = flag_meta.get("choices") or ()
+        if choices:
+            return _filter(list(choices), value_prefix)
+        return []
     if index < len(cmd["args"]):
         arg = cmd["args"][index]
         complete = arg["complete"]
@@ -3927,13 +3963,6 @@ def _catalog_candidates(
             ).get(complete)
             if pool is not None:
                 hits = _filter(pool, prefix)
-            else:
-                pending = _pending_flag_value(tokens or filled, cmd, trailing=trailing)
-                if pending is not None:
-                    flag_meta, value_prefix = pending
-                    choices = flag_meta.get("choices") or ()
-                    if choices:
-                        hits = _filter(list(choices), value_prefix)
         longer = _longer_path_children()
         merged = []
         for item in list(hits) + list(longer or []):

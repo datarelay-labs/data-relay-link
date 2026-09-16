@@ -50,8 +50,10 @@ import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 channel = str(data.get("channel") or "").strip().lower()
-if channel not in ("dev", "stable"):
+if channel not in ("development", "dev", "preview", "stable"):
     raise SystemExit("unsupported release-manifest channel: %r" % channel)
+if channel == "dev":
+    channel = "development"
 print(channel)
 PY
 }

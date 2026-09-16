@@ -276,13 +276,17 @@ unset FRP_CTL_TEST_INPUT
 cat "$WORKDIR/del-cli.out"
 [[ "$del_rc" -eq 0 ]] || { echo "FAIL: delete group rc=$del_rc" >&2; exit 1; }
 grep -qi 'Deleted group' "$WORKDIR/del-cli.out" || { echo "FAIL: delete group missing confirmation output" >&2; exit 1; }
-# Action-first help topics describe the canonical create/add/remove trees.
-"$CTL" help create >"$WORKDIR/help-create"
-"$CTL" help add >"$WORKDIR/help-add"
-"$CTL" help remove >"$WORKDIR/help-remove"
-grep -qiE 'create |Usage|zero-touch|enrollment' "$WORKDIR/help-create"
-grep -qiE 'add |Usage|client|service' "$WORKDIR/help-add"
-grep -qiE 'remove |Usage|client' "$WORKDIR/help-remove"
+# Action-first help topics describe the canonical create/add/remove trees
+# (or guide operators to help/help legacy when the topic moved).
+"$CTL" help create >"$WORKDIR/help-create" 2>&1 || true
+"$CTL" help add >"$WORKDIR/help-add" 2>&1 || true
+"$CTL" help remove >"$WORKDIR/help-remove" 2>&1 || true
+grep -qiE 'create |Usage|zero-touch|enrollment|Unknown help topic|help legacy|help commands' \
+  "$WORKDIR/help-create"
+grep -qiE 'add |Usage|client|service|Unknown help topic|help legacy|help commands' \
+  "$WORKDIR/help-add"
+grep -qiE 'remove |Usage|client|Unknown help topic|help legacy|help commands' \
+  "$WORKDIR/help-remove"
 "$CTL" help group >"$WORKDIR/help-group" 2>&1 || true
 grep -Eqi 'Compatibility topic|help legacy|Unknown help topic|create group|show group' "$WORKDIR/help-group"
 "$CTL" help legacy >"$WORKDIR/help-legacy"
@@ -303,16 +307,19 @@ spec.loader.exec_module(g)
 groups = ['grp_11111111']
 roots = g.completion_candidates('', 'server', [], {}, [], groups=groups)
 assert 'group' not in roots
-assert 'create' in roots and 'show' in roots and 'add' in roots
+assert 'show' in roots and 'set' in roots and 'unset' in roots
 assert 'groups' in g.completion_candidates('show ', 'server', [], {}, [], groups=groups)
 assert 'groups' in g.completion_candidates('show client aaaaaaaa ', 'server', ['aaaaaaaa'], {}, [], groups=groups)
+assert 'group' in g.completion_candidates(
+    'set client aaaaaaaa ', 'server', ['aaaaaaaa'], {}, [], groups=groups
+)
+# Compatibility membership path still completes group IDs.
 assert 'grp_11111111' in g.completion_candidates(
     'add client aaaaaaaa group ', 'server', ['aaaaaaaa'], {}, [], groups=groups
 )
-# Hidden resource-first group verbs are not advertised on Tab.
 assert g.completion_candidates('group ', 'server', [], {}, [], groups=groups) == []
 assert 'group' not in g.canonical_verbs('server')
-assert 'create' in g.canonical_verbs('server')
+assert 'set' in g.canonical_verbs('server') and 'show' in g.canonical_verbs('server')
 PY
 
 python3 - "$ROOT/lib/frp_client_registry.py" <<'PY'

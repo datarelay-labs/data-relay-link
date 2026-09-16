@@ -157,7 +157,12 @@ class AccessControlTests(unittest.TestCase):
         ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
         with self.assertRaises(ACL.AccessError) as ctx:
             ACL.delete_access_list(self.state, lid)
-        self.assertIn("still referenced", str(ctx.exception))
+        msg = str(ctx.exception).lower()
+        self.assertTrue(
+            "still referenced" in msg or "still assigned" in msg,
+            msg,
+        )
+        self.assertIn("unset acl", msg)
 
     def test_empty_allowlist_assign_rejected(self):
         lid, _ = ACL.create_access_list(self.state, "Empty")

@@ -119,7 +119,7 @@ grep -q 'PROFILE ID' "$WORKDIR/list.out" || fail "profiles header"
 grep -q '(none)' "$WORKDIR/list.out" || fail "empty profiles"
 
 "$CTL" create profile office-ssh --preset ssh --target-host 127.0.0.1 --target-port 22 --ssh-user ubuntu --description 'desk' >"$WORKDIR/create.out"
-grep -q 'Created profile prof_' "$WORKDIR/create.out" || fail "create profile id"
+grep -qiE 'Created (Service )?Profile: office-ssh' "$WORKDIR/create.out" || fail "create profile id"
 PROFILE_ID="$(python3 -c 'import json,re; from pathlib import Path; import os; p=Path(os.environ["FRP_DEPLOY_TEST_ROOT"])/"var/lib/drlink/service-profiles.json"; d=json.loads(p.read_text()); print(next(iter(d["profiles"])))')"
 [[ "$PROFILE_ID" == prof_* ]] || fail "profile id format"
 

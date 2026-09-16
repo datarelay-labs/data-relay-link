@@ -239,15 +239,19 @@ grep -q 'set disable-completion on' "$ROOT/tools/frpctl" || fail "disable defaul
 if grep -q "disable-completion off" "$ROOT/tools/frpctl"; then
   fail "filename completion re-enabled"
 fi
-# read -e is only used after a successful custom bind.
+# read -e is used only on a TTY: either after custom Tab bind (REPL) or for
+# guided-menu prompts where Backspace must not walk into the prompt text.
 python3 - "$ROOT/tools/frpctl" <<'PY' || fail "read -e not gated on bound tab"
 from pathlib import Path
-import sys
+import re, sys
 text = Path(sys.argv[1]).read_text(encoding='utf-8')
-idx_bound = text.find('_FRP_CTL_BOUND_TAB:-')
-idx_reade = text.find('read -e')
-if idx_bound < 0 or idx_reade < 0 or idx_reade < idx_bound:
-    raise SystemExit(1)
+# Every read -e must sit inside a TTY-aware or BOUND_TAB-aware branch.
+for m in re.finditer(r'^([^\n]*read -e[^\n]*)$', text, re.M):
+    start = max(0, m.start() - 400)
+    window = text[start:m.end()]
+    if '_FRP_CTL_BOUND_TAB' not in window and '[[ -t 0 ]]' not in window and '[ -t 0 ]' not in window:
+        print(m.group(1), file=sys.stderr)
+        raise SystemExit(1)
 PY
 _FRP_CTL_BOUND_TAB=""
 FRP_CTL_DISABLE_TAB=1
@@ -279,7 +283,8 @@ grep -q 'frp_write_compatible_systemd_unit' "$ROOT/install-server.sh" || fail "s
 pass "SERVER_INSTALL_LAYOUT"
 pass "CLIENT_INSTALL_LAYOUT"
 
-grep -q 'bootstrap-client.sh | sudo bash -s -- --upgrade' "$ROOT/install-client.sh" \
+grep -qE 'bootstrap-client\.sh \| sudo bash -s -- --upgrade|bash -s -- --upgrade|bootstrap-client\.sh --upgrade' \
+  "$ROOT/install-client.sh" \
   || fail "upgrade path documented"
 grep -q 'Enrollment Code : NOT REQUIRED' "$ROOT/tests/test-client-upgrade.sh" \
   || fail "upgrade tests"

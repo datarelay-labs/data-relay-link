@@ -69,7 +69,9 @@ frp_normalize_release_channel() {
   local ch
   ch="$(printf '%s' "${1:-stable}" | tr '[:upper:]' '[:lower:]')"
   case "$ch" in
-    dev|main|development) printf 'dev' ;;
+    dev|main|development) printf 'development' ;;
+    preview|rc|candidate|prerelease) printf 'preview' ;;
+    stable) printf 'stable' ;;
     *) printf 'stable' ;;
   esac
 }
@@ -89,7 +91,8 @@ frp_parse_known_release_channel() {
   local ch
   ch="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
   case "$ch" in
-    dev|main|development) printf 'dev' ;;
+    dev|main|development) printf 'development' ;;
+    preview|rc|candidate|prerelease) printf 'preview' ;;
     stable) printf 'stable' ;;
     *) return 1 ;;
   esac
@@ -129,11 +132,14 @@ frp_resolve_project_update_identity() {
   FRP_RESOLVED_SOURCE_REF=""
   if [[ -n "${FRP_RELEASE_CHANNEL:-}" ]]; then
     if ! FRP_RESOLVED_RELEASE_CHANNEL="$(frp_parse_known_release_channel "$FRP_RELEASE_CHANNEL")"; then
-      echo "ERROR: FRP_RELEASE_CHANNEL must be dev or stable" >&2
+      echo "ERROR: FRP_RELEASE_CHANNEL must be development, preview, or stable" >&2
       return 1
     fi
-    if [[ "$FRP_RESOLVED_RELEASE_CHANNEL" == "dev" ]]; then
+    if [[ "$FRP_RESOLVED_RELEASE_CHANNEL" == "development" ]]; then
+      # Explicit tip-following opt-in; pretags should set FRP_EXPECTED_SOURCE_REF.
       FRP_RESOLVED_SOURCE_REF="main"
+    elif [[ "$FRP_RESOLVED_RELEASE_CHANNEL" == "preview" ]]; then
+      FRP_RESOLVED_SOURCE_REF="v${PROJECT_VERSION}-rc.1"
     else
       FRP_RESOLVED_SOURCE_REF="v${PROJECT_VERSION}"
     fi
@@ -148,7 +154,7 @@ frp_resolve_project_update_identity() {
     if [[ -z "$txn_ch" || -z "$txn_ref" ]] || \
        ! FRP_RESOLVED_RELEASE_CHANNEL="$(frp_parse_known_release_channel "$txn_ch")"; then
       echo "ERROR: pending transaction does not identify a safe release line." >&2
-      echo "Set FRP_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=stable explicitly." >&2
+      echo "Set FRP_RELEASE_CHANNEL=development|preview|stable explicitly." >&2
       return 1
     fi
     FRP_RESOLVED_SOURCE_REF="$txn_ref"
@@ -159,8 +165,10 @@ frp_resolve_project_update_identity() {
   if [[ -n "$persisted" ]] && FRP_RESOLVED_RELEASE_CHANNEL="$(frp_parse_known_release_channel "$persisted")"; then
     if [[ -n "$persisted_ref" ]]; then
       FRP_RESOLVED_SOURCE_REF="$persisted_ref"
-    elif [[ "$FRP_RESOLVED_RELEASE_CHANNEL" == "dev" ]]; then
+    elif [[ "$FRP_RESOLVED_RELEASE_CHANNEL" == "development" ]]; then
       FRP_RESOLVED_SOURCE_REF="main"
+    elif [[ "$FRP_RESOLVED_RELEASE_CHANNEL" == "preview" ]]; then
+      FRP_RESOLVED_SOURCE_REF="v${PROJECT_VERSION}-rc.1"
     else
       FRP_RESOLVED_SOURCE_REF="v${PROJECT_VERSION}"
     fi
@@ -169,11 +177,11 @@ frp_resolve_project_update_identity() {
   server_marker="$(frp_txn_marker_path server)"
   if [[ -f "$server_marker" ]] || [[ -f "$(frp_txn_legacy_marker_path)" ]]; then
     echo "ERROR: pending transaction does not identify a safe release line." >&2
-    echo "Set FRP_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=stable explicitly." >&2
+    echo "Set FRP_RELEASE_CHANNEL=development|preview|stable explicitly." >&2
     return 1
   fi
   echo "ERROR: installed release channel is unknown; refusing to guess stable." >&2
-  echo "Set FRP_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=stable explicitly." >&2
+  echo "Set FRP_RELEASE_CHANNEL=development|preview|stable explicitly." >&2
   return 1
 }
 
@@ -219,11 +227,11 @@ frp_release_git_ref() {
     printf '%s' "$persisted"
     return 0
   fi
-  if [[ "$(frp_release_channel)" == "dev" ]]; then
-    printf 'main'
-  else
-    printf 'v%s' "${PROJECT_VERSION}"
-  fi
+  case "$(frp_release_channel)" in
+    development) printf 'main' ;;
+    preview) printf 'v%s-rc.1' "${PROJECT_VERSION}" ;;
+    *) printf 'v%s' "${PROJECT_VERSION}" ;;
+  esac
 }
 
 frp_github_raw_url() {
@@ -354,9 +362,18 @@ frp_git_head_source_ref() {
 frp_infer_expected_source_ref_from_git_source() {
   # Local --source / worktree installs: prefer exact HEAD SHA over a premature
   # release-line tag so Zero-Touch URLs remain fetchable before the tag exists.
-  local source="${1:-}" ref=""
+  local source="${1:-}" ref="" channel=""
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     return 0
+  fi
+  # Only an *explicit* stable channel keeps the immutable vPROJECT_VERSION
+  # release-line ref. An unset channel must not default into skipping HEAD
+  # inference (frp_release_channel defaults to stable for URL fallbacks).
+  if [[ -n "${FRP_RELEASE_CHANNEL:-}" ]]; then
+    channel="$(frp_normalize_release_channel "$FRP_RELEASE_CHANNEL")"
+    if [[ "$channel" == "stable" ]]; then
+      return 0
+    fi
   fi
   if ref="$(frp_git_head_source_ref "$source")"; then
     FRP_EXPECTED_SOURCE_REF="$ref"
@@ -427,23 +444,53 @@ if str(data.get("project_version") or "") != project:
     raise SystemExit(1)
 channel = str(data.get("channel") or "").strip().lower()
 git_ref = str(data.get("git_ref") or "").strip()
-if channel not in ("dev", "stable"):
-    sys.stderr.write("ERROR: release metadata channel must be dev or stable\n")
+# Normalize legacy "dev" alias to development for comparison.
+if channel == "dev":
+    channel = "development"
+if channel not in ("development", "preview", "stable"):
+    sys.stderr.write(
+        "ERROR: release metadata channel must be development, preview, or stable\n"
+    )
     raise SystemExit(1)
-expected_git_ref = "main" if channel == "dev" else "v%s" % project
-if git_ref != expected_git_ref:
-    sys.stderr.write("ERROR: release metadata channel/ref disagreement\n")
-    raise SystemExit(1)
-# Exact SHA is install provenance for pretags / local git checkouts. The
-# manifest git_ref remains the eventual release-line label (main / vX.Y.Z).
-is_exact_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", expected_ref or ""))
-if expected_ref and not is_exact_sha and git_ref != expected_ref:
-    sys.stderr.write("ERROR: release metadata source ref mismatch\n")
-    raise SystemExit(1)
-if expected_channel and channel != expected_channel:
-    sys.stderr.write("ERROR: release metadata channel mismatch\n")
-    raise SystemExit(1)
-out_ref = expected_ref if is_exact_sha else git_ref
+is_exact_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", git_ref or ""))
+is_rc = bool(re.fullmatch(r"v\d+\.\d+\.\d+-rc\.\d+", git_ref or ""))
+if channel == "development":
+    if not (is_exact_sha or git_ref == "main"):
+        sys.stderr.write(
+            "ERROR: development git_ref must be a 40-char SHA or explicit main\n"
+        )
+        raise SystemExit(1)
+elif channel == "preview":
+    if not (is_exact_sha or is_rc):
+        sys.stderr.write(
+            "ERROR: preview git_ref must be a 40-char SHA or RC tag\n"
+        )
+        raise SystemExit(1)
+else:
+    expected_git_ref = "v%s" % project
+    if git_ref != expected_git_ref:
+        sys.stderr.write("ERROR: release metadata channel/ref disagreement\n")
+        raise SystemExit(1)
+# Exact SHA is install provenance for pretags / local git checkouts.
+expected_is_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", expected_ref or ""))
+if expected_ref and not expected_is_sha and git_ref != expected_ref:
+    # Development tip-following (expected main) accepts either an explicit
+    # main tip or a pretags exact-SHA pin in the candidate manifest.
+    if not (
+        channel == "development"
+        and expected_ref == "main"
+        and (git_ref == "main" or is_exact_sha)
+    ):
+        sys.stderr.write("ERROR: release metadata source ref mismatch\n")
+        raise SystemExit(1)
+if expected_channel:
+    exp = expected_channel.strip().lower()
+    if exp == "dev":
+        exp = "development"
+    if channel != exp:
+        sys.stderr.write("ERROR: release metadata channel mismatch\n")
+        raise SystemExit(1)
+out_ref = expected_ref if expected_is_sha else git_ref
 sys.stdout.write("%s\t%s\t%s\n" % (project, channel, out_ref))
 PY
 }
@@ -1036,7 +1083,7 @@ frp_atomic_install() {
 
 frp_write_version_file() {
   local dest="$1"
-  local dir tmp channel source_ref bundle existing
+  local dir tmp channel source_ref source_head bundle existing existing_ref
   dir="$(dirname "$dest")"
   mkdir -p "$dir"
   if [[ -n "${FRP_RELEASE_CHANNEL:-}" ]]; then
@@ -1060,10 +1107,21 @@ frp_write_version_file() {
     existing_ref="$(frp_read_kv_file "$dest" SOURCE_REF)"
     if [[ -n "$existing_ref" ]]; then
       source_ref="$existing_ref"
-    elif [[ "$channel" == "dev" ]]; then
+    elif [[ "$channel" == "development" ]]; then
       source_ref="main"
+    elif [[ "$channel" == "preview" ]]; then
+      source_ref="v${PROJECT_VERSION}-rc.1"
     else
       source_ref="v${PROJECT_VERSION}"
+    fi
+  fi
+  source_head=""
+  if [[ "$source_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    source_head="$source_ref"
+  else
+    source_head="$(frp_read_kv_file "$dest" SOURCE_HEAD)"
+    if [[ -z "$source_head" && -n "${FRP_EXPECTED_SOURCE_HEAD:-}" ]]; then
+      source_head="$FRP_EXPECTED_SOURCE_HEAD"
     fi
   fi
   bundle="${FRP_BUNDLE_SHA256:-}"
@@ -1096,6 +1154,9 @@ frp_write_version_file() {
     printf 'FRP_VERSION=%s\n' "${FRP_VERSION}"
     printf 'RELEASE_CHANNEL=%s\n' "${channel}"
     printf 'SOURCE_REF=%s\n' "${source_ref}"
+    if [[ -n "$source_head" ]]; then
+      printf 'SOURCE_HEAD=%s\n' "$source_head"
+    fi
     if [[ -n "$bundle" ]]; then
       printf 'BUNDLE_SHA256=%s\n' "$bundle"
     fi

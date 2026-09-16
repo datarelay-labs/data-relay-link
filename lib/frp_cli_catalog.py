@@ -573,8 +573,9 @@ _MIGRATION_SOURCE_COMMANDS = (
         "any",
         "Status",
         "Show installed versions",
-        detail="Project version, release channel, source ref, FRP version, "
-        "and the installed bundle checksum.",
+        detail="Data Relay Link display identity, release channel, source HEAD, "
+        "Relay Engine (FRP) version, and optional bundle checksum. Stable is "
+        "never claimed from PROJECT_VERSION alone.",
         examples=("version",),
         aliases=(("show", "version"),),
     ),
@@ -2145,7 +2146,9 @@ def alias_rows():
 
 # --- canonical -> internal verb-first rewrite -----------------------------
 def _rw_client_release(rest):
-    if len(rest) >= 2:
+    # client release <CLIENT> <SERVICE> … → release service
+    # client release <CLIENT> [--yes] → release client
+    if len(rest) >= 2 and not str(rest[1]).startswith("-"):
         return ["release", "service", rest[0], rest[1]] + list(rest[2:])
     return ["release", "client"] + list(rest)
 
@@ -2270,6 +2273,17 @@ def _rw_egress_remove(kind):
     return inner
 
 
+def _rw_access_remove_expired(rest):
+    """Map access remove-expired <RULE> [--yes] → system cleanup … expired."""
+    if not rest:
+        return ["system", "cleanup", "access-rule"]
+    rule = rest[0]
+    flags = list(rest[1:])
+    if flags and flags[0] == "expired":
+        return ["system", "cleanup", "access-rule", rule] + flags
+    return ["system", "cleanup", "access-rule", rule, "expired"] + flags
+
+
 REWRITES = {
     ("client", "release"): _rw_client_release,
     ("enrollment", "purge"): _rw_enrollment_purge,
@@ -2284,6 +2298,8 @@ REWRITES = {
     ("egress", "add-source"): _rw_egress_add_source,
     ("egress", "remove-destination"): _rw_egress_remove("destination"),
     ("egress", "remove-source"): _rw_egress_remove("source"),
+    ("access", "remove-expired"): _rw_access_remove_expired,
+    ("remove", "access-expired"): _rw_access_remove_expired,
 }
 
 # Roots that also exist as historical flat commands. A bare root token (or a
@@ -2309,14 +2325,35 @@ def to_internal(tokens):
     # Preserve distinct legacy safety semantics that collapse onto unset client.
     if original[:2] in (["revoke", "client"], ["client", "revoke"]):
         return ["revoke", "client"] + original[2:]
-    if original[:2] == ["release", "service"] or original[:2] == ["release-service"]:
-        return ["release", "service"] + original[2:]
+    if original[:2] == ["release", "service"] or original[:1] == ["release-service"]:
+        return ["release", "service"] + original[2:] if original[:2] == ["release", "service"] else ["release", "service"] + original[1:]
+    if original[:1] == ["release-client"]:
+        # Hyphenated legacy: release-client <ID> [--yes]; never <SERVICE>.
+        return ["release", "client"] + original[1:]
     if original[:2] in (["release", "client"], ["client", "release"]):
-        return ["release", "client"] + original[2:]
+        rest = original[2:]
+        if len(rest) >= 2 and not str(rest[1]).startswith("-"):
+            return ["release", "service", rest[0], rest[1]] + rest[2:]
+        return ["release", "client"] + rest
     if original[:2] in (["revoke", "enrollment"], ["enrollment", "revoke"]):
         return ["revoke", "enrollment"] + original[2:]
     if original[:2] in (["delete", "enrollment"], ["purge", "enrollment"], ["enrollment", "purge"]):
         return ["purge", "enrollment"] if original[0] != "delete" else ["delete", "enrollment"] + original[2:]
+    # access create and access edit-info both alias to set acl; keep create
+    # vs metadata-edit distinct so --description on create does not become
+    # edit-info against a missing list.
+    if original[:2] in (["access", "create"], ["create", "access-list"]):
+        return ["create", "access-list"] + original[2:]
+    if original[:2] == ["access", "edit-info"]:
+        return ["set", "access-list"] + original[2:]
+    if original[:2] == ["access", "replace-source"]:
+        return ["set", "access-source"] + original[2:]
+    if original[:2] in (["access", "add-source"], ["add", "access-source"]):
+        return ["add", "access-source"] + original[2:]
+    if original[:2] in (["create", "profile"], ["create", "service-profile"]):
+        return ["create", "service-profile"] + original[2:]
+    if original[:2] == ["add", "service"]:
+        return ["add", "service"] + original[2:]
     # Prefer alias-aware resolution so legacy forms still dispatch.
     resolved = resolve_tokens(tokens)
     cmd = find(resolved, include_aliases=True)
@@ -2379,7 +2416,15 @@ def to_internal(tokens):
             return ["set", "service-profile"]
         if len(rest) == 1:
             return ["create", "service-profile", rest[0]]
-        return ["set", "service-profile"] + rest
+        # Positional property edit: set service-profile <P> name|preset|… <value>
+        props = (
+            "name", "description", "preset", "target-host", "target-port", "ssh-user",
+            "health-type", "health-timeout", "health-interval", "health-max-failed", "health-path",
+        )
+        if len(rest) >= 3 and rest[1] in props:
+            return ["set", "service-profile"] + rest
+        # Create-time machine flags (--preset, --target-host, …).
+        return ["create", "service-profile"] + rest
 
     if path == ("set", "acl"):
         if not rest:
@@ -2393,6 +2438,12 @@ def to_internal(tokens):
             return ["set", "access-assign", rest[2], rest[3], rest[0]] + rest[4:]
         if len(rest) >= 3 and rest[1] in ("name", "description"):
             return ["set", "access-list", rest[0], rest[1], rest[2]] + rest[3:]
+        # Create-time machine flags (--description / --name). Positional
+        # name|description is metadata edit; --yes marks confirmed edit-info.
+        if any(str(t).startswith("-") for t in rest[1:]):
+            if "--yes" in rest:
+                return ["set", "access-list"] + rest
+            return ["create", "access-list"] + rest
         return ["set", "access-list"] + rest
 
     if path == ("set", "access-rule"):
@@ -2400,10 +2451,19 @@ def to_internal(tokens):
             return ["set", "access-rule"]
         if len(rest) == 1:
             return ["create", "access-list", rest[0]]
+        if any(str(t).startswith("-") for t in rest[1:]):
+            if "--yes" in rest:
+                return ["set", "access-list"] + rest
+            return ["create", "access-list"] + rest
         return ["set", "access-list"] + rest
 
     if path == ("set", "access-source"):
-        return ["add", "access-source"] + rest if rest else ["set", "access-source"]
+        if not rest:
+            return ["set", "access-source"]
+        # --new-source marks atomic replace; otherwise add.
+        if "--new-source" in rest:
+            return ["set", "access-source"] + rest
+        return ["add", "access-source"] + rest
 
     if path == ("set", "service-access"):
         return ["set", "access-assign"] + rest
@@ -2470,6 +2530,9 @@ def to_internal(tokens):
             return ["add", "service"]
         if len(rest) >= 2 and rest[1] == "enabled":
             return ["enable", "service", rest[0]] + rest[2:]
+        # Create/add with machine flags only: set service --profile …
+        if str(rest[0]).startswith("-"):
+            return ["add", "service"] + rest
         return ["set", "service"] + rest
 
     if path == ("unset", "service"):
@@ -2646,7 +2709,8 @@ def to_internal(tokens):
         return rewrite(rest)
 
     # Legacy specials retained for absorbed forms that still appear as internal.
-    if path == ("release", "client") and len(rest) >= 2:
+    # release client <ID> <SERVICE> → release service; flags like --yes stay on client.
+    if path == ("release", "client") and len(rest) >= 2 and not str(rest[1]).startswith("-"):
         return ["release", "service", rest[0], rest[1]] + rest[2:]
     if path == ("delete", "enrollment") and rest and rest[0] == "--older-than":
         return ["purge", "enrollments"] + list(rest)
@@ -2696,18 +2760,22 @@ def strict_error(tokens):
     # Normalize to canonical path length when tokens used a hidden alias.
     resolved = resolve_tokens(tokens)
     rest = list(resolved[len(cmd["path"]) :])
-    if cmd["tail"] == "any":
-        return None
     idx = 0
     used = 0
     slots = len(cmd["args"])
-    while idx < len(rest) and used < slots and not rest[idx].startswith("-"):
-        idx += 1
-        used += 1
-    if cmd["tail"] is None:
-        if idx < len(rest):
-            return "unexpected argument: %s" % rest[idx]
-        return None
+    if cmd["tail"] == "any":
+        # Arbitrary positionals allowed — advance to the first flag (if any).
+        while idx < len(rest) and not str(rest[idx]).startswith("-"):
+            idx += 1
+    else:
+        while idx < len(rest) and used < slots and not rest[idx].startswith("-"):
+            idx += 1
+            used += 1
+        if cmd["tail"] is None:
+            # Required positionals only — but still allow declared trailing flags
+            # (e.g. system cleanup access-rule <RULE> expired --yes).
+            if idx < len(rest) and not str(rest[idx]).startswith("-"):
+                return "unexpected argument: %s" % rest[idx]
     # Trailing option flags: enforce arity for catalog-known flags; reject
     # stray positionals. Unknown flags stay forwarded to the backend tool.
     known = {flag["name"]: flag for flag in cmd["flags"]}
@@ -2715,6 +2783,11 @@ def strict_error(tokens):
     while idx < len(rest):
         tok = rest[idx]
         if not tok.startswith("-"):
+            if cmd["tail"] == "any":
+                # Positionals may interleave after flags for free-form tails;
+                # skip them without treating as errors.
+                idx += 1
+                continue
             return "unexpected argument: %s" % tok
         flag = known.get(tok)
         if flag is None:

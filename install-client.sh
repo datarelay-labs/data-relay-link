@@ -138,7 +138,7 @@ collect_services() {
     services_load_from_env
     return 0
   fi
-  collect_services_interactive || exit 1
+  collect_services_interactive || return 1
 }
 
 print_complete() {
