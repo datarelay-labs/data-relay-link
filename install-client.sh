@@ -402,6 +402,71 @@ frp_client_service_start() {
   fi
 }
 
+frp_client_reconcile_installed_permissions() {
+  local f
+  for f in "$(frp_client_state_path)" "$(frp_client_toml_path)" \
+    "$(frp_client_identity_key_path)" "$(frp_client_identity_pub_path)" \
+    "$(frp_client_identity_mac_path)"; do
+    if [[ -f "$f" ]]; then
+      chmod 600 "$f" 2>/dev/null || true
+    fi
+  done
+  if [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]]; then
+    chmod 0755 "$(frp_client_path /usr/local/bin/drlink)" 2>/dev/null || true
+  fi
+  if [[ -x "$(frp_client_path /usr/bin/drlink)" ]]; then
+    chmod 0755 "$(frp_client_path /usr/bin/drlink)" 2>/dev/null || true
+  fi
+  if [[ -x "$(frp_client_path /usr/local/bin/frpc)" ]]; then
+    chmod 0755 "$(frp_client_path /usr/local/bin/frpc)" 2>/dev/null || true
+  fi
+}
+
+frp_client_repair_partial_install() {
+  local source="${1:-${_FRP_INSTALL_CLIENT_DIR}}"
+  echo "A partial or broken Data Relay Link client installation was found." >&2
+  echo "Restoring missing client software without changing this client's identity." >&2
+  frp_client_install_management_files "$source" || return 1
+  if [[ -z "${FRP_CLIENT_TEST_ROOT:-}" && "${FRP_SKIP_SYSTEMD:-}" != "1" ]]; then
+    frp_client_install_service_definition || return 1
+    frp_client_service_reload || return 1
+    if ! frp_is_darwin; then
+      systemctl enable drlink-client >/dev/null 2>&1 || true
+    fi
+  fi
+  frp_client_reconcile_installed_permissions
+  if ! frp_client_has_existing_install; then
+    echo "ERROR: the partial installation could not be repaired into a complete client." >&2
+    echo "Identity and configuration were left unchanged." >&2
+    frp_client_partial_recovery_guidance
+    frp_emit_failure_class RECOVERY_REQUIRED
+    return 1
+  fi
+  echo "Repair complete. Existing client identity and configuration were preserved." >&2
+  echo "This client was not re-enrolled." >&2
+  if frp_zero_touch_active; then
+    echo "The Bootstrap Ticket was not used." >&2
+  fi
+  echo "Use sudo drlink show status to inspect this client." >&2
+  return 0
+}
+
+frp_client_partial_recovery_guidance() {
+  echo "ERROR: a partial or broken Data Relay Link client installation was found." >&2
+  if command -v drlink >/dev/null 2>&1 || [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]]; then
+    echo "Repair it with: sudo drlink system update product" >&2
+  else
+    echo "This host is not a complete current Data Relay Link client." >&2
+    echo "Re-run the exact same bootstrap-client.sh installer command to restore" >&2
+    echo "missing software from local recovery state (the Bootstrap Ticket is not reused)." >&2
+    if [[ -x "$(frp_client_path /usr/local/sbin/uninstall-client.sh)" ]] \
+      || [[ -x "$(frp_client_path /usr/local/bin/uninstall-client.sh)" ]]; then
+      echo "Or uninstall locally, then enroll again from the server." >&2
+    fi
+  fi
+  echo "Do not invent a new Enrollment Code for a reserved partial client." >&2
+}
+
 frp_client_existing_install_message() {
   if frp_zero_touch_active; then
     echo "This client is already installed." >&2
@@ -482,19 +547,11 @@ frp_client_main() {
     return 1
   fi
   if frp_client_has_partial_install && [[ "$FRP_RESUME_PENDING" != "1" ]]; then
-    echo "ERROR: a partial Data Relay Link client installation was found." >&2
-    if command -v drlink >/dev/null 2>&1 || [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]]; then
-      echo "Repair it with: sudo drlink system update product" >&2
-    else
-      echo "Management tooling is not installed yet on this host." >&2
-      echo "Re-run the exact same bootstrap-client.sh installer command to resume" >&2
-      echo "from local recovery state (the Bootstrap Ticket is not reused)." >&2
-      if [[ -x "$(frp_client_path /usr/local/sbin/uninstall-client.sh)" ]] \
-        || [[ -x "$(frp_client_path /usr/local/bin/uninstall-client.sh)" ]]; then
-        echo "Or uninstall locally, then enroll again from the server." >&2
-      fi
+    if frp_client_partial_is_safe_to_repair; then
+      frp_client_repair_partial_install "${_FRP_INSTALL_CLIENT_DIR}" || return 1
+      return 0
     fi
-    echo "Do not invent a new Enrollment Code for a reserved partial client." >&2
+    frp_client_partial_recovery_guidance
     frp_emit_failure_class RECOVERY_REQUIRED
     return 1
   fi

@@ -275,7 +275,7 @@ sys.stdout.write("".join(out))
 frpctl_run() {
   local name="$1"
   shift
-  local bin rc err
+  local bin rc err last
   bin="$(frpctl_find_cmd "$name")" || return 1
   if [[ "${FRP_CTL_DRY_RUN:-}" == "1" ]]; then
     if [[ $# -gt 0 ]]; then
@@ -289,13 +289,26 @@ frpctl_run() {
     python3 -c 'import json,sys; print("DISPATCH_ARGV\t"+json.dumps([sys.argv[1]]+sys.argv[2:], ensure_ascii=False))' "$name" "$@"
     return 0
   fi
-  # Keep interactive TTY backends live on stdout. Always sanitize stderr so
-  # public failures never leak backend argparse / frp-* command names.
+  # Keep interactive TTY backends live on stdout. Capture stderr only when
+  # stdin is not a TTY (automation / tests) so GNU readline prompts are not
+  # deferred until after the child exits and glued onto the parent `drlink>`
+  # prompt. Always sanitize captured stderr so public failures never leak
+  # backend argparse / frp-* command names.
+  if [[ -t 0 && -t 1 && -z "${FRP_CTL_TEST_INPUT:-}" ]]; then
+    "$bin" "$@"
+    return $?
+  fi
   err="$(mktemp)"
   "$bin" "$@" 2>"$err"
   rc=$?
   if [[ -s "$err" ]]; then
     frpctl_sanitize_backend_stream <"$err" >&2 || cat "$err" >&2
+    if [[ -t 1 ]]; then
+      last="$(tail -c 1 "$err" 2>/dev/null || true)"
+      if [[ -n "$last" && "$last" != $'\n' ]]; then
+        printf '\n' >&2
+      fi
+    fi
   fi
   rm -f "$err"
   return "$rc"

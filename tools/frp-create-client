@@ -699,6 +699,20 @@ def read_prompt(prompt):
         sys.stdout.flush()
         return value
     try:
+        stderr_tty = sys.stderr.isatty()
+        stdout_tty = sys.stdout.isatty()
+    except Exception:
+        stderr_tty = False
+        stdout_tty = False
+    try:
+        # GNU readline writes input() prompts to stderr. When a parent (the
+        # REPL via frpctl_run) captures stderr for sanitizing, that prompt is
+        # dumped after the child exits and glues onto the next `drlink>` line.
+        # Force the prompt onto the live stdout TTY in that case.
+        if stdout_tty and not stderr_tty:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            return input()
         # Always pass the prompt to input()/readline so Backspace cannot walk
         # into a separately written prompt prefix.
         return input(prompt)

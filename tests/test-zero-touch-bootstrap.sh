@@ -958,6 +958,75 @@ if grep -q bootstrap_redeem "$WORKDIR/partial.hook"; then
 fi
 pass "PARTIAL_CLIENT_RECOVERY_PROTECTION"
 
+# DP1-equivalent: state/config/identity + leftover frpc/frp-client, but no
+# canonical drlink CLI or client service. Must not be "already installed".
+DP1="$WORKDIR/client-dp1"
+mkdir -p "$DP1/etc/frp" "$DP1/usr/local/bin"
+python3 - "$DP1/etc/frp/client-state.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "allocator_url": "https://203.0.113.10:6099/enroll",
+    "frp_server": "203.0.113.10",
+    "frp_server_port": 443,
+    "hostname": "dp1",
+    "machine_id": "dddddddddddddddddddddddddddddddd",
+    "host_id": "dp1-dddddddd",
+    "services": {"ssh": {"id": "ssh", "remote_port": 18300, "enabled": True}},
+}, indent=2) + "\n")
+PY
+chmod 600 "$DP1/etc/frp/client-state.json"
+cat >"$DP1/etc/frp/frpc.toml" <<'EOF'
+serverAddr = "203.0.113.10"
+serverPort = 443
+auth.method = "token"
+auth.token = "test-frp-token-do-not-use"
+EOF
+chmod 600 "$DP1/etc/frp/frpc.toml"
+python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
+  "$DP1/etc/frp/client-identity.key" "$DP1/etc/frp/client-identity.pub"
+chmod 600 "$DP1/etc/frp/client-identity.key"
+make_frpc "$DP1/usr/local/bin/frpc"
+printf '#!/bin/sh\necho frp-client\n' >"$DP1/usr/local/bin/frp-client"
+chmod 0755 "$DP1/usr/local/bin/frp-client"
+DP1_KEY_BEFORE="$(sha256sum "$DP1/etc/frp/client-identity.key" | awk '{print $1}')"
+export FRP_CLIENT_SOURCED=1
+# shellcheck source=../install-client.sh
+. "$ROOT/install-client.sh"
+export FRP_CLIENT_TEST_ROOT="$DP1"
+[[ "$(frp_client_install_class)" == "partial" ]] || fail "DP1 class should be partial"
+if frp_client_has_existing_install; then
+  fail "DP1 must not classify as complete"
+fi
+export FRP_ALLOCATOR_URL="https://127.0.0.1:${ALLOC_PORT}/enroll"
+export FRP_BOOTSTRAP_TICKET="$BC_TICKET"
+export FRP_CLIENT_HOOK_LOG="$WORKDIR/dp1.hook"
+: >"$FRP_CLIENT_HOOK_LOG"
+set +e
+frp_client_main >"$WORKDIR/dp1.out" 2>"$WORKDIR/dp1.err" </dev/null
+dp1_rc=$?
+set -e
+[[ "$dp1_rc" -eq 0 ]] || {
+  cat "$WORKDIR/dp1.out" "$WORKDIR/dp1.err" >&2
+  fail "DP1 partial repair should succeed"
+}
+if grep -q 'This client is already installed' "$WORKDIR/dp1.out" "$WORKDIR/dp1.err"; then
+  fail "DP1 false already-installed message"
+fi
+grep -qi 'partial or broken' "$WORKDIR/dp1.err" "$WORKDIR/dp1.out" || fail "DP1 repair wording"
+grep -q 'not re-enrolled' "$WORKDIR/dp1.err" "$WORKDIR/dp1.out" || fail "DP1 must not re-enroll"
+[[ -x "$DP1/usr/local/bin/drlink" ]] || fail "DP1 canonical drlink not restored"
+[[ -x "$DP1/usr/local/lib/drlink/frpctl" ]] || fail "DP1 runtime payload not restored"
+if grep -q bootstrap_redeem "$WORKDIR/dp1.hook"; then
+  fail "DP1 repair redeemed ticket"
+fi
+DP1_KEY_AFTER="$(sha256sum "$DP1/etc/frp/client-identity.key" | awk '{print $1}')"
+[[ "$DP1_KEY_BEFORE" == "$DP1_KEY_AFTER" ]] || fail "DP1 repair rotated identity"
+export FRP_CLIENT_TEST_ROOT="$DP1"
+[[ "$(frp_client_install_class)" == "complete" ]] || fail "DP1 should be complete after repair"
+pass "DP1_PARTIAL_INSTALL_REPAIR"
+
 # Expired ticket via client.
 EXP="$WORKDIR/client-exp"
 issue_ticket >"$WORKDIR/exp-create.out"

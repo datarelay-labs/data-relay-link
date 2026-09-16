@@ -92,6 +92,7 @@ python3 tests/test-repl-live-inventory.py
 bash ./tests/test-installed-client-update.sh
 ./tests/test-legacy-client-secure-bridge.sh
 ./tests/test-install-lifecycle.sh
+./tests/test-partial-client-install-recovery.sh
 ./tests/test-uninstall-owned-frpc.sh
 ./tests/test-uninstall-stdin-execution.sh
 ./tests/test-frpctl.sh
@@ -99,6 +100,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-frpctl-completion.sh
 ./tests/test-frpctl-pty-completion.sh
 ./tests/test-frpctl-pty-prompt-backspace.sh
+./tests/test-frpctl-pty-create-confirm.sh
 ./tests/test-frp-compat-gate.sh
 ./tests/test-create-zero-touch.sh
 ./tests/test-zero-touch-short-command.sh

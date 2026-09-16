@@ -742,24 +742,128 @@ frp_client_report_identity() {
   echo "Target bundle SHA256      : ${target_bundle}"
 }
 
-frp_client_has_existing_install() {
-  if [[ -f "$(frp_client_state_path)" ]]; then
+frp_client_file_nonempty() {
+  [[ -s "$1" ]]
+}
+
+frp_client_has_enrolled_local_state() {
+  if frp_client_file_nonempty "$(frp_client_state_path)"; then
     return 0
   fi
-  if [[ -f "$(frp_client_toml_path)" && -f "$(frp_client_identity_key_path)" ]]; then
+  if frp_client_file_nonempty "$(frp_client_toml_path)" \
+    && frp_client_file_nonempty "$(frp_client_identity_key_path)"; then
     return 0
   fi
   return 1
+}
+
+frp_client_has_canonical_cli() {
+  [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]] \
+    || [[ -x "$(frp_client_path /usr/bin/drlink)" ]]
+}
+
+frp_client_has_frpc_runtime() {
+  [[ -x "$(frp_client_path /usr/local/bin/frpc)" ]]
+}
+
+frp_client_has_runtime_payload() {
+  [[ -f "$(frp_client_lib_dir)/frp-client-common.sh" ]] \
+    && [[ -f "$(frp_client_lib_dir)/frpctl" ]]
+}
+
+frp_client_requires_service_definition() {
+  # Do not require Linux systemd evidence in sandboxes, or on macOS/Windows.
+  if [[ -n "${FRP_CLIENT_TEST_ROOT:-}" || "${FRP_SKIP_SYSTEMD:-}" == "1" ]]; then
+    return 1
+  fi
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  local os=""
+  if declare -F frp_os >/dev/null 2>&1; then
+    os="$(frp_os)"
+  fi
+  [[ "$os" == "linux" || -z "$os" ]]
+}
+
+frp_client_has_service_definition() {
+  [[ -f "$(frp_client_path /etc/systemd/system/drlink-client.service)" ]]
+}
+
+frp_client_has_complete_product_runtime() {
+  frp_client_has_canonical_cli || return 1
+  frp_client_has_frpc_runtime || return 1
+  frp_client_has_runtime_payload || return 1
+  if frp_client_requires_service_definition; then
+    frp_client_has_service_definition || return 1
+  fi
+  return 0
+}
+
+# INSTALLED_COMPLETE: enrolled local state plus an operationally coherent
+# current Data Relay Link product runtime. State/config/identity alone are
+# never sufficient.
+frp_client_has_existing_install() {
+  frp_client_has_enrolled_local_state || return 1
+  frp_client_has_complete_product_runtime || return 1
+  return 0
 }
 
 frp_client_has_partial_install() {
   if frp_client_has_existing_install; then
     return 1
   fi
-  if [[ -f "$(frp_client_path /etc/systemd/system/drlink-client.service)" ]]; then
+  if frp_client_has_enrolled_local_state; then
+    return 0
+  fi
+  if frp_client_has_canonical_cli; then
+    return 0
+  fi
+  if frp_client_has_service_definition; then
+    return 0
+  fi
+  if frp_client_file_nonempty "$(frp_client_toml_path)" \
+    || frp_client_file_nonempty "$(frp_client_identity_key_path)" \
+    || frp_client_file_nonempty "$(frp_client_state_path)"; then
     return 0
   fi
   return 1
+}
+
+frp_client_install_class() {
+  if frp_client_has_existing_install; then
+    printf '%s\n' complete
+    return 0
+  fi
+  if frp_client_has_partial_install; then
+    printf '%s\n' partial
+    return 0
+  fi
+  printf '%s\n' none
+}
+
+frp_client_state_json_usable() {
+  local path
+  path="$(frp_client_state_path)"
+  [[ -s "$path" ]] || return 1
+  python3 - "$path" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(data, dict) else 1)
+PY
+}
+
+# Safe to restore missing product runtime without re-enrollment or identity
+# regeneration: committed local state, config, and identity are all present.
+frp_client_partial_is_safe_to_repair() {
+  frp_client_state_json_usable || return 1
+  frp_client_file_nonempty "$(frp_client_toml_path)" || return 1
+  frp_client_file_nonempty "$(frp_client_identity_key_path)" || return 1
+  return 0
 }
 
 frp_client_hook_log() {
@@ -5466,7 +5570,10 @@ frp_client_fetch_and_upgrade() {
     return 1
   fi
   explicit_channel="$(frp_client_explicit_expected_channel || true)"
-  if frp_client_has_existing_install; then
+  # Enrolled local state, even if the current CLI/service payload is incomplete,
+  # still requires the verified update bridge. Completeness is a bootstrap
+  # classifier, not an excuse to skip identity-preserving upgrade gates.
+  if frp_client_has_enrolled_local_state; then
     if ! frp_client_has_trustworthy_release_line && [[ -z "$explicit_channel" ]]; then
       frp_client_report_identity \
         "$(frp_client_installed_project_version)" "unknown" \

@@ -1023,10 +1023,38 @@ mkdir -p "$EXIST/etc/frp"
 echo '{"schema_version":1}' >"$EXIST/etc/frp/client-state.json"
 export FRP_CLIENT_TEST_ROOT="$EXIST"
 if frp_client_main >"$WORKDIR/rerun.out" 2>"$WORKDIR/rerun.err"; then
-  fail "existing client installer should refuse"
+  fail "state-only partial client installer should refuse"
 fi
-grep -q 'already has a Data Relay Link client installed' "$WORKDIR/rerun.err" || fail "refuse message"
-grep -q 'sudo drlink system update product' "$WORKDIR/rerun.err" || fail "directs to update"
+if grep -q 'This client is already installed' "$WORKDIR/rerun.err" \
+  || grep -q 'already has a Data Relay Link client installed' "$WORKDIR/rerun.err"; then
+  fail "state-only remnant must not be classified complete"
+fi
+grep -qi 'partial or broken' "$WORKDIR/rerun.err" || fail "state-only should be partial"
+grep -q 'RECOVERY_REQUIRED' "$WORKDIR/rerun.out" "$WORKDIR/rerun.err" || fail "state-only recovery class"
+pass "CLIENT_STATE_ONLY_PARTIAL"
+
+COMPLETE="$WORKDIR/client-complete"
+mkdir -p "$COMPLETE/etc/frp" "$COMPLETE/usr/local/bin" "$COMPLETE/usr/local/lib/drlink"
+echo '{"schema_version":1,"machine_id":"aabbccddeeff00112233445566778899"}' >"$COMPLETE/etc/frp/client-state.json"
+echo 'serverAddr = "203.0.113.10"' >"$COMPLETE/etc/frp/frpc.toml"
+echo 'test-identity-key' >"$COMPLETE/etc/frp/client-identity.key"
+chmod 600 "$COMPLETE/etc/frp/client-state.json" "$COMPLETE/etc/frp/frpc.toml" \
+  "$COMPLETE/etc/frp/client-identity.key"
+printf '#!/bin/sh\necho frpc\n' >"$COMPLETE/usr/local/bin/frpc"
+printf '#!/bin/sh\necho drlink\n' >"$COMPLETE/usr/local/bin/drlink"
+printf '#!/bin/sh\necho frpctl\n' >"$COMPLETE/usr/local/lib/drlink/frpctl"
+echo 'common' >"$COMPLETE/usr/local/lib/drlink/frp-client-common.sh"
+chmod 0755 "$COMPLETE/usr/local/bin/frpc" "$COMPLETE/usr/local/bin/drlink" \
+  "$COMPLETE/usr/local/lib/drlink/frpctl"
+export FRP_CLIENT_TEST_ROOT="$COMPLETE"
+if frp_client_main >"$WORKDIR/complete-rerun.out" 2>"$WORKDIR/complete-rerun.err"; then
+  fail "complete client installer should refuse"
+fi
+grep -q 'already has a Data Relay Link client installed' "$WORKDIR/complete-rerun.err" \
+  || fail "refuse message"
+grep -q 'sudo drlink system update product' "$WORKDIR/complete-rerun.err" || fail "directs to update"
+cmp -s "$COMPLETE/etc/frp/client-identity.key" <(printf 'test-identity-key\n') \
+  || fail "complete re-run mutated identity"
 pass "CLIENT_REINSTALL_SAFE"
 
 # ---------------------------------------------------------------------------
