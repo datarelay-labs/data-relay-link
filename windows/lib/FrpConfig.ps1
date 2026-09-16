@@ -48,6 +48,20 @@ function New-FrpClientToml {
         [void]$lines.Add(('transport.tls.trustedCaFile = "{0}"' -f (Escape-FrpTomlString $TrustedCaFile)))
     }
 
+    # Runtime log. Every failure path tells the operator to read this file, so
+    # frpc must actually write it. maxDays bounds retention (frpc rotates and
+    # prunes daily); the product additionally caps the live file by size.
+    $logPath = Get-FrpLogPath
+    $logDir = Split-Path -Parent $logPath
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    }
+    [void]$lines.Add('')
+    [void]$lines.Add(('log.to = "{0}"' -f (Escape-FrpTomlString $logPath)))
+    [void]$lines.Add('log.level = "info"')
+    [void]$lines.Add(('log.maxDays = {0}' -f (Get-FrpLogMaxDays)))
+    [void]$lines.Add('log.disablePrintColor = true')
+
     $map = ConvertTo-FrpServiceMap -Services $Services
     foreach ($sid in $map.Keys) {
         $item = $map[$sid]

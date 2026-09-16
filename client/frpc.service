@@ -1,5 +1,5 @@
 [Unit]
-Description=FRP Client
+Description=Data Relay Link Client (legacy unit name; use drlink-client)
 After=network-online.target
 Wants=network-online.target
 

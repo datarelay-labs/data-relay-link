@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Finding E: --source requires a directory argument before any mutation.
+#
+# TEST_CHANGE_REASON=ambient FRP_SERVER_SOURCED=1 from a parent shell that
+# previously sourced install-server.sh makes the installer entrypoint no-op,
+# causing a false FAIL ("missing --source succeeded").
+# PRODUCT_CONTRACT=install-server.sh/--client must validate --source when
+# executed as an entrypoint (FRP_*_SOURCED unset/not 1).
+# WHY_OLD_ASSERTION_WAS_WRONG=assertion was correct; the test harness could
+# inherit SOURCED=1 and skip the entrypoint entirely.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
@@ -7,6 +15,10 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
+
+# Installer entrypoints no-op when SOURCED=1. Never inherit ambient pollution
+# from a parent shell that previously sourced install-*.sh for unit tests.
+unset FRP_SERVER_SOURCED FRP_CLIENT_SOURCED || true
 
 TREE="$WORKDIR/tree"
 mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin"

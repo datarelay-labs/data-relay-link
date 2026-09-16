@@ -25,26 +25,29 @@ deploy_file() {
   sshx "$host" "sudo install -m $mode /tmp/frp-profiles-upload.$$ '$dest' && rm -f /tmp/frp-profiles-upload.$$"
 }
 
-deploy_file "$SERVER" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/frp-auto-deploy/frp_service_profiles.py 644
-deploy_file "$SERVER" "$ROOT/lib/frp_health_check.py" /usr/local/lib/frp-auto-deploy/frp_health_check.py 644
+deploy_file "$SERVER" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/drlink/frp_service_profiles.py 644
+deploy_file "$SERVER" "$ROOT/lib/frp_health_check.py" /usr/local/lib/drlink/frp_health_check.py 644
 deploy_file "$SERVER" "$ROOT/tools/frp-profile" /usr/local/sbin/frp-profile 755
-deploy_file "$SERVER" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py 644
-deploy_file "$SERVER" "$ROOT/tools/frpctl" /usr/local/sbin/frpctl 755
-deploy_file "$SERVER" "$ROOT/server/frp-port-allocator.py" /usr/local/lib/frp-auto-deploy/frp-port-allocator.py 644
-deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/frp-auto-deploy/frp_service_profiles.py 644
-deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_health_check.py" /usr/local/lib/frp-auto-deploy/frp_health_check.py 644
+deploy_file "$SERVER" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/drlink/frp_ctl_grammar.py 644
+deploy_file "$SERVER" "$ROOT/tools/frpctl" /usr/local/lib/drlink/frpctl 755
+deploy_file "$SERVER" "$ROOT/tools/drlink" /usr/local/bin/drlink 755
+deploy_file "$SERVER" "$ROOT/server/frp-port-allocator.py" /usr/local/lib/drlink/frp-port-allocator.py 644
+deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_service_profiles.py" /usr/local/lib/drlink/frp_service_profiles.py 644
+deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_health_check.py" /usr/local/lib/drlink/frp_health_check.py 644
 deploy_file "$CLIENT_HOST" "$ROOT/tools/frp-client" /usr/local/sbin/frp-client 755
-deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py 644
-deploy_file "$CLIENT_HOST" "$ROOT/tools/frpctl" /usr/local/sbin/frpctl 755
+deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_ctl_grammar.py" /usr/local/lib/drlink/frp_ctl_grammar.py 644
+deploy_file "$CLIENT_HOST" "$ROOT/lib/frp_cli_catalog.py" /usr/local/lib/drlink/frp_cli_catalog.py 644
+deploy_file "$CLIENT_HOST" "$ROOT/tools/frpctl" /usr/local/lib/drlink/frpctl 755
+deploy_file "$CLIENT_HOST" "$ROOT/tools/drlink" /usr/local/bin/drlink 755
 
 # Ensure empty profiles file exists on server.
 sshx "$SERVER" 'sudo python3 - <<'\''PY'\''
 import importlib.util, json
 from pathlib import Path
-cfg=json.loads(Path("/etc/frp-auto-deploy/config.json").read_text())
-cfg.setdefault("service_profiles_file", "/var/lib/frp-auto-deploy/service-profiles.json")
-Path("/etc/frp-auto-deploy/config.json").write_text(json.dumps(cfg, indent=2)+"\n")
-spec=importlib.util.spec_from_file_location("frp_service_profiles","/usr/local/lib/frp-auto-deploy/frp_service_profiles.py")
+cfg=json.loads(Path("/etc/drlink/config.json").read_text())
+cfg.setdefault("service_profiles_file", "/var/lib/drlink/service-profiles.json")
+Path("/etc/drlink/config.json").write_text(json.dumps(cfg, indent=2)+"\n")
+spec=importlib.util.spec_from_file_location("frp_service_profiles","/usr/local/lib/drlink/frp_service_profiles.py")
 mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 path=mod.service_profiles_path(cfg)
 if not path.is_file():
@@ -52,7 +55,7 @@ if not path.is_file():
 print(path)
 PY'
 # Restart allocator so GET /v1/profiles is available.
-sshx "$SERVER" 'sudo systemctl restart frp-port-allocator && sleep 1 && systemctl is-active frp-port-allocator' \
+sshx "$SERVER" 'sudo systemctl restart drlink-allocator && sleep 1 && systemctl is-active drlink-allocator' \
   || fail "allocator restart"
 
 # Shared e2e clients may retain Target Health fixtures whose health target is down.
@@ -125,10 +128,10 @@ SERVICE_ID="e2eprofssh$$"
 SERVICE_ID2="e2eprofssh2$$"
 
 # Cleanup leftovers from prior runs.
-sshx "$SERVER" "sudo frpctl delete profile '$PROFILE_NAME' >/dev/null 2>&1 || true"
-sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+sshx "$SERVER" "sudo drlink delete profile '$PROFILE_NAME' >/dev/null 2>&1 || true"
+sshx "$CLIENT_HOST" "sudo drlink discard >/dev/null 2>&1 || true"
 
-sshx "$SERVER" "sudo frpctl create profile '$PROFILE_NAME' --preset ssh --target-host 127.0.0.1 --target-port 22 --ssh-user ubuntu --description e2e" \
+sshx "$SERVER" "sudo drlink create profile '$PROFILE_NAME' --preset ssh --target-host 127.0.0.1 --target-port 22 --ssh-user ubuntu --description e2e" \
   | tee "$OUT_DIR/01-create-profile.log" \
   | grep -q 'Created profile prof_' || fail "create profile"
 pass "create SSH profile"
@@ -137,7 +140,7 @@ pass "create SSH profile"
 CLIENT_ID="$(sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 want=None
 for mid,c in (reg.get('clients') or {}).items():
   label=str((c or {}).get('label') or '')
@@ -153,13 +156,13 @@ echo "CLIENT_ID=$CLIENT_ID"
 
 # Drop prior fixed-id leftovers and this run's ids if present.
 for sid in e2eprofssh e2eprofssh2 "$SERVICE_ID" "$SERVICE_ID2"; do
-  sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$sid' >/dev/null 2>&1 || true"
+  sshx "$SERVER" "printf 'RELEASE\n' | sudo drlink release service --force '$CLIENT_ID' '$sid' >/dev/null 2>&1 || true"
 done
-sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+sshx "$CLIENT_HOST" "sudo drlink discard >/dev/null 2>&1 || true"
 # Keep client.toml aligned if a prior run left stale proxies after a failed apply.
 sshx "$CLIENT_HOST" 'sudo bash -s' <<'EOF' >/dev/null || true
 set -euo pipefail
-. /usr/local/lib/frp-auto-deploy/frp-client-common.sh
+. /usr/local/lib/drlink/frp-client-common.sh
 path="$(frp_client_state_path)"
 python3 - "$path" <<'PY'
 import json, sys
@@ -185,17 +188,17 @@ fi
 EOF
 
 # Seed draft on client from profile, then apply.
-sshx "$CLIENT_HOST" "sudo frpctl add service --profile '$PROFILE_NAME' --id '$SERVICE_ID' --name E2EProfileSSH" \
+sshx "$CLIENT_HOST" "sudo drlink add service --profile '$PROFILE_NAME' --id '$SERVICE_ID' --name E2EProfileSSH" \
   | tee "$OUT_DIR/02-add-service.log" \
   | grep -qi 'Pending service' || fail "add service --profile"
-sshx "$CLIENT_HOST" "sudo frpctl apply" | tee "$OUT_DIR/03-apply.log" || fail "apply"
+sshx "$CLIENT_HOST" "sudo drlink apply" | tee "$OUT_DIR/03-apply.log" || fail "apply"
 pass "apply profile-seeded SSH service"
 
 # Fetch public port and verify SSH banner.
 read -r PUBLIC_PORT < <(sshx "$SERVER" "sudo python3 - <<PY
 import json
 from pathlib import Path
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 c=(reg.get('clients') or {}).get('$CLIENT_ID') or {}
 svc=((c.get('services') or {}).get('$SERVICE_ID') or {})
 print(svc.get('remote_port') or '')
@@ -219,7 +222,7 @@ pass "SSH connectivity via profile-created service"
 sshx "$SERVER" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 Path('/tmp/frp-profile-svc-before.json').write_text(json.dumps(reg, sort_keys=True))
 PY"
 OLD_TARGET="$(sshx "$CLIENT_HOST" "sudo python3 - <<'PY'
@@ -229,7 +232,7 @@ st=json.loads(Path('/etc/frp/client-state.json').read_text())
 svc=(st.get('services') or {}).get('$SERVICE_ID') or {}
 print('%s:%s' % (svc.get('local_ip'), svc.get('local_port')))
 PY")"
-sshx "$SERVER" "sudo frpctl set profile '$PROFILE_NAME' target-port 2222" | tee "$OUT_DIR/05-edit-profile.log" || fail "edit profile"
+sshx "$SERVER" "sudo drlink set profile '$PROFILE_NAME' target-port 2222" | tee "$OUT_DIR/05-edit-profile.log" || fail "edit profile"
 NEW_TARGET="$(sshx "$CLIENT_HOST" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
@@ -241,24 +244,24 @@ PY")"
 pass "profile edit leaves existing service unchanged"
 
 # New service from edited profile gets new defaults.
-sshx "$CLIENT_HOST" "sudo frpctl add service --profile '$PROFILE_NAME' --id '$SERVICE_ID2' --name E2EProfileSSH2" >/dev/null
+sshx "$CLIENT_HOST" "sudo drlink add service --profile '$PROFILE_NAME' --id '$SERVICE_ID2' --name E2EProfileSSH2" >/dev/null
 sshx "$CLIENT_HOST" "sudo python3 - <<'PY'
 import json
 from pathlib import Path
-draft=json.loads(Path('/var/lib/frp-auto-deploy/client-draft.json').read_text())
+draft=json.loads(Path('/var/lib/drlink/client-draft.json').read_text())
 svc=(draft.get('services') or {}).get('$SERVICE_ID2') or {}
 assert int(svc.get('local_port') or 0)==2222, svc
 print('NEW_DEFAULTS_OK')
 PY" | grep -q NEW_DEFAULTS_OK || fail "new service did not pick updated profile defaults"
-sshx "$CLIENT_HOST" "sudo frpctl discard" >/dev/null || true
+sshx "$CLIENT_HOST" "sudo drlink discard" >/dev/null || true
 pass "new service gets updated profile defaults"
 
 # Delete profile; existing live service remains.
-sshx "$SERVER" "sudo frpctl delete profile '$PROFILE_NAME'" | tee "$OUT_DIR/06-delete-profile.log" || fail "delete profile"
+sshx "$SERVER" "sudo drlink delete profile '$PROFILE_NAME'" | tee "$OUT_DIR/06-delete-profile.log" || fail "delete profile"
 STILL="$(sshx "$SERVER" "sudo python3 - <<PY
 import json
 from pathlib import Path
-reg=json.loads(Path('/var/lib/frp-auto-deploy/registry.json').read_text())
+reg=json.loads(Path('/var/lib/drlink/registry.json').read_text())
 c=(reg.get('clients') or {}).get('$CLIENT_ID') or {}
 svc=((c.get('services') or {}).get('$SERVICE_ID') or {})
 print('YES' if svc.get('remote_port') else 'NO')
@@ -267,9 +270,9 @@ PY")"
 pass "delete profile leaves existing service"
 
 # Cleanup live e2e service to avoid port clutter.
-sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$SERVICE_ID' >/dev/null 2>&1 || true"
-sshx "$SERVER" "printf 'RELEASE\n' | sudo frpctl release service --force '$CLIENT_ID' '$SERVICE_ID2' >/dev/null 2>&1 || true"
-sshx "$CLIENT_HOST" "sudo frpctl discard >/dev/null 2>&1 || true"
+sshx "$SERVER" "printf 'RELEASE\n' | sudo drlink release service --force '$CLIENT_ID' '$SERVICE_ID' >/dev/null 2>&1 || true"
+sshx "$SERVER" "printf 'RELEASE\n' | sudo drlink release service --force '$CLIENT_ID' '$SERVICE_ID2' >/dev/null 2>&1 || true"
+sshx "$CLIENT_HOST" "sudo drlink discard >/dev/null 2>&1 || true"
 
 echo "TARGETED_REAL_E2E=PASS" >"$OUT_DIR/result.env"
 echo "SERVICE_PROFILES_REAL_E2E=PASS"

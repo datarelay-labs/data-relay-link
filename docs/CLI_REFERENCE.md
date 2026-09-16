@@ -1,335 +1,781 @@
-# frpctl command reference
+# Data Relay Link — CLI Reference
 
-`frpctl` is the everyday operator CLI. It does not add new backend behavior.
-Existing tools (`frp-clients`, `frp-client-set`, `frp-create-client`, …) remain
-the implementation.
+> **Document role:** Canonical v2.4.0 target direct-command grammar
+> **Status:** Architecture-frozen target; current development implementation may lag until the implementation phase completes
+> **Primary CLI:** `drlink`
+> **UX architecture:** `Data Relay Link CLI Information Architecture.md`
 
-Grammar:
+## 1. Grammar
 
-```text
-<verb> <resource> [target] [property] [value]
-```
-
-Host role decides which commands appear in Tab and help. Dual-role hosts see
-the union. There is no `server …` / `client …` top-level namespace.
-
-Interactive keys:
+Canonical direct form:
 
 ```text
-Tab   = immediately show/complete what can be entered here
-?     = detailed contextual explanation
-Enter = execute
-↑/↓   = session history
+drlink <ACTION> <RESOURCE> [TARGET] [PROPERTY] [VALUE...]
 ```
 
-Tab completes a unique match inline. When several next tokens remain, the
-first Tab prints the candidate list above the prompt and restores the exact
-input line for editing. A second Tab on the same unchanged line does not
-reprint the list. Tab never runs the command and never clears the screen.
-Type `?` (then Enter) for detailed context help when needed.
+Inside the persistent REPL, omit the leading `drlink`.
 
-`↑` / `↓` walk this session only. History is never written to disk
-(`~/.bash_history`, `~/.frpctl_history`, or `HISTFILE`).
+Canonical roots:
 
-The canonical client selector is **CLIENT ID**: the immutable short machine
-identity (usually 8 hex characters; longer when that prefix is not unique).
-Changing label, note, tags, or hostname never changes CLIENT ID.
-`show clients` prints CLIENT ID as the first identity column. Tab completes
-CLIENT ID only. A unique label or unique hostname still works when typed by
-hand. An SSH connection string such as `user@host:port` is not a selector.
-An ambiguous prefix fails closed; use a longer CLIENT ID prefix.
+```text
+show
+set
+unset
+test
+system
+menu
+help
+exit
+```
 
-`unset` removes stored metadata. `release` returns public port reservations.
-`revoke` removes management identity. Those three are never aliases of each
-other. There is no `delete client`.
+Normal public grammar does not use legacy `acl`, `service-profile`, or `internet-profile` resources.
 
----
-
-## show
+## 2. Common discovery
 
 ```text
 show status
 show version
+help
+help commands
+menu
+```
+
+## 3. Clients
+
+```text
 show clients
-show clients --group <GROUP>
-show client <ID>
-show client <ID> services
-show client <ID> tags
-show client <ID> groups
-show groups
-show group <GROUP>
+show client <CLIENT>
+show client <CLIENT> services
+show client <CLIENT> groups
+show client <CLIENT> endpoint
+show client <CLIENT> addresses
+
+set client <CLIENT> label <TEXT>
+set client <CLIENT> description <TEXT>
+set client <CLIENT> tag <KEY=VALUE>
+unset client <CLIENT> tag <KEY>
+
+unset client <CLIENT>
+```
+
+`unset client <CLIENT>` is destructive server-side removal and requires confirmation in interactive use. Exact lifecycle effects must preserve the Product Master contract for service reservations, identity, and orphaned policy references.
+
+Management trust revocation remains a distinct lifecycle operation if the implementation exposes it as a public direct command:
+
+```text
+system revoke client <CLIENT>
+```
+
+The implementation must not overload `unset` to mean both revoke and remove.
+
+## 4. Client Groups
+
+```text
+show client-groups
+show client-group <GROUP>
+
+set client-group <GROUP>
+set client-group <GROUP> description <TEXT>
+set client-group <GROUP> member <CLIENT>
+
+unset client-group <GROUP> member <CLIENT>
+unset client-group <GROUP>
+```
+
+Client Group is operational organization and an AI target selector. It is not an Object Group.
+
+## 5. Enrollments
+
+```text
 show enrollments
-show audit
-show upstream
-show services
-show info
+show enrollment <ID>
+
+set enrollment manual
+set enrollment zero-touch
+
+unset enrollment <ID>
 ```
 
-`status` and `version` remain shortcuts for `show status` / `show version`.
-Canonical help prefers the `show` form.
+Guided onboarding remains preferred for Zero-Touch because it collects platform, client identity, and initial Published Service settings safely.
 
-`show clients` reuses the existing client table. The identity columns are
-CLIENT ID, LABEL, and HOSTNAME. `show client <ID>` is the overview.
-`show client <ID> services` and `show client <ID> tags` print only that view.
+Bootstrap secrets/tickets are treated as credentials and are not redisplayed through ordinary `show`.
 
-`show enrollments` lists every issued enrollment credential that is still on
-disk: manual Enrollment Code records and zero-touch bootstrap tickets. Secrets
-are never printed. Zero-touch issuance that creates both an enrollment file and
-a bootstrap ticket appears once (ticket ID). Lifecycle states are normalized to
-`pending`, `bound`, `completed`, `expired`, or `revoked`. Terminal records
-(`expired`, `completed`, `revoked`) are retained for
-`enrollment_retention_days` (default 30) and then removed automatically during
-enrollment issuance or allocator startup. Use `revoke enrollment <ID>` for active
-(`pending`/`bound`) credentials and `purge enrollment <ID>` for terminal records.
+## 6. Objects
 
-## set
-
-Server:
+List and inspect:
 
 ```text
-set client <ID> label <value>
-set client <ID> note <value>
-set client <ID> tag <key> <value>
-set installer-url <url>
-set server hostname <fqdn>
-set server bootstrap-hostname <fqdn>
+show objects
+show object <OBJECT>
+show object <OBJECT> references
 ```
 
-`set server hostname` configures an optional DNS alias for published-service
-access. It does not change FRP control (`frp_server` / `serverAddr`), CLIENT ID,
-public ports, or the CA. DNS records are managed outside FRP Auto Deploy.
-
-`set server bootstrap-hostname` configures the optional publicly trusted
-Zero-Touch short URL hostname. FRP Auto Deploy does not create DNS records,
-issue certificates, or configure ACME. See `docs/ZERO_TOUCH_SHORT_URL.md`.
-
-The backend still accepts `--tag key=value`. The parser converts
-`tag <key> <value>` to that form. Quoted values work
-(`tag location "OCI Osaka"`). The older `tag key=value` token is still
-accepted.
-
-Client:
+Create/edit static Object:
 
 ```text
-set service <service-id> target-host <host>
-set service <service-id> target-port <port>
-set service <service-id> ssh-user <user>
-set service <service-id> name <value>
-set service <service-id> health-type <tcp|http|disabled>
-set service <service-id> health-timeout <seconds>
-set service <service-id> health-interval <seconds>
-set service <service-id> health-max-failed <count>
-set service <service-id> health-path </path>
+set object <OBJECT> type host
+set object <OBJECT> type network
+set object <OBJECT> type fqdn
+
+set object <OBJECT> value <VALUE>
+set object <OBJECT> description <TEXT>
+set object <OBJECT> name <NEW_NAME>
 ```
 
-Service IDs are immutable. Pending service edits become live only after
-`apply`. Disable/enable reuse the same public port. Client-side disable does
-not release the server reservation. Health checks are disabled by default;
-when enabled, FRP `healthCheck` settings are written into `frpc.toml`.
-`show services` / `status` report CLIENT / TUNNEL / TARGET separately.
-
-## unset
+Remove value or Object:
 
 ```text
-unset client <ID> label
-unset client <ID> note
-unset client <ID> tag <key>
-unset server hostname
-unset server bootstrap-hostname
+unset object <OBJECT> value <VALUE>
+unset object <OBJECT> description
+unset object <OBJECT>
 ```
 
-Removes administrator metadata only (or the optional public / bootstrap
-hostname). Display label falls back to hostname. Does not change identity,
-machine-id, ports, or enrollment. Unsetting the public hostname falls back to
-Public IP access. Unsetting the bootstrap hostname falls back to `zt1` Zero-Touch
-commands.
+Rules:
 
-## create / add
+- `set object <OBJECT> type ...` creates the Object if absent.
+- Static Object type changes after values/references exist should be rejected unless a safe explicit conversion workflow is implemented.
+- An Object may hold multiple compatible values.
+- Managed Endpoint is not a creatable `type` value.
+- Referenced Objects cannot be deleted.
+- Value mutations run policy-impact analysis.
+
+## 7. Object Groups
 
 ```text
-create group <name> [--description TEXT]
-add client <CLIENT> group <GROUP>
-create zero-touch
-create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]
-create enrollments --count N
-create enrollments --csv clients.csv
-create backup [path]
-add service [--preset ssh|http|https|custom] ...
+show object-groups
+show object-group <GROUP>
+show object-group <GROUP> references
+
+set object-group <GROUP>
+set object-group <GROUP> description <TEXT>
+set object-group <GROUP> member <OBJECT_OR_GROUP>
+
+unset object-group <GROUP> member <OBJECT_OR_GROUP>
+unset object-group <GROUP>
 ```
 
-Manual groups have immutable IDs (`grp_` plus eight lowercase hex digits),
-mutable names and descriptions, and multiple client memberships. Group
-selectors resolve in this order: exact ID, unique ID prefix, unique exact
-name. `all` and `ungrouped` are reserved virtual selectors, not stored group
-objects.
+Nested membership, if enabled, is cycle-checked.
+
+A group containing members invalid for a selected policy field causes the whole assignment to fail. Members are not silently ignored.
+
+## 8. Managed Endpoints
 
 ```text
-rename group <GROUP> <name>
-set group <GROUP> name <name>
-set group <GROUP> description <text>
-delete group <GROUP>
-remove client <CLIENT> group <GROUP>
+show managed-endpoints
+show managed-endpoint <ENDPOINT>
+show managed-endpoint <ENDPOINT> addresses
+show managed-endpoint <ENDPOINT> references
 ```
 
-Deleting a group removes its membership references but does not change client
-identity, services, or ports. Enrollment-time group assignment is deferred.
-
-`create zero-touch` is the recommended everyday client onboarding path.
-Enrollment Code and bootstrap ticket secrets are never completed or shown by
-`show` / `?` / Tab.
-
-## enable / disable / apply / discard
+There is no normal public:
 
 ```text
-enable service <service-id>
-disable service <service-id>
-apply
-discard
+set managed-endpoint ...
+unset managed-endpoint ...
 ```
 
-Client-local pending changes. `apply` does not release server ports.
+Creation/removal follows Client lifecycle.
 
-## revoke / purge / release / restore
+An Orphaned endpoint remains queryable while referenced.
+
+## 9. Published Services
 
 ```text
-revoke client <ID>
-revoke enrollment <ID>
-purge enrollment <ID>
-purge enrollments --older-than <days>
-release service <ID> <service-id>
-release client <ID>
-restore backup <path>
+show published-services
+show published-service <CLIENT_OR_ENDPOINT> <SERVICE>
 ```
 
-`revoke enrollment` prevents a pending or bound enrollment credential from being
-used. It does not apply to terminal records (`expired`, `completed`, `revoked`).
-
-`purge enrollment` permanently removes terminal enrollment metadata. Active
-pending or bound enrollments must be revoked first. Bulk purge matches terminal
-records whose terminal timestamp is older than the requested threshold.
-Non-interactive purge requires `FRP_ENROLLMENT_PURGE_YES=yes`.
-
-Terminal enrollment JSON retention and audit log retention are separate.
-Purging enrollment metadata does not delete audit events.
-
-`release` keeps the existing confirmation, locking, and passive port recheck.
-`restore` keeps archive validation, snapshot, restart, doctor, and rollback.
-
-
-## profiles (server)
-
-Reusable server-owned service creation templates. Profiles seed client drafts
-only; they never store public ports, CLIENT IDs, Service IDs, or ACL
-assignments. Editing or deleting a profile does not mutate existing services.
+Where local/client-side service mutation is supported:
 
 ```text
-show profiles
-show profile <PROFILE>
-create profile <name> --preset ssh|http|https|custom --target-host HOST --target-port PORT
-                 [--description TEXT] [--ssh-user USER]
-set profile <PROFILE> name|description|preset|target-host|target-port|ssh-user <value>
-delete profile <PROFILE>
+set published-service <SERVICE> type <ssh|http|https|tcp>
+set published-service <SERVICE> target-mode <self|routed>
+set published-service <SERVICE> target-host <HOST>
+set published-service <SERVICE> target-port <PORT>
+set published-service <SERVICE> enabled
+
+unset published-service <SERVICE> enabled
+unset published-service <SERVICE>
 ```
 
-On a client host, seed a pending service from a profile, then run `apply`:
+Semantics:
 
 ```text
-add service --profile <PROFILE|NAME> [--id ID] [--name NAME]
-apply
+SELF
+  effective destination = Managed Endpoint
+  local target may be 127.0.0.1 or another local address
+
+ROUTED
+  effective destination = configured reachable target host
+  connector = Managed Endpoint
 ```
 
-## access (server)
+Changing target mode/host/port runs policy-impact analysis.
 
-Named reusable Service Access Lists, optional TTL entries, and recent
-connection authorization history. Access is keyed by CLIENT ID + Service ID
-(not by public port). Modes are `PUBLIC` (default for existing services) and
-`ALLOWLIST`.
+Public-port allocation/reservation remains server-controlled unless an explicit supported command says otherwise.
+
+## 10. Service Presets
 
 ```text
-access
-access list
-access create <name> [--description TEXT]
-access add-source <list> --name <name> --source <ip|cidr> [--ttl 30m|1h|4h|1d]
-access remove-source <list> --source <ip|cidr|name|id>
-access show <list>
-access delete <list>
-access assign <client> <service-id> <list>
-access public <client> <service-id>
-access show-service <client> <service-id>
-access test <client> <service-id> <source-ip>
-access log <client> <service-id> [--limit N] [--allow|--deny]
+show service-presets
+show service-preset <PRESET>
+
+set service-preset <PRESET>
+set service-preset <PRESET> type <ssh|http|https|tcp>
+set service-preset <PRESET> target-mode <self|routed>
+set service-preset <PRESET> target-port <PORT>
+set service-preset <PRESET> description <TEXT>
+
+unset service-preset <PRESET>
 ```
 
-Interactive `frpctl` server menu includes Access Control. Empty ALLOWLIST
-assignment is refused. Deleting a list that is still referenced is refused.
-IP allowlisting is defense-in-depth; keep target authentication enabled.
+A Service Preset is creation-time convenience only. It has no continuing ownership relation to services already created from it.
 
-## update
+## 11. Remote Access rules
+
+List and inspect:
 
 ```text
-update project [--check]
-update frp [--check]
+show remote-access
+show remote-access <RULE>
+show remote-access <RULE> impact
 ```
 
-`update` with no resource keeps the previous role default (client project
-tools on a client; `frp-update` on a server). Updater security is unchanged:
-stable tag, verified SHA256SUMS, fail-closed, rollback, no re-enrollment, no
-CA/token/port loss. FRP stays pinned at 0.71.0.
+Create/edit:
 
-## Other
+```text
+set remote-access <RULE>
+set remote-access <RULE> source <OBJECT_OR_GROUP>
+set remote-access <RULE> destination <OBJECT_OR_GROUP>
+set remote-access <RULE> service <PROTOCOL> <PORT>
+set remote-access <RULE> action <allow|deny>
+set remote-access <RULE> description <TEXT>
+set remote-access <RULE> enabled
+```
+
+Remove fields / rule:
+
+```text
+unset remote-access <RULE> source <OBJECT_OR_GROUP>
+unset remote-access <RULE> destination <OBJECT_OR_GROUP>
+unset remote-access <RULE> service <PROTOCOL> <PORT>
+unset remote-access <RULE> enabled
+unset remote-access <RULE>
+```
+
+Ordering:
+
+```text
+set remote-access <RULE> before <OTHER_RULE>
+set remote-access <RULE> after <OTHER_RULE>
+```
+
+New rule default:
+
+```text
+status   = disabled
+position = bottom
+```
+
+Evaluation:
+
+```text
+top-down
+first complete match wins
+explicit ALLOW / DENY
+implicit final DENY
+multiple selectors in one dimension = OR
+Source AND Destination AND Service dimensions must all match
+```
+
+## 12. Remote Access test/explain
+
+```text
+test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>
+```
+
+Example:
+
+```text
+test remote-access 203.0.113.10 10.10.10.50 tcp 22
+```
+
+Output includes:
+
+```text
+source Object matches
+destination Object matches
+ordered rule trace
+first complete match
+effective ALLOW/DENY
+Published Service match
+connector/target availability
+final effective access result
+```
+
+Unless explicitly documented as live, `test` is simulation/explanation and does not mutate state or establish the application connection.
+
+## 13. Internet Access rules
+
+```text
+show internet-access
+show internet-access <RULE>
+show internet-access <RULE> impact
+
+set internet-access <RULE>
+set internet-access <RULE> source <OBJECT_OR_GROUP>
+set internet-access <RULE> destination <OBJECT_OR_GROUP>
+set internet-access <RULE> service <PROTOCOL> <PORT>
+set internet-access <RULE> action <allow|deny>
+set internet-access <RULE> description <TEXT>
+set internet-access <RULE> enabled
+
+unset internet-access <RULE> source <OBJECT_OR_GROUP>
+unset internet-access <RULE> destination <OBJECT_OR_GROUP>
+unset internet-access <RULE> service <PROTOCOL> <PORT>
+unset internet-access <RULE> enabled
+unset internet-access <RULE>
+
+set internet-access <RULE> before <OTHER_RULE>
+set internet-access <RULE> after <OTHER_RULE>
+```
+
+Internet Access uses its own order independent of Remote Access. Within a rule, multiple selectors in the same dimension are OR; Source AND Destination AND Service dimensions must all match.
+
+Valid destination types include FQDN, public Host, public Network, and compatible Object Groups subject to security validation.
+
+## 14. Internet Access test/explain
+
+```text
+test internet-access <SOURCE_IP> <DESTINATION> <PORT> <PROTOCOL>
+```
+
+Example:
+
+```text
+test internet-access 10.10.10.20 google.com 443 https
+```
+
+Output should include Object matches, DNS/security validation where applicable, ordered rule trace, and final action.
+
+## 15. Fixed TCP
+
+The canonical Fixed TCP grammar is implementation-frozen during the implementation phase, but it must use the same Object/policy authority rather than a separate flat destination authority.
+
+Target discovery surface:
+
+```text
+show fixed-tcp
+show fixed-tcp <ENTRY>
+set fixed-tcp <ENTRY>
+unset fixed-tcp <ENTRY>
+```
+
+Any direct mutation must reuse Internet Access policy validation and cannot bypass implicit default DENY.
+
+## 16. AI Principals
+
+```text
+show ai-principals
+show ai-principal <PRINCIPAL>
+show ai-principal <PRINCIPAL> references
+
+set ai-principal <PRINCIPAL>
+set ai-principal <PRINCIPAL> description <TEXT>
+set ai-principal <PRINCIPAL> enabled
+
+unset ai-principal <PRINCIPAL> enabled
+unset ai-principal <PRINCIPAL>
+```
+
+Creation is a guided/auth-aware workflow. Raw authentication credentials are not accepted or echoed through generic property commands unless the implementation defines a secure credential-ingest command with non-echo semantics.
+
+Credential revocation/rotation is exposed through a dedicated safe workflow, for example:
+
+```text
+system credential revoke ai-principal <PRINCIPAL>
+system credential rotate ai-principal <PRINCIPAL>
+system credential configure ai-principal <PRINCIPAL> authentication static-bearer
+system credential configure ai-principal <PRINCIPAL> authentication oauth
+system credential configure ai-principal <PRINCIPAL> oauth-redirect <URI>
+system credential approve-oauth <PENDING-ID>
+```
+
+Authentication modes:
+
+```text
+Static Bearer    operator-issued token in Authorization: Bearer
+OAuth            built-in OAuth 2.1 authorization server + resource server
+                 (authorization_code+PKCE S256, client_credentials)
+Auth model       static-bearer+built-in-oauth2.1-as/rs+rfc9728
+```
+
+`client_credentials` mints a separate expiring `drauth_` access token bound to
+the canonical MCP resource. It is not an alias for Static Bearer.
+
+Do not call Static Bearer "OAuth". Raw tokens are shown only at issuance.
+
+## 17. AI Access rules
+
+```text
+show ai-access
+show ai-access <RULE>
+show ai-access <RULE> impact
+
+set ai-access <RULE>
+set ai-access <RULE> principal <PRINCIPAL>
+set ai-access <RULE> target endpoint <ENDPOINT>
+set ai-access <RULE> target client-group <GROUP>
+set ai-access <RULE> capability <CAPABILITY>
+set ai-access <RULE> path <PATTERN>
+set ai-access <RULE> exec-timeout <SECONDS>
+set ai-access <RULE> action <allow|deny>
+set ai-access <RULE> description <TEXT>
+set ai-access <RULE> enabled
+set ai-access <RULE> before <OTHER_RULE>
+set ai-access <RULE> after <OTHER_RULE>
+
+unset ai-access <RULE> target endpoint <ENDPOINT>
+unset ai-access <RULE> target client-group <GROUP>
+unset ai-access <RULE> capability <CAPABILITY>
+unset ai-access <RULE> path <PATTERN>
+unset ai-access <RULE> exec-timeout
+unset ai-access <RULE> enabled
+unset ai-access <RULE>
+```
+
+Initial capability names:
+
+```text
+list_hosts
+get_host
+get_system_info
+exec
+read_file
+write_file
+upload_file
+download_file
+list_processes
+```
+
+Unknown capability names fail closed.
+
+AI Access evaluation is top-down first complete match, with explicit ALLOW/DENY and implicit final DENY. New rules are disabled at the bottom. Multiple targets/capabilities inside one rule are OR; Principal AND Target AND Capability AND applicable constraints must all match.
+
+A rule intended to be truly read-only must not grant `exec`.
+
+## 18. AI authorization test
+
+```text
+test ai-access <PRINCIPAL> <ENDPOINT> <CAPABILITY> [OPERAND]
+```
+
+Examples:
+
+```text
+test ai-access chatgpt-support dp1 read_file /var/log/vendor/app.log
+test ai-access cursor-dev lab1 exec 'systemctl status vendor'
+```
+
+The test explains authorization only; it does not run the command or read the file.
+
+## 19. AI activity
+
+```text
+show ai-activity
+show ai-activity principal <PRINCIPAL>
+show ai-activity endpoint <ENDPOINT>
+```
+
+Output is bounded and sanitized. It does not print secrets, full sensitive file contents, or unrestricted command output.
+
+## 20. Policy timing
+
+Canonical network rule:
+
+```text
+Policy changes apply immediately to new connections.
+```
+
+Established connections are not implicitly terminated by policy edits.
+
+Canonical AI rule:
+
+```text
+Each new MCP tool invocation evaluates the current AI Access policy.
+```
+
+An already-running operation is not implicitly killed by a later policy edit.
+
+## 21. Policy impact and confirmation
+
+All security-relevant mutating commands use the same impact engine.
+
+Interactive output may include:
+
+```text
+Access broadened: YES
+Access narrowed: NO
+Affected rules: 2
+Newly shadowed: 1
+Before: DENY
+After: ALLOW via #10
+Continue? [y/N]:
+```
+
+Broadening defaults to No.
+
+Non-interactive automation requires an explicit acknowledgement mechanism implemented consistently across resources; silent bypass is not allowed.
+
+## 22. Reference protection
+
+Examples:
+
+```text
+unset object external1
+```
+
+must fail when referenced and list references.
+
+Likewise for Object Groups, AI Principals, Client Groups, and other durable dependencies where deletion would silently alter security meaning.
+
+## 23. Concurrency
+
+Mutating interactive workflows use optimistic concurrency.
+
+If the stored row version changed since the edit began, the mutation fails with no partial write.
+
+## 24. System status
+
+```text
+show status
+```
+
+must include control-plane/runtime consistency when running on a server:
+
+```text
+Control DB       : Healthy
+DB Revision      : 42
+Remote Policy    : 42 active
+Internet Policy  : 42 active
+AI Policy        : 42 active
+
+MCP Bridge
+----------
+Backend       : Healthy
+Backend Bind  : 127.0.0.1:6103
+Public URL    : https://<control-host>/mcp
+Protocol      : 2026-07-28
+Transport     : Streamable HTTP
+Authentication: Static Bearer / OAuth
+Auth Model    : static-bearer+built-in-oauth2.1-as/rs+rfc9728
+```
+
+Public URL is `Not configured` in Direct mode because there is no Data Relay Link HTTPS frontend on TCP/443. Remote MCP requires Enterprise single-443.
+
+A mismatch is surfaced as warning/critical/error according to the canonical health model.
+
+```text
+system diagnostics mcp
+```
+
+reports backend health, loopback bind, public URL, frontend `/mcp` routing, and authentication modes. Backend Healthy does not imply remote MCP is healthy.
+
+## 25. Version
+
+```text
+show version
+```
+
+Canonical fields:
+
+```text
+Data Relay Link: <display identity>
+Channel: <development|preview|stable>
+Source HEAD: <40-character SHA>
+Relay Engine (FRP): <version>
+Control DB Schema: <schema version>
+```
+
+Stable identity requires an immutable matching tag and qualification evidence.
+
+## 26. Audit
+
+```text
+system audit
+system audit revision <REV>
+system audit entity <TYPE> <ID>
+system audit ai-principal <PRINCIPAL>
+```
+
+Audit output contains bounded metadata and impact summaries, not arbitrary sensitive payloads.
+
+## 27. Revisions
+
+```text
+system revisions
+system revision <REV>
+system diff <REV_A> <REV_B>
+```
+
+Target rollback grammar:
+
+```text
+system rollback <REV>
+```
+
+Rollback is only public after it is implemented and qualified. It creates a new audited revision rather than rewriting history.
+
+## 28. Backup / restore
+
+```text
+system backup <PATH>
+system backup validate <PATH>
+system restore <PATH>
+```
+
+Backup uses a consistent SQLite snapshot mechanism. It is not equivalent to copying the live DB file.
+
+Restore validates archive, DB integrity, schema compatibility, ownership/modes, recompiles runtime artifacts, activates them, and verifies generation consistency.
+
+## 29. Diagnostics
+
+```text
+system diagnostics
+system diagnostics control-plane
+system diagnostics runtime
+```
+
+The historical `doctor` direct alias may be retained as a discoverable convenience only if it maps to the same read-only diagnostics path:
 
 ```text
 doctor
-support-bundle
-support-bundle --output <path>
+```
+
+Diagnostics do not mutate state unless the command explicitly says it is a repair operation.
+
+## 30. Updates
+
+```text
+system update product
+system update engine
+```
+
+Product and Relay Engine versions are independent.
+
+Stable update paths use immutable qualified release resources only.
+
+## 31. Help
+
+```text
 help
-help show
-help set client
+help clients
+help objects
+help remote-access
+help internet-access
+help ai-access
+help system
+help workflows
+help commands
 help legacy
-?
-show ?
-set client <ID> ?
+```
+
+`help commands` is the complete public command catalog.
+
+`help legacy` is the only normal location for any temporary pre-v2.4 development aliases if implementation retains them during transition.
+
+## 32. Menu
+
+```text
 menu
-history
-clear
+```
+
+opens the role-aware guided navigation defined by the CLI IA.
+
+## 33. Exit
+
+```text
 exit
 ```
 
-`support-bundle` writes a sanitized read-only diagnostic archive
-(`frp-support-<hostname>-<YYYYMMDDTHHMMSSZ>.tar.gz`). Private keys, tokens,
-enrollment secrets, and auth material are omitted or redacted. It does not
-restart services.
+leaves the REPL. At shell level, command completion returns to the shell normally.
 
-Root `?` lists verbs only. Detailed syntax is under `help` / `help <verb>`
-or a context `?`. `menu` is the guided numbered interface using the same
-vocabulary (Show / Set / Unset / Create / Update / Revoke / Release).
+## 34. Completion contract
 
----
+Tab completion must be:
 
-## Compatibility aliases
+```text
+non-executing
+context-aware
+role-aware
+field-type-aware
+secret-safe
+```
 
-These still work for scripts and muscle memory. Tab and canonical help hide
-them. `help legacy` lists them.
+Completion candidates are drawn from authoritative DB identity, not stale derived runtime artifacts.
 
-| Alias | Canonical |
-| --- | --- |
-| `clients` | `show clients` |
-| `client` / `client-info` | `show client` |
-| `client-set` / `edit-client` | `set client` / `unset client` |
-| `enroll` / `create-client` | `create enrollment` |
-| `enroll-bulk` | `create enrollments` |
-| `enrollments` | `show enrollments` |
-| `enrollment-revoke` | `revoke enrollment` |
-| `revoke` / `revoke-client` | `revoke client` |
-| `release-service` | `release service` |
-| `release-client` | `release client` |
-| `project-update` / `client-update` | `update project` |
-| `frp-update` / `server-update` | `update frp` |
-| `backup` | `create backup` |
-| `restore PATH` | `restore backup PATH` |
-| `upstream` | `show upstream` |
-| `audit` | `show audit` |
-| `services` / `manage` / `info` | `show services` / `add`+`set service` / `show info` |
-| `status` / `version` | `show status` / `show version` |
+## 35. Legacy transition
 
-Direct `/usr/local/sbin/frp-*` tools are unchanged.
+The current development source may still implement older commands such as:
+
+```text
+set service-profile
+set internet-profile
+legacy ACL/access-list grammar
+```
+
+Those are not the v2.4.0 target public contract.
+
+The implementation phase removes or hides them before stable qualification unless an explicit new product decision retains a compatibility alias. Because v2.4.0 has not yet been released and has no production users, backward compatibility is not a release requirement for these development-only nouns.
+
+## 36. Error semantics
+
+Security-relevant invalid operations fail closed with actionable messages.
+
+Examples:
+
+```text
+Object type is not valid for Internet Access Destination.
+No changes were applied.
+```
+
+```text
+Cannot remove Object external1.
+Referenced by remote-access partner-ssh and internet-access approved-web.
+```
+
+```text
+Object changed while you were editing it.
+No changes were applied.
+```
+
+```text
+Rule is shadowed by earlier rule #10 allow-all.
+Effective action remains ALLOW.
+```
+
+## 37. Stable CLI invariants
+
+```text
+DIRECT_ROOTS=show,set,unset,test,system,menu,help,exit
+
+LEGACY_ACL_PRIMARY_RESOURCE=NO
+SERVICE_PROFILE_PRIMARY_RESOURCE=NO
+INTERNET_PROFILE_PRIMARY_RESOURCE=NO
+
+OBJECT_PRIMARY_RESOURCE=YES
+OBJECT_GROUP_PRIMARY_RESOURCE=YES
+CLIENT_GROUP_PRIMARY_RESOURCE=YES
+PUBLISHED_SERVICE_PRIMARY_RESOURCE=YES
+SERVICE_PRESET_PRIMARY_RESOURCE=YES
+REMOTE_ACCESS_PRIMARY_RESOURCE=YES
+INTERNET_ACCESS_PRIMARY_RESOURCE=YES
+AI_PRINCIPAL_PRIMARY_RESOURCE=YES
+AI_ACCESS_PRIMARY_RESOURCE=YES
+
+FIRST_MATCH_ORDERING=YES
+IMPLICIT_DEFAULT_DENY=YES
+POLICY_IMPACT_ANALYSIS=YES
+REFERENCE_PROTECTION=YES
+OPTIMISTIC_CONCURRENCY=YES
+```

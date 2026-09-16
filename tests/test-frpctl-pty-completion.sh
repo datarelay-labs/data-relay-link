@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Real PTY frpctl Tab completion regression for GNU Readline and libedit.
 # Verifies Tab completes rather than executing a partial token.
+# Canonical grammar is action-first: sho<Tab> → show; show statu<Tab> → show status.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
@@ -82,7 +83,7 @@ def read_some(timeout=0.2):
 deadline = time.time() + 8.0
 while time.time() < deadline:
     read_some(0.25)
-    if b"frpctl>" in buf:
+    if b"drlink>" in buf or b"frpctl>" in buf:
         break
 else:
     try:
@@ -92,7 +93,8 @@ else:
     sys.stderr.write(buf.decode("utf-8", "replace"))
     raise SystemExit("prompt not seen")
 
-os.write(master, b"statu")
+# Action-first unique root completion: sho → show
+os.write(master, b"sho")
 time.sleep(0.2)
 read_some(0.2)
 os.write(master, b"\t")
@@ -100,12 +102,28 @@ time.sleep(0.6)
 read_some(0.6)
 
 text = buf.decode("utf-8", "replace")
-if "Unknown command: statu" in text:
+if "Unknown command: sho" in text:
     sys.stderr.write(text)
     raise SystemExit("Tab executed partial token")
+if "show" not in text:
+    sys.stderr.write(text)
+    raise SystemExit("Tab did not complete to show")
+
+# Continue: show statu → show status
+os.write(master, b" statu")
+time.sleep(0.2)
+read_some(0.2)
+os.write(master, b"\t")
+time.sleep(0.6)
+read_some(0.6)
+
+text = buf.decode("utf-8", "replace")
+if "Unknown command: show statu" in text or "Unknown command: statu" in text:
+    sys.stderr.write(text)
+    raise SystemExit("Tab executed partial show status token")
 if "status" not in text:
     sys.stderr.write(text)
-    raise SystemExit("Tab did not complete to status")
+    raise SystemExit("Tab did not complete to status under show")
 
 # Enter runs completed command through stub dispatcher.
 # PTY Enter is carriage-return on libedit/macOS; send both for portability.
@@ -113,7 +131,7 @@ os.write(master, b"\r")
 time.sleep(0.5)
 read_some(0.8)
 text = buf.decode("utf-8", "replace")
-if "Unknown command: statu" in text:
+if "Unknown command: sho" in text or "Unknown command: show statu" in text:
     sys.stderr.write(text)
     raise SystemExit("Enter still saw partial token")
 if "STUB_FRPCTL" not in text:
@@ -124,15 +142,16 @@ if "STUB_FRPCTL" not in text:
     text = buf.decode("utf-8", "replace")
 if "STUB_FRPCTL" not in text or "status" not in text.split("STUB_FRPCTL")[-1]:
     # Accept Tab-complete proof alone if dispatch capture is noisy on a backend.
-    if "status " in text or text.rstrip().endswith("status"):
+    if "show status" in text or text.rstrip().endswith("status"):
         print("PTY_STATUS_DISPATCH_CAPTURE_SOFT=PASS")
     else:
         sys.stderr.write(text)
-        raise SystemExit("completed status was not dispatched")
+        raise SystemExit("completed show status was not dispatched")
 else:
     print("PTY_STATUS_DISPATCHED=PASS")
 
-print("PTY_TAB_STATUS_COMPLETE=PASS")
+print("PTY_TAB_SHOW_COMPLETE=PASS")
+print("PTY_TAB_SHOW_STATUS_COMPLETE=PASS")
 print("PTY_NO_PARTIAL_EXECUTE=PASS")
 
 # Ambiguous "s" + Tab should not execute a partial command (best-effort;
@@ -167,5 +186,6 @@ except ChildProcessError:
 PY
 
 pass "MACOS_PTY_REPL_OR_LINUX_PTY"
-pass "TAB_COMPLETES_STATUS"
+pass "TAB_COMPLETES_SHOW"
+pass "TAB_COMPLETES_SHOW_STATUS"
 echo "FRPCTL_PTY_COMPLETION_TEST=PASS"

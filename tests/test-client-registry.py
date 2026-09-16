@@ -62,6 +62,34 @@ def test_display_and_match():
     mid, client = creg.resolve_client(state, '0303cedf')
     if mid != '0303cedf99999999':
         fail('prefix lookup', mid)
+    mid, client = creg.resolve_client(state, 'SEOUL-WEB01')
+    if mid != 'aabbccdd00112233':
+        fail('case-insensitive label shortcut', mid)
+    mid, client = creg.resolve_client(state, 'AELLA')
+    if mid != '0303cedf99999999':
+        fail('case-insensitive hostname shortcut', mid)
+    try:
+        creg.resolve_client(state, 'UBUNTU')
+        fail('case-insensitive duplicate hostname should be ambiguous')
+    except creg.ClientLookupError as exc:
+        if len(exc.matches) != 2:
+            fail('case-insensitive ambiguous hostname', exc.matches)
+    if creg.find_client_id_by_label(state, 'Seoul-Web01') != 'aabbccdd00112233':
+        fail('find_client_id_by_label case fold')
+    groups = {
+        'schema_version': 2,
+        'clients': {},
+        'groups': {
+            'grp_aaaaaaaa': {'name': 'Edge-Sites'},
+            'grp_bbbbbbbb': {'name': 'other'},
+        },
+    }
+    if creg.find_group_id_by_name(groups, 'edge-sites') != 'grp_aaaaaaaa':
+        fail('group name case-insensitive uniqueness')
+    gid, group = creg.resolve_group(groups, 'EDGE-SITES')
+    if gid != 'grp_aaaaaaaa':
+        fail('group resolve case-insensitive', gid)
+    pass_('CASE_INSENSITIVE_SHORTCUTS')
     # CLIENT ID / prefix must win over label or hostname collisions.
     collision = {
         'schema_version': 2,

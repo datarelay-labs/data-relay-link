@@ -20,33 +20,55 @@ from pathlib import Path
 FORMAT = "frp-auto-deploy-server-backup"
 SCHEMA_VERSION = 1
 REQUIRED = {
-    "etc/frp-auto-deploy/config.json",
-    "etc/frp-auto-deploy/version",
-    "etc/frp-auto-deploy/pki/ca.key",
-    "etc/frp-auto-deploy/pki/ca.crt",
-    "etc/frp-auto-deploy/pki/server.key",
-    "etc/frp-auto-deploy/pki/server.crt",
+    "etc/drlink/config.json",
+    "etc/drlink/version",
+    "etc/drlink/pki/ca.key",
+    "etc/drlink/pki/ca.crt",
+    "etc/drlink/pki/server.key",
+    "etc/drlink/pki/server.crt",
     "etc/frp/frps.toml",
     "etc/frp/server_token",
-    "var/lib/frp-auto-deploy/registry.json",
-    "var/lib/frp-auto-deploy/access-control.json",
-    "var/lib/frp-auto-deploy/service-profiles.json",
+    "var/lib/drlink/registry.json",
+    "var/lib/drlink/access-control.json",
+    "var/lib/drlink/egress-control.json",
+    "var/lib/drlink/service-profiles.json",
 }
+def _load_state_paths():
+    candidates = []
+    try:
+        here = Path(__file__).resolve()
+        candidates.append(here.parent.parent / "lib" / "frp_state_paths.py")
+    except NameError:
+        pass
+    env_root = os.environ.get("ROOT") or os.environ.get("FRP_SOURCE_ROOT") or ""
+    if env_root:
+        candidates.append(Path(env_root) / "lib" / "frp_state_paths.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_state_paths.py"))
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("frp_state_paths", str(path))
+            module = importlib.util.module_from_spec(spec)
+            # dataclasses requires the module to be present in sys.modules
+            # before exec_module when using from __future__ import annotations.
+            sys.modules[spec.name] = module
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError("frp_state_paths.py is unavailable")
+
+
+_STATE_PATHS = _load_state_paths()
 OPTIONAL_EXACT = {
-    "etc/frp-auto-deploy/frontend.conf",
-    "var/lib/frp-auto-deploy/mgmt-nonces.json",
-    "var/lib/frp-auto-deploy/nginx-ownership",
-    "var/log/frp-auto-deploy/audit.jsonl",
-    "var/log/frp-auto-deploy/access-conn.jsonl",
+    "etc/drlink/frontend.conf",
+    "var/lib/drlink/mgmt-nonces.json",
+    "var/lib/drlink/nginx-ownership",
+    *_STATE_PATHS.restore_optional_exact(),
 }
 TREE_PREFIXES = (
-    "etc/frp-auto-deploy/pki/",
-    "var/lib/frp-auto-deploy/enrollments/",
-    "var/lib/frp-auto-deploy/bootstrap/",
+    "etc/drlink/pki/",
+    *(prefix + "/" for prefix in _STATE_PATHS.backup_tree_roots()),
 )
 TREE_ROOTS = tuple(prefix.rstrip("/") for prefix in TREE_PREFIXES)
-AUDIT_ROTATED_PREFIX = "var/log/frp-auto-deploy/audit.jsonl."
-ACCESS_CONN_ROTATED_PREFIX = "var/log/frp-auto-deploy/access-conn.jsonl."
 
 
 class RestoreError(RuntimeError):
@@ -70,19 +92,15 @@ def allowed_path(rel: str) -> bool:
         return True
     if any(rel.startswith(prefix) for prefix in TREE_PREFIXES):
         return True
-    if rel.startswith(AUDIT_ROTATED_PREFIX):
-        suffix = rel[len(AUDIT_ROTATED_PREFIX) :]
-        return suffix.isdigit() and not rel.endswith(".lock")
-    if rel.startswith(ACCESS_CONN_ROTATED_PREFIX):
-        suffix = rel[len(ACCESS_CONN_ROTATED_PREFIX) :]
-        return suffix.isdigit() and not rel.endswith(".lock")
+    if _STATE_PATHS.allowed_rotated_rel(rel):
+        return True
     return False
 
 
 def allowed_directory(rel: str) -> bool:
     prefix = rel.rstrip("/") + "/"
     candidates = REQUIRED | OPTIONAL_EXACT | set(TREE_ROOTS) | {
-        "var/log/frp-auto-deploy",
+        "var/log/drlink",
     }
     return any(candidate == rel or candidate.startswith(prefix) for candidate in candidates)
 
@@ -94,7 +112,7 @@ def validate_rel(rel: str) -> None:
 
 
 def read_installed_project_version(root: Path) -> str:
-    path = root / "etc/frp-auto-deploy/version"
+    path = root / "etc/drlink/version"
     if not path.is_file():
         return ""
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -223,10 +241,11 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         raise RestoreError("checksum manifest does not match the backup manifest")
 
     for rel in (
-        "etc/frp-auto-deploy/config.json",
-        "var/lib/frp-auto-deploy/registry.json",
-        "var/lib/frp-auto-deploy/access-control.json",
-        "var/lib/frp-auto-deploy/service-profiles.json",
+        "etc/drlink/config.json",
+        "var/lib/drlink/registry.json",
+        "var/lib/drlink/access-control.json",
+        "var/lib/drlink/egress-control.json",
+        "var/lib/drlink/service-profiles.json",
     ):
         try:
             value = json.loads((destination / "payload" / rel).read_text(encoding="utf-8"))
@@ -240,7 +259,7 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
 
 
 def fixed_mode(rel: str) -> int:
-    if rel == "etc/frp-auto-deploy/version" or rel.endswith(".crt"):
+    if rel == "etc/drlink/version" or rel.endswith(".crt"):
         return 0o644
     return 0o600
 
@@ -334,34 +353,254 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
         if allow_hook and hook_after and count >= hook_after:
             raise RestoreError("simulated restore failure")
 
-    # Restore rotated audit companions declared in the backup payload.
-    audit_payload_dir = payload / "var/log/frp-auto-deploy"
-    if audit_payload_dir.is_dir():
-        for source in sorted(audit_payload_dir.glob("audit.jsonl.*")):
-            if not source.is_file() or source.name.endswith(".lock"):
-                continue
-            rel = source.relative_to(payload).as_posix()
-            if not allowed_path(rel):
-                continue
-            atomic_file(source, root / rel, rel)
-            count += 1
-            if allow_hook and hook_after and count >= hook_after:
-                raise RestoreError("simulated restore failure")
+    for rel, source in _STATE_PATHS.collect_present_rotated_files(payload):
+        if not allowed_path(rel):
+            continue
+        atomic_file(source, root / rel, rel)
+        count += 1
+        if allow_hook and hook_after and count >= hook_after:
+            raise RestoreError("simulated restore failure")
 
 
 def _load_module(name, filename):
     here = Path(__file__).resolve()
     candidates = (
         here.parent.parent / "lib" / filename,
-        Path("/usr/local/lib/frp-auto-deploy") / filename,
+        Path("/usr/local/lib/drlink") / filename,
     )
     for path in candidates:
         if path.is_file():
+            lib_dir = str(path.parent)
+            if lib_dir not in sys.path:
+                sys.path.insert(0, lib_dir)
             spec = importlib.util.spec_from_file_location(name, str(path))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
     return None
+
+
+def _reapply_egress_permissions_after_restore(root: Path) -> None:
+    """Restore drops ACLs on replace; re-grant egress the runtime read surface."""
+    eg = _load_module("frp_egress_control", "frp_egress_control.py")
+    if eg is None:
+        return
+    config = root / "etc/drlink/config.json"
+    control = root / "var/lib/drlink/egress-control.json"
+    conn_log = root / _STATE_PATHS.default_egress_conn_log_rel()
+    # Prefer paths from restored config when present.
+    if config.is_file():
+        try:
+            cfg = json.loads(config.read_text(encoding="utf-8"))
+            if isinstance(cfg, dict):
+                raw = cfg.get("egress_control_file")
+                if raw:
+                    control = Path(str(raw))
+                    if not str(control).startswith(str(root)):
+                        # Under test roots, map absolute product paths into the tree.
+                        test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+                        if test_root and str(control).startswith("/"):
+                            control = Path(test_root + str(control))
+                raw_log = cfg.get("egress_conn_log_file")
+                if raw_log:
+                    conn_log = Path(str(raw_log))
+                    test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
+                    if test_root and str(conn_log).startswith("/") and not str(conn_log).startswith(str(root)):
+                        conn_log = Path(test_root + str(conn_log))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    try:
+        eg.reapply_egress_runtime_permissions(
+            config_path=config if config.is_file() else None,
+            control_path=control if control.is_file() else None,
+            conn_log_path=conn_log,
+            parents=True,
+        )
+    except Exception:
+        return
+
+
+def _load_allocator_validator():
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parent.parent / "server" / "frp-port-allocator.py",
+        Path("/usr/local/lib/drlink/frp-port-allocator.py"),
+    )
+    for path in candidates:
+        if path.is_file():
+            lib_dir = str(here.parent.parent / "lib")
+            if lib_dir not in sys.path:
+                sys.path.insert(0, lib_dir)
+            installed = str(Path("/usr/local/lib/drlink"))
+            if installed not in sys.path:
+                sys.path.insert(0, installed)
+            spec = importlib.util.spec_from_file_location("frp_port_allocator", str(path))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
+def validate_staged_control_payload(extracted: Path) -> None:
+    """Semantic preflight on staged backup payload before replacing live files."""
+    payload = extracted / "payload"
+    cfg_path = payload / "etc/drlink/config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RestoreError("staged config.json is invalid") from exc
+    if not isinstance(cfg, dict):
+        raise RestoreError("staged config.json must be an object")
+
+    allocator = _load_allocator_validator()
+    creg = _load_module("frp_client_registry", "frp_client_registry.py")
+    acl = _load_module("frp_access_control", "frp_access_control.py")
+    egress = _load_module("frp_egress_control", "frp_egress_control.py")
+    profiles = _load_module("frp_service_profiles", "frp_service_profiles.py")
+    infra = _load_module("frp_infrastructure_ports", "frp_infrastructure_ports.py")
+
+    rel_paths = {
+        "registry": "var/lib/drlink/registry.json",
+        "access": "var/lib/drlink/access-control.json",
+        "egress": "var/lib/drlink/egress-control.json",
+        "profiles": "var/lib/drlink/service-profiles.json",
+    }
+    staged: dict[str, dict] = {}
+    for key, rel in rel_paths.items():
+        path = payload / rel
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RestoreError("staged %s is invalid" % rel) from exc
+        if not isinstance(value, dict):
+            raise RestoreError("staged %s must be an object" % rel)
+        staged[key] = value
+
+    if allocator is not None:
+        try:
+            allocator.validate_registry_invariants(staged["registry"], cfg)
+        except Exception as exc:
+            raise RestoreError("staged registry failed invariant checks: %s" % exc) from exc
+    elif staged["registry"].get("schema_version") != 2:
+        raise RestoreError("staged registry schema is invalid")
+    # Group invariants do not depend on the allocator being importable.
+    if creg is not None:
+        try:
+            creg.validate_group_invariants(staged["registry"])
+        except Exception as exc:
+            raise RestoreError("staged registry failed group invariant checks: %s" % exc) from exc
+
+    if acl is not None:
+        try:
+            acl.validate_access_state(staged["access"])
+        except Exception as exc:
+            raise RestoreError("staged access-control.json is invalid: %s" % exc) from exc
+        # Canonical Access↔registry cross-reference (same rules as doctor).
+        try:
+            xref_issues = acl.doctor_issues(staged["access"], staged["registry"])
+        except Exception as exc:
+            raise RestoreError("staged access cross-reference failed: %s" % exc) from exc
+        xref_errors = [
+            issue
+            for issue in (xref_issues or [])
+            if str(issue.get("severity") or "").lower() == "error"
+        ]
+        if xref_errors:
+            first = xref_errors[0]
+            raise RestoreError(
+                "staged access-control.json fails registry cross-reference: %s"
+                % (first.get("message") or first.get("class") or "invalid binding")
+            )
+    if egress is not None:
+        try:
+            # Restore candidates may still be schema v1 (pre-protocol). Migrate
+            # deterministically before semantic validation; ambiguous ports fail closed.
+            migrated = egress._parse_egress_state(staged["egress"], migrate=True)
+            egress.validate_egress_state(migrated)
+            staged["egress"] = migrated
+        except Exception as exc:
+            raise RestoreError("staged egress-control.json is invalid: %s" % exc) from exc
+    if profiles is not None:
+        try:
+            profiles.validate_profiles_state(staged["profiles"])
+        except Exception as exc:
+            raise RestoreError("staged service-profiles.json is invalid: %s" % exc) from exc
+    if infra is not None:
+        try:
+            infra.assert_egress_not_owned_by_service(cfg, staged["registry"])
+        except Exception as exc:
+            raise RestoreError("staged infrastructure port collision: %s" % exc) from exc
+        colliding = infra.infrastructure_ports_in_service_range(cfg)
+        if colliding:
+            raise RestoreError(
+                "staged infrastructure ports collide with service range: %s"
+                % ", ".join(str(p) for p in sorted(colliding))
+            )
+
+    pair_errors = staged_enrollment_pair_errors(payload)
+    if pair_errors:
+        raise RestoreError(
+            "staged enrollment state contains orphan Zero-Touch pairs: %s"
+            % "; ".join(pair_errors[:5])
+        )
+
+
+def staged_enrollment_pair_errors(payload: Path) -> list[str]:
+    """Structural Zero-Touch pair errors in a staged payload.
+
+    A bootstrap ticket without its enrollment record is an orphan: the ticket
+    can never be redeemed and the pair can never be purged coherently. Manual
+    enrollments legitimately have no ticket and are not inspected here. Only
+    unambiguous structural breakage is reported; state disagreements inside an
+    intact pair are lifecycle findings for doctor, not restore blockers.
+    """
+    bootstrap_dir = payload / "var/lib/drlink/bootstrap"
+    enrollments_dir = payload / "var/lib/drlink/enrollments"
+    if not bootstrap_dir.is_dir():
+        return []
+    errors: list[str] = []
+    tickets_by_enrollment: dict[str, list[str]] = {}
+    for path in sorted(bootstrap_dir.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            errors.append(f"bootstrap ticket {path.name} is unreadable")
+            continue
+        if not isinstance(record, dict):
+            errors.append(f"bootstrap ticket {path.name} is not an object")
+            continue
+        enrollment_id = str(record.get("enrollment_id") or "").strip().lower()
+        if not enrollment_id:
+            errors.append(f"bootstrap ticket {path.name} has no enrollment_id")
+            continue
+        tickets_by_enrollment.setdefault(enrollment_id, []).append(path.name)
+        enroll_path = enrollments_dir / (enrollment_id + ".json")
+        if not enroll_path.is_file():
+            errors.append(
+                f"bootstrap ticket {path.name} has no paired enrollment record "
+                f"({enrollment_id}.json)"
+            )
+            continue
+        try:
+            enrollment = json.loads(enroll_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            errors.append(f"enrollment record {enroll_path.name} is unreadable")
+            continue
+        if not isinstance(enrollment, dict):
+            errors.append(f"enrollment record {enroll_path.name} is not an object")
+            continue
+        if str(enrollment.get("id") or "").strip().lower() != enrollment_id:
+            errors.append(
+                f"bootstrap ticket {path.name} does not match enrollment record "
+                f"{enroll_path.name}"
+            )
+    for enrollment_id, names in sorted(tickets_by_enrollment.items()):
+        if len(names) > 1:
+            errors.append(
+                "enrollment %s is paired to multiple bootstrap tickets: %s"
+                % (enrollment_id, ", ".join(sorted(names)))
+            )
+    return errors
 
 
 def _audit_emit(event, **kwargs):
@@ -373,9 +612,14 @@ def _audit_emit(event, **kwargs):
         return
 
 
-def _write_txn(root: Path, snapshot: Path | None = None) -> None:
+def _write_txn(
+    root: Path,
+    snapshot: Path | None = None,
+    *,
+    rollback_kind: str = "VALIDATED",
+) -> None:
     # Restore is a server-role operation; use the server marker path.
-    marker = root / "var/lib/frp-auto-deploy/server-update-pending.json"
+    marker = root / "var/lib/drlink/server-update-pending.json"
     marker.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "schema_version": 2,
@@ -385,6 +629,7 @@ def _write_txn(root: Path, snapshot: Path | None = None) -> None:
         "candidate_version": "",
         "started_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "mutation_started": True,
+        "rollback_kind": rollback_kind,
     }
     if snapshot is not None:
         record["snapshot_path"] = str(snapshot)
@@ -393,11 +638,11 @@ def _write_txn(root: Path, snapshot: Path | None = None) -> None:
 
 
 def _clear_txn(root: Path) -> None:
-    marker = root / "var/lib/frp-auto-deploy/server-update-pending.json"
+    marker = root / "var/lib/drlink/server-update-pending.json"
     if marker.is_file():
         marker.unlink()
     # Clear legacy shared marker only when it is unambiguously a server restore.
-    legacy = root / "var/lib/frp-auto-deploy/update-pending.json"
+    legacy = root / "var/lib/drlink/update-pending.json"
     if legacy.is_file():
         try:
             data = json.loads(legacy.read_text(encoding="utf-8"))
@@ -433,16 +678,32 @@ def _wait_until_ready(check, description: str) -> None:
         time.sleep(_readiness_interval())
 
 
-def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None:
+def installed_client_role(root: Path) -> bool:
+    """True when this host has an installed client unit (dual-role).
+
+    Detected BEFORE restore mutation using the same systemd ownership marker
+    doctor uses for role detection. A server-only host without this unit
+    must remain valid.
+    """
+    return (root / "etc/systemd/system/drlink-client.service").is_file()
+
+
+def verify_restored_control_state(
+    root: Path,
+    in_rollback: bool = False,
+    expect_client_role: bool = False,
+) -> None:
     if os.environ.get("FRP_RESTORE_HOOK_HEALTH_FAIL") == "1" and not in_rollback:
         raise RestoreError("simulated post-restore health failure")
     if in_rollback and os.environ.get("FRP_RESTORE_HOOK_ROLLBACK_HEALTH_FAIL") == "1":
         raise RestoreError("simulated rollback health failure")
-    registry_path = root / "var/lib/frp-auto-deploy/registry.json"
-    config_path = root / "etc/frp-auto-deploy/config.json"
+    if expect_client_role and os.environ.get("FRP_RESTORE_HOOK_CLIENT_READY_FAIL") == "1" and not in_rollback:
+        raise RestoreError("drlink-client.service is not active after restore")
+    registry_path = root / "var/lib/drlink/registry.json"
+    config_path = root / "etc/drlink/config.json"
     toml_path = root / "etc/frp/frps.toml"
     token_path = root / "etc/frp/server_token"
-    ca_path = root / "etc/frp-auto-deploy/pki/ca.crt"
+    ca_path = root / "etc/drlink/pki/ca.crt"
     try:
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -463,10 +724,16 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         raise RestoreError("restored CA certificate is missing")
     if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
         return
-    units = ["frps.service", "frp-port-allocator.service", "frp-access-plugin.service"]
-    frontend = (root / "etc/frp-auto-deploy/frontend.conf").is_file()
+    units = [
+        "drlink-server.service",
+        "drlink-allocator.service",
+        "drlink-access.service",
+        "drlink-egress.service",
+        "drlink-tcp-egress.service",
+    ]
+    frontend = (root / "etc/drlink/frontend.conf").is_file()
     if frontend:
-        units.append("frp-frontend.service")
+        units.append("drlink-frontend.service")
     for unit in units:
         def unit_active() -> bool:
             active = subprocess.run(
@@ -519,7 +786,7 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
         host = str(config.get("public_host") or "")
         port = int(config.get("frp_control_public_port") or 443)
         if host:
-            py = Path("/usr/local/lib/frp-auto-deploy/frp_frontend.py")
+            py = Path("/usr/local/lib/drlink/frp_frontend.py")
             if not py.is_file():
                 py = Path(__file__).resolve().parent.parent / "lib" / "frp_frontend.py"
             if py.is_file():
@@ -541,29 +808,85 @@ def verify_restored_control_state(root: Path, in_rollback: bool = False) -> None
                     return result.returncode == 0
 
                 _wait_until_ready(frontend_healthy, "verified frontend proxy health check failed")
+    if expect_client_role:
+        def client_active() -> bool:
+            active = subprocess.run(
+                ["systemctl", "is-active", "drlink-client.service"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return (active.stdout or "").strip() == "active"
+
+        _wait_until_ready(client_active, "drlink-client.service is not active")
 
 
-def restart_services(root: Path, allow_hook: bool = True) -> None:
-    if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
-        return
+def restart_services(root: Path, allow_hook: bool = True, expect_client_role: bool = False) -> None:
     if allow_hook and os.environ.get("FRP_RESTORE_HOOK_RESTART_FAIL") == "1":
         raise RestoreError("simulated service restart failure")
-    units = ["frps.service", "frp-port-allocator.service", "frp-access-plugin.service"]
-    if (root / "etc/frp-auto-deploy/frontend.conf").is_file():
-        units.append("frp-frontend.service")
+    if expect_client_role and allow_hook and os.environ.get("FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL") == "1":
+        raise RestoreError("failed to restart drlink-client.service")
+    if os.environ.get("FRP_SKIP_SYSTEMD") or os.environ.get("FRP_DEPLOY_TEST_ROOT"):
+        return
+    units = [
+        "drlink-server.service",
+        "drlink-allocator.service",
+        "drlink-access.service",
+        "drlink-egress.service",
+        "drlink-tcp-egress.service",
+    ]
+    if (root / "etc/drlink/frontend.conf").is_file():
+        units.append("drlink-frontend.service")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "restart", *units], check=True)
+    if not expect_client_role:
+        return
+    # Dual-role hosts: restart client after the server stack so frpc does not
+    # exit permanently while control plane ports are briefly unavailable.
+    result = subprocess.run(["systemctl", "restart", "drlink-client.service"], check=False)
+    if result.returncode != 0:
+        raise RestoreError("failed to restart drlink-client.service")
 
 
-def validate_to_temp(archive: Path, parent: Path | None = None) -> tuple[tempfile.TemporaryDirectory, Path]:
+def validate_to_temp(
+    archive: Path,
+    parent: Path | None = None,
+    *,
+    require_semantic: bool = True,
+) -> tuple[tempfile.TemporaryDirectory, Path]:
+    """Extract archive to a temp dir and optionally run semantic validation.
+
+    Restore candidates must always be semantically valid (require_semantic=True).
+    Pre-restore rollback snapshots of a damaged live tree may be preserved as
+    raw evidence without semantic validation (require_semantic=False).
+    """
     temp = tempfile.TemporaryDirectory(prefix="frp-restore-", dir=str(parent) if parent else None)
     extracted = Path(temp.name)
     extract_and_validate(archive, extracted)
+    if require_semantic:
+        validate_staged_control_payload(extracted)
     return temp, extracted
 
 
+def classify_rollback_snapshot(snapshot: Path) -> tuple[str, tempfile.TemporaryDirectory | None, Path | None]:
+    """Classify a pre-restore snapshot as VALIDATED or RAW_CORRUPT.
+
+    Returns (kind, temp_dir_or_None, extracted_or_None).
+    VALIDATED snapshots may be used for automatic rollback on mutation failure.
+    RAW_CORRUPT snapshots are retained on disk for emergency/manual recovery
+    but must not block applying a valid backup candidate.
+    """
+    try:
+        temp, extracted = validate_to_temp(snapshot, require_semantic=True)
+        return "VALIDATED", temp, extracted
+    except (RestoreError, OSError, tarfile.TarError, ValueError, json.JSONDecodeError) as exc:
+        # Preserve the raw archive; do not treat corrupt-current as restore failure.
+        del exc
+        return "RAW_CORRUPT", None, None
+
+
 def make_snapshot(root: Path) -> Path:
-    backup_dir = root / "var/lib/frp-auto-deploy/backups"
+    backup_dir = root / "var/lib/drlink/backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(backup_dir, 0o700)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -571,6 +894,8 @@ def make_snapshot(root: Path) -> Path:
     backup_tool = Path(__file__).resolve().with_name("frp-backup")
     env = os.environ.copy()
     env["FRP_BACKUP_ALREADY_LOCKED"] = "1"
+    # Capture exact raw files even if current required state is missing/corrupt.
+    env["FRP_BACKUP_RAW_SNAPSHOT"] = "1"
     subprocess.run(
         [sys.executable, str(backup_tool), str(snapshot)],
         stdout=subprocess.DEVNULL,
@@ -636,44 +961,74 @@ def main() -> int:
     candidate_temp = None
     rollback_temp = None
     locks = _load_module("frp_control_locks", "frp_control_locks.py")
+    if locks is None:
+        error("frp_control_locks.py is unavailable; refusing unlocked restore")
+        return 1
     try:
-        candidate_temp, candidate = validate_to_temp(archive)
+        # Candidate must always be semantically valid before any live mutation.
+        candidate_temp, candidate = validate_to_temp(archive, require_semantic=True)
         manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
         assert_same_version_restore(root, manifest)
         timeout = float(os.environ.get("FRP_RESTORE_LOCK_TIMEOUT", "30"))
-        lock_cm = locks.acquire_control_locks(root, timeout=timeout) if locks is not None else None
-        if lock_cm is not None:
-            lock_cm.__enter__()
+        expect_client_role = installed_client_role(root)
+        lock_cm = locks.acquire_control_locks(root, timeout=timeout)
+        lock_cm.__enter__()
         try:
             snapshot = make_snapshot(root)
-            _write_txn(root, snapshot)
-            rollback_temp, rollback = validate_to_temp(snapshot)
+            rollback_kind, rollback_temp, rollback = classify_rollback_snapshot(snapshot)
+            # Mutation marker only after preflight succeeds (candidate valid;
+            # current state preserved as VALIDATED or RAW_CORRUPT evidence).
+            _write_txn(root, snapshot, rollback_kind=rollback_kind)
             try:
                 apply_payload(root, candidate)
-                restart_services(root)
-                verify_restored_control_state(root)
+                _reapply_egress_permissions_after_restore(root)
+                restart_services(root, expect_client_role=expect_client_role)
+                verify_restored_control_state(root, expect_client_role=expect_client_role)
             except Exception as restore_exc:
-                try:
-                    apply_payload(root, rollback, allow_hook=False)
-                    restart_services(root, allow_hook=False)
-                    verify_restored_control_state(root, in_rollback=True)
-                except Exception as rollback_exc:
-                    print("RESTORE_ROLLBACK_FAILED", file=sys.stderr)
-                    print("RECOVERY_REQUIRED", file=sys.stderr)
-                    _audit_emit("restore.failed", details={"rollback": "failed"})
+                if rollback_kind == "VALIDATED" and rollback is not None:
+                    try:
+                        apply_payload(root, rollback, allow_hook=False)
+                        _reapply_egress_permissions_after_restore(root)
+                        restart_services(root, allow_hook=False, expect_client_role=expect_client_role)
+                        verify_restored_control_state(
+                            root, in_rollback=True, expect_client_role=expect_client_role
+                        )
+                    except Exception as rollback_exc:
+                        print("RESTORE_ROLLBACK_FAILED", file=sys.stderr)
+                        print("RECOVERY_REQUIRED", file=sys.stderr)
+                        print(f"Raw pre-restore snapshot: {snapshot}", file=sys.stderr)
+                        _audit_emit("restore.failed", details={"rollback": "failed"})
+                        raise RestoreError(
+                            f"restore failed and rollback also failed: {rollback_exc}"
+                        ) from restore_exc
+                    _clear_txn(root)
+                    _audit_emit("restore.failed", details={"rollback": "pass"})
                     raise RestoreError(
-                        f"restore failed and rollback also failed: {rollback_exc}"
-                    ) from restore_exc
-                _clear_txn(root)
-                _audit_emit("restore.failed", details={"rollback": "pass"})
-                raise RestoreError(f"restore failed; previous state was restored: {restore_exc}")
+                        f"restore failed; previous state was restored: {restore_exc}"
+                    )
+                # Current state was already corrupt — cannot auto-rollback, but
+                # the valid candidate was the recovery target. Leave evidence.
+                print("RESTORE_FAILED", file=sys.stderr)
+                print("AUTO_ROLLBACK_UNAVAILABLE: current state was RAW_CORRUPT", file=sys.stderr)
+                print(f"Raw pre-restore snapshot preserved: {snapshot}", file=sys.stderr)
+                _audit_emit(
+                    "restore.failed",
+                    details={"rollback": "unavailable", "rollback_kind": "RAW_CORRUPT"},
+                )
+                raise RestoreError(
+                    "restore failed; automatic rollback unavailable because the "
+                    f"pre-restore state was corrupt (snapshot preserved at {snapshot}): "
+                    f"{restore_exc}"
+                ) from restore_exc
             _clear_txn(root)
         finally:
-            if lock_cm is not None:
-                lock_cm.__exit__(None, None, None)
+            lock_cm.__exit__(None, None, None)
         print("WARNING: the restored backup contained private keys, authentication tokens, and enrollment secrets.")
-        print(f"Restore completed. Pre-restore snapshot: {snapshot}")
-        _audit_emit("restore.completed", details={"snapshot": snapshot.name})
+        print(f"Restore completed. Pre-restore snapshot: {snapshot} ({rollback_kind})")
+        _audit_emit(
+            "restore.completed",
+            details={"snapshot": snapshot.name, "rollback_kind": rollback_kind},
+        )
         return 0
     except (RestoreError, OSError, subprocess.SubprocessError, ValueError) as exc:
         error(str(exc))

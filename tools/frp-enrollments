@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = Path(ROOT + '/etc/frp-auto-deploy/config.json')
+CONFIG = Path(ROOT + '/etc/drlink/config.json')
 
 
 def remap(path):
@@ -157,12 +157,17 @@ def main(argv=None):
         print('(none)')
     else:
         print()
-        print('Actions:')
-        print('  pending/bound:')
-        print('    revoke enrollment <ID>')
+        print('Enrollment lifecycle:')
+        repl = str(os.environ.get('FRP_CTL_REPL') or '').strip() == '1'
+        prefix = '' if repl else 'sudo drlink '
+        print('  %sshow enrollments' % prefix)
+        print('  %sunset enrollment <ID>' % prefix)
         print()
-        print('  expired/completed/revoked:')
-        print('    purge enrollment <ID>')
+        print('Active enrollment:')
+        print('  unset revokes it.')
+        print()
+        print('Completed, expired or revoked enrollment:')
+        print('  unset removes the retained record.')
     retention_days = 30
     lifecycle = None
     try:
@@ -170,7 +175,7 @@ def main(argv=None):
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_enrollment_lifecycle.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py'),
+            Path('/usr/local/lib/drlink/frp_enrollment_lifecycle.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_enrollment_lifecycle', str(path))

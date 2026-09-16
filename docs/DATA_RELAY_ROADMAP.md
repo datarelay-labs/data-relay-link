@@ -1,0 +1,480 @@
+# Data Relay Link Roadmap
+
+> **Status:** Living roadmap aligned to the v2.4.0 Control Plane / Policy / MCP architecture
+> **Product Master:** `PRODUCT_MASTER.md`
+> **Architecture:** `CONTROL_PLANE_ARCHITECTURE.md`
+
+## 1. Roadmap principle
+
+Finish foundations that would be expensive to replace after stable release. Defer features that can be added later without changing those foundations.
+
+Foundation to finish before v2.4.0 stable:
+
+```text
+SQLite authority
+immutable identities
+Objects / Object Groups
+Managed Endpoint
+endpoint addresses
+Published Service SELF / ROUTED
+ordered Remote Access policy
+ordered Internet Access policy
+AI Access / MCP Bridge
+revisions / audit
+runtime generation
+backup / migration
+canonical CLI nouns
+```
+
+Can remain later work:
+
+```text
+Web UI
+central SaaS management
+external DB / HA
+large-fleet orchestration
+SIEM/reporting
+broad vendor destination catalogs
+```
+
+## 2. Phase DL-0 — proven relay foundation
+
+**Status:** Existing foundation; preserve while redesigning control plane.
+
+Includes:
+
+```text
+official fatedier/frp
+Zero-Touch / Manual Enrollment
+immutable Client identity
+multi-service relay
+public-port reservation
+Linux/macOS/Windows clients
+lifecycle/update/doctor/support bundle
+```
+
+Do not fork FRP.
+
+## 3. Phase DL-1 — control-plane architecture closure
+
+**Status:** Architecture approved; docs-first closure in progress.
+
+Required:
+
+```text
+CONTROL_PLANE_ARCHITECTURE.md
+Product Master alignment
+CLI IA alignment
+Security alignment
+Version/release governance alignment
+MCP inclusion decision aligned
+```
+
+No stable tag during this phase.
+
+## 4. Phase DL-2 — SQLite control-plane implementation
+
+**Status:** Next implementation phase.
+
+Implement:
+
+```text
+/var/lib/drlink/drlink.db
+schema_migrations
+system_meta
+config_revisions
+revision_snapshots
+audit_events
+runtime_generations
+```
+
+Required properties:
+
+```text
+foreign keys
+WAL
+synchronous durability
+busy timeout
+trusted_schema off
+transactional mutation
+optimistic concurrency
+integrity checks
+unsupported-schema fail closed
+```
+
+## 5. Phase DL-3 — Object and endpoint model
+
+Implement:
+
+```text
+objects
+object_values
+object_group_members
+clients
+managed_endpoints
+endpoint_addresses
+client_groups
+client_group_members
+client_tags
+```
+
+Acceptance:
+
+```text
+neutral Objects
+no Source/Destination object duplication
+multi-value static Objects
+Object Group cycle protection
+context validation
+Managed Endpoint lifecycle ownership
+orphan semantics
+local address inventory
+reference-protected deletion
+```
+
+## 6. Phase DL-4 — Published Service model
+
+Implement:
+
+```text
+published_services
+service_presets
+port_reservations
+```
+
+Acceptance:
+
+```text
+SELF effective destination
+ROUTED effective destination
+loopback SELF policy matching
+ROUTED no-agent target
+stable service/public-port identity
+policy-impact analysis on target changes
+Service Profile public model removed
+Service Preset semantics clear
+```
+
+## 7. Phase DL-5 — Remote Access ordered policy
+
+Implement common network policy tables and Remote Access evaluator/compiler.
+
+Acceptance:
+
+```text
+ALLOW / DENY
+implicit DENY
+top-down first match
+create disabled at bottom
+before / after
+shadow analysis
+impact analysis
+flow test/explain
+Published Service + reachability intersection
+```
+
+Legacy ACL becomes non-canonical and is removed/hidden before stable.
+
+## 8. Phase DL-6 — Internet Access ordered policy
+
+Replace legacy Internet Profile authoritative policy with Objects + ordered rules.
+
+Preserve/harden protocol boundary:
+
+```text
+HTTP forward proxy
+HTTPS CONNECT
+server-side DNS
+SSRF/special-address protection
+DNS rebinding resistance
+CONNECT/SNI binding
+controlled wildcard semantics
+public Host/CIDR explicit policy
+Fixed TCP through same authority
+resource limits
+safe audit
+```
+
+Acceptance includes curl/wget/git/apt Real E2E plus denied-traffic escape tests.
+
+## 9. Phase DL-7 — revision/audit/runtime compiler
+
+Implement one mutation pipeline:
+
+```text
+validate
+→ impact
+→ confirm
+→ transaction
+→ revision/audit
+→ compile
+→ atomic activate
+→ verify generation
+```
+
+Acceptance:
+
+```text
+system audit
+system revisions
+runtime revision status
+compiler failure surfaced
+generation mismatch fail closed where required
+```
+
+Rollback may be added only if its semantics are fully transactional and qualified.
+
+## 10. Phase DL-8 — backup / restore / migration
+
+Implement SQLite Online Backup/equivalent consistent snapshot.
+
+Acceptance:
+
+```text
+backup during WAL activity
+config/trust/secret recovery
+restore integrity + FK checks
+schema compatibility
+runtime regeneration
+permissions/ownership
+pre-upgrade backup
+migration rollback/failure safety
+```
+
+Legacy JSON is migration input only, not dual authority.
+
+## 11. Phase DL-9 — MCP Bridge / AI Access
+
+**Status:** Included in v2.4.0 target; supersedes old exclusion decision.
+
+Implement server-side MCP Bridge plus:
+
+```text
+ai_principals
+ai_access_rules
+ai_rule_targets
+ai_rule_capabilities
+ai_path_scopes
+ai_exec_constraints
+ai_sessions
+ai_activity
+```
+
+Targets:
+
+```text
+Managed Endpoint
+Client Group
+```
+
+Minimum capabilities:
+
+```text
+exec
+read_file
+write_file
+upload_file
+download_file
+```
+
+Additional discovery:
+
+```text
+list_hosts
+get_host
+get_system_info
+list_processes
+```
+
+Security:
+
+```text
+current official MCP spec
+modern supported remote transport
+authenticated HTTPS
+strong AI Principal binding
+per-invocation authorization
+least privilege
+path scopes
+exec timeout/process controls
+audit
+no per-host MCP server requirement
+```
+
+Real interoperability is required for each client explicitly claimed supported.
+
+## 12. Phase DL-10 — canonical CLI implementation
+
+Implement guided root:
+
+```text
+Clients
+Objects
+Remote Access
+Internet Access
+AI Access
+System
+Help
+Exit
+```
+
+Direct roots:
+
+```text
+show
+set
+unset
+test
+system
+menu
+help
+exit
+```
+
+Remove/hide pre-stable legacy public resources:
+
+```text
+service-profile
+internet-profile
+legacy ACL naming
+ambiguous generic group
+```
+
+Protect impact confirmation, stale edit detection, contextual Tab completion, REPL/shell hints, and backend isolation.
+
+## 13. Phase DL-11 — release-governance transition
+
+Remove old hard-coded v2.4 MCP exclusion from:
+
+```text
+release manifest schema
+manifest generator
+version identity validation
+release governance scripts
+version consistency checks
+tests
+release manifest content
+```
+
+Final candidate truth:
+
+```text
+features.mcp_included=true
+```
+
+only after actual MCP implementation exists and passes qualification.
+
+Keep exact-SHA pretag provenance, immutable tags, source/dist parity, checksums, and historical tag immutability.
+
+## 14. Phase DL-12 — full automated closure
+
+Required:
+
+```text
+static validation
+DB/migration tests
+Object tests
+policy evaluator/compiler tests
+shadow/impact tests
+CLI/PTy tests
+Internet security tests
+MCP auth/capability/path tests
+backup/restore tests
+release governance tests
+full local suite
+CI
+source/dist parity
+secret/public metadata scan
+```
+
+No stale test is allowed to redefine the approved architecture.
+
+## 15. Phase DL-13 — multi-host Real E2E
+
+Matrix:
+
+```text
+Ubuntu 24
+Windows 10
+Rocky Linux 8
+Rocky Linux 9
+Amazon Linux 2023
+macOS Apple Silicon
+```
+
+Validate install, enrollment, services, policy, Internet Access, lifecycle, reboot, backup/restore, and supported AI/MCP operations.
+
+## 16. Phase DL-14 — final exact-HEAD qualification
+
+Freeze candidate HEAD, then:
+
+```text
+FULL_REAL_E2E_PASS_1=PASS
+FULL_REAL_E2E_PASS_2=PASS
+PASS1_HEAD==PASS2_HEAD
+```
+
+Both passes include all three access planes and release lifecycle applicable to stable claims.
+
+Any code/dependency/generated-artifact change resets the counter.
+
+## 17. Phase DL-15 — stable publication
+
+Only after all gates:
+
+```text
+create immutable v2.4.0 tag
+publish immutable artifacts/checksums/manifest
+publish release notes
+update stable channel
+update public docs
+verify clean stable install/bootstrap/update
+```
+
+## 18. Post-v2.4 demand-driven work
+
+Potential later additions only with real demand:
+
+```text
+Web UI
+central multi-server/fleet coordination
+enterprise identity providers beyond required MCP auth
+HA deployment
+reporting/SIEM exports
+more protocols
+more Fixed TCP presets
+policy rollback UX enhancements
+signed policy/export packages
+```
+
+These additions should reuse, not replace, the v2.4 identity/Object/policy/database foundation.
+
+## 19. Stable non-goals
+
+Data Relay Link is not being expanded into:
+
+```text
+VPN/full network overlay
+SASE/SWG/CASB/DLP
+TLS inspection platform
+RMM/fleet orchestrator
+automatic firewall/DNS manager
+large database cluster
+```
+
+## 20. Roadmap success condition
+
+The v2.4.0 foundation is done when no further foreseeable core change requires replacing:
+
+```text
+control-plane authority
+identity model
+Object model
+rule ordering semantics
+Published Service destination semantics
+AI trust/authorization model
+backup/migration model
+canonical CLI nouns
+```
+
+Feature growth after that point should be additive.

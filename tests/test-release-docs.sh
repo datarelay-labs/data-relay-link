@@ -10,11 +10,16 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 
 # shellcheck disable=SC1091
 . "$ROOT/VERSION"
-[[ "$PROJECT_VERSION" == "2.3.0" ]] || fail "VERSION project is $PROJECT_VERSION"
-[[ "$FRP_VERSION" == "0.71.0" ]] || fail "VERSION FRP is $FRP_VERSION"
+[[ -n "${PROJECT_VERSION:-}" ]] || fail "VERSION missing PROJECT_VERSION"
+[[ -n "${FRP_VERSION:-}" ]] || fail "VERSION missing FRP_VERSION"
 pass "VERSION_FILE"
 
-grep -qF "Current project version: **${PROJECT_VERSION}**" README.md || fail "README project version"
+# VERSION is the single source of truth. Cross-document agreement, and the
+# published-tag immutability policy, are asserted there rather than by
+# repeating version literals in this file.
+"$ROOT/scripts/check-version-consistency.sh" || fail "version consistency"
+pass "VERSION_CONSISTENCY"
+
 grep -qF "**v${FRP_VERSION}**" README.md || fail "README FRP version"
 if grep -nE 'Current project version: \*\*1\.(7|8|9)\.' README.md; then
   fail "README still shows a pre-2.0 current version"
@@ -113,13 +118,22 @@ fi
 pass "NO_TLS_VERIFY_DISABLE"
 pass "NO_CURL_K_PRODUCTION_FLOW"
 
-# During FINAL AUDIT CLOSURE, docs may describe 2.3.0 as prepared until the
-# immutable tag is moved/recreated on final HEAD. Do not require premature
+# During release closure, docs may describe the candidate as prepared
+# until the immutable tag is created. Do not require premature
 # "current stable release" wording, and do not ban preparation language.
-if grep -qF 'FINAL AUDIT CLOSURE' README.md || grep -qF 'current stable release' README.md; then
+if grep -qF 'FINAL AUDIT CLOSURE' README.md || grep -qF 'current stable release' README.md \
+  || grep -qF "Current release — v${PROJECT_VERSION}" README.md \
+  || grep -qF "Prepared release — v${PROJECT_VERSION}" README.md; then
   :
 else
-  fail "README missing FINAL AUDIT CLOSURE or current stable release wording"
+  fail "README missing release closure, prepared release, or current stable release wording"
+fi
+# Pre-tag safety: if the immutable tag URL is advertised as the install command,
+# README must also warn that the tag may not exist yet (avoid silent 404 hazard).
+if grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md; then
+  if ! grep -qiE "until.*(tag|v${PROJECT_VERSION}).*exist|tag pending|after.*tag.*(publish|creat)|would 404" README.md; then
+    fail "README advertises v${PROJECT_VERSION} install URL without pre-tag sequencing warning"
+  fi
 fi
 if grep -nE 'v2\.1\.1 is not tagged|not a tagged stable release until|not created until real-environment' README.md CHANGELOG.md docs/*.md; then
   fail "docs still say v2.1.1 is untagged"
@@ -131,7 +145,7 @@ grep -qE '^## 2\.1\.1 — ' CHANGELOG.md || fail "CHANGELOG missing 2.1.1 headin
 grep -qE '^## 2\.1\.0 — ' CHANGELOG.md || fail "CHANGELOG missing historical 2.1.0 heading"
 pass "VERSION_STABLE_WORDING"
 
-grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md || fail "README missing immutable server bootstrap URL"
+grep -qF "v${PROJECT_VERSION}/dist/bootstrap-server.sh" README.md || fail "README missing intended immutable server bootstrap URL"
 if grep -nE 'raw.githubusercontent.com/(datarelay-labs|xdr-labs)/frp-auto-deploy/main/dist/bootstrap-(server|client)\.sh' \
   README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md GITHUB_SETUP.md; then
   fail "stable docs still point bootstrap installs at mutable main"
@@ -140,8 +154,8 @@ if grep -nE 'datarelay-labs/frp-auto-deploy' \
   README.md docs/SCHEMA_V2_DEPLOYMENT.md docs/DEPLOYMENT_MODES.md docs/FRP_UPGRADE.md docs/PRODUCT_MASTER.md GITHUB_SETUP.md; then
   fail "stable docs still reference old repository owner datarelay-labs"
 fi
-grep -qF 'xdr-labs/frp-auto-deploy' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
-  fail "docs missing canonical xdr-labs repository"
+grep -qF 'datarelay-labs/data-relay-link' README.md GITHUB_SETUP.md docs/PRODUCT_MASTER.md ||
+  fail "docs missing canonical datarelay-labs/data-relay-link repository"
 grep -q 'FRP_RELEASE_CHANNEL=dev' README.md || fail "README missing opt-in dev channel note"
 grep -q 'one-time verified bridge' README.md || fail "README missing legacy client bridge"
 grep -q 'one-time verified bridge' docs/FRP_UPGRADE.md || fail "upgrade doc missing legacy bridge"
@@ -170,5 +184,13 @@ rm -f "$TMPERR"
 grep -q 'Do \*\*not\*\* tag a tree whose `PROJECT_VERSION` does not match' docs/RELEASE_CHECKLIST.md ||
   fail "checklist missing release version gate procedure"
 pass "P1_RELEASE_VERSION_GATE"
+
+# Public documentation must describe visible canonical commands only.
+# Hidden compatibility aliases do not satisfy this gate.
+python3 "$ROOT/tests/test-release-recovery-dual-role-audit-docs-closure.py" \
+  ReleaseRecoveryDualRoleAuditDocsClosure.test_public_doc_command_parity \
+  ReleaseRecoveryDualRoleAuditDocsClosure.test_hidden_aliases_not_advertised_in_normal_help \
+  || fail "PUBLIC_DOC_COMMAND_PARITY"
+pass "PUBLIC_DOC_COMMAND_PARITY"
 
 echo "RELEASE_DOCS_TEST=PASS"

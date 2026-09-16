@@ -21,6 +21,7 @@ FRP_WEBSOCKET_PATH = '/~!frp'
 DEFAULT_BACKEND_CONTROL_PORT = 7000
 DEFAULT_ALLOCATOR_LISTEN_PORT = 6099
 DEFAULT_FRONTEND_PORT = 443
+DEFAULT_MCP_BRIDGE_PORT = 6103
 # Internal TLS identity for the loopback allocator backend. nginx
 # proxy_ssl_verify matches DNS names, not iPAddress SANs, so the frontend
 # verifies DNS:localhost rather than the public IP/hostname. This is not a
@@ -95,10 +96,11 @@ def render_nginx_conf(
     ca_cert,
     server_cert,
     server_key,
-    pid_path='/run/frp-auto-deploy/nginx.pid',
+    pid_path='/run/drlink/frontend/nginx.pid',
     error_log='stderr',
-    temp_root='/var/lib/frp-auto-deploy/nginx',
+    temp_root='/var/lib/drlink/nginx',
     websocket_path=FRP_WEBSOCKET_PATH,
+    mcp_bridge_port=DEFAULT_MCP_BRIDGE_PORT,
 ):
     host = _require_host(public_host, 'public_host')
     frontend_port = _require_port(frontend_port, 'frontend_port')
@@ -110,6 +112,7 @@ def render_nginx_conf(
     pid_path = _require_abs_path(pid_path, 'pid_path')
     error_log = _require_error_log(error_log)
     temp_root = _require_abs_path(temp_root, 'temp_root')
+    mcp_bridge_port = _require_port(mcp_bridge_port, "mcp_bridge_port")
     if websocket_path != FRP_WEBSOCKET_PATH:
         raise ValueError('FRP 0.71.0 WebSocket path is fixed at %s' % FRP_WEBSOCKET_PATH)
 
@@ -184,6 +187,67 @@ http {
             proxy_connect_timeout 10s;
         }
 
+        location = /mcp {
+            proxy_pass http://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header MCP-Protocol-Version $http_mcp_protocol_version;
+            proxy_set_header Mcp-Method $http_mcp_method;
+            proxy_set_header Mcp-Name $http_mcp_name;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_connect_timeout 10s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            add_header X-Accel-Buffering no;
+            client_max_body_size 2m;
+        }
+
+        location = /.well-known/oauth-protected-resource {
+            proxy_pass http://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /.well-known/oauth-protected-resource/mcp {
+            proxy_pass http://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /.well-known/oauth-authorization-server {
+            proxy_pass http://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /oauth/token {
+            proxy_pass http://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /oauth/authorize {
+            proxy_pass http://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
+
         location / {
             return 404;
         }
@@ -206,6 +270,12 @@ http {
         allocator_listen_port,
         ca_cert,
         ALLOCATOR_BACKEND_TLS_NAME,
+        mcp_bridge_port,
+        mcp_bridge_port,
+        mcp_bridge_port,
+        mcp_bridge_port,
+        mcp_bridge_port,
+        mcp_bridge_port,
     )
 
 
@@ -314,9 +384,9 @@ def main(argv=None):
     parser.add_argument('--server-cert', default='')
     parser.add_argument('--server-key', default='')
     parser.add_argument('--expected-fingerprint', default='')
-    parser.add_argument('--pid-path', default='/run/frp-auto-deploy/nginx.pid')
+    parser.add_argument('--pid-path', default='/run/drlink/frontend/nginx.pid')
     parser.add_argument('--error-log', default='stderr')
-    parser.add_argument('--temp-root', default='/var/lib/frp-auto-deploy/nginx')
+    parser.add_argument('--temp-root', default='/var/lib/drlink/nginx')
     args = parser.parse_args(argv)
     if args.verify_proxy:
         ok, message = verify_frontend_proxy(

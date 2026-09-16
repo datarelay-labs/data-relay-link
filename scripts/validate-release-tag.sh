@@ -39,6 +39,9 @@ if channel == "stable" and ref != tag:
 if channel == "stable" and ref == "main":
     sys.stderr.write("ERROR: stable release must not use mutable main\n")
     raise SystemExit(1)
+if channel not in ("development", "preview", "stable"):
+    sys.stderr.write("ERROR: release-manifest channel must be development|preview|stable\n")
+    raise SystemExit(1)
 print("RELEASE_TAG_VALID=%s" % tag)
 PY
 fi

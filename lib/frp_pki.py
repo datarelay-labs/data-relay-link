@@ -11,6 +11,7 @@ if sys.version_info < (3, 7):
 
 import argparse
 import hashlib
+import importlib.util
 import ipaddress
 import os
 import re
@@ -19,6 +20,20 @@ import stat
 import subprocess
 import tempfile
 from pathlib import Path
+
+
+def durable_replace(tmp, path):
+    """Shared durable replace (lib/frp_control_locks.py)."""
+    mod = sys.modules.get('frp_control_locks')
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            'frp_control_locks', str(Path(__file__).resolve().parent / 'frp_control_locks.py')
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules['frp_control_locks'] = mod
+        spec.loader.exec_module(mod)
+    return mod.durable_replace(tmp, path)
+
 
 CA_DAYS = 3650
 SERVER_DAYS = 3650
@@ -176,7 +191,10 @@ def _write_mode(path, data, mode):
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        # CA key and certificate: losing the rename after a power failure
+        # leaves a trust anchor that no longer matches what was issued
+        # against it, which no later run can reconstruct.
+        durable_replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             try:
@@ -263,7 +281,7 @@ def write_openssl_config(path, dns, ips, ca=False):
         'x509_extensions = v3_ca' if ca else 'req_extensions = v3_server',
         '',
         '[req_dn]',
-        'CN = FRP Auto Deploy CA' if ca else 'CN = FRP Auto Deploy allocator',
+        'CN = Data Relay Link CA' if ca else 'CN = Data Relay Link allocator',
         '',
         '[v3_ca]',
         'basicConstraints = critical,CA:TRUE',
@@ -345,7 +363,7 @@ def _genrsa(path):
 def generate_ca(paths, workdir):
     openssl = openssl_bin()
     cfg = Path(workdir) / 'ca.cnf'
-    write_openssl_config(cfg, ['FRP Auto Deploy CA'], [], ca=True)
+    write_openssl_config(cfg, ['Data Relay Link CA'], [], ca=True)
     _genrsa(paths['ca_key'])
     _run([
         openssl, 'req', '-new', '-x509',
@@ -463,7 +481,7 @@ def atomic_install_trusted_ca(src_pem_path, dest_path, expected_fingerprint=None
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='FRP Auto Deploy allocator PKI')
+    parser = argparse.ArgumentParser(description='Data Relay Link allocator PKI')
     sub = parser.add_subparsers(dest='cmd', required=True)
 
     p_ensure = sub.add_parser('ensure')

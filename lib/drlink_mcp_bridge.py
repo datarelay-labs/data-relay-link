@@ -1,0 +1,801 @@
+#!/usr/bin/env python3
+"""Data Relay Link MCP Bridge (MCP 2026-07-28 Streamable HTTP).
+
+Transport: Streamable HTTP POST /mcp (stateless). Legacy HTTP+SSE is not used.
+Authentication modes:
+  Static Bearer — operator-issued drk_ tokens bound to an AI Principal
+  OAuth         — built-in OAuth 2.1 authorization server (authorization_code+PKCE
+                  S256 and client_credentials) issuing distinct expiring tokens
+Protected Resource Metadata: RFC 9728
+Authorization is a separate ordered AI Access rulebase evaluated on every tools/call.
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
+from typing import Any, Optional
+from urllib.parse import parse_qs, urlencode, urlparse
+
+from drlink_ai_agent import AgentLoop, execute_local
+from drlink_control_db import ControlPlaneError, resolve_root
+from drlink_control_plane import AI_CAPABILITIES, ControlPlane, MCP_AUTH_MODEL
+
+MCP_PROTOCOL_VERSION = "2026-07-28"
+MCP_TRANSPORT = "streamable-http"
+MCP_SERVER_NAME = "data-relay-link"
+MCP_SERVER_VERSION = "2.4.0"
+SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+DEFAULT_LISTEN = "127.0.0.1"
+DEFAULT_PORT = 6103
+HEADER_MISMATCH = -32020
+UNSUPPORTED_PROTOCOL_VERSION = -32022
+INVALID_PARAMS = -32602
+LOCAL_ORIGINS = ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost")
+PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion"
+CLIENT_CAPS_META = "io.modelcontextprotocol/clientCapabilities"
+NAME_BEARING = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
+
+TOOL_DEFS = (
+    ("list_hosts", "List Managed Endpoints this principal may target", {}),
+    ("get_host", "Get one Managed Endpoint", {"endpoint": "string"}),
+    ("get_system_info", "Read uname/system identity from a Managed Endpoint", {"endpoint": "string"}),
+    ("exec", "Run a shell command on a Managed Endpoint", {"endpoint": "string", "command": "string"}),
+    ("read_file", "Read a file within allowed path scopes", {"endpoint": "string", "path": "string"}),
+    ("write_file", "Write a file within allowed path scopes", {"endpoint": "string", "path": "string", "content": "string"}),
+    ("upload_file", "Upload bytes to an allowed path", {"endpoint": "string", "path": "string", "content": "string"}),
+    ("download_file", "Download a file from an allowed path", {"endpoint": "string", "path": "string"}),
+    ("list_processes", "List processes on a Managed Endpoint", {"endpoint": "string"}),
+)
+
+ENDPOINT_TOOLS = frozenset(
+    {
+        "get_system_info",
+        "exec",
+        "read_file",
+        "write_file",
+        "upload_file",
+        "download_file",
+        "list_processes",
+    }
+)
+
+
+def _server_info():
+    return {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION}
+
+
+def _with_server_meta(result):
+    payload = dict(result) if isinstance(result, dict) else {"value": result}
+    meta = dict(payload.get("_meta") or {})
+    meta[SERVER_INFO_META] = _server_info()
+    payload["_meta"] = meta
+    return payload
+
+
+def _jsonrpc_error(req_id, code, message, data=None):
+    err = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    return {"jsonrpc": "2.0", "id": req_id, "error": err}
+
+
+def _jsonrpc_result(req_id, result):
+    return {"jsonrpc": "2.0", "id": req_id, "result": _with_server_meta(result)}
+
+
+def _text_result(text: str, *, is_error: bool = False) -> dict:
+    out = {"content": [{"type": "text", "text": text}], "resultType": "complete"}
+    if is_error:
+        out["isError"] = True
+    return out
+
+
+def _header(headers, name: str) -> str:
+    return headers.get(name) or headers.get(name.lower()) or headers.get(name.title()) or ""
+
+
+def _decode_mcp_header(value: str) -> str:
+    text = str(value or "")
+    if text.startswith("=?base64?") and text.endswith("?="):
+        import base64
+
+        try:
+            return base64.b64decode(text[len("=?base64?") : -2]).decode("utf-8")
+        except Exception:
+            return text
+    return text
+
+
+class MCPBridge:
+    def __init__(self, root: Optional[str] = None, plane: Optional[ControlPlane] = None, *, auto_agents: bool = True):
+        self.root = root or resolve_root()
+        self.plane = plane or ControlPlane(self.root)
+        self.running_ops = {}
+        self._lock = threading.Lock()
+        self._agents = {}
+        self._agent_stop = threading.Event()
+        self._job_results = {}
+        self.listen_host = DEFAULT_LISTEN
+        self.listen_port = DEFAULT_PORT
+        self.auto_agents = auto_agents
+
+    def canonical_public_base(self) -> str:
+        """Issuer/resource base from configured control identity, never request Host."""
+        url = self.plane.mcp_public_url()
+        if url and url != "Not configured":
+            return url[:-4] if url.endswith("/mcp") else url.rstrip("/")
+        return "http://%s:%s" % (self.listen_host, self.listen_port)
+
+    def canonical_resource(self) -> str:
+        url = self.plane.mcp_public_url()
+        if url and url != "Not configured":
+            return url
+        return self.canonical_public_base() + "/mcp"
+
+    def _require_canonical_resource(self, resource: str) -> str:
+        wanted = self.canonical_resource()
+        if str(resource or "") != wanted:
+            raise ControlPlaneError("resource must be exactly %s" % wanted)
+        return wanted
+
+    def close(self) -> None:
+        self._agent_stop.set()
+        for _cid, (_stop, thread) in list(self._agents.items()):
+            thread.join(timeout=1)
+        self._agents.clear()
+
+    def refresh_local_agents(self, base_url: Optional[str] = None) -> None:
+        if not self.auto_agents:
+            return
+        url = base_url or ("http://127.0.0.1:%s" % self.listen_port)
+        for client in self.plane.connected_clients():
+            cid = client["id"]
+            if cid in self._agents:
+                continue
+            token = self.plane.issue_agent_credential(cid)
+            if not token:
+                continue
+            stop = threading.Event()
+
+            def _run(token=token, stop=stop, url=url):
+                loop = AgentLoop(url, token, stop_event=stop)
+                while not stop.is_set() and not self._agent_stop.is_set():
+                    try:
+                        loop.run_once()
+                    except Exception:
+                        pass
+                    stop.wait(0.05)
+
+            thread = threading.Thread(target=_run, daemon=True, name="drlink-ai-agent-%s" % cid[:8])
+            thread.start()
+            self._agents[cid] = (stop, thread)
+
+    def authenticate(self, headers) -> Optional[Any]:
+        auth = _header(headers, "Authorization")
+        if not auth.lower().startswith("bearer "):
+            return None
+        token = auth.split(" ", 1)[1].strip()
+        if not token:
+            return None
+        resource = self.canonical_resource()
+        with self._lock:
+            return self.plane.authenticate_principal(token, resource=resource)
+
+    def authenticate_agent(self, headers) -> Optional[str]:
+        auth = _header(headers, "Authorization")
+        if not auth.lower().startswith("bearer "):
+            return None
+        token = auth.split(" ", 1)[1].strip()
+        with self._lock:
+            return self.plane.authenticate_agent(token)
+
+    def oauth_metadata(self, headers=None) -> dict:
+        base = self.canonical_public_base()
+        resource = self.canonical_resource()
+        return {
+            "resource": resource,
+            "authorization_servers": [base],
+            "bearer_methods_supported": ["header"],
+            "scopes_supported": ["drlink.ai"],
+            "resource_name": "Data Relay Link MCP Bridge",
+            "resource_documentation": "https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization",
+        }
+
+    def as_metadata(self, headers=None) -> dict:
+        base = self.canonical_public_base()
+        return {
+            "issuer": base,
+            "authorization_endpoint": base + "/oauth/authorize",
+            "token_endpoint": base + "/oauth/token",
+            "grant_types_supported": ["authorization_code", "client_credentials"],
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+            "scopes_supported": ["drlink.ai"],
+            "resource_indicators_supported": True,
+        }
+
+    def issue_oauth_token(self, fields: dict, headers=None) -> Optional[dict]:
+        grant = str(fields.get("grant_type") or "")
+        resource = self._require_canonical_resource(str(fields.get("resource") or ""))
+        if grant == "client_credentials":
+            issued = self.plane.client_credentials_token(
+                str(fields.get("client_id") or ""),
+                str(fields.get("client_secret") or ""),
+                resource,
+            )
+            return issued
+        if grant == "authorization_code":
+            return self.plane.exchange_authorization_code(
+                code=str(fields.get("code") or ""),
+                verifier=str(fields.get("code_verifier") or ""),
+                redirect_uri=str(fields.get("redirect_uri") or ""),
+                resource=resource,
+                client_id=str(fields.get("client_id") or ""),
+            )
+        return None
+
+    def validate_origin(self, headers) -> Optional[str]:
+        origin = _header(headers, "Origin")
+        if not origin:
+            return None
+        allowed = os.environ.get("DRLINK_MCP_ALLOWED_ORIGINS") or ""
+        extras = [x.strip() for x in allowed.split(",") if x.strip()]
+        host = (_header(headers, "Host") or "").split(":")[0].lower()
+        local_host = host in ("127.0.0.1", "localhost", "::1")
+        if origin.startswith(LOCAL_ORIGINS) or origin in extras:
+            return None
+        # Public MCP: allow HTTPS browser hosts (Cursor/Claude/ChatGPT) and
+        # reject DNS-rebinding Origins against loopback plus plaintext http.
+        if not local_host and origin.startswith("https://"):
+            return None
+        return origin
+
+    def validate_headers(self, body: dict, headers) -> Optional[tuple]:
+        req_id = body.get("id")
+        method = body.get("method")
+        params = body.get("params") if isinstance(body.get("params"), dict) else None
+        meta = params.get("_meta") if isinstance(params, dict) else None
+        if not isinstance(meta, dict):
+            return 400, _jsonrpc_error(
+                req_id,
+                INVALID_PARAMS,
+                "params._meta must be an object carrying the required %r and %r envelope keys"
+                % (PROTOCOL_VERSION_META, CLIENT_CAPS_META),
+            )
+        missing = [key for key in (PROTOCOL_VERSION_META, CLIENT_CAPS_META) if key not in meta]
+        if missing:
+            return 400, _jsonrpc_error(
+                req_id,
+                INVALID_PARAMS,
+                "params._meta is missing the required envelope key(s): %s" % ", ".join(missing),
+            )
+        proto_meta = meta.get(PROTOCOL_VERSION_META)
+        proto = _header(headers, "MCP-Protocol-Version")
+        mcp_method = _header(headers, "Mcp-Method")
+        if not proto or proto != proto_meta:
+            return 400, _jsonrpc_error(
+                req_id,
+                HEADER_MISMATCH,
+                "MCP-Protocol-Version header does not match the request envelope's protocol version",
+                {"name": "HeaderMismatch"},
+            )
+        if mcp_method != method:
+            return 400, _jsonrpc_error(
+                req_id,
+                HEADER_MISMATCH,
+                "Mcp-Method header does not match the request body's method",
+                {"name": "HeaderMismatch"},
+            )
+        name_key = NAME_BEARING.get(method)
+        if name_key is not None:
+            body_value = params.get(name_key) if isinstance(params, dict) else None
+            hdr_name = _decode_mcp_header(_header(headers, "Mcp-Name"))
+            if body_value is not None and hdr_name != body_value:
+                return 400, _jsonrpc_error(
+                    req_id,
+                    HEADER_MISMATCH,
+                    "Mcp-Name header does not match the request body's %r parameter" % name_key,
+                    {"name": "HeaderMismatch"},
+                )
+            if name_key == "name" and method == "tools/call" and not hdr_name:
+                return 400, _jsonrpc_error(
+                    req_id,
+                    HEADER_MISMATCH,
+                    "Header mismatch: Mcp-Name is required",
+                    {"name": "HeaderMismatch"},
+                )
+        if not isinstance(proto_meta, str) or proto_meta != MCP_PROTOCOL_VERSION:
+            return 400, _jsonrpc_error(
+                req_id,
+                UNSUPPORTED_PROTOCOL_VERSION,
+                "Unsupported protocol version",
+                {"supported": [MCP_PROTOCOL_VERSION], "requested": proto_meta},
+            )
+        return None
+
+    def handle_rpc(self, body: dict, headers, principal) -> tuple[int, dict]:
+        mismatch = self.validate_headers(body, headers)
+        if mismatch:
+            return mismatch
+        req_id = body.get("id")
+        method = str(body.get("method") or "")
+        params = body.get("params") or {}
+        if method == "server/discover":
+            return 200, _jsonrpc_result(
+                req_id,
+                {
+                    "supportedVersions": [MCP_PROTOCOL_VERSION],
+                    "capabilities": {"tools": {}},
+                    "ttlMs": 5000,
+                    "cacheScope": "private",
+                    "resultType": "complete",
+                    "instructions": (
+                        "Data Relay Link MCP Bridge. Tools operate on Managed Endpoints "
+                        "authorized by AI Access policy. Authenticated does not mean authorized."
+                    ),
+                },
+            )
+        if method in ("initialize", "notifications/initialized", "ping"):
+            return 404, _jsonrpc_error(
+                req_id,
+                -32601,
+                "Method not found: 2026-07-28 is stateless; initialize/ping are not part of this revision",
+            )
+        if method == "tools/list":
+            tools = []
+            for name, desc, props in TOOL_DEFS:
+                tools.append(
+                    {
+                        "name": name,
+                        "description": desc,
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {k: {"type": v} for k, v in props.items()},
+                        },
+                    }
+                )
+            return 200, _jsonrpc_result(
+                req_id,
+                {
+                    "tools": tools,
+                    "ttlMs": 5000,
+                    "cacheScope": "private",
+                    "resultType": "complete",
+                },
+            )
+        if method == "tools/call":
+            name = (params.get("name") if isinstance(params, dict) else None) or ""
+            args = params.get("arguments") if isinstance(params, dict) else {}
+            try:
+                result = self.call_tool(principal, name, args or {})
+                return 200, _jsonrpc_result(req_id, result)
+            except ControlPlaneError as exc:
+                return 200, _jsonrpc_result(req_id, _text_result("DENY: %s" % exc, is_error=True))
+            except Exception as exc:
+                return 200, _jsonrpc_error(req_id, -32603, "internal error", str(exc))
+        return 404, _jsonrpc_error(req_id, -32601, "Method not found")
+
+    def call_tool(self, principal, name: str, arguments: dict) -> dict:
+        if name not in AI_CAPABILITIES:
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint=str(arguments.get("endpoint") or "-"),
+                capability=name,
+                result="DENY",
+                operand="unknown capability",
+            )
+            return _text_result("DENY: unknown capability", is_error=True)
+        if name == "list_hosts":
+            hosts = []
+            decision = None
+            for obj in self.plane.list_objects():
+                if obj["type"] != "managed_endpoint":
+                    continue
+                allowed = False
+                for cap in ("list_hosts", "get_host", "get_system_info"):
+                    decision = self.plane.evaluate_ai_access(principal["name"], obj["name"], cap)
+                    if decision["action"] == "ALLOW":
+                        allowed = True
+                        break
+                if allowed:
+                    hosts.append(
+                        {
+                            "name": obj["name"],
+                            "status": obj.get("status"),
+                            "client_id": obj.get("client_id"),
+                        }
+                    )
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint="*",
+                capability="list_hosts",
+                result="ALLOW" if hosts else "DENY",
+                rule=(decision["winner"]["name"] if decision and decision.get("winner") else None),
+            )
+            return _text_result(json.dumps(hosts, indent=2))
+        endpoint = str(arguments.get("endpoint") or arguments.get("host") or "")
+        if not endpoint:
+            raise ControlPlaneError("endpoint is required")
+        operand = arguments.get("path") or arguments.get("command") or arguments.get("operand")
+        start = time.monotonic()
+        decision = self.plane.evaluate_ai_access(principal["name"], endpoint, name, operand)
+        if decision["action"] != "ALLOW":
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint=endpoint,
+                capability=name,
+                result="DENY",
+                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                operand=operand,
+                duration_ms=int((time.monotonic() - start) * 1000),
+            )
+            return _text_result("DENY\nReason: %s" % decision["reason"], is_error=True)
+        ep = decision.get("endpoint_row")
+        if ep is None:
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint=endpoint,
+                capability=name,
+                result="UNAVAILABLE",
+                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                operand=operand,
+            )
+            return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable", is_error=True)
+        if ep["status"] == "orphaned":
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint=endpoint,
+                capability=name,
+                result="UNAVAILABLE",
+                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                operand=operand,
+            )
+            return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable (orphaned)", is_error=True)
+        client = self.plane.client_for_endpoint(ep["id"])
+        if client is None or not int(client["connected"] or 0):
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint=endpoint,
+                capability=name,
+                result="UNAVAILABLE",
+                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                operand=operand,
+            )
+            return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable", is_error=True)
+        if name == "get_host":
+            view = {
+                "name": ep["name"],
+                "status": ep["status"],
+                "type": ep["type"],
+                "origin": ep["origin"],
+            }
+            self.plane.record_ai_activity(
+                principal=principal["name"],
+                endpoint=endpoint,
+                capability=name,
+                result="ALLOW",
+                rule=decision["winner"]["name"],
+                duration_ms=int((time.monotonic() - start) * 1000),
+            )
+            return _text_result(json.dumps(view, indent=2))
+        patterns = decision["winner"].get("paths") or []
+        timeout = decision.get("exec_timeout") or 30
+        payload = self._dispatch_endpoint(
+            principal=principal,
+            client_id=client["id"],
+            endpoint_object_id=ep["id"],
+            capability=name,
+            arguments=arguments,
+            patterns=patterns,
+            timeout=int(timeout),
+        )
+        duration_ms = int((time.monotonic() - start) * 1000)
+        op_result = payload.get("result") or "ALLOW"
+        self.plane.record_ai_activity(
+            principal=principal["name"],
+            endpoint=endpoint,
+            capability=name,
+            result=op_result,
+            rule=decision["winner"]["name"],
+            operand=operand,
+            duration_ms=duration_ms,
+        )
+        safe = dict(payload)
+        if name not in ("read_file", "download_file"):
+            safe.pop("content_b64", None)
+        is_error = op_result not in ("ALLOW",)
+        return _text_result(json.dumps(safe, indent=2), is_error=is_error)
+
+    def _dispatch_endpoint(self, *, principal, client_id, endpoint_object_id, capability, arguments, patterns, timeout):
+        """Dispatch through the client AI agent job path, not a local MCP server."""
+        with self._lock:
+            job_id = self.plane.enqueue_ai_job(
+                principal_id=principal["id"],
+                endpoint_object_id=endpoint_object_id,
+                client_id=client_id,
+                capability=capability,
+                arguments=arguments,
+                patterns=patterns,
+                timeout=timeout,
+            )
+        if client_id in self._agents:
+            wait_for = max(2.0, float(timeout) + 2.0)
+        elif os.environ.get("DRLINK_TEST_ROOT") or os.environ.get("DRLINK_AI_LOCAL_EXEC") == "1":
+            wait_for = 0.25
+        else:
+            wait_for = max(2.0, float(timeout) + 5.0)
+        deadline = time.monotonic() + wait_for
+        while time.monotonic() < deadline:
+            with self._lock:
+                if job_id in self._job_results:
+                    return self._job_results.pop(job_id)
+            job = self.plane.get_ai_job(job_id)
+            if job and job.get("status") == "done" and job_id in self._job_results:
+                with self._lock:
+                    return self._job_results.pop(job_id)
+            time.sleep(0.05)
+        with self._lock:
+            if job_id in self._job_results:
+                return self._job_results.pop(job_id)
+        if os.environ.get("DRLINK_TEST_ROOT") or os.environ.get("DRLINK_AI_LOCAL_EXEC") == "1":
+            try:
+                payload = execute_local(capability, arguments, patterns=patterns, timeout=timeout)
+            except ControlPlaneError as exc:
+                payload = {"result": "DENY", "error": str(exc)}
+            with self._lock:
+                self._job_results[job_id] = payload
+                try:
+                    self.plane.complete_ai_job(job_id, client_id, payload)
+                except ControlPlaneError:
+                    pass
+            return payload
+        return {"result": "TIMEOUT", "error": "agent did not complete the job"}
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def make_handler(bridge: MCPBridge):
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt, *args):
+            return
+
+        def _send(self, code, payload, extra_headers=None, raw=None):
+            if raw is None:
+                raw = b"" if payload == {} and code == 202 else json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            if raw:
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+            else:
+                self.send_header("Content-Length", "0")
+            for k, v in (extra_headers or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if raw:
+                self.wfile.write(raw)
+
+        def _origin_denied(self):
+            bad = bridge.validate_origin(self.headers)
+            if bad:
+                self._send(403, {"error": "invalid origin"})
+                return True
+            return False
+
+        def _www_auth(self):
+            base = bridge.canonical_public_base()
+            return 'Bearer realm="drlink-mcp", resource_metadata="%s/.well-known/oauth-protected-resource", scope="drlink.ai"' % base
+
+        def do_GET(self):
+            if self._origin_denied():
+                return
+            parsed = urlparse(self.path)
+            if parsed.path in ("/healthz", "/health"):
+                st = bridge.plane.status()
+                mcp = "Healthy" if st.get("mcp_configured") else "Not configured"
+                self._send(200, {"status": mcp, "revision": st["revision"]})
+                return
+            if parsed.path in (
+                "/.well-known/oauth-protected-resource",
+                "/.well-known/oauth-protected-resource/mcp",
+            ):
+                self._send(200, bridge.oauth_metadata(self.headers))
+                return
+            if parsed.path == "/.well-known/oauth-authorization-server":
+                self._send(200, bridge.as_metadata(self.headers))
+                return
+            if parsed.path == "/oauth/authorize":
+                qs = parse_qs(parsed.query)
+                fields = {k: (v[0] if v else "") for k, v in qs.items()}
+                if str(fields.get("code_challenge_method") or "S256") != "S256":
+                    self._send(400, {"error": "invalid_request", "error_description": "code_challenge_method must be S256"})
+                    return
+                try:
+                    resource = bridge._require_canonical_resource(str(fields.get("resource") or ""))
+                    pending = bridge.plane.create_oauth_pending(
+                        client_id=str(fields.get("client_id") or ""),
+                        redirect_uri=str(fields.get("redirect_uri") or ""),
+                        code_challenge=str(fields.get("code_challenge") or ""),
+                        resource=resource,
+                        state=str(fields.get("state") or ""),
+                    )
+                except ControlPlaneError as exc:
+                    self._send(400, {"error": "invalid_request", "error_description": str(exc)})
+                    return
+                auto = os.environ.get("DRLINK_OAUTH_AUTO_APPROVE") == "1" and bridge.listen_host in (
+                    "127.0.0.1",
+                    "localhost",
+                    "::1",
+                )
+                if auto:
+                    approved = bridge.plane.approve_oauth_pending(pending["id"])
+                    loc = approved["redirect_uri"]
+                    sep = "&" if "?" in loc else "?"
+                    query = {"code": approved["code"], "iss": bridge.canonical_public_base()}
+                    if approved.get("state"):
+                        query["state"] = approved["state"]
+                    loc = "%s%s%s" % (loc, sep, urlencode(query))
+                    self.send_response(302)
+                    self.send_header("Location", loc)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                page = (
+                    "<!doctype html><html><body><p>Approve this MCP OAuth request as operator:</p>"
+                    "<pre>system credential approve-oauth %s</pre>"
+                    "<p>This is a consent page, not a management UI.</p></body></html>"
+                    % pending["id"]
+                )
+                raw = page.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self._send(404, {"error": "not found"})
+
+        def do_DELETE(self):
+            # 2026-07-28 removed protocol-level sessions; DELETE is not a session
+            # terminator. Answer 405 so official SDKs fail closed rather than hang.
+            self.send_response(405)
+            self.send_header("Allow", "GET, POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self.send_header("Allow", "GET, POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_POST(self):
+            if self._origin_denied():
+                return
+            parsed = urlparse(self.path)
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 2_000_000:
+                self._send(413, _jsonrpc_error(None, -32700, "payload too large"))
+                return
+            raw = self.rfile.read(length) if length else b"{}"
+            if parsed.path == "/oauth/token":
+                fields = {}
+                if self.headers.get("Content-Type", "").startswith("application/json"):
+                    try:
+                        fields = json.loads(raw.decode("utf-8") or "{}")
+                    except Exception:
+                        self._send(400, {"error": "invalid_request"})
+                        return
+                else:
+                    from urllib.parse import parse_qs
+
+                    qs = parse_qs(raw.decode("utf-8"))
+                    fields = {k: (v[0] if v else "") for k, v in qs.items()}
+                auth = _header(self.headers, "Authorization")
+                if auth.lower().startswith("basic "):
+                    import base64
+
+                    try:
+                        decoded = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+                        cid, secret = decoded.split(":", 1)
+                        fields.setdefault("client_id", cid)
+                        fields.setdefault("client_secret", secret)
+                    except Exception:
+                        pass
+                try:
+                    issued = bridge.issue_oauth_token(fields, self.headers)
+                except ControlPlaneError as exc:
+                    self._send(400, {"error": "invalid_request", "error_description": str(exc)})
+                    return
+                if issued is None:
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", self._www_auth())
+                    body = json.dumps({"error": "invalid_client"}).encode("utf-8")
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self._send(200, issued)
+                return
+            if parsed.path in ("/agent/v1/claim", "/agent/v1/complete"):
+                client_id = bridge.authenticate_agent(self.headers)
+                if client_id is None:
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", 'Bearer realm="drlink-agent"')
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                try:
+                    body = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._send(400, {"error": "parse error"})
+                    return
+                if parsed.path.endswith("/claim"):
+                    with bridge._lock:
+                        jobs = bridge.plane.claim_ai_jobs(client_id, int(body.get("limit") or 4))
+                    self._send(200, {"jobs": jobs})
+                    return
+                full = body.get("result") or {}
+                with bridge._lock:
+                    bridge._job_results[str(body.get("id") or "")] = full
+                    bridge.plane.complete_ai_job(str(body.get("id") or ""), client_id, full)
+                self._send(200, {"ok": True})
+                return
+            if parsed.path != "/mcp":
+                self._send(404, {"error": "not found"})
+                return
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception:
+                self._send(400, _jsonrpc_error(None, -32700, "parse error"))
+                return
+            principal = bridge.authenticate(self.headers)
+            if principal is None:
+                payload = json.dumps(_jsonrpc_error(body.get("id"), -32001, "unauthorized")).encode("utf-8")
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", self._www_auth())
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            code, result = bridge.handle_rpc(body, self.headers, principal)
+            extra = {}
+            if code == 200:
+                extra["Cache-Control"] = "no-store"
+            self._send(code, result, extra_headers=extra)
+
+    return Handler
+
+
+def serve(host=DEFAULT_LISTEN, port=DEFAULT_PORT, root=None):
+    bridge = MCPBridge(root=root)
+    bridge.listen_host = host
+    bridge.listen_port = int(port)
+    httpd = ThreadingHTTPServer((host, int(port)), make_handler(bridge))
+    bridge.refresh_local_agents("http://%s:%s" % (host, port))
+    httpd.serve_forever()
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Data Relay Link MCP Bridge")
+    parser.add_argument("--listen", default=os.environ.get("DRLINK_MCP_LISTEN", DEFAULT_LISTEN))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("DRLINK_MCP_PORT", DEFAULT_PORT)))
+    args = parser.parse_args(argv)
+    serve(args.listen, args.port)
+
+
+if __name__ == "__main__":
+    main()

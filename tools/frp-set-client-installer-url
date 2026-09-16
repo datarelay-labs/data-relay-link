@@ -4,6 +4,12 @@
 Requires HTTPS. Rejects userinfo, control characters, whitespace tricks,
 malformed URLs, and unsupported schemes. Uses the server lifecycle lock
 and atomic config writes.
+
+Usage:
+  frp-set-client-installer-url <https-url>
+  frp-set-client-installer-url --windows <https-url>
+  frp-set-client-installer-url --unset
+  frp-set-client-installer-url --windows --unset
 """
 from __future__ import annotations
 
@@ -24,10 +30,10 @@ def _load(name, rel):
     root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
     candidates = [
         here.parent.parent / 'lib' / rel,
-        Path('/usr/local/lib/frp-auto-deploy') / rel,
+        Path('/usr/local/lib/drlink') / rel,
     ]
     if root:
-        candidates.insert(1, Path(root) / 'usr/local/lib/frp-auto-deploy' / rel)
+        candidates.insert(1, Path(root) / 'usr/local/lib/drlink' / rel)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(name, str(path))
@@ -42,7 +48,6 @@ def validate_https_installer_url(url: str) -> str:
         fail('client installer URL is required')
     if not isinstance(url, str):
         fail('client installer URL must be a string')
-    # Reject whitespace / control characters before parsing (urlsplit is permissive).
     if url.strip() != url:
         fail('client installer URL must not have leading/trailing whitespace')
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
@@ -69,10 +74,33 @@ def validate_https_installer_url(url: str) -> str:
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if len(argv) != 1:
-        print('Usage: frp-set-client-installer-url <https-install-client-url>', file=sys.stderr)
-        raise SystemExit(2)
-    url = validate_https_installer_url(argv[0])
+    key = 'client_installer_url'
+    label = 'Client installer URL'
+    unset = False
+    while argv and argv[0] in ('--windows', '-w', '--unset', 'unset'):
+        tok = argv.pop(0)
+        if tok in ('--windows', '-w'):
+            key = 'windows_client_installer_url'
+            label = 'Windows client installer URL'
+        else:
+            unset = True
+    if unset:
+        if argv:
+            print(
+                'Usage: frp-set-client-installer-url [--windows] --unset',
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        url = None
+    else:
+        if len(argv) != 1:
+            print(
+                'Usage: frp-set-client-installer-url [--windows] <https-install-client-url>\n'
+                '       frp-set-client-installer-url [--windows] --unset',
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        url = validate_https_installer_url(argv[0])
 
     SCFG = _load('frp_server_config', 'frp_server_config.py')
     LOCKS = _load('frp_control_locks', 'frp_control_locks.py')
@@ -86,7 +114,10 @@ def main(argv=None):
     try:
         with LOCKS.ExclusiveFileLock(LOCKS.lifecycle_lock_path(root)):
             cfg = SCFG.load_config(cfg_path)
-            cfg['client_installer_url'] = url
+            if unset:
+                cfg.pop(key, None)
+            else:
+                cfg[key] = url
             SCFG.atomic_write_config(cfg_path, cfg)
     except LOCKS.LockTimeout:
         fail('timed out waiting for the server lifecycle lock')
@@ -95,7 +126,10 @@ def main(argv=None):
     except Exception as exc:
         fail(str(exc))
 
-    print('Client installer URL updated.')
+    if unset:
+        print('%s cleared (automatic/default installer source).' % label)
+    else:
+        print('%s updated.' % label)
     return 0
 
 

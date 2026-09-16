@@ -23,12 +23,12 @@ def load_module():
 
 def seed_tree(root: Path) -> None:
     for rel in (
-        "etc/frp-auto-deploy/pki",
+        "etc/drlink/pki",
         "etc/frp",
-        "var/lib/frp-auto-deploy",
+        "var/lib/drlink",
     ):
         (root / rel).mkdir(parents=True, exist_ok=True)
-    (root / "etc/frp-auto-deploy/config.json").write_text(
+    (root / "etc/drlink/config.json").write_text(
         json.dumps(
             {
                 "public_host": "203.0.113.10",
@@ -40,21 +40,174 @@ def seed_tree(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / "var/lib/frp-auto-deploy/registry.json").write_text(
+    (root / "var/lib/drlink/registry.json").write_text(
         json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n",
         encoding="utf-8",
     )
-    (root / "var/lib/frp-auto-deploy/access-control.json").write_text(
+    (root / "var/lib/drlink/access-control.json").write_text(
         json.dumps({"schema_version": 1, "access_lists": {}, "service_access": {}}) + "\n",
         encoding="utf-8",
     )
     (root / "etc/frp/frps.toml").write_text('bindPort = 443\n', encoding="utf-8")
     (root / "etc/frp/server_token").write_text("token\n", encoding="utf-8")
-    (root / "etc/frp-auto-deploy/pki/ca.crt").write_text("ca\n", encoding="utf-8")
+    (root / "etc/drlink/pki/ca.crt").write_text("ca\n", encoding="utf-8")
+
+
+def _restore_env():
+    old = {
+        k: os.environ.get(k)
+        for k in (
+            "FRP_SKIP_SYSTEMD",
+            "FRP_DEPLOY_TEST_ROOT",
+            "FRP_RESTORE_READY_TIMEOUT",
+            "FRP_RESTORE_READY_INTERVAL",
+            "FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL",
+            "FRP_RESTORE_HOOK_CLIENT_READY_FAIL",
+        )
+    }
+    os.environ.pop("FRP_SKIP_SYSTEMD", None)
+    os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
+    os.environ.pop("FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL", None)
+    os.environ.pop("FRP_RESTORE_HOOK_CLIENT_READY_FAIL", None)
+    os.environ["FRP_RESTORE_READY_TIMEOUT"] = "1"
+    os.environ["FRP_RESTORE_READY_INTERVAL"] = "0"
+    return old
+
+
+def _restore_env_back(old):
+    for key, value in old.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def test_dual_role_restart_and_readiness(mod) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        seed_tree(root)
+        (root / "etc/systemd/system").mkdir(parents=True, exist_ok=True)
+        (root / "etc/systemd/system/drlink-client.service").write_text("[Unit]\n", encoding="utf-8")
+        assert mod.installed_client_role(root) is True
+        old = _restore_env()
+        calls = []
+
+        def fake_run(args, capture_output=False, text=False, check=False):
+            calls.append(list(args))
+            if args[:2] == ["systemctl", "daemon-reload"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["systemctl", "restart"]:
+                if "drlink-client.service" in args:
+                    return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["systemctl", "is-active"]:
+                return types.SimpleNamespace(stdout="active\n", returncode=0)
+            if args[:2] == ["ss", "-lnt"]:
+                return types.SimpleNamespace(stdout="LISTEN 0 4096 *:443 *:*\n", returncode=0)
+            raise AssertionError("unexpected subprocess call: %s" % args)
+
+        real_urllib = __import__("urllib.request", fromlist=["request"])
+        real_run = mod.subprocess.run
+        real_ssl = mod.ssl.create_default_context
+        real_urlopen = real_urllib.urlopen
+        mod.subprocess.run = fake_run
+        mod.ssl.create_default_context = lambda cafile=None: object()
+        real_urllib.urlopen = lambda *a, **kw: types.SimpleNamespace(read=lambda: b"ok")
+        try:
+            mod.restart_services(root, expect_client_role=False)
+            if any("drlink-client.service" in c for c in calls if c[:2] == ["systemctl", "restart"]):
+                raise AssertionError("server-only restart restarted the client")
+            calls.clear()
+            mod.restart_services(root, expect_client_role=True)
+            if not any(
+                c[:2] == ["systemctl", "restart"] and "drlink-client.service" in c for c in calls
+            ):
+                raise AssertionError("dual-role restart skipped drlink-client.service")
+            os.environ["FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL"] = "1"
+            try:
+                mod.restart_services(root, expect_client_role=True)
+                raise AssertionError("client restart failure was ignored")
+            except mod.RestoreError as exc:
+                if "drlink-client" not in str(exc):
+                    raise AssertionError("unexpected error: %s" % exc)
+            os.environ.pop("FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL", None)
+            mod.verify_restored_control_state(root, expect_client_role=True)
+            os.environ["FRP_RESTORE_HOOK_CLIENT_READY_FAIL"] = "1"
+            try:
+                mod.verify_restored_control_state(root, expect_client_role=True)
+                raise AssertionError("client readiness failure was ignored")
+            except mod.RestoreError as exc:
+                if "drlink-client" not in str(exc):
+                    raise AssertionError("unexpected readiness error: %s" % exc)
+            os.environ.pop("FRP_RESTORE_HOOK_CLIENT_READY_FAIL", None)
+            # Rollback path must still restart/verify the client role.
+            calls.clear()
+            mod.restart_services(root, allow_hook=False, expect_client_role=True)
+            if not any(
+                c[:2] == ["systemctl", "restart"] and "drlink-client.service" in c for c in calls
+            ):
+                raise AssertionError("rollback skipped dual-role client restart")
+            mod.verify_restored_control_state(root, in_rollback=True, expect_client_role=True)
+        finally:
+            mod.subprocess.run = real_run
+            mod.ssl.create_default_context = real_ssl
+            real_urllib.urlopen = real_urlopen
+            _restore_env_back(old)
+    print("NEW_004_DUAL_ROLE_RESTORE_CLIENT_READINESS=PASS")
+    print("DUAL_ROLE_RESTORE_ROLLBACK=PASS")
+
+
+def test_server_only_skips_missing_client(mod) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        seed_tree(root)
+        assert mod.installed_client_role(root) is False
+        old = _restore_env()
+        calls = []
+
+        def fake_run(args, capture_output=False, text=False, check=False):
+            calls.append(list(args))
+            if args[:2] == ["systemctl", "daemon-reload"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["systemctl", "restart"]:
+                if "drlink-client.service" in args:
+                    raise AssertionError("server-only restore restarted missing client")
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["systemctl", "is-active"]:
+                if args[-1] == "drlink-client.service":
+                    raise AssertionError("server-only verify probed missing client")
+                return types.SimpleNamespace(stdout="active\n", returncode=0)
+            if args[:2] == ["ss", "-lnt"]:
+                return types.SimpleNamespace(stdout="LISTEN 0 4096 *:443 *:*\n", returncode=0)
+            raise AssertionError("unexpected subprocess call: %s" % args)
+
+        real_urllib = __import__("urllib.request", fromlist=["request"])
+        real_run = mod.subprocess.run
+        real_ssl = mod.ssl.create_default_context
+        real_urlopen = real_urllib.urlopen
+        mod.subprocess.run = fake_run
+        mod.ssl.create_default_context = lambda cafile=None: object()
+        real_urllib.urlopen = lambda *a, **kw: types.SimpleNamespace(read=lambda: b"ok")
+        try:
+            mod.restart_services(root, expect_client_role=False)
+            mod.verify_restored_control_state(root, expect_client_role=False)
+        finally:
+            mod.subprocess.run = real_run
+            mod.ssl.create_default_context = real_ssl
+            real_urllib.urlopen = real_urlopen
+            _restore_env_back(old)
+    print("SERVER_ONLY_NO_CLIENT_UNIT=PASS")
 
 
 def main() -> int:
     mod = load_module()
+    test_existing_server_readiness(mod)
+    test_server_only_skips_missing_client(mod)
+    test_dual_role_restart_and_readiness(mod)
+    return 0
+
+
+def test_existing_server_readiness(mod) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         seed_tree(root)
@@ -118,8 +271,9 @@ def main() -> int:
         assert counters["access_healthz"] >= 2, counters
         assert "https://127.0.0.1:6099/healthz" in seen["urls"], seen
         assert "http://127.0.0.1:6101/healthz" in seen["urls"], seen
-        assert seen["cafile"] == str(root / "etc/frp-auto-deploy/pki/ca.crt"), seen
+        assert seen["cafile"] == str(root / "etc/drlink/pki/ca.crt"), seen
         print("RESTORE_READINESS_RETRY=PASS")
+        print("SERVER_ONLY_RESTORE_COMPAT=PASS")
     return 0
 
 
