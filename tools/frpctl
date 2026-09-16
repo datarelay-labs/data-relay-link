@@ -710,6 +710,9 @@ print(
     )
 )
 PY
+    if db_py="$(frpctl_lib_candidate drlink_control_db.py)"; then
+      python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from drlink_control_db import SCHEMA_VERSION; print("Control DB Schema: %s" % SCHEMA_VERSION)' "$(dirname "$db_py")" 2>/dev/null || true
+    fi
     return 0
   fi
   # Fallback when identity helper is not packaged yet.
@@ -718,6 +721,35 @@ PY
   echo "Source HEAD: ${source_head:-unknown}"
   echo "Relay Engine (FRP): ${frp_ver}"
   echo "Role: ${role}"
+}
+
+frpctl_control_plane_dispatch() {
+  local result="$1" cli_py libdir
+  if ! cli_py="$(frpctl_lib_candidate drlink_control_cli.py)"; then
+    echo "ERROR: control-plane CLI is not installed." >&2
+    return 1
+  fi
+  libdir="$(dirname "$cli_py")"
+  PYTHONPATH="${libdir}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$cli_py" "$result" <<'PY'
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import drlink_control_cli as cli
+
+result = json.loads(sys.argv[2])
+tokens = result.get("tokens") or []
+raise SystemExit(cli.main(tokens) or 0)
+PY
+}
+
+frpctl_control_plane_status() {
+  local cli_py libdir
+  cli_py="$(frpctl_lib_candidate drlink_control_cli.py)" || return 0
+  libdir="$(dirname "$cli_py")"
+  echo
+  PYTHONPATH="${libdir}${PYTHONPATH:+:$PYTHONPATH}" python3 "$cli_py" show status 2>/dev/null || true
 }
 
 frpctl_print_catalog_overview() {
@@ -2596,6 +2628,7 @@ frpctl_status_both() {
   echo "----- Server -----"
   echo
   frpctl_run frp-server-status || true
+  frpctl_control_plane_status
 }
 
 frpctl_client_update() {
@@ -2621,6 +2654,7 @@ frpctl_status() {
     frpctl_run frp-client status
   elif [[ "$server" == "1" ]]; then
     frpctl_run frp-server-status
+    frpctl_control_plane_status
   else
     frpctl_require_install
     return 1
@@ -3592,6 +3626,10 @@ frpctl_dispatch_canonical() {
       frpctl_with_pt frpctl_run frp-server-status
       ;;
     show_version) echo; frpctl_print_version; echo ;;
+    control_plane)
+      frpctl_require_server || return 1
+      frpctl_control_plane_dispatch "$result"
+      ;;
     show_clients)
       frpctl_require_server || return 1
       frpctl_load_passthrough "$result"

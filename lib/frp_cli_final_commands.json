@@ -2237,17 +2237,21 @@
     "roles": "server",
     "category": "Server",
     "summary": "Change server settings",
-    "detail": "public-hostname is a published-service alias only; never allocator identity. Client installer URLs use: set installer-url / set windows-installer-url.",
+    "detail": "public-hostname is a published-service alias only; never allocator identity. Installer URLs may be set with set server installer-url / set server windows-installer-url or the sibling commands set installer-url / set windows-installer-url.",
     "examples": [
       "set server public-hostname frp.example.com",
-      "set server bootstrap-hostname bootstrap.example.com"
+      "set server bootstrap-hostname bootstrap.example.com",
+      "set server installer-url https://example.test/install-client.sh",
+      "set server windows-installer-url https://example.test/install-client.ps1"
     ],
     "args": [
       {
-        "name": "public-hostname|bootstrap-hostname",
+        "name": "public-hostname|bootstrap-hostname|installer-url|windows-installer-url",
         "complete": [
           "public-hostname",
-          "bootstrap-hostname"
+          "bootstrap-hostname",
+          "installer-url",
+          "windows-installer-url"
         ],
         "required": true
       },
@@ -3729,20 +3733,8 @@
       }
     ],
     "tail": "flags",
-    "internal": [
-      "create",
-      "backup"
-    ],
-    "aliases": [
-      [
-        "create",
-        "backup"
-      ],
-      [
-        "backup",
-        "create"
-      ]
-    ],
+    "internal": null,
+    "aliases": [],
     "destructive": false,
     "hidden": false,
     "risk": "none",
@@ -5119,5 +5111,1171 @@
         "default": 30
       }
     ]
+  },
+  {
+    "path": [
+      "show",
+      "objects"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "List Objects",
+    "detail": "List Objects",
+    "examples": [
+      "show objects"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "object"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "Show an Object",
+    "detail": "Show an Object",
+    "examples": [
+      "show object"
+    ],
+    "args": [
+      {
+        "name": "<OBJECT>",
+        "complete": "objects",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "object-groups"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "List Object Groups",
+    "detail": "List Object Groups",
+    "examples": [
+      "show object-groups"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "object-group"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "Show an Object Group",
+    "detail": "Show an Object Group",
+    "examples": [
+      "show object-group"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "object-groups",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "managed-endpoints"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "List Managed Endpoints",
+    "detail": "List Managed Endpoints",
+    "examples": [
+      "show managed-endpoints"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "managed-endpoint"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Show a Managed Endpoint",
+    "detail": "Show a Managed Endpoint",
+    "examples": [
+      "show managed-endpoint"
+    ],
+    "args": [
+      {
+        "name": "<ENDPOINT>",
+        "complete": "managed-endpoints",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "published-services"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "List Published Services",
+    "detail": "List Published Services",
+    "examples": [
+      "show published-services"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "published-service"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Show a Published Service",
+    "detail": "Show a Published Service",
+    "examples": [
+      "show published-service"
+    ],
+    "args": [
+      {
+        "name": "<CLIENT>",
+        "complete": "clients",
+        "required": true
+      },
+      {
+        "name": "<SERVICE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-presets"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "List Service Presets",
+    "detail": "List Service Presets",
+    "examples": [
+      "show service-presets"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "remote-access"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "List Remote Access rules",
+    "detail": "List Remote Access rules",
+    "examples": [
+      "show remote-access"
+    ],
+    "args": [],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "internet-access"
+    ],
+    "roles": "server",
+    "category": "Internet Access",
+    "summary": "List Internet Access rules",
+    "detail": "List Internet Access rules",
+    "examples": [
+      "show internet-access"
+    ],
+    "args": [],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "client-groups"
+    ],
+    "roles": "server",
+    "category": "Clients",
+    "summary": "List Client Groups",
+    "detail": "List Client Groups",
+    "examples": [
+      "show client-groups"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "client-group"
+    ],
+    "roles": "server",
+    "category": "Clients",
+    "summary": "Show a Client Group",
+    "detail": "Show a Client Group",
+    "examples": [
+      "show client-group"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "client-groups",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-principals"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "List AI Principals",
+    "detail": "List AI Principals",
+    "examples": [
+      "show ai-principals"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-principal"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Show an AI Principal",
+    "detail": "Show an AI Principal",
+    "examples": [
+      "show ai-principal"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-access"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "List AI Access rules",
+    "detail": "List AI Access rules",
+    "examples": [
+      "show ai-access",
+      "show ai-access readonly-support",
+      "show ai-access readonly-support impact"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": "ai-access-rules",
+        "required": false
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-activity"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Show AI activity",
+    "detail": "Show AI activity",
+    "examples": [
+      "show ai-activity",
+      "show ai-activity principal chatgpt-support",
+      "show ai-activity endpoint Expernet-DP1"
+    ],
+    "args": [
+      {
+        "name": "principal|endpoint",
+        "complete": [
+          "principal",
+          "endpoint"
+        ],
+        "required": false
+      },
+      {
+        "name": "<NAME>",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "object"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "Create or edit an Object",
+    "detail": "Create or edit an Object",
+    "examples": [
+      "set object"
+    ],
+    "args": [
+      {
+        "name": "<OBJECT>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "object-group"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "Create or edit an Object Group",
+    "detail": "Create or edit an Object Group",
+    "examples": [
+      "set object-group"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "client-group"
+    ],
+    "roles": "server",
+    "category": "Clients",
+    "summary": "Create or edit a Client Group",
+    "detail": "Create or edit a Client Group",
+    "examples": [
+      "set client-group"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "remote-access"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Create or edit a Remote Access rule",
+    "detail": "Create or edit a Remote Access rule",
+    "examples": [
+      "set remote-access"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "internet-access"
+    ],
+    "roles": "server",
+    "category": "Internet Access",
+    "summary": "Create or edit an Internet Access rule",
+    "detail": "Create or edit an Internet Access rule",
+    "examples": [
+      "set internet-access"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "published-service"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Create or edit a Published Service",
+    "detail": "Create or edit a Published Service",
+    "examples": [
+      "set published-service"
+    ],
+    "args": [
+      {
+        "name": "<SERVICE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "service-preset"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Create or edit a Service Preset",
+    "detail": "Create or edit a Service Preset",
+    "examples": [
+      "set service-preset"
+    ],
+    "args": [
+      {
+        "name": "<PRESET>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "ai-principal"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Create or edit an AI Principal",
+    "detail": "Create or edit an AI Principal",
+    "examples": [
+      "set ai-principal"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "ai-access"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Create or edit an AI Access rule",
+    "detail": "Create or edit an AI Access rule",
+    "examples": [
+      "set ai-access"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "object"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "Remove an Object",
+    "detail": "Remove an Object",
+    "examples": [
+      "unset object"
+    ],
+    "args": [
+      {
+        "name": "<OBJECT>",
+        "complete": "objects",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "object-group"
+    ],
+    "roles": "server",
+    "category": "Objects",
+    "summary": "Remove an Object Group",
+    "detail": "Remove an Object Group",
+    "examples": [
+      "unset object-group"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "object-groups",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "client-group"
+    ],
+    "roles": "server",
+    "category": "Clients",
+    "summary": "Remove a Client Group",
+    "detail": "Remove a Client Group",
+    "examples": [
+      "unset client-group"
+    ],
+    "args": [
+      {
+        "name": "<GROUP>",
+        "complete": "client-groups",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "remote-access"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Remove a Remote Access rule",
+    "detail": "Remove a Remote Access rule",
+    "examples": [
+      "unset remote-access"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "internet-access"
+    ],
+    "roles": "server",
+    "category": "Internet Access",
+    "summary": "Remove an Internet Access rule",
+    "detail": "Remove an Internet Access rule",
+    "examples": [
+      "unset internet-access"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "published-service"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Remove a Published Service",
+    "detail": "Remove a Published Service",
+    "examples": [
+      "unset published-service"
+    ],
+    "args": [
+      {
+        "name": "<SERVICE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "ai-principal"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Remove an AI Principal",
+    "detail": "Remove an AI Principal",
+    "examples": [
+      "unset ai-principal"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "ai-access"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Remove an AI Access rule",
+    "detail": "Remove an AI Access rule",
+    "examples": [
+      "unset ai-access"
+    ],
+    "args": [
+      {
+        "name": "<RULE>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "test",
+      "remote-access"
+    ],
+    "roles": "server",
+    "category": "Remote Access",
+    "summary": "Explain Remote Access authorization",
+    "detail": "Explain Remote Access authorization",
+    "examples": [
+      "test remote-access"
+    ],
+    "args": [
+      {
+        "name": "<SOURCE_IP>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<DESTINATION>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PROTOCOL>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PORT>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "test",
+      "internet-access"
+    ],
+    "roles": "server",
+    "category": "Internet Access",
+    "summary": "Explain Internet Access authorization",
+    "detail": "Explain Internet Access authorization",
+    "examples": [
+      "test internet-access"
+    ],
+    "args": [
+      {
+        "name": "<SOURCE_IP>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<DESTINATION>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PROTOCOL>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "<PORT>",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "test",
+      "ai-access"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Explain AI Access authorization",
+    "detail": "Explain AI Access authorization",
+    "examples": [
+      "test ai-access"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      },
+      {
+        "name": "<ENDPOINT>",
+        "complete": "managed-endpoints",
+        "required": true
+      },
+      {
+        "name": "<CAPABILITY>",
+        "complete": null,
+        "required": true
+      },
+      {
+        "name": "[OPERAND]",
+        "complete": null,
+        "required": false
+      }
+    ],
+    "tail": "any",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "revisions"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "List control-plane revisions",
+    "detail": "List control-plane revisions",
+    "examples": [
+      "system revisions"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "credential",
+      "rotate",
+      "ai-principal"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Rotate an AI Principal credential",
+    "detail": "Rotate an AI Principal credential",
+    "examples": [
+      "system credential rotate ai-principal"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "credential",
+      "revoke",
+      "ai-principal"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Revoke an AI Principal credential",
+    "detail": "Revoke an AI Principal credential",
+    "examples": [
+      "system credential revoke ai-principal"
+    ],
+    "args": [
+      {
+        "name": "<PRINCIPAL>",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
   }
 ]

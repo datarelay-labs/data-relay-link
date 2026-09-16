@@ -1,0 +1,16 @@
+[Unit]
+Description=Data Relay Link MCP Bridge
+After=network.target drlink-server.service
+Wants=drlink-server.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/drlink-mcp-bridge.py --listen 127.0.0.1 --port 6103
+Restart=on-failure
+RestartSec=2
+User=root
+Group=root
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

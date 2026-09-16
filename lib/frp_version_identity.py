@@ -242,12 +242,8 @@ def validate_manifest_dict(
     else:
         if "mcp_included" not in features:
             errs.append("features.mcp_included required")
-        elif features.get("mcp_included") is not False:
-            # v2.4.0 product line excludes MCP.
-            if project.startswith("2.4."):
-                errs.append("v2.4.x stable/candidate manifests must set features.mcp_included=false")
-            elif features.get("mcp_included") not in (True, False):
-                errs.append("features.mcp_included must be boolean")
+        elif features.get("mcp_included") not in (True, False):
+            errs.append("features.mcp_included must be boolean")
 
     if require_artifacts:
         artifacts = data.get("artifacts")

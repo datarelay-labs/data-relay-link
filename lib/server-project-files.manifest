@@ -39,6 +39,12 @@ project usr/local/lib/drlink/frp_ctl_grammar.py 0644 lib/frp_ctl_grammar.py pyth
 project usr/local/lib/drlink/frp_cli_catalog.py 0644 lib/frp_cli_catalog.py python
 project usr/local/lib/drlink/frp_version_identity.py 0644 lib/frp_version_identity.py python
 project usr/local/lib/drlink/frp_cli_final_commands.json 0644 lib/frp_cli_final_commands.json data
+project usr/local/lib/drlink/drlink_control_db.py 0644 lib/drlink_control_db.py python
+project usr/local/lib/drlink/drlink_control_plane.py 0644 lib/drlink_control_plane.py python
+project usr/local/lib/drlink/drlink_control_cli.py 0644 lib/drlink_control_cli.py python
+project usr/local/lib/drlink/drlink_ai_agent.py 0644 lib/drlink_ai_agent.py python
+project usr/local/lib/drlink/drlink_mcp_bridge.py 0644 lib/drlink_mcp_bridge.py python
+project usr/local/lib/drlink/drlink-mcp-bridge.py 0755 server/drlink-mcp-bridge.py python
 project usr/local/lib/drlink/frp_infrastructure_ports.py 0644 lib/frp_infrastructure_ports.py python
 project usr/local/lib/drlink/frp_ctl_repl.py 0644 lib/frp_ctl_repl.py python
 project usr/local/lib/drlink/frp_machine_id.py 0644 lib/frp_machine_id.py python
@@ -68,6 +74,7 @@ unit etc/systemd/system/drlink-allocator.service 0644 server/drlink-allocator.se
 unit etc/systemd/system/drlink-access.service 0644 server/drlink-access.service none
 unit etc/systemd/system/drlink-egress.service 0644 server/drlink-egress.service none
 unit etc/systemd/system/drlink-tcp-egress.service 0644 server/drlink-tcp-egress.service none
+unit etc/systemd/system/drlink-mcp-bridge.service 0644 server/drlink-mcp-bridge.service none
 unit-single443 etc/systemd/system/drlink-frontend.service 0644 server/drlink-frontend.service none
 project usr/local/lib/drlink/frp-create-client 0755 tools/frp-create-client python
 project usr/local/lib/drlink/frp-enrollments 0755 tools/frp-enrollments python
@@ -108,6 +115,8 @@ protected var/lib/drlink/registry.json - - none
 protected var/lib/drlink/access-control.json - - none
 protected var/lib/drlink/egress-control.json - - none
 protected var/lib/drlink/service-profiles.json - - none
+protected var/lib/drlink/drlink.db - - none
+protected-prefix var/lib/drlink/runtime/ - - none
 protected-prefix etc/drlink/pki/ - - none
 protected-prefix var/lib/drlink/enrollments/ - - none
 protected-prefix var/lib/drlink/bootstrap/ - - none

@@ -251,6 +251,8 @@ def preflight_installer_url(url, *, label='Client installer'):
                     '  %s\n\n'
                     'HTTP status: 404\n\n'
                     'Fix:\n'
+                    '  set server installer-url <URL>\n'
+                    '  set server windows-installer-url <URL>\n'
                     '  set installer-url <URL>\n'
                     '  set windows-installer-url <URL>\n\n'
                     'No enrollment ticket was created.' % (label, url)
@@ -258,15 +260,17 @@ def preflight_installer_url(url, *, label='Client installer'):
             return
     except urllib.error.HTTPError as exc:
         if int(getattr(exc, 'code', 0) or 0) == 404:
-            raise SystemExit(
-                '%s is unavailable:\n\n'
-                '  %s\n\n'
-                'HTTP status: 404\n\n'
-                'Fix:\n'
-                '  set installer-url <URL>\n'
-                '  set windows-installer-url <URL>\n\n'
-                'No enrollment ticket was created.' % (label, url)
-            ) from None
+                raise SystemExit(
+                    '%s is unavailable:\n\n'
+                    '  %s\n\n'
+                    'HTTP status: 404\n\n'
+                    'Fix:\n'
+                    '  set server installer-url <URL>\n'
+                    '  set server windows-installer-url <URL>\n'
+                    '  set installer-url <URL>\n'
+                    '  set windows-installer-url <URL>\n\n'
+                    'No enrollment ticket was created.' % (label, url)
+                ) from None
         # Non-404 HTTP: inconclusive for destroyer semantics.
         return
     except Exception:

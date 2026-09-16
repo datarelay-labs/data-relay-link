@@ -55,6 +55,20 @@ SERVICE_PROFILES = StatePathSpec(
     restore_policy="required",
     sensitivity="standard",
 )
+CONTROL_DB = StatePathSpec(
+    path="var/lib/drlink/drlink.db",
+    type="state",
+    backup_policy="optional",
+    restore_policy="optional",
+    sensitivity="critical",
+)
+RUNTIME_TREE = StatePathSpec(
+    path="var/lib/drlink/runtime",
+    type="tree",
+    backup_policy="tree",
+    restore_policy="tree",
+    sensitivity="standard",
+)
 ENROLLMENTS_TREE = StatePathSpec(
     path="var/lib/drlink/enrollments",
     type="tree",
@@ -129,6 +143,8 @@ STATE_PATHS: tuple[StatePathSpec, ...] = (
     ACCESS_CONTROL,
     EGRESS_CONTROL,
     SERVICE_PROFILES,
+    CONTROL_DB,
+    RUNTIME_TREE,
     ENROLLMENTS_TREE,
     BOOTSTRAP_TREE,
     CONFIG_JSON,

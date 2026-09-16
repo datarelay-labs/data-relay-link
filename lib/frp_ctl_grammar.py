@@ -41,6 +41,53 @@ def _load_catalog():
 
 CATALOG = _load_catalog()
 
+CONTROL_PLANE_SHOW = frozenset(
+    {
+        "objects",
+        "object",
+        "object-groups",
+        "object-group",
+        "managed-endpoints",
+        "managed-endpoint",
+        "published-services",
+        "published-service",
+        "service-presets",
+        "service-preset",
+        "remote-access",
+        "internet-access",
+        "client-groups",
+        "client-group",
+        "ai-principals",
+        "ai-principal",
+        "ai-access",
+        "ai-activity",
+        "fixed-tcp",
+    }
+)
+CONTROL_PLANE_MUTATE = frozenset(
+    {
+        "object",
+        "object-group",
+        "client-group",
+        "managed-endpoint",
+        "published-service",
+        "service-preset",
+        "remote-access",
+        "internet-access",
+        "ai-principal",
+        "ai-access",
+        "fixed-tcp",
+    }
+)
+CONTROL_PLANE_TEST = frozenset({"remote-access", "internet-access", "ai-access"})
+CONTROL_PLANE_SYSTEM = frozenset(
+    {"backup", "restore", "revisions", "revision", "diff", "credential"}
+)
+
+
+def _control_plane_ok(tokens):
+    return {"status": "ok", "action": "control_plane", "tokens": [str(t) for t in tokens]}
+
 # Roots that also exist as historical flat commands. When the second token is
 # not a canonical action, the old flat meaning wins so scripts keep working.
 FALLTHROUGH_ROOTS = frozenset({"access", "egress"})
@@ -1756,6 +1803,8 @@ def _match_test(tokens, role, names=None):
             avail,
         )
     target = tokens[1]
+    if target in CONTROL_PLANE_TEST:
+        return _control_plane_ok(tokens)
     if target in ("access", "acl"):
         if len(tokens) < 5:
             return {
@@ -1956,6 +2005,18 @@ def _match_system(tokens, role, names=None):
     discovery = _parent_discovery(tokens, role)
     if discovery is not None:
         return discovery
+    op = tokens[1]
+    if op in CONTROL_PLANE_SYSTEM:
+        return _control_plane_ok(tokens)
+    if op == "diagnostics" and len(tokens) > 2 and tokens[2] in ("control-plane", "runtime"):
+        return _control_plane_ok(tokens)
+    if op == "audit" and len(tokens) > 2 and tokens[2] in (
+        "ai-principal",
+        "revision",
+        "entity",
+        "object",
+    ):
+        return _control_plane_ok(tokens)
     # Prefer catalog-driven rewrite via to_internal; if we still see system *,
     # the rewrite missed — guide the operator.
     return incomplete(
@@ -2001,6 +2062,8 @@ def _match_show(tokens, role, names=None):
             avail,
         )
     resource = tokens[1]
+    if resource in CONTROL_PLANE_SHOW:
+        return _control_plane_ok(tokens)
     # Final public terminology → existing actions (also covered by to_internal).
     _show_alias = {
         "acls": "access-lists",
@@ -2180,6 +2243,8 @@ def _match_set(tokens, role, names=None):
     if len(tokens) == 1:
         return incomplete("Missing resource.", ["set <resource> ..."], avail, tip="drlink help set")
     resource = tokens[1]
+    if resource in CONTROL_PLANE_MUTATE:
+        return _control_plane_ok(tokens)
     if resource == "client":
         if not server:
             return {"status": "role", "need": "server", "command": "set client"}
@@ -2587,6 +2652,8 @@ def _match_unset(tokens, role, names=None):
             avail,
         )
     resource = tokens[1]
+    if resource in CONTROL_PLANE_MUTATE:
+        return _control_plane_ok(tokens)
     if resource == "service":
         if not client:
             return {"status": "role", "need": "client", "command": "unset service"}

@@ -25,6 +25,20 @@ C_PROFILE = "service-profiles"
 C_EGRESS = "egress-profiles"
 C_ACCESS_LIST = "access-lists"
 C_PATH = "path"
+C_OBJECT = "objects"
+C_OBJECT_GROUP = "object-groups"
+C_CLIENT_GROUP = "client-groups"
+C_ENDPOINT = "managed-endpoints"
+C_REMOTE_RULE = "remote-access-rules"
+C_INTERNET_RULE = "internet-access-rules"
+C_RA_SOURCE = "remote-access-sources"
+C_RA_DEST = "remote-access-destinations"
+C_IA_SOURCE = "internet-access-sources"
+C_IA_DEST = "internet-access-destinations"
+C_PRESET = "service-presets"
+C_FIXED_TCP = "fixed-tcp"
+C_AI_PRINCIPAL = "ai-principals"
+C_AI_RULE = "ai-access-rules"
 C_NONE = None
 
 CLIENT_PROPS = ("label", "note", "tag")
@@ -2371,6 +2385,34 @@ def to_internal(tokens):
         work = list(resolved)
     rest = list(work[len(path) :])
 
+    CONTROL_PLANE_RES = {
+        "objects",
+        "object",
+        "object-groups",
+        "object-group",
+        "managed-endpoints",
+        "managed-endpoint",
+        "published-services",
+        "published-service",
+        "service-presets",
+        "service-preset",
+        "remote-access",
+        "internet-access",
+        "client-groups",
+        "client-group",
+        "ai-principals",
+        "ai-principal",
+        "ai-access",
+        "ai-activity",
+        "fixed-tcp",
+    }
+    if len(path) >= 2 and path[0] in ("show", "set", "unset", "test") and path[1] in CONTROL_PLANE_RES:
+        return list(work)
+    if path[:3] == ("system", "credential", "rotate") or path[:3] == ("system", "credential", "revoke"):
+        return list(work)
+    if path[:2] == ("system", "revisions") or path[:2] == ("system", "revision") or path[:2] == ("system", "diff"):
+        return list(work)
+
     # --- Merged final-grammar specials (preserve distinct safety semantics) ---
     if path == ("set", "client"):
         if not rest:
@@ -2508,14 +2550,6 @@ def to_internal(tokens):
             return ["add", "egress-destination", rest[0], rest[1], rest[2], rest[3]] + rest[4:]
         return ["add", "egress-destination"] + rest
 
-    if path == ("set", "fixed-tcp"):
-        if not rest:
-            return ["set", "fixed-tcp"]
-        if len(rest) >= 2 and rest[1] == "enabled":
-            return ["egress", "tcp", "enable", rest[0]] + rest[2:]
-        # Name-only create is handled as a guided product action.
-        return ["egress", "tcp", "create"] + rest
-
     if path == ("set", "server"):
         if not rest:
             return ["set", "server"]
@@ -2592,11 +2626,6 @@ def to_internal(tokens):
     if path == ("unset", "internet-destination"):
         return ["remove", "egress-destination"] + rest
 
-    if path == ("unset", "fixed-tcp"):
-        if len(rest) >= 2 and rest[1] == "enabled":
-            return ["egress", "tcp", "disable", rest[0]] + rest[2:]
-        return ["egress", "tcp", "delete"] + rest
-
     if path == ("unset", "server"):
         return ["unset", "server"] + rest
 
@@ -2618,10 +2647,6 @@ def to_internal(tokens):
         return ["egress", "recipe", "list"] + rest
     if path == ("show", "internet-template"):
         return ["egress", "recipe", "show"] + rest
-    if path == ("show", "fixed-tcp"):
-        if rest:
-            return ["egress", "tcp", "show"] + rest
-        return ["egress", "tcp", "list"]
 
     if path == ("test", "internet"):
         # Optional trailing PROTOCOL is remapped in the matcher.
@@ -2641,9 +2666,9 @@ def to_internal(tokens):
     if path == ("system", "info"):
         return ["show", "info"] + rest
     if path == ("system", "backup"):
-        return ["create", "backup"] + rest
+        return ["system", "backup"] + rest
     if path == ("system", "restore"):
-        return ["restore", "backup"] + rest
+        return ["system", "restore"] + rest
     if path == ("system", "update", "product"):
         return ["update", "product"] + rest
     if path == ("system", "update", "engine"):
@@ -2651,6 +2676,8 @@ def to_internal(tokens):
     if path == ("system", "update", "check-engine"):
         return ["show", "upstream"] + rest
     if path == ("system", "diagnostics"):
+        if rest and rest[0] in ("control-plane", "runtime"):
+            return ["system", "diagnostics"] + rest
         return ["doctor"] + rest
     if path == ("system", "support-bundle"):
         # Direct dispatcher action (not create support-bundle).
@@ -2658,6 +2685,8 @@ def to_internal(tokens):
             return ["support-bundle", "--output", rest[0]] + list(rest[1:])
         return ["support-bundle"]
     if path == ("system", "audit"):
+        if rest and rest[0] in ("ai-principal", "revision", "entity", "object"):
+            return ["system", "audit"] + rest
         return ["show", "audit"] + rest
     if path == ("system", "export", "internet-profile"):
         if len(rest) >= 2:
@@ -2880,11 +2909,13 @@ def root_command_overview(role, detailed=False):
             [
                 "Help topics:",
                 "  help clients",
-                "  help services",
-                "  help internet",
+                "  help objects",
+                "  help remote-access",
+                "  help internet-access",
+                "  help ai-access",
                 "  help system",
-                "  help commands",
                 "  help workflows",
+                "  help commands",
                 "  help legacy",
                 "",
                 "Relay Engine (FRP) is the upstream tunnel engine.",
@@ -2911,40 +2942,65 @@ def domain_help(topic, role):
             "  1) Connect a new client   (set client)\n"
             "  2) List clients          (show clients)\n"
             "  3) View or manage a client\n"
-            "  4) Groups\n"
+            "  4) Client Groups\n"
             "  5) Enrollments\n\n"
             "Everyday commands:\n"
             "  show clients\n"
-            "  show client <CLIENT-ID>\n"
-            "  set client\n"
-            "  set client <CLIENT-ID> label <value>\n"
-            "  unset client <CLIENT-ID> trust\n"
-            "  unset client <CLIENT-ID> service <SERVICE-ID>\n"
-            "  unset client <CLIENT-ID>\n\n"
+            "  show client <CLIENT>\n"
+            "  show client <CLIENT> endpoint\n"
+            "  set client <CLIENT> label <value>\n"
+            "  set client-group <GROUP>\n"
+            "  system revoke client <CLIENT>\n"
+            "  unset client <CLIENT>\n\n"
             "CLIENT ID is the immutable selector. Labels and hostnames are\n"
             "convenient display shortcuts when unique.\n"
+        )
+    if topic in ("object", "objects"):
+        if not server:
+            return "Objects help is available on a Data Relay Link server.\n"
+        return (
+            "Objects\n"
+            "=======\n\n"
+            "Reusable Host, Network and FQDN identities. Role comes from the\n"
+            "policy field, not from the Object itself.\n\n"
+            "Guided path:\n"
+            "  menu → Objects\n\n"
+            "Everyday commands:\n"
+            "  show objects\n"
+            "  show object <OBJECT>\n"
+            "  set object <OBJECT> type host|network|fqdn\n"
+            "  set object <OBJECT> value <VALUE>\n"
+            "  set object-group <GROUP> member <OBJECT>\n"
+            "  unset object <OBJECT>\n"
+        )
+    if topic in ("remote-access", "remote"):
+        if not server:
+            return "Remote Access help is available on a Data Relay Link server.\n"
+        return (
+            "Remote Access\n"
+            "=============\n\n"
+            "Ordered inbound policy for Published Services.\n"
+            "Top-down, first complete match, explicit ALLOW/DENY, implicit DENY.\n\n"
+            "Guided path:\n"
+            "  menu → Remote Access\n\n"
+            "Everyday commands:\n"
+            "  show remote-access\n"
+            "  set remote-access <RULE>\n"
+            "  set remote-access <RULE> source <OBJECT>\n"
+            "  test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>\n"
         )
     if topic in ("service", "services"):
         if server:
             return (
-                "Services\n"
-                "========\n\n"
-                "Published SSH / HTTP / HTTPS / TCP services and who may reach them.\n\n"
+                "Published Services\n"
+                "==================\n\n"
+                "Inbound relay definitions with SELF or ROUTED target mode.\n\n"
                 "Guided path:\n"
-                "  menu → Services\n\n"
-                "  List published services\n"
-                "  View a client's services\n"
-                "  Access Rules (source-IP controls)\n"
-                "  Service Profiles (reusable templates)\n"
-                "  Release a published service\n\n"
-                "Service definitions are changed on the client.\n"
-                "Use drlink on that client to add or edit services.\n\n"
+                "  menu → Remote Access → Published Services\n\n"
                 "Everyday commands:\n"
-                "  show services\n"
-                "  show client <CLIENT-ID> services\n"
-                "  set access-rule <NAME>\n"
-                "  set service-profile <NAME>\n"
-                "  unset client <CLIENT-ID> service <SERVICE-ID>\n"
+                "  show published-services\n"
+                "  show published-service <CLIENT> <SERVICE>\n"
+                "  show service-presets\n"
             )
         if client:
             return (
@@ -2970,26 +3026,36 @@ def domain_help(topic, role):
         return (
             "Internet Access\n"
             "===============\n\n"
-            "Allow clients to reach approved Internet destinations.\n"
-            "Everything else remains denied by default.\n\n"
-            "This is the beginner-facing navigation name for the product's\n"
-            "Controlled Egress capability.\n\n"
+            "Ordered outbound policy for approved Internet destinations.\n"
+            "Top-down, first complete match, explicit ALLOW/DENY, implicit DENY.\n\n"
             "Guided path:\n"
             "  menu → Internet Access\n\n"
-            "  Overview\n"
-            "  Access Profiles\n"
-            "  Fixed TCP\n"
-            "  Templates\n"
-            "  Check policy   (policy + DNS; not a live connection test)\n\n"
             "Everyday commands:\n"
-            "  show internet\n"
-            "  show internet-profiles\n"
-            "  set internet-profile <NAME>\n"
-            "  set internet-source <NAME> <CIDR>\n"
-            "  set internet-destination <NAME> <FQDN> <PORT> <PROTOCOL>\n"
-            "  test internet\n"
+            "  show internet-access\n"
+            "  set internet-access <RULE>\n"
+            "  set internet-access <RULE> source <OBJECT>\n"
+            "  set internet-access <RULE> destination <OBJECT>\n"
+            "  test internet-access <CLIENT> <FQDN> <PROTOCOL> <PORT>\n"
             "  show fixed-tcp\n"
-            "  show internet-templates\n"
+        )
+    if topic in ("ai", "ai-access", "mcp"):
+        if not server:
+            return "AI Access help is available on a Data Relay Link server.\n"
+        return (
+            "AI Access\n"
+            "=========\n\n"
+            "Authorize AI principals through the MCP Bridge onto managed hosts.\n"
+            "Authentication (MCP identity) is separate from authorization (AI Access).\n\n"
+            "Guided path:\n"
+            "  menu → AI Access\n\n"
+            "Everyday commands:\n"
+            "  show ai-principals\n"
+            "  set ai-principal <PRINCIPAL> enabled\n"
+            "  set ai-access <RULE> principal <PRINCIPAL>\n"
+            "  test ai-access <PRINCIPAL> <ENDPOINT> <CAPABILITY> [OPERAND]\n"
+            "  show ai-activity\n"
+            "  system credential rotate ai-principal <PRINCIPAL>\n\n"
+            "True read-only requires exec=false. Granting exec is not a read-only role.\n"
         )
     if topic in ("system", "operate"):
         lines = [
@@ -3016,8 +3082,12 @@ def domain_help(topic, role):
             lines.extend(
                 [
                     "  system backup",
+                    "  system backup validate <PATH>",
                     "  system restore <PATH>",
+                    "  system revisions",
                     "  system audit",
+                    "  system credential rotate ai-principal <PRINCIPAL>",
+                    "  system credential revoke ai-principal <PRINCIPAL>",
                     "  set server public-hostname <FQDN>",
                     "  set server bootstrap-hostname <FQDN>",
                 ]
@@ -3387,18 +3457,32 @@ NAVIGATION_TREE = {
             "server.clients",
         ),
         (
-            "server_services",
-            "Services",
-            "View published services and control who can reach them",
+            "server_objects",
+            "Objects",
+            "Reusable Host, Network and FQDN identities",
             "submenu",
-            "server.services",
+            "server.objects",
+        ),
+        (
+            "server_remote",
+            "Remote Access",
+            "Inbound policy for published services",
+            "submenu",
+            "server.remote",
         ),
         (
             "server_internet",
             "Internet Access",
-            "Allow clients to reach approved Internet destinations",
+            "Outbound policy for approved Internet destinations",
             "submenu",
             "server.internet",
+        ),
+        (
+            "server_ai",
+            "AI Access",
+            "Authorize AI principals onto managed hosts",
+            "submenu",
+            "server.ai",
         ),
         (
             "server_system",
@@ -3414,14 +3498,36 @@ NAVIGATION_TREE = {
         ("server_zt", "Connect a new client", "", "workflow", "create_zero_touch"),
         ("server_clients_list", "List clients", "", "command", "show clients"),
         ("server_clients_manage", "View or manage a client", "", "workflow", "manage_client"),
-        ("server_groups", "Groups", "", "submenu", "server.clients.groups"),
+        ("server_groups", "Client Groups", "", "submenu", "server.clients.groups"),
+        ("server_endpoints", "Managed Endpoints", "", "command", "show managed-endpoints"),
         ("server_enrollments", "Enrollments", "", "submenu", "server.clients.enrollments"),
         ("back", "Back", "", "back", None),
     ),
     "server.clients.groups": (
-        ("server_groups_list", "List groups", "", "command", "show groups"),
-        ("server_groups_create", "Create group", "", "workflow", "create_group"),
-        ("server_groups_manage", "View or manage a group", "", "workflow", "manage_group"),
+        ("server_groups_list", "List client groups", "", "command", "show client-groups"),
+        ("server_groups_create", "Create client group", "", "command", "set client-group"),
+        ("server_groups_manage", "View or manage a client group", "", "command", "show client-groups"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.objects": (
+        ("server_obj_list", "List objects", "", "command", "show objects"),
+        ("server_obj_create", "Create object", "", "command", "set object"),
+        ("server_og_list", "Object Groups", "", "command", "show object-groups"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.remote": (
+        ("server_ra_list", "List Remote Access rules", "", "command", "show remote-access"),
+        ("server_ra_create", "Create Remote Access rule", "", "command", "set remote-access"),
+        ("server_ps_list", "Published Services", "", "command", "show published-services"),
+        ("server_sp_list", "Service Presets", "", "command", "show service-presets"),
+        ("server_ra_test", "Test Remote Access", "", "command", "test remote-access"),
+        ("back", "Back", "", "back", None),
+    ),
+    "server.ai": (
+        ("server_ai_principals", "AI Principals", "", "command", "show ai-principals"),
+        ("server_ai_rules", "AI Access rules", "", "command", "show ai-access"),
+        ("server_ai_activity", "AI Activity", "", "command", "show ai-activity"),
+        ("server_ai_test", "Test AI Access", "", "command", "test ai-access"),
         ("back", "Back", "", "back", None),
     ),
     "server.clients.enrollments": (
@@ -3488,35 +3594,10 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.internet": (
-        ("server_egress_overview", "Overview", "", "command", "show internet"),
-        (
-            "server_egress_profiles",
-            "Access Profiles",
-            "Define which sources may reach approved Internet destinations",
-            "submenu",
-            "server.internet.profiles",
-        ),
-        (
-            "server_egress_tcp",
-            "Fixed TCP",
-            "Allow approved TCP connections for apps that cannot use HTTP/HTTPS proxy",
-            "submenu",
-            "server.internet.tcp",
-        ),
-        (
-            "server_egress_templates",
-            "Templates",
-            "Start from predefined Internet Access configurations",
-            "submenu",
-            "server.internet.templates",
-        ),
-        (
-            "server_egress_check",
-            "Check policy",
-            "Check whether a connection would be allowed",
-            "workflow",
-            "explain_egress",
-        ),
+        ("server_ia_list", "List Internet Access rules", "", "command", "show internet-access"),
+        ("server_ia_create", "Create Internet Access rule", "", "command", "set internet-access"),
+        ("server_ia_test", "Test Internet Access", "", "command", "test internet-access"),
+        ("server_ia_tcp", "Fixed TCP", "", "command", "show fixed-tcp"),
         ("back", "Back", "", "back", None),
     ),
     "server.internet.profiles": (
@@ -3586,6 +3667,20 @@ NAVIGATION_TREE["both"] = (
         "server.clients",
     ),
     (
+        "both_objects",
+        "Objects",
+        "Reusable Host, Network and FQDN identities",
+        "submenu",
+        "server.objects",
+    ),
+    (
+        "both_remote",
+        "Remote Access",
+        "Inbound policy for published services",
+        "submenu",
+        "server.remote",
+    ),
+    (
         "both_services",
         "Services",
         "View published services and control who can reach them",
@@ -3598,6 +3693,13 @@ NAVIGATION_TREE["both"] = (
         "Allow clients to reach approved Internet destinations",
         "submenu",
         "server.internet",
+    ),
+    (
+        "both_ai",
+        "AI Access",
+        "Authorize AI principals onto managed hosts",
+        "submenu",
+        "server.ai",
     ),
     (
         "both_system",
@@ -3757,6 +3859,8 @@ COMPLETION_DOMAIN_GROUPS = (
             "client",
             "groups",
             "group",
+            "client-groups",
+            "client-group",
             "enrollments",
             "enrollment",
         ),
@@ -3768,6 +3872,15 @@ COMPLETION_DOMAIN_GROUPS = (
             "service",
             "service-profiles",
             "service-profile",
+        ),
+    ),
+    (
+        "Objects",
+        (
+            "objects",
+            "object",
+            "object-groups",
+            "object-group",
         ),
     ),
     (
@@ -3787,8 +3900,21 @@ COMPLETION_DOMAIN_GROUPS = (
         ),
     ),
     (
+        "Remote Access",
+        (
+            "remote-access",
+            "published-services",
+            "published-service",
+            "service-presets",
+            "service-preset",
+            "managed-endpoints",
+            "managed-endpoint",
+        ),
+    ),
+    (
         "Internet Access",
         (
+            "internet-access",
             "internet",
             "internet-profiles",
             "internet-profile",
@@ -3800,6 +3926,15 @@ COMPLETION_DOMAIN_GROUPS = (
             "internet-destination",
             "egress-destination",
             "egress-source",
+        ),
+    ),
+    (
+        "AI Access",
+        (
+            "ai-access",
+            "ai-principals",
+            "ai-principal",
+            "ai-activity",
         ),
     ),
     (

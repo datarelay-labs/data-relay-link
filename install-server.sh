@@ -43,6 +43,13 @@ for f in \
   "$BASE_DIR/lib/frp_cli_catalog.py" \
   "$BASE_DIR/lib/frp_version_identity.py" \
   "$BASE_DIR/lib/frp_cli_final_commands.json" \
+  "$BASE_DIR/lib/drlink_control_db.py" \
+  "$BASE_DIR/lib/drlink_control_plane.py" \
+  "$BASE_DIR/lib/drlink_control_cli.py" \
+  "$BASE_DIR/lib/drlink_ai_agent.py" \
+  "$BASE_DIR/lib/drlink_mcp_bridge.py" \
+  "$BASE_DIR/server/drlink-mcp-bridge.py" \
+  "$BASE_DIR/server/drlink-mcp-bridge.service" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
   "$BASE_DIR/lib/frp_machine_id.py" \
   "$BASE_DIR/lib/frp_bounded_server.py" \
@@ -1978,9 +1985,9 @@ frp_server_record_action() {
 frp_server_enable_units() {
   if frp_server_skip_systemd; then
     if frp_mode_is_single443; then
-      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-frontend"
+      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-frontend drlink-mcp-bridge"
     else
-      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator"
+      frp_server_record_action "enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-mcp-bridge"
       frp_server_record_action "disable drlink-frontend"
     fi
     if [[ "${FRP_INSTALL_HOOK_ENABLE_FAIL:-}" == "1" ]]; then
@@ -1990,9 +1997,9 @@ frp_server_enable_units() {
     return 0
   fi
   if frp_mode_is_single443; then
-    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-frontend >/dev/null
+    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-frontend drlink-mcp-bridge >/dev/null
   else
-    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator >/dev/null
+    frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-mcp-bridge >/dev/null
     frp_server_systemctl disable --now drlink-frontend >/dev/null 2>&1 || true
   fi
 }
@@ -2649,6 +2656,10 @@ PY
       frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-frontend failed to start; previous semantic configuration restored."
       return 1
     fi
+  fi
+  if ! frp_server_restart_unit drlink-mcp-bridge; then
+    frp_server_fail_after_mutation SERVICE_START_FAILED "drlink-mcp-bridge failed to start; installation is not complete."
+    return 1
   fi
 
   if [[ "$need_frps_restart" == "1" ]] || [[ "$existing_install" != "1" ]]; then
