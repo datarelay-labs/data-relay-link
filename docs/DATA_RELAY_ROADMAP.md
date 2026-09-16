@@ -1,1100 +1,480 @@
-# Data Relay — Product Direction & Roadmap
+# Data Relay Link Roadmap
 
-> **Document role:** Product Direction + Scope + Architecture Principles + Development Roadmap
-> **Status:** Implementation in progress on `feature/data-relay-controlled-egress`
-> **Product identity:** **Data Relay Link**
-> **Repository:** `datarelay-labs/data-relay-link`
-> **Primary interface:** `sudo drlink` / `drlink>`
-> **Public documentation:** https://link.datarelay.run
-> **Design principle:** **Do not connect entire networks. Relay only the connections that are actually needed.**
-> **Operator guide:** `docs/CONTROLLED_EGRESS.md`
+> **Status:** Living roadmap aligned to the v2.4.0 Control Plane / Policy / MCP architecture
+> **Product Master:** `PRODUCT_MASTER.md`
+> **Architecture:** `CONTROL_PLANE_ARCHITECTURE.md`
 
----
+## 1. Roadmap principle
 
-# 1. Why the Product Direction Changes
+Finish foundations that would be expensive to replace after stable release. Defer features that can be added later without changing those foundations.
 
-Data Relay Link started as a lightweight deployment and operations layer for official `fatedier/frp`.
-
-Its original problem was primarily **outside → inside** connectivity:
+Foundation to finish before v2.4.0 stable:
 
 ```text
-Internet / Support Engineer
-        ↓
-FRP Server
-        ↓
-FRP Client
-        ↓
-Private / Closed Network Service
+SQLite authority
+immutable identities
+Objects / Object Groups
+Managed Endpoint
+endpoint addresses
+Published Service SELF / ROUTED
+ordered Remote Access policy
+ordered Internet Access policy
+AI Access / MCP Bridge
+revisions / audit
+runtime generation
+backup / migration
+canonical CLI nouns
 ```
 
-The product has since evolved beyond simple FRP installation. It already manages enrollment, identity, services, access control, lifecycle, audit, backup/restore, diagnostics, groups/tags, and multi-platform clients.
-
-The next product problem is the opposite direction:
+Can remain later work:
 
 ```text
-Closed / Restricted Network
-        ↓
-Only approved Internet destinations
-        ↓
-Internet
+Web UI
+central SaaS management
+external DB / HA
+large-fleet orchestration
+SIEM/reporting
+broad vendor destination catalogs
 ```
 
-Many closed or restricted networks block general outbound Internet access but still require limited connectivity for:
+## 2. Phase DL-0 — proven relay foundation
 
-- OS and security updates
-- package repositories
-- license servers
-- vendor APIs
-- SaaS integrations
-- telemetry or required cloud APIs
+**Status:** Existing foundation; preserve while redesigning control plane.
 
-Today this is commonly solved with firewall rules, Squid or another forward proxy, VPN/network changes, or custom per-environment configuration. These approaches work, but are often operationally heavy for environments that only need a small number of explicitly approved connections.
-
-Therefore the product direction expands from **FRP deployment automation** to **secure bidirectional connection relay for isolated and restricted networks**.
-
----
-
-# 2. Product Identity
-
-## 2.1 Product Name
-
-**Data Relay**
-
-`Data Relay Link` becomes a legacy/technical identity rather than the full product definition.
-
-FRP remains an important transport engine for inbound remote access, but it is no longer the product identity itself.
+Includes:
 
 ```text
-Data Relay
-    │
-    ├── Secure Remote Access
-    │       └── powered by official FRP
-    │
-    └── Controlled Egress
-            └── built-in agentless HTTP/HTTPS forward proxy
+official fatedier/frp
+Zero-Touch / Manual Enrollment
+immutable Client identity
+multi-service relay
+public-port reservation
+Linux/macOS/Windows clients
+lifecycle/update/doctor/support bundle
 ```
 
-The existing repository/package/CLI identity is now **Data Relay Link** / `drlink` at `datarelay-labs/data-relay-link`. Upstream FRP engine names (`frpc`/`frps`/`fatedier/frp`) remain as implementation details.
+Do not fork FRP.
 
----
+## 3. Phase DL-1 — control-plane architecture closure
 
-# 3. Product Definition
+**Status:** Architecture approved; docs-first closure in progress.
 
-Data Relay is:
-
-> **A lightweight secure connectivity gateway for isolated and restricted networks, providing controlled inbound remote access and agentless outbound Internet access.**
-
-In simpler user-facing language:
-
-> **필요한 연결만 안전하게 열어주는 폐쇄망/제한망용 경량 연결 게이트웨이**
-
-The product solves two related problems with one server and one operational model.
-
-### Inbound — Secure Remote Access
+Required:
 
 ```text
-Outside Administrator / Service
-            ↓
-        Data Relay
-            ↓
-Approved internal service only
+CONTROL_PLANE_ARCHITECTURE.md
+Product Master alignment
+CLI IA alignment
+Security alignment
+Version/release governance alignment
+MCP inclusion decision aligned
 ```
 
-Examples:
+No stable tag during this phase.
 
-- SSH
-- HTTP / HTTPS
-- RDP or custom TCP services where supported by the transport model
-- APIs
-- LAN targets reachable through a managed FRP client/gateway
+## 4. Phase DL-2 — SQLite control-plane implementation
 
-### Outbound — Agentless Controlled Egress
+**Status:** Next implementation phase.
+
+Implement:
 
 ```text
-Closed Network Host
-       ↓
-HTTP / HTTPS Proxy Setting
-       ↓
-Data Relay Egress Gateway
-       ↓
-Approved destination only
+/var/lib/drlink/drlink.db
+schema_migrations
+system_meta
+config_revisions
+revision_snapshots
+audit_events
+runtime_generations
 ```
 
-Examples:
-
-- `security.ubuntu.com:443`
-- package repositories
-- license servers
-- GitHub/vendor APIs
-- approved SaaS endpoints
-
-Everything not explicitly allowed is denied.
-
----
-
-# 4. Core Product Philosophy
-
-The common security principle for both directions is:
-
-> **Do not connect networks. Relay only the connections that are needed.**
-
-Traditional network access often grants broad connectivity:
+Required properties:
 
 ```text
-VPN
-Network routing
-Broad firewall allow rules
-General Internet access
+foreign keys
+WAL
+synchronous durability
+busy timeout
+trusted_schema off
+transactional mutation
+optimistic concurrency
+integrity checks
+unsupported-schema fail closed
 ```
 
-Data Relay instead grants individual required connections:
+## 5. Phase DL-3 — Object and endpoint model
+
+Implement:
 
 ```text
-Inbound:
-Internet → approved internal service
-
-Outbound:
-Internal host → approved Internet destination
+objects
+object_values
+object_group_members
+clients
+managed_endpoints
+endpoint_addresses
+client_groups
+client_group_members
+client_tags
 ```
-
-The product must remain:
-
-- simple to deploy
-- simple to understand
-- safe to operate
-- lightweight by design
-- CLI first
-- suitable for a few systems to a few dozen systems/sites
-
-It must **not** become a general VPN, SASE, Secure Web Gateway, RMM, large fleet platform, or enterprise web-security stack.
-
----
-
-# 5. Target Environments
-
-Primary target environments include:
-
-- closed networks
-- restricted outbound networks
-- network-separated environments
-- public-sector / financial environments with strict network policy
-- manufacturing / OT environments
-- security appliances
-- customer/partner environments requiring temporary or persistent support access
-- systems where direct Internet access is prohibited but selected external services are required
-- environments where firewall rules are difficult to maintain because destinations are FQDN/CDN based rather than stable IP addresses
-
-Typical operational examples:
-
-### Security Update
-
-```text
-Internal Server
-   ↓
-Data Relay
-   ↓
-security.vendor.com:443   ALLOW
-all other destinations    DENY
-```
-
-### License / API
-
-```text
-Security Appliance
-   ↓
-Data Relay
-   ↓
-license.vendor.com:443    ALLOW
-api.vendor.com:443        ALLOW
-Internet:any              DENY
-```
-
-### Remote Technical Support
-
-```text
-Support Engineer
-   ↓
-Data Relay
-   ↓
-SSH / Web / API on approved internal targets
-```
-
----
-
-# 6. Product Architecture
-
-```text
-                         INTERNET
-
-        Administrator                  Approved Services
-             │                         Update / Repo / API
-             │                                ▲
-             ▼                                │
-     ┌────────────────────────────────────────────┐
-     │                Data Relay                  │
-     │                                            │
-     │  Secure Remote Access   Controlled Egress │
-     │  Access Control         Egress Control    │
-     │  Service Management     FQDN/Port ACL     │
-     │  Audit                  DNS/SSRF Guard    │
-     │  Doctor                 Audit             │
-     └───────────┬────────────────────▲───────────┘
-                 │                    │
-═════════════════╪════════════════════╪══════════════════
-                 │      FIREWALL      │
-                 │                    │
-          CLOSED / RESTRICTED NETWORK
-                 │                    │
-         FRP Client/Gateway     Agentless Hosts
-                 │                    │
-          Internal Services      Proxy setting only
-```
-
-Important architectural distinction:
-
-- **Inbound Remote Access uses official FRP.**
-- **Outbound Controlled Egress does not need FRP on the protected host.**
-- Controlled Egress is a server-side Data Relay capability.
-- FRP must not be forced into the outbound path when a standard forward proxy is sufficient.
-
----
-
-# 7. Secure Remote Access — Existing Product Pillar
-
-The existing inbound capability remains a first-class product function.
-
-Core principles remain unchanged:
-
-- official FRP only; no FRP fork
-- pinned/tested FRP versions
-- zero-touch enrollment
-- persistent client identity
-- multiple services per client
-- LAN target support
-- service lifecycle management
-- public port reservation/persistence
-- access control
-- audit
-- doctor
-- backup/restore
-- simple group/tag/filter management
-- no automatic customer firewall/NAT modification
-
-Inbound access is intended for:
-
-- administration
-- technical support
-- operational access
-- selected published services
-
-The product must expose only explicitly configured services, not entire internal networks.
-
----
-
-# 8. Controlled Egress — New Product Pillar
-
-## 8.1 Primary Requirement
-
-Controlled Egress must work **without installing Data Relay/FRP client software on the protected host**.
-
-The expected client-side configuration is only a standard proxy setting, for example:
-
-```text
-HTTP_PROXY=http://datarelay.example.com:6102
-HTTPS_PROXY=http://datarelay.example.com:6102
-```
-
-The protected application/server then uses standard HTTP proxy behavior and HTTPS `CONNECT` tunneling.
-
-For HTTPS destination traffic:
-
-```text
-Application
-    ↓
-CONNECT approved.example.com:443
-    ↓
-Data Relay
-    ↓
-Policy check
-    ↓
-TLS remains end-to-end between application and destination
-```
-
-Data Relay v1 does **not** decrypt application TLS.
-
----
-
-# 9. Controlled Egress v1 — Required Features
-
-## 9.1 HTTP Forward Proxy
-
-Support standard HTTP proxy clients.
-
-## 9.2 HTTPS CONNECT
-
-Support standard `CONNECT host:port` behavior so existing applications can use `HTTPS_PROXY` without TLS interception.
-
-## 9.3 Source Network ACL
-
-Allow administrators to define which source IPs/CIDRs may use the egress service.
-
-Example:
-
-```text
-10.10.20.0/24
-203.0.113.10/32
-```
-
-This is the primary v1 authorization mechanism for agentless clients.
-
-## 9.4 Destination FQDN Allowlist
-
-Allow exact approved FQDN destinations.
-
-Example:
-
-```text
-security.ubuntu.com:443
-api.vendor.com:443
-license.vendor.com:443
-```
-
-## 9.5 Controlled Subdomain Matching
-
-Support carefully defined subdomain rules where operationally required.
-
-Example:
-
-```text
-*.githubusercontent.com:443
-```
-
-Wildcard behavior must be narrow and explicit. Arbitrary pattern matching is not required.
-
-## 9.6 Destination Port ACL
-
-Destination permission is a combination of hostname and port.
-
-```text
-example.com:443   ALLOW
-example.com:22    DENY
-```
-
-Default CONNECT port should be 443 unless another port is explicitly permitted.
-
-## 9.7 Default Deny / Fail Closed
-
-If policy state is missing, invalid, corrupt, or cannot be safely evaluated:
-
-```text
-DENY
-```
-
-must be the default behavior.
-
-## 9.8 Audit
-
-Record connection-level audit information such as:
-
-- timestamp
-- source address
-- requested destination hostname
-- destination port
-- allow/deny decision
-- matched policy/profile
-- failure reason where safe
-
-Do not log credentials, application payloads, sensitive URL query strings, or TLS contents.
-
-## 9.9 Health / Doctor
-
-`drlink doctor` or an equivalent egress-specific doctor path should verify:
-
-- gateway service state
-- policy readability
-- listening socket
-- DNS resolution capability
-- outbound connectivity test where explicitly requested
-- dangerous configuration conditions
-
-## 9.10 Backup / Restore
-
-Egress policy state must participate in existing backup/restore lifecycle.
-
----
-
-# 10. Egress Profile Model
-
-A single SaaS/update service often requires multiple FQDNs. Therefore policy should be grouped as reusable **Egress Profiles**.
-
-Example:
-
-```text
-Profile: ubuntu-update
-
-Destinations:
-  security.ubuntu.com:443
-  archive.ubuntu.com:443
-
-Sources:
-  customer-a-network
-
-Default:
-  DENY
-```
-
-Another example:
-
-```text
-Profile: vendor-license
-
-Destinations:
-  license.vendor.com:443
-  api.vendor.com:443
-```
-
-Initial product scope should support **user-defined profiles**.
-
-A large vendor-maintained destination catalog is not required for v1.
-
----
-
-# 11. Proposed CLI Experience
-
-The CLI should remain simple and consistent with the existing `drlink` operational model.
-
-Illustrative UX:
-
-```text
-drlink> create egress-profile ubuntu-update
-drlink> add egress-profile ubuntu-update destination security.ubuntu.com 443
-drlink> add egress-profile ubuntu-update destination archive.ubuntu.com 443
-drlink> add egress-profile ubuntu-update source 203.0.113.10/32
-
-drlink> show egress-profiles
-drlink> show egress-profile ubuntu-update
-drlink> disable egress-profile ubuntu-update
-drlink> enable egress-profile ubuntu-update
-drlink> delete egress-profile ubuntu-update
-```
-
-Exact grammar should follow the canonical parser and existing CLI conventions after implementation audit.
-
-The CLI must prefer understandable objects and lifecycle operations over exposing raw proxy configuration syntax.
-
----
-
-# 12. Security Requirements
-
-Controlled Egress is a security boundary, not merely a convenience proxy.
-
-## 12.1 Server-Side DNS Resolution
-
-The gateway resolves destination FQDNs on the server side.
-
-## 12.2 DNS / SSRF Protection
-
-After hostname resolution, every candidate destination IP must be validated before connection.
-
-By default, reject destinations resolving to ranges such as:
-
-```text
-127.0.0.0/8
-10.0.0.0/8
-172.16.0.0/12
-192.168.0.0/16
-169.254.0.0/16
-IPv6 loopback/link-local/private ranges
-multicast/reserved ranges
-cloud metadata addresses
-```
-
-The exact deny set should use maintained standard-library/network primitives rather than fragile string rules.
-
-## 12.3 DNS Rebinding Resistance
-
-Policy evaluation and actual connection must not perform unrelated independent DNS resolutions that permit validation of one IP and connection to another.
-
-The gateway should connect to the exact validated resolution result or otherwise provide equivalent rebinding-safe behavior.
-
-## 12.4 IP Literal Policy
-
-Direct IP-literal destinations should be denied by default unless there is an explicit product requirement and safe policy model.
-
-The primary product value is FQDN-based control.
-
-## 12.5 Resource Protection
-
-Implement reasonable:
-
-- connection timeout
-- idle timeout
-- maximum concurrent connections
-- request/header size limits
-- defensive parsing
-- rate/concurrency protection where necessary
-
-The gateway must never become an open proxy.
-
----
-
-# 13. Agentless Identity Limitation
-
-Because Controlled Egress v1 requires **no agent**, the server normally identifies the caller by source network address.
-
-If multiple hosts are behind the same NAT:
-
-```text
-Host A ─┐
-Host B ─┼→ NAT public IP → Data Relay
-Host C ─┘
-```
-
-Data Relay sees the same source address for all of them.
-
-Therefore v1 must clearly distinguish:
-
-> **Site/Network Policy** from **Per-Host Identity**.
-
-Source CIDR policy is sufficient for many restricted-network use cases, but it cannot securely distinguish individual hosts behind the same NAT.
-
-This is an accepted v1 limitation, not a bug.
-
----
-
-# 14. Explicitly Excluded from Controlled Egress v1
-
-The following are **not** part of v1:
-
-- TLS Proxy endpoint
-- mTLS client identity
-- TLS interception / SSL bump
-- certificate/root-CA deployment for traffic inspection
-- URL path/content filtering
-- web category filtering
-- DLP
-- malware scanning/sandboxing
-- CASB
-- browser isolation
-- transparent proxying
-- full L3 routing
-- VPN functionality
-- general Secure Web Gateway / SASE functionality
-- automatic firewall changes
-- automatic DNS changes
-
-Because TLS Proxy endpoint is excluded, v1 should **not** depend on plaintext proxy username/password credentials as the primary security boundary across untrusted networks. Source IP/CIDR restriction remains the default v1 access control for the agentless proxy endpoint.
-
----
-
-# 15. Optional / Later Capabilities
-
-These may be considered only after real field demand.
-
-## 15.1 Fixed TCP Egress
-
-For proxy-unaware applications that need a fixed `host:port` destination:
-
-```text
-Internal Application
-    ↓
-Data Relay:published-port
-    ↓
-approved.vendor.com:custom-port
-```
-
-This must remain destination-pinned and policy-controlled.
-
-For HTTPS applications, hostname/certificate behavior must be validated because connecting to a relay hostname instead of the original destination hostname can cause TLS hostname validation failure.
-
-## 15.2 SOCKS5
-
-Deferred until a real requirement exists.
-
-## 15.3 PAC File
-
-Deferred. Useful for workstation/browser environments but not required for initial server-focused use cases.
-
-## 15.4 Strong Per-Host Agentless Identity
-
-Deferred until a secure transport/authentication design is explicitly approved.
-
-mTLS is currently excluded.
-
----
-
-# 16. Network Responsibility Boundary
-
-Data Relay does **not** automatically modify customer firewalls, NAT, DNS, routing, UFW, iptables, nftables, cloud security groups, or proxy settings.
-
-For Controlled Egress, the customer/network administrator remains responsible for allowing the protected network to reach the Data Relay proxy endpoint.
-
-Typical model:
-
-```text
-Firewall:
-ALLOW Closed-Network → Data-Relay-Server:6102
-DENY  Closed-Network → Internet:any
-```
-
-Data Relay then enforces destination-level policy.
-
-This separation is intentional.
-
-The product should make required firewall rules easy to document and validate, but must not silently change the network perimeter.
-
----
-
-# 17. Product Advantages
-
-## 17.1 One Product for Both Directions
-
-```text
-External → Internal
-Secure Remote Access
-
-Internal → External
-Controlled Egress
-```
-
-Both are managed from one server and one operational model.
-
-## 17.2 Agentless Outbound Connectivity
-
-Protected outbound hosts require no Data Relay/FRP software installation.
-
-Standard proxy configuration is sufficient.
-
-## 17.3 FQDN-Oriented Egress Control
-
-This reduces the operational burden of maintaining large/changing destination IP lists for services using DNS/CDN infrastructure.
-
-## 17.4 Default-Deny Security Model
-
-Only approved connections are relayed.
-
-## 17.5 Easier Than General-Purpose Proxy Platforms
-
-The product should provide simple lifecycle objects instead of requiring users to manage large Squid/Envoy configuration files.
-
-## 17.6 Stable Egress Source
-
-Approved outbound traffic exits through the Data Relay server, allowing external services to see a predictable source IP when the server itself has a stable public address.
-
-## 17.7 Good Fit for Restricted Networks
-
-The design is particularly useful where:
-
-- direct Internet access is prohibited
-- a few update/API/license endpoints are still required
-- firewall policies are difficult to manage
-- remote support access is also required
-
----
-
-# 18. Product Positioning
-
-Data Relay should **not** position itself as a Secure Web Gateway.
-
-Do not compete on features such as:
-
-- content inspection
-- web categories
-- DLP
-- malware inspection
-- CASB
-- TLS decryption
-- enterprise user/browser policy
-
-The intended position is:
-
-> **Secure Connectivity for Isolated Networks**
-
-Core message:
-
-> **Inbound: expose only the internal services you need.**
-> **Outbound: allow only the Internet services you need.**
-
-Or more simply:
-
-> **필요한 연결만, 더 안전하고 더 쉽게.**
-
----
-
-# 19. Development Roadmap
-
-## Phase DR-0 — Preserve Existing Inbound Foundation
-
-**Status: EXISTING FOUNDATION**
-
-Goal:
-
-> Keep current FRP-based remote-access functionality stable while adding the new product pillar.
-
-Rules:
-
-- no FRP fork
-- no regression of enrollment/identity/service lifecycle
-- existing Access Control remains independent from egress policy
-- no broad rename before feature correctness is proven
-
----
-
-## Phase DR-1 — Product Identity & Architecture Definition
-
-**Status: PLANNED**
-
-Goal:
-
-> Introduce Data Relay as the product-level identity and define the two connectivity planes.
-
-Deliverables:
-
-- update Product Master product definition
-- add architecture diagram
-- define `Secure Remote Access` and `Controlled Egress`
-- explicitly state agentless egress requirement
-- define network responsibility boundary
-- define v1 out-of-scope list
-- retain FRP as inbound transport engine
-- decide naming migration policy without mass-renaming implementation yet
 
 Acceptance:
 
 ```text
-Product purpose is understandable without knowing FRP.
-Inbound and outbound responsibilities are clearly separated.
-No ambiguity that outbound hosts are agentless in v1.
+neutral Objects
+no Source/Destination object duplication
+multi-value static Objects
+Object Group cycle protection
+context validation
+Managed Endpoint lifecycle ownership
+orphan semantics
+local address inventory
+reference-protected deletion
 ```
 
----
+## 6. Phase DL-4 — Published Service model
 
-## Phase DR-2 — Controlled Egress Core MVP
-
-**Status: PLANNED**
-
-Goal:
-
-> Prove that an agentless closed-network host can reach approved Internet destinations and nothing else through Data Relay.
-
-Required implementation:
-
-- server-side egress gateway service
-- HTTP forward proxy
-- HTTPS CONNECT
-- source IP/CIDR ACL
-- exact FQDN + port allowlist
-- default deny
-- basic connection audit
-- service lifecycle integration
-
-Minimum Real E2E:
+Implement:
 
 ```text
-Closed host configured with HTTP_PROXY / HTTPS_PROXY
-Approved HTTP destination      = PASS
-Approved HTTPS destination     = PASS
-Unapproved destination         = DENY
-Unapproved port                = DENY
-Unapproved source              = DENY
-Gateway restart                = policy preserved
+published_services
+service_presets
+port_reservations
 ```
 
----
+Acceptance:
 
-## Phase DR-3 — Egress Policy & CLI Integration
+```text
+SELF effective destination
+ROUTED effective destination
+loopback SELF policy matching
+ROUTED no-agent target
+stable service/public-port identity
+policy-impact analysis on target changes
+Service Profile public model removed
+Service Preset semantics clear
+```
 
-**Status: PLANNED**
+## 7. Phase DL-5 — Remote Access ordered policy
 
-Goal:
+Implement common network policy tables and Remote Access evaluator/compiler.
 
-> Make egress policy easier to operate than editing a general-purpose proxy configuration file.
+Acceptance:
+
+```text
+ALLOW / DENY
+implicit DENY
+top-down first match
+create disabled at bottom
+before / after
+shadow analysis
+impact analysis
+flow test/explain
+Published Service + reachability intersection
+```
+
+Legacy ACL becomes non-canonical and is removed/hidden before stable.
+
+## 8. Phase DL-6 — Internet Access ordered policy
+
+Replace legacy Internet Profile authoritative policy with Objects + ordered rules.
+
+Preserve/harden protocol boundary:
+
+```text
+HTTP forward proxy
+HTTPS CONNECT
+server-side DNS
+SSRF/special-address protection
+DNS rebinding resistance
+CONNECT/SNI binding
+controlled wildcard semantics
+public Host/CIDR explicit policy
+Fixed TCP through same authority
+resource limits
+safe audit
+```
+
+Acceptance includes curl/wget/git/apt Real E2E plus denied-traffic escape tests.
+
+## 9. Phase DL-7 — revision/audit/runtime compiler
+
+Implement one mutation pipeline:
+
+```text
+validate
+→ impact
+→ confirm
+→ transaction
+→ revision/audit
+→ compile
+→ atomic activate
+→ verify generation
+```
+
+Acceptance:
+
+```text
+system audit
+system revisions
+runtime revision status
+compiler failure surfaced
+generation mismatch fail closed where required
+```
+
+Rollback may be added only if its semantics are fully transactional and qualified.
+
+## 10. Phase DL-8 — backup / restore / migration
+
+Implement SQLite Online Backup/equivalent consistent snapshot.
+
+Acceptance:
+
+```text
+backup during WAL activity
+config/trust/secret recovery
+restore integrity + FK checks
+schema compatibility
+runtime regeneration
+permissions/ownership
+pre-upgrade backup
+migration rollback/failure safety
+```
+
+Legacy JSON is migration input only, not dual authority.
+
+## 11. Phase DL-9 — MCP Bridge / AI Access
+
+**Status:** Included in v2.4.0 target; supersedes old exclusion decision.
+
+Implement server-side MCP Bridge plus:
+
+```text
+ai_principals
+ai_access_rules
+ai_rule_targets
+ai_rule_capabilities
+ai_path_scopes
+ai_exec_constraints
+ai_sessions
+ai_activity
+```
+
+Targets:
+
+```text
+Managed Endpoint
+Client Group
+```
+
+Minimum capabilities:
+
+```text
+exec
+read_file
+write_file
+upload_file
+download_file
+```
+
+Additional discovery:
+
+```text
+list_hosts
+get_host
+get_system_info
+list_processes
+```
+
+Security:
+
+```text
+current official MCP spec
+modern supported remote transport
+authenticated HTTPS
+strong AI Principal binding
+per-invocation authorization
+least privilege
+path scopes
+exec timeout/process controls
+audit
+no per-host MCP server requirement
+```
+
+Real interoperability is required for each client explicitly claimed supported.
+
+## 12. Phase DL-10 — canonical CLI implementation
+
+Implement guided root:
+
+```text
+Clients
+Objects
+Remote Access
+Internet Access
+AI Access
+System
+Help
+Exit
+```
+
+Direct roots:
+
+```text
+show
+set
+unset
+test
+system
+menu
+help
+exit
+```
+
+Remove/hide pre-stable legacy public resources:
+
+```text
+service-profile
+internet-profile
+legacy ACL naming
+ambiguous generic group
+```
+
+Protect impact confirmation, stale edit detection, contextual Tab completion, REPL/shell hints, and backend isolation.
+
+## 13. Phase DL-11 — release-governance transition
+
+Remove old hard-coded v2.4 MCP exclusion from:
+
+```text
+release manifest schema
+manifest generator
+version identity validation
+release governance scripts
+version consistency checks
+tests
+release manifest content
+```
+
+Final candidate truth:
+
+```text
+features.mcp_included=true
+```
+
+only after actual MCP implementation exists and passes qualification.
+
+Keep exact-SHA pretag provenance, immutable tags, source/dist parity, checksums, and historical tag immutability.
+
+## 14. Phase DL-12 — full automated closure
 
 Required:
 
-- `egress-control` authoritative state
-- Egress Profile CRUD
-- destination add/remove
-- source CIDR add/remove
-- enable/disable lifecycle
-- show/status commands
-- audit integration
-- backup/restore
-- doctor checks
-- deterministic config generation/runtime loading
-
-Guardrail:
-
-Inbound Access Control and Egress Control may share utility code and UX patterns, but their authoritative policy semantics must remain separate.
-
----
-
-## Phase DR-4 — Security Hardening
-
-**Status: PLANNED / RELEASE BLOCKER**
-
-Goal:
-
-> Ensure the egress gateway cannot be abused as an open proxy or SSRF/pivot mechanism.
-
-Required:
-
-- robust FQDN canonicalization
-- DNS resolution validation
-- private/local/link-local/reserved destination rejection
-- cloud metadata protection
-- DNS rebinding resistance
-- safe CONNECT parsing
-- destination port restrictions
-- IP literal policy
-- connection and idle timeouts
-- concurrency/resource limits
-- fail-closed state loading
-- sensitive-data-safe logging
-- malformed input tests
-
-No release of Controlled Egress as stable before this phase passes.
-
----
-
-## Phase DR-5 — Real E2E & Compatibility Validation
-
-**Status: PLANNED**
-
-Goal:
-
-> Validate real applications rather than only synthetic proxy tests.
-
-Initial application matrix should include representative tools such as:
-
 ```text
-curl
-wget
-apt
-Git
-package manager / update workflow where available
-vendor/API style HTTPS request
+static validation
+DB/migration tests
+Object tests
+policy evaluator/compiler tests
+shadow/impact tests
+CLI/PTy tests
+Internet security tests
+MCP auth/capability/path tests
+backup/restore tests
+release governance tests
+full local suite
+CI
+source/dist parity
+secret/public metadata scan
 ```
 
-Real E2E must verify:
+No stale test is allowed to redefine the approved architecture.
 
-- approved destination success
-- denied destination failure
-- DNS address changes do not require policy rewrite when FQDN is unchanged
-- restart persistence
-- backup/restore
-- malformed policy fail-closed
-- source CIDR behavior through real NAT/firewall environments
-- audit correctness
-- no secret/payload logging
+## 15. Phase DL-13 — multi-host Real E2E
 
-Follow the existing release principle that actual product bugs found during scenario execution are collected, classified, fixed, and then targeted regressions are run before final release qualification.
-
----
-
-## Phase DR-6 — Product Documentation & Field Usability
-
-**Status: PLANNED**
-
-Required documentation:
-
-- Product Overview
-- Secure Remote Access guide
-- Controlled Egress quick start
-- firewall requirements
-- proxy configuration examples
-- Egress Profile examples
-- security model
-- supported/unsupported applications
-- NAT/source-IP limitation
-- troubleshooting/doctor guide
-
-The quick-start path should make the basic deployment understandable in minutes:
+Matrix:
 
 ```text
-1. Install Data Relay Server
-2. Allow the closed network to reach the proxy endpoint
-3. Create an Egress Profile
-4. Configure HTTP_PROXY / HTTPS_PROXY on the protected host/application
-5. Verify approved destination works
-6. Verify non-approved destination is denied
+Ubuntu 24
+Windows 10
+Rocky Linux 8
+Rocky Linux 9
+Amazon Linux 2023
+macOS Apple Silicon
 ```
 
----
+Validate install, enrollment, services, policy, Internet Access, lifecycle, reboot, backup/restore, and supported AI/MCP operations.
 
-## Phase DR-7 — Demand-Driven Expansion
+## 16. Phase DL-14 — final exact-HEAD qualification
 
-**Status: DEFERRED / DEMAND DRIVEN**
-
-Candidates:
-
-- fixed TCP egress
-- SOCKS5
-- PAC
-- additional audit/reporting convenience
-- reusable organization-level profile templates
-- stronger host identity if a secure agentless approach is later approved
-
-Do not implement these because competitors have them. Add them only for repeated field requirements.
-
----
-
-# 20. Testing Strategy Additions
-
-Controlled Egress adds a new security test category.
-
-Minimum layers:
+Freeze candidate HEAD, then:
 
 ```text
-Unit
-↓
-Policy Parser
-↓
-Proxy Protocol Tests
-↓
-Security / SSRF Tests
-↓
-Integration
-↓
-CLI Lifecycle
-↓
-Backup / Restore
-↓
-Real E2E
+FULL_REAL_E2E_PASS_1=PASS
+FULL_REAL_E2E_PASS_2=PASS
+PASS1_HEAD==PASS2_HEAD
 ```
 
-Security regression cases must include at least:
+Both passes include all three access planes and release lifecycle applicable to stable claims.
 
-- localhost destination
-- RFC1918 destination
-- link-local destination
-- metadata destination
-- IPv6 local/private destinations
-- malicious/invalid hostnames
-- wildcard boundary bypass attempts
-- destination port bypass attempts
-- malformed CONNECT requests
-- DNS rebinding-style resolution changes
-- corrupted/missing policy file
-- gateway restart during active/idle connections
+Any code/dependency/generated-artifact change resets the counter.
 
-The test suite must prove not only that approved traffic works, but that **unapproved traffic cannot escape**.
+## 17. Phase DL-15 — stable publication
 
----
-
-# 21. Architecture Guardrails — New Additions
-
-The existing Product Master guardrails remain in force, plus:
-
-## Agentless Egress Must Stay Agentless
-
-Do not require FRP client installation on protected outbound hosts for the base Controlled Egress product.
-
-## Do Not Force FRP into the Egress Data Path
-
-Use FRP where it solves inbound connectivity. Do not add unnecessary FRP components to standard forward-proxy traffic.
-
-## No Open Proxy
-
-The egress gateway must never default to broad anonymous Internet relay.
-
-## No TLS Inspection
-
-Controlled Egress v1 does not terminate or inspect destination TLS traffic.
-
-## No TLS Proxy Endpoint in v1
-
-Explicitly deferred by product decision.
-
-## No mTLS Client Identity in v1
-
-Explicitly deferred by product decision.
-
-## No Automatic Firewall/DNS Changes
-
-Network perimeter control remains administrator-owned.
-
-## No SWG/SASE Scope Creep
-
-Do not add DLP, CASB, malware scanning, web categorization, TLS decryption, or browser security functionality to satisfy generic enterprise-security feature comparisons.
-
----
-
-# 22. Product Success Criteria
-
-The new product direction is successful when a user unfamiliar with FRP can understand and achieve both workflows.
-
-### Workflow A — Remote Access
+Only after all gates:
 
 ```text
-Need to support an internal server
-        ↓
-Publish only the required service
-        ↓
-Connect securely through Data Relay
+create immutable v2.4.0 tag
+publish immutable artifacts/checksums/manifest
+publish release notes
+update stable channel
+update public docs
+verify clean stable install/bootstrap/update
 ```
 
-### Workflow B — Restricted Internet Access
+## 18. Post-v2.4 demand-driven work
+
+Potential later additions only with real demand:
 
 ```text
-Internal server has no general Internet access
-        ↓
-Configure standard proxy
-        ↓
-Allow only required update/API/license FQDNs
-        ↓
-Everything else remains blocked
+Web UI
+central multi-server/fleet coordination
+enterprise identity providers beyond required MCP auth
+HA deployment
+reporting/SIEM exports
+more protocols
+more Fixed TCP presets
+policy rollback UX enhancements
+signed policy/export packages
 ```
 
-Operational success means:
+These additions should reuse, not replace, the v2.4 identity/Object/policy/database foundation.
 
-- no general VPN required
-- no broad Internet opening required
-- no Squid-style manual config management for basic cases
-- no agent required for outbound protected hosts
-- minimal firewall changes
-- clear audit trail
-- simple CLI lifecycle
-- fail-closed security behavior
+## 19. Stable non-goals
 
----
-
-# 23. Final Product Vision
-
-The long-term product experience becomes:
+Data Relay Link is not being expanded into:
 
 ```text
-                    DATA RELAY
-
-              Install Server Once
-                     │
-        ┌────────────┴────────────┐
-        │                         │
-        ▼                         ▼
-Secure Remote Access      Controlled Egress
-        │                         │
-External → Internal       Internal → External
-        │                         │
-FRP Client/Gateway        Agentless Proxy Client
-        │                         │
-Approved Services         Approved Destinations
-        │                         │
-        └────────────┬────────────┘
-                     │
-              Central Policy
-                  + Audit
-                  + Doctor
-                  + Backup
+VPN/full network overlay
+SASE/SWG/CASB/DLP
+TLS inspection platform
+RMM/fleet orchestrator
+automatic firewall/DNS manager
+large database cluster
 ```
 
-The core product statement is:
+## 20. Roadmap success condition
 
-> **Data Relay securely connects isolated networks without opening full network access.**
+The v2.4.0 foundation is done when no further foreseeable core change requires replacing:
 
-And the operating principle remains:
+```text
+control-plane authority
+identity model
+Object model
+rule ordering semantics
+Published Service destination semantics
+AI trust/authorization model
+backup/migration model
+canonical CLI nouns
+```
 
-> **Simple to deploy.**
-> **Simple to understand.**
-> **Safe to operate.**
-> **Lightweight by design.**
-
+Feature growth after that point should be additive.

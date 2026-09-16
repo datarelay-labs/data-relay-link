@@ -1,486 +1,508 @@
-# Security architecture
+# Data Relay Link — Security Architecture
 
-This document describes the security model of `Data Relay Link` **2.4.0**.
-It is not a certification, audit report, or guarantee against a compromised
-root account.
+> **Document role:** Canonical security invariants and trust boundaries
+> **Status:** v2.4.0 target architecture; implementation qualification pending
+> **Technical SSOT:** `CONTROL_PLANE_ARCHITECTURE.md`
 
-Pinned FRP version: **0.71.0**. Product version is independent of the
-management protocol version (`schema: 1` in signed requests) and of FRP.
+## 1. Security principle
 
-**Product framing:** Data Relay is the family; Data Relay Link delivers
-**Secure Remote Access** (inbound FRP ops) plus **Controlled Egress**
-(outbound agentless proxy). See `docs/PRODUCT_MASTER.md` §2.2 and
-`docs/CONTROLLED_EGRESS.md`.
+Data Relay Link is default deny and fail closed.
 
-## 1. FRP tunnel authentication
+It relays explicitly authorized connections/operations; it does not create broad network trust.
 
-The FRP control/data tunnel uses:
-
-- FRP native TLS on Direct mode (`transport.protocol = tcp`, `transport.tls.enable = true`)
-- FRP WSS on Enterprise single-443 (`transport.protocol = wss` plus `trustedCaFile` pinning the allocator CA)
-- the FRP server token (`/etc/frp/server_token`)
-
-In single-443 mode nginx terminates TLS on public TCP/443 with the project
-leaf certificate. The frontend proxies allocator paths to loopback HTTPS
-and verifies that backend with `proxy_ssl_verify on` as `DNS:localhost`.
-The frps backend on localhost does not use `tls.force`;
-authentication remains the FRP token. Plain WebSocket (`websocket` without
-TLS) is not a supported production transport.
-
-The FRP token authenticates the **tunnel only**. It is not a management API
-credential, not an Enrollment Code, and not a Bootstrap Ticket.
-
-## 2. Management-plane transport
-
-Enrollment and signed client management use **HTTPS only**.
-
-- There is no plain HTTP allocator mode.
-- There is no HTTP fallback.
-- There is no mutual TLS (mTLS).
-
-Clients authenticate to the allocator with a one-time Enrollment Code (or a
-short-lived Bootstrap Ticket that redeems into the same enrollment flow), then
-with a persistent ECDSA P-256 identity.
-
-## 3. Private CA
-
-The server installer creates a project-managed private CA:
+The product has three policy planes:
 
 ```text
-/etc/drlink/pki/ca.key     # secret
-/etc/drlink/pki/ca.crt     # public certificate
-/etc/drlink/pki/server.key # secret
-/etc/drlink/pki/server.crt # public certificate
+Remote Access     outside → inside
+Internet Access   inside → outside
+AI Access         authenticated AI principal → internal endpoint capability
 ```
 
-The allocator presents `server.crt`. Clients verify it with the pinned CA.
-Software update is **not** CA rotation. A public-host / SAN change may reissue
-the **leaf** certificate under the same CA. Rotating or replacing the CA itself
-is an advanced manual recovery scenario; this release does not implement CA
-rotation.
+Each plane has separate semantics but shares durable identity, revisions, audit, and SQLite transaction infrastructure.
 
-## 4. CA fingerprint bootstrap
+## 2. Authoritative state
 
-First client install downloads `/ca.crt` once over the configured HTTPS
-allocator URL **without** using a `--cacert` file that does not exist yet.
-It parses the body as X.509 and checks the SHA256 fingerprint of the
-**canonical DER** encoding against `FRP_ALLOCATOR_CA_SHA256`. That hash is the
-**CA** certificate, not the nginx/allocator leaf. On success it stores
-`/etc/drlink/allocator-ca.crt`. Later allocator calls use
-verified HTTPS (`curl --cacert` with that stored CA). This is not TOFU and not
-self-verification of a file against itself.
-
-The fingerprint is public trust metadata. It does **not** prove that a
-`curl | sudo bash` bootstrap script from GitHub is authentic. Those are
-separate trust domains (see below).
-
-## 5. Enrollment Code
-
-A short-lived secret created on the server (`sudo drlink` → `set enrollment`).
-
-- Default TTL: 10 minutes
-- Bound to the first machine (`machine-id`) that uses it
-- **One-time credential**: after the first successful enrollment (`used_at` set),
-  the code cannot be used as a fresh credential again
-- Exact lost-response retry is allowed only when the same machine, the same
-  management public key, and the same enabled service set are presented; the
-  server returns the already-committed allocation without rotating identity
-- Rejected: used code + different machine, used code + new management key,
-  used code + changed services / authority
-- Identity recovery or key rotation requires a **new** Enrollment Code issued
-  by an administrator (after `frp-revoke-client` when the old key must be blocked)
-- Ordinary service apply/update after enrollment uses the persistent management
-  identity (signed requests), not the Enrollment Code
-- Entered interactively on manual install; not placed on the command line
-- Not the FRP token
-- Enrollment requests/responses are HMAC-authenticated
-- The enrollment secret is not sent in the HTTPS request body
-- The FRP token is returned encrypted (AES-256-CBC / PBKDF2) over verified HTTPS
-- Server storage: root-owned mode-0600 JSON under
-  `/var/lib/drlink/enrollments/*.json` (secret field stored as issued;
-  not hashed or wrapped at rest in the current release)
-
-Needed again only to enroll a new client, recover a lost local identity, or
-re-establish trust after `frp-revoke-client`.
-
-## 6. Bootstrap Ticket
-
-Zero-touch (`--one-line`) issues a short-lived ticket that the client redeems
-over verified HTTPS **after** CA pinning.
-
-Shared ticket properties (both delivery modes):
-
-- High-entropy secret; hashed at rest on the server
-- First-machine bound; same-machine retry is safe until enrollment completes
-- After successful enrollment the ticket is marked completed; further redeem
-  attempts fail with `BOOTSTRAP_TICKET_USED`
-- A different machine is rejected with `BOOTSTRAP_TICKET_BOUND`
-- The ticket defines the authorized service scope. `/enroll` requires the
-  Enrollment Code request to match it exactly (an empty list is a
-  management-only ticket); anything else is rejected with
-  `SERVICE_SCOPE_VIOLATION`. Later service changes go through the management
-  identity, not the Enrollment Code.
-- TTL enforced; revocable before use
-- Not persisted on the client as the raw ticket
-- Must not be logged
-- Has no management authority after enrollment completes
-- Not the FRP token
-
-### Transitional zt1 mode (v2.1.2 and fallback)
-
-When `bootstrap_hostname` is unset, the ticket is carried **inside** the opaque
-`zt1.` package argument. It is **not** placed in the HTTP URL path or query of
-the installer fetch. The installer URL is a public immutable release asset; the
-sensitive ticket travels only as the `bash -s -- 'zt1.<opaque>'` argument.
-
-### Short URL mode (v2.1.3 Option B)
-
-When `bootstrap_hostname` is configured, the enrollment command is:
-
-```bash
-curl -fsSL https://<bootstrap_hostname>/i/<opaque-ticket> | sudo bash
-```
-
-In this mode the Bootstrap Ticket **is** present in the HTTP URL path
-(`/i/<opaque-ticket>`). That is intentional for the short-command UX and does
-**not** weaken the ticket controls above.
-
-Treat the complete `/i/<ticket>` URL as a **short-lived credential**:
-
-- Do not log it (allocator audit already redacts `/i/<ticket>` to `/i/<redacted>`;
-  operator reverse proxies must also avoid raw URI logging — see
-  `docs/ZERO_TOUCH_SHORT_URL.md`)
-- Do not paste it into public tickets or chat
-- Do not store it in analytics
-- Do not expose it through HTTP referrers
-
-Lifecycle (unchanged binding rules):
-
-- `GET /i/<ticket>` delivers the bootstrap script only — it does **not** consume
-  or bind the ticket
-- Binding occurs only at `POST /bootstrap/redeem`
-- Successful enrollment completes consumption (single-use)
-
-Treat the generated one-line command as sensitive until used, expired, or
-revoked.
-
-### Windows Short URL bootstrap
-
-The Windows Short URL appends `?platform=windows`. The returned PowerShell
-bootstrap downloads both `SHA256SUMS` and `dist/bootstrap-client.ps1`, verifies
-the script with `Get-FileHash -Algorithm SHA256`, and only then executes it with
-`powershell.exe -File`. It never uses `irm | iex` or another download-and-execute
-pipeline. Windows PS5.1 Real E2E is validated in v2.2.1; PowerShell 7 remains
-CI-validated (same real host only when `pwsh` is available).
-
-## 6a. Enrollment retention and purge
-
-Terminal enrollment metadata (`expired`, `completed`, `revoked`) is retained on
-disk for `enrollment_retention_days` (default **30**) so operators can review
-recent history with `show enrollments`. After that period, records become
-eligible for automatic cleanup during enrollment issuance or allocator startup.
-
-- `revoke enrollment` — security lifecycle; blocks pending/bound credentials
-- `purge enrollment` — housekeeping lifecycle; permanently removes terminal metadata
-- Automatic cleanup is pair-aware for zero-touch (bootstrap ticket + paired enrollment)
-- Malformed or inconsistent pairs are never silently deleted (fail closed; see `system diagnostics`)
-- Audit log retention is independent; purging enrollment JSON does not delete audit events
-- Non-interactive purge requires `FRP_ENROLLMENT_PURGE_YES=yes`
-
-Terminal timestamp policy:
-
-| State | Retention age calculated from |
-|-------|------------------------------|
-| expired | `expires_at` |
-| completed | `completed_at` or `used_at` |
-| revoked | `revoked_at` |
-
-## 7. ECDSA management identity
-
-After enrollment, the client keeps a local ECDSA P-256 key:
+The v2.4.0 target authoritative control-plane state is:
 
 ```text
-/etc/frp/client-identity.key   # secret, 0600
-/etc/frp/client-identity.pub   # public
-/etc/frp/client-identity.mac   # secret MAC material, 0600
+/var/lib/drlink/drlink.db
 ```
 
-The private key never leaves the client. The server stores the public key,
-fingerprint, MAC secret, and revocation status. Signed management requests use
-management schema **1** (independent of project version 2.0.0).
+Legacy `registry.json`, `access-control.json`, and `egress-control.json` are not authoritative target state.
 
-## 8. Nonce and timestamp replay defense
+Runtime artifacts are derived from a specific DB revision.
 
-Signed objects bind protocol schema, algorithm, client/machine identity,
-operation, timestamp, nonce, and payload digest.
+## 3. SQLite hardening
+
+Required baseline:
+
+```sql
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = FULL;
+PRAGMA busy_timeout = 5000;
+PRAGMA trusted_schema = OFF;
+```
+
+Database and secret files are root-owned with restrictive modes appropriate to their contents.
+
+An unsupported newer schema, failed integrity check, or corruption that prevents safe interpretation fails closed.
+
+## 4. Runtime generation integrity
+
+Policy runtime state is compiled from the DB and activated atomically.
+
+Every active plane records the source revision.
+
+Example:
 
 ```text
-MAX_CLOCK_SKEW=300          # seconds
-MGMT_NONCE_TTL=900          # seconds
-MAX_NONCES_PER_CLIENT=256
+DB Revision       : 42
+Remote Policy     : 42 active
+Internet Policy   : 42 active
+AI Policy         : 42 active
 ```
 
-Replayed nonces and stale timestamps are rejected. A retry of the same logical
-Apply uses a new timestamp/nonce/signature and reuses existing public ports.
+A generation mismatch is surfaced and must not be treated as normal healthy enforcement.
 
-`drlink system diagnostics` is read-only and does not consume a nonce.
+## 5. Transaction boundary
 
-## 9. Revoke vs release
-
-| Action | Management identity | Port reservations | Client registry record |
-| --- | --- | --- | --- |
-| `client revoke` / `frp-revoke-client` | blocked | kept | kept |
-| `client release <ID> <SERVICE>` / `frp-release-service` | unchanged | that service freed | kept |
-| `client release <ID>` / `frp-release-client` | removed | all freed | **removed** |
-
-Revoke is not release. An administrator can still release after revoke.
-`client release <CLIENT-ID>` is irreversible for that server-side client record;
-it does not uninstall software on the remote host.
-
-## 10. Disable vs release
-
-| Action | Publication | Public port |
-| --- | --- | --- |
-| Disable | stopped | reserved |
-| Re-enable | resumed | **same** port |
-| Edit (local target) | may change target | **same** port |
-| Release | removed | freed for reuse |
-
-Disable is not release.
-
-## 11. Secret vs public inventory
-
-**Secrets**
-
-| Item | Typical path |
-| --- | --- |
-| FRP server token | `/etc/frp/server_token` |
-| Enrollment Code secret | `/var/lib/drlink/enrollments/*.json` (root-owned `0600`; secret stored as issued, not hashed/wrapped) |
-| Bootstrap Ticket while valid | `/var/lib/drlink/bootstrap/` (hashed at rest) |
-| Client management private key | `/etc/frp/client-identity.key` |
-| Management MAC secret | `/etc/frp/client-identity.mac` (server copy on the client record) |
-| CA private key | `/etc/drlink/pki/ca.key` |
-| TLS server private key | `/etc/drlink/pki/server.key` |
-| Generated `frps.toml` / `frpc.toml` | contain the FRP token |
-
-**Public / non-secret metadata**
-
-| Item | Typical path |
-| --- | --- |
-| CA certificate | `/etc/drlink/pki/ca.crt` |
-| CA SHA256 fingerprint | printed by `frp-create-client` |
-| Server certificate | `/etc/drlink/pki/server.crt` |
-| Management public key | `/etc/frp/client-identity.pub` |
-| Service ID, public service port, public hostname (optional DNS alias) | `frp-client-info`, `access-info.txt` |
-| Client desired state (no secrets) | `/etc/frp/client-state.json` |
-
-`client-state.json` is the canonical local desired state. `frpc.toml` and
-`access-info.txt` are generated artifacts. Do not treat `frpc.toml` as the
-document to edit.
-
-## 12. Expected file modes
-
-| Path | Mode |
-| --- | --- |
-| `/etc/frp/server_token` | `0600` |
-| `/etc/drlink/pki/` | `0700` |
-| `/etc/drlink/pki/ca.key` | `0600` |
-| `/etc/drlink/pki/ca.crt` | `0644` |
-| `/etc/drlink/pki/server.key` | `0600` |
-| `/etc/drlink/pki/server.crt` | `0644` |
-| `/etc/frp/client-identity.key` | `0600` |
-| `/etc/frp/client-identity.mac` | `0600` |
-| `/etc/frp/client-state.json` | `0600` |
-| `/etc/frp/frpc.toml` | `0600` |
-| `/etc/frp/frps.toml` | `0600` |
-| `/var/lib/drlink/registry.json` | `0600` |
-| `/etc/drlink/allocator-ca.crt` | `0644` |
-| `/etc/frp/access-info.txt` | `0644` |
-| `/etc/drlink/version` | `0644` |
-
-Do not manually edit the registry, `client-state.json`, `frpc.toml`, or
-identity files unless performing advanced recovery.
-
-## 13. Trust domains
-
-`curl … | sudo bash` fetches the **installer bundle** from the configured
-installer URL (often GitHub `raw.githubusercontent.com`). Integrity of that
-script is a GitHub/HTTPS and operator-process concern.
-
-Allocator **CA fingerprint** pins the management CA. It does not attest the
-bootstrap script.
-
-Checksums:
-
-- Official FRP archives are checked against pinned SHA256 values
-- Repository `SHA256SUMS` covers tracked source/release files, excluding the
-  three derived metadata files that would make the relation circular
-  (`SHA256SUMS`, `release-manifest.json`, `dist/sbom.spdx.json`)
-- `scripts/check-frp-compatibility.sh` verifies digests **before** extract/execute
-  and writes an atomic PASS report only after required checks succeed
-
-Three distinct evidence classes, in increasing strength:
-
-| Class | Artifact | What it proves |
-| --- | --- | --- |
-| Integrity | `SHA256SUMS` | bytes were not altered **if** the checksum channel is trusted |
-| Inventory | `dist/sbom.spdx.json` | what the release contains, bound to one source commit |
-| Provenance | GitHub Artifact Attestation | which workflow, at which commit, produced these exact bytes |
-
-A checksum is not provenance, and provenance is not a commit signature.
-
-`release-manifest.json` records `"signing": false`: this project does **not**
-ship its own detached cryptographic signatures (GPG/cosign) of its bundles.
-It **does** produce GitHub Artifact Attestations via
-`.github/workflows/release-attest.yml`, which signs a provenance statement over
-the release subjects using workflow OIDC identity. That workflow verifies its
-own attestation before the release passes; verification failure fails the
-release. Consumers can check it independently:
-
-```bash
-gh attestation verify <artifact> --repo datarelay-labs/data-relay-link
-```
-
-Developer commit signing is not part of this release evidence set. Residual
-supply-chain risk from the absence of detached release signatures remains
-accepted for the 2.4.x line.
-
-Published tags are immutable and are never moved, recreated, or retargeted.
-Attestation binds a tag to a commit to a set of artifact digests, so repointing
-a tag would invalidate evidence a consumer has already verified.
-
-## 14. Threat boundaries
-
-| Situation | Boundary |
-| --- | --- |
-| MITM on allocator before CA pin | Fingerprint mismatch; install must fail closed |
-| MITM after CA pin | TLS verification with pinned CA |
-| Stolen Enrollment Code | Usable until expiry / first-machine bind |
-| Stolen Bootstrap Ticket | Same; one-line command is sensitive |
-| Replayed management request | Rejected (nonce/timestamp) |
-| Compromised client local root | **Outside** the protection boundary |
-| Compromised server root | **Outside** the protection boundary |
-| Lost response / retry | New nonce; ports reused, not duplicated |
-| Registry corruption | Fail closed; restore from backup |
-| Malicious FRP archive | Version/arch/checksum/path-traversal checks |
-| Shell metacharacters in zero-touch fields | Values are `shlex`-quoted; control characters rejected |
-
-Local root compromise on the FRP server or client is outside the protection
-boundary. File modes reduce accidental exposure; they do not protect secrets
-from root.
-
-## 15. Backup and disaster recovery
-
-**Server backup (minimum)**
+Security-relevant mutations use a common sequence:
 
 ```text
-/etc/drlink/pki/
-/etc/frp/server_token
-/etc/drlink/config.json
-/var/lib/drlink/registry.json
+validate
+→ resolve references
+→ calculate impact
+→ confirm broadening where required
+→ BEGIN IMMEDIATE
+→ optimistic-concurrency recheck
+→ write authoritative state
+→ revision + audit
+→ COMMIT
+→ compile
+→ validate
+→ atomic activate/reload
+→ verify active generation
 ```
 
-Also consider enrollments, bootstrap tickets, and `mgmt-nonces.json`. Store
-backups mode `600`. Losing the private CA means existing clients cannot
-validate a replacement allocator until trust is re-established (typically
-re-enrollment).
+Partial writes are not accepted as successful mutations.
 
-**Client**
+## 6. Durable identity
 
-Client uninstall **intentionally** removes local identity and state. Do not
-copy `client-identity.key` over insecure channels. A replacement host is a new
-enrollment (or Enrollment Code recovery) even if the server still holds the
-old reservation.
+Names are display identities. Durable references use immutable internal IDs.
 
-| Loss | Supported recovery |
-| --- | --- |
-| Server software lost, state preserved | Re-run the server installer; CA/token/registry reused |
-| Server host completely lost | Restore the backups above, then reinstall |
-| Client local state lost | New enrollment or Enrollment Code recovery |
-| Client identity lost | Enrollment Code recovery (`frp-revoke-client` if the old key must be blocked) |
-| CA lost or compromised | Advanced manual recovery; **not** solved by `drlink update` |
-| Registry lost | Restore `registry.json` from backup; the installer will not invent reservations |
+This prevents rename operations from silently detaching policy.
 
-Token rotation is not automatic. Reinstall preserves the existing FRP token.
+Managed Endpoint identity is tied to the enrolled client/machine identity, not label, hostname, or observed public/NAT IP.
 
-## 16. Service Access Control (defense-in-depth)
+## 7. Reference protection
 
-Published TCP services may be `PUBLIC` (default) or `ALLOWLIST` using Named
-Access Lists. Authorization runs in the FRP NewUserConn plugin on loopback
-only. For ALLOWLIST services, plugin/policy failure **denies** the user
-connection (fail closed). PUBLIC services keep open access when policy loads
-successfully.
+Policy dependencies are not cascade-deleted.
 
-Access Control does **not** replace target authentication. Keep SSH keys,
-application auth, and database credentials enabled. Do not apply Service
-Access Lists to FRP control, enrollment/management, or the single-443
-frontend itself. Unmapped or drifted published-service proxy names fail
-closed (DENY); they must never fall back to PUBLIC.
+Deletion of a referenced Object, Object Group, AI Principal, Client Group, or other durable policy entity fails and lists references.
 
-Connection authorization events are written to a bounded local log
-(`/var/log/drlink/access-conn.jsonl`). Enrollment tickets, FRP
-tokens, CA keys, and passwords are not logged.
+A removed Client's referenced Managed Endpoint may remain Orphaned rather than silently rebinding to a new client.
 
-Access Control mutations emit structured audit events to `audit.jsonl`
-(`access.list.created|updated|deleted`, `access.source.added|updated|removed`,
-`access.service.assigned|public`). Audit payloads use a field allowlist:
-identifiers, list/source names, CIDRs, and expiry only — never descriptions,
-tickets, or other operator free text.
+## 8. Optimistic concurrency
 
-Input bounds for Access Control policy:
+Interactive editing must detect stale state using `row_version` or equivalent.
 
-- Temporary source TTL accepts `Ns/Nm/Nh/Nd` up to **3650d** (10 years);
-  larger values are a user-facing error, not an arithmetic overflow
-- Access List descriptions are limited to 1024 characters and reject C0/C1
-  control characters, CR/LF, and ANSI escapes so policy text cannot forge
-  terminal output or log lines
+Lost updates fail with no applied change.
 
-If an upstream device SNATs clients, allowlists must use the source address
-observed by `frps`.
+SQLite writer serialization alone is not considered sufficient protection against stale wizard state.
 
-## 17. Controlled Egress (agentless outbound)
+## 9. Remote Access boundary
 
-Controlled Egress is a **separate policy plane** from inbound Access Control.
+Remote Access authorization and Published Service reachability are both required.
 
-Authoritative state: `/var/lib/drlink/egress-control.json`
-Connection log: `/var/log/drlink/egress-conn.jsonl`
-Daemon: `drlink-egress.service` (default listen `0.0.0.0:6102`, outside published pool `6000–6098`)
+```text
+rule ALLOW
++
+enabled Published Service
++
+reachable connector/target
+=
+effective access
+```
 
-Security contract:
+A network Object match alone does not expose arbitrary hosts or ports.
 
-- Default DENY; missing/corrupt/invalid policy fails closed
-- Primary caller authorization is source IP/CIDR (no agent on protected hosts)
-- Destinations are FQDN + port + **required protocol** `http|https`
-  - `http`: absolute-form proxy requests only
-  - `https`: `CONNECT` + TLS ClientHello SNI binding; ECH denied; no TLS interception
-- Wildcard hosts are checked against a **pinned Public Suffix List**
-  (`lib/frp_public_suffix.py`, `lib/data/public_suffix_list.dat`); bare public-suffix wildcards are rejected
-  - PSL rules are indexed in both their Unicode and IDNA/punycode spellings, so
-    `*.公司.cn` and `*.xn--55qx5d.cn` are rejected identically
-- IP literals denied by default
-- Server-side DNS; every resolved candidate IP is validated before connect
-- Reject loopback, RFC1918, link-local, ULA, metadata (`169.254.169.254`), multicast/reserved
-- Resolve once → validate → connect to that exact IP (rebinding-safe)
-- Policy reload Option B: gateway reloads policy on file mtime change; new authorizations always use current policy (no stale-while-revalidate for allow decisions)
-- Do not log Proxy-Authorization, cookies, bodies, or TLS payloads
-- Egress failure must not take down inbound `frps`; inbound Access Control remains independent
-- Service unit runs as dedicated non-root user `drlink-egress` with systemd hardening; registry/enrollment secrets stay root-owned and outside egress write paths
+SELF Published Services use the Managed Endpoint as effective destination even if the local socket target is loopback.
 
-Windows Update over the proxy is possible with an explicit destination set. **Delivery Optimization peer traffic is out of Controlled Egress scope** — keep DO disabled or use WSUS/managed update paths on closed hosts.
+ROUTED Published Services use the explicit routed target as effective destination.
 
-Operator CLI (final public grammar): `show internet` /
-`set internet-profile` / guided
-`set internet-source` → `set internet-destination` → `test internet` →
-`set internet-profile … enabled`. See `docs/CONTROLLED_EGRESS.md`.
+## 10. Remote Access rule semantics
 
-## 18. Mixed product versions
+```text
+ordered top-down
+first complete match wins
+ALLOW / DENY
+implicit final DENY
+```
 
-Project **2.1.0** does not change management protocol schema `1`. An already
-enrolled **1.9.1** or **2.0.0** client is expected to keep its tunnel and signed
-management against a **2.1.0** Direct-mode server. Product version is not
-management protocol version. There is no forced client re-enrollment on this
-upgrade.
+No hidden specificity algorithm overrides rule order.
 
-A **2.0.0** client cannot speak FRP WSS. Switching the server to single-443
-requires **2.1.0+** clients and an Apply after cutover; it is not a silent
-transport upgrade.
+Policy changes apply immediately to new connections. Established connections are not implicitly terminated by a policy edit.
+
+## 11. Internet Access boundary
+
+Internet Access must never operate as an open proxy.
+
+Required controls:
+
+```text
+explicit source authorization
+explicit destination authorization
+explicit protocol/port
+default deny
+server-side DNS where applicable
+FQDN canonicalization
+DNS rebinding resistance
+validated exact-IP connection
+private/local/link-local/metadata protection
+safe IP-literal semantics
+CONNECT/SNI binding where applicable
+ECH-safe behavior
+resource/time limits
+safe logs
+```
+
+Ambiguous parsing or unsafe resolution fails closed.
+
+## 12. Object context validation
+
+Objects are neutral but context validation is mandatory.
+
+An Object Group assignment fails as a whole if any member is invalid in the selected policy field.
+
+Silently ignoring invalid members is prohibited.
+
+Nested Object Group cycles are prohibited.
+
+## 13. Policy-impact analysis
+
+Security changes are not limited to Rule edits.
+
+Impact analysis covers:
+
+```text
+Object value changes
+Object Group membership
+Rule content/order/enablement/action
+Published Service target/mode
+Managed Endpoint address membership changes
+AI target/capability/path/exec constraints
+```
+
+At minimum calculate access broadened/narrowed, affected active rules, shadowing changes, and effective-action changes.
+
+Interactive broadening defaults to No.
+
+## 14. Secrets
+
+The SQLite control plane does not require raw secret material to live in tables.
+
+Root-owned secret storage may contain:
+
+```text
+CA private key
+TLS private key
+FRP/upstream raw transport token
+bootstrap/enrollment raw secret during its valid lifecycle
+MCP/OAuth client or signing secret where required
+```
+
+The DB may store references, hashes, IDs, status, and rotation metadata.
+
+Secrets must not appear in:
+
+```text
+normal show output
+help
+Tab completion
+audit records
+public metadata
+support bundles without deliberate protected handling
+logs
+```
+
+## 15. PKI and management identity
+
+Remote transport authentication and Data Relay Link management identity remain separate trust concepts.
+
+Management paths use authenticated encrypted transport and persistent endpoint identity. Existing secure enrollment/CA fingerprint principles are retained unless superseded by a stronger explicit design.
+
+Do not reuse an upstream FRP token as a general management or MCP credential.
+
+## 16. MCP Bridge trust boundary
+
+MCP is included in the v2.4.0 target.
+
+Remote MCP calls terminate at a Data Relay Link server-side bridge. Internal endpoints do not expose independent MCP servers by default.
+
+```text
+MCP host
+→ authenticated HTTPS
+→ DRLink MCP Bridge
+→ AI Principal
+→ AI Access authorization
+→ managed client control path
+→ target OS boundary
+```
+
+The bridge does not bypass client identity, AI Access policy, or target OS permissions. Authorized operations are dispatched through a dedicated authenticated Data Relay Link client management/RPC path; Published Services and exposed SSH are not prerequisites for MCP operation.
+
+## 17. MCP protocol baseline
+
+Implementation must use the then-current official MCP specification and supported SDK behavior.
+
+At the September 2026 architecture freeze, the modern remote direction is HTTP-native Streamable HTTP with the `2026-07-28` protocol revision available. Legacy SSE-first transport is not the new design target.
+
+Exact authorization/transport mechanics are re-verified immediately before implementation and Real E2E.
+
+## 18. AI Principal authentication
+
+Every privileged MCP operation has an authenticated AI Principal.
+
+Requirements:
+
+```text
+strong binding to credential/subject
+revocation
+rotation
+no anonymous privileged tool call
+server-side authorization every invocation
+least privilege
+rate/resource controls
+audit attribution
+```
+
+Do not assume that a network source IP is sufficient AI identity.
+
+## 19. AI capability authorization
+
+Capabilities are explicit grants.
+
+Initial required surface includes:
+
+```text
+exec
+read_file
+write_file
+upload_file
+download_file
+```
+
+Unknown or ungranted tools are denied.
+
+Each tool invocation is authorized using the current ordered AI Access policy. Evaluation is top-down first complete match with explicit ALLOW/DENY and implicit final DENY.
+
+## 20. Read-only AI semantics
+
+`exec` is powerful enough to mutate files/system state through the shell.
+
+Therefore:
+
+```text
+true read-only role => exec=false
+```
+
+If `exec=true`, the effective security boundary also includes:
+
+```text
+target OS user
+filesystem permissions
+sudo policy
+shell/environment restrictions
+timeout/process controls
+optional sandbox/isolation if implemented
+```
+
+Do not market a role as read-only merely because direct `write_file` is denied. Execution identity and privilege elevation should be explicit constraints; granting `exec` alone never implies permission to elevate privileges.
+
+## 21. AI path scopes
+
+Direct file operations enforce configured path scopes after safe canonical path resolution.
+
+Implementation must defend against traversal/symlink/path-normalization bypasses appropriate to the supported OS.
+
+A path that cannot be proven inside the allowed scope is denied.
+
+## 22. AI upload/download
+
+Transfers enforce:
+
+```text
+principal authorization
+target authorization
+capability authorization
+path scope
+size/resource limits
+safe temporary-file handling
+atomic destination semantics where appropriate
+audit metadata
+```
+
+Do not persist file contents in the audit database.
+
+## 23. AI exec
+
+`exec` enforcement includes:
+
+```text
+principal + target authorization
+explicit exec capability
+timeout
+bounded output handling
+process lifecycle management
+safe environment construction
+OS-account privilege boundary
+audit attribution
+```
+
+Command allowlists/denylists may be added, but must not be represented as a complete sandbox when the OS account remains broadly privileged.
+
+## 24. AI audit
+
+Record bounded metadata:
+
+```text
+timestamp
+principal
+target endpoint
+tool
+matched rule
+result
+duration
+revision
+```
+
+For exec, store a sanitized command summary/fingerprint and exit code as appropriate; avoid unrestricted sensitive output.
+
+For file operations, store path, byte count/direction, result, and rule attribution; not file content.
+
+## 25. Policy timing for AI
+
+> **Policy changes apply immediately to new operations.**
+
+A new MCP tool call sees current policy.
+
+A command already running is not implicitly killed by a later policy edit unless the operator invokes an explicit cancellation mechanism.
+
+## 26. Audit integrity
+
+Configuration audit and AI activity are durable metadata in the control plane.
+
+Audit writes must not be able to convert a denied operation into an allowed operation if audit persistence fails; fail behavior should preserve security and report loss of audit guarantees clearly.
+
+## 27. Backup security
+
+A live WAL DB is backed up with SQLite Online Backup or equivalent.
+
+Backup archives may contain security-sensitive control state and trust material. They require restrictive ownership/permissions and validation before restore.
+
+Restore performs schema, integrity, foreign-key, ownership/mode, and runtime-generation validation.
+
+## 28. Database migration security
+
+Upgrade sequence:
+
+```text
+consistent pre-upgrade backup
+→ compatibility check
+→ BEGIN IMMEDIATE
+→ migrations
+→ foreign_key_check
+→ integrity validation
+→ migration ledger update
+→ COMMIT
+→ policy compile
+→ runtime activate
+→ generation verify
+```
+
+Old binaries facing unsupported newer schema fail closed.
+
+## 29. Support bundle
+
+Support bundles must redact or omit:
+
+```text
+raw secrets
+private keys
+bootstrap tickets
+MCP/OAuth tokens
+sensitive command/file payloads
+private customer data not required for diagnosis
+```
+
+They may include bounded schema/version/revision/generation metadata and safe health evidence.
+
+## 30. Public endpoint separation
+
+Preserve the product contract:
+
+```text
+public_ip / public_host
+  control/allocator identity
+
+public_hostname
+  optional published-service alias
+
+bootstrap_hostname
+  bootstrap entrypoint
+```
+
+Do not silently mix these identities during installer/config generation.
+
+## 31. External infrastructure boundary
+
+Data Relay Link does not silently modify cloud security groups, external firewalls, NAT/DNAT, DNS, SSH accounts, or application TLS certificates.
+
+Incorrect external infrastructure is classified as an environment/configuration issue rather than bypassed by weakening product security.
+
+## 32. Fail-closed examples
+
+The following must deny or stop affected enforcement safely:
+
+```text
+corrupt DB
+unsupported DB schema
+missing required durable reference
+Object Group cycle
+context-invalid group assignment
+unsafe DNS answer
+runtime generation cannot be verified
+MCP auth failure
+unknown AI Principal
+unknown capability
+path-scope violation
+malformed tool request
+```
+
+No fallback to legacy JSON authority is permitted in the stable target.
+
+## 33. Release security gates
+
+v2.4.0 stable requires evidence for:
+
+```text
+SQLITE_INTEGRITY=PASS
+DB_CORRUPTION_FAIL_CLOSED=PASS
+REFERENCE_INTEGRITY=PASS
+OPTIMISTIC_CONCURRENCY=PASS
+POLICY_IMPACT_ANALYSIS=PASS
+RUNTIME_GENERATION_CONSISTENCY=PASS
+BACKUP_RESTORE=PASS
+REMOTE_ACCESS_SECURITY_REGRESSION=PASS
+INTERNET_ACCESS_SECURITY_REGRESSION=PASS
+MCP_AUTH=PASS
+MCP_CAPABILITY_ENFORCEMENT=PASS
+MCP_FILE_SCOPE=PASS
+MCP_AUDIT=PASS
+MCP_REAL_E2E=PASS
+SECRET_SCAN=PASS
+PUBLIC_METADATA_SCAN=PASS
+```
+
+No stable claim is made from synthetic/unit tests alone.

@@ -198,9 +198,14 @@ FRP is **not** upgraded to 0.71.0 for this mode.
 
 This is a **maintenance-window cutover**, not zero-downtime.
 
-Preserved: FRP token, private CA, registry.json, schema v2, client records,
-management identities, reserved ports, enrollment files that are still valid.
-The installer does not reset the registry.
+For the v2.4.0 target, a deployment-mode change preserves the embedded SQLite
+control plane (`/var/lib/drlink/drlink.db`), client/Managed Endpoint identities,
+Published Services and port reservations, PKI/transport secrets, enrollment state,
+and configuration revisions. The installer must not reset the control database.
+
+Historical pre-v2.4 releases used JSON registry/schema-v2 state; any supported
+upgrade from those immutable releases must migrate that state into SQLite before
+it is retired. JSON is never kept as a second authoritative store.
 
 Existing clients speak native FRP TLS on TCP/443. After cutover they must
 speak WSS to nginx on TCP/443. A 2.0.0 client that ignores `frp_transport`

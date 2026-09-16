@@ -1,140 +1,319 @@
 # Data Relay Link Version Policy
 
-Normative version and release-channel rules for Data Relay Link (`drlink`).
-This document does not redefine product behavior described in
-`docs/PRODUCT_MASTER.md`; it is the version/release governance contract.
+> **Document role:** Normative product versioning, release-channel, tag, provenance, and release-line policy
+> **Target:** v2.4.0 development
+> **Related:** `PRODUCT_MASTER.md`, `CONTROL_PLANE_ARCHITECTURE.md`, `RELEASE_CHECKLIST.md`, `CHANGELOG.md`
 
-Cross-references:
-
-- Product truth: `docs/PRODUCT_MASTER.md`
-- Release operator checklist: `docs/RELEASE_CHECKLIST.md`
-- Release validation evidence: `docs/RELEASE_VALIDATION.md`
-- CLI surface: `docs/Data Relay Link CLI Information Architecture.md`
-- Manifest schema: `RELEASE_MANIFEST.schema.json`
-
-## Single source of truth
+## 1. Version source of truth
 
 `VERSION` is the authoritative product-version source:
 
 ```text
-PROJECT_VERSION=<SemVer MAJOR.MINOR.PATCH>
-FRP_VERSION=<independently pinned Relay Engine version>
+PROJECT_VERSION=<MAJOR.MINOR.PATCH>
+FRP_VERSION=<independently pinned upstream engine version>
 RELEASE_CHANNEL=<development|preview|stable>
 ```
 
 Rules:
 
-- Do not mechanically couple `PROJECT_VERSION` to the upstream FRP version.
-- A plain `PROJECT_VERSION=2.4.0` does **not** by itself make a build stable.
-- Internal phases, audits, worktrees, and commits do not consume product versions.
-- Fixes made before the immutable `v2.4.0` tag do **not** become `2.4.1`.
+- Data Relay Link product version and FRP version are independent.
+- A plain `PROJECT_VERSION=2.4.0` does not make a build stable.
+- Internal phases, audits, commits, worktrees, and test rounds do not consume product versions.
+- Fixes and architecture changes made before the first immutable `v2.4.0` stable tag remain part of the 2.4.0 target.
 
-Logical provenance fields (persisted at install / recorded in the release
-manifest):
-
-```text
-PRODUCT_VERSION     = PROJECT_VERSION
-RELEASE_CHANNEL     = development | preview | stable
-SOURCE_HEAD         = exact 40-character Git SHA
-SOURCE_REF          = immutable tag, RC tag, exact SHA, or explicit main tip
-UPSTREAM_ENGINE_VERSION = FRP_VERSION
-```
-
-## Display identities
-
-| Build class              | Display identity        | Channel       |
-|--------------------------|-------------------------|---------------|
-| Non-tag engineering build | `2.4.0-dev+g<SHORT_SHA>` | `development` |
-| Release candidate        | `2.4.0-rc.N`            | `preview`     |
-| Stable tagged release    | `2.4.0`                 | `stable`      |
-| First post-release fix   | `2.4.1`                 | `stable`      |
-| Compatible feature       | `2.5.0`                 | `stable`      |
-| Incompatible change      | `3.0.0`                 | `stable`      |
-
-`show version` must never report `Channel: stable` without matching immutable
-stable-tag provenance. Product version and Relay Engine (FRP) version remain
-distinct labels.
-
-## Channel and installer refs
-
-### Before the stable tag exists
+## 2. Current release direction
 
 ```text
-installer_ref = exact 40-character SHA (or immutable RC artifact)
-channel       = development (engineering) or preview (explicit RC)
+Documented stable baseline             v2.2.1
+Historical immutable tag               v2.3.0
+Current development target             2.4.0
+Current release channel                development
+Pinned Relay Engine                    FRP 0.71.0
+MCP included in final 2.4.0 target     YES
+Stable v2.4.0 tag exists               NO
 ```
 
-Never advertise or generate URLs for a future stable tag such as `v2.4.0`
-before that tag exists. Missing immutable refs must fail closed; do not silently
-fall back to `main` or `latest`.
+Historical tags remain immutable regardless of whether they represented stable, RC, or historical release-line milestones.
 
-### After the stable release
+Do not manufacture missing numbers, move old tags, or recreate them merely to make a sequence look continuous.
+
+## 3. Semantic versioning
+
+Data Relay Link uses:
 
 ```text
-installer_ref = immutable vMAJOR.MINOR.PATCH tag (or immutable release artifact)
-channel       = stable
+MAJOR.MINOR.PATCH
 ```
 
-Explicit tip-following remains an opt-in (`FRP_RELEASE_CHANNEL=development` or
-legacy alias `dev`, with `SOURCE_REF=main`) and is never the default for stable
-installs.
+After stable release:
 
-## Stable release existence
+| Change | Increment |
+|---|---|
+| Backward-compatible defect/security fix | PATCH |
+| Backward-compatible supported feature | MINOR |
+| Incompatible supported public behavior | MAJOR |
+| Test/audit/internal-only change | none by itself |
+| Docs-only correction outside shipped behavior | none by itself |
 
-A stable version exists only after **all** of:
+The supported compatibility surface includes documented CLI grammar, config/state formats, enrollment/identity continuity, backup/restore format, install/service identity, update semantics, and security-policy behavior.
 
-1. Immutable git tag `vMAJOR.MINOR.PATCH`
-2. Release artifacts + checksums bound to that tag's commit
-3. Qualification evidence recorded for that exact HEAD
+## 4. Pre-stable redesign rule
 
-Published tags are immutable. Never move, recreate, retarget, delete, or
-force-push a published tag. Do not manufacture gap-fill tags. Do not renumber
-the product back to `1.0.0`.
+v2.4.0 has not been released and has no production user compatibility promise.
 
-Historical note for this line: published stable baseline is `v2.2.1`; `v2.3.0`
-is published history and must remain untouched. The next stable target is
-`v2.4.0`.
+Therefore the current pre-stable architecture closure may replace development-only public models such as:
 
-## MCP exclusion (v2.4.0)
+```text
+ACL / Access Rule grammar
+Service Profile
+Internet Profile
+JSON authoritative control-plane state
+MCP exclusion
+```
 
-For the v2.4.0 product line:
+without renaming the target to 3.0.0.
+
+This exception exists because the incompatible behavior was never part of an immutable qualified stable v2.4.0 release.
+
+Once v2.4.0 is stable, incompatible changes to its supported public surface require a future MAJOR version unless an automatic safe compatibility path preserves the contract.
+
+## 5. Build identities
+
+### Development
+
+```text
+2.4.0-dev+g<SHORT_SHA>
+Channel: development
+Source HEAD: <exact 40-character SHA>
+```
+
+### Release candidate
+
+```text
+2.4.0-rc.N
+Channel: preview
+Source HEAD: <exact 40-character SHA>
+```
+
+Code/dependency changes after an RC require a new RC identity and reset final double-E2E evidence.
+
+### Stable
+
+```text
+2.4.0
+Channel: stable
+Source HEAD: <exact qualified 40-character SHA>
+Tag: v2.4.0
+```
+
+Stable exists only after immutable tag + artifacts + qualification evidence are all present.
+
+## 6. Stable existence
+
+A stable release requires all of:
+
+1. Immutable `vMAJOR.MINOR.PATCH` tag.
+2. Tag points to the exact fully qualified source HEAD.
+3. Required automated and Real E2E gates passed on that exact HEAD.
+4. Immutable release artifacts.
+5. SHA256 checksums.
+6. Release manifest.
+7. Final release notes.
+8. Stable-channel publication.
+
+A branch, milestone, `VERSION` value, README claim, or generated URL is not a release.
+
+## 7. Release channels
+
+```text
+stable
+  immutable fully qualified releases only
+
+preview
+  explicit operator opt-in RCs only
+
+development
+  exact-SHA engineering builds only
+```
+
+Stable installers/updates never silently consume preview/development artifacts.
+
+## 8. Source provenance
+
+Runtime/release metadata preserves:
+
+```text
+PRODUCT_VERSION
+RELEASE_CHANNEL
+SOURCE_HEAD
+SOURCE_REF
+UPSTREAM_ENGINE_VERSION
+```
+
+Installs without `.git` must still retain exact provenance through build/install metadata.
+
+Never fabricate `SOURCE_HEAD` or stable provenance.
+
+## 9. Installer/bootstrap references
+
+Before stable tag:
+
+```text
+source ref = exact 40-character SHA or immutable RC artifact
+```
+
+After stable release:
+
+```text
+source ref = immutable stable tag or immutable release artifact
+```
+
+Prohibited:
+
+```text
+future nonexistent v2.4.0 URL
+qualified install from mutable main/latest
+silent fallback from missing immutable ref to main/latest
+moving/replacing bytes behind an existing released version
+```
+
+## 10. Product vs Relay Engine
+
+Canonical display:
+
+```text
+Data Relay Link: 2.4.0-dev+g<sha>
+Channel: development
+Source HEAD: <sha>
+Relay Engine (FRP): 0.71.0
+Control DB Schema: <schema version>
+```
+
+An upstream FRP version change changes Data Relay Link version only according to Data Relay Link user-visible compatibility/behavior.
+
+## 11. v2.4.0 architecture inclusion
+
+The final v2.4.0 target includes the Control Plane/Object/Policy/MCP architecture defined in `CONTROL_PLANE_ARCHITECTURE.md`.
+
+Therefore the earlier rule:
 
 ```text
 MCP_COMMANDS_INCLUDED=NO
 MCP_RUNTIME_DEPENDENCY=NO
 MCP_INSTALLER_PAYLOAD_INCLUDED=NO
 MCP_ENABLED_CODE_PATH=NO
-MCP_STABLE_SUPPORT_CLAIM=NO
 features.mcp_included=false
 ```
 
-## Release manifest
+is superseded as a product decision.
 
-`release-manifest.json` must validate against `RELEASE_MANIFEST.schema.json`
-and record at least:
+Before v2.4.0 candidate qualification, all implementation/governance artifacts that still hard-code the old exclusion must be updated consistently.
 
-- schema version
-- product version and channel
-- exact Git SHA (`source_head`)
-- immutable source ref / tag (`git_ref`)
-- upstream FRP version
-- `features.mcp_included`
-- artifact paths and SHA256 digests
-- qualification evidence for stable releases
+Known development-transition locations include release manifest validation/generation, version governance checks, tests, and release scripts. Their existence on an unimplemented development HEAD is not permission to publish a contradictory candidate.
 
-## Guardrails
+## 12. Release manifest
 
-Repository-native checks enforce:
+`release-manifest.json` must validate against `RELEASE_MANIFEST.schema.json` and record at least:
 
-- `VERSION_SSOT_CONSISTENT`
-- `TAG_MATCHES_PRODUCT_VERSION`
-- `TAG_HEAD_MATCHES_SOURCE_HEAD`
-- `SOURCE_DIST_PARITY`
-- `INSTALLER_SOURCE_REF_IMMUTABLE`
-- `RELEASE_MANIFEST_VALID`
-- `MCP_V2_4_EXCLUSION`
-- `HISTORICAL_TAG_IMMUTABILITY`
+```text
+schema version
+product version
+channel
+exact source HEAD
+immutable source ref/tag
+upstream FRP version
+features.mcp_included
+artifact names/sizes/SHA256
+qualification evidence for stable
+```
 
-Release publication is triggered only from an explicitly qualified immutable
-tag (see `.github/workflows/release-attest.yml`), never merely from a feature
-branch push.
+For the final qualified v2.4.0 artifact:
+
+```text
+features.mcp_included=true
+```
+
+only after MCP Bridge/AI Access are actually present and qualified.
+
+Before implementation completes, the development manifest may reflect current code truth rather than future target scope; it must not be used to claim release readiness.
+
+## 13. Governance guardrails
+
+The final release-governance implementation must enforce:
+
+```text
+VERSION_SSOT_CONSISTENT
+TAG_MATCHES_PRODUCT_VERSION
+TAG_HEAD_MATCHES_SOURCE_HEAD
+SOURCE_DIST_PARITY
+INSTALLER_SOURCE_REF_IMMUTABLE
+RELEASE_MANIFEST_VALID
+HISTORICAL_TAG_IMMUTABILITY
+CONTROL_PLANE_SCHEMA_COMPATIBLE
+MCP_V2_4_INCLUDED_AND_QUALIFIED
+```
+
+The old `MCP_V2_4_EXCLUSION` guard is retired during the implementation phase, not carried into candidate qualification.
+
+## 14. Branch model
+
+Use lightweight isolated feature/fix worktrees.
+
+`main` represents the latest releasable/stable product state. Incomplete v2.4.0 architecture work stays on its isolated feature branch until qualification and explicit integration.
+
+Do not create a permanent develop branch merely for process aesthetics.
+
+## 15. Exact-HEAD release sequence
+
+1. Freeze architecture/scope.
+2. Implement the full target.
+3. Run targeted + full automated tests.
+4. Record exact candidate HEAD.
+5. Build and prove source/dist parity.
+6. Run Full Real E2E pass 1 on that HEAD.
+7. Run Full Real E2E pass 2 on the same HEAD.
+8. Verify no code/dependency/generated artifact changed.
+9. Create immutable `v2.4.0` tag on exactly that HEAD.
+10. Publish immutable artifacts, checksums, manifest, notes.
+11. Update stable channel/public release metadata.
+
+If final integration creates a new commit, repeat qualification on the new HEAD.
+
+## 16. Post-v2.4 maintenance
+
+After stable v2.4.0:
+
+```text
+compatible defect/security fix → 2.4.1, 2.4.2 ...
+compatible feature             → 2.5.0
+incompatible supported change  → 3.0.0
+```
+
+Do not backport new features into a PATCH release.
+
+## 17. Prohibited practices
+
+- Incrementing version for every phase/audit.
+- Using 2.4.1 for a fix before 2.4.0 exists.
+- Publishing development as stable.
+- Advertising future tags.
+- Moving/deleting/recreating historical tags.
+- Mixing product and FRP versions.
+- Silently adding a feature to an already released PATCH line.
+- Claiming MCP support before implementation/qualification.
+- Preserving a superseded MCP exclusion solely because old tests/scripts still encode it.
+
+## 18. Adoption gate
+
+Before v2.4.0 RC:
+
+```text
+[ ] architecture docs synchronized
+[ ] old MCP exclusion implementation removed/replaced
+[ ] release schema/generator/checks aligned
+[ ] tests aligned to MCP included target
+[ ] exact-SHA development provenance preserved
+[ ] new SQLite schema/version surfaced
+[ ] all product/runtime features implemented
+[ ] release manifest reflects actual candidate bytes
+```

@@ -1,145 +1,382 @@
-# Controlled Egress — Operator Guide
+# Data Relay Link — Internet Access / Controlled Egress
 
-> **Product family:** Data Relay
->
-> **Pillar:** Agentless Controlled Egress (sibling of Secure Remote Access / Data Relay Link inbound)
->
-> **CLI:** `sudo drlink` (action-first; see `docs/CLI_REFERENCE.md`)
->
-> **Default HTTP/HTTPS proxy port:** `6102` (outside published service pool `6000–6098`; not `6080`)
->
-> **Fixed TCP Egress listen pool:** `6200–6299`
+> **Document role:** Protocol and security behavior for the Internet Access plane
+> **Status:** v2.4.0 target architecture; implementation qualification pending
+> **Policy model:** Ordered Internet Access rulebase in SQLite
+> **Architecture:** `CONTROL_PLANE_ARCHITECTURE.md`
 
-## What it is
+## 1. Purpose
 
-Controlled Egress lets hosts on a closed or restricted network reach **only** explicitly approved Internet destinations through a Data Relay Server:
+Internet Access is Data Relay Link's controlled outbound connectivity plane.
 
-- **HTTP/HTTPS forward proxy** (agentless; clients set `HTTP_PROXY` / `HTTPS_PROXY`)
-- **Fixed TCP Egress** (proxy-unaware apps connect to a server-owned listener that relays to one preconfigured FQDN:port)
+It allows protected/restricted hosts to reach only explicitly approved Internet destinations through a Data Relay Link server.
 
-Protected hosts do **not** install Data Relay, frpc, or any agent for HTTP/HTTPS mode. They only set a standard proxy:
+`Controlled Egress` remains the technical capability name. The normal CLI/resource name is `Internet Access`.
 
-```bash
-export HTTP_PROXY=http://datarelay.example.com:6102
-export HTTPS_PROXY=http://datarelay.example.com:6102
-```
-
-HTTPS traffic uses `CONNECT` plus TLS ClientHello SNI binding. Application TLS stays end-to-end between the client and the destination. Data Relay does **not** decrypt TLS. Encrypted Client Hello (ECH) is denied.
-
-HTTP destinations use absolute-form `http://` proxy requests and must be listed
-with protocol HTTP in the guided destination flow (or the matching backend
-protocol when using internal tools). Mixing protocols on the same host:port is
-not allowed without an explicit matching protocol entry.
-
-## Quick start (safe create workflow)
-
-Profiles are always created **DISABLED**. Incomplete policies cannot widen egress.
+## 2. Base flow
 
 ```text
-sudo drlink
-drlink> set internet-profile ubuntu-update
-drlink> set internet-source ubuntu-update 10.0.0.0/24
-drlink> set internet-destination ubuntu-update archive.ubuntu.com 443 https
-drlink> test internet 10.0.0.5 archive.ubuntu.com 443 https
-drlink> show internet-profile ubuntu-update
-drlink> set internet-profile ubuntu-update enabled
+Protected host
+    ↓
+HTTP_PROXY / HTTPS_PROXY
+    ↓
+Data Relay Link Internet Access gateway
+    ↓
+source + destination + protocol/port policy
+    ↓
+approved Internet destination
 ```
 
-`set internet-source` / `set internet-destination` collect CIDR, FQDN, port, and
-protocol through guided prompts when incomplete (no public `--options`).
-`test internet` previews policy + DNS safety only: **no live connect**,
-**no state mutation**.
+The base HTTP/HTTPS path remains agentless on the protected host.
 
-Then on the closed host, set `HTTP_PROXY` / `HTTPS_PROXY` (or app-specific proxy settings). Verify an allowed destination succeeds and a non-allowed destination is denied.
+## 3. Policy authority
 
-### Fixed TCP Egress (proxy-unaware apps)
+The authoritative policy is not `egress-control.json`.
 
-Each Fixed TCP relay pins **one** listener to **one** exact destination FQDN:port. The connecting client cannot choose destination host, IP, or port.
+v2.4.0 target authority:
 
 ```text
-sudo drlink
-drlink> set fixed-tcp vendor-license
-# follow guided Fixed TCP prompts, then:
-drlink> set fixed-tcp vendor-license enabled
+/var/lib/drlink/drlink.db
 ```
 
-Relays are always created **DISABLED**. Listen ports auto-allocate from **6200–6299** unless the operator chooses a listen port in the guided flow. Runtime: `drlink-tcp-egress.service`.
+Internet Access uses neutral Objects/Object Groups and an ordered rulebase.
 
-### Templates (never auto-enable)
+Example:
 
 ```text
-drlink> show internet
-drlink> show internet-templates
-drlink> set internet-profile my-api template <TEMPLATE>
-# then set sources if needed, test, enable
+#   NAME              SOURCE       DESTINATION   SERVICE      ACTION
+10  block-github-db   database     github        HTTPS/443    DENY
+20  approved-web      internal1    external2     HTTPS/443    ALLOW
+
+Implicit Default                                          DENY
 ```
 
-Older `egress*` / `recipe` forms may still run as hidden compatibility aliases.
-They are not the advertised CLI.
+Evaluation is top-down and the first complete match wins.
 
-## Firewall responsibility
+## 4. Destination types
 
-Data Relay never modifies customer firewalls, Security Groups, UFW, iptables, or DNS.
-
-Example customer policy:
+Supported target architecture:
 
 ```text
-ALLOW closed-network → DATA_RELAY_IP:6102
-DENY  closed-network → Internet:any
+FQDN
+public Host IP
+public CIDR
+compatible Object Group
 ```
 
-## Security model
+FQDN remains the preferred mode for services whose addresses change through DNS/CDN infrastructure.
 
-| Control | Behavior |
-|---------|----------|
-| Default | DENY |
-| Fail closed | Missing/corrupt/invalid policy ⇒ DENY |
-| Caller auth | Source IP / CIDR (agentless) |
-| Destination | Exact FQDN or strict `*.suffix` + port + **protocol** |
-| Protocol | Required `http`, `https`, or `tcp` per destination |
-| Public Suffix | `*.com` / `*.co.uk`-class wildcards rejected via pinned PSL (HTTP/HTTPS); Fixed TCP is exact FQDN only |
-| IP literals | Denied by default |
-| DNS | Resolved on the Data Relay server; every candidate IP validated; mixed public+unsafe ⇒ DENY ALL |
-| SSRF | Private, loopback, link-local, ULA, metadata (`169.254.169.254`), multicast/reserved denied |
-| DNS rebinding | Resolve once → validate → connect to that exact IP (no DNS re-resolution at connect) |
-| Fixed TCP | Client cannot negotiate destination; one relay = one FQDN:port |
-| Policy reload (Option B) | Gateway/TCP runtime reload `egress-control.json` on mtime change; new authorizations always use current policy |
-| Secrets in logs | Proxy-Authorization, cookies, bodies, TLS/TCP payloads are not logged |
+A public IP/CIDR rule is explicit policy, not a bypass around FQDN security.
 
-Inbound Access Control (`access-control.json`) and Egress Control (`egress-control.json`) are **separate policy planes**.
+## 5. Source types
 
-## Public Suffix List
+Internet Access Source accepts context-valid Host/Network Objects and compatible Object Groups.
 
-Wildcard destinations are checked against a **pinned** Public Suffix List snapshot:
+The base agentless HTTP/HTTPS proxy observes network source identity. Per-host cryptographic identity is not invented where the protected application is simply using a standard proxy.
 
-- Module: `lib/frp_public_suffix.py`
-- Data: `lib/data/public_suffix_list.dat` (Mozilla PSL; see module header for VERSION/COMMIT)
+## 6. HTTP
 
-Update only from https://publicsuffix.org/list/public_suffix_list.dat and bump the module metadata.
+For approved HTTP requests:
 
-## Windows Update vs Delivery Optimization
+1. Parse the absolute target safely.
+2. Canonicalize the host.
+3. Match source/destination/protocol/port policy.
+4. Resolve and validate destination when DNS is required.
+5. Connect only to a validated address.
+6. Relay application traffic without expanding authorization beyond the matched rule.
 
-Allowlisting Windows Update HTTPS endpoints through Controlled Egress can work when destinations and source CIDRs are explicit. **Delivery Optimization (DO) peer-to-peer / LAN sharing is out of scope** for this proxy: DO may use additional hosts, ports, or non-proxy paths. Prefer WSUS / Microsoft Update over HTTP(S) proxy with a tested destination set, or keep DO disabled on closed hosts that must use the proxy only.
+Malformed or ambiguous requests fail closed.
 
-## Process identity
+## 7. HTTPS CONNECT
 
-`drlink-egress.service` (HTTP/HTTPS) and `drlink-tcp-egress.service` (Fixed TCP) run as dedicated user `drlink-egress` (non-root) with
-systemd hardening (`NoNewPrivileges`, `ProtectSystem=strict`, …). Parent
-directories are traversed with least privilege; registry/enrollment secrets
-remain root-owned and are not writable by the egress account.
+For HTTPS proxying:
 
-## Diagnostics / backup
+```text
+Application
+  ↓
+CONNECT approved.example.com:443
+  ↓
+Data Relay Link policy + DNS/security validation
+  ↓
+validated exact destination IP
+  ↓
+end-to-end TLS between application and destination
+```
 
-- `drlink system diagnostics` checks Internet Access / egress policy validity, HTTP listen (`6102`), Fixed TCP listeners (`6200–6299`), and gateway/TCP unit state (read-only).
-- After diagnostics hints, inspect with `show internet-profiles` / `show internet` / `test internet`.
-- Server backup/restore includes `var/lib/drlink/egress-control.json` (profiles + Fixed TCP relays).
+Base Internet Access does not terminate application TLS.
 
-## Verified client patterns
+## 8. SNI / host binding
 
-Exercised in automated tests with a local harness:
+Where the implementation can observe TLS SNI for CONNECT validation, the requested CONNECT host and observed SNI must not be allowed to diverge in a way that bypasses destination policy.
 
-- HTTP GET / POST via absolute-form proxy requests (`protocol=http`)
-- HTTPS-style `CONNECT` tunnel establishment with SNI binding (`protocol=https`; TLS payload not inspected)
-- Fixed TCP relay to an echo/TCP service (`protocol=tcp`; destination pinned)
+If the implementation cannot safely bind the request to the expected destination identity, fail closed.
 
-Field apps that speak standard HTTP(S) proxies (`curl`, `wget`, package managers, `git` HTTPS) are expected to work when pointed at the proxy. Proxy-unaware TCP apps use Fixed TCP listeners. Validate each app in your environment before production cutover.
+## 9. ECH
+
+If Encrypted ClientHello prevents required destination/SNI validation in a security path that depends on it, the connection must not silently bypass the check. The implementation may deny the affected connection unless another verified binding mechanism is available.
+
+## 10. DNS resolution
+
+Destination DNS is resolved by the Data Relay Link server for policy/security decisions.
+
+Preferred sequence:
+
+```text
+resolve
+→ validate every candidate IP
+→ select a validated exact IP
+→ connect to that exact IP
+```
+
+Policy validation and connection must not use unrelated DNS resolutions that permit rebinding between check and use.
+
+## 11. SSRF and special-address protection
+
+Internet Access must reject unsafe destinations by default, including as applicable:
+
+```text
+loopback
+private/RFC1918 where the Internet plane must not reach private targets
+link-local
+multicast
+reserved/special-use
+IPv6 loopback/link-local/ULA where unsafe
+cloud metadata endpoints
+169.254.169.254
+```
+
+Example:
+
+```text
+allowed.example.com
+→ DNS returns 169.254.169.254
+→ DENY
+```
+
+The exact special-address classification must use maintained platform/library semantics and regression tests.
+
+## 12. DNS rebinding resistance
+
+A host that resolves to an allowed public IP during policy evaluation and then to a blocked local address during connection must not succeed.
+
+The validated address is the address actually connected to.
+
+## 13. FQDN canonicalization
+
+At minimum normalize/validate:
+
+```text
+case
+trailing dot
+IDNA/Punycode handling
+empty labels
+invalid labels
+wildcard boundary semantics
+public suffix safety where wildcard rules are supported
+```
+
+Ambiguity fails closed.
+
+## 14. IP literals
+
+Direct IP literals are allowed only through explicit Host/public Network policy and corresponding safety checks.
+
+An IP literal does not inherit an FQDN allow merely because DNS could map that FQDN to the IP.
+
+## 15. Protocol and port
+
+Rules match protocol/port explicitly.
+
+Examples:
+
+```text
+HTTPS/443
+HTTP/80
+TCP/443
+```
+
+A destination Object alone never implies all ports.
+
+## 16. Wildcards
+
+If controlled FQDN wildcard support is retained, it is narrow and boundary-aware.
+
+Acceptable concept:
+
+```text
+*.githubusercontent.com
+```
+
+Unsafe broad forms such as generic public-suffix-wide authorization are rejected.
+
+## 17. Fixed TCP
+
+Fixed TCP supports approved applications that cannot use HTTP/HTTPS proxy semantics.
+
+It must reuse the same Internet Access authorization authority and may not maintain an independent permissive destination list.
+
+Conceptual flow:
+
+```text
+protected host
+→ Data Relay Link fixed listener
+→ source authorization
+→ configured destination Object / protocol / port
+→ validated destination
+→ TCP relay
+```
+
+Fixed TCP cannot bypass unsafe destination checks or implicit default DENY.
+
+## 18. Rule timing
+
+Canonical behavior:
+
+> **Policy changes apply immediately to new connections.**
+
+An existing established proxy/TCP connection is not implicitly terminated solely because a later policy edit would deny a new connection.
+
+## 19. Rule creation safety
+
+New Internet Access rules are created disabled at the bottom.
+
+Enabling or moving a rule runs:
+
+```text
+context validation
+shadow/conflict analysis
+policy-impact analysis
+access-broadening confirmation when required
+```
+
+## 20. Object changes
+
+Object/Object Group mutation can change Internet Access without changing a Rule row.
+
+Example:
+
+```text
+external2 before:
+  google.com
+  naver.com
+
+after:
+  google.com
+  naver.com
+  openai.com
+```
+
+If an enabled ALLOW rule references `external2`, adding `openai.com` is access broadening and requires impact analysis/confirmation.
+
+## 21. Shadowing
+
+Overlapping rules are valid.
+
+Example:
+
+```text
+10 allow-web   internal1 → external2 → HTTPS/443 → ALLOW
+20 block-openai internal1 → openai    → HTTPS/443 → DENY
+```
+
+If `openai` becomes a member of `external2`, rule 20 can become shadowed. The operator is warned before the effective behavior is broadened.
+
+## 22. Test/explain
+
+Canonical example:
+
+```text
+test internet-access 10.10.10.20 google.com 443 https
+```
+
+The result should show:
+
+```text
+Source Object matches
+Destination Object matches
+DNS/security validation
+Rule #10 ... MATCH / NO MATCH
+First complete match
+Not-evaluated later rules
+Final action
+```
+
+`test` is policy explanation unless explicitly documented as a live connection test.
+
+## 23. Audit
+
+Record bounded metadata such as:
+
+```text
+timestamp
+source address
+requested host/address
+destination port/protocol
+matched rule
+action
+safe failure reason
+configuration revision
+```
+
+Do not log application payloads, proxy credentials, destination TLS contents, or sensitive URL query strings by default.
+
+## 24. Resource protection
+
+The gateway applies reasonable:
+
+```text
+connect timeout
+idle timeout
+maximum concurrency
+header/request size limits
+defensive parsing
+rate/resource protections where needed
+```
+
+Failure to allocate or validate resources must not convert into an allow bypass.
+
+## 25. Runtime compilation
+
+Internet Access runtime policy is compiled from the SQLite revision and activated atomically.
+
+System status must report the active revision.
+
+A DB/runtime revision mismatch is not healthy.
+
+## 26. Backup and restore
+
+Internet Access policy is backed up through the consistent control-plane SQLite snapshot.
+
+Derived runtime files are regenerated after restore and are not the recovery authority.
+
+## 27. Legacy transition
+
+Legacy `internet-profile`, Egress Profile, and authoritative `egress-control.json` semantics are development-history concepts and are not the v2.4.0 target control model.
+
+The implementation phase migrates or replaces them without dual authoritative state.
+
+## 28. Real E2E
+
+Minimum final qualification includes:
+
+```text
+approved HTTP destination                  PASS
+approved HTTPS CONNECT                     PASS
+unapproved destination                     DENY
+wrong destination port                     DENY
+unapproved source                          DENY
+public Host/CIDR explicit policy            PASS where supported
+loopback/private/link-local/metadata       DENY
+DNS rebinding-style attempt                 DENY
+IP literal bypass                           DENY
+wildcard boundary bypass                    DENY
+malformed CONNECT                           DENY
+policy order / first-match                  PASS
+explicit DENY exception                     PASS
+object-change impact                        PASS
+restart                                     policy preserved
+backup/restore                              policy preserved
+DB/runtime mismatch                         fail closed / surfaced
+```
+
+Real application qualification continues to include `curl`, `wget`, `git`, `apt`, and representative vendor/API HTTPS use cases where applicable.

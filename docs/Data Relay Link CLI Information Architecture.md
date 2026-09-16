@@ -1,39 +1,40 @@
 # Data Relay Link — Canonical CLI Information Architecture
 
-> **Document role:** Canonical CLI UX / Information Architecture Specification  
-> **Product:** Data Relay Link  
-> **Primary CLI:** `drlink`  
-> **Status:** Normative / Living Document  
-> **Applies to:** Data Relay Link v2.4.0 and later unless explicitly superseded  
-> **Related documents:** `PRODUCT_MASTER.md`, `CLI_REFERENCE.md`
+> **Document role:** Canonical CLI UX / information architecture
+> **Status:** Approved v2.4.0 target; implementation qualification pending
+> **Primary CLI:** `drlink`
+> **Architecture:** `CONTROL_PLANE_ARCHITECTURE.md`
 
----
+## 1. Purpose
 
-# 1. Purpose
+This document defines how Data Relay Link presents the v2.4.0 control-plane model to operators.
 
-This document defines the canonical user experience and information architecture for the Data Relay Link command-line interface.
+The CLI must be understandable to a first-time operator and predictable for an experienced operator. It must also make security-impacting changes explicit.
 
-It answers the following questions:
+The canonical mental model is:
 
-- What should a first-time user see after running `sudo drlink`?
-- How should commands and features be grouped?
-- Which terminology is user-facing?
-- How should server, client, and dual-role hosts differ?
-- How should direct commands differ from guided navigation?
-- How should `?`, `help`, Tab completion, and menus behave?
-- Which implementation terms must remain hidden?
-- How should Zero-Touch onboarding be presented?
-- How should CLI evolution avoid returning to a flat or implementation-oriented design?
+```text
+Clients
+Objects
+Remote Access
+Internet Access
+AI Access
+System
+```
 
-This document is the canonical source for CLI UX and navigation decisions.
+The old canonical model based on generic Groups, Service Profiles, Access Rules, and Internet Profiles is superseded.
 
-Implementation details may change, but the concepts and user-facing structure defined here must not change without an explicit product UX decision.
+## 2. Two interfaces, one semantic model
 
----
+### Direct interface
 
-# 1.1 Final public root contract (v2.4.0)
+Experienced operators and automation use action-first commands:
 
-Server / dual-role public roots are exactly:
+```text
+drlink <ACTION> <RESOURCE> [TARGET] [PROPERTY] [VALUE]
+```
+
+Canonical direct roots:
 
 ```text
 show
@@ -46,172 +47,21 @@ help
 exit
 ```
 
-Client-only roots are exactly:
+### Guided interface
+
+Interactive mode is task/domain oriented:
 
 ```text
-show
-set
-unset
-system
-menu
-help
-exit
-```
-
-Mental model:
-
-```text
-show   = see current state
-set    = create / add / configure / modify / enable desired state
-unset  = remove / delete / revoke / release / disable desired state
-test   = evaluate without changing state
-system = low-frequency system/maintenance operations
-```
-
-There are no other public root commands.
-
----
-
-# 2. CLI Design Goals
-
-The Data Relay Link CLI is designed for environments with approximately:
-
-```text
-1–50 clients
-```
-
-with the primary focus on a few to a few dozen systems.
-
-The CLI must therefore optimize for:
-
-```text
-easy discovery
-low learning cost
-clear terminology
-safe operation
-fast expert usage
-minimal documentation dependency
-```
-
-The product is intentionally not designed as a large-scale enterprise fleet orchestration system.
-
-The CLI should feel understandable to an operator who has never read the documentation.
-
----
-
-# 3. Two User Interfaces, One CLI
-
-Data Relay Link intentionally provides two different CLI interaction models.
-
-They serve different users and must not be forced into the same structure.
-
-## 3.1 Direct command interface
-
-Experienced users and automation use the final public grammar:
-
-```text
-show | set | unset | test | system | menu | help | exit
-```
-
-Examples:
-
-```text
-show status
-show clients
-show client <ID>
-show services
-
-set client
-set enrollment
-
-set client <ID> label production
-set client <ID> group <GROUP>
-
-unset enrollment <ID>
-unset client <ID> trust
-unset client <ID> service <SERVICE>
-unset client <ID>
-
-system update product
-system update check-engine
-system diagnostics
-```
-
-The direct interface prioritizes:
-
-```text
-speed
-scriptability
-predictable grammar
-Tab completion
-```
-
-## 3.2 Guided interactive interface
-
-A new or occasional user should not need to learn the command grammar first.
-
-Interactive navigation is therefore organized by **what the user wants to manage**, not by parser verbs.
-
-The canonical server navigation is:
-
-```text
-Clients
-Services
-Internet Access
-System
-```
-
-This distinction is fundamental:
-
-```text
-COMMANDS
-=
-canonical scriptable grammar
-
-NAVIGATION
-=
-human task-oriented information architecture
-```
-
-The direct command tree and the guided menu must share capabilities but do not need to have the same shape.
-
----
-
-# 4. Canonical Mental Model
-
-A user should only need to understand four concepts.
-
-```text
-Clients
-=
-Which machines are connected?
-
-Services
-=
-What services are published and who may reach them?
-
-Internet Access
-=
-Where may protected/client networks connect outbound?
-
-System
-=
-How is Data Relay Link itself operated?
-```
-
-Everything else belongs underneath these concepts.
-
----
-
-# 5. Canonical Server Root Navigation
-
-Running:
-
-```bash
 sudo drlink
 ```
 
-on a Data Relay Link server should expose the following primary navigation:
+The menu preserves selected-object context and hides implementation terms.
+
+Direct and guided paths must call the same validation, impact-analysis, transaction, revision, and policy compiler paths.
+
+## 3. Server root
+
+Canonical server root:
 
 ```text
 Data Relay Link
@@ -220,508 +70,147 @@ Data Relay Link
 1) Clients
    Connect and manage client machines
 
-2) Services
-   View published services and control who can reach them
+2) Objects
+   Define reusable hosts, networks and destinations
 
-3) Internet Access
-   Allow clients to reach approved Internet destinations
+3) Remote Access
+   Control inbound access to published services
 
-4) System
-   Status, settings, backup, updates and diagnostics
+4) Internet Access
+   Control approved outbound Internet access
 
-5) Help
+5) AI Access
+   Control AI/MCP access to managed endpoints
 
-6) Exit
+6) System
+   Status, audit, revisions, backup, updates and diagnostics
+
+7) Help
+8) Exit
 ```
 
-These labels are canonical.
+These root labels are normative.
 
-The following terms must not be used as primary root navigation categories:
+## 4. Client-only root
+
+A client-only host does not expose server policy/control-plane areas:
 
 ```text
-Remote Access
-Controlled Egress
-Organize
-Operate
-Inventory
-Lifecycle
-Policy
-Resources
-Management
+Data Relay Link
+===============
+
+1) Published Services
+2) System
+3) Help
+4) Exit
 ```
 
-Some of those terms remain valid architecture or implementation terminology, but they are not the first concepts a user should have to understand.
+Client-side Published Service definition/editing remains local unless the product explicitly implements server-driven mutation.
 
----
+## 5. Dual-role host
 
-# 6. Product Terminology vs Navigation Terminology
-
-Data Relay Link architecture still has two major product capabilities:
+A dual-role host uses the server root. Where necessary, Published Services distinguishes:
 
 ```text
-Secure Remote Access
-Controlled Egress
+Published services from managed clients
+Local published services on this machine
 ```
 
-These remain valid product and technical terms.
-
-However, interactive navigation uses more immediately understandable language.
-
-```text
-Secure Remote Access
-→ represented through Clients + Services
-
-Controlled Egress
-→ presented to users as Internet Access
-```
-
-This prevents ambiguous menu labels such as `Remote Access`, which may sound like an action that immediately starts a remote session.
-
----
-
-# 7. User-Facing Terminology Contract
-
-The following terminology is canonical for menus and normal user-facing output.
-
-## Clients
-
-Machines connected to Data Relay Link.
-
-Examples:
-
-```text
-Linux server
-Windows workstation
-macOS machine
-GPU server
-Mac Studio
-```
-
-## Services
-
-Services published from clients through Data Relay Link.
-
-Examples:
-
-```text
-SSH
-HTTP
-HTTPS
-RDP
-Custom TCP
-```
-
-## Groups
-
-Collections of clients for easier organization.
-
-Groups belong under:
-
-```text
-Clients
-```
-
-## Service Profiles
-
-Reusable templates for creating services.
-
-Service Profiles belong under:
-
-```text
-Services
-```
-
-## Access Rules
-
-Rules controlling which source IP addresses may connect to published services.
-
-Public direct-command resources:
-
-```text
-access-rule
-access-rules
-access-source
-service-access
-```
-
-Beginner-facing navigation uses:
-
-```text
-Access Rules
-```
-
-Internal completion provider identifiers may still say `access-lists`; that is
-not public CLI vocabulary.
-
-## Internet Access
-
-Approved outbound connectivity from protected/client networks to Internet destinations.
-
-This is the user-facing navigation term for:
-
-```text
-Controlled Egress
-```
-
-## Access Profiles
-
-Internet Access policy profiles.
-
-The backend/direct-command resource may continue to use:
-
-```text
-egress-profile
-```
-
-## Fixed TCP
-
-Outbound TCP access for applications that cannot use HTTP/HTTPS proxy semantics.
-
-## Templates
-
-Predefined starting configurations for Internet Access.
-
-Backend implementation may continue to call these:
-
-```text
-egress recipes
-```
-
-but the normal guided UI uses:
-
-```text
-Templates
-```
-
-## Diagnostics
-
-Health and troubleshooting functions.
-
-The direct command remains:
-
-```text
-system diagnostics
-```
-
-## Relay Engine (FRP)
-
-When the upstream FRP component must be exposed to the user, prefer:
-
-```text
-Relay Engine (FRP)
-```
-
-FRP is the implementation/upstream relay engine, not the Data Relay Link product identity.
-
----
-
-# 8. Clients Navigation
-
-Canonical server submenu:
-
-```text
-Clients
-=======
-
-1) Connect a new client
-2) List clients
-3) View or manage a client
-4) Groups
-5) Enrollments
-6) Back
-```
-
----
-
-# 9. Connect a New Client
-
-The normal onboarding task is:
-
-```text
-Connect a new client
-```
-
-A first-time operator should not need to understand:
-
-```text
-Zero-Touch
-Bootstrap ticket
-Enrollment internals
-```
-
-before connecting a machine.
-
-The guided workflow internally maps to:
-
-```text
-set client
-```
-
-but the user-facing task remains:
-
-```text
-Connect a new client
-```
-
----
-
-# 10. Zero-Touch Onboarding Flow
-
-The canonical high-level flow is:
-
-```text
-Connect a new client
-        ↓
-Select platform
-        ↓
-Client details
-        ↓
-Configure service(s)
-        ↓
-Review
-        ↓
-Generate Zero-Touch command
-```
-
-## 10.1 Platform
-
-```text
-Platform
-========
-
-1) Linux
-2) Windows
-3) Back
-```
-
-## 10.2 Client details
-
-Collected exactly once:
-
-```text
-Client details
-==============
-
-Client name:
-Description [optional]:
-```
-
-`Description` is optional.
-
-Leaving it blank must not trigger another identification prompt later in the workflow.
-
-The same `Client identification` step must never appear twice during one onboarding flow.
-
----
-
-# 11. Linux Service Setup
-
-Canonical Linux onboarding choices:
-
-```text
-How do you want to configure this client?
-
-1) SSH only
-2) Choose services
-3) Back
-```
-
-The following option must not be offered during new onboarding:
-
-```text
-Connect this machine only
-(management-only; no published services)
-```
-
-New onboarding requires at least one useful service.
-
----
-
-# 12. Windows Service Setup
-
-Canonical Windows onboarding choices:
-
-```text
-How do you want to configure this client?
-
-1) RDP only
-2) SSH only
-3) Choose services
-4) Back
-```
-
-Windows bootstrap security requirements remain unchanged.
-
-The secure flow remains:
-
-```text
-download PowerShell bootstrap
-        ↓
-verify expected SHA256
-        ↓
-execute verified file
-```
-
-Shorter commands must never weaken hash-before-execute behavior.
-
----
-
-# 13. Management-Only State
-
-There is an important difference between:
-
-```text
-NEW onboarding with zero services
-```
-
-and:
-
-```text
-an EXISTING enrolled client with zero remaining services
-```
-
-The canonical contract is:
-
-```text
-INITIAL_ONBOARDING_REQUIRES_AT_LEAST_ONE_SERVICE=YES
-
-MANAGEMENT_ONLY_INITIAL_ONBOARDING_OPTION=NO
-
-EXISTING_CLIENT_MAY_HAVE_ZERO_SERVICES=YES
-```
-
-For example:
-
-```text
-client has SSH service
-        ↓
-operator releases SSH reservation
-        ↓
-client remains enrolled
-        ↓
-client now has zero published services
-```
-
-This is valid.
-
-Therefore removal of the management-only onboarding option must not break existing zero-service lifecycle states.
-
----
-
-# 14. View or Manage a Client
-
-After a client is selected, the CLI should preserve that selection as context.
-
-Example:
-
-```text
-Client: 24cd7856
-Label : production
-
-1) Overview
-2) Services
-3) Details and tags
-4) Groups
-5) Revoke management trust
-6) Remove client from server
-7) Back
-```
-
-The CLI should not repeatedly ask the operator to enter the same CLIENT ID.
-
-Mappings:
-
-```text
-Overview
-→ show client <ID>
-
-Services
-→ show client <ID> services
-
-Details and tags
-→ show / set / unset client metadata
-
-Groups
-→ set / unset client <ID> group …
-
-Revoke management trust
-→ unset client <ID> trust
-
-Remove client from server
-→ unset client <ID>
-```
-
----
-
-# 15. Revoke vs Release
-
-These operations must remain distinct.
-
-## Revoke client trust
-
-```text
-unset client <ID> trust
-```
-
-Blocks the client's management trust.
-
-It does not release all reservations.
-
-Legacy compatibility (hidden): `revoke client <ID>` — see `help legacy`.
-
-## Release service
-
-```text
-unset client <CLIENT> service <SERVICE>
-```
-
-Releases one service reservation.
-
-The client remains enrolled.
-
-Legacy compatibility (hidden): `release service <CLIENT> <SERVICE>` — see `help legacy`.
-
-## Release client
-
-```text
-unset client <ID>
-```
-
-Legacy compatibility (hidden): `release client <ID>` — see `help legacy`.
-
-Removes:
-
-```text
-client registry record
-management identity
-all service reservations
-all public ports
-```
-
-It does not:
-
-```text
-delete the remote machine
-uninstall Data Relay Link on the remote machine
-```
-
-Guided confirmations must explain these effects clearly.
-
----
-
-# 16. Groups
-
-Groups belong under:
-
-```text
-Clients
-```
+Do not expose implementation roles as the primary root hierarchy.
+
+## 6. Canonical terminology
+
+| Canonical term | Meaning | Supersedes / avoids |
+|---|---|---|
+| Client | Enrolled Data Relay Link client | — |
+| Managed Endpoint | Policy-visible managed identity for a Client | treating hostname/IP as identity |
+| Client Group | Operational collection of Clients | generic `group` ambiguity |
+| Object | Neutral Host/Network/FQDN/Managed Endpoint policy object | source-object / destination-object |
+| Object Group | Reusable network-policy Object collection | generic group ambiguity |
+| Published Service | Inbound relay definition | ambiguous `Service` |
+| Service Preset | Creation-time Published Service template | Service Profile |
+| Remote Access | Inbound policy plane | ACL / Access Rule as primary UX |
+| Internet Access | Outbound policy plane | Internet Profile as primary UX |
+| AI Principal | Authenticated AI/MCP identity | AI as Network Object |
+| AI Access | AI capability policy plane | mixing MCP into Remote Access |
+| Diagnostics | Health/troubleshooting | internal tool names |
+
+`Controlled Egress` remains a technical capability description, but `Internet Access` is the normal CLI navigation/resource name.
+
+## 7. Clients
 
 Canonical submenu:
 
 ```text
-Groups
-======
+Clients
+-------
+
+1) Connect a new client
+2) List clients
+3) View or manage a client
+4) Client Groups
+5) Enrollments
+6) Back
+```
+
+### Connect a new client
+
+Guided flow:
+
+```text
+platform
+→ client name / description
+→ initial Published Service(s)
+→ review
+→ create Zero-Touch bootstrap
+```
+
+Initial onboarding requires at least one useful Published Service unless an explicit future product decision changes that contract.
+
+An existing client may later have zero services after releases/removals.
+
+### Selected client
+
+```text
+Client: <LABEL>
+Client ID: <ID>
+
+1) Overview
+2) Managed Endpoint
+3) Published Services
+4) Details and tags
+5) Client Groups
+6) Revoke management trust
+7) Remove client from server
+8) Back
+```
+
+The operator should not re-enter the Client ID for each action.
+
+## 8. Managed Endpoint view
+
+A selected Client exposes its policy identity and local address inventory:
+
+```text
+Managed Endpoint: dp1
+Status: Connected
+Client ID: facc9a57
+
+Addresses
+---------
+10.10.10.10   eth0    private   active
+192.168.122.1 virbr0  private   active
+```
+
+Managed Endpoint is viewable but not manually created/deleted from Object CRUD.
+
+An Orphaned endpoint view explains why it remains referenced.
+
+## 9. Client Groups
+
+```text
+Client Groups
+=============
 
 1) List groups
 2) Create group
@@ -732,381 +221,445 @@ Groups
 Selected group:
 
 ```text
-Group: <NAME>
+Client Group: <NAME>
 
 1) Overview
 2) Rename / description
-3) View members
+3) Members
 4) Add client
 5) Remove client
 6) Delete group
 7) Back
 ```
 
-Do not create a separate `Organize` root merely for Groups and Profiles.
+Client Group is distinct from Object Group.
 
-Place concepts near the objects they organize.
-
----
-
-# 17. Enrollments
-
-Enrollments are an advanced onboarding/lifecycle function under:
-
-```text
-Clients
-```
-
-Canonical submenu:
+## 10. Enrollments
 
 ```text
 Enrollments
 ===========
 
-Manual codes and recent/pending client enrollments.
-
 1) List enrollments
-2) Create manual enrollment code
-3) Create enrollment codes in bulk
-4) Revoke active enrollment
-5) Delete terminal enrollment record
+2) Create manual enrollment
+3) Create Zero-Touch enrollment
+4) Revoke enrollment
+5) Delete terminal record
 6) Back
 ```
 
-Canonical direct commands:
+Security-sensitive tickets/secrets are not shown after their one-time issuance window unless explicitly required by a safe workflow.
 
-```text
-show enrollments
-set enrollment
-set enrollments
-revoke enrollment <ID>
-delete enrollment <ID>
-```
-
-Normal Zero-Touch onboarding should remain under:
-
-```text
-Clients
-→ Connect a new client
-```
-
----
-
-# 18. Services Navigation
-
-Canonical server submenu:
-
-```text
-Services
-========
-
-Published services and inbound access control.
-
-1) List published services
-2) View a client's services
-3) Access Rules
-4) Service Profiles
-5) Release a service reservation
-6) Back
-```
-
-The server must not pretend to remotely edit local service definitions if that capability does not exist.
-
-Where appropriate, display:
-
-```text
-Service definitions are changed on the client.
-Use drlink on that client to add or edit services.
-```
-
-Do not invent remote mutation behavior for UX convenience.
-
----
-
-# 19. Access Rules
-
-Access Rules belong under:
-
-```text
-Services
-```
-
-because they control access to published services.
+## 11. Objects
 
 Canonical submenu:
 
 ```text
-Access Rules
-============
+Objects
+-------
 
-Control which source IPs may reach published services.
+1) List objects
+2) Create object
+3) View or edit object
+4) Object Groups
+5) Find references
+6) Back
+```
 
-1) List rules
-2) Create rule
-3) View or edit rule
-4) Assign rule to a service
-5) Set service to public access
-6) Check access for a source IP
-7) Recent access decisions
-8) Back
+Object list should distinguish static and managed origin:
+
+```text
+NAME          TYPE              SOURCE       STATUS
+external1     Network           Static       -
+external2     FQDN              Static       -
+internal1     Network           Static       -
+dp1           Managed Endpoint  Data Relay   Connected
+```
+
+## 12. Create Object
+
+Guided static Object creation:
+
+```text
+Name
+→ Type: Host | Network | FQDN
+→ Value(s)
+→ Description [optional]
+→ Reference/policy impact preview if applicable
+→ Commit
+```
+
+`Managed Endpoint` is not a user-selectable creation type.
+
+Object values are validated and normalized before commit.
+
+## 13. Selected Object
+
+```text
+Object: external2
+Type: FQDN
+
+1) Overview
+2) Values
+3) Name / description
+4) References
+5) Delete
+6) Back
+```
+
+Adding/removing values runs policy-impact analysis before commit.
+
+If access broadens, interactive confirmation is default-deny:
+
+```text
+Continue? [y/N]:
+```
+
+Delete is refused while references exist.
+
+## 14. Object Groups
+
+```text
+Object Groups
+=============
+
+1) List groups
+2) Create group
+3) View or manage group
+4) Back
+```
+
+Selected group:
+
+```text
+Object Group: <NAME>
+
+1) Overview
+2) Members
+3) Add member
+4) Remove member
+5) References
+6) Delete
+7) Back
+```
+
+Cycle creation is rejected. A context-invalid group assignment fails as a whole; invalid members are never silently skipped.
+
+## 15. Remote Access
+
+Canonical submenu:
+
+```text
+Remote Access
+=============
+
+1) Overview
+2) Rules
+3) Published Services
+4) Service Presets
+5) Test access
+6) Recent decisions
+7) Back
+```
+
+Remote Access uses an ordered top-down first-match rulebase with explicit ALLOW/DENY and implicit default DENY.
+
+## 16. Remote Access Rules
+
+List view:
+
+```text
+#   NAME               SOURCE       DESTINATION   SERVICE     ACTION   STATUS
+10  block-dp1-ssh      external1    dp1           TCP/22      DENY     enabled
+20  partner-ssh        external1    internal1     TCP/22      ALLOW    enabled
+30  partner-web        external1    internal1     TCP/443     ALLOW    enabled
+
+Implicit Default                                           DENY
+```
+
+Rule creation flow:
+
+```text
+Name
+→ Source
+→ Destination
+→ Protocol / port
+→ Action ALLOW|DENY
+→ create Disabled at bottom
+→ policy/shadow analysis
+→ optional enable
 ```
 
 Selected rule:
 
 ```text
-Access Rule: <NAME>
+Remote Access Rule: partner-ssh
 
 1) Overview
-2) Name / description
-3) Allowed sources
-4) Remove expired sources
-5) Delete rule
-6) Back
+2) Source
+3) Destination
+4) Protocol / port
+5) Action
+6) Enable / Disable
+7) Move before / after
+8) Explain impact
+9) Delete
+10) Back
 ```
 
-Security behavior is not changed by this terminology.
+Changing order runs shadow/conflict and effective-action analysis.
 
----
-
-# 20. Service Profiles
-
-Service Profiles belong under:
-
-```text
-Services
-```
+## 17. Published Services
 
 Canonical submenu:
 
 ```text
-Service Profiles
-================
+Published Services
+==================
 
-Reusable templates for creating services.
-
-1) List profiles
-2) Create profile
-3) View or edit profile
-4) Delete profile
+1) List services
+2) View service
+3) Create service on local/client context where supported
+4) Service Presets
 5) Back
 ```
 
-Profiles are templates.
-
-They must not imply ownership of:
+A service view must show effective-target semantics:
 
 ```text
-public ports
-client identity
-access assignments
-existing services
-```
-
-unless existing product behavior explicitly provides it.
-
----
-
-# 21. Internet Access
-
-Canonical root:
-
-```text
-Internet Access
-```
-
-Description:
-
-```text
-Allow clients to reach approved Internet destinations.
-Everything else remains denied by default.
-```
-
-Canonical submenu:
-
-```text
-Internet Access
-===============
-
-1) Overview
-2) Access Profiles
-3) Fixed TCP
-4) Templates
-5) Check policy
-6) Back
-```
-
-This is the guided UI for the Controlled Egress capability.
-
----
-
-# 22. Internet Access — Security Model
-
-Changing the menu name from Controlled Egress to Internet Access must not change its security semantics.
-
-The existing security model remains authoritative:
-
-```text
-default DENY
-explicit approved destinations
-explicit protocol
-approved sources
-FQDN validation
-DNS rebinding protection
-no implicit allow
-```
-
-UI simplification must never weaken policy enforcement.
-
----
-
-# 23. Access Profiles
-
-Canonical submenu:
-
-```text
-Access Profiles
-===============
-
-1) List profiles
-2) Create profile
-3) View or manage profile
-4) Import profile
-5) Compare with import file
-6) Back
-```
-
-Selected profile:
-
-```text
-Profile: <NAME>
-
-1) Overview
-2) Name / description
-3) Allowed sources
-4) Allowed destinations
-5) Check policy
-6) Enable / Disable
-7) Export
-8) Delete profile
-9) Back
-```
-
-New profiles remain disabled until explicitly enabled.
-
----
-
-# 24. Fixed TCP
-
-Canonical label:
-
-```text
-Fixed TCP
-```
-
-Description:
-
-```text
-Outbound TCP access for applications that cannot use an HTTP/HTTPS proxy.
-```
-
-Canonical submenu:
-
-```text
-Fixed TCP
-=========
-
-1) List Fixed TCP entries
-2) Create Fixed TCP entry
-3) View or manage an entry
-4) Back
-```
-
-Selected entry:
-
-```text
-Fixed TCP: <NAME>
-
-1) Overview
-2) Check source authorization
-3) Enable
-4) Disable
-5) Delete
-6) Back
-```
-
-The underlying direct/backend resource may continue to use `egress-tcp`.
-
----
-
-# 25. Templates
-
-The guided UI uses:
-
-```text
-Templates
-```
-
-instead of the implementation-oriented term:
-
-```text
-Recipes
-```
-
-Canonical submenu:
-
-```text
-Templates
-=========
-
-Predefined starting points for Internet Access configuration.
-
-1) List templates
-2) View template
-3) Create configuration from template
-4) Back
-```
-
-Backend implementation may continue using `egress-recipe`.
-
----
-
-# 26. Check Policy
-
-The Controlled Egress `explain` operation evaluates:
-
-```text
-policy
-+
-DNS
-```
-
-It does not necessarily establish a live connection to the final destination.
-
-Therefore the guided UI should use:
-
-```text
-Check policy
+Published Service: ssh
+Target Mode      : SELF
+Local Target     : 127.0.0.1:22
+Effective Target : dp1
+Public Port      : 6000
+Status           : Enabled
 ```
 
 or:
 
 ```text
-Check whether this access would be allowed
+Published Service: web1
+Target Mode      : ROUTED
+Effective Target : 10.10.10.20:443
+Via              : dp1
+Public Port      : 6001
 ```
 
-It must not misleadingly call this:
+Changing target/mode triggers policy-impact analysis.
+
+## 18. Service Presets
 
 ```text
-Test connection
+Service Presets
+===============
+
+1) List presets
+2) Create preset
+3) View or edit preset
+4) Delete preset
+5) Back
 ```
 
-unless an actual live connectivity test is performed.
+The UI explicitly states:
 
----
+```text
+A Service Preset only supplies initial values.
+Changing it does not change existing Published Services.
+```
 
-# 27. System Navigation
+## 19. Remote Access test
 
-Canonical:
+Guided flow asks for an actual flow:
+
+```text
+Source IP
+Destination IP / endpoint
+Protocol
+Port
+```
+
+Result shows:
+
+```text
+Source object matches
+Destination object matches
+Rule trace
+First complete match
+Published Service match / reachability
+Final result
+```
+
+Do not label policy-only evaluation as a live connectivity test.
+
+## 20. Internet Access
+
+Canonical submenu:
+
+```text
+Internet Access
+===============
+
+1) Overview
+2) Rules
+3) Fixed TCP
+4) Test access
+5) Recent decisions
+6) Back
+```
+
+The old Internet Profile UX is superseded by the ordered rulebase.
+
+## 21. Internet Access Rules
+
+List view:
+
+```text
+#   NAME              SOURCE       DESTINATION   SERVICE      ACTION   STATUS
+10  block-github-db   database     github        HTTPS/443    DENY     enabled
+20  approved-web      internal1    external2     HTTPS/443    ALLOW    enabled
+
+Implicit Default                                          DENY
+```
+
+Creation/edit/order semantics match Remote Access where meaningful.
+
+Destination selection is context-aware and may include FQDN, public Host, public Network, or a compatible Object Group.
+
+## 22. Fixed TCP
+
+Fixed TCP remains available for approved proxy-unaware use cases.
+
+Its public UX must reference the same Object/policy system rather than inventing a third independent destination-list authority.
+
+```text
+Fixed TCP
+=========
+
+1) List entries
+2) Create entry
+3) View or manage entry
+4) Back
+```
+
+The exact low-level listener model remains implementation-defined, but enablement cannot bypass Internet Access source/destination authorization.
+
+## 23. Internet Access test
+
+Example direct equivalent:
+
+```text
+test internet-access 10.10.10.20 google.com 443 https
+```
+
+Guided output includes DNS/security validation where relevant, matched Objects, ordered rule trace, and final action.
+
+## 24. AI Access
+
+Canonical submenu:
+
+```text
+AI Access
+=========
+
+1) Overview
+2) AI Principals
+3) Access Rules
+4) Active / recent operations
+5) Test authorization
+6) Back
+```
+
+AI Access is separate from Remote Access because the decision is capability-oriented rather than packet-oriented. Its rulebase is ordered top-down: first complete match wins, explicit ALLOW/DENY are supported, and no match means implicit DENY.
+
+## 25. AI Principals
+
+```text
+AI Principals
+=============
+
+1) List principals
+2) Add principal
+3) View or manage principal
+4) Disable / enable principal
+5) Revoke credential
+6) Back
+```
+
+Normal output never reveals raw credentials.
+
+Principal detail shows identity/provider binding, enabled state, last-seen metadata, and rule references.
+
+## 26. AI Access Rules
+
+Example list:
+
+```text
+NAME                 PRINCIPAL         TARGETS            CAPABILITIES        STATUS
+readonly-audit       chatgpt-support   production-linux   read_file,system    enabled
+lab-maintenance      cursor-dev        lab-linux          exec,file-rw        enabled
+```
+
+Selected rule:
+
+```text
+AI Access Rule: lab-maintenance
+
+1) Overview
+2) Principal
+3) Targets
+4) Capabilities
+5) Path scopes
+6) Exec constraints
+7) Action: ALLOW / DENY
+8) Enable / Disable
+9) Move before / after
+10) Explain impact
+11) Delete
+12) Back
+```
+
+Target selectors are Managed Endpoints and Client Groups. New AI Access rules are created disabled at the bottom. Multiple targets/capabilities within one rule are OR; Principal, Target, Capability, and applicable constraints must all match for a complete rule match.
+
+## 27. AI capability safety
+
+The CLI must warn when a user grants `exec` while describing a role as read-only.
+
+Canonical explanation:
+
+```text
+exec can modify the target through shell/OS permissions.
+A true read-only AI role requires exec disabled.
+```
+
+Path-scope changes and capability additions participate in access-broadening confirmation.
+
+## 28. AI authorization test
+
+Guided test accepts:
+
+```text
+Principal
+Target
+Tool / capability
+Path or command metadata where applicable
+```
+
+Result shows:
+
+```text
+principal status
+matching target identity
+rule evaluation
+capability decision
+path/exec constraint decision
+final ALLOW/DENY
+```
+
+A policy test does not execute the requested operation.
+
+## 29. System
+
+Canonical submenu:
 
 ```text
 System
@@ -1114,92 +667,92 @@ System
 
 1) Status
 2) Server Settings
-3) Backup & Restore
-4) Updates
-5) Diagnostics
-6) Audit Log
-7) Version Information
-8) Back
+3) Audit
+4) Revisions
+5) Backup & Restore
+6) Updates
+7) Diagnostics
+8) Version Information
+9) Back
 ```
 
-`System` is intentionally used instead of the more abstract `Operate`.
+## 30. Status
 
----
-
-# 28. Server Settings
-
-Canonical submenu:
+System status must include control-plane/runtime consistency, for example:
 
 ```text
-Server Settings
-===============
-
-1) Published service hostname
-2) Bootstrap hostname
-3) Client installer URL
-4) Back
+Control DB       : Healthy
+DB Revision      : 42
+Remote Policy    : revision 42 active
+Internet Policy  : revision 42 active
+AI Policy        : revision 42 active
+MCP Bridge       : Healthy
 ```
 
-Existing technical semantics remain unchanged.
+A generation mismatch is surfaced explicitly and must not be collapsed into a generic Healthy state.
 
-In particular:
+## 31. Audit
 
 ```text
-public_ip / public_host
-=
-control / allocator identity
+Audit
+=====
 
-public_hostname
-=
-optional published-service access alias
-
-bootstrap_hostname
-=
-optional Zero-Touch bootstrap hostname
+1) Recent configuration changes
+2) Recent Remote Access decisions
+3) Recent Internet Access decisions
+4) Recent AI operations
+5) Filter / search
+6) Back
 ```
 
-Changing `public_hostname` must not silently change allocator/control identity.
+Sensitive payloads are never dumped merely because an audit record exists.
 
----
+## 32. Revisions
 
-# 29. Backup & Restore
+```text
+Revisions
+=========
 
-Canonical:
+1) List revisions
+2) View revision
+3) Diff revisions
+4) Rollback [when implemented and qualified]
+5) Back
+```
+
+Rollback must itself be a new audited revision and must run normal impact analysis/compilation.
+
+## 33. Backup & Restore
 
 ```text
 Backup & Restore
 ================
 
 1) Create backup
-2) Restore backup
-3) Back
+2) Validate backup
+3) Restore backup
+4) Back
 ```
 
-Existing backup validation, rollback, and restore safety behavior must be retained.
+The UI should describe the backup as a consistent control-plane snapshot, not a raw copy of `drlink.db`.
 
----
-
-# 30. Updates
-
-Canonical:
+## 34. Updates
 
 ```text
 Updates
-=======
+-------
 
 1) Update Data Relay Link
-2) Check upstream relay-engine release
+2) Check Relay Engine (FRP) release
 3) Update Relay Engine (FRP)
 4) Back
 ```
 
-FRP remains visible only where distinguishing the upstream engine from the Data Relay Link product is useful.
+Product and Relay Engine versions remain separate.
 
----
+Stable update paths never silently consume preview/development builds.
 
-# 31. Diagnostics
-
-Canonical:
+## 35. Diagnostics
 
 ```text
 Diagnostics
@@ -1207,174 +760,30 @@ Diagnostics
 
 1) Run health checks
 2) Create support bundle
-3) Back
+3) Control-plane integrity checks
+4) Runtime-generation checks
+5) Back
 ```
 
-Direct mappings:
+Diagnostics are read-only unless an operation explicitly says it repairs state and the user confirms it.
+
+## 36. Version Information
+
+Canonical fields:
 
 ```text
-Run health checks
-→ system diagnostics
-
-Create support bundle
-→ system support-bundle
+Data Relay Link: <product identity>
+Channel: <development|preview|stable>
+Source HEAD: <40-char SHA>
+Relay Engine (FRP): <version>
+Control DB Schema: <version>
 ```
 
-The direct command `system diagnostics` remains valid and canonical.
+Do not report `stable` without matching immutable release provenance.
 
----
+## 37. Root `?`
 
-# 32. Client-Only Host Navigation
-
-A host installed only as a client must not show server-only concepts.
-
-Canonical root:
-
-```text
-Data Relay Link
-===============
-
-1) Services
-   Configure services published from this machine
-
-2) System
-   Status, connection information, updates and diagnostics
-
-3) Help
-
-4) Exit
-```
-
----
-
-# 33. Client Services
-
-Canonical client-only submenu:
-
-```text
-Services
-========
-
-1) List services
-2) Add service
-3) Edit service
-4) Enable service
-5) Disable service
-6) Apply pending changes
-7) Discard pending changes
-8) Sync with server
-9) Back
-```
-
-Direct mappings include:
-
-```text
-show services
-add service
-set service
-enable service
-disable service
-apply
-discard
-sync
-```
-
----
-
-# 34. Client System
-
-Client System exposes existing client capabilities:
-
-```text
-Status
-Connection information
-Version information
-Update Data Relay Link
-Update Relay Engine (FRP)
-Diagnostics
-Support Bundle
-Back
-```
-
-Direct commands include:
-
-```text
-show status
-show info
-show version
-system update product
-system update engine
-system diagnostics
-system support-bundle
-```
-
----
-
-# 35. Dual-Role Hosts
-
-A host acting as both server and client should not expose:
-
-```text
-Client operations
-Server operations
-```
-
-as its primary navigation.
-
-Use the normal server product-domain model:
-
-```text
-Clients
-Services
-Internet Access
-System
-Help
-Exit
-```
-
-Inside Services, distinguish where necessary between:
-
-```text
-Published services
-Local services on this machine
-```
-
-The user should think in product concepts rather than implementation roles.
-
----
-
-# 36. Root `?`
-
-Bare:
-
-```text
-?
-```
-
-must not be a dump of parser verbs.
-
-This is NOT acceptable as the primary discovery experience:
-
-```text
-show
-create
-set
-unset
-add
-remove
-enable
-disable
-revoke
-release
-delete
-restore
-update
-test
-system diagnostics
-...
-```
-
-Instead, root `?` should explain the product domains.
+Bare `?` is domain-oriented, not a parser verb dump.
 
 Example:
 
@@ -1382,128 +791,50 @@ Example:
 Data Relay Link
 ===============
 
-Commands
+Clients
+  Connect and manage client machines
 
-  Clients
-    Connect and manage client machines
+Objects
+  Reusable hosts, networks and destinations
 
-  Services
-    View published services and control who can reach them
+Remote Access
+  Inbound access to published services
 
-  Internet Access
-    Allow clients to reach approved Internet destinations
+Internet Access
+  Approved outbound Internet connectivity
 
-  System
-    Status, settings, backup, updates and diagnostics
+AI Access
+  AI/MCP authorization to managed endpoints
 
-Guided navigation:
-  menu
+System
+  Status, audit, backup, updates and diagnostics
 
-Quick commands:
-  show status
-  show clients
-  show services
-  set client
-  system diagnostics
-
-Help:
-  help clients
-  help services
-  help internet
-  help system
-  help commands
+Guided navigation: menu
+Advanced commands: help commands
 ```
 
-Output must be role-aware.
-
----
-
-# 37. Help Architecture
+## 38. Help topics
 
 Required topics:
 
 ```text
 help
 help clients
-help services
-help internet
+help objects
+help remote-access
+help internet-access
+help ai-access
 help system
 help workflows
 help commands
 help legacy
 ```
 
-## `help`
+`help legacy` may explain development-transition aliases if retained temporarily, but legacy names are not shown in normal discovery.
 
-Product/domain overview.
+## 39. Tab completion
 
-## `help clients`
-
-Client onboarding, inventory, groups, enrollment, lifecycle.
-
-## `help services`
-
-Published services, Access Rules, Service Profiles.
-
-## `help internet`
-
-Internet Access / Controlled Egress concepts and workflows.
-
-## `help system`
-
-Status, settings, backups, updates, diagnostics.
-
-## `help workflows`
-
-Common end-to-end tasks.
-
-## `help commands`
-
-Complete advanced canonical command reference.
-
-## `help legacy`
-
-Hidden compatibility grammar.
-
----
-
-# 38. `help commands`
-
-The complete direct command grammar belongs under:
-
-```text
-help commands
-```
-
-Every non-hidden public canonical command must be:
-
-```text
-parseable
-Tab-discoverable
-documented in help commands
-```
-
-Advanced actions such as:
-
-```text
-explain
-export
-import
-diff
-apply
-```
-
-where public and valid must not disappear merely because they are not shown in root navigation.
-
-Progressive disclosure is preferred over capability removal.
-
----
-
-# 39. Tab Completion
-
-Tab completion remains part of the expert direct-command interface.
-
-It must be:
+Completion is:
 
 ```text
 safe
@@ -1511,510 +842,226 @@ non-executing
 deterministic
 context-aware
 role-aware
+policy-field-aware
 ```
-
-Tab must never execute commands or mutate state.
-
----
-
-# 40. Grouped Completion Display
-
-Large completion/context lists should be visually grouped by user domain where practical.
-
-Example for:
-
-```text
-show ?
-```
-
-Conceptually:
-
-```text
-Clients
-  clients
-  client
-  groups
-  group
-  enrollments
-  enrollment
-
-Services
-  services
-  service-profiles
-  service-profile
-  access-rules
-  access-rule
-  access-service
-  access-log
-
-Internet Access
-  internet
-  internet-profiles
-  internet-profile
-  fixed-tcp
-  internet-templates
-  internet-template
-
-System
-  status
-  version
-  server-status
-  upstream
-  audit
-```
-
-The grouping affects display only.
-
-It must not change parser semantics.
-
----
-
-# 41. Navigation Tree vs Command Catalog
-
-The implementation must maintain two distinct concepts.
-
-```text
-COMMANDS
-```
-
-is the single source of truth for the direct command grammar.
-
-```text
-NAVIGATION_TREE
-```
-
-is the single source of truth for guided navigation.
-
-Every guided-menu leaf must map to either:
-
-```text
-a canonical drlink command
-```
-
-or:
-
-```text
-an explicitly defined canonical guided workflow
-```
-
-A guided menu should not bypass the public `drlink` layer and invoke internal backend tools directly when a canonical operation exists.
-
----
-
-# 42. Menu Presentation
-
-Normal menus should show user tasks, not parser implementation.
-
-Bad:
-
-```text
-Clients (show clients / show client / set client)
-```
-
-Good:
-
-```text
-1) Clients
-   Connect and manage client machines
-```
-
-Detailed direct syntax belongs under:
-
-```text
-help commands
-```
-
-or contextual help.
-
----
-
-# 43. Navigation Depth
-
-Normal menu depth should remain shallow.
-
-Preferred:
-
-```text
-Root
-→ Domain
-→ Object/list
-→ Selected object actions
-```
-
-Avoid deeply nested enterprise-style navigation.
-
-After an object is selected, preserve it as context.
 
 Examples:
 
-```text
-Client: 24cd7856
-Group: production
-Access Rule: office
-Profile: ubuntu-updates
-Fixed TCP: vendor-license
-```
+- A Remote Access Source selector only offers Objects valid for that field.
+- An Internet Access Destination selector offers FQDN/public Host/public Network compatible resources.
+- AI target completion offers Managed Endpoints and Client Groups.
+- Secrets are never completion candidates.
 
-The user should not have to re-enter the same identifier for every operation.
+## 40. Guided transaction semantics
 
----
-
-# 44. Back, Cancel, and Exit
+A guided mutation is staged until final commit.
 
 Canonical behavior:
 
 ```text
-Back
-→ one navigation level up
-
-Cancel
-→ leave the current operation without mutation
-
-Exit
-→ leave the Data Relay Link CLI
+Back    → one level up
+Cancel  → discard the current staged operation
+Commit  → run validation/impact/concurrency checks and apply atomically
+Exit    → leave CLI
 ```
 
-A cancelled guided flow must not partially modify configuration.
+A cancelled wizard must not partially mutate authoritative state.
 
----
+## 41. Concurrency feedback
 
-# 45. Shell vs REPL Command Guidance
+If the selected entity changed while the operator was editing:
 
-Output must know whether the operator is already inside:
+```text
+Object changed while you were editing it.
+No changes were applied.
+Review current state and retry.
+```
+
+The UI never silently overwrites newer state.
+
+## 42. Policy-impact presentation
+
+Security-relevant edits should summarize effect in operator terms:
+
+```text
+Policy behavior will change
+
+Access broadened: YES
+Access narrowed: NO
+Affected rules: 2
+Newly shadowed rules: 1
+
+Before: DENY
+After : ALLOW via remote-access #20 partner-ssh
+
+Continue? [y/N]:
+```
+
+The default answer for broadening is No.
+
+## 43. First-match explanation
+
+Explain output explicitly distinguishes:
+
+```text
+MATCH
+NO MATCH
+NOT EVALUATED — earlier complete match already decided
+```
+
+This is essential for debugging ordered policy.
+
+## 44. REPL vs shell hints
+
+Inside:
 
 ```text
 drlink>
 ```
 
-## Inside REPL
-
-Use:
+show:
 
 ```text
-show enrollments
-revoke enrollment <ID>
-delete enrollment <ID>
+show objects
+set remote-access partner-ssh enabled
 ```
 
-Never instruct the user to type another leading:
+At a shell, show:
 
 ```text
-drlink
+sudo drlink show objects
+sudo drlink set remote-access partner-ssh enabled
 ```
 
-inside the REPL.
+Never tell a user already inside the REPL to type a second `drlink` prefix.
 
-## Shell-facing output
+## 45. Backend isolation
 
-Use:
+Normal operator output must not expose internal backend commands, SQL, table names, raw FRP helper binaries, or generated runtime file names unless explicitly requested for diagnostics.
 
-```text
-sudo drlink show enrollments
-sudo drlink revoke enrollment <ID>
-sudo drlink delete enrollment <ID>
-```
-
-The distinction must be consistent across all generated guidance.
-
----
-
-# 46. Enrollment Vocabulary
-
-Current canonical actions are:
-
-```text
-show enrollments
-revoke enrollment <ID>
-delete enrollment <ID>
-```
-
-Do not advertise older forms such as:
-
-```text
-drlink enrollment list
-drlink enrollment revoke <ID>
-purge enrollment <ID>
-```
-
-`purge` may remain internally or as hidden compatibility behavior if required, but it is not current public vocabulary.
-
----
-
-# 47. Backend Isolation
-
-Normal operator output must not expose implementation commands such as:
-
-```text
-frp-create-client
-frp-client
-frp-access
-frp-egress
-frp-profile
-frp-groups
-frpctl
-```
-
-Internal implementation may continue using these components.
-
-The public product interface is:
+Public interface:
 
 ```text
 drlink
 ```
 
----
+## 46. Discovery consistency
 
-# 48. GNU-Style Options
-
-Normal interactive UX should not require users to understand internal GNU-style options such as:
-
-```text
---ttl
---ssh
---force
---protocol
---yes
-```
-
-Complex normal operations should use guided prompts.
-
-Internal automation and compatibility paths may continue to use flags where necessary.
-
-Normal:
+These surfaces use the same nouns:
 
 ```text
 ?
 help
 menu
-Tab
+Tab display
+errors
 examples
-```
-
-must not unnecessarily expose them.
-
----
-
-# 49. Safety and Confirmation
-
-Destructive or security-sensitive operations must remain explicit.
-
-Examples include:
-
-```text
-revoke client
-release client
-release service
-delete access rule
-delete Internet Access profile
-system restore
-widen public access
-```
-
-Confirmation text should explain effects in user terms rather than internal implementation terms.
-
----
-
-# 50. Discovery Consistency
-
-The following surfaces must use consistent terminology:
-
-```text
-?
-help
-menu
-Tab candidate display
-error messages
-Zero-Touch output
-completion screens
 documentation
 ```
 
-A feature must not be called:
+Do not call the same concept Object Group in one surface and ACL Group in another.
+
+## 47. Destructive operation safety
+
+Operations requiring clear confirmation include:
 
 ```text
-Access Rule
+remove client
+release service reservation
+delete referenced policy resource after references are cleared
+widen network access
+grant AI exec/write/upload/download
+restore backup
+rollback revision
+disable policy enforcement component
 ```
 
-in one menu,
+Confirmation describes user-visible effect, not merely internal implementation.
 
-```text
-Access Rule
-```
-
-in another,
-
-and:
-
-```text
-ACL object
-```
-
-in a third unless the context explicitly requires the technical distinction.
-
----
-
-# 51. Product UX Invariants
-
-The following are canonical invariants.
+## 48. Canonical UX invariants
 
 ```text
 CLI_DIRECT_GRAMMAR=ACTION_FIRST
 
 SERVER_ROOT=
 Clients
-Services
+Objects
+Remote Access
 Internet Access
+AI Access
 System
 Help
 Exit
 
 CLIENT_ROOT=
-Services
+Published Services
 System
 Help
 Exit
 
-ROOT_NAVIGATION_IS_NOT_ACTION_LIST=YES
-
+OBJECT_MODEL=NEUTRAL
+CLIENT_GROUP_NE_OBJECT_GROUP=YES
+SERVICE_PROFILE_PUBLIC_RESOURCE=NO
+SERVICE_PRESET_PUBLIC_RESOURCE=YES
+INTERNET_PROFILE_PUBLIC_RESOURCE=NO
+ACL_PRIMARY_PUBLIC_RESOURCE=NO
+ORDERED_RULEBASE_VISIBLE=YES
+FIRST_MATCH_EXPLAINABLE=YES
+IMPLICIT_DEFAULT_DENY_VISIBLE=YES
+POLICY_IMPACT_VISIBLE=YES
 BACKEND_TOOLS_USER_VISIBLE=NO
-
-MANAGEMENT_ONLY_INITIAL_ONBOARDING=NO
-
-INITIAL_ONBOARDING_REQUIRES_SERVICE=YES
-
-EXISTING_ZERO_SERVICE_CLIENT_VALID=YES
-
-CLIENT_IDENTIFICATION_COLLECTED_ONCE=YES
-
-DESCRIPTION_OPTIONAL=YES
-
-PUBLIC_ENROLLMENT_DELETE_TERM=delete
-
-CONTROLLED_EGRESS_BEGINNER_TERM=Internet Access
-
-GROUPS_PARENT=Clients
-
-SERVICE_PROFILES_PARENT=Services
-
-ACCESS_RULES_PARENT=Services
 ```
 
----
+## 49. Testing contract
 
-# 52. Non-Goals
-
-The CLI IA must not be used as justification for expanding the product into:
+CLI regressions must protect at least:
 
 ```text
-Web UI
-enterprise fleet manager
-hundreds/thousands of clients orchestration
-database-backed management platform
-HA management cluster
-policy orchestration platform
-generic VPN
-generic SOCKS proxy
-TLS inspection
-DLP
-```
-
-The CLI remains optimized for lightweight operation of approximately 1–50 clients.
-
----
-
-# 53. Implementation Rule
-
-When implementation and this specification disagree:
-
-1. Verify whether this document reflects the latest explicit product UX decision.
-2. If yes, implementation should be brought into alignment.
-3. Do not silently reinterpret the navigation structure based on backend object names.
-4. Do not flatten the guided interface merely because the command parser is canonical.
-
-The parser and navigation solve different problems.
-
----
-
-# 54. Documentation Rule
-
-`PRODUCT_MASTER.md` should contain a concise normative summary of this architecture and reference this document.
-
-`CLI_REFERENCE.md` should document:
-
-```text
-actual canonical direct syntax
-```
-
-and should not redefine the navigation architecture independently.
-
-This document owns:
-
-```text
-terminology
-information architecture
-guided navigation
-discovery UX
-```
-
----
-
-# 55. Testing Contract
-
-CLI regression tests should protect at least:
-
-```text
-server root domains
-client root domains
-role filtering
-guided navigation hierarchy
-root ? domain orientation
-help topics
-complete help commands parity
-Tab safety
-grouped candidate display
-Zero-Touch onboarding flow
-single client-identification prompt
-blank optional description
-no management-only initial onboarding
-existing zero-service lifecycle
-REPL vs shell command hints
+role-aware roots
+canonical nouns
+root ? domains
+help topic parity
+Tab safety/context filtering
+Object CRUD/reference protection
+Object Group cycle rejection
+Managed Endpoint lifecycle restrictions
+SELF/ROUTED Published Service display
+rule create-disabled-at-bottom semantics
+ALLOW/DENY
+before/after ordering
+first-match explain trace
+shadow warnings
+policy-impact confirmation
+optimistic concurrency failure
+AI Principal secret non-disclosure
+AI capability/path target selection
+REPL vs shell hints
 no backend command leakage
-no public stale resource-first syntax
+version/provenance fields
 ```
 
-Tests should validate product UX contracts rather than exact incidental spacing wherever possible.
+## 50. Final UX principle
 
----
-
-# 56. Final UX Principle
-
-The Data Relay Link CLI should make the correct next action obvious without requiring the operator to understand its internal architecture.
-
-The beginner thinks:
+A first-time operator should think:
 
 ```text
 I need to connect a machine
 → Clients
 
-I need to expose SSH or HTTP
-→ Services
+I need reusable network identities
+→ Objects
 
-I need this internal machine to access an approved Internet destination
+I need to control inbound support access
+→ Remote Access
+
+I need to allow approved Internet access
 → Internet Access
 
-I need to check or maintain Data Relay Link itself
+I need to allow an AI tool to operate on a private host
+→ AI Access
+
+I need to maintain Data Relay Link itself
 → System
 ```
 
-The experienced operator can skip navigation and type:
-
-```text
-show clients
-set client
-revoke enrollment <ID>
-system diagnostics
-```
-
-Both interfaces are first-class.
-
-The product should never force a beginner to think like the command parser, and it should never slow down an experienced operator with unnecessary menus.
+An experienced operator can skip menus and use the direct grammar without losing any safety guarantees.
