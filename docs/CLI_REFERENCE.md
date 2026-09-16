@@ -405,8 +405,13 @@ Authentication modes:
 
 ```text
 Static Bearer    operator-issued token in Authorization: Bearer
-OAuth            built-in OAuth 2.1 authorization server (authorization_code+PKCE S256, client_credentials)
+OAuth            built-in OAuth 2.1 authorization server + resource server
+                 (authorization_code+PKCE S256, client_credentials)
+Auth model       static-bearer+built-in-oauth2.1-as/rs+rfc9728
 ```
+
+`client_credentials` mints a separate expiring `drauth_` access token bound to
+the canonical MCP resource. It is not an alias for Static Bearer.
 
 Do not call Static Bearer "OAuth". Raw tokens are shown only at issuance.
 
@@ -563,6 +568,7 @@ Public URL    : https://<control-host>/mcp
 Protocol      : 2026-07-28
 Transport     : Streamable HTTP
 Authentication: Static Bearer / OAuth
+Auth Model    : static-bearer+built-in-oauth2.1-as/rs+rfc9728
 ```
 
 Public URL is `Not configured` in Direct mode because there is no Data Relay Link HTTPS frontend on TCP/443. Remote MCP requires Enterprise single-443.

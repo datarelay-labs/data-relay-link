@@ -18,15 +18,17 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from drlink_ai_agent import AgentLoop, execute_local
 from drlink_control_db import ControlPlaneError, resolve_root
-from drlink_control_plane import AI_CAPABILITIES, ControlPlane
+from drlink_control_plane import AI_CAPABILITIES, ControlPlane, MCP_AUTH_MODEL
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
 MCP_TRANSPORT = "streamable-http"
-MCP_AUTH_MODEL = "static-bearer+oauth2.1-as+rfc9728"
+MCP_SERVER_NAME = "data-relay-link"
+MCP_SERVER_VERSION = "2.4.0"
+SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
 DEFAULT_LISTEN = "127.0.0.1"
 DEFAULT_PORT = 6103
 HEADER_MISMATCH = -32020
@@ -62,6 +64,18 @@ ENDPOINT_TOOLS = frozenset(
 )
 
 
+def _server_info():
+    return {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION}
+
+
+def _with_server_meta(result):
+    payload = dict(result) if isinstance(result, dict) else {"value": result}
+    meta = dict(payload.get("_meta") or {})
+    meta[SERVER_INFO_META] = _server_info()
+    payload["_meta"] = meta
+    return payload
+
+
 def _jsonrpc_error(req_id, code, message, data=None):
     err = {"code": code, "message": message}
     if data is not None:
@@ -70,7 +84,7 @@ def _jsonrpc_error(req_id, code, message, data=None):
 
 
 def _jsonrpc_result(req_id, result):
-    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+    return {"jsonrpc": "2.0", "id": req_id, "result": _with_server_meta(result)}
 
 
 def _text_result(text: str, *, is_error: bool = False) -> dict:
@@ -96,15 +110,6 @@ def _decode_mcp_header(value: str) -> str:
     return text
 
 
-def _public_base(headers, listen, port) -> str:
-    env = os.environ.get("DRLINK_MCP_PUBLIC_URL") or ""
-    if env:
-        return env.rstrip("/")
-    host = _header(headers, "Host") or ("%s:%s" % (listen, port))
-    proto = _header(headers, "X-Forwarded-Proto") or "http"
-    return "%s://%s" % (proto, host)
-
-
 class MCPBridge:
     def __init__(self, root: Optional[str] = None, plane: Optional[ControlPlane] = None, *, auto_agents: bool = True):
         self.root = root or resolve_root()
@@ -117,6 +122,25 @@ class MCPBridge:
         self.listen_host = DEFAULT_LISTEN
         self.listen_port = DEFAULT_PORT
         self.auto_agents = auto_agents
+
+    def canonical_public_base(self) -> str:
+        """Issuer/resource base from configured control identity, never request Host."""
+        url = self.plane.mcp_public_url()
+        if url and url != "Not configured":
+            return url[:-4] if url.endswith("/mcp") else url.rstrip("/")
+        return "http://%s:%s" % (self.listen_host, self.listen_port)
+
+    def canonical_resource(self) -> str:
+        url = self.plane.mcp_public_url()
+        if url and url != "Not configured":
+            return url
+        return self.canonical_public_base() + "/mcp"
+
+    def _require_canonical_resource(self, resource: str) -> str:
+        wanted = self.canonical_resource()
+        if str(resource or "") != wanted:
+            raise ControlPlaneError("resource must be exactly %s" % wanted)
+        return wanted
 
     def close(self) -> None:
         self._agent_stop.set()
@@ -157,7 +181,7 @@ class MCPBridge:
         token = auth.split(" ", 1)[1].strip()
         if not token:
             return None
-        resource = _public_base(headers, self.listen_host, self.listen_port) + "/mcp"
+        resource = self.canonical_resource()
         with self._lock:
             return self.plane.authenticate_principal(token, resource=resource)
 
@@ -169,9 +193,9 @@ class MCPBridge:
         with self._lock:
             return self.plane.authenticate_agent(token)
 
-    def oauth_metadata(self, headers) -> dict:
-        base = _public_base(headers, self.listen_host, self.listen_port)
-        resource = base + "/mcp"
+    def oauth_metadata(self, headers=None) -> dict:
+        base = self.canonical_public_base()
+        resource = self.canonical_resource()
         return {
             "resource": resource,
             "authorization_servers": [base],
@@ -181,8 +205,8 @@ class MCPBridge:
             "resource_documentation": "https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization",
         }
 
-    def as_metadata(self, headers) -> dict:
-        base = _public_base(headers, self.listen_host, self.listen_port)
+    def as_metadata(self, headers=None) -> dict:
+        base = self.canonical_public_base()
         return {
             "issuer": base,
             "authorization_endpoint": base + "/oauth/authorize",
@@ -195,9 +219,9 @@ class MCPBridge:
             "resource_indicators_supported": True,
         }
 
-    def issue_oauth_token(self, fields: dict, headers) -> Optional[dict]:
+    def issue_oauth_token(self, fields: dict, headers=None) -> Optional[dict]:
         grant = str(fields.get("grant_type") or "")
-        resource = str(fields.get("resource") or "")
+        resource = self._require_canonical_resource(str(fields.get("resource") or ""))
         if grant == "client_credentials":
             issued = self.plane.client_credentials_token(
                 str(fields.get("client_id") or ""),
@@ -314,22 +338,14 @@ class MCPBridge:
                         "Data Relay Link MCP Bridge. Tools operate on Managed Endpoints "
                         "authorized by AI Access policy. Authenticated does not mean authorized."
                     ),
-                    "_meta": {
-                        "io.modelcontextprotocol/serverInfo": {
-                            "name": "data-relay-link",
-                            "version": "2.4.0",
-                        }
-                    },
                 },
             )
-        if method in ("initialize", "notifications/initialized"):
+        if method in ("initialize", "notifications/initialized", "ping"):
             return 404, _jsonrpc_error(
                 req_id,
                 -32601,
-                "Method not found: 2026-07-28 is stateless; initialize is not part of this revision",
+                "Method not found: 2026-07-28 is stateless; initialize/ping are not part of this revision",
             )
-        if method == "ping":
-            return 200, _jsonrpc_result(req_id, {})
         if method == "tools/list":
             tools = []
             for name, desc, props in TOOL_DEFS:
@@ -543,6 +559,7 @@ class MCPBridge:
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
+    allow_reuse_address = True
 
 
 def make_handler(bridge: MCPBridge):
@@ -575,7 +592,7 @@ def make_handler(bridge: MCPBridge):
             return False
 
         def _www_auth(self):
-            base = _public_base(self.headers, bridge.listen_host, bridge.listen_port)
+            base = bridge.canonical_public_base()
             return 'Bearer realm="drlink-mcp", resource_metadata="%s/.well-known/oauth-protected-resource", scope="drlink.ai"' % base
 
         def do_GET(self):
@@ -603,11 +620,12 @@ def make_handler(bridge: MCPBridge):
                     self._send(400, {"error": "invalid_request", "error_description": "code_challenge_method must be S256"})
                     return
                 try:
+                    resource = bridge._require_canonical_resource(str(fields.get("resource") or ""))
                     pending = bridge.plane.create_oauth_pending(
                         client_id=str(fields.get("client_id") or ""),
                         redirect_uri=str(fields.get("redirect_uri") or ""),
                         code_challenge=str(fields.get("code_challenge") or ""),
-                        resource=str(fields.get("resource") or ""),
+                        resource=resource,
                         state=str(fields.get("state") or ""),
                     )
                 except ControlPlaneError as exc:
@@ -622,9 +640,10 @@ def make_handler(bridge: MCPBridge):
                     approved = bridge.plane.approve_oauth_pending(pending["id"])
                     loc = approved["redirect_uri"]
                     sep = "&" if "?" in loc else "?"
-                    loc = "%s%scode=%s" % (loc, sep, approved["code"])
+                    query = {"code": approved["code"], "iss": bridge.canonical_public_base()}
                     if approved.get("state"):
-                        loc += "&state=%s" % approved["state"]
+                        query["state"] = approved["state"]
+                    loc = "%s%s%s" % (loc, sep, urlencode(query))
                     self.send_response(302)
                     self.send_header("Location", loc)
                     self.send_header("Content-Length", "0")

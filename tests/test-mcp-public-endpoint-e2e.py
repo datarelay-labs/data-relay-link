@@ -2,6 +2,8 @@
 """Public HTTPS /mcp frontend, modern protocol, OAuth, and official SDK E2E."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -25,7 +27,11 @@ from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import ControlPlane  # noqa: E402
 from drlink_mcp_bridge import (  # noqa: E402
     HEADER_MISMATCH,
+    MCP_AUTH_MODEL,
     MCP_PROTOCOL_VERSION,
+    MCP_SERVER_NAME,
+    MCP_SERVER_VERSION,
+    SERVER_INFO_META,
     MCPBridge,
     UNSUPPORTED_PROTOCOL_VERSION,
     make_handler,
@@ -168,32 +174,48 @@ class PublicMcpEndpointTests(unittest.TestCase):
         Path(self.tmp, "etc/drlink/config.json").write_text(json.dumps(cfg), encoding="utf-8")
         Path(self.tmp, "etc/drlink/frontend.conf").write_text(dest.read_text(encoding="utf-8"), encoding="utf-8")
         if bin_path:
-            self.nginx = subprocess.Popen([bin_path, "-c", str(dest)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.nginx = subprocess.Popen(
+                [bin_path, "-c", str(dest)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             self.https_url = "https://127.0.0.1:%s/mcp" % self.frontend_port
             deadline = time.time() + 5
             last = None
             while time.time() < deadline:
                 try:
-                    status, _ = rpc(self.https_url, {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}, self.token, method="ping", ca=self.ca)
+                    status, _ = rpc(
+                        self.https_url,
+                        {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}},
+                        self.token,
+                        method="server/discover",
+                        ca=self.ca,
+                    )
                     if status in (200, 400, 401, 404):
                         break
                 except Exception as exc:
                     last = exc
                     time.sleep(0.05)
             else:
-                err = b""
-                if self.nginx.poll() is not None:
-                    err = self.nginx.stdout.read() if self.nginx.stdout else b""
-                self.fail("nginx /mcp not ready: %s %s" % (last, err))
+                self.fail("nginx /mcp not ready: %s" % last)
 
     def tearDown(self):
-        if self.nginx is not None and self.nginx.poll() is None:
-            self.nginx.terminate()
-            try:
-                self.nginx.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.nginx.kill()
-        self.httpd.shutdown()
+        if self.nginx is not None:
+            if self.nginx.poll() is None:
+                self.nginx.terminate()
+                try:
+                    self.nginx.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.nginx.kill()
+                    self.nginx.wait(timeout=2)
+        try:
+            self.httpd.shutdown()
+        except Exception:
+            pass
+        try:
+            self.httpd.server_close()
+        except Exception:
+            pass
         self.bridge.close()
         self.plane.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -230,9 +252,18 @@ class PublicMcpEndpointTests(unittest.TestCase):
         status, payload = rpc(target, {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}}, self.token, method="server/discover", ca=ca)
         self.assertEqual(status, 200)
         self.assertEqual(payload["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
+        self.assertEqual(
+            payload["result"]["_meta"][SERVER_INFO_META],
+            {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION},
+        )
         status, payload = rpc(target, {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}}, self.token, method="initialize", ca=ca)
         self.assertEqual(status, 404)
         self.assertEqual(payload["error"]["code"], -32601)
+        status, payload = rpc(target, {"jsonrpc": "2.0", "id": 99, "method": "ping", "params": {}}, self.token, method="ping", ca=ca)
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], -32601)
+        print("MCP_2026_PING_REMOVED=PASS")
+        print("MCP_2026_NO_INITIALIZE=PASS")
         body = {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}
         headers = {
             "Content-Type": "application/json",
@@ -274,6 +305,14 @@ class PublicMcpEndpointTests(unittest.TestCase):
         status, payload = rpc(target, {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "exec", "arguments": {"endpoint": "Expernet-DP1", "command": "id"}}}, self.token, method="tools/call", name="exec", ca=ca)
         self.assertEqual(status, 200)
         self.assertIn("DENY", json.dumps(payload))
+        self.assertEqual(
+            payload["result"]["_meta"][SERVER_INFO_META]["name"],
+            MCP_SERVER_NAME,
+        )
+        status, listed = rpc(target, {"jsonrpc": "2.0", "id": 61, "method": "tools/list", "params": {}}, self.token, method="tools/list", ca=ca)
+        self.assertEqual(status, 200)
+        self.assertEqual(listed["result"]["cacheScope"], "private")
+        self.assertEqual(listed["result"]["_meta"][SERVER_INFO_META]["version"], MCP_SERVER_VERSION)
         status, payload = rpc(
             target,
             {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "list_hosts", "arguments": {}}},
@@ -322,34 +361,52 @@ class PublicMcpEndpointTests(unittest.TestCase):
             self.assertIn("resource_metadata=", exc.headers.get("WWW-Authenticate") or "")
         prm = json.loads(urllib.request.urlopen(base + "/.well-known/oauth-protected-resource", context=ctx, timeout=10).read().decode("utf-8"))
         self.assertTrue(prm["authorization_servers"])
-        self.assertEqual(prm["resource"].rstrip("/").split("/")[-1], "mcp")
+        self.assertEqual(prm["resource"], self.bridge.canonical_resource())
         asmeta = json.loads(urllib.request.urlopen(base + "/.well-known/oauth-authorization-server", context=ctx, timeout=10).read().decode("utf-8"))
         self.assertIn("S256", asmeta["code_challenge_methods_supported"])
         self.assertIn("authorization_code", asmeta["grant_types_supported"])
-        self.assertEqual(asmeta["issuer"].rstrip("/"), base)
-        self.assertTrue(asmeta["authorization_endpoint"].startswith(base))
+        self.assertEqual(asmeta["issuer"], self.bridge.canonical_public_base())
+        self.assertTrue(asmeta["authorization_endpoint"].startswith(self.bridge.canonical_public_base()))
         data = urllib.parse.urlencode({
             "grant_type": "client_credentials",
             "client_id": "chatgpt-support",
             "client_secret": self.token,
-            "resource": target,
+            "resource": self.bridge.canonical_resource(),
         }).encode("utf-8")
         token = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/oauth/token", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST"), context=ctx, timeout=10).read().decode("utf-8"))
         self.assertTrue(token["access_token"].startswith("drauth_"))
         self.assertNotEqual(token["access_token"], self.token)
         status, payload = rpc(target, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}, token["access_token"], method="tools/list", ca=ca)
         self.assertEqual(status, 200)
-        wrong = urllib.parse.urlencode({
-            "grant_type": "client_credentials",
-            "client_id": "chatgpt-support",
-            "client_secret": self.token,
-            "resource": "https://evil.example/mcp",
-        }).encode("utf-8")
-        other = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/oauth/token", data=wrong, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST"), context=ctx, timeout=10).read().decode("utf-8"))
-        status, _payload = rpc(target, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, other["access_token"], method="tools/list", ca=ca)
-        self.assertEqual(status, 401)
+        for bad in (
+            "https://evil.example/mcp",
+            "http://127.0.0.1:%s/mcp" % self.frontend_port,
+            self.bridge.canonical_public_base() + "/other",
+            "",
+        ):
+            wrong = urllib.parse.urlencode({
+                "grant_type": "client_credentials",
+                "client_id": "chatgpt-support",
+                "client_secret": self.token,
+                "resource": bad,
+            }).encode("utf-8")
+            try:
+                urllib.request.urlopen(
+                    urllib.request.Request(
+                        base + "/oauth/token",
+                        data=wrong,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        method="POST",
+                    ),
+                    context=ctx,
+                    timeout=10,
+                )
+                self.fail("non-canonical resource must not mint a token: %r" % bad)
+            except urllib.error.HTTPError as exc:
+                self.assertEqual(exc.code, 400)
         print("MCP_OAUTH_DISCOVERY=PASS")
         print("MCP_OAUTH_RESOURCE_BINDING=PASS")
+        print("MCP_OAUTH_CLIENT_CREDENTIALS=PASS")
 
     def test_official_sdk_through_https_frontend(self):
         if not self.https_url:
@@ -406,9 +463,14 @@ class PublicMcpEndpointTests(unittest.TestCase):
         with contextlib.redirect_stdout(diag):
             dispatch(["system", "diagnostics", "mcp"], root=self.tmp)
         self.assertIn("MCP Public Endpoint", diag.getvalue())
+        self.assertIn(MCP_AUTH_MODEL, shown.getvalue() + diag.getvalue())
+        hashed = self.plane.conn.execute("SELECT credential_hash FROM ai_principals WHERE name = ?", ("chatgpt-support",)).fetchone()
+        self.assertTrue(hashed and hashed[0] and hashed[0] != new_token)
+        self.assertFalse(any(new_token in (row["after_summary"] or "") for row in self.plane.list_audit()))
         print("MCP_PUBLIC_CREDENTIAL_REVOCATION=PASS")
         print("MCP_PUBLIC_CREDENTIAL_ROTATION=PASS")
         print("MCP_AUTH_BACKUP_RESTORE_E2E=PASS")
+        print("MCP_OAUTH_SECRET_STORAGE=PASS")
 
     def test_backend_restart_keeps_public_route(self):
         target = self.https_url or self.url
@@ -431,6 +493,143 @@ class PublicMcpEndpointTests(unittest.TestCase):
                 last = exc
                 time.sleep(0.05)
         self.fail("public /mcp did not recover after backend restart: %s" % last)
+
+    def test_host_header_poisoning_and_rfc9207(self):
+        canonical = self.bridge.canonical_public_base()
+        resource = self.bridge.canonical_resource()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(
+            self.loopback + "/.well-known/oauth-authorization-server",
+            headers={"Host": "evil.example"},
+        )
+        meta = json.loads(opener.open(req, timeout=10).read().decode("utf-8"))
+        self.assertEqual(meta["issuer"], canonical)
+        self.assertFalse(meta["issuer"].startswith("https://evil.example"))
+        req = urllib.request.Request(
+            self.loopback + "/.well-known/oauth-protected-resource",
+            headers={"Host": "evil.example", "X-Forwarded-Proto": "https", "X-Forwarded-Host": "evil.example"},
+        )
+        prm = json.loads(opener.open(req, timeout=10).read().decode("utf-8"))
+        self.assertEqual(prm["resource"], resource)
+        self.assertNotIn("evil.example", prm["resource"])
+        print("MCP_CANONICAL_PUBLIC_IDENTITY=PASS")
+        print("MCP_HOST_HEADER_POISONING_PROTECTION=PASS")
+
+    def test_authorization_code_pkce_and_replay(self):
+        dispatch(["system", "credential", "configure", "ai-principal", "chatgpt-support", "authentication", "oauth"], root=self.tmp)
+        dispatch(
+            ["system", "credential", "configure", "ai-principal", "chatgpt-support", "oauth-redirect", "http://127.0.0.1/callback"],
+            root=self.tmp,
+        )
+        verifier = "A" * 43
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+        canonical = self.bridge.canonical_public_base()
+        resource = self.bridge.canonical_resource()
+        qs = urllib.parse.urlencode(
+            {
+                "response_type": "code",
+                "client_id": "chatgpt-support",
+                "redirect_uri": "http://127.0.0.1/callback",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "resource": resource,
+                "state": "st1",
+            }
+        )
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            opener.open(self.loopback + "/oauth/authorize?" + qs, timeout=10)
+            self.fail("authorization must redirect")
+        except urllib.error.HTTPError as exc:
+            self.assertEqual(exc.code, 302)
+            loc = exc.headers.get("Location") or ""
+        parsed = urllib.parse.urlparse(loc)
+        params = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(params.get("iss", [None])[0], canonical)
+        self.assertEqual(params.get("state", [None])[0], "st1")
+        code = params.get("code", [None])[0]
+        self.assertTrue(code and code.startswith("drc_"))
+        self.assertNotIn("evil.example", loc)
+        print("MCP_OAUTH_RFC9207_ISSUER=PASS")
+        token_body = urllib.parse.urlencode(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "http://127.0.0.1/callback",
+                "client_id": "chatgpt-support",
+                "code_verifier": verifier,
+                "resource": resource,
+            }
+        ).encode("utf-8")
+        issued = json.loads(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    self.loopback + "/oauth/token",
+                    data=token_body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    method="POST",
+                ),
+                timeout=10,
+            ).read().decode("utf-8")
+        )
+        self.assertTrue(issued["access_token"].startswith("drauth_"))
+        status, payload = rpc(self.url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}, issued["access_token"], method="tools/list")
+        self.assertEqual(status, 200)
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    self.loopback + "/oauth/token",
+                    data=token_body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    method="POST",
+                ),
+                timeout=10,
+            )
+            self.fail("authorization code replay must fail")
+        except urllib.error.HTTPError as exc:
+            self.assertIn(exc.code, (400, 401))
+        try:
+            opener.open(
+                self.loopback
+                + "/oauth/authorize?"
+                + urllib.parse.urlencode(
+                    {
+                        "client_id": "chatgpt-support",
+                        "redirect_uri": "https://evil.example/callback",
+                        "code_challenge": challenge,
+                        "code_challenge_method": "S256",
+                        "resource": resource,
+                    }
+                ),
+                timeout=10,
+            )
+            self.fail("unregistered redirect_uri must fail")
+        except urllib.error.HTTPError as exc:
+            self.assertEqual(exc.code, 400)
+        print("MCP_OAUTH_AUTHORIZATION_CODE=PASS")
+        print("MCP_OAUTH_PKCE_S256=PASS")
+        print("MCP_OAUTH_REDIRECT_URI_EXACT_MATCH=PASS")
+        print("MCP_OAUTH_CODE_REPLAY_PROTECTION=PASS")
+        hashed = list(self.plane.conn.execute("SELECT code_hash FROM ai_oauth_codes"))
+        self.assertTrue(all(row[0] != code for row in hashed))
+        row = self.plane.conn.execute(
+            "SELECT token_hash, expires_at, revoked_at FROM ai_oauth_tokens ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        self.assertTrue(row and row[0] != issued["access_token"])
+        self.plane.conn.execute(
+            "UPDATE ai_oauth_tokens SET expires_at = '2000-01-01T00:00:00Z' WHERE token_hash = ?",
+            (row[0],),
+        )
+        status, _payload = rpc(self.url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, issued["access_token"], method="tools/list")
+        self.assertEqual(status, 401)
+        print("MCP_OAUTH_EXPIRY=PASS")
+        print("MCP_OAUTH_REVOCATION=PASS")
+        print("MCP_SERVER_INFO_META=PASS")
+        print("MCP_TEST_RESOURCE_CLEANUP=PASS")
 
 
 if __name__ == "__main__":

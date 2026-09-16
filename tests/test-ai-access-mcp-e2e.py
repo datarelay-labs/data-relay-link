@@ -395,11 +395,20 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
         self.assertEqual(payload["result"]["resultType"], "complete")
+        self.assertEqual(payload["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "data-relay-link")
         status, payload = rpc(
             self.url,
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             self.chatgpt,
             method="initialize",
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(payload.get("error", {}).get("code"), -32601)
+        status, payload = rpc(
+            self.url,
+            {"jsonrpc": "2.0", "id": 19, "method": "ping", "params": {}},
+            self.chatgpt,
+            method="ping",
         )
         self.assertEqual(status, 404)
         self.assertEqual(payload.get("error", {}).get("code"), -32601)

@@ -13,6 +13,7 @@ from drlink_control_plane import (
     ConfirmationRequired,
     ConcurrencyError,
     ControlPlane,
+    MCP_AUTH_MODEL,
 )
 
 USAGE_HINT = "No changes were applied."
@@ -283,6 +284,7 @@ def _show(plane: ControlPlane, rest):
             "AI Principal: %s\n\n"
             "Status              : %s\n"
             "Authentication      : %s\n"
+            "Auth Model          : %s\n"
             "Credential Status   : %s\n"
             "Last Seen           : %s\n"
             "Issuer              : %s\n"
@@ -293,6 +295,7 @@ def _show(plane: ControlPlane, rest):
                 p["name"],
                 "Enabled" if p["enabled"] else "Disabled",
                 "OAuth" if str(p["auth_mode"] or "") == "oauth" else "Static Bearer",
+                MCP_AUTH_MODEL,
                 p["credential_status"],
                 p["last_seen"] or "-",
                 p["oauth_issuer"] or ("built-in" if str(p["auth_mode"] or "") == "oauth" else "-"),

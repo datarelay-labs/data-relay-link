@@ -129,6 +129,10 @@ private host
 Support claims are evidence-based. Protocol and official SDK coverage do not
 imply Cursor, Claude, or ChatGPT product support until those hosts are tested.
 
+Modern 2026-07-28 is stateless: no `initialize`, no protocol `ping`, and no
+`Mcp-Session-Id`. Authentication is
+`static-bearer+built-in-oauth2.1-as/rs+rfc9728`.
+
 No separate MCP server is required on every internal host.
 
 Minimum target capabilities include:

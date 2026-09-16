@@ -52,6 +52,7 @@ AI_CAPABILITIES = (
     "list_processes",
 )
 FILE_CAPABILITIES = frozenset({"read_file", "write_file", "upload_file", "download_file"})
+MCP_AUTH_MODEL = "static-bearer+built-in-oauth2.1-as/rs+rfc9728"
 OBJECT_TYPES = ("host", "network", "fqdn")
 PLANES = ("remote", "internet")
 POSITION_STEP = 1000
@@ -2460,6 +2461,8 @@ class ControlPlane:
         ).fetchone()
         if client is None:
             raise ControlPlaneError("unknown OAuth client")
+        if not code_challenge:
+            raise ControlPlaneError("code_challenge is required")
         allowed = [p for p in str(client["redirect_uris"] or "").split("\n") if p]
         if redirect_uri not in allowed:
             raise ControlPlaneError("redirect_uri is not registered")
@@ -2548,9 +2551,11 @@ class ControlPlane:
             return None
         if row["expires_at"] <= utc_now_iso():
             return None
+        if not resource:
+            raise ControlPlaneError("resource is required")
         if row["client_id"] != client_id or row["redirect_uri"] != redirect_uri:
             return None
-        if resource and row["resource"] and resource != row["resource"]:
+        if resource != row["resource"]:
             return None
         if self._pkce_s256(verifier) != row["code_challenge"]:
             return None
@@ -2584,7 +2589,7 @@ class ControlPlane:
         if row is None:
             return None
         stored = str(row["resource"] or "")
-        if resource and stored and stored.rstrip("/") != str(resource).rstrip("/"):
+        if str(resource or "") != stored:
             return None
         return self.conn.execute("SELECT * FROM ai_principals WHERE id = ?", (row["principal_id"],)).fetchone()
 
@@ -3424,6 +3429,7 @@ class ControlPlane:
             "Protocol      : %s" % mcp["protocol"],
             "Transport     : %s" % mcp["transport"],
             "Authentication: %s" % mcp["authentication"],
+            "Auth Model    : %s" % mcp["auth_model"],
             "",
             "Clients          : %s" % st["clients"],
             "Published Service: %s" % st["services"],
@@ -3491,6 +3497,7 @@ class ControlPlane:
             "protocol": "2026-07-28",
             "transport": "Streamable HTTP",
             "authentication": " / ".join(modes) or "Not configured",
+            "auth_model": MCP_AUTH_MODEL,
             "frontend_routed": routed,
             "remote_ready": bool(routed and public_url != "Not configured" and st.get("mcp_configured")),
         }
@@ -3513,6 +3520,7 @@ class ControlPlane:
         lines.append("Protocol            : %s" % mcp["protocol"])
         lines.append("Transport           : %s" % mcp["transport"])
         lines.append("Authentication      : %s" % mcp["authentication"])
+        lines.append("Auth Model          : %s" % mcp["auth_model"])
         if mcp["backend"] == "Healthy" and not mcp["remote_ready"]:
             lines.append("")
             lines.append("Backend Healthy alone does not imply MCP Remote Access = Healthy.")

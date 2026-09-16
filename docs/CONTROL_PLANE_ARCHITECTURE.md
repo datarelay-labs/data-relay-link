@@ -836,6 +836,8 @@ Implementation must target the then-current official Model Context Protocol spec
 
 As of the architecture freeze in September 2026, the official MCP `2026-07-28` revision uses an HTTP-native/stateless protocol core for modern remote requests, and Streamable HTTP is the modern remote transport. Legacy HTTP+SSE is not the target for new implementation.
 
+Modern 2026-07-28 requests do not use `initialize`, `notifications/initialized`, `Mcp-Session-Id`, or protocol `ping`. Capability discovery is `server/discover`. Identity is never taken from `_meta.clientInfo`.
+
 Do not hard-code assumptions from older MCP revisions when the current standard provides a different authorization, transport, or operation model.
 
 ## 37. AI Principal
@@ -1032,17 +1034,31 @@ no general identity-management product
 Mechanics:
 
 ```text
+Auth model: static-bearer+built-in-oauth2.1-as/rs+rfc9728
+
 Static Bearer     operator-issued drk_ token in Authorization: Bearer
                   (not OAuth)
 
-OAuth             built-in AS at the public control host
+OAuth             Data Relay Link is both the built-in OAuth 2.1
+                  authorization server and the MCP resource server.
                   RFC 9728 Protected Resource Metadata
                   RFC 8414 authorization-server metadata
+                  RFC 9207 iss on authorization responses
                   authorization_code + PKCE S256
                   client_credentials with RFC 8707 resource
                   resource-bound expiring drauth_ access tokens
                   AI Principal mapping is explicit and revocable
 ```
+
+`client_credentials` exists for machine/API MCP clients that can present
+`client_id` plus the principal's Static Bearer as `client_secret` and receive a
+short-lived resource-bound `drauth_` access token. That access token is not the
+Static Bearer token. Cursor typically uses Static Bearer headers.
+Claude/ChatGPT custom connectors are expected to use authorization_code+PKCE.
+
+Issuer, resource, authorization endpoint, token endpoint, and Protected
+Resource Metadata are taken from the configured control-plane public identity.
+They are not derived from an arbitrary request `Host` or `X-Forwarded-*` header.
 
 Threat model (must remain fail-closed):
 
@@ -1052,7 +1068,7 @@ backend remains 127.0.0.1:6103
 do not bind 0.0.0.0:6103
 do not expose MCP /healthz publicly
 TLS terminates on the existing single-443 frontend
-Host/X-Forwarded-* are informational; authorization uses credentials
+Host/X-Forwarded-* from direct clients are not used for issuer/resource identity
 Origin is validated to block loopback DNS rebinding
 Bearer tokens never appear in show/status/audit/support bundles
 OAuth codes are one-time; tokens expire and are resource-bound
