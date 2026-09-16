@@ -1,21 +1,97 @@
-MIT License
+Data Relay Link Source Available License 1.0
 
-Copyright (c) 2026
+Copyright (c) 2026 Data Relay Labs. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license governs Data Relay Link source code and related materials (the
+"Software"), except for third-party components that are distributed under
+their own licenses.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Permitted Use
+
+Subject to the terms of this license, Data Relay Labs grants you a
+non-exclusive, non-transferable, royalty-free right to:
+
+(a) use the Software for personal purposes;
+(b) use the Software for education, research, testing, and evaluation;
+(c) use the Software within a business, company, government body, or other
+    organization for that organization's own internal operations, including
+    commercial internal operations;
+(d) copy and modify the Software solely for the permitted uses above; and
+(e) make reasonable backup and archival copies.
+
+Internal commercial use includes using Data Relay Link to operate, secure,
+maintain, access, automate, or support systems used in your own business.
+
+2. Prohibited Uses
+
+Unless Data Relay Labs gives you a separate written commercial license, you
+may not:
+
+(a) sell, resell, sublicense, rent, lease, publish, distribute, or otherwise
+    provide the Software or a modified version of it as a product or service;
+(b) use the Software, its source code, or a derivative work to create,
+    develop, manufacture, market, distribute, license, sell, provide, or
+    operate a product or service that competes with, substitutes for, or
+    substantially reproduces Data Relay Link functionality;
+(c) use the Software or its source code as the basis of a commercial
+    derivative product;
+(d) embed, bundle, OEM, white-label, or incorporate the Software or a
+    modified version into a product or service offered to third parties;
+(e) provide Data Relay Link functionality to third parties as SaaS, hosted
+    software, a managed service, a service bureau, or a substantially similar
+    commercial offering;
+(f) distribute modified source code or binaries outside your organization;
+(g) remove or alter copyright, attribution, license, or proprietary notices;
+    or
+(h) grant any third party rights in the Software beyond the rights expressly
+    granted by this license.
+
+3. Separate Commercial License
+
+Rights for redistribution, resale, OEM use, embedding, white-label use,
+hosted or managed-service offerings, commercial derivative products, or
+other uses prohibited above may be available under a separate written
+commercial license from Data Relay Labs.
+
+4. Third-Party Components
+
+Third-party software, libraries, binaries, and other components included with
+or used by Data Relay Link remain governed by their respective licenses. This
+license does not restrict rights granted independently by those third-party
+licenses.
+
+5. Ownership and Trademarks
+
+Data Relay Labs retains all right, title, and interest in the Software except
+for rights expressly granted by this license. No trademark, trade name, logo,
+or branding rights are granted. "Data Relay Link", "DRLink", and associated
+branding may not be used to represent another product or service as an
+official Data Relay Labs product.
+
+6. Termination
+
+Your rights under this license terminate automatically if you materially
+violate its terms and do not cure the violation within 30 days after becoming
+aware of it. Upon termination, you must stop using and distributing copies of
+the Software except where applicable law requires otherwise.
+
+7. No Warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+8. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, DATA RELAY LABS AND CONTRIBUTORS WILL
+NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF,
+OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+9. Source-Available Status
+
+This is a source-available license. It is not an open-source license as that
+term is commonly used for licenses that permit unrestricted redistribution
+and commercial derivative products.
+
+For commercial licensing inquiries, contact Data Relay Labs through the
+project's official repository or website.
