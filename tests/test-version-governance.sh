@@ -184,8 +184,8 @@ print("OK")
 PY
 pass "FAIL_CLOSED_PROVENANCE"
 
-# MCP exclusion markers
-python3 -c 'import json; assert json.load(open("release-manifest.json"))["features"]["mcp_included"] is False'
-pass "MCP_V2_4_EXCLUSION"
+# MCP included markers
+python3 -c 'import json; assert json.load(open("release-manifest.json"))["features"]["mcp_included"] is True'
+pass "MCP_V2_4_INCLUDED_AND_QUALIFIED"
 
 echo "VERSION_GOVERNANCE=PASS"

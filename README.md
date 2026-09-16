@@ -12,6 +12,10 @@ AI Access         authorized AI/MCP principal → approved private endpoints
 
 > **Development status:** The current v2.4.0 branch is in a pre-stable control-plane redesign. The canonical target architecture is documented, but the exact development HEAD may not yet implement every v2.4.0 target command or feature. Do not treat this branch as a stable release.
 
+Current project version: **2.4.0**
+Current pinned FRP version: **v0.71.0**
+Prepared release — v2.4.0 (tag pending). The `v2.4.0/dist/bootstrap-server.sh` URL would 404 until the immutable tag exists.
+
 ## Architecture
 
 v2.4.0 target:
@@ -159,6 +163,36 @@ help
 exit
 ```
 
+```text
+ssh -p <public-port> user@<public-hostname>
+
+Connect a client with zero-touch:
+
+```text
+set client --one-line --ssh-user ubuntu
+```
+
+Interactive create-client still prompts `Client SSH user`. There is no default username.
+
+Zero-touch `--one-line` does **not**:
+- join entire networks
+- skip enrollment authentication
+
+Official server bootstrap (immutable tag path after the tag is published; until the v2.4.0 tag exists this URL would 404):
+
+```text
+https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.4.0/dist/bootstrap-server.sh
+```
+
+Development channel remains explicit opt-in:
+
+```text
+FRP_RELEASE_CHANNEL=dev
+```
+
+A legacy client on an older updater can use a one-time verified bridge; it cannot replace current upgrade policy.
+```
+
 The legacy pre-stable public resources `service-profile`, `internet-profile`, and ACL-centric grammar are not the v2.4.0 target contract.
 
 ## Example target commands
@@ -175,7 +209,7 @@ set remote-access partner-ssh service tcp 22
 set remote-access partner-ssh action allow
 set remote-access partner-ssh enabled
 
-test remote-access 210.90.80.10 10.10.10.50 tcp 22
+test remote-access 203.0.113.10 10.10.10.50 tcp 22
 
 show internet-access
 set internet-access approved-web source internal1

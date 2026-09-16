@@ -64,8 +64,14 @@ class NavigationTargetParityTests(unittest.TestCase):
                     continue
                 check_role = "server" if role == "both" else role
                 if not CATALOG.role_allows(cmd["roles"], check_role):
-                    # dual-role published leaf may still be server-only; accept for both.*
-                    if not (role == "both" and CATALOG.role_allows(cmd["roles"], "server")):
+                    # dual-role menus mix server and client leaves.
+                    if not (
+                        role == "both"
+                        and (
+                            CATALOG.role_allows(cmd["roles"], "server")
+                            or CATALOG.role_allows(cmd["roles"], "client")
+                        )
+                    ):
                         failures.append(
                             "%s: role mismatch for %r (role=%s)" % (key, target, role)
                         )

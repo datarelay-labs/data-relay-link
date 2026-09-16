@@ -6,6 +6,8 @@
 
 ## 1. Version source of truth
 
+`VERSION` is the Single source of truth for product identity. Every release document, manifest, and operator-facing version string must match it.
+
 `VERSION` is the authoritative product-version source:
 
 ```text
@@ -13,6 +15,8 @@ PROJECT_VERSION=<MAJOR.MINOR.PATCH>
 FRP_VERSION=<independently pinned upstream engine version>
 RELEASE_CHANNEL=<development|preview|stable>
 ```
+
+Channels: development | preview | stable
 
 Rules:
 
@@ -293,6 +297,7 @@ Do not backport new features into a PATCH release.
 
 ## 17. Prohibited practices
 
+These practices are never allowed. Published tags are immutable.
 - Incrementing version for every phase/audit.
 - Using 2.4.1 for a fix before 2.4.0 exists.
 - Publishing development as stable.

@@ -6,6 +6,8 @@ Released tags/artifacts are immutable. Historical source is never rewritten to m
 
 ## [Unreleased]
 
+## 2.4.0 — development target
+
 ### Candidate target: 2.4.0
 
 v2.4.0 remains a development target. The following is approved architecture scope, not a stable-release claim. Final notes must be reconciled against the exact qualified HEAD before publication.
@@ -26,7 +28,7 @@ v2.4.0 remains a development target. The following is approved architecture scop
 
 ### Changed — target scope
 
-- Control-plane authority moves from multiple authoritative JSON state files to embedded SQLite.
+- Control-plane authority is transferred from multiple authoritative JSON state files to embedded SQLite.
 - Public `Service Profile` is replaced by `Service Preset`, a creation-time convenience with no ownership of existing services.
 - Legacy `Internet Profile` policy is replaced by the ordered Internet Access rulebase.
 - Legacy ACL/Access Rule-centric inbound policy is replaced by the ordered Remote Access rulebase.
@@ -65,6 +67,11 @@ v2.4.0 remains a development target. The following is approved architecture scop
 - Create the immutable `v2.4.0` tag only afterward.
 
 ## Historical releases
+
+## 2.1.1 — hardening
+## 2.1.0 — baseline
+
+Historical tags remain the authority for released/historical content. Current repository history includes immutable tags through `v2.3.0`; do not reconstruct old release notes from memory or move old tags.
 
 Historical tags remain the authority for released/historical content. Current repository history includes immutable tags through `v2.3.0`; do not reconstruct old release notes from memory or move old tags.
 

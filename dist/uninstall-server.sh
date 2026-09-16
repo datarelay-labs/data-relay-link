@@ -433,7 +433,7 @@ frp_u_rm_legacy_frps_unit_if_owned() {
 
 frp_u_stop_product_units() {
   local unit
-  for unit in drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+  for unit in drlink-mcp-bridge drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_should_manage_unit "$unit"; then
       continue
     fi
@@ -458,7 +458,7 @@ frp_u_stop_product_units() {
 
 frp_u_disable_product_units() {
   local unit enabled
-  for unit in drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+  for unit in drlink-mcp-bridge drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_should_manage_unit "$unit"; then
       continue
     fi
@@ -663,6 +663,10 @@ try_rm_file "${var_lib}/access-control.json"
 try_rm_file "${var_lib}/egress-control.json"
 try_rm_file "${var_lib}/service-profiles.json"
 try_rm_file "${var_lib}/service-profiles.json.lock"
+try_rm_file "${var_lib}/drlink.db"
+try_rm_file "${var_lib}/drlink.db-wal"
+try_rm_file "${var_lib}/drlink.db-shm"
+try_rm_rf "${var_lib}/runtime"
 try_rm_file "${var_lib}/mgmt-nonces.json"
 try_rm_file "${var_lib}/registry.lock"
 try_rm_file "${var_lib}/control-state.lock"

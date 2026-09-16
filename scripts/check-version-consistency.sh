@@ -63,8 +63,8 @@ if channel == 'development':
     if source_head and not re.fullmatch(r'[0-9a-fA-F]{40}', source_head):
         errs.append('source_head malformed')
 features = m.get('features') or {}
-if project.startswith('2.4.') and features.get('mcp_included') is not False:
-    errs.append('features.mcp_included must be false for 2.4.x')
+if 'mcp_included' not in features or features.get('mcp_included') not in (True, False):
+    errs.append('features.mcp_included must be boolean')
 for e in errs:
     print('ERROR: release-manifest.json: %s' % e, file=sys.stderr)
 sys.exit(1 if errs else 0)

@@ -42,7 +42,7 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes. Pretags / development trees pin git_ref and source_head to the exact HEAD SHA; never advertise a future stable tag before it exists. features.mcp_included=false for the v2.4.0 line.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes. Pretags / development trees pin git_ref and source_head to the exact HEAD SHA; never advertise a future stable tag before it exists. features.mcp_included=true after MCP Bridge/AI Access implementation.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
     "tag_policy": "Published tags are immutable and are never moved, deleted, recreated, retargeted, or force-pushed. A wrong tag is superseded by a new version tag.",
@@ -66,7 +66,7 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "09a8790c69a4701d548d663ebb6a29b7dc5a4ee881a3c44c461b2814a9a7c3fc"
+      "sha256": "2a99c23f33ecfbd2bafad2725216976b5cd2610f81377578c59ec3a8b2c0882f"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
@@ -76,7 +76,7 @@
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "fadc13861096088fa521b4fd1489f49d97e1c72bc8d5ad84407066f4687ee27a"
+      "sha256": "ac7b97d58a10e8d10f58e20e1e42fab8300be61bb84488c213f149a3a21bfadb"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",
@@ -86,12 +86,12 @@
     "uninstall-server.sh": {
       "path": "dist/uninstall-server.sh",
       "url_path": "dist/uninstall-server.sh",
-      "sha256": "9084f791241bb277b663e3ca3000f6e888b14daa28c526fcf25ae9caf5a32829"
+      "sha256": "a3da1fc7ad8e4ef0dfba5dfbb2fde0c87a5365fb1355dc7aa2d358e60f4caea4"
     }
   },
   "source_head": "af81d107a6fcbeb4778689b585207f216f163c32",
   "features": {
-    "mcp_included": false
+    "mcp_included": true
   },
   "immutable_source_ref": "af81d107a6fcbeb4778689b585207f216f163c32"
 }

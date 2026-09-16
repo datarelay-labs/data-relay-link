@@ -4,6 +4,9 @@
 > **Status:** v2.4.0 target architecture; implementation qualification pending
 > **Technical SSOT:** `CONTROL_PLANE_ARCHITECTURE.md`
 
+`Data Relay Link` **2.4.0**
+Pinned FRP version: **0.71.0**
+
 ## 1. Security principle
 
 Data Relay Link is default deny and fail closed.
@@ -505,4 +508,4 @@ SECRET_SCAN=PASS
 PUBLIC_METADATA_SCAN=PASS
 ```
 
-No stable claim is made from synthetic/unit tests alone.
+Enrollment secrets are stored as issued credentials, not hashed or wrapped at rest. Post-success reuse is classified as `BOOTSTRAP_TICKET_USED`.

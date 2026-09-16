@@ -179,16 +179,15 @@ class PublicRuntimeMatrixTests(unittest.TestCase):
         )
 
     def test_fixed_tcp_lifecycle_actions(self):
-        self.assertEqual(self.match("set", "fixed-tcp", "vendor-license")["action"], "create_egress_tcp")
-        self.assertEqual(
-            self.match("set", "fixed-tcp", "vendor-license", "enabled")["passthrough"],
-            ["tcp", "enable", "vendor-license"],
-        )
-        self.assertEqual(
-            self.match("unset", "fixed-tcp", "vendor-license", "enabled")["passthrough"],
-            ["tcp", "disable", "vendor-license"],
-        )
-        self.assertEqual(self.match("unset", "fixed-tcp", "vendor-license")["action"], "delete_egress_tcp")
+        result = self.match("set", "fixed-tcp", "vendor-license")
+        self.assertEqual(result["action"], "control_plane")
+        self.assertEqual(result["tokens"][:3], ["set", "fixed-tcp", "vendor-license"])
+        enabled = self.match("set", "fixed-tcp", "vendor-license", "enabled")
+        self.assertEqual(enabled["action"], "control_plane")
+        disabled = self.match("unset", "fixed-tcp", "vendor-license", "enabled")
+        self.assertEqual(disabled["action"], "control_plane")
+        deleted = self.match("unset", "fixed-tcp", "vendor-license")
+        self.assertEqual(deleted["action"], "control_plane")
         result = self.match("test", "fixed-tcp", "vendor-license", "10.0.0.5")
         self.assertEqual(result["passthrough"], ["tcp", "explain", "vendor-license", "10.0.0.5"])
         rc, out, argv = self.dry_run("test", "fixed-tcp", "vendor-license", "10.0.0.5")

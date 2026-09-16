@@ -199,7 +199,7 @@ Client ID: facc9a57
 Addresses
 ---------
 10.10.10.10   eth0    private   active
-192.168.122.1 virbr0  private   active
+10.10.20.1    virbr0  private   active
 ```
 
 Managed Endpoint is viewable but not manually created/deleted from Object CRUD.

@@ -107,25 +107,6 @@
           }
         }
       }
-    },
-    {
-      "if": {
-        "properties": {
-          "channel": { "const": "development" },
-          "project_version": { "pattern": "^2\\.4\\." }
-        },
-        "required": ["channel", "project_version"]
-      },
-      "then": {
-        "properties": {
-          "features": {
-            "type": "object",
-            "properties": {
-              "mcp_included": { "const": false }
-            }
-          }
-        }
-      }
     }
   ]
 }

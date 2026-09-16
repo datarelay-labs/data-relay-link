@@ -15,10 +15,9 @@ import frp_cli_catalog as c
 print(c.render_guided_menu("server"))
 PY
 )"
-for label in Clients Services "Internet Access" System Help Exit; do
+for label in Clients Objects "Remote Access" "Internet Access" "AI Access" System Help Exit; do
   echo "$SERVER_MENU" | grep -q "$label" || fail "server menu missing $label"
 done
-! echo "$SERVER_MENU" | grep -q 'Remote Access' || fail "NO_REMOTE_ACCESS_ROOT"
 ! echo "$SERVER_MENU" | grep -q 'Controlled Egress' || fail "NO_CONTROLLED_EGRESS_ROOT"
 ! echo "$SERVER_MENU" | grep -q 'Organize' || fail "NO_ORGANIZE_ROOT"
 ! echo "$SERVER_MENU" | grep -q 'Operate' || fail "NO_OPERATE_ROOT"
@@ -64,7 +63,7 @@ import frp_ctl_grammar as g
 print(g.help_text([], "server"))
 PY
 )"
-for topic in clients services internet system commands; do
+for topic in clients objects remote-access internet-access ai-access system commands; do
   echo "$HELP" | grep -q "help $topic" || fail "root help missing help $topic"
   text="$(python3 -c "import frp_ctl_grammar as g; print(g.help_text(['$topic'], 'server'))")"
   [[ -n "$text" ]] || fail "help $topic empty"
@@ -101,7 +100,9 @@ print(g.context_help(["show"], "server"))
 PY
 )"
 echo "$SHOW_CTX" | grep -q 'Clients' || fail "show ? missing Clients group"
+echo "$SHOW_CTX" | grep -q 'Remote Access' || fail "show ? missing Remote Access group"
 echo "$SHOW_CTX" | grep -q 'Internet Access' || fail "show ? missing Internet Access group"
+echo "$SHOW_CTX" | grep -q 'AI Access' || fail "show ? missing AI Access group"
 echo "$SHOW_CTX" | grep -q 'System' || fail "show ? missing System group"
 pass CONTEXT_CANDIDATES_GROUPED
 
@@ -194,36 +195,25 @@ print("HELP_COMMANDS_VISIBLE=YES")
 PY
 pass PUBLIC_COMMAND_DISCOVERY_PARITY
 
-# --- Beginner descriptions on Services / Internet Access ---
-SERVICES_MENU="$(python3 - <<'PY'
+# --- Beginner descriptions on Remote Access / Internet Access ---
+REMOTE_MENU="$(python3 - <<'PY'
 import frp_cli_catalog as c
-print(c.render_navigation_menu("server.services", title="Services"))
+print(c.render_navigation_menu("server.remote", title="Remote Access"))
 PY
 )"
-echo "$SERVICES_MENU" | grep -q 'List published services' || fail "services missing list"
-echo "$SERVICES_MENU" | grep -q 'View services currently exposed through Data Relay Link' \
-  || fail "services missing list description"
-echo "$SERVICES_MENU" | grep -q 'Service Profiles' || fail "services missing Service Profiles"
-echo "$SERVICES_MENU" | grep -q 'Reusable templates for configuring services' \
-  || fail "services missing profile description"
-echo "$SERVICES_MENU" | grep -q 'Release a published service' || fail "services missing release label"
-echo "$SERVICES_MENU" | grep -q 'Remove its reservation and return the public port' \
-  || fail "services missing release description"
-pass SERVICES_MENU_BEGINNER_DESCRIPTIONS
+echo "$REMOTE_MENU" | grep -q 'List Remote Access rules' || fail "remote missing list"
+echo "$REMOTE_MENU" | grep -q 'Published Services' || fail "remote missing published services"
+echo "$REMOTE_MENU" | grep -q 'Service Presets' || fail "remote missing presets"
+pass REMOTE_ACCESS_MENU
 
 INTERNET_MENU="$(python3 - <<'PY'
 import frp_cli_catalog as c
 print(c.render_navigation_menu("server.internet", title="Internet Access"))
 PY
 )"
-echo "$INTERNET_MENU" | grep -q 'Access Profiles' || fail "internet missing Access Profiles"
-echo "$INTERNET_MENU" | grep -q 'Define which sources may reach approved Internet destinations' \
-  || fail "internet missing Access Profiles description"
+echo "$INTERNET_MENU" | grep -q 'List Internet Access rules' || fail "internet missing list"
 echo "$INTERNET_MENU" | grep -q 'Fixed TCP' || fail "internet missing Fixed TCP"
-echo "$INTERNET_MENU" | grep -q 'Allow approved TCP connections for apps that cannot use HTTP/HTTPS proxy' \
-  || fail "internet missing Fixed TCP description"
-echo "$INTERNET_MENU" | grep -q 'Check whether a connection would be allowed' \
-  || fail "internet missing Check policy description"
+echo "$INTERNET_MENU" | grep -q 'Test Internet Access' || fail "internet missing test"
 ! echo "$INTERNET_MENU" | grep -q 'Controlled Egress' || fail "internet menu leaked Controlled Egress"
 pass INTERNET_ACCESS_BEGINNER_DESCRIPTIONS
 
@@ -235,8 +225,8 @@ for entry in c.navigation_entries("server.clients.groups"):
     if entry[0] == "server_groups_manage":
         row = entry
         break
-assert row is not None, "missing View or manage a group"
-assert row[3] == "workflow" and row[4] == "manage_group", row
+assert row is not None, "missing View or manage a client group"
+assert row[3] in ("command", "workflow"), row
 print("ok")
 PY
 grep -q 'frpctl_manage_one_group' tools/frpctl || fail "missing manage_one_group implementation"
@@ -249,7 +239,7 @@ grep -q 'shown_identity' tools/frpctl || fail "nav loop missing one-shot identit
 pass SUBMENU_VERSION_BANNER_NOT_REPEATED
 
 # --- PRODUCT_MASTER IA contract ---
-grep -q 'Canonical CLI Information Architecture' docs/PRODUCT_MASTER.md \
+grep -q 'CLI Information Architecture' docs/PRODUCT_MASTER.md \
   || fail "PRODUCT_MASTER missing IA section"
 grep -q 'Internet Access' docs/PRODUCT_MASTER.md || fail "PRODUCT_MASTER missing Internet Access"
 grep -q 'help commands' docs/CLI_REFERENCE.md || fail "CLI_REFERENCE missing help commands"

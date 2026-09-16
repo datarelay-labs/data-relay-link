@@ -7,6 +7,9 @@
 > **Technical architecture SSOT:** `docs/CONTROL_PLANE_ARCHITECTURE.md`
 > **Version governance:** `docs/VERSION_POLICY.md`
 
+Current project version: **2.4.0**
+Current pinned FRP version: **v0.71.0**
+
 ## 1. Product definition
 
 Data Relay Link is a lightweight secure connectivity gateway for isolated and restricted networks.

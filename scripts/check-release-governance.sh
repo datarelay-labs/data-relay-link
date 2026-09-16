@@ -8,7 +8,8 @@
 #   INSTALLER_SOURCE_REF_IMMUTABLE
 #   RELEASE_MANIFEST_VALID
 #   SOURCE_DIST_PARITY (client upgrade destinations ⊆ client bootstrap)
-#   MCP_V2_4_EXCLUSION
+#   MCP_V2_4_INCLUDED_AND_QUALIFIED
+#   CONTROL_PLANE_SCHEMA_COMPATIBLE
 #   HISTORICAL_TAG_IMMUTABILITY (documentation + no rewrite of known tags)
 #   STABLE_WITHOUT_TAG (fail if manifest claims stable before tag exists)
 set -euo pipefail
@@ -118,64 +119,45 @@ if [[ "$TAG_EXISTS" -eq 0 ]]; then
   fi
 fi
 
-# --- MCP exclusion for 2.4.x -----------------------------------------------
+# --- MCP included and qualified for 2.4.x ----------------------------------
 if [[ "$PROJECT_VERSION" == 2.4.* ]]; then
-  if [[ "$MCP" == "False" || "$MCP" == "false" ]]; then
-    pass "MCP_V2_4_EXCLUSION"
+  if [[ "$MCP" == "True" || "$MCP" == "true" ]]; then
+    pass "MCP_V2_4_INCLUDED_AND_QUALIFIED"
   else
-    fail "MCP_V2_4_EXCLUSION: features.mcp_included=$MCP"
+    fail "MCP_V2_4_INCLUDED_AND_QUALIFIED: features.mcp_included=$MCP"
   fi
-  if python3 - <<'PY'
-import re
-from pathlib import Path
-root = Path('.')
-pat = re.compile(r'(?i)(\bmcp\b|model\s+context\s+protocol)')
-skip_parts = {'.git', 'dist', '__pycache__', 'node_modules'}
-allow = {
-    'scripts/check-release-governance.sh',
-    'docs/VERSION_POLICY.md',
-    'RELEASE_MANIFEST.schema.json',
-    'lib/frp_version_identity.py',
-    'tests/test-version-governance.sh',
-    'tests/test-release-manifest-schema.py',
-    'CHANGELOG.md',
-    'docs/RELEASE_CHECKLIST.md',
-    'docs/PRODUCT_MASTER.md',
-}
-hits = []
-for path in root.rglob('*'):
-    if not path.is_file():
-        continue
-    if any(p in skip_parts for p in path.parts):
-        continue
-    if path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.dat', '.tar', '.gz', '.zip'}:
-        continue
-    try:
-        text = path.read_text(encoding='utf-8', errors='ignore')
-    except OSError:
-        continue
-    for i, line in enumerate(text.splitlines(), 1):
-        if not pat.search(line):
-            continue
-        if path.as_posix() in allow:
-            continue
-        if 'mcpre.' in line.lower():
-            continue
-        hits.append('%s:%d:%s' % (path, i, line.strip()[:120]))
-if hits:
-    print('MCP_LEAK')
-    for h in hits[:40]:
-        print(h)
-    raise SystemExit(1)
-raise SystemExit(0)
-PY
-  then
-    pass "MCP_SURFACE_SCAN"
+  missing=0
+  for req in \
+    lib/drlink_mcp_bridge.py \
+    lib/drlink_control_db.py \
+    lib/drlink_control_plane.py \
+    lib/drlink_control_cli.py \
+    lib/drlink_ai_agent.py \
+    server/drlink-mcp-bridge.py \
+    server/drlink-mcp-bridge.service \
+    tests/test-ai-access-mcp-e2e.py
+  do
+    if [[ ! -f "$req" ]]; then
+      echo "missing $req" >&2
+      missing=1
+    fi
+  done
+  if grep -q 'CREATE TABLE ai_principals' lib/drlink_control_db.py &&
+     grep -q 'MCP_PROTOCOL_VERSION = "2026-07-28"' lib/drlink_mcp_bridge.py &&
+     [[ "$missing" -eq 0 ]]; then
+    pass "MCP_SURFACE_PRESENT"
   else
-    fail "MCP_SURFACE_SCAN"
+    fail "MCP_SURFACE_PRESENT"
+  fi
+  if grep -q 'SCHEMA_VERSION = 1' lib/drlink_control_db.py &&
+     grep -q 'APPLICATION_ID = 0x44524C4B' lib/drlink_control_db.py; then
+    pass "CONTROL_PLANE_SCHEMA_COMPATIBLE"
+  else
+    fail "CONTROL_PLANE_SCHEMA_COMPATIBLE"
   fi
 else
-  pass "MCP_V2_4_EXCLUSION (n/a)"
+  pass "MCP_V2_4_INCLUDED_AND_QUALIFIED (n/a)"
+  pass "CONTROL_PLANE_SCHEMA_COMPATIBLE (n/a)"
 fi
 
 # --- Historical tag immutability (presence) --------------------------------

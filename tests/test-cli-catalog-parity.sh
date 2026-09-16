@@ -91,9 +91,9 @@ for role in ("server", "client", "both"):
     assert catalog.guided_menu_action(role, str(len(entries))) == "exit"
 # Server guided menu follows product-domain IA (not parser verbs / old roots).
 server_menu = catalog.render_guided_menu("server")
-for label in ("Clients", "Services", "Internet Access", "System"):
+for label in ("Clients", "Objects", "Remote Access", "Internet Access", "AI Access", "System"):
     assert label in server_menu, label
-for label in ("Remote Access", "Controlled Egress", "Organize", "Operate"):
+for label in ("Controlled Egress", "Organize", "Operate"):
     assert label not in server_menu, label
 assert "server_clients" in [e[1] for e in catalog.guided_menu_entries("server")]
 frpctl = Path("tools/frpctl").read_text(encoding="utf-8")

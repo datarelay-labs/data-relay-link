@@ -3,6 +3,10 @@
 > **Purpose:** Validation plan for the final Control Plane / Object / Policy / MCP architecture
 > **Rule:** Final stable evidence must come from the same exact source HEAD.
 
+Current project version **2.4.0** / FRP **0.71.0**
+
+Published tags are immutable.
+
 ## 1. Gate philosophy
 
 Validation must prove both allowed behavior and denied behavior.
@@ -565,3 +569,15 @@ BLOCKERS=
 ```
 
 PASS requires zero unresolved release-blocking findings and exact-HEAD evidence for every mandatory gate.
+
+Recorded prior evidence and remaining platform limitations:
+
+```text
+REAL_ENTERPRISE_RESTRICTED_NETWORK_E2E=PASS
+REAL_SSH_SERVICE_E2E=PASS
+REAL_END_TO_END_REBOOT_RECOVERY=PASS
+FIREWALL_DNAT_PRIVATE_FRP_SERVER=NOT_TESTED
+REAL_ARM_SYSTEMD=NOT_TESTED
+REAL_OPENSSL_1_0_2_TLS_ENROLLMENT=NOT_TESTED
+ROCKY_9_SELINUX_ENFORCING=NOT_TESTED
+```

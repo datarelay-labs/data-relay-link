@@ -97,13 +97,16 @@ class ReleaseManifestSchemaTests(unittest.TestCase):
         errs = validate_manifest_dict(data)
         self.assertTrue(any("malformed sha256" in e for e in errs))
 
-    def test_negative_v240_stable_with_mcp(self):
+    def test_v240_accepts_mcp_included_true(self):
         data = base_manifest(
-            channel="stable",
-            git_ref="v2.4.0",
+            channel="development",
             features={"mcp_included": True},
-            qualification={"real_e2e": "pass"},
         )
+        errs = validate_manifest_dict(data)
+        self.assertEqual(errs, [], errs)
+
+    def test_negative_mcp_included_not_boolean(self):
+        data = base_manifest(features={"mcp_included": "yes"})
         errs = validate_manifest_dict(data)
         self.assertTrue(any("mcp_included" in e for e in errs))
 

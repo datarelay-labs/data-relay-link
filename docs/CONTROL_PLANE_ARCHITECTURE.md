@@ -241,8 +241,8 @@ Example:
 external1
   Type: Network
   Values:
-    210.90.80.0/24
-    210.90.81.0/24
+    203.0.113.0/24
+    203.0.113.128/25
 
 internal1
   Type: Network
@@ -633,7 +633,7 @@ Policy debugging uses actual flow inputs.
 Remote Access example:
 
 ```text
-test remote-access 210.90.80.10 10.10.10.50 tcp 22
+test remote-access 203.0.113.10 10.10.10.50 tcp 22
 ```
 
 Internet Access example:

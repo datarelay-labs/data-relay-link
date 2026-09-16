@@ -3,6 +3,13 @@
 > **Purpose:** Exact-HEAD stable qualification checklist
 > **Rule:** A checked item requires retained evidence. Architecture documentation is not implementation evidence.
 
+Authoritative classification of remaining gates is in `docs/RELEASE_VALIDATION.md`.
+Do **not** tag a tree whose `PROJECT_VERSION` does not match the intended immutable tag.
+
+FRP_VERSION=0.71.0
+
+Published tags are immutable. Preparing the 2.4.0 immutable tag is a later qualification step. Published tags remain immutable and must never be moved, recreated, retargeted, or deleted.
+
 ## 1. Candidate identity
 
 - [ ] `PROJECT_VERSION=2.4.0`.

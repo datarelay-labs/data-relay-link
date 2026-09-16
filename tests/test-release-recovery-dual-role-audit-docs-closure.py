@@ -118,8 +118,8 @@ class ReleaseRecoveryDualRoleAuditDocsClosure(unittest.TestCase):
             "server",
         )
         self.assertEqual(result.get("status"), "ok")
-        self.assertEqual(result.get("action"), "restore_backup")
-        self.assertIn("--yes", result.get("passthrough") or [])
+        self.assertEqual(result.get("action"), "control_plane")
+        self.assertEqual((result.get("tokens") or [])[:2], ["system", "restore"])
 
     def test_restore_help_states_same_version(self):
         help_txt = CATALOG.command_help(CATALOG.find(("system", "restore")))

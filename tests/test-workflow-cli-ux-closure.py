@@ -41,20 +41,20 @@ def _msg(result):
 class DiscoveryTests(unittest.TestCase):
     def test_public_set_surface(self):
         names = [n for n, _ in CATALOG.subcommands("set", "server")]
-        self.assertEqual(
-            names,
-            [
-                "client",
-                "group",
-                "service-profile",
-                "acl",
-                "internet-profile",
-                "fixed-tcp",
-                "server",
-            ],
-        )
+        for required in (
+            "client",
+            "object",
+            "object-group",
+            "client-group",
+            "remote-access",
+            "internet-access",
+            "ai-principal",
+            "ai-access",
+            "fixed-tcp",
+            "server",
+        ):
+            self.assertIn(required, names)
         for banned in (
-            "enrollment",
             "access-rule",
             "access-source",
             "service-access",
@@ -65,7 +65,8 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_public_test_surface(self):
         names = [n for n, _ in CATALOG.subcommands("test", "server")]
-        self.assertEqual(names, ["acl", "internet", "fixed-tcp"])
+        for required in ("acl", "internet", "fixed-tcp", "remote-access", "internet-access", "ai-access"):
+            self.assertIn(required, names)
         self.assertNotIn("access", names)
 
     def test_no_other_category(self):

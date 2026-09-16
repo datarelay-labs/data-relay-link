@@ -297,7 +297,7 @@ test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>
 Example:
 
 ```text
-test remote-access 210.90.80.10 10.10.10.50 tcp 22
+test remote-access 203.0.113.10 10.10.10.50 tcp 22
 ```
 
 Output includes:

@@ -95,8 +95,8 @@ def main() -> int:
             if git_ref == "v%s" % project:
                 errs.append("development must not use future stable tag ref")
         features = data.get("features") or {}
-        if project.startswith("2.4.") and features.get("mcp_included") is not False:
-            errs.append("features.mcp_included must be false for 2.4.x")
+        if features.get("mcp_included") not in (True, False):
+            errs.append("features.mcp_included must be boolean")
         errs.extend(validate_manifest_dict(data, require_artifacts=True))
         if errs:
             for e in errs:
@@ -113,7 +113,7 @@ def main() -> int:
         frp_version=frp,
         channel=channel,
         source_head=head,
-        mcp_included=False,
+        mcp_included=True,
     )
     # Stable preparation still uses v-tag git_ref; development uses HEAD.
     if channel != "stable":
@@ -126,7 +126,7 @@ def main() -> int:
             (note + " " if note else "")
             + marker
             + "; never advertise a future stable tag before it exists. "
-            "features.mcp_included=false for the v2.4.0 line."
+            "features.mcp_included=true after MCP Bridge/AI Access implementation."
         ).strip()
     path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     print("UPDATED release-manifest.json channel=%s source_head=%s" % (channel, head))
