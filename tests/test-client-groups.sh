@@ -277,20 +277,25 @@ cat "$WORKDIR/del-cli.out"
 [[ "$del_rc" -eq 0 ]] || { echo "FAIL: delete group rc=$del_rc" >&2; exit 1; }
 grep -qi 'Deleted group' "$WORKDIR/del-cli.out" || { echo "FAIL: delete group missing confirmation output" >&2; exit 1; }
 # Action-first help topics describe the canonical create/add/remove trees
-# (or guide operators to help/help legacy when the topic moved).
+# or reject obsolete topics with a pointer to help commands.
 "$CTL" help create >"$WORKDIR/help-create" 2>&1 || true
 "$CTL" help add >"$WORKDIR/help-add" 2>&1 || true
 "$CTL" help remove >"$WORKDIR/help-remove" 2>&1 || true
-grep -qiE 'create |Usage|zero-touch|enrollment|Unknown help topic|help legacy|help commands' \
+grep -qiE 'create |Usage|zero-touch|enrollment|Unknown help topic|help commands|obsolete' \
   "$WORKDIR/help-create"
-grep -qiE 'add |Usage|client|service|Unknown help topic|help legacy|help commands' \
+grep -qiE 'add |Usage|client|service|Unknown help topic|help commands|obsolete' \
   "$WORKDIR/help-add"
-grep -qiE 'remove |Usage|client|Unknown help topic|help legacy|help commands' \
+grep -qiE 'remove |Usage|client|Unknown help topic|help commands|obsolete' \
   "$WORKDIR/help-remove"
 "$CTL" help group >"$WORKDIR/help-group" 2>&1 || true
-grep -Eqi 'Compatibility topic|help legacy|Unknown help topic|create group|show group' "$WORKDIR/help-group"
-"$CTL" help legacy >"$WORKDIR/help-legacy"
-grep -Eqi 'create group|add client|remove client|group add-client|show groups' "$WORKDIR/help-legacy"
+grep -Eqi 'Compatibility topic|Unknown help topic|create group|show group|set group' "$WORKDIR/help-group"
+set +e
+"$CTL" help legacy >"$WORKDIR/help-legacy" 2>"$WORKDIR/help-legacy.err"
+legacy_rc=$?
+set -e
+cat "$WORKDIR/help-legacy" "$WORKDIR/help-legacy.err" >"$WORKDIR/help-legacy.all"
+[[ "$legacy_rc" -ne 0 ]] || { echo "FAIL: help legacy must be rejected" >&2; exit 1; }
+grep -Eqi "help legacy.*removed|help commands|obsolete" "$WORKDIR/help-legacy.all"
 
 grep -q '"event":"group.created"' "$TREE/var/log/drlink/audit.jsonl"
 grep -Eq '"event":"group.(renamed|updated)"' "$TREE/var/log/drlink/audit.jsonl"

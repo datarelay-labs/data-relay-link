@@ -60,6 +60,8 @@ python3 tests/test-core-correctness-p1.py
 ./tests/test-core-correctness-lifecycle.sh
 ./tests/test-cli-hardening.sh
 ./tests/test-cli-catalog-parity.sh
+python3 tests/test-no-legacy-current-surface.py
+python3 tests/test-canonical-runtime-policy.py
 ./tests/test-release-blockers-cli.sh
 ./tests/test-enroll-bulk.sh
 ./tests/test-zero-service-client.sh

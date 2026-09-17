@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove public tokens → match action → dry-run backend argv for key paths."""
+"""Prove public tokens → match action for canonical v2.4 control-plane paths."""
 from __future__ import annotations
 
 import json
@@ -33,22 +33,10 @@ def write_server_tree(tree: Path) -> None:
     (tree / "usr/local/lib/drlink").mkdir(parents=True)
     cfg = {
         "registry_file": str(tree / "var/lib/drlink/registry.json"),
-        "egress_control_file": str(tree / "var/lib/drlink/egress-control.json"),
-        "access_control_file": str(tree / "var/lib/drlink/access-control.json"),
-        "service_profiles_file": str(tree / "var/lib/drlink/service-profiles.json"),
     }
     (tree / "etc/drlink/config.json").write_text(json.dumps(cfg) + "\n", encoding="utf-8")
     (tree / "var/lib/drlink/registry.json").write_text(
         json.dumps({"schema_version": 2, "clients": {}}) + "\n", encoding="utf-8"
-    )
-    (tree / "var/lib/drlink/egress-control.json").write_text(
-        json.dumps({"schema_version": 3, "egress_profiles": {}}) + "\n", encoding="utf-8"
-    )
-    (tree / "var/lib/drlink/access-control.json").write_text(
-        json.dumps({"schema_version": 1, "access_lists": {}}) + "\n", encoding="utf-8"
-    )
-    (tree / "var/lib/drlink/service-profiles.json").write_text(
-        json.dumps({"schema_version": 1, "profiles": {}}) + "\n", encoding="utf-8"
     )
     (tree / "etc/drlink/version").write_text(
         "PROJECT_VERSION=2.4.0\nFRP_VERSION=0.71.0\n", encoding="utf-8"
@@ -94,136 +82,51 @@ class PublicRuntimeMatrixTests(unittest.TestCase):
         out = (proc.stdout or "") + (proc.stderr or "")
         self.assertNotRegex(out, r"usage:\s+frp-", msg=out)
         self.assertNotIn("argparse", out.lower(), msg=out)
-        argv = None
-        for line in out.splitlines():
-            if line.startswith("DISPATCH_ARGV\t"):
-                argv = json.loads(line.split("\t", 1)[1])
-                break
-        return proc.returncode, out, argv
+        return proc.returncode, out
 
-    def test_show_internet_family(self):
-        for toks, action in (
-            (("show", "internet"), "egress_cmd"),
-            (("show", "internet-profile", "vendor-api"), "show_egress_profile"),
-            (("show", "access-rule", "office"), "access_cmd"),
-            (("show", "service-profile", "office-ssh"), "show_profile"),
+    def test_obsolete_surfaces_rejected(self):
+        for toks in (
+            ("show", "internet-profile", "vendor-api"),
+            ("show", "access-rule", "office"),
+            ("show", "service-profile", "office-ssh"),
+            ("set", "access-source", "office", "203.0.113.10"),
+            ("set", "internet-destination", "vendor-api", "api.example.com", "443", "https"),
+            ("set", "service-profile", "office-ssh"),
+            ("system", "export", "internet-profile", "vendor-api", "/tmp/v.json"),
+            ("system", "cleanup", "access-rule", "office", "expired"),
+            ("help", "legacy"),
+            ("access", "list"),
+            ("egress", "list"),
+        ):
+            result = self.match(*toks)
+            self.assertEqual(result.get("status"), "error", toks)
+
+    def test_canonical_control_plane_actions(self):
+        for toks in (
+            ("show", "remote-access"),
+            ("set", "remote-access", "office"),
+            ("show", "internet-access"),
+            ("set", "internet-access", "allow-api"),
+            ("set", "fixed-tcp", "vendor-license"),
+            ("set", "fixed-tcp", "vendor-license", "enabled"),
+            ("unset", "fixed-tcp", "vendor-license", "enabled"),
+            ("unset", "fixed-tcp", "vendor-license"),
+            ("show", "published-services"),
+            ("test", "remote-access", "10.0.0.5", "lab", "tcp", "22"),
+            ("test", "internet-access", "10.0.0.5", "api.example.com", "443", "https"),
         ):
             result = self.match(*toks)
             self.assertEqual(result.get("status"), "ok", result)
-            self.assertEqual(result.get("action"), action, result)
+            self.assertEqual(result.get("action"), "control_plane", result)
 
-    def test_access_source_argv(self):
-        result = self.match("set", "access-source", "office", "203.0.113.10")
-        self.assertEqual(result["passthrough"][:6], [
-            "add-source", "office", "--name", "203.0.113.10", "--source", "203.0.113.10"
-        ])
-        rc, out, argv = self.dry_run("set", "access-source", "office", "203.0.113.10")
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(
-            argv,
-            ["frp-access", "add-source", "office", "--name", "203.0.113.10", "--source", "203.0.113.10"],
-        )
-        result = self.match("unset", "access-source", "office", "203.0.113.10")
-        self.assertEqual(
-            result["passthrough"][:4],
-            ["remove-source", "office", "--source", "203.0.113.10"],
-        )
-
-    def test_internet_destination_protocol_argv(self):
-        result = self.match(
-            "set", "internet-destination", "vendor-api", "api.example.com", "443", "https"
-        )
-        self.assertEqual(result.get("protocol"), "https")
-        rc, out, argv = self.dry_run(
-            "set", "internet-destination", "vendor-api", "api.example.com", "443", "https"
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(
-            argv,
-            [
-                "frp-egress",
-                "add-destination",
-                "vendor-api",
-                "api.example.com",
-                "443",
-                "--protocol",
-                "https",
-            ],
-        )
-
-    def test_test_internet_protocol_argv(self):
-        result = self.match("test", "internet", "10.0.0.5", "api.example.com", "443")
-        self.assertEqual(result["passthrough"], ["explain", "10.0.0.5", "api.example.com", "443"])
-        result = self.match(
-            "test", "internet", "10.0.0.5", "api.example.com", "443", "https"
-        )
-        self.assertEqual(
-            result["passthrough"],
-            ["explain", "10.0.0.5", "api.example.com", "443", "--protocol", "https"],
-        )
-        rc, out, argv = self.dry_run(
-            "test", "internet", "10.0.0.5", "api.example.com", "443", "https"
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(
-            argv,
-            [
-                "frp-egress",
-                "explain",
-                "10.0.0.5",
-                "api.example.com",
-                "443",
-                "--protocol",
-                "https",
-            ],
-        )
-
-    def test_fixed_tcp_lifecycle_actions(self):
-        result = self.match("set", "fixed-tcp", "vendor-license")
-        self.assertEqual(result["action"], "control_plane")
-        self.assertEqual(result["tokens"][:3], ["set", "fixed-tcp", "vendor-license"])
-        enabled = self.match("set", "fixed-tcp", "vendor-license", "enabled")
-        self.assertEqual(enabled["action"], "control_plane")
-        disabled = self.match("unset", "fixed-tcp", "vendor-license", "enabled")
-        self.assertEqual(disabled["action"], "control_plane")
-        deleted = self.match("unset", "fixed-tcp", "vendor-license")
-        self.assertEqual(deleted["action"], "control_plane")
-        result = self.match("test", "fixed-tcp", "vendor-license", "10.0.0.5")
-        self.assertEqual(result["passthrough"], ["tcp", "explain", "vendor-license", "10.0.0.5"])
-        rc, out, argv = self.dry_run("test", "fixed-tcp", "vendor-license", "10.0.0.5")
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(argv, ["frp-egress", "tcp", "explain", "vendor-license", "10.0.0.5"])
-
-    def test_support_bundle_and_export(self):
+    def test_support_bundle_still_routes(self):
         self.assertEqual(self.match("system", "support-bundle")["action"], "support_bundle")
         self.assertEqual(
             self.match("system", "support-bundle", "/tmp/x.tgz")["passthrough"],
             ["--output", "/tmp/x.tgz"],
         )
-        rc, out, argv = self.dry_run("system", "support-bundle", "/tmp/x.tgz")
+        rc, out = self.dry_run("system", "support-bundle", "/tmp/x.tgz")
         self.assertEqual(rc, 0, out)
-        self.assertEqual(argv, ["frp-support-bundle", "--output", "/tmp/x.tgz"])
-        result = self.match("system", "export", "internet-profile", "vendor-api", "/tmp/v.json")
-        self.assertEqual(
-            result["passthrough"],
-            ["export", "vendor-api", "--output", "/tmp/v.json"],
-        )
-        rc, out, argv = self.dry_run(
-            "system", "export", "internet-profile", "vendor-api", "/tmp/v.json"
-        )
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(argv, ["frp-egress", "export", "vendor-api", "--output", "/tmp/v.json"])
-
-    def test_cleanup_access_rule_expired(self):
-        result = self.match("system", "cleanup", "access-rule", "office", "expired")
-        self.assertEqual(result["action"], "access_cmd")
-        self.assertEqual(result["passthrough"], ["remove-expired", "office"])
-        self.assertTrue(result.get("confirm_expired"))
-
-    def test_service_profile_create_action(self):
-        result = self.match("set", "service-profile", "office-ssh")
-        self.assertEqual(result["action"], "create_profile")
-        self.assertEqual(result["name"], "office-ssh")
 
 
 if __name__ == "__main__":

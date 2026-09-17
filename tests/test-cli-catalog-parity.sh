@@ -19,7 +19,7 @@ def discovery_blob(role):
     chunks = [
         catalog.root_help(role),
         catalog.workflow_help(role),
-        catalog.legacy_help(role),
+        catalog.legacy_help(role),  # rejection text only
         "\n".join(catalog.shell_usage_lines(role)),
         grammar.help_text([], role),
     ]
@@ -60,22 +60,25 @@ set_cmd = catalog.find(["set", "group"])
 assert set_cmd is not None
 assert set_cmd["path"] == ("set", "group")
 
-internet_set = catalog.find(["set", "internet-profile"])
-assert internet_set is not None
-assert internet_set["path"] == ("set", "internet-profile")
-egress_set = catalog.find(["set", "egress-profile"], include_aliases=True)
-assert egress_set is not None
+# Obsolete profile/ACL surfaces must be absent from the current catalog.
+assert catalog.find(["set", "internet-profile"]) is None
+assert catalog.find(["set", "service-profile"]) is None
+assert catalog.find(["set", "acl"]) is None
+assert catalog.find(["access", "list"]) is None
+assert len(catalog.HIDDEN_COMPAT_ALIASES) == 0
 
-# Public UX does not require --protocol; guided/backends enforce it.
-assert catalog.strict_error(["set", "internet-destination", "p", "h", "443", "https"]) in (None,)
+# Canonical control-plane resources remain discoverable.
+assert catalog.find(["set", "internet-access"]) is not None
+assert catalog.find(["set", "remote-access"]) is not None
+assert catalog.find(["set", "published-service"], include_aliases=True) is not None or catalog.find(["show", "published-services"]) is not None
+
 assert catalog.strict_error(["system", "diagnostics", "--json", "true"]) == "flag --json does not take a value"
 
-assert catalog.find(["rename", "group"], include_aliases=True).get("hidden")
-# Hidden resource-first compat still rewrites into dispatcher-shaped tokens.
-resolved = catalog.resolve_tokens(["group", "add-client", "edge", "24cd7856"])
-assert resolved[:2] in (["add", "client"], ["set", "client"]), resolved
-internal = catalog.to_internal(["group", "add-client", "edge", "24cd7856"])
-assert internal[:2] == ["add", "client"], internal
+# Grammar rejects obsolete commands instead of rewriting them.
+rejected = grammar.match(["set", "internet-profile", "x"], role="server")
+assert rejected.get("status") == "error", rejected
+rejected = grammar.match(["help", "legacy"], role="server")
+assert rejected.get("status") == "error", rejected
 print("CLI_CATALOG_PARITY=PASS")
 
 # Guided menu must be generated from NAVIGATION_TREE / COMMANDS, not hard-coded.
@@ -106,39 +109,19 @@ for tokens, needle in (
     (["show", "status", "foo"], "unexpected argument"),
     (["system", "version", "abc"], "unexpected argument"),
     (["menu", "x"], "unexpected argument"),
-    (["show", "access-rules", "extra"], "unexpected argument"),
-    (["show", "internet", "x"], "unexpected argument"),
 ):
     err = catalog.strict_error(tokens)
     assert err and needle in err, (tokens, err)
 
-# Lifecycle confirmation / risk metadata.
-revoke = catalog.find(["revoke", "client"], include_aliases=True)
-release = catalog.find(["release", "client"], include_aliases=True)
+# Lifecycle confirmation / risk metadata on canonical unset client.
 unset_client = catalog.find(["unset", "client"])
-assert revoke["confirmation"] == "typed_token" and revoke["risk"] == "irreversible"
-assert release["confirmation"] == "typed_token" and release["risk"] == "irreversible"
+assert unset_client is not None
 assert unset_client["confirmation"] == "typed_token"
-assert "--force" in catalog.flag_names(revoke["flags"], include_hidden=True)
-assert "--force" in catalog.flag_names(release["flags"], include_hidden=True)
 
-# Flag help metadata for shallow options (hidden flags still carry metadata).
-yes = next(f for f in catalog.find(["unset", "service-access"], include_aliases=True)["flags"] if f["name"] == "--yes")
-assert yes.get("description")
-ttl = next(f for f in catalog.find(["set", "access-source"], include_aliases=True)["flags"] if f["name"] == "--ttl")
-assert ttl.get("metavar") and ttl.get("description")
-
-# Public catalog coverage for reverse-parity surfaces.
-assert catalog.find(["set", "access-source"], include_aliases=True)
-assert "--yes" in catalog.flag_names(catalog.find(["unset", "service-access"], include_aliases=True)["flags"], include_hidden=True)
-assert "--name" in catalog.flag_names(catalog.find(["set", "internet-source"], include_aliases=True)["flags"], include_hidden=True)
-assert "--ssh-user" in catalog.flag_names(catalog.find(["set", "service-profile"], include_aliases=True)["flags"], include_hidden=True)
-assert "--yes" in catalog.flag_names(catalog.find(["unset", "internet-source"], include_aliases=True)["flags"], include_hidden=True)
-assert "--yes" in catalog.flag_names(catalog.find(["unset", "internet-profile"], include_aliases=True)["flags"], include_hidden=True)
-egress_test = catalog.find(["test", "internet"], include_aliases=True)
-assert egress_test is not None
-assert "policy" in (egress_test.get("detail") or "").lower()
-assert "live" in (egress_test.get("detail") or "").lower() or "connection" in (egress_test.get("detail") or "").lower()
+# Canonical internet/remote test surfaces remain present when catalogued.
+ra = catalog.find(["test", "remote-access"], include_aliases=True)
+ia = catalog.find(["test", "internet-access"], include_aliases=True)
+assert ra is not None or ia is not None
 print("CLI_STRICT_AND_METADATA=PASS")
 PY
 pass "CLI_CATALOG_PARITY"
@@ -166,20 +149,9 @@ def catalog_flags_for(path):
     }
 
 # Map backend (tool, subcommand) → catalog path.
-SURFACES = {
-    ("frp-access", "replace-source"): ("set", "access-source"),
-    ("frp-access", "public"): ("set", "access-public"),
-    ("frp-access", "add-source"): ("add", "access-source"),
-    ("frp-egress", "add-source"): ("add", "egress-source"),
-    ("frp-egress", "remove-source"): ("remove", "egress-source"),
-    ("frp-egress", "remove-destination"): ("remove", "egress-destination"),
-    ("frp-egress", "delete"): ("delete", "egress-profile"),
-    ("frp-egress", "explain"): ("explain", "egress"),
-    ("frp-profile", "set"): ("set", "service-profile"),
-    ("frp-release-client", None): ("release", "client"),
-    ("frp-release-service", None): ("release", "client"),
-    ("frp-revoke-client", None): ("revoke", "client"),
-}
+# Obsolete frp-access/frp-egress/frp-profile tools are no longer current
+# public catalog surfaces. Reverse parity tracks remaining current tools only.
+SURFACES = {}
 
 def parse_tool_flags(tool_path, subcommand):
     """Best-effort: collect add_argument('--…') under a subparser or root."""
@@ -278,6 +250,7 @@ for name in (
     "frp_policy_fingerprint.py",
     "frp_egress_runtime.py",
     "drlink-tcp-egress.py",
+    "drlink_runtime_policy.py",
     "public_suffix_list.dat",
     "egress-recipes/https-api.json",
 ):

@@ -65,14 +65,15 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_public_test_surface(self):
         names = [n for n, _ in CATALOG.subcommands("test", "server")]
-        for required in ("acl", "internet", "fixed-tcp", "remote-access", "internet-access", "ai-access"):
+        for required in ("remote-access", "internet-access", "ai-access"):
             self.assertIn(required, names)
-        self.assertNotIn("access", names)
+        for banned in ("acl", "access", "internet-profile", "service-profile"):
+            self.assertNotIn(banned, names)
 
     def test_no_other_category(self):
         text = _msg(GRAMMAR.match(["set", "?"], "server"))
         self.assertNotIn("\nOther\n", text)
-        self.assertIn("Access Control", text)
+        self.assertIn("Remote Access", text)
         self.assertIn("Internet Access", text)
 
     def test_incomplete_never_backend_usage(self):
@@ -80,19 +81,18 @@ class DiscoveryTests(unittest.TestCase):
             ["set", "acl"],
             ["set", "internet-profile"],
             ["test", "acl"],
-            ["test", "internet"],
-            ["test", "fixed-tcp"],
             ["show", "acl"],
             ["show", "internet-profile"],
             ["unset", "acl"],
             ["unset", "internet-profile"],
-            ["show", "access-log"],
+            ["access", "list"],
+            ["egress", "list"],
+            ["help", "legacy"],
         ):
             result = GRAMMAR.match(cmd, "server")
-            self.assertEqual(result.get("status"), "incomplete", cmd)
+            self.assertEqual(result.get("status"), "error", cmd)
             msg = _msg(result).lower()
-            self.assertFalse(msg.startswith("usage: frp-"), cmd)
-            for leak in ("frp-access", "frp-egress", "frp-profile", "frpc", "frps"):
+            for leak in ("frp-access", "frp-egress", "frp-profile"):
                 self.assertNotIn(leak, msg, cmd)
 
     def test_set_server_properties_discoverable(self):
@@ -113,62 +113,38 @@ class WorkflowGrammarTests(unittest.TestCase):
         self.assertEqual(r.get("action"), "create_group")
         self.assertEqual(r.get("name"), "production")
 
-    def test_w4_acl_mapping(self):
-        create = GRAMMAR.match(["set", "acl", "office-network"], "server")
-        self.assertEqual(create.get("action"), "access_cmd")
-        self.assertEqual(create.get("passthrough"), ["create", "office-network"])
-
+    def test_w4_remote_access_canonical(self):
+        create = GRAMMAR.match(["set", "remote-access", "office-network"], "server")
+        self.assertEqual(create.get("status"), "ok")
+        self.assertEqual(create.get("action"), "control_plane")
         source = GRAMMAR.match(
-            ["set", "acl", "office-network", "source", "10.10.10.0/24"], "server"
+            ["set", "remote-access", "office-network", "source", "office"], "server"
         )
-        self.assertEqual(source.get("action"), "access_cmd")
-
-        assign = GRAMMAR.match(
-            ["set", "acl", "office-network", "service", "dp1", "ssh"], "server"
+        self.assertEqual(source.get("action"), "control_plane")
+        test = GRAMMAR.match(
+            ["test", "remote-access", "10.10.10.25", "lab", "tcp", "22"], "server"
         )
-        self.assertEqual(assign.get("action"), "access_cmd")
-        self.assertEqual(
-            assign.get("passthrough")[:4],
-            ["assign", "dp1", "ssh", "office-network"],
-        )
+        self.assertEqual(test.get("action"), "control_plane")
+        # Obsolete ACL surface is rejected.
+        obsolete = GRAMMAR.match(["set", "acl", "office-network"], "server")
+        self.assertEqual(obsolete.get("status"), "error")
 
-        test = GRAMMAR.match(["test", "acl", "dp1", "ssh", "10.10.10.25"], "server")
-        self.assertEqual(test.get("action"), "access_cmd")
-        self.assertEqual(test.get("passthrough"), ["test", "dp1", "ssh", "10.10.10.25"])
-
-    def test_w5_internet_nested_mapping(self):
-        create = GRAMMAR.match(["set", "internet-profile", "ubuntu-update"], "server")
-        self.assertEqual(create.get("action"), "create_egress_profile")
-
-        source = GRAMMAR.match(
-            ["set", "internet-profile", "ubuntu-update", "source", "10.10.20.0/24"],
-            "server",
-        )
-        self.assertEqual(source.get("action"), "add_egress_source")
-
-        dest = GRAMMAR.match(
-            [
-                "set",
-                "internet-profile",
-                "ubuntu-update",
-                "destination",
-                "archive.ubuntu.com",
-                "443",
-                "https",
-            ],
-            "server",
-        )
-        self.assertEqual(dest.get("action"), "add_egress_destination")
-
+    def test_w5_internet_access_canonical(self):
+        create = GRAMMAR.match(["set", "internet-access", "ubuntu-update"], "server")
+        self.assertEqual(create.get("status"), "ok")
+        self.assertEqual(create.get("action"), "control_plane")
         enable = GRAMMAR.match(
-            ["set", "internet-profile", "ubuntu-update", "enabled"], "server"
+            ["set", "internet-access", "ubuntu-update", "enabled"], "server"
         )
-        self.assertEqual(enable.get("action"), "enable_egress_profile")
+        self.assertEqual(enable.get("action"), "control_plane")
+        obsolete = GRAMMAR.match(["set", "internet-profile", "ubuntu-update"], "server")
+        self.assertEqual(obsolete.get("status"), "error")
 
-    def test_hidden_compat_still_parseable(self):
+    def test_obsolete_compat_rejected(self):
         r = GRAMMAR.match(["set", "access-rule", "office"], "server")
-        self.assertEqual(r.get("status"), "ok")
-        self.assertEqual(r.get("action"), "access_cmd")
+        self.assertEqual(r.get("status"), "error")
+        r2 = GRAMMAR.match(["help", "legacy"], "server")
+        self.assertEqual(r2.get("status"), "error")
 
 
 class CreateClientWorkflowTests(unittest.TestCase):

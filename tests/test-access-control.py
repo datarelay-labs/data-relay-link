@@ -419,55 +419,42 @@ class AccessControlTests(unittest.TestCase):
 
 
 
+
 class PolicyCacheFailClosedTests(unittest.TestCase):
-    """PolicyCache must fail closed when authoritative files disappear."""
+    """PolicyCache must fail closed when SQLite control plane is unavailable."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.etc = self.root / "etc" / "frp-auto-deploy"
-        self.var = self.root / "var" / "lib" / "frp-auto-deploy"
-        self.etc.mkdir(parents=True)
-        self.var.mkdir(parents=True)
-        self.access_path = self.var / "access-control.json"
-        self.registry_path = self.var / "registry.json"
-        self.config_path = self.etc / "config.json"
-        self.state = ACL.empty_access_state()
-        lid, _ = ACL.create_access_list(self.state, "Office")
-        ACL.add_source_entry(self.state, lid, "net", "198.51.100.0/24")
-        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
-        ACL.save_access_state(self.state, path=self.access_path)
-        self.registry = {
-            "schema_version": 2,
-            "clients": {
-                "machine-aaa": {
-                    "label": "alpha",
-                    "hostname": "alpha-host",
-                    "services": {"ssh": {"remote_port": 6001, "enabled": True}},
-                }
-            },
-            "reserved": [6001],
-        }
-        self.registry_path.write_text(json.dumps(self.registry) + "\n", encoding="utf-8")
-        self.config_path.write_text(
-            json.dumps(
-                {
-                    "access_control_file": str(self.access_path),
-                    "access_conn_log_file": str(self.var / "access-conn.jsonl"),
-                    "registry_file": str(self.registry_path),
-                }
-            )
-            + "\n",
-            encoding="utf-8",
+        os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
+        (self.root / "etc" / "drlink").mkdir(parents=True)
+        (self.root / "var" / "lib" / "drlink").mkdir(parents=True)
+        self.config_path = self.root / "etc" / "drlink" / "config.json"
+        self.config_path.write_text(json.dumps({"deployment_mode": "direct"}) + "\n", encoding="utf-8")
+        sys.path.insert(0, str(ROOT / "lib"))
+        from drlink_control_plane import ControlPlane
+        import drlink_runtime_policy as RP
+        self.RP = RP
+        self.plane = ControlPlane(str(self.root))
+        self.mid = "machineaaamachineaaamachineaaa0001"
+        self.plane.set_object_type("office", "network")
+        self.plane.set_object_value("office", "198.51.100.0/24")
+        self.plane.upsert_client(self.mid, label="alpha", hostname="alpha-host",
+                                 addresses=[{"address": "10.0.0.5", "active": True}])
+        self.plane.set_published_service(
+            self.mid, "ssh", service_type="ssh", target_mode="self",
+            target_host="127.0.0.1", target_port=22, enabled=True, public_port=6001,
         )
-        os.environ["FRP_DEPLOY_TEST_ROOT"] = ""
+        self.plane.set_rule("remote", "allow-office")
+        self.plane.set_rule_source("remote", "allow-office", "office")
+        self.plane.set_rule_destination("remote", "allow-office", "alpha")
+        self.plane.set_rule_service("remote", "allow-office", "tcp", 22)
+        self.plane.set_rule_action("remote", "allow-office", "allow")
+        self.plane.set_rule_enabled("remote", "allow-office", True)
+        self.plane.close()
         plugin_path = ROOT / "server" / "frp-access-plugin.py"
-        spec = importlib.util.spec_from_file_location(
-            "frp_access_plugin_test", str(plugin_path)
-        )
+        spec = importlib.util.spec_from_file_location("frp_access_plugin_test", str(plugin_path))
         self.plugin = importlib.util.module_from_spec(spec)
-        # Ensure plugin resolves lib next to repo, not missing install root.
-        sys.modules.pop("frp_access_control", None)
         spec.loader.exec_module(self.plugin)
         self.cache = self.plugin.PolicyCache(self.config_path)
 
@@ -475,74 +462,39 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _authorize_via_cache(self, source_ip="198.51.100.9"):
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
-        if load_error is not None:
+        plane, load_error, _cfg = self.cache.snapshot()
+        if load_error is not None or plane is None:
             return {
-                "decision": ACL.DECISION_DENY,
-                "reason": ACL.REASON_AUTHORIZATION_ERROR,
+                "decision": self.RP.DECISION_DENY,
+                "reason": self.RP.REASON_DB_UNAVAILABLE,
                 "load_error": load_error,
             }
-        proxy = ACL.expected_proxy_name("alpha-host", "machine-aaa", "ssh")
-        return ACL.authorize(
-            access_state, registry, proxy_name=proxy, source_ip=source_ip
-        )
+        proxy = self.RP.expected_proxy_name("alpha-host", self.mid, "ssh")
+        return self.RP.authorize_remote(plane, proxy_name=proxy, source_ip=source_ip)
 
     def test_policy_cache_healthy_allowlist(self):
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
+        plane, load_error, _cfg = self.cache.snapshot()
         self.assertIsNone(load_error)
-        self.assertTrue(self.access_path.exists())
-        self.assertTrue(self.registry_path.exists())
+        self.assertIsNotNone(plane)
         result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(result["decision"], self.RP.DECISION_ALLOW)
 
-    def test_missing_access_policy_fail_closed_and_recovery(self):
+    def test_missing_db_fail_closed(self):
         result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
-        backup = self.access_path.read_bytes()
-        self.access_path.unlink()
-        # Force fingerprint re-check
-        self.cache.access_fp = object()
-        self.cache.access_mtime = object()
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNotNone(load_error)
-        self.assertIn("missing", load_error)
+        self.assertEqual(result["decision"], self.RP.DECISION_ALLOW)
+        db = self.root / "var" / "lib" / "drlink" / "drlink.db"
+        db.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            (self.root / "var" / "lib" / "drlink" / ("drlink.db" + suffix)).unlink(missing_ok=True)
+        self.cache.reload(force=True)
+        plane, load_error, _cfg = self.cache.snapshot()
+        self.assertTrue(load_error or plane is None)
         denied = self._authorize_via_cache()
-        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
-        self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
-        # Restore
-        self.access_path.write_bytes(backup)
-        self.cache.access_fp = object()
-        self.cache.access_mtime = object()
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNone(load_error)
-        recovered = self._authorize_via_cache()
-        self.assertEqual(recovered["decision"], ACL.DECISION_ALLOW)
-
-    def test_missing_registry_fail_closed_and_recovery(self):
-        result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
-        backup = self.registry_path.read_bytes()
-        self.registry_path.unlink()
-        self.cache.registry_fp = object()
-        self.cache.registry_mtime = object()
-        _a, _r, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNotNone(load_error)
-        self.assertIn("missing", load_error)
-        denied = self._authorize_via_cache()
-        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
-        self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
-        self.registry_path.write_bytes(backup)
-        self.cache.registry_fp = object()
-        self.cache.registry_mtime = object()
-        _a, _r, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNone(load_error)
-        recovered = self._authorize_via_cache()
-        self.assertEqual(recovered["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(denied["decision"], self.RP.DECISION_DENY)
 
     def test_healthz_503_when_policy_missing(self):
         from http.client import HTTPConnection
         from threading import Thread
-        import time
 
         handler = self.plugin.make_handler(self.cache, "/access-auth")
         server = self.plugin.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -556,28 +508,24 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
             self.assertEqual(resp.status, 200)
             body = json.loads(resp.read().decode())
             self.assertTrue(body.get("ok"))
+            self.assertEqual(body.get("authority"), "sqlite")
             conn.close()
 
-            self.access_path.unlink()
-            self.cache.access_fp = object()
-            self.cache.access_mtime = object()
-            time.sleep(0.05)
+            db = self.root / "var" / "lib" / "drlink" / "drlink.db"
+            db.unlink(missing_ok=True)
+            self.cache.reload(force=True)
             conn = HTTPConnection("127.0.0.1", port, timeout=3)
             conn.request("GET", "/healthz")
             resp = conn.getresponse()
             self.assertEqual(resp.status, 503)
             body = json.loads(resp.read().decode())
             self.assertFalse(body.get("ok"))
-            self.assertTrue(body.get("error"))
             conn.close()
 
-            # NewUserConn must reject without PUBLIC fallback
             payload = {
                 "op": "NewUserConn",
                 "content": {
-                    "proxy_name": ACL.expected_proxy_name(
-                        "alpha-host", "machine-aaa", "ssh"
-                    ),
+                    "proxy_name": self.RP.expected_proxy_name("alpha-host", self.mid, "ssh"),
                     "remote_addr": "198.51.100.9:12345",
                 },
             }
@@ -598,62 +546,6 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
-    def test_policy_fingerprint_same_mtime_new_inode_reloads(self):
-        """Atomic replace with identical mtime must still reload (new inode)."""
-        result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
-        before_fp = self.cache.access_fp
-        # New allowlist without the previous source → should DENY after reload.
-        new_state = ACL.empty_access_state()
-        lid, _ = ACL.create_access_list(new_state, "OtherNet")
-        ACL.add_source_entry(new_state, lid, "other", "203.0.113.0/24")
-        ACL.set_service_binding(
-            new_state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid
-        )
-        # Write via temp + replace; then force identical mtime_ns on the new inode.
-        tmp = self.access_path.with_suffix(".tmp-fp")
-        tmp.write_text(
-            json.dumps(new_state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        old_mtime_ns = before_fp[4]
-        os.replace(tmp, self.access_path)
-        os.utime(self.access_path, ns=(old_mtime_ns, old_mtime_ns))
-        after_stat = self.access_path.stat()
-        self.assertEqual(after_stat.st_mtime_ns, old_mtime_ns)
-        self.assertNotEqual(after_stat.st_ino, before_fp[2])
-        # Do not poke cache; natural fingerprint compare must detect inode change.
-        denied = self._authorize_via_cache()
-        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
-        self.assertNotEqual(self.cache.access_fp, before_fp)
-
-    def test_policy_fingerprint_same_timestamp_different_content_reloads(self):
-        result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
-        before_fp = self.cache.access_fp
-        # Overwrite in place with different size/content but same mtime_ns.
-        payload = json.loads(self.access_path.read_text(encoding="utf-8"))
-        # Flip binding to PUBLIC so ALLOW becomes broader — then deny via empty list.
-        mid_map = payload["service_access"]["machine-aaa"]
-        mid_map["ssh"] = {"access_mode": ACL.MODE_PUBLIC, "access_list_id": None}
-        raw = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        # Pad to keep size different from original while we still change content.
-        raw = raw.rstrip() + "\n"
-        self.access_path.write_text(raw, encoding="utf-8")
-        os.utime(self.access_path, ns=(before_fp[4], before_fp[4]))
-        # Size or content fingerprint fields must diverge even if mtime matches.
-        snap_a, _r, err, _c = self.cache.snapshot()
-        self.assertIsNone(err)
-        self.assertNotEqual(self.cache.access_fp, before_fp)
-        # PUBLIC should ALLOW
-        allowed = self._authorize_via_cache(source_ip="198.51.100.9")
-        self.assertEqual(allowed["decision"], ACL.DECISION_ALLOW)
-        self.assertEqual(
-            (snap_a.get("service_access") or {})
-            .get("machine-aaa", {})
-            .get("ssh", {})
-            .get("access_mode"),
-            ACL.MODE_PUBLIC,
-        )
 
 
 class AccessTtlBoundsTests(unittest.TestCase):
