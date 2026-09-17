@@ -2298,6 +2298,20 @@ def _rw_access_remove_expired(rest):
     return ["system", "cleanup", "access-rule", rule, "expired"] + flags
 
 
+def _rw_enable_service(rest):
+    # enable service <ID> / service enable <ID> → set service <ID> enabled
+    if not rest:
+        return ["set", "service"]
+    return ["set", "service", rest[0], "enabled"] + list(rest[1:])
+
+
+def _rw_disable_service(rest):
+    # disable service <ID> / service disable <ID> → unset service <ID> enabled
+    if not rest:
+        return ["unset", "service"]
+    return ["unset", "service", rest[0], "enabled"] + list(rest[1:])
+
+
 REWRITES = {
     ("client", "release"): _rw_client_release,
     ("enrollment", "purge"): _rw_enrollment_purge,
@@ -2314,6 +2328,10 @@ REWRITES = {
     ("egress", "remove-source"): _rw_egress_remove("source"),
     ("access", "remove-expired"): _rw_access_remove_expired,
     ("remove", "access-expired"): _rw_access_remove_expired,
+    ("enable", "service"): _rw_enable_service,
+    ("service", "enable"): _rw_enable_service,
+    ("disable", "service"): _rw_disable_service,
+    ("service", "disable"): _rw_disable_service,
 }
 
 # Roots that also exist as historical flat commands. A bare root token (or a

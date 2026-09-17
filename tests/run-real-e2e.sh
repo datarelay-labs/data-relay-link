@@ -688,7 +688,7 @@ print('PROXY_MAPPED_OK')
 PY" || fail_stop
 
   run_client 12-http-fixtures 'mkdir -p /tmp/frp-e2e-http && printf "macos-web\n" >/tmp/frp-e2e-http/index.html; nohup python3 -m http.server 18080 --bind 127.0.0.1 -d /tmp/frp-e2e-http >/tmp/frp-http.log 2>&1 </dev/null & sleep 1; curl -fsS http://127.0.0.1:18080' || fail_stop
-  run_client 13-http-add 'sudo /usr/local/bin/drlink add service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services' || fail_stop
+  run_client 13-http-add 'sudo /usr/local/bin/drlink add service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/drlink system services apply && sudo /usr/local/bin/drlink show services' || fail_stop
   local http_port
   http_port="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
     "sudo python3 -c \"import json; d=json.load(open('$state_root/client-state.json')); print(((d.get('services') or {}).get('web') or {}).get('remote_port') or '')\"" | tr -d '\r\n')"
@@ -780,7 +780,7 @@ scenario_install() {
 
 scenario_services() {
   run_client 10-http-fixtures "rm -rf /tmp/frp-e2e-http-a /tmp/frp-e2e-http-b; mkdir -p /tmp/frp-e2e-http-a /tmp/frp-e2e-http-b; printf 'web-a\n' >/tmp/frp-e2e-http-a/index.html; printf 'web-b\n' >/tmp/frp-e2e-http-b/index.html; nohup python3 -m http.server 18080 --bind 127.0.0.1 -d /tmp/frp-e2e-http-a >/tmp/frp-http-a.log 2>&1 </dev/null & nohup python3 -m http.server 18081 --bind 127.0.0.1 -d /tmp/frp-e2e-http-b >/tmp/frp-http-b.log 2>&1 </dev/null & sleep 1; curl -fsS http://127.0.0.1:18080; echo ====; curl -fsS http://127.0.0.1:18081" || fail_stop
-  run_client 11-http-add "sudo /usr/local/bin/drlink add service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 11-http-add "sudo /usr/local/bin/drlink add service --preset http --id web --name Web --target-host 127.0.0.1 --target-port 18080 && sudo /usr/local/bin/drlink system services apply && sudo /usr/local/bin/drlink show services" || fail_stop
   # Discover HTTP port from client state (not hardcoded 6001 when other clients exist).
   local http_port
   http_port="$(ssh "${SSH_OPTS[@]}" "$CLIENT_ALIAS" \
@@ -788,13 +788,13 @@ scenario_services() {
   [[ -n "$http_port" ]] || fail_stop
   note "HTTP_PUBLIC_PORT=$http_port"
   run_server 12-http-external "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 13-http-edit "sudo /usr/local/bin/drlink set service web target-port 18081 && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 13-http-edit "sudo /usr/local/bin/drlink set service web target-port 18081 && sudo /usr/local/bin/drlink system services apply && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 14-http-external-edited "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 15-http-disable "sudo /usr/local/bin/drlink disable service web && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 15-http-disable "sudo /usr/local/bin/drlink unset service web enabled && sudo /usr/local/bin/drlink system services apply && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 16-http-disabled "! curl -fsS --max-time 5 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 17-http-enable "sudo /usr/local/bin/drlink enable service web && sudo /usr/local/bin/drlink apply && sudo /usr/local/bin/drlink show services" || fail_stop
+  run_client 17-http-enable "sudo /usr/local/bin/drlink set service web enabled && sudo /usr/local/bin/drlink system services apply && sudo /usr/local/bin/drlink show services" || fail_stop
   run_server 18-http-reenabled "curl -fsS 'http://127.0.0.1:$http_port'" || fail_stop
-  run_client 19-http-disable-again "sudo /usr/local/bin/drlink disable service web && sudo /usr/local/bin/drlink apply >/dev/null" || fail_stop
+  run_client 19-http-disable-again "sudo /usr/local/bin/drlink unset service web enabled && sudo /usr/local/bin/drlink system services apply >/dev/null" || fail_stop
   run_server 20-release "printf 'RELEASE\n' | sudo /usr/local/bin/drlink release service '$CLIENT_MID_PREFIX' web" || fail_stop
   run_server 21-http-released "! curl -fsS --max-time 5 'http://127.0.0.1:$http_port'" || fail_stop
 

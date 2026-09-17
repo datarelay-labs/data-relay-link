@@ -131,6 +131,26 @@ class BackendCatalogReverseParityTests(unittest.TestCase):
             self.assertIn(name, by_name)
             self.assertTrue(by_name[name].get("description"))
 
+    def test_enable_service_alias_includes_enabled(self):
+        # Regression: enable service <id> must not collapse to bare set service <id>.
+        import frp_ctl_grammar as g
+
+        for toks in (
+            ["enable", "service", "web"],
+            ["service", "enable", "web"],
+            ["disable", "service", "web"],
+            ["service", "disable", "web"],
+        ):
+            resolved = self.cat.resolve_tokens(toks, role="client")
+            if toks[0] in ("enable",) or toks[:2] == ["service", "enable"]:
+                self.assertEqual(resolved, ["set", "service", "web", "enabled"])
+                matched = g.match(resolved, "client")
+                self.assertEqual(matched.get("action"), "enable_service")
+            else:
+                self.assertEqual(resolved, ["unset", "service", "web", "enabled"])
+                matched = g.match(resolved, "client")
+                self.assertEqual(matched.get("action"), "disable_service")
+
 
 if __name__ == "__main__":
     unittest.main()
