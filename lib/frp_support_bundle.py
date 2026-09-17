@@ -707,9 +707,28 @@ class BundleBuilder:
             "/etc/drlink/pki/server.key",
             "/etc/frp/client-identity.key",
             "/etc/frp/server_token",
+            "/var/lib/drlink/tls/mcp/active/privkey.pem",
+            "/var/lib/drlink/tls/mcp/previous/privkey.pem",
+            "/var/lib/drlink/tls/mcp/account/account.key",
         ):
             if self.path(rel).exists():
                 omitted.append(rel)
+        # Public MCP TLS metadata only (never private keys).
+        try:
+            import drlink_mcp_tls as mcp_tls
+            from drlink_control_plane import ControlPlane
+
+            plane = ControlPlane(str(self.root) if str(self.root) not in ("/", "") else None)
+            meta = mcp_tls.support_bundle_public_meta(plane, self.root)
+            self.stage_write("mcp-tls/status.json", json.dumps(meta, indent=2, sort_keys=True) + "\n")
+            self.add_section("mcp-tls-public-status")
+            active_cert = self.path("/var/lib/drlink/tls/mcp/active/fullchain.pem")
+            if active_cert.is_file():
+                text = active_cert.read_text(encoding="utf-8", errors="replace")
+                if "PRIVATE KEY" not in text:
+                    self.stage_write("mcp-tls/fullchain.pem", text)
+        except Exception as exc:
+            self.stage_write("mcp-tls/status-error.txt", "mcp tls status unavailable: %s\n" % type(exc).__name__)
         if omitted:
             self.stage_write(
                 "certs/OMITTED_SECRETS.txt",

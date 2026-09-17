@@ -23,6 +23,8 @@ from drlink_configuration_bundle import (
     prepare_plan,
     read_bundle_from_path_or_stdin,
 )
+import drlink_mcp_tls as mcp_tls
+from drlink_mcp_tls import McpTlsError
 
 USAGE_HINT = "No changes were applied."
 
@@ -461,6 +463,10 @@ def _show(plane: ControlPlane, rest):
         for row in plane.conn.execute("SELECT id, kind, status FROM enrollments"):
             sys.stdout.write("%s %s %s\n" % (row["id"], row["kind"], row["status"]))
         return 0
+    if res == "mcp-tls":
+        view = mcp_tls.status_view(plane, plane.root)
+        sys.stdout.write(mcp_tls.format_status(view))
+        return 0
     raise SystemExit("Unknown show resource.")
 
 
@@ -717,7 +723,61 @@ def _set(plane: ControlPlane, rest, client_sel):
         _run(plane._mutate, "set enrollment %s" % kind, "create enrollment", write)
         sys.stdout.write("Enrollment created. Secret is not redisplayed.\n")
         return 0
+    if res == "mcp-tls":
+        return _set_mcp_tls(plane, rest[1:])
     raise SystemExit("Unknown set resource.")
+
+
+def _set_mcp_tls(plane: ControlPlane, rest):
+    if not rest:
+        raise SystemExit(
+            "Missing mcp-tls setting.\n\n"
+            "Usage:\n"
+            "  set mcp-tls hostname <fqdn>\n"
+            "  set mcp-tls mode auto-acme|user-certificate|private-ca\n"
+            "  set mcp-tls contact-email <email>\n"
+            "  set mcp-tls acme-environment staging|production\n\n"
+            "Default public-cloud mode is AUTO_ACME.\n"
+            "PRIVATE_CA is for internal/test clients that trust the DRLink CA;\n"
+            "it is not the default ChatGPT/Claude cloud connector path.\n"
+            "After configure: system certificate issue|import|renew"
+        )
+    prop = rest[0]
+    try:
+        if prop == "hostname":
+            _need(rest, 2, "set mcp-tls hostname <fqdn>")
+            state = mcp_tls.configure_intent(plane, hostname=rest[1])
+        elif prop == "mode":
+            _need(rest, 2, "set mcp-tls mode auto-acme|user-certificate|private-ca")
+            state = mcp_tls.configure_intent(plane, mode=rest[1])
+            if state.get("mode") == mcp_tls.MODE_PRIVATE_CA:
+                sys.stdout.write(
+                    "Warning: PRIVATE_CA certificates are signed by the Data Relay Link private CA.\n"
+                    "Cloud-hosted Remote MCP clients that do not trust this CA may reject it.\n"
+                )
+        elif prop in ("contact-email", "email"):
+            _need(rest, 2, "set mcp-tls contact-email <email>")
+            state = mcp_tls.configure_intent(plane, contact_email=rest[1])
+        elif prop in ("acme-environment", "acme-env"):
+            _need(rest, 2, "set mcp-tls acme-environment staging|production")
+            state = mcp_tls.configure_intent(plane, acme_environment=rest[1])
+        elif prop in ("acme-directory", "acme-directory-url"):
+            _need(rest, 2, "set mcp-tls acme-directory <url>")
+            state = mcp_tls.configure_intent(plane, acme_directory_url=rest[1])
+        else:
+            raise SystemExit("Unknown mcp-tls setting: %s" % prop)
+    except McpTlsError as exc:
+        raise SystemExit(str(exc)) from exc
+    sys.stdout.write("MCP TLS intent updated.\n")
+    sys.stdout.write("Mode: %s\n" % (state.get("mode") or "(unset)"))
+    sys.stdout.write("Hostname: %s\n" % (state.get("hostname") or "(unset)"))
+    if state.get("mode") == mcp_tls.MODE_AUTO_ACME:
+        sys.stdout.write("Next: system certificate issue\n")
+    elif state.get("mode") == mcp_tls.MODE_USER_CERTIFICATE:
+        sys.stdout.write("Next: system certificate import --cert <PATH> --key <PATH>\n")
+    elif state.get("mode") == mcp_tls.MODE_PRIVATE_CA:
+        sys.stdout.write("Next: system certificate issue\n")
+    return 0
 
 
 def _unset(plane: ControlPlane, rest, client_sel):
@@ -820,6 +880,15 @@ def _unset(plane: ControlPlane, rest, client_sel):
         raise SystemExit("Unknown unset ai-access")
     if res == "enrollment":
         plane.conn.execute("DELETE FROM enrollments WHERE id = ?", (rest[1],))
+        return 0
+    if res == "mcp-tls":
+        purge = len(rest) > 1 and rest[1] in ("purge", "--purge")
+        mcp_tls.clear_tls(plane, plane.root, purge_secrets=purge)
+        sys.stdout.write("MCP TLS configuration cleared.\n")
+        if purge:
+            sys.stdout.write("DRLink-owned certificate and ACME account material removed.\n")
+        else:
+            sys.stdout.write("Certificate files retained (use unset mcp-tls purge to remove secrets).\n")
         return 0
     raise SystemExit("Unknown unset resource.")
 
@@ -944,7 +1013,111 @@ def _system(plane: ControlPlane, rest):
             sys.stdout.write("code=%s\n" % result.get("code"))
             return 0
         raise SystemExit("Unknown credential operation.")
+    if rest[0] == "certificate":
+        return _system_certificate(plane, rest[1:])
     raise SystemExit("Unknown system operation.")
+
+
+def _system_certificate(plane: ControlPlane, rest):
+    if not rest:
+        raise SystemExit(
+            "Missing certificate operation.\n\n"
+            "Usage:\n"
+            "  system certificate issue\n"
+            "  system certificate import --cert <PATH> --key <PATH> [--chain <PATH>]\n"
+            "  system certificate renew [--force]\n"
+            "  system certificate status\n"
+            "  system certificate preflight\n"
+        )
+    op = rest[0]
+    root = plane.root
+    try:
+        if op == "status":
+            view = mcp_tls.status_view(plane, root)
+            sys.stdout.write(mcp_tls.format_status(view))
+            return 0
+        if op == "preflight":
+            state = mcp_tls.load_state(plane)
+            host = state.get("hostname") or ""
+            if not host:
+                raise SystemExit("Configure hostname first: set mcp-tls hostname <fqdn>")
+            require_public = (state.get("mode") or mcp_tls.DEFAULT_PUBLIC_CLOUD_TLS_MODE) == mcp_tls.MODE_AUTO_ACME
+            result = mcp_tls.preflight_hostname(host, require_public_dns=require_public)
+            sys.stdout.write(json.dumps(result, indent=2) + "\n")
+            return 0 if result.get("ok") else 1
+        if op == "issue":
+            # Directory override for tests / custom ACME.
+            directory = None
+            if "--directory" in rest:
+                idx = rest.index("--directory")
+                if idx + 1 >= len(rest):
+                    raise SystemExit("Missing value for --directory")
+                directory = rest[idx + 1]
+            skip_reload = "--no-reload" in rest
+            state = mcp_tls.issue_and_activate(
+                plane,
+                root,
+                reload=not skip_reload,
+                directory_url_override=directory,
+            )
+            sys.stdout.write("Certificate issued and activated.\n")
+            sys.stdout.write(mcp_tls.format_status(mcp_tls.status_view(plane, root)))
+            return 0
+        if op == "import":
+            cert = key = chain = None
+            i = 1
+            while i < len(rest):
+                if rest[i] == "--cert" and i + 1 < len(rest):
+                    cert = rest[i + 1]
+                    i += 2
+                elif rest[i] == "--key" and i + 1 < len(rest):
+                    key = rest[i + 1]
+                    i += 2
+                elif rest[i] == "--chain" and i + 1 < len(rest):
+                    chain = rest[i + 1]
+                    i += 2
+                elif rest[i] == "--no-reload":
+                    i += 1
+                else:
+                    raise SystemExit("Unknown import argument: %s" % rest[i])
+            if not cert or not key:
+                raise SystemExit("usage: system certificate import --cert <PATH> --key <PATH> [--chain <PATH>]")
+            mcp_tls.import_user_certificate(
+                plane,
+                root,
+                cert_path=cert,
+                key_path=key,
+                chain_path=chain,
+                reload="--no-reload" not in rest,
+            )
+            sys.stdout.write("Certificate imported and activated.\n")
+            sys.stdout.write(mcp_tls.format_status(mcp_tls.status_view(plane, root)))
+            return 0
+        if op == "renew":
+            force = "--force" in rest
+            directory = None
+            if "--directory" in rest:
+                idx = rest.index("--directory")
+                directory = rest[idx + 1]
+            result = mcp_tls.renew_if_due(
+                plane,
+                root,
+                force=force,
+                reload="--no-reload" not in rest,
+                directory_url_override=directory,
+            )
+            if result.get("renewed"):
+                sys.stdout.write("Certificate renewed and activated.\n")
+            else:
+                sys.stdout.write("Renewal not applied (%s).\n" % result.get("reason"))
+                if result.get("failure_class"):
+                    sys.stdout.write("Failure class: %s\n" % result["failure_class"])
+                    sys.stdout.write("Previous valid certificate retained.\n")
+            sys.stdout.write(mcp_tls.format_status(mcp_tls.status_view(plane, root)))
+            return 0 if result.get("renewed") or result.get("reason") in ("not_due", "backoff", "renewal_not_applicable", "renewal_disabled") else 1
+        raise SystemExit("Unknown certificate operation: %s" % op)
+    except McpTlsError as exc:
+        raise SystemExit("%s (%s)" % (exc, exc.failure_class)) from exc
 
 
 def main(argv=None):

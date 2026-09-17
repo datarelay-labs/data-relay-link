@@ -46,6 +46,8 @@ project usr/local/lib/drlink/drlink_configuration_bundle.py 0644 lib/drlink_conf
 project usr/local/lib/drlink/drlink_runtime_policy.py 0644 lib/drlink_runtime_policy.py python
 project usr/local/lib/drlink/drlink_ai_agent.py 0644 lib/drlink_ai_agent.py python
 project usr/local/lib/drlink/drlink_mcp_bridge.py 0644 lib/drlink_mcp_bridge.py python
+project usr/local/lib/drlink/drlink_mcp_tls.py 0644 lib/drlink_mcp_tls.py python
+project usr/local/lib/drlink/drlink_mcp_tls_renew.py 0755 lib/drlink_mcp_tls_renew.py python
 project usr/local/lib/drlink/drlink-mcp-bridge.py 0755 server/drlink-mcp-bridge.py python
 project usr/local/lib/drlink/frp_infrastructure_ports.py 0644 lib/frp_infrastructure_ports.py python
 project usr/local/lib/drlink/frp_ctl_repl.py 0644 lib/frp_ctl_repl.py python
@@ -77,6 +79,8 @@ unit etc/systemd/system/drlink-access.service 0644 server/drlink-access.service 
 unit etc/systemd/system/drlink-egress.service 0644 server/drlink-egress.service none
 unit etc/systemd/system/drlink-tcp-egress.service 0644 server/drlink-tcp-egress.service none
 unit etc/systemd/system/drlink-mcp-bridge.service 0644 server/drlink-mcp-bridge.service none
+unit etc/systemd/system/drlink-mcp-tls-renew.service 0644 server/drlink-mcp-tls-renew.service none
+unit etc/systemd/system/drlink-mcp-tls-renew.timer 0644 server/drlink-mcp-tls-renew.timer none
 unit-single443 etc/systemd/system/drlink-frontend.service 0644 server/drlink-frontend.service none
 project usr/local/lib/drlink/frp-create-client 0755 tools/frp-create-client python
 project usr/local/lib/drlink/frp-enrollments 0755 tools/frp-enrollments python

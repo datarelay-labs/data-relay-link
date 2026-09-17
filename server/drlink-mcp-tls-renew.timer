@@ -1,0 +1,13 @@
+[Unit]
+Description=Data Relay Link MCP TLS certificate renewal timer
+Documentation=file:///usr/local/lib/drlink/drlink_mcp_tls.py
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=12h
+AccuracySec=1h
+Persistent=true
+Unit=drlink-mcp-tls-renew.service
+
+[Install]
+WantedBy=timers.target

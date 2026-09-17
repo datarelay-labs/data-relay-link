@@ -4034,5 +4034,137 @@
     "confirmation": "y_n",
     "surface": "",
     "flags": []
+  },
+  {
+    "roles": "server",
+    "detail": "TLS mode, certificate validity, renewal, and cloud compatibility for https://<hostname>/mcp",
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [],
+    "internal": null,
+    "tail": "flags",
+    "path": [
+      "show",
+      "mcp-tls"
+    ],
+    "category": "System",
+    "summary": "Show MCP public TLS status",
+    "examples": [
+      "show mcp-tls"
+    ],
+    "args": []
+  },
+  {
+    "roles": "server",
+    "detail": "Configure non-secret MCP TLS intent. Default public-cloud mode is AUTO_ACME. PRIVATE_CA is internal/test only.",
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [],
+    "internal": null,
+    "tail": "any",
+    "path": [
+      "set",
+      "mcp-tls"
+    ],
+    "category": "System",
+    "summary": "Configure MCP public TLS intent",
+    "examples": [
+      "set mcp-tls hostname mcp.example.com",
+      "set mcp-tls mode auto-acme",
+      "set mcp-tls contact-email ops@example.com",
+      "set mcp-tls acme-environment staging"
+    ],
+    "args": [
+      {
+        "name": "<SETTING>",
+        "complete": [
+          "hostname",
+          "mode",
+          "contact-email",
+          "acme-environment",
+          "acme-directory"
+        ],
+        "required": true
+      }
+    ]
+  },
+  {
+    "roles": "server",
+    "detail": "Clear MCP TLS intent. Optional purge removes DRLink-owned certificate and ACME account keys.",
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [],
+    "internal": null,
+    "tail": null,
+    "path": [
+      "unset",
+      "mcp-tls"
+    ],
+    "category": "System",
+    "summary": "Clear MCP public TLS configuration",
+    "examples": [
+      "unset mcp-tls",
+      "unset mcp-tls purge"
+    ],
+    "args": [
+      {
+        "name": "<PURGE>",
+        "complete": [
+          "purge"
+        ],
+        "required": false
+      }
+    ]
+  },
+  {
+    "roles": "server",
+    "detail": "Certificate lifecycle for the public MCP endpoint. Uses python3-acme for AUTO_ACME (HTTP-01).",
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [],
+    "internal": null,
+    "tail": "any",
+    "path": [
+      "system",
+      "certificate"
+    ],
+    "category": "System",
+    "summary": "Issue, import, renew, or show MCP certificates",
+    "examples": [
+      "system certificate issue",
+      "system certificate import --cert /path/fullchain.pem --key /path/privkey.pem",
+      "system certificate renew",
+      "system certificate status",
+      "system certificate preflight"
+    ],
+    "args": [
+      {
+        "name": "<OPERATION>",
+        "complete": [
+          "issue",
+          "import",
+          "renew",
+          "status",
+          "preflight"
+        ],
+        "required": true
+      }
+    ]
   }
 ]

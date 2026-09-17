@@ -62,6 +62,7 @@ CONTROL_PLANE_SHOW = frozenset(
         "ai-access",
         "ai-activity",
         "fixed-tcp",
+        "mcp-tls",
     }
 )
 CONTROL_PLANE_MUTATE = frozenset(
@@ -77,11 +78,22 @@ CONTROL_PLANE_MUTATE = frozenset(
         "ai-principal",
         "ai-access",
         "fixed-tcp",
+        "mcp-tls",
     }
 )
 CONTROL_PLANE_TEST = frozenset({"remote-access", "internet-access", "ai-access", "configuration"})
 CONTROL_PLANE_SYSTEM = frozenset(
-    {"backup", "restore", "revisions", "revision", "diff", "credential", "export", "apply"}
+    {
+        "backup",
+        "restore",
+        "revisions",
+        "revision",
+        "diff",
+        "credential",
+        "export",
+        "apply",
+        "certificate",
+    }
 )
 
 

@@ -85,11 +85,12 @@ ENROLLMENTS_TREE = StatePathSpec(
     restore_policy="tree",
     sensitivity="secret",
 )
-BOOTSTRAP_TREE = StatePathSpec(
-    path="var/lib/drlink/bootstrap",
+MCP_TLS_TREE = StatePathSpec(
+    path="var/lib/drlink/tls/mcp",
     type="tree",
     backup_policy="tree",
     restore_policy="tree",
+    support_bundle_policy="exclude",
     sensitivity="secret",
 )
 CONFIG_JSON = StatePathSpec(
@@ -156,6 +157,7 @@ STATE_PATHS: tuple[StatePathSpec, ...] = (
     RUNTIME_TREE,
     ENROLLMENTS_TREE,
     BOOTSTRAP_TREE,
+    MCP_TLS_TREE,
     CONFIG_JSON,
     AUDIT_LOG,
     ACCESS_CONN_LOG,

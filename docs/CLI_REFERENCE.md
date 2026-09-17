@@ -581,6 +581,32 @@ system diagnostics mcp
 
 reports backend health, loopback bind, public URL, frontend `/mcp` routing, and authentication modes. Backend Healthy does not imply remote MCP is healthy.
 
+## 24.1 MCP Public TLS
+
+Public cloud Remote MCP (ChatGPT / Claude connectors) needs a publicly trusted
+certificate on `https://<hostname>/mcp`. Default mode is `AUTO_ACME`.
+
+```text
+set mcp-tls hostname mcp.example.com
+set mcp-tls mode auto-acme
+set mcp-tls contact-email ops@example.com
+system certificate preflight
+system certificate issue
+show mcp-tls
+system certificate renew
+```
+
+Modes:
+
+```text
+AUTO_ACME          publicly trusted certificate via ACME HTTP-01 (default for cloud MCP)
+USER_CERTIFICATE   import an existing cert/key through system certificate import
+PRIVATE_CA         DRLink private CA leaf for internal/test clients that trust the CA
+```
+
+`PRIVATE_CA` is not the default ChatGPT/Claude cloud connector path. Operators
+do not need to run certbot/nginx/acme.sh directly.
+
 ## 25. Version
 
 ```text

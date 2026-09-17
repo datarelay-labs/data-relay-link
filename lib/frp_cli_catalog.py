@@ -1760,6 +1760,13 @@ def domain_help(topic, role):
                     "  system credential configure ai-principal <PRINCIPAL> authentication oauth",
                     "  system credential approve-oauth <PENDING-ID>",
                     "  system diagnostics mcp",
+                    "  show mcp-tls",
+                    "  set mcp-tls hostname <fqdn>",
+                    "  set mcp-tls mode auto-acme",
+                    "  system certificate issue",
+                    "  system certificate import --cert <PATH> --key <PATH>",
+                    "  system certificate renew",
+                    "  system certificate status",
                     "  set server public-hostname <FQDN>",
                     "  set server bootstrap-hostname <FQDN>",
                 ]

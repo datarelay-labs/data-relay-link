@@ -3474,11 +3474,21 @@ class ControlPlane:
         override = (os.environ.get("DRLINK_MCP_PUBLIC_URL") or "").strip().rstrip("/")
         if override:
             return override if override.endswith("/mcp") else override + "/mcp"
+        # Prefer dedicated MCP TLS hostname when configured.
+        try:
+            import drlink_mcp_tls as mcp_tls
+
+            tls_state = mcp_tls.load_state(self)
+            host = str(tls_state.get("hostname") or "").strip()
+            if host and tls_state.get("mode"):
+                return "https://%s/mcp" % host
+        except Exception:
+            pass
         data = cfg if cfg is not None else self._read_server_config()
         mode = str(data.get("deployment_mode") or "direct").strip().lower().replace("-", "").replace("_", "")
         if mode not in ("single443", "enterprise", "enterprisesingle443"):
             return "Not configured"
-        host = str(data.get("public_ip") or data.get("public_host") or "").strip()
+        host = str(data.get("public_hostname") or data.get("public_ip") or data.get("public_host") or "").strip()
         if not host:
             return "Not configured"
         port = str(data.get("frp_control_public_port") or data.get("frontend_port") or "443")
@@ -3539,6 +3549,24 @@ class ControlPlane:
         lines.append("Transport           : %s" % mcp["transport"])
         lines.append("Authentication      : %s" % mcp["authentication"])
         lines.append("Auth Model          : %s" % mcp["auth_model"])
+        try:
+            import drlink_mcp_tls as mcp_tls
+
+            view = mcp_tls.status_view(self, self.root)
+            lines.append("")
+            lines.append("MCP Public TLS")
+            lines.append("--------------")
+            lines.append("TLS mode            : %s" % view.get("mode"))
+            lines.append("Certificate         : %s" % view.get("certificate"))
+            lines.append("Issuer              : %s" % view.get("issuer"))
+            lines.append("Expires             : %s" % view.get("expires"))
+            lines.append("Auto renewal        : %s" % view.get("auto_renewal"))
+            if view.get("private_ca_warning"):
+                lines.append(
+                    "Warning             : PRIVATE_CA is not suitable for cloud-hosted Remote MCP by default"
+                )
+        except Exception:
+            pass
         if mcp["backend"] == "Healthy" and not mcp["remote_ready"]:
             lines.append("")
             lines.append("Backend Healthy alone does not imply MCP Remote Access = Healthy.")

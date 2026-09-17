@@ -42,6 +42,7 @@ RESOURCE_FAMILIES = (
     "aiPrincipals",
     "aiAccess",
     "enrollmentPlans",
+    "mcpTls",
     "tests",
 )
 
@@ -78,6 +79,19 @@ PROHIBITED_SECRET_KEYS = frozenset(
         "enrollment_secret",
         "credential",
         "credentials",
+        "accountKey",
+        "account_key",
+        "acmeAccountKey",
+        "acme_account_key",
+        "tlsPrivateKey",
+        "tls_private_key",
+        "privkey",
+        "privKey",
+        "fullchain",
+        "dnsApiKey",
+        "dns_api_key",
+        "dnsApiSecret",
+        "dns_api_secret",
     }
 )
 
@@ -587,6 +601,28 @@ def export_configuration(plane: ControlPlane) -> str:
     if plans:
         spec["enrollmentPlans"] = plans
 
+    # Non-secret MCP TLS intent only (never keys/certs).
+    try:
+        import drlink_mcp_tls as mcp_tls
+
+        tls = mcp_tls.load_state(plane)
+        if tls.get("mode") or tls.get("hostname"):
+            spec["mcpTls"] = {
+                "state": "present",
+                "mode": tls.get("mode") or "",
+                "hostname": tls.get("hostname") or "",
+                "acmeEnvironment": tls.get("acme_environment") or "",
+                "contactEmail": tls.get("contact_email") or "",
+                "acmeDirectoryUrl": tls.get("acme_directory_url") or "",
+                "certificateStatus": tls.get("status") or "",
+                "fingerprintSha256": tls.get("fingerprint_sha256") or "",
+                "issuer": tls.get("issuer") or "",
+                "notAfter": tls.get("not_after") or "",
+                "autoRenewal": bool(tls.get("renewal_enabled")),
+            }
+    except Exception:
+        pass
+
     doc = {
         "apiVersion": API_VERSION,
         "kind": KIND,
@@ -1053,6 +1089,56 @@ def build_change_plan(
                 )
             )
 
+    # --- MCP TLS non-secret intent (no ACME network I/O during apply) ---
+    mcp_tls_items = list(spec.get("mcpTls") or [])
+    if mcp_tls_items:
+        import drlink_mcp_tls as mcp_tls
+
+        if len(mcp_tls_items) > 1:
+            raise BundleError("mcpTls accepts at most one resource entry")
+        item = mcp_tls_items[0]
+        if not isinstance(item, dict):
+            raise BundleError("mcpTls entries must be mappings")
+        # Fail closed on any secret-looking keys.
+        mcp_tls.bundle_intent_from_item(item)  # validates + rejects secrets
+        state = _resource_state(item)
+        if state == "absent":
+            plan.destructive = True
+            plan.changes.append(
+                PlannedChange(
+                    "DELETE",
+                    "mcpTls",
+                    "mcp-tls",
+                    "clear MCP TLS intent (secrets not purged by Bundle)",
+                    apply_fn=lambda pl: __import__("drlink_mcp_tls", fromlist=["clear_tls"]).clear_tls(
+                        pl, pl.root, purge_secrets=False
+                    ),
+                    security="reduced",
+                )
+            )
+        else:
+            intent = mcp_tls.bundle_intent_from_item(item)
+
+            def _apply_tls(pl, intent=intent):
+                return mcp_tls.configure_intent(
+                    pl,
+                    mode=intent.get("mode"),
+                    hostname=intent.get("hostname"),
+                    contact_email=intent.get("contact_email"),
+                    acme_environment=intent.get("acme_environment"),
+                    acme_directory_url=intent.get("acme_directory_url"),
+                )
+
+            plan.changes.append(
+                PlannedChange(
+                    "UPDATE",
+                    "mcpTls",
+                    intent.get("hostname") or "mcp-tls",
+                    "configure MCP TLS intent only (run system certificate issue/import for ACME side effects)",
+                    apply_fn=_apply_tls,
+                )
+            )
+
     # Security impact aggregation
     for ch in plan.mutating_changes:
         if ch.security == "broadened":
@@ -1455,6 +1541,7 @@ def prepare_plan(
                         "aiPrincipals": 50,
                         "servicePresets": 50,
                         "enrollmentPlans": 60,
+                        "mcpTls": 70,
                     }
                     if ch.op == "DELETE":
                         return (0, family_rank.get(ch.family, 99), ch.name)
@@ -1532,6 +1619,7 @@ def apply_change_plan(
             "aiPrincipals": 50,
             "servicePresets": 50,
             "enrollmentPlans": 60,
+            "mcpTls": 70,
         }
         if ch.op == "DELETE":
             return (0, family_rank.get(ch.family, 99), ch.name)

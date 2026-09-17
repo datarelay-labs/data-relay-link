@@ -49,8 +49,12 @@ for f in \
   "$BASE_DIR/lib/drlink_runtime_policy.py" \
   "$BASE_DIR/lib/drlink_ai_agent.py" \
   "$BASE_DIR/lib/drlink_mcp_bridge.py" \
+  "$BASE_DIR/lib/drlink_mcp_tls.py" \
+  "$BASE_DIR/lib/drlink_mcp_tls_renew.py" \
   "$BASE_DIR/server/drlink-mcp-bridge.py" \
   "$BASE_DIR/server/drlink-mcp-bridge.service" \
+  "$BASE_DIR/server/drlink-mcp-tls-renew.service" \
+  "$BASE_DIR/server/drlink-mcp-tls-renew.timer" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
   "$BASE_DIR/lib/frp_machine_id.py" \
   "$BASE_DIR/lib/frp_bounded_server.py" \
@@ -1503,6 +1507,8 @@ EOF2
 
 write_frontend_config() {
   local dest="$1" pki run_dir log_dir temp_root
+  local mcp_host="" mcp_cert="" mcp_key="" acme_root=""
+  local mcp_meta
   pki="$(frp_pki_dir)"
   run_dir="$(frp_server_fs /run/drlink)"
   log_dir="$(frp_server_fs /var/log/drlink)"
@@ -1510,6 +1516,20 @@ write_frontend_config() {
   mkdir -p "$run_dir" "$run_dir/frontend" "$log_dir" "$temp_root/body" "$temp_root/proxy" \
     "$temp_root/fastcgi" "$temp_root/uwsgi" "$temp_root/scgi"
   chmod 700 "$run_dir" "$run_dir/frontend" "$log_dir" "$temp_root"
+  mcp_cert="$(frp_server_fs /var/lib/drlink/tls/mcp/active/fullchain.pem)"
+  mcp_key="$(frp_server_fs /var/lib/drlink/tls/mcp/active/privkey.pem)"
+  mcp_meta="$(frp_server_fs /var/lib/drlink/tls/mcp/active/meta.json)"
+  if [[ -f "$mcp_cert" && -f "$mcp_key" && -f "$mcp_meta" ]]; then
+    mcp_host="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("hostname") or "")' "$mcp_meta" 2>/dev/null || true)"
+    acme_root="$(frp_server_fs /var/lib/drlink/tls/mcp/acme-www)"
+    mkdir -p "$acme_root/.well-known/acme-challenge"
+    chmod 755 "$acme_root" 2>/dev/null || true
+  else
+    mcp_cert=""
+    mcp_key=""
+    mcp_host=""
+    acme_root=""
+  fi
   python3 "$BASE_DIR/lib/frp_frontend.py" \
     --dest "$dest" \
     --public-host "$FRP_PUBLIC_HOST" \
@@ -1521,7 +1541,11 @@ write_frontend_config() {
     --server-key "${pki}/server.key" \
     --pid-path "${run_dir}/frontend/nginx.pid" \
     --error-log stderr \
-    --temp-root "$temp_root"
+    --temp-root "$temp_root" \
+    ${mcp_host:+--mcp-tls-hostname "$mcp_host"} \
+    ${mcp_cert:+--mcp-tls-cert "$mcp_cert"} \
+    ${mcp_key:+--mcp-tls-key "$mcp_key"} \
+    ${acme_root:+--acme-webroot "$acme_root"}
 }
 
 write_frontend_unit() {
@@ -1994,6 +2018,7 @@ frp_server_enable_units() {
     frp_server_systemctl enable drlink-server drlink-access drlink-egress drlink-tcp-egress drlink-allocator drlink-mcp-bridge >/dev/null
     frp_server_systemctl disable --now drlink-frontend >/dev/null 2>&1 || true
   fi
+  frp_server_systemctl enable --now drlink-mcp-tls-renew.timer >/dev/null 2>&1 || true
 }
 
 frp_server_restart_unit() {
@@ -2469,6 +2494,12 @@ PY
   frp_write_compatible_systemd_unit \
     "$BASE_DIR/server/drlink-mcp-bridge.service" \
     "$unit_mcp_bridge"
+  frp_write_compatible_systemd_unit \
+    "$BASE_DIR/server/drlink-mcp-tls-renew.service" \
+    "$(frp_server_fs /etc/systemd/system/drlink-mcp-tls-renew.service)"
+  frp_write_compatible_systemd_unit \
+    "$BASE_DIR/server/drlink-mcp-tls-renew.timer" \
+    "$(frp_server_fs /etc/systemd/system/drlink-mcp-tls-renew.timer)"
   if frp_mode_is_single443; then
     write_frontend_config "$frontend_conf"
     write_frontend_unit "$unit_frontend"

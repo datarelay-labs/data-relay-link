@@ -3060,6 +3060,32 @@ def check_server(report, paths, facts, skip_network):
                     fe_ca.get('detail') or '', rec, 'network',
                 )
 
+    # MCP public TLS (read-only).
+    try:
+        import drlink_mcp_tls as mcp_tls
+        from drlink_control_plane import ControlPlane
+
+        plane = ControlPlane(paths.root or None)
+        status_map = {'PASS': PASS, 'FAIL': FAIL, 'WARN': WARN, 'INFO': INFO}
+        for check in mcp_tls.doctor_checks(plane, paths.root or None):
+            report.add(
+                check.get('id') or 'mcp_tls',
+                status_map.get(check.get('status'), INFO),
+                check.get('summary') or '',
+                check.get('detail') or '',
+                '',
+                'security',
+            )
+    except Exception as exc:
+        report.add(
+            'mcp_tls_doctor',
+            INFO,
+            'MCP TLS doctor checks unavailable',
+            redact(str(exc)),
+            '',
+            'security',
+        )
+
     check_access_control(report, paths, facts, cfg if isinstance(cfg, dict) else {}, state if isinstance(state, dict) else {})
     check_service_profiles(report, paths, facts, cfg if isinstance(cfg, dict) else {})
     check_egress_control(report, paths, facts, cfg if isinstance(cfg, dict) else {})
