@@ -37,6 +37,10 @@ from drlink_control_db import (
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,63}$")
 TAG_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+OAUTH_UNBOUND_PRINCIPAL = "__oauth_unbound__"
+OAUTH_ACCESS_TTL = 3600
+OAUTH_REFRESH_TTL = 30 * 24 * 3600
+OAUTH_MAX_REDIRECTS = 16
 FQDN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
 )
@@ -2274,12 +2278,17 @@ class ControlPlane:
 
     # --- AI principals / rules --------------------------------------------
     def get_principal(self, name: str) -> Optional[sqlite3.Row]:
-        return self.conn.execute(
+        row = self.conn.execute(
             "SELECT * FROM ai_principals WHERE name = ? COLLATE NOCASE", (name,)
         ).fetchone()
+        if row is not None and row["name"] == OAUTH_UNBOUND_PRINCIPAL:
+            return None
+        return row
 
     def set_ai_principal(self, name: str, *, description: Optional[str] = None, enabled: Optional[bool] = None) -> dict:
         name = _validate_name(name, "AI Principal name")
+        if name == OAUTH_UNBOUND_PRINCIPAL:
+            raise ControlPlaneError("reserved AI Principal name")
 
         def write():
             existing = self.get_principal(name)
@@ -2405,6 +2414,199 @@ class ControlPlane:
         digest = hashlib.sha256(str(verifier).encode("ascii")).digest()
         return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
+    def _ensure_oauth_unbound_principal(self) -> str:
+        row = self.conn.execute(
+            "SELECT id FROM ai_principals WHERE name = ?", (OAUTH_UNBOUND_PRINCIPAL,)
+        ).fetchone()
+        if row:
+            return row["id"]
+        now = utc_now_iso()
+        pid = _new_id("aip")
+        self.conn.execute(
+            "INSERT INTO ai_principals(id, name, description, provider, enabled, credential_status, "
+            "auth_mode, oauth_issuer, oauth_subject, row_version, created_at, updated_at) "
+            "VALUES (?, ?, 'OAuth unbound placeholder', '', 0, 'revoked', 'oauth', '', '', 1, ?, ?)",
+            (pid, OAUTH_UNBOUND_PRINCIPAL, now, now),
+        )
+        return pid
+
+    def _validate_oauth_redirect_uri(self, uri: str) -> str:
+        text = str(uri or "").strip()
+        if not text:
+            raise ControlPlaneError("redirect_uri is required")
+        if "*" in text:
+            raise ControlPlaneError("wildcard redirect_uri is not allowed")
+        lower = text.lower()
+        if lower.startswith("javascript:") or lower.startswith("data:") or lower.startswith("file:"):
+            raise ControlPlaneError("redirect_uri scheme is not allowed")
+        if text.startswith("https://"):
+            return text
+        if text.startswith("http://127.0.0.1") or text.startswith("http://localhost") or text.startswith("http://[::1]"):
+            return text
+        raise ControlPlaneError("OAuth redirect URI must be https or loopback http")
+
+    def _redirect_uris_list(self, raw: str) -> list[str]:
+        return [p for p in str(raw or "").split("\n") if p]
+
+    def _lookup_oauth_client(self, client_id: str) -> Optional[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM ai_oauth_clients WHERE client_id = ?", (client_id,)
+        ).fetchone()
+
+    def _lookup_dcr_client(self, client_id: str) -> Optional[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM ai_oauth_dcr_clients WHERE client_id = ?", (client_id,)
+        ).fetchone()
+
+    def _fetch_cimd_document(self, url: str) -> dict:
+        import urllib.error
+        import urllib.request
+
+        text = str(url or "").strip()
+        parsed = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(text)
+        if parsed.scheme != "https" or parsed.path in ("", "/"):
+            raise ControlPlaneError("CIMD client_id must be an https URL with a path")
+        req = urllib.request.Request(
+            text,
+            headers={"Accept": "application/json", "User-Agent": "DataRelayLink-MCP/2.4"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = resp.read(65536)
+        except Exception as exc:
+            raise ControlPlaneError("CIMD metadata fetch failed") from exc
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise ControlPlaneError("CIMD metadata is not valid JSON") from exc
+        if not isinstance(doc, dict):
+            raise ControlPlaneError("CIMD metadata must be a JSON object")
+        return doc
+
+    def register_oauth_client(self, metadata: dict) -> dict:
+        """RFC 7591 Dynamic Client Registration (public clients)."""
+        if not isinstance(metadata, dict):
+            raise ControlPlaneError("client metadata must be a JSON object")
+        redirects = metadata.get("redirect_uris") or []
+        if not isinstance(redirects, list) or not redirects:
+            raise ControlPlaneError("redirect_uris is required")
+        if len(redirects) > OAUTH_MAX_REDIRECTS:
+            raise ControlPlaneError("too many redirect_uris")
+        cleaned = []
+        for item in redirects:
+            cleaned.append(self._validate_oauth_redirect_uri(str(item)))
+        # Exact-match only; reject open-prefix patterns
+        for uri in cleaned:
+            if "*" in uri:
+                raise ControlPlaneError("wildcard redirect_uri is not allowed")
+        auth_method = str(metadata.get("token_endpoint_auth_method") or "none").strip() or "none"
+        if auth_method not in ("none", "client_secret_post", "client_secret_basic"):
+            raise ControlPlaneError("unsupported token_endpoint_auth_method")
+        grant_types = metadata.get("grant_types") or ["authorization_code", "refresh_token"]
+        if not isinstance(grant_types, list):
+            raise ControlPlaneError("grant_types must be a list")
+        for gt in grant_types:
+            if str(gt) not in ("authorization_code", "refresh_token"):
+                raise ControlPlaneError("unsupported grant_type in registration")
+        client_id = "drcid_" + secrets.token_urlsafe(18)
+        secret = None
+        secret_hash = None
+        if auth_method != "none":
+            secret = "drcs_" + secrets.token_urlsafe(24)
+            secret_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        now = utc_now_iso()
+        self.conn.execute(
+            "INSERT INTO ai_oauth_dcr_clients(client_id, redirect_uris, token_endpoint_auth_method, "
+            "client_secret_hash, client_name, metadata_url, created_at) VALUES (?, ?, ?, ?, ?, '', ?)",
+            (
+                client_id,
+                "\n".join(cleaned),
+                auth_method,
+                secret_hash,
+                str(metadata.get("client_name") or "")[:128],
+                now,
+            ),
+        )
+        issued = {
+            "client_id": client_id,
+            "client_id_issued_at": int(time.time()),
+            "redirect_uris": cleaned,
+            "token_endpoint_auth_method": auth_method,
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "client_name": str(metadata.get("client_name") or "")[:128] or None,
+        }
+        if secret:
+            issued["client_secret"] = secret
+            issued["client_secret_expires_at"] = 0
+        return {k: v for k, v in issued.items() if v is not None}
+
+    def resolve_oauth_authorize_client(self, client_id: str, redirect_uri: str) -> dict:
+        """Resolve static, DCR, or CIMD client for authorization."""
+        redirect_uri = self._validate_oauth_redirect_uri(redirect_uri)
+        static = self._lookup_oauth_client(client_id)
+        if static is not None:
+            allowed = self._redirect_uris_list(static["redirect_uris"])
+            if redirect_uri not in allowed:
+                raise ControlPlaneError("redirect_uri is not registered")
+            principal = self.conn.execute(
+                "SELECT * FROM ai_principals WHERE id = ? AND enabled = 1", (static["principal_id"],)
+            ).fetchone()
+            if principal is None:
+                raise ControlPlaneError("AI Principal disabled or missing")
+            return {
+                "client_id": client_id,
+                "principal_id": principal["id"],
+                "principal_name": principal["name"],
+                "redirect_uri": redirect_uri,
+                "unbound": False,
+                "source": "static",
+            }
+        dcr = self._lookup_dcr_client(client_id)
+        if dcr is not None:
+            allowed = self._redirect_uris_list(dcr["redirect_uris"])
+            if redirect_uri not in allowed:
+                raise ControlPlaneError("redirect_uri is not registered")
+            return {
+                "client_id": client_id,
+                "principal_id": self._ensure_oauth_unbound_principal(),
+                "principal_name": OAUTH_UNBOUND_PRINCIPAL,
+                "redirect_uri": redirect_uri,
+                "unbound": True,
+                "source": "dcr",
+            }
+        # CIMD: HTTPS URL client_id with path
+        if str(client_id).startswith("https://"):
+            doc = self._fetch_cimd_document(client_id)
+            redirects = doc.get("redirect_uris") or []
+            if not isinstance(redirects, list):
+                raise ControlPlaneError("CIMD redirect_uris must be a list")
+            allowed = [self._validate_oauth_redirect_uri(str(x)) for x in redirects]
+            if redirect_uri not in allowed:
+                raise ControlPlaneError("redirect_uri is not registered")
+            now = utc_now_iso()
+            self.conn.execute(
+                "INSERT OR REPLACE INTO ai_oauth_dcr_clients(client_id, redirect_uris, token_endpoint_auth_method, "
+                "client_secret_hash, client_name, metadata_url, created_at) VALUES (?, ?, 'none', NULL, ?, ?, ?)",
+                (
+                    client_id,
+                    "\n".join(allowed),
+                    str(doc.get("client_name") or "cimd")[:128],
+                    client_id,
+                    now,
+                ),
+            )
+            return {
+                "client_id": client_id,
+                "principal_id": self._ensure_oauth_unbound_principal(),
+                "principal_name": OAUTH_UNBOUND_PRINCIPAL,
+                "redirect_uri": redirect_uri,
+                "unbound": True,
+                "source": "cimd",
+            }
+        raise ControlPlaneError("unknown OAuth client")
+
     def configure_ai_auth(self, name: str, mode: str) -> dict:
         principal = self.get_principal(name)
         if principal is None:
@@ -2443,9 +2645,7 @@ class ControlPlane:
         principal = self.get_principal(name)
         if principal is None:
             raise ControlPlaneError("AI Principal not found: %s" % name)
-        text = str(uri or "").strip()
-        if not (text.startswith("https://") or text.startswith("http://127.0.0.1") or text.startswith("http://localhost")):
-            raise ControlPlaneError("OAuth redirect URI must be https or loopback http")
+        text = self._validate_oauth_redirect_uri(uri)
 
         def write():
             now = utc_now_iso()
@@ -2455,6 +2655,8 @@ class ControlPlane:
             ).fetchone()
             existing = [p for p in str(row["redirect_uris"] if row else "").split("\n") if p]
             if text not in existing:
+                if len(existing) >= OAUTH_MAX_REDIRECTS:
+                    raise ControlPlaneError("too many redirect_uris")
                 existing.append(text)
             self.conn.execute(
                 "INSERT OR REPLACE INTO ai_oauth_clients(client_id, principal_id, redirect_uris, created_at) "
@@ -2474,34 +2676,71 @@ class ControlPlane:
         return self._mutate("system credential configure ai-principal %s oauth-redirect" % name, "configure credential", write)
 
     def create_oauth_pending(self, *, client_id: str, redirect_uri: str, code_challenge: str, resource: str, state: str = "") -> dict:
-        client = self.conn.execute(
-            "SELECT * FROM ai_oauth_clients WHERE client_id = ?", (client_id,)
-        ).fetchone()
-        if client is None:
-            raise ControlPlaneError("unknown OAuth client")
         if not code_challenge:
             raise ControlPlaneError("code_challenge is required")
-        allowed = [p for p in str(client["redirect_uris"] or "").split("\n") if p]
-        if redirect_uri not in allowed:
-            raise ControlPlaneError("redirect_uri is not registered")
-        principal = self.conn.execute(
-            "SELECT * FROM ai_principals WHERE id = ? AND enabled = 1", (client["principal_id"],)
-        ).fetchone()
-        if principal is None:
-            raise ControlPlaneError("AI Principal disabled or missing")
+        resolved = self.resolve_oauth_authorize_client(client_id, redirect_uri)
         pending_id = _new_id("oap")
         now = utc_now_iso()
         self.conn.execute(
             "INSERT INTO ai_oauth_pending(id, principal_id, client_id, redirect_uri, code_challenge, resource, state, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (pending_id, principal["id"], client_id, redirect_uri, code_challenge, resource or "", state or "", now),
+            (
+                pending_id,
+                resolved["principal_id"],
+                client_id,
+                resolved["redirect_uri"],
+                code_challenge,
+                resource or "",
+                state or "",
+                now,
+            ),
         )
-        return {"id": pending_id, "principal": principal["name"], "client_id": client_id}
+        return {
+            "id": pending_id,
+            "principal": resolved["principal_name"],
+            "client_id": client_id,
+            "unbound": bool(resolved.get("unbound")),
+            "source": resolved.get("source"),
+        }
 
-    def approve_oauth_pending(self, pending_id: str) -> dict:
+    def approve_oauth_pending(self, pending_id: str, principal_name: Optional[str] = None) -> dict:
         row = self.conn.execute("SELECT * FROM ai_oauth_pending WHERE id = ?", (pending_id,)).fetchone()
         if row is None:
             raise ControlPlaneError("OAuth request not found")
+        principal = self.conn.execute(
+            "SELECT * FROM ai_principals WHERE id = ?", (row["principal_id"],)
+        ).fetchone()
+        unbound = principal is not None and principal["name"] == OAUTH_UNBOUND_PRINCIPAL
+        if unbound:
+            if not principal_name:
+                raise ControlPlaneError(
+                    "DCR/CIMD OAuth approval requires an AI Principal: "
+                    "system credential approve-oauth %s <PRINCIPAL>" % pending_id
+                )
+            target = self.get_principal(principal_name)
+            if target is None or not int(target["enabled"] or 0):
+                raise ControlPlaneError("AI Principal not found or disabled: %s" % principal_name)
+            # Bind DCR/CIMD client to the approved principal for future static lookups.
+            now = utc_now_iso()
+            dcr = self._lookup_dcr_client(row["client_id"])
+            redirects = dcr["redirect_uris"] if dcr is not None else row["redirect_uri"]
+            self.conn.execute(
+                "INSERT OR REPLACE INTO ai_oauth_clients(client_id, principal_id, redirect_uris, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (row["client_id"], target["id"], redirects, now),
+            )
+            self.conn.execute(
+                "UPDATE ai_principals SET auth_mode = 'oauth', oauth_subject = COALESCE(NULLIF(oauth_subject, ''), ?), "
+                "row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                (target["name"], now, target["id"]),
+            )
+            principal_id = target["id"]
+        else:
+            if principal is None or not int(principal["enabled"] or 0):
+                raise ControlPlaneError("AI Principal disabled or missing")
+            if principal_name and str(principal["name"]).lower() != str(principal_name).lower():
+                raise ControlPlaneError("pending OAuth request is bound to a different AI Principal")
+            principal_id = principal["id"]
         code = "drc_" + secrets.token_urlsafe(24)
         digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
         now = utc_now_iso()
@@ -2510,7 +2749,7 @@ class ControlPlane:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 digest,
-                row["principal_id"],
+                principal_id,
                 row["client_id"],
                 row["redirect_uri"],
                 row["code_challenge"],
@@ -2528,23 +2767,49 @@ class ControlPlane:
         }
 
     def issue_oauth_access_token(
-        self, *, principal_id: str, client_id: str, resource: str, ttl: int = 3600
+        self,
+        *,
+        principal_id: str,
+        client_id: str,
+        resource: str,
+        ttl: int = OAUTH_ACCESS_TTL,
+        include_refresh: bool = False,
+        rotated_from: Optional[str] = None,
     ) -> dict:
         token = "drauth_" + secrets.token_urlsafe(32)
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         fp = digest[:12]
         now = utc_now_iso()
         self.conn.execute(
-            "INSERT INTO ai_oauth_tokens(token_hash, principal_id, client_id, resource, expires_at, fingerprint, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (digest, principal_id, client_id, resource or "", self._iso_plus_seconds(ttl), fp, now),
+            "INSERT INTO ai_oauth_tokens(token_hash, principal_id, client_id, resource, expires_at, fingerprint, created_at, kind, rotated_from) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'access', ?)",
+            (digest, principal_id, client_id, resource or "", self._iso_plus_seconds(ttl), fp, now, rotated_from),
         )
-        return {
+        issued = {
             "access_token": token,
             "token_type": "Bearer",
             "expires_in": int(ttl),
-            "scope": "drlink.ai",
+            "scope": "drlink.ai offline_access",
         }
+        if include_refresh:
+            refresh = "drref_" + secrets.token_urlsafe(32)
+            rdigest = hashlib.sha256(refresh.encode("utf-8")).hexdigest()
+            self.conn.execute(
+                "INSERT INTO ai_oauth_tokens(token_hash, principal_id, client_id, resource, expires_at, fingerprint, created_at, kind, rotated_from) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'refresh', ?)",
+                (
+                    rdigest,
+                    principal_id,
+                    client_id,
+                    resource or "",
+                    self._iso_plus_seconds(OAUTH_REFRESH_TTL),
+                    rdigest[:12],
+                    now,
+                    rotated_from,
+                ),
+            )
+            issued["refresh_token"] = refresh
+        return issued
 
     def client_credentials_token(self, client_id: str, client_secret: str, resource: str) -> Optional[dict]:
         principal = self.authenticate_static_bearer(client_secret)
@@ -2555,7 +2820,7 @@ class ControlPlane:
         if not resource:
             raise ControlPlaneError("resource is required")
         return self.issue_oauth_access_token(
-            principal_id=principal["id"], client_id=client_id, resource=resource
+            principal_id=principal["id"], client_id=client_id, resource=resource, include_refresh=False
         )
 
     def exchange_authorization_code(
@@ -2585,7 +2850,57 @@ class ControlPlane:
             principal_id=row["principal_id"],
             client_id=client_id,
             resource=row["resource"] or resource,
+            include_refresh=True,
         )
+
+    def exchange_refresh_token(
+        self, *, refresh_token: str, client_id: str, resource: str
+    ) -> Optional[dict]:
+        digest = hashlib.sha256(str(refresh_token or "").encode("utf-8")).hexdigest()
+        now = utc_now_iso()
+        row = self.conn.execute(
+            "SELECT t.* FROM ai_oauth_tokens t "
+            "JOIN ai_principals p ON p.id = t.principal_id "
+            "WHERE t.token_hash = ? AND t.kind = 'refresh' AND t.revoked_at IS NULL "
+            "AND t.expires_at > ? AND p.enabled = 1 AND p.credential_status != 'revoked'",
+            (digest, now),
+        ).fetchone()
+        if row is None:
+            return None
+        if str(row["client_id"] or "") != str(client_id or ""):
+            return None
+        stored = str(row["resource"] or "")
+        wanted = str(resource or stored)
+        if wanted != stored:
+            return None
+        # Rotate: revoke presented refresh (+ sibling access tokens for same client/resource).
+        self.conn.execute(
+            "UPDATE ai_oauth_tokens SET revoked_at = ? WHERE client_id = ? AND resource = ? "
+            "AND principal_id = ? AND revoked_at IS NULL",
+            (now, row["client_id"], stored, row["principal_id"]),
+        )
+        return self.issue_oauth_access_token(
+            principal_id=row["principal_id"],
+            client_id=row["client_id"],
+            resource=stored,
+            include_refresh=True,
+            rotated_from=digest,
+        )
+
+    def revoke_oauth_credential(self, token: str) -> bool:
+        digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+        now = utc_now_iso()
+        row = self.conn.execute(
+            "SELECT * FROM ai_oauth_tokens WHERE token_hash = ? AND revoked_at IS NULL", (digest,)
+        ).fetchone()
+        if row is None:
+            return False
+        self.conn.execute(
+            "UPDATE ai_oauth_tokens SET revoked_at = ? WHERE client_id = ? AND resource = ? "
+            "AND principal_id = ? AND revoked_at IS NULL",
+            (now, row["client_id"], row["resource"], row["principal_id"]),
+        )
+        return True
 
     def authenticate_static_bearer(self, token: str) -> Optional[sqlite3.Row]:
         digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
@@ -2600,9 +2915,9 @@ class ControlPlane:
         row = self.conn.execute(
             "SELECT t.* FROM ai_oauth_tokens t "
             "JOIN ai_principals p ON p.id = t.principal_id "
-            "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND p.enabled = 1 "
-            "AND p.credential_status != 'revoked'",
-            (digest, now),
+            "WHERE t.token_hash = ? AND t.kind = 'access' AND t.revoked_at IS NULL AND t.expires_at > ? "
+            "AND p.enabled = 1 AND p.credential_status != 'revoked' AND p.name != ?",
+            (digest, now, OAUTH_UNBOUND_PRINCIPAL),
         ).fetchone()
         if row is None:
             return None
@@ -2614,11 +2929,14 @@ class ControlPlane:
     def authenticate_principal(self, token: str, resource: Optional[str] = None) -> Optional[sqlite3.Row]:
         self._ensure_live_conn()
         text = str(token or "")
+        if text.startswith("drref_"):
+            # Refresh tokens are not MCP access credentials.
+            return None
         if text.startswith("drauth_"):
             row = self.authenticate_oauth_token(text, resource=resource)
         else:
             row = self.authenticate_static_bearer(text)
-            if row is None:
+            if row is None and not text.startswith("drk_"):
                 row = self.authenticate_oauth_token(text, resource=resource)
         if row is not None:
             self._touch_principal(row["id"])
@@ -3514,9 +3832,15 @@ class ControlPlane:
         except Exception:
             routed = False
         modes = []
-        if self.conn.execute("SELECT 1 FROM ai_principals WHERE credential_status = 'active' LIMIT 1").fetchone():
+        if self.conn.execute(
+            "SELECT 1 FROM ai_principals WHERE credential_status = 'active' AND name != ? LIMIT 1",
+            (OAUTH_UNBOUND_PRINCIPAL,),
+        ).fetchone():
             modes.append("Static Bearer")
-        if self.conn.execute("SELECT 1 FROM ai_principals WHERE auth_mode = 'oauth' LIMIT 1").fetchone():
+        if self.conn.execute(
+            "SELECT 1 FROM ai_principals WHERE auth_mode = 'oauth' AND name != ? LIMIT 1",
+            (OAUTH_UNBOUND_PRINCIPAL,),
+        ).fetchone():
             modes.append("OAuth")
         return {
             "backend": backend,

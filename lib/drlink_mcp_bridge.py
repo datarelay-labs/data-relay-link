@@ -200,7 +200,7 @@ class MCPBridge:
             "resource": resource,
             "authorization_servers": [base],
             "bearer_methods_supported": ["header"],
-            "scopes_supported": ["drlink.ai"],
+            "scopes_supported": ["drlink.ai", "offline_access"],
             "resource_name": "Data Relay Link MCP Bridge",
             "resource_documentation": "https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization",
         }
@@ -211,16 +211,26 @@ class MCPBridge:
             "issuer": base,
             "authorization_endpoint": base + "/oauth/authorize",
             "token_endpoint": base + "/oauth/token",
-            "grant_types_supported": ["authorization_code", "client_credentials"],
+            "registration_endpoint": base + "/oauth/register",
+            "revocation_endpoint": base + "/oauth/revoke",
+            "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
-            "scopes_supported": ["drlink.ai"],
+            "scopes_supported": ["drlink.ai", "offline_access"],
             "resource_indicators_supported": True,
+            "client_id_metadata_document_supported": True,
         }
 
     def issue_oauth_token(self, fields: dict, headers=None) -> Optional[dict]:
         grant = str(fields.get("grant_type") or "")
+        if grant == "refresh_token":
+            resource = str(fields.get("resource") or "")
+            return self.plane.exchange_refresh_token(
+                refresh_token=str(fields.get("refresh_token") or ""),
+                client_id=str(fields.get("client_id") or ""),
+                resource=resource,
+            )
         resource = self._require_canonical_resource(str(fields.get("resource") or ""))
         if grant == "client_credentials":
             issued = self.plane.client_credentials_token(
@@ -238,6 +248,12 @@ class MCPBridge:
                 client_id=str(fields.get("client_id") or ""),
             )
         return None
+
+    def register_oauth_client(self, metadata: dict) -> dict:
+        return self.plane.register_oauth_client(metadata)
+
+    def revoke_oauth_credential(self, token: str) -> bool:
+        return self.plane.revoke_oauth_credential(token)
 
     def validate_origin(self, headers) -> Optional[str]:
         origin = _header(headers, "Origin")
@@ -376,8 +392,8 @@ class MCPBridge:
                 return 200, _jsonrpc_result(req_id, result)
             except ControlPlaneError as exc:
                 return 200, _jsonrpc_result(req_id, _text_result("DENY: %s" % exc, is_error=True))
-            except Exception as exc:
-                return 200, _jsonrpc_error(req_id, -32603, "internal error", str(exc))
+            except Exception:
+                return 200, _jsonrpc_error(req_id, -32603, "internal error")
         return 404, _jsonrpc_error(req_id, -32601, "Method not found")
 
     def call_tool(self, principal, name: str, arguments: dict) -> dict:
@@ -584,6 +600,36 @@ def make_handler(bridge: MCPBridge):
             if raw:
                 self.wfile.write(raw)
 
+        def _public_cors(self):
+            # Public metadata may be read cross-origin; credentials are never included.
+            return {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name",
+                "Access-Control-Max-Age": "600",
+            }
+
+        def _client_addr(self):
+            try:
+                return self.client_address[0]
+            except Exception:
+                return "unknown"
+
+        def _rate_limited(self, bucket: str, *, limit: int = 60, window_s: int = 60) -> bool:
+            key = "%s:%s" % (bucket, self._client_addr())
+            now = time.time()
+            with bridge._lock:
+                hits = getattr(bridge, "_rate_hits", None)
+                if hits is None:
+                    bridge._rate_hits = {}
+                    hits = bridge._rate_hits
+                window = hits.get(key)
+                if not window or now - window[0] >= window_s:
+                    hits[key] = [now, 1]
+                    return False
+                window[1] += 1
+                return window[1] > limit
+
         def _origin_denied(self):
             bad = bridge.validate_origin(self.headers)
             if bad:
@@ -608,10 +654,10 @@ def make_handler(bridge: MCPBridge):
                 "/.well-known/oauth-protected-resource",
                 "/.well-known/oauth-protected-resource/mcp",
             ):
-                self._send(200, bridge.oauth_metadata(self.headers))
+                self._send(200, bridge.oauth_metadata(self.headers), extra_headers=self._public_cors())
                 return
             if parsed.path == "/.well-known/oauth-authorization-server":
-                self._send(200, bridge.as_metadata(self.headers))
+                self._send(200, bridge.as_metadata(self.headers), extra_headers=self._public_cors())
                 return
             if parsed.path == "/oauth/authorize":
                 qs = parse_qs(parsed.query)
@@ -636,7 +682,7 @@ def make_handler(bridge: MCPBridge):
                     "localhost",
                     "::1",
                 )
-                if auto:
+                if auto and not pending.get("unbound"):
                     approved = bridge.plane.approve_oauth_pending(pending["id"])
                     loc = approved["redirect_uri"]
                     sep = "&" if "?" in loc else "?"
@@ -649,11 +695,17 @@ def make_handler(bridge: MCPBridge):
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
+                if pending.get("unbound"):
+                    hint = (
+                        "system credential approve-oauth %s &lt;AI-PRINCIPAL&gt;" % pending["id"]
+                    )
+                else:
+                    hint = "system credential approve-oauth %s" % pending["id"]
                 page = (
                     "<!doctype html><html><body><p>Approve this MCP OAuth request as operator:</p>"
-                    "<pre>system credential approve-oauth %s</pre>"
+                    "<pre>%s</pre>"
                     "<p>This is a consent page, not a management UI.</p></body></html>"
-                    % pending["id"]
+                    % hint
                 )
                 raw = page.encode("utf-8")
                 self.send_response(200)
@@ -673,6 +725,13 @@ def make_handler(bridge: MCPBridge):
             self.end_headers()
 
         def do_OPTIONS(self):
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/.well-known/") or parsed.path.startswith("/oauth/") or parsed.path in (
+                "/register",
+                "/mcp",
+            ):
+                self._send(204, {}, extra_headers=self._public_cors())
+                return
             self.send_response(204)
             self.send_header("Allow", "GET, POST")
             self.send_header("Content-Length", "0")
@@ -681,13 +740,52 @@ def make_handler(bridge: MCPBridge):
         def do_POST(self):
             if self._origin_denied():
                 return
+            if self._rate_limited("post", limit=120, window_s=60):
+                self._send(429, {"error": "rate_limited"})
+                return
             parsed = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
             if length > 2_000_000:
                 self._send(413, _jsonrpc_error(None, -32700, "payload too large"))
                 return
             raw = self.rfile.read(length) if length else b"{}"
+            if parsed.path in ("/oauth/register", "/register"):
+                if self._rate_limited("register", limit=20, window_s=60):
+                    self._send(429, {"error": "rate_limited"})
+                    return
+                try:
+                    meta = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._send(400, {"error": "invalid_client_metadata"})
+                    return
+                try:
+                    with bridge._lock:
+                        registered = bridge.register_oauth_client(meta if isinstance(meta, dict) else {})
+                except ControlPlaneError as exc:
+                    self._send(400, {"error": "invalid_client_metadata", "error_description": str(exc)})
+                    return
+                self._send(201, registered, extra_headers=self._public_cors())
+                return
+            if parsed.path == "/oauth/revoke":
+                fields = {}
+                if self.headers.get("Content-Type", "").startswith("application/json"):
+                    try:
+                        fields = json.loads(raw.decode("utf-8") or "{}")
+                    except Exception:
+                        fields = {}
+                else:
+                    qs = parse_qs(raw.decode("utf-8"))
+                    fields = {k: (v[0] if v else "") for k, v in qs.items()}
+                token = str(fields.get("token") or "")
+                with bridge._lock:
+                    bridge.revoke_oauth_credential(token)
+                # RFC 7009: always return 200 whether or not the token existed.
+                self._send(200, {}, extra_headers=self._public_cors())
+                return
             if parsed.path == "/oauth/token":
+                if self._rate_limited("token", limit=60, window_s=60):
+                    self._send(429, {"error": "rate_limited"})
+                    return
                 fields = {}
                 if self.headers.get("Content-Type", "").startswith("application/json"):
                     try:
@@ -722,10 +820,12 @@ def make_handler(bridge: MCPBridge):
                     body = json.dumps({"error": "invalid_client"}).encode("utf-8")
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
+                    for k, v in self._public_cors().items():
+                        self.send_header(k, v)
                     self.end_headers()
                     self.wfile.write(body)
                     return
-                self._send(200, issued)
+                self._send(200, issued, extra_headers=self._public_cors())
                 return
             if parsed.path in ("/agent/v1/claim", "/agent/v1/complete"):
                 client_id = bridge.authenticate_agent(self.headers)
@@ -761,6 +861,9 @@ def make_handler(bridge: MCPBridge):
                 return
             principal = bridge.authenticate(self.headers)
             if principal is None:
+                if self._rate_limited("authfail", limit=30, window_s=60):
+                    self._send(429, {"error": "rate_limited"})
+                    return
                 payload = json.dumps(_jsonrpc_error(body.get("id"), -32001, "unauthorized")).encode("utf-8")
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", self._www_auth())

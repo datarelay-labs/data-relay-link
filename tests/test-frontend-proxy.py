@@ -91,6 +91,10 @@ def test_backend_identity_ip_and_dns():
             fail('mcp loopback proxy')
         if 'location = /oauth/token {' not in conf:
             fail('oauth token route')
+        if 'location = /oauth/register {' not in conf:
+            fail('oauth register route')
+        if 'location = /oauth/revoke {' not in conf:
+            fail('oauth revoke route')
         if 'location = /.well-known/oauth-protected-resource {' not in conf:
             fail('prm route')
         pass_('NGINX_BACKEND_DNS_IDENTITY')

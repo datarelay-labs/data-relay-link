@@ -398,7 +398,7 @@ system credential rotate ai-principal <PRINCIPAL>
 system credential configure ai-principal <PRINCIPAL> authentication static-bearer
 system credential configure ai-principal <PRINCIPAL> authentication oauth
 system credential configure ai-principal <PRINCIPAL> oauth-redirect <URI>
-system credential approve-oauth <PENDING-ID>
+system credential approve-oauth <PENDING-ID> [AI-PRINCIPAL]
 ```
 
 Authentication modes:
@@ -406,14 +406,38 @@ Authentication modes:
 ```text
 Static Bearer    operator-issued token in Authorization: Bearer
 OAuth            built-in OAuth 2.1 authorization server + resource server
-                 (authorization_code+PKCE S256, client_credentials)
+                 (authorization_code+PKCE S256, refresh_token, client_credentials)
+                 DCR (/oauth/register) and CIMD when the client presents an
+                 https metadata URL as client_id
 Auth model       static-bearer+built-in-oauth2.1-as/rs+rfc9728
 ```
 
 `client_credentials` mints a separate expiring `drauth_` access token bound to
 the canonical MCP resource. It is not an alias for Static Bearer.
+Authorization-code exchanges also mint a rotating `drref_` refresh token.
+DCR/CIMD consent requires `approve-oauth <PENDING-ID> <AI-PRINCIPAL>`.
 
 Do not call Static Bearer "OAuth". Raw tokens are shown only at issuance.
+
+## 16.1 Remote MCP connector (Claude / ChatGPT)
+
+```text
+MCP URL: https://<hostname>/mcp
+```
+
+1. Prefer `AUTO_ACME` public TLS (`set mcp-tls mode auto-acme`).
+2. Create an AI Principal and AI Access rules for the intended hosts/tools.
+3. Add the public `/mcp` URL as a custom connector / remote MCP server.
+4. Complete OAuth (PKCE S256). Approve unbound DCR/CIMD requests with
+   `system credential approve-oauth <PENDING-ID> <PRINCIPAL>`.
+5. Tool discovery must be read-only; writes/exec remain AI Access gated.
+
+`USER_CERTIFICATE` is for customer-managed publicly trusted certificates.
+`PRIVATE_CA` is for internal clients that explicitly trust the private CA — not
+the default ChatGPT/Claude cloud connector path.
+
+Not every ChatGPT subscription supports full write MCP; treat write/exec
+support as plan-dependent on the vendor side.
 
 ## 17. AI Access rules
 

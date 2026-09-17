@@ -601,6 +601,15 @@ CREATE TABLE IF NOT EXISTS ai_oauth_pending (
   created_at TEXT NOT NULL,
   FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
 );
+CREATE TABLE IF NOT EXISTS ai_oauth_dcr_clients (
+  client_id TEXT PRIMARY KEY,
+  redirect_uris TEXT NOT NULL DEFAULT '',
+  token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+  client_secret_hash TEXT,
+  client_name TEXT NOT NULL DEFAULT '',
+  metadata_url TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -616,6 +625,11 @@ def ensure_ai_auth_schema(conn: sqlite3.Connection) -> None:
     if cols and "oauth_subject" not in cols:
         conn.execute("ALTER TABLE ai_principals ADD COLUMN oauth_subject TEXT NOT NULL DEFAULT ''")
     conn.executescript(AI_AUTH_SQL)
+    tok_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_oauth_tokens)")}
+    if tok_cols and "kind" not in tok_cols:
+        conn.execute("ALTER TABLE ai_oauth_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'access'")
+    if tok_cols and "rotated_from" not in tok_cols:
+        conn.execute("ALTER TABLE ai_oauth_tokens ADD COLUMN rotated_from TEXT")
     ensure_enrollment_plans_schema(conn)
 
 

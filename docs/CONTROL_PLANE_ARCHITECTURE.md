@@ -1112,6 +1112,9 @@ OAuth             Data Relay Link is both the built-in OAuth 2.1
                   RFC 8414 authorization-server metadata
                   RFC 9207 iss on authorization responses
                   authorization_code + PKCE S256
+                  refresh_token rotation (drref_) + offline_access metadata
+                  RFC 7591 Dynamic Client Registration (/oauth/register)
+                  Client ID Metadata Documents (CIMD) when advertised
                   client_credentials with RFC 8707 resource
                   resource-bound expiring drauth_ access tokens
                   AI Principal mapping is explicit and revocable
@@ -1121,10 +1124,15 @@ OAuth             Data Relay Link is both the built-in OAuth 2.1
 `client_id` plus the principal's Static Bearer as `client_secret` and receive a
 short-lived resource-bound `drauth_` access token. That access token is not the
 Static Bearer token. Cursor typically uses Static Bearer headers.
-Claude/ChatGPT custom connectors are expected to use authorization_code+PKCE.
+Claude/ChatGPT custom connectors are expected to use authorization_code+PKCE,
+with DCR or CIMD for client registration and refresh tokens for persistent
+sessions. DCR/CIMD clients remain unbound until an operator approves OAuth
+consent against a concrete AI Principal (`system credential approve-oauth
+<PENDING-ID> <PRINCIPAL>`).
 
-Issuer, resource, authorization endpoint, token endpoint, and Protected
-Resource Metadata are taken from the configured control-plane public identity.
+Issuer, resource, authorization endpoint, token endpoint, registration
+endpoint, and Protected Resource Metadata are taken from the configured
+control-plane public identity.
 They are not derived from an arbitrary request `Host` or `X-Forwarded-*` header.
 
 Threat model (must remain fail-closed):

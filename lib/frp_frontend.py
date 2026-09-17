@@ -152,6 +152,33 @@ def _mcp_location_block(mcp_bridge_port):
             proxy_set_header X-Forwarded-Proto https;
             proxy_connect_timeout 10s;
         }
+
+        location = /oauth/register {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+            client_max_body_size 64k;
+        }
+
+        location = /register {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+            client_max_body_size 64k;
+        }
+
+        location = /oauth/revoke {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
 ''' % {'port': mcp_bridge_port}
 
 

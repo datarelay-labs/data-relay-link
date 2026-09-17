@@ -131,7 +131,12 @@ imply Cursor, Claude, or ChatGPT product support until those hosts are tested.
 
 Modern 2026-07-28 is stateless: no `initialize`, no protocol `ping`, and no
 `Mcp-Session-Id`. Authentication is
-`static-bearer+built-in-oauth2.1-as/rs+rfc9728`.
+`static-bearer+built-in-oauth2.1-as/rs+rfc9728` with authorization_code+PKCE,
+refresh tokens, DCR, and CIMD for remote connectors.
+
+Connect with one URL: `https://<hostname>/mcp`. Prefer `AUTO_ACME` for
+public-cloud connectors; use `USER_CERTIFICATE` for customer-managed public
+trust, or `PRIVATE_CA` only for internal clients that trust the private CA.
 
 No separate MCP server is required on every internal host.
 

@@ -1758,7 +1758,7 @@ def domain_help(topic, role):
                     "  system credential revoke ai-principal <PRINCIPAL>",
                     "  system credential configure ai-principal <PRINCIPAL> authentication static-bearer",
                     "  system credential configure ai-principal <PRINCIPAL> authentication oauth",
-                    "  system credential approve-oauth <PENDING-ID>",
+                    "  system credential approve-oauth <PENDING-ID> [AI-PRINCIPAL]",
                     "  system diagnostics mcp",
                     "  show mcp-tls",
                     "  set mcp-tls hostname <fqdn>",

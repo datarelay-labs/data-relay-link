@@ -577,8 +577,35 @@ class PublicMcpEndpointTests(unittest.TestCase):
             ).read().decode("utf-8")
         )
         self.assertTrue(issued["access_token"].startswith("drauth_"))
+        self.assertTrue(issued.get("refresh_token", "").startswith("drref_"))
+        self.assertIn("offline_access", issued.get("scope") or "")
         status, payload = rpc(self.url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}, issued["access_token"], method="tools/list")
         self.assertEqual(status, 200)
+        refreshed = json.loads(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    self.loopback + "/oauth/token",
+                    data=urllib.parse.urlencode(
+                        {
+                            "grant_type": "refresh_token",
+                            "refresh_token": issued["refresh_token"],
+                            "client_id": "chatgpt-support",
+                            "resource": resource,
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    method="POST",
+                ),
+                timeout=10,
+            ).read().decode("utf-8")
+        )
+        self.assertTrue(refreshed["access_token"].startswith("drauth_"))
+        self.assertNotEqual(refreshed["access_token"], issued["access_token"])
+        status, payload = rpc(self.url, {"jsonrpc": "2.0", "id": 11, "method": "tools/list", "params": {}}, refreshed["access_token"], method="tools/list")
+        self.assertEqual(status, 200)
+        status, _payload = rpc(self.url, {"jsonrpc": "2.0", "id": 12, "method": "tools/list", "params": {}}, issued["access_token"], method="tools/list")
+        self.assertEqual(status, 401)
+        print("MCP_OAUTH_REFRESH_TOKEN=PASS")
         try:
             urllib.request.urlopen(
                 urllib.request.Request(
@@ -616,15 +643,17 @@ class PublicMcpEndpointTests(unittest.TestCase):
         print("MCP_OAUTH_CODE_REPLAY_PROTECTION=PASS")
         hashed = list(self.plane.conn.execute("SELECT code_hash FROM ai_oauth_codes"))
         self.assertTrue(all(row[0] != code for row in hashed))
+        access_digest = hashlib.sha256(refreshed["access_token"].encode("utf-8")).hexdigest()
         row = self.plane.conn.execute(
-            "SELECT token_hash, expires_at, revoked_at FROM ai_oauth_tokens ORDER BY created_at DESC LIMIT 1"
+            "SELECT token_hash, expires_at, revoked_at, kind FROM ai_oauth_tokens WHERE token_hash = ?",
+            (access_digest,),
         ).fetchone()
-        self.assertTrue(row and row[0] != issued["access_token"])
+        self.assertTrue(row and row["kind"] == "access")
         self.plane.conn.execute(
             "UPDATE ai_oauth_tokens SET expires_at = '2000-01-01T00:00:00Z' WHERE token_hash = ?",
-            (row[0],),
+            (access_digest,),
         )
-        status, _payload = rpc(self.url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, issued["access_token"], method="tools/list")
+        status, _payload = rpc(self.url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, refreshed["access_token"], method="tools/list")
         self.assertEqual(status, 401)
         print("MCP_OAUTH_EXPIRY=PASS")
         print("MCP_OAUTH_REVOCATION=PASS")

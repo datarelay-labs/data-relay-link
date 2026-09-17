@@ -1008,7 +1008,19 @@ def _system(plane: ControlPlane, rest):
                 "       system credential configure ai-principal <PRINCIPAL> oauth-redirect <URI>"
             )
         if rest[1] == "approve-oauth":
-            result = _run(plane.approve_oauth_pending, rest[2] if rest[2] != "ai-principal" else rest[3])
+            # system credential approve-oauth <PENDING-ID> [PRINCIPAL]
+            # or system credential approve-oauth ai-principal <PENDING-ID> [PRINCIPAL]
+            args = rest[2:]
+            if args and args[0] == "ai-principal":
+                args = args[1:]
+            if not args:
+                raise SystemExit(
+                    "usage: system credential approve-oauth <PENDING-ID> [AI-PRINCIPAL]\n"
+                    "DCR/CIMD requests require AI-PRINCIPAL."
+                )
+            pending_id = args[0]
+            principal = args[1] if len(args) > 1 else None
+            result = _run(plane.approve_oauth_pending, pending_id, principal)
             sys.stdout.write("Authorization code issued. It is shown once.\n")
             sys.stdout.write("code=%s\n" % result.get("code"))
             return 0
