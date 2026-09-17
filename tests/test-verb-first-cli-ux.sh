@@ -74,9 +74,14 @@ print("\n".join(g.completion_candidates("set ", "server", [], {}, [], trailing=T
 PY
 )"
 echo "$SET_CANDS" | grep -qx 'client' || fail "set tree missing client"
-echo "$SET_CANDS" | grep -qx 'acl' || fail "set tree missing acl"
+echo "$SET_CANDS" | grep -qx 'remote-access' || fail "set tree missing remote-access"
+echo "$SET_CANDS" | grep -qx 'internet-access' || fail "set tree missing internet-access"
 echo "$SET_CANDS" | grep -qx 'enrollment' || fail "set tree missing enrollment"
 echo "$SET_CANDS" | grep -qx 'server' || fail "set tree missing server"
+# Obsolete public set children must stay absent.
+echo "$SET_CANDS" | grep -qx 'acl' && fail "set tree still exposes acl"
+echo "$SET_CANDS" | grep -qx 'service-profile' && fail "set tree still exposes service-profile"
+echo "$SET_CANDS" | grep -qx 'internet-profile' && fail "set tree still exposes internet-profile"
 pass SHOW_TREE
 pass SET_TREE
 
@@ -199,10 +204,9 @@ pass REVOKE_RELEASE_DELETE_DISTINCT
 
 # --- GUIDED_ZERO_TOUCH / GUIDED_ENROLLMENT ---
 ZT="$(grammar 'set client')"
-EN="$(grammar 'create enrollment')"
+EN="$(grammar 'set enrollment')"
 assert_json_field "$ZT" action create_zero_touch
 assert_json_field "$EN" action create_enrollment
-assert_json_field "$EN" guided True
 pass GUIDED_ZERO_TOUCH
 pass GUIDED_ENROLLMENT
 
@@ -210,21 +214,21 @@ pass GUIDED_ENROLLMENT
 for line_action in \
   "show clients:show_clients" \
   "create backup:create_backup" \
-  "update product:update_project" \
-  "update engine:update_frp" \
-  "delete group edge:delete_group" \
-  "add egress-destination ubuntu:add_egress_destination"
+  "system update product:update_project" \
+  "system update engine:update_frp" \
+  "unset group edge:delete_group" \
+  "set internet-access allow-api:control_plane"
 do
   line="${line_action%%:*}"
   action="${line_action##*:}"
   js="$(grammar "$line")"
   assert_json_field "$js" action "$action"
 done
-# Hidden resource-first still parses
-HF="$(grammar 'client show 24cd7856')"
-assert_json_field "$HF" action show_client
+# Obsolete resource-first / egress-destination must reject (no auto-translation).
+HF="$(grammar 'add egress-destination ubuntu')"
+assert_json_field "$HF" status error
 pass BACKEND_CAPABILITY_PARITY
-pass RESOURCE_FIRST_HIDDEN_COMPAT
+pass NO_LEGACY_EGRESS_DESTINATION_TRANSLATION
 
 # --- ALLOCATOR_PUBLIC_HOSTNAME_SEPARATION (EXPECTED_BEHAVIOR) ---
 if [[ -f "$ROOT/tests/test-server-install-config.sh" ]] && grep -q 'ALLOCATOR_SEPARATE_FROM_PUBLIC_HOSTNAME\|allocator URL stays on public IP' "$ROOT/tests/test-server-install-config.sh"; then

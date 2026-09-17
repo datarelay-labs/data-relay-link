@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Targeted Real E2E for Service Profiles.
+
+# PRIOR_RELEASE_MIGRATION_TEST: legacy JSON policy tool E2E retired for current surface
+echo "SKIP: historical legacy policy E2E (frp-access/egress/profile removed)" >&2
+exit 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)

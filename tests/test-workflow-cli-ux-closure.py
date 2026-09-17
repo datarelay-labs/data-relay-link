@@ -239,351 +239,35 @@ class CreateClientWorkflowTests(unittest.TestCase):
 
 
 class BackendProductOutputTests(unittest.TestCase):
+    """Legacy frp-access/egress CLIs are deleted; assert absence + create-client UX."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
         self.env = os.environ.copy()
         self.env["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
-
-        lib = self.root / "usr/local/lib/drlink"
-        lib.mkdir(parents=True, exist_ok=True)
-        for name in (
-            "frp_egress_control.py",
-            "frp_access_control.py",
-            "frp_control_locks.py",
-            "frp_audit.py",
-            "frp_client_registry.py",
-            "frp_public_suffix.py",
-            "frp_infrastructure_ports.py",
-        ):
-            src = ROOT / "lib" / name
-            if src.is_file():
-                shutil.copy2(src, lib / name)
-        psl = ROOT / "lib" / "data" / "public_suffix_list.dat"
-        if psl.is_file():
-            data = lib / "data"
-            data.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(psl, data / "public_suffix_list.dat")
-
-        sbin = self.root / "usr/local/sbin"
-        sbin.mkdir(parents=True, exist_ok=True)
-        for tool in ("frp-egress", "frp-access", "frp-create-client"):
-            path = sbin / tool
-            path.write_text((ROOT / "tools" / tool).read_text(encoding="utf-8"), encoding="utf-8")
-            path.chmod(0o755)
-            setattr(self, tool.replace("-", "_"), path)
-
         (self.root / "etc/drlink").mkdir(parents=True, exist_ok=True)
         (self.root / "var/lib/drlink").mkdir(parents=True, exist_ok=True)
-        (self.root / "etc/drlink/config.json").write_text(
-            json.dumps(
-                {
-                    "egress_control_file": "/var/lib/drlink/egress-control.json",
-                    "access_control_file": "/var/lib/drlink/access-control.json",
-                    "registry_file": "/var/lib/drlink/registry.json",
-                    "enrollments_dir": "/var/lib/drlink/enrollments",
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (self.root / "var/lib/drlink/registry.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "clients": {
-                        "machine-abcdef012345": {
-                            "label": "dp1",
-                            "hostname": "dp1-host",
-                            "services": {"ssh": {"remote_port": 6001, "enabled": True}},
-                        }
-                    },
-                    "reserved": [6001],
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        sys.path.insert(0, str(ROOT / "lib"))
-        import frp_egress_control as EG  # noqa: E402
-        import frp_access_control as ACL  # noqa: E402
-
-        self.EG = EG
-        self.ACL = ACL
-        EG.save_egress_state(
-            EG.empty_egress_state(), path=self.root / "var/lib/drlink/egress-control.json"
-        )
-        ACL.save_access_state(
-            ACL.empty_access_state(), path=self.root / "var/lib/drlink/access-control.json"
-        )
+        self.create_client = ROOT / "tools" / "frp-create-client"
 
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
 
-    def _run(self, tool, args):
-        return subprocess.run(
-            [sys.executable, "-u", str(tool), *args],
-            env=self.env,
-            text=True,
-            capture_output=True,
-        )
+    def test_dead_policy_tools_absent(self):
+        for name in ("frp-access", "frp-egress", "frp-profile"):
+            self.assertFalse((ROOT / "tools" / name).exists(), name)
 
-    def _load_egress_cli(self):
-        name = "frp_egress_cli_%s" % self.id().replace(".", "_")
-        spec = importlib.util.spec_from_loader(
-            name,
-            loader=importlib.machinery.SourceFileLoader(name, str(self.frp_egress)),
-        )
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[name] = mod
-        spec.loader.exec_module(mod)
-        return mod
-
-    def _assert_no_access_list_leak(self, text):
-        lowered = text.lower()
-        self.assertNotIn("Access List", text)
-        self.assertNotIn("access-list", lowered)
-        self.assertNotIn("access lists", lowered)
-
-    def test_w4_acl_next_steps(self):
-        proc = self._run(self.frp_access, ["create", "office-network"])
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        out = proc.stdout
-        self.assertIn("Created ACL: office-network", out)
-        self.assertIn("set acl office-network source", out)
-        self.assertIn("set acl office-network service", out)
-        self.assertIn("test acl", out)
-        self._assert_no_access_list_leak(out)
-
-    def test_w4_acl_destructive_and_dependency_terminology(self):
-        self.assertEqual(self._run(self.frp_access, ["create", "office-network"]).returncode, 0)
-        add = self._run(
-            self.frp_access,
-            [
-                "add-source",
-                "office-network",
-                "--name",
-                "office",
-                "--source",
-                "10.10.10.0/24",
-            ],
-        )
-        self.assertEqual(add.returncode, 0, add.stderr)
-        self._assert_no_access_list_leak(add.stdout + add.stderr)
-        assign = self._run(
-            self.frp_access, ["assign", "dp1", "ssh", "office-network"]
-        )
-        self.assertEqual(assign.returncode, 0, assign.stderr)
-        self._assert_no_access_list_leak(assign.stdout + assign.stderr)
-
-        delete = self._run(self.frp_access, ["delete", "office-network"])
-        self.assertNotEqual(delete.returncode, 0)
-        dep = delete.stdout + delete.stderr
-        self.assertIn('Cannot delete ACL "office-network"', dep)
-        self.assertIn("dp1:ssh", dep)
-        self.assertIn("unset acl office-network service dp1 ssh", dep)
-        self._assert_no_access_list_leak(dep)
-        self.assertNotIn("another Access List", dep)
-        self.assertNotIn("Change those services to PUBLIC", dep)
-
-        public = self._run(self.frp_access, ["public", "dp1", "ssh", "--yes"])
-        self.assertEqual(public.returncode, 0, public.stderr)
-        self.assertIn("Restrict this service with an ACL", public.stdout)
-        self.assertIn("set acl <ACL> service", public.stdout)
-        self._assert_no_access_list_leak(public.stdout + public.stderr)
-
-    def test_w5_internet_next_steps_and_status(self):
-        proc = self._run(self.frp_egress, ["create", "ubuntu-update", "--disabled"])
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        out = proc.stdout
-        self.assertIn("Created Internet Access profile: ubuntu-update", out)
-        self.assertIn("set internet-profile ubuntu-update source", out)
-        self.assertIn("test internet", out)
-        self.assertIn("set internet-profile ubuntu-update enabled", out)
-        self.assertNotIn("egress add-", out)
-        self.assertNotIn("create →", out)
-
-        status = self._run(self.frp_egress, ["status"])
-        self.assertEqual(status.returncode, 0, status.stderr)
-        self.assertIn("Internet Access", status.stdout)
-        self.assertNotIn("Egress control file", status.stdout)
-        self.assertNotIn("Doctor", status.stdout)
-
-    def test_w5_internet_disabled_preview_and_enable_terminology(self):
-        self.assertEqual(
-            self._run(self.frp_egress, ["create", "ubuntu-update", "--disabled"]).returncode, 0
-        )
-        self.assertEqual(
-            self._run(
-                self.frp_egress, ["add-source", "ubuntu-update", "10.10.20.0/24"]
-            ).returncode,
-            0,
-        )
-        dest = self._run(
-            self.frp_egress,
-            [
-                "add-destination",
-                "ubuntu-update",
-                "archive.ubuntu.com",
-                "443",
-                "--protocol",
-                "https",
-            ],
-        )
-        self.assertEqual(dest.returncode, 0, dest.stderr)
-
-        mod = self._load_egress_cli()
-        cfg = mod.load_cfg()
-        args = argparse.Namespace(
-            source_ip="10.10.20.25",
-            host="archive.ubuntu.com",
-            port=443,
-            protocol="https",
-        )
-        public_addr = [
-            (2, 1, 6, "", ("93.184.216.34", 0)),
-        ]
-        from io import StringIO
-
-        buf = StringIO()
-        with mock.patch.object(mod.socket, "getaddrinfo", return_value=public_addr):
-            with mock.patch("sys.stdout", buf):
-                try:
-                    mod.cmd_explain(cfg, args)
-                except SystemExit as exc:
-                    self.fail("disabled preview should not hard-fail policy: %s" % exc)
-        out = buf.getvalue()
-        self.assertIn("Profile state : Disabled", out)
-        self.assertIn("Policy preview : ALLOW", out)
-        self.assertIn("Current state  : BLOCKED", out)
-        self.assertIn("set internet-profile ubuntu-update enabled", out)
-        self.assertNotRegex(out, r"(?m)^Decision\s*:\s*ALLOW\s*$")
-        self.assertNotIn("egress profile", out.lower())
-
-        enable = self._run(self.frp_egress, ["enable", "ubuntu-update"])
-        self.assertEqual(enable.returncode, 0, enable.stderr)
-        self.assertIn("Internet Access profile enabled", enable.stdout)
-        self.assertIn("Profile : ubuntu-update", enable.stdout)
-        self.assertIn("Status  : Enabled", enable.stdout)
-        self.assertNotIn("egress profile", enable.stdout.lower())
-
-        buf2 = StringIO()
-        with mock.patch.object(mod.socket, "getaddrinfo", return_value=public_addr):
-            with mock.patch("sys.stdout", buf2):
-                try:
-                    mod.cmd_explain(cfg, args)
-                except SystemExit as exc:
-                    self.fail("enabled allow should succeed: %s" % exc)
-        enabled_out = buf2.getvalue()
-        self.assertIn("Profile state : Enabled", enabled_out)
-        self.assertRegex(enabled_out, r"(?m)^Decision\s*:\s*ALLOW\s*$")
-        self.assertNotIn("Policy preview : ALLOW", enabled_out)
-        self.assertNotIn("Current state  : BLOCKED", enabled_out)
-
-    def test_w6_fixed_tcp_product_output(self):
-        self.assertEqual(
-            self._run(self.frp_egress, ["create", "vendor-license", "--disabled"]).returncode, 0
-        )
-        self.assertEqual(
-            self._run(
-                self.frp_egress, ["add-source", "vendor-license", "10.10.30.0/24"]
-            ).returncode,
-            0,
-        )
-        self.assertEqual(
-            self._run(
-                self.frp_egress,
-                [
-                    "add-destination",
-                    "vendor-license",
-                    "license.example.com",
-                    "27000",
-                    "--protocol",
-                    "tcp",
-                ],
-            ).returncode,
-            0,
-        )
-        create = self._run(
-            self.frp_egress,
-            [
-                "tcp",
-                "create",
-                "vendor-license",
-                "--profile",
-                "vendor-license",
-                "--destination",
-                "license.example.com:27000",
-                "--listen-port",
-                "6201",
-            ],
-        )
-        self.assertEqual(create.returncode, 0, create.stderr)
-
-        mod = self._load_egress_cli()
-        cfg = mod.load_cfg()
-        args = argparse.Namespace(selector="vendor-license", source_ip="10.10.30.25")
-        public_addr = [(2, 1, 6, "", ("93.184.216.34", 0))]
-        from io import StringIO
-
-        buf = StringIO()
-        with mock.patch.object(mod.socket, "getaddrinfo", return_value=public_addr):
-            with mock.patch("sys.stdout", buf):
-                try:
-                    mod.cmd_tcp_explain(cfg, args)
-                except SystemExit as exc:
-                    self.fail("disabled fixed-tcp preview should not fail: %s" % exc)
-        out = buf.getvalue()
-        self.assertIn("Fixed TCP Check", out)
-        self.assertIn("Status      : Disabled", out)
-        self.assertIn("Policy preview : ALLOW", out)
-        self.assertIn("Current state  : BLOCKED", out)
-        self.assertIn("set fixed-tcp vendor-license enabled", out)
-        self.assertNotRegex(out, r"(?m)^Decision\s*:\s*ALLOW\s*$")
-        for leak in ("Mode: PREVIEW", "Relay ID", "Profile ID", "PROFILE_MATCH"):
-            self.assertNotIn(leak, out)
-
-        dns_fail = self._run(
-            self.frp_egress,
-            [
-                "add-destination",
-                "vendor-license",
-                "no-such-host.invalid",
-                "27001",
-                "--protocol",
-                "tcp",
-            ],
-        )
-        self.assertEqual(dns_fail.returncode, 0, dns_fail.stderr)
-        create2 = self._run(
-            self.frp_egress,
-            [
-                "tcp",
-                "create",
-                "vendor-dns-fail",
-                "--profile",
-                "vendor-license",
-                "--destination",
-                "no-such-host.invalid:27001",
-                "--listen-port",
-                "6202",
-            ],
-        )
-        self.assertEqual(create2.returncode, 0, create2.stderr)
-        explained = self._run(
-            self.frp_egress, ["tcp", "explain", "vendor-dns-fail", "10.10.30.25"]
-        )
-        self.assertNotEqual(explained.returncode, 0)
-        dns_out = explained.stdout + explained.stderr
-        self.assertIn("Fixed TCP Check", dns_out)
-        self.assertIn("Status      : Disabled", dns_out)
-        self.assertIn("DNS safety     : FAIL", dns_out)
-        self.assertIn("Current state  : NOT READY", dns_out)
-        self.assertIn("could not be resolved", dns_out.lower())
-        for leak in ("Mode: PREVIEW", "Relay ID", "Profile ID", "PROFILE_MATCH"):
-            self.assertNotIn(leak, dns_out)
+    def test_guided_menu_has_no_legacy_labels(self):
+        for key, entries in CATALOG.NAVIGATION_TREE.items():
+            for item in entries:
+                label = item[1] if len(item) > 1 else ""
+                self.assertNotIn(
+                    label,
+                    ("ACLs", "Access Lists", "Service Profiles", "Internet Profiles", "Egress Profiles"),
+                    "%s -> %s" % (key, label),
+                )
 
     def test_onboarding_missing_enrollments_dir_product_error(self):
         incomplete = self.root / "etc/drlink/config.json"
@@ -591,7 +275,12 @@ class BackendProductOutputTests(unittest.TestCase):
             json.dumps({"public_host": "203.0.113.10", "public_ip": "203.0.113.10"}) + "\n",
             encoding="utf-8",
         )
-        proc = self._run(self.frp_create_client, [])
+        proc = subprocess.run(
+            [sys.executable, "-u", str(self.create_client)],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
         combined = proc.stdout + proc.stderr
         self.assertNotEqual(proc.returncode, 0)
         self.assertNotIn("Traceback", combined)

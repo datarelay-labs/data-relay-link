@@ -30,27 +30,18 @@ def _match(tokens, role):
 
 
 class OperationalUxClosureTests(unittest.TestCase):
-    def test_acl_unassign_preserves_selector(self):
+    def test_acl_unassign_surface_rejected(self):
         tokens = ["unset", "acl", "office", "service", "dp1", "ssh"]
-        self.assertEqual(
-            CATALOG.to_internal(tokens),
-            ["access", "unassign", "office", "dp1", "ssh"],
-        )
         result = _match(tokens, "server")
-        self.assertEqual(result.get("status"), "ok")
-        self.assertEqual(result.get("action"), "access_cmd")
-        self.assertEqual(
-            result.get("passthrough"),
-            ["unassign", "office", "dp1", "ssh"],
-        )
+        self.assertEqual(result.get("status"), "error")
+        self.assertNotEqual(result.get("action"), "access_cmd")
 
     def test_wrong_acl_cannot_silently_become_public_rewrite(self):
-        # Typo'd ACL must still carry the selector into the backend validator.
+        # Obsolete ACL grammar must not translate into any mutating action.
         tokens = ["unset", "acl", "definitely-does-not-exist", "service", "dp1", "ssh"]
-        internal = CATALOG.to_internal(tokens)
-        self.assertEqual(internal[0:2], ["access", "unassign"])
-        self.assertEqual(internal[2], "definitely-does-not-exist")
-        self.assertNotEqual(internal[0:2], ["set", "access-public"])
+        result = _match(tokens, "server")
+        self.assertEqual(result.get("status"), "error")
+        self.assertNotIn(result.get("action"), ("access_cmd", "set_access_public", "access_public"))
 
     def test_client_service_edit_public_cli(self):
         cases = [
@@ -66,12 +57,11 @@ class OperationalUxClosureTests(unittest.TestCase):
                 self.assertEqual(result.get("status"), "ok", result)
                 self.assertEqual(result.get("action"), action, result)
 
-    def test_service_profile_edit_public_cli(self):
+    def test_service_profile_edit_public_cli_rejected(self):
         tokens = ["set", "service-profile", "office-ssh", "target-port", "22"]
-        self.assertIsNone(CATALOG.strict_error(tokens))
         result = _match(tokens, "server")
-        self.assertEqual(result.get("status"), "ok", result)
-        self.assertEqual(result.get("action"), "set_profile")
+        self.assertEqual(result.get("status"), "error", result)
+        self.assertNotEqual(result.get("action"), "set_profile")
 
     def test_public_catalog_examples_parse(self):
         data = json.loads((LIB / "frp_cli_final_commands.json").read_text(encoding="utf-8"))
@@ -119,9 +109,6 @@ class OperationalUxClosureTests(unittest.TestCase):
         cases = [
             (["system", "update"], "server"),
             (["system", "services"], "client"),
-            (["system", "export"], "server"),
-            (["system", "import"], "server"),
-            (["system", "diff"], "server"),
         ]
         for tokens, role in cases:
             with self.subTest(tokens=tokens):
@@ -130,6 +117,20 @@ class OperationalUxClosureTests(unittest.TestCase):
                 msg = result.get("message") or ""
                 self.assertNotIn("Unknown system operation", msg)
                 self.assertIn("Available:", msg)
+
+    def test_obsolete_system_export_import_rejected(self):
+        # Legacy internet-profile export/import parents must not remain as
+        # successful mutating surfaces.
+        for tokens in (["system", "export"], ["system", "import"]):
+            with self.subTest(tokens=tokens):
+                result = _match(tokens, "server")
+                self.assertIn(result.get("status"), ("error", "incomplete"), result)
+                msg = (result.get("message") or "").lower()
+                self.assertTrue(
+                    "unknown" in msg or "obsolete" in msg or "not part" in msg,
+                    result,
+                )
+                self.assertNotEqual(result.get("action"), "control_plane")
 
     def test_system_server_status_parity(self):
         result = _match(["system", "server-status"], "server")
@@ -235,24 +236,12 @@ class OperationalUxClosureTests(unittest.TestCase):
 
 
 class AclUnassignFailClosedTests(unittest.TestCase):
-    def test_unassign_subcommand_exists(self):
-        proc = subprocess.run(
-            [sys.executable, str(ROOT / "tools" / "frp-access"), "unassign", "-h"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0)
-        self.assertIn("unassign", (proc.stdout + proc.stderr).lower())
+    def test_legacy_access_tool_absent(self):
+        self.assertFalse((ROOT / "tools" / "frp-access").exists())
 
-    def test_unassign_fail_closed_logic_unit(self):
-        # Direct unit coverage of selector validation without full server cfg.
-        source = (ROOT / "tools" / "frp-access").read_text(encoding="utf-8")
-        self.assertIn("def cmd_unassign", source)
-        self.assertIn("ACL not found", source)
-        self.assertIn("is not assigned to ACL", source)
-        self.assertIn("Access unchanged", source)
-        self.assertIn("will make this published service PUBLIC", source)
+    def test_grammar_rejects_acl_unassign_surface(self):
+        result = GRAMMAR.match(["unset", "acl", "office", "service", "c1", "ssh"], "server")
+        self.assertEqual(result.get("status"), "error")
 
 if __name__ == "__main__":
     unittest.main()

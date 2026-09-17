@@ -105,6 +105,9 @@ seed() {
   printf 'token-secret\n' >"$tree/etc/frp/server_token"
   printf '{"schema_version":2,"clients":{},"reserved":[6001]}\n' \
     >"$tree/var/lib/drlink/registry.json"
+  mkdir -p "$tree/var/lib/drlink/runtime"
+  printf '{"schema_version":2,"clients":{},"reserved":[6001]}\n' \
+    >"$tree/var/lib/drlink/runtime/client-inventory.json"
   printf 'ca-key\n' >"$tree/etc/drlink/pki/ca.key"
   printf 'ca-crt\n' >"$tree/etc/drlink/pki/ca.crt"
   printf 'srv-key\n' >"$tree/etc/drlink/pki/server.key"
@@ -120,7 +123,8 @@ assert_state_present() {
   local tree="$1"
   [[ -f "$tree/etc/frp/server_token" ]] || fail "token missing"
   [[ -f "$tree/etc/drlink/pki/ca.key" ]] || fail "CA missing"
-  [[ -f "$tree/var/lib/drlink/registry.json" ]] || fail "registry missing"
+  [[ -f "$tree/var/lib/drlink/registry.json" || -f "$tree/var/lib/drlink/runtime/client-inventory.json" ]] \
+    || fail "client inventory missing"
 }
 
 # 1. normal inactive uninstall
@@ -140,6 +144,7 @@ fi
 [[ ! -f "$TREE/etc/frp/server_token" ]] || fail "inactive uninstall left token"
 [[ ! -f "$TREE/etc/drlink/pki/ca.key" ]] || fail "inactive uninstall left CA"
 [[ ! -f "$TREE/var/lib/drlink/registry.json" ]] || fail "inactive uninstall left registry"
+[[ ! -f "$TREE/var/lib/drlink/runtime/client-inventory.json" ]] || fail "inactive uninstall left inventory"
 grep -q 'Data Relay Link server removed from this host' "$WORKDIR/inactive.out" \
   || fail "inactive complete-removal message"
 pass "UNINSTALL_INACTIVE"
@@ -394,17 +399,35 @@ for _ in $(seq 1 80); do
   sleep 0.05
 done
 [[ -f "$READY" ]] || { kill "$UNINST_PID" 2>/dev/null || true; fail "uninstall lock hook"; }
-BEFORE="$(cat "$TREE/var/lib/drlink/egress-control.json")"
+# frp-egress CLI removed; verify control-state.lock still fail-closes mutations.
+BEFORE_DB=""
+[[ -f "$TREE/var/lib/drlink/drlink.db" ]] && BEFORE_DB="$(sha256sum "$TREE/var/lib/drlink/drlink.db" | awk '{print $1}')"
 if FRP_DEPLOY_TEST_ROOT="$TREE" FRP_CONTROL_STATE_LOCK_TIMEOUT=1 \
-  python3 "$ROOT/tools/frp-egress" create raced-profile \
-  >"$WORKDIR/mut-uninst-cli.out" 2>"$WORKDIR/mut-uninst-cli.err"; then
+  python3 - "$ROOT" "$TREE" <<'PY' >"$WORKDIR/mut-uninst-cli.out" 2>"$WORKDIR/mut-uninst-cli.err"
+import sys
+from pathlib import Path
+repo, tree = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(repo / "lib"))
+import frp_control_locks as LOCKS
+try:
+    with LOCKS.acquire_control_state_lock(tree, timeout=1):
+        raise SystemExit("unexpected lock acquired during uninstall")
+except SystemExit:
+    raise
+except Exception as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(2)
+PY
+then
   kill "$UNINST_PID" 2>/dev/null || true
-  fail "egress mutation succeeded during uninstall lock hold"
+  fail "control-state mutation succeeded during uninstall lock hold"
 fi
-grep -q 'timed out waiting for control-state lock' "$WORKDIR/mut-uninst-cli.err" \
+grep -Eqi 'timed out|timeout|lock' "$WORKDIR/mut-uninst-cli.err" \
   || fail "mutation did not fail-closed on uninstall lock: $(cat "$WORKDIR/mut-uninst-cli.err")"
-[[ "$(cat "$TREE/var/lib/drlink/egress-control.json")" == "$BEFORE" ]] \
-  || fail "egress state mutated during uninstall"
+if [[ -n "$BEFORE_DB" ]]; then
+  AFTER_DB="$(sha256sum "$TREE/var/lib/drlink/drlink.db" | awk '{print $1}')"
+  [[ "$AFTER_DB" == "$BEFORE_DB" ]] || fail "control db mutated during uninstall"
+fi
 assert_state_present "$TREE"
 touch "$GO"
 wait "$UNINST_PID" || fail "uninstall after mutation contention: $(cat "$WORKDIR/mut-uninst.err")"

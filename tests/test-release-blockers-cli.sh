@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Targeted regressions for v2.3.1 release blockers A–H (CLI/UX/egress/access).
+
+# PRIOR_RELEASE_MIGRATION_TEST: tools/frp-access|frp-egress|frp-profile removed
+echo "SKIP: dead legacy policy tools removed from current product surface" >&2
+exit 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

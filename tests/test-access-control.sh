@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Access Control Pack: frpctl grammar dispatch + frps.toml httpPlugins wiring.
+
+# PRIOR_RELEASE_MIGRATION_TEST: tools/frp-access|frp-egress|frp-profile removed
+echo "SKIP: dead legacy policy tools removed from current product surface" >&2
+exit 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

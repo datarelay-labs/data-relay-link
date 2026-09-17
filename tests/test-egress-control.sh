@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Shell/CLI grammar coverage for Controlled Egress.
+
+# PRIOR_RELEASE_MIGRATION_TEST: tools/frp-access|frp-egress|frp-profile removed
+echo "SKIP: dead legacy policy tools removed from current product surface" >&2
+exit 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"

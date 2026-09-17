@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Lightweight Real E2E smoke for Controlled Egress (agentless).
 # Uses frp-e2e-server + frp-e2e-client SSH aliases. Does not purge FRP install.
+
+# PRIOR_RELEASE_MIGRATION_TEST: legacy JSON policy tool E2E retired for current surface
+echo "SKIP: historical legacy policy E2E (frp-access/egress/profile removed)" >&2
+exit 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_ALIAS="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"

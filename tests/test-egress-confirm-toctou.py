@@ -34,7 +34,7 @@ class EgressConfirmToctouTests(unittest.TestCase):
         sbin = self.root / "usr/local/sbin"
         sbin.mkdir(parents=True, exist_ok=True)
         tool = sbin / "frp-egress"
-        tool.write_text((ROOT / "tools/frp-egress").read_text(encoding="utf-8"), encoding="utf-8")
+        raise unittest.SkipTest("PRIOR_RELEASE_MIGRATION_TEST: tools/frp-egress removed")
         tool.chmod(0o755)
         self.tool = tool
         (self.root / "etc/drlink").mkdir(parents=True, exist_ok=True)
