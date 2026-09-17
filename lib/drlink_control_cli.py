@@ -495,6 +495,7 @@ def _set(plane: ControlPlane, rest, client_sel):
             _run(plane.set_object_group, rest[1], description=" ".join(rest[3:]))
             return 0
         if rest[2] == "member":
+            _need(rest, 4, "set object-group <GROUP> member <OBJECT>")
             _run(plane.set_object_group_member, rest[1], rest[3])
             return 0
         raise SystemExit("Unknown object-group setting")
@@ -507,6 +508,7 @@ def _set(plane: ControlPlane, rest, client_sel):
             _run(plane.set_client_group, rest[1], description=" ".join(rest[3:]))
             return 0
         if rest[2] == "member":
+            _need(rest, 4, "set client-group <GROUP> member <CLIENT|ENDPOINT>")
             _run(plane.set_client_group_member, rest[1], rest[3])
             return 0
         raise SystemExit("Unknown client-group setting")
@@ -536,12 +538,15 @@ def _set(plane: ControlPlane, rest, client_sel):
             return 0
         prop = rest[2]
         if prop == "source":
+            _need(rest, 4, "set %s <RULE> source <OBJECT|GROUP>" % res)
             _run(plane.set_rule_source, plane_name, name, rest[3])
             return 0
         if prop == "destination":
+            _need(rest, 4, "set %s <RULE> destination <OBJECT|GROUP|SERVICE>" % res)
             _run(plane.set_rule_destination, plane_name, name, rest[3])
             return 0
         if prop == "service":
+            _need(rest, 4, "set %s <RULE> service <PROTOCOL> [PORT]" % res)
             proto = rest[3]
             port = rest[4] if len(rest) > 4 else (443 if proto in ("https",) else 80)
             # internet grammar: service https 443  OR service <PROTOCOL> <PORT>
@@ -550,6 +555,7 @@ def _set(plane: ControlPlane, rest, client_sel):
             _run(plane.set_rule_service, plane_name, name, proto, int(port))
             return 0
         if prop == "action":
+            _need(rest, 4, "set %s <RULE> action allow|deny" % res)
             _run(plane.set_rule_action, plane_name, name, rest[3])
             return 0
         if prop == "description":
@@ -559,9 +565,11 @@ def _set(plane: ControlPlane, rest, client_sel):
             _run(plane.set_rule_enabled, plane_name, name, True)
             return 0
         if prop == "before":
+            _need(rest, 4, "set %s <RULE> before <RULE>" % res)
             _run(plane.move_rule, plane_name, name, before=rest[3])
             return 0
         if prop == "after":
+            _need(rest, 4, "set %s <RULE> after <RULE>" % res)
             _run(plane.move_rule, plane_name, name, after=rest[3])
             return 0
         raise SystemExit("Unknown %s setting" % res)
@@ -827,8 +835,8 @@ def _test(plane: ControlPlane, rest):
         sys.stdout.write(plane.format_remote_explain(result))
         return 0
     if rest[0] == "internet-access":
-        _need(rest, 5, "test internet-access <SOURCE_IP> <DESTINATION> <PORT> <PROTOCOL>")
-        result = plane.evaluate_internet_access(rest[1], rest[2], int(rest[3]), rest[4])
+        _need(rest, 5, "test internet-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>")
+        result = plane.evaluate_internet_access(rest[1], rest[2], int(rest[4]), rest[3])
         sys.stdout.write(plane.format_internet_explain(result, dns={"status": "not executed (explain only)", "security": "server-side DNS required at runtime"}))
         return 0
     if rest[0] == "ai-access":

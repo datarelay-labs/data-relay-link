@@ -1750,6 +1750,10 @@ def domain_help(topic, role):
                     "  system restore <PATH>",
                     "  system revisions",
                     "  system audit",
+                    "  system export configuration --output <PATH>",
+                    "  test configuration <PATH|->",
+                    "  system diff configuration <PATH|->",
+                    "  system apply configuration <PATH|->",
                     "  system credential rotate ai-principal <PRINCIPAL>",
                     "  system credential revoke ai-principal <PRINCIPAL>",
                     "  system credential configure ai-principal <PRINCIPAL> authentication static-bearer",
@@ -1918,39 +1922,62 @@ WORKFLOWS = (
             "set client",
             "show clients",
             "show client <CLIENT-ID>",
+            "show enrollments",
         ),
-        "Zero-Touch via set client is the recommended path. Use 'set enrollment' "
-        "only when an interactive install is required.",
+        "Zero-Touch via set client is the recommended path. Use "
+        "'set enrollment bulk' for bounded multi-ticket issuance "
+        "(max 10 per request, max 10 active unused).",
     ),
     (
         "Publish and reach a remote service",
         (
-            "set service",
-            "apply",
-            "show client <CLIENT-ID> services",
+            "set published-service <SERVICE>",
+            "show published-services",
+            "show published-service <SERVICE>",
         ),
-        "Public ports are assigned by the server at apply time and stay "
-        "reserved until 'unset client … service …' / 'unset client …'.",
+        "Published Services bind a Managed Endpoint to a Service Preset. "
+        "Public ports stay reserved until the service is removed.",
     ),
     (
         "Restrict who may reach a service",
         (
-            "set access-rule office",
-            "set access-source office 203.0.113.0/24",
-            "set service-access <CLIENT-ID> <SERVICE-ID> office",
-            "test access <CLIENT-ID> <SERVICE-ID> 203.0.113.9",
+            "set object office type network",
+            "set object office value 203.0.113.0/24",
+            "set remote-access office-ssh",
+            "set remote-access office-ssh source office",
+            "set remote-access office-ssh destination <PUBLISHED-SERVICE>",
+            "set remote-access office-ssh action allow",
+            "test remote-access <CLIENT> <SERVICE> <SOURCE-IP>",
         ),
-        "Services are PUBLIC until an Access Rule is assigned.",
+        "Remote Access is ordered first-match. Unmatched traffic is DENY.",
     ),
     (
         "Allow one outbound destination",
         (
-            "set internet-profile vendor-api",
-            "set internet-source vendor-api 10.0.0.0/24",
-            "set internet-destination vendor-api api.example.com 443 https",
-            "set internet-profile vendor-api enabled",
+            "set object vendor-api type fqdn",
+            "set object vendor-api value api.example.com",
+            "set object office-net type network",
+            "set object office-net value 10.0.0.0/24",
+            "set internet-access vendor-https",
+            "set internet-access vendor-https source office-net",
+            "set internet-access vendor-https destination vendor-api",
+            "set internet-access vendor-https action allow",
+            "test internet-access <CLIENT> api.example.com https 443",
         ),
-        "A new Internet Access profile is created disabled. Default policy is DENY.",
+        "Internet Access is ordered first-match with default DENY.",
+    ),
+    (
+        "Apply a ConfigurationBundle",
+        (
+            "system export configuration --output drlink.yaml",
+            "test configuration drlink.yaml",
+            "system diff configuration drlink.yaml",
+            "system apply configuration drlink.yaml",
+            "system apply configuration -",
+        ),
+        "File or stdin ('-') input is supported. Apply validates, tests, "
+        "diffs, confirms, then commits atomically. Bundles never issue "
+        "Zero-Touch tickets.",
     ),
     (
         "Routine maintenance",
@@ -1959,6 +1986,7 @@ WORKFLOWS = (
             "system backup",
             "system update product",
             "system support-bundle",
+            "system revisions",
         ),
         "'system update engine' updates the upstream Relay Engine (FRP) binary separately. "
         "Use 'system update check-engine' to check upstream releases.",
@@ -1974,6 +2002,7 @@ def workflow_help(role):
             "Onboard a new client",
             "Restrict who may reach a service",
             "Allow one outbound destination",
+            "Apply a ConfigurationBundle",
         ):
             continue
         lines.append(title)

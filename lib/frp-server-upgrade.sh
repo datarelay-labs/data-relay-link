@@ -632,6 +632,162 @@ PY
   return 0
 }
 
+frp_server_upgrade_ensure_control_plane() {
+  # Bootstrap SQLite control-plane authority on upgrades from pre-SQLite installs.
+  # Fresh installs initialize drlink.db in install-server.sh; project-update must
+  # do the same before access/egress health checks expect authority=sqlite.
+  local cfg_file db_file db_mod plane_mod created=0
+  cfg_file="$(frp_server_fs /etc/drlink/config.json)"
+  db_file="$(frp_server_fs /var/lib/drlink/drlink.db)"
+  if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/drlink_control_db.py" ]]; then
+    db_mod="$BASE_DIR/lib/drlink_control_db.py"
+    plane_mod="$BASE_DIR/lib/drlink_control_plane.py"
+  else
+    db_mod="$(frp_server_fs /usr/local/lib/drlink/drlink_control_db.py)"
+    plane_mod="$(frp_server_fs /usr/local/lib/drlink/drlink_control_plane.py)"
+  fi
+  [[ -f "$db_mod" && -f "$plane_mod" ]] || {
+    echo "ERROR: control-plane modules missing from update source" >&2
+    return 1
+  }
+  if [[ ! -f "$db_file" ]]; then
+    created=1
+  fi
+  python3 - "$db_file" "$db_mod" "$plane_mod" <<'PY' || return 1
+import importlib.util
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+db_mod = Path(sys.argv[2])
+plane_mod = Path(sys.argv[3])
+lib_dir = str(db_mod.parent)
+if lib_dir not in sys.path:
+    sys.path.insert(0, lib_dir)
+# Deploy root is parent of var/ (…/var/lib/drlink/drlink.db → /)
+deploy = db_path.parent.parent.parent
+if str(deploy) in ("", "."):
+    deploy = Path("/")
+spec = importlib.util.spec_from_file_location("drlink_control_db", str(db_mod))
+db = importlib.util.module_from_spec(spec)
+sys.modules["drlink_control_db"] = db
+spec.loader.exec_module(db)
+spec = importlib.util.spec_from_file_location("drlink_control_plane", str(plane_mod))
+plane_mod_obj = importlib.util.module_from_spec(spec)
+sys.modules["drlink_control_plane"] = plane_mod_obj
+spec.loader.exec_module(plane_mod_obj)
+plane = plane_mod_obj.ControlPlane(str(deploy))
+try:
+    st = plane.status()
+    if not st.get("db_healthy"):
+        raise SystemExit("control DB unhealthy after init")
+    # One-time lab/state protection: adopt existing registry clients into SQLite
+    # when the control DB has none (pre-SQLite upgrades).
+    registry = Path("/var/lib/drlink/registry.json")
+    if int(st.get("clients") or 0) == 0 and registry.is_file():
+        import json
+        data = json.loads(registry.read_text(encoding="utf-8"))
+        adopted = 0
+        for cid, row in (data.get("clients") or {}).items():
+            if not isinstance(row, dict):
+                continue
+            plane.upsert_client(
+                str(cid),
+                label=str(row.get("label") or "") or None,
+                description=str(row.get("note") or "") or None,
+                hostname=str(row.get("hostname") or "") or None,
+                connected=False,
+            )
+            adopted += 1
+        if adopted:
+            print("CONTROL_DB_ADOPTED_CLIENTS=%s" % adopted)
+    st = plane.status()
+    print("CONTROL_DB_OK revision=%s mismatch=%s clients=%s" % (
+        st.get("revision"), st.get("mismatch"), st.get("clients")))
+finally:
+    plane.close()
+PY
+  chmod 600 "$db_file" 2>/dev/null || true
+  if [[ -f "$cfg_file" ]]; then
+    python3 - "$cfg_file" <<'PY' || true
+import json, os, sys, tempfile
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text(encoding="utf-8"))
+changed = False
+defaults = {
+    "registry_file": "/var/lib/drlink/runtime/client-inventory.json",
+    "control_db_file": "/var/lib/drlink/drlink.db",
+    "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
+    "egress_listen_addr": "0.0.0.0",
+    "egress_listen_port": 6102,
+}
+for obsolete in (
+    "access_control_file",
+    "egress_control_file",
+    "service_profiles_file",
+):
+    if obsolete in cfg:
+        cfg.pop(obsolete, None)
+        changed = True
+if str(cfg.get("registry_file") or "").endswith("/registry.json"):
+    cfg["registry_file"] = defaults["registry_file"]
+    changed = True
+for key, value in defaults.items():
+    if key not in cfg or cfg.get(key) in (None, ""):
+        cfg[key] = value
+        changed = True
+if changed:
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+print("CONTROL_CONFIG_OK")
+PY
+  fi
+  # Grant drlink-egress read access to config + SQLite SSOT after inode replace.
+  local eg_mod=""
+  if [[ -n "${BASE_DIR:-}" && -f "$BASE_DIR/lib/frp_egress_control.py" ]]; then
+    eg_mod="$BASE_DIR/lib/frp_egress_control.py"
+  else
+    eg_mod="$(frp_server_fs /usr/local/lib/drlink/frp_egress_control.py)"
+  fi
+  if [[ -f "$eg_mod" ]]; then
+    python3 - "$eg_mod" "$cfg_file" "$db_file" <<'PY' || true
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+cfg = Path(sys.argv[2])
+db = Path(sys.argv[3])
+mod.reapply_egress_runtime_permissions(
+    config_path=cfg if cfg.is_file() else None,
+    control_db_path=db if db.is_file() else None,
+    parents=True,
+)
+print("CONTROL_PERMS_OK")
+PY
+  fi
+  if [[ "$created" == "1" ]]; then
+    echo "CONTROL_PLANE_BOOTSTRAP=created"
+  else
+    echo "CONTROL_PLANE_BOOTSTRAP=existing"
+  fi
+  return 0
+}
+
 frp_server_apply_project_upgrade() {
   local source="$1" check_only="${2:-0}"
   local version_file previous target staged snapshot backups preserved_before
@@ -773,6 +929,9 @@ frp_server_apply_project_upgrade() {
   frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-access.service && restart_access=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp-access-plugin.py && restart_access=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_access_control.py && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_runtime_policy.py && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_control_db.py && restart_access=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_control_plane.py && restart_access=1
   frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-egress.service && restart_egress=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp-egress-gateway.py && restart_egress=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_control.py && restart_egress=1
@@ -781,6 +940,12 @@ frp_server_apply_project_upgrade() {
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink-tcp-egress.py && restart_tcp_egress=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_runtime.py && restart_egress=1
   frp_server_upgrade_changed "$staged" usr/local/lib/drlink/frp_egress_runtime.py && restart_tcp_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_runtime_policy.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_control_db.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_control_plane.py && restart_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_runtime_policy.py && restart_tcp_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_control_db.py && restart_tcp_egress=1
+  frp_server_upgrade_changed "$staged" usr/local/lib/drlink/drlink_control_plane.py && restart_tcp_egress=1
   if frp_server_upgrade_is_single443; then
     frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-frontend.service && restart_frontend=1
   fi
@@ -820,9 +985,23 @@ frp_server_apply_project_upgrade() {
     return 1
   fi
   restart_egress=1
-  # Controlled Egress bootstrap may intentionally add default keys to
-  # config.json and create egress-control.json on pre-egress upgrades.
-  # Re-baseline after that deliberate migration step.
+  # SQLite control-plane bootstrap for upgrades from pre-SQLite installs.
+  # Must run before access/egress restarts so /healthz authority=sqlite succeeds.
+  local control_bootstrap_out=""
+  if ! control_bootstrap_out="$(frp_server_upgrade_ensure_control_plane)"; then
+    frp_server_upgrade_rollback "$snapshot"
+    frp_emit_failure_class FILE_COMMIT_FAILED
+    return 1
+  fi
+  printf '%s\n' "$control_bootstrap_out"
+  if printf '%s\n' "$control_bootstrap_out" | grep -q 'CONTROL_PLANE_BOOTSTRAP=created'; then
+    restart_access=1
+    restart_egress=1
+    restart_tcp_egress=1
+  fi
+  # Controlled Egress / control-plane bootstrap may intentionally add keys to
+  # config.json and create protected state (egress-control.json / drlink.db).
+  # Re-baseline after those deliberate migration steps.
   preserved_before="$(frp_server_upgrade_preserved_digest)"
   if ! frp_server_upgrade_post_mutation_guard; then
     frp_server_upgrade_rollback "$snapshot"

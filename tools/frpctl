@@ -730,7 +730,9 @@ frpctl_control_plane_dispatch() {
     return 1
   fi
   libdir="$(dirname "$cli_py")"
-  PYTHONPATH="${libdir}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$cli_py" "$result" <<'PY'
+  # Use python -c (not a stdin heredoc) so ConfigurationBundle '-' can read
+  # the operator's stdin for copy/paste apply/test/diff workflows.
+  PYTHONPATH="${libdir}${PYTHONPATH:+:$PYTHONPATH}" python3 -c '
 import json
 import os
 import sys
@@ -741,7 +743,7 @@ import drlink_control_cli as cli
 result = json.loads(sys.argv[2])
 tokens = result.get("tokens") or []
 raise SystemExit(cli.main(tokens) or 0)
-PY
+' "$cli_py" "$result"
 }
 
 frpctl_control_plane_status() {

@@ -344,5 +344,55 @@ class ConfigurationBundleTests(unittest.TestCase):
         self.assertIn(result["bundle_hash"], blob)
 
 
+    def test_source_revision_conflict_public_semantics(self):
+        raw = _bundle(objects=[{"name": "sr1", "type": "Host", "values": ["198.51.100.1"]}])
+        # Simulate reviewed export at revision 0, then intervening mutation.
+        import yaml
+        doc = yaml.safe_load(raw)
+        doc["metadata"]["sourceRevision"] = 0
+        raw2 = yaml.safe_dump(doc, sort_keys=False)
+        self.plane.set_object_type("intervening", "host")
+        self.plane.set_object_value("intervening", "198.51.100.2")
+        plan = prepare_plan(self.plane, yaml.safe_dump(doc, sort_keys=False))
+        self.assertEqual(plan.base_revision, 0)
+        self.assertGreater(plan.current_revision or 0, 0)
+        with self.assertRaises(ConcurrencyError):
+            apply_change_plan(self.plane, plan, confirm=True)
+        self.assertIsNone(self.plane.get_object("sr1"))
+
+    def test_singular_rule_aliases_and_cidr_broadening(self):
+        self.plane.set_object_type("net", "network")
+        self.plane.set_object_value("net", "203.0.113.10/32")
+        raw = _bundle(
+            objects=[
+                {"name": "net", "type": "Network", "values": ["203.0.113.0/24"]},
+                {"name": "dst", "type": "FQDN", "values": ["alias.example"]},
+            ],
+            internetAccess=[
+                {
+                    "name": "alias-rule",
+                    "source": "net",
+                    "destination": "dst",
+                    "service": {"protocol": "https", "port": 443},
+                    "action": "ALLOW",
+                    "enabled": True,
+                }
+            ],
+        )
+        plan = prepare_plan(self.plane, raw)
+        self.assertTrue(plan.access_broadened)
+        families = {c.family for c in plan.mutating_changes}
+        self.assertIn("objects", families)
+        self.assertIn("internetAccess", families)
+        result = apply_change_plan(self.plane, plan, confirm=True)
+        self.assertEqual(result["status"], "APPLIED")
+        rule = self.plane._get_rule("internet", "alias-rule")
+        self.assertIsNotNone(rule)
+        view = self.plane._rule_view(rule)
+        self.assertEqual(view["sources"], ["net"])
+        self.assertEqual(view["destinations"], ["dst"])
+        self.assertIn("tcp/443", view["services"])
+
+
 if __name__ == "__main__":
     unittest.main()

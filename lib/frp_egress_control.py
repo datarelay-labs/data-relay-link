@@ -318,6 +318,7 @@ def reapply_egress_runtime_permissions(
     config_path: Optional[Path] = None,
     control_path: Optional[Path] = None,
     conn_log_path: Optional[Path] = None,
+    control_db_path: Optional[Path] = None,
     parents: bool = True,
 ) -> None:
     """Re-grant drlink-egress the minimum read/write surface after inode replace.
@@ -362,6 +363,11 @@ def reapply_egress_runtime_permissions(
         control_path = var_lib / "egress-control.json"
     else:
         control_path = Path(control_path)
+    if control_db_path is None:
+        control_db_path = var_lib / "drlink.db"
+    else:
+        control_db_path = Path(control_db_path)
+    runtime_dir = var_lib / "runtime"
     if conn_log_path is None:
         conn_log_path = egress_log_dir / "connections.jsonl"
     else:
@@ -417,6 +423,21 @@ def reapply_egress_runtime_permissions(
         if control_path.is_file():
             # Least privilege: egress gateway only reads policy.
             _acl_grant_file(control_path, "r--")
+        # SQLite SSOT + sidecars + derived runtime artifacts.
+        for path in (
+            control_db_path,
+            Path(str(control_db_path) + "-wal"),
+            Path(str(control_db_path) + "-shm"),
+        ):
+            if path.is_file():
+                _acl_grant_file(path, "r--")
+        if runtime_dir.is_dir():
+            _setfacl_user(runtime_dir, "r-x")
+            for child in runtime_dir.rglob("*"):
+                if child.is_file():
+                    _acl_grant_file(child, "r--")
+                elif child.is_dir():
+                    _setfacl_user(child, "r-x")
         if conn_log_path.parent.is_dir():
             try:
                 conn_log_path.touch(exist_ok=True)
@@ -453,6 +474,33 @@ def reapply_egress_runtime_permissions(
             os.chmod(control_path, 0o640)
         except OSError:
             pass
+    for path in (
+        control_db_path,
+        Path(str(control_db_path) + "-wal"),
+        Path(str(control_db_path) + "-shm"),
+    ):
+        if path.is_file():
+            try:
+                os.chown(path, 0, gid)
+                os.chmod(path, 0o640)
+            except OSError:
+                pass
+    if runtime_dir.is_dir():
+        try:
+            os.chown(runtime_dir, 0, gid)
+            os.chmod(runtime_dir, 0o750)
+        except OSError:
+            pass
+        for child in runtime_dir.rglob("*"):
+            try:
+                if child.is_dir():
+                    os.chown(child, 0, gid)
+                    os.chmod(child, 0o750)
+                elif child.is_file():
+                    os.chown(child, 0, gid)
+                    os.chmod(child, 0o640)
+            except OSError:
+                pass
     if conn_log_path.parent.is_dir():
         try:
             conn_log_path.touch(exist_ok=True)

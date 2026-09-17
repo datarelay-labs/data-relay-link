@@ -2060,7 +2060,9 @@ PY
   url="http://${addr}/healthz"
   # systemd can report active before the plugin binds; retry briefly.
   code="000"
+  body=""
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    body="$(curl -sS --connect-timeout 2 --max-time 5 "$url" 2>/dev/null || true)"
     code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$url" 2>/dev/null || echo 000)"
     if [[ "$code" == "200" ]]; then
       return 0
@@ -2068,6 +2070,9 @@ PY
     sleep 0.5
   done
   echo "ERROR: access plugin /healthz returned ${code} (expected 200)" >&2
+  if [[ -n "$body" ]]; then
+    echo "ERROR: access plugin /healthz body: ${body}" >&2
+  fi
   return 1
 }
 

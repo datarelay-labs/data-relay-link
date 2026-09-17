@@ -119,6 +119,7 @@ class ChangePlan:
     client_action_required: bool = False
     validation_ok: bool = True
     validation_errors: list[str] = field(default_factory=list)
+    current_revision: Optional[int] = None
 
     @property
     def mutating_changes(self) -> list[PlannedChange]:
@@ -287,6 +288,75 @@ def _parse_service_token(token: str) -> tuple[str, int]:
     if port < 1 or port > 65535:
         raise BundleError("Port out of range in service token: %s" % token)
     return proto, port
+
+
+def _as_str_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                out.append(text)
+        return out
+    raise BundleError("%s must be a string or list" % field_name)
+
+
+def _normalize_policy_rule_item(item: dict, family: str) -> dict:
+    """Accept AI-friendly singular aliases alongside canonical plural fields."""
+    out = dict(item)
+    if "sources" not in out and "source" in out:
+        out["sources"] = _as_str_list(out.get("source"), field_name="%s.source" % family)
+    if "destinations" not in out and "destination" in out:
+        out["destinations"] = _as_str_list(
+            out.get("destination"), field_name="%s.destination" % family
+        )
+    if "services" not in out and "service" in out:
+        svc = out.get("service")
+        if isinstance(svc, dict):
+            proto = str(svc.get("protocol") or svc.get("proto") or "tcp").strip().lower()
+            port = svc.get("port")
+            if port is None:
+                raise BundleError("%s.service.port is required" % family)
+            out["services"] = ["%s/%s" % (proto, port)]
+        else:
+            out["services"] = _as_str_list(svc, field_name="%s.service" % family)
+    return out
+
+
+def _network_values_broaden(old_vals: list[str], new_vals: list[str]) -> bool:
+    """True when proposed network/host values enlarge effective coverage."""
+    import ipaddress
+
+    old_set = set(old_vals)
+    new_set = set(new_vals)
+    added = new_set - old_set
+    if not added:
+        return False
+    old_nets = []
+    for v in old_vals:
+        try:
+            old_nets.append(ipaddress.ip_network(v, strict=False))
+        except ValueError:
+            continue
+    if not old_nets:
+        return True
+    for v in added:
+        try:
+            net = ipaddress.ip_network(v, strict=False)
+        except ValueError:
+            return True
+        # Broadens when new coverage is not contained in some prior network,
+        # or when it properly contains a prior network (supernet expansion).
+        if any(old.subnet_of(net) and old != net for old in old_nets):
+            return True
+        if not any(net.subnet_of(old) for old in old_nets):
+            return True
+    return False
 
 
 def _normalize_type(raw: str) -> str:
@@ -548,14 +618,28 @@ def build_change_plan(
     input_path: str = "file",
 ) -> ChangePlan:
     spec = bundle["spec"]
+    meta = bundle.get("metadata") or {}
+    current = plane.current_revision()
+    reviewed = meta.get("sourceRevision", meta.get("source_revision"))
+    if reviewed is None or reviewed == "":
+        base_revision = current
+    else:
+        try:
+            base_revision = int(reviewed)
+        except (TypeError, ValueError) as exc:
+            raise BundleError(
+                "metadata.sourceRevision must be an integer (got %r)" % reviewed
+            ) from exc
+        if base_revision < 0:
+            raise BundleError("metadata.sourceRevision must be >= 0")
     plan = ChangePlan(
-        base_revision=plane.current_revision(),
-        bundle_name=str(bundle["metadata"].get("name") or "unnamed"),
+        base_revision=base_revision,
+        bundle_name=str(meta.get("name") or "unnamed"),
         bundle_hash=str(bundle.get("raw_hash") or ""),
         input_path=input_path,
         embedded_tests=list(spec.get("tests") or []),
+        current_revision=current,
     )
-
     # --- objects ---
     objects = list(spec.get("objects") or [])
     _dup_check(objects, "objects")
@@ -638,6 +722,12 @@ def build_change_plan(
                     pl.set_object_description(n, d)
                     return {"operation": "update", "entity": {"type": "object", "name": n}}
 
+                security = "unchanged"
+                if obj_type in ("network", "host") and _network_values_broaden(
+                    cur_vals, want_vals
+                ):
+                    security = "broadened"
+                    plan.access_broadened = True
                 plan.changes.append(
                     PlannedChange(
                         "UPDATE",
@@ -645,6 +735,7 @@ def build_change_plan(
                         name,
                         "update object %s" % name,
                         apply_fn=_update,
+                        security=security,
                     )
                 )
 
@@ -1053,6 +1144,7 @@ def _validate_group_acyclic(plane: ControlPlane, ogroups: list[dict]) -> None:
 
 
 def _plan_policy_rule(plane: ControlPlane, plan: ChangePlan, family: str, plane_name: str, item: dict):
+    item = _normalize_policy_rule_item(item, family)
     name = _require_name(item, family)
     state = _resource_state(item)
     existing = plane._get_rule(plane_name, name)
@@ -1301,7 +1393,12 @@ def format_plan_review(plan: ChangePlan) -> str:
             else "none"
         ),
         "Base revision:            %s" % plan.base_revision,
-        "Current revision:         %s" % plan.base_revision,
+        "Current revision:         %s"
+        % (
+            plan.current_revision
+            if plan.current_revision is not None
+            else plan.base_revision
+        ),
         "",
         "Planned changes:",
         "  + %s CREATE" % creates,
