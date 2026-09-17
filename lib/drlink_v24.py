@@ -1388,6 +1388,13 @@ def set_ai_access_rule(
                     next_step="Authenticate/bind the AI Identity first.",
                 )
             )
+        status = str(principal["credential_status"] or "").lower()
+        if status not in ("verified", "active"):
+            raise ControlPlaneError(
+                "ERROR:\nAI Identity '%s' is not VERIFIED.\n\n"
+                "Authentication is required before AI Access authorization.\n\n"
+                "No changes were applied." % source
+            )
     if destination is not None:
         try:
             plane_db.resolve_ref(destination)
@@ -1470,25 +1477,18 @@ def evaluate_ai_access_v24(
             "plane": "ai",
             "auth": "UNAUTHENTICATED",
         }
-    # Authentication is always required.
-    auth_ok = str(principal["credential_status"] or "").lower() in (
-        "verified",
-        "bound",
-        "active",
-        "configured",
-        "ok",
-    ) or bool(principal["enabled"])
-    if not auth_ok and str(principal.get("auth_mode") or "") == "oauth":
-        # OAuth identities without verification remain denied regardless of policy disable.
-        if str(principal["credential_status"] or "").lower() not in ("verified", "active"):
-            return {
-                "mode": pol["mode"],
-                "enforcement": pol["enforcement"],
-                "matched_rules": [],
-                "result": "DENY",
-                "plane": "ai",
-                "auth": "UNAUTHENTICATED",
-            }
+    # Display name / pending shell alone is never authenticated.
+    status = str(principal["credential_status"] or "").lower()
+    auth_ok = status in ("verified", "active") and bool(principal["enabled"])
+    if not auth_ok:
+        return {
+            "mode": pol["mode"],
+            "enforcement": pol["enforcement"],
+            "matched_rules": [],
+            "result": "DENY",
+            "plane": "ai",
+            "auth": "UNAUTHENTICATED",
+        }
     wanted_perms = expand_permissions(plane_db, permission) if get_permission_object(plane_db, permission) or get_permission_group(plane_db, permission) else {permission}
     matched = []
     for row in plane_db.conn.execute("SELECT * FROM ai_policy_rules WHERE enabled = 1 ORDER BY name"):
@@ -1517,7 +1517,7 @@ def evaluate_ai_access_v24(
                     perms.add(r["permission"])
         if wanted_perms & perms or permission.lower() in {p.lower() for p in perms}:
             matched.append(row["name"])
-    # Policy enforcement disabled => ALLOW after auth
+    # Policy enforcement disabled => ALLOW only after authentication succeeds.
     result = effective_policy_result(pol["mode"], pol["enforcement"], bool(matched))
     return {
         "mode": pol["mode"],
@@ -1535,11 +1535,109 @@ def evaluate_ai_access_v24(
 
 
 def _server_reachable(plane_db) -> bool:
+    return detect_server_reachable(plane_db)
+
+
+def detect_server_reachable(plane_db=None, root: Optional[str] = None) -> bool:
+    """Server reachability for Agent Remote Service operations.
+
+    Tests may force the value with DRLINK_SERVER_REACHABLE=0|1.
+    """
+    forced = os.environ.get("DRLINK_SERVER_REACHABLE")
+    if forced is not None:
+        return str(forced).strip().lower() in ("1", "yes", "y", "true", "online")
+    marker_root = root
+    if marker_root is None and plane_db is not None:
+        marker_root = getattr(plane_db, "root", None)
+    if marker_root:
+        offline = Path(marker_root) / "var" / "lib" / "drlink" / "agent-server-offline"
+        if offline.exists():
+            return False
+        online = Path(marker_root) / "var" / "lib" / "drlink" / "agent-server-online"
+        if online.exists():
+            return True
     try:
-        plane_db.conn.execute("SELECT 1").fetchone()
+        if plane_db is not None:
+            plane_db.conn.execute("SELECT 1").fetchone()
         return True
-    except sqlite3.Error:
+    except Exception:
         return False
+
+
+def sync_agent_catalog_from_server(plane_db, server_plane) -> None:
+    """Copy Server Network/Service Objects into the Agent local catalog."""
+    now = utc_now_iso()
+    for obj in server_plane.list_objects():
+        if obj["type"] not in ("host", "network", "fqdn", "managed_endpoint"):
+            continue
+        values = server_plane._object_values(obj["id"])
+        payload = json.dumps(
+            {"name": obj["name"], "type": obj["type"], "values": values, "origin": obj.get("origin")},
+            sort_keys=True,
+        )
+        plane_db.conn.execute(
+            "INSERT OR REPLACE INTO agent_object_catalog(kind, name, payload, synced_at) VALUES (?, ?, ?, ?)",
+            ("network-object", obj["name"], payload, now),
+        )
+    for sobj in server_plane.conn.execute("SELECT name, type, port FROM service_objects"):
+        payload = json.dumps(
+            {"name": sobj["name"], "type": sobj["type"], "port": int(sobj["port"])},
+            sort_keys=True,
+        )
+        plane_db.conn.execute(
+            "INSERT OR REPLACE INTO agent_object_catalog(kind, name, payload, synced_at) VALUES (?, ?, ?, ?)",
+            ("service-object", sobj["name"], payload, now),
+        )
+
+
+def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -> dict:
+    """Reconnect synchronization: allocate pending endpoints, apply deletes, revalidate deps."""
+    if not detect_server_reachable(plane_db, root):
+        return {"status": "OFFLINE", "updated": 0}
+    identity = load_agent_identity(root or getattr(plane_db, "root", None))
+    updated = 0
+    # Process delete_pending tombstones
+    for row in list(
+        plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 1")
+    ):
+        unset_remote_service_agent(plane_db, row["name"], root=root, server_reachable=True)
+        updated += 1
+    # Revalidate + activate remaining services
+    for row in list(
+        plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
+    ):
+        svc_name = row["service_object"]
+        sobj = get_service_object(plane_db, svc_name)
+        if not sobj:
+            catalog = plane_db.conn.execute(
+                "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
+                (svc_name,),
+            ).fetchone()
+            if not catalog:
+                plane_db.conn.execute(
+                    "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                    "WHERE name = ?",
+                    (
+                        "Required Service Object '%s' is missing or invalid after reconnect." % svc_name,
+                        utc_now_iso(),
+                        row["name"],
+                    ),
+                )
+                updated += 1
+                continue
+        # Re-apply to allocate pending endpoints / refresh HEALTHY
+        set_remote_service_agent(
+            plane_db,
+            row["name"],
+            destination=row["destination"],
+            service=row["service_object"],
+            enabled=bool(row["enabled"]),
+            oneshot=True,
+            root=root,
+            server_reachable=True,
+        )
+        updated += 1
+    return {"status": "SYNCHRONIZED", "updated": updated}
 
 
 def allocate_endpoint_port(plane_db, client_id: str, service_name: str, pool_class: str) -> int:
@@ -1754,12 +1852,29 @@ def set_remote_service_agent(
                 pending = 1
                 status = "DEGRADED"
                 reason = "No endpoint port is currently available"
-        # Upsert published_services
-        if client is not None and endpoint_port is not None:
+        # Reachability probe for relay destinations (non-fatal)
+        if en and target_mode == "routed" and status == "HEALTHY":
+            if not _probe_tcp(target_host, sport):
+                status = "DEGRADED"
+                reason = "Destination is currently unreachable from Relay Host."
 
-            def write_pub():
+    now = utc_now_iso()
+    client_for_pub = locals().get("client")
+
+    def write_all():
+        # Nested helpers (set_published_service) also call _mutate; run them as batch
+        # participants of this outer transaction.
+        nested_prev = getattr(plane_db, "_batch_mode", False)
+        plane_db._batch_mode = True
+        try:
+            if (
+                server_reachable
+                and client_for_pub is not None
+                and endpoint_port is not None
+                and pending == 0
+            ):
                 plane_db.set_published_service(
-                    client["id"],
+                    client_for_pub["id"],
                     name,
                     service_type="tcp",
                     target_mode=target_mode,
@@ -1770,7 +1885,7 @@ def set_remote_service_agent(
                 )
                 pub = plane_db.conn.execute(
                     "SELECT id FROM published_services WHERE client_id = ? AND name = ?",
-                    (client["id"], name),
+                    (client_for_pub["id"], name),
                 ).fetchone()
                 sobj_row = get_service_object(plane_db, svc_name)
                 plane_db.conn.execute(
@@ -1779,7 +1894,7 @@ def set_remote_service_agent(
                     "VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
                     (
                         pub["id"],
-                        status,
+                        status if en else "DISABLED",
                         pool_class,
                         sobj_row["id"] if sobj_row else None,
                         dest_token,
@@ -1787,46 +1902,30 @@ def set_remote_service_agent(
                         reason,
                     ),
                 )
-                return {"entity": {"type": "remote-service", "id": pub["id"], "name": name}, "operation": "set"}
+            plane_db.conn.execute(
+                "INSERT OR REPLACE INTO agent_remote_services"
+                "(name, destination, service_object, enabled, status, endpoint_host, endpoint_port, "
+                "pending_allocation, delete_pending, pool_class, reason, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                (
+                    name,
+                    dest_token,
+                    svc_name,
+                    1 if en else 0,
+                    status if en else "DISABLED",
+                    endpoint_host,
+                    endpoint_port,
+                    pending,
+                    pool_class,
+                    reason,
+                    now,
+                ),
+            )
+            return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "set"}
+        finally:
+            plane_db._batch_mode = nested_prev
 
-            try:
-                plane_db._mutate("set remote-service %s" % name, "set remote service", write_pub)
-            except ControlPlaneError:
-                pending = 1
-                status = "DEGRADED"
-                reason = "DRLink Server is currently unreachable."
-
-        # Reachability probe for relay destinations (non-fatal)
-        if en and target_mode == "routed" and status == "HEALTHY":
-            if not _probe_tcp(target_host, sport):
-                status = "DEGRADED"
-                reason = "Destination is currently unreachable from Relay Host."
-
-    now = utc_now_iso()
-
-    def write_local():
-        plane_db.conn.execute(
-            "INSERT OR REPLACE INTO agent_remote_services"
-            "(name, destination, service_object, enabled, status, endpoint_host, endpoint_port, "
-            "pending_allocation, delete_pending, pool_class, reason, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
-            (
-                name,
-                dest_token,
-                svc_name,
-                1 if en else 0,
-                status if en else "DISABLED",
-                endpoint_host,
-                endpoint_port,
-                pending,
-                pool_class,
-                reason,
-                now,
-            ),
-        )
-        return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "set"}
-
-    result = plane_db._mutate("set remote-service local %s" % name, "set remote service local", write_local)
+    result = plane_db._mutate("set remote-service %s" % name, "set remote service", write_all)
     result["view"] = {
         "name": name,
         "destination": dest_token,
@@ -1908,9 +2007,6 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
                     utc_now_iso(),
                 ),
             )
-            # Immediately remove from desired local view but keep tombstone — master says remove local desired config
-            # Re-interpret: remove local desired configuration, queue deletion. Keep tombstone separately.
-            # For simplicity keep delete_pending row until sync.
         return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "delete"}
 
     return plane_db._mutate("unset remote-service %s" % name, "delete remote service", write)

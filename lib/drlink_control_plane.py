@@ -276,6 +276,117 @@ class ControlPlane:
             ),
         )
 
+    def _pre_activation_checkpoint(self) -> dict:
+        """Snapshot authoritative DB + runtime artifacts before a mutating Apply."""
+        runtime_snap: dict[str, bytes] = {}
+        if self.runtime.exists():
+            for path in self.runtime.iterdir():
+                if path.is_file():
+                    try:
+                        runtime_snap[path.name] = path.read_bytes()
+                    except OSError:
+                        pass
+        fd, backup_path = tempfile.mkstemp(prefix="drlink-act-", suffix=".tar")
+        os.close(fd)
+        try:
+            self.backup(backup_path)
+        except Exception:
+            try:
+                os.unlink(backup_path)
+            except OSError:
+                pass
+            raise
+        return {
+            "backup": backup_path,
+            "runtime": runtime_snap,
+            "revision": self.current_revision(),
+        }
+
+    def _restore_db_only(self, backup_path: str) -> None:
+        """Restore DB from a control backup without re-entering activation."""
+        self.backup_validate(backup_path)
+        with tarfile.open(backup_path, "r") as tar:
+            db_member = tar.extractfile("drlink.db")
+            if db_member is None:
+                raise ControlPlaneError("backup drlink.db unreadable")
+            payload = db_member.read()
+        # Close live connection so the on-disk DB can be replaced safely.
+        try:
+            if self.conn is not None:
+                self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
+        db_file = Path(self.db_file)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        # Remove WAL/SHM companions from the previous connection.
+        for suffix in ("", "-wal", "-shm"):
+            companion = Path(str(db_file) + suffix) if suffix else db_file
+            if suffix:
+                try:
+                    companion.unlink()
+                except FileNotFoundError:
+                    pass
+        tmp = db_file.with_suffix(db_file.suffix + ".restore-tmp")
+        tmp.write_bytes(payload)
+        os.replace(str(tmp), str(db_file))
+        self.conn = open_control_db(self.root)
+        self._db_ident = self._db_file_ident()
+
+    def _rollback_activation(self, checkpoint: dict) -> None:
+        if str(os.environ.get("DRLINK_FAULT_ROLLBACK") or "").strip().lower() in (
+            "1",
+            "yes",
+            "y",
+            "true",
+        ):
+            raise ControlPlaneError("simulated rollback failure")
+        backup_path = checkpoint.get("backup")
+        if not backup_path:
+            raise ControlPlaneError("activation checkpoint missing")
+        self._restore_db_only(str(backup_path))
+        self.runtime.mkdir(parents=True, exist_ok=True)
+        wanted = set((checkpoint.get("runtime") or {}).keys())
+        for path in list(self.runtime.iterdir()):
+            if path.is_file() and path.name not in wanted:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        for name, data in (checkpoint.get("runtime") or {}).items():
+            target = self.runtime / name
+            target.write_bytes(data)
+            try:
+                os.chmod(target, 0o600)
+            except OSError:
+                pass
+
+    def _cleanup_activation_checkpoint(self, checkpoint: Optional[dict]) -> None:
+        if not checkpoint:
+            return
+        path = checkpoint.get("backup")
+        if path:
+            try:
+                os.unlink(str(path))
+            except OSError:
+                pass
+
+    def _activation_should_run(self) -> bool:
+        return str(os.environ.get("DRLINK_SKIP_ACTIVATION") or "").strip().lower() not in (
+            "1",
+            "yes",
+            "y",
+            "true",
+        )
+
+    def _forced_activation_failure(self) -> bool:
+        return str(os.environ.get("DRLINK_FAULT_ACTIVATION") or "").strip().lower() in (
+            "1",
+            "yes",
+            "y",
+            "true",
+        )
+
     def _mutate(
         self,
         command: str,
@@ -305,6 +416,9 @@ class ControlPlane:
             result = writer()
             self._batch_results.append(result)
             return result
+        checkpoint = None
+        if compile_runtime and self._activation_should_run():
+            checkpoint = self._pre_activation_checkpoint()
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             if expected:
@@ -347,21 +461,45 @@ class ControlPlane:
             self.conn.execute("COMMIT")
         except ConfirmationRequired:
             self.conn.execute("ROLLBACK")
+            self._cleanup_activation_checkpoint(checkpoint)
             raise
         except ConcurrencyError:
             self.conn.execute("ROLLBACK")
+            self._cleanup_activation_checkpoint(checkpoint)
             raise
         except ControlPlaneError:
             self.conn.execute("ROLLBACK")
+            self._cleanup_activation_checkpoint(checkpoint)
             raise
         except Exception as exc:
             self.conn.execute("ROLLBACK")
+            self._cleanup_activation_checkpoint(checkpoint)
             raise ControlPlaneError("No changes were applied. %s" % exc) from exc
-        if compile_runtime:
+        if compile_runtime and self._activation_should_run():
             try:
+                if self._forced_activation_failure():
+                    raise ControlPlaneError("simulated activation failure")
                 self.compile_runtime()
-            except Exception as exc:
-                self._mark_generation_failed(str(exc))
+            except Exception:
+                try:
+                    self._rollback_activation(checkpoint or {})
+                except Exception:
+                    self._mark_generation_failed("activation failed; rollback incomplete")
+                    self._cleanup_activation_checkpoint(checkpoint)
+                    raise ControlPlaneError(
+                        "ERROR:\nApply failed and automatic rollback was not fully successful.\n\n"
+                        "The current runtime state may require operator attention.\n\n"
+                        "Run:\n  system diagnostics"
+                    ) from None
+                self._cleanup_activation_checkpoint(checkpoint)
+                raise ControlPlaneError(
+                    "ERROR:\nRuntime activation failed.\n\n"
+                    "Previous configuration was restored.\n"
+                    "No configuration changes remain active."
+                ) from None
+            self._cleanup_activation_checkpoint(checkpoint)
+        else:
+            self._cleanup_activation_checkpoint(checkpoint)
         return result
 
     def _format_impact(self, impact: dict) -> str:

@@ -556,8 +556,11 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
                     oneshot=True,
                 )
     elif kind == "remote-service":
+        reachable = v24.detect_server_reachable(plane, plane.root)
         if op == "DELETE":
-            v24.unset_remote_service_agent(plane, name, root=plane.root, server_reachable=True)
+            v24.unset_remote_service_agent(
+                plane, name, root=plane.root, server_reachable=reachable
+            )
         else:
             v24.set_remote_service_agent(
                 plane,
@@ -567,7 +570,7 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
                 enabled=bool(item.get("enabled", True)),
                 oneshot=True,
                 root=plane.root,
-                server_reachable=True,
+                server_reachable=reachable,
             )
     else:
         raise ControlPlaneError("Unsupported bundle change: %s" % kind)

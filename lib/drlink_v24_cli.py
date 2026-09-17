@@ -505,11 +505,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             raise ControlPlaneError("Usage: set network-object <NAME> ...")
         name = rest[1]
         if len(rest) == 2:
-            raise ControlPlaneError(
-                "ERROR:\nInteractive Network Object wizard requires a TTY session.\n\n"
-                "AI one-shot form:\n  set network-object %s type <ip|cidr|fqdn> value <VALUE>\n\n"
-                "No changes were applied." % name
-            )
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "network-object", name)
         kv = v24.parse_kv_tokens(rest[2:])
         result = v24.set_network_object(
             plane, name, type=kv.get("type"), value=kv.get("value"), oneshot=True
@@ -523,11 +521,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         name = rest[1]
         kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
         if "members" not in kv:
-            raise ControlPlaneError(
-                "ERROR:\nInteractive Network Group wizard requires a TTY session.\n\n"
-                "AI one-shot form:\n  set network-group %s members a,b,c\n\n"
-                "No changes were applied." % name
-            )
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "network-group", name)
         v24.set_network_group(plane, name, members=v24.parse_csv_list(kv["members"]), oneshot=True)
         sys.stdout.write("Network Group set: %s\n" % name)
         return 0
@@ -537,11 +533,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             raise ControlPlaneError("Usage: set service-object <NAME> ...")
         name = rest[1]
         if len(rest) == 2:
-            raise ControlPlaneError(
-                "ERROR:\nInteractive Service Object wizard requires a TTY session.\n\n"
-                "AI one-shot form:\n  set service-object %s type <tcp|udp|fixed-tcp> port <PORT>\n\n"
-                "No changes were applied." % name
-            )
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "service-object", name)
         kv = v24.parse_kv_tokens(rest[2:])
         port = int(kv["port"]) if "port" in kv else None
         v24.set_service_object(plane, name, type=kv.get("type"), port=port, oneshot=True)
@@ -552,7 +546,11 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set service-group <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:])
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        if "members" not in kv:
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "service-group", name)
         v24.set_service_group(plane, name, members=v24.parse_csv_list(kv.get("members", "")), oneshot=True)
         sys.stdout.write("Service Group set: %s\n" % name)
         return 0
@@ -561,7 +559,11 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set permission-object <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:])
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        if "permissions" not in kv:
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "permission-object", name)
         v24.set_permission_object(
             plane, name, permissions=v24.parse_csv_list(kv.get("permissions", "")), oneshot=True
         )
@@ -572,7 +574,11 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set permission-group <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:])
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        if "members" not in kv:
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "permission-group", name)
         v24.set_permission_group(plane, name, members=v24.parse_csv_list(kv.get("members", "")), oneshot=True)
         sys.stdout.write("Permission Group set: %s\n" % name)
         return 0
@@ -587,12 +593,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         oneshot = bool(rest[2:])
         if not oneshot:
-            raise ControlPlaneError(
-                "ERROR:\nInteractive rule wizard requires a TTY session.\n\n"
-                "AI one-shot form:\n  set %s %s mode <blacklist|whitelist> "
-                "source <SRC> destination <DST> service <SVC> enabled\n\n"
-                "No changes were applied." % (res, name)
-            )
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, res, name)
         v24.set_access_rule(
             plane,
             res,
@@ -616,12 +619,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         if not rest[2:]:
-            raise ControlPlaneError(
-                "ERROR:\nInteractive AI Access wizard requires a TTY session.\n\n"
-                "AI one-shot form:\n  set ai-access %s mode <blacklist|whitelist> "
-                "source <IDENTITY> destination <DEST> permission <PERM> enabled\n\n"
-                "No changes were applied." % name
-            )
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "ai-access", name)
         v24.set_ai_access_rule(
             plane,
             name,
@@ -639,18 +639,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set ai-identity <NAME>")
         name = rest[1]
-        # Create/bind identity shell; verification remains OAuth lifecycle.
-        plane.set_ai_principal(name, enabled=True)
-        plane.conn.execute(
-            "UPDATE ai_principals SET credential_status = COALESCE(NULLIF(credential_status,''), 'pending') WHERE name = ? COLLATE NOCASE",
-            (name,),
-        )
-        sys.stdout.write(
-            "AI Identity created: %s\nStatus: pending verification\n"
-            "Complete OAuth Authorization Code (interactive) or Client Credentials (automation) to reach VERIFIED.\n"
-            % name
-        )
-        return 0
+        from drlink_v24_wizard import run_wizard
+
+        return run_wizard(plane, "ai-identity", name)
     if res == "remote-service":
         _require_agent(plane)
         if len(rest) < 2:
@@ -661,13 +652,10 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         if not rest[2:]:
-            raise ControlPlaneError(
-                "ERROR:\nInteractive Remote Service wizard requires a TTY session.\n\n"
-                "AI one-shot form:\n  set remote-service %s destination <DEST|this-host> service <SERVICE> enabled\n\n"
-                "No changes were applied." % name
-            )
-        # Detect server reachability loosely: control DB present implies reachable in tests.
-        reachable = True
+            from drlink_v24_wizard import run_wizard
+
+            return run_wizard(plane, "remote-service", name)
+        reachable = v24.detect_server_reachable(plane, plane.root)
         result = v24.set_remote_service_agent(
             plane,
             name,
@@ -821,8 +809,16 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         _require_agent(plane)
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset remote-service <NAME>")
-        v24.unset_remote_service_agent(plane, rest[1], root=plane.root, server_reachable=True)
-        sys.stdout.write("Remote Service deleted: %s\n" % rest[1])
+        reachable = v24.detect_server_reachable(plane, plane.root)
+        v24.unset_remote_service_agent(
+            plane, rest[1], root=plane.root, server_reachable=reachable
+        )
+        sys.stdout.write(
+            "Remote Service deleted: %s\n" % rest[1]
+            if reachable
+            else "Remote Service local configuration deleted: %s\nDeletion will synchronize when the Server is reachable.\n"
+            % rest[1]
+        )
         return 0
     return None
 

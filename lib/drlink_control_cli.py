@@ -1009,6 +1009,19 @@ def _system(plane: ControlPlane, rest):
         return _configuration_diff(plane, rest[2:])
     if rest[0] == "apply" and len(rest) >= 2 and rest[1] == "configuration":
         return _configuration_apply(plane, rest[2:])
+    if rest[0] == "synchronize":
+        import drlink_v24 as v24
+
+        if v24.detect_cli_role(plane.root) != "agent":
+            raise SystemExit(
+                "ERROR:\nsystem synchronize is an Agent Host operation.\n\nNo changes were applied."
+            )
+        result = v24.synchronize_agent_remote_services(plane, root=plane.root)
+        sys.stdout.write(
+            "Synchronization %s (%s Remote Service(s) updated).\n"
+            % (result.get("status"), result.get("updated", 0))
+        )
+        return 0
     if rest[0] == "diagnostics":
         kind = rest[1] if len(rest) > 1 else "all"
         if kind in ("control-plane", "all"):
