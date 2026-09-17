@@ -275,7 +275,13 @@ def handle_tcp_client(
             source_acquired = True
 
         policy_plane, load_error, cfg, snap = state.cache.snapshot()
-        if RP is not None and policy_plane is not None and load_error is None:
+        if RP is None or policy_plane is None or load_error is not None:
+            decision = {
+                "decision": EG.DECISION_DENY,
+                "reason": "CONTROL_PLANE_UNAVAILABLE",
+                "detail": load_error or "SQLite control plane unavailable",
+            }
+        else:
             decision = RP.authorize_fixed_tcp(
                 policy_plane,
                 relay_id=relay_id,
@@ -285,14 +291,6 @@ def handle_tcp_client(
                 decision["decision"] = EG.DECISION_ALLOW
             else:
                 decision["decision"] = EG.DECISION_DENY
-        else:
-            decision = EG.authorize_tcp_relay(
-                None,
-                relay_selector=relay_id,
-                source_ip=source_ip,
-                load_error=load_error or "control plane unavailable",
-                preview=False,
-            )
         if snap is not None:
             decision["policy_generation"] = snap.generation
         if decision.get("decision") != EG.DECISION_ALLOW:
@@ -473,32 +471,20 @@ def ipaddress_compress(ip: str) -> str:
 
 
 def _session_still_authorized(state: TcpEgressState, session: dict) -> bool:
-    plane, _err, _cfg, snap = state.cache.snapshot()
-    if RP is not None and plane is not None:
-        decision = RP.authorize_fixed_tcp(
-            plane,
-            relay_id=session.get("relay_id") or "",
-            source_ip=session["source_ip"],
-        )
-        if decision.get("decision") != RP.DECISION_ALLOW:
-            return False
-        gen = decision.get("policy_generation")
-        if gen is not None:
-            state.update_session_generation(session["session_id"], int(gen))
-            session["policy_generation"] = int(gen)
-        return True
-    decision = EG.authorize_against_snapshot(
-        snap,
+    plane, err, _cfg, _snap = state.cache.snapshot()
+    if RP is None or plane is None or err is not None:
+        return False
+    decision = RP.authorize_fixed_tcp(
+        plane,
+        relay_id=session.get("relay_id") or "",
         source_ip=session["source_ip"],
-        hostname=session["hostname"],
-        port=int(session["port"]),
-        protocol=EG.PROTOCOL_TCP,
-        method=None,
     )
-    if decision.get("decision") != EG.DECISION_ALLOW:
+    if decision.get("decision") != RP.DECISION_ALLOW:
         return False
-    if snap is None or not snap.healthy:
-        return False
+    gen = decision.get("policy_generation")
+    if gen is not None:
+        state.update_session_generation(session["session_id"], int(gen))
+        session["policy_generation"] = int(gen)
     return True
 
 

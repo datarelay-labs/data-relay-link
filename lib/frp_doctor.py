@@ -1697,10 +1697,10 @@ def check_access_control(report, paths, facts, cfg, registry_state):
     access_path = paths.p(access_rel)
     if not paths.is_file(access_rel):
         report.add(
-            'ACCESS_CONFIG_ERROR', FAIL,
-            'ACCESS_CONFIG_ERROR: access-control.json is missing',
+            'ACCESS_CONFIG_ERROR', INFO,
+            'obsolete access-control.json absent (SQLite control plane is authoritative)',
             access_rel,
-            're-run the server installer to create an empty access-control.json',
+            '',
             'state',
         )
         access_state = None
@@ -1717,7 +1717,7 @@ def check_access_control(report, paths, facts, cfg, registry_state):
                 'ACCESS_CONFIG_ERROR', FAIL,
                 'ACCESS_CONFIG_ERROR: access-control.json is invalid',
                 str(exc),
-                'restore access-control.json from backup or recreate with frp-access',
+                'remove or ignore obsolete access-control.json; use show remote-access / SQLite control plane',
                 'state',
             )
             access_state = None
@@ -1733,7 +1733,7 @@ def check_access_control(report, paths, facts, cfg, registry_state):
                 status,
                 '%s: %s' % (cls, issue.get('message') or 'issue'),
                 '',
-                'inspect Access Rules with show access-rules / show access-rule; diagnostics does not rewrite ACL state',
+                'inspect Remote Access with show remote-access; diagnostics does not rewrite policy state',
                 'state',
             )
 
@@ -1971,10 +1971,10 @@ def check_service_profiles(report, paths, facts, cfg):
             profiles_rel = configured
     if not paths.is_file(profiles_rel):
         report.add(
-            'SERVICE_PROFILES_ERROR', FAIL,
-            'SERVICE_PROFILES_ERROR: service-profiles.json is missing',
+            'SERVICE_PROFILES_ERROR', INFO,
+            'obsolete service-profiles.json absent (published-service/presets are authoritative)',
             profiles_rel,
-            're-run the server installer to create an empty service-profiles.json',
+            '',
             'state',
         )
         return
@@ -1994,7 +1994,7 @@ def check_service_profiles(report, paths, facts, cfg):
             'SERVICE_PROFILES_ERROR', FAIL,
             'SERVICE_PROFILES_ERROR: service-profiles.json is invalid',
             str(exc),
-            'restore service-profiles.json from backup or recreate with drlink service-profile create',
+            'ignore obsolete service-profiles.json; use published-service / service-preset',
             'state',
         )
         return
@@ -2007,7 +2007,7 @@ def check_service_profiles(report, paths, facts, cfg):
             status,
             '%s: %s' % (cls, issue.get('message') or 'issue'),
             '',
-            'inspect Service Profiles with drlink service-profile list',
+            'inspect Published Services with show published-services',
             'state',
         )
 
@@ -2145,10 +2145,10 @@ def check_egress_control(report, paths, facts, cfg):
             egress_rel = configured
     if not paths.is_file(egress_rel):
         report.add(
-            'EGRESS_CONFIG_ERROR', FAIL,
-            'EGRESS_CONFIG_ERROR: egress-control.json is missing',
+            'EGRESS_CONFIG_ERROR', INFO,
+            'obsolete egress-control.json absent (SQLite Internet Access is authoritative)',
             egress_rel,
-            're-run the server installer to create an empty egress-control.json',
+            '',
             'state',
         )
         return
@@ -2169,7 +2169,7 @@ def check_egress_control(report, paths, facts, cfg):
             'EGRESS_CONFIG_ERROR', FAIL,
             'EGRESS_CONFIG_ERROR: egress-control.json is invalid (fail-closed)',
             str(exc),
-            'restore egress-control.json from backup or recreate with drlink egress create',
+            'ignore obsolete egress-control.json; use show internet-access / Fixed TCP',
             'state',
         )
         return
@@ -2773,25 +2773,49 @@ def check_server(report, paths, facts, skip_network):
             if last.get('id') == 'server_token' and last.get('status') == PASS:
                 last['message'] = 'FRP token is present and permission-safe'
 
-    registry_path = '/var/lib/drlink/registry.json'
+    registry_path = '/var/lib/drlink/runtime/client-inventory.json'
     if cfg:
         registry_path = str(cfg.get('registry_file') or registry_path)
         if not registry_path.startswith('/'):
-            registry_path = '/var/lib/drlink/registry.json'
+            registry_path = '/var/lib/drlink/runtime/client-inventory.json'
+    # Prefer derived inventory; fall back to legacy filename only for diagnostics.
     state, err = load_json_path(paths, registry_path)
+    if err and registry_path.endswith('/client-inventory.json'):
+        legacy = '/var/lib/drlink/registry.json'
+        state2, err2 = load_json_path(paths, legacy)
+        if not err2:
+            state, err = state2, None
+            registry_path = legacy
+    control_db = '/var/lib/drlink/drlink.db'
+    if cfg and str(cfg.get('control_db_file') or '').startswith('/'):
+        control_db = str(cfg.get('control_db_file'))
+    if paths.is_file(control_db):
+        report.add(
+            'control_plane_db', PASS,
+            'SQLite control plane database is present',
+            control_db, '', 'state',
+        )
+    else:
+        report.add(
+            'control_plane_db', FAIL,
+            'SQLite control plane database is missing',
+            control_db,
+            're-run the server installer; doctor does not create drlink.db',
+            'state',
+        )
     if err:
         report.add(
-            'server_registry', FAIL,
-            'registry.json is %s' % err,
-            '',
-            'restore the registry from backup; doctor does not rewrite it',
+            'server_registry', INFO if paths.is_file(control_db) else FAIL,
+            'derived client inventory is %s' % err,
+            registry_path,
+            'rebuild from SQLite or restore backup; inventory is not policy authority',
             'state',
         )
     else:
         status, message, extra = validate_registry(state, cfg if isinstance(cfg, dict) else None)
         rec = ''
         if status == FAIL:
-            rec = 'restore registry.json from a known-good backup; doctor does not repair it'
+            rec = 'rebuild derived client inventory from SQLite; doctor does not repair it'
         report.add('server_registry', status, message, '; '.join(extra[:4]) if extra and status != PASS else '', rec, 'state')
         check_permissions(report, paths, registry_path, 'server_registry_permissions', secret=True, expect_root=expect_root, section='security')
 

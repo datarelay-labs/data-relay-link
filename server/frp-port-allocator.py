@@ -131,8 +131,8 @@ RP = _load_runtime_policy()
 def sync_enrollment_to_control_plane(cfg, client, machine_id):
     """Persist enrolled client inventory into SQLite (authoritative).
 
-    registry.json remains an enrollment transport/derived artifact for this
-    release path but must not remain the policy/inventory SSOT.
+    The allocator may also maintain a derived enrollment inventory projection
+    under /var/lib/drlink/runtime/ for transport/reconcile, but SQLite is SSOT.
     """
     if RP is None or not isinstance(client, dict) or not machine_id:
         return
@@ -1257,15 +1257,26 @@ class Allocator:
         return Path(self.registry_file).exists()
 
     def load_registry(self):
-        """Load authoritative registry. Missing file is corruption, not empty state."""
+        """Load derived enrollment inventory projection.
+
+        Missing file is corruption for allocator transport (rebuild from
+        SQLite / re-enroll). The file is not policy authority.
+        """
+        path = Path(self.registry_file)
+        if not path.exists():
+            legacy = path.parent.parent / 'registry.json'
+            if path.name == 'client-inventory.json' and legacy.is_file():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(legacy, path)
         if not Path(self.registry_file).exists():
             raise RegistrySchemaError(
-                'registry.json is missing (authoritative registry state required)'
+                'client inventory projection is missing (rebuild from SQLite control plane)'
             )
         try:
             state = load_json(self.registry_file)
         except (OSError, json.JSONDecodeError) as exc:
-            raise RegistrySchemaError('unable to read an existing FRP registry') from exc
+            raise RegistrySchemaError('unable to read enrollment inventory projection') from exc
         require_registry_v2(state)
         return validate_registry_invariants(state, self.cfg)
 
@@ -1274,6 +1285,7 @@ class Allocator:
         state['schema_version'] = REGISTRY_SCHEMA_VERSION
         require_registry_v2(state)
         validate_registry_invariants(state, self.cfg)
+        Path(self.registry_file).parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(self.registry_file, state)
 
     def used_ports(self, state):
@@ -2393,17 +2405,11 @@ class Allocator:
             return machine_id, None
 
     def list_profiles_payload(self):
-        if PROF is None:
-            return []
-        state = PROF.load_profiles_state(cfg=self.cfg)
-        return [PROF.public_profile_view(p) for _pid, p in PROF.list_profiles(state)]
+        # Service Profiles JSON store retired; Published Services / presets are canonical.
+        return []
 
     def get_profile_payload(self, selector):
-        if PROF is None:
-            raise KeyError('profiles unavailable')
-        state = PROF.load_profiles_state(cfg=self.cfg)
-        _pid, profile = PROF.resolve_profile(state, selector)
-        return PROF.public_profile_view(profile)
+        raise KeyError('service profiles retired; use published-service / service-preset')
 
 
 

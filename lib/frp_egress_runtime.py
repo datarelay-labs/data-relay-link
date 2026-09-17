@@ -464,24 +464,15 @@ def session_still_authorized(
     update_generation: Optional[Callable[[str, int], None]] = None,
 ) -> bool:
     """Option B: re-authorize against current canonical Internet Access policy."""
-    if hasattr(cache, "authorize"):
-        decision = cache.authorize(
-            source_ip=session["source_ip"],
-            hostname=session["hostname"],
-            port=int(session["port"]),
-            protocol=session["protocol"],
-            method=session.get("method"),
-        )
-    else:
-        _state, _err, _cfg, snap = cache.snapshot()
-        decision = EG.authorize_against_snapshot(
-            snap,
-            source_ip=session["source_ip"],
-            hostname=session["hostname"],
-            port=int(session["port"]),
-            protocol=session["protocol"],
-            method=session.get("method"),
-        )
+    if not hasattr(cache, "authorize"):
+        return False
+    decision = cache.authorize(
+        source_ip=session["source_ip"],
+        hostname=session["hostname"],
+        port=int(session["port"]),
+        protocol=session["protocol"],
+        method=session.get("method"),
+    )
     if decision.get("decision") == EG.DECISION_ALLOW:
         gen = decision.get("policy_generation")
         if gen is not None:

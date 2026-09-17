@@ -106,7 +106,7 @@ def control_state_lock_path(root):
     return Path(root) / CONTROL_STATE_LOCK_REL
 
 
-def registry_lock_path(root, registry_rel="var/lib/drlink/registry.json"):
+def registry_lock_path(root, registry_rel="var/lib/drlink/runtime/client-inventory.json"):
     return (Path(root) / registry_rel).resolve().parent / "registry.lock"
 
 
@@ -196,7 +196,7 @@ def mutation_lock(root=None, timeout=None, state_path=None):
 
 
 @contextmanager
-def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/lib/drlink/registry.json"):
+def acquire_control_locks(root, timeout=DEFAULT_TIMEOUT_SEC, registry_rel="var/lib/drlink/runtime/client-inventory.json"):
     """Acquire lifecycle, control-state, then registry. Same order as documented."""
     with ExclusiveFileLock(lifecycle_lock_path(root), timeout=timeout) as life:
         with acquire_control_state_lock(root, timeout=timeout) as ctrl:

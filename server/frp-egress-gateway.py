@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Data Relay Controlled Egress HTTP/HTTPS forward proxy gateway.
+"""Data Relay Link Internet Access HTTP/HTTPS forward proxy gateway.
 
-Agentless clients use HTTP_PROXY / HTTPS_PROXY. Policy is evaluated from
-egress-control.json (separate from inbound Access Control). Default DENY,
-fail-closed. Application TLS is never terminated.
+Agentless clients use HTTP_PROXY / HTTPS_PROXY. Policy is evaluated from the
+SQLite control plane (Internet Access rules). Default DENY, fail-closed.
+Application TLS is never terminated.
 
 v1 model (intentionally small/strict):
 - HTTP: absolute-form http:// URI only; one request per connection; protocol=http
@@ -654,32 +654,19 @@ def _authorize_policy_only(
     connection_id: Optional[str] = None,
 ) -> tuple[dict, Optional[dict]]:
     """Authorize against canonical Internet Access policy without DNS/connect I/O."""
-    _plane, load_error, cfg, snap = gw.cache.snapshot()
-    if hasattr(gw.cache, "authorize"):
+    _plane, load_error, cfg, _snap = gw.cache.snapshot()
+    if not hasattr(gw.cache, "authorize"):
+        decision = {
+            "decision": EG.DECISION_DENY,
+            "reason": "CONTROL_PLANE_UNAVAILABLE",
+            "detail": load_error or "SQLite control plane authorize unavailable",
+        }
+    else:
         decision = gw.cache.authorize(
             source_ip=source_ip,
             hostname=hostname,
             port=port,
             protocol=protocol,
-            method=method,
-        )
-    elif snap is not None:
-        decision = EG.authorize_against_snapshot(
-            snap,
-            source_ip=source_ip,
-            hostname=hostname,
-            port=port,
-            protocol=protocol,
-            method=method,
-        )
-    else:
-        decision = EG.authorize_request(
-            None,
-            source_ip=source_ip,
-            hostname=hostname,
-            port=port,
-            protocol=protocol,
-            load_error=load_error,
             method=method,
         )
     decision["method"] = method
@@ -939,10 +926,10 @@ def _read_and_validate_client_hello(
 
 
 def _session_still_authorized(gw: GatewayState, session: dict) -> bool:
-    """Option B: re-authorize against current compiled snapshot only."""
-    _state, _err, _cfg, snap = gw.cache.snapshot()
-    decision = EG.authorize_against_snapshot(
-        snap,
+    """Option B: re-authorize against current SQLite Internet Access policy only."""
+    if not hasattr(gw.cache, "authorize"):
+        return False
+    decision = gw.cache.authorize(
         source_ip=session["source_ip"],
         hostname=session["hostname"],
         port=int(session["port"]),

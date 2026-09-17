@@ -27,39 +27,48 @@ class StatePathSpec:
 
 
 # Canonical relative paths (from filesystem root / test root).
-REGISTRY = StatePathSpec(
-    path="var/lib/drlink/registry.json",
+# Enrollment inventory is a non-authoritative derived/runtime projection of
+# SQLite client + published-service state used by the allocator transport.
+CLIENT_INVENTORY = StatePathSpec(
+    path="var/lib/drlink/runtime/client-inventory.json",
+    legacy_paths=("var/lib/drlink/registry.json",),
     type="state",
-    backup_policy="required",
-    restore_policy="required",
+    backup_policy="optional",
+    restore_policy="optional",
     sensitivity="critical",
 )
+# Back-compat alias name used by older callers.
+REGISTRY = CLIENT_INVENTORY
+# Obsolete JSON policy stores — migration inputs only; not current authority.
 ACCESS_CONTROL = StatePathSpec(
     path="var/lib/drlink/access-control.json",
     type="state",
-    backup_policy="required",
-    restore_policy="required",
-    sensitivity="critical",
+    backup_policy="optional",
+    restore_policy="ignore",
+    support_bundle_policy="exclude",
+    sensitivity="standard",
 )
 EGRESS_CONTROL = StatePathSpec(
     path="var/lib/drlink/egress-control.json",
     type="state",
-    backup_policy="required",
-    restore_policy="required",
-    sensitivity="critical",
+    backup_policy="optional",
+    restore_policy="ignore",
+    support_bundle_policy="exclude",
+    sensitivity="standard",
 )
 SERVICE_PROFILES = StatePathSpec(
     path="var/lib/drlink/service-profiles.json",
     type="state",
-    backup_policy="required",
-    restore_policy="required",
+    backup_policy="optional",
+    restore_policy="ignore",
+    support_bundle_policy="exclude",
     sensitivity="standard",
 )
 CONTROL_DB = StatePathSpec(
     path="var/lib/drlink/drlink.db",
     type="state",
-    backup_policy="optional",
-    restore_policy="optional",
+    backup_policy="required",
+    restore_policy="required",
     sensitivity="critical",
 )
 RUNTIME_TREE = StatePathSpec(
