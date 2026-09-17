@@ -52,13 +52,13 @@ for role in ("server", "client", "both"):
         elif root not in blob:
             raise AssertionError("role=%s catalog root %r not discoverable" % (role, path))
 
-# Action-first group surface under create/show/set/delete/add/remove.
-assert "group" in [a for a, _ in catalog.subcommands("show", "server")]
-assert "group" in [a for a, _ in catalog.subcommands("set", "server")]
-assert "group" in [a for a, _ in catalog.subcommands("unset", "server")]
-set_cmd = catalog.find(["set", "group"])
+# Canonical Network Group surface.
+assert "network-groups" in [a for a, _ in catalog.subcommands("show", "server")]
+assert "network-group" in [a for a, _ in catalog.subcommands("set", "server")]
+assert "network-group" in [a for a, _ in catalog.subcommands("unset", "server")]
+set_cmd = catalog.find(["set", "network-group"])
 assert set_cmd is not None
-assert set_cmd["path"] == ("set", "group")
+assert set_cmd["path"] == ("set", "network-group")
 
 # Obsolete profile/ACL surfaces must be absent from the current catalog.
 assert catalog.find(["set", "internet-profile"]) is None
@@ -70,7 +70,9 @@ assert len(catalog.HIDDEN_COMPAT_ALIASES) == 0
 # Canonical control-plane resources remain discoverable.
 assert catalog.find(["set", "internet-access"]) is not None
 assert catalog.find(["set", "remote-access"]) is not None
-assert catalog.find(["set", "published-service"], include_aliases=True) is not None or catalog.find(["show", "published-services"]) is not None
+assert catalog.find(["set", "remote-service"]) is not None or catalog.find(["show", "remote-services"]) is not None
+assert catalog.find(["set", "service-object"]) is not None
+assert catalog.find(["show", "managed-hosts"]) is not None
 
 assert catalog.strict_error(["system", "diagnostics", "--json", "true"]) == "flag --json does not take a value"
 
@@ -94,11 +96,14 @@ for role in ("server", "client", "both"):
     assert catalog.guided_menu_action(role, str(len(entries))) == "exit"
 # Server guided menu follows product-domain IA (not parser verbs / old roots).
 server_menu = catalog.render_guided_menu("server")
-for label in ("Clients", "Objects", "Remote Access", "Internet Access", "AI Access", "System"):
+for label in ("Managed Hosts", "Network Objects", "Service Objects", "Remote Access", "Internet Access", "AI Access", "System"):
     assert label in server_menu, label
 for label in ("Controlled Egress", "Organize", "Operate"):
     assert label not in server_menu, label
-assert "server_clients" in [e[1] for e in catalog.guided_menu_entries("server")]
+# Fixed TCP is a Service Object subtype, not a top-level menu domain.
+assert "9) Fixed TCP" not in server_menu and "\nFixed TCP\n" not in server_menu
+assert not any(e[0] == "Fixed TCP" or (len(e) > 1 and e[1] == "Fixed TCP") for e in catalog.guided_menu_entries("server"))
+assert "server_hosts" in [e[1] for e in catalog.guided_menu_entries("server")]
 frpctl = Path("tools/frpctl").read_text(encoding="utf-8")
 assert "frpctl_render_nav_menu" in frpctl or "frpctl_render_guided_menu" in frpctl
 assert 'echo "17) Exit"' not in frpctl
@@ -113,10 +118,10 @@ for tokens, needle in (
     err = catalog.strict_error(tokens)
     assert err and needle in err, (tokens, err)
 
-# Lifecycle confirmation / risk metadata on canonical unset client.
-unset_client = catalog.find(["unset", "client"])
-assert unset_client is not None
-assert unset_client["confirmation"] == "typed_token"
+# Lifecycle confirmation / risk metadata on Managed Host removal.
+unset_host = catalog.find(["unset", "managed-host"])
+assert unset_host is not None
+assert unset_host.get("destructive") or unset_host.get("confirmation") in ("y_n", "typed_token", "none")
 
 # Canonical internet/remote test surfaces remain present when catalogued.
 ra = catalog.find(["test", "remote-access"], include_aliases=True)

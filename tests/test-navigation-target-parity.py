@@ -77,14 +77,14 @@ class NavigationTargetParityTests(unittest.TestCase):
                         )
         self.assertFalse(failures, "\n".join(failures))
 
-    def test_access_log_is_workflow(self):
+    def test_ai_access_log_in_ai_menu(self):
         found = False
-        for entry in CATALOG.NAVIGATION_TREE.get("server.services.access", ()):
-            if entry[0] == "server_access_log":
+        for entry in CATALOG.NAVIGATION_TREE.get("server.ai", ()):
+            if entry[0] == "server_ai_log":
                 found = True
-                self.assertEqual(entry[3], "workflow")
-                self.assertEqual(entry[4], "show_access_log")
-        self.assertTrue(found, "Recent access decisions leaf missing")
+                self.assertEqual(entry[3], "command")
+                self.assertEqual(entry[4], "show ai-access-log")
+        self.assertTrue(found, "AI Access Log leaf missing from AI Access menu")
 
 
 if __name__ == "__main__":

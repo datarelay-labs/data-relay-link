@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from drlink_control_plane import ControlPlane
 import drlink_runtime_policy as RP
+import drlink_v24 as v24
 
 
 class RuntimePolicyTests(unittest.TestCase):
@@ -39,6 +40,7 @@ class RuntimePolicyTests(unittest.TestCase):
             enabled=True,
             public_port=6001,
         )
+        v24.ensure_policy_mode(self.plane, "remote", "whitelist", oneshot=True)
         self.plane.set_rule("remote", "allow-office")
         self.plane.set_rule_source("remote", "allow-office", "office")
         self.plane.set_rule_destination("remote", "allow-office", "lab")
@@ -96,6 +98,7 @@ class RuntimePolicyTests(unittest.TestCase):
     def test_internet_and_fixed_tcp(self):
         self.plane.set_object_type("api", "fqdn")
         self.plane.set_object_value("api", "example.com")
+        v24.ensure_policy_mode(self.plane, "internet", "whitelist", oneshot=True)
         self.plane.set_rule("internet", "allow-api")
         self.plane.set_rule_source("internet", "allow-api", "office")
         self.plane.set_rule_destination("internet", "allow-api", "api")
