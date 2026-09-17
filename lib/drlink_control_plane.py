@@ -62,9 +62,9 @@ PLANES = ("remote", "internet")
 POSITION_STEP = 1000
 
 CONTEXT_MATRIX = {
-    ("remote", "source"): frozenset({"host", "network"}),
-    ("remote", "destination"): frozenset({"host", "network", "managed_endpoint"}),
-    ("internet", "source"): frozenset({"host", "network"}),
+    ("remote", "source"): frozenset({"host", "network", "fqdn", "managed_endpoint"}),
+    ("remote", "destination"): frozenset({"host", "network", "fqdn", "managed_endpoint"}),
+    ("internet", "source"): frozenset({"host", "network", "fqdn", "managed_endpoint"}),
     ("internet", "destination"): frozenset({"fqdn", "host", "network"}),
 }
 
@@ -1859,8 +1859,8 @@ class ControlPlane:
     # --- evaluation -------------------------------------------------------
     def _object_matches_ip(self, obj: sqlite3.Row, ip: str, *, role: str) -> bool:
         if obj["type"] == "managed_endpoint":
-            if role != "destination":
-                return False
+            # Managed Host participates as a Network Object for source and destination
+            # where the context matrix allows it (Internet Access source; Remote Access both).
             for addr in self.conn.execute(
                 "SELECT address, scope, active FROM endpoint_addresses WHERE endpoint_object_id = ?",
                 (obj["id"],),
@@ -1938,6 +1938,8 @@ class ControlPlane:
         return names
 
     def evaluate_remote_access(self, source_ip: str, destination: str, protocol: str, port: int) -> dict:
+        from drlink_v24 import effective_policy_result, get_access_policy
+
         proto = str(protocol).lower()
         if proto in ("https", "http"):
             proto = "tcp"
@@ -1954,17 +1956,15 @@ class ControlPlane:
         dest_obj = self.get_object(destination)
         if dest_obj and dest_obj["name"] not in dst_matches:
             dst_matches.append(dest_obj["name"])
+        pol = get_access_policy(self, "remote")
         traces = []
-        winner = None
+        matched = []
         for rule_row in self.conn.execute(
-            "SELECT * FROM policy_rules WHERE plane = 'remote' ORDER BY position, name"
+            "SELECT * FROM policy_rules WHERE plane = 'remote' ORDER BY name"
         ):
             if not rule_row["enabled"]:
                 continue
             view = self._rule_view(rule_row)
-            if winner is not None:
-                traces.append({"rule": view, "evaluated": False, "source": None, "dest": None, "service": None})
-                continue
             src_ok = False
             for s in self.conn.execute("SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ?", (rule_row["id"],)):
                 if self._ref_matches_ip(s["ref_kind"], s["ref_id"], source_ip, role="source"):
@@ -1975,7 +1975,6 @@ class ControlPlane:
                 if self._ref_matches_ip(s["ref_kind"], s["ref_id"], dest_ip, role="destination"):
                     dst_ok = True
                     break
-                # endpoint identity match when destination token is the endpoint name
                 if dest_obj and s["ref_kind"] == "object" and s["ref_id"] == dest_obj["id"]:
                     dst_ok = True
                     break
@@ -1984,17 +1983,23 @@ class ControlPlane:
                 if s["protocol"] == proto and int(s["port"]) == int(port):
                     svc_ok = True
                     break
-            traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok})
-            if src_ok and dst_ok and svc_ok:
-                winner = view
-        action = winner["action"].upper() if winner else "DENY"
-        implicit = winner is None
+            hit = bool(src_ok and dst_ok and svc_ok)
+            traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok, "match": hit})
+            if hit:
+                matched.append(view)
+        action = effective_policy_result(pol["mode"], pol["enforcement"], bool(matched))
+        winner = matched[0] if matched else None
         published = self._published_for_destination(dest_ip, proto, port, dest_obj)
-        effective = action
-        reason = "Remote Access rule #%s %s" % (winner["display_position"], winner["name"]) if winner else "implicit DENY"
-        if action == "ALLOW" and not published:
-            # Policy allow still reported; effective access notes missing service.
-            reason = reason + " (no matching Published Service)"
+        if pol["mode"] is None:
+            reason = "No Policy (ALLOW)"
+        elif str(pol["enforcement"]).lower() == "disabled":
+            reason = "Policy enforcement DISABLED (ALLOW ALL)"
+        elif matched:
+            reason = "Remote Access matched rule(s): %s" % ", ".join(m["name"] for m in matched)
+        else:
+            reason = "No enabled Remote Access rule matched (%s)" % (
+                "ALLOW" if pol["mode"] == "blacklist" else "DENY"
+            )
         return {
             "source_ip": source_ip,
             "destination": dest_ip,
@@ -2004,11 +2009,14 @@ class ControlPlane:
             "destination_matches": dst_matches,
             "traces": traces,
             "winner": winner,
+            "matched_rules": [m["name"] for m in matched],
+            "mode": pol["mode"],
+            "enforcement": pol["enforcement"],
             "action": action,
-            "implicit": implicit,
+            "implicit": winner is None,
             "published": published,
             "reason": reason,
-            "effective": effective,
+            "effective": action,
         }
 
     def _published_for_destination(self, dest_ip: str, proto: str, port: int, dest_obj: Optional[sqlite3.Row]) -> Optional[dict]:
@@ -2106,25 +2114,24 @@ class ControlPlane:
         return "\n".join(lines) + "\n"
 
     def evaluate_internet_access(self, source_ip: str, destination: str, port: int, protocol: str) -> dict:
+        from drlink_v24 import effective_policy_result, get_access_policy
+
         proto = str(protocol).lower()
         if proto in ("https", "http"):
-            # service match uses protocol name or tcp/port
             want_tcp = True
         else:
             want_tcp = proto in ("tcp", "udp")
         src_matches = self.matching_objects_for_ip(source_ip, role="source")
         dst_matches = self.matching_objects_for_host(destination)
+        pol = get_access_policy(self, "internet")
         traces = []
-        winner = None
+        matched = []
         for rule_row in self.conn.execute(
-            "SELECT * FROM policy_rules WHERE plane = 'internet' ORDER BY position, name"
+            "SELECT * FROM policy_rules WHERE plane = 'internet' ORDER BY name"
         ):
             if not rule_row["enabled"]:
                 continue
             view = self._rule_view(rule_row)
-            if winner is not None:
-                traces.append({"rule": view, "evaluated": False})
-                continue
             src_ok = False
             for s in self.conn.execute("SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ?", (rule_row["id"],)):
                 if self._ref_matches_ip(s["ref_kind"], s["ref_id"], source_ip, role="source"):
@@ -2145,10 +2152,22 @@ class ControlPlane:
                 ):
                     svc_ok = True
                     break
-            traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok})
-            if src_ok and dst_ok and svc_ok:
-                winner = view
-        action = winner["action"].upper() if winner else "DENY"
+            hit = bool(src_ok and dst_ok and svc_ok)
+            traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok, "match": hit})
+            if hit:
+                matched.append(view)
+        action = effective_policy_result(pol["mode"], pol["enforcement"], bool(matched))
+        winner = matched[0] if matched else None
+        if pol["mode"] is None:
+            reason = "No Policy (ALLOW)"
+        elif str(pol["enforcement"]).lower() == "disabled":
+            reason = "Policy enforcement DISABLED (ALLOW ALL)"
+        elif matched:
+            reason = "Internet Access matched rule(s): %s" % ", ".join(m["name"] for m in matched)
+        else:
+            reason = "No enabled Internet Access rule matched (%s)" % (
+                "ALLOW" if pol["mode"] == "blacklist" else "DENY"
+            )
         return {
             "source_ip": source_ip,
             "destination": destination,
@@ -2158,13 +2177,12 @@ class ControlPlane:
             "destination_matches": dst_matches,
             "traces": traces,
             "winner": winner,
+            "matched_rules": [m["name"] for m in matched],
+            "mode": pol["mode"],
+            "enforcement": pol["enforcement"],
             "action": action,
             "implicit": winner is None,
-            "reason": (
-                "Internet Access rule #%s %s" % (winner["display_position"], winner["name"])
-                if winner
-                else "implicit DENY"
-            ),
+            "reason": reason,
         }
 
     def format_internet_explain(self, result: dict, *, dns: Optional[dict] = None) -> str:
@@ -3730,47 +3748,23 @@ class ControlPlane:
         }
 
     def format_status(self) -> str:
+        from drlink_v24 import detect_cli_role, format_show_status
+
+        role = detect_cli_role(self.root)
+        base = format_show_status(role, self)
+        # Append compact operational health for operators.
         st = self.status()
-        gens = st["generations"]
-
-        def plane_line(key, label):
-            g = gens.get(key) or {}
-            status = g.get("status") or "not_configured"
-            gen = g.get("generation")
-            if status == "not_configured":
-                return "%s: Not configured" % label.ljust(16)
-            if status == "mismatch" or (status == "active" and gen != st["revision"]):
-                return "%s: %s mismatch" % (label.ljust(16), gen)
-            return "%s: %s active" % (label.ljust(16), gen)
-
         db_line = "Healthy" if st["db_healthy"] and not st["mismatch"] else (
             "Critical" if not st["db_healthy"] else "Warning"
         )
-        mcp = self.mcp_endpoint_status()
-        lines = [
-            "Data Relay Link",
+        extra = [
             "",
             "Control DB       : %s" % db_line,
             "DB Revision      : %s" % st["revision"],
-            "",
-            plane_line("remote", "Remote Policy"),
-            plane_line("internet", "Internet Policy"),
-            plane_line("ai", "AI Policy"),
-            "",
-            "MCP Bridge",
-            "----------",
-            "Backend       : %s" % mcp["backend"],
-            "Backend Bind  : %s" % mcp["bind"],
-            "Public URL    : %s" % mcp["public_url"],
-            "Protocol      : %s" % mcp["protocol"],
-            "Transport     : %s" % mcp["transport"],
-            "Authentication: %s" % mcp["authentication"],
-            "Auth Model    : %s" % mcp["auth_model"],
-            "",
-            "Clients          : %s" % st["clients"],
-            "Published Service: %s" % st["services"],
+            "Managed Hosts    : %s" % st["clients"],
+            "Remote Services  : %s" % st["services"],
         ]
-        return "\n".join(lines) + "\n"
+        return base.rstrip() + "\n" + "\n".join(extra) + "\n"
 
     def _read_server_config(self) -> dict:
         env = os.environ.get("DRLINK_SERVER_CONFIG") or ""

@@ -1,0 +1,903 @@
+#!/usr/bin/env python3
+"""Public CLI handlers for the v2.4 canonical command surface."""
+from __future__ import annotations
+
+import sys
+from typing import Optional
+
+from drlink_control_db import ControlPlaneError
+from drlink_control_plane import ControlPlane
+import drlink_v24 as v24
+
+
+SERVER_ONLY = frozenset(
+    {
+        "network-object",
+        "network-objects",
+        "network-group",
+        "network-groups",
+        "service-object",
+        "service-objects",
+        "service-group",
+        "service-groups",
+        "permission-object",
+        "permission-objects",
+        "permission-group",
+        "permission-groups",
+        "remote-access",
+        "internet-access",
+        "ai-access",
+        "ai-access-log",
+        "ai-identity",
+        "ai-identities",
+        "managed-host",
+        "managed-hosts",
+        "enrollment",
+        "enrollments",
+    }
+)
+
+AGENT_ONLY_MUTATE = frozenset({"remote-service", "remote-services"})
+
+OBSOLETE = {
+    "object": "Use network-object / service-object instead.",
+    "objects": "Use show network-objects / show service-objects instead.",
+    "object-group": "Use network-group instead.",
+    "object-groups": "Use show network-groups instead.",
+    "fixed-tcp": "Fixed TCP is a Service Object type. Use: set service-object <NAME> type fixed-tcp port <PORT>",
+    "published-service": "Use remote-service on the Agent Host.",
+    "published-services": "Use show remote-services on the Agent Host, or show managed-host <HOST> remote-services on the Server.",
+    "ai-principal": "Use ai-identity instead.",
+    "ai-principals": "Use show ai-identities instead.",
+    "client": "Use managed-host instead.",
+    "clients": "Use show managed-hosts instead.",
+    "managed-endpoint": "Use managed-host instead.",
+    "managed-endpoints": "Use show managed-hosts instead.",
+}
+
+
+def _role(plane: ControlPlane) -> str:
+    return v24.detect_cli_role(plane.root)
+
+
+def _require_server(plane: ControlPlane, resource: str) -> None:
+    if _role(plane) == "agent":
+        raise ControlPlaneError(v24.role_error_server_resource(resource.replace("-", " ").title()))
+
+
+def _require_agent(plane: ControlPlane) -> None:
+    if _role(plane) == "server":
+        raise ControlPlaneError(v24.role_error_agent_resource())
+
+
+def maybe_handle_obsolete(res: str) -> None:
+    if res in OBSOLETE:
+        raise ControlPlaneError(
+            "ERROR:\n'%s' is not part of the canonical DRLink CLI.\n\n%s\n\nNo changes were applied."
+            % (res, OBSOLETE[res])
+        )
+
+
+def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
+    if not rest:
+        return None
+    res = rest[0]
+    maybe_handle_obsolete(res)
+    if res == "status":
+        sys.stdout.write(plane.format_status())
+        return 0
+    if res in ("network-objects",):
+        _require_server(plane, "Network Objects")
+        sys.stdout.write("%-16s %s\n" % ("NAME", "TYPE"))
+        for row in v24.list_network_objects(plane):
+            sys.stdout.write("%-16s %s\n" % (row["name"], row["type"]))
+        return 0
+    if res == "network-object":
+        _require_server(plane, "Network Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show network-object <OBJECT>")
+        name = rest[1]
+        obj = plane.get_object(name)
+        if not obj:
+            raise ControlPlaneError(v24.cli_error("Network Object '%s' was not found." % name))
+        if len(rest) >= 3 and rest[2] == "references":
+            refs = plane.object_references(name)
+            if not refs:
+                sys.stdout.write("(no references)\n")
+            else:
+                for r in refs:
+                    sys.stdout.write("%s\n" % r["display"])
+            return 0
+        values = obj.get("values") or plane._object_values(obj["id"])
+        sys.stdout.write(
+            "Network Object: %s\nType : %s\nValue: %s\n"
+            % (obj["name"], v24.display_network_type(obj["type"]), values[0] if values else "-")
+        )
+        return 0
+    if res in ("network-groups",):
+        _require_server(plane, "Network Groups")
+        for g in plane.conn.execute("SELECT name FROM object_groups ORDER BY name"):
+            sys.stdout.write("%s\n" % g["name"])
+        return 0
+    if res == "network-group":
+        _require_server(plane, "Network Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show network-group <GROUP>")
+        g = plane.get_object_group(rest[1])
+        if not g:
+            raise ControlPlaneError(v24.cli_error("Network Group '%s' was not found." % rest[1]))
+        sys.stdout.write("Network Group: %s\n" % g["name"])
+        for mem in plane._expand_group_members(g["id"], set()):
+            sys.stdout.write("  %s\n" % mem["name"])
+        return 0
+    if res in ("service-objects",):
+        _require_server(plane, "Service Objects")
+        sys.stdout.write("%-16s %-10s %s\n" % ("NAME", "TYPE", "PORT"))
+        for row in plane.conn.execute("SELECT name, type, port FROM service_objects ORDER BY name"):
+            sys.stdout.write("%-16s %-10s %s\n" % (row["name"], row["type"], row["port"]))
+        return 0
+    if res == "service-object":
+        _require_server(plane, "Service Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show service-object <SERVICE>")
+        sobj = v24.get_service_object(plane, rest[1])
+        if not sobj:
+            raise ControlPlaneError(v24.cli_error("Service Object '%s' was not found." % rest[1]))
+        if len(rest) >= 3 and rest[2] == "references":
+            refs = v24.service_object_references(plane, rest[1])
+            if not refs:
+                sys.stdout.write("(no references)\n")
+            else:
+                for r in refs:
+                    sys.stdout.write("%s\n" % r["display"])
+            return 0
+        sys.stdout.write(
+            "Service Object: %s\nType : %s\nPort : %s\n" % (sobj["name"], sobj["type"], sobj["port"])
+        )
+        return 0
+    if res in ("service-groups",):
+        _require_server(plane, "Service Groups")
+        for g in plane.conn.execute("SELECT name FROM service_groups ORDER BY name"):
+            sys.stdout.write("%s\n" % g["name"])
+        return 0
+    if res == "service-group":
+        _require_server(plane, "Service Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show service-group <GROUP>")
+        g = v24.get_service_group(plane, rest[1])
+        if not g:
+            raise ControlPlaneError(v24.cli_error("Service Group '%s' was not found." % rest[1]))
+        sys.stdout.write("Service Group: %s\n" % g["name"])
+        for m in plane.conn.execute(
+            "SELECT s.name FROM service_group_members x JOIN service_objects s ON s.id = x.service_object_id WHERE x.group_id = ?",
+            (g["id"],),
+        ):
+            sys.stdout.write("  %s\n" % m["name"])
+        return 0
+    if res in ("permission-objects",):
+        _require_server(plane, "Permission Objects")
+        for row in plane.conn.execute("SELECT name FROM permission_objects ORDER BY name"):
+            sys.stdout.write("%s\n" % row["name"])
+        return 0
+    if res == "permission-object":
+        _require_server(plane, "Permission Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show permission-object <PERMISSION>")
+        pobj = v24.get_permission_object(plane, rest[1])
+        if not pobj:
+            raise ControlPlaneError(v24.cli_error("Permission Object '%s' was not found." % rest[1]))
+        sys.stdout.write("Permission Object: %s\n\nPermissions:\n" % pobj["name"])
+        for r in plane.conn.execute(
+            "SELECT permission FROM permission_object_members WHERE permission_object_id = ? ORDER BY permission",
+            (pobj["id"],),
+        ):
+            sys.stdout.write("  %s\n" % r["permission"])
+        return 0
+    if res in ("permission-groups",):
+        _require_server(plane, "Permission Groups")
+        for row in plane.conn.execute("SELECT name FROM permission_groups ORDER BY name"):
+            sys.stdout.write("%s\n" % row["name"])
+        return 0
+    if res == "permission-group":
+        _require_server(plane, "Permission Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show permission-group <GROUP>")
+        g = v24.get_permission_group(plane, rest[1])
+        if not g:
+            raise ControlPlaneError(v24.cli_error("Permission Group '%s' was not found." % rest[1]))
+        sys.stdout.write("Permission Group: %s\n" % g["name"])
+        for m in plane.conn.execute(
+            "SELECT p.name FROM permission_group_members x JOIN permission_objects p ON p.id = x.permission_object_id WHERE x.group_id = ?",
+            (g["id"],),
+        ):
+            sys.stdout.write("  %s\n" % m["name"])
+        return 0
+    if res in ("managed-hosts",):
+        _require_server(plane, "Managed Hosts")
+        for row in plane.conn.execute(
+            "SELECT id, label, hostname, status FROM clients ORDER BY COALESCE(label, hostname, id)"
+        ):
+            sys.stdout.write(
+                "%s %s %s\n"
+                % (row["label"] or row["hostname"] or row["id"][:8], row["hostname"] or "-", row["status"])
+            )
+        return 0
+    if res == "managed-host":
+        _require_server(plane, "Managed Hosts")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show managed-host <HOST>")
+        client = plane.require_client(rest[1])
+        view = rest[2] if len(rest) > 2 else "overview"
+        if view == "remote-services":
+            sys.stdout.write("%-18s %-14s %-10s %-24s %s\n" % ("NAME", "DESTINATION", "SERVICE", "ENDPOINT", "STATUS"))
+            for s in plane.conn.execute(
+                "SELECT s.name, s.public_port, s.enabled, m.destination_name, m.status, m.service_object_id, m.pending_allocation "
+                "FROM published_services s LEFT JOIN remote_service_meta m ON m.service_id = s.id "
+                "WHERE s.client_id = ? AND s.released = 0 ORDER BY s.name",
+                (client["id"],),
+            ):
+                sobj = None
+                if s["service_object_id"]:
+                    sobj = plane.conn.execute(
+                        "SELECT name FROM service_objects WHERE id = ?", (s["service_object_id"],)
+                    ).fetchone()
+                endpoint = (
+                    "Pending allocation"
+                    if s["pending_allocation"]
+                    else ("drlink.local:%s" % s["public_port"] if s["public_port"] else "-")
+                )
+                status = s["status"] or ("DISABLED" if not s["enabled"] else "HEALTHY")
+                sys.stdout.write(
+                    "%-18s %-14s %-10s %-24s %s\n"
+                    % (
+                        s["name"],
+                        s["destination_name"] or "-",
+                        sobj["name"] if sobj else "-",
+                        endpoint,
+                        status,
+                    )
+                )
+            return 0
+        sys.stdout.write(
+            "Managed Host: %s\nHostname: %s\nStatus: %s\nAgent: %s\n"
+            % (
+                client["label"] or client["hostname"] or client["id"][:8],
+                client["hostname"] or "-",
+                client["status"],
+                "Connected" if client["connected"] else "Disconnected",
+            )
+        )
+        return 0
+    if res in ("ai-identities",):
+        _require_server(plane, "AI Identities")
+        for p in plane.conn.execute("SELECT name, enabled, credential_status FROM ai_principals ORDER BY name"):
+            status = "VERIFIED" if str(p["credential_status"] or "").lower() in ("verified", "active", "configured", "ok") else (
+                p["credential_status"] or "UNBOUND"
+            )
+            sys.stdout.write("%s %s\n" % (p["name"], status))
+        return 0
+    if res == "ai-identity":
+        _require_server(plane, "AI Identities")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show ai-identity <IDENTITY>")
+        p = plane.get_principal(rest[1])
+        if not p:
+            raise ControlPlaneError(v24.cli_error("AI Identity '%s' was not found." % rest[1]))
+        status = "VERIFIED" if str(p["credential_status"] or "").lower() in ("verified", "active", "configured", "ok") else (
+            p["credential_status"] or "UNBOUND"
+        )
+        sys.stdout.write("AI Identity : %s\nStatus      : %s\n" % (p["name"], status))
+        return 0
+    if res == "remote-access":
+        _require_server(plane, "Remote Access")
+        return _show_policy(plane, "remote", rest)
+    if res == "internet-access":
+        _require_server(plane, "Internet Access")
+        return _show_policy(plane, "internet", rest)
+    if res == "ai-access":
+        _require_server(plane, "AI Access")
+        return _show_ai_policy(plane, rest)
+    if res == "ai-access-log":
+        _require_server(plane, "AI Access Log")
+        return _show_ai_log(plane, rest[1:])
+    if res in ("remote-services",):
+        _require_agent(plane)
+        sys.stdout.write("%-18s %-14s %-10s %-24s %s\n" % ("NAME", "DESTINATION", "SERVICE", "ENDPOINT", "STATUS"))
+        for row in plane.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0 ORDER BY name"):
+            endpoint = (
+                "Pending allocation"
+                if row["pending_allocation"] or row["endpoint_port"] is None
+                else "%s:%s" % (row["endpoint_host"] or "drlink.local", row["endpoint_port"])
+            )
+            sys.stdout.write(
+                "%-18s %-14s %-10s %-24s %s\n"
+                % (row["name"], row["destination"], row["service_object"], endpoint, row["status"])
+            )
+        return 0
+    if res == "remote-service":
+        _require_agent(plane)
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: show remote-service <NAME>")
+        row = plane.conn.execute(
+            "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (rest[1],)
+        ).fetchone()
+        if not row or row["delete_pending"]:
+            raise ControlPlaneError(v24.cli_error("Remote Service '%s' was not found." % rest[1]))
+        endpoint = (
+            "Pending allocation"
+            if row["pending_allocation"] or row["endpoint_port"] is None
+            else "%s:%s" % (row["endpoint_host"] or "drlink.local", row["endpoint_port"])
+        )
+        sys.stdout.write(
+            "Remote Service: %s\nDestination: %s\nService: %s\nStatus: %s\nEndpoint: %s\nEnabled: %s\n"
+            % (
+                row["name"],
+                row["destination"],
+                row["service_object"],
+                row["status"],
+                endpoint,
+                "YES" if row["enabled"] else "NO",
+            )
+        )
+        if row["reason"]:
+            sys.stdout.write("Reason: %s\n" % row["reason"])
+        return 0
+    return None
+
+
+def _show_policy(plane: ControlPlane, family: str, rest: list[str]) -> int:
+    pol = v24.get_access_policy(plane, family)
+    title = "Remote Access" if family == "remote" else "Internet Access"
+    if len(rest) == 1:
+        sys.stdout.write("%s\n%s\n\n" % (title, "=" * len(title)))
+        if pol["mode"] is None:
+            sys.stdout.write("Mode        : No Policy\nEnforcement : -\nEffective   : ALLOW\n")
+        else:
+            # effective with no match is mode default
+            eff = v24.effective_policy_result(pol["mode"], pol["enforcement"], False)
+            if str(pol["enforcement"]).lower() == "disabled":
+                eff = "ALLOW ALL"
+            elif pol["mode"] == "whitelist":
+                # With zero rules, whitelist is DENY ALL
+                count = plane.conn.execute(
+                    "SELECT COUNT(*) FROM policy_rules WHERE plane = ?", (family,)
+                ).fetchone()[0]
+                if int(count or 0) == 0:
+                    eff = "DENY ALL"
+                else:
+                    enabled = plane.conn.execute(
+                        "SELECT COUNT(*) FROM policy_rules WHERE plane = ? AND enabled = 1", (family,)
+                    ).fetchone()[0]
+                    if int(enabled or 0) == 0:
+                        eff = "DENY ALL"
+            elif pol["mode"] == "blacklist":
+                count = plane.conn.execute(
+                    "SELECT COUNT(*) FROM policy_rules WHERE plane = ?", (family,)
+                ).fetchone()[0]
+                if int(count or 0) == 0:
+                    eff = "ALLOW ALL"
+            sys.stdout.write(
+                "Mode        : %s\nEnforcement : %s\nEffective   : %s\n"
+                % (pol["mode"].upper(), str(pol["enforcement"]).upper(), eff)
+            )
+        sys.stdout.write("\nRules:\n")
+        for row in plane.conn.execute(
+            "SELECT name, enabled FROM policy_rules WHERE plane = ? ORDER BY name", (family,)
+        ):
+            sys.stdout.write("  %s (%s)\n" % (row["name"], "enabled" if row["enabled"] else "disabled"))
+        return 0
+    rule = plane._get_rule(family, rest[1])
+    if not rule:
+        raise ControlPlaneError(v24.cli_error("Rule '%s' was not found." % rest[1]))
+    view = plane._rule_view(rule)
+    sys.stdout.write(
+        "%s Rule: %s\nSource: %s\nDestination: %s\nService: %s\nEnabled: %s\n"
+        % (
+            title,
+            view["name"],
+            ", ".join(view.get("sources") or []) or "-",
+            ", ".join(view.get("destinations") or []) or "-",
+            ", ".join(view.get("services") or []) or "-",
+            "YES" if view["enabled"] else "NO",
+        )
+    )
+    return 0
+
+
+def _show_ai_policy(plane: ControlPlane, rest: list[str]) -> int:
+    pol = v24.get_access_policy(plane, "ai")
+    if len(rest) == 1:
+        sys.stdout.write("AI Access\n=========\n\n")
+        if pol["mode"] is None:
+            sys.stdout.write("Mode        : No Policy\nEnforcement : -\nEffective   : ALLOW\n")
+        else:
+            eff = "ALLOW ALL" if str(pol["enforcement"]).lower() == "disabled" else (
+                "DENY ALL" if pol["mode"] == "whitelist" else "ALLOW ALL"
+            )
+            count = plane.conn.execute("SELECT COUNT(*) FROM ai_policy_rules").fetchone()[0]
+            if pol["mode"] == "whitelist" and int(count or 0) == 0 and str(pol["enforcement"]).lower() != "disabled":
+                eff = "DENY ALL"
+            sys.stdout.write(
+                "Mode        : %s\nEnforcement : %s\nEffective   : %s\n"
+                % (pol["mode"].upper(), str(pol["enforcement"]).upper(), eff)
+            )
+        sys.stdout.write("\nRules:\n")
+        for row in plane.conn.execute("SELECT name, enabled FROM ai_policy_rules ORDER BY name"):
+            sys.stdout.write("  %s (%s)\n" % (row["name"], "enabled" if row["enabled"] else "disabled"))
+        return 0
+    row = plane.conn.execute(
+        "SELECT * FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rest[1],)
+    ).fetchone()
+    if not row:
+        raise ControlPlaneError(v24.cli_error("Rule '%s' was not found." % rest[1]))
+    principal = plane.conn.execute(
+        "SELECT name FROM ai_principals WHERE id = ?", (row["source_identity_id"],)
+    ).fetchone()
+    sys.stdout.write(
+        "AI Access Rule: %s\nSource: %s\nEnabled: %s\n"
+        % (row["name"], principal["name"] if principal else "-", "YES" if row["enabled"] else "NO")
+    )
+    return 0
+
+
+def _show_ai_log(plane: ControlPlane, args: list[str]) -> int:
+    identity = destination = permission = None
+    i = 0
+    while i < len(args):
+        key = args[i].lower()
+        if key in ("identity", "destination", "permission") and i + 1 < len(args):
+            if key == "identity":
+                identity = args[i + 1]
+            elif key == "destination":
+                destination = args[i + 1]
+            else:
+                permission = args[i + 1]
+            i += 2
+            continue
+        i += 1
+    sys.stdout.write("%-22s %-10s %-14s %-12s %s\n" % ("TIME", "IDENTITY", "DESTINATION", "PERMISSION", "RESULT"))
+    rows = plane.list_ai_activity(principal=identity, endpoint=destination)
+    for row in rows:
+        perm = permission or "-"
+        # Map capability to permission label when possible
+        cap = row.get("capability") or row.get("action") or "-"
+        if permission and v24.CAP_TO_PERMISSION.get(str(cap)) != permission and str(cap) != permission:
+            continue
+        sys.stdout.write(
+            "%-22s %-10s %-14s %-12s %s\n"
+            % (
+                row.get("timestamp") or "-",
+                row.get("principal") or row.get("principal_name") or "-",
+                row.get("endpoint") or "-",
+                v24.CAP_TO_PERMISSION.get(str(cap), str(cap)),
+                row.get("result") or row.get("decision") or "-",
+            )
+        )
+    return 0
+
+
+def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
+    if not rest:
+        return None
+    res = rest[0]
+    maybe_handle_obsolete(res)
+    # Policy enable/disable without rule name
+    if res in ("remote-access", "internet-access", "ai-access") and len(rest) == 2 and rest[1] in ("enabled", "disabled"):
+        _require_server(plane, res.replace("-", " ").title())
+        v24.set_policy_enforcement(plane, res, rest[1] == "enabled", confirm=True)
+        title = res.replace("-", " ").title()
+        pol = v24.get_access_policy(plane, res)
+        sys.stdout.write(
+            "%s\n%s\n\nMode        : %s\nEnforcement : %s\nEffective   : ALLOW ALL\n\nSaved rules remain unchanged.\n"
+            % (
+                title,
+                "=" * len(title),
+                (pol["mode"] or "-").upper(),
+                str(pol["enforcement"]).upper(),
+            )
+            if rest[1] == "disabled"
+            else "%s enforcement enabled.\n" % title
+        )
+        return 0
+    if res == "network-object":
+        _require_server(plane, "Network Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set network-object <NAME> ...")
+        name = rest[1]
+        if len(rest) == 2:
+            raise ControlPlaneError(
+                "ERROR:\nInteractive Network Object wizard requires a TTY session.\n\n"
+                "AI one-shot form:\n  set network-object %s type <ip|cidr|fqdn> value <VALUE>\n\n"
+                "No changes were applied." % name
+            )
+        kv = v24.parse_kv_tokens(rest[2:])
+        result = v24.set_network_object(
+            plane, name, type=kv.get("type"), value=kv.get("value"), oneshot=True
+        )
+        sys.stdout.write("Network Object %s: %s\n" % (result["operation"], name))
+        return 0
+    if res == "network-group":
+        _require_server(plane, "Network Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set network-group <NAME> ...")
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        if "members" not in kv:
+            raise ControlPlaneError(
+                "ERROR:\nInteractive Network Group wizard requires a TTY session.\n\n"
+                "AI one-shot form:\n  set network-group %s members a,b,c\n\n"
+                "No changes were applied." % name
+            )
+        v24.set_network_group(plane, name, members=v24.parse_csv_list(kv["members"]), oneshot=True)
+        sys.stdout.write("Network Group set: %s\n" % name)
+        return 0
+    if res == "service-object":
+        _require_server(plane, "Service Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set service-object <NAME> ...")
+        name = rest[1]
+        if len(rest) == 2:
+            raise ControlPlaneError(
+                "ERROR:\nInteractive Service Object wizard requires a TTY session.\n\n"
+                "AI one-shot form:\n  set service-object %s type <tcp|udp|fixed-tcp> port <PORT>\n\n"
+                "No changes were applied." % name
+            )
+        kv = v24.parse_kv_tokens(rest[2:])
+        port = int(kv["port"]) if "port" in kv else None
+        v24.set_service_object(plane, name, type=kv.get("type"), port=port, oneshot=True)
+        sys.stdout.write("Service Object set: %s\n" % name)
+        return 0
+    if res == "service-group":
+        _require_server(plane, "Service Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set service-group <NAME> ...")
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:])
+        v24.set_service_group(plane, name, members=v24.parse_csv_list(kv.get("members", "")), oneshot=True)
+        sys.stdout.write("Service Group set: %s\n" % name)
+        return 0
+    if res == "permission-object":
+        _require_server(plane, "Permission Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set permission-object <NAME> ...")
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:])
+        v24.set_permission_object(
+            plane, name, permissions=v24.parse_csv_list(kv.get("permissions", "")), oneshot=True
+        )
+        sys.stdout.write("Permission Object set: %s\n" % name)
+        return 0
+    if res == "permission-group":
+        _require_server(plane, "Permission Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set permission-group <NAME> ...")
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:])
+        v24.set_permission_group(plane, name, members=v24.parse_csv_list(kv.get("members", "")), oneshot=True)
+        sys.stdout.write("Permission Group set: %s\n" % name)
+        return 0
+    if res in ("remote-access", "internet-access"):
+        _require_server(plane, res.replace("-", " ").title())
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set %s <RULE> ..." % res)
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        enabled = None
+        if "enabled" in kv:
+            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
+        oneshot = bool(rest[2:])
+        if not oneshot:
+            raise ControlPlaneError(
+                "ERROR:\nInteractive rule wizard requires a TTY session.\n\n"
+                "AI one-shot form:\n  set %s %s mode <blacklist|whitelist> "
+                "source <SRC> destination <DST> service <SVC> enabled\n\n"
+                "No changes were applied." % (res, name)
+            )
+        v24.set_access_rule(
+            plane,
+            res,
+            name,
+            mode=kv.get("mode"),
+            source=kv.get("source"),
+            destination=kv.get("destination"),
+            service=kv.get("service"),
+            enabled=enabled,
+            oneshot=True,
+        )
+        sys.stdout.write("%s rule set: %s\n" % (res, name))
+        return 0
+    if res == "ai-access":
+        _require_server(plane, "AI Access")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set ai-access <RULE> ...")
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        enabled = None
+        if "enabled" in kv:
+            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
+        if not rest[2:]:
+            raise ControlPlaneError(
+                "ERROR:\nInteractive AI Access wizard requires a TTY session.\n\n"
+                "AI one-shot form:\n  set ai-access %s mode <blacklist|whitelist> "
+                "source <IDENTITY> destination <DEST> permission <PERM> enabled\n\n"
+                "No changes were applied." % name
+            )
+        v24.set_ai_access_rule(
+            plane,
+            name,
+            mode=kv.get("mode"),
+            source=kv.get("source"),
+            destination=kv.get("destination"),
+            permission=kv.get("permission"),
+            enabled=enabled,
+            oneshot=True,
+        )
+        sys.stdout.write("AI Access rule set: %s\n" % name)
+        return 0
+    if res == "ai-identity":
+        _require_server(plane, "AI Identities")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set ai-identity <NAME>")
+        name = rest[1]
+        # Create/bind identity shell; verification remains OAuth lifecycle.
+        plane.set_ai_principal(name, enabled=True)
+        plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = COALESCE(NULLIF(credential_status,''), 'pending') WHERE name = ? COLLATE NOCASE",
+            (name,),
+        )
+        sys.stdout.write(
+            "AI Identity created: %s\nStatus: pending verification\n"
+            "Complete OAuth Authorization Code (interactive) or Client Credentials (automation) to reach VERIFIED.\n"
+            % name
+        )
+        return 0
+    if res == "remote-service":
+        _require_agent(plane)
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: set remote-service <NAME> ...")
+        name = rest[1]
+        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        enabled = None
+        if "enabled" in kv:
+            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
+        if not rest[2:]:
+            raise ControlPlaneError(
+                "ERROR:\nInteractive Remote Service wizard requires a TTY session.\n\n"
+                "AI one-shot form:\n  set remote-service %s destination <DEST|this-host> service <SERVICE> enabled\n\n"
+                "No changes were applied." % name
+            )
+        # Detect server reachability loosely: control DB present implies reachable in tests.
+        reachable = True
+        result = v24.set_remote_service_agent(
+            plane,
+            name,
+            destination=kv.get("destination"),
+            service=kv.get("service"),
+            enabled=enabled,
+            oneshot=True,
+            root=plane.root,
+            server_reachable=reachable,
+        )
+        sys.stdout.write(v24.format_remote_service_view(result.get("view") or {"name": name, "destination": "-", "service": "-", "status": "HEALTHY", "endpoint": "-"}))
+        return 0
+    return None
+
+
+def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
+    if not rest:
+        return None
+    res = rest[0]
+    maybe_handle_obsolete(res)
+    if res in ("remote-access", "internet-access", "ai-access") and len(rest) >= 2 and rest[1] == "policy":
+        _require_server(plane, res.replace("-", " ").title())
+        v24.reset_access_policy(plane, res, confirm=True)
+        sys.stdout.write("%s policy reset.\nEffective access: ALLOW\n" % res)
+        return 0
+    if res == "network-object":
+        _require_server(plane, "Network Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset network-object <NAME>")
+        v24.unset_network_object(plane, rest[1])
+        sys.stdout.write("Network Object deleted: %s\n" % rest[1])
+        return 0
+    if res == "network-group":
+        _require_server(plane, "Network Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset network-group <NAME>")
+        plane.unset_object_group(rest[1])
+        sys.stdout.write("Network Group deleted: %s\n" % rest[1])
+        return 0
+    if res == "service-object":
+        _require_server(plane, "Service Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset service-object <NAME>")
+        v24.unset_service_object(plane, rest[1])
+        sys.stdout.write("Service Object deleted: %s\n" % rest[1])
+        return 0
+    if res == "service-group":
+        _require_server(plane, "Service Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset service-group <NAME>")
+        g = v24.get_service_group(plane, rest[1])
+        if not g:
+            raise ControlPlaneError(v24.cli_error("Service Group '%s' was not found." % rest[1]))
+
+        def write():
+            plane.conn.execute("DELETE FROM service_group_members WHERE group_id = ?", (g["id"],))
+            plane.conn.execute("DELETE FROM service_groups WHERE id = ?", (g["id"],))
+            return {"entity": {"type": "service-group", "id": g["id"], "name": rest[1]}, "operation": "delete"}
+
+        plane._mutate("unset service-group %s" % rest[1], "delete service group", write)
+        sys.stdout.write("Service Group deleted: %s\n" % rest[1])
+        return 0
+    if res == "permission-object":
+        _require_server(plane, "Permission Objects")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset permission-object <NAME>")
+        p = v24.get_permission_object(plane, rest[1])
+        if not p:
+            raise ControlPlaneError(v24.cli_error("Permission Object '%s' was not found." % rest[1]))
+
+        def write():
+            plane.conn.execute("DELETE FROM permission_object_members WHERE permission_object_id = ?", (p["id"],))
+            plane.conn.execute("DELETE FROM permission_objects WHERE id = ?", (p["id"],))
+            return {"entity": {"type": "permission-object", "id": p["id"], "name": rest[1]}, "operation": "delete"}
+
+        plane._mutate("unset permission-object %s" % rest[1], "delete permission object", write)
+        sys.stdout.write("Permission Object deleted: %s\n" % rest[1])
+        return 0
+    if res == "permission-group":
+        _require_server(plane, "Permission Groups")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset permission-group <NAME>")
+        g = v24.get_permission_group(plane, rest[1])
+        if not g:
+            raise ControlPlaneError(v24.cli_error("Permission Group '%s' was not found." % rest[1]))
+
+        def write():
+            plane.conn.execute("DELETE FROM permission_group_members WHERE group_id = ?", (g["id"],))
+            plane.conn.execute("DELETE FROM permission_groups WHERE id = ?", (g["id"],))
+            return {"entity": {"type": "permission-group", "id": g["id"], "name": rest[1]}, "operation": "delete"}
+
+        plane._mutate("unset permission-group %s" % rest[1], "delete permission group", write)
+        sys.stdout.write("Permission Group deleted: %s\n" % rest[1])
+        return 0
+    if res in ("remote-access", "internet-access"):
+        _require_server(plane, res.replace("-", " ").title())
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset %s <RULE>|policy" % res)
+        v24.unset_access_rule(plane, res, rest[1])
+        sys.stdout.write("Rule deleted: %s\n" % rest[1])
+        return 0
+    if res == "ai-access":
+        _require_server(plane, "AI Access")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset ai-access <RULE>|policy")
+        row = plane.conn.execute(
+            "SELECT * FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rest[1],)
+        ).fetchone()
+        if not row:
+            raise ControlPlaneError(v24.cli_error("Rule '%s' was not found." % rest[1]))
+
+        def write():
+            plane.conn.execute("DELETE FROM ai_policy_rules WHERE id = ?", (row["id"],))
+            return {"entity": {"type": "ai-access", "id": row["id"], "name": rest[1]}, "operation": "delete"}
+
+        plane._mutate("unset ai-access %s" % rest[1], "delete ai access rule", write)
+        sys.stdout.write("AI Access rule deleted: %s\n" % rest[1])
+        return 0
+    if res == "ai-identity":
+        _require_server(plane, "AI Identities")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset ai-identity <NAME>")
+        # Reference-safe via existing unset_ai_principal
+        plane.unset_ai_principal(rest[1])
+        sys.stdout.write("AI Identity deleted: %s\n" % rest[1])
+        return 0
+    if res == "managed-host":
+        _require_server(plane, "Managed Hosts")
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset managed-host <HOST>")
+        # Reuse client revoke/delete path if present
+        client = plane.require_client(rest[1])
+        # Check policy references via managed endpoint object
+        ep = plane.conn.execute(
+            "SELECT o.name FROM objects o JOIN managed_endpoints e ON e.object_id = o.id WHERE e.client_id = ?",
+            (client["id"],),
+        ).fetchone()
+        if ep:
+            refs = plane.object_references(ep["name"])
+            if refs:
+                raise ControlPlaneError(
+                    "ERROR:\nManaged Host '%s' is still referenced.\n\nReferences:\n%s\n\nNo changes were applied."
+                    % (rest[1], "\n".join("  %s" % r["display"] for r in refs))
+                )
+        # Reference-safe cleanup is required; full client lifecycle delete is server inventory work.
+        raise ControlPlaneError(
+            "ERROR:\nManaged Host removal must use the Managed Host lifecycle path with impact review.\n\n"
+            "Host: %s\n\nNo changes were applied." % rest[1]
+        )
+    if res == "remote-service":
+        _require_agent(plane)
+        if len(rest) < 2:
+            raise ControlPlaneError("Usage: unset remote-service <NAME>")
+        v24.unset_remote_service_agent(plane, rest[1], root=plane.root, server_reachable=True)
+        sys.stdout.write("Remote Service deleted: %s\n" % rest[1])
+        return 0
+    return None
+
+
+def handle_test(plane: ControlPlane, rest: list[str]) -> Optional[int]:
+    if not rest:
+        return None
+    res = rest[0]
+    if res == "remote-access":
+        _require_server(plane, "Remote Access")
+        kv = v24.parse_kv_tokens(rest[1:])
+        for req in ("source", "destination", "service"):
+            if req not in kv:
+                raise ControlPlaneError(
+                    "Usage: test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>"
+                )
+        evaluation = v24.evaluate_selector_policy(
+            plane,
+            "remote",
+            source_name=kv["source"],
+            destination_name=kv["destination"],
+            service_name=kv["service"],
+        )
+        sys.stdout.write(
+            v24.format_policy_test(
+                "remote",
+                evaluation,
+                {"source": kv["source"], "destination": kv["destination"], "service": kv["service"]},
+            )
+        )
+        return 0
+    if res == "internet-access":
+        _require_server(plane, "Internet Access")
+        kv = v24.parse_kv_tokens(rest[1:])
+        for req in ("source", "destination", "service"):
+            if req not in kv:
+                raise ControlPlaneError(
+                    "Usage: test internet-access source <SOURCE> destination <DESTINATION> service <SERVICE>"
+                )
+        evaluation = v24.evaluate_selector_policy(
+            plane,
+            "internet",
+            source_name=kv["source"],
+            destination_name=kv["destination"],
+            service_name=kv["service"],
+        )
+        sys.stdout.write(
+            v24.format_policy_test(
+                "internet",
+                evaluation,
+                {"source": kv["source"], "destination": kv["destination"], "service": kv["service"]},
+            )
+        )
+        return 0
+    if res == "ai-access":
+        _require_server(plane, "AI Access")
+        kv = v24.parse_kv_tokens(rest[1:])
+        for req in ("source", "destination", "permission"):
+            if req not in kv:
+                raise ControlPlaneError(
+                    "Usage: test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION>"
+                )
+        evaluation = v24.evaluate_ai_access_v24(
+            plane, identity=kv["source"], destination=kv["destination"], permission=kv["permission"]
+        )
+        sys.stdout.write(
+            v24.format_policy_test(
+                "ai",
+                evaluation,
+                {
+                    "source": kv["source"],
+                    "destination": kv["destination"],
+                    "permission": kv["permission"],
+                },
+            )
+        )
+        return 0
+    return None

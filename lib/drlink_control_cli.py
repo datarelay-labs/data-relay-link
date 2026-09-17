@@ -46,11 +46,25 @@ def _parse_output_flag(tokens):
 
 def _configuration_export(plane: ControlPlane, rest):
     out_path, remaining = _parse_output_flag(rest)
+    # Canonical master form: system export configuration <FILE>
+    if not out_path and remaining and len(remaining) == 1 and remaining[0] not in ("-",):
+        out_path = remaining[0]
+        remaining = []
     if remaining:
-        raise SystemExit("Unexpected arguments.\n\nUsage:\n  system export configuration --output <file>")
+        raise SystemExit(
+            "Unexpected arguments.\n\nUsage:\n  system export configuration <file>\n  system export configuration --output <file>"
+        )
     if not out_path:
-        raise SystemExit("Missing --output.\n\nUsage:\n  system export configuration --output <file>")
-    text = export_configuration(plane)
+        raise SystemExit(
+            "Missing output path.\n\nUsage:\n  system export configuration <file>\n  system export configuration --output <file>"
+        )
+    # Prefer canonical v2.4 export when available.
+    try:
+        from drlink_v24_bundle import export_configuration_v24
+
+        text = export_configuration_v24(plane)
+    except Exception:
+        text = export_configuration(plane)
     Path = __import__("pathlib").Path
     Path(out_path).write_text(text, encoding="utf-8")
     sys.stdout.write("Configuration exported (redacted): %s\n" % out_path)
@@ -60,7 +74,17 @@ def _configuration_export(plane: ControlPlane, rest):
 def _configuration_test(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing configuration path.\n\nUsage:\n  test configuration <file|->")
-    raw, label = read_bundle_from_path_or_stdin(rest[0])
+    raw, label = _read_config_input(rest[0])
+    if "configurationBundle" in raw or raw.lstrip().startswith("configurationBundle:"):
+        from drlink_v24_bundle import BundleError as _BE
+        from drlink_v24_bundle import format_v24_plan, prepare_v24_plan
+
+        try:
+            plan = prepare_v24_plan(plane, raw)
+        except Exception as exc:
+            raise SystemExit(str(exc)) from exc
+        sys.stdout.write(format_v24_plan(plan))
+        return 0
     try:
         plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
     except BundleError as exc:
@@ -73,7 +97,20 @@ def _configuration_test(plane: ControlPlane, rest):
 def _configuration_diff(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing configuration path.\n\nUsage:\n  system diff configuration <file|->")
-    raw, label = read_bundle_from_path_or_stdin(rest[0])
+    raw, label = _read_config_input(rest[0])
+    if raw.lstrip().startswith("configurationBundle:") or "configurationBundle:" in raw[:200]:
+        from drlink_v24_bundle import format_v24_plan, prepare_v24_plan
+
+        try:
+            plan = prepare_v24_plan(plane, raw)
+        except Exception as exc:
+            raise SystemExit(str(exc)) from exc
+        sys.stdout.write(format_v24_plan(plan))
+        if plan.no_change:
+            sys.stdout.write("Diff result: NO CHANGE\n")
+        else:
+            sys.stdout.write("Diff result: CHANGES PENDING (no mutation performed)\n")
+        return 0
     try:
         plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
     except BundleError as exc:
@@ -89,7 +126,25 @@ def _configuration_diff(plane: ControlPlane, rest):
 def _configuration_apply(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing configuration path.\n\nUsage:\n  system apply configuration <file|->")
-    raw, label = read_bundle_from_path_or_stdin(rest[0])
+    raw, label = _read_config_input(rest[0])
+    if raw.lstrip().startswith("configurationBundle:") or "configurationBundle:" in raw[:200]:
+        from drlink_v24_bundle import apply_v24_plan, format_v24_plan, prepare_v24_plan
+
+        try:
+            plan = prepare_v24_plan(plane, raw)
+        except Exception as exc:
+            raise SystemExit(str(exc)) from exc
+        sys.stdout.write(format_v24_plan(plan).replace("No changes were applied.\n", ""))
+        result = _run(apply_v24_plan, plane, plan)
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
+        if isinstance(result, dict) and result.get("status") == "NO_CHANGE":
+            sys.stdout.write("NO CHANGE\nConfiguration already matches the requested state.\n")
+            return 0
+        sys.stdout.write("Apply result: APPLIED\n")
+        if isinstance(result, dict):
+            sys.stdout.write("Revision: %s\n" % result.get("revision"))
+        return 0
     try:
         plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
     except BundleError as exc:
@@ -114,6 +169,14 @@ def _configuration_apply(plane: ControlPlane, rest):
         if result.get("client_action_required"):
             sys.stdout.write("CLIENT_ACTION_REQUIRED: yes (see planned changes)\n")
     return 0
+
+
+def _read_config_input(source: str):
+    if source == "-":
+        from drlink_v24_bundle import read_bundle_stdin_with_end
+
+        return read_bundle_stdin_with_end(), "stdin"
+    return read_bundle_from_path_or_stdin(source)
 
 
 def _confirm_from_stdin(message: str) -> bool:
@@ -182,6 +245,11 @@ def _dispatch(plane: ControlPlane, verb: str, tokens, client_sel):
 def _show(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing resource.")
+    import drlink_v24_cli as v24cli
+
+    handled = v24cli.handle_show(plane, rest)
+    if handled is not None:
+        return handled
     res = rest[0]
     if res == "status":
         sys.stdout.write(plane.format_status())
@@ -473,6 +541,11 @@ def _show(plane: ControlPlane, rest):
 def _set(plane: ControlPlane, rest, client_sel):
     if not rest:
         raise SystemExit("Missing resource.")
+    import drlink_v24_cli as v24cli
+
+    handled = v24cli.handle_set(plane, rest)
+    if handled is not None:
+        return handled
     res = rest[0]
     if res == "object":
         _need(rest, 3, "set object <OBJECT> type|value|description|name ...")
@@ -783,6 +856,11 @@ def _set_mcp_tls(plane: ControlPlane, rest):
 def _unset(plane: ControlPlane, rest, client_sel):
     if not rest:
         raise SystemExit("Missing resource.")
+    import drlink_v24_cli as v24cli
+
+    handled = v24cli.handle_unset(plane, rest)
+    if handled is not None:
+        return handled
     res = rest[0]
     if res == "object":
         _need(rest, 2, "unset object <OBJECT>")
@@ -896,8 +974,13 @@ def _unset(plane: ControlPlane, rest, client_sel):
 def _test(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing test target.")
+    import drlink_v24_cli as v24cli
+
     if rest[0] == "configuration":
         return _configuration_test(plane, rest[1:])
+    handled = v24cli.handle_test(plane, rest)
+    if handled is not None:
+        return handled
     if rest[0] == "remote-access":
         _need(rest, 5, "test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>")
         result = plane.evaluate_remote_access(rest[1], rest[2], rest[3], int(rest[4]))

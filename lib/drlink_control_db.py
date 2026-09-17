@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPLICATION_ID = 0x44524C4B  # 'DRLK'
 DEFAULT_DB_REL = "var/lib/drlink/drlink.db"
 BUSY_TIMEOUT_MS = 5000
@@ -654,21 +654,29 @@ def ensure_enrollment_plans_schema(conn: sqlite3.Connection) -> None:
 
 
 def initialize(conn: sqlite3.Connection) -> None:
+    from drlink_v24 import ensure_v2_schema
+
     found = current_schema_version(conn)
     if found > SCHEMA_VERSION:
         raise SchemaTooNewError(found, SCHEMA_VERSION)
     if found == SCHEMA_VERSION:
         ensure_ai_auth_schema(conn)
+        ensure_v2_schema(conn)
         integrity_check(conn)
         return
     if found == 0:
         conn.executescript(SCHEMA_SQL)
+        ensure_v2_schema(conn)
         now = utc_now_iso()
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
                 "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
                 (1, "initial_control_plane", now),
+            )
+            conn.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                (2, "v24_canonical_objects_policy", now),
             )
             conn.execute(
                 "INSERT OR REPLACE INTO system_meta(key, value) VALUES (?, ?)",
@@ -689,6 +697,29 @@ def initialize(conn: sqlite3.Connection) -> None:
                     "VALUES (?, 0, 0, ?, '', ?, '')",
                     (plane, status, now),
                 )
+            integrity_check(conn)
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        ensure_ai_auth_schema(conn)
+        return
+    if found == 1:
+        ensure_v2_schema(conn)
+        now = utc_now_iso()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                (2, "v24_canonical_objects_policy", now),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO system_meta(key, value) VALUES (?, ?)",
+                ("schema_version", str(SCHEMA_VERSION)),
+            )
             integrity_check(conn)
             conn.execute("COMMIT")
         except Exception:
