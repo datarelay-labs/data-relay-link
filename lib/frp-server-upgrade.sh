@@ -11,6 +11,9 @@ FRP_ALLOCATOR_RUNTIME_HELPERS=(
   frp_enrollment_lifecycle.py
   frp_zero_touch.py
   frp_audit.py
+  drlink_runtime_policy.py
+  drlink_control_db.py
+  drlink_control_plane.py
 )
 _FRP_UPGRADE_MUTATION_STARTED=0
 _FRP_UPGRADE_ROLLBACK_DONE=0

@@ -927,7 +927,7 @@ frp_migrate_legacy_systemd_units() {
   local legacy_tools=(
     frpctl frp-create-client frp-enrollments frp-enrollment-revoke frp-enrollment-purge
     frp-enroll-bulk frp-clients frp-client-info frp-client-set frp-groups frp-group-set
-    frp-release-client frp-release-service frp-access frp-egress frp-profile frp-revoke-client
+    frp-release-client frp-release-service frp-revoke-client
     frp-set-client-installer-url frp-server-set frp-server-status frp-project-update
     frp-backup frp-restore frp-support-bundle frp-update frp-upstream
   )

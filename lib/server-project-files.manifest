@@ -90,9 +90,6 @@ project usr/local/lib/drlink/frp-groups 0755 tools/frp-groups python
 project usr/local/lib/drlink/frp-group-set 0755 tools/frp-group-set python
 project usr/local/lib/drlink/frp-release-client 0755 tools/frp-release-client python
 project usr/local/lib/drlink/frp-release-service 0755 tools/frp-release-service python
-project usr/local/lib/drlink/frp-access 0755 tools/frp-access python
-project usr/local/lib/drlink/frp-egress 0755 tools/frp-egress python
-project usr/local/lib/drlink/frp-profile 0755 tools/frp-profile python
 project usr/local/lib/drlink/frp-revoke-client 0755 tools/frp-revoke-client python
 project usr/local/lib/drlink/frp-set-client-installer-url 0755 tools/frp-set-client-installer-url python
 project usr/local/lib/drlink/frp-server-set 0755 tools/frp-server-set python

@@ -46,6 +46,7 @@ for f in \
   "$BASE_DIR/lib/drlink_control_db.py" \
   "$BASE_DIR/lib/drlink_control_plane.py" \
   "$BASE_DIR/lib/drlink_control_cli.py" \
+  "$BASE_DIR/lib/drlink_runtime_policy.py" \
   "$BASE_DIR/lib/drlink_ai_agent.py" \
   "$BASE_DIR/lib/drlink_mcp_bridge.py" \
   "$BASE_DIR/server/drlink-mcp-bridge.py" \
@@ -69,9 +70,6 @@ for f in \
   "$BASE_DIR/tools/frp-group-set" \
   "$BASE_DIR/tools/frp-release-client" \
   "$BASE_DIR/tools/frp-release-service" \
-  "$BASE_DIR/tools/frp-access" \
-  "$BASE_DIR/tools/frp-egress" \
-  "$BASE_DIR/tools/frp-profile" \
   "$BASE_DIR/tools/frp-revoke-client" \
   "$BASE_DIR/tools/frp-client-set" \
   "$BASE_DIR/tools/frp-set-client-installer-url" \
@@ -1393,18 +1391,12 @@ cfg = {
     'allocator_listen_port': int(sys.argv[8]),
     'listen_port': int(sys.argv[8]),
     'allocator_public_url': sys.argv[9],
-    'registry_file': '/var/lib/drlink/registry.json',
+    'registry_file': '/var/lib/drlink/runtime/client-inventory.json',
     'enrollments_dir': '/var/lib/drlink/enrollments',
     'bootstrap_dir': '/var/lib/drlink/bootstrap',
     'enrollment_retention_days': 30,
     'token_file': '/etc/frp/server_token',
-    'access_control_file': '/var/lib/drlink/access-control.json',
-    'service_profiles_file': '/var/lib/drlink/service-profiles.json',
-    'egress_control_file': str(_preserved(
-        'egress_control_file',
-        'FRP_EGRESS_CONTROL_FILE',
-        '/var/lib/drlink/egress-control.json',
-    )),
+    'control_db_file': '/var/lib/drlink/drlink.db',
     'access_conn_log_file': '/var/log/drlink/access/connections.jsonl',
     'egress_conn_log_file': str(_preserved(
         'egress_conn_log_file',
@@ -2218,7 +2210,7 @@ frp_server_main() {
   fi
 
   local etc_frp etc_proj var_lib version_file token_file frps_toml
-  local registry_file access_control_file service_profiles_file egress_control_file backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_tcp_egress unit_mcp_bridge unit_frontend sbin_dir bin_dir
+  local registry_file control_db_file legacy_registry backups_dir lib_dir unit_frps unit_alloc unit_access unit_egress unit_tcp_egress unit_mcp_bridge unit_frontend sbin_dir bin_dir
   local frontend_conf toml_backup
   etc_frp="$(frp_server_fs /etc/frp)"
   etc_proj="$(frp_server_fs /etc/drlink)"
@@ -2227,9 +2219,9 @@ frp_server_main() {
   token_file="$(frp_server_fs /etc/frp/server_token)"
   frps_toml="$(frp_server_fs /etc/frp/frps.toml)"
   frontend_conf="$(frp_server_fs /etc/drlink/frontend.conf)"
-  registry_file="$(frp_server_fs /var/lib/drlink/registry.json)"
-  access_control_file="$(frp_server_fs /var/lib/drlink/access-control.json)"
-  egress_control_file="$(frp_server_fs /var/lib/drlink/egress-control.json)"
+  registry_file="$(frp_server_fs /var/lib/drlink/runtime/client-inventory.json)"
+  control_db_file="$(frp_server_fs /var/lib/drlink/drlink.db)"
+  legacy_registry="$(frp_server_fs /var/lib/drlink/registry.json)"
   backups_dir="$(frp_server_fs /var/lib/drlink/backups)"
   lib_dir="$(frp_server_fs /usr/local/lib/drlink)"
   unit_frps="$(frp_server_fs /etc/systemd/system/drlink-server.service)"
@@ -2243,7 +2235,7 @@ frp_server_main() {
   bin_dir="$(frp_server_fs /usr/local/bin)"
 
   local existing_install=0
-  if [[ -f "$(frp_server_config_path)" || -s "$token_file" || -f "$registry_file" ]]; then
+  if [[ -f "$(frp_server_config_path)" || -s "$token_file" || -f "$registry_file" || -f "$legacy_registry" || -f "$control_db_file" ]]; then
     existing_install=1
   fi
   local previous_project
@@ -2301,10 +2293,10 @@ frp_server_main() {
     return 1
   fi
 
-  mkdir -p "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir" "$lib_dir" "$sbin_dir" "$bin_dir" \
+  mkdir -p "${var_lib}/enrollments" "${var_lib}/bootstrap" "${var_lib}/runtime" "$backups_dir" "$lib_dir" "$sbin_dir" "$bin_dir" \
     "$(dirname "$unit_frps")"
   frp_server_ensure_sandbox_dirs
-  chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "${var_lib}/enrollments" "${var_lib}/bootstrap" "$backups_dir"
+  chmod 700 "$etc_frp" "$etc_proj" "$var_lib" "${var_lib}/enrollments" "${var_lib}/bootstrap" "${var_lib}/runtime" "$backups_dir"
   if [[ ${EUID} -eq 0 ]]; then
     chown root:root "$etc_frp" "$etc_proj" "$var_lib" "$(frp_server_fs /var/log/drlink)" 2>/dev/null || true
   fi
@@ -2352,6 +2344,12 @@ frp_server_main() {
   REGISTRY_ACTION=""
   MIGRATED_CLIENTS="0"
   PRESERVED_PORTS="0"
+  # Prefer new derived inventory path; migrate literal registry.json once when present.
+  if [[ ! -f "$registry_file" && -f "$legacy_registry" ]]; then
+    mkdir -p "$(dirname "$registry_file")"
+    cp -a "$legacy_registry" "$registry_file"
+    chmod 600 "$registry_file"
+  fi
   registry_out="$(python3 "$BASE_DIR/server/migrate_token.py" init-registry \
     --registry "$registry_file" \
     --ports "$ACTIVE_PORTS" \
@@ -2365,84 +2363,38 @@ frp_server_main() {
         ;;
     esac
   done <<< "$registry_out"
-  [[ -f "$registry_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "registry.json is missing"; return 1; }
+  [[ -f "$registry_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "client-inventory.json is missing"; return 1; }
   chmod 600 "$registry_file"
 
-  if [[ ! -f "$access_control_file" ]]; then
-    if ! python3 - "$access_control_file" "$BASE_DIR/lib/frp_access_control.py" <<'PY'
+  # Initialize SQLite control plane (authoritative). Obsolete JSON policy stores
+  # are not created on fresh installs.
+  if ! python3 - "$var_lib" "$BASE_DIR/lib/drlink_control_db.py" "$BASE_DIR/lib/drlink_control_plane.py" <<'PY'
 import importlib.util
 import sys
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("frp_access_control", sys.argv[2])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-path = Path(sys.argv[1])
-mod.save_access_state(mod.empty_access_state(), path=path)
+root = Path(sys.argv[1])
+# Deploy root is parent of var/
+deploy = root.parent.parent if root.name == "drlink" else root
+for mod_path in (sys.argv[2], sys.argv[3]):
+    name = Path(mod_path).stem
+    spec = importlib.util.spec_from_file_location(name, mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    globals()[name] = mod
+plane = drlink_control_plane.ControlPlane(str(deploy))
+try:
+    plane.status()
+finally:
+    plane.close()
+print("CONTROL_DB_OK")
 PY
-    then
-      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create access-control.json"
-      return 1
-    fi
+  then
+    frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to initialize drlink.db control plane"
+    return 1
   fi
-  [[ -f "$access_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "access-control.json is missing"; return 1; }
 
-  service_profiles_file="$(frp_server_fs /var/lib/drlink/service-profiles.json)"
-  if [[ ! -f "$service_profiles_file" ]]; then
-    if ! python3 - "$service_profiles_file" "$BASE_DIR/lib/frp_service_profiles.py" <<'PY'
-import importlib.util, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location("frp_service_profiles", sys.argv[2])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-mod.save_profiles_state(mod.empty_profiles_state(), path=path)
-print(path)
-PY
-    then
-      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create service-profiles.json"
-      return 1
-    fi
-  fi
-  chmod 600 "$service_profiles_file"
-  [[ -f "$service_profiles_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "service-profiles.json is missing"; return 1; }
-  chmod 600 "$access_control_file"
-
-  if [[ ! -f "$egress_control_file" ]]; then
-    if ! python3 - "$egress_control_file" "$BASE_DIR/lib/frp_egress_control.py" <<'PY'
-import importlib.util, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-mod.save_egress_state(mod.empty_egress_state(), path=path)
-print(path)
-PY
-    then
-      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to create egress-control.json"
-      return 1
-    fi
-  else
-    # Upgrade/reinstall: migrate legacy egress schema to current and persist.
-    if ! python3 - "$egress_control_file" "$BASE_DIR/lib/frp_egress_control.py" <<'PY'
-import importlib.util, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location("frp_egress_control", sys.argv[2])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-state = mod.load_egress_state(path=path, persist_migration=True)
-print("EGRESS_SCHEMA=%s" % state.get("schema_version"))
-PY
-    then
-      frp_server_fail_after_mutation FILE_COMMIT_FAILED "failed to migrate egress-control.json"
-      return 1
-    fi
-  fi
-  chmod 600 "$egress_control_file"
-  [[ -f "$egress_control_file" ]] || { frp_server_fail_after_mutation FILE_COMMIT_FAILED "egress-control.json is missing"; return 1; }
-
-  # Ensure Controlled Egress keys exist on upgrades without rewriting unrelated config.
+  # Ensure Controlled Egress listen keys exist on upgrades without reintroducing
+  # obsolete egress-control.json authority paths.
   if [[ -f "$(frp_server_fs /etc/drlink/config.json)" ]]; then
     python3 - "$(frp_server_fs /etc/drlink/config.json)" <<'PY' || true
 import json, sys, tempfile, os
@@ -2451,11 +2403,24 @@ path = Path(sys.argv[1])
 cfg = json.loads(path.read_text(encoding="utf-8"))
 changed = False
 defaults = {
-    "egress_control_file": "/var/lib/drlink/egress-control.json",
+    "registry_file": "/var/lib/drlink/runtime/client-inventory.json",
+    "control_db_file": "/var/lib/drlink/drlink.db",
     "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6102,
 }
+# Drop obsolete JSON authority keys from current config.
+for obsolete in (
+    "access_control_file",
+    "egress_control_file",
+    "service_profiles_file",
+):
+    if obsolete in cfg:
+        cfg.pop(obsolete, None)
+        changed = True
+if str(cfg.get("registry_file") or "").endswith("/registry.json"):
+    cfg["registry_file"] = defaults["registry_file"]
+    changed = True
 for key, value in defaults.items():
     if key not in cfg or cfg.get(key) in (None, ""):
         cfg[key] = value
@@ -2477,21 +2442,10 @@ if changed:
             except OSError:
                 pass
 PY
-    # Re-apply egress ACL if the ensure-keys path replaced config.json.
-    python3 - "$(frp_server_fs /etc/drlink/config.json)" "$BASE_DIR/lib/frp_server_config.py" <<'PY' || true
-import importlib.util, sys
-from pathlib import Path
-cfg_path = Path(sys.argv[1])
-mod_path = Path(sys.argv[2])
-if not mod_path.is_file():
-    raise SystemExit(0)
-spec = importlib.util.spec_from_file_location("frp_server_config", str(mod_path))
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-if hasattr(mod, "_reapply_config_egress_permissions"):
-    mod._reapply_config_egress_permissions(cfg_path)
-PY
   fi
+
+  # Obsolete access-control / service-profiles / egress-control JSON stores are
+  # not created. Canonical authority is drlink.db only.
 
   frp_server_install_manifest_files "$lib_dir" "$sbin_dir" "$bin_dir"
   install -m 0644 "$BASE_DIR/server/drlink-server.service" "$unit_frps"
