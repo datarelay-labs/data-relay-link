@@ -5041,5 +5041,26 @@
     "confirmation": "y_n",
     "surface": "",
     "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "synchronize"
+    ],
+    "roles": "client",
+    "category": "system",
+    "summary": "Synchronize Agent Remote Services with the DRLink Server",
+    "detail": "Reconnect processing: allocate pending endpoints, apply deletes, and revalidate catalog dependencies.",
+    "examples": [
+      "system synchronize"
+    ],
+    "args": [],
+    "flags": [],
+    "tail": null,
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": ""
   }
 ]
