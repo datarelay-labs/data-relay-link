@@ -157,19 +157,82 @@ class AIIdentityOAuth(unittest.TestCase):
     def tearDown(self):
         set_wizard_io(None)
         self.plane.close()
-        for k in ("DRLINK_CONFIRM", "DRLINK_SKIP_ACTIVATION", "DRLINK_OAUTH_FORCE_FAIL", "DRLINK_OAUTH_CLIENT_SECRET"):
+        for k in (
+            "DRLINK_CONFIRM",
+            "DRLINK_SKIP_ACTIVATION",
+            "DRLINK_OAUTH_FORCE_FAIL",
+            "DRLINK_OAUTH_CLIENT_SECRET",
+            "DRLINK_OAUTH_AUTHORIZATION_CODE",
+        ):
             os.environ.pop(k, None)
 
-    def test_authorization_code_success(self):
+    def _external_approve(self, session: dict, principal_name: str = "claude") -> str:
+        """TEST-only external authorization-server actor."""
+        approved = self.plane.approve_oauth_pending(session["pending_id"], principal_name=principal_name)
+        return approved["code"]
+
+    def test_authorization_code_without_external_approval_not_verified(self):
         self.plane.set_ai_principal("claude", enabled=True)
-        result = ai_id.verify_authorization_code(self.plane, "claude")
+        with self.assertRaises(ControlPlaneError):
+            ai_id.verify_authorization_code(self.plane, "claude")
+        row = self.plane.get_principal("claude")
+        self.assertNotEqual(str(row["credential_status"]).lower(), "verified")
+
+    def test_authorization_code_success_with_external_approval(self):
+        self.plane.set_ai_principal("claude", enabled=True)
+        session = ai_id.begin_authorization_code(self.plane, "claude")
+        code = self._external_approve(session, "claude")
+        result = ai_id.verify_authorization_code(
+            self.plane,
+            "claude",
+            authorization_code=code,
+            code_verifier=session["verifier"],
+            state=session["state"],
+            redirect_uri=session["redirect_uri"],
+            resource=session["resource"],
+        )
         self.assertEqual(result["auth"], "VERIFIED")
         row = self.plane.get_principal("claude")
         self.assertEqual(str(row["credential_status"]).lower(), "verified")
-        # secrets must not appear in result
         dumped = str(result)
         self.assertNotIn("drauth_", dumped)
         self.assertNotIn("drc_", dumped)
+
+    def test_authorization_code_wrong_pkce_fails(self):
+        self.plane.set_ai_principal("claude", enabled=True)
+        session = ai_id.begin_authorization_code(self.plane, "claude")
+        code = self._external_approve(session, "claude")
+        with self.assertRaises(ControlPlaneError):
+            ai_id.verify_authorization_code(
+                self.plane,
+                "claude",
+                authorization_code=code,
+                code_verifier="wrong-verifier-value-not-pkce",
+                redirect_uri=session["redirect_uri"],
+                resource=session["resource"],
+            )
+
+    def test_authorization_code_replay_fails(self):
+        self.plane.set_ai_principal("claude", enabled=True)
+        session = ai_id.begin_authorization_code(self.plane, "claude")
+        code = self._external_approve(session, "claude")
+        ai_id.verify_authorization_code(
+            self.plane,
+            "claude",
+            authorization_code=code,
+            code_verifier=session["verifier"],
+            redirect_uri=session["redirect_uri"],
+            resource=session["resource"],
+        )
+        with self.assertRaises(ControlPlaneError):
+            ai_id.verify_authorization_code(
+                self.plane,
+                "claude",
+                authorization_code=code,
+                code_verifier=session["verifier"],
+                redirect_uri=session["redirect_uri"],
+                resource=session["resource"],
+            )
 
     def test_authorization_code_failure(self):
         self.plane.set_ai_principal("claude", enabled=True)
@@ -179,21 +242,38 @@ class AIIdentityOAuth(unittest.TestCase):
         row = self.plane.get_principal("claude")
         self.assertNotEqual(str(row["credential_status"]).lower(), "verified")
 
+    def test_client_credentials_without_secret_not_verified(self):
+        self.plane.set_ai_principal("custom-ai", enabled=True)
+        with self.assertRaises(ControlPlaneError):
+            ai_id.verify_client_credentials(self.plane, "custom-ai", client_secret=None)
+        row = self.plane.get_principal("custom-ai")
+        self.assertNotEqual(str(row["credential_status"]).lower(), "verified")
+
     def test_client_credentials_success(self):
         self.plane.set_ai_principal("custom-ai", enabled=True)
-        result = ai_id.verify_client_credentials(self.plane, "custom-ai")
+        issued = self.plane.rotate_ai_credential("custom-ai")
+        secret = issued["token"]
+        result = ai_id.verify_client_credentials(self.plane, "custom-ai", client_secret=secret)
         self.assertEqual(result["auth"], "VERIFIED")
         self.assertNotIn("token", result)
+        self.assertNotIn(secret, str(result))
 
-    def test_client_credentials_failure(self):
+    def test_client_credentials_wrong_secret(self):
         self.plane.set_ai_principal("custom-ai", enabled=True)
+        self.plane.rotate_ai_credential("custom-ai")
         with self.assertRaises(ControlPlaneError):
-            ai_id.verify_client_credentials(self.plane, "custom-ai", client_secret="wrong-secret", force_fail=False)
-        # wrong secret without force_fail
-        row = self.plane.get_principal("custom-ai")
-        # may still be active from rotate attempt — force_fail path:
+            ai_id.verify_client_credentials(
+                self.plane, "custom-ai", client_secret="wrong-secret", force_fail=False
+            )
+
+    def test_client_credentials_other_client_secret(self):
+        self.plane.set_ai_principal("custom-ai", enabled=True)
+        self.plane.set_ai_principal("other-ai", enabled=True)
+        other = self.plane.rotate_ai_credential("other-ai")
         with self.assertRaises(ControlPlaneError):
-            ai_id.verify_client_credentials(self.plane, "custom-ai", force_fail=True)
+            ai_id.verify_client_credentials(
+                self.plane, "custom-ai", client_secret=other["token"], force_fail=False
+            )
 
     def test_display_name_alone_not_verified(self):
         self.plane.set_ai_principal("claude", enabled=True)
@@ -213,7 +293,6 @@ class AIIdentityOAuth(unittest.TestCase):
         )
         v24.set_network_object(self.plane, "ubuntu-prod", type="ip", value="198.51.100.10", oneshot=True)
         v24.set_permission_object(self.plane, "read-only", permissions=["host-info"], oneshot=True)
-        # Cannot create AI Access rule with unverified identity
         with self.assertRaises(ControlPlaneError) as ctx:
             v24.set_ai_access_rule(
                 self.plane,
@@ -226,8 +305,16 @@ class AIIdentityOAuth(unittest.TestCase):
                 oneshot=True,
             )
         self.assertIn("VERIFIED", str(ctx.exception))
-        # Even with enforcement disabled, unauthenticated remains DENY
-        ai_id.verify_authorization_code(self.plane, "claude")
+        session = ai_id.begin_authorization_code(self.plane, "claude")
+        code = self._external_approve(session, "claude")
+        ai_id.verify_authorization_code(
+            self.plane,
+            "claude",
+            authorization_code=code,
+            code_verifier=session["verifier"],
+            redirect_uri=session["redirect_uri"],
+            resource=session["resource"],
+        )
         v24.set_ai_access_rule(
             self.plane,
             "r1",
@@ -239,7 +326,6 @@ class AIIdentityOAuth(unittest.TestCase):
             oneshot=True,
         )
         v24.set_policy_enforcement(self.plane, "ai", False, confirm=True)
-        # Revoke verification
         self.plane.conn.execute(
             "UPDATE ai_principals SET credential_status = 'pending' WHERE name = 'claude'"
         )
@@ -250,7 +336,23 @@ class AIIdentityOAuth(unittest.TestCase):
         self.assertEqual(ev["auth"], "UNAUTHENTICATED")
 
     def test_wizard_ai_identity_auth_code(self):
-        set_wizard_io(ScriptedIO(["1", "y"]))  # Interactive AI, continue
+        class ExternalApproveIO(ScriptedIO):
+            def __init__(self, plane, name, answers):
+                super().__init__(answers)
+                self.plane = plane
+                self.name = name
+
+            def ask(self, prompt):
+                text = str(prompt or "")
+                if "Authorization code" in text:
+                    row = self.plane.conn.execute(
+                        "SELECT id FROM ai_oauth_pending ORDER BY created_at DESC"
+                    ).fetchone()
+                    approved = self.plane.approve_oauth_pending(row["id"], principal_name=self.name)
+                    return approved["code"]
+                return super().ask(prompt)
+
+        set_wizard_io(ExternalApproveIO(self.plane, "claude", ["1", "y"]))
         out = io.StringIO()
         with redirect_stdout(out):
             rc = cli.dispatch(["set", "ai-identity", "claude"], root=self.tmp, plane=self.plane)
@@ -259,7 +361,8 @@ class AIIdentityOAuth(unittest.TestCase):
         self.assertEqual(str(self.plane.get_principal("claude")["credential_status"]).lower(), "verified")
         self.assertNotIn("drauth_", out.getvalue())
 
-    def test_wizard_ai_identity_cancel(self):
+    def test_wizard_ai_identity_cancel_zero_revision(self):
+        rev_before = self.plane.current_revision()
         set_wizard_io(ScriptedIO(["1", "cancel"]))
         out = io.StringIO()
         with redirect_stdout(out):
@@ -267,6 +370,11 @@ class AIIdentityOAuth(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("No changes were applied", out.getvalue())
         self.assertIsNone(self.plane.get_principal("claude"))
+        self.assertEqual(self.plane.current_revision(), rev_before)
+        oauth_clients = self.plane.conn.execute(
+            "SELECT COUNT(*) AS c FROM ai_oauth_clients WHERE client_id = 'claude'"
+        ).fetchone()["c"]
+        self.assertEqual(oauth_clients, 0)
 
 
 class AgentBundleOfflineLifecycle(unittest.TestCase):

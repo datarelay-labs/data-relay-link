@@ -2521,31 +2521,41 @@ Data Relay Link
 
 ```text
 Data Relay Link — Agent Host
-├── 1. Status
-├── 2. Remote Services
-│   ├── List
-│   ├── Create
-│   └── Manage
+├── 1. Remote Services
+│   ├── List Remote Services
+│   ├── Create Remote Service
+│   └── Manage Remote Service
 │
-├── 3. Agent
+├── 2. Agent
 │   ├── Pause
 │   ├── Resume
 │   ├── Restart
-│   ├── Autostart
-│   └── Update
+│   └── Autostart
 │
-├── 4. Configuration
-│   ├── Test
-│   ├── Diff
-│   ├── Apply
-│   └── Export
+├── 3. Configuration
+│   ├── Test Configuration
+│   ├── Diff Configuration
+│   ├── Apply Configuration
+│   └── Export Configuration
 │
-├── 5. Diagnostics
-├── 6. Help
-└── 7. Exit
+├── 4. System
+│   ├── Status
+│   ├── Connection Information
+│   ├── Diagnostics
+│   ├── Support Bundle
+│   ├── Version Information
+│   ├── Updates
+│   │   ├── Update Data Relay Link
+│   │   └── Update Relay Engine
+│   └── Uninstall Data Relay Link
+│
+├── 5. Help
+└── 6. Exit
 ```
 
-The initial screen and `show status` should identify the role clearly:
+Server and Agent Host CLIs use the same public verbs, capitalization, System
+organization, Help behavior, error contract, and discovery model. A supported
+installation operates in exactly one public CLI role:
 
 ```text
 Role: DRLink Server
@@ -2557,6 +2567,11 @@ or:
 Role: Agent Host
 ```
 
+Dual-role / combined Server+Agent CLI mode is out of scope and unsupported in
+v2.4. Do not present a hybrid hierarchy that mixes Server and Agent mutation
+domains.
+
+The initial screen and `show status` should identify the role clearly.
 ---
 
 # 52. AI-assisted configuration principles

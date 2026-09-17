@@ -907,8 +907,13 @@ def run_ai_access_wizard(plane: ControlPlane, name: str) -> int:
 
 
 def run_ai_identity_wizard(plane: ControlPlane, name: str) -> int:
-    """Guided AI Identity connect → OAuth verify → VERIFIED binding."""
+    """Guided AI Identity connect → OAuth verify → VERIFIED binding.
+
+    All configuration remains draft until successful verification. Cancel must
+    leave configuration revision and authoritative AI Identity state unchanged.
+    """
     from drlink_v24_ai_identity import (
+        discard_staged_ai_identity,
         verify_authorization_code,
         verify_client_credentials,
         WizardAuthCancelled,
@@ -916,23 +921,24 @@ def run_ai_identity_wizard(plane: ControlPlane, name: str) -> int:
 
     io = _io()
     existing = plane.get_principal(name)
-    created_here = False
+    existed_before = existing is not None
+    rev_before = plane.current_revision()
     try:
         _emit(io, "Connect AI")
         _emit(io, "==========")
         _emit(io, "Name: %s" % name)
         kind = _ask_choice(io, "Type", ["Interactive AI", "Automation / Custom AI"])
-        if existing is None:
-            plane.set_ai_principal(name, enabled=True)
-            plane.conn.execute(
-                "UPDATE ai_principals SET credential_status = 'pending', auth_mode = 'oauth' "
-                "WHERE name = ? COLLATE NOCASE",
-                (name,),
-            )
-            created_here = True
         if kind.startswith("Interactive"):
-            result = verify_authorization_code(plane, name, io=io)
+            # Staging (no config revision) happens inside begin/verify.
+            result = verify_authorization_code(plane, name, io=io, stage=True)
         else:
+            if not existed_before:
+                # Client Credentials requires a pre-provisioned credential identity.
+                # Stage a pending principal without revision so Cancel stays atomic;
+                # verification still demands an externally supplied secret.
+                from drlink_v24_ai_identity import stage_ai_identity_oauth
+
+                stage_ai_identity_oauth(plane, name)
             result = verify_client_credentials(plane, name, io=io)
         sys.stdout.write(
             "AI Identity verified: %s\nStatus: VERIFIED\nAuth: %s\n"
@@ -940,32 +946,32 @@ def run_ai_identity_wizard(plane: ControlPlane, name: str) -> int:
         )
         return 0
     except (WizardCancelled, WizardAuthCancelled):
-        if created_here:
-            try:
-                row = plane.get_principal(name)
-                if row is not None:
-                    plane.conn.execute("DELETE FROM ai_oauth_clients WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_oauth_pending WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_oauth_codes WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_oauth_tokens WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_sessions WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_principals WHERE id = ?", (row["id"],))
-                    plane.conn.commit()
-            except Exception:
-                pass
+        if not existed_before:
+            discard_staged_ai_identity(plane, name, only_if_unverified=True)
+        # Drop any leftover pending OAuth request rows (non-config).
+        try:
+            plane.conn.execute(
+                "DELETE FROM ai_oauth_pending WHERE principal_id IN "
+                "(SELECT id FROM ai_principals WHERE name = ? COLLATE NOCASE)",
+                (name,),
+            )
+            if not existed_before:
+                discard_staged_ai_identity(plane, name, only_if_unverified=True)
+            plane.conn.commit()
+        except Exception:
+            pass
+        if plane.current_revision() != rev_before:
+            # Should never happen; surface truthfully rather than lying.
+            sys.stdout.write(
+                "ERROR:\nWizard cancel left configuration revision changed.\n\n"
+                "No trusted AI Identity binding was created.\n"
+            )
+            return 1
         sys.stdout.write(_cancel_message())
         return 0
-    except ControlPlaneError as exc:
-        if created_here:
-            try:
-                row = plane.get_principal(name)
-                if row and str(row["credential_status"] or "").lower() not in ("verified", "active"):
-                    plane.conn.execute("DELETE FROM ai_oauth_clients WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_oauth_pending WHERE principal_id = ?", (row["id"],))
-                    plane.conn.execute("DELETE FROM ai_principals WHERE id = ?", (row["id"],))
-                    plane.conn.commit()
-            except Exception:
-                pass
+    except ControlPlaneError:
+        if not existed_before:
+            discard_staged_ai_identity(plane, name, only_if_unverified=True)
         raise
 
 

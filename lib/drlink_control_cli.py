@@ -1065,7 +1065,7 @@ def _system(plane: ControlPlane, rest):
         if len(rest) >= 4 and rest[1] == "entity":
             kwargs["entity_type"] = rest[2]
             kwargs["entity_id"] = rest[3]
-        if len(rest) >= 3 and rest[1] == "ai-principal":
+        if len(rest) >= 3 and rest[1] in ("ai-principal", "ai-identity"):
             kwargs["principal"] = rest[2]
         rows = plane.list_audit(**kwargs)
         for row in rows:
@@ -1075,8 +1075,36 @@ def _system(plane: ControlPlane, rest):
         _run(plane.remove_client, rest[2], revoke_only=True)
         return 0
     if rest[0] == "credential":
+        if len(rest) < 2:
+            raise SystemExit(
+                "usage: system credential rotate|revoke|configure|approve-oauth ..."
+            )
+        if rest[1] == "approve-oauth":
+            # system credential approve-oauth <PENDING-ID> [AI-IDENTITY]
+            # or system credential approve-oauth ai-identity|ai-principal <PENDING-ID> [AI-IDENTITY]
+            args = rest[2:]
+            if args and args[0] in ("ai-principal", "ai-identity"):
+                args = args[1:]
+            if not args:
+                raise SystemExit(
+                    "usage: system credential approve-oauth <PENDING-ID> [AI-IDENTITY]\n"
+                    "DCR/CIMD requests require AI-IDENTITY."
+                )
+            pending_id = args[0]
+            principal = args[1] if len(args) > 1 else None
+            result = _run(plane.approve_oauth_pending, pending_id, principal)
+            sys.stdout.write("Authorization code issued. It is shown once.\n")
+            sys.stdout.write("code=%s\n" % result.get("code"))
+            return 0
         if len(rest) < 4:
-            raise SystemExit("usage: system credential rotate|revoke|configure|approve-oauth ai-principal ...")
+            raise SystemExit(
+                "usage: system credential rotate|revoke|configure ai-identity <NAME> ..."
+            )
+        noun = rest[2]
+        if noun not in ("ai-identity", "ai-principal"):
+            raise SystemExit(
+                "usage: system credential rotate|revoke|configure ai-identity <NAME> ..."
+            )
         if rest[1] == "rotate":
             result = _run(plane.rotate_ai_credential, rest[3])
             token = result.get("token") if isinstance(result, dict) else None
@@ -1100,26 +1128,9 @@ def _system(plane: ControlPlane, rest):
                 sys.stdout.write("OAuth redirect registered.\n")
                 return 0
             raise SystemExit(
-                "usage: system credential configure ai-principal <PRINCIPAL> authentication <static-bearer|oauth>\n"
-                "       system credential configure ai-principal <PRINCIPAL> oauth-redirect <URI>"
+                "usage: system credential configure ai-identity <NAME> authentication <static-bearer|oauth>\n"
+                "       system credential configure ai-identity <NAME> oauth-redirect <URI>"
             )
-        if rest[1] == "approve-oauth":
-            # system credential approve-oauth <PENDING-ID> [PRINCIPAL]
-            # or system credential approve-oauth ai-principal <PENDING-ID> [PRINCIPAL]
-            args = rest[2:]
-            if args and args[0] == "ai-principal":
-                args = args[1:]
-            if not args:
-                raise SystemExit(
-                    "usage: system credential approve-oauth <PENDING-ID> [AI-PRINCIPAL]\n"
-                    "DCR/CIMD requests require AI-PRINCIPAL."
-                )
-            pending_id = args[0]
-            principal = args[1] if len(args) > 1 else None
-            result = _run(plane.approve_oauth_pending, pending_id, principal)
-            sys.stdout.write("Authorization code issued. It is shown once.\n")
-            sys.stdout.write("code=%s\n" % result.get("code"))
-            return 0
         raise SystemExit("Unknown credential operation.")
     if rest[0] == "certificate":
         return _system_certificate(plane, rest[1:])

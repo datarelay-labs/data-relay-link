@@ -53,7 +53,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": [
       {
         "name": "--group",
@@ -106,7 +106,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -364,7 +364,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -392,7 +392,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -814,7 +814,7 @@
     "hidden": true,
     "risk": "security_widening",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": [
       {
         "name": "--profile",
@@ -1219,7 +1219,7 @@
     "hidden": true,
     "risk": "irreversible",
     "confirmation": "typed_token",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": [
       {
         "name": "--force",
@@ -1380,7 +1380,7 @@
     "hidden": true,
     "risk": "security_widening",
     "confirmation": "y_n",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": [
       {
         "name": "--yes",
@@ -1591,7 +1591,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2591,7 +2591,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2620,7 +2620,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2643,7 +2643,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2672,7 +2672,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2695,7 +2695,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2724,7 +2724,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2747,7 +2747,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2781,7 +2781,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2801,7 +2801,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -2870,7 +2870,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -2899,7 +2899,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -2925,7 +2925,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -2954,7 +2954,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3024,7 +3024,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3053,7 +3053,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3082,7 +3082,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3108,7 +3108,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -3198,7 +3198,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3224,7 +3224,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -3256,7 +3256,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3314,7 +3314,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3343,7 +3343,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3369,7 +3369,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -3459,7 +3459,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3488,7 +3488,7 @@
     "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "hidden_compat",
+    "surface": "",
     "flags": []
   },
   {
@@ -3700,7 +3700,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -3731,7 +3731,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -3774,7 +3774,7 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",

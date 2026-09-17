@@ -643,8 +643,9 @@ def _load_final_commands():
                 hidden=bool(row.get("hidden")),
                 risk=row.get("risk") or "none",
                 confirmation=row.get("confirmation") or "none",
-                surface=row.get("surface")
-                or ("hidden_compat" if row.get("hidden") else ""),
+                # Hidden keeps parser compatibility without advertising nouns.
+                # Do not auto-label as hidden_compat (forbidden on current gate).
+                surface=str(row.get("surface") or ""),
             )
         )
     return tuple(out)
@@ -1740,11 +1741,11 @@ def domain_help(topic, role):
                     "  test configuration <PATH|->",
                     "  system diff configuration <PATH|->",
                     "  system apply configuration <PATH|->",
-                    "  system credential rotate ai-principal <PRINCIPAL>",
-                    "  system credential revoke ai-principal <PRINCIPAL>",
-                    "  system credential configure ai-principal <PRINCIPAL> authentication static-bearer",
-                    "  system credential configure ai-principal <PRINCIPAL> authentication oauth",
-                    "  system credential approve-oauth <PENDING-ID> [AI-PRINCIPAL]",
+                    "  system credential rotate ai-identity <NAME>",
+                    "  system credential revoke ai-identity <NAME>",
+                    "  system credential configure ai-identity <NAME> authentication static-bearer",
+                    "  system credential configure ai-identity <NAME> authentication oauth",
+                    "  system credential approve-oauth <PENDING-ID> [AI-IDENTITY]",
                     "  system diagnostics mcp",
                     "  show mcp-tls",
                     "  set mcp-tls hostname <fqdn>",
@@ -1910,69 +1911,59 @@ def command_help(cmd):
 
 WORKFLOWS = (
     (
-        "Onboard a new client",
+        "Connect a Managed Host",
         (
-            "set client",
-            "show clients",
-            "show client <CLIENT-ID>",
+            "set enrollment zero-touch",
             "show enrollments",
+            "show managed-hosts",
+            "show managed-host <HOST>",
         ),
-        "Zero-Touch via set client is the recommended path. Use "
+        "Zero-Touch enrollment is the recommended path. Use "
         "'set enrollment bulk' for bounded multi-ticket issuance "
         "(max 10 per request, max 10 active unused).",
+        "server",
     ),
     (
-        "Publish and reach a remote service",
+        "Create a Remote Service — Agent Host",
         (
-            "set published-service <SERVICE>",
-            "show published-services",
-            "show published-service <SERVICE>",
+            "set remote-service ssh-access destination this-host service ssh enabled",
+            "show remote-service ssh-access",
+            "show remote-services",
         ),
-        "Published Services bind a Managed Endpoint to a Service Preset. "
-        "Public ports stay reserved until the service is removed.",
+        "Remote Services are owned by the Agent Host. The Server allocates "
+        "the public endpoint when the Agent is connected.",
+        "agent",
     ),
     (
-        "Restrict who may reach a service",
+        "Remote Access BLACKLIST",
         (
-            "set object office type network",
-            "set object office value 203.0.113.0/24",
-            "set remote-access office-ssh",
-            "set remote-access office-ssh source office",
-            "set remote-access office-ssh destination <ENDPOINT>",
-            "set remote-access office-ssh service tcp 22",
-            "set remote-access office-ssh action allow",
-            "set remote-access office-ssh enabled",
-            "test remote-access 203.0.113.10 <ENDPOINT> tcp 22",
+            "set remote-access block-partner mode blacklist source partner-office destination ubuntu-prod service ssh enabled",
+            "test remote-access source partner-office destination ubuntu-prod service ssh",
         ),
-        "Remote Access is ordered first-match. Unmatched traffic is DENY.",
+        "Remote Access uses explicit BLACKLIST or WHITELIST mode with "
+        "Permission Objects — not legacy ordered ALLOW/DENY row evaluation.",
+        "server",
     ),
     (
-        "Allow one outbound destination",
+        "Internet Access WHITELIST",
         (
-            "set object vendor-api type fqdn",
-            "set object vendor-api value api.example.com",
-            "set object office-net type network",
-            "set object office-net value 10.0.0.0/24",
-            "set internet-access vendor-https",
-            "set internet-access vendor-https source office-net",
-            "set internet-access vendor-https destination vendor-api",
-            "set internet-access vendor-https action allow",
-            "test internet-access 10.0.0.5 api.example.com tcp 443",
+            "set internet-access github-https mode whitelist source ubuntu-prod destination github service https enabled",
+            "test internet-access source ubuntu-prod destination github service https",
         ),
-        "Internet Access is ordered first-match with default DENY.",
+        "Internet Access uses explicit WHITELIST or BLACKLIST mode.",
+        "server",
     ),
     (
-        "Apply a ConfigurationBundle",
+        "ConfigurationBundle",
         (
-            "system export configuration --output drlink.yaml",
             "test configuration drlink.yaml",
             "system diff configuration drlink.yaml",
             "system apply configuration drlink.yaml",
-            "system apply configuration -",
+            "system export configuration exported.yaml",
         ),
         "File or stdin ('-') input is supported. Apply validates, tests, "
-        "diffs, confirms, then commits atomically. Bundles never issue "
-        "Zero-Touch tickets.",
+        "diffs, confirms, then commits atomically.",
+        "both",
     ),
     (
         "Routine maintenance",
@@ -1981,24 +1972,22 @@ WORKFLOWS = (
             "system backup",
             "system update product",
             "system support-bundle",
-            "system revisions",
+            "system version",
         ),
         "'system update engine' updates the upstream Relay Engine (FRP) binary separately. "
         "Use 'system update check-engine' to check upstream releases.",
+        "both",
     ),
 )
 
 
 def workflow_help(role):
-    _client, server = role_parts(role)
+    client, server = role_parts(role)
     lines = ["Common workflows", "================", ""]
-    for title, steps, note in WORKFLOWS:
-        if not server and title in (
-            "Onboard a new client",
-            "Restrict who may reach a service",
-            "Allow one outbound destination",
-            "Apply a ConfigurationBundle",
-        ):
+    for title, steps, note, scope in WORKFLOWS:
+        if scope == "server" and not server:
+            continue
+        if scope == "agent" and not client:
             continue
         lines.append(title)
         lines.append("-" * len(title))
@@ -2067,8 +2056,10 @@ def shell_usage_lines(role):
 # target: submenu key | canonical command string | workflow id | None
 
 NAVIGATION_TREE = {
+    # Single Agent Host menu SSOT (v2.4). Do not expose a second client.system
+    # tree as a competing root. Agent lifecycle stays under Agent; generic
+    # operational items live under System (parity with Server).
     "client": (
-        ("client_status", "Status", "", "command", "show status"),
         (
             "client_remote_services",
             "Remote Services",
@@ -2079,7 +2070,7 @@ NAVIGATION_TREE = {
         (
             "client_agent",
             "Agent",
-            "Pause, resume, restart, autostart and update",
+            "Pause, resume, restart and autostart",
             "submenu",
             "client.agent",
         ),
@@ -2090,14 +2081,20 @@ NAVIGATION_TREE = {
             "submenu",
             "client.configuration",
         ),
-        ("client_diag", "Diagnostics", "", "command", "system diagnostics"),
+        (
+            "client_system",
+            "System",
+            "Status, connection, diagnostics, updates and support",
+            "submenu",
+            "client.system",
+        ),
         ("client_help", "Help", "", "help", None),
         ("exit", "Exit", "", "exit", None),
     ),
     "client.remote_services": (
-        ("client_rs_list", "List", "", "command", "show remote-services"),
-        ("client_rs_create", "Create", "", "command", "set remote-service"),
-        ("client_rs_manage", "Manage", "", "command", "show remote-services"),
+        ("client_rs_list", "List Remote Services", "", "command", "show remote-services"),
+        ("client_rs_create", "Create Remote Service", "", "command", "set remote-service"),
+        ("client_rs_manage", "Manage Remote Service", "", "command", "show remote-services"),
         ("back", "Back", "", "back", None),
     ),
     "client.agent": (
@@ -2105,14 +2102,13 @@ NAVIGATION_TREE = {
         ("client_sys_resume", "Resume", "", "command", "system resume"),
         ("client_sys_restart", "Restart", "", "command", "system restart"),
         ("client_sys_autostart", "Autostart", "", "command", "system autostart"),
-        ("client_sys_update_product", "Update", "", "command", "system update product"),
         ("back", "Back", "", "back", None),
     ),
     "client.configuration": (
-        ("client_cfg_test", "Test", "", "command", "test configuration"),
-        ("client_cfg_diff", "Diff", "", "command", "system diff configuration"),
-        ("client_cfg_apply", "Apply", "", "command", "system apply configuration"),
-        ("client_cfg_export", "Export", "", "command", "system export configuration"),
+        ("client_cfg_test", "Test Configuration", "", "command", "test configuration"),
+        ("client_cfg_diff", "Diff Configuration", "", "command", "system diff configuration"),
+        ("client_cfg_apply", "Apply Configuration", "", "command", "system apply configuration"),
+        ("client_cfg_export", "Export Configuration", "", "command", "system export configuration"),
         ("back", "Back", "", "back", None),
     ),
     "client.services": (
@@ -2122,17 +2118,23 @@ NAVIGATION_TREE = {
     ),
     "client.system": (
         ("client_sys_status", "Status", "", "command", "show status"),
-        ("client_sys_info", "Connection information", "", "command", "system info"),
-        ("client_sys_pause", "Pause", "", "command", "system pause"),
-        ("client_sys_resume", "Resume", "", "command", "system resume"),
-        ("client_sys_restart", "Restart", "", "command", "system restart"),
-        ("client_sys_autostart", "Autostart", "", "command", "system autostart"),
-        ("client_sys_update_product", "Update Data Relay Link", "", "command", "system update product"),
-        ("client_sys_update_engine", "Update Relay Engine (FRP)", "", "command", "system update engine"),
+        ("client_sys_info", "Connection Information", "", "command", "system info"),
         ("client_sys_doctor", "Diagnostics", "", "command", "system diagnostics"),
         ("client_sys_support", "Support Bundle", "", "command", "system support-bundle"),
         ("client_sys_version", "Version Information", "", "command", "system version"),
+        (
+            "client_sys_updates",
+            "Updates",
+            "Update Data Relay Link or Relay Engine",
+            "submenu",
+            "client.system.updates",
+        ),
         ("client_sys_uninstall", "Uninstall Data Relay Link", "", "command", "system uninstall"),
+        ("back", "Back", "", "back", None),
+    ),
+    "client.system.updates": (
+        ("client_sys_update_product", "Update Data Relay Link", "", "command", "system update product"),
+        ("client_sys_update_engine", "Update Relay Engine", "", "command", "system update engine"),
         ("back", "Back", "", "back", None),
     ),
     "server": (

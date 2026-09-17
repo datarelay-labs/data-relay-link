@@ -317,6 +317,114 @@ def load_agent_identity(root: Optional[str] = None) -> dict:
     }
 
 
+def load_agent_server_endpoint(root: Optional[str] = None) -> Optional[tuple[str, int]]:
+    """Return configured Agent→Server management endpoint (host, port) or None.
+
+    Local SQLite availability is intentionally not treated as Server reachability.
+    """
+    base = Path(root) if root else Path("/")
+    # Explicit connection info written by enrollment / Apply.
+    for rel in (
+        "etc/frp/server-endpoint.json",
+        "var/lib/drlink/server-endpoint.json",
+        "etc/drlink/server-endpoint.json",
+    ):
+        path = base / rel
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                data = None
+            if isinstance(data, dict):
+                host = str(data.get("host") or data.get("server_addr") or data.get("addr") or "").strip()
+                port = data.get("port") or data.get("server_port") or data.get("allocator_port")
+                if host and port:
+                    try:
+                        return host, int(port)
+                    except (TypeError, ValueError):
+                        pass
+    # client-state may carry allocator / server URL fragments.
+    state_path = base / "etc/frp/client-state.json"
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            state = None
+        if isinstance(state, dict):
+            host = str(state.get("server_addr") or state.get("server_host") or "").strip()
+            port = state.get("server_port") or state.get("allocator_port")
+            if host and port:
+                try:
+                    return host, int(port)
+                except (TypeError, ValueError):
+                    pass
+            for key in ("allocator_public_url", "server_url", "enroll_url"):
+                url = str(state.get(key) or "").strip()
+                if not url:
+                    continue
+                parsed = _parse_host_port_from_url(url)
+                if parsed:
+                    return parsed
+    # frpc.toml / frpc.ini serverAddr + serverPort
+    for rel in ("etc/frp/frpc.toml", "etc/frp/frpc.ini"):
+        path = base / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        host = None
+        port = None
+        for line in text.splitlines():
+            raw = line.split("#", 1)[0].strip()
+            if not raw or "=" not in raw:
+                continue
+            key, val = raw.split("=", 1)
+            key = key.strip().lower()
+            val = val.strip().strip('"').strip("'")
+            if key in ("serveraddr", "server_addr"):
+                host = val
+            elif key in ("serverport", "server_port"):
+                try:
+                    port = int(val)
+                except ValueError:
+                    port = None
+        if host and port:
+            return host, port
+    return None
+
+
+def _parse_host_port_from_url(url: str) -> Optional[tuple[str, int]]:
+    text = str(url or "").strip()
+    if not text:
+        return None
+    # Minimal parse without urllib dependency surprises for host:port forms.
+    if "://" not in text:
+        if ":" in text:
+            host, _, port_s = text.rpartition(":")
+            try:
+                return host.strip("[]"), int(port_s)
+            except ValueError:
+                return None
+        return None
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(text)
+    except Exception:
+        return None
+    host = parsed.hostname
+    if not host:
+        return None
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+    if port is None:
+        return None
+    return host, int(port)
+
+
 # ---------------------------------------------------------------------------
 # Access policy mode / enforcement
 # ---------------------------------------------------------------------------
@@ -1539,9 +1647,13 @@ def _server_reachable(plane_db) -> bool:
 
 
 def detect_server_reachable(plane_db=None, root: Optional[str] = None) -> bool:
-    """Server reachability for Agent Remote Service operations.
+    """Real Agent→Server reachability for Remote Service operations.
 
-    Tests may force the value with DRLINK_SERVER_REACHABLE=0|1.
+    Production path probes the configured Server management/control endpoint.
+    Local SQLite health is never treated as Server reachability.
+
+    Tests may force the value with DRLINK_SERVER_REACHABLE=0|1 (fault injection
+    only). Marker files under the Agent root remain supported for lab isolation.
     """
     forced = os.environ.get("DRLINK_SERVER_REACHABLE")
     if forced is not None:
@@ -1556,12 +1668,11 @@ def detect_server_reachable(plane_db=None, root: Optional[str] = None) -> bool:
         online = Path(marker_root) / "var" / "lib" / "drlink" / "agent-server-online"
         if online.exists():
             return True
-    try:
-        if plane_db is not None:
-            plane_db.conn.execute("SELECT 1").fetchone()
-        return True
-    except Exception:
+    endpoint = load_agent_server_endpoint(marker_root)
+    if endpoint is None:
         return False
+    host, port = endpoint
+    return _probe_tcp(host, port, timeout=0.75)
 
 
 def sync_agent_catalog_from_server(plane_db, server_plane) -> None:
@@ -1590,11 +1701,84 @@ def sync_agent_catalog_from_server(plane_db, server_plane) -> None:
         )
 
 
+def _catalog_payload(plane_db, kind: str, name: str) -> Optional[dict]:
+    row = plane_db.conn.execute(
+        "SELECT payload FROM agent_object_catalog WHERE kind = ? AND name = ? COLLATE NOCASE",
+        (kind, name),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        data = json.loads(row["payload"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _destination_dependency_status(plane_db, destination: str, *, root: Optional[str] = None) -> Optional[str]:
+    """Return a DEGRADED reason if destination dependency is missing/changed; else None."""
+    dest = str(destination or "").strip()
+    if not dest:
+        return "Remote Service destination is missing after reconnect."
+    if dest.lower() in ("this-host", "this_host", "self"):
+        return None
+    identity = load_agent_identity(root or getattr(plane_db, "root", None))
+    host_name = identity.get("hostname") or identity.get("label") or ""
+    if host_name and dest.lower() == host_name.lower():
+        return None
+    obj = plane_db.get_object(dest) if hasattr(plane_db, "get_object") else None
+    catalog = _catalog_payload(plane_db, "network-object", dest)
+    if obj is None and catalog is None:
+        return (
+            "Required Network Object / Managed Host destination '%s' is missing or invalid after reconnect."
+            % dest
+        )
+    if catalog:
+        ctype = str(catalog.get("type") or "").lower()
+        if ctype == "network":
+            return (
+                "Required destination '%s' is a CIDR Network Object and is not a valid single target after reconnect."
+                % dest
+            )
+        values = catalog.get("values")
+        if isinstance(values, list) and len(values) == 0:
+            return (
+                "Required Network Object / Managed Host destination '%s' has no address values after reconnect."
+                % dest
+            )
+    if obj is not None and obj.get("type") == "network":
+        return (
+            "Required destination '%s' is a CIDR Network Object and is not a valid single target after reconnect."
+            % dest
+        )
+    return None
+
+
+def _service_dependency_status(plane_db, svc_name: str) -> Optional[str]:
+    sobj = get_service_object(plane_db, svc_name)
+    catalog = _catalog_payload(plane_db, "service-object", svc_name)
+    if not sobj and not catalog:
+        return "Required Service Object '%s' is missing or invalid after reconnect." % svc_name
+    meta = sobj if sobj is not None else catalog
+    stype = str(meta.get("type") if isinstance(meta, dict) else meta["type"]).lower()
+    if stype == "udp":
+        return (
+            "Required Service Object '%s' uses UDP; Remote Service supports TCP and Fixed TCP only."
+            % svc_name
+        )
+    try:
+        port = int(meta.get("port") if isinstance(meta, dict) else meta["port"])
+    except (TypeError, ValueError, KeyError):
+        return "Required Service Object '%s' is missing a valid port after reconnect." % svc_name
+    if port < 1 or port > 65535:
+        return "Required Service Object '%s' has an invalid port after reconnect." % svc_name
+    return None
+
+
 def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -> dict:
     """Reconnect synchronization: allocate pending endpoints, apply deletes, revalidate deps."""
     if not detect_server_reachable(plane_db, root):
         return {"status": "OFFLINE", "updated": 0}
-    identity = load_agent_identity(root or getattr(plane_db, "root", None))
     updated = 0
     # Process delete_pending tombstones
     for row in list(
@@ -1607,24 +1791,18 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
         plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
     ):
         svc_name = row["service_object"]
-        sobj = get_service_object(plane_db, svc_name)
-        if not sobj:
-            catalog = plane_db.conn.execute(
-                "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
-                (svc_name,),
-            ).fetchone()
-            if not catalog:
-                plane_db.conn.execute(
-                    "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
-                    "WHERE name = ?",
-                    (
-                        "Required Service Object '%s' is missing or invalid after reconnect." % svc_name,
-                        utc_now_iso(),
-                        row["name"],
-                    ),
-                )
-                updated += 1
-                continue
+        dest_reason = _destination_dependency_status(plane_db, row["destination"], root=root)
+        svc_reason = _service_dependency_status(plane_db, svc_name)
+        reason = dest_reason or svc_reason
+        if reason:
+            plane_db.conn.execute(
+                "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                "WHERE name = ?",
+                (reason, utc_now_iso(), row["name"]),
+            )
+            plane_db.conn.commit()
+            updated += 1
+            continue
         # Re-apply to allocate pending endpoints / refresh HEALTHY
         set_remote_service_agent(
             plane_db,
