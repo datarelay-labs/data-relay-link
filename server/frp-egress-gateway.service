@@ -21,7 +21,7 @@ ProtectSystem=strict
 # Least privilege: writable service log dir + runtime only. Policy/config are
 # read-only. Shared /var/log/drlink stays traverse-only (not writable).
 ReadWritePaths=/var/log/drlink/egress /run/drlink/egress
-ReadOnlyPaths=/etc/drlink/config.json /var/lib/drlink/egress-control.json
+ReadOnlyPaths=/etc/drlink/config.json /var/lib/drlink/drlink.db /var/lib/drlink/drlink.db-wal /var/lib/drlink/drlink.db-shm /var/lib/drlink/runtime
 # Outbound TCP to approved Internet destinations.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 

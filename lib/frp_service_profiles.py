@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Server-owned Service Profiles (creation templates only).
 
-Authoritative state lives in /var/lib/drlink/service-profiles.json.
+LEGACY/MIGRATION state previously lived in /var/lib/drlink/service-profiles.json.
 
 Profiles seed client service drafts. They never store remote_port, CLIENT ID,
 Service ID, or ACL assignments. Editing or deleting a profile must not mutate
@@ -334,7 +334,7 @@ def require_profiles_state(path: Optional[Path] = None, cfg: Optional[dict] = No
     path = path or service_profiles_path(cfg)
     if not path.exists():
         raise ProfileError(
-            "service-profiles.json is missing (authoritative profile store required)"
+            "service-profiles.json is missing (legacy service-profiles.json missing (use published-service/presets))"
         )
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

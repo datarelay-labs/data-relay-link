@@ -2,7 +2,8 @@
 """Shared Controlled Egress runtime primitives (DNS / connect / HE / relay).
 
 Used by the HTTP/HTTPS forward-proxy gateway and Fixed TCP Egress runtime.
-Policy authorization remains in frp_egress_control (single policy engine).
+Internet Access policy authority is the SQLite control plane via
+drlink_runtime_policy; destination DNS/SSRF validation remains here.
 """
 from __future__ import annotations
 
@@ -63,6 +64,10 @@ def _load_module(name: str, rel: str):
 
 EG = _load_module("frp_egress_control", "frp_egress_control.py")
 FP = _load_module("frp_policy_fingerprint", "frp_policy_fingerprint.py")
+try:
+    RP = _load_module("drlink_runtime_policy", "drlink_runtime_policy.py")
+except ImportError:
+    RP = None
 
 
 def audit_safe_hostname(hostname: Optional[str] = None) -> str:
@@ -343,11 +348,10 @@ def happy_eyeballs_connect(
 
 
 class PolicyCache:
-    """Policy load plane: validate → compile snapshot → generation.
+    """Canonical Internet Access policy load plane (SQLite SSOT).
 
-    Invalid reload enters unhealthy fail-closed (all authorize DENY). Last-good
-    snapshot is retained for doctor/diagnostics only and is NOT used for live
-    authorization while unhealthy.
+    egress-control.json is not authoritative. Invalid/mismatched control-plane
+    reload enters unhealthy fail-closed (all authorize DENY).
     """
 
     def __init__(self, config_path: Path):
@@ -359,40 +363,98 @@ class PolicyCache:
         self.cfg = {}
         self.load_error = "not loaded"
         self.engine = EG.PolicyEngine()
+        self._cp = None
+        self.plane = None
+        self._RP = RP
+        if RP is not None:
+            try:
+                self._cp = RP.ControlPlaneCache(config_path)
+            except Exception as exc:
+                self.load_error = "control plane unavailable: %s" % exc
+        else:
+            self.load_error = "control plane unavailable: drlink_runtime_policy missing"
         self.reload(force=True)
 
     def reload(self, force: bool = False) -> None:
         with self.lock:
+            if self._cp is None or self._RP is None:
+                self.engine.mark_unhealthy(self.load_error or "control plane unavailable")
+                return
             try:
-                self.cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-                self.path = EG.egress_control_path(self.cfg)
-                fp = FP.policy_file_fingerprint(self.path)
-                if not force and fp == self.fingerprint and self.load_error is None:
-                    snap = self.engine.snapshot()
-                    if snap is not None and snap.healthy:
-                        return
-                if not self.path.exists():
-                    self.fingerprint = fp
-                    self.mtime = fp[4]
-                    self.load_error = "%s missing" % self.path.name
+                self._cp.reload(force=force)
+                self.cfg = dict(self._cp.cfg)
+                self.plane = self._cp.plane
+                self.fingerprint = self._cp.fingerprint
+                self.load_error = self._cp.load_error
+                if self.load_error or self.plane is None:
+                    self.engine.mark_unhealthy(self.load_error or "control plane unavailable")
+                    return
+                gen = self._RP.generation_status(self.plane, "internet")
+                if not gen.get("healthy"):
+                    self.load_error = gen.get("error") or "internet policy unhealthy"
                     self.engine.mark_unhealthy(self.load_error)
                     return
-                snap = self.engine.load_from_path(self.path, cfg=self.cfg)
-                self.fingerprint = fp
-                self.mtime = fp[4]
-                self.load_error = None if snap.healthy else (snap.load_error or "unhealthy")
+                # Keep PolicyEngine generation aligned with DB revision for session revalidation.
+                rev = int(gen.get("revision") or 0)
+                with self.engine._lock:
+                    self.engine._generation = rev
+                    self.engine._snapshot = EG.compile_policy_snapshot(
+                        {
+                            "schema_version": EG.EGRESS_SCHEMA_VERSION,
+                            "egress_profiles": {},
+                            "tcp_relays": {},
+                        },
+                        generation=rev,
+                        healthy=True,
+                    )
+                    self.engine._last_good = self.engine._snapshot
+                self.path = self._RP.runtime_dir(self.plane.root) / "internet-access.json"
+                self.load_error = None
             except Exception as exc:
                 self.load_error = str(exc)
                 self.engine.mark_unhealthy(str(exc))
 
     def snapshot(self):
-        """Return (state_or_None, load_error, cfg, policy_snapshot)."""
+        """Return (plane_or_None, load_error, cfg, policy_snapshot)."""
         with self.lock:
             self.reload(force=False)
             snap = self.engine.snapshot()
-            if snap is None or not snap.healthy:
+            if self.plane is None or self.load_error or snap is None or not snap.healthy:
                 return None, (self.load_error or "policy unhealthy"), dict(self.cfg), snap
-            return dict(snap.state), None, dict(self.cfg), snap
+            return self.plane, None, dict(self.cfg), snap
+
+    def authorize(
+        self,
+        *,
+        source_ip: str,
+        hostname: str,
+        port: int,
+        protocol: str,
+        method=None,
+    ) -> dict:
+        plane, load_error, _cfg, snap = self.snapshot()
+        if plane is None or self._RP is None:
+            return {
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_POLICY_UNHEALTHY if hasattr(EG, "REASON_POLICY_UNHEALTHY") else "POLICY_UNHEALTHY",
+                "load_error": load_error,
+                "policy_generation": snap.generation if snap else None,
+            }
+        decision = self._RP.authorize_internet(
+            plane,
+            source_ip=source_ip,
+            hostname=hostname,
+            port=int(port),
+            protocol=protocol,
+        )
+        # Normalize to egress decision constants.
+        if decision.get("decision") == self._RP.DECISION_ALLOW:
+            decision["decision"] = EG.DECISION_ALLOW
+        else:
+            decision["decision"] = EG.DECISION_DENY
+        if method is not None:
+            decision["method"] = method
+        return decision
 
 
 def session_still_authorized(
@@ -401,16 +463,25 @@ def session_still_authorized(
     session: dict,
     update_generation: Optional[Callable[[str, int], None]] = None,
 ) -> bool:
-    """Option B: re-authorize against current compiled snapshot only."""
-    _state, _err, _cfg, snap = cache.snapshot()
-    decision = EG.authorize_against_snapshot(
-        snap,
-        source_ip=session["source_ip"],
-        hostname=session["hostname"],
-        port=int(session["port"]),
-        protocol=session["protocol"],
-        method=session.get("method"),
-    )
+    """Option B: re-authorize against current canonical Internet Access policy."""
+    if hasattr(cache, "authorize"):
+        decision = cache.authorize(
+            source_ip=session["source_ip"],
+            hostname=session["hostname"],
+            port=int(session["port"]),
+            protocol=session["protocol"],
+            method=session.get("method"),
+        )
+    else:
+        _state, _err, _cfg, snap = cache.snapshot()
+        decision = EG.authorize_against_snapshot(
+            snap,
+            source_ip=session["source_ip"],
+            hostname=session["hostname"],
+            port=int(session["port"]),
+            protocol=session["protocol"],
+            method=session.get("method"),
+        )
     if decision.get("decision") == EG.DECISION_ALLOW:
         gen = decision.get("policy_generation")
         if gen is not None:

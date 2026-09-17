@@ -106,6 +106,67 @@ def _load_client_registry():
 CREG = _load_client_registry()
 
 
+def _load_runtime_policy():
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    candidates = [
+        Path(__file__).resolve().parent / 'drlink_runtime_policy.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'drlink_runtime_policy.py',
+        Path('/usr/local/lib/drlink/drlink_runtime_policy.py'),
+    ]
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'drlink_runtime_policy.py')
+        candidates.insert(0, Path(root) / 'lib' / 'drlink_runtime_policy.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('drlink_runtime_policy', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+RP = _load_runtime_policy()
+
+
+def sync_enrollment_to_control_plane(cfg, client, machine_id):
+    """Persist enrolled client inventory into SQLite (authoritative).
+
+    registry.json remains an enrollment transport/derived artifact for this
+    release path but must not remain the policy/inventory SSOT.
+    """
+    if RP is None or not isinstance(client, dict) or not machine_id:
+        return
+    try:
+        plane = RP.open_plane(cfg)
+    except Exception as exc:
+        print('allocator control-plane open failed: %s' % exc, flush=True)
+        return
+    try:
+        addresses = []
+        observed = client.get('observed') if isinstance(client.get('observed'), dict) else {}
+        for key in ('source_ip', 'last_source_ip'):
+            addr = str(observed.get(key) or client.get(key) or '').strip()
+            if addr:
+                addresses.append({'address': addr, 'active': True})
+        RP.sync_enrolled_client(
+            plane,
+            client_id=str(machine_id),
+            hostname=str(client.get('hostname') or ''),
+            label=str(client.get('label') or ''),
+            description=str(client.get('note') or client.get('description') or ''),
+            services=client.get('services') if isinstance(client.get('services'), dict) else {},
+            addresses=addresses,
+            connected=True,
+        )
+    except Exception as exc:
+        print('allocator control-plane sync failed: %s' % exc, flush=True)
+    finally:
+        try:
+            plane.close()
+        except Exception:
+            pass
+
+
 def _load_machine_id():
     for path in (
         Path(__file__).resolve().parent / 'frp_machine_id.py',
@@ -2058,6 +2119,7 @@ class Allocator:
 
                         client['services'] = updated
                         self.save_registry(state)
+                        sync_enrollment_to_control_plane(self.cfg, client, machine_id)
 
                         if pending_nonce:
                             try:
@@ -2190,6 +2252,7 @@ class Allocator:
 
                         client['services'] = updated
                         self.save_registry(state)
+                        sync_enrollment_to_control_plane(self.cfg, client, machine_id)
 
                         def _rollback_enrollment_attempt():
                             if previous_client is None:

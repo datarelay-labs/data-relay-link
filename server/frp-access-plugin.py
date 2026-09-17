@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""FRP NewUserConn HTTP plugin for Service Access Lists.
+"""FRP NewUserConn HTTP plugin for canonical Remote Access policy.
 
 Listens on loopback only. frps POSTs NewUserConn events; this process
-returns reject=true/false. ALLOWLIST failures fail closed. Connection
-logging is best-effort and never changes the authorization decision.
+returns reject=true/false. SQLite control-plane policy is authoritative.
+Connection logging is best-effort and never changes the authorization decision.
 """
 from __future__ import annotations
 
@@ -47,8 +47,12 @@ def _load_module(name: str, rel: str):
     raise SystemExit("ERROR: missing %s" % rel)
 
 
-ACL = _load_module("frp_access_control", "frp_access_control.py")
-FP = _load_module("frp_policy_fingerprint", "frp_policy_fingerprint.py")
+RP = _load_module("drlink_runtime_policy", "drlink_runtime_policy.py")
+# Optional audit helper — logging must never affect allow/deny.
+try:
+    ACL = _load_module("frp_access_control", "frp_access_control.py")
+except SystemExit:
+    ACL = None
 try:
     _BOUNDED = _load_module("frp_bounded_server", "frp_bounded_server.py")
     _BOUNDED_LOAD_ERROR = None
@@ -56,45 +60,21 @@ except SystemExit as exc:
     _BOUNDED = None
     _BOUNDED_LOAD_ERROR = str(exc) or "ERROR: missing frp_bounded_server.py"
 
-
-def _load_registry_validator():
-    """Reuse allocator registry schema validation (no soft-empty)."""
-    import importlib.util
-
-    here = Path(__file__).resolve()
-    candidates = [
-        here.parent / "frp-port-allocator.py",
-        Path("/usr/local/lib/drlink/frp-port-allocator.py"),
-    ]
-    if ROOT:
-        candidates.insert(1, Path(ROOT) / "usr/local/lib/drlink/frp-port-allocator.py")
-    for path in candidates:
-        if path.is_file():
-            spec = importlib.util.spec_from_file_location(
-                "frp_port_allocator_validate", str(path)
-            )
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod.require_registry_v2, mod.validate_registry_invariants
-    raise SystemExit("ERROR: missing frp-port-allocator.py for registry validation")
-
-
-_require_registry_v2, _validate_registry_invariants = _load_registry_validator()
-
 ACCESS_MAX_CONCURRENT = int(os.environ.get("FRP_ACCESS_MAX_CONCURRENT", "32"))
 _ACCESS_REQUEST_SLOTS = threading.BoundedSemaphore(ACCESS_MAX_CONCURRENT)
 
 
 class PolicyCache:
+    """SQLite-backed Remote Access policy cache (access-control.json is not authority)."""
+
     def __init__(self, config_path: Path):
-        self.config_path = config_path
-        self.lock = threading.RLock()
-        # Fingerprints (path+dev+ino+size+mtime_ns); mtime-only aliases kept for tests.
+        self._inner = RP.ControlPlaneCache(config_path)
+        # Test-compat aliases (legacy fingerprint fields unused for authority).
         self.access_fp = None
         self.registry_fp = None
         self.access_mtime = None
         self.registry_mtime = None
-        self.access_state = ACL.empty_access_state()
+        self.access_state = {}
         self.registry = {"schema_version": 2, "clients": {}}
         self.access_path = None
         self.registry_path = None
@@ -103,57 +83,16 @@ class PolicyCache:
         self.reload(force=True)
 
     def reload(self, force: bool = False) -> None:
-        with self.lock:
-            try:
-                self.cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-                self.access_path = ACL.access_control_path(self.cfg)
-                self.registry_path = ACL.registry_path_from_cfg(self.cfg)
-                access_fp = FP.policy_file_fingerprint(self.access_path)
-                reg_fp = FP.policy_file_fingerprint(self.registry_path)
-                if (
-                    not force
-                    and access_fp == self.access_fp
-                    and reg_fp == self.registry_fp
-                    and self.load_error is None
-                ):
-                    return
-                # Authoritative policy/registry must be present. Soft-empty would
-                # PUBLIC-allow missing bindings; fail closed instead.
-                missing = []
-                if not self.access_path.exists():
-                    missing.append("%s missing" % self.access_path.name)
-                if not self.registry_path.exists():
-                    missing.append("%s missing" % self.registry_path.name)
-                if missing:
-                    self.access_fp = access_fp
-                    self.registry_fp = reg_fp
-                    self.access_mtime = access_fp[4]
-                    self.registry_mtime = reg_fp[4]
-                    self.load_error = "; ".join(missing)
-                    return
-                self.access_state = ACL.load_access_state(path=self.access_path, cfg=self.cfg)
-                raw_registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
-                # Same canonical invariants as the allocator — never accept a
-                # registry the control plane would reject.
-                self.registry = _validate_registry_invariants(raw_registry, self.cfg)
-                ACL.validate_access_state(self.access_state)
-                self.access_fp = access_fp
-                self.registry_fp = reg_fp
-                self.access_mtime = access_fp[4]
-                self.registry_mtime = reg_fp[4]
-                self.load_error = None
-            except Exception as exc:
-                self.load_error = str(exc)
+        self._inner.reload(force=force)
+        self.cfg = dict(self._inner.cfg)
+        self.load_error = self._inner.load_error
+        self.fingerprint = self._inner.fingerprint
 
     def snapshot(self):
-        with self.lock:
-            self.reload(force=False)
-            return (
-                dict(self.access_state),
-                dict(self.registry),
-                self.load_error,
-                self.cfg,
-            )
+        plane, load_error, cfg = self._inner.snapshot()
+        self.cfg = dict(cfg)
+        self.load_error = load_error
+        return plane, load_error, cfg
 
 
 def make_handler(cache: PolicyCache, plugin_path: str):
@@ -200,15 +139,25 @@ def make_handler(cache: PolicyCache, plugin_path: str):
             def _handle():
                 parsed = urlparse(self.path)
                 if parsed.path in ("/healthz", "/health"):
-                    access_state, registry, load_error, _cfg = cache.snapshot()
-                    ok = load_error is None
+                    plane, load_error, _cfg = cache.snapshot()
+                    ok = load_error is None and plane is not None
+                    clients = 0
+                    services = 0
+                    if plane is not None:
+                        try:
+                            st = plane.status()
+                            clients = int(st.get("clients") or 0)
+                            services = int(st.get("services") or 0)
+                        except Exception:
+                            pass
                     self._send_json(
                         200 if ok else 503,
                         {
                             "ok": ok,
                             "error": load_error,
-                            "lists": len(access_state.get("access_lists") or {}),
-                            "clients": len((registry.get("clients") or {})),
+                            "clients": clients,
+                            "published_services": services,
+                            "authority": "sqlite",
                         },
                     )
                     return
@@ -244,21 +193,24 @@ def make_handler(cache: PolicyCache, plugin_path: str):
                     )
                     return
 
-                access_state, registry, load_error, cfg = cache.snapshot()
+                plane, load_error, cfg = cache.snapshot()
                 proxy_name = str(content.get("proxy_name") or "")
                 remote_addr = str(content.get("remote_addr") or "")
 
-                if load_error is not None:
-                    # Fail closed when authoritative policy cannot be loaded.
+                if load_error is not None or plane is None:
+                    # Fail closed when authoritative SQLite policy cannot be loaded.
                     event = {
-                        "timestamp": ACL.utc_now_iso(),
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         "proxy_name": proxy_name,
                         "source_ip": remote_addr,
-                        "access_mode": ACL.MODE_ALLOWLIST,
-                        "decision": ACL.DECISION_DENY,
-                        "reason": ACL.REASON_AUTHORIZATION_ERROR,
+                        "decision": RP.DECISION_DENY,
+                        "reason": RP.REASON_DB_UNAVAILABLE,
                     }
-                    ACL.emit_conn_log(event, cfg=cfg)
+                    if ACL is not None:
+                        try:
+                            ACL.emit_conn_log(event, cfg=cfg)
+                        except Exception:
+                            pass
                     self._send_json(
                         200,
                         {
@@ -269,15 +221,18 @@ def make_handler(cache: PolicyCache, plugin_path: str):
                     )
                     return
 
-                verdict = ACL.authorize(
-                    access_state,
-                    registry,
+                verdict = RP.authorize_remote(
+                    plane,
                     proxy_name=proxy_name,
                     source_ip=remote_addr,
                 )
                 # Logging must not affect allow/deny.
-                ACL.emit_conn_log(verdict, cfg=cfg)
-                if verdict.get("decision") == ACL.DECISION_ALLOW:
+                if ACL is not None:
+                    try:
+                        ACL.emit_conn_log(verdict, cfg=cfg)
+                    except Exception:
+                        pass
+                if verdict.get("decision") == RP.DECISION_ALLOW:
                     self._send_json(200, {"reject": False, "unchange": True})
                 else:
                     reason = str(verdict.get("reason") or "denied")
@@ -292,7 +247,7 @@ def make_handler(cache: PolicyCache, plugin_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Data Relay Link Access Control Plugin (NewUserConn)")
+    parser = argparse.ArgumentParser(description="Data Relay Link Remote Access Plugin (NewUserConn)")
     parser.add_argument(
         "--config",
         default="/etc/drlink/config.json",

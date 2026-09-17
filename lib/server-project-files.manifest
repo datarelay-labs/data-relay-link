@@ -42,6 +42,7 @@ project usr/local/lib/drlink/frp_cli_final_commands.json 0644 lib/frp_cli_final_
 project usr/local/lib/drlink/drlink_control_db.py 0644 lib/drlink_control_db.py python
 project usr/local/lib/drlink/drlink_control_plane.py 0644 lib/drlink_control_plane.py python
 project usr/local/lib/drlink/drlink_control_cli.py 0644 lib/drlink_control_cli.py python
+project usr/local/lib/drlink/drlink_runtime_policy.py 0644 lib/drlink_runtime_policy.py python
 project usr/local/lib/drlink/drlink_ai_agent.py 0644 lib/drlink_ai_agent.py python
 project usr/local/lib/drlink/drlink_mcp_bridge.py 0644 lib/drlink_mcp_bridge.py python
 project usr/local/lib/drlink/drlink-mcp-bridge.py 0755 server/drlink-mcp-bridge.py python

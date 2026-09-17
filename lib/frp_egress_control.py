@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Controlled Egress policy plane for Data Relay.
 
-Authoritative state: /var/lib/drlink/egress-control.json
+LEGACY/MIGRATION state previously: /var/lib/drlink/egress-control.json
 
 Separate from inbound Access Control. Default DENY / fail-closed.
 Agentless authorization is source IP/CIDR + FQDN:port allowlists.

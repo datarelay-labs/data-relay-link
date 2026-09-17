@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Data Relay Fixed TCP Egress runtime.
 
-Destination-pinned TCP relay listeners (ports 6200-6299). Policy is evaluated
-from the same egress-control.json engine as HTTP Controlled Egress.
+Destination-pinned TCP relay listeners. Policy is evaluated from the
+canonical SQLite Internet Access rulebase (Fixed TCP cannot bypass it).
 
 Security model:
 - Server-side DNS only
@@ -58,6 +58,10 @@ def _load_module(name: str, rel: str):
 
 EG = _load_module("frp_egress_control", "frp_egress_control.py")
 RT = _load_module("frp_egress_runtime", "frp_egress_runtime.py")
+try:
+    RP = _load_module("drlink_runtime_policy", "drlink_runtime_policy.py")
+except SystemExit:
+    RP = None
 
 
 class TcpEgressState:
@@ -270,14 +274,25 @@ def handle_tcp_client(
                 return
             source_acquired = True
 
-        policy_state, load_error, cfg, snap = state.cache.snapshot()
-        decision = EG.authorize_tcp_relay(
-            policy_state,
-            relay_selector=relay_id,
-            source_ip=source_ip,
-            load_error=load_error,
-            preview=False,
-        )
+        policy_plane, load_error, cfg, snap = state.cache.snapshot()
+        if RP is not None and policy_plane is not None and load_error is None:
+            decision = RP.authorize_fixed_tcp(
+                policy_plane,
+                relay_id=relay_id,
+                source_ip=source_ip,
+            )
+            if decision.get("decision") == RP.DECISION_ALLOW:
+                decision["decision"] = EG.DECISION_ALLOW
+            else:
+                decision["decision"] = EG.DECISION_DENY
+        else:
+            decision = EG.authorize_tcp_relay(
+                None,
+                relay_selector=relay_id,
+                source_ip=source_ip,
+                load_error=load_error or "control plane unavailable",
+                preview=False,
+            )
         if snap is not None:
             decision["policy_generation"] = snap.generation
         if decision.get("decision") != EG.DECISION_ALLOW:
@@ -458,8 +473,20 @@ def ipaddress_compress(ip: str) -> str:
 
 
 def _session_still_authorized(state: TcpEgressState, session: dict) -> bool:
-    _policy, _err, _cfg, snap = state.cache.snapshot()
-    # Re-check relay enabled + profile authorize against snapshot.
+    plane, _err, _cfg, snap = state.cache.snapshot()
+    if RP is not None and plane is not None:
+        decision = RP.authorize_fixed_tcp(
+            plane,
+            relay_id=session.get("relay_id") or "",
+            source_ip=session["source_ip"],
+        )
+        if decision.get("decision") != RP.DECISION_ALLOW:
+            return False
+        gen = decision.get("policy_generation")
+        if gen is not None:
+            state.update_session_generation(session["session_id"], int(gen))
+            session["policy_generation"] = int(gen)
+        return True
     decision = EG.authorize_against_snapshot(
         snap,
         source_ip=session["source_ip"],
@@ -470,27 +497,16 @@ def _session_still_authorized(state: TcpEgressState, session: dict) -> bool:
     )
     if decision.get("decision") != EG.DECISION_ALLOW:
         return False
-    # Also require the relay itself still enabled in current state.
     if snap is None or not snap.healthy:
         return False
-    relays = (snap.state or {}).get("tcp_relays") or {}
-    relay = relays.get(session.get("relay_id"))
-    if not isinstance(relay, dict) or not relay.get("enabled"):
-        return False
-    gen = decision.get("policy_generation")
-    if gen is not None:
-        state.update_session_generation(session["session_id"], int(gen))
-        session["policy_generation"] = int(gen)
     return True
 
 
-def _desired_enabled_relays(state_dict: Optional[dict]) -> dict[str, tuple[str, int]]:
+def _desired_enabled_relays(plane) -> dict[str, tuple[str, int]]:
     desired = {}
-    if not isinstance(state_dict, dict):
+    if plane is None or RP is None:
         return desired
-    for rid, relay in (state_dict.get("tcp_relays") or {}).items():
-        if not isinstance(relay, dict) or not relay.get("enabled"):
-            continue
+    for rid, relay in RP.list_enabled_fixed_tcp(plane).items():
         try:
             addr = str(relay.get("listen_addr") or "0.0.0.0")
             port = int(relay.get("listen_port"))
@@ -501,8 +517,8 @@ def _desired_enabled_relays(state_dict: Optional[dict]) -> dict[str, tuple[str, 
 
 
 def sync_listeners(state: TcpEgressState) -> None:
-    policy_state, _err, _cfg, _snap = state.cache.snapshot()
-    desired = _desired_enabled_relays(policy_state)
+    plane, _err, _cfg, _snap = state.cache.snapshot()
+    desired = _desired_enabled_relays(plane)
     # Stop removed / re-bound relays.
     for rid, server in list(state._servers.items()):
         want = desired.get(rid)

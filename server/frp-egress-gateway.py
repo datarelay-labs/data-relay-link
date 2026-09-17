@@ -653,9 +653,17 @@ def _authorize_policy_only(
     protocol: str,
     connection_id: Optional[str] = None,
 ) -> tuple[dict, Optional[dict]]:
-    """Authorize against compiled policy without DNS/connect/body I/O."""
-    state, load_error, cfg, snap = gw.cache.snapshot()
-    if snap is not None:
+    """Authorize against canonical Internet Access policy without DNS/connect I/O."""
+    _plane, load_error, cfg, snap = gw.cache.snapshot()
+    if hasattr(gw.cache, "authorize"):
+        decision = gw.cache.authorize(
+            source_ip=source_ip,
+            hostname=hostname,
+            port=port,
+            protocol=protocol,
+            method=method,
+        )
+    elif snap is not None:
         decision = EG.authorize_against_snapshot(
             snap,
             source_ip=source_ip,
@@ -666,7 +674,7 @@ def _authorize_policy_only(
         )
     else:
         decision = EG.authorize_request(
-            state,
+            None,
             source_ip=source_ip,
             hostname=hostname,
             port=port,

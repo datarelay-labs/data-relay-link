@@ -886,7 +886,7 @@ def load_server_registry(root=None):
         path = Path(str(root) + str(path))
     if not path.exists():
         raise FileNotFoundError(
-            'registry.json is missing (authoritative registry state required)'
+            'registry.json is missing (legacy registry file missing (migrate to SQLite control plane))'
         )
     state = json.loads(path.read_text(encoding='utf-8'))
     return cfg, path, state

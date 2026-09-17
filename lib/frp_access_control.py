@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Named Access Lists, TTL entries, and connection authorization for Data Relay Link.
 
-Authoritative state lives in /var/lib/drlink/access-control.json.
+LEGACY/MIGRATION state previously lived in /var/lib/drlink/access-control.json.
 Runtime authorization is evaluated by the NewUserConn plugin using an
 in-memory cache derived from that file plus registry.json proxy mapping.
 
@@ -352,7 +352,7 @@ def require_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None
     path = path or access_control_path(cfg)
     if not path.exists():
         raise AccessError(
-            "access-control.json is missing (authoritative Access Control state required)"
+            "access-control.json is missing (legacy access-control.json missing (use SQLite control plane))"
         )
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
