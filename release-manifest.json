@@ -3,7 +3,7 @@
   "project_version": "2.4.0",
   "frp_version": "0.71.0",
   "channel": "development",
-  "git_ref": "9381db3b4004918d582d95e1ac6d0337682cbc58",
+  "git_ref": "56fb654063a6eefbbe7c73b0f5b2456384ca7630",
   "owner": "datarelay-labs",
   "repo": "data-relay-link",
   "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link",
@@ -66,7 +66,7 @@
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "4b389382b9376da2799134f5bc5f1d9a8573436150c3f747c8731943255d79fb"
+      "sha256": "530679f30aff95409efcd6cb6ca09b2b2b48926032960fddce01f6abd9c34737"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
@@ -76,7 +76,7 @@
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "bbdaf5520ad651f54db015c8ecca4d48e1198b91414dae534f226dfb818027aa"
+      "sha256": "78578309deb96d34d4674b73f5959a90d2fb460cd0c30f581f109f825cc50e0e"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",
@@ -89,9 +89,9 @@
       "sha256": "a3da1fc7ad8e4ef0dfba5dfbb2fde0c87a5365fb1355dc7aa2d358e60f4caea4"
     }
   },
-  "source_head": "9381db3b4004918d582d95e1ac6d0337682cbc58",
+  "source_head": "56fb654063a6eefbbe7c73b0f5b2456384ca7630",
   "features": {
     "mcp_included": true
   },
-  "immutable_source_ref": "9381db3b4004918d582d95e1ac6d0337682cbc58"
+  "immutable_source_ref": "56fb654063a6eefbbe7c73b0f5b2456384ca7630"
 }
