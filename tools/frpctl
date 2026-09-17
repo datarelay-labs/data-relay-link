@@ -2660,9 +2660,14 @@ frpctl_status() {
   frpctl_is_client && client=1
   frpctl_is_server && server=1
   if [[ "$client" == "1" && "$server" == "1" ]]; then
+    # Dual-role installs are unsupported as a product mode in v2.4; keep a
+    # minimal split view only for legacy hosts that still have both markers.
     frpctl_status_both
   elif [[ "$client" == "1" ]]; then
-    frpctl_run frp-client status
+    # Agent Host status: prefer control-plane Agent view, fall back to frpc status.
+    if ! frpctl_control_plane_status; then
+      frpctl_run frp-client status
+    fi
   elif [[ "$server" == "1" ]]; then
     frpctl_run frp-server-status
     frpctl_control_plane_status
@@ -3637,8 +3642,14 @@ frpctl_dispatch_canonical() {
       ;;
     show_version) echo; frpctl_print_version; echo ;;
     control_plane)
-      frpctl_require_server || return 1
-      frpctl_control_plane_dispatch "$result"
+      # Shared control-plane dispatcher for Server and Agent Host.
+      # Role-specific resource enforcement lives in drlink_v24_cli /
+      # drlink_control_cli (Agent Host owns Remote Service; Server owns policy).
+      if frpctl_is_server || frpctl_is_client; then
+        frpctl_control_plane_dispatch "$result"
+      else
+        frpctl_require_install || return 1
+      fi
       ;;
     show_clients)
       frpctl_require_server || return 1
