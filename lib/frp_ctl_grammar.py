@@ -131,6 +131,7 @@ CONTROL_PLANE_SYSTEM = frozenset(
         "export",
         "apply",
         "certificate",
+        "synchronize",
     }
 )
 
