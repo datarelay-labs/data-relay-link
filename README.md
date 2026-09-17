@@ -239,6 +239,27 @@ show ai-activity
 
 These are target v2.4.0 grammar; current development code may lag until implementation closure.
 
+## Declarative configuration and AI copy/paste
+
+v2.4.0 stable also targets a `ConfigurationBundle` input for dependent multi-resource changes. It is an idempotent change set against the SQLite-authoritative server state, not a second source of truth.
+
+Canonical operations remain under existing CLI roots:
+
+```text
+system export configuration --output drlink.yaml
+test configuration drlink.yaml
+system diff configuration drlink.yaml
+system apply configuration drlink.yaml
+```
+
+Standard input is supported so an AI can provide one safe SSH copy/paste block without requiring file upload. Simple AI-assisted work should still use one canonical public `drlink` command.
+
+All paths share one Change Plan: validate → test → diff → impact → confirm → transactional commit → revision/audit → runtime activation. Bundles never carry raw Zero-Touch tickets or other secrets.
+
+Zero-Touch issuance is separate from deployment intent: max 10 unique single-use tickets per request, max 10 active unused tickets, default 1-hour TTL, maximum 24-hour TTL.
+
+See [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md).
+
 ## Policy safety
 
 Security-relevant mutations run:
@@ -292,6 +313,7 @@ Start here:
 - [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — technical SSOT.
 - [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX.
 - [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar.
+- [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative configuration, AI copy/paste, and bounded Zero-Touch contract.
 - [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access behavior.
 - [`docs/SECURITY.md`](docs/SECURITY.md) — security boundaries.
 - [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release rules.

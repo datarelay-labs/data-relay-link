@@ -667,14 +667,49 @@ System
 
 1) Status
 2) Server Settings
-3) Audit
-4) Revisions
-5) Backup & Restore
-6) Updates
-7) Diagnostics
-8) Version Information
-9) Back
+3) Configuration
+4) Audit
+5) Revisions
+6) Backup & Restore
+7) Updates
+8) Diagnostics
+9) Version Information
+10) Back
 ```
+
+### 29.1 Configuration
+
+```text
+Configuration
+=============
+
+1) Export redacted configuration
+2) Validate / test configuration
+3) Diff configuration
+4) Apply configuration
+5) Enrollment plans / Zero-Touch batches
+6) Back
+```
+
+The guided workflow and direct commands must invoke the same Change Plan engine.
+
+Applying a bundle always shows validation/tests/diff/security impact before confirmation. Default confirmation is No. Reapplying an equivalent bundle reports `NO CHANGE`.
+
+The UI must clearly distinguish `Enrollment plan` from an issued ticket and from an enrolled Client/Managed Endpoint. Applying a plan does not display or create a ticket.
+
+When issuing Zero-Touch credentials, show the server limits before confirmation:
+
+```text
+Per issuance request : max 10
+Active unused tickets: max 10
+Ticket use count     : 1
+Default TTL          : 1 hour
+Maximum TTL          : 24 hours
+```
+
+If capacity is 7 because 3 valid unused tickets already exist, the UI must report that fact instead of accepting 10 and failing ambiguously.
+
+Raw ticket/install URL is shown once after successful issuance; subsequent inventory shows only non-secret metadata/status.
 
 ## 30. Status
 

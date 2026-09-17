@@ -50,6 +50,10 @@ CONTROL_DB_SCHEMA_VERSION=
 - [ ] Remote Access ordered rulebase implemented.
 - [ ] Internet Access ordered rulebase implemented.
 - [ ] AI Access/MCP included and implemented.
+- [ ] ConfigurationBundle included in the v2.4.0 stable target.
+- [ ] direct CLI, AI-generated CLI, and ConfigurationBundle share one Change Plan/mutation engine.
+- [ ] ConfigurationBundle is an idempotent change set, not a second SSOT.
+- [ ] Zero-Touch ticket issuance is server-bounded to max 10/request and max 10 active unused, unique single-use tickets.
 
 ## 3. SQLite control plane
 
@@ -236,6 +240,34 @@ MCP_AUDIT=
 MCP_REAL_E2E=
 ```
 
+## 14.1 ConfigurationBundle / AI-assisted configuration
+
+- [ ] `apiVersion: drlink.datarelay.run/v1alpha1` / `kind: ConfigurationBundle` schema validated.
+- [ ] file input validated.
+- [ ] standard-input copy/paste validated.
+- [ ] no top-level `apply` root introduced; stable direct roots unchanged.
+- [ ] `test configuration` is non-mutating.
+- [ ] diff is generated against authoritative current state.
+- [ ] identical reapply returns `NO CHANGE`.
+- [ ] omission preserves resources; deletion requires explicit absent state.
+- [ ] multi-resource apply is one authoritative transaction.
+- [ ] reference/security validation occurs before commit.
+- [ ] revision conflict aborts without partial mutation.
+- [ ] broadening/destructive confirmation uses existing impact engine and defaults No.
+- [ ] export is redacted and excludes tickets/secrets/private keys.
+- [ ] direct CLI and equivalent bundle have semantic parity.
+- [ ] AI-generated simple changes use canonical public CLI only.
+- [ ] AI-generated complex changes use a copy/paste ConfigurationBundle and public `drlink` only.
+- [ ] unsupported existing-client local target changes report `CLIENT_ACTION_REQUIRED`.
+- [ ] bundle enrollment plans issue 0 secrets during apply.
+- [ ] Zero-Touch issuance request max = 10.
+- [ ] active unused Zero-Touch tickets max = 10.
+- [ ] each ticket is unique/single-use and consumed atomically.
+- [ ] default TTL = 1 hour; max TTL = 24 hours.
+- [ ] raw ticket/install URL displayed once; server retains verifier/hash, not raw ticket.
+- [ ] expired/revoked tickets release capacity without disconnecting enrolled clients.
+- [ ] YAML/CLI/API cannot override server ticket ceilings.
+
 ## 15. Legacy model removal
 
 - [ ] `registry.json` no longer authoritative.
@@ -349,6 +381,8 @@ Any change resets the pass counter.
 - [ ] Security doc current.
 - [ ] Version policy current.
 - [ ] Changelog only lists qualified scope.
+- [ ] `CONFIGURATION_BUNDLE.md` matches qualified schema/behavior.
+- [ ] ConfigurationBundle/AI copy-paste examples use canonical public CLI only.
 - [ ] known limits current.
 
 ## 23. Publication
@@ -386,6 +420,10 @@ REVISION_AUDIT=
 RUNTIME_GENERATION_CONSISTENCY=
 BACKUP_RESTORE=
 MCP_REAL_E2E=
+CONFIGURATION_BUNDLE=
+CONFIGURATION_DIRECT_CLI_PARITY=
+CONFIGURATION_AI_COPY_PASTE_REAL_E2E=
+ZERO_TOUCH_BOUNDED_BATCH=
 FULL_REAL_E2E_PASS_1=
 FULL_REAL_E2E_PASS_2=
 

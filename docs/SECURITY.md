@@ -211,7 +211,7 @@ Root-owned secret storage may contain:
 CA private key
 TLS private key
 FRP/upstream raw transport token
-bootstrap/enrollment raw secret during its valid lifecycle
+bootstrap/enrollment verifier/hash and lifecycle metadata
 MCP/OAuth client or signing secret where required
 ```
 
@@ -227,7 +227,13 @@ audit records
 public metadata
 support bundles without deliberate protected handling
 logs
+ConfigurationBundle export/input generated for review
+AI-generated configuration blocks
 ```
+
+For v2.4 stable Zero-Touch, raw ticket/install URL material is returned only at issuance time. The server stores the verifier/hash required for validation, plus non-secret lifecycle metadata; it does not retain a redisplayable raw ticket.
+
+ConfigurationBundle and AI-assisted configuration are never secret-distribution channels. Applying a bundle that attempts to embed a raw enrollment ticket, install credential, private key, OAuth/static bearer secret, or equivalent protected value fails validation before mutation.
 
 ## 15. PKI and management identity
 
@@ -504,8 +510,17 @@ MCP_CAPABILITY_ENFORCEMENT=PASS
 MCP_FILE_SCOPE=PASS
 MCP_AUDIT=PASS
 MCP_REAL_E2E=PASS
+CONFIGURATION_BUNDLE_SECRET_EXCLUSION=PASS
+CONFIGURATION_REDACTED_EXPORT=PASS
+CONFIGURATION_ATOMICITY=PASS
+CONFIGURATION_REVISION_CONFLICT=PASS
+ZERO_TOUCH_MAX_10_PER_REQUEST=PASS
+ZERO_TOUCH_MAX_10_ACTIVE_UNUSED=PASS
+ZERO_TOUCH_SINGLE_USE=PASS
+ZERO_TOUCH_DOUBLE_USE_ATOMIC_DENY=PASS
+ZERO_TOUCH_RAW_SECRET_NOT_STORED=PASS
 SECRET_SCAN=PASS
 PUBLIC_METADATA_SCAN=PASS
 ```
 
-Enrollment secrets are stored as issued credentials, not hashed or wrapped at rest. Post-success reuse is classified as `BOOTSTRAP_TICKET_USED`.
+For the v2.4 stable target, enrollment tickets are unique single-use credentials whose raw value is displayed only at issuance. Server-side persistent state stores a verifier/hash plus lifecycle metadata rather than a redisplayable raw ticket. Post-success reuse is classified as `BOOTSTRAP_TICKET_USED`, and concurrent double-use must have exactly one successful consumer.

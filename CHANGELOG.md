@@ -25,6 +25,10 @@ v2.4.0 remains a development target. The following is approved architecture scop
 - AI Principal and AI Access policy model.
 - Server-side MCP Bridge reusing Data Relay Link Managed Endpoints instead of deploying an MCP server per internal host.
 - AI capability/path/exec authorization and AI operation audit.
+- ConfigurationBundle v1alpha1 for idempotent multi-resource change sets using the same Change Plan/control-plane engine as direct CLI.
+- AI-assisted configuration contract: simple changes as canonical public CLI; dependent changes as copy/paste ConfigurationBundle via standard input.
+- Redacted configuration export plus validate/test/diff/atomic-apply workflow.
+- Zero-Touch bounded issuance: max 10 tickets per request, max 10 active unused, unique single-use tickets, default 1-hour TTL and maximum 24-hour TTL.
 
 ### Changed — target scope
 
@@ -63,6 +67,7 @@ v2.4.0 remains a development target. The following is approved architecture scop
 - Remove/replace old MCP-exclusion code, tests, schema constraints, and release scripts.
 - Generate a candidate manifest that reflects actual included features.
 - Complete automated validation, multi-host Real E2E, MCP interoperability qualification, backup/restore/migration, and security regressions.
+- Qualify ConfigurationBundle file/stdin, idempotency, atomicity, revision conflict, direct-CLI semantic parity, AI copy/paste Real E2E, and bounded Zero-Touch ticket issuance.
 - Pass Full Real E2E twice on the same exact final HEAD.
 - Create the immutable `v2.4.0` tag only afterward.
 

@@ -198,10 +198,36 @@ public bootstrap hostname. Do not put `curl -k` in client bootstrap commands.
 ```text
 GET /i/<ticket>          → no consume, no machine bind
 POST /bootstrap/redeem   → first-machine bind
-POST /enroll success     → completed_at (single-use)
+POST /enroll success     → atomic consume / completed_at (single-use)
 ```
 
 Treat `/i/<opaque-ticket>` as sensitive until used, expired, or revoked.
+
+### v2.4 stable bounded issuance contract
+
+Configuration/deployment intent and ticket issuance are separate. Applying a `ConfigurationBundle` may create enrollment plans but creates **zero** raw Zero-Touch tickets.
+
+Server-enforced limits:
+
+```text
+max tickets per issuance request = 10
+max active unused tickets        = 10
+use count per ticket              = 1
+default TTL                       = 1 hour
+maximum TTL                       = 24 hours
+```
+
+If 3 valid unused tickets already exist, the next issuance may create at most 7.
+
+Each ticket is unique and bound to one intended enrollment context. A reusable shared credential with a count of 10 is not allowed.
+
+Raw ticket/install URL is shown once at issuance. Persistent server state stores the verifier/hash and non-secret lifecycle metadata, not a redisplayable raw ticket.
+
+Successful enrollment atomically consumes the credential so concurrent double-use cannot create two Clients. Expired/revoked tickets leave the active-unused count. Ticket expiry/revocation never disconnects a Client that has already completed enrollment.
+
+Reinstall/recovery never reuses a consumed ticket; use the supported recovery/re-enrollment flow.
+
+YAML fields, hidden CLI flags, or APIs cannot raise these server-side ceilings.
 
 ## v2.1.3 Real E2E evidence
 

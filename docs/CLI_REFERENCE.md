@@ -714,6 +714,44 @@ secret-safe
 
 Completion candidates are drawn from authoritative DB identity, not stale derived runtime artifacts.
 
+## 34.1 Configuration bundles
+
+ConfigurationBundle operations preserve the stable direct roots; there is no top-level `apply` command.
+
+```text
+system export configuration --output <PATH>
+test configuration <PATH|->
+system diff configuration <PATH|->
+system apply configuration <PATH|->
+```
+
+`-` means standard input and exists specifically so an AI-generated block can be pasted into an SSH terminal without first creating/uploading a file.
+
+`test configuration` is non-mutating and performs schema/reference/security validation plus embedded expected-policy tests.
+
+`system diff configuration` compares the validated Change Plan to current authoritative state.
+
+`system apply configuration` performs validate → tests → diff → impact analysis → confirmation → optimistic-concurrency check → one authoritative transaction → revision/audit → compile/activate/verify. Confirmation defaults to No.
+
+ConfigurationBundle semantics:
+
+```text
+omitted resource → unchanged
+state: present   → idempotent create/update
+state: absent    → explicit delete
+same effective state → NO CHANGE
+```
+
+A bundle never contains/re-exports raw Zero-Touch tickets, installation credentials, OAuth/static bearer secrets, private keys, or client identity private material.
+
+For simple requests, AI should output one canonical direct command. For dependent multi-resource requests, AI should output one copy/paste ConfigurationBundle. Both paths use the same Change Plan engine.
+
+Existing-client local service/target changes that cannot be performed from the server report `CLIENT_ACTION_REQUIRED` rather than false success.
+
+Zero-Touch bundle entries describe enrollment plans only. Ticket issuance is separate and server-bounded to max 10 per request and max 10 active unused, with unique single-use tickets, default 1-hour TTL, and maximum 24-hour TTL.
+
+See `CONFIGURATION_BUNDLE.md` for the normative schema and safety contract.
+
 ## 35. Legacy transition
 
 The current development source may still implement older commands such as:
@@ -778,4 +816,11 @@ IMPLICIT_DEFAULT_DENY=YES
 POLICY_IMPACT_ANALYSIS=YES
 REFERENCE_PROTECTION=YES
 OPTIMISTIC_CONCURRENCY=YES
+CONFIGURATION_BUNDLE=YES
+CONFIGURATION_BUNDLE_SHARED_CHANGE_PLAN=YES
+CONFIGURATION_BUNDLE_IDEMPOTENT=YES
+CONFIGURATION_BUNDLE_EXPLICIT_DELETE_ONLY=YES
+ZERO_TOUCH_MAX_PER_ISSUE=10
+ZERO_TOUCH_MAX_ACTIVE_UNUSED=10
+ZERO_TOUCH_SINGLE_USE=YES
 ```

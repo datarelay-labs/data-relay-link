@@ -425,6 +425,57 @@ REPL vs shell hints
 backend command isolation
 ```
 
+## 22.1 ConfigurationBundle / AI-assisted configuration validation
+
+Qualification must exercise the actual public CLI and the same installed control-plane engine used by ordinary operators.
+
+Required automated + Real E2E cases:
+
+```text
+CONFIGURATION_BUNDLE_SCHEMA=PASS
+CONFIGURATION_FILE_INPUT=PASS
+CONFIGURATION_STDIN_INPUT=PASS
+CONFIGURATION_VALIDATE_NO_MUTATION=PASS
+CONFIGURATION_EMBEDDED_POLICY_TESTS=PASS
+CONFIGURATION_DIFF=PASS
+CONFIGURATION_IDEMPOTENT_REAPPLY_NO_CHANGE=PASS
+CONFIGURATION_EXPLICIT_DELETE_ONLY=PASS
+CONFIGURATION_REFERENCE_PROTECTION=PASS
+CONFIGURATION_ATOMIC_ROLLBACK=PASS
+CONFIGURATION_REVISION_CONFLICT=PASS
+CONFIGURATION_SECURITY_IMPACT_CONFIRMATION=PASS
+CONFIGURATION_REDACTED_EXPORT=PASS
+CONFIGURATION_SECRET_EXCLUSION=PASS
+DIRECT_CLI_AND_BUNDLE_SEMANTIC_PARITY=PASS
+AI_COPY_PASTE_REAL_E2E=PASS
+CLIENT_ACTION_REQUIRED_BOUNDARY=PASS
+```
+
+Semantic parity must compare equivalent changes made through direct CLI and ConfigurationBundle and prove they produce the same authoritative state/effective policy, impact decision, revision/audit semantics, and runtime behavior.
+
+AI copy/paste Real E2E starts from a generated stdin block, applies it through the installed public `drlink` CLI, and verifies real traffic. Direct SQLite, JSON mutation, private helper commands, or hidden compatibility grammar cannot count as PASS.
+
+Zero-Touch qualification:
+
+```text
+ZERO_TOUCH_MAX_10_PER_REQUEST=PASS
+ZERO_TOUCH_MAX_10_ACTIVE_UNUSED=PASS
+ZERO_TOUCH_CAPACITY_REMAINDER=PASS
+ZERO_TOUCH_UNIQUE_PER_DEVICE=PASS
+ZERO_TOUCH_SINGLE_USE=PASS
+ZERO_TOUCH_CONCURRENT_DOUBLE_USE_DENY=PASS
+ZERO_TOUCH_DEFAULT_TTL_1H=PASS
+ZERO_TOUCH_MAX_TTL_24H=PASS
+ZERO_TOUCH_EXPIRED_REVOKED_CAPACITY_RELEASE=PASS
+ZERO_TOUCH_SECRET_DISPLAY_ONCE=PASS
+ZERO_TOUCH_SERVER_STORES_NO_RAW_TICKET=PASS
+ZERO_TOUCH_YAML_CANNOT_EMBED_SECRET=PASS
+ZERO_TOUCH_LIMIT_CANNOT_BE_OVERRIDDEN=PASS
+ZERO_TOUCH_EXPIRY_DOES_NOT_DISCONNECT_ENROLLED_CLIENT=PASS
+```
+
+Also prove that applying a bundle containing 30 enrollment plans issues 0 tickets and that explicit batch issuance never exceeds remaining active-unused capacity.
+
 ## 23. Version/governance transition validation
 
 Before RC, tests that encode legacy MCP exclusion must be intentionally replaced.
@@ -555,6 +606,10 @@ MCP_CAPABILITY_ENFORCEMENT=
 MCP_FILE_SCOPE=
 MCP_AUDIT=
 MCP_REAL_E2E=
+CONFIGURATION_BUNDLE=
+CONFIGURATION_DIRECT_CLI_PARITY=
+CONFIGURATION_AI_COPY_PASTE_REAL_E2E=
+ZERO_TOUCH_BOUNDED_BATCH=
 SQLITE_MIGRATION_FRAMEWORK=
 REVISION_AUDIT=
 RUNTIME_GENERATION_CONSISTENCY=

@@ -67,6 +67,9 @@ runtime compilation and generation tracking
 consistent SQLite backup/restore
 AI Access policy
 MCP Bridge
+ConfigurationBundle declarative change sets
+AI-generated canonical CLI / copy-paste configuration blocks
+Zero-Touch bounded batch issuance (max 10 active unused, unique single-use tickets)
 ```
 
 Legacy JSON state and legacy public nouns do not constrain this redesign.
@@ -456,6 +459,31 @@ The old public nouns `acl`, `service-profile`, and `internet-profile` are not ca
 
 The full UX contract is in `docs/Data Relay Link CLI Information Architecture.md`.
 
+### 23.1 ConfigurationBundle and AI-assisted operations
+
+v2.4.0 stable includes a declarative `ConfigurationBundle` input for multi-resource changes and an AI-friendly copy/paste workflow. This is not a second configuration authority.
+
+```text
+direct canonical CLI ─┐
+AI-generated CLI     ─┼→ shared Change Plan → validate/test/diff/impact/confirm
+ConfigurationBundle ─┘                      → one transaction → revision/audit → compile/activate
+```
+
+The server SQLite state remains authoritative. Bundle omission never deletes existing state; deletion is explicit. Reapplying the same bundle is idempotent and must produce `NO CHANGE` when effective state is already equal.
+
+Canonical configuration operations stay under existing direct roots; no top-level `apply` root is reintroduced. File and standard-input workflows are defined in `CONFIGURATION_BUNDLE.md` and `CLI_REFERENCE.md`.
+
+AI output rules:
+
+```text
+simple independent change → one canonical public drlink command
+multi-resource/dependent change → one ConfigurationBundle block
+internal helper/direct DB/runtime JSON → forbidden
+secret/ticket/private key in generated bundle → forbidden
+```
+
+Zero-Touch deployment intent may be declared by a bundle, but secrets are issued separately immediately before installation. A single issuance request is limited to 10 unique single-use tickets, and the server permits at most 10 active unused tickets at once. Default TTL is 1 hour; maximum TTL is 24 hours.
+
 ## 24. Enrollment and identity
 
 Zero-Touch remains the preferred client onboarding path; Manual Enrollment remains available.
@@ -550,6 +578,9 @@ MCP Bridge/auth/routing/capability/path/audit
 MCP Real E2E
 multi-host Real E2E
 fresh install/uninstall/reinstall
+ConfigurationBundle file/stdin validation, diff, atomicity, idempotency, revision conflict, redacted export, and direct-CLI semantic parity
+AI-generated copy/paste ConfigurationBundle Real E2E
+Zero-Touch batch limits: max 10/request, max 10 active unused, unique single-use, default 1h/max 24h TTL
 Full Real E2E pass 1 and pass 2 on the same exact HEAD
 ```
 
@@ -588,6 +619,9 @@ Data Relay Link CLI Information Architecture.md
 
 CLI_REFERENCE.md
   target direct grammar
+
+CONFIGURATION_BUNDLE.md
+  declarative configuration, AI copy/paste, Change Plan, and Zero-Touch batch contract
 
 SECURITY.md
   trust boundaries and security invariants
@@ -636,6 +670,12 @@ Historical behavior belongs in Git history or explicitly historical documents, n
 **Decision:** Supersede the earlier v2.4 MCP-exclusion decision and include the MCP Bridge/AI Access foundation before stable release.
 
 **Reason:** This is still a pre-stable architecture window, so adding the authorization foundation now avoids a second control-plane redesign immediately after stable release.
+
+### 2026-09 — ConfigurationBundle and bounded Zero-Touch before stable
+
+**Decision:** Include declarative ConfigurationBundle input and AI copy/paste workflows in the v2.4.0 stable target rather than deferring them to v2.5.0.
+
+**Reason:** CLI and configuration-file automation must share one Change Plan/control-plane engine from the first stable release; adding a separate configuration path later would create avoidable semantic and migration debt. Zero-Touch secret issuance remains separate from configuration intent and is bounded to unique single-use tickets with server-enforced batch/active limits.
 
 ## 33. Master rule
 

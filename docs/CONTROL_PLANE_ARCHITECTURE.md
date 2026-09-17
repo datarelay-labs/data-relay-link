@@ -49,6 +49,16 @@ ESTABLISHED_CONNECTIONS_IMPLICITLY_TERMINATED=NO
 MCP_INCLUDED_IN_V2_4_0_TARGET=YES
 MCP_PER_ENDPOINT_SERVER_REQUIRED=NO
 
+CONFIGURATION_BUNDLE_INCLUDED_IN_V2_4_0_TARGET=YES
+CONFIGURATION_BUNDLE_SEPARATE_ENGINE=NO
+CONFIGURATION_BUNDLE_SSOT=NO
+CHANGE_PLAN_SHARED_BY_CLI_AND_BUNDLE=YES
+ZERO_TOUCH_MAX_PER_ISSUE=10
+ZERO_TOUCH_MAX_ACTIVE_UNUSED=10
+ZERO_TOUCH_SINGLE_USE=YES
+ZERO_TOUCH_DEFAULT_TTL=1h
+ZERO_TOUCH_MAX_TTL=24h
+
 FRP_UPSTREAM=fatedier/frp
 FRP_FORK=NO
 ```
@@ -732,6 +742,63 @@ read current state + row_version
 
 If compilation or activation fails, the database remains authoritative but system health must report the generation mismatch and enforcement must fail closed for affected policy paths.
 
+### 31.1 Configuration ingestion and shared Change Plan
+
+Direct CLI mutations, AI-generated commands, and `ConfigurationBundle` input MUST NOT maintain separate policy/mutation implementations.
+
+```text
+direct public CLI ─┐
+AI-generated CLI  ─┼→ canonical Change Plan → validate → resolve → test → diff
+ConfigurationBundle┘                       → impact → confirm → concurrency check
+                                            → authoritative transaction
+                                            → revision/audit → compile/activate/verify
+```
+
+The authoritative state remains SQLite. A YAML document is an input/change-set artifact, not a continuously reconciled state owner.
+
+Bundle semantics:
+
+```text
+resource omitted → unchanged
+state: present   → idempotent create/update
+state: absent    → explicit delete subject to reference/destructive checks
+same bundle/effective state → NO CHANGE
+```
+
+A Change Plan is revision-bound. If state changes after planning, commit fails with a revision conflict rather than silently rebasing security-relevant intent.
+
+The bundle path cannot write authoritative tables, generated runtime JSON, or legacy state through an alternate implementation. It must invoke the same domain mutations and safety checks as canonical public CLI.
+
+Export is redacted and never emits enrollment tickets, install URLs containing credentials, OAuth/static bearer secrets, private keys, or client identity private material.
+
+Existing-client local target/service mutations that are not remotely supported return `CLIENT_ACTION_REQUIRED`; the server must never report false success.
+
+Full schema/CLI/audit semantics are defined by `CONFIGURATION_BUNDLE.md`.
+
+### 31.2 Zero-Touch planning and bounded ticket issuance
+
+Configuration intent and enrollment secret issuance are separate operations.
+
+A ConfigurationBundle may create enrollment plans, but applying it creates zero raw tickets. Client and Managed Endpoint identity continue to materialize only after successful enrollment.
+
+Server-enforced ticket rules:
+
+```text
+one issuance request        ≤ 10 tickets
+active + unused tickets     ≤ 10 total
+one ticket                  = one intended enrollment context
+use count                   = 1
+TTL default                 = 1 hour
+TTL maximum                 = 24 hours
+raw ticket/install URL      = display once
+stored server credential    = verifier/hash only
+successful consume          = atomic
+```
+
+If 3 active unused tickets remain, the next issuance can create at most 7. Expired/revoked tickets leave the active-unused count; consuming/expiring an enrollment ticket never disconnects an already enrolled Client.
+
+Neither configuration fields nor hidden/public CLI flags may raise these server-side ceilings.
+
 ## 32. Migration framework
 
 Database evolution uses ordered migrations recorded in `schema_migrations`.
@@ -1304,6 +1371,9 @@ docs/Data Relay Link CLI Information Architecture.md
 
 docs/CLI_REFERENCE.md
   REPLACED/REWRITTEN — target v2.4 direct grammar
+
+docs/CONFIGURATION_BUNDLE.md
+  NEW — declarative change-set, shared Change Plan, AI copy/paste, and bounded Zero-Touch contract
 
 docs/CONTROLLED_EGRESS.md
   REWORKED — low-level Internet Access behavior retained, policy authority replaced

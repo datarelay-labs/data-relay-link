@@ -24,6 +24,9 @@ revisions / audit
 runtime generation
 backup / migration
 canonical CLI nouns
+ConfigurationBundle + shared Change Plan
+AI-generated canonical CLI / copy-paste bundle workflow
+bounded Zero-Touch issuance (max 10/request and active unused)
 ```
 
 Can remain later work:
@@ -388,6 +391,35 @@ secret/public metadata scan
 ```
 
 No stale test is allowed to redefine the approved architecture.
+
+## 14.1 Phase DL-12A — ConfigurationBundle and bounded Zero-Touch
+
+**Status:** Required before v2.4.0 stable.
+
+Implement one shared Change Plan path for direct CLI, AI-generated commands, and declarative ConfigurationBundle input.
+
+Required closure:
+
+```text
+file + stdin ConfigurationBundle
+validate / embedded policy tests / diff
+idempotent present + explicit absent semantics
+one atomic transaction
+revision conflict protection
+policy-impact confirmation
+redacted export
+secret exclusion
+AI copy/paste real CLI E2E
+CLIENT_ACTION_REQUIRED boundary
+Zero-Touch enrollment plans separate from ticket issuance
+max 10 tickets per issuance request
+max 10 active unused tickets
+unique single-use ticket
+1h default / 24h max TTL
+atomic consumption / double-use denial
+```
+
+This phase must reuse the canonical SQLite/domain policy engine; do not add a second YAML/AI state engine.
 
 ## 15. Phase DL-13 — multi-host Real E2E
 
