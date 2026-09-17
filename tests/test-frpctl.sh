@@ -664,8 +664,11 @@ run_repl "$SERVER" "$WORKDIR/help-client.out" "help client" exit || fail "help c
 grep -qi 'client' "$WORKDIR/help-client.out" || fail "help client body"
 pass "CONTEXT_HELP"
 
-run_repl "$SERVER" "$WORKDIR/help-legacy.out" "help legacy" exit || fail "help legacy"
-grep -qE 'Compatibility aliases|Legacy compatibility commands' "$WORKDIR/help-legacy.out" || fail "legacy help heading"
+run_repl "$SERVER" "$WORKDIR/help-legacy.out" "help legacy" exit || true
+grep -qiE "help legacy.*removed|help commands|Canonical roots" "$WORKDIR/help-legacy.out" \
+  || fail "help legacy must report removal"
+! grep -qiE 'Compatibility aliases|Legacy compatibility commands' "$WORKDIR/help-legacy.out" \
+  || fail "help legacy must not advertise a compatibility catalog"
 pass "FRPCTL_HELP_LEGACY"
 
 run_repl "$SERVER" "$WORKDIR/glob.out" 'show clients *' exit || fail "glob reject repl"

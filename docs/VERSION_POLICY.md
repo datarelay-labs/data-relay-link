@@ -197,9 +197,17 @@ An upstream FRP version change changes Data Relay Link version only according to
 
 ## 11. v2.4.0 architecture inclusion
 
+Current authoritative product decision:
+
+```text
+MCP_INCLUDED_IN_V2_4_0=YES
+MCP_RELEASE_BLOCKER=YES
+features.mcp_included=true   # on the development candidate once MCP Bridge/AI Access are present
+```
+
 The final v2.4.0 target includes the Control Plane/Object/Policy/MCP architecture defined in `CONTROL_PLANE_ARCHITECTURE.md`.
 
-Therefore the earlier rule:
+The earlier exclusion rule is obsolete historical decision text only (do not treat as current scope):
 
 ```text
 MCP_COMMANDS_INCLUDED=NO
@@ -209,11 +217,9 @@ MCP_ENABLED_CODE_PATH=NO
 features.mcp_included=false
 ```
 
-is superseded as a product decision.
+That earlier rule is superseded as a product decision.
 
-Before v2.4.0 candidate qualification, all implementation/governance artifacts that still hard-code the old exclusion must be updated consistently.
-
-Known development-transition locations include release manifest validation/generation, version governance checks, tests, and release scripts. Their existence on an unimplemented development HEAD is not permission to publish a contradictory candidate.
+Before v2.4.0 candidate qualification, all implementation/governance artifacts must remain consistent with MCP inclusion. Do not revive MCP-exclusion wording as current release scope.
 
 ## 12. Release manifest
 

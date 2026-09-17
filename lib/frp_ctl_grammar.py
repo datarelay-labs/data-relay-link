@@ -428,9 +428,10 @@ def _system_resources(role):
 
 def _create_resources(role):
     # Hidden compatibility only — not public discovery.
+    # Keep only resources that still resolve; never Tab-offer obsolete ACL/profile nouns.
     _, server = _role_parts(role)
     if server:
-        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "service-profile", "egress-profile", "access-list", "support-bundle"]
+        return ["zero-touch", "enrollment", "enrollments", "backup", "group", "support-bundle"]
     return []
 
 
@@ -535,7 +536,7 @@ def help_text(tokens, role):
             "===========\n\n"
             "Public command:\n"
             "  system diagnostics\n\n"
-            "Compatibility: help legacy (hidden `doctor`).\n"
+            "See: help system / help commands\n"
         )
     if verb == "support-bundle":
         return (
@@ -563,8 +564,9 @@ def help_text(tokens, role):
     lines = [
         "Unknown help topic: %s" % " ".join(tokens),
         "",
-        "Type 'help' for domains, 'help commands' for the full command",
-        "reference, or 'help legacy' for compatibility aliases.",
+        "Type 'help' for domains, or 'help commands' for the full command",
+        "reference.",
+        "Canonical roots: show, set, unset, test, system, menu, help, exit",
     ]
     if client or server:
         pass
@@ -834,20 +836,17 @@ def _create_help(role):
     return (
         "Create\n"
         "======\n\n"
-        "Usage:\n"
+        '"create" is not a current public root.\n\n'
+        "Preferred onboarding:\n"
+        "  set client\n"
+        "  help clients\n\n"
+        "Hidden compatibility forms still accepted:\n"
         "  create zero-touch\n"
         "  create enrollment\n"
         "  create enrollments\n"
-        "  create group <name>\n"
-        "  create service-profile <name>\n"
-        "  create access-list <name>\n"
-        "  create egress-profile <name>\n"
         "  create backup [path]\n"
         "  create support-bundle\n\n"
-        "Recommended:\n"
-        "  create zero-touch\n\n"
-        "Complex creates use guided prompts. Data Relay Link does not use "
-        "--options.\n"
+        "See: help commands\n"
     )
 
 
@@ -862,7 +861,7 @@ def _update_help(role):
         "system update engine updates the pinned upstream Relay Engine (FRP) binary.\n"
         "system update check-engine checks upstream Relay Engine releases (read-only).\n"
         "A software update does not re-enroll clients or rotate CA/token/ports.\n"
-        "Compatibility: help legacy (hidden root `update …`).\n"
+        "See: help system / help commands\n"
     )
 
 
@@ -1045,74 +1044,74 @@ def context_help(tokens, role, names=None, clients=None):
         return _concise_root(role)
     hidden_roots = {
         "create": (
-            '"create" is a legacy compatibility command.\n\n'
+            '"create" is not a current public root.\n\n'
             "Current commands:\n"
             "  set client\n"
             "  set enrollment\n"
-            "  set group <NAME>\n"
-            "  set service-profile <NAME>\n"
-            "  set internet-profile <NAME>\n"
-            "  set access-rule <NAME>\n"
+            "  set client-group <NAME>\n"
+            "  set object <NAME>\n"
+            "  set object-group <NAME>\n"
+            "  set published-service <NAME>\n"
+            "  set service-preset <NAME>\n"
+            "  set remote-access <NAME>\n"
+            "  set internet-access <NAME>\n"
+            "  set fixed-tcp <NAME>\n"
             "  system backup\n"
             "  system support-bundle\n\n"
             "Use:\n"
             "  ?\n"
+            "  help clients\n"
             "  help commands\n"
-            "  help legacy\n"
         ),
         "add": (
-            '"add" is a legacy compatibility command.\n\n'
+            '"add" is not a current public root.\n\n'
             "Current commands:\n"
-            "  set service\n"
+            "  set published-service …\n"
             "  set client <CLIENT> group <GROUP>\n"
-            "  set internet-source …\n"
-            "  set internet-destination …\n"
-            "  set access-source …\n\n"
+            "  set internet-access …\n"
+            "  set remote-access …\n\n"
             "Use:\n"
             "  ?\n"
             "  help commands\n"
-            "  help legacy\n"
         ),
         "remove": (
-            '"remove" is a legacy compatibility command.\n\n'
-            "Prefer unset … forms. See: help commands / help legacy\n"
+            '"remove" is not a current public root.\n\n'
+            "Prefer unset … forms. See: help commands\n"
         ),
         "enable": (
-            '"enable" is a legacy compatibility command.\n\n'
+            '"enable" is not a current public root.\n\n'
             "Prefer:\n"
-            "  set service <ID> enabled\n"
-            "  set internet-profile <PROFILE> enabled\n"
+            "  set published-service <SERVICE> enabled\n"
             "  set fixed-tcp <ENTRY> enabled\n\n"
-            "See: help commands / help legacy\n"
+            "See: help commands\n"
         ),
         "disable": (
-            '"disable" is a legacy compatibility command.\n\n'
+            '"disable" is not a current public root.\n\n'
             "Prefer:\n"
-            "  unset service <ID> enabled\n"
-            "  unset internet-profile <PROFILE> enabled\n"
+            "  unset published-service <SERVICE> enabled\n"
             "  unset fixed-tcp <ENTRY> enabled\n\n"
-            "See: help commands / help legacy\n"
+            "See: help commands\n"
         ),
         "delete": (
-            '"delete" is a legacy compatibility command.\n\n'
-            "Prefer unset …. See: help commands / help legacy\n"
+            '"delete" is not a current public root.\n\n'
+            "Prefer unset …. See: help commands\n"
         ),
         "revoke": (
-            '"revoke" is a legacy compatibility command.\n\n'
+            '"revoke" is not a current public root.\n\n'
             "Prefer:\n"
             "  unset client <CLIENT> trust\n"
             "  unset enrollment <ENROLLMENT>\n\n"
-            "See: help legacy\n"
+            "See: help commands\n"
         ),
         "release": (
-            '"release" is a legacy compatibility command.\n\n'
+            '"release" is not a current public root.\n\n'
             "Prefer:\n"
             "  unset client <CLIENT>\n"
-            "  unset client <CLIENT> service <SERVICE>\n\n"
-            "See: help legacy\n"
+            "  unset published-service <SERVICE>\n\n"
+            "See: help commands\n"
         ),
         "update": (
-            '"update" is a legacy compatibility command.\n\n'
+            '"update" is not a current public root.\n\n'
             "Prefer:\n"
             "  system update product\n"
             "  system update engine\n"
@@ -1120,77 +1119,80 @@ def context_help(tokens, role, names=None, clients=None):
             "See: help commands\n"
         ),
         "doctor": (
-            '"doctor" is a legacy compatibility command.\n\n'
+            '"doctor" is not a current public root.\n\n'
             "Prefer:\n"
             "  system diagnostics\n\n"
-            "See: help commands / help legacy\n"
+            "See: help commands\n"
         ),
         "history": (
-            '"history" is a legacy compatibility command.\n\n'
+            '"history" is not a current public root.\n\n'
             "Prefer:\n"
             "  system history\n"
         ),
         "clear": (
-            '"clear" is a legacy compatibility command.\n\n'
+            '"clear" is not a current public root.\n\n'
             "Prefer:\n"
             "  system clear\n"
         ),
         "access": (
-            '"access" is a legacy compatibility command.\n\n'
-            "Prefer Access Rules commands:\n"
-            "  show access-rules\n"
-            "  set access-rule …\n"
-            "  set access-source …\n"
-            "  set service-access …\n\n"
-            "See: help commands / help legacy\n"
+            '"access" is not a current public root.\n\n'
+            "Prefer Remote Access commands:\n"
+            "  show remote-access\n"
+            "  set remote-access …\n"
+            "  test remote-access …\n\n"
+            "See: help remote-access / help commands\n"
         ),
         "egress": (
-            '"egress" is a legacy compatibility command.\n\n'
+            '"egress" is not a current public root.\n\n'
             "Prefer Internet Access commands:\n"
-            "  show internet\n"
-            "  set internet-profile …\n"
-            "  set fixed-tcp …\n\n"
-            "See: help commands / help legacy\n"
+            "  show internet-access\n"
+            "  set internet-access …\n"
+            "  set fixed-tcp …\n"
+            "  test internet-access …\n\n"
+            "See: help internet-access / help commands\n"
         ),
         "client": (
-            '"client" is a legacy compatibility command.\n\n'
+            '"client" is not a current public root.\n\n'
             "Prefer:\n"
             "  show clients / show client …\n"
             "  set client …\n"
             "  unset client …\n\n"
-            "See: help commands / help legacy\n"
+            "See: help clients / help commands\n"
         ),
         "service": (
-            '"service" is a legacy compatibility command.\n\n'
-            "Prefer set service / show services. See: help commands / help legacy\n"
+            '"service" is not a current public root.\n\n'
+            "Prefer set published-service / show published-services.\n"
+            "See: help commands\n"
         ),
         "group": (
-            '"group" is a legacy compatibility command.\n\n'
-            "Prefer show groups / set group …. See: help commands / help legacy\n"
+            '"group" is not a current public root.\n\n'
+            "Prefer show client-groups / set client-group ….\n"
+            "See: help commands\n"
         ),
         "enrollment": (
-            '"enrollment" is a legacy compatibility command.\n\n'
+            '"enrollment" is not a current public root.\n\n'
             "Prefer set enrollment / show enrollments / unset enrollment.\n"
-            "See: help commands / help legacy\n"
+            "See: help clients / help commands\n"
         ),
         "apply": (
-            '"apply" is a legacy compatibility command.\n\n'
+            '"apply" is not a current public root.\n\n'
             "Prefer: system services apply\n"
+            "Or ConfigurationBundle: system apply configuration <PATH|->\n"
         ),
         "discard": (
-            '"discard" is a legacy compatibility command.\n\n'
+            '"discard" is not a current public root.\n\n'
             "Prefer: system services discard\n"
         ),
         "sync": (
-            '"sync" is a legacy compatibility command.\n\n'
+            '"sync" is not a current public root.\n\n'
             "Prefer: system services sync\n"
         ),
         "restore": (
-            '"restore" is a legacy compatibility command.\n\n'
+            '"restore" is not a current public root.\n\n'
             "Prefer: system restore <PATH>\n"
         ),
         "support-bundle": (
-            '"support-bundle" is a legacy compatibility command.\n\n'
+            '"support-bundle" is not a current public root.\n\n'
             "Prefer: system support-bundle\n"
         ),
     }
@@ -2151,6 +2153,35 @@ def _match_system(tokens, role, names=None):
     if discovery is not None:
         return discovery
     op = tokens[1]
+    # Bare aliases (history/clear/doctor/…) resolve to `system <op>` but
+    # _canonical_result still sees the pre-resolve token list, so these must
+    # be handled here or operators hit a dead-end "Unknown system operation".
+    if op == "history":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["system history", "history"])
+        return {"status": "ok", "action": "history"}
+    if op == "clear":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["system clear", "clear"])
+        return {"status": "ok", "action": "clear"}
+    if op == "version":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["system version"])
+        return {"status": "ok", "action": "show_version"}
+    if op == "diagnostics":
+        if len(tokens) > 2 and tokens[2] not in ("control-plane", "runtime", "mcp"):
+            return incomplete(
+                "Unknown diagnostics scope.",
+                [
+                    "system diagnostics",
+                    "system diagnostics control-plane",
+                    "system diagnostics runtime",
+                    "system diagnostics mcp",
+                ],
+            )
+        return {"status": "ok", "action": "doctor", "passthrough": list(tokens[2:])}
+    if op == "support-bundle":
+        return {"status": "ok", "action": "support_bundle", "passthrough": list(tokens[2:])}
     if op == "export" and len(tokens) >= 3 and tokens[2] == "configuration":
         return _control_plane_ok(tokens)
     if op == "apply" and len(tokens) >= 3 and tokens[2] == "configuration":
@@ -2158,8 +2189,6 @@ def _match_system(tokens, role, names=None):
     if op == "diff" and len(tokens) >= 3 and tokens[2] == "configuration":
         return _control_plane_ok(tokens)
     if op in CONTROL_PLANE_SYSTEM:
-        return _control_plane_ok(tokens)
-    if op == "diagnostics" and len(tokens) > 2 and tokens[2] in ("control-plane", "runtime", "mcp"):
         return _control_plane_ok(tokens)
     if op == "audit" and len(tokens) > 2 and tokens[2] in (
         "ai-principal",
@@ -2999,7 +3028,7 @@ def _match_create(tokens, role, names=None):
             return incomplete(
                 "Unexpected arguments.",
                 ["create zero-touch"],
-                tip="drlink help create",
+                tip="Prefer: set client   (or help clients)",
             )
         return {"status": "ok", "action": "create_zero_touch"}
     if resource == "enrollment":

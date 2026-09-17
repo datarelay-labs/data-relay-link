@@ -91,15 +91,17 @@ if echo "$create_cands" | grep -qiE 'ticket|secret|bootstrap|token|password'; th
 fi
 pass "ZERO_TOUCH_SECRET_NOT_COMPLETED"
 
-# --- help create is not a public topic; create lives under set/legacy ---
+# --- help create is not a public topic; prefer set client / help clients ---
 help_create="$(frpctl_grammar_call help '{"tokens":["create"]}')"
-echo "$help_create" | grep -qiE 'Unknown help topic: create|help legacy|help commands' \
+echo "$help_create" | grep -qiE 'Unknown help topic: create|help commands|not a current public root|set client' \
   || fail "help create should redirect away from a create topic"
 ! echo "$help_create" | grep -qiE 'Current grammar is resource-first' \
   || fail "help create still says resource-first is current"
+! echo "$help_create" | grep -qiE 'help legacy' \
+  || fail "help create must not advertise help legacy"
 help_legacy="$(frpctl_grammar_call help '{"tokens":["legacy"]}')"
-echo "$help_legacy" | grep -qE 'create zero-touch|zero-touch create' \
-  || fail "help legacy missing create zero-touch alias"
+echo "$help_legacy" | grep -qiE "help legacy.*removed|help commands|Canonical roots" \
+  || fail "help legacy must report removal and point to help commands"
 help_clients="$(frpctl_grammar_call help '{"tokens":["clients"]}')"
 echo "$help_clients" | grep -qiE 'set client|Connect a new client|zero-touch|Zero-Touch' \
   || fail "help clients missing onboarding path"
@@ -113,20 +115,24 @@ pass "CREATE_ZERO_TOUCH_HELP"
 
 # --- context help ---
 ctx_create="$(frpctl_grammar_call match '{"tokens":["create","?"],"role":"server"}')"
-python3 - "$ctx_create" <<'PY' || fail "create ? legacy redirect"
+python3 - "$ctx_create" <<'PY' || fail "create ? current redirect"
 import json, sys
 msg = json.loads(sys.argv[1]).get("message", "")
-if "legacy" not in msg.lower():
-    raise SystemExit("create ? should identify legacy compatibility")
+if "not a current public root" not in msg.lower() and "legacy" not in msg.lower():
+    raise SystemExit("create ? should identify non-current root")
 if "set client" not in msg:
     raise SystemExit("create ? missing set client current command")
-if "help legacy" not in msg:
-    raise SystemExit("create ? missing help legacy pointer")
+if "help legacy" in msg:
+    raise SystemExit("create ? must not advertise help legacy")
+if "service-profile" in msg or "internet-profile" in msg or "access-rule" in msg:
+    raise SystemExit("create ? must not advertise obsolete profile/ACL nouns")
+if "help commands" not in msg:
+    raise SystemExit("create ? missing help commands pointer")
 PY
 ctx_zt="$(frpctl_grammar_call match '{"tokens":["create","zero-touch","?"],"role":"server"}')"
-echo "$ctx_zt" | grep -qiE 'Zero-Touch|zero-touch|Guided|set client|legacy' || fail "create zero-touch ? heading"
+echo "$ctx_zt" | grep -qiE 'Zero-Touch|zero-touch|Guided|set client|not a current public root' || fail "create zero-touch ? heading"
 ctx_en="$(frpctl_grammar_call match '{"tokens":["create","enrollment","?"],"role":"server"}')"
-echo "$ctx_en" | grep -qiE 'Manual Enrollment|enrollment|set enrollment|legacy' || fail "create enrollment ? heading"
+echo "$ctx_en" | grep -qiE 'Manual Enrollment|enrollment|set enrollment|not a current public root' || fail "create enrollment ? heading"
 pass "CREATE_ZERO_TOUCH_CONTEXT_HELP"
 
 # --- Guided: SSH only ---
@@ -281,8 +287,8 @@ if [[ -n "$svc_path" && -e "$svc_path" ]]; then
   fail "services temp file not deleted: $svc_path"
 fi
 
-# --- Manual enrollment: hidden machine flags accepted; bare create is guided ---
-# create zero-touch rejects --options; create enrollment keeps catalog machine flags.
+# --- Manual enrollment: --options rejected; bare create enrollment is guided ---
+# Both create zero-touch and create enrollment reject GNU --options in the public CLI.
 if "$CTL" create zero-touch --ssh --ssh-user aella \
   >"$WORKDIR/zt-flags.out" 2>"$WORKDIR/zt-flags.err"; then
   fail "create zero-touch --ssh should be rejected"
@@ -291,12 +297,14 @@ grep -qi 'do not use --options' "$WORKDIR/zt-flags.err" \
   || fail "zero-touch flag rejection message"
 ! grep -qi 'frp-create-client' "$WORKDIR/zt-flags.err" \
   || fail "zero-touch leaked backend"
-"$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
-  >"$WORKDIR/manual-compat.out" 2>"$WORKDIR/manual-compat.err" \
-  || fail "create enrollment machine flags should dispatch"
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --ssh --ssh-user aella --label dp01' \
-  "$WORKDIR/manual-compat.out" \
-  || fail "create enrollment machine-flag dispatch"
+if "$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
+  >"$WORKDIR/manual-compat.out" 2>"$WORKDIR/manual-compat.err"; then
+  fail "create enrollment --ssh should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/manual-compat.err" \
+  || fail "create enrollment flag rejection message"
+! grep -qi 'frp-create-client' "$WORKDIR/manual-compat.err" \
+  || fail "create enrollment leaked backend on rejected flags"
 run_repl "$SERVER" "$WORKDIR/manual-repl.out" "create enrollment" exit \
   || fail "create enrollment repl"
 # Guided path should solicit prompts rather than immediately dispatch one-line.
@@ -305,17 +313,20 @@ if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/manual-repl.out"; t
 fi
 pass "MANUAL_ENROLLMENT_COMPAT"
 
-# --- Flag-based create enrollment remains a hidden machine path ---
-"$CTL" create enrollment --one-line --ssh --ssh-user aella --client-name legacy01 \
-  >"$WORKDIR/legacy-oneline.out" 2>"$WORKDIR/legacy-oneline.err" \
-  || fail "create enrollment --one-line should accept hidden machine flags"
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella --client-name legacy01' \
-  "$WORKDIR/legacy-oneline.out" \
-  || fail "legacy one-line dispatch"
+# --- Flag-based create enrollment / enroll are not public machine paths ---
+if "$CTL" create enrollment --one-line --ssh --ssh-user aella --client-name legacy01 \
+  >"$WORKDIR/legacy-oneline.out" 2>"$WORKDIR/legacy-oneline.err"; then
+  fail "create enrollment --one-line should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/legacy-oneline.err" \
+  || fail "create enrollment --one-line rejection message"
 run_repl "$SERVER" "$WORKDIR/legacy-enroll.out" "enroll --one-line --ssh --ssh-user aella" exit || true
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella' \
+if grep -q 'DISPATCH frp-create-client' "$WORKDIR/legacy-enroll.out"; then
+  fail "enroll --one-line must not dispatch via public REPL"
+fi
+grep -qiE 'do not use --options|Unknown input|Unknown set resource|obsolete|not part of the current|Available:' \
   "$WORKDIR/legacy-enroll.out" \
-  || fail "legacy enroll --one-line should dispatch hidden machine flags"
+  || fail "enroll --one-line should explain rejection"
 pass "LEGACY_ONE_LINE_COMPAT"
 
 # --- History must not store secret-looking lines; create zero-touch itself is fine ---
