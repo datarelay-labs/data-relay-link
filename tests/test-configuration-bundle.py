@@ -393,6 +393,58 @@ class ConfigurationBundleTests(unittest.TestCase):
         self.assertEqual(view["destinations"], ["dst"])
         self.assertIn("tcp/443", view["services"])
 
+    def test_export_roundtrip_managed_endpoint_and_idempotent(self):
+        # Enrollment-owned Managed Endpoint must export as reference-only and
+        # re-apply as NO_CHANGE (never reject the whole export).
+        self.plane.set_object_type("hq", "host")
+        self.plane.set_object_value("hq", "203.0.113.10")
+        now = "2026-01-01T00:00:00Z"
+        self.plane.conn.execute(
+            "INSERT INTO objects(id, name, type, origin, description, status, row_version, created_at, updated_at) "
+            "VALUES (?, ?, 'managed_endpoint', 'managed', '', 'active', 1, ?, ?)",
+            ("obj_me_test", "me-host", now, now),
+        )
+        self.plane.conn.execute(
+            "INSERT INTO managed_endpoints(id, object_id, client_id) VALUES (?, ?, NULL)",
+            ("mep_me_test", "obj_me_test"),
+        )
+        self.plane.conn.commit()
+        exported = export_configuration(self.plane)
+        self.assertIn("ManagedEndpoint", exported)
+        plan = prepare_plan(self.plane, exported)
+        ops = {(c.family, c.name, c.op) for c in plan.changes}
+        self.assertIn(("objects", "me-host", "NO_CHANGE"), ops)
+        result = apply_change_plan(self.plane, plan, confirm=True)
+        self.assertEqual(result["status"], "NO_CHANGE")
+
+    def test_ai_access_export_uses_human_target_names(self):
+        now = "2026-01-01T00:00:00Z"
+        self.plane.conn.execute(
+            "INSERT INTO objects(id, name, type, origin, description, status, row_version, created_at, updated_at) "
+            "VALUES (?, ?, 'managed_endpoint', 'managed', '', 'active', 1, ?, ?)",
+            ("obj_ep1", "ep1", now, now),
+        )
+        self.plane.conn.execute(
+            "INSERT INTO managed_endpoints(id, object_id, client_id) VALUES (?, ?, NULL)",
+            ("mep_ep1", "obj_ep1"),
+        )
+        self.plane.conn.commit()
+        self.plane.set_ai_principal("bot")
+        self.plane.set_ai_rule("r1")
+        self.plane.set_ai_rule_principal("r1", "bot")
+        self.plane.set_ai_rule_target("r1", "endpoint", "ep1")
+        self.plane.set_ai_rule_capability("r1", "list_hosts")
+        self.plane.set_ai_rule_action("r1", "allow")
+        self.plane.set_ai_rule_enabled("r1", True)
+        exported = export_configuration(self.plane)
+        self.assertIn("ep1", exported)
+        ai_section = exported.split("aiAccess:")[-1] if "aiAccess:" in exported else ""
+        self.assertNotIn("obj_ep1", ai_section)
+        plan = prepare_plan(self.plane, exported)
+        ai_ops = [c for c in plan.changes if c.family == "aiAccess"]
+        self.assertTrue(ai_ops)
+        self.assertTrue(all(c.op == "NO_CHANGE" for c in ai_ops))
+
 
 if __name__ == "__main__":
     unittest.main()

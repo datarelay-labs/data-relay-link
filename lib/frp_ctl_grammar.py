@@ -703,7 +703,6 @@ def _root_help_legacy(role):
             "  menu                 Guided numbered menu",
             "  history              This session only (not saved to disk)",
             "  help, ?",
-            "  help legacy          Compatibility aliases",
             "  clear",
             "  exit",
             "",
@@ -1759,6 +1758,16 @@ def _canonical_result(tokens, role, names=None):
             "need": cmd["roles"],
             "command": " ".join(cmd["path"]),
         }
+    # Documented enrollment modes rewrite before strict positional checks
+    # (set enrollment has tail=flags and would otherwise reject zero-touch/manual).
+    if (
+        work[:2] == ["set", "enrollment"]
+        and len(work) >= 3
+        and work[2] in ("zero-touch", "manual")
+    ):
+        internal = CATALOG.to_internal(original)
+        if internal is not None:
+            return internal, None
     problem = CATALOG.strict_error(work)
     if problem:
         if "flag" in problem or "required flag" in problem or problem.startswith("missing value for -"):

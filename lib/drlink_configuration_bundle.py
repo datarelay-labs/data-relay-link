@@ -526,42 +526,41 @@ def export_configuration(plane: ControlPlane) -> str:
 
     ai_rules = []
     for row in plane.conn.execute("SELECT * FROM ai_access_rules ORDER BY position, name"):
-        targets = [
-            {"kind": t["target_kind"], "name": plane._ref_name(t["target_kind"], t["target_id"])
-             if t["target_kind"] in ("object", "group")
-             else (
-                 plane.conn.execute(
-                     "SELECT name FROM client_groups WHERE id = ?", (t["target_id"],)
-                 ).fetchone()
-                 or {"name": t["target_id"]}
-             )["name"]}
-            for t in plane.conn.execute(
-                "SELECT target_kind, target_id FROM ai_rule_targets WHERE rule_id = ?",
-                (row["id"],),
-            )
-        ]
-        # Simplify target names for export.
+        # Export human selectors (never opaque object/client IDs).
         target_names = []
         for t in plane.conn.execute(
             "SELECT target_kind, target_id FROM ai_rule_targets WHERE rule_id = ?",
             (row["id"],),
         ):
-            if t["target_kind"] == "client_group":
+            kind = str(t["target_kind"] or "")
+            if kind == "endpoint":
+                obj = plane.conn.execute(
+                    "SELECT name FROM objects WHERE id = ?", (t["target_id"],)
+                ).fetchone()
+                target_names.append(obj["name"] if obj else t["target_id"])
+            elif kind in ("client-group", "client_group"):
                 g = plane.conn.execute(
                     "SELECT name FROM client_groups WHERE id = ?", (t["target_id"],)
                 ).fetchone()
                 target_names.append(g["name"] if g else t["target_id"])
-            elif t["target_kind"] == "client":
+            elif kind == "client":
                 c = plane.conn.execute(
                     "SELECT label, id FROM clients WHERE id = ?", (t["target_id"],)
                 ).fetchone()
                 target_names.append((c["label"] or c["id"]) if c else t["target_id"])
             else:
-                target_names.append(plane._ref_name(t["target_kind"], t["target_id"]))
+                target_names.append(plane._ref_name(kind, t["target_id"]))
         caps = [
             r["capability"]
             for r in plane.conn.execute(
                 "SELECT capability FROM ai_rule_capabilities WHERE rule_id = ?",
+                (row["id"],),
+            )
+        ]
+        paths = [
+            p["pattern"]
+            for p in plane.conn.execute(
+                "SELECT pattern FROM ai_path_scopes WHERE rule_id = ?",
                 (row["id"],),
             )
         ]
@@ -574,6 +573,7 @@ def export_configuration(plane: ControlPlane) -> str:
                 "principal": principal["name"] if principal else "",
                 "targets": target_names,
                 "capabilities": caps,
+                "paths": paths,
                 "action": str(row["action"]).upper(),
                 "enabled": bool(row["enabled"]),
                 "description": row["description"] or "",
@@ -683,6 +683,31 @@ def build_change_plan(
         name = _require_name(item, "objects")
         state = _resource_state(item)
         existing = plane.get_object(name)
+        type_key = str(item.get("type") or "").strip().lower().replace("-", "").replace("_", "")
+        # Exported Managed Endpoints are reference-only (enrollment-owned).
+        # Round-trip must be NO_CHANGE, never CREATE/UPDATE/DELETE.
+        if item.get("origin") == "managed" or type_key == "managedendpoint":
+            if state == "absent":
+                raise BundleError(
+                    "Cannot delete Managed Endpoint %s via ConfigurationBundle" % name
+                )
+            if existing is not None and (
+                existing["origin"] == "managed" or existing["type"] == "managed_endpoint"
+            ):
+                plan.changes.append(
+                    PlannedChange(
+                        "NO_CHANGE",
+                        "objects",
+                        name,
+                        "managed endpoint unchanged (enrollment-owned)",
+                    )
+                )
+            else:
+                raise BundleError(
+                    "Managed Endpoint cannot be created by ConfigurationBundle.\n"
+                    "Managed Endpoints are created only by Client enrollment."
+                )
+            continue
         if state == "absent":
             if existing is None:
                 plan.changes.append(
@@ -918,17 +943,36 @@ def build_change_plan(
                 )
             )
         else:
-            plan.changes.append(
-                PlannedChange(
-                    "UPDATE",
-                    "clientGroups",
-                    name,
-                    "update client group %s" % name,
-                    apply_fn=lambda pl, n=name, mems=list(members), d=description: _sync_client_group(
-                        pl, n, mems, d
-                    ),
+            cur_members = [
+                _normalize_client_group_member_token(plane, m)
+                for m in _client_group_member_names(plane, existing["id"])
+            ]
+            want_members = [
+                _normalize_client_group_member_token(plane, m) for m in members
+            ]
+            same_members = sorted(cur_members) == sorted(want_members)
+            same_desc = (existing["description"] or "") == description
+            if same_members and same_desc:
+                plan.changes.append(
+                    PlannedChange(
+                        "NO_CHANGE",
+                        "clientGroups",
+                        name,
+                        "client group unchanged",
+                    )
                 )
-            )
+            else:
+                plan.changes.append(
+                    PlannedChange(
+                        "UPDATE",
+                        "clientGroups",
+                        name,
+                        "update client group %s" % name,
+                        apply_fn=lambda pl, n=name, mems=list(members), d=description: _sync_client_group(
+                            pl, n, mems, d
+                        ),
+                    )
+                )
 
     # --- remote / internet access ---
     for family, plane_name in (("remoteAccess", "remote"), ("internetAccess", "internet")):
@@ -999,6 +1043,22 @@ def build_change_plan(
             continue
         description = str(item.get("description") or "")
         enabled = item.get("enabled")
+        existing = plane.conn.execute(
+            "SELECT * FROM ai_principals WHERE lower(name)=lower(?)", (name,)
+        ).fetchone()
+        if existing is not None:
+            same_desc = (existing["description"] or "") == description
+            same_enabled = True if enabled is None else (bool(existing["enabled"]) == bool(enabled))
+            if same_desc and same_enabled:
+                plan.changes.append(
+                    PlannedChange(
+                        "NO_CHANGE",
+                        "aiPrincipals",
+                        name,
+                        "ai-principal unchanged",
+                    )
+                )
+                continue
         plan.changes.append(
             PlannedChange(
                 "UPDATE",
@@ -1077,6 +1137,35 @@ def build_change_plan(
                 )
             )
         else:
+            existing = None
+            try:
+                existing = plane.conn.execute(
+                    "SELECT * FROM enrollment_plans WHERE lower(name)=lower(?)", (name,)
+                ).fetchone()
+            except Exception:
+                existing = None
+            if existing is not None:
+                try:
+                    cur_cg = json.loads(existing["client_groups_json"] or "[]")
+                    cur_iv = json.loads(existing["initial_services_json"] or "[]")
+                except Exception:
+                    cur_cg, cur_iv = [], []
+                same = (
+                    str(existing["platform"] or "").lower() == platform
+                    and list(cur_cg) == list(client_groups)
+                    and list(cur_iv) == list(initial)
+                    and (existing["description"] or "") == description
+                )
+                if same:
+                    plan.changes.append(
+                        PlannedChange(
+                            "NO_CHANGE",
+                            "enrollmentPlans",
+                            name,
+                            "enrollment plan unchanged",
+                        )
+                    )
+                    continue
             plan.changes.append(
                 PlannedChange(
                     "UPDATE",
@@ -1165,6 +1254,35 @@ def _delete_client_group(plane: ControlPlane, name: str):
         return {"entity": {"type": "client-group", "id": row["id"], "name": name}, "operation": "delete"}
 
     return plane._mutate("unset client-group %s" % name, "delete client group", write)
+
+
+def _client_group_member_names(plane: ControlPlane, group_id: str) -> list[str]:
+    names = []
+    for m in plane.conn.execute(
+        "SELECT client_id FROM client_group_members WHERE group_id = ?", (group_id,)
+    ):
+        c = plane.conn.execute(
+            "SELECT label, id FROM clients WHERE id = ?", (m["client_id"],)
+        ).fetchone()
+        if c:
+            names.append(c["label"] or c["id"])
+        else:
+            names.append(m["client_id"])
+    return names
+
+
+def _normalize_client_group_member_token(plane: ControlPlane, token: str) -> str:
+    """Map client id/label selectors to a stable label-or-id display token."""
+    text = str(token or "").strip()
+    if not text:
+        return text
+    row = plane.conn.execute(
+        "SELECT label, id FROM clients WHERE id = ? OR lower(label)=lower(?)",
+        (text, text),
+    ).fetchone()
+    if row:
+        return row["label"] or row["id"]
+    return text
 
 
 def _sync_client_group(plane: ControlPlane, name: str, members: list, description: str):
@@ -1349,38 +1467,89 @@ def _plan_ai_rule(plane: ControlPlane, plan: ChangePlan, item: dict):
         raise BundleError("aiAccess.principal is required for %s" % name)
     targets = item.get("targets") or []
     caps = item.get("capabilities") or []
+    paths = item.get("paths") or []
     action = str(item.get("action") or "ALLOW").strip().lower()
     if action not in ("allow", "deny"):
         raise BundleError("aiAccess.action must be ALLOW or DENY")
     enabled = bool(item.get("enabled")) if "enabled" in item else False
-    if not isinstance(targets, list) or not isinstance(caps, list):
-        raise BundleError("aiAccess targets/capabilities must be lists")
+    description = str(item.get("description") or "")
+    if not isinstance(targets, list) or not isinstance(caps, list) or not isinstance(paths, list):
+        raise BundleError("aiAccess targets/capabilities/paths must be lists")
     for c in caps:
         if str(c) not in AI_CAPABILITIES:
             raise BundleError("Unknown AI capability: %s" % c)
+
+    existing_row = plane.conn.execute(
+        "SELECT * FROM ai_access_rules WHERE lower(name)=lower(?)", (name,)
+    ).fetchone()
+    if existing_row is not None:
+        view = plane._ai_rule_view(existing_row)
+        # Normalize client-group:name display from view back to bare names.
+        cur_targets = []
+        for t in view.get("targets") or []:
+            text = str(t)
+            if text.startswith("client-group:"):
+                text = text.split(":", 1)[1]
+            cur_targets.append(text)
+        same = (
+            (view.get("principal") or "") == principal
+            and sorted(cur_targets) == sorted(str(t) for t in targets)
+            and sorted(view.get("capabilities") or []) == sorted(str(c) for c in caps)
+            and sorted(view.get("paths") or []) == sorted(str(p) for p in paths)
+            and str(view.get("action") or "").lower() == action
+            and bool(view.get("enabled")) == enabled
+            and (view.get("description") or "") == description
+        )
+        if same:
+            plan.changes.append(
+                PlannedChange("NO_CHANGE", "aiAccess", name, "ai-access unchanged")
+            )
+            return
+
     security = "unchanged"
     if action == "allow" and enabled:
         security = "broadened"
         plan.access_broadened = True
 
-    def _apply(pl, n=name, p=principal, tg=list(targets), cp=list(caps), act=action, en=enabled):
+    def _apply(
+        pl,
+        n=name,
+        p=principal,
+        tg=list(targets),
+        cp=list(caps),
+        ph=list(paths),
+        act=action,
+        en=enabled,
+        desc=description,
+    ):
         pl.set_ai_rule(n)
         pl.set_ai_rule_principal(n, p)
+        if desc:
+            try:
+                pl.set_ai_rule_description(n, desc)
+            except Exception:
+                pass
         for t in tg:
-            # Prefer client-group, then object/group, then client selector.
-            kind = "client_group"
-            row = pl.conn.execute(
-                "SELECT id FROM client_groups WHERE lower(name)=lower(?)", (t,)
+            token = str(t)
+            if token.startswith("client-group:"):
+                token = token.split(":", 1)[1]
+            obj = pl.get_object(token)
+            if obj is not None and obj["type"] == "managed_endpoint":
+                pl.set_ai_rule_target(n, "endpoint", token)
+                continue
+            grp = pl.conn.execute(
+                "SELECT id FROM client_groups WHERE lower(name)=lower(?)", (token,)
             ).fetchone()
-            if row:
-                pl.set_ai_rule_target(n, "client_group", t)
-            else:
-                try:
-                    pl.set_ai_rule_target(n, "object", t)
-                except Exception:
-                    pl.set_ai_rule_target(n, "client", t)
+            if grp:
+                pl.set_ai_rule_target(n, "client-group", token)
+                continue
+            raise BundleError(
+                "AI Access target %r must be a Managed Endpoint or Client Group" % token
+            )
         for c in cp:
             pl.set_ai_rule_capability(n, c)
+        for path in ph:
+            pl.set_ai_rule_path(n, str(path))
         pl.set_ai_rule_action(n, act)
         pl.set_ai_rule_enabled(n, en)
         return {"operation": "set-ai-rule", "entity": {"type": "ai-access", "name": n}}

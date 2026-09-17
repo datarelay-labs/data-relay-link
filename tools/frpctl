@@ -205,6 +205,15 @@ frpctl_require_install() {
   if frpctl_is_client || frpctl_is_server; then
     return 0
   fi
+  # Distinguish missing install from permission-denied on root-owned state dirs.
+  if [[ -e /etc/drlink || -e /var/lib/drlink || -e /etc/frp ]]; then
+    if [[ ! -r /etc/drlink && ! -r /var/lib/drlink ]]; then
+      echo "ERROR: Data Relay Link appears installed, but this user cannot read the install state." >&2
+      echo "Retry with: sudo ${FRP_CTL_CMD_NAME}" >&2
+      echo "Or grant this account access to /etc/drlink and /var/lib/drlink." >&2
+      return 1
+    fi
+  fi
   echo "ERROR: no ${FRP_CTL_PRODUCT_NAME} installation was found on this host." >&2
   echo "Install the server or client bootstrap first." >&2
   return 1
@@ -2723,7 +2732,6 @@ Navigation
   help                  Detailed help
   help <topic>          Domain or command help
   help workflows        End-to-end examples
-  help legacy           Hidden compatibility aliases
   ?                     Context-sensitive help
   Tab                   Show/complete next tokens (first press)
   system history        This session only

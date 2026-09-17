@@ -1129,6 +1129,10 @@ def to_internal(tokens):
         return ["create", "group"] + rest
 
     if path == ("set", "enrollment"):
+        if rest[:1] == ["zero-touch"]:
+            return ["create", "zero-touch"] + rest[1:]
+        if rest[:1] == ["manual"]:
+            return ["create", "enrollment"] + rest[1:]
         return ["create", "enrollment"] + rest
 
     if path == ("set", "enrollment", "bulk"):
@@ -1697,7 +1701,7 @@ def domain_help(topic, role):
             "  set internet-access <RULE>\n"
             "  set internet-access <RULE> source <OBJECT>\n"
             "  set internet-access <RULE> destination <OBJECT>\n"
-            "  test internet-access <CLIENT> <FQDN> <PROTOCOL> <PORT>\n"
+            "  test internet-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>\n"
             "  show fixed-tcp\n"
         )
     if topic in ("ai", "ai-access", "mcp"):
@@ -1952,9 +1956,11 @@ WORKFLOWS = (
             "set object office value 203.0.113.0/24",
             "set remote-access office-ssh",
             "set remote-access office-ssh source office",
-            "set remote-access office-ssh destination <PUBLISHED-SERVICE>",
+            "set remote-access office-ssh destination <ENDPOINT>",
+            "set remote-access office-ssh service tcp 22",
             "set remote-access office-ssh action allow",
-            "test remote-access <CLIENT> <SERVICE> <SOURCE-IP>",
+            "set remote-access office-ssh enabled",
+            "test remote-access 203.0.113.10 <ENDPOINT> tcp 22",
         ),
         "Remote Access is ordered first-match. Unmatched traffic is DENY.",
     ),
@@ -1969,7 +1975,7 @@ WORKFLOWS = (
             "set internet-access vendor-https source office-net",
             "set internet-access vendor-https destination vendor-api",
             "set internet-access vendor-https action allow",
-            "test internet-access <CLIENT> api.example.com https 443",
+            "test internet-access 10.0.0.5 api.example.com tcp 443",
         ),
         "Internet Access is ordered first-match with default DENY.",
     ),

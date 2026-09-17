@@ -88,7 +88,6 @@ Client Group is operational organization and an AI target selector. It is not an
 
 ```text
 show enrollments
-show enrollment <ID>
 
 set enrollment manual
 set enrollment zero-touch
@@ -96,9 +95,7 @@ set enrollment zero-touch
 unset enrollment <ID>
 ```
 
-Guided onboarding remains preferred for Zero-Touch because it collects platform, client identity, and initial Published Service settings safely.
-
-Bootstrap secrets/tickets are treated as credentials and are not redisplayed through ordinary `show`.
+`show enrollments` lists lifecycle state only. Bootstrap secrets/tickets are credentials and are never redisplayed through ordinary `show`.
 
 ## 6. Objects
 

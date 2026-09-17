@@ -135,6 +135,15 @@ ctx_en="$(frpctl_grammar_call match '{"tokens":["create","enrollment","?"],"role
 echo "$ctx_en" | grep -qiE 'Manual Enrollment|enrollment|set enrollment|not a current public root' || fail "create enrollment ? heading"
 pass "CREATE_ZERO_TOUCH_CONTEXT_HELP"
 
+# --- Public contract: set enrollment zero-touch / manual ---
+zt_set="$(frpctl_grammar_call match '{"tokens":["set","enrollment","zero-touch"],"role":"server"}')"
+echo "$zt_set" | grep -q '"action": "create_zero_touch"' \
+  || fail "set enrollment zero-touch must dispatch create_zero_touch"
+manual_set="$(frpctl_grammar_call match '{"tokens":["set","enrollment","manual"],"role":"server"}')"
+echo "$manual_set" | grep -q '"action": "create_enrollment"' \
+  || fail "set enrollment manual must dispatch create_enrollment"
+pass "SET_ENROLLMENT_ZERO_TOUCH_PUBLIC"
+
 # --- Guided: SSH only ---
 # create zero-touch → method(Zero-Touch) → platform(Linux) → identity → SSH only
 run_repl "$SERVER" "$WORKDIR/zt-ssh.out" \

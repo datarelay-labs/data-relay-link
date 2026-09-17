@@ -2405,13 +2405,20 @@ from pathlib import Path
 root = Path(sys.argv[1])
 # Deploy root is parent of var/
 deploy = root.parent.parent if root.name == "drlink" else root
-for mod_path in (sys.argv[2], sys.argv[3]):
-    name = Path(mod_path).stem
-    spec = importlib.util.spec_from_file_location(name, mod_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    globals()[name] = mod
-plane = drlink_control_plane.ControlPlane(str(deploy))
+db_mod = Path(sys.argv[2])
+plane_mod = Path(sys.argv[3])
+lib_dir = str(db_mod.parent)
+if lib_dir not in sys.path:
+    sys.path.insert(0, lib_dir)
+spec = importlib.util.spec_from_file_location("drlink_control_db", str(db_mod))
+db = importlib.util.module_from_spec(spec)
+sys.modules["drlink_control_db"] = db
+spec.loader.exec_module(db)
+spec = importlib.util.spec_from_file_location("drlink_control_plane", str(plane_mod))
+plane_mod_obj = importlib.util.module_from_spec(spec)
+sys.modules["drlink_control_plane"] = plane_mod_obj
+spec.loader.exec_module(plane_mod_obj)
+plane = plane_mod_obj.ControlPlane(str(deploy))
 try:
     plane.status()
 finally:
