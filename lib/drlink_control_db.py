@@ -616,6 +616,27 @@ def ensure_ai_auth_schema(conn: sqlite3.Connection) -> None:
     if cols and "oauth_subject" not in cols:
         conn.execute("ALTER TABLE ai_principals ADD COLUMN oauth_subject TEXT NOT NULL DEFAULT ''")
     conn.executescript(AI_AUTH_SQL)
+    ensure_enrollment_plans_schema(conn)
+
+
+ENROLLMENT_PLANS_SQL = """
+CREATE TABLE IF NOT EXISTS enrollment_plans (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  platform TEXT NOT NULL DEFAULT 'linux',
+  client_groups_json TEXT NOT NULL DEFAULT '[]',
+  initial_services_json TEXT NOT NULL DEFAULT '[]',
+  description TEXT NOT NULL DEFAULT '',
+  created_revision INTEGER,
+  updated_revision INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+"""
+
+
+def ensure_enrollment_plans_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(ENROLLMENT_PLANS_SQL)
 
 
 def initialize(conn: sqlite3.Connection) -> None:

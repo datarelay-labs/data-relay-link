@@ -128,15 +128,16 @@ class EnrollmentTtlHelpTests(unittest.TestCase):
             CREATE.parse_enrollment_ttl(example)
 
     def test_access_ttl_metavar_differs_by_role(self):
+        # Legacy add access-source was removed; enrollment TTL remains.
         access_cmd = CATALOG.find(["add", "access-source"]) or CATALOG.find(
             ["access", "add-source"], include_aliases=True
         )
+        self.assertIsNone(access_cmd)
         enroll_cmd = CATALOG.find(["create", "enrollment"]) or CATALOG.find(
             ["enrollment", "create"], include_aliases=True
         )
-        access = next(f for f in access_cmd["flags"] if f["name"] == "--ttl")
+        self.assertIsNotNone(enroll_cmd)
         enroll = next(f for f in enroll_cmd["flags"] if f["name"] == "--ttl")
-        self.assertEqual(access.get("role"), "access")
         self.assertEqual(enroll.get("role"), "enrollment")
         self.assertIn("|SECONDS", enroll.get("metavar", ""))
 
@@ -188,7 +189,7 @@ class EnrollmentTtlUpperBoundTests(unittest.TestCase):
             result = run_tool(root, "frp-create-client", ["--help"])
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("30d", result.stdout)
-            self.assertIn("2592000", result.stdout)
+            self.assertIn("24h", result.stdout)
 
     def test_catalog_documents_the_maximum(self):
         cmd = CATALOG.find(["create", "enrollment"]) or CATALOG.find(
@@ -209,14 +210,18 @@ class EnrollmentTtlUpperBoundTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             seed_server_tree(root)
-            for args in (
-                ["--ttl", "3650d", "--client-name", "manual-extreme"],
-                ["--ttl", "99999999999", "--client-name", "manual-extreme"],
+            manual = run_tool(
+                root, "frp-create-client", ["--ttl", "3650d", "--client-name", "manual-extreme"]
+            )
+            self.assertNotEqual(manual.returncode, 0)
+            self.assertIn("30d", manual.stderr)
+            zt = run_tool(
+                root,
+                "frp-create-client",
                 ["--one-line", "--ttl", "3650d", "--client-name", "zt-extreme"],
-            ):
-                result = run_tool(root, "frp-create-client", args)
-                self.assertNotEqual(result.returncode, 0, args)
-                self.assertIn("30d", result.stderr, args)
+            )
+            self.assertNotEqual(zt.returncode, 0)
+            self.assertIn("24h", zt.stderr)
             enrollments = list((root / "var/lib/drlink/enrollments").glob("*.json"))
             tickets = list((root / "var/lib/drlink/bootstrap").glob("*.json"))
             self.assertEqual(enrollments, [], "rejected TTL still wrote an enrollment")
@@ -230,7 +235,7 @@ class EnrollmentTtlUpperBoundTests(unittest.TestCase):
                 root, "frp-enroll-bulk", ["--count", "2", "--ttl", "3650d"]
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("30d", rejected.stderr)
+            self.assertIn("24h", rejected.stderr)
             self.assertEqual(
                 list((root / "var/lib/drlink/bootstrap").glob("*.json")),
                 [],
@@ -251,13 +256,13 @@ class EnrollmentTtlUpperBoundTests(unittest.TestCase):
             result = run_tool(
                 root,
                 "frp-create-client",
-                ["--one-line", "--ttl", "30d", "--client-name", "zt-max"],
+                ["--one-line", "--ttl", "24h", "--client-name", "zt-max"],
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             tickets = list((root / "var/lib/drlink/bootstrap").glob("*.json"))
             self.assertEqual(len(tickets), 1)
             record = json.loads(tickets[0].read_text(encoding="utf-8"))
-            self.assertLessEqual(int(record["expires_at"]) - int(time.time()), MAX_TTL)
+            self.assertLessEqual(int(record["expires_at"]) - int(time.time()), 24 * 86400)
             enrollment = json.loads(
                 (root / "var/lib/drlink/enrollments" / (record["enrollment_id"] + ".json"))
                 .read_text(encoding="utf-8")

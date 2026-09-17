@@ -79,9 +79,9 @@ CONTROL_PLANE_MUTATE = frozenset(
         "fixed-tcp",
     }
 )
-CONTROL_PLANE_TEST = frozenset({"remote-access", "internet-access", "ai-access"})
+CONTROL_PLANE_TEST = frozenset({"remote-access", "internet-access", "ai-access", "configuration"})
 CONTROL_PLANE_SYSTEM = frozenset(
-    {"backup", "restore", "revisions", "revision", "diff", "credential"}
+    {"backup", "restore", "revisions", "revision", "diff", "credential", "export", "apply"}
 )
 
 
@@ -1619,6 +1619,15 @@ def public_option_rejection(tokens):
     if bad is None:
         return None
     focus = [t for t in toks if not t.startswith("-")]
+    # ConfigurationBundle stdin path uses a lone "-" (not a GNU option).
+    if bad == "-":
+        for prefix in (
+            ("test", "configuration"),
+            ("system", "diff", "configuration"),
+            ("system", "apply", "configuration"),
+        ):
+            if tuple(focus[: len(prefix)]) == prefix:
+                return None
     # Guided / no-flag public commands (reject all dash tokens).
     # Enrollment / zero-touch / destination create flows are prompt-driven.
     # Other commands may still accept catalog-declared hidden machine flags.
@@ -2130,6 +2139,12 @@ def _match_system(tokens, role, names=None):
     if discovery is not None:
         return discovery
     op = tokens[1]
+    if op == "export" and len(tokens) >= 3 and tokens[2] == "configuration":
+        return _control_plane_ok(tokens)
+    if op == "apply" and len(tokens) >= 3 and tokens[2] == "configuration":
+        return _control_plane_ok(tokens)
+    if op == "diff" and len(tokens) >= 3 and tokens[2] == "configuration":
+        return _control_plane_ok(tokens)
     if op in CONTROL_PLANE_SYSTEM:
         return _control_plane_ok(tokens)
     if op == "diagnostics" and len(tokens) > 2 and tokens[2] in ("control-plane", "runtime", "mcp"):

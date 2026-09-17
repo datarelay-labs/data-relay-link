@@ -184,6 +184,8 @@ class ControlPlane:
         self.runtime = runtime_dir(root)
         self.conn = conn or open_control_db(root)
         self._db_ident = self._db_file_ident()
+        self._batch_mode = False
+        self._batch_results: list = []
 
     def close(self) -> None:
         if self.conn is not None:
@@ -282,7 +284,23 @@ class ControlPlane:
         compile_runtime: bool = True,
     ) -> Any:
         if impact and impact.get("access_broadened") and not _confirm_requested(confirm):
-            raise ConfirmationRequired(self._format_impact(impact), impact)
+            if not self._batch_mode:
+                raise ConfirmationRequired(self._format_impact(impact), impact)
+        if self._batch_mode:
+            if expected:
+                for table, entity_id, version in expected.get("rows") or ():
+                    row = self.conn.execute(
+                        "SELECT row_version FROM %s WHERE id = ?" % table, (entity_id,)
+                    ).fetchone()
+                    if row is None or int(row["row_version"]) != int(version):
+                        raise ConcurrencyError(
+                            "Object changed while you were editing it.\n"
+                            "No changes were applied.\n"
+                            "Review current state and retry."
+                        )
+            result = writer()
+            self._batch_results.append(result)
+            return result
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             if expected:
@@ -3642,6 +3660,113 @@ class ControlPlane:
 
     def list_revisions(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM config_revisions ORDER BY revision DESC LIMIT 200")]
+
+    def upsert_enrollment_plan(
+        self,
+        name: str,
+        *,
+        platform: str = "linux",
+        client_groups: Optional[list] = None,
+        initial_services: Optional[list] = None,
+        description: str = "",
+    ) -> dict:
+        name = _validate_name(name, "Enrollment plan name")
+        platform = str(platform or "linux").strip().lower()
+        if platform not in ("linux", "windows", "macos"):
+            raise ControlPlaneError("enrollment plan platform must be linux|windows|macos")
+        client_groups = list(client_groups or [])
+        initial_services = list(initial_services or [])
+
+        def write():
+            now = utc_now_iso()
+            existing = self.conn.execute(
+                "SELECT * FROM enrollment_plans WHERE lower(name)=lower(?)", (name,)
+            ).fetchone()
+            payload_groups = json.dumps(client_groups, sort_keys=True)
+            payload_services = json.dumps(initial_services, sort_keys=True)
+            if existing:
+                if (
+                    existing["platform"] == platform
+                    and existing["client_groups_json"] == payload_groups
+                    and existing["initial_services_json"] == payload_services
+                    and (existing["description"] or "") == description
+                ):
+                    return {
+                        "entity": {"type": "enrollment-plan", "id": existing["id"], "name": name},
+                        "operation": "noop",
+                    }
+                self.conn.execute(
+                    "UPDATE enrollment_plans SET platform=?, client_groups_json=?, "
+                    "initial_services_json=?, description=?, updated_at=?, updated_revision=? "
+                    "WHERE id=?",
+                    (
+                        platform,
+                        payload_groups,
+                        payload_services,
+                        description,
+                        now,
+                        self._next_revision(),
+                        existing["id"],
+                    ),
+                )
+                return {
+                    "entity": {"type": "enrollment-plan", "id": existing["id"], "name": name},
+                    "operation": "update",
+                }
+            eid = _new_id("epl")
+            self.conn.execute(
+                "INSERT INTO enrollment_plans(id, name, platform, client_groups_json, "
+                "initial_services_json, description, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (eid, name, platform, payload_groups, payload_services, description, now, now),
+            )
+            return {"entity": {"type": "enrollment-plan", "id": eid, "name": name}, "operation": "create"}
+
+        return self._mutate("set enrollment-plan %s" % name, "upsert enrollment plan", write)
+
+    def delete_enrollment_plan(self, name: str) -> dict:
+        name = _validate_name(name, "Enrollment plan name")
+
+        def write():
+            row = self.conn.execute(
+                "SELECT id FROM enrollment_plans WHERE lower(name)=lower(?)", (name,)
+            ).fetchone()
+            if not row:
+                return {"entity": {"type": "enrollment-plan", "name": name}, "operation": "absent"}
+            self.conn.execute("DELETE FROM enrollment_plans WHERE id = ?", (row["id"],))
+            return {
+                "entity": {"type": "enrollment-plan", "id": row["id"], "name": name},
+                "operation": "delete",
+            }
+
+        return self._mutate("unset enrollment-plan %s" % name, "delete enrollment plan", write)
+
+    def _audit_bundle_attempt(self, plan, *, result: str, result_revision: int) -> None:
+        """Record non-secret ConfigurationBundle metadata (no raw bundle body)."""
+        try:
+            self._audit(
+                revision=int(result_revision),
+                action="system apply configuration",
+                entity_type="configuration-bundle",
+                entity_id=str(getattr(plan, "bundle_name", "") or ""),
+                operation=str(result),
+                after="bundle_hash=%s input=%s" % (
+                    getattr(plan, "bundle_hash", ""),
+                    getattr(plan, "input_path", ""),
+                ),
+                impact=json.dumps(
+                    {
+                        "bundle_hash": getattr(plan, "bundle_hash", ""),
+                        "input_path": getattr(plan, "input_path", ""),
+                        "base_revision": getattr(plan, "base_revision", None),
+                        "result": result,
+                    },
+                    sort_keys=True,
+                )[:2000],
+            )
+            self.conn.commit()
+        except Exception:
+            pass
 
     def list_audit(self, *, revision: Optional[int] = None, entity_type: Optional[str] = None, entity_id: Optional[str] = None, principal: Optional[str] = None) -> list[dict]:
         sql = "SELECT * FROM audit_events WHERE 1=1"

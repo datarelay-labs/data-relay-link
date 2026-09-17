@@ -15,8 +15,103 @@ from drlink_control_plane import (
     ControlPlane,
     MCP_AUTH_MODEL,
 )
+from drlink_configuration_bundle import (
+    BundleError,
+    apply_change_plan,
+    export_configuration,
+    format_plan_review,
+    prepare_plan,
+    read_bundle_from_path_or_stdin,
+)
 
 USAGE_HINT = "No changes were applied."
+
+
+def _parse_output_flag(tokens):
+    """Parse [--output PATH] from trailing tokens; return (path_or_none, remaining)."""
+    out = None
+    remaining = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in ("--output", "-o") and i + 1 < len(tokens):
+            out = tokens[i + 1]
+            i += 2
+            continue
+        remaining.append(tokens[i])
+        i += 1
+    return out, remaining
+
+
+def _configuration_export(plane: ControlPlane, rest):
+    out_path, remaining = _parse_output_flag(rest)
+    if remaining:
+        raise SystemExit("Unexpected arguments.\n\nUsage:\n  system export configuration --output <file>")
+    if not out_path:
+        raise SystemExit("Missing --output.\n\nUsage:\n  system export configuration --output <file>")
+    text = export_configuration(plane)
+    Path = __import__("pathlib").Path
+    Path(out_path).write_text(text, encoding="utf-8")
+    sys.stdout.write("Configuration exported (redacted): %s\n" % out_path)
+    return 0
+
+
+def _configuration_test(plane: ControlPlane, rest):
+    if not rest:
+        raise SystemExit("Missing configuration path.\n\nUsage:\n  test configuration <file|->")
+    raw, label = read_bundle_from_path_or_stdin(rest[0])
+    try:
+        plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
+    except BundleError as exc:
+        raise SystemExit(str(exc)) from exc
+    sys.stdout.write(format_plan_review(plan))
+    sys.stdout.write("Configuration test: PASS\n")
+    return 0
+
+
+def _configuration_diff(plane: ControlPlane, rest):
+    if not rest:
+        raise SystemExit("Missing configuration path.\n\nUsage:\n  system diff configuration <file|->")
+    raw, label = read_bundle_from_path_or_stdin(rest[0])
+    try:
+        plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
+    except BundleError as exc:
+        raise SystemExit(str(exc)) from exc
+    sys.stdout.write(format_plan_review(plan))
+    if not plan.mutating_changes and not plan.client_action_required:
+        sys.stdout.write("Diff result: NO CHANGE\n")
+    else:
+        sys.stdout.write("Diff result: CHANGES PENDING (no mutation performed)\n")
+    return 0
+
+
+def _configuration_apply(plane: ControlPlane, rest):
+    if not rest:
+        raise SystemExit("Missing configuration path.\n\nUsage:\n  system apply configuration <file|->")
+    raw, label = read_bundle_from_path_or_stdin(rest[0])
+    try:
+        plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
+    except BundleError as exc:
+        raise SystemExit(str(exc)) from exc
+    sys.stdout.write(format_plan_review(plan))
+    result = _run(apply_change_plan, plane, plan)
+    if isinstance(result, dict) and result.get("cancelled"):
+        return 0
+    if not isinstance(result, dict):
+        return 0
+    status = result.get("status")
+    if status == "NO_CHANGE":
+        sys.stdout.write("Apply result: NO CHANGE\n")
+        sys.stdout.write("Revision: %s\n" % result.get("revision"))
+    elif status == "CLIENT_ACTION_REQUIRED":
+        sys.stdout.write("Apply result: CLIENT_ACTION_REQUIRED\n")
+        sys.stdout.write("Server mutations: none for client-local targets.\n")
+    else:
+        sys.stdout.write("Apply result: APPLIED\n")
+        sys.stdout.write("Revision: %s\n" % result.get("revision"))
+        sys.stdout.write("Zero-Touch tickets issued: %s\n" % result.get("tickets_issued", 0))
+        if result.get("client_action_required"):
+            sys.stdout.write("CLIENT_ACTION_REQUIRED: yes (see planned changes)\n")
+    return 0
 
 
 def _confirm_from_stdin(message: str) -> bool:
@@ -724,6 +819,8 @@ def _unset(plane: ControlPlane, rest, client_sel):
 def _test(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing test target.")
+    if rest[0] == "configuration":
+        return _configuration_test(plane, rest[1:])
     if rest[0] == "remote-access":
         _need(rest, 5, "test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>")
         result = plane.evaluate_remote_access(rest[1], rest[2], rest[3], int(rest[4]))
@@ -746,6 +843,12 @@ def _test(plane: ControlPlane, rest):
 def _system(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing system operation.")
+    if rest[0] == "export" and len(rest) >= 2 and rest[1] == "configuration":
+        return _configuration_export(plane, rest[2:])
+    if rest[0] == "diff" and len(rest) >= 2 and rest[1] == "configuration":
+        return _configuration_diff(plane, rest[2:])
+    if rest[0] == "apply" and len(rest) >= 2 and rest[1] == "configuration":
+        return _configuration_apply(plane, rest[2:])
     if rest[0] == "diagnostics":
         kind = rest[1] if len(rest) > 1 else "all"
         if kind in ("control-plane", "all"):

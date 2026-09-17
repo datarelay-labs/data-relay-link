@@ -3903,5 +3903,136 @@
     "confirmation": "none",
     "surface": "",
     "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "export",
+      "configuration"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Export redacted ConfigurationBundle",
+    "detail": "Export current server-owned configuration as a redacted ConfigurationBundle YAML suitable for review and AI-assisted editing. Secrets are never exported.",
+    "examples": [
+      "system export configuration --output drlink.yaml"
+    ],
+    "args": [
+      {
+        "name": "--output",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": [
+      {
+        "name": "--output",
+        "arity": 1,
+        "hidden": false,
+        "required": true,
+        "description": "Output YAML path",
+        "metavar": "<file>"
+      }
+    ]
+  },
+  {
+    "path": [
+      "test",
+      "configuration"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Validate a ConfigurationBundle without mutation",
+    "detail": "Parse, validate, run embedded policy tests, and show the Change Plan for a ConfigurationBundle. Supports file path or '-' for stdin.",
+    "examples": [
+      "test configuration drlink.yaml",
+      "test configuration -"
+    ],
+    "args": [
+      {
+        "name": "<file|->",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "diff",
+      "configuration"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Diff a ConfigurationBundle against current state",
+    "detail": "Show the Change Plan and security impact for a ConfigurationBundle without mutation. Supports file path or '-' for stdin.",
+    "examples": [
+      "system diff configuration drlink.yaml",
+      "system diff configuration -"
+    ],
+    "args": [
+      {
+        "name": "<file|->",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "apply",
+      "configuration"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Apply a ConfigurationBundle atomically",
+    "detail": "Validate, test, diff, confirm, and atomically apply a ConfigurationBundle through the shared Change Plan engine. Supports file path or '-' for stdin. Does not issue Zero-Touch tickets.",
+    "examples": [
+      "system apply configuration drlink.yaml",
+      "system apply configuration -"
+    ],
+    "args": [
+      {
+        "name": "<file|->",
+        "complete": null,
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "security_widening",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
   }
 ]

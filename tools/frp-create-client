@@ -434,26 +434,35 @@ def fail(message, code=2):
 TTL_DURATION_RE = re.compile(r'^(\d+)([smhd])$', re.I)
 
 # An enrollment credential is a short-lived hand-off, not long-term access.
-# 30 days is the hard ceiling: deliberately far below the enrollment retention
-# maximum (3650 days) so a mistyped TTL cannot outlive the record that tracks it.
+# Zero-Touch tickets: default 1h, maximum 24h (server-enforced in allocator).
+ZERO_TOUCH_DEFAULT_TTL = '1h'
+ZERO_TOUCH_MAX_TTL_SEC = 24 * 86400
+ZERO_TOUCH_MAX_TTL_TEXT = '24h'
+# Manual Enrollment Codes retain a longer operational ceiling (30d).
 MAX_ENROLLMENT_TTL_SEC = 30 * 86400
 MAX_ENROLLMENT_TTL_TEXT = '30d'
 TTL_TOO_LARGE_ERROR = (
     'TTL must be at most %s (%s seconds); enrollment credentials are short-lived'
     % (MAX_ENROLLMENT_TTL_TEXT, MAX_ENROLLMENT_TTL_SEC)
 )
+ZERO_TOUCH_TTL_TOO_LARGE_ERROR = (
+    'Zero-Touch TTL must be at most %s (%s seconds)'
+    % (ZERO_TOUCH_MAX_TTL_TEXT, ZERO_TOUCH_MAX_TTL_SEC)
+)
 
 
-def parse_enrollment_ttl(raw):
+def parse_enrollment_ttl(raw, *, zero_touch=False):
     text = str(raw or '').strip()
     if not text:
         raise ValueError('TTL is required')
+    max_sec = ZERO_TOUCH_MAX_TTL_SEC if zero_touch else MAX_ENROLLMENT_TTL_SEC
+    too_large = ZERO_TOUCH_TTL_TOO_LARGE_ERROR if zero_touch else TTL_TOO_LARGE_ERROR
     if text.isdigit():
         seconds = int(text)
         if seconds <= 0:
             raise ValueError('TTL must be a positive integer')
-        if seconds > MAX_ENROLLMENT_TTL_SEC:
-            raise ValueError(TTL_TOO_LARGE_ERROR)
+        if seconds > max_sec:
+            raise ValueError(too_large)
         return seconds
     match = TTL_DURATION_RE.match(text.lower())
     if not match:
@@ -464,8 +473,8 @@ def parse_enrollment_ttl(raw):
         raise ValueError('TTL must be positive')
     multipliers = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
     seconds = amount * multipliers[unit]
-    if seconds > MAX_ENROLLMENT_TTL_SEC:
-        raise ValueError(TTL_TOO_LARGE_ERROR)
+    if seconds > max_sec:
+        raise ValueError(too_large)
     return seconds
 
 
@@ -539,12 +548,12 @@ def parse_args(argv=None):
     )
     p.add_argument(
         '--ttl',
-        default='600',
+        default=None,
         metavar='DURATION|SECONDS',
         help=(
-            'Enrollment lifetime: duration (30m|1h|4h|1d) or seconds '
-            '(default 600, maximum %s / %s seconds)'
-            % (MAX_ENROLLMENT_TTL_TEXT, MAX_ENROLLMENT_TTL_SEC)
+            'Enrollment lifetime: duration (30m|1h|4h|1d) or seconds. '
+            'Zero-Touch default %s (max %s); Manual Enrollment default 600s (max %s).'
+            % (ZERO_TOUCH_DEFAULT_TTL, ZERO_TOUCH_MAX_TTL_TEXT, MAX_ENROLLMENT_TTL_TEXT)
         ),
     )
     p.add_argument('--note', default='')
@@ -1093,6 +1102,7 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     print()
     print('This command contains a short-lived one-time bootstrap ticket.')
     print('Treat the command as sensitive until it expires or is used.')
+    print('This credential will not be shown again.')
     print()
     if tracking_id:
         print('Enrollment ID: %s' % tracking_id)
@@ -1125,8 +1135,12 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
 
 def main(argv=None):
     a = parse_args(argv)
+    zero_touch = bool(a.one_line)
+    ttl_raw = a.ttl
+    if ttl_raw is None or str(ttl_raw).strip() == '':
+        ttl_raw = ZERO_TOUCH_DEFAULT_TTL if zero_touch else '600'
     try:
-        ttl = parse_enrollment_ttl(a.ttl)
+        ttl = parse_enrollment_ttl(ttl_raw, zero_touch=zero_touch)
     except ValueError as exc:
         fail(str(exc))
 
@@ -1293,6 +1307,8 @@ def main(argv=None):
             cfg=remapped_server_cfg(cfg),
         )
     except Exception as exc:
+        if type(exc).__name__ == 'ZeroTouchCapacityError' or 'MAX_ISSUABLE' in str(exc):
+            fail(str(exc))
         fail('failed to issue bootstrap ticket: %s' % exc)
 
     ticket_id = str((ticket_record or {}).get('id') or '')

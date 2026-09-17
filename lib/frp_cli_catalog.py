@@ -1079,10 +1079,17 @@ def to_internal(tokens):
         "ai-access",
         "ai-activity",
         "fixed-tcp",
+        "configuration",
     }
     if len(path) >= 2 and path[0] in ("show", "set", "unset", "test") and path[1] in CONTROL_PLANE_RES:
         return list(work)
     if path[:3] == ("system", "credential", "rotate") or path[:3] == ("system", "credential", "revoke"):
+        return list(work)
+    if path[:3] in (
+        ("system", "export", "configuration"),
+        ("system", "apply", "configuration"),
+        ("system", "diff", "configuration"),
+    ):
         return list(work)
     if path[:2] == ("system", "revisions") or path[:2] == ("system", "revision") or path[:2] == ("system", "diff"):
         return list(work)

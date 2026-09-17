@@ -43,6 +43,12 @@ BOOTSTRAP_TICKET_MAX_LEN = 160
 BOOTSTRAP_DUMMY_HASH = '0' * 64
 HEX_RE = re.compile(r'^[0-9a-f]+$')
 MACHINE_ID_MAX_LEN = 128
+# Bounded Zero-Touch issuance (server-enforced; not CLI-only).
+ZERO_TOUCH_MAX_PER_ISSUE = 10
+ZERO_TOUCH_MAX_ACTIVE_UNUSED = 10
+ZERO_TOUCH_USE_COUNT = 1
+ZERO_TOUCH_DEFAULT_TTL_SEC = 3600
+ZERO_TOUCH_MAX_TTL_SEC = 24 * 3600
 HOSTNAME_MAX_LEN = 253
 # Request body already caps at 64KiB; also bound idle reads and fan-out.
 ALLOCATOR_REQUEST_TIMEOUT_SEC = 30
@@ -528,6 +534,140 @@ def hash_bootstrap_secret(secret):
     return hashlib.sha256(secret.encode('ascii')).hexdigest()
 
 
+class ZeroTouchCapacityError(RuntimeError):
+    """Raised when Zero-Touch issuance would exceed server-side ceilings."""
+
+    def __init__(self, message, *, active_unused=0, max_issuable=0, requested=0):
+        super().__init__(message)
+        self.active_unused = int(active_unused)
+        self.max_issuable = int(max_issuable)
+        self.requested = int(requested)
+
+
+def normalize_zero_touch_ttl(ttl):
+    """Normalize Zero-Touch TTL. Default 1h; reject <=0 or >24h."""
+    if ttl is None or ttl == '':
+        return ZERO_TOUCH_DEFAULT_TTL_SEC
+    try:
+        seconds = int(ttl)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('invalid Zero-Touch TTL') from exc
+    if seconds <= 0:
+        raise ValueError('Zero-Touch TTL must be positive')
+    if seconds > ZERO_TOUCH_MAX_TTL_SEC:
+        raise ValueError(
+            'Zero-Touch TTL must be at most 24h (%s seconds)'
+            % ZERO_TOUCH_MAX_TTL_SEC
+        )
+    return seconds
+
+
+def bootstrap_ticket_is_active_unused(record, now=None):
+    """True when a ticket counts toward the active-unused ceiling."""
+    if not isinstance(record, dict):
+        return False
+    now = int(now if now is not None else time.time())
+    if record.get('revoked_at') or record.get('completed_at'):
+        return False
+    try:
+        expires_at = int(record.get('expires_at', 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if expires_at <= now:
+        return False
+    return True
+
+
+def count_active_unused_bootstrap_tickets(bootstrap_dir, now=None):
+    """Count valid unused (not consumed/revoked/expired) Zero-Touch tickets."""
+    bootstrap_dir = Path(bootstrap_dir)
+    now = int(now if now is not None else time.time())
+    count = 0
+    try:
+        entries = list(bootstrap_dir.glob('*.json'))
+    except OSError:
+        return 0
+    for path in entries:
+        try:
+            record = load_json(path)
+        except Exception:
+            continue
+        if bootstrap_ticket_is_active_unused(record, now=now):
+            count += 1
+    return count
+
+
+def max_issuable_zero_touch_tickets(bootstrap_dir, now=None):
+    active = count_active_unused_bootstrap_tickets(bootstrap_dir, now=now)
+    remaining = ZERO_TOUCH_MAX_ACTIVE_UNUSED - active
+    if remaining < 0:
+        remaining = 0
+    return min(ZERO_TOUCH_MAX_PER_ISSUE, remaining), active
+
+
+def assert_zero_touch_issuance_capacity(bootstrap_dir, requested, now=None):
+    """Fail closed before any issuance when capacity is insufficient."""
+    requested = int(requested)
+    if requested <= 0:
+        raise ValueError('Zero-Touch issuance count must be positive')
+    if requested > ZERO_TOUCH_MAX_PER_ISSUE:
+        raise ZeroTouchCapacityError(
+            'Zero-Touch issuance rejects requests above %s tickets per issue '
+            '(requested=%s).'
+            % (ZERO_TOUCH_MAX_PER_ISSUE, requested),
+            active_unused=count_active_unused_bootstrap_tickets(bootstrap_dir, now=now),
+            max_issuable=ZERO_TOUCH_MAX_PER_ISSUE,
+            requested=requested,
+        )
+    max_ok, active = max_issuable_zero_touch_tickets(bootstrap_dir, now=now)
+    if requested > max_ok:
+        raise ZeroTouchCapacityError(
+            'Zero-Touch capacity exceeded.\n'
+            'ACTIVE_UNUSED=%s\n'
+            'MAX_ACTIVE_UNUSED=%s\n'
+            'MAX_ISSUABLE=%s\n'
+            'REQUESTED=%s\n'
+            'Issued: 0'
+            % (active, ZERO_TOUCH_MAX_ACTIVE_UNUSED, max_ok, requested),
+            active_unused=active,
+            max_issuable=max_ok,
+            requested=requested,
+        )
+    return max_ok, active
+
+
+def revoke_bootstrap_tickets_by_batch(bootstrap_dir, batch_id, now_iso=None):
+    """Revoke unused tickets sharing batch_id. Does not touch enrolled clients."""
+    batch_id = str(batch_id or '').strip()
+    if not batch_id:
+        raise ValueError('batch_id is required')
+    bootstrap_dir = Path(bootstrap_dir)
+    now_iso = now_iso or utc_now_iso()
+    revoked = []
+    try:
+        entries = list(bootstrap_dir.glob('*.json'))
+    except OSError:
+        return revoked
+    for path in entries:
+        try:
+            record = load_json(path)
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if str(record.get('batch_id') or '') != batch_id:
+            continue
+        if record.get('completed_at') or record.get('revoked_at'):
+            continue
+        record['revoked_at'] = now_iso
+        try:
+            atomic_write_json(path, record, mode=0o600)
+        except OSError:
+            continue
+        revoked.append(str(record.get('id') or path.stem))
+    return revoked
+
+
 def parse_bootstrap_ticket(raw):
     """Return (ticket_id, secret) or None. Never raises on malformed input."""
     if raw is None:
@@ -621,26 +761,13 @@ def enrollment_state_dir(enrollments_dir, cfg=None):
     return Path(enrollments_dir).resolve().parent
 
 
-def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='', label='', cfg=None):
-    """Create a hashed bootstrap ticket plus a normal enrollment record.
-
-    Does not allocate a public port. Caller must have already validated
-    `services` with normalize_services(); re-normalizing here keeps the ticket
-    scope byte-identical to what /enroll compares a request against.
-
-    The enrollment record and the bootstrap ticket are one logical pair. Both
-    durable writes happen under lifecycle → control-state → registry locks (the
-    documented order backup and restore use), so a concurrent backup archives
-    either the pre-create state or the complete pair, never one half.
-
-    Retention cleanup uses the caller's server cfg. Callers must pass cfg= to
-    get their configured enrollment_retention_days; a cfg synthesized here
-    would silently fall back to the 30-day default.
-    """
+def _prepare_bootstrap_ticket_pair(services, ttl, note='', label='', batch_id=''):
+    """Build enrollment+ticket records and raw secret (not persisted)."""
     services = normalize_services(services)
-    ttl = int(ttl)
+    ttl = normalize_zero_touch_ttl(ttl)
     note = str(note or '')
     label = str(label or '')
+    batch_id = str(batch_id or '').strip()
     enrollment_id = secrets.token_hex(8)
     enroll_secret = secrets.token_hex(32)
     ticket_id = secrets.token_hex(8)
@@ -659,8 +786,6 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
         'used_at': None,
         'note': note,
         'label': label,
-        # Ticket scope is authoritative: /enroll must refuse any service set
-        # the administrator did not authorize when issuing this ticket.
         'authorized_services': services,
     }
     ticket_record = {
@@ -675,7 +800,72 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
         'note': note,
         'label': label,
         'services': services,
+        'use_count_max': ZERO_TOUCH_USE_COUNT,
     }
+    if batch_id:
+        ticket_record['batch_id'] = batch_id
+    raw_ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
+    return raw_ticket, enroll_record, ticket_record
+
+
+def _persist_bootstrap_ticket_pair(enrollments_dir, bootstrap_dir, enroll_record, ticket_record):
+    """Write enrollment+ticket pair. Caller must hold control locks."""
+    enroll_path = enrollment_file_path(enrollments_dir, enroll_record['id'])
+    ticket_path = bootstrap_file_path(bootstrap_dir, ticket_record['id'])
+    if enroll_path is None or ticket_path is None:
+        raise RuntimeError('failed to allocate bootstrap ticket paths')
+    try:
+        atomic_write_json(enroll_path, enroll_record, mode=0o600)
+        try:
+            os.chmod(str(enroll_path), 0o600)
+        except OSError:
+            pass
+        _pair_write_pause_hook()
+        atomic_write_json(ticket_path, ticket_record, mode=0o600)
+        try:
+            os.chmod(str(ticket_path), 0o600)
+        except OSError:
+            pass
+    except Exception:
+        unlink_quiet(ticket_path)
+        unlink_quiet(enroll_path)
+        raise
+    return enroll_path, ticket_path
+
+
+def issue_bootstrap_ticket(
+    enrollments_dir,
+    bootstrap_dir,
+    services,
+    ttl,
+    note='',
+    label='',
+    cfg=None,
+    *,
+    batch_id='',
+    requested_count=1,
+):
+    """Create a hashed bootstrap ticket plus a normal enrollment record.
+
+    Does not allocate a public port. Caller must have already validated
+    `services` with normalize_services(); re-normalizing here keeps the ticket
+    scope byte-identical to what /enroll compares a request against.
+
+    The enrollment record and the bootstrap ticket are one logical pair. Both
+    durable writes happen under lifecycle → control-state → registry locks (the
+    documented order backup and restore use), so a concurrent backup archives
+    either the pre-create state or the complete pair, never one half.
+
+    Retention cleanup uses the caller's server cfg. Callers must pass cfg= to
+    get their configured enrollment_retention_days; a cfg synthesized here
+    would silently fall back to the 30-day default.
+
+    Capacity ceilings (max 10/issue, max 10 active unused) are enforced under
+    the same locks so concurrent issuers cannot bypass them.
+    """
+    raw_ticket, enroll_record, ticket_record = _prepare_bootstrap_ticket_pair(
+        services, ttl, note=note, label=label, batch_id=batch_id
+    )
     enrollments_dir = Path(enrollments_dir)
     bootstrap_dir = ensure_secret_dir(bootstrap_dir, 0o700)
     try:
@@ -686,45 +876,97 @@ def issue_bootstrap_ticket(enrollments_dir, bootstrap_dir, services, ttl, note='
             os.chmod(str(enrollments_dir), 0o700)
         except OSError:
             pass
-    # Retention policy lives in the server cfg; keep it and only realign the
-    # paths this call is actually writing.
     cleanup_cfg = None
     if cfg:
         cleanup_cfg = dict(cfg)
         cleanup_cfg['enrollments_dir'] = str(enrollments_dir)
         cleanup_cfg['bootstrap_dir'] = str(bootstrap_dir)
-    enroll_path = enrollment_file_path(enrollments_dir, enrollment_id)
-    ticket_path = bootstrap_file_path(bootstrap_dir, ticket_id)
-    if enroll_path is None or ticket_path is None:
-        raise RuntimeError('failed to allocate bootstrap ticket paths')
     state_dir = enrollment_state_dir(enrollments_dir, cfg)
     lock_timeout = float(
         os.environ.get('FRP_ENROLLMENT_LOCK_TIMEOUT')
         or CLOCKS.DEFAULT_TIMEOUT_SEC
     )
+    now = int(time.time())
     with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
-        # registry.lock is already held here: retention must not reacquire it.
         cleanup_expired_bootstrap_tickets(
             bootstrap_dir, now, cfg=cleanup_cfg, force=True, already_locked=True
         )
+        assert_zero_touch_issuance_capacity(
+            bootstrap_dir, int(requested_count or 1), now=now
+        )
+        _persist_bootstrap_ticket_pair(
+            enrollments_dir, bootstrap_dir, enroll_record, ticket_record
+        )
+    return raw_ticket, enroll_record, ticket_record
+
+
+def issue_bootstrap_ticket_batch(
+    enrollments_dir,
+    bootstrap_dir,
+    rows,
+    ttl,
+    cfg=None,
+    *,
+    batch_id=None,
+):
+    """Issue N unique single-use tickets under one capacity reservation.
+
+    rows: list of dicts with keys services, note, label.
+    Rejects the entire request (issues 0) when capacity is insufficient.
+    """
+    rows = list(rows or [])
+    count = len(rows)
+    if count == 0:
+        raise ValueError('Zero-Touch batch is empty')
+    ttl = normalize_zero_touch_ttl(ttl)
+    batch_id = str(batch_id or secrets.token_hex(8))
+    enrollments_dir = Path(enrollments_dir)
+    bootstrap_dir = ensure_secret_dir(bootstrap_dir, 0o700)
+    try:
+        os.chmod(str(enrollments_dir), 0o700)
+    except OSError:
+        enrollments_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_cfg = None
+    if cfg:
+        cleanup_cfg = dict(cfg)
+        cleanup_cfg['enrollments_dir'] = str(enrollments_dir)
+        cleanup_cfg['bootstrap_dir'] = str(bootstrap_dir)
+    state_dir = enrollment_state_dir(enrollments_dir, cfg)
+    lock_timeout = float(
+        os.environ.get('FRP_ENROLLMENT_LOCK_TIMEOUT')
+        or CLOCKS.DEFAULT_TIMEOUT_SEC
+    )
+    now = int(time.time())
+    prepared = [
+        _prepare_bootstrap_ticket_pair(
+            row.get('services') or [],
+            ttl,
+            note=row.get('note') or '',
+            label=row.get('label') or '',
+            batch_id=batch_id,
+        )
+        for row in rows
+    ]
+    issued = []
+    created_paths = []
+    with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
+        cleanup_expired_bootstrap_tickets(
+            bootstrap_dir, now, cfg=cleanup_cfg, force=True, already_locked=True
+        )
+        assert_zero_touch_issuance_capacity(bootstrap_dir, count, now=now)
         try:
-            atomic_write_json(enroll_path, enroll_record, mode=0o600)
-            try:
-                os.chmod(str(enroll_path), 0o600)
-            except OSError:
-                pass
-            _pair_write_pause_hook()
-            atomic_write_json(ticket_path, ticket_record, mode=0o600)
-            try:
-                os.chmod(str(ticket_path), 0o600)
-            except OSError:
-                pass
+            for raw_ticket, enroll_record, ticket_record in prepared:
+                enroll_path, ticket_path = _persist_bootstrap_ticket_pair(
+                    enrollments_dir, bootstrap_dir, enroll_record, ticket_record
+                )
+                created_paths.append((enroll_path, ticket_path))
+                issued.append((raw_ticket, enroll_record, ticket_record))
         except Exception:
-            unlink_quiet(ticket_path)
-            unlink_quiet(enroll_path)
+            for enroll_path, ticket_path in created_paths:
+                unlink_quiet(ticket_path)
+                unlink_quiet(enroll_path)
             raise
-    ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
-    return ticket, enroll_record, ticket_record
+    return batch_id, issued
 
 
 def port_is_available(port):
@@ -1347,7 +1589,7 @@ class Allocator:
             already_locked=already_locked,
         )
 
-    def issue_bootstrap_ticket(self, services, ttl, note='', label=''):
+    def issue_bootstrap_ticket(self, services, ttl, note='', label='', *, batch_id='', requested_count=1):
         ensure_secret_dir(self.bootstrap_dir, 0o700)
         return issue_bootstrap_ticket(
             self.enrollments_dir,
@@ -1357,7 +1599,29 @@ class Allocator:
             note,
             label=label,
             cfg=self.cfg,
+            batch_id=batch_id,
+            requested_count=requested_count,
         )
+
+    def issue_bootstrap_ticket_batch(self, rows, ttl, *, batch_id=None):
+        ensure_secret_dir(self.bootstrap_dir, 0o700)
+        return issue_bootstrap_ticket_batch(
+            self.enrollments_dir,
+            self.bootstrap_dir,
+            rows,
+            ttl,
+            cfg=self.cfg,
+            batch_id=batch_id,
+        )
+
+    def count_active_unused_bootstrap_tickets(self, now=None):
+        return count_active_unused_bootstrap_tickets(self.bootstrap_dir, now=now)
+
+    def max_issuable_zero_touch_tickets(self, now=None):
+        return max_issuable_zero_touch_tickets(self.bootstrap_dir, now=now)
+
+    def revoke_bootstrap_tickets_by_batch(self, batch_id):
+        return revoke_bootstrap_tickets_by_batch(self.bootstrap_dir, batch_id)
 
     def _invalid_ticket_response(self):
         return 403, api_error('bootstrap ticket is invalid', 'BOOTSTRAP_TICKET_INVALID')

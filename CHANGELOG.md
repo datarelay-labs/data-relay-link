@@ -6,6 +6,16 @@ Released tags/artifacts are immutable. Historical source is never rewritten to m
 
 ## [Unreleased]
 
+### Implemented (feature branch)
+
+- ConfigurationBundle Change Plan engine (`lib/drlink_configuration_bundle.py`) with public CLI:
+  `system export configuration`, `test configuration`, `system diff configuration`,
+  `system apply configuration` (file or stdin).
+- Shared mutation path: Bundle apply uses ControlPlane batch mode + one revision/audit/compile cycle.
+- Bounded Zero-Touch issuance enforced in `issue_bootstrap_ticket` / batch API:
+  max 10 per issue, max 10 active unused, default TTL 1h, max TTL 24h, verifier-only persistence,
+  batch revoke by `batch_id`. Bundle enrollment plans issue zero tickets.
+
 ## 2.4.0 — development target
 
 ### Candidate target: 2.4.0
