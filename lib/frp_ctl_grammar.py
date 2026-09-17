@@ -88,9 +88,109 @@ CONTROL_PLANE_SYSTEM = frozenset(
 def _control_plane_ok(tokens):
     return {"status": "ok", "action": "control_plane", "tokens": [str(t) for t in tokens]}
 
-# Roots that also exist as historical flat commands. When the second token is
-# not a canonical action, the old flat meaning wins so scripts keep working.
-FALLTHROUGH_ROOTS = frozenset({"access", "egress"})
+
+# Obsolete development-era surfaces — reject rather than translate.
+_OBSOLETE_ROOTS = frozenset(
+    {
+        "access",
+        "egress",
+        "acl",
+        "service-profile",
+        "internet-profile",
+        "access-list",
+        "egress-profile",
+        "profile",
+    }
+)
+_OBSOLETE_RESOURCES = frozenset(
+    {
+        "acl",
+        "access-list",
+        "access-rule",
+        "access-rules",
+        "access-source",
+        "access-service",
+        "service-access",
+        "service-profile",
+        "service-profiles",
+        "internet-profile",
+        "internet-profiles",
+        "egress-profile",
+        "egress-profiles",
+        "internet-source",
+        "internet-destination",
+        "profile",
+        "profiles",
+        "acls",
+        "internet-templates",
+        "internet-template",
+        "egress-recipes",
+        "egress-recipe",
+    }
+)
+_OBSOLETE_POINTERS = {
+    "access": "Use show/set/unset/test remote-access and Objects instead.",
+    "egress": "Use show/set/unset/test internet-access and set fixed-tcp instead.",
+    "acl": "Use remote-access ordered rules with Objects instead.",
+    "service-profile": "Use published-service and service-preset instead.",
+    "internet-profile": "Use internet-access ordered rules with Objects instead.",
+    "profile": "Use published-service / service-preset / internet-access instead.",
+    "legacy": "Use help commands for the current grammar.",
+}
+
+
+def reject_obsolete_surface(tokens):
+    """Return an error result when tokens are obsolete current-surface grammar."""
+    if not tokens:
+        return None
+    raw = [str(t) for t in tokens]
+    verb = raw[0]
+    if verb == "help" and len(raw) >= 2 and raw[1] == "legacy":
+        return {
+            "status": "error",
+            "exit_code": 2,
+            "message": (
+                "'help legacy' has been removed.\n"
+                "Use: help commands\n"
+                "Canonical roots: show, set, unset, test, system, menu, help, exit"
+            ),
+        }
+    if verb in _OBSOLETE_ROOTS:
+        tip = _OBSOLETE_POINTERS.get(verb, "Use the canonical v2.4.0 grammar (help commands).")
+        return {
+            "status": "error",
+            "exit_code": 2,
+            "message": (
+                "Obsolete command '%s' is not part of the current Data Relay Link grammar.\n%s"
+                % (verb, tip)
+            ),
+        }
+    if verb in ("show", "set", "unset", "test", "create", "add", "remove", "enable", "disable", "delete", "system") and len(raw) >= 2:
+        resource = raw[1]
+        # system export/import/diff internet-profile
+        if verb == "system" and len(raw) >= 3 and raw[1] in ("export", "import", "diff", "cleanup"):
+            resource = raw[2]
+        if resource in _OBSOLETE_RESOURCES:
+            key = resource
+            for candidate in ("service-profile", "internet-profile", "acl", "access", "egress", "profile"):
+                if candidate in resource:
+                    key = candidate
+                    break
+            tip = _OBSOLETE_POINTERS.get(key, "Use help commands for the current grammar.")
+            return {
+                "status": "error",
+                "exit_code": 2,
+                "message": (
+                    "Obsolete resource '%s' is not part of the current Data Relay Link grammar.\n%s"
+                    % (resource, tip)
+                ),
+            }
+    return None
+
+
+# Roots that previously fell through to flat legacy commands. Kept empty so
+# obsolete access/egress roots cannot regain silent translation.
+FALLTHROUGH_ROOTS = frozenset()
 
 _CLIENT_ACTION_LIKE = frozenset(
     {
@@ -371,7 +471,8 @@ def help_text(tokens, role):
         return _root_help(role)
     verb = tokens[0]
     if verb == "legacy":
-        return _legacy_help(role)
+        rejected = reject_obsolete_surface(["help", "legacy"])
+        return rejected["message"] if rejected else "help legacy removed"
     if verb in ("workflow", "workflows"):
         return CATALOG.workflow_help(role)
     if verb in ("command", "commands"):
@@ -1656,8 +1757,14 @@ def match(tokens, role, names=None, clients=None):
     # Keep pre-resolve tokens so to_internal can preserve create vs edit-info
     # (both alias to set acl) and similar distinct safety semantics.
     raw_tokens = [str(t) for t in tokens]
+    rejected = reject_obsolete_surface(raw_tokens)
+    if rejected is not None:
+        return rejected
     # Hidden resource-first compatibility → canonical action-first tokens.
     tokens = CATALOG.resolve_tokens(tokens, role=role)
+    rejected = reject_obsolete_surface(tokens)
+    if rejected is not None:
+        return rejected
     opt_err = public_option_error(tokens)
     if opt_err is None:
         # Reject undeclared dash tokens. Catalog-declared flags and a small

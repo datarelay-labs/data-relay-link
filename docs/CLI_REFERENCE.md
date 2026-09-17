@@ -677,12 +677,10 @@ help ai-access
 help system
 help workflows
 help commands
-help legacy
 ```
 
 `help commands` is the complete public command catalog.
 
-`help legacy` is the only normal location for any temporary pre-v2.4 development aliases if implementation retains them during transition.
 
 ## 32. Menu
 
@@ -752,19 +750,15 @@ Zero-Touch bundle entries describe enrollment plans only. Ticket issuance is sep
 
 See `CONFIGURATION_BUNDLE.md` for the normative schema and safety contract.
 
-## 35. Legacy transition
+## 35. Obsolete development-era grammar
 
-The current development source may still implement older commands such as:
+The current product rejects obsolete development-era commands such as
+`service-profile`, `internet-profile`, ACL/access-list roots, top-level
+access/egress command trees, and `help legacy`.
 
-```text
-set service-profile
-set internet-profile
-legacy ACL/access-list grammar
-```
-
-Those are not the v2.4.0 target public contract.
-
-The implementation phase removes or hides them before stable qualification unless an explicit new product decision retains a compatibility alias. Because v2.4.0 has not yet been released and has no production users, backward compatibility is not a release requirement for these development-only nouns.
+Operators must use the canonical v2.4.0 grammar (`remote-access`,
+`internet-access`, `published-service`, Objects, and the stable direct roots).
+Silent compatibility translation is not part of the stable contract.
 
 ## 36. Error semantics
 

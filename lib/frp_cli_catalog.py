@@ -7,11 +7,10 @@ Single source of truth for the final public ``drlink`` grammar:
 
 Root help, ``help <topic>``, context ``?``, Tab discovery, and the guided
 menu are all derived from :data:`PUBLIC_COMMANDS` / :data:`COMMANDS`.
-Hidden compatibility aliases live in :data:`HIDDEN_COMPAT_ALIASES` and must
-not appear in normal discovery surfaces.
 
 Public UX never advertises GNU-style ``--options`` or backend ``frp-*``
-tool names.
+tool names. Obsolete development-era aliases are rejected by the grammar
+rather than silently translated; :data:`HIDDEN_COMPAT_ALIASES` must stay empty.
 """
 from __future__ import annotations
 
@@ -2001,10 +2000,15 @@ def _load_final_commands():
 
 COMMANDS = _load_final_commands()
 PUBLIC_COMMANDS = tuple(cmd for cmd in COMMANDS if not cmd.get("hidden"))
+# Compatibility alias catalog must stay empty for current product surface.
+# Historical aliases belong in migration fixtures / prior-release tests only.
 HIDDEN_COMPAT_ALIASES = {
     tuple(alias): cmd["path"]
     for cmd in COMMANDS
     for alias in (cmd.get("aliases") or ())
+    if (cmd.get("surface") == "hidden_compat") or (
+        cmd.get("hidden") and cmd.get("surface") == "hidden_compat"
+    )
 }
 
 # --- role helpers ---------------------------------------------------------
@@ -2770,30 +2774,12 @@ def to_internal(tokens):
 
 
 def expand_compat_alias(tokens):
-    """Expand a hidden resource-first alias into canonical action-first tokens.
+    """Compatibility alias expansion is disabled for current product surface.
 
-    Returns ``None`` when ``tokens`` is not a known compatibility alias.
+    Obsolete forms must be rejected by the grammar with an actionable pointer.
+    Returns ``None`` always.
     """
-    if not tokens:
-        return None
-    best = None
-    best_len = 0
-    for alias, cmd in ALIASES.items():
-        n = len(alias)
-        if n > best_len and n <= len(tokens) and tuple(tokens[:n]) == alias:
-            # Only treat non-canonical (hidden) aliases here.
-            if tuple(alias) == tuple(cmd["path"]):
-                continue
-            best = (alias, cmd)
-            best_len = n
-    if best is None:
-        return None
-    alias, cmd = best
-    rest = list(tokens[best_len:])
-    rewrite = REWRITES.get(tuple(alias))
-    if rewrite is not None:
-        return rewrite(rest)
-    return list(cmd["path"]) + rest
+    return None
 
 
 def strict_error(tokens):
@@ -3343,40 +3329,11 @@ def workflow_help(role):
 
 
 def legacy_help(role):
-    lines = [
-        "Legacy compatibility commands",
-        "=============================",
-        "",
-        "These forms are accepted only for backward compatibility.",
-        "",
-        "Do not use them for new interactive operation, documentation, or scripts.",
-        "",
-        "Use:",
-        "  help commands",
-        "",
-        "for the current Data Relay Link command grammar.",
-        "",
-    ]
-    rows = []
-    seen = set()
-    for cmd in COMMANDS:
-        if not role_allows(cmd["roles"], role):
-            continue
-        for alias in cmd["aliases"]:
-            text_alias = " ".join(alias)
-            if text_alias in seen:
-                continue
-            seen.add(text_alias)
-            rows.append((text_alias, " ".join(cmd["path"])))
-    lines.extend(_fmt_rows(rows))
-    lines.extend(
-        [
-            "",
-            "Also accepted: client-status, manage, revoke <ID>, restore <PATH>.",
-            "",
-        ]
+    return (
+        "'help legacy' has been removed.\n"
+        "Use: help commands\n"
+        "Canonical roots: show, set, unset, test, system, menu, help, exit\n"
     )
-    return "\n".join(lines)
 
 
 def parity_paths(role):

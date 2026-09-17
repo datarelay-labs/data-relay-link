@@ -862,10 +862,8 @@ help ai-access
 help system
 help workflows
 help commands
-help legacy
 ```
 
-`help legacy` may explain development-transition aliases if retained temporarily, but legacy names are not shown in normal discovery.
 
 ## 39. Tab completion
 
