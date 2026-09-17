@@ -39,12 +39,16 @@ if grep -nE "config\.json.*client_installer_url|c\['client_installer_url'\]|c\['
 fi
 pass "NO_DIRECT_INSTALLER_JSON_PATCH"
 
-# Required: canonical installer pin + guided zero-touch.
+# Required: canonical installer pin + guided zero-touch via public set client.
 grep -q "set installer-url" "$E2E" || fail "missing set installer-url pin"
 grep -q "set windows-installer-url" "$E2E" || fail "missing set windows-installer-url pin"
-grep -q "drlink create zero-touch" "$E2E" || fail "missing create zero-touch"
+grep -q 'drlink set client"' "$E2E" || fail "missing public set client onboarding"
 grep -q "FRP_CTL_TEST_INPUT" "$E2E" || fail "zero-touch must use FRP_CTL_TEST_INPUT under sudo use_pty"
 grep -q "base64" "$E2E" || fail "zero-touch TEST_INPUT must be base64-safe across remote shells"
+# Guided answers must include the post-identity service-mode choice (SSH only).
+grep -Fq '\"$note_text\" '\''1'\'' \"$TUNNEL_SSH_USER\"' "$E2E" \
+  || grep -Fq "\"\$note_text\" '1' \"\$TUNNEL_SSH_USER\"" "$E2E" \
+  || fail "zero-touch guided answers missing SSH-only step"
 pass "CANONICAL_INSTALLER_AND_ZERO_TOUCH"
 
 # set installer-url must not resolve through set server (URL-as-setting bug).
