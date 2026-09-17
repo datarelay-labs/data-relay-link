@@ -119,6 +119,10 @@ _OBSOLETE_RESOURCES = frozenset(
         "egress-profiles",
         "internet-source",
         "internet-destination",
+        "egress-destination",
+        "egress-source",
+        "egress-destinations",
+        "egress-sources",
         "profile",
         "profiles",
         "acls",
@@ -134,6 +138,9 @@ _OBSOLETE_POINTERS = {
     "acl": "Use remote-access ordered rules with Objects instead.",
     "service-profile": "Use published-service and service-preset instead.",
     "internet-profile": "Use internet-access ordered rules with Objects instead.",
+    "internet-destination": "Use set internet-access … with Objects instead.",
+    "egress-destination": "Use set internet-access … with Objects instead.",
+    "egress-source": "Use set internet-access … with Objects instead.",
     "profile": "Use published-service / service-preset / internet-access instead.",
     "legacy": "Use help commands for the current grammar.",
 }
@@ -172,8 +179,18 @@ def reject_obsolete_surface(tokens):
             resource = raw[2]
         if resource in _OBSOLETE_RESOURCES:
             key = resource
-            for candidate in ("service-profile", "internet-profile", "acl", "access", "egress", "profile"):
-                if candidate in resource:
+            for candidate in (
+                "service-profile",
+                "internet-profile",
+                "egress-destination",
+                "egress-source",
+                "internet-destination",
+                "acl",
+                "access",
+                "egress",
+                "profile",
+            ):
+                if candidate in resource or resource == candidate:
                     key = candidate
                     break
             tip = _OBSOLETE_POINTERS.get(key, "Use help commands for the current grammar.")
