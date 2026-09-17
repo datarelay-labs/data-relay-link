@@ -4995,7 +4995,8 @@
     "summary": "Create or edit a Remote Service",
     "detail": "Create or edit a Remote Service",
     "examples": [
-      "set remote-service"
+      "set remote-service",
+      "set remote-service ssh-access destination this-host service ssh enabled"
     ],
     "args": [
       {
@@ -5003,7 +5004,7 @@
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
