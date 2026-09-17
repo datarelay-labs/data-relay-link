@@ -48,20 +48,12 @@
     ],
     "tail": "flags",
     "internal": null,
-    "aliases": [
-      [
-        "client",
-        "list"
-      ],
-      [
-        "clients"
-      ]
-    ],
+    "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--group",
@@ -109,20 +101,12 @@
     ],
     "tail": null,
     "internal": null,
-    "aliases": [
-      [
-        "client",
-        "show"
-      ],
-      [
-        "client-info"
-      ]
-    ],
+    "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -375,21 +359,12 @@
       "tcp",
       "list"
     ],
-    "aliases": [
-      [
-        "show",
-        "egress-tcp"
-      ],
-      [
-        "show",
-        "egress-tcp-entry"
-      ]
-    ],
+    "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -412,43 +387,12 @@
       "create",
       "zero-touch"
     ],
-    "aliases": [
-      [
-        "create",
-        "zero-touch"
-      ],
-      [
-        "zero-touch",
-        "create"
-      ],
-      [
-        "add",
-        "client"
-      ],
-      [
-        "group",
-        "add-client"
-      ],
-      [
-        "group",
-        "add-member"
-      ],
-      [
-        "client",
-        "set"
-      ],
-      [
-        "client-set"
-      ],
-      [
-        "edit-client"
-      ]
-    ],
+    "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -865,21 +809,12 @@
       "tcp",
       "create"
     ],
-    "aliases": [
-      [
-        "create",
-        "egress-tcp"
-      ],
-      [
-        "enable",
-        "egress-tcp"
-      ]
-    ],
+    "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "security_widening",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--profile",
@@ -1279,29 +1214,12 @@
       "release",
       "client"
     ],
-    "aliases": [
-      [
-        "remove",
-        "client"
-      ],
-      [
-        "group",
-        "remove-client"
-      ],
-      [
-        "group",
-        "remove-member"
-      ],
-      [
-        "client",
-        "unset"
-      ]
-    ],
+    "aliases": [],
     "destructive": true,
-    "hidden": false,
+    "hidden": true,
     "risk": "irreversible",
     "confirmation": "typed_token",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--force",
@@ -1457,21 +1375,12 @@
       "tcp",
       "delete"
     ],
-    "aliases": [
-      [
-        "delete",
-        "egress-tcp"
-      ],
-      [
-        "disable",
-        "egress-tcp"
-      ]
-    ],
+    "aliases": [],
     "destructive": true,
-    "hidden": false,
+    "hidden": true,
     "risk": "security_widening",
     "confirmation": "y_n",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": [
       {
         "name": "--yes",
@@ -1677,17 +1586,12 @@
       "tcp",
       "explain"
     ],
-    "aliases": [
-      [
-        "explain",
-        "egress-tcp"
-      ]
-    ],
+    "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2684,10 +2588,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2713,10 +2617,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2736,10 +2640,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2765,10 +2669,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2788,10 +2692,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2817,10 +2721,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2840,10 +2744,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -2874,10 +2778,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3018,10 +2922,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3047,10 +2951,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3117,10 +3021,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3146,10 +3050,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3175,10 +3079,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3291,10 +3195,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3349,10 +3253,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3407,10 +3311,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3436,10 +3340,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3552,10 +3456,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3581,10 +3485,10 @@
     "internal": null,
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
-    "surface": "",
+    "surface": "hidden_compat",
     "flags": []
   },
   {
@@ -3912,7 +3816,7 @@
       "export",
       "configuration"
     ],
-    "roles": "server",
+    "roles": "any",
     "category": "System",
     "summary": "Export redacted ConfigurationBundle",
     "detail": "Export current server-owned configuration as a redacted ConfigurationBundle YAML suitable for review and AI-assisted editing. Secrets are never exported.",
@@ -3950,7 +3854,7 @@
       "test",
       "configuration"
     ],
-    "roles": "server",
+    "roles": "any",
     "category": "System",
     "summary": "Validate a ConfigurationBundle without mutation",
     "detail": "Parse, validate, run embedded policy tests, and show the Change Plan for a ConfigurationBundle. Supports file path or '-' for stdin.",
@@ -3981,9 +3885,9 @@
       "diff",
       "configuration"
     ],
-    "roles": "server",
+    "roles": "any",
     "category": "System",
-    "summary": "Diff a ConfigurationBundle against current state",
+    "summary": "Diff a ConfigurationBundle",
     "detail": "Show the Change Plan and security impact for a ConfigurationBundle without mutation. Supports file path or '-' for stdin.",
     "examples": [
       "system diff configuration drlink.yaml",
@@ -4012,9 +3916,9 @@
       "apply",
       "configuration"
     ],
-    "roles": "server",
+    "roles": "any",
     "category": "System",
-    "summary": "Apply a ConfigurationBundle atomically",
+    "summary": "Apply a ConfigurationBundle",
     "detail": "Validate, test, diff, confirm, and atomically apply a ConfigurationBundle through the shared Change Plan engine. Supports file path or '-' for stdin. Does not issue Zero-Touch tickets.",
     "examples": [
       "system apply configuration drlink.yaml",
@@ -4168,5 +4072,973 @@
         "required": true
       }
     ]
+  },
+  {
+    "path": [
+      "show",
+      "network-objects"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "List Network Objects",
+    "detail": "List Network Objects",
+    "examples": [
+      "show network-objects"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "network-object"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "Show a Network Object",
+    "detail": "Show a Network Object",
+    "examples": [
+      "show network-object"
+    ],
+    "args": [
+      {
+        "name": "OBJECT",
+        "complete": "objects",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "network-groups"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "List Network Groups",
+    "detail": "List Network Groups",
+    "examples": [
+      "show network-groups"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "network-group"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "Show a Network Group",
+    "detail": "Show a Network Group",
+    "examples": [
+      "show network-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "complete": "object-groups",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "network-object"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "Create or edit a Network Object",
+    "detail": "Create or edit a Network Object",
+    "examples": [
+      "set network-object"
+    ],
+    "args": [
+      {
+        "name": "OBJECT",
+        "complete": "objects",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "network-group"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "Create or edit a Network Group",
+    "detail": "Create or edit a Network Group",
+    "examples": [
+      "set network-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "complete": "object-groups",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "network-object"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "Delete a Network Object",
+    "detail": "Delete a Network Object",
+    "examples": [
+      "unset network-object"
+    ],
+    "args": [
+      {
+        "name": "OBJECT",
+        "complete": "objects",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "network-group"
+    ],
+    "roles": "server",
+    "category": "Network Objects",
+    "summary": "Delete a Network Group",
+    "detail": "Delete a Network Group",
+    "examples": [
+      "unset network-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "complete": "object-groups",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-objects"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "List Service Objects",
+    "detail": "List Service Objects",
+    "examples": [
+      "show service-objects"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-object"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "Show a Service Object",
+    "detail": "Show a Service Object",
+    "examples": [
+      "show service-object"
+    ],
+    "args": [
+      {
+        "name": "SERVICE",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-groups"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "List Service Groups",
+    "detail": "List Service Groups",
+    "examples": [
+      "show service-groups"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "service-group"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "Show a Service Group",
+    "detail": "Show a Service Group",
+    "examples": [
+      "show service-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "service-object"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "Create or edit a Service Object",
+    "detail": "Create or edit a Service Object",
+    "examples": [
+      "set service-object"
+    ],
+    "args": [
+      {
+        "name": "SERVICE",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "service-group"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "Create or edit a Service Group",
+    "detail": "Create or edit a Service Group",
+    "examples": [
+      "set service-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "service-object"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "Delete a Service Object",
+    "detail": "Delete a Service Object",
+    "examples": [
+      "unset service-object"
+    ],
+    "args": [
+      {
+        "name": "SERVICE",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "service-group"
+    ],
+    "roles": "server",
+    "category": "Service Objects",
+    "summary": "Delete a Service Group",
+    "detail": "Delete a Service Group",
+    "examples": [
+      "unset service-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "permission-objects"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "List Permission Objects",
+    "detail": "List Permission Objects",
+    "examples": [
+      "show permission-objects"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "permission-object"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Show a Permission Object",
+    "detail": "Show a Permission Object",
+    "examples": [
+      "show permission-object"
+    ],
+    "args": [
+      {
+        "name": "PERMISSION",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "permission-groups"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "List Permission Groups",
+    "detail": "List Permission Groups",
+    "examples": [
+      "show permission-groups"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "permission-group"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Show a Permission Group",
+    "detail": "Show a Permission Group",
+    "examples": [
+      "show permission-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "permission-object"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Create or edit a Permission Object",
+    "detail": "Create or edit a Permission Object",
+    "examples": [
+      "set permission-object"
+    ],
+    "args": [
+      {
+        "name": "PERMISSION",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "permission-group"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Create or edit a Permission Group",
+    "detail": "Create or edit a Permission Group",
+    "examples": [
+      "set permission-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "permission-object"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Delete a Permission Object",
+    "detail": "Delete a Permission Object",
+    "examples": [
+      "unset permission-object"
+    ],
+    "args": [
+      {
+        "name": "PERMISSION",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "permission-group"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Delete a Permission Group",
+    "detail": "Delete a Permission Group",
+    "examples": [
+      "unset permission-group"
+    ],
+    "args": [
+      {
+        "name": "GROUP",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "managed-hosts"
+    ],
+    "roles": "server",
+    "category": "Managed Hosts",
+    "summary": "List Managed Hosts",
+    "detail": "List Managed Hosts",
+    "examples": [
+      "show managed-hosts"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "managed-host"
+    ],
+    "roles": "server",
+    "category": "Managed Hosts",
+    "summary": "Show a Managed Host",
+    "detail": "Show a Managed Host",
+    "examples": [
+      "show managed-host"
+    ],
+    "args": [
+      {
+        "name": "HOST",
+        "complete": "clients",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "managed-host"
+    ],
+    "roles": "server",
+    "category": "Managed Hosts",
+    "summary": "Remove a Managed Host",
+    "detail": "Remove a Managed Host",
+    "examples": [
+      "unset managed-host"
+    ],
+    "args": [
+      {
+        "name": "HOST",
+        "complete": "clients",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-identities"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "List AI Identities",
+    "detail": "List AI Identities",
+    "examples": [
+      "show ai-identities"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-identity"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Show an AI Identity",
+    "detail": "Show an AI Identity",
+    "examples": [
+      "show ai-identity"
+    ],
+    "args": [
+      {
+        "name": "IDENTITY",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "ai-identity"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Connect / bind an AI Identity",
+    "detail": "Connect / bind an AI Identity",
+    "examples": [
+      "set ai-identity"
+    ],
+    "args": [
+      {
+        "name": "IDENTITY",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "ai-identity"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Delete an AI Identity",
+    "detail": "Delete an AI Identity",
+    "examples": [
+      "unset ai-identity"
+    ],
+    "args": [
+      {
+        "name": "IDENTITY",
+        "complete": "ai-principals",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "ai-access-log"
+    ],
+    "roles": "server",
+    "category": "AI Access",
+    "summary": "Show AI Access Log",
+    "detail": "Show AI Access Log",
+    "examples": [
+      "show ai-access-log"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "remote-services"
+    ],
+    "roles": "client",
+    "category": "Remote Services",
+    "summary": "List Remote Services on this Agent Host",
+    "detail": "List Remote Services on this Agent Host",
+    "examples": [
+      "show remote-services"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
+      "remote-service"
+    ],
+    "roles": "client",
+    "category": "Remote Services",
+    "summary": "Show a Remote Service",
+    "detail": "Show a Remote Service",
+    "examples": [
+      "show remote-service"
+    ],
+    "args": [
+      {
+        "name": "NAME",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "set",
+      "remote-service"
+    ],
+    "roles": "client",
+    "category": "Remote Services",
+    "summary": "Create or edit a Remote Service",
+    "detail": "Create or edit a Remote Service",
+    "examples": [
+      "set remote-service"
+    ],
+    "args": [
+      {
+        "name": "NAME",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "unset",
+      "remote-service"
+    ],
+    "roles": "client",
+    "category": "Remote Services",
+    "summary": "Delete a Remote Service",
+    "detail": "Delete a Remote Service",
+    "examples": [
+      "unset remote-service"
+    ],
+    "args": [
+      {
+        "name": "NAME",
+        "required": true
+      }
+    ],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": true,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "y_n",
+    "surface": "",
+    "flags": []
   }
 ]

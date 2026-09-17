@@ -191,11 +191,11 @@ frpctl_role_label() {
   frpctl_is_client && client=1
   frpctl_is_server && server=1
   if [[ "$client" == "1" && "$server" == "1" ]]; then
-    printf '%s' "Client + Server"
+    printf '%s' "Agent Host + DRLink Server"
   elif [[ "$client" == "1" ]]; then
-    printf '%s' "Client"
+    printf '%s' "Agent Host"
   elif [[ "$server" == "1" ]]; then
-    printf '%s' "Server"
+    printf '%s' "DRLink Server"
   else
     printf '%s' "unknown"
   fi
