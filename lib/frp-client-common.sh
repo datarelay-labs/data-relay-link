@@ -4805,7 +4805,8 @@ frp_client_install_management_files() {
   install -m 0755 "${source}/tools/drlink" "${bindir}/drlink"
   # RHEL/Rocky sudo defaults omit /usr/local/bin from secure_path.
   # Keep a copy on the secure_path so `sudo drlink` works after install.
-  if [[ "$(frp_client_path /usr/bin)" != "$bindir" ]]; then
+  # macOS SIP forbids writing /usr/bin; brew/prefix PATH already covers sudo.
+  if ! frp_is_darwin && [[ "$(frp_client_path /usr/bin)" != "$bindir" ]]; then
     mkdir -p "$(frp_client_path /usr/bin)"
     install -m 0755 "${source}/tools/drlink" "$(frp_client_path /usr/bin/drlink)"
   fi
@@ -4818,7 +4819,7 @@ frp_client_install_management_files() {
     install -m 0755 "${source}/tools/frp-client" "$(frp_client_path /usr/local/sbin/frp-client)"
   fi
   chmod 0755 "${bindir}/drlink" "${libdir}/frpctl"
-  if [[ -x "$(frp_client_path /usr/bin/drlink)" ]]; then
+  if ! frp_is_darwin && [[ -x "$(frp_client_path /usr/bin/drlink)" ]]; then
     chmod 0755 "$(frp_client_path /usr/bin/drlink)"
   fi
   if [[ -f "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" ]]; then
@@ -4854,10 +4855,13 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/drlink:0755:tools/drlink" \
-    "usr/bin/drlink:0755:tools/drlink" \
     "usr/local/lib/drlink/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
+  # Linux-only sudo secure_path helper; SIP blocks /usr/bin writes on macOS.
+  if ! frp_is_darwin; then
+    printf '%s\n' "usr/bin/drlink:0755:tools/drlink"
+  fi
 }
 
 frp_client_upgrade_validate_existing() {
