@@ -9,16 +9,17 @@ export PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}"
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# --- SERVER / CLIENT ROOT DOMAINS ---
+# --- SERVER / AGENT ROOT DOMAINS ---
 SERVER_MENU="$(python3 - <<'PY'
 import frp_cli_catalog as c
 print(c.render_guided_menu("server"))
 PY
 )"
-for label in Clients Objects "Remote Access" "Internet Access" "AI Access" System Help Exit; do
+for label in "Managed Hosts" "Network Objects" "Service Objects" "Remote Access" "Internet Access" "AI Access" System Help Exit; do
   echo "$SERVER_MENU" | grep -q "$label" || fail "server menu missing $label"
 done
 ! echo "$SERVER_MENU" | grep -q 'Controlled Egress' || fail "NO_CONTROLLED_EGRESS_ROOT"
+! echo "$SERVER_MENU" | grep -qE '(^|[[:space:]])Clients([[:space:]]|$)' || fail "NO_CLIENTS_ROOT"
 ! echo "$SERVER_MENU" | grep -q 'Organize' || fail "NO_ORGANIZE_ROOT"
 ! echo "$SERVER_MENU" | grep -q 'Operate' || fail "NO_OPERATE_ROOT"
 pass SERVER_ROOT_DOMAINS
@@ -28,11 +29,11 @@ import frp_cli_catalog as c
 print(c.render_guided_menu("client"))
 PY
 )"
-for label in Services System Help Exit; do
-  echo "$CLIENT_MENU" | grep -q "$label" || fail "client menu missing $label"
+for label in Status "Remote Services" Agent Configuration Diagnostics Help Exit; do
+  echo "$CLIENT_MENU" | grep -q "$label" || fail "agent menu missing $label"
 done
-! echo "$CLIENT_MENU" | grep -q 'Clients' || fail "client menu must not show Clients"
-! echo "$CLIENT_MENU" | grep -q 'Internet Access' || fail "client menu must not show Internet Access"
+! echo "$CLIENT_MENU" | grep -q 'Clients' || fail "agent menu must not show Clients"
+! echo "$CLIENT_MENU" | grep -q 'Internet Access' || fail "agent menu must not show Internet Access"
 pass CLIENT_ROOT_DOMAINS
 
 BOTH_MENU="$(python3 - <<'PY'
@@ -40,7 +41,7 @@ import frp_cli_catalog as c
 print(c.render_guided_menu("both"))
 PY
 )"
-echo "$BOTH_MENU" | grep -q 'Clients' || fail "dual-role must use server domain root"
+echo "$BOTH_MENU" | grep -q 'Managed Hosts' || fail "dual-role must use server domain root"
 ! echo "$BOTH_MENU" | grep -q 'Client operations' || fail "dual-role must not split Client/Server ops"
 pass DUAL_ROLE_SERVER_DOMAIN_ROOT
 
@@ -63,7 +64,7 @@ import frp_ctl_grammar as g
 print(g.help_text([], "server"))
 PY
 )"
-for topic in clients objects remote-access internet-access ai-access system commands; do
+for topic in "managed-hosts" "network-objects" "remote-access" internet-access ai-access system commands; do
   echo "$HELP" | grep -q "help $topic" || fail "root help missing help $topic"
   text="$(python3 -c "import frp_ctl_grammar as g; print(g.help_text(['$topic'], 'server'))")"
   [[ -n "$text" ]] || fail "help $topic empty"
@@ -99,7 +100,7 @@ import frp_ctl_grammar as g
 print(g.context_help(["show"], "server"))
 PY
 )"
-echo "$SHOW_CTX" | grep -q 'Clients' || fail "show ? missing Clients group"
+echo "$SHOW_CTX" | grep -q 'Managed Hosts' || fail "show ? missing Managed Hosts group"
 echo "$SHOW_CTX" | grep -q 'Remote Access' || fail "show ? missing Remote Access group"
 echo "$SHOW_CTX" | grep -q 'Internet Access' || fail "show ? missing Internet Access group"
 echo "$SHOW_CTX" | grep -q 'AI Access' || fail "show ? missing AI Access group"
@@ -112,7 +113,7 @@ cands = g.completion_candidates("show ", "server", [], {}, [], trailing=True)
 print(g.format_tab_candidates("show ", cands, "server"))
 PY
 )"
-echo "$TAB_FMT" | grep -q 'Clients' || fail "show Tab missing Clients group"
+echo "$TAB_FMT" | grep -q 'Managed Hosts' || fail "show Tab missing Managed Hosts group"
 pass TAB_CANDIDATES_GROUPED
 
 # --- Navigation leaves use canonical drlink commands (no frp-* targets) ---
@@ -201,9 +202,10 @@ import frp_cli_catalog as c
 print(c.render_navigation_menu("server.remote", title="Remote Access"))
 PY
 )"
-echo "$REMOTE_MENU" | grep -q 'List Remote Access rules' || fail "remote missing list"
-echo "$REMOTE_MENU" | grep -q 'Published Services' || fail "remote missing published services"
-echo "$REMOTE_MENU" | grep -q 'Service Presets' || fail "remote missing presets"
+echo "$REMOTE_MENU" | grep -qE 'Rules|Create Remote Access' || fail "remote missing rules"
+echo "$REMOTE_MENU" | grep -q 'Test' || fail "remote missing test"
+! echo "$REMOTE_MENU" | grep -q 'Published Services' || fail "remote must not advertise Published Services"
+! echo "$REMOTE_MENU" | grep -q 'Service Presets' || fail "remote must not advertise Service Presets"
 pass REMOTE_ACCESS_MENU
 
 INTERNET_MENU="$(python3 - <<'PY'
@@ -211,28 +213,19 @@ import frp_cli_catalog as c
 print(c.render_navigation_menu("server.internet", title="Internet Access"))
 PY
 )"
-echo "$INTERNET_MENU" | grep -q 'List Internet Access rules' || fail "internet missing list"
-echo "$INTERNET_MENU" | grep -q 'Fixed TCP' || fail "internet missing Fixed TCP"
-echo "$INTERNET_MENU" | grep -q 'Test Internet Access' || fail "internet missing test"
+echo "$INTERNET_MENU" | grep -qE 'Rules|Create Internet Access' || fail "internet missing rules"
+echo "$INTERNET_MENU" | grep -q 'Test' || fail "internet missing test"
 ! echo "$INTERNET_MENU" | grep -q 'Controlled Egress' || fail "internet menu leaked Controlled Egress"
 pass INTERNET_ACCESS_BEGINNER_DESCRIPTIONS
 
-# --- Selected-group context workflow is wired ---
-python3 - <<'PY' || fail "SELECTED_GROUP_CONTEXT_MENU"
+# --- Network Groups workflow is wired ---
+python3 - <<'PY' || fail "NETWORK_GROUPS_MENU"
 import frp_cli_catalog as c
-row = None
-for entry in c.navigation_entries("server.clients.groups"):
-    if entry[0] == "server_groups_manage":
-        row = entry
-        break
-assert row is not None, "missing View or manage a client group"
-assert row[3] in ("command", "workflow"), row
+labels = [e[1] for e in c.navigation_entries("server.network_objects")]
+assert any("Network Group" in x for x in labels), labels
 print("ok")
 PY
-grep -q 'frpctl_manage_one_group' tools/frpctl || fail "missing manage_one_group implementation"
-grep -q 'Rename / description' tools/frpctl || fail "missing group rename/description action"
-grep -q 'View members' tools/frpctl || fail "missing group view members action"
-pass SELECTED_GROUP_CONTEXT_MENU
+pass NETWORK_GROUPS_MENU
 
 # --- Guided identity banner is not repeated every submenu ---
 grep -q 'shown_identity' tools/frpctl || fail "nav loop missing one-shot identity banner gate"
@@ -242,6 +235,9 @@ pass SUBMENU_VERSION_BANNER_NOT_REPEATED
 grep -q 'CLI Information Architecture' docs/PRODUCT_MASTER.md \
   || fail "PRODUCT_MASTER missing IA section"
 grep -q 'Internet Access' docs/PRODUCT_MASTER.md || fail "PRODUCT_MASTER missing Internet Access"
+grep -q 'DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md' docs/PRODUCT_MASTER.md \
+  || fail "PRODUCT_MASTER missing CLI/AI Master SSOT"
+grep -q 'Managed Hosts' docs/PRODUCT_MASTER.md || fail "PRODUCT_MASTER missing Managed Hosts"
 grep -q 'help commands' docs/CLI_REFERENCE.md || fail "CLI_REFERENCE missing help commands"
 ! grep -qE '^access list$' docs/CLI_REFERENCE.md || fail "CLI_REFERENCE still teaches access list"
 ! grep -q 'Root \`?\` lists resources' docs/CLI_REFERENCE.md \

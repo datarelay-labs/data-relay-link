@@ -1569,8 +1569,9 @@ def root_command_overview(role, detailed=False):
         lines.extend(
             [
                 "Help topics:",
-                "  help clients",
-                "  help objects",
+                "  help managed-hosts",
+                "  help network-objects",
+                "  help service-objects",
                 "  help remote-access",
                 "  help internet-access",
                 "  help ai-access",
@@ -1587,51 +1588,57 @@ def root_command_overview(role, detailed=False):
 
 
 def domain_help(topic, role):
-    """Conceptual help for product domains (clients/services/internet/system)."""
+    """Conceptual help for product domains (v2.4 public nouns)."""
     topic = str(topic or "").strip().lower()
     client, server = role_parts(role)
-    if topic in ("client", "clients"):
+    if topic in ("managed-host", "managed-hosts", "client", "clients"):
         if not server:
-            return "Clients help is available on a Data Relay Link server.\n"
+            return "Managed Hosts help is available on a Data Relay Link server.\n"
         return (
-            "Clients\n"
-            "=======\n\n"
-            "Clients are enrolled machines managed by this server.\n\n"
+            "Managed Hosts\n"
+            "=============\n\n"
+            "Managed Hosts are enrolled machines managed by this server.\n"
+            "A Managed Host may also be selected as a Network Object where valid.\n\n"
             "Guided path:\n"
-            "  menu → Clients\n\n"
-            "  1) Connect a new client   (set client)\n"
-            "  2) List clients          (show clients)\n"
-            "  3) View or manage a client\n"
-            "  4) Client Groups\n"
-            "  5) Enrollments\n\n"
+            "  menu → Managed Hosts\n\n"
             "Everyday commands:\n"
-            "  show clients\n"
-            "  show client <CLIENT>\n"
-            "  show client <CLIENT> endpoint\n"
-            "  set client <CLIENT> label <value>\n"
-            "  set client-group <GROUP>\n"
-            "  system revoke client <CLIENT>\n"
-            "  unset client <CLIENT>\n\n"
-            "CLIENT ID is the immutable selector. Labels and hostnames are\n"
-            "convenient display shortcuts when unique.\n"
+            "  show managed-hosts\n"
+            "  show managed-host <HOST>\n"
+            "  show managed-host <HOST> remote-services\n"
+            "  set enrollment\n"
+            "  system revoke client <HOST>\n\n"
+            "Obsolete noun 'clients' redirects here.\n"
         )
-    if topic in ("object", "objects"):
+    if topic in ("network-object", "network-objects", "object", "objects"):
         if not server:
-            return "Objects help is available on a Data Relay Link server.\n"
+            return "Network Objects help is available on a Data Relay Link server.\n"
         return (
-            "Objects\n"
-            "=======\n\n"
-            "Reusable Host, Network and FQDN identities. Role comes from the\n"
-            "policy field, not from the Object itself.\n\n"
+            "Network Objects\n"
+            "===============\n\n"
+            "Reusable IP, CIDR, FQDN and Managed Host selectors.\n"
+            "Network Groups are flat collections of Network Objects.\n\n"
             "Guided path:\n"
-            "  menu → Objects\n\n"
+            "  menu → Network Objects\n\n"
             "Everyday commands:\n"
-            "  show objects\n"
-            "  show object <OBJECT>\n"
-            "  set object <OBJECT> type host|network|fqdn\n"
-            "  set object <OBJECT> value <VALUE>\n"
-            "  set object-group <GROUP> member <OBJECT>\n"
-            "  unset object <OBJECT>\n"
+            "  show network-objects\n"
+            "  set network-object <NAME> type <ip|cidr|fqdn> value <VALUE>\n"
+            "  set network-group <NAME> members a,b,c\n"
+            "  unset network-object <NAME>\n"
+        )
+    if topic in ("service-object", "service-objects"):
+        if not server:
+            return "Service Objects help is available on a Data Relay Link server.\n"
+        return (
+            "Service Objects\n"
+            "===============\n\n"
+            "TCP, UDP and Fixed TCP service definitions.\n"
+            "Fixed TCP is a Service Object subtype with a separate endpoint pool.\n\n"
+            "Guided path:\n"
+            "  menu → Service Objects\n\n"
+            "Everyday commands:\n"
+            "  show service-objects\n"
+            "  set service-object <NAME> type <tcp|udp|fixed-tcp> port <PORT>\n"
+            "  set service-group <NAME> members a,b\n"
         )
     if topic in ("remote-access", "remote"):
         if not server:
@@ -1639,85 +1646,66 @@ def domain_help(topic, role):
         return (
             "Remote Access\n"
             "=============\n\n"
-            "Ordered inbound policy for Published Services.\n"
-            "Top-down, first complete match, explicit ALLOW/DENY, implicit DENY.\n\n"
+            "BLACKLIST / WHITELIST authorization for Remote Services.\n"
+            "No ordering model. Rules authorize; they do not create connectivity.\n\n"
             "Guided path:\n"
             "  menu → Remote Access\n\n"
             "Everyday commands:\n"
             "  show remote-access\n"
             "  set remote-access <RULE>\n"
-            "  set remote-access <RULE> source <OBJECT>\n"
-            "  test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>\n"
+            "  test remote-access source <SRC> destination <DST> service <SVC>\n"
         )
     if topic in ("service", "services"):
         if server:
             return (
-                "Published Services\n"
-                "==================\n\n"
-                "Inbound relay definitions with SELF or ROUTED target mode.\n\n"
-                "Guided path:\n"
-                "  menu → Remote Access → Published Services\n\n"
-                "Everyday commands:\n"
-                "  show published-services\n"
-                "  show published-service <CLIENT> <SERVICE>\n"
-                "  show service-presets\n"
+                "Remote Services are owned by Agent Hosts.\n\n"
+                "On the Server:\n"
+                "  show managed-host <HOST> remote-services\n\n"
+                "On an Agent Host:\n"
+                "  show remote-services\n"
+                "  set remote-service <NAME>\n"
             )
-        if client:
-            return (
-                "Services\n"
-                "========\n\n"
-                "Configure services published from this machine.\n\n"
-                "Guided path:\n"
-                "  menu → Services\n\n"
-                "Everyday commands:\n"
-                "  show services\n"
-                "  add service\n"
-                "  set service <ID> ...\n"
-                "  enable service <ID>\n"
-                "  disable service <ID>\n"
-                "  apply\n"
-                "  discard\n"
-                "  sync\n"
-            )
-        return "Services help requires an installed Data Relay Link role.\n"
+        return (
+            "Remote Services\n"
+            "===============\n\n"
+            "Agent-local connectivity objects with DRLink endpoints.\n"
+            "UDP Remote Service is not supported.\n\n"
+            "Everyday commands:\n"
+            "  show remote-services\n"
+            "  set remote-service <NAME> destination <DEST|this-host> service <SERVICE> enabled\n"
+            "  unset remote-service <NAME>\n"
+        )
     if topic in ("internet", "egress", "internet-access"):
         if not server:
             return "Internet Access help is available on a Data Relay Link server.\n"
         return (
             "Internet Access\n"
             "===============\n\n"
-            "Ordered outbound policy for approved Internet destinations.\n"
-            "Top-down, first complete match, explicit ALLOW/DENY, implicit DENY.\n\n"
+            "BLACKLIST / WHITELIST authorization for outbound access.\n"
+            "Managed Host may be used as a source; Managed Host destination is rejected.\n\n"
             "Guided path:\n"
             "  menu → Internet Access\n\n"
             "Everyday commands:\n"
             "  show internet-access\n"
             "  set internet-access <RULE>\n"
-            "  set internet-access <RULE> source <OBJECT>\n"
-            "  set internet-access <RULE> destination <OBJECT>\n"
-            "  test internet-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>\n"
-            "  show fixed-tcp\n"
+            "  test internet-access source <SRC> destination <DST> service <SVC>\n"
         )
-    if topic in ("ai", "ai-access", "mcp"):
+    if topic in ("ai", "ai-access", "mcp", "ai-identity", "ai-identities"):
         if not server:
             return "AI Access help is available on a Data Relay Link server.\n"
         return (
             "AI Access\n"
             "=========\n\n"
-            "Authorize AI principals through the MCP Bridge onto managed hosts.\n"
-            "Authentication (MCP identity) is separate from authorization (AI Access).\n\n"
+            "AI Identity authentication is separate from AI Access authorization.\n"
+            "Display name alone is not a verified identity.\n\n"
             "Guided path:\n"
             "  menu → AI Access\n\n"
             "Everyday commands:\n"
-            "  show ai-principals\n"
-            "  set ai-principal <PRINCIPAL> enabled\n"
-            "  set ai-access <RULE> principal <PRINCIPAL>\n"
-            "  test ai-access <PRINCIPAL> <ENDPOINT> <CAPABILITY> [OPERAND]\n"
-            "  show ai-activity\n"
-            "  system credential rotate ai-principal <PRINCIPAL>\n"
-            "  system credential configure ai-principal <PRINCIPAL> authentication static-bearer\n"
-            "  system credential configure ai-principal <PRINCIPAL> authentication oauth\n\n"
-            "True read-only requires exec=false. Granting exec is not a read-only role.\n"
+            "  set ai-identity <NAME>\n"
+            "  show ai-identities\n"
+            "  set ai-access <RULE>\n"
+            "  test ai-access source <IDENTITY> destination <DEST> permission <PERM>\n"
+            "  show ai-access-log\n"
         )
     if topic in ("system", "operate"):
         lines = [
@@ -2488,8 +2476,10 @@ def guided_menu_action(role, choice):
 # Resource-domain grouping for large Tab / context candidate lists.
 COMPLETION_DOMAIN_GROUPS = (
     (
-        "Clients",
+        "Managed Hosts",
         (
+            "managed-hosts",
+            "managed-host",
             "clients",
             "client",
             "groups",
@@ -2501,8 +2491,10 @@ COMPLETION_DOMAIN_GROUPS = (
         ),
     ),
     (
-        "Services",
+        "Remote Services",
         (
+            "remote-services",
+            "remote-service",
             "services",
             "service",
             "service-profiles",
@@ -2510,12 +2502,25 @@ COMPLETION_DOMAIN_GROUPS = (
         ),
     ),
     (
-        "Objects",
+        "Network Objects",
         (
+            "network-objects",
+            "network-object",
+            "network-groups",
+            "network-group",
             "objects",
             "object",
             "object-groups",
             "object-group",
+        ),
+    ),
+    (
+        "Service Objects",
+        (
+            "service-objects",
+            "service-object",
+            "service-groups",
+            "service-group",
         ),
     ),
     (
@@ -2567,9 +2572,16 @@ COMPLETION_DOMAIN_GROUPS = (
         "AI Access",
         (
             "ai-access",
+            "ai-identities",
+            "ai-identity",
             "ai-principals",
             "ai-principal",
             "ai-activity",
+            "ai-access-log",
+            "permission-objects",
+            "permission-object",
+            "permission-groups",
+            "permission-group",
         ),
     ),
     (

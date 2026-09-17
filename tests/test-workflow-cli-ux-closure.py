@@ -42,15 +42,16 @@ class DiscoveryTests(unittest.TestCase):
     def test_public_set_surface(self):
         names = [n for n, _ in CATALOG.subcommands("set", "server")]
         for required in (
-            "client",
-            "object",
-            "object-group",
-            "client-group",
+            "network-object",
+            "network-group",
+            "service-object",
+            "service-group",
+            "permission-object",
+            "permission-group",
             "remote-access",
             "internet-access",
-            "ai-principal",
+            "ai-identity",
             "ai-access",
-            "fixed-tcp",
             "server",
         ):
             self.assertIn(required, names)
@@ -60,6 +61,10 @@ class DiscoveryTests(unittest.TestCase):
             "service-access",
             "internet-source",
             "internet-destination",
+            "fixed-tcp",
+            "object",
+            "ai-principal",
+            "published-service",
         ):
             self.assertNotIn(banned, names)
 
