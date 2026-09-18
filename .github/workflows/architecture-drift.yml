@@ -1,0 +1,59 @@
+name: architecture-drift
+
+on:
+  schedule:
+    - cron: "30 0 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    name: architecture-drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Install OpenSpec
+        run: npm install --global @fission-ai/openspec@1.13.1
+
+      - name: Run drift audit
+        id: audit
+        shell: bash
+        run: |
+          set +e
+          python3 automation/governance/audit_architecture.py --report "$RUNNER_TEMP/architecture-drift.md"
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Reconcile managed drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_STATUS: ${{ steps.audit.outputs.status }}
+          REPORT: ${{ runner.temp }}/architecture-drift.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='[Governance] Architecture / OpenSpec drift detected'
+          issue_number="$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "[Governance] Architecture / OpenSpec drift detected") | .number' | head -1)"
+          if [[ "$AUDIT_STATUS" != "0" ]]; then
+            if [[ -n "$issue_number" ]]; then
+              gh issue comment "$issue_number" --body-file "$REPORT"
+            else
+              gh issue create --title "$title" --body-file "$REPORT"
+            fi
+          elif [[ -n "$issue_number" ]]; then
+            gh issue comment "$issue_number" --body 'Automated drift audit is clean. Closing this managed issue.'
+            gh issue close "$issue_number"
+          fi

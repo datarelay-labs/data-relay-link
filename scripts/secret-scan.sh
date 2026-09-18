@@ -6,7 +6,42 @@ cd "$(dirname "$0")/.."
 
 fail() { echo "SECRET_SCAN=FAIL $1" >&2; exit 1; }
 
-if git grep -nE 'BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY' -- . >/dev/null; then
+# Detect actual tracked PEM private-key blocks without false-positive matches on
+# negative assertions or deliberately tiny rejection fixtures in tests.
+if ! python3 - <<'PY'
+import re
+import subprocess
+from pathlib import Path
+
+paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+pem = re.compile(
+    r"-----BEGIN ((?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY)-----"
+    r"(.*?)"
+    r"-----END \1-----",
+    re.DOTALL,
+)
+bad = []
+for raw in paths:
+    if not raw:
+        continue
+    path = Path(raw.decode())
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        continue
+    for match in pem.finditer(text):
+        payload = re.sub(r"\s+", "", match.group(2))
+        # Real private-key PEM payloads are substantially larger than the tiny
+        # sentinel fixture used to prove secret rejection.
+        if len(payload) >= 80 and re.fullmatch(r"[A-Za-z0-9+/=]+", payload):
+            bad.append(str(path))
+            break
+if bad:
+    for path in bad:
+        print(f"tracked private key material: {path}")
+    raise SystemExit(1)
+PY
+then
   fail "private key material is tracked"
 fi
 

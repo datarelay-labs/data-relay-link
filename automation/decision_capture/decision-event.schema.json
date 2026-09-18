@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Data Relay Link Decision Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version","status","accepted_at","project","title","summary","rationale","behavior_change","capabilities"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "accepted"},
+    "accepted_at": {"type": "string","format": "date-time"},
+    "project": {"const": "data-relay-link"},
+    "title": {"type": "string","minLength": 3},
+    "summary": {"type": "string","minLength": 10},
+    "rationale": {"type": "string","minLength": 10},
+    "behavior_change": {"type": "boolean"},
+    "change_name": {"type": "string","pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "non_goals": {"type": "array","items": {"type": "string"}},
+    "sources": {"type": "array","items": {"type": "object","required": ["type","ref"],"properties": {"type":{"type":"string"},"ref":{"type":"string"},"note":{"type":"string"}}}},
+    "alternatives": {"type": "array","items": {"type": "object","required": ["name","outcome","reason"],"properties": {"name":{"type":"string"},"outcome":{"enum":["selected","rejected"]},"reason":{"type":"string"}}}},
+    "capabilities": {"type": "array","items": {"type": "object","required": ["path","kind","requirements"],"properties": {
+      "path":{"type":"string"},
+      "kind":{"enum":["existing","new"]},
+      "purpose":{"type":"string"},
+      "requirements":{"type":"array","items":{"type":"object","required":["operation"],"properties":{
+        "operation":{"enum":["ADDED","MODIFIED","REMOVED","RENAMED"]},
+        "name":{"type":"string"},"text":{"type":"string"},"reason":{"type":"string"},"migration":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},
+        "scenarios":{"type":"array","items":{"type":"object","required":["name","when","then"],"properties":{"name":{"type":"string"},"when":{"type":"string"},"then":{"type":"string"}}}}
+      }}}
+    }}},
+    "tasks": {"type":"array","items":{"type":"object","required":["description","verification"],"properties":{"description":{"type":"string"},"verification":{"type":"string"}}}}
+  }
+}

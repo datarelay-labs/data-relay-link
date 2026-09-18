@@ -1,0 +1,23 @@
+---
+description: Automatically preserve accepted product/design decisions in OpenSpec
+alwaysApply: true
+---
+
+# Decision Capture Rule
+
+For product/design behavior, `openspec/specs/` is the structured current contract.
+
+When the user explicitly finalizes a decision:
+- read the affected current specs;
+- create a valid accepted Decision Event;
+- run `automation/decision_capture/capture_decision.py`;
+- use the generated OpenSpec change as the implementation plan;
+- do not ask the user to maintain master documents manually.
+
+Do not capture exploration, suggestions, or unresolved alternatives.
+
+Never infer WHY from source code. Preserve documented rationale and rejected alternatives. A later replacement decision must supersede the old decision through a new change.
+
+Do not archive until implementation and required regression/E2E evidence are complete.
+
+After a qualified PRODUCT archive, automatically regenerate `knowledge/CANONICAL_SOURCE_OF_TRUTH.md` with `automation/tela_sync/render_canonical.py`, then use the connected Tela MCP to update the configured canonical page from `automation/tela_sync/config.json`. Read the page back and verify a decision-history query. Never ask the user to maintain Tela manually. If Tela is unavailable, report `KNOWLEDGE_SYNC_PENDING`; OpenSpec remains authoritative.

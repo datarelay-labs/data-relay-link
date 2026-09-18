@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Add machine-verifiable Definition of Done, security gates,
+  protected-branch target policy, and scheduled architecture/OpenSpec drift
+  detection without changing product runtime behavior.
+
+skip_specs: true

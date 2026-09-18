@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Automatically project canonical OpenSpec truth and decision history into
+  Tela through connected AI agents without manual documentation maintenance.
+
+skip_specs: true

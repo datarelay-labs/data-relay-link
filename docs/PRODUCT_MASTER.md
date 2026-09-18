@@ -8,7 +8,7 @@
 > **Version governance:** `docs/VERSION_POLICY.md`
 
 Current project version: **2.4.0**
-Current pinned Relay Engine (FRP): **v0.71.0**
+Current pinned FRP version: **v0.71.0** (Relay Engine)
 
 ## 1. Product definition
 
