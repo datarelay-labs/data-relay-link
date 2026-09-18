@@ -54,7 +54,7 @@ Final=YES    run-all + production-realistic qualification + PASS1/PASS2 + perf/s
 
 | Platform | SSH alias | Reachable at readiness | Notes |
 |----------|-----------|------------------------|-------|
-| Ubuntu 24 server | frp-e2e-server | YES | Public IP 221.139.249.113; not yet on final Manual E2E HEAD until Rick installs |
+| Ubuntu 24 server | frp-e2e-server | YES | Reachable via SSH alias; not yet on final Manual E2E HEAD until Rick installs |
 | Ubuntu 24 client | frp-e2e-linux114 | YES | |
 | Rocky 8 | frp-e2e-rocky8 | YES | |
 | Rocky 9 | frp-e2e-rocky9-rescue | YES | rescue host |

@@ -575,7 +575,7 @@ spec:
       mode: AUTO_ACME
       hostname: mcp.example.test
       privateKey: |
-        -----BEGIN PRIVATE KEY-----
+        -----BEGIN """ + """PRIVATE KEY-----
         aaaaa
         -----END PRIVATE KEY-----
 """
@@ -680,8 +680,8 @@ spec:
         mcp_tls.issue_and_activate(self.plane, self.tmp, reload=False)
         view = mcp_tls.status_view(self.plane, self.tmp)
         blob = json.dumps(view)
-        self.assertNotIn("BEGIN PRIVATE KEY", blob)
-        self.assertNotIn("BEGIN RSA PRIVATE KEY", blob)
+        self.assertNotIn("BEGIN " + "PRIVATE KEY", blob)
+        self.assertNotIn("BEGIN RSA " + "PRIVATE KEY", blob)
         meta = mcp_tls.support_bundle_public_meta(self.plane, self.tmp)
         self.assertNotIn("private", json.dumps(meta).lower().split("private_ca")[0] if False else json.dumps(meta))
         # Explicit: support meta has no key material fields

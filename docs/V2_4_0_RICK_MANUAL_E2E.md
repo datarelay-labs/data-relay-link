@@ -84,10 +84,10 @@ ConfigurationBundle / MCP TLS live under **System** help and `system ?` / `show 
 
 ## Public MCP prerequisites (do before Section I)
 
-Current lab server public IP (as of readiness assessment):
+Current lab server is the SSH alias `frp-e2e-server`. Do not commit the live public IP.
 
 ```text
-PUBLIC_IP=221.139.249.113
+PUBLIC_IP=<server public IPv4; do not commit>
 SSH_ALIAS=frp-e2e-server
 ```
 
@@ -95,14 +95,14 @@ Rick must prepare a **project-controlled hostname** for real public MCP TLS:
 
 ```text
 PUBLIC_MCP_REQUIRED_HOSTNAME=<choose, e.g. mcp.<your-domain>>
-PUBLIC_MCP_REQUIRED_DNS=A/AAAA -> 221.139.249.113 (or current server public IP)
+PUBLIC_MCP_REQUIRED_DNS=A/AAAA -> current server public IP
 PUBLIC_MCP_REQUIRED_PORTS=TCP/80 (HTTP-01), TCP/443 (HTTPS /mcp)
 ```
 
 Notes from readiness probe:
 
 ```text
-fw.xdr.ooo        -> 221.139.249.110 (NOT this server; do not reuse blindly)
+fw.xdr.ooo        -> retired historical lab address (NOT this server; do not reuse blindly)
 mcp.xdr.ooo       -> docs/CDN CNAME today; NOT usable as MCP endpoint without DNS change
 TCP/80 on server  -> must be free/open for AUTO_ACME HTTP-01
 TCP/443           -> currently used by frps on the installed lab host; plan coexistence / DNAT carefully
