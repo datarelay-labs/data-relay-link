@@ -35,6 +35,10 @@ class GovernanceTests(unittest.TestCase):
         for forbidden in ("token", "secret", "password", "credential", "api_key"):
             self.assertNotIn(forbidden, keys)
 
+    def test_lint_fetches_release_history(self):
+        text = (ROOT / ".github" / "workflows" / "lint.yml").read_text(encoding="utf-8")
+        self.assertIn("fetch-depth: 0", text)
+
     def test_repository_security_dry_run(self):
         proc = subprocess.run(
             ["bash", "scripts/configure-repository-security.sh", "--dry-run"],
