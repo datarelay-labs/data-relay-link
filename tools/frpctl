@@ -4805,10 +4805,21 @@ frpctl_repl_banner() {
   echo "Bundle SHA256   : $(frpctl_bundle_sha256)"
   echo
   echo "Type '?' for a short command list, or 'help' for full syntax."
-  echo "Commands read <action> <resource>, for example: show clients"
-  echo "Type 'help workflows' for end-to-end examples."
-  echo "Press Tab to complete a unique match or list next-token candidates."
-  echo "On a server, Tab completes CLIENT IDs and service IDs."
+  if frpctl_is_server; then
+    echo "Commands read <action> <resource>, for example: show managed-hosts"
+    echo "Type 'help workflows' for end-to-end examples."
+    echo "Press Tab to complete a unique match or list next-token candidates."
+    echo "On a server, Tab completes Managed Host IDs and Remote Service names."
+  elif frpctl_is_client; then
+    echo "Commands read <action> <resource>, for example: show remote-services"
+    echo "Type 'help workflows' for end-to-end examples."
+    echo "Press Tab to complete a unique match or list next-token candidates."
+    echo "On an Agent Host, Tab completes Remote Service names."
+  else
+    echo "Commands read <action> <resource>, for example: show status"
+    echo "Type 'help workflows' for end-to-end examples."
+    echo "Press Tab to complete a unique match or list next-token candidates."
+  fi
   echo "Type 'menu' for the guided menu."
   echo "Type 'exit' to leave."
   echo
