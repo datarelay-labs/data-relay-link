@@ -264,7 +264,7 @@
     ],
     "aliases": [],
     "destructive": false,
-    "hidden": false,
+    "hidden": true,
     "risk": "none",
     "confirmation": "none",
     "surface": "",
@@ -3124,12 +3124,12 @@
     "summary": "Create or edit a Remote Access rule",
     "detail": "Create or edit a Remote Access rule",
     "examples": [
-      "set remote-access"
+      "set remote-access",
+      "set remote-access block-partner mode blacklist source partner-office destination ubuntu-prod service ssh enabled"
     ],
     "args": [
       {
-        "name": "<RULE>",
-        "complete": null,
+        "name": "RULE",
         "required": true
       }
     ],
@@ -3153,12 +3153,12 @@
     "summary": "Create or edit an Internet Access rule",
     "detail": "Create or edit an Internet Access rule",
     "examples": [
-      "set internet-access"
+      "set internet-access",
+      "set internet-access github-https mode whitelist source ubuntu-prod destination github service https enabled"
     ],
     "args": [
       {
-        "name": "<RULE>",
-        "complete": null,
+        "name": "RULE",
         "required": true
       }
     ],
@@ -3269,12 +3269,12 @@
     "summary": "Create or edit an AI Access rule",
     "detail": "Create or edit an AI Access rule",
     "examples": [
-      "set ai-access"
+      "set ai-access",
+      "set ai-access allow-ops mode whitelist source automation-ai destination production-servers permission operations enabled"
     ],
     "args": [
       {
-        "name": "<RULE>",
-        "complete": null,
+        "name": "RULE",
         "required": true
       }
     ],
@@ -3530,31 +3530,10 @@
     "summary": "Explain Remote Access authorization",
     "detail": "Explain Remote Access authorization",
     "examples": [
-      "test remote-access"
+      "test remote-access source partner-office destination ubuntu-prod service ssh"
     ],
-    "args": [
-      {
-        "name": "<SOURCE_IP>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "<DESTINATION>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "<PROTOCOL>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "<PORT>",
-        "complete": null,
-        "required": true
-      }
-    ],
-    "tail": null,
+    "args": [],
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -3574,31 +3553,10 @@
     "summary": "Explain Internet Access authorization",
     "detail": "Explain Internet Access authorization",
     "examples": [
-      "test internet-access"
+      "test internet-access source ubuntu-prod destination github service https"
     ],
-    "args": [
-      {
-        "name": "<SOURCE_IP>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "<DESTINATION>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "<PROTOCOL>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "<PORT>",
-        "complete": null,
-        "required": true
-      }
-    ],
-    "tail": null,
+    "args": [],
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -3618,30 +3576,9 @@
     "summary": "Explain AI Access authorization",
     "detail": "Explain AI Access authorization",
     "examples": [
-      "test ai-access"
+      "test ai-access source automation-ai destination production-servers permission operations"
     ],
-    "args": [
-      {
-        "name": "<PRINCIPAL>",
-        "complete": "ai-principals",
-        "required": true
-      },
-      {
-        "name": "<ENDPOINT>",
-        "complete": "managed-endpoints",
-        "required": true
-      },
-      {
-        "name": "<CAPABILITY>",
-        "complete": null,
-        "required": true
-      },
-      {
-        "name": "[OPERAND]",
-        "complete": null,
-        "required": false
-      }
-    ],
+    "args": [],
     "tail": "any",
     "internal": null,
     "aliases": [],
@@ -4187,16 +4124,16 @@
     "summary": "Create or edit a Network Object",
     "detail": "Create or edit a Network Object",
     "examples": [
-      "set network-object"
+      "set network-object",
+      "set network-object office-admin type ip value 203.0.113.10"
     ],
     "args": [
       {
-        "name": "OBJECT",
-        "complete": "objects",
+        "name": "NAME",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4216,16 +4153,16 @@
     "summary": "Create or edit a Network Group",
     "detail": "Create or edit a Network Group",
     "examples": [
-      "set network-group"
+      "set network-group",
+      "set network-group approved-admins members office-admin,vpn-admin"
     ],
     "args": [
       {
-        "name": "GROUP",
-        "complete": "object-groups",
+        "name": "NAME",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4405,15 +4342,16 @@
     "summary": "Create or edit a Service Object",
     "detail": "Create or edit a Service Object",
     "examples": [
-      "set service-object"
+      "set service-object",
+      "set service-object postgres type tcp port 5432"
     ],
     "args": [
       {
-        "name": "SERVICE",
+        "name": "NAME",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4433,15 +4371,16 @@
     "summary": "Create or edit a Service Group",
     "detail": "Create or edit a Service Group",
     "examples": [
-      "set service-group"
+      "set service-group",
+      "set service-group web-services members http,https"
     ],
     "args": [
       {
-        "name": "GROUP",
+        "name": "NAME",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4619,15 +4558,16 @@
     "summary": "Create or edit a Permission Object",
     "detail": "Create or edit a Permission Object",
     "examples": [
-      "set permission-object"
+      "set permission-object",
+      "set permission-object read-only permissions host-info,process-read,file-read"
     ],
     "args": [
       {
-        "name": "PERMISSION",
+        "name": "NAME",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4647,15 +4587,16 @@
     "summary": "Create or edit a Permission Group",
     "detail": "Create or edit a Permission Group",
     "examples": [
-      "set permission-group"
+      "set permission-group",
+      "set permission-group operations members read-only,operator"
     ],
     "args": [
       {
-        "name": "GROUP",
+        "name": "NAME",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,

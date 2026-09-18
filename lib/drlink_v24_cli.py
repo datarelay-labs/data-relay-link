@@ -484,7 +484,9 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     # Policy enable/disable without rule name
     if res in ("remote-access", "internet-access", "ai-access") and len(rest) == 2 and rest[1] in ("enabled", "disabled"):
         _require_server(plane, res.replace("-", " ").title())
-        v24.set_policy_enforcement(plane, res, rest[1] == "enabled", confirm=True)
+        from drlink_control_cli import _run
+
+        _run(v24.set_policy_enforcement, plane, res, rest[1] == "enabled")
         title = res.replace("-", " ").title()
         pol = v24.get_access_policy(plane, res)
         sys.stdout.write(
@@ -495,8 +497,10 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 (pol["mode"] or "-").upper(),
                 str(pol["enforcement"]).upper(),
             )
-            if rest[1] == "disabled"
+            if rest[1] == "disabled" and str(pol["enforcement"]).lower() == "disabled"
             else "%s enforcement enabled.\n" % title
+            if rest[1] == "enabled"
+            else "Cancelled.\nNo changes were applied.\n"
         )
         return 0
     if res == "network-object":
@@ -678,7 +682,11 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     maybe_handle_obsolete(res)
     if res in ("remote-access", "internet-access", "ai-access") and len(rest) >= 2 and rest[1] == "policy":
         _require_server(plane, res.replace("-", " ").title())
-        v24.reset_access_policy(plane, res, confirm=True)
+        from drlink_control_cli import _run
+
+        result = _run(v24.reset_access_policy, plane, res)
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("%s policy reset.\nEffective access: ALLOW\n" % res)
         return 0
     if res == "network-object":

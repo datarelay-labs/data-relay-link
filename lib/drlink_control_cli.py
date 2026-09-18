@@ -981,24 +981,14 @@ def _test(plane: ControlPlane, rest):
     handled = v24cli.handle_test(plane, rest)
     if handled is not None:
         return handled
-    if rest[0] == "remote-access":
-        _need(rest, 5, "test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>")
-        result = plane.evaluate_remote_access(rest[1], rest[2], rest[3], int(rest[4]))
-        sys.stdout.write(plane.format_remote_explain(result))
-        return 0
-    if rest[0] == "internet-access":
-        _need(rest, 5, "test internet-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>")
-        result = plane.evaluate_internet_access(rest[1], rest[2], int(rest[4]), rest[3])
-        sys.stdout.write(plane.format_internet_explain(result, dns={"status": "not executed (explain only)", "security": "server-side DNS required at runtime"}))
-        return 0
-    if rest[0] == "ai-access":
-        _need(rest, 4, "test ai-access <PRINCIPAL> <ENDPOINT> <CAPABILITY> [OPERAND]")
-        operand = rest[4] if len(rest) > 4 else None
-        result = plane.evaluate_ai_access(rest[1], rest[2], rest[3], operand)
-        sys.stdout.write(plane.format_ai_explain(result))
-        return 0
-    raise SystemExit("Unknown test target.")
-
+    raise SystemExit(
+        "Unknown test target.\n\n"
+        "Usage:\n"
+        "  test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>\n"
+        "  test internet-access source <SOURCE> destination <DESTINATION> service <SERVICE>\n"
+        "  test ai-access source <IDENTITY> destination <DESTINATION> permission <PERMISSION>\n"
+        "  test configuration <FILE|->\n"
+    )
 
 def _system(plane: ControlPlane, rest):
     if not rest:
