@@ -3997,6 +3997,14 @@ class ControlPlane:
         if role == "server":
             extra.append("Managed Hosts    : %s" % st["clients"])
         extra.append("Remote Services  : %s" % st["services"])
+        if role == "server":
+            mcp = self.mcp_endpoint_status()
+            extra.append("MCP Public Endpoint : %s" % (
+                "Healthy" if mcp["remote_ready"] else (
+                    "Not configured" if mcp["public_url"] == "Not configured" else "Warning"
+                )
+            ))
+            extra.append("Authentication      : %s" % mcp["authentication"])
         return base.rstrip() + "\n" + "\n".join(extra) + "\n"
 
     def _read_server_config(self) -> dict:
