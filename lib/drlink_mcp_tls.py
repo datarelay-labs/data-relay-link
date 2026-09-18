@@ -455,6 +455,8 @@ def default_state() -> dict:
 
 
 def load_state(plane) -> dict:
+    if plane is None or getattr(plane, "conn", None) is None:
+        return default_state()
     row = plane.conn.execute("SELECT value FROM system_meta WHERE key = ?", (META_KEY,)).fetchone()
     state = default_state()
     if not row:

@@ -715,11 +715,24 @@ class BundleBuilder:
                 omitted.append(rel)
         # Public MCP TLS metadata only (never private keys).
         try:
+            import sqlite3
+
             import drlink_mcp_tls as mcp_tls
+            from drlink_control_db import db_path
             from drlink_control_plane import ControlPlane
 
-            plane = ControlPlane(str(self.root) if str(self.root) not in ("/", "") else None)
-            meta = mcp_tls.support_bundle_public_meta(plane, self.root)
+            root = str(self.root) if str(self.root) not in ("/", "") else None
+            db_file = db_path(root)
+            plane = None
+            if db_file.is_file():
+                conn = sqlite3.connect("file:%s?mode=ro" % db_file.as_posix(), uri=True)
+                conn.row_factory = sqlite3.Row
+                plane = ControlPlane(root, conn=conn)
+            try:
+                meta = mcp_tls.support_bundle_public_meta(plane, self.root)
+            finally:
+                if plane is not None:
+                    plane.close()
             self.stage_write("mcp-tls/status.json", json.dumps(meta, indent=2, sort_keys=True) + "\n")
             self.add_section("mcp-tls-public-status")
             active_cert = self.path("/var/lib/drlink/tls/mcp/active/fullchain.pem")
