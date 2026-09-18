@@ -73,10 +73,10 @@ grep -q 'Authoritative classification' docs/RELEASE_CHECKLIST.md || fail "checkl
 grep -q 'authoritative' docs/RELEASE_VALIDATION.md || fail "validation missing authoritative wording"
 pass "SUPPORT_CLAIM_ALIGNMENT"
 
-if grep -nE 'hashed/wrapped server-side' docs/SECURITY.md; then
-  fail "SECURITY.md still claims enrollment secret is hashed/wrapped"
+if grep -nE 'not hashed or wrapped at rest' docs/SECURITY.md; then
+  fail "SECURITY.md still claims enrollment secret is stored unhashed"
 fi
-grep -q 'not hashed or wrapped at rest' docs/SECURITY.md || fail "SECURITY.md missing enrollment secret storage accuracy"
+grep -q 'verifier/hash' docs/SECURITY.md || fail "SECURITY.md missing enrollment secret storage accuracy"
 grep -q 'BOOTSTRAP_TICKET_USED' docs/SECURITY.md || fail "SECURITY.md missing post-success ticket reuse class"
 pass "SECURITY_DOC_SECRET_ACCURACY"
 

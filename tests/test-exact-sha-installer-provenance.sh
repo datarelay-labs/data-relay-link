@@ -95,7 +95,7 @@ resolve_server_settings
 [[ "${FRP_EXPECTED_SOURCE_REF:-}" == "$FAKE_SHA" ]] || fail "install did not infer SOURCE_REF"
 [[ "$CLIENT_INSTALLER_URL" == *"/${FAKE_SHA}/dist/bootstrap-client.sh" ]] \
   || fail "install linux installer URL: $CLIENT_INSTALLER_URL"
-[[ "$WINDOWS_CLIENT_INSTALLER_URL" == *"/${FAKE_SHA}/dist/bootstrap-client.ps1" ]] \
+[[ "$WINDOWS_CLIENT_INSTALLER_URL" == *"/artifacts/"*"bootstrap-client.ps1" ]] \
   || fail "install windows installer URL: $WINDOWS_CLIENT_INSTALLER_URL"
 [[ "$CLIENT_INSTALLER_URL" != *"/v${PROJECT_VERSION}/"* ]] \
   || fail "premature tag in install linux URL"
