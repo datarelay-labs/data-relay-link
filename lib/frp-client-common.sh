@@ -4759,6 +4759,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/drlink_mgmt_sync.py" ]] || {
+    echo "ERROR: missing ${source}/lib/drlink_mgmt_sync.py" >&2
+    return 1
+  }
   [[ -f "${source}/tools/frp-client" ]] || {
     echo "ERROR: missing ${source}/tools/frp-client" >&2
     return 1
@@ -4793,6 +4797,9 @@ frp_client_install_management_files() {
   fi
   if [[ -f "${source}/lib/drlink_control_plane.py" ]]; then
     install -m 0644 "${source}/lib/drlink_control_plane.py" "${libdir}/drlink_control_plane.py"
+  fi
+  if [[ -f "${source}/lib/drlink_mgmt_sync.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_mgmt_sync.py" "${libdir}/drlink_mgmt_sync.py"
   fi
   if [[ -f "${source}/lib/frp-role-ownership.sh" ]]; then
     install -m 0644 "${source}/lib/frp-role-ownership.sh" "${libdir}/frp-role-ownership.sh"
@@ -4851,6 +4858,7 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/drlink_ai_agent.py:0644:lib/drlink_ai_agent.py" \
     "usr/local/lib/drlink/drlink_control_db.py:0644:lib/drlink_control_db.py" \
     "usr/local/lib/drlink/drlink_control_plane.py:0644:lib/drlink_control_plane.py" \
+    "usr/local/lib/drlink/drlink_mgmt_sync.py:0644:lib/drlink_mgmt_sync.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
@@ -4966,6 +4974,7 @@ frp_client_upgrade_validate_staged() {
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_version_identity.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_service_profiles.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_ctl_repl.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/drlink_mgmt_sync.py" || return 1
   python3 -m py_compile "${staged}/usr/local/bin/frp-support-bundle" || return 1
   rm -rf "${staged}/usr/local/lib/drlink/__pycache__" \
     "${staged}/usr/local/lib/drlink/"*.pyc 2>/dev/null || true

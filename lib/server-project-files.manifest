@@ -47,6 +47,7 @@ project usr/local/lib/drlink/drlink_v24_cli.py 0644 lib/drlink_v24_cli.py python
 project usr/local/lib/drlink/drlink_v24_wizard.py 0644 lib/drlink_v24_wizard.py python
 project usr/local/lib/drlink/drlink_v24_ai_identity.py 0644 lib/drlink_v24_ai_identity.py python
 project usr/local/lib/drlink/drlink_v24.py 0644 lib/drlink_v24.py python
+project usr/local/lib/drlink/drlink_mgmt_sync.py 0644 lib/drlink_mgmt_sync.py python
 project usr/local/lib/drlink/drlink_configuration_bundle.py 0644 lib/drlink_configuration_bundle.py python
 project usr/local/lib/drlink/drlink_runtime_policy.py 0644 lib/drlink_runtime_policy.py python
 project usr/local/lib/drlink/drlink_ai_agent.py 0644 lib/drlink_ai_agent.py python

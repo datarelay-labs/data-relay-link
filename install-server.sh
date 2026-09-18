@@ -46,6 +46,7 @@ for f in \
   "$BASE_DIR/lib/drlink_control_db.py" \
   "$BASE_DIR/lib/drlink_control_plane.py" \
   "$BASE_DIR/lib/drlink_control_cli.py" \
+  "$BASE_DIR/lib/drlink_mgmt_sync.py" \
   "$BASE_DIR/lib/drlink_runtime_policy.py" \
   "$BASE_DIR/lib/drlink_ai_agent.py" \
   "$BASE_DIR/lib/drlink_mcp_bridge.py" \

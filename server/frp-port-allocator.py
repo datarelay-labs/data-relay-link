@@ -2058,7 +2058,7 @@ class Allocator:
         client['mgmt_revoked_at'] = None
         return mac, None
 
-    def verify_mgmt_against_client(self, client, machine_id, headers, body):
+    def verify_mgmt_against_client(self, client, machine_id, headers, body, op=None, method=None, path=None):
         try:
             ts = int(str(headers.get('X-Timestamp') or headers.get('X-Mgmt-Timestamp') or ''))
         except Exception:
@@ -2081,7 +2081,10 @@ class Allocator:
             ), None, None
         if status != 'enrolled' or not client.get('mgmt_pubkey'):
             return 'this client does not have a management identity', None, None
-        message = MGMT.signed_message(machine_id, body, ts, nonce)
+        sign_op = op if op is not None else MGMT.MGMT_OP_ENROLL
+        message = MGMT.signed_message(
+            machine_id, body, ts, nonce, op=sign_op, method=method, path=path
+        )
         try:
             ok = MGMT.verify_signature(client['mgmt_pubkey'], message, signature)
         except ValueError as exc:
@@ -2913,7 +2916,12 @@ def make_handler(allocator):
                         return
                     try:
                         handled = MGMT_SYNC.handle_allocator_http(
-                            plane, 'GET', path, self.headers, b''
+                            plane,
+                            'GET',
+                            path,
+                            self.headers,
+                            b'',
+                            verifier=MGMT_SYNC.AllocatorMgmtVerifier(allocator),
                         )
                         if handled is not None:
                             self.send_json(handled[0], handled[1])
@@ -2978,7 +2986,12 @@ def make_handler(allocator):
                             return
                         try:
                             handled = MGMT_SYNC.handle_allocator_http(
-                                plane, 'POST', path, self.headers, body
+                                plane,
+                                'POST',
+                                path,
+                                self.headers,
+                                body,
+                                verifier=MGMT_SYNC.AllocatorMgmtVerifier(allocator),
                             )
                             if handled is not None:
                                 self.send_json(handled[0], handled[1])
@@ -3038,7 +3051,12 @@ def make_handler(allocator):
                         return
                     try:
                         handled = MGMT_SYNC.handle_allocator_http(
-                            plane, 'DELETE', path, self.headers, b''
+                            plane,
+                            'DELETE',
+                            path,
+                            self.headers,
+                            b'',
+                            verifier=MGMT_SYNC.AllocatorMgmtVerifier(allocator),
                         )
                         if handled is not None:
                             self.send_json(handled[0], handled[1])

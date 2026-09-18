@@ -8,14 +8,27 @@ Server is authoritative for:
 
 Agent stores synchronized runtime/desired state locally and must not mint
 authoritative online endpoint reservations when a live management path exists.
+
+Agent↔Server management operations are authenticated with the enrolled Agent
+ECDSA P-256 management identity (timestamp, nonce, operation binding, replay
+protection). TLS certificate verification is enabled by default.
+
+DRLINK_MGMT_INSECURE is an explicit lab/test-only override. It is never applied
+automatically when certificate validation fails.
+
+DRLINK_MGMT_TOKEN is not a production Agent identity and is ignored by this
+path.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
-import socket
 import socketserver
+import ssl
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -25,10 +38,39 @@ from urllib.parse import quote, unquote, urlparse
 
 from drlink_control_db import ControlPlaneError, utc_now_iso
 import drlink_v24 as v24
+import frp_mgmt_auth as MGMT
 
 
 class MgmtSyncError(ControlPlaneError):
     """Raised when the Agent↔Server management path fails."""
+
+
+class MgmtAuthError(MgmtSyncError):
+    """Raised when management identity authentication fails."""
+
+
+AUTH_REJECTED = (
+    "ERROR:\nThe DRLink Server rejected the Agent management identity.\n\n"
+    "The Agent may need to be re-enrolled.\n\nNo changes were applied."
+)
+AUTH_REVOKED = (
+    "ERROR:\nThe Agent management identity has been revoked.\n\n"
+    "Re-enroll this Agent before retrying.\n\nNo changes were applied."
+)
+TLS_INSECURE_WARNING = (
+    "WARNING: management TLS certificate verification is disabled.\n"
+)
+_INSECURE_FLAGS = ("1", "yes", "true")
+
+
+class MgmtAuthContext:
+    __slots__ = ("machine_id", "client", "nonce", "now")
+
+    def __init__(self, machine_id: str, client: dict, nonce: str, now: int):
+        self.machine_id = machine_id
+        self.client = client if isinstance(client, dict) else {}
+        self.nonce = nonce
+        self.now = int(now)
 
 
 def resolve_mgmt_base_url(root: Optional[str] = None) -> Optional[str]:
@@ -99,12 +141,155 @@ def use_live_mgmt_path(root: Optional[str] = None) -> bool:
     return resolve_mgmt_base_url(root) is not None
 
 
-def _mgmt_token() -> str:
-    return str(os.environ.get("DRLINK_MGMT_TOKEN") or "").strip()
+def mgmt_insecure_tls_enabled() -> bool:
+    """True only when the explicit lab/test TLS override is set."""
+    return str(os.environ.get("DRLINK_MGMT_INSECURE") or "").strip().lower() in _INSECURE_FLAGS
+
+
+def allocator_ca_path(root: Optional[str] = None) -> Optional[Path]:
+    base = Path(root) if root else Path("/")
+    for rel in (
+        "etc/drlink/allocator-ca.crt",
+        "etc/frp/allocator-ca.crt",
+        "var/lib/drlink/allocator-ca.crt",
+    ):
+        path = base / rel
+        if path.is_file():
+            return path
+    return None
+
+
+def _tls_context(url: str, root: Optional[str] = None):
+    """Build a TLS context. Production default verifies certificates.
+
+    There is no automatic insecure fallback if verification fails.
+    """
+    if not str(url).lower().startswith("https://"):
+        return None
+    if mgmt_insecure_tls_enabled():
+        sys.stderr.write(TLS_INSECURE_WARNING)
+        sys.stderr.flush()
+        return ssl._create_unverified_context()
+    ca = allocator_ca_path(root)
+    try:
+        if ca is not None:
+            return ssl.create_default_context(cafile=str(ca))
+        return ssl.create_default_context()
+    except Exception as exc:
+        raise MgmtSyncError(
+            "ERROR:\nDRLink Server management TLS trust material is invalid.\n\n"
+            "No changes were applied."
+        ) from exc
 
 
 def _agent_identity(root: Optional[str] = None) -> dict:
     return v24.load_agent_identity(root)
+
+
+def _identity_key_path(root: Optional[str] = None) -> Path:
+    base = Path(root) if root else Path("/")
+    return base / "etc/frp/client-identity.key"
+
+
+def _identity_mac_path(root: Optional[str] = None) -> Path:
+    base = Path(root) if root else Path("/")
+    return base / "etc/frp/client-identity.mac"
+
+
+def _canonical_operation(method: str, path: str) -> Optional[tuple[str, str]]:
+    parsed = urlparse(path).path or path
+    method_u = str(method or "").upper()
+    if method_u == "GET" and parsed == "/v1/catalog":
+        return MGMT.MGMT_OP_CATALOG_READ, parsed
+    if method_u == "POST" and parsed == "/v1/remote-services":
+        return MGMT.MGMT_OP_REMOTE_SERVICE_SET, parsed
+    if method_u == "DELETE" and parsed.startswith("/v1/remote-services/"):
+        name = parsed[len("/v1/remote-services/") :]
+        if not name or "/" in name:
+            return None
+        return MGMT.MGMT_OP_REMOTE_SERVICE_DELETE, parsed
+    return None
+
+
+def _sign_request_headers(method: str, url: str, body: bytes, root: Optional[str] = None) -> dict:
+    identity = _agent_identity(root)
+    machine_id = str(identity.get("machine_id") or "").strip()
+    if not machine_id:
+        raise MgmtSyncError(AUTH_REJECTED)
+    key_path = _identity_key_path(root)
+    try:
+        MGMT.validate_private_key(key_path)
+    except Exception:
+        raise MgmtSyncError(AUTH_REJECTED) from None
+    parsed = urlparse(url)
+    path = parsed.path or "/"
+    bound = _canonical_operation(method, path)
+    if bound is None:
+        raise MgmtSyncError(
+            "ERROR:\nUnsupported management operation.\n\nNo changes were applied."
+        )
+    op, canonical_path = bound
+    ts = int(time.time())
+    nonce = MGMT.new_nonce()
+    message = MGMT.signed_message(
+        machine_id, body, ts, nonce, op=op, method=method, path=canonical_path
+    )
+    signature = MGMT.sign_message(key_path, message)
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Machine-Id": machine_id,
+        "X-Timestamp": str(ts),
+        "X-Mgmt-Nonce": nonce,
+        "X-Mgmt-Signature": signature,
+        "X-Mgmt-Auth": "1",
+    }
+    return headers
+
+
+def _load_response_mac(root: Optional[str] = None) -> str:
+    path = _identity_mac_path(root)
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _verify_response_mac(data: dict, root: Optional[str] = None) -> dict:
+    """Verify existing management response HMAC when the Agent has a MAC key."""
+    mac = _load_response_mac(root)
+    if not mac:
+        # Test fixtures without enrollment MAC rely on TLS. Production enrolled
+        # Agents always have client-identity.mac.
+        data.pop("response_hmac", None)
+        return data
+    received = str(data.pop("response_hmac", "") or "").strip()
+    if not received:
+        raise MgmtSyncError(
+            "ERROR:\nThe DRLink Server management response was not authenticated.\n\n"
+            "No changes were applied."
+        )
+    expected = MGMT.hmac_hex(mac, MGMT.canonical_json(data))
+    if not hmac.compare_digest(received, expected):
+        raise MgmtSyncError(
+            "ERROR:\nThe DRLink Server management response failed integrity verification.\n\n"
+            "No changes were applied."
+        )
+    return data
+
+
+def _raise_http_auth_error(code: int, detail: str) -> None:
+    text = str(detail or "").lower()
+    if code in (401, 403) and "revoked" in text:
+        raise MgmtSyncError(AUTH_REVOKED)
+    if code in (401, 403):
+        raise MgmtSyncError(AUTH_REJECTED)
+    raise MgmtSyncError(
+        "ERROR:\nServer management request failed (%s).\n\n%s\n\nNo changes were applied."
+        % (code, (detail or "").strip() or "request rejected")
+    )
 
 
 def _request_json(
@@ -116,30 +301,16 @@ def _request_json(
     timeout: float = 8.0,
 ) -> dict:
     payload = b""
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    token = _mgmt_token()
-    if token:
-        headers["X-Drlink-Mgmt-Token"] = token
-    identity = _agent_identity(root)
-    machine_id = str(identity.get("machine_id") or "").strip()
-    hostname = str(identity.get("hostname") or identity.get("label") or "").strip()
-    if machine_id:
-        headers["X-Drlink-Machine-Id"] = machine_id
-    if hostname:
-        headers["X-Drlink-Hostname"] = hostname
     if body is not None:
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    req = urllib.request.Request(url, data=payload if method != "GET" else None, headers=headers, method=method)
-    # Lab / self-signed allocator TLS: allow override for disposable E2E.
-    ctx = None
-    if url.lower().startswith("https://") and str(os.environ.get("DRLINK_MGMT_INSECURE") or "").strip().lower() in (
-        "1",
-        "yes",
-        "true",
-    ):
-        import ssl
-
-        ctx = ssl._create_unverified_context()
+    headers = _sign_request_headers(method, url, payload, root=root)
+    req = urllib.request.Request(
+        url,
+        data=payload if method.upper() != "GET" else None,
+        headers=headers,
+        method=method,
+    )
+    ctx = _tls_context(url, root)
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             raw = resp.read()
@@ -149,9 +320,19 @@ def _request_json(
             detail = exc.read().decode("utf-8", errors="replace")
         except Exception:
             detail = str(exc)
+        code = int(exc.code)
+        parsed_error = ""
+        try:
+            payload = json.loads(detail)
+            if isinstance(payload, dict):
+                parsed_error = str(payload.get("error") or "")
+        except Exception:
+            parsed_error = ""
+        if code in (401, 403):
+            _raise_http_auth_error(code, parsed_error or detail)
         raise MgmtSyncError(
             "ERROR:\nServer management request failed (%s).\n\n%s\n\nNo changes were applied."
-            % (exc.code, detail.strip() or exc.reason)
+            % (code, (parsed_error or detail).strip() or exc.reason)
         ) from exc
     except Exception as exc:
         raise MgmtSyncError(
@@ -171,10 +352,8 @@ def _request_json(
             "ERROR:\nServer management response was malformed.\n\nNo changes were applied."
         )
     if data.get("error"):
-        raise MgmtSyncError(
-            "ERROR:\n%s\n\nNo changes were applied." % data.get("error")
-        )
-    return data
+        _raise_http_auth_error(403, str(data.get("error")))
+    return _verify_response_mac(data, root=root)
 
 
 def fetch_server_catalog(root: Optional[str] = None) -> dict:
@@ -228,28 +407,168 @@ def delete_remote_service_on_server(*, root: Optional[str] = None, name: str) ->
             "ERROR:\nNo Server management URL is configured for Remote Service delete.\n\n"
             "No changes were applied."
         )
-    return _request_json("DELETE", base + "/v1/remote-services/" + quote(name, safe=""), root=root)
+    return _request_json(
+        "DELETE",
+        base + "/v1/remote-services/" + quote(name, safe=""),
+        root=root,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Server-side handlers (ControlPlane authoritative)
+# Server-side identity verification
 # ---------------------------------------------------------------------------
 
 
-def _authenticate_request(headers) -> tuple[str, str]:
-    """Return (machine_id, hostname). Token auth or identity headers."""
-    token = _mgmt_token()
-    provided = str(headers.get("X-Drlink-Mgmt-Token") or "").strip()
-    if token:
-        if provided != token:
-            raise MgmtSyncError("management authentication failed")
-    elif not str(headers.get("X-Drlink-Machine-Id") or "").strip():
-        # Allow unsigned lab calls only when token not required and machine id present
-        # — fail closed if neither token nor machine id.
-        raise MgmtSyncError("management authentication required")
-    machine_id = str(headers.get("X-Drlink-Machine-Id") or "unknown").strip()
-    hostname = str(headers.get("X-Drlink-Hostname") or machine_id).strip()
-    return machine_id, hostname
+def _public_auth_error(internal: str) -> dict:
+    text = str(internal or "").lower()
+    if "revoked" in text:
+        return {
+            "error": "management identity revoked",
+            "error_class": "REVOKED",
+        }
+    if "replay" in text:
+        return {
+            "error": "management request replayed",
+            "error_class": "REPLAY_REJECTED",
+        }
+    if "unknown" in text or "not enrolled" in text or "does not have a management identity" in text:
+        return {
+            "error": "management identity not enrolled",
+            "error_class": "AUTH_FAILED",
+        }
+    return {
+        "error": "management authentication failed",
+        "error_class": "AUTH_FAILED",
+    }
+
+
+def _status_of(client) -> str:
+    if not isinstance(client, dict):
+        return "unknown"
+    status = client.get("mgmt_status")
+    if status in ("enrolled", "revoked", "legacy"):
+        return status
+    if client.get("mgmt_pubkey"):
+        return "enrolled"
+    return "unknown"
+
+
+class AllocatorMgmtVerifier:
+    """Production verifier: enrolled ECDSA identity in the allocator registry."""
+
+    def __init__(self, allocator):
+        self.allocator = allocator
+
+    def authenticate(self, headers, body, *, op, method, path) -> MgmtAuthContext:
+        machine_id = MGMT.extract_machine_id(headers)
+        if not machine_id:
+            raise MgmtAuthError("missing machine id")
+        with self.allocator.registry_lock():
+            state = self.allocator.load_registry()
+            client = (state.get("clients") or {}).get(machine_id)
+            error, now, nonce = self.allocator.verify_mgmt_against_client(
+                client, machine_id, headers, body, op=op, method=method, path=path
+            )
+            if error:
+                raise MgmtAuthError(error)
+            if not isinstance(client, dict):
+                raise MgmtAuthError("unknown client identity")
+        return MgmtAuthContext(machine_id, client, nonce, int(now or time.time()))
+
+    def commit_nonce(self, machine_id, nonce, now):
+        with self.allocator.registry_lock():
+            return self.allocator.commit_nonce(machine_id, nonce, now)
+
+
+class InMemoryMgmtVerifier:
+    """Test-only enrolled-identity store. Not a production authentication shortcut."""
+
+    def __init__(self, clock=None):
+        self.clients = {}
+        self.nonces = {}
+        self.clock = clock or (lambda: int(time.time()))
+
+    def enroll(self, machine_id: str, pub_pem: str, mac_key: str = "", hostname: str = ""):
+        self.clients[str(machine_id)] = {
+            "mgmt_pubkey": pub_pem,
+            "mgmt_status": "enrolled",
+            "mgmt_mac_key": mac_key,
+            "hostname": hostname,
+        }
+
+    def revoke(self, machine_id: str):
+        client = self.clients.get(str(machine_id))
+        if client is None:
+            return
+        client["mgmt_status"] = "revoked"
+
+    def authenticate(self, headers, body, *, op, method, path) -> MgmtAuthContext:
+        machine_id = MGMT.extract_machine_id(headers)
+        if not machine_id:
+            raise MgmtAuthError("missing machine id")
+        client = self.clients.get(machine_id)
+        now = int(self.clock())
+        status = _status_of(client)
+        if client is None or status == "unknown":
+            raise MgmtAuthError("unknown client identity")
+        if status == "revoked":
+            raise MgmtAuthError("management identity revoked")
+        if status != "enrolled" or not client.get("mgmt_pubkey"):
+            raise MgmtAuthError("this client does not have a management identity")
+        error, _ts, nonce = MGMT.verify_signed_mgmt_request(
+            client["mgmt_pubkey"],
+            machine_id,
+            headers,
+            body,
+            op=op,
+            method=method,
+            path=path,
+            now=now,
+        )
+        if error:
+            raise MgmtAuthError(error)
+        key = "%s:%s" % (machine_id, nonce)
+        if key in self.nonces:
+            raise MgmtAuthError("replayed request")
+        return MgmtAuthContext(machine_id, client, nonce, now)
+
+    def commit_nonce(self, machine_id, nonce, now):
+        key = "%s:%s" % (machine_id, nonce)
+        if key in self.nonces:
+            return "replayed request"
+        self.nonces[key] = int(now) + 900
+        return None
+
+
+def _authenticate_mgmt_api(verifier, headers, body, *, op, method, path) -> MgmtAuthContext:
+    if verifier is None:
+        raise MgmtAuthError("management authentication required")
+    return verifier.authenticate(headers, body, op=op, method=method, path=path)
+
+
+def _commit_auth_nonce(verifier, auth: MgmtAuthContext) -> None:
+    error = verifier.commit_nonce(auth.machine_id, auth.nonce, auth.now)
+    if error:
+        raise MgmtAuthError(error)
+
+
+def _with_response_mac(payload: dict, auth: MgmtAuthContext) -> dict:
+    mac = str(auth.client.get("mgmt_mac_key") or "").strip()
+    if not mac:
+        return payload
+    out = dict(payload)
+    out["response_hmac"] = MGMT.hmac_hex(mac, MGMT.canonical_json(out))
+    return out
+
+
+def _require_managed_host(plane, machine_id: str):
+    """Exact enrolled Managed Host lookup. Never creates, never matches hostname."""
+    row = plane.conn.execute(
+        "SELECT * FROM clients WHERE id = ?", (machine_id,)
+    ).fetchone()
+    if row is None:
+        raise MgmtAuthError("unknown Managed Host")
+    return row
 
 
 def build_catalog_payload(plane) -> dict:
@@ -364,36 +683,8 @@ def apply_catalog_to_agent(plane_db, catalog: dict) -> int:
     return count
 
 
-def _ensure_managed_host(plane, machine_id: str, hostname: str) -> dict:
-    client = None
-    try:
-        client = plane.get_client(machine_id)
-    except Exception:
-        client = None
-    if client is None:
-        try:
-            client = plane.get_client(hostname)
-        except Exception:
-            client = None
-    if client is not None:
-        return client
-
-    def ensure():
-        now = utc_now_iso()
-        plane.conn.execute(
-            "INSERT OR IGNORE INTO clients(id, label, hostname, status, trust_status, connected, "
-            "row_version, created_at, updated_at) VALUES (?, ?, ?, 'connected', 'trusted', 1, 1, ?, ?)",
-            (machine_id, hostname, hostname, now, now),
-        )
-        # Also ensure managed Network Object representation if helpers exist
-        return {"entity": {"type": "client", "id": machine_id, "name": hostname}, "operation": "ensure"}
-
-    plane._mutate("ensure managed host %s" % hostname, "ensure managed host", ensure)
-    return plane.get_client(machine_id) or plane.require_client(hostname)
-
-
-def server_upsert_remote_service(plane, headers, body: dict) -> dict:
-    machine_id, hostname = _authenticate_request(headers)
+def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> dict:
+    machine_id = auth.machine_id
     name = str(body.get("name") or "").strip()
     destination = str(body.get("destination") or "").strip()
     service = str(body.get("service") or "").strip()
@@ -418,7 +709,8 @@ def server_upsert_remote_service(plane, headers, body: dict) -> dict:
     if pool_class != expected_pool:
         raise MgmtSyncError("pool_class does not match Service Object type")
 
-    client = _ensure_managed_host(plane, machine_id, hostname)
+    client = _require_managed_host(plane, machine_id)
+    host_label = client["label"] or client["hostname"] or machine_id
 
     existing = plane.conn.execute(
         "SELECT s.id, s.public_port, m.pool_class FROM published_services s "
@@ -474,11 +766,19 @@ def server_upsert_remote_service(plane, headers, body: dict) -> dict:
                     reason,
                 ),
             )
-            return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "set"}
+            return {
+                "entity": {"type": "remote-service", "id": name, "name": name},
+                "operation": "set",
+                "after": "agent %s remote-service %s" % (machine_id, name),
+            }
         finally:
             plane._batch_mode = nested_prev
 
-    plane._mutate("mgmt set remote-service %s" % name, "mgmt set remote service", write)
+    plane._mutate(
+        "mgmt set remote-service %s [agent %s]" % (name, machine_id),
+        "mgmt set remote service",
+        write,
+    )
     endpoint_host = os.environ.get("DRLINK_HOST") or "drlink.local"
     return {
         "name": name,
@@ -491,15 +791,15 @@ def server_upsert_remote_service(plane, headers, body: dict) -> dict:
         "pool_class": pool_class,
         "pending_allocation": 0 if endpoint_port is not None else 1,
         "reason": reason,
-        "managed_host": hostname,
+        "managed_host": host_label,
         "machine_id": machine_id,
         "generation": 1,
     }
 
 
-def server_delete_remote_service(plane, headers, name: str) -> dict:
-    machine_id, hostname = _authenticate_request(headers)
-    client = _ensure_managed_host(plane, machine_id, hostname)
+def server_delete_remote_service(plane, auth: MgmtAuthContext, name: str) -> dict:
+    machine_id = auth.machine_id
+    client = _require_managed_host(plane, machine_id)
     pub = plane.conn.execute(
         "SELECT id, public_port FROM published_services WHERE client_id = ? AND name = ? COLLATE NOCASE AND released = 0",
         (client["id"], name),
@@ -518,9 +818,17 @@ def server_delete_remote_service(plane, headers, name: str) -> dict:
             "UPDATE published_services SET released = 1, enabled = 0, updated_at = ? WHERE id = ?",
             (utc_now_iso(), pub["id"]),
         )
-        return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "unset"}
+        return {
+            "entity": {"type": "remote-service", "id": name, "name": name},
+            "operation": "unset",
+            "after": "agent %s remote-service %s" % (machine_id, name),
+        }
 
-    plane._mutate("mgmt unset remote-service %s" % name, "mgmt unset remote service", write)
+    plane._mutate(
+        "mgmt unset remote-service %s [agent %s]" % (name, machine_id),
+        "mgmt unset remote service",
+        write,
+    )
     return {"status": "DELETED", "name": name, "released_port": pub["public_port"]}
 
 
@@ -531,6 +839,7 @@ def server_delete_remote_service(plane, headers, name: str) -> dict:
 
 class _MgmtHandler(BaseHTTPRequestHandler):
     plane = None
+    verifier = None
 
     def log_message(self, fmt, *args):  # noqa: A003
         return
@@ -543,72 +852,63 @@ class _MgmtHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _dispatch(self, method: str, body: bytes):
+        handled = handle_allocator_http(
+            self.plane, method, self.path, self.headers, body, verifier=self.verifier
+        )
+        if handled is None:
+            self._send(404, {"error": "not found"})
+            return
+        self._send(handled[0], handled[1])
+
     def do_GET(self):  # noqa: N802
         path = urlparse(self.path).path
+        if path == "/healthz":
+            self._send(200, {"status": "ok"})
+            return
         try:
-            if path == "/v1/catalog":
-                _authenticate_request(self.headers)
-                self._send(200, build_catalog_payload(self.plane))
-                return
-            if path == "/healthz":
-                self._send(200, {"status": "ok"})
-                return
-            self._send(404, {"error": "not found"})
-        except MgmtSyncError as exc:
-            self._send(403, {"error": str(exc).replace("ERROR:\n", "").split("\n\n")[0]})
+            self._dispatch("GET", b"")
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 
     def do_POST(self):  # noqa: N802
-        path = urlparse(self.path).path
         try:
             length = int(self.headers.get("Content-Length") or "0")
             raw = self.rfile.read(length) if length > 0 else b"{}"
-            body = json.loads(raw.decode("utf-8") or "{}")
-            if path == "/v1/remote-services":
-                result = server_upsert_remote_service(self.plane, self.headers, body)
-                self._send(200, result)
-                return
-            self._send(404, {"error": "not found"})
-        except MgmtSyncError as exc:
-            msg = str(exc)
-            if msg.startswith("ERROR:\n"):
-                msg = msg[7:].split("\n\n")[0]
-            self._send(400, {"error": msg})
+            self._dispatch("POST", raw)
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 
     def do_DELETE(self):  # noqa: N802
-        path = urlparse(self.path).path
         try:
-            if path.startswith("/v1/remote-services/"):
-                name = path[len("/v1/remote-services/") :]
-                result = server_delete_remote_service(self.plane, self.headers, unquote(name))
-                self._send(200, result)
-                return
-            self._send(404, {"error": "not found"})
-        except MgmtSyncError as exc:
-            msg = str(exc)
-            if msg.startswith("ERROR:\n"):
-                msg = msg[7:].split("\n\n")[0]
-            self._send(403, {"error": msg})
+            self._dispatch("DELETE", b"")
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 
 
-def start_mgmt_server(plane, host: str = "127.0.0.1", port: int = 0):
+def start_mgmt_server(
+    plane,
+    host: str = "127.0.0.1",
+    port: int = 0,
+    verifier=None,
+    ssl_context=None,
+):
     """Start an in-process management HTTP server. Returns (server, base_url, thread)."""
 
     class Handler(_MgmtHandler):
         pass
 
     Handler.plane = plane
+    Handler.verifier = verifier
     server = socketserver.ThreadingTCPServer((host, port), Handler)
     server.daemon_threads = True
+    if ssl_context is not None:
+        server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
     bound_port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    return server, "http://%s:%s" % (host, bound_port), thread
+    scheme = "https" if ssl_context is not None else "http"
+    return server, "%s://%s:%s" % (scheme, host, bound_port), thread
 
 
 def stop_mgmt_server(server) -> None:
@@ -622,28 +922,52 @@ def stop_mgmt_server(server) -> None:
         pass
 
 
-def handle_allocator_http(plane, method: str, path: str, headers, body: bytes) -> Optional[tuple[int, dict]]:
-    """Optional allocator integration hook.
+def handle_allocator_http(
+    plane,
+    method: str,
+    path: str,
+    headers,
+    body: bytes,
+    verifier=None,
+) -> Optional[tuple[int, dict]]:
+    """Allocator integration hook.
 
     Returns (status, payload) when the path is a v2.4 management route, else None.
+    Authentication is mandatory. There is no machine-id-only or shared-token path.
     """
     parsed = urlparse(path).path
+    bound = _canonical_operation(method, parsed)
+    if bound is None:
+        return None
+    op, canonical_path = bound
+    raw = body if body is not None else b""
     try:
-        if method == "GET" and parsed == "/v1/catalog":
-            _authenticate_request(headers)
-            return 200, build_catalog_payload(plane)
-        if method == "POST" and parsed == "/v1/remote-services":
-            data = json.loads(body.decode("utf-8") or "{}") if body else {}
-            return 200, server_upsert_remote_service(plane, headers, data)
-        if method == "DELETE" and parsed.startswith("/v1/remote-services/"):
+        auth = _authenticate_mgmt_api(
+            verifier, headers, raw, op=op, method=method.upper(), path=canonical_path
+        )
+        _require_managed_host(plane, auth.machine_id)
+        _commit_auth_nonce(verifier, auth)
+        if method.upper() == "GET" and parsed == "/v1/catalog":
+            return 200, _with_response_mac(build_catalog_payload(plane), auth)
+        if method.upper() == "POST" and parsed == "/v1/remote-services":
+            data = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+            if not isinstance(data, dict):
+                return 400, {"error": "invalid JSON"}
+            result = server_upsert_remote_service(plane, auth, data)
+            return 200, _with_response_mac(result, auth)
+        if method.upper() == "DELETE" and parsed.startswith("/v1/remote-services/"):
             name = unquote(parsed[len("/v1/remote-services/") :])
-            return 200, server_delete_remote_service(plane, headers, name)
+            result = server_delete_remote_service(plane, auth, name)
+            return 200, _with_response_mac(result, auth)
+    except MgmtAuthError as exc:
+        return 403, _public_auth_error(str(exc))
     except MgmtSyncError as exc:
         msg = str(exc)
         if msg.startswith("ERROR:\n"):
             msg = msg[7:].split("\n\n")[0]
-        code = 403 if "auth" in msg.lower() else 400
-        return code, {"error": msg}
+        return 400, {"error": msg}
+    except json.JSONDecodeError:
+        return 400, {"error": "invalid JSON"}
     except Exception as exc:
         return 500, {"error": str(exc)}
     return None
