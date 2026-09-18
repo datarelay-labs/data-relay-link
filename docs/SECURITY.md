@@ -241,6 +241,8 @@ Remote transport authentication and Data Relay Link management identity remain s
 
 Management paths use authenticated encrypted transport and persistent endpoint identity. Existing secure enrollment/CA fingerprint principles are retained unless superseded by a stronger explicit design.
 
+Agent↔Server management operations (`/v1/catalog`, `/v1/remote-services`) reuse the enrolled Agent ECDSA P-256 management identity, with timestamp, nonce, operation binding, and replay protection. TLS certificate verification is enabled by default using the enrollment allocator CA. `DRLINK_MGMT_INSECURE` is an explicit lab/test-only override and is never applied automatically when validation fails.
+
 Do not reuse an upstream FRP token as a general management or MCP credential.
 
 ## 16. MCP Bridge trust boundary

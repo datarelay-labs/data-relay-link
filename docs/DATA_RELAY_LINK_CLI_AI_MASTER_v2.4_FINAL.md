@@ -1634,6 +1634,8 @@ UDP Service Objects may exist for other policy/use cases, but they cannot be sel
 
 The Agent Host maintains a synchronized local catalog of canonical Server-side Service Objects and Network Objects used for validation and selection. A temporary Server disconnect does not by itself prevent Remote Service create/edit.
 
+Agent↔Server management operations are authenticated with the enrolled Agent management identity. Operators continue to use `drlink set remote-service`, `drlink show remote-service`, and `drlink system synchronize`; signing is internal.
+
 Example selectable services:
 
 ```text

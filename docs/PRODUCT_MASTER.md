@@ -125,7 +125,7 @@ Agent ConfigurationBundle
 local diagnostics
 ```
 
-Remote Service mutation is local to the Agent Host. Server inspection is read-only for Remote Service configuration.
+Remote Service mutation is local to the Agent Host. Server inspection is read-only for Remote Service configuration. Live Agent↔Server catalog synchronization and endpoint allocation are authenticated with the enrolled Agent management identity.
 
 ## 7. Managed Host and Agent
 
