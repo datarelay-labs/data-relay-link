@@ -84,7 +84,7 @@ want "VALIDATION_PROJECT_VERSION" docs/RELEASE_VALIDATION.md "Current project ve
 want "CHECKLIST_FRP_VERSION" docs/RELEASE_CHECKLIST.md "FRP_VERSION=${FRP_VERSION}"
 want "CHECKLIST_TAG_SECTION" docs/RELEASE_CHECKLIST.md "Preparing the ${PROJECT_VERSION} immutable tag"
 want "PRODUCT_MASTER_PROJECT_VERSION" docs/PRODUCT_MASTER.md "Current project version: **${PROJECT_VERSION}**"
-want "PRODUCT_MASTER_FRP_VERSION" docs/PRODUCT_MASTER.md "Current pinned FRP version: **v${FRP_VERSION}**"
+want "PRODUCT_MASTER_FRP_VERSION" docs/PRODUCT_MASTER.md "Current pinned Relay Engine (FRP): **v${FRP_VERSION}**"
 want "VERSION_POLICY_PRESENT" docs/VERSION_POLICY.md "Single source of truth"
 want "VERSION_POLICY_CHANNELS" docs/VERSION_POLICY.md "development | preview | stable"
 want "MANIFEST_SCHEMA_PRESENT" RELEASE_MANIFEST.schema.json '"mcp_included"'
