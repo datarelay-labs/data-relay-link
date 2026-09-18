@@ -53,6 +53,10 @@ class PublicGrammarClosure(unittest.TestCase):
     def test_SERVER_OBJECT_ONESHOT_PUBLIC_GRAMMAR(self):
         r = self._cli("set", "network-object", "office-admin", "type", "ip", "value", "203.0.113.10")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self._cli("show", "network-object", "office-admin")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("office-admin", r.stdout)
+        self.assertIn("203.0.113.10", r.stdout)
         r = self._cli("set", "service-object", "dns-udp", "type", "udp", "port", "53")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         r = self._cli("set", "service-object", "legacy-db", "type", "fixed-tcp", "port", "1521")

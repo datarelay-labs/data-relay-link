@@ -108,10 +108,11 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 for r in refs:
                     sys.stdout.write("%s\n" % r["display"])
             return 0
-        values = obj.get("values") or plane._object_values(obj["id"])
+        payload = dict(obj)
+        values = payload.get("values") or plane._object_values(payload["id"])
         sys.stdout.write(
             "Network Object: %s\nType : %s\nValue: %s\n"
-            % (obj["name"], v24.display_network_type(obj["type"]), values[0] if values else "-")
+            % (payload["name"], v24.display_network_type(payload["type"]), values[0] if values else "-")
         )
         return 0
     if res in ("network-groups",):
