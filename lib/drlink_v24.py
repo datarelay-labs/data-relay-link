@@ -1856,18 +1856,22 @@ def _service_dependency_status(plane_db, svc_name: str) -> Optional[str]:
     return None
 
 
-def _push_agent_remote_service_status(plane_db, *, root: Optional[str] = None, names: Optional[list] = None) -> None:
-    """Tell the Server the Agent's effective Remote Service status. Never allocates."""
+def _push_agent_remote_service_status(plane_db, *, root: Optional[str] = None, names: Optional[list] = None) -> int:
+    """Tell the Server the Agent's effective Remote Service status. Never allocates.
+
+    The authenticated Server response is the endpoint-ownership authority. Agent
+    local canonical fields are reconciled from that response.
+    """
     try:
         import drlink_mgmt_sync as mgmt
     except Exception:
-        return
+        return 0
     target_root = root or getattr(plane_db, "root", None)
     try:
         if not mgmt.use_live_mgmt_path(target_root):
-            return
+            return 0
     except Exception:
-        return
+        return 0
     items = []
     rows = plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
     for row in rows:
@@ -1886,11 +1890,85 @@ def _push_agent_remote_service_status(plane_db, *, root: Optional[str] = None, n
             }
         )
     if not items:
-        return
+        return 0
     try:
-        mgmt.report_remote_service_status_on_server(root=target_root, services=items)
+        result = mgmt.report_remote_service_status_on_server(root=target_root, services=items)
     except Exception:
-        return
+        return 0
+    return _reconcile_agent_from_server_status(plane_db, result)
+
+
+def _reconcile_agent_from_server_status(plane_db, result: dict) -> int:
+    """Converge Agent local endpoint projection with authenticated Server state."""
+    if not isinstance(result, dict):
+        return 0
+    items = result.get("services") or result.get("updated") or []
+    if not isinstance(items, list):
+        return 0
+    changed = 0
+    now = utc_now_iso()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        row = plane_db.conn.execute(
+            "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE AND delete_pending = 0",
+            (name,),
+        ).fetchone()
+        if row is None:
+            continue
+        assignments = []
+        values = []
+        if "endpoint_port" in item:
+            raw = item.get("endpoint_port")
+            if raw is None or raw == "":
+                new_port = None
+            else:
+                try:
+                    new_port = int(raw)
+                except (TypeError, ValueError):
+                    continue
+            if row["endpoint_port"] != new_port:
+                assignments.append("endpoint_port = ?")
+                values.append(new_port)
+            if new_port is None:
+                new_pending = 1
+            elif "pending_allocation" in item:
+                try:
+                    new_pending = 1 if int(item.get("pending_allocation") or 0) else 0
+                except (TypeError, ValueError):
+                    new_pending = 0
+            else:
+                new_pending = 0
+            if int(row["pending_allocation"] or 0) != int(new_pending):
+                assignments.append("pending_allocation = ?")
+                values.append(int(new_pending))
+        if "status" in item:
+            status = str(item.get("status") or "").strip().upper()
+            if status in ("HEALTHY", "DEGRADED", "DISABLED") and str(row["status"] or "") != status:
+                assignments.append("status = ?")
+                values.append(status)
+        if "reason" in item:
+            reason = str(item.get("reason") or "")
+            if str(row["reason"] or "") != reason:
+                assignments.append("reason = ?")
+                values.append(reason)
+        if not assignments:
+            continue
+        assignments.append("updated_at = ?")
+        values.append(now)
+        values.append(name)
+        plane_db.conn.execute(
+            "UPDATE agent_remote_services SET %s WHERE name = ? COLLATE NOCASE"
+            % ", ".join(assignments),
+            tuple(values),
+        )
+        changed += 1
+    if changed and not getattr(plane_db, "_batch_mode", False):
+        plane_db.conn.commit()
+    return changed
 
 
 def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -> dict:
@@ -1962,6 +2040,9 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
             )
             plane_db.conn.commit()
         updated += 1
+    # Reconcile endpoint ownership with Server before runtime projection so a
+    # stale Agent claim cannot keep advertising or activating a revoked port.
+    _push_agent_remote_service_status(plane_db, root=root)
     # Final runtime reconciliation for all desired services.
     try:
         import drlink_v24_runtime as runtime

@@ -183,6 +183,16 @@ python3 tests/test-audit-log.py
 ./tests/test-backup-restore.sh
 ./tests/test-server-uninstall-fail-closed.sh
 python3 tests/test-release-partial-acl.py
+python3 tests/test-v24-upgrade-reconcile.py
+python3 tests/test-v24-status-parity.py
+python3 tests/test-v24-managed-host-policy.py
+python3 tests/test-v24-runtime-allocator.py
+python3 tests/test-v24-mgmt-api-auth.py
+python3 tests/test-v24-cli-ai-master.py
+python3 tests/test-v24-cli-ai-master-closure.py
+python3 tests/test-v24-false-pass-hardening.py
+python3 tests/test-v24-final-closure.py
+python3 tests/test-v24-doc-consistency.py
 ./tests/test-orphan-suite-coverage.sh
 
 echo "=== leftover test allocators ==="

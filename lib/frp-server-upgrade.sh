@@ -664,14 +664,12 @@ plane_mod = Path(sys.argv[3])
 lib_dir = str(db_mod.parent)
 if lib_dir not in sys.path:
     sys.path.insert(0, lib_dir)
-# Deploy root is parent of var/ (…/var/lib/drlink/drlink.db → /)
-deploy = db_path.parent.parent.parent
-if str(deploy) in ("", "."):
-    deploy = Path("/")
 spec = importlib.util.spec_from_file_location("drlink_control_db", str(db_mod))
 db = importlib.util.module_from_spec(spec)
 sys.modules["drlink_control_db"] = db
 spec.loader.exec_module(db)
+# <ROOT>/var/lib/drlink/drlink.db → <ROOT>  (real FS: / ; staging: test root)
+deploy = db.deploy_root_from_db_path(db_path)
 spec = importlib.util.spec_from_file_location("drlink_control_plane", str(plane_mod))
 plane_mod_obj = importlib.util.module_from_spec(spec)
 sys.modules["drlink_control_plane"] = plane_mod_obj
@@ -682,8 +680,8 @@ try:
     if not st.get("db_healthy"):
         raise SystemExit("control DB unhealthy after init")
     # Reconcile existing FRP registry clients into canonical SQLite (idempotent).
-    registry_live = Path("/var/lib/drlink/runtime/client-inventory.json")
-    registry_legacy = Path("/var/lib/drlink/registry.json")
+    registry_live = Path(str(deploy)) / "var/lib/drlink/runtime/client-inventory.json"
+    registry_legacy = Path(str(deploy)) / "var/lib/drlink/registry.json"
     recon_mod = Path(sys.argv[3]).parent / "drlink_upgrade_reconcile.py"
     if recon_mod.is_file() and (registry_live.is_file() or registry_legacy.is_file()):
         spec = importlib.util.spec_from_file_location("drlink_upgrade_reconcile", str(recon_mod))
@@ -701,6 +699,7 @@ try:
         elif not rec.get("ok"):
             print("CONTROL_DB_RECONCILE_WARNING %s" % rec.get("error"))
     st = plane.status()
+    print("CONTROL_PLANE_ROOT=%s" % deploy)
     print("CONTROL_DB_OK revision=%s mismatch=%s clients=%s" % (
         st.get("revision"), st.get("mismatch"), st.get("clients")))
 finally:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -398,6 +399,88 @@ class UpgradeReconcileTests(unittest.TestCase):
             UR.apply_upgrade_reconciliation(self.plane, bad)
         self.assertEqual(self.plane.current_revision(), before)
         self.assertEqual(self.plane.conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0], 1)
+
+
+def _extract_ensure_control_plane_python() -> str:
+    text = (ROOT / "lib" / "frp-server-upgrade.sh").read_text(encoding="utf-8")
+    start = text.index("frp_server_upgrade_ensure_control_plane()")
+    chunk = text[start:]
+    marker = "<<'PY'"
+    py_open = chunk.index(marker) + len(marker)
+    py_start = chunk.index("\n", py_open) + 1
+    py_end = chunk.index("\nPY\n", py_start)
+    return chunk[py_start:py_end]
+
+
+class UpgradeHookRootTests(unittest.TestCase):
+    def test_UPGRADE_HOOK_ROOT_REAL_FS(self):
+        from drlink_control_db import deploy_root_from_db_path
+
+        self.assertEqual(deploy_root_from_db_path("/var/lib/drlink/drlink.db"), "/")
+        self.assertEqual(deploy_root_from_db_path(Path("/var/lib/drlink/drlink.db")), "/")
+        # The previous three-parent walk stopped at /var instead of /.
+        self.assertEqual(Path("/var/lib/drlink/drlink.db").parent.parent.parent, Path("/var"))
+        src = (ROOT / "lib" / "frp-server-upgrade.sh").read_text(encoding="utf-8")
+        self.assertIn("deploy_root_from_db_path", src)
+        self.assertNotIn("db_path.parent.parent.parent", src)
+
+    def test_UPGRADE_HOOK_ROOT_STAGING_FS(self):
+        from drlink_control_db import deploy_root_from_db_path
+
+        self.assertEqual(
+            deploy_root_from_db_path("/tmp/test-root/var/lib/drlink/drlink.db"),
+            "/tmp/test-root",
+        )
+        tmp = tempfile.mkdtemp(prefix="drlink-hook-staging-")
+        db = Path(tmp) / "var" / "lib" / "drlink" / "drlink.db"
+        self.assertEqual(deploy_root_from_db_path(db), tmp)
+        self.assertEqual(db.parent.parent.parent, Path(tmp) / "var")
+
+    def test_UPGRADE_HOOK_NO_VAR_VAR_SHADOW_STATE(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-hook-novarvar-")
+        env_keys = (
+            "FRP_DEPLOY_TEST_ROOT",
+            "FRP_CTL_TEST_ROOT",
+            "FRP_SERVER_TEST_ROOT",
+            "DRLINK_TEST_ROOT",
+        )
+        saved = {key: os.environ.get(key) for key in env_keys}
+        for key in env_keys:
+            os.environ.pop(key, None)
+        plane = ControlPlane(tmp)
+        v24.ensure_v2_schema(plane.conn)
+        plane.close()
+        db = Path(tmp) / "var" / "lib" / "drlink" / "drlink.db"
+        self.assertTrue(db.is_file())
+        registry = Path(tmp) / "var" / "lib" / "drlink" / "runtime" / "client-inventory.json"
+        _write_json(registry, {"schema_version": 2, "clients": {}, "reserved": []})
+        py_src = _extract_ensure_control_plane_python()
+        self.assertIn("deploy_root_from_db_path", py_src)
+        self.assertNotIn("parent.parent.parent", py_src)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-",
+                str(db),
+                str(ROOT / "lib" / "drlink_control_db.py"),
+                str(ROOT / "lib" / "drlink_control_plane.py"),
+            ],
+            input=py_src,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("CONTROL_PLANE_ROOT=%s" % tmp, proc.stdout)
+        shadow = Path(tmp) / "var" / "var" / "lib" / "drlink"
+        self.assertFalse(shadow.exists(), "upgrade hook created shadow state at %s" % shadow)
+        self.assertTrue(db.is_file())
+        self.assertFalse((Path(tmp) / "var" / "var").exists())
 
 
 if __name__ == "__main__":

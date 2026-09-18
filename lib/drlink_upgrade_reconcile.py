@@ -318,11 +318,20 @@ def effective_remote_service_status(
     registry_owners: dict[int, dict],
     *,
     agent_runtime: Optional[dict] = None,
+    registry_available: bool = True,
+    missing_registry_port_is_stale: bool = True,
 ) -> tuple[str, str, bool]:
     """Return (status, reason, stale_port).
 
     stale_port is True when SQLite still claims a port the registry does not
     attribute to this semantic service.
+
+    When ``registry_available`` is False the FRP registry could not be loaded,
+    so ownership is left unchanged rather than treating every port as stale.
+
+    Status synchronization passes ``missing_registry_port_is_stale=False`` so a
+    newly allocated port that the allocator has not yet persisted is not
+    revoked. Upgrade reconciliation keeps the stricter default.
     """
     if pub is None:
         return "DEGRADED", "Published Service is missing.", False
@@ -341,11 +350,12 @@ def effective_remote_service_status(
             port_i = int(port)
         except (TypeError, ValueError):
             port_i = None
-        if port_i is not None:
+        if port_i is not None and registry_available:
             owner = registry_owners.get(port_i)
             if owner is None:
-                ownership_reason = "Authoritative registry does not own this endpoint."
-                stale_port = True
+                if missing_registry_port_is_stale:
+                    ownership_reason = "Authoritative registry does not own this endpoint."
+                    stale_port = True
             elif not _semantic_owner_match(
                 plane,
                 client_id=pub["client_id"],

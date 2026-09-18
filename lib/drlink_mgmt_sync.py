@@ -922,18 +922,53 @@ def server_delete_remote_service(plane, auth: MgmtAuthContext, name: str) -> dic
     return {"status": "DELETED", "name": name, "released_port": pub["public_port"]}
 
 
-def _allocator_registry_owners(auth: MgmtAuthContext) -> dict:
+def _allocator_registry_state(auth: MgmtAuthContext):
     allocator = getattr(auth, "allocator", None)
     if allocator is None:
-        return {}
+        return None
     try:
-        from drlink_upgrade_reconcile import registry_endpoint_owners
-
         with allocator.registry_lock():
             state = allocator.load_registry()
-        return registry_endpoint_owners(state if isinstance(state, dict) else {})
+        return state if isinstance(state, dict) else None
     except Exception:
-        return {}
+        return None
+
+
+def _status_registry_owners(plane, auth: MgmtAuthContext) -> tuple[dict, bool]:
+    """Return (owners, registry_available).
+
+    When the FRP registry cannot be loaded, ownership checks are skipped so
+    a missing registry cannot mass-release valid endpoints.
+    """
+    from drlink_upgrade_reconcile import load_authoritative_registry, registry_endpoint_owners
+
+    state = _allocator_registry_state(auth)
+    if state is None:
+        try:
+            state, _path, _err = load_authoritative_registry(getattr(plane, "root", None))
+        except Exception:
+            state = None
+    if not isinstance(state, dict):
+        return {}, False
+    try:
+        return registry_endpoint_owners(state), True
+    except Exception:
+        return {}, False
+
+
+def _canonical_status_projection(name: str, pub, meta, status: str, reason: str) -> dict:
+    endpoint_port = None if pub is None or pub["public_port"] is None else int(pub["public_port"])
+    if status == "DEGRADED" and endpoint_port is None:
+        pending = 1
+    else:
+        pending = int((meta["pending_allocation"] if meta is not None else 0) or 0)
+    return {
+        "name": name,
+        "status": status,
+        "reason": reason or "",
+        "endpoint_port": endpoint_port,
+        "pending_allocation": pending,
+    }
 
 
 def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict) -> dict:
@@ -941,7 +976,6 @@ def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict
     from drlink_upgrade_reconcile import (
         effective_remote_service_status,
         _release_stale_port,
-        registry_endpoint_owners,
     )
 
     machine_id = auth.machine_id
@@ -949,16 +983,7 @@ def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict
     items = body.get("services") if isinstance(body, dict) else None
     if not isinstance(items, list):
         raise MgmtSyncError("services list is required")
-    owners = _allocator_registry_owners(auth)
-    if not owners:
-        try:
-            from drlink_upgrade_reconcile import load_authoritative_registry
-
-            registry, _path, _err = load_authoritative_registry(getattr(plane, "root", None))
-            if registry:
-                owners = registry_endpoint_owners(registry)
-        except Exception:
-            owners = {}
+    owners, registry_available = _status_registry_owners(plane, auth)
 
     updated = []
 
@@ -1002,6 +1027,8 @@ def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict
                         "runtime_verified": verified and reported == "HEALTHY",
                         "reason": reason,
                     },
+                    registry_available=registry_available,
+                    missing_registry_port_is_stale=False,
                 )
                 if stale and pub["public_port"] is not None:
                     _release_stale_port(
@@ -1028,21 +1055,26 @@ def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict
                             "runtime_verified": False,
                             "reason": reason,
                         },
+                        registry_available=registry_available,
+                        missing_registry_port_is_stale=False,
                     )
                 if meta is None:
                     continue
                 extra = computed_reason
                 if generation is not None and extra:
                     extra = "%s (generation %s)" % (extra, generation)
-                if str(meta["status"] or "") != status or str(meta["reason"] or "") != (extra or ""):
-                    pending = 1 if status == "DEGRADED" and pub["public_port"] is None else int(
-                        meta["pending_allocation"] or 0
-                    )
+                projection = _canonical_status_projection(name, pub, meta, status, extra or "")
+                pending = int(projection["pending_allocation"])
+                if (
+                    str(meta["status"] or "") != status
+                    or str(meta["reason"] or "") != (extra or "")
+                    or int(meta["pending_allocation"] or 0) != pending
+                ):
                     plane.conn.execute(
                         "UPDATE remote_service_meta SET status = ?, reason = ?, pending_allocation = ? WHERE service_id = ?",
                         (status, extra or "", pending, pub["id"]),
                     )
-                updated.append({"name": name, "status": status, "reason": extra or ""})
+                updated.append(projection)
             return {
                 "entity": {"type": "remote-service-status", "id": machine_id, "name": machine_id},
                 "operation": "status",
@@ -1056,7 +1088,7 @@ def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict
         "mgmt remote service status",
         write,
     )
-    return {"updated": updated, "count": len(updated)}
+    return {"updated": updated, "services": updated, "count": len(updated)}
 
 
 # ---------------------------------------------------------------------------

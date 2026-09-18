@@ -75,6 +75,38 @@ def db_path(root: Optional[str] = None) -> Path:
     return Path("/") / DEFAULT_DB_REL
 
 
+def deploy_root_from_db_path(db_file) -> str:
+    """Return <ROOT> for <ROOT>/var/lib/drlink/drlink.db.
+
+    Real filesystem: ``/var/lib/drlink/drlink.db`` → ``/``.
+    Staging/test: ``/tmp/test-root/var/lib/drlink/drlink.db`` → ``/tmp/test-root``.
+
+    Do not walk a fixed number of parents: ``Path.parent`` × 3 on the real DB
+    path stops at ``/var`` and would create ``/var/var/lib/drlink``.
+    """
+    path = Path(db_file)
+    rel_parts = Path(DEFAULT_DB_REL).parts
+    parts = path.parts
+    if len(parts) >= len(rel_parts) and parts[-len(rel_parts) :] == rel_parts:
+        prefix = parts[: -len(rel_parts)]
+        if not prefix or prefix == ("/",):
+            return "/"
+        return str(Path(*prefix))
+    parts_list = list(parts)
+    for idx, part in enumerate(parts_list):
+        if part != "var":
+            continue
+        if parts_list[idx : idx + len(rel_parts)] != list(rel_parts):
+            continue
+        prefix = parts_list[:idx]
+        if not prefix or prefix == ["/"]:
+            return "/"
+        return str(Path(*prefix))
+    raise ControlPlaneError(
+        "cannot derive deploy root from control db path %s" % path
+    )
+
+
 def runtime_dir(root: Optional[str] = None) -> Path:
     return db_path(root).parent / "runtime"
 

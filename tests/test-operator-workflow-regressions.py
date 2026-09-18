@@ -47,7 +47,7 @@ class EgressStagedWorkflowTests(unittest.TestCase):
         sbin = self.root / "usr/local/sbin"
         sbin.mkdir(parents=True, exist_ok=True)
         self.tool = sbin / "frp-egress"
-        self.raise unittest.SkipTest("PRIOR_RELEASE_MIGRATION_TEST: tools/frp-egress removed")
+        raise unittest.SkipTest("PRIOR_RELEASE_MIGRATION_TEST: tools/frp-egress removed")
         self.tool.chmod(0o755)
 
         (self.root / "etc/drlink").mkdir(parents=True, exist_ok=True)
