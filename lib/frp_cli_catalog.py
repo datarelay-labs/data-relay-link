@@ -1778,7 +1778,7 @@ def domain_help(topic, role):
                     "  set mcp-tls hostname <fqdn>",
                     "  set mcp-tls mode auto-acme",
                     "  system certificate issue",
-                    "  system certificate import --cert <PATH> --key <PATH>",
+                    "  system certificate import <CERT> <KEY> [CHAIN]",
                     "  system certificate renew",
                     "  system certificate status",
                     "  set server public-hostname <FQDN>",

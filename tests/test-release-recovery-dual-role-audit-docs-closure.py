@@ -204,10 +204,10 @@ frpctl_audit_tail
     def test_dual_role_lifecycle_labels_are_client_scoped(self):
         tree = CATALOG.NAVIGATION_TREE["both.system"]
         labels = {row[1]: row[4] for row in tree if row[3] == "command"}
-        self.assertEqual(labels.get("Pause client"), "system pause")
-        self.assertEqual(labels.get("Resume client"), "system resume")
-        self.assertEqual(labels.get("Restart client"), "system restart")
-        self.assertEqual(labels.get("Client autostart"), "system autostart")
+        self.assertEqual(labels.get("Pause Agent"), "system pause")
+        self.assertEqual(labels.get("Resume Agent"), "system resume")
+        self.assertEqual(labels.get("Restart Agent"), "system restart")
+        self.assertEqual(labels.get("Agent autostart"), "system autostart")
         for path in (
             ("system", "pause"),
             ("system", "resume"),

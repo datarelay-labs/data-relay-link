@@ -67,6 +67,5 @@ removed. Server-side enrollment records and port reservations are intentionally
 retained and must be released explicitly on the server with:
 
 ```bash
-unset client <CLIENT> service <SERVICE>
-unset client <CLIENT>
+unset managed-host <HOST>
 ```

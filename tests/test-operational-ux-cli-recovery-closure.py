@@ -119,9 +119,17 @@ class OperationalUxClosureTests(unittest.TestCase):
                 self.assertIn("Available:", msg)
 
     def test_obsolete_system_export_import_rejected(self):
-        # Legacy internet-profile export/import parents must not remain as
-        # successful mutating surfaces.
-        for tokens in (["system", "export"], ["system", "import"]):
+        # Current parent is ConfigurationBundle export discovery, not a
+        # mutating internet-profile export.
+        export_parent = _match(["system", "export"], "server")
+        self.assertEqual(export_parent.get("status"), "incomplete", export_parent)
+        self.assertIn("configuration", (export_parent.get("message") or "").lower())
+        self.assertNotEqual(export_parent.get("action"), "control_plane")
+        for tokens in (
+            ["system", "import"],
+            ["system", "export", "internet-profile"],
+            ["system", "import", "internet-profile"],
+        ):
             with self.subTest(tokens=tokens):
                 result = _match(tokens, "server")
                 self.assertIn(result.get("status"), ("error", "incomplete"), result)

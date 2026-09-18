@@ -468,7 +468,16 @@
       "set enrollment zero-touch",
       "set enrollment manual"
     ],
-    "args": [],
+    "args": [
+      {
+        "name": "<MODE>",
+        "complete": [
+          "zero-touch",
+          "manual"
+        ],
+        "required": false
+      }
+    ],
     "tail": "flags",
     "internal": [
       "create",
@@ -3990,7 +3999,7 @@
     "summary": "Issue, import, renew, or show MCP certificates",
     "examples": [
       "system certificate issue",
-      "system certificate import --cert /path/fullchain.pem --key /path/privkey.pem",
+      "system certificate import /path/fullchain.pem /path/privkey.pem",
       "system certificate renew",
       "system certificate status",
       "system certificate preflight"

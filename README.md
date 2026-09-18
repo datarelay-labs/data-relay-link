@@ -215,9 +215,9 @@ The legacy pre-stable public resources `service-profile`, `internet-profile`, an
 ## Example target commands
 
 ```text
-show objects
-show managed-endpoints
-show published-services
+show network-objects
+show managed-hosts
+show remote-services
 
 show remote-access
 set remote-access partner-ssh source external1
@@ -237,9 +237,9 @@ set internet-access approved-web enabled
 
 test internet-access 10.10.10.20 google.com 443 https
 
-show ai-principals
+show ai-identities
 show ai-access
-show ai-activity
+show ai-access-log
 ```
 
 These are target v2.4.0 grammar; current development code may lag until implementation closure.

@@ -28,8 +28,9 @@ class StrictCliParsingTests(unittest.TestCase):
 
     def test_guided_menu_categories(self):
         text = self.cat.render_guided_menu("server")
-        self.assertIn("Clients", text)
-        self.assertIn("Objects", text)
+        self.assertIn("Managed Hosts", text)
+        self.assertIn("Network Objects", text)
+        self.assertIn("Service Objects", text)
         self.assertIn("Remote Access", text)
         self.assertIn("Internet Access", text)
         self.assertIn("AI Access", text)

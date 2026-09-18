@@ -54,13 +54,16 @@ class ReplLiveInventoryTests(unittest.TestCase):
         self.assertEqual(self.editor.service_profiles, ["office-ssh"])
 
     def test_tab_uses_live_inventory(self):
-        self.assertIn("vendor-api", self._cands("show internet-profile "))
-        self.assertIn("office", self._cands("show acl "))
-        self.assertIn("office-ssh", self._cands("show service-profile "))
+        self.assertIn("24cd7856", self._cands("show managed-host "))
+        self.assertIn("24cd7856", self._cands("unset managed-host "))
 
     def test_mutation_refresh_helper_updates_all_fields(self):
         # Simulate a refreshed payload after create/delete.
         refreshed = dict(self.payload)
+        refreshed["names"] = ["24cd7856", "new-host"]
+        refreshed["clients"] = list(self.payload["clients"]) + [
+            {"id": "new-host", "label": "b", "hostname": "h2"}
+        ]
         refreshed["egress"] = ["vendor-api", "new-profile"]
         refreshed["access_lists"] = ["office", "remote"]
         refreshed["service_profiles"] = ["office-ssh", "office-http"]
@@ -74,19 +77,17 @@ class ReplLiveInventoryTests(unittest.TestCase):
         self.editor.egress_profiles = refreshed["egress"]
         self.editor.access_lists = refreshed["access_lists"]
         self.editor.service_profiles = refreshed["service_profiles"]
-        self.assertIn("new-profile", self._cands("show internet-profile "))
-        self.assertIn("remote", self._cands("show acl "))
-        self.assertIn("office-http", self._cands("show service-profile "))
+        self.assertIn("new-host", self._cands("show managed-host "))
         # Delete path
-        self.editor.egress_profiles = ["vendor-api"]
-        self.assertNotIn("new-profile", self._cands("show internet-profile "))
+        self.editor.names = ["24cd7856"]
+        self.assertNotIn("new-host", self._cands("show managed-host "))
 
     def test_should_refresh_current_grammar(self):
-        self.assertTrue(REPL._should_refresh_inventory(["set", "internet-profile", "x"]))
-        self.assertTrue(REPL._should_refresh_inventory(["unset", "acl", "office"]))
+        self.assertTrue(REPL._should_refresh_inventory(["set", "internet-access", "x"]))
+        self.assertTrue(REPL._should_refresh_inventory(["unset", "remote-access", "office"]))
         self.assertTrue(REPL._should_refresh_inventory(["system", "services", "apply"]))
-        self.assertFalse(REPL._should_refresh_inventory(["show", "internet"]))
-        self.assertFalse(REPL._should_refresh_inventory(["test", "internet", "1.1.1.1", "a", "443"]))
+        self.assertFalse(REPL._should_refresh_inventory(["show", "internet-access"]))
+        self.assertFalse(REPL._should_refresh_inventory(["test", "internet-access", "1.1.1.1", "a", "443"]))
         self.assertFalse(REPL._should_refresh_inventory(["help", "commands"]))
 
 

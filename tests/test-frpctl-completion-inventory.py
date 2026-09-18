@@ -24,45 +24,28 @@ GRAMMAR = load("frp_ctl_grammar", "lib/frp_ctl_grammar.py")
 
 
 class CompletionInventoryTests(unittest.TestCase):
-    def test_internet_profile_completion(self):
-        inv = ["vendor-api", "partner"]
+    def test_managed_host_completion(self):
         hits = GRAMMAR.completion_candidates(
-            "show internet-profile ",
+            "show managed-host ",
             "server",
-            [],
+            ["host-a", "host-b"],
             {},
             [],
             trailing=True,
-            egress_profiles=inv,
         )
-        self.assertIn("vendor-api", hits)
-        self.assertIn("partner", hits)
+        self.assertIn("host-a", hits)
+        self.assertIn("host-b", hits)
 
-    def test_access_rule_completion(self):
-        inv = ["office", "acl_office"]
+    def test_unset_managed_host_completion(self):
         hits = GRAMMAR.completion_candidates(
-            "show acl ",
+            "unset managed-host ",
             "server",
-            [],
+            ["host-a"],
             {},
             [],
             trailing=True,
-            access_lists=inv,
         )
-        self.assertIn("office", hits)
-
-    def test_service_profile_completion(self):
-        inv = ["office-ssh"]
-        hits = GRAMMAR.completion_candidates(
-            "show service-profile ",
-            "server",
-            [],
-            {},
-            [],
-            trailing=True,
-            service_profiles=inv,
-        )
-        self.assertIn("office-ssh", hits)
+        self.assertIn("host-a", hits)
 
     def test_no_public_protocol_flag_completion(self):
         # Public Tab must not complete or advertise --protocol values.
@@ -84,9 +67,9 @@ class CompletionInventoryTests(unittest.TestCase):
             self.assertEqual(hits, [], msg=line)
             self.assertFalse(any(str(h).startswith("-") for h in hits))
 
-    def test_set_internet_destination_offers_profiles(self):
+    def test_obsolete_internet_profile_not_completed(self):
         hits = GRAMMAR.completion_candidates(
-            "set internet-destination ",
+            "show internet-profile ",
             "server",
             [],
             {},
@@ -94,8 +77,7 @@ class CompletionInventoryTests(unittest.TestCase):
             trailing=True,
             egress_profiles=["vendor-api", "partner"],
         )
-        self.assertIn("vendor-api", hits)
-        self.assertIn("partner", hits)
+        self.assertEqual(hits, [])
 
 
 class GrammarPayloadInventoryTests(unittest.TestCase):

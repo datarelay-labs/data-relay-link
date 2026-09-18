@@ -853,7 +853,7 @@ def _set_mcp_tls(plane: ControlPlane, rest):
     if state.get("mode") == mcp_tls.MODE_AUTO_ACME:
         sys.stdout.write("Next: system certificate issue\n")
     elif state.get("mode") == mcp_tls.MODE_USER_CERTIFICATE:
-        sys.stdout.write("Next: system certificate import --cert <PATH> --key <PATH>\n")
+        sys.stdout.write("Next: system certificate import <CERT> <KEY> [CHAIN]\n")
     elif state.get("mode") == mcp_tls.MODE_PRIVATE_CA:
         sys.stdout.write("Next: system certificate issue\n")
     return 0
@@ -1160,7 +1160,7 @@ def _system_certificate(plane: ControlPlane, rest):
             "Missing certificate operation.\n\n"
             "Usage:\n"
             "  system certificate issue\n"
-            "  system certificate import --cert <PATH> --key <PATH> [--chain <PATH>]\n"
+            "  system certificate import <CERT> <KEY> [CHAIN]\n"
             "  system certificate renew [--force]\n"
             "  system certificate status\n"
             "  system certificate preflight\n"
@@ -1201,6 +1201,8 @@ def _system_certificate(plane: ControlPlane, rest):
             return 0
         if op == "import":
             cert = key = chain = None
+            skip_reload = False
+            positionals = []
             i = 1
             while i < len(rest):
                 if rest[i] == "--cert" and i + 1 < len(rest):
@@ -1213,11 +1215,27 @@ def _system_certificate(plane: ControlPlane, rest):
                     chain = rest[i + 1]
                     i += 2
                 elif rest[i] == "--no-reload":
+                    skip_reload = True
                     i += 1
+                elif str(rest[i]).startswith("-"):
+                    raise SystemExit(
+                        "Unknown input: %s\n\n"
+                        "Data Relay Link commands do not use --options.\n\n"
+                        "Run:\n"
+                        "  system certificate import <CERT> <KEY> [CHAIN]\n"
+                        % rest[i]
+                    )
                 else:
-                    raise SystemExit("Unknown import argument: %s" % rest[i])
+                    positionals.append(rest[i])
+                    i += 1
+            if not cert and len(positionals) >= 1:
+                cert = positionals[0]
+            if not key and len(positionals) >= 2:
+                key = positionals[1]
+            if not chain and len(positionals) >= 3:
+                chain = positionals[2]
             if not cert or not key:
-                raise SystemExit("usage: system certificate import --cert <PATH> --key <PATH> [--chain <PATH>]")
+                raise SystemExit("usage: system certificate import <CERT> <KEY> [CHAIN]")
             mcp_tls.import_user_certificate(
                 plane,
                 root,
