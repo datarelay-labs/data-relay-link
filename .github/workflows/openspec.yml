@@ -4,15 +4,25 @@ on:
   pull_request:
     paths:
       - "openspec/**"
+      - "automation/decision_capture/**"
+      - "tests/test-decision-capture.py"
+      - "AGENTS.md"
       - ".cursor/commands/opsx-*.md"
       - ".cursor/skills/openspec-*/**"
+      - ".cursor/rules/decision-capture.mdc"
       - ".github/workflows/openspec.yml"
+      - ".github/workflows/decision-capture.yml"
   push:
     branches:
       - main
     paths:
       - "openspec/**"
+      - "automation/decision_capture/**"
+      - "tests/test-decision-capture.py"
+      - "AGENTS.md"
+      - ".cursor/rules/decision-capture.mdc"
       - ".github/workflows/openspec.yml"
+      - ".github/workflows/decision-capture.yml"
 
 jobs:
   validate:
@@ -34,3 +44,6 @@ jobs:
 
       - name: Validate all specs and changes
         run: openspec validate --all --strict
+
+      - name: Test decision capture automation
+        run: python3 tests/test-decision-capture.py

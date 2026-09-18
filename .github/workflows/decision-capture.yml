@@ -1,0 +1,79 @@
+name: Decision capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      decision_event_base64:
+        description: Base64-encoded accepted Decision Event JSON
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout selected base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install OpenSpec
+        run: npm install --global @fission-ai/openspec@1.13.1
+
+      - name: Decode Decision Event
+        env:
+          DECISION_EVENT_BASE64: ${{ inputs.decision_event_base64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os
+          raw = base64.b64decode(os.environ['DECISION_EVENT_BASE64'], validate=True)
+          open('/tmp/decision-event.json', 'wb').write(raw)
+          PY
+
+      - name: Capture accepted decision
+        id: capture
+        run: |
+          python3 automation/decision_capture/capture_decision.py --event /tmp/decision-event.json | tee /tmp/capture-result.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          data = json.load(open('/tmp/capture-result.json', encoding='utf-8'))
+          print('change_name=' + data['change_name'])
+          print('knowledge_id=' + data['knowledge_id'])
+          PY
+
+      - name: Create decision branch and commit
+        id: branch
+        env:
+          CHANGE_NAME: ${{ steps.capture.outputs.change_name }}
+          KNOWLEDGE_ID: ${{ steps.capture.outputs.knowledge_id }}
+        run: |
+          branch="decision/${CHANGE_NAME}"
+          git config user.name "data-relay-decision-bot"
+          git config user.email "data-relay-decision-bot@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "openspec/changes/${CHANGE_NAME}"
+          git commit -m "spec: capture ${KNOWLEDGE_ID}"
+          git push -u origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open draft pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          CHANGE_NAME: ${{ steps.capture.outputs.change_name }}
+          KNOWLEDGE_ID: ${{ steps.capture.outputs.knowledge_id }}
+        run: |
+          gh pr create --draft --base "$GITHUB_REF_NAME" --head "$BRANCH" \
+            --title "spec: ${KNOWLEDGE_ID}" \
+            --body "Automatically captured accepted decision ${KNOWLEDGE_ID}. OpenSpec change: ${CHANGE_NAME}. Implementation and E2E evidence are required before archive." \
+          || echo "::warning::Decision branch was pushed but draft PR creation was unavailable."

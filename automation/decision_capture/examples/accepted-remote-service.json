@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-18T20:30:00+09:00",
+  "project": "data-relay-link",
+  "title": "Keep valid Remote Service configuration during temporary Server disconnect",
+  "summary": "A temporary Agent-to-Server disconnect does not invalidate a Remote Service when required synchronized references are locally resolvable.",
+  "rationale": "Configuration validity and runtime availability are separate lifecycles, so temporary Server reachability must not destroy valid desired state or endpoint identity.",
+  "behavior_change": true,
+  "non_goals": ["Do not permit unresolved Object or Service references."],
+  "sources": [{"type":"chatgpt","ref":"accepted-design-discussion","note":"Explicitly accepted by Rick after architecture review."}],
+  "alternatives": [
+    {"name":"Reject all create/edit operations while Server is unreachable","outcome":"rejected","reason":"It couples configuration validity to transient runtime reachability."},
+    {"name":"Retain valid local desired state and synchronize later","outcome":"selected","reason":"It preserves valid intent and stable endpoint lifecycle."}
+  ],
+  "capabilities": [{
+    "path": "remote-service",
+    "kind": "existing",
+    "requirements": [{
+      "operation": "ADDED",
+      "name": "Locally resolvable intent survives Server disconnect",
+      "text": "The Agent SHALL retain a valid Remote Service configuration during temporary Server unreachability when every required reference is available in synchronized local metadata.",
+      "scenarios": [{
+        "name": "Server unreachable with locally available dependencies",
+        "when": "the Agent cannot reach the Server but the destination and Service Object are resolvable from synchronized local metadata",
+        "then": "the configuration is retained as DEGRADED for later synchronization"
+      }]
+    }]
+  }]
+}

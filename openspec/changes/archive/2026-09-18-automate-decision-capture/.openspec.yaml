@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Automatically convert explicitly accepted AI discussion decisions into
+  validated OpenSpec change candidates without user-maintained documentation.
+
+skip_specs: true
