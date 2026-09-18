@@ -1836,7 +1836,8 @@ def _service_dependency_status(plane_db, svc_name: str) -> Optional[str]:
     catalog = _catalog_payload(plane_db, "service-object", svc_name)
     if not sobj and not catalog:
         return "Required Service Object '%s' is missing or invalid after reconnect." % svc_name
-    meta = sobj if sobj is not None else catalog
+    # Prefer synchronized Server catalog when present (authoritative after reconnect).
+    meta = catalog if catalog is not None else sobj
     stype = str(meta.get("type") if isinstance(meta, dict) else meta["type"]).lower()
     if stype == "udp":
         return (
@@ -1870,7 +1871,15 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
     for row in list(
         plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 1")
     ):
-        unset_remote_service_agent(plane_db, row["name"], root=root, server_reachable=True)
+        try:
+            unset_remote_service_agent(plane_db, row["name"], root=root, server_reachable=True)
+        except ControlPlaneError as exc:
+            plane_db.conn.execute(
+                "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                "WHERE name = ?",
+                (str(exc).split("\n", 2)[1] if "\n" in str(exc) else str(exc), utc_now_iso(), row["name"]),
+            )
+            plane_db.conn.commit()
         updated += 1
     # Revalidate + activate remaining services
     for row in list(
@@ -1890,16 +1899,28 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
             updated += 1
             continue
         # Re-apply to allocate pending endpoints / refresh HEALTHY
-        set_remote_service_agent(
-            plane_db,
-            row["name"],
-            destination=row["destination"],
-            service=row["service_object"],
-            enabled=bool(row["enabled"]),
-            oneshot=True,
-            root=root,
-            server_reachable=True,
-        )
+        try:
+            set_remote_service_agent(
+                plane_db,
+                row["name"],
+                destination=row["destination"],
+                service=row["service_object"],
+                enabled=bool(row["enabled"]),
+                oneshot=True,
+                root=root,
+                server_reachable=True,
+            )
+        except ControlPlaneError as exc:
+            msg = str(exc)
+            brief = msg
+            if msg.startswith("ERROR:\n"):
+                brief = msg[7:].split("\n\n")[0]
+            plane_db.conn.execute(
+                "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                "WHERE name = ?",
+                (brief, utc_now_iso(), row["name"]),
+            )
+            plane_db.conn.commit()
         updated += 1
     return {"status": "SYNCHRONIZED", "updated": updated}
 
