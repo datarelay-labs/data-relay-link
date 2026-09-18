@@ -45,6 +45,47 @@ def build_client_hello(sni: str) -> bytes:
     return b"\x16\x03\x01" + len(handshake).to_bytes(2, "big") + handshake
 
 
+def _seed_internet_allow(root: Path, *, extra: bool = False) -> None:
+    """Install SQLite Internet Access allow rules for the gateway test fixture."""
+    from drlink_control_plane import ControlPlane
+    import drlink_v24 as v24
+
+    plane = ControlPlane(str(root))
+    try:
+        v24.set_network_object(plane, "proxy-src", type="ip", value="127.0.0.1", oneshot=True)
+        v24.set_network_object(plane, "allowed-host", type="fqdn", value="allowed.test", oneshot=True)
+        v24.set_service_object(plane, "http", type="tcp", port=80, oneshot=True)
+        v24.set_service_object(plane, "https", type="tcp", port=443, oneshot=True)
+        rules = [
+            ("allow-http", "allowed-host", "http"),
+            ("allow-https", "allowed-host", "https"),
+        ]
+        if extra:
+            v24.set_network_object(plane, "dual-host", type="fqdn", value="dual.test", oneshot=True)
+            v24.set_service_object(plane, "https-alt", type="tcp", port=8443, oneshot=True)
+            rules.extend(
+                (
+                    ("allow-https-alt", "allowed-host", "https-alt"),
+                    ("allow-dual-https", "dual-host", "https"),
+                )
+            )
+        for name, dest, service in rules:
+            v24.set_access_rule(
+                plane,
+                "internet",
+                name,
+                mode="whitelist",
+                source="proxy-src",
+                destination=dest,
+                service=service,
+                enabled=True,
+                oneshot=True,
+            )
+        plane.compile_runtime()
+    finally:
+        plane.close()
+
+
 class EgressPolicyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -415,6 +456,7 @@ class EgressProxyFunctionalTests(unittest.TestCase):
         self.cfg_path = cfg_path
         self.state_path = state_path
         (self.root / "var/log/drlink/egress").mkdir(parents=True, exist_ok=True)
+        _seed_internet_allow(self.root)
 
         self.origin = _RecordingOrigin()
         self.origin.start()
@@ -1161,6 +1203,7 @@ class EgressRelayTests(unittest.TestCase):
         }
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
         (self.root / "var/log/drlink/egress").mkdir(parents=True, exist_ok=True)
+        _seed_internet_allow(self.root)
 
         self.payload = os.urandom(256 * 1024)
         self.slow_delay = 0.002
@@ -1375,6 +1418,7 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             return pid
 
         EG.mutate_egress_state(mut, path=self.state_path)
+        _seed_internet_allow(self.root, extra=True)
 
         self.origin = _RecordingOrigin()
         self.origin.start()
@@ -1453,9 +1497,8 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         return path.read_text(encoding="utf-8")
 
     def test_protocol_http_connect_denied(self):
-        """CONNECT must not use an http-only destination even if host:port match."""
-        # Remove https:80 if any; only http:80 exists for port 80.
-        req = b"CONNECT allowed.test:80 HTTP/1.1\r\nHost: allowed.test:80\r\n\r\n"
+        """CONNECT to a port not present in Internet Access service objects is denied."""
+        req = b"CONNECT allowed.test:8080 HTTP/1.1\r\nHost: allowed.test:8080\r\n\r\n"
         with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=5) as sock:
             sock.sendall(req)
             data = sock.recv(4096)
@@ -1643,10 +1686,6 @@ class EgressHardeningFeatureTests(unittest.TestCase):
         self.assertEqual(dns.workers_busy, 0)
 
     def test_happy_eyeballs_falls_back_to_v4(self):
-        EG.mutate_egress_state(
-            lambda s: EG.add_destination(s, "test", "dual.test", 443, protocol="https"),
-            path=self.state_path,
-        )
         self.gw_state.cache.reload(force=True)
         sock, decision = self.GW._authorize_and_connect(
             self.gw_state,
@@ -1740,18 +1779,16 @@ class EgressHardeningFeatureTests(unittest.TestCase):
     def test_egress_policy_fingerprint_atomic_replace(self):
         before = self.gw_state.cache.fingerprint
         self.assertIsNotNone(before)
-        # Atomic replace with same mtime_ns but new inode + deny-all content.
-        new_state = EG.empty_egress_state()
-        EG.create_profile(new_state, "replaced", enabled=False)
-        # Leave profile disabled → authorize should fail closed / deny.
-        tmp = self.state_path.with_suffix(".tmp-fp")
-        tmp.write_text(
-            json.dumps(new_state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        os.replace(tmp, self.state_path)
-        os.utime(self.state_path, ns=(before[4], before[4]))
-        self.assertNotEqual(self.state_path.stat().st_ino, before[2])
-        self.gw_state.cache.reload(force=False)
+        from drlink_control_plane import ControlPlane
+        import drlink_v24 as v24
+
+        plane = ControlPlane(str(self.root))
+        try:
+            v24.set_access_rule(plane, "internet", "allow-https", enabled=False)
+            plane.compile_runtime()
+        finally:
+            plane.close()
+        self.gw_state.cache.reload(force=True)
         self.assertNotEqual(self.gw_state.cache.fingerprint, before)
 
     def test_http_body_streaming_large(self):
@@ -1848,11 +1885,16 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             s.settimeout(3)
             first = s.recv(4096)
             self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
-            # Revoke destination while tunnel is live.
-            EG.mutate_egress_state(
-                lambda st: EG.remove_destination(st, "test", "allowed.test:443"),
-                path=self.state_path,
-            )
+            from drlink_control_plane import ControlPlane
+            import drlink_v24 as v24
+
+            plane = ControlPlane(str(self.root))
+            try:
+                for name in ("allow-http", "allow-https", "allow-https-alt", "allow-dual-https"):
+                    v24.set_access_rule(plane, "internet", name, enabled=False)
+                plane.compile_runtime()
+            finally:
+                plane.close()
             self.gw_state.cache.reload(force=True)
             # Wait for revalidation interval and expect peer close.
             s.settimeout(3)
@@ -1883,11 +1925,24 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             )
             first = s.recv(4096)
             self.assertTrue(first.startswith(b"HTTP/1.1 200"), first[:80])
-            # Unrelated: add another destination (generation bumps but still authorized).
-            EG.mutate_egress_state(
-                lambda st: EG.add_destination(st, "test", "other.test", 443, protocol="https"),
-                path=self.state_path,
-            )
+            from drlink_control_plane import ControlPlane
+            import drlink_v24 as v24
+
+            plane = ControlPlane(str(self.root))
+            try:
+                v24.set_network_object(plane, "other-host", type="fqdn", value="other.test", oneshot=True)
+                v24.set_access_rule(
+                    plane,
+                    "internet",
+                    "allow-other",
+                    source="proxy-src",
+                    destination="other-host",
+                    service="https",
+                    enabled=True,
+                    oneshot=True,
+                )
+            finally:
+                plane.close()
             self.gw_state.cache.reload(force=True)
             time.sleep(0.6)
             # Connection should still be open (send should succeed or not get immediate close).

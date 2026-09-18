@@ -133,6 +133,28 @@ class ConnectionCriticalHeaderTests(unittest.TestCase):
             return pid
 
         EG.mutate_egress_state(mut, path=self.state_path)
+        from drlink_control_plane import ControlPlane
+        import drlink_v24 as v24
+
+        plane = ControlPlane(str(self.root))
+        try:
+            v24.set_network_object(plane, "proxy-src", type="ip", value="127.0.0.1", oneshot=True)
+            v24.set_network_object(plane, "allowed-host", type="fqdn", value="allowed.test", oneshot=True)
+            v24.set_service_object(plane, "http", type="tcp", port=80, oneshot=True)
+            v24.set_access_rule(
+                plane,
+                "internet",
+                "allow-http",
+                mode="whitelist",
+                source="proxy-src",
+                destination="allowed-host",
+                service="http",
+                enabled=True,
+                oneshot=True,
+            )
+            plane.compile_runtime()
+        finally:
+            plane.close()
 
         self.origin = _WireOrigin()
         self.origin.start()
