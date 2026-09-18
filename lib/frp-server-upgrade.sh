@@ -14,6 +14,8 @@ FRP_ALLOCATOR_RUNTIME_HELPERS=(
   drlink_runtime_policy.py
   drlink_control_db.py
   drlink_control_plane.py
+  drlink_mgmt_sync.py
+  drlink_upgrade_reconcile.py
 )
 _FRP_UPGRADE_MUTATION_STARTED=0
 _FRP_UPGRADE_ROLLBACK_DONE=0

@@ -3155,7 +3155,7 @@ def make_handler(allocator):
                         code, result = allocator.redeem_bootstrap(body)
                         self.send_json(code, result)
                         return
-                    if path == '/v1/remote-services' and MGMT_SYNC is not None:
+                    if path in ('/v1/remote-services', '/v1/remote-services-status') and MGMT_SYNC is not None:
                         plane = _open_control_plane(allocator.cfg)
                         if plane is None:
                             self.send_json(

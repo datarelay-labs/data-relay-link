@@ -667,6 +667,7 @@ class SourceAudit(unittest.TestCase):
         self.assertIn("ecdsa", src.lower() + "ECDSA")
         alloc = Path(ROOT, "server/frp-port-allocator.py").read_text(encoding="utf-8")
         self.assertIn("AllocatorMgmtVerifier(allocator)", alloc)
+        self.assertIn("/v1/remote-services-status", alloc)
 
 
 if __name__ == "__main__":
