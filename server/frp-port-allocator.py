@@ -134,6 +134,36 @@ def _load_runtime_policy():
 RP = _load_runtime_policy()
 
 
+def _load_mgmt_sync():
+    candidates = [
+        Path(__file__).resolve().parent / 'drlink_mgmt_sync.py',
+        Path(__file__).resolve().parent.parent / 'lib' / 'drlink_mgmt_sync.py',
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT') or ''
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'drlink_mgmt_sync.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('drlink_mgmt_sync', path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+MGMT_SYNC = _load_mgmt_sync()
+
+
+def _open_control_plane(cfg):
+    if RP is None:
+        return None
+    try:
+        return RP.open_plane(cfg)
+    except Exception as exc:
+        print('allocator control-plane open failed: %s' % exc, flush=True)
+        return None
+
+
 def sync_enrollment_to_control_plane(cfg, client, machine_id):
     """Persist enrolled client inventory into SQLite (authoritative).
 
@@ -2870,6 +2900,29 @@ def make_handler(allocator):
                             api_error('internal server error', 'SERVER_MUTATION_FAILED'),
                         )
                         return
+                if path == '/v1/catalog' and MGMT_SYNC is not None:
+                    plane = _open_control_plane(allocator.cfg)
+                    if plane is None:
+                        self.send_json(
+                            503,
+                            api_error(
+                                'control plane unavailable',
+                                'SERVER_MUTATION_FAILED',
+                            ),
+                        )
+                        return
+                    try:
+                        handled = MGMT_SYNC.handle_allocator_http(
+                            plane, 'GET', path, self.headers, b''
+                        )
+                        if handled is not None:
+                            self.send_json(handled[0], handled[1])
+                            return
+                    finally:
+                        try:
+                            plane.close()
+                        except Exception:
+                            pass
                 self.send_json(404, {'error': 'not found'})
 
             self._with_slot(_handle)
@@ -2912,6 +2965,29 @@ def make_handler(allocator):
                         code, result = allocator.redeem_bootstrap(body)
                         self.send_json(code, result)
                         return
+                    if path == '/v1/remote-services' and MGMT_SYNC is not None:
+                        plane = _open_control_plane(allocator.cfg)
+                        if plane is None:
+                            self.send_json(
+                                503,
+                                api_error(
+                                    'control plane unavailable',
+                                    'SERVER_MUTATION_FAILED',
+                                ),
+                            )
+                            return
+                        try:
+                            handled = MGMT_SYNC.handle_allocator_http(
+                                plane, 'POST', path, self.headers, body
+                            )
+                            if handled is not None:
+                                self.send_json(handled[0], handled[1])
+                                return
+                        finally:
+                            try:
+                                plane.close()
+                            except Exception:
+                                pass
                     self.send_json(404, {'error': 'not found'})
                 except json.JSONDecodeError:
                     self.send_json(400, api_error('invalid JSON', 'AUTH_FAILED'))
@@ -2942,6 +3018,37 @@ def make_handler(allocator):
                             'internal server error', 'SERVER_MUTATION_FAILED'
                         ),
                     )
+
+            self._with_slot(_handle)
+
+        def do_DELETE(self):
+            def _handle():
+                allocator.reload_cfg_if_changed()
+                path = self._request_path()
+                if path.startswith('/v1/remote-services/') and MGMT_SYNC is not None:
+                    plane = _open_control_plane(allocator.cfg)
+                    if plane is None:
+                        self.send_json(
+                            503,
+                            api_error(
+                                'control plane unavailable',
+                                'SERVER_MUTATION_FAILED',
+                            ),
+                        )
+                        return
+                    try:
+                        handled = MGMT_SYNC.handle_allocator_http(
+                            plane, 'DELETE', path, self.headers, b''
+                        )
+                        if handled is not None:
+                            self.send_json(handled[0], handled[1])
+                            return
+                    finally:
+                        try:
+                            plane.close()
+                        except Exception:
+                            pass
+                self.send_json(404, {'error': 'not found'})
 
             self._with_slot(_handle)
 
