@@ -349,30 +349,53 @@ class BundleStrictClosure(unittest.TestCase):
 
 class LiveMgmtPathClosure(unittest.TestCase):
     def setUp(self):
+        import frp_mgmt_auth as MGMT
+
         self.server_tmp = tempfile.mkdtemp(prefix="drlink-mgmt-srv-")
         self.agent_tmp = tempfile.mkdtemp(prefix="drlink-mgmt-agt-")
         Path(self.server_tmp, "etc/drlink").mkdir(parents=True, exist_ok=True)
         Path(self.server_tmp, "etc/drlink/config.json").write_text('{"role":"server"}\n', encoding="utf-8")
         Path(self.agent_tmp, "etc/frp").mkdir(parents=True, exist_ok=True)
+        self.machine_id = "aabbccddeeff00112233445566778899"
         Path(self.agent_tmp, "etc/frp/client-state.json").write_text(
-            '{"machine_id":"aabbccddeeff00112233445566778899","hostname":"branch-gateway","label":"branch-gateway"}\n',
+            '{"machine_id":"%s","hostname":"branch-gateway","label":"branch-gateway"}\n'
+            % self.machine_id,
             encoding="utf-8",
         )
-        Path(self.agent_tmp, "etc/frp/client-identity.key").write_text("x", encoding="utf-8")
+        key = Path(self.agent_tmp, "etc/frp/client-identity.key")
+        pub = Path(self.agent_tmp, "etc/frp/client-identity.pub")
+        MGMT.generate_keypair(key, pub)
+        os.chmod(key, 0o600)
+        mac = MGMT.new_mac_key()
+        mac_path = Path(self.agent_tmp, "etc/frp/client-identity.mac")
+        mac_path.write_text(mac, encoding="utf-8")
+        os.chmod(mac_path, 0o600)
         Path(self.agent_tmp, "etc/frp/frpc.toml").write_text("[common]\n", encoding="utf-8")
         os.environ["DRLINK_SKIP_ACTIVATION"] = "1"
         os.environ["DRLINK_CONFIRM"] = "yes"
-        os.environ["DRLINK_MGMT_TOKEN"] = "test-token"
+        os.environ.pop("DRLINK_MGMT_TOKEN", None)
         os.environ.pop("DRLINK_SERVER_REACHABLE", None)
         os.environ.pop("DRLINK_MGMT_MODE", None)
+        os.environ.pop("DRLINK_MGMT_INSECURE", None)
         self.server = ControlPlane(self.server_tmp)
         v24.ensure_v2_schema(self.server.conn)
         self.agent = ControlPlane(self.agent_tmp)
         v24.ensure_v2_schema(self.agent.conn)
-        # Seed service object on both for local validation; Server is authority for allocation.
         v24.set_service_object(self.server, "ssh", type="tcp", port=22, oneshot=True)
         v24.set_service_object(self.agent, "ssh", type="tcp", port=22, oneshot=True)
-        self.httpd, self.base_url, _ = mgmt.start_mgmt_server(self.server)
+        self.server.upsert_client(
+            self.machine_id, label="branch-gateway", hostname="branch-gateway"
+        )
+        self.verifier = mgmt.InMemoryMgmtVerifier()
+        self.verifier.enroll(
+            self.machine_id,
+            pub.read_text(encoding="utf-8"),
+            mac_key=mac,
+            hostname="branch-gateway",
+        )
+        self.httpd, self.base_url, _ = mgmt.start_mgmt_server(
+            self.server, verifier=self.verifier
+        )
         os.environ["DRLINK_MGMT_URL"] = self.base_url
         Path(self.agent_tmp, "etc/frp/server-endpoint.json").write_text(
             '{"mgmt_url":"%s"}\n' % self.base_url, encoding="utf-8"
@@ -389,6 +412,7 @@ class LiveMgmtPathClosure(unittest.TestCase):
             "DRLINK_MGMT_URL",
             "DRLINK_MGMT_MODE",
             "DRLINK_SERVER_REACHABLE",
+            "DRLINK_MGMT_INSECURE",
         ):
             os.environ.pop(k, None)
 
