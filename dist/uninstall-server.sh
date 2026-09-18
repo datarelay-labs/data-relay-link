@@ -433,7 +433,7 @@ frp_u_rm_legacy_frps_unit_if_owned() {
 
 frp_u_stop_product_units() {
   local unit
-  for unit in drlink-mcp-bridge drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+  for unit in drlink-mcp-tls-renew.timer drlink-mcp-tls-renew drlink-mcp-bridge drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_should_manage_unit "$unit"; then
       continue
     fi
@@ -458,7 +458,7 @@ frp_u_stop_product_units() {
 
 frp_u_disable_product_units() {
   local unit enabled
-  for unit in drlink-mcp-bridge drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
+  for unit in drlink-mcp-tls-renew.timer drlink-mcp-tls-renew drlink-mcp-bridge drlink-frontend drlink-tcp-egress drlink-egress drlink-access drlink-allocator drlink-server frps frp-port-allocator frp-access-plugin frp-egress-gateway frp-frontend; do
     if ! frp_u_should_manage_unit "$unit"; then
       continue
     fi
