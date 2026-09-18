@@ -188,15 +188,32 @@ def _destination_for_service(plane: ControlPlane, mapped: dict) -> str:
     mode = str(mapped.get("target_mode") or "self").lower()
     if mode == "routed":
         return str(mapped.get("target_host") or "")
-    # SELF: prefer managed endpoint object name, else first active address, else 127.0.0.1
-    ep = plane.conn.execute(
-        "SELECT o.name FROM objects o JOIN managed_endpoints e ON e.object_id = o.id "
-        "WHERE e.client_id = ?",
-        (mapped["client_id"],),
-    ).fetchone()
-    if ep:
-        return ep["name"]
-    return str(mapped.get("target_host") or "127.0.0.1")
+    # SELF: policy identity is the Managed Host, never the backend loopback.
+    try:
+        from drlink_upgrade_reconcile import managed_host_policy_name
+
+        name = managed_host_policy_name(plane, mapped["client_id"])
+        if name:
+            return name
+    except Exception:
+        ep = plane.conn.execute(
+            "SELECT o.name FROM objects o JOIN managed_endpoints e ON e.object_id = o.id "
+            "WHERE e.client_id = ?",
+            (mapped["client_id"],),
+        ).fetchone()
+        if ep and str(ep["name"] or "").strip():
+            return ep["name"]
+        client = plane.conn.execute(
+            "SELECT label, hostname FROM clients WHERE id = ?",
+            (mapped["client_id"],),
+        ).fetchone()
+        if client:
+            for candidate in (client["label"], client["hostname"]):
+                text = str(candidate or "").strip()
+                if text and text not in ("127.0.0.1", "::1", "localhost"):
+                    return text
+    # Fail closed: empty destination denies rather than silently becoming loopback.
+    return ""
 
 
 def authorize_remote(
@@ -253,6 +270,7 @@ def authorize_remote(
         return result
 
     dest = _destination_for_service(plane, mapped)
+    result["destination"] = dest
     port = int(mapped.get("target_port") or 0)
     proto = "tcp"
     evaluation = plane.evaluate_remote_access(result["source_ip"], dest, proto, port)
@@ -419,9 +437,10 @@ def sync_enrolled_client(
         except ValueError:
             pass
 
+    public_label = (label or hostname or "").strip() or None
     plane.upsert_client(
         client_id,
-        label=label or None,
+        label=public_label,
         description=description or None,
         hostname=hostname or None,
         connected=connected,
@@ -432,6 +451,14 @@ def sync_enrolled_client(
     for sid, svc in services.items():
         if not isinstance(svc, dict):
             continue
+        try:
+            from drlink_upgrade_reconcile import is_v24_runtime_projection
+
+            if is_v24_runtime_projection(sid, svc, plane=plane, client_id=client_id):
+                continue
+        except Exception:
+            if bool(svc.get("v24_remote_service")) or str(sid).startswith("rs-"):
+                continue
         enabled = bool(svc.get("enabled", True))
         local_ip = str(svc.get("local_ip") or "127.0.0.1")
         local_port = int(svc.get("local_port") or 0)

@@ -63,6 +63,7 @@ MGMT_OP_ENROLL = 'enroll'
 MGMT_OP_CATALOG_READ = 'catalog.read'
 MGMT_OP_REMOTE_SERVICE_SET = 'remote-service.set'
 MGMT_OP_REMOTE_SERVICE_DELETE = 'remote-service.delete'
+MGMT_OP_REMOTE_SERVICE_STATUS = 'remote-service.status'
 MGMT_NONCE_HEX_LEN = 64
 MGMT_MAX_CLOCK_SKEW = 300
 MGMT_NONCE_RE = re.compile(r'^[0-9a-f]{64}$')

@@ -1856,6 +1856,43 @@ def _service_dependency_status(plane_db, svc_name: str) -> Optional[str]:
     return None
 
 
+def _push_agent_remote_service_status(plane_db, *, root: Optional[str] = None, names: Optional[list] = None) -> None:
+    """Tell the Server the Agent's effective Remote Service status. Never allocates."""
+    try:
+        import drlink_mgmt_sync as mgmt
+    except Exception:
+        return
+    target_root = root or getattr(plane_db, "root", None)
+    try:
+        if not mgmt.use_live_mgmt_path(target_root):
+            return
+    except Exception:
+        return
+    items = []
+    rows = plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
+    for row in rows:
+        if names is not None and row["name"] not in names:
+            continue
+        status = str(row["status"] or "DEGRADED").upper()
+        if status not in ("HEALTHY", "DEGRADED", "DISABLED"):
+            status = "DEGRADED"
+        items.append(
+            {
+                "name": row["name"],
+                "status": status,
+                "reason": str(row["reason"] or ""),
+                "runtime_verified": status == "HEALTHY",
+                "endpoint_port": row["endpoint_port"],
+            }
+        )
+    if not items:
+        return
+    try:
+        mgmt.report_remote_service_status_on_server(root=target_root, services=items)
+    except Exception:
+        return
+
+
 def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -> dict:
     """Reconnect synchronization: allocate pending endpoints, apply deletes, revalidate deps."""
     if not detect_server_reachable(plane_db, root):
@@ -1934,6 +1971,7 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
             runtime.mark_runtime_status(
                 plane_db, ok=False, reason=applied.get("error") or "Runtime activation failed"
             )
+            _push_agent_remote_service_status(plane_db, root=root)
             return {
                 "status": "DEGRADED",
                 "updated": updated,
@@ -1942,7 +1980,9 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
         if applied.get("ok") and not applied.get("skipped"):
             runtime.mark_runtime_status(plane_db, ok=True)
     except Exception as exc:
+        _push_agent_remote_service_status(plane_db, root=root)
         return {"status": "DEGRADED", "updated": updated, "runtime_error": str(exc)}
+    _push_agent_remote_service_status(plane_db, root=root)
     return {"status": "SYNCHRONIZED", "updated": updated}
 
 
@@ -2430,6 +2470,8 @@ def set_remote_service_agent(
                     pending = 1
                 except Exception:
                     pass
+            elif live_mgmt:
+                _push_agent_remote_service_status(plane_db, root=root, names=[name])
     elif not en:
         # Disabled: ensure runtime proxy removed.
         try:

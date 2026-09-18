@@ -681,26 +681,25 @@ try:
     st = plane.status()
     if not st.get("db_healthy"):
         raise SystemExit("control DB unhealthy after init")
-    # One-time lab/state protection: adopt existing registry clients into SQLite
-    # when the control DB has none (pre-SQLite upgrades).
-    registry = Path("/var/lib/drlink/registry.json")
-    if int(st.get("clients") or 0) == 0 and registry.is_file():
-        import json
-        data = json.loads(registry.read_text(encoding="utf-8"))
-        adopted = 0
-        for cid, row in (data.get("clients") or {}).items():
-            if not isinstance(row, dict):
-                continue
-            plane.upsert_client(
-                str(cid),
-                label=str(row.get("label") or "") or None,
-                description=str(row.get("note") or "") or None,
-                hostname=str(row.get("hostname") or "") or None,
-                connected=False,
-            )
-            adopted += 1
-        if adopted:
-            print("CONTROL_DB_ADOPTED_CLIENTS=%s" % adopted)
+    # Reconcile existing FRP registry clients into canonical SQLite (idempotent).
+    registry_live = Path("/var/lib/drlink/runtime/client-inventory.json")
+    registry_legacy = Path("/var/lib/drlink/registry.json")
+    recon_mod = Path(sys.argv[3]).parent / "drlink_upgrade_reconcile.py"
+    if recon_mod.is_file() and (registry_live.is_file() or registry_legacy.is_file()):
+        spec = importlib.util.spec_from_file_location("drlink_upgrade_reconcile", str(recon_mod))
+        ur = importlib.util.module_from_spec(spec)
+        sys.modules["drlink_upgrade_reconcile"] = ur
+        spec.loader.exec_module(ur)
+        rec = ur.reconcile_control_plane(plane, root=str(deploy), connected=False)
+        if rec.get("ok") and rec.get("applied"):
+            print("CONTROL_DB_RECONCILED clients=%s hosts=%s" % (
+                (rec.get("after") or {}).get("sqlite_clients"),
+                (rec.get("after") or {}).get("managed_hosts"),
+            ))
+        elif rec.get("ok") and rec.get("skipped"):
+            print("CONTROL_DB_RECONCILE_SKIPPED")
+        elif not rec.get("ok"):
+            print("CONTROL_DB_RECONCILE_WARNING %s" % rec.get("error"))
     st = plane.status()
     print("CONTROL_DB_OK revision=%s mismatch=%s clients=%s" % (
         st.get("revision"), st.get("mismatch"), st.get("clients")))

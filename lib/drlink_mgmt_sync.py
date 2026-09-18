@@ -204,6 +204,8 @@ def _canonical_operation(method: str, path: str) -> Optional[tuple[str, str]]:
         return MGMT.MGMT_OP_CATALOG_READ, parsed
     if method_u == "POST" and parsed == "/v1/remote-services":
         return MGMT.MGMT_OP_REMOTE_SERVICE_SET, parsed
+    if method_u == "POST" and parsed == "/v1/remote-services-status":
+        return MGMT.MGMT_OP_REMOTE_SERVICE_STATUS, parsed
     if method_u == "DELETE" and parsed.startswith("/v1/remote-services/"):
         name = parsed[len("/v1/remote-services/") :]
         if not name or "/" in name:
@@ -401,6 +403,21 @@ def upsert_remote_service_on_server(
     if preserve_endpoint_port is not None:
         body["preserve_endpoint_port"] = int(preserve_endpoint_port)
     return _request_json("POST", base + "/v1/remote-services", body, root=root)
+
+
+def report_remote_service_status_on_server(
+    *,
+    root: Optional[str] = None,
+    services: list,
+) -> dict:
+    base = resolve_mgmt_base_url(root)
+    if not base:
+        raise MgmtSyncError(
+            "ERROR:\nNo Server management URL is configured for Remote Service status.\n\n"
+            "No changes were applied."
+        )
+    body = {"services": list(services or [])}
+    return _request_json("POST", base + "/v1/remote-services-status", body, root=root)
 
 
 def delete_remote_service_on_server(*, root: Optional[str] = None, name: str) -> dict:
@@ -771,8 +788,20 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         endpoint_port = v24.allocate_endpoint_port(plane, client["id"], name, pool_class)
 
     if enabled and runtime_verified and endpoint_port is not None:
-        status = "HEALTHY"
-        reason = ""
+        try:
+            from drlink_upgrade_reconcile import server_destination_reason
+
+            dest_reason = server_destination_reason(
+                plane, destination, owner_client_id=client["id"]
+            )
+        except Exception:
+            dest_reason = None
+        if dest_reason:
+            status = "DEGRADED"
+            reason = dest_reason
+        else:
+            status = "HEALTHY"
+            reason = ""
     elif not enabled:
         status = "DISABLED"
         reason = ""
@@ -891,6 +920,143 @@ def server_delete_remote_service(plane, auth: MgmtAuthContext, name: str) -> dic
         write,
     )
     return {"status": "DELETED", "name": name, "released_port": pub["public_port"]}
+
+
+def _allocator_registry_owners(auth: MgmtAuthContext) -> dict:
+    allocator = getattr(auth, "allocator", None)
+    if allocator is None:
+        return {}
+    try:
+        from drlink_upgrade_reconcile import registry_endpoint_owners
+
+        with allocator.registry_lock():
+            state = allocator.load_registry()
+        return registry_endpoint_owners(state if isinstance(state, dict) else {})
+    except Exception:
+        return {}
+
+
+def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict) -> dict:
+    """Authenticated Agent runtime/dependency status. Does not allocate ports."""
+    from drlink_upgrade_reconcile import (
+        effective_remote_service_status,
+        _release_stale_port,
+        registry_endpoint_owners,
+    )
+
+    machine_id = auth.machine_id
+    client = _require_managed_host(plane, machine_id)
+    items = body.get("services") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        raise MgmtSyncError("services list is required")
+    owners = _allocator_registry_owners(auth)
+    if not owners:
+        try:
+            from drlink_upgrade_reconcile import load_authoritative_registry
+
+            registry, _path, _err = load_authoritative_registry(getattr(plane, "root", None))
+            if registry:
+                owners = registry_endpoint_owners(registry)
+        except Exception:
+            owners = {}
+
+    updated = []
+
+    def write():
+        nested_prev = getattr(plane, "_batch_mode", False)
+        plane._batch_mode = True
+        try:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                reported = str(item.get("status") or "").strip().upper()
+                if reported not in ("HEALTHY", "DEGRADED", "DISABLED"):
+                    continue
+                verified = bool(item.get("runtime_verified", False))
+                reason = str(item.get("reason") or "").strip()
+                generation = item.get("runtime_generation")
+                try:
+                    generation = int(generation) if generation is not None else None
+                except (TypeError, ValueError):
+                    generation = None
+                pub = plane.conn.execute(
+                    "SELECT * FROM published_services WHERE client_id = ? AND name = ? COLLATE NOCASE AND released = 0",
+                    (client["id"], name),
+                ).fetchone()
+                if pub is None:
+                    continue
+                meta = plane.conn.execute(
+                    "SELECT * FROM remote_service_meta WHERE service_id = ?",
+                    (pub["id"],),
+                ).fetchone()
+                status, computed_reason, stale = effective_remote_service_status(
+                    plane,
+                    pub,
+                    meta,
+                    owners,
+                    agent_runtime={
+                        "status": reported,
+                        "runtime_verified": verified and reported == "HEALTHY",
+                        "reason": reason,
+                    },
+                )
+                if stale and pub["public_port"] is not None:
+                    _release_stale_port(
+                        plane,
+                        int(pub["public_port"]),
+                        pub,
+                        meta,
+                        computed_reason,
+                    )
+                    pub = plane.conn.execute(
+                        "SELECT * FROM published_services WHERE id = ?", (pub["id"],)
+                    ).fetchone()
+                    meta = plane.conn.execute(
+                        "SELECT * FROM remote_service_meta WHERE service_id = ?",
+                        (pub["id"],),
+                    ).fetchone()
+                    status, computed_reason, _stale = effective_remote_service_status(
+                        plane,
+                        pub,
+                        meta,
+                        owners,
+                        agent_runtime={
+                            "status": reported,
+                            "runtime_verified": False,
+                            "reason": reason,
+                        },
+                    )
+                if meta is None:
+                    continue
+                extra = computed_reason
+                if generation is not None and extra:
+                    extra = "%s (generation %s)" % (extra, generation)
+                if str(meta["status"] or "") != status or str(meta["reason"] or "") != (extra or ""):
+                    pending = 1 if status == "DEGRADED" and pub["public_port"] is None else int(
+                        meta["pending_allocation"] or 0
+                    )
+                    plane.conn.execute(
+                        "UPDATE remote_service_meta SET status = ?, reason = ?, pending_allocation = ? WHERE service_id = ?",
+                        (status, extra or "", pending, pub["id"]),
+                    )
+                updated.append({"name": name, "status": status, "reason": extra or ""})
+            return {
+                "entity": {"type": "remote-service-status", "id": machine_id, "name": machine_id},
+                "operation": "status",
+                "after": "agent %s status %s" % (machine_id, len(updated)),
+            }
+        finally:
+            plane._batch_mode = nested_prev
+
+    plane._mutate(
+        "mgmt remote-service status [agent %s]" % machine_id,
+        "mgmt remote service status",
+        write,
+    )
+    return {"updated": updated, "count": len(updated)}
 
 
 # ---------------------------------------------------------------------------
@@ -1015,6 +1181,12 @@ def handle_allocator_http(
             if not isinstance(data, dict):
                 return 400, {"error": "invalid JSON"}
             result = server_upsert_remote_service(plane, auth, data)
+            return 200, _with_response_mac(result, auth)
+        if method.upper() == "POST" and parsed == "/v1/remote-services-status":
+            data = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+            if not isinstance(data, dict):
+                return 400, {"error": "invalid JSON"}
+            result = server_report_remote_service_status(plane, auth, data)
             return 200, _with_response_mac(result, auth)
         if method.upper() == "DELETE" and parsed.startswith("/v1/remote-services/"):
             name = unquote(parsed[len("/v1/remote-services/") :])

@@ -256,6 +256,7 @@ for name in (
     "frp_egress_runtime.py",
     "drlink-tcp-egress.py",
     "drlink_runtime_policy.py",
+    "drlink_upgrade_reconcile.py",
     "public_suffix_list.dat",
     "egress-recipes/https-api.json",
 ):
@@ -269,6 +270,8 @@ for name in (
     "lib/frp_public_suffix.py",
     "lib/frp_policy_fingerprint.py",
     "lib/frp_egress_runtime.py",
+    "lib/drlink_runtime_policy.py",
+    "lib/drlink_upgrade_reconcile.py",
     "lib/data/public_suffix_list.dat",
     "lib/data/egress-recipes/https-api.json",
     "server/drlink-tcp-egress.py",

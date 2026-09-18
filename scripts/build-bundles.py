@@ -50,6 +50,7 @@ files=[
  'lib/drlink_control_plane.py',
  'lib/drlink_control_cli.py',
  'lib/drlink_runtime_policy.py',
+ 'lib/drlink_upgrade_reconcile.py',
  'lib/drlink_ai_agent.py',
  'lib/drlink_mcp_bridge.py',
  'lib/drlink_mcp_tls.py',

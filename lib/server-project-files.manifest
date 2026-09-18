@@ -51,6 +51,7 @@ project usr/local/lib/drlink/drlink_v24_runtime.py 0644 lib/drlink_v24_runtime.p
 project usr/local/lib/drlink/drlink_mgmt_sync.py 0644 lib/drlink_mgmt_sync.py python
 project usr/local/lib/drlink/drlink_configuration_bundle.py 0644 lib/drlink_configuration_bundle.py python
 project usr/local/lib/drlink/drlink_runtime_policy.py 0644 lib/drlink_runtime_policy.py python
+project usr/local/lib/drlink/drlink_upgrade_reconcile.py 0644 lib/drlink_upgrade_reconcile.py python
 project usr/local/lib/drlink/drlink_ai_agent.py 0644 lib/drlink_ai_agent.py python
 project usr/local/lib/drlink/drlink_mcp_bridge.py 0644 lib/drlink_mcp_bridge.py python
 project usr/local/lib/drlink/drlink_mcp_tls.py 0644 lib/drlink_mcp_tls.py python

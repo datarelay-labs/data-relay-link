@@ -108,6 +108,23 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 for r in refs:
                     sys.stdout.write("%s\n" % r["display"])
             return 0
+        if obj["type"] == "managed_endpoint" or obj["origin"] == "managed":
+            client = None
+            try:
+                client = plane.get_client(name)
+            except ControlPlaneError:
+                client = None
+            hostname = client["hostname"] if client else "-"
+            status = (
+                "Connected"
+                if client and client["connected"]
+                else ("Disconnected" if client else "Managed Host")
+            )
+            sys.stdout.write(
+                "Network Object: %s\nType : Managed Host\nOrigin: Managed Host\nHostname: %s\nStatus: %s\n"
+                % (obj["name"], hostname or "-", status)
+            )
+            return 0
         payload = dict(obj)
         values = payload.get("values") or plane._object_values(payload["id"])
         sys.stdout.write(
@@ -247,7 +264,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                     if s["pending_allocation"]
                     else ("drlink.local:%s" % s["public_port"] if s["public_port"] else "-")
                 )
-                status = s["status"] or ("DISABLED" if not s["enabled"] else "HEALTHY")
+                status = s["status"] or ("DISABLED" if not s["enabled"] else "DEGRADED")
                 sys.stdout.write(
                     "%-18s %-14s %-10s %-24s %s\n"
                     % (

@@ -184,11 +184,13 @@ def sync_enrollment_to_control_plane(cfg, client, machine_id):
             addr = str(observed.get(key) or client.get(key) or '').strip()
             if addr:
                 addresses.append({'address': addr, 'active': True})
+        hostname = str(client.get('hostname') or '')
+        label = str(client.get('label') or hostname or '')
         RP.sync_enrolled_client(
             plane,
             client_id=str(machine_id),
-            hostname=str(client.get('hostname') or ''),
-            label=str(client.get('label') or ''),
+            hostname=hostname,
+            label=label,
             description=str(client.get('note') or client.get('description') or ''),
             services=client.get('services') if isinstance(client.get('services'), dict) else {},
             addresses=addresses,
@@ -3297,6 +3299,26 @@ def main():
             print('ERROR: %s' % exc, flush=True)
         else:
             raise SystemExit(f'ERROR: {exc}') from exc
+    try:
+        import drlink_upgrade_reconcile as UR
+
+        rec = UR.reconcile_from_allocator(allocator)
+        if rec.get('ok') and rec.get('applied'):
+            print(
+                'upgrade reconcile applied clients=%s hosts=%s path=%s'
+                % (
+                    (rec.get('after') or rec.get('plan') or {}).get('sqlite_clients'),
+                    (rec.get('after') or rec.get('plan') or {}).get('managed_hosts'),
+                    rec.get('path') or '',
+                ),
+                flush=True,
+            )
+        elif rec.get('ok') and rec.get('skipped'):
+            print('upgrade reconcile already converged', flush=True)
+        elif not rec.get('ok'):
+            print('WARNING: upgrade reconcile did not apply: %s' % rec.get('error'), flush=True)
+    except Exception as exc:
+        print('WARNING: upgrade reconcile failed (existing state preserved): %s' % exc, flush=True)
     allocator.cleanup_expired_enrollments()
     host = allocator.cfg.get('listen_host', '0.0.0.0')
     port = cfg_allocator_listen_port(allocator.cfg)
