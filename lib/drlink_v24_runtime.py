@@ -316,31 +316,31 @@ def verify_runtime_proxies(
         time.sleep(1.5)
         try:
             out = subprocess.check_output(
-                ["journalctl", "-u", "drlink-client", "-n", "120", "--no-pager"],
+                [
+                    "journalctl",
+                    "-u",
+                    "drlink-client",
+                    "--since",
+                    "90 seconds ago",
+                    "--no-pager",
+                ],
                 text=True,
                 timeout=15,
             )
         except Exception:
             out = ""
         for proxy_name, _port in v24_names:
-            # Prefer the newest line mentioning this proxy.
             mentions = [ln for ln in out.splitlines() if proxy_name in ln]
             if not mentions:
                 continue
-            last = mentions[-1]
-            if "start error" in last.lower() or "error:" in last.lower():
+            recent = mentions[-8:]
+            if any("start error" in m.lower() for m in recent) and not any(
+                "start proxy success" in m.lower() for m in recent
+            ):
                 raise ControlPlaneError(
-                    "runtime activation could not be verified for proxy '%s': %s"
-                    % (proxy_name, last.strip()[-200:])
+                    "runtime activation could not be verified for proxy '%s'"
+                    % proxy_name
                 )
-            if "start proxy success" not in last.lower() and "success" not in last.lower():
-                # Ambiguous last line — look for any success after last error.
-                if any("start error" in m.lower() for m in mentions[-5:]):
-                    if not any("start proxy success" in m.lower() for m in mentions[-5:]):
-                        raise ControlPlaneError(
-                            "runtime activation could not be verified for proxy '%s'"
-                            % proxy_name
-                        )
 
 
 def apply_agent_runtime(
