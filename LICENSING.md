@@ -1,51 +1,80 @@
-# License
+# Data Relay Link Licensing
 
-Data Relay Link is **source available, not open source**. Current distributions are licensed under the **Data Relay Source Available License 1.0**, except where a specific file or third-party component states a different license.
+## Commercial status
 
-> The full license text in the [`LICENSE`](LICENSE) file is controlling. This page is a plain-language summary and does not replace the license terms.
+**Data Relay Link is currently available as Free Early Access.**
 
-## Free and permitted use
+- **Price:** Free during Early Access
+- **Source model:** Source Available
+- **Open source:** No
+- **Deployment:** Self-hosted, including offline and restricted-network environments
+- **Support:** Best effort
+- **SLA:** None during Early Access
+- **Future General Availability model:** Commercial perpetual licensing is planned
+
+The complete terms are defined by the [Data Relay Link Early Access License 1.0](LICENSE).
+
+> The `LICENSE` file is controlling. This page is a plain-language product and licensing summary.
+
+## Permitted during Early Access
 
 You may use Data Relay Link free of charge for:
 
 - personal use
 - education and non-commercial research
-- evaluation and testing
-- internal commercial use
-- internal source-code modification for permitted uses
-- customer-owned deployments where the customer directly controls and uses the deployment
-- paid installation, integration, migration, maintenance, training, or support for a customer-owned deployment, provided Data Relay Link itself is not resold or operated as a managed service
+- evaluation, testing, lab, and proof-of-concept use
+- your organization's own internal business operations
+- internal source-code modification for permitted use
+- customer-owned deployments where the customer directly controls and operates Data Relay Link
+- paid installation, integration, migration, maintenance, training, or support around a customer-owned deployment, provided Data Relay Link itself is not resold or operated as a managed service
 
-## Productization is not permitted
+## Requires a separate commercial license
 
 Without a separate written commercial license from Data Relay Labs, you may not:
 
 - resell or sublicense Data Relay Link
-- commercially redistribute the original or a modified version as a standalone product
-- OEM, embed, bundle, or integrate Data Relay Link or substantial portions of its source code into a commercial product or appliance
-- white-label, rename, rebrand, or fork Data Relay Link for commercial productization
-- operate or offer Data Relay Link functionality as SaaS, MSP, hosted, shared, or multi-tenant service for third parties
-- use Data Relay Link or a substantial portion of its source code to create, improve, or maintain a competing or substantially similar product or service
+- commercially redistribute Data Relay Link or a modified version as a standalone product
+- OEM, embed, bundle, or white-label Data Relay Link in another commercial product or appliance
+- rebrand or fork Data Relay Link for commercial productization
+- provide Data Relay Link functionality as SaaS, MSP, hosted, shared, managed, or multi-tenant service
+- use Data Relay Link or substantial portions of its source code to create, improve, or maintain a competing or substitute commercial product
 - remove or obscure copyright, license, attribution, or trademark notices
-- describe the project as OSI-approved open-source software
+- describe Data Relay Link as OSI-approved open-source software
+
+## Commercial General Availability
+
+Data Relay Labs intends to move Data Relay Link to commercial General Availability after the Early Access period and product-stability qualification.
+
+The planned commercial model is:
+
+| Item | Planned direction |
+| --- | --- |
+| Product license | **Perpetual** |
+| Deployment | **Self-hosted / offline-capable** |
+| Subscription required for continued use | **No** |
+| Maintenance and support | **Optional or separately licensed** |
+| Traffic/bandwidth metering | **Not planned as the core licensing metric** |
+| Commercial SKU | Defined when General Availability is announced |
+
+Future General Availability releases may require a commercial license and may use license terms different from the Early Access License.
+
+The Early Access License applies to copies and versions distributed with that license. It does not grant access, upgrade, maintenance, support, or licensing rights to future releases.
 
 ## Examples
 
-| Scenario | Status |
-|---|---|
-| Use Data Relay Link on your company's own servers | Permitted |
-| Modify the source for your company's internal environment | Permitted |
-| Install Data Relay Link in a customer's own environment for that customer to operate | Permitted |
-| Charge for installation, migration, support, or training around that customer-owned deployment | Permitted |
-| Fork Data Relay Link, rename it, and sell it as another product | Not permitted |
-| Embed Data Relay Link code into a commercial security or connectivity product | Not permitted |
-| Sell Data Relay Link functionality as SaaS or an MSP service | Not permitted |
-| Use the source to build or improve a competing/substitute product | Not permitted |
+| Scenario | Early Access |
+| --- | --- |
+| Use Data Relay Link on your own servers | Permitted |
+| Use it for your company's internal operations | Permitted |
+| Modify the source for your own permitted internal environment | Permitted |
+| Evaluate it in a production-like lab or POC | Permitted |
+| Install it in a customer's own environment for the customer to operate | Permitted |
+| Charge for installation, migration, training, or support around that customer-owned deployment | Permitted |
+| Fork, rename, and sell it as another product | Not permitted |
+| Embed it in a commercial connectivity/security product | Not permitted |
+| Sell Data Relay Link functionality as SaaS/MSP/managed service | Not permitted |
+| Use the source to build or improve a competing product | Not permitted |
 
-## Separate commercial license
+## Third-party components
 
-Resale, OEM/embedding, white-labeling, commercial redistribution, derivative commercial products, SaaS/MSP/hosted offerings, competitive-product rights, or other productization may be permitted only under a **separate written commercial license** granted by Data Relay Labs.
-
-## Why it is called source available
-
-The license places restrictions on productization, competing products, and SaaS/MSP use. Because those use restrictions are not compatible with the OSI Open Source Definition, Data Relay Link is described as **source available**, not open source.
+Third-party components remain governed by their own licenses. Data Relay Link's license does not restrict rights independently granted by those third-party licenses.
