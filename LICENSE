@@ -1,29 +1,39 @@
-Data Relay Source Available License 1.0
+Data Relay Link Early Access License 1.0
 
 Copyright (c) 2026 Data Relay Labs.
 All rights reserved except as expressly granted by this License.
 
-IMPORTANT: THIS IS A SOURCE-AVAILABLE LICENSE, NOT AN OPEN-SOURCE LICENSE.
+COMMERCIAL STATUS: FREE EARLY ACCESS
+SOURCE MODEL: SOURCE AVAILABLE
+OPEN SOURCE: NO
 
-This License is intended to allow free personal use, research, evaluation,
-internal commercial use, internal modification, and customer-owned deployment,
-while prohibiting productization, resale, OEM/embedding, white-labeling,
-commercial redistribution, competitive products, and SaaS/MSP offerings of the
-Software's functionality unless Data Relay Labs grants a separate written
-commercial license.
+Data Relay Link is a commercial product currently made available free of charge
+during its Early Access period. This License permits evaluation, personal use,
+internal business use, internal modification, and customer-owned deployments,
+while reserving productization and service-provider rights to Data Relay Labs.
+
+Data Relay Labs intends to offer future General Availability releases under
+commercial terms, including a perpetual-license model. Future releases may be
+offered under different license terms. This License grants rights only to
+Software distributed with this License and does not grant rights to future
+releases.
 
 1. DEFINITIONS
 
 "Software" means the Data Relay Link software, source code, object code,
 documentation, configuration, and other materials distributed with this
 License, including modifications and derivative works based on them, except for
-Third-Party Components as described in Section 11.
+Third-Party Components as described in Section 12.
 
 "Licensor" means Data Relay Labs or the applicable copyright owner authorized
 to grant rights under this License.
 
 "You" means the individual or legal entity exercising rights under this
 License.
+
+"Early Access" means a pre-General-Availability distribution of the Software
+made available by the Licensor for real-world use, evaluation, testing,
+feedback, validation, and product stabilization.
 
 "Internal Use" means use of the Software solely for Your own internal business,
 operational, development, testing, security, connectivity, automation, or
@@ -44,42 +54,39 @@ Software.
 
 "Competitive Product or Service" means a product or service that competes with,
 substitutes for, or offers substantially similar functionality to Data Relay
-Link, including a product or service whose primary purpose includes secure
-remote access, controlled network egress, relay-based private-network access,
-MCP/AI access to private endpoints, or substantially similar secure
-connectivity functionality in a manner that can reasonably substitute for the
-Software.
+Link, including secure remote access, controlled network egress, relay-based
+private-network access, AI-assisted access to private endpoints, or
+substantially similar secure-connectivity functionality.
 
 "Managed Service" includes SaaS, MSP, hosted, shared-service, multi-tenant, or
 service-provider offerings in which a third party receives access to, or the
 primary benefit of, the Software's functionality.
 
-2. PERMITTED USES
+2. EARLY ACCESS LICENSE GRANT
 
-Subject to this License, You may, free of charge:
+Subject to this License, You may use the Software free of charge for:
 
-(a) use the Software for personal purposes;
+(a) personal use;
 
-(b) use the Software for education, academic or non-commercial research,
-    testing, and evaluation;
+(b) education, academic or non-commercial research, testing, and evaluation;
 
-(c) use the Software for Internal Use, including commercial Internal Use;
+(c) Internal Use, including commercial Internal Use;
 
-(d) view, study, and modify the source code for the purposes permitted above;
+(d) security validation, proof-of-concept, laboratory, development, and
+    production-like testing;
 
-(e) make copies reasonably necessary for backup, development, testing,
+(e) viewing, studying, and modifying the source code for purposes permitted by
+    this License;
+
+(f) making copies reasonably necessary for backup, development, testing,
     deployment, and operation under the permitted purposes; and
 
-(f) redistribute source code or modifications on a non-commercial basis for
-    collaboration, research, or contribution, provided that the complete
-    copyright and license notices are retained and the redistribution is made
-    under this License without additional rights that conflict with it.
+(g) Customer-Owned Deployments as permitted by Section 3.
 
-Use of the Software solely as an internal tool incidental to another business
-or service is permitted when third parties are not sold, licensed, or provided
-access to Data Relay Link functionality itself.
+The rights granted for a copy or version of the Software distributed under this
+License continue for that copy or version unless terminated under Section 11.
 
-3. CUSTOMER-OWNED DEPLOYMENTS
+3. CUSTOMER-OWNED DEPLOYMENTS AND PROFESSIONAL SERVICES
 
 You may provide installation, integration, migration, maintenance, training, or
 support services for a Customer-Owned Deployment, including for a fee, provided
@@ -95,7 +102,23 @@ that:
 (d) You do not operate the Software for that customer as a Managed Service that
     provides Data Relay Link functionality as the service being sold.
 
-4. PROHIBITED PRODUCTIZATION
+4. EARLY ACCESS STATUS AND SUPPORT
+
+The Software is provided as Early Access software.
+
+Unless the Licensor separately agrees in writing:
+
+(a) no service-level agreement (SLA) is provided;
+
+(b) support is best-effort only;
+
+(c) features, interfaces, packaging, compatibility, and documentation may
+    change between Early Access releases; and
+
+(d) Early Access suitability for a particular production environment remains
+    the responsibility of the operator.
+
+5. PROHIBITED PRODUCTIZATION
 
 Unless You have a separate written commercial license from the Licensor, You
 may not use the Software, its source code, a substantial portion of it, or any
@@ -104,16 +127,16 @@ market, or operate a commercial software product or service that incorporates,
 derives from, substantially reproduces, exposes, or provides the functionality
 of the Software.
 
-5. SPECIFIC PROHIBITED USES
+6. SPECIFIC PROHIBITED USES
 
 Without a separate written commercial license from the Licensor, You may not:
 
 (a) resell, sublicense, or commercially redistribute the Software or a modified
     version of it as a standalone product;
 
-(b) include, embed, bundle, integrate, or OEM the Software or its substantial
-    source code into a commercial software product, hardware appliance, virtual
-    appliance, platform, or commercial distribution;
+(b) include, embed, bundle, integrate, or OEM the Software or a substantial
+    portion of its source code into a commercial software product, hardware
+    appliance, virtual appliance, platform, or commercial distribution;
 
 (c) white-label, rename, rebrand, or fork the Software for sale, licensing, or
     other commercial productization;
@@ -122,118 +145,153 @@ Without a separate written commercial license from the Licensor, You may not:
     functionality as a SaaS, MSP, hosted, managed, shared, or multi-tenant
     service for third parties;
 
-(e) use the Software or any substantial portion of its source code to create,
+(e) use the Software or a substantial portion of its source code to create,
     provide, improve, or maintain a Competitive Product or Service;
 
-(f) copy or adapt the Software's implementation into another commercial
-    product in order to provide substantially similar functionality;
+(f) copy or adapt the Software's implementation into another commercial product
+    to provide substantially similar functionality;
 
 (g) remove, obscure, or alter copyright, license, attribution, trademark, or
     other proprietary notices contained in the Software; or
 
-(h) represent the Software as open-source software under an OSI-approved
-    license.
+(h) represent the Software as software distributed under an OSI-approved
+    open-source license.
 
-6. NO IMPLIED COMMERCIAL PRODUCT RIGHTS
+7. SOURCE REDISTRIBUTION
 
-Payment for consulting, installation, integration, migration, support, or
-training services does not by itself grant resale, OEM, embedding,
-white-labeling, SaaS, MSP, competitive-product, or commercial redistribution
-rights.
+You may share source code or modifications on a non-commercial basis for
+collaboration, research, contribution, or issue reproduction only when:
 
-Any such rights require a separate written commercial license from the
-Licensor.
+(a) the complete copyright and license notices are retained;
 
-7. MODIFICATIONS AND DERIVATIVE WORKS
+(b) the redistributed material remains subject to this License;
+
+(c) no additional rights are represented as having been granted by the
+    Licensor; and
+
+(d) the redistribution is not used to circumvent Sections 5 or 6.
+
+8. MODIFICATIONS AND DERIVATIVE WORKS
 
 You may create modifications and derivative works only within the permissions
-of Sections 2 and 3.
+of this License.
 
 A modification or derivative work does not remove or reduce the restrictions of
 this License. You may not use a modification or derivative work to avoid the
 Productization, Competitive Product or Service, SaaS/MSP, resale, OEM,
-embedding, white-labeling, or commercial redistribution restrictions.
+embedding, white-labeling, or commercial-redistribution restrictions.
 
-8. COMMERCIAL LICENSE EXCEPTION
+9. FUTURE COMMERCIAL GENERAL AVAILABILITY
+
+Data Relay Labs intends to commercialize Data Relay Link after the Early Access
+period when the product reaches General Availability.
+
+The intended commercial model is:
+
+- perpetual software licensing;
+- self-hosted and offline-capable deployment;
+- optional or separately licensed maintenance and support; and
+- commercial licensing based on the applicable product/SKU terms at General
+  Availability.
+
+Future releases, including General Availability releases, may require a
+commercial license and may be distributed under license terms different from
+this Early Access License.
+
+Nothing in this Section grants access to, upgrade rights for, maintenance for,
+support for, or licensing rights to a future release.
+
+10. SEPARATE COMMERCIAL LICENSE
 
 The Licensor may grant separate written commercial licenses permitting rights
 otherwise prohibited by this License, including resale, OEM, embedding,
 white-labeling, commercial redistribution, derivative commercial products,
-SaaS, MSP, hosted services, or other productization.
+SaaS, MSP, hosted services, managed services, or other productization.
 
-A separate commercial license controls to the extent it expressly conflicts
-with this License.
+A separate written commercial license controls to the extent it expressly
+conflicts with this License.
 
-9. TRADEMARKS
-
-This License does not grant permission to use the names "Data Relay Link",
-"DRLink", "Data Relay Labs", related logos, or other trademarks, except as
-reasonably necessary to identify the origin of the Software or to comply with
-attribution requirements.
-
-10. TERMINATION
+11. TERMINATION
 
 Your rights under this License terminate automatically if You materially breach
 this License and fail to cure the breach within 30 days after receiving written
 notice from the Licensor, except that deliberate Productization, resale,
-white-labeling, OEM/embedding, or operation of a prohibited Competitive Product
-or Service may be treated as immediately terminable where permitted by law.
+white-labeling, OEM/embedding, prohibited Managed Service operation, or use in a
+Competitive Product or Service may be treated as immediately terminable where
+permitted by law.
 
 Upon termination, You must stop exercising rights granted by this License.
 
-11. THIRD-PARTY COMPONENTS
+12. THIRD-PARTY COMPONENTS
 
 The Software may include or depend on third-party components governed by their
 own licenses. Those third-party licenses continue to apply to those components.
 Nothing in this License restricts rights that You independently receive under a
 third-party license.
 
-12. DISCLAIMER OF WARRANTY
+13. TRADEMARKS
+
+This License does not grant permission to use the names "Data Relay Link",
+"DRLink", "Data Relay Labs", related logos, or other trademarks, except as
+reasonably necessary to identify the origin of the Software or comply with
+attribution requirements.
+
+14. DISCLAIMER OF WARRANTY
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SOFTWARE IS PROVIDED "AS IS" AND
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR
 STATUTORY, INCLUDING WARRANTIES OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, OR THAT THE SOFTWARE WILL BE ERROR-FREE OR
-UNINTERRUPTED.
+FITNESS FOR A PARTICULAR PURPOSE, OR THAT THE SOFTWARE WILL BE ERROR-FREE,
+SECURE, OR UNINTERRUPTED.
 
-13. LIMITATION OF LIABILITY
+15. LIMITATION OF LIABILITY
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR AND CONTRIBUTORS WILL NOT
 BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR
-PUNITIVE DAMAGES, OR FOR LOSS OF PROFITS, REVENUE, DATA, GOODWILL, OR BUSINESS
-OPPORTUNITY, ARISING FROM OR RELATED TO THE SOFTWARE OR THIS LICENSE, EVEN IF
-ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+PUNITIVE DAMAGES, OR FOR LOSS OF PROFITS, REVENUE, DATA, GOODWILL, BUSINESS
+OPPORTUNITY, OR SERVICE AVAILABILITY, ARISING FROM OR RELATED TO THE SOFTWARE OR
+THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
 
-14. SEVERABILITY AND NO WAIVER
+16. SEVERABILITY AND NO WAIVER
 
 If any provision of this License is held unenforceable, the remaining
 provisions remain in effect to the maximum extent permitted by law. Failure to
 enforce a provision is not a waiver of that provision or any other provision.
 
-15. ACCEPTANCE
+17. ACCEPTANCE
 
 By using, copying, modifying, distributing, or otherwise exercising rights in
 the Software, You accept and agree to comply with this License.
 
 SUMMARY (NON-BINDING)
 
-Free / permitted:
+Commercial status:
+- Free Early Access
+- Source available
+- Not open source
+- No SLA; best-effort support
+
+Permitted without charge:
 - Personal use
-- Education and research
-- Evaluation and testing
+- Education, research, evaluation, and testing
 - Internal commercial use
-- Internal modification
+- Internal source modification for permitted use
 - Customer-owned deployment
 - Paid installation/integration/support for customer-owned deployments
 
 Not permitted without a separate commercial license:
-- Resale
+- Resale or sublicensing
 - OEM / embedding
 - White-labeling
 - Commercial redistribution
 - Derivative commercial products
-- SaaS / MSP / hosted Data Relay Link functionality
+- SaaS / MSP / hosted / managed Data Relay Link functionality
 - Competitive products or services
-- Removal of copyright / license / trademark notices
+- Removal of copyright, license, attribution, or trademark notices
+
+Planned after Early Access:
+- Commercial General Availability
+- Perpetual licensing
+- Optional or separately licensed maintenance/support
 
 The full terms above, not this summary, control.

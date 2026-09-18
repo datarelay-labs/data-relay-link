@@ -2,7 +2,7 @@
 
 **Lightweight, CLI-first, Zero-Touch remote access management on top of official FRP.**
 
-> **License — Source Available:** Data Relay Link is free for personal use and for an organization's own internal commercial operations. Internal source modifications are allowed. Resale, commercial redistribution, OEM/white-label use, competing or derivative commercial products, and SaaS/hosted/managed-service offerings require a separate written commercial license. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
+> **Commercial Status — Free Early Access:** Data Relay Link is currently available free of charge under the **Data Relay Link Early Access License 1.0**. It is source available, not open source. Personal use, evaluation, internal business use, permitted internal modification, and customer-owned deployments are allowed. Resale, OEM/white-label use, competing commercial products, and SaaS/MSP/hosted offerings require a separate written commercial license. Commercial General Availability is planned with a **perpetual-license** model. Early Access has no SLA and support is best effort. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
 
 FRP Auto Deploy helps you securely reach servers and services behind NAT or firewalls without building a full VPN, RMM platform, or custom FRP fork.
 
