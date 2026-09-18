@@ -121,6 +121,9 @@ def sha256sums_url_for_installer(installer_url):
     installer = str(installer_url or '').strip()
     if not installer.lower().startswith('https://'):
         raise ValueError('installer URL must be HTTPS')
+    marker = '/artifacts/'
+    if marker in installer:
+        return installer.split(marker, 1)[0] + '/artifacts/SHA256SUMS'
     for suffix in ('/dist/bootstrap-client.ps1', '/dist/bootstrap-client.sh'):
         if installer.endswith(suffix):
             return installer[: -len(suffix)] + '/SHA256SUMS'
@@ -134,13 +137,15 @@ def sha256sums_url_for_installer(installer_url):
 def linux_installer_sum_names(installer_url):
     """Return candidate SHA256SUMS pathnames for the Linux installer artifact."""
     installer = str(installer_url or '').strip()
+    if installer.endswith('/artifacts/agent/bootstrap-client.sh'):
+        return ('agent/bootstrap-client.sh',)
     if installer.endswith('/dist/bootstrap-client.sh'):
         return ('dist/bootstrap-client.sh',)
     name = installer.rsplit('/', 1)[-1]
     if not name:
         raise ValueError('Linux installer URL must include a filename')
     if name == 'bootstrap-client.sh':
-        return ('dist/bootstrap-client.sh', 'bootstrap-client.sh')
+        return ('dist/bootstrap-client.sh', 'bootstrap-client.sh', 'agent/bootstrap-client.sh')
     return (name,)
 
 
@@ -227,7 +232,7 @@ def render_short_url_windows_bootstrap_script(
         '  (New-Object Net.WebClient).DownloadFile(%s, $installer)' % powershell_quote(installer),
         '  $want = $null',
         '  Get-Content -LiteralPath $sums | ForEach-Object {',
-        "    if ($_ -match '^([0-9a-fA-F]{64})\\s+dist/bootstrap-client\\.ps1\\s*$') {",
+        "    if ($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$') {",
         '      if ($want) { throw "duplicate bootstrap-client.ps1 hash" }',
         '      $want = $Matches[1].ToLowerInvariant()',
         '    }',

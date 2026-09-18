@@ -38,6 +38,7 @@ files=[
  'lib/frp_control_locks.py',
  'lib/frp_server_config.py',
  'lib/frp_zero_touch.py',
+ 'lib/drlink_qualified_artifacts.py',
  'lib/server-project-files.manifest',
  'lib/frp-doctor-common.sh',
  'lib/frp_doctor.py',
@@ -121,21 +122,22 @@ files=[
  'tools/frpctl',
 ]
 
-lines=['#!/usr/bin/env bash','set -euo pipefail','TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT']
-for rel in files:
-    data=base64.b64encode(bundle_payload(rel)).decode()
-    parent=str(Path(rel).parent)
-    if parent!='.': lines.append(f'mkdir -p "$TMP/{parent}"')
-    lines.append(f"base64 -d >\"$TMP/{rel}\" <<'B64'")
-    for i in range(0,len(data),76): lines.append(data[i:i+76])
-    lines.append('B64')
-for rel in files:
-    if rel.endswith('.sh') or rel.startswith('tools/') or rel.endswith('.py'):
-        lines.append(f'chmod +x "$TMP/{rel}"')
-# Preserve exact-SHA (or tag) install provenance for Zero-Touch installer URLs.
-# FRP_EXPECTED_SOURCE_REF wins; otherwise derive from FRP_BOOTSTRAP_URL or a
-# best-effort scan of this process group for the official raw bootstrap URL.
-lines.append('''if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+def write_server_bundle(rels):
+    out=['#!/usr/bin/env bash','set -euo pipefail','TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT']
+    for rel in rels:
+        data=base64.b64encode(bundle_payload(rel)).decode()
+        parent=str(Path(rel).parent)
+        if parent!='.': out.append(f'mkdir -p "$TMP/{parent}"')
+        out.append(f"base64 -d >\"$TMP/{rel}\" <<'B64'")
+        for i in range(0,len(data),76): out.append(data[i:i+76])
+        out.append('B64')
+    for rel in rels:
+        if rel.endswith('.sh') or rel.startswith('tools/') or rel.endswith('.py'):
+            out.append(f'chmod +x "$TMP/{rel}"')
+    return out
+
+# Client bundles are generated first so the server payload can include them.
+SERVER_BOOTSTRAP_REF_SNIPPET = r'''if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
   _frp_bootstrap_ref=""
   if [[ -n "${FRP_BOOTSTRAP_URL:-}" ]]; then
     _frp_bootstrap_ref="$(python3 -c '
@@ -187,10 +189,7 @@ PY
     export FRP_EXPECTED_SOURCE_REF="$_frp_bootstrap_ref"
   fi
   unset _frp_bootstrap_ref
-fi''')
-lines.append('exec "$TMP/install-server.sh" "$@"')
-(dist/'bootstrap-server.sh').write_text('\n'.join(lines)+'\n')
-(dist/'bootstrap-server.sh').chmod(0o755)
+fi'''
 
 client_files=[
  'VERSION',
@@ -200,6 +199,7 @@ client_files=[
  'lib/frp-common.sh',
  'lib/frp-macos.sh',
  'lib/frp-client-common.sh',
+ 'lib/drlink_qualified_artifacts.py',
  'lib/frp_mgmt_auth.py',
  'lib/frp_health_check.py',
  'lib/frp-doctor-common.sh',
@@ -214,6 +214,9 @@ client_files=[
  'lib/drlink_ai_agent.py',
  'lib/drlink_control_db.py',
  'lib/drlink_control_plane.py',
+ 'lib/drlink_mgmt_sync.py',
+ 'lib/drlink_v24.py',
+ 'lib/drlink_v24_runtime.py',
  'lib/frp-role-ownership.sh',
  'tools/frp-client',
  'tools/drlink',
@@ -283,6 +286,17 @@ ps_lines.extend([
 (dist/'bootstrap-client.ps1').write_text(
     '\n'.join(ps_lines)+'\n', encoding='utf-8'
 )
+
+server_rels = list(files)
+for path in sorted((root / 'third_party' / 'frp').rglob('*')):
+    if path.is_file():
+        server_rels.append(path.relative_to(root).as_posix())
+server_rels.extend(['dist/bootstrap-client.sh', 'dist/bootstrap-client.ps1'])
+lines = write_server_bundle(server_rels)
+lines.append(SERVER_BOOTSTRAP_REF_SNIPPET)
+lines.append('exec "$TMP/install-server.sh" "$@"')
+(dist/'bootstrap-server.sh').write_text('\n'.join(lines)+'\n')
+(dist/'bootstrap-server.sh').chmod(0o755)
 
 for src,dst in [('uninstall-client.sh','uninstall-client.sh'),('uninstall-server.sh','uninstall-server.sh')]:
     (dist/dst).write_bytes((root/src).read_bytes())

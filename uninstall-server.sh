@@ -565,7 +565,7 @@ else
   libdir="$(frp_u_path /usr/local/lib/drlink)"
   if [[ -d "$libdir" && ! -L "$libdir" ]]; then
     for f in frp-port-allocator.py frp-access-plugin.py frp-egress-gateway.py drlink-tcp-egress.py frp_access_control.py frp_egress_control.py frp_egress_runtime.py frp_pki.py frp_frontend.py frp_client_registry.py \
-      frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py \
+      frp_enrollment_lifecycle.py frp_audit.py frp_zero_touch.py drlink_qualified_artifacts.py \
       frp_install_txn.py frp_health_check.py frp_service_profiles.py \
       frp-server-upgrade.sh frp_project_files.py frp_control_locks.py frp_server_config.py \
       frp-role-ownership.sh \
@@ -590,6 +590,7 @@ if [[ "$CLIENT_PRESENT" != "1" ]]; then
 fi
 frp_u_rm_file "$(frp_u_path /etc/drlink/frontend.conf)"
 frp_u_remove_legacy_sbin_wrappers "$CLIENT_PRESENT"
+frp_u_safe_rm_rf "$(frp_u_path /usr/local/share/drlink/artifacts)"
 
 libdir="$(frp_u_path /usr/local/lib/drlink)"
 if [[ -L "$libdir" ]]; then

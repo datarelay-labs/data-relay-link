@@ -78,6 +78,7 @@ project usr/local/lib/drlink/uninstall-server.sh 0755 uninstall-server.sh bash
 project usr/local/lib/drlink/frp_control_locks.py 0644 lib/frp_control_locks.py python
 project usr/local/lib/drlink/frp_server_config.py 0644 lib/frp_server_config.py python
 project usr/local/lib/drlink/frp_zero_touch.py 0644 lib/frp_zero_touch.py python
+project usr/local/lib/drlink/drlink_qualified_artifacts.py 0644 lib/drlink_qualified_artifacts.py python
 project usr/local/lib/drlink/server-project-files.manifest 0644 lib/server-project-files.manifest none
 project usr/local/lib/drlink/release-manifest.json 0644 release-manifest.json none
 optional usr/local/lib/drlink/SHA256SUMS 0644 SHA256SUMS none

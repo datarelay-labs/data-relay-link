@@ -16,6 +16,7 @@ FRP_ALLOCATOR_RUNTIME_HELPERS=(
   drlink_control_plane.py
   drlink_mgmt_sync.py
   drlink_upgrade_reconcile.py
+  drlink_qualified_artifacts.py
 )
 _FRP_UPGRADE_MUTATION_STARTED=0
 _FRP_UPGRADE_ROLLBACK_DONE=0
@@ -46,6 +47,37 @@ frp_server_upgrade_destinations() {
     extra+=(--source "$BASE_DIR")
   fi
   python3 "$(_frp_project_files_py)" destinations "${extra[@]}"
+}
+
+frp_install_qualified_artifacts_from() {
+  local source="${1:-${BASE_DIR:-}}"
+  local dest agent_linux agent_windows py
+  dest="$(frp_server_fs /usr/local/share/drlink/artifacts)"
+  py="${source}/lib/drlink_qualified_artifacts.py"
+  if [[ ! -f "$py" ]]; then
+    py="$(frp_server_fs /usr/local/lib/drlink/drlink_qualified_artifacts.py)"
+  fi
+  agent_linux=""
+  agent_windows=""
+  if [[ -f "${source}/dist/bootstrap-client.sh" ]]; then
+    agent_linux="${source}/dist/bootstrap-client.sh"
+  elif [[ -f "${source}/artifacts/agent/bootstrap-client.sh" ]]; then
+    agent_linux="${source}/artifacts/agent/bootstrap-client.sh"
+  fi
+  if [[ -f "${source}/dist/bootstrap-client.ps1" ]]; then
+    agent_windows="${source}/dist/bootstrap-client.ps1"
+  elif [[ -f "${source}/artifacts/agent/bootstrap-client.ps1" ]]; then
+    agent_windows="${source}/artifacts/agent/bootstrap-client.ps1"
+  fi
+  if [[ ! -f "$py" || -z "$agent_linux" || -z "$agent_windows" ]]; then
+    python3 "${py:-$(frp_qualified_artifacts_py)}" missing-error \
+      --platform linux --architecture any >&2 || true
+    echo "No changes were applied." >&2
+    return 1
+  fi
+  python3 "$py" install \
+    --source "$source" --dest "$dest" \
+    --agent-linux "$agent_linux" --agent-windows "$agent_windows"
 }
 
 frp_server_upgrade_is_single443() {
@@ -967,6 +999,11 @@ frp_server_apply_project_upgrade() {
   _FRP_UPGRADE_MUTATION_STARTED=1
 
   if ! frp_server_upgrade_install_staged "$staged"; then
+    frp_server_upgrade_rollback "$snapshot"
+    frp_emit_failure_class FILE_COMMIT_FAILED
+    return 1
+  fi
+  if ! frp_install_qualified_artifacts_from "$source"; then
     frp_server_upgrade_rollback "$snapshot"
     frp_emit_failure_class FILE_COMMIT_FAILED
     return 1

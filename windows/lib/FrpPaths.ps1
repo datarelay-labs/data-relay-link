@@ -115,7 +115,46 @@ function Get-FrpWindowsAmd64Sha256 {
 function Get-FrpWindowsAmd64Url {
     $ver = Get-FrpUpstreamVersion
     if ($env:FRP_WINDOWS_DOWNLOAD_URL -and $env:FRP_WINDOWS_DOWNLOAD_URL.Trim().Length -gt 0) {
-        return $env:FRP_WINDOWS_DOWNLOAD_URL.Trim()
+        $url = $env:FRP_WINDOWS_DOWNLOAD_URL.Trim()
+        if ($url -match 'github\.com/fatedier' -or $url -match 'frp/releases/download') {
+            throw @"
+ERROR:
+Required qualified artifact is not available on this DRLink Server.
+
+Required:
+  Data Relay Link Agent 2.4.0
+  FRP $ver
+  windows/amd64
+
+Reinstall or update the DRLink Server package containing
+the required qualified artifacts.
+
+No changes were applied.
+"@
+        }
+        return $url
     }
-    return "https://github.com/fatedier/frp/releases/download/v${ver}/frp_${ver}_windows_amd64.zip"
+    $allocator = ''
+    if ($env:FRP_ALLOCATOR_URL -and $env:FRP_ALLOCATOR_URL.Trim().Length -gt 0) {
+        $allocator = $env:FRP_ALLOCATOR_URL.Trim()
+    }
+    if ($allocator -match '^https://') {
+        $uri = [Uri]$allocator
+        $origin = '{0}://{1}' -f $uri.Scheme, $uri.Authority
+        return "$origin/artifacts/frp/$ver/frp_${ver}_windows_amd64.zip"
+    }
+    throw @"
+ERROR:
+Required qualified artifact is not available on this DRLink Server.
+
+Required:
+  Data Relay Link Agent 2.4.0
+  FRP $ver
+  windows/amd64
+
+Reinstall or update the DRLink Server package containing
+the required qualified artifacts.
+
+No changes were applied.
+"@
 }

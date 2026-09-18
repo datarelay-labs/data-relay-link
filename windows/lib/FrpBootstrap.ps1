@@ -76,6 +76,23 @@ function Install-FrpWindowsBinary {
     if ($DownloadUrl -notmatch '^https://') {
         throw 'ERROR: FRP download URL must be https://'
     }
+    if ($DownloadUrl -match 'github\.com/fatedier' -or $DownloadUrl -match '/frp/releases/download/') {
+        $ver = Get-FrpUpstreamVersion
+        throw @"
+ERROR:
+Required qualified artifact is not available on this DRLink Server.
+
+Required:
+  Data Relay Link Agent 2.4.0
+  FRP $ver
+  windows/amd64
+
+Reinstall or update the DRLink Server package containing
+the required qualified artifacts.
+
+No changes were applied.
+"@
+    }
 
     $binDir = Get-FrpBinDir
     $dest = Get-FrpFrpcPath
@@ -86,18 +103,7 @@ function Install-FrpWindowsBinary {
     $tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) ("frp-win-" + [guid]::NewGuid().ToString('N') + '.zip')
     try {
         Write-Host 'Downloading FRP Windows amd64 package...'
-        if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-            $p = Start-Process -FilePath 'curl.exe' -ArgumentList @(
-                '--fail', '--silent', '--show-error', '--location', '--proto', '=https',
-                '-o', $tmpZip, $DownloadUrl
-            ) -Wait -PassThru -NoNewWindow
-            if ($p.ExitCode -ne 0) { throw 'ERROR: FRP download failed' }
-        } else {
-            # PS 5.1 / 7 compatible
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            $wc = New-Object System.Net.WebClient
-            try { $wc.DownloadFile($DownloadUrl, $tmpZip) } finally { $wc.Dispose() }
-        }
+        Invoke-FrpHttpsDownload -Url $DownloadUrl -DestinationPath $tmpZip -TimeoutSec 180
         $actual = Get-FrpSha256HexOfFile -Path $tmpZip
         if ($actual -ne $expected) {
             throw 'ERROR: FRP package SHA256 mismatch'

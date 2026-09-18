@@ -328,6 +328,29 @@ def _load_zero_touch():
 ZT = _load_zero_touch()
 
 
+def _load_qualified_artifacts():
+    candidates = [
+        Path(__file__).resolve().parent.parent / 'lib' / 'drlink_qualified_artifacts.py',
+        Path('/usr/local/lib/drlink/drlink_qualified_artifacts.py'),
+    ]
+    root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
+    if root:
+        candidates.insert(0, Path(root) / 'usr/local/lib/drlink' / 'drlink_qualified_artifacts.py')
+        candidates.insert(0, Path(root) / 'lib' / 'drlink_qualified_artifacts.py')
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(
+                'drlink_qualified_artifacts', path
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+QA = _load_qualified_artifacts()
+
+
 def _load_pki():
     candidates = [
         Path(__file__).resolve().parent.parent / 'lib' / 'frp_pki.py',
@@ -1244,7 +1267,6 @@ def validate_registry_invariants(state, cfg=None):
             if port in seen_ports and seen_ports[port][0] != 'reserved':
                 raise RegistrySchemaError('REGISTRY_INVALID: duplicate public port ownership')
             seen_ports[port] = (mid, key)
-            pool_class = str(svc.get('pool_class') or '').strip().lower()
             in_service_range = (
                 port_start is not None
                 and port_end is not None
@@ -1256,13 +1278,12 @@ def validate_registry_invariants(state, cfg=None):
                     in_fixed_range = bool(INFRA.is_tcp_relay_port(port, cfg))
                 except Exception:
                     in_fixed_range = False
-            if pool_class == 'fixed-tcp' or svc.get('v24_remote_service'):
-                if not (in_service_range or in_fixed_range):
-                    raise RegistrySchemaError(
-                        'REGISTRY_INVALID: allocated port outside configured range'
-                    )
-            elif port_start is not None and port_end is not None:
-                if port < port_start or port > port_end:
+            elif 6200 <= port <= 6299:
+                in_fixed_range = True
+            # Published service pool or dedicated Fixed TCP pool (including
+            # legacy untagged Custom TCP records that already hold 6200-6299).
+            if not (in_service_range or in_fixed_range):
+                if port_start is not None and port_end is not None:
                     raise RegistrySchemaError(
                         'REGISTRY_INVALID: allocated port outside configured range'
                     )
@@ -2982,6 +3003,30 @@ def make_handler(allocator):
             self._send_bootstrap_headers(200, content_type, script)
             return True
 
+        def _handle_artifact_get(self, path):
+            if not path.startswith('/artifacts'):
+                return False
+            if QA is None:
+                body = b'Required qualified artifact is not available on this DRLink Server.\n'
+                self._send_bootstrap_headers(503, 'text/plain; charset=utf-8', body.decode('utf-8'))
+                return True
+            root = QA.installed_root()
+            try:
+                file_path = QA.resolve_http_path(root, path)
+            except QA.ArtifactError:
+                msg = QA.missing_artifact_error()
+                self._send_bootstrap_headers(404, 'text/plain; charset=utf-8', msg)
+                return True
+            data = file_path.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', QA.content_type_for(file_path))
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(data)
+            return True
+
         def _with_slot(self, fn):
             # Connection-level bounding is enforced by BoundedThreadingMixIn
             # before the worker thread starts. A second semaphore here deadlocks.
@@ -3004,6 +3049,8 @@ def make_handler(allocator):
                 allocator.reload_cfg_if_changed()
                 path = self._request_path()
                 if self._handle_short_url_get(path):
+                    return
+                if self._handle_artifact_get(path):
                     return
                 if path == '/healthz':
                     try:

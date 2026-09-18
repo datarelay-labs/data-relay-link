@@ -1,5 +1,8 @@
 *.zip
 *.tar.gz
+# Qualified upstream FRP archives vendored for Server-local distribution.
+!third_party/frp/**/*.tar.gz
+!third_party/frp/**/*.zip
 __pycache__/
 *.pyc
 .env

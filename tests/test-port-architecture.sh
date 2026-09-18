@@ -272,7 +272,7 @@ assert 'proxy_ssl_server_name on' in conf
 assert 'proxy_ssl_name 203.0.113.10;' not in conf
 assert 'ssl_certificate /etc/drlink/pki/server.crt' in conf
 assert 'listen 443 ssl;' in conf
-assert 'ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+' in conf
+assert 'ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+|artifacts(?:/.*)?' in conf
 assert 'return 404;' in conf
 # Catch-all must not proxy arbitrary paths to a localhost backend.
 idx = conf.find('location / {')

@@ -731,29 +731,51 @@ frp_client_main() {
 
   if [[ "${FRP_SKIP_DOWNLOAD:-}" != "1" ]]; then
     ARCHIVE="$TMPDIR/frp.tar.gz"
-    URL="$(frp_release_url "$FRP_VERSION" "$FRP_ARCH")"
-    echo "Downloading FRP ${FRP_VERSION} ($(frp_os)/${FRP_ARCH}) ..."
-    if [[ "${FRP_INSTALL_HOOK_DOWNLOAD_FAIL:-}" == "1" ]]; then
-      echo "ERROR: failed to download FRP archive" >&2
+    if [[ -z "${ALLOCATOR_URL:-}" ]]; then
+      frp_qualified_artifact_missing "$(frp_os)" "$FRP_ARCH"
       frp_emit_failure_class DOWNLOAD_FAILED
       exit 1
     fi
-    if ! curl -fL --retry 3 -o "$ARCHIVE" "$URL"; then
-      echo "ERROR: failed to download FRP archive" >&2
+    URL="$(frp_server_local_frp_url "$ALLOCATOR_URL" "$(frp_os)" "$FRP_ARCH")" || {
+      frp_emit_failure_class DOWNLOAD_FAILED
+      exit 1
+    }
+    if frp_is_public_frp_download_url "$URL"; then
+      frp_qualified_artifact_missing "$(frp_os)" "$FRP_ARCH"
+      frp_emit_failure_class DOWNLOAD_FAILED
+      exit 1
+    fi
+    echo "Installing qualified FRP ${FRP_VERSION} ($(frp_os)/${FRP_ARCH}) from DRLink Server ..."
+    if [[ "${FRP_INSTALL_HOOK_DOWNLOAD_FAIL:-}" == "1" ]]; then
+      frp_qualified_artifact_missing "$(frp_os)" "$FRP_ARCH"
+      frp_emit_failure_class DOWNLOAD_FAILED
+      exit 1
+    fi
+    if ! frp_allocator_curl -fL --proto '=https' --tlsv1.2 --retry 3 -o "$ARCHIVE" "$URL"; then
+      frp_qualified_artifact_missing "$(frp_os)" "$FRP_ARCH"
       frp_emit_failure_class DOWNLOAD_FAILED
       exit 1
     fi
     echo "Verifying checksum ..."
     if frp_is_darwin; then
       frp_macos_sha256_check "$EXPECTED_SHA" "$ARCHIVE" || {
+        python3 "$(frp_qualified_artifacts_py)" verify \
+          --file "$ARCHIVE" --sha256 "$EXPECTED_SHA" --kind FRP \
+          --platform "$(frp_os)" --architecture "$FRP_ARCH" >/dev/null 2>&1 || true
+        echo "ERROR:" >&2
+        echo "Qualified FRP artifact failed verification." >&2
+        echo "No changes were applied." >&2
         frp_emit_failure_class INTEGRITY_FAILED
         exit 1
       }
     else
-      printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | sha256sum -c - || {
+      if ! printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | sha256sum -c -; then
+        echo "ERROR:" >&2
+        echo "Qualified FRP artifact failed verification." >&2
+        echo "No changes were applied." >&2
         frp_emit_failure_class INTEGRITY_FAILED
         exit 1
-      }
+      fi
     fi
     extracted="$(frp_extract_frp_member "$ARCHIVE" "$TMPDIR" frpc)" || {
       frp_emit_failure_class STAGING_FAILED

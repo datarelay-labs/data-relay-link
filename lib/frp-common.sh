@@ -250,6 +250,50 @@ frp_default_windows_client_installer_url() {
   frp_github_raw_url dist/bootstrap-client.ps1
 }
 
+frp_qualified_artifacts_py() {
+  if [[ -n "${_FRP_COMMON_DIR:-}" && -f "${_FRP_COMMON_DIR}/drlink_qualified_artifacts.py" ]]; then
+    printf '%s' "${_FRP_COMMON_DIR}/drlink_qualified_artifacts.py"
+  elif [[ -f /usr/local/lib/drlink/drlink_qualified_artifacts.py ]]; then
+    printf '%s' /usr/local/lib/drlink/drlink_qualified_artifacts.py
+  else
+    printf '%s' "${_FRP_COMMON_DIR}/drlink_qualified_artifacts.py"
+  fi
+}
+
+frp_is_public_github_installer_url() {
+  local url="${1:-}"
+  case "$url" in
+    https://raw.githubusercontent.com/*/*/*/dist/bootstrap-client.sh) return 0 ;;
+    https://raw.githubusercontent.com/*/*/*/dist/bootstrap-client.ps1) return 0 ;;
+    https://github.com/fatedier/frp/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_server_local_agent_url() {
+  local allocator="${1:-}" platform="${2:-linux}"
+  python3 "$(frp_qualified_artifacts_py)" agent-url \
+    --allocator-url "$allocator" --platform "$platform"
+}
+
+frp_server_local_frp_url() {
+  local allocator="${1:-}" os_name="${2:-}" arch="${3:-}"
+  python3 "$(frp_qualified_artifacts_py)" frp-url \
+    --allocator-url "$allocator" --platform "$os_name" --architecture "$arch"
+}
+
+frp_server_local_sha256sums_url() {
+  python3 "$(frp_qualified_artifacts_py)" sha256sums-url --allocator-url "${1:-}"
+}
+
+frp_is_public_frp_download_url() {
+  local url="${1:-}"
+  case "$url" in
+    *github.com/fatedier*|*://github.com/*/frp/releases/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 frp_default_client_update_url() {
   frp_github_raw_url dist/bootstrap-client.sh
 }
@@ -1015,6 +1059,8 @@ frp_checksum_for() {
 }
 
 frp_release_url() {
+  # Qualification/archive identity only. Runtime install must use
+  # frp_server_local_frp_url (DRLink Server), never this upstream URL.
   local version="$1" arch="$2" os="${3:-$(frp_os)}"
   case "$os" in
     linux|darwin) ;;

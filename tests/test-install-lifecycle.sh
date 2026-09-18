@@ -277,6 +277,18 @@ assert cfg.get('deployment_mode')=='direct'
 assert cfg.get('frp_transport')=='tcp'
 assert cfg.get('listen_host')=='0.0.0.0'
 PY
+[[ -f "$SRV/usr/local/share/drlink/artifacts/manifest.json" ]] || fail "qualified artifact manifest missing"
+[[ -f "$SRV/usr/local/share/drlink/artifacts/SHA256SUMS" ]] || fail "qualified artifact SHA256SUMS missing"
+[[ -f "$SRV/usr/local/share/drlink/artifacts/agent/bootstrap-client.sh" ]] || fail "agent payload missing"
+[[ -f "$SRV/usr/local/share/drlink/artifacts/frp/0.71.0/frp_0.71.0_linux_amd64.tar.gz" ]] || fail "FRP amd64 artifact missing"
+python3 - "$SRV/etc/drlink/config.json" <<'PY' || fail "server-local installer URL"
+import json,sys
+from pathlib import Path
+cfg=json.loads(Path(sys.argv[1]).read_text())
+assert cfg['client_installer_url']=='https://203.0.113.10:6099/artifacts/agent/bootstrap-client.sh', cfg['client_installer_url']
+assert cfg['windows_client_installer_url']=='https://203.0.113.10:6099/artifacts/agent/bootstrap-client.ps1'
+assert 'github.com/fatedier' not in cfg['client_installer_url']
+PY
 [[ ! -f "$SRV/var/lib/drlink/server-update-pending.json" ]] || fail "stale txn marker after success"
 [[ -d "$SRV/var/log/drlink" ]] || fail "fresh install missing /var/log/drlink"
 assert_project_state_dir_mode "$SRV/var/log/drlink"

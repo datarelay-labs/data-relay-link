@@ -499,3 +499,51 @@ function Invoke-FrpHttpsJson {
         if ($pin.Ca) { $pin.Ca.Dispose() }
     }
 }
+
+function Invoke-FrpHttpsDownload {
+    <#
+    .SYNOPSIS
+      Download a binary artifact from DRLink Server using the pinned allocator CA.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [string]$CaPath,
+        [int]$TimeoutSec = 180
+    )
+    if ($Url -notmatch '^https://') {
+        throw 'ERROR: only https:// URLs are supported'
+    }
+    if (-not $CaPath) { $CaPath = Get-FrpAllocatorCaPath }
+    if (-not (Test-Path -LiteralPath $CaPath)) {
+        throw "ERROR: trusted allocator CA is missing ($CaPath)"
+    }
+    $expectedHost = $null
+    try { $expectedHost = ([Uri]$Url).Host } catch { }
+    $pin = New-FrpPinnedServerCertificateValidator -CaPath $CaPath -ExpectedHost $expectedHost
+    $previous = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+    try {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $pin.Callback
+        $req = [System.Net.HttpWebRequest]::Create($Url)
+        $req.Method = 'GET'
+        $req.Timeout = $TimeoutSec * 1000
+        $req.ReadWriteTimeout = $TimeoutSec * 1000
+        $req.KeepAlive = $false
+        $req.ProtocolVersion = [System.Net.HttpVersion]::Version11
+        $req.ConnectionGroupName = ('frp-art-' + [guid]::NewGuid().ToString('N'))
+        try { $req.ServicePoint.Expect100Continue = $false } catch { }
+        $resp = $req.GetResponse()
+        try {
+            $src = $resp.GetResponseStream()
+            $fs = [System.IO.File]::Create($DestinationPath)
+            try { $src.CopyTo($fs) } finally { $fs.Dispose(); $src.Close() }
+        } finally {
+            $resp.Close()
+        }
+    } catch [System.Net.WebException] {
+        throw 'ERROR: FRP download failed'
+    } finally {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
+        if ($pin.Ca) { $pin.Ca.Dispose() }
+    }
+}

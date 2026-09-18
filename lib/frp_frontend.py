@@ -339,7 +339,7 @@ http {
         # Allocator backend is always loopback HTTPS. Verify DNS:localhost
         # (present on every project leaf) because nginx proxy_ssl_verify does
         # not reliably match iPAddress SANs such as the public IP.
-        location ~ ^/(ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+)$ {
+        location ~ ^/(ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+|artifacts(?:/.*)?)$ {
             proxy_pass https://127.0.0.1:%s;
             proxy_http_version 1.1;
             proxy_ssl_trusted_certificate %s;
@@ -351,9 +351,10 @@ http {
             proxy_set_header X-Forwarded-Proto https;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_read_timeout 60s;
-            proxy_send_timeout 60s;
+            proxy_read_timeout 180s;
+            proxy_send_timeout 180s;
             proxy_connect_timeout 10s;
+            proxy_buffering off;
         }
 %s
         location / {

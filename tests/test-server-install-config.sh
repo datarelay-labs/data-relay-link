@@ -240,8 +240,9 @@ pass "explicit env overrides existing config"
 legacy_owner='RickLee-kr'
 legacy_repo='frp-auto-deploy'
 LEGACY_INSTALLER_URL="https://raw.githubusercontent.com/${legacy_owner}/${legacy_repo}/main/dist/bootstrap-client.sh"
-# Stable releases must pin an immutable tag/commit URL, never mutable main.
-CANONICAL_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.sh"
+# Stable managed-host install source is the DRLink Server artifact tree.
+CANONICAL_INSTALLER_URL="https://203.0.113.10:6099/artifacts/agent/bootstrap-client.sh"
+CANONICAL_WINDOWS_URL="https://203.0.113.10:6099/artifacts/agent/bootstrap-client.ps1"
 OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh'
 
 # Known obsolete project installer URL is migrated on a safe installer rerun.
@@ -293,7 +294,7 @@ export FRP_SERVER_CONFIG="$EXISTING_FORMER"
 load_existing_server_config
 resolve_server_settings
 [[ "$CLIENT_INSTALLER_URL" == "$CANONICAL_INSTALLER_URL" ]] || fail "former xdr-labs installer URL not migrated"
-[[ "$WINDOWS_CLIENT_INSTALLER_URL" == "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.ps1" ]] \
+[[ "$WINDOWS_CLIENT_INSTALLER_URL" == "$CANONICAL_WINDOWS_URL" ]] \
   || fail "former xdr-labs windows installer URL not migrated"
 pass "former xdr-labs installer URL migrated"
 
@@ -321,7 +322,7 @@ export FRP_SERVER_CONFIG="$EXISTING_RENAMED"
 load_existing_server_config
 resolve_server_settings
 [[ "$CLIENT_INSTALLER_URL" == "$CANONICAL_INSTALLER_URL" ]] || fail "renamed frp-auto-deploy installer URL not migrated"
-[[ "$WINDOWS_CLIENT_INSTALLER_URL" == "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v${PROJECT_VERSION}/dist/bootstrap-client.ps1" ]] \
+[[ "$WINDOWS_CLIENT_INSTALLER_URL" == "$CANONICAL_WINDOWS_URL" ]] \
   || fail "renamed frp-auto-deploy windows installer URL not migrated"
 pass "former datarelay-labs/frp-auto-deploy installer URL migrated"
 

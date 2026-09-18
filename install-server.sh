@@ -61,6 +61,7 @@ for f in \
   "$BASE_DIR/lib/frp_bounded_server.py" \
   "$BASE_DIR/lib/frp_public_suffix.py" \
   "$BASE_DIR/lib/frp_policy_fingerprint.py" \
+  "$BASE_DIR/lib/drlink_qualified_artifacts.py" \
   "$BASE_DIR/lib/data/public_suffix_list.dat" \
   "$BASE_DIR/release-manifest.json" \
   "$BASE_DIR/tools/frp-create-client" \
@@ -163,6 +164,48 @@ frp_server_config_path() {
   else
     frp_server_fs /etc/drlink/config.json
   fi
+}
+
+frp_apply_server_local_installer_urls() {
+  local linux_url windows_url
+  linux_url="$(frp_server_local_agent_url "$FRP_ALLOCATOR_PUBLIC_URL" linux)" || {
+    frp_qualified_artifact_missing linux any
+    return 1
+  }
+  windows_url="$(frp_server_local_agent_url "$FRP_ALLOCATOR_PUBLIC_URL" windows)" || {
+    frp_qualified_artifact_missing windows amd64
+    return 1
+  }
+  if [[ -z "${FRP_CLIENT_INSTALLER_URL:-}" ]]; then
+    if [[ -z "${CLIENT_INSTALLER_URL:-}" ]] || \
+       frp_is_public_github_installer_url "$CLIENT_INSTALLER_URL" || \
+       frp_is_former_product_installer_url "$CLIENT_INSTALLER_URL" || \
+       [[ "$CLIENT_INSTALLER_URL" == "$(frp_legacy_client_installer_url)" ]] || \
+       frp_is_official_main_installer_url "$CLIENT_INSTALLER_URL" || \
+       [[ "$CLIENT_INSTALLER_URL" == "$(frp_default_client_installer_url)" ]]; then
+      CLIENT_INSTALLER_URL="$linux_url"
+    fi
+  fi
+  if [[ -z "${FRP_WINDOWS_CLIENT_INSTALLER_URL:-}" ]]; then
+    if [[ -z "${WINDOWS_CLIENT_INSTALLER_URL:-}" ]] || \
+       frp_is_public_github_installer_url "$WINDOWS_CLIENT_INSTALLER_URL" || \
+       frp_is_former_product_installer_url "$WINDOWS_CLIENT_INSTALLER_URL" || \
+       [[ "$WINDOWS_CLIENT_INSTALLER_URL" == "$(frp_default_windows_client_installer_url)" ]]; then
+      WINDOWS_CLIENT_INSTALLER_URL="$windows_url"
+    fi
+  fi
+  if ! frp_validate_https_url "$CLIENT_INSTALLER_URL"; then
+    echo "ERROR: client_installer_url must be a valid https:// URL" >&2
+    exit 1
+  fi
+  if ! frp_validate_https_url "$WINDOWS_CLIENT_INSTALLER_URL"; then
+    echo "ERROR: windows_client_installer_url must be a valid https:// URL" >&2
+    exit 1
+  fi
+}
+
+frp_server_install_qualified_artifacts() {
+  frp_install_qualified_artifacts_from "$BASE_DIR"
 }
 
 frp_valid_https_url() {
@@ -1312,6 +1355,10 @@ PY
     echo "WARNING: FRP control and allocator public ports are both ${FRP_CONTROL_PUBLIC_PORT}." >&2
     echo "WARNING: two distinct raw TCP services cannot normally share the same public IP:port without an external proxy." >&2
   fi
+
+  # Managed Hosts consume Agent + FRP from this Server. Public GitHub URLs are
+  # not the runtime install source. Explicit FRP_*_INSTALLER_URL env wins.
+  frp_apply_server_local_installer_urls
 }
 
 write_server_config() {
@@ -2137,7 +2184,7 @@ frp_server_health_tcp_egress() {
 }
 
 frp_server_install_frp_binary() {
-  local dest archive url extracted
+  local dest archive extracted
   dest="$(frp_server_fs /usr/local/bin/frps)"
   if [[ "${FRP_INSTALL_HOOK_DOWNLOAD_FAIL:-}" == "1" ]]; then
     echo "ERROR: failed to download FRP archive" >&2
@@ -2173,14 +2220,13 @@ frp_server_install_frp_binary() {
     fi
   fi
 
-  archive="${TMPDIR}/frp.tar.gz"
-  url="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
-  echo "Downloading official FRP ${FRP_VERSION} (${FRP_ARCH}) ..."
-  if ! curl -fL --retry 3 -o "$archive" "$url"; then
-    echo "ERROR: failed to download FRP archive" >&2
+  archive="$(frp_server_fs /usr/local/share/drlink/artifacts)/frp/${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
+  if [[ ! -f "$archive" ]]; then
+    frp_qualified_artifact_missing linux "$FRP_ARCH"
     frp_emit_failure_class DOWNLOAD_FAILED
     return 1
   fi
+  echo "Installing qualified FRP ${FRP_VERSION} (${FRP_ARCH}) from Server-local artifacts ..."
   printf '%s  %s\n' "$EXPECTED_SHA" "$archive" | sha256sum -c - || {
     frp_emit_failure_class INTEGRITY_FAILED
     return 1
@@ -2325,6 +2371,12 @@ frp_server_main() {
   frp_server_begin_tmp
   frp_txn_write install commit "${previous_project}" "${PROJECT_VERSION}"
 
+  if ! frp_server_install_qualified_artifacts; then
+    frp_server_rollback_snapshot
+    frp_txn_clear server
+    frp_server_end_tmp
+    return 1
+  fi
   if ! frp_server_install_frp_binary; then
     frp_server_rollback_snapshot
     frp_txn_clear server
