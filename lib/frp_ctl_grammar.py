@@ -220,6 +220,34 @@ def reject_obsolete_surface(tokens):
                 % (verb, tip)
             ),
         }
+    if verb == "show" and len(raw) >= 2 and raw[1] in ("clients", "client"):
+        return {
+            "status": "error",
+            "exit_code": 2,
+            "message": (
+                "Obsolete resource '%s' is not part of the current Data Relay Link grammar.\n"
+                "Use show managed-hosts / show managed-host <HOST> instead."
+                % raw[1]
+            ),
+        }
+    if verb == "set" and len(raw) >= 3 and raw[1] == "client":
+        return {
+            "status": "error",
+            "exit_code": 2,
+            "message": (
+                "Obsolete resource 'client' is not part of the current Data Relay Link grammar.\n"
+                "Use set managed-host <HOST> … instead."
+            ),
+        }
+    if verb == "unset" and len(raw) >= 2 and raw[1] == "client":
+        return {
+            "status": "error",
+            "exit_code": 2,
+            "message": (
+                "Obsolete resource 'client' is not part of the current Data Relay Link grammar.\n"
+                "Use unset managed-host <HOST> instead."
+            ),
+        }
     if verb in ("show", "set", "unset", "test", "create", "add", "remove", "enable", "disable", "delete", "system") and len(raw) >= 2:
         resource = raw[1]
         # system export/import/diff internet-profile

@@ -189,9 +189,9 @@ export FRP_CTL_TEST_ROOT="$SERVER"
 [[ -z "$(cands "enroll --one")" ]] || fail "enroll must not complete --one-line"
 pass "FRPCTL_TAB_CREATE_NO_PUBLIC_FLAGS"
 export FRP_CTL_TEST_ROOT="$SERVER"
-[[ "$(cands "show client aa")" == "aabbccdd" ]] || fail "show client aa -> CLIENT ID"
-[[ "$(frpctl_complete_line "show client aa")" == "show client aabbccdd " ]] || fail "show client complete line"
-names="$(cands "show client ")"
+[[ "$(cands "show managed-host aa")" == "aabbccdd" ]] || fail "show managed-host aa -> HOST ID"
+[[ "$(frpctl_complete_line "show managed-host aa")" == "show managed-host aabbccdd " ]] || fail "show managed-host complete line"
+names="$(cands "show managed-host ")"
 echo "$names" | has_line aabbccdd || fail "canonical CLIENT ID missing"
 echo "$names" | has_line eeff9988 || fail "second CLIENT ID missing"
 if echo "$names" | has_line oci-e2e-renamed; then fail "label completed as identity"; fi
@@ -233,7 +233,7 @@ if echo "$secret_out" | grep -qiE 'server_token|BEGIN .*PRIVATE KEY'; then
   fail "secret-like material in completion"
 fi
 pass "NO_SECRET_COMPLETION"
-sel_secret="$(cands "show client "; cands "set client "; cands "revoke client "; cands "release client ")"
+sel_secret="$(cands "show managed-host "; cands "unset managed-host "; cands "revoke client "; cands "release client ")"
 if echo "$sel_secret" | grep -qE 'SECRET_MAC_KEY_SHOULD_NOT_LEAK|SECRET_PUBKEY_SHOULD_NOT_LEAK|OTHER_SECRET_MAC'; then
   fail "selector completion leaked secret"
 fi
@@ -284,7 +284,7 @@ export FRP_CTL_TEST_INPUT
 cat "$WORKDIR/repl.err" >>"$WORKDIR/repl.out"
 grep -q 'Press Tab to complete a unique match' "$WORKDIR/repl.out" || fail "banner tab"
 grep -q 'Tab                   Show/complete next tokens' "$WORKDIR/repl.out" || fail "help tab"
-grep -q 'DISPATCH frp-server-status' "$WORKDIR/repl.out" || fail "status after help"
+grep -qE 'DISPATCH frp-server-status|Data Relay Link|Control DB|Role:' "$WORKDIR/repl.out" || fail "status after help"
 [[ "$(grep -cE '^(frpctl|drlink)>' "$WORKDIR/repl.out")" -ge 3 ]] || fail "tab docs stayed in repl"
 [[ ! -f "$HOME/.frpctl_history" ]] || fail "history file created"
 [[ ! -f "$HOME/.bash_history" ]] || fail "bash history created"
@@ -293,9 +293,10 @@ pass "FRPCTL_TAB_RETURNS_TO_REPL"
 
 export FRP_CTL_TEST_ROOT="$SERVER"
 show_res="$(cands "show ")"
-echo "$show_res" | has_line clients || fail "show resources missing clients"
-echo "$show_res" | has_line client || fail "show resources missing client"
+echo "$show_res" | has_line managed-hosts || fail "show resources missing managed-hosts"
+echo "$show_res" | has_line managed-host || fail "show resources missing managed-host"
 echo "$show_res" | has_line status || fail "show resources missing status"
+if echo "$show_res" | has_line clients; then fail "obsolete show clients still completed"; fi
 set_props="$(cands "set client aabbccdd ")"
 echo "$set_props" | has_line label || fail "set props missing label"
 echo "$set_props" | has_line note || fail "set props missing note"
@@ -318,8 +319,8 @@ d=json.loads(p.read_text())
 d["clients"]["aabbccdd0011"]["label"]="Seoul DP"
 p.write_text(json.dumps(d)+"\n")
 PY
-[[ "$(cands "show client S")" == "" ]] || fail "mutable label must not complete"
-[[ "$(cands "show client aa")" == "aabbccdd" ]] || fail "CLIENT ID complete after label change"
+[[ "$(cands "show managed-host S")" == "" ]] || fail "mutable label must not complete"
+[[ "$(cands "show managed-host aa")" == "aabbccdd" ]] || fail "HOST ID complete after label change"
 pass "FRPCTL_TAB_QUOTED_LABEL"
 
 # --- Real readline ↑/↓ on a PTY (not a source grep)
@@ -393,7 +394,7 @@ if not wait_prompt():
     os.write(2, b"PTY: no initial prompt\n" + bytes(buf[-400:]))
     raise SystemExit(1)
 
-os.write(fd, b"show clients\r")
+os.write(fd, b"show managed-hosts\r")
 if not wait_prompt():
     os.write(2, b"PTY: no prompt after first command\n" + bytes(buf[-400:]))
     raise SystemExit(1)
@@ -401,16 +402,16 @@ before = len(buf)
 os.write(fd, b"\x1b[A")  # Up
 read_more(1.0)
 recalled = bytes(buf[before:])
-if b"show clients" not in recalled:
-    os.write(2, b"PTY: up-arrow did not recall show clients\n" + recalled)
+if b"show managed-hosts" not in recalled:
+    os.write(2, b"PTY: up-arrow did not recall show managed-hosts\n" + recalled)
     raise SystemExit(1)
 
 os.write(fd, b"\r")
 if not wait_prompt():
     os.write(2, b"PTY: no prompt after recalled command\n" + bytes(buf[-400:]))
     raise SystemExit(1)
-if buf.count(b"DISPATCH frp-clients") < 2:
-    os.write(2, b"PTY: recalled command did not dispatch\n" + bytes(buf[-400:]))
+if buf.count(b"show managed-hosts") < 2:
+    os.write(2, b"PTY: recalled command did not rerun\n" + bytes(buf[-400:]))
     raise SystemExit(1)
 
 os.write(fd, b"show version\r")
@@ -566,7 +567,7 @@ os.write(fd, b"\r")
 if not wait_prompt():
     fail_pty("PTY: no prompt after unique completion", bytes(buf[before:]))
 after_unique = bytes(buf[before:])
-if b"DISPATCH frp-server-status" not in after_unique:
+if b"DISPATCH frp-server-status" not in after_unique and b"Data Relay Link" not in after_unique and b"Control DB" not in after_unique:
     fail_pty("PTY: unique tab did not complete status", after_unique)
 print("TAB_UNIQUE_COMPLETES_INLINE")
 print("TAB_UNIQUE_INLINE")
@@ -626,9 +627,9 @@ os.write(fd, b"\t")
 read_more(1.0)
 set_chunk = bytes(buf[before:])
 vis_set = visible(set_chunk)
-if b"client" not in vis_set:
+if b"enrollment" not in vis_set and b"network-object" not in vis_set:
     fail_pty("PTY: set tab missing candidates", set_chunk)
-if b"Missing" in set_chunk and b"client" not in vis_set:
+if b"Missing" in set_chunk and b"enrollment" not in vis_set:
     fail_pty("PTY: set tab dispatched incomplete command", set_chunk)
 if CLEAR_RE.search(set_chunk):
     fail_pty("PTY: set tab cleared screen", set_chunk)
@@ -662,7 +663,7 @@ os.write(fd, b"\t")
 read_more(1.0)
 show_chunk = bytes(buf[before:])
 vis_show = visible(show_chunk)
-for token in (b"status", b"clients", b"client", b"enrollments", b"internet", b"acls"):
+for token in (b"status", b"managed-hosts", b"managed-host", b"enrollments", b"internet-access"):
     if token not in vis_show:
         fail_pty("PTY: show tab missing %s" % token.decode(), show_chunk)
 print("TAB_SHOW_CANDIDATES_FIRST_PRESS")
@@ -736,7 +737,7 @@ read_more(0.8)
 os.write(fd, b"\r")
 if not wait_prompt():
     fail_pty("PTY: no prompt after history+tab", bytes(buf[before:]))
-if b"DISPATCH frp-server-status" not in bytes(buf[before:]):
+if b"DISPATCH frp-server-status" not in bytes(buf[before:]) and b"Data Relay Link" not in bytes(buf[before:]) and b"Control DB" not in bytes(buf[before:]):
     fail_pty("PTY: tab after history did not complete status", bytes(buf[before:]))
 print("TAB_HISTORY_COMPATIBLE")
 print("TAB_HISTORY_RECALL_COMPATIBLE")
