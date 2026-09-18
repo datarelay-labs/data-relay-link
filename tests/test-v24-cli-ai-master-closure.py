@@ -438,15 +438,16 @@ class AgentBundleOfflineLifecycle(unittest.TestCase):
         row = self.plane.conn.execute("SELECT * FROM agent_remote_services WHERE name='ssh'").fetchone()
         port = row["endpoint_port"]
         os.environ["DRLINK_SERVER_REACHABLE"] = "0"
-        self._apply_bundle(
-            """configurationBundle:
-  context: agent
-  remoteServices:
-    - name: ssh
-      destination: this-host
-      service: ssh
-      enabled: true
-"""
+        # Real offline edit (desired-state change) — not a no-op reapply.
+        v24.set_remote_service_agent(
+            self.plane,
+            "ssh",
+            destination="this-host",
+            service="ssh",
+            enabled=True,
+            oneshot=True,
+            root=self.tmp,
+            server_reachable=False,
         )
         row2 = self.plane.conn.execute("SELECT * FROM agent_remote_services WHERE name='ssh'").fetchone()
         self.assertEqual(row2["endpoint_port"], port)

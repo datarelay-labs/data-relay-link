@@ -29,11 +29,20 @@ import frp_cli_catalog as c
 print(c.render_guided_menu("client"))
 PY
 )"
-for label in Status "Remote Services" Agent Configuration Diagnostics Help Exit; do
+for label in "Remote Services" Agent Configuration System Help Exit; do
   echo "$CLIENT_MENU" | grep -q "$label" || fail "agent menu missing $label"
 done
 ! echo "$CLIENT_MENU" | grep -q 'Clients' || fail "agent menu must not show Clients"
 ! echo "$CLIENT_MENU" | grep -q 'Internet Access' || fail "agent menu must not show Internet Access"
+# Diagnostics/Status live under System (not competing root entries).
+SYSTEM_MENU="$(python3 - <<'PY'
+import frp_cli_catalog as c
+print(c.render_navigation_menu("client.system"))
+PY
+)"
+for label in Status Diagnostics "Support Bundle" "Version Information" Updates; do
+  echo "$SYSTEM_MENU" | grep -q "$label" || fail "agent System menu missing $label"
+done
 pass CLIENT_ROOT_DOMAINS
 
 BOTH_MENU="$(python3 - <<'PY'

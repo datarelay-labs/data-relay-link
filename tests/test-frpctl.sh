@@ -335,7 +335,7 @@ grep -qE 'FRP version     : 0\.71\.0|Relay Engine \(FRP\): 0\.71\.0' "$WORKDIR/c
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
 grep -q 'Data Relay Link Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
-grep -q 'Data Relay Link — Client Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
+grep -q 'Data Relay Link — Agent Host Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
 grep -qE 'service|client' "$WORKDIR/client-repl.out" || fail "client help service"
 pass "FRPCTL_REPL_START_CLIENT"
 pass "FRPCTL_REPL_HELP"
