@@ -1474,7 +1474,8 @@ auth.tokenSource.file.path = "/etc/frp/server_token"
 transport.tls.force = false
 
 allowPorts = [
-  { start = ${FRP_PORT_START}, end = ${FRP_PORT_END} }
+  { start = ${FRP_PORT_START}, end = ${FRP_PORT_END} },
+  { start = ${FRP_TCP_RELAY_PORT_START:-6200}, end = ${FRP_TCP_RELAY_PORT_END:-6299} }
 ]
 
 [[httpPlugins]]
@@ -1494,7 +1495,8 @@ auth.tokenSource.file.path = "/etc/frp/server_token"
 transport.tls.force = true
 
 allowPorts = [
-  { start = ${FRP_PORT_START}, end = ${FRP_PORT_END} }
+  { start = ${FRP_PORT_START}, end = ${FRP_PORT_END} },
+  { start = ${FRP_TCP_RELAY_PORT_START:-6200}, end = ${FRP_TCP_RELAY_PORT_END:-6299} }
 ]
 
 [[httpPlugins]]

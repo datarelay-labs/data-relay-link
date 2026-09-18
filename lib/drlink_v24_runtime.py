@@ -295,18 +295,52 @@ def verify_runtime_proxies(
         "true",
     ):
         raise ControlPlaneError("runtime activation could not be verified")
+    v24_names = []
     for sid, rec in expected.items():
         if not isinstance(rec, dict) or rec.get("enabled", True) is False:
             continue
         if not rec.get("v24_remote_service"):
             continue
         proxy_name = "%s-%s" % (host_id, rec.get("id") or sid)
+        v24_names.append((proxy_name, int(rec["remote_port"])))
         needle_name = 'name = "%s"' % proxy_name
         needle_port = "remotePort = %s" % int(rec["remote_port"])
         if needle_name not in toml_text or needle_port not in toml_text:
             raise ControlPlaneError(
                 "runtime activation could not be verified for proxy '%s'" % proxy_name
             )
+    # On a real Agent, confirm frpc did not report start errors for these proxies.
+    if (not root or str(root).rstrip("/") in ("", "/")) and v24_names:
+        import time
+
+        time.sleep(1.5)
+        try:
+            out = subprocess.check_output(
+                ["journalctl", "-u", "drlink-client", "-n", "120", "--no-pager"],
+                text=True,
+                timeout=15,
+            )
+        except Exception:
+            out = ""
+        for proxy_name, _port in v24_names:
+            # Prefer the newest line mentioning this proxy.
+            mentions = [ln for ln in out.splitlines() if proxy_name in ln]
+            if not mentions:
+                continue
+            last = mentions[-1]
+            if "start error" in last.lower() or "error:" in last.lower():
+                raise ControlPlaneError(
+                    "runtime activation could not be verified for proxy '%s': %s"
+                    % (proxy_name, last.strip()[-200:])
+                )
+            if "start proxy success" not in last.lower() and "success" not in last.lower():
+                # Ambiguous last line — look for any success after last error.
+                if any("start error" in m.lower() for m in mentions[-5:]):
+                    if not any("start proxy success" in m.lower() for m in mentions[-5:]):
+                        raise ControlPlaneError(
+                            "runtime activation could not be verified for proxy '%s'"
+                            % proxy_name
+                        )
 
 
 def apply_agent_runtime(

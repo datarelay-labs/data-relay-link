@@ -130,6 +130,10 @@ def build_proxy_map(plane: ControlPlane) -> dict[str, dict]:
     """Map FRP proxy_name → published service metadata from SQLite."""
     mapping: dict[str, dict] = {}
     collisions: dict[str, list] = {}
+    try:
+        from drlink_v24_runtime import remote_service_proxy_id
+    except Exception:
+        remote_service_proxy_id = None
     for client in plane.conn.execute("SELECT * FROM clients"):
         hostname = client["hostname"] or ""
         mid = client["id"]
@@ -138,7 +142,15 @@ def build_proxy_map(plane: ControlPlane) -> dict[str, dict]:
             "SELECT * FROM published_services WHERE client_id = ? AND released = 0",
             (mid,),
         ):
+            # v2.4 Remote Services use stable rs-<name> runtime ids; enrollment
+            # services keep their historical id (== published name).
             sid = str(svc["name"]).strip().lower()
+            meta = plane.conn.execute(
+                "SELECT 1 FROM remote_service_meta WHERE service_id = ?",
+                (svc["id"],),
+            ).fetchone()
+            if meta is not None and remote_service_proxy_id is not None:
+                sid = remote_service_proxy_id(svc["name"])
             name = expected_proxy_name(hostname, mid, sid)
             entry = {
                 "client_id": mid,
