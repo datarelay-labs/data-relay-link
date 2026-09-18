@@ -1,0 +1,49 @@
+schema: spec-driven
+
+context: |
+  Product: Data Relay Link (DRLink), active development line v2.4.0.
+  Repository: datarelay-labs/data-relay-link.
+  Product principle: connect only the services/destinations actually needed; remain simple, lightweight, default-deny, and fail-closed.
+  OpenSpec specs are the structured canonical contract for accepted product behavior. Implementation and E2E evidence prove whether that contract is implemented and qualified; code alone must not silently redefine accepted behavior.
+  Bootstrap authority order:
+    1. docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md for final CLI/AI public behavior.
+    2. docs/PRODUCT_MASTER.md for product charter, public model, and accepted decisions.
+    3. docs/SECURITY.md, docs/CONFIGURATION_BUNDLE.md, docs/CLI_REFERENCE.md, and architecture documents for domain detail.
+    4. Source code and tests for implementation/evidence, not inferred design rationale.
+  Current public model uses Managed Host / DRLink Agent, Network Object/Group, Service Object/Group, Permission Object/Group, AI Identity, Remote Service, Remote/Internet/AI Access, BLACKLIST/WHITELIST, and ConfigurationBundle.
+  The earlier Managed Endpoint / Published Service / Service Preset / AI Principal public model is superseded.
+  Do not infer WHY from source code. If rationale is not documented, mark it RATIONALE_UNKNOWN or NEEDS_DECISION.
+  Preserve accepted decision history. A replacement decision must explicitly supersede the prior decision rather than rewriting history.
+  Server and Agent Host are separate configuration contexts. ConfigurationBundle atomicity never spans those contexts.
+  Remote Service is Agent-local; valid configuration may persist as DEGRADED during target or Server unreachability.
+  Remote Service accepts TCP and Fixed TCP Service Objects; UDP may exist as a Service Object but is not valid for Remote Service.
+  Fixed TCP is a Service Object subtype and uses a separate endpoint pool when a Remote Service activates it.
+  Agent-to-Server management uses the enrolled Agent management identity.
+  Existing large master documents are migration inputs. Once a capability has a canonical OpenSpec spec, future behavior changes must go through an OpenSpec change instead of silently editing a master document.
+
+rules:
+  proposal:
+    - State the problem, intended behavior change, affected capabilities, and explicit non-goals.
+    - Name the authoritative source/evidence used when backfilling an existing accepted decision.
+    - Never convert an unresolved discussion into an accepted decision.
+  design:
+    - Record alternatives considered, selected option, rationale, rejected alternatives, consequences, and any superseded decision.
+    - If rationale is unavailable, write RATIONALE_UNKNOWN rather than inventing one.
+  specs:
+    - Use normative MUST/SHALL requirements and observable scenarios.
+    - Keep historical debate and rejected alternatives in design artifacts, not current requirements.
+    - Do not claim implementation qualification unless supported by explicit test/E2E evidence.
+  tasks:
+    - Include implementation tests, E2E/qualification evidence, and affected derived-document synchronization.
+    - Keep documentation generation/update automated where practical; do not create manual copy steps for the operator.
+
+operations:
+  apply:
+    guidance:
+      - Read the relevant current specs and active change before editing code.
+      - Do not silently broaden scope or reverse an accepted decision.
+      - Run focused regression tests and capture evidence tied to the change.
+  archive:
+    guidance:
+      - Validate artifacts and confirm required implementation/E2E evidence before treating behavior as qualified.
+      - Preserve proposal/design history when syncing the accepted delta into current specs.

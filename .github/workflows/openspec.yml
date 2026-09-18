@@ -1,0 +1,36 @@
+name: OpenSpec validation
+
+on:
+  pull_request:
+    paths:
+      - "openspec/**"
+      - ".cursor/commands/opsx-*.md"
+      - ".cursor/skills/openspec-*/**"
+      - ".github/workflows/openspec.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "openspec/**"
+      - ".github/workflows/openspec.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install OpenSpec
+        run: npm install --global @fission-ai/openspec@1.13.1
+
+      - name: Validate OpenSpec root
+        run: openspec doctor --json
+
+      - name: Validate all specs and changes
+        run: openspec validate --all --strict

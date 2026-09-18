@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Backfill the accepted v2.4 product decisions into structured OpenSpec
+  capabilities without changing product behavior.
