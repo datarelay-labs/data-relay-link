@@ -43,6 +43,7 @@ operations:
       - Read the relevant current specs and active change before editing code.
       - Do not silently broaden scope or reverse an accepted decision.
       - Run focused regression tests and capture evidence tied to the change.
+      - Evaluate governance/DEFINITION_OF_DONE.md; never infer PASS for evidence-based criteria.
   archive:
     guidance:
       - Validate artifacts and confirm required implementation/E2E evidence before treating behavior as qualified.

@@ -1,4 +1,4 @@
-name: OpenSpec validation
+name: governance
 
 on:
   pull_request:
@@ -7,13 +7,18 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  validate:
-    name: openspec
+  governance:
+    name: governance
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -23,14 +28,5 @@ jobs:
       - name: Install OpenSpec
         run: npm install --global @fission-ai/openspec@1.13.1
 
-      - name: Validate OpenSpec root
-        run: openspec doctor --json
-
-      - name: Validate all specs and changes
-        run: openspec validate --all --strict
-
-      - name: Test decision capture automation
-        run: python3 tests/test-decision-capture.py
-
-      - name: Test Tela knowledge projection
-        run: python3 tests/test-tela-knowledge-sync.py
+      - name: Verify Definition of Done automation
+        run: python3 automation/governance/verify_governance.py

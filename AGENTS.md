@@ -33,3 +33,13 @@ After a qualified PRODUCT OpenSpec change is archived:
 5. Do not ask Rick to update Tela manually.
 
 If Tela is unavailable, OpenSpec remains authoritative. Report `KNOWLEDGE_SYNC_PENDING` and retry the Tela update later; never invent missing rationale or roll back a valid OpenSpec archive.
+
+## Definition of Done
+
+Use `governance/DEFINITION_OF_DONE.md` for every change. Run `python3 automation/governance/verify_governance.py` before declaring repository/governance completion.
+
+- Never claim test, security, upgrade, rollback, or Real E2E PASS without evidence.
+- Runtime/operator behavior changes require Real E2E PASS unless there is a concrete N/A rationale.
+- Missing evidence is `NOT_PROVEN`, not PASS.
+- Governance-only changes must not contain unrelated runtime edits.
+- Do not ask Rick to maintain a completion checklist manually; evaluate and report it automatically.

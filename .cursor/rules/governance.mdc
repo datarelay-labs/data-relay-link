@@ -1,0 +1,18 @@
+---
+description: Enforce automated Definition of Done and evidence-based completion
+alwaysApply: true
+---
+
+# Development Governance Rule
+
+For every change:
+
+- Treat `governance/DEFINITION_OF_DONE.md` as the completion contract.
+- Run the available automatic gates before declaring completion.
+- Never infer PASS from code inspection alone when the criterion requires runtime/E2E evidence.
+- Report missing evidence as `NOT_PROVEN` or `N/A` with a concrete rationale.
+- Keep changes small and isolated; do not mix unrelated runtime edits into governance/tooling changes.
+- OpenSpec remains the behavior authority and Tela remains a derived knowledge layer.
+- Architecture/document drift discovered by automation must be tracked, not silently normalized into current behavior.
+
+Before merge-ready status, run `python3 automation/governance/verify_governance.py`.
