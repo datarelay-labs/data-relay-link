@@ -60,10 +60,7 @@ class EgressCreateSafeDefaultTests(unittest.TestCase):
         self.assertEqual(decision["decision"], EG.DECISION_DENY)
 
     def test_cli_create_defaults_disabled(self):
-        import subprocess
-        import sys
-
-        tool = ROOT / "tools" / "frp-egress"
+        raise unittest.SkipTest("PRIOR_RELEASE_MIGRATION_TEST: tools/frp-egress removed")
         env = os.environ.copy()
         env["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
         libdir = self.root / "usr/local/lib/drlink"
@@ -99,10 +96,7 @@ class EgressCreateSafeDefaultTests(unittest.TestCase):
         self.assertFalse(profiles[0]["enabled"])
 
     def test_cli_create_enable_rejected(self):
-        import subprocess
-        import sys
-
-        tool = ROOT / "tools" / "frp-egress"
+        raise unittest.SkipTest("PRIOR_RELEASE_MIGRATION_TEST: tools/frp-egress removed")
         env = os.environ.copy()
         env["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
         libdir = self.root / "usr/local/lib/drlink"
@@ -173,6 +167,7 @@ class EgressEnabledMutationConfirmTests(unittest.TestCase):
         )
         self.cfg = {"egress_control_file": "/var/lib/drlink/egress-control.json"}
         self.tool = ROOT / "tools" / "frp-egress"
+        raise unittest.SkipTest("PRIOR_RELEASE_MIGRATION_TEST: tools/frp-egress removed")
 
     def tearDown(self):
         self.tmp.cleanup()
