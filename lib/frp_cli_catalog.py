@@ -275,7 +275,7 @@ SERVICE_ADD_FLAGS = (
 # (name, roles, category, summary)
 # Categories are display-only groupings for help/menu discoverability.
 ROOTS = (
-    ("show", "any", "View", "View current clients, services, policies and status"),
+    ("show", "any", "View", "View Managed Hosts, Remote Services, policies and status"),
     ("set", "any", "Change", "Create, add, change or enable configuration"),
     ("unset", "any", "Change", "Remove, delete, revoke, release or disable configuration"),
     ("test", "server", "Validate", "Check policy decisions without changing configuration"),
@@ -1941,13 +1941,13 @@ WORKFLOWS = (
             "test remote-access source partner-office destination ubuntu-prod service ssh",
         ),
         "Remote Access uses explicit BLACKLIST or WHITELIST mode with "
-        "Permission Objects — not legacy ordered ALLOW/DENY row evaluation.",
+        "Network Objects / Groups and Service Objects / Groups — not legacy ordered ALLOW/DENY row evaluation.",
         "server",
     ),
     (
         "Internet Access WHITELIST",
         (
-            "set internet-access github-https mode whitelist source ubuntu-prod destination github service https enabled",
+            "set internet-access github-https mode whitelist source ubuntu-prod destination github service https",
             "test internet-access source ubuntu-prod destination github service https",
         ),
         "Internet Access uses explicit WHITELIST or BLACKLIST mode.",
@@ -1966,7 +1966,7 @@ WORKFLOWS = (
         "both",
     ),
     (
-        "Routine maintenance",
+        "Routine maintenance — Server",
         (
             "system diagnostics",
             "system backup",
@@ -1976,7 +1976,18 @@ WORKFLOWS = (
         ),
         "'system update engine' updates the upstream Relay Engine (FRP) binary separately. "
         "Use 'system update check-engine' to check upstream releases.",
-        "both",
+        "server",
+    ),
+    (
+        "Routine maintenance — Agent Host",
+        (
+            "system diagnostics",
+            "system support-bundle",
+            "system version",
+            "system synchronize",
+        ),
+        "Agent Host maintenance focuses on local diagnostics and Server synchronization.",
+        "agent",
     ),
 )
 

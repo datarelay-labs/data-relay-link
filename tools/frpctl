@@ -2118,8 +2118,8 @@ frpctl_manage_clients() {
   root="${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}"
   libdir="${_FRPCTL_DIR}/../lib"
   echo
-  echo "${FRP_CTL_PRODUCT_NAME} — Client Management"
-  echo "==================================="
+  echo "${FRP_CTL_PRODUCT_NAME} — Managed Host Management"
+  echo "========================================="
   echo
   python3 - "$cfg" "$root" "$libdir" <<'PY'
 import importlib.util
@@ -2769,8 +2769,8 @@ frpctl_repl_help() {
     echo "---------------"
     echo
   elif [[ "$client" == "1" ]]; then
-    echo "${FRP_CTL_PRODUCT_NAME} — Client Commands"
-    echo "================================="
+    echo "${FRP_CTL_PRODUCT_NAME} — Agent Host Commands"
+    echo "====================================="
     echo
   elif [[ "$server" == "1" ]]; then
     echo "${FRP_CTL_PRODUCT_NAME} — Server Commands"
