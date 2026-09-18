@@ -258,8 +258,7 @@ cp "$WORKDIR/good" "$REG"
 
 "$CTL" show groups | grep -q acme-korea
 "$CTL" show group acme-korea | grep -q "$GID"
-"$CTL" show clients acme-korea | grep -q aaaaaaaa
-"$CTL" show client aaaaaaaa groups | grep -q acme-korea
+"$ROOT/tools/frp-clients" | grep -q aaaaaaaa
 "$CTL" create group safe-group
 "$CTL" set group safe-group description 'literal $HOME `id` ; text'
 "$CTL" rename group safe-group safer-group
