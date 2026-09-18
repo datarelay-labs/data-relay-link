@@ -47,3 +47,6 @@ operations:
     guidance:
       - Validate artifacts and confirm required implementation/E2E evidence before treating behavior as qualified.
       - Preserve proposal/design history when syncing the accepted delta into current specs.
+      - After a qualified product archive, regenerate knowledge/CANONICAL_SOURCE_OF_TRUTH.md with automation/tela_sync/render_canonical.py.
+      - Use the connected Tela MCP to update the canonical page configured in automation/tela_sync/config.json, then read back and verify a decision-history query.
+      - If Tela is unavailable, keep OpenSpec authoritative and report KNOWLEDGE_SYNC_PENDING for retry; never require Rick to maintain the page manually.

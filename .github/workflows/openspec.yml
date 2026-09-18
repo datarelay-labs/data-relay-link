@@ -5,7 +5,10 @@ on:
     paths:
       - "openspec/**"
       - "automation/decision_capture/**"
+      - "automation/tela_sync/**"
+      - "knowledge/CANONICAL_SOURCE_OF_TRUTH.md"
       - "tests/test-decision-capture.py"
+      - "tests/test-tela-knowledge-sync.py"
       - "AGENTS.md"
       - ".cursor/commands/opsx-*.md"
       - ".cursor/skills/openspec-*/**"
@@ -18,7 +21,10 @@ on:
     paths:
       - "openspec/**"
       - "automation/decision_capture/**"
+      - "automation/tela_sync/**"
+      - "knowledge/CANONICAL_SOURCE_OF_TRUTH.md"
       - "tests/test-decision-capture.py"
+      - "tests/test-tela-knowledge-sync.py"
       - "AGENTS.md"
       - ".cursor/rules/decision-capture.mdc"
       - ".github/workflows/openspec.yml"
@@ -47,3 +53,6 @@ jobs:
 
       - name: Test decision capture automation
         run: python3 tests/test-decision-capture.py
+
+      - name: Test Tela knowledge projection
+        run: python3 tests/test-tela-knowledge-sync.py
