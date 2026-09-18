@@ -63,7 +63,7 @@ Do not reintroduce a top-level `apply` root.
 Configuration operations live under existing roots:
 
 ```text
-system export configuration --output drlink.yaml
+system export configuration drlink.yaml
 test configuration drlink.yaml
 system diff configuration drlink.yaml
 system apply configuration drlink.yaml

@@ -251,7 +251,7 @@ v2.4.0 stable also targets a `ConfigurationBundle` input for dependent multi-res
 Canonical operations remain under existing CLI roots:
 
 ```text
-system export configuration --output drlink.yaml
+system export configuration drlink.yaml
 test configuration drlink.yaml
 system diff configuration drlink.yaml
 system apply configuration drlink.yaml

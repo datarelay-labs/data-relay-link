@@ -64,8 +64,8 @@ import frp_ctl_grammar as g
 print("\n".join(g.completion_candidates("show ", "server", ["24cd7856"], {}, [], trailing=True)))
 PY
 )"
-echo "$SHOW_CANDS" | grep -qx 'client' || fail "show tree missing client"
-echo "$SHOW_CANDS" | grep -qx 'clients' || fail "show tree missing clients"
+echo "$SHOW_CANDS" | grep -qx 'managed-host' || fail "show tree missing managed-host"
+echo "$SHOW_CANDS" | grep -qx 'managed-hosts' || fail "show tree missing managed-hosts"
 echo "$SHOW_CANDS" | grep -qx 'status' || fail "show tree missing status"
 SET_CANDS="$(python3 - <<'PY'
 import sys; sys.path.insert(0,"lib")
@@ -73,7 +73,7 @@ import frp_ctl_grammar as g
 print("\n".join(g.completion_candidates("set ", "server", [], {}, [], trailing=True)))
 PY
 )"
-echo "$SET_CANDS" | grep -qx 'client' || fail "set tree missing client"
+echo "$SET_CANDS" | grep -qx 'enrollment' || fail "set tree missing enrollment"
 echo "$SET_CANDS" | grep -qx 'remote-access' || fail "set tree missing remote-access"
 echo "$SET_CANDS" | grep -qx 'internet-access' || fail "set tree missing internet-access"
 echo "$SET_CANDS" | grep -qx 'enrollment' || fail "set tree missing enrollment"
@@ -95,7 +95,7 @@ PY
 ! echo "$MENU" | grep -q 'client list' || fail "menu advertises client list"
 ! echo "$MENU" | grep -q 'enrollment create' || fail "menu advertises enrollment create"
 ! echo "$MENU" | grep -q 'zero-touch create' || fail "menu advertises zero-touch create"
-echo "$MENU" | grep -q 'Clients' || fail "menu missing Clients"
+echo "$MENU" | grep -q 'Managed Hosts' || fail "menu missing Managed Hosts"
 echo "$MENU" | grep -q 'Objects' || fail "menu missing Objects"
 echo "$MENU" | grep -q 'Remote Access' || fail "menu missing Remote Access root"
 echo "$MENU" | grep -q 'Internet Access' || fail "menu missing Internet Access"
@@ -114,7 +114,7 @@ import frp_ctl_grammar as g
 lines = [
     "create enrollment ",
     "create enrollment --",
-    "show clients ",
+    "show managed-hosts ",
     "update product ",
     "doctor ",
 ]
@@ -149,19 +149,19 @@ PY
 )"
 echo "$ROOT_CANDS" | grep -qx 'show' || fail "tab root missing show"
 ! echo "$ROOT_CANDS" | grep -qx 'client' || fail "tab root still has client"
-CLIENT_CANDS="$(python3 - <<'PY'
+HOST_CANDS="$(python3 - <<'PY'
 import sys; sys.path.insert(0,"lib")
 import frp_ctl_grammar as g
-print("\n".join(g.completion_candidates("show client ", "server", ["24cd7856", "aabbccdd"], {}, [], trailing=True)))
+print("\n".join(g.completion_candidates("show managed-host ", "server", ["24cd7856", "aabbccdd"], {}, [], trailing=True)))
 PY
 )"
-echo "$CLIENT_CANDS" | grep -qx '24cd7856' || fail "tab client ids"
+echo "$HOST_CANDS" | grep -qx '24cd7856' || fail "tab managed-host ids"
 pass TAB_ACTION_FIRST
 pass TAB_CLIENT_IDS
 
 # --- CONTEXT_HELP_ACTION_FIRST ---
 CTX="$(grammar 'unset ?')"
-echo "$CTX" | grep -q 'client' || fail "context help missing unset client"
+echo "$CTX" | grep -q 'managed-host' || fail "context help missing unset managed-host"
 echo "$CTX" | grep -qi 'Available' || fail "context help missing Available"
 pass CONTEXT_HELP_ACTION_FIRST
 
@@ -187,8 +187,8 @@ echo "$CLIENT_SYSTEM" | grep -qx 'support-bundle' || fail "client system missing
 pass ROLE_FILTERING
 
 # --- INCOMPLETE_COMMAND_HELP ---
-INC="$(grammar 'show client')"
-echo "$INC" | grep -q 'show client <ID>' || fail "incomplete usage"
+INC="$(grammar 'revoke client')"
+echo "$INC" | grep -q 'revoke client <ID>' || fail "incomplete usage"
 ! echo "$INC" | grep -q 'client show' || fail "incomplete recommends resource-first"
 echo "$INC" | grep -qi 'Tab' || fail "incomplete missing Tab tip"
 pass INCOMPLETE_COMMAND_HELP
@@ -203,7 +203,7 @@ assert_json_field "$R3" action purge_enrollment
 pass REVOKE_RELEASE_DELETE_DISTINCT
 
 # --- GUIDED_ZERO_TOUCH / GUIDED_ENROLLMENT ---
-ZT="$(grammar 'set client')"
+ZT="$(grammar 'set enrollment zero-touch')"
 EN="$(grammar 'set enrollment')"
 assert_json_field "$ZT" action create_zero_touch
 assert_json_field "$EN" action create_enrollment
@@ -212,7 +212,7 @@ pass GUIDED_ENROLLMENT
 
 # --- BACKEND_CAPABILITY_PARITY (spot checks) ---
 for line_action in \
-  "show clients:show_clients" \
+  "show managed-hosts:control_plane" \
   "create backup:create_backup" \
   "system update product:update_project" \
   "system update engine:update_frp" \

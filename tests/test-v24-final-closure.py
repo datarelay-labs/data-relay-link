@@ -122,6 +122,32 @@ class PublicGrammarClosure(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("AI Access Test", r.stdout)
 
+    def test_SYSTEM_UPDATE_AND_INFO_ALIASES_NOT_DEAD_ENDS(self):
+        import frp_ctl_grammar as grammar
+
+        cases = (
+            (["system", "update", "engine"], "client", "update_frp"),
+            (["update", "engine"], "client", "update_frp"),
+            (["system", "update", "product"], "client", "update_project"),
+            (["update", "product"], "client", "update_project"),
+            (["system", "info"], "client", "show_info"),
+            (["info"], "client", "show_info"),
+            (["show", "info"], "client", "show_info"),
+            (["pause"], "client", "client_pause"),
+            (["stop"], "client", "client_pause"),
+            (["unset", "managed-host", "x"], "server", "control_plane"),
+            (["system", "revoke", "client", "x"], "server", "revoke_client"),
+        )
+        for tokens, role, action in cases:
+            result = grammar.match(list(tokens), role=role)
+            self.assertEqual(result.get("status"), "ok", tokens)
+            self.assertEqual(result.get("action"), action, tokens)
+        help_root = grammar.help_text([], "server")
+        self.assertIn("help managed-hosts", help_root)
+        self.assertNotIn("help clients", help_root)
+        compat = grammar.help_text(["clients"], "server")
+        self.assertIn("Managed Hosts", compat)
+
 
 class BundleStrictClosure(unittest.TestCase):
     def setUp(self):

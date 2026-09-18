@@ -3758,16 +3758,15 @@
     "summary": "Export redacted ConfigurationBundle",
     "detail": "Export current server-owned configuration as a redacted ConfigurationBundle YAML suitable for review and AI-assisted editing. Secrets are never exported.",
     "examples": [
-      "system export configuration --output drlink.yaml"
+      "system export configuration drlink.yaml"
     ],
     "args": [
       {
-        "name": "--output",
-        "complete": null,
+        "name": "FILE",
         "required": true
       }
     ],
-    "tail": null,
+    "tail": "flags",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -3779,9 +3778,9 @@
       {
         "name": "--output",
         "arity": 1,
-        "hidden": false,
-        "required": true,
-        "description": "Output YAML path",
+        "hidden": true,
+        "required": false,
+        "description": "Hidden compatibility flag; prefer positional FILE",
         "metavar": "<file>"
       }
     ]
@@ -4701,6 +4700,7 @@
     "args": [
       {
         "name": "HOST",
+        "complete": "clients",
         "required": true
       },
       {

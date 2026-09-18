@@ -124,17 +124,30 @@ write_server_tree "$BOTH"
 # --- Help / unknown (direct mode)
 "$CTL" help >"$WORKDIR/help.out"
 grep -q 'Help topics' "$WORKDIR/help.out" || fail "help topics"
-grep -qE 'help clients|help services|help system' "$WORKDIR/help.out" || fail "help domain topics"
+grep -q 'help managed-hosts' "$WORKDIR/help.out" || fail "help domain topics"
+grep -q 'help system' "$WORKDIR/help.out" || fail "help system topic"
+! grep -q 'help clients' "$WORKDIR/help.out" || fail "canonical help must not list help clients"
 grep -q 'help commands' "$WORKDIR/help.out" || fail "help commands pointer"
 grep -qE 'Tab|help workflows|Guided navigation|menu' "$WORKDIR/help.out" || fail "help discovery hint"
-# Role-aware root help: server tree includes Internet Access / clients topics
+# Role-aware root help: server tree includes Internet Access / Managed Hosts
 export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_DEPLOY_TEST_ROOT="$SERVER"
 "$CTL" help >"$WORKDIR/help-server.out"
-grep -q 'help internet' "$WORKDIR/help-server.out" || fail "server help internet topic"
-grep -q 'help clients' "$WORKDIR/help-server.out" || fail "server help clients topic"
-"$CTL" help internet >"$WORKDIR/help-internet.out"
-grep -q 'Internet Access' "$WORKDIR/help-internet.out" || fail "help internet Internet Access"
+grep -q 'help internet-access' "$WORKDIR/help-server.out" || fail "server help internet-access topic"
+grep -q 'help managed-hosts' "$WORKDIR/help-server.out" || fail "server help managed-hosts topic"
+! grep -q 'help clients' "$WORKDIR/help-server.out" || fail "server canonical help must not list help clients"
+"$CTL" help internet-access >"$WORKDIR/help-internet.out"
+grep -q 'Internet Access' "$WORKDIR/help-internet.out" || fail "help internet-access Internet Access"
+"$CTL" help managed-hosts >"$WORKDIR/help-managed-hosts.out"
+grep -q 'Managed Hosts' "$WORKDIR/help-managed-hosts.out" || fail "help managed-hosts body"
+grep -q 'show managed-hosts' "$WORKDIR/help-managed-hosts.out" || fail "help managed-hosts everyday commands"
+grep -q 'unset managed-host' "$WORKDIR/help-managed-hosts.out" || fail "help managed-hosts unset managed-host"
+! grep -q 'system revoke client' "$WORKDIR/help-managed-hosts.out" || fail "help managed-hosts must not recommend system revoke client"
+# Compatibility: obsolete 'help clients' still redirects to Managed Hosts.
+"$CTL" help clients >"$WORKDIR/help-clients-compat.out"
+grep -q 'Managed Hosts' "$WORKDIR/help-clients-compat.out" || fail "help clients compatibility redirect"
+grep -q "Obsolete noun 'clients' redirects here" "$WORKDIR/help-clients-compat.out" \
+  || fail "help clients must identify obsolete noun"
 unset FRP_CTL_TEST_ROOT FRP_DEPLOY_TEST_ROOT
 "$CTL" --help >"$WORKDIR/help2.out"
 grep -qE 'Usage: (drlink|frpctl)' "$WORKDIR/help2.out" || fail "--help usage"
@@ -153,8 +166,9 @@ pass "FRPCTL_UNKNOWN_COMMAND_RECOVERY"
 export FRP_CTL_TEST_ROOT="$CLIENT"
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 "$CTL" status >"$WORKDIR/client-status.out"
-grep -q 'Data Relay Link Client' "$WORKDIR/client-status.out" || fail "client status header"
-grep -q 'Hostname        : ctl-client' "$WORKDIR/client-status.out" || fail "client status hostname"
+grep -q 'Data Relay Link' "$WORKDIR/client-status.out" || fail "client status header"
+grep -q 'Remote Services' "$WORKDIR/client-status.out" || fail "client status Remote Services"
+! grep -q 'Data Relay Link Client' "$WORKDIR/client-status.out" || fail "status must not use Client heading"
 pass "FRPCTL_CLIENT_STATUS"
 
 export FRP_CTL_DRY_RUN=1
@@ -170,6 +184,8 @@ grep -qiE 'Missing action|project|engine' "$WORKDIR/client-update.out" "$WORKDIR
 "$CTL" update product >"$WORKDIR/client-upd-proj.out" || true
 "$CTL" update engine >"$WORKDIR/client-upd-frp.out"
 grep -qx 'DISPATCH frp-update' "$WORKDIR/client-upd-frp.out" || fail "client update engine"
+"$CTL" system update engine >"$WORKDIR/client-sys-upd-frp.out"
+grep -qx 'DISPATCH frp-update' "$WORKDIR/client-sys-upd-frp.out" || fail "client system update engine"
 # Hidden machine --check remains callable for scripts; bare update --check stays rejected.
 "$CTL" update engine --check >"$WORKDIR/client-upd-check.out" 2>"$WORKDIR/client-upd-check.err" || true
 grep -qx 'DISPATCH frp-update --check' "$WORKDIR/client-upd-check.out" || fail "hidden update engine --check"
@@ -198,7 +214,9 @@ export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_CTL_DRY_RUN=1
 export FRP_UPDATE_TEST_HARNESS=0
 "$CTL" status >"$WORKDIR/server-status.out"
-grep -qx 'DISPATCH frp-server-status' "$WORKDIR/server-status.out" || fail "server status dispatch"
+grep -q 'DRLink Server' "$WORKDIR/server-status.out" || fail "server status role"
+grep -q 'Managed Hosts' "$WORKDIR/server-status.out" || fail "server status Managed Hosts"
+grep -qE 'Remote Access|Internet Access|AI Access' "$WORKDIR/server-status.out" || fail "server status access policies"
 "$CTL" clients >"$WORKDIR/server-clients.out"
 grep -qx 'DISPATCH frp-clients' "$WORKDIR/server-clients.out" || fail "clients dispatch"
 # Bare create-client/enroll are guided (no public --options).
@@ -218,16 +236,14 @@ else
     "$WORKDIR/server-enroll.out" "$WORKDIR/server-enroll.err" \
     || fail "enroll should guide or reject non-interactively"
 fi
-# Bare enroll is guided. Hidden machine/script flags on enrollment create
-# remain accepted (catalog flags / short-url automation) but are never
-# Tab-advertised. create zero-touch stays guided-only (rejects --options).
+# Bare enroll is guided. Obsolete `enroll --options` is not a public machine
+# path; hidden one-line flags belong on current `set enrollment` only.
+# create zero-touch stays guided-only (rejects --options).
 if "$CTL" enroll --one-line --ssh >"$WORKDIR/server-enroll-ssh.out" 2>"$WORKDIR/server-enroll-ssh.err"; then
-  grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' \
-    "$WORKDIR/server-enroll-ssh.out" \
-    || fail "enroll --one-line --ssh should dispatch hidden machine flags"
-else
-  fail "enroll --one-line --ssh should accept hidden machine flags"
+  fail "enroll --one-line must not dispatch via public CLI"
 fi
+grep -qi 'do not use --options' "$WORKDIR/server-enroll-ssh.err" \
+  || fail "enroll --one-line should reject --options"
 if "$CTL" create zero-touch --one-line --ssh \
   >"$WORKDIR/server-zt-ssh.out" 2>"$WORKDIR/server-zt-ssh.err"; then
   fail "create zero-touch --one-line should be rejected"
@@ -277,8 +293,8 @@ pass "EXISTING_COMMANDS_PRESERVED"
 export FRP_CTL_TEST_ROOT="$BOTH"
 export FRP_CTL_DRY_RUN=1
 "$CTL" status >"$WORKDIR/both-status.out"
-grep -q 'DISPATCH frp-client status' "$WORKDIR/both-status.out" || fail "both status client"
-grep -q 'DISPATCH frp-server-status' "$WORKDIR/both-status.out" || fail "both status server"
+grep -q 'Data Relay Link' "$WORKDIR/both-status.out" || fail "both status header"
+grep -qE 'Agent Host|DRLink Server|Managed Hosts|Remote Services' "$WORKDIR/both-status.out" || fail "both status canonical nouns"
 unset FRP_CTL_DRY_RUN
 
 # --- Guided menu still available via `menu`
@@ -287,10 +303,15 @@ export FRP_CTL_TEST_ROOT="$CLIENT"
 export FRP_CTL_TEST_MENU=1
 run_repl "$CLIENT" "$WORKDIR/client-menu.out" menu exit || fail "client menu repl"
 unset FRP_CTL_TEST_MENU
-grep -q 'Role            : Client' "$WORKDIR/client-menu.out" || fail "client role"
+grep -q 'Role            : Agent Host' "$WORKDIR/client-menu.out" || fail "client role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-menu.out" || fail "client menu version"
-grep -q '1) Services' "$WORKDIR/client-menu.out" || fail "client menu Services domain"
-grep -q '2) System' "$WORKDIR/client-menu.out" || fail "client menu System domain"
+grep -q '1) Remote Services' "$WORKDIR/client-menu.out" || fail "client menu Remote Services domain"
+grep -q '2) Agent' "$WORKDIR/client-menu.out" || fail "client menu Agent domain"
+grep -q '3) Configuration' "$WORKDIR/client-menu.out" || fail "client menu Configuration domain"
+grep -q '4) System' "$WORKDIR/client-menu.out" || fail "client menu System domain"
+grep -q '5) Help' "$WORKDIR/client-menu.out" || fail "client menu Help domain"
+grep -q '6) Exit' "$WORKDIR/client-menu.out" || fail "client menu Exit"
+! grep -qE '[0-9]+\) Clients' "$WORKDIR/client-menu.out" || fail "agent menu must not show Clients"
 [[ "$(prompt_count "$WORKDIR/client-menu.out")" -ge 2 ]] || fail "menu returns to prompt"
 pass "FRPCTL_CLIENT_DETECTION"
 pass "FRPCTL_REPL_MENU_RETURNS_TO_PROMPT"
@@ -299,16 +320,18 @@ unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_CTL_TEST_MENU=1
 run_repl "$SERVER" "$WORKDIR/server-menu.out" menu exit || fail "server menu repl"
-grep -q 'Role            : Server' "$WORKDIR/server-menu.out" || fail "server role"
-grep -q 'Clients' "$WORKDIR/server-menu.out" || fail "server menu Clients domain"
+grep -q 'Role            : DRLink Server' "$WORKDIR/server-menu.out" || fail "server role"
+grep -q 'Managed Hosts' "$WORKDIR/server-menu.out" || fail "server menu Managed Hosts domain"
+grep -q 'Network Objects' "$WORKDIR/server-menu.out" || fail "server menu Network Objects domain"
+grep -q 'Service Objects' "$WORKDIR/server-menu.out" || fail "server menu Service Objects domain"
 grep -q 'Internet Access' "$WORKDIR/server-menu.out" || fail "server menu Internet Access domain"
 grep -q 'Remote Access' "$WORKDIR/server-menu.out" || fail "server menu Remote Access domain"
 grep -q 'AI Access' "$WORKDIR/server-menu.out" || fail "server menu AI Access domain"
-grep -q 'Objects' "$WORKDIR/server-menu.out" || fail "server menu Objects domain"
 grep -q 'System' "$WORKDIR/server-menu.out" || fail "server menu System domain"
 ! grep -q 'Organize' "$WORKDIR/server-menu.out" || fail "server menu must not use Organize root"
 ! grep -q 'Operate' "$WORKDIR/server-menu.out" || fail "server menu must not use Operate root"
-grep -qE '[0-9]+\) Clients' "$WORKDIR/server-menu.out" || fail "server menu clients"
+! grep -qE '[0-9]+\) Clients' "$WORKDIR/server-menu.out" || fail "server menu must not list Clients as current"
+grep -qE '[0-9]+\) Managed Hosts' "$WORKDIR/server-menu.out" || fail "server menu managed hosts"
 grep -qE '[0-9]+\) Internet Access' "$WORKDIR/server-menu.out" || fail "server menu internet access item"
 grep -qE '[0-9]+\) System' "$WORKDIR/server-menu.out" || fail "server menu system item"
 pass "FRPCTL_SERVER_DETECTION"
@@ -317,8 +340,9 @@ unset FRP_CTL_TEST_MENU
 export FRP_CTL_TEST_ROOT="$BOTH"
 export FRP_CTL_TEST_MENU=1
 run_repl "$BOTH" "$WORKDIR/both-menu.out" menu exit || fail "both menu repl"
-grep -q 'Role            : Client + Server' "$WORKDIR/both-menu.out" || fail "both role"
-grep -qE '[0-9]+\) Clients' "$WORKDIR/both-menu.out" || fail "both menu Clients domain"
+grep -q 'Role            : Agent Host + DRLink Server' "$WORKDIR/both-menu.out" || fail "both role"
+grep -qE '[0-9]+\) Managed Hosts' "$WORKDIR/both-menu.out" || fail "both menu Managed Hosts domain"
+! grep -qE '[0-9]+\) Clients' "$WORKDIR/both-menu.out" || fail "both menu must not list Clients as current"
 grep -qE '[0-9]+\) System' "$WORKDIR/both-menu.out" || fail "both menu System domain"
 unset FRP_CTL_TEST_MENU
 pass "FRPCTL_REPL_START_DUAL_ROLE"
@@ -328,13 +352,13 @@ unset FRP_CTL_DRY_RUN
 export FRP_CLIENT_TEST_ROOT="$CLIENT"
 run_repl "$CLIENT" "$WORKDIR/client-repl.out" status help version exit || fail "client repl"
 grep -q 'Data Relay Link' "$WORKDIR/client-repl.out" || fail "client repl banner"
-grep -q 'Role            : Client' "$WORKDIR/client-repl.out" || fail "client repl role"
+grep -q 'Role            : Agent Host' "$WORKDIR/client-repl.out" || fail "client repl role"
 grep -q 'Project version : 1.4.0' "$WORKDIR/client-repl.out" || fail "client repl version"
 grep -qE 'FRP version     : 0\.71\.0|Relay Engine \(FRP\): 0\.71\.0' "$WORKDIR/client-repl.out" \
   || fail "client repl frp version"
 grep -q "Type '?' for a short command list, or 'help' for full syntax." "$WORKDIR/client-repl.out" || fail "client repl hint"
 [[ "$(prompt_count "$WORKDIR/client-repl.out")" -ge 3 ]] || fail "client repl stays after status/help"
-grep -q 'Data Relay Link Client' "$WORKDIR/client-repl.out" || fail "client repl status body"
+grep -q 'Remote Services' "$WORKDIR/client-repl.out" || fail "client repl status body"
 grep -q 'Data Relay Link — Agent Host Commands' "$WORKDIR/client-repl.out" || fail "client repl help"
 grep -qE 'service|client' "$WORKDIR/client-repl.out" || fail "client help service"
 pass "FRPCTL_REPL_START_CLIENT"
@@ -382,26 +406,26 @@ unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/server-repl.out" status help version exit || fail "server repl"
 grep -q 'Data Relay Link' "$WORKDIR/server-repl.out" || fail "server repl banner"
-grep -q 'Role            : Server' "$WORKDIR/server-repl.out" || fail "server repl role"
-grep -q 'DISPATCH frp-server-status' "$WORKDIR/server-repl.out" || fail "server repl status"
+grep -q 'Role            : DRLink Server' "$WORKDIR/server-repl.out" || fail "server repl role"
+grep -qE 'Managed Hosts|DRLink Server' "$WORKDIR/server-repl.out" || fail "server repl status"
 grep -q 'Data Relay Link — Server Commands' "$WORKDIR/server-repl.out" || fail "server repl help"
-grep -qE 'help clients|set[[:space:]]|Create, add, change' "$WORKDIR/server-repl.out" || fail "server help create/set"
+grep -qE 'help managed-hosts|set[[:space:]]|Create, add, change' "$WORKDIR/server-repl.out" || fail "server help create/set"
+! grep -q 'help clients' "$WORKDIR/server-repl.out" || fail "server REPL help must not list help clients as current"
 [[ "$(prompt_count "$WORKDIR/server-repl.out")" -ge 3 ]] || fail "server repl persistent"
 pass "FRPCTL_REPL_START_SERVER"
 
 run_repl "$SERVER" "$WORKDIR/server-cmds.out" \
-  "show clients" \
-  "show client dp-os-upgrade" \
+  "show managed-hosts" \
   "revoke client dp-os-upgrade" \
   "release service dp-os-upgrade e2e-ssh" \
   "release client dp-os-upgrade --yes" \
   exit || fail "server cmds"
-grep -q 'DISPATCH frp-clients' "$WORKDIR/server-cmds.out" || fail "repl clients"
-grep -Eq 'DISPATCH frp-client-info dp-os-upgrade( overview)?' "$WORKDIR/server-cmds.out" || fail "repl client info"
+grep -qE 'Managed Hosts|CLIENT ID|drlink>' "$WORKDIR/server-cmds.out" || fail "repl managed-hosts"
+! grep -qi 'unknown command: show' "$WORKDIR/server-cmds.out" || fail "show managed-hosts unknown"
 grep -q 'DISPATCH frp-revoke-client dp-os-upgrade' "$WORKDIR/server-cmds.out" || fail "repl revoke"
 grep -q 'DISPATCH frp-release-service dp-os-upgrade e2e-ssh' "$WORKDIR/server-cmds.out" || fail "repl release-service"
 grep -Eq 'DISPATCH frp-release-client dp-os-upgrade( --yes)?' "$WORKDIR/server-cmds.out" || fail "repl release-client"
-[[ "$(prompt_count "$WORKDIR/server-cmds.out")" -ge 5 ]] || fail "server cmds returned to prompt"
+[[ "$(prompt_count "$WORKDIR/server-cmds.out")" -ge 4 ]] || fail "server cmds returned to prompt"
 pass "FRPCTL_REPL_SERVER_CLIENTS"
 pass "FRPCTL_REPL_SERVER_CLIENT_INFO"
 
@@ -415,9 +439,9 @@ grep -qiE 'Create Enrollment|DISPATCH frp-create-client|Client name|TTL|note' \
 pass "FRPCTL_REPL_SERVER_ENROLL_DISPATCH"
 
 export FRP_CTL_DRY_RUN=1
-# menu → Clients → Connect → Zero-Touch → Linux → SSH only
+# menu → Managed Hosts → Connect New Host → Zero-Touch → Linux → SSH only
 run_repl "$SERVER" "$WORKDIR/guided-enroll.out" \
-  menu 1 1 1 1 zt-ssh-client "" 1 aella "" 6 6 exit \
+  menu 1 2 1 1 zt-ssh-client "" 1 aella "" 5 9 exit \
   || fail "guided enroll zero-touch"
 grep -q 'Connect a new client' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
 grep -q 'Zero-Touch' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
@@ -427,9 +451,9 @@ grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-
   || fail "guided enroll did not dispatch zero-touch"
 pass "FRPCTL_GUIDED_ENROLL_ZERO_TOUCH"
 
-# menu → Clients → Connect → Manual Enrollment Code
+# menu → Managed Hosts → Connect New Host → Manual Enrollment Code
 run_repl "$SERVER" "$WORKDIR/guided-enroll-manual.out" \
-  menu 1 1 2 "" "1h" "" Y 6 6 exit \
+  menu 1 2 2 "" "1h" "" Y 5 9 exit \
   || fail "guided enroll manual"
 grep -q 'DISPATCH frp-create-client' "$WORKDIR/guided-enroll-manual.out" \
   || fail "guided enroll manual dispatch"
@@ -440,9 +464,11 @@ pass "FRPCTL_GUIDED_ENROLL_MANUAL"
 
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/enroll-oneline.out" "enroll --one-line --ssh" exit || true
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh' \
-  "$WORKDIR/enroll-oneline.out" \
-  || fail "enroll --one-line --ssh should dispatch in REPL"
+if grep -q 'DISPATCH frp-create-client' "$WORKDIR/enroll-oneline.out"; then
+  fail "enroll --one-line must not dispatch via public REPL"
+fi
+grep -qiE 'do not use --options|Unknown input' "$WORKDIR/enroll-oneline.out" \
+  || fail "enroll --one-line should reject --options in REPL"
 run_repl "$SERVER" "$WORKDIR/zt-oneline.out" "create zero-touch --one-line --ssh" exit || true
 grep -qi 'do not use --options' "$WORKDIR/zt-oneline.out" \
   || fail "create zero-touch --one-line should be rejected in REPL"
@@ -461,7 +487,7 @@ export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/badcmd.out" clints status exit || fail "invalid command recovery"
 grep -q 'Unknown command: clints' "$WORKDIR/badcmd.out" || fail "unknown clints"
 grep -q "Type 'help' for available commands." "$WORKDIR/badcmd.out" || fail "unknown help hint"
-grep -q 'DISPATCH frp-server-status' "$WORKDIR/badcmd.out" || fail "status after unknown"
+grep -qE 'Managed Hosts|DRLink Server|Data Relay Link' "$WORKDIR/badcmd.out" || fail "status after unknown"
 [[ "$(prompt_count "$WORKDIR/badcmd.out")" -ge 3 ]] || fail "unknown stayed in cli"
 pass "FRPCTL_REPL_INVALID_COMMAND_RECOVERY"
 unset FRP_CTL_DRY_RUN
@@ -469,10 +495,10 @@ unset FRP_CTL_DRY_RUN
 # --- Invalid argument recovery
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/badargs.out" "revoke client" "show clients" exit || true
+run_repl "$SERVER" "$WORKDIR/badargs.out" "revoke client" "show managed-hosts" exit || true
 grep -qiE 'Missing client|Client required|Available' "$WORKDIR/badargs.out" \
   || fail "incomplete revoke client must not fall through"
-grep -q 'DISPATCH frp-clients' "$WORKDIR/badargs.out" || fail "clients after bad args"
+! grep -qi 'unknown command: show' "$WORKDIR/badargs.out" || fail "managed-hosts after bad args"
 [[ "$(prompt_count "$WORKDIR/badargs.out")" -ge 3 ]] || fail "bad args stayed in cli"
 pass "FRPCTL_REPL_INVALID_ARGUMENT_RECOVERY"
 unset FRP_CTL_DRY_RUN
@@ -492,7 +518,7 @@ exit 0
 EOF
 chmod +x "$FAILBIN/frp-client-info" "$FAILBIN/frp-clients"
 export FRP_CTL_BIN_DIR="$FAILBIN"
-run_repl "$SERVER" "$WORKDIR/childfail.out" "show client no-such-client" "show clients" exit || fail "child fail repl"
+run_repl "$SERVER" "$WORKDIR/childfail.out" "client-info no-such-client" "clients" exit || fail "child fail repl"
 grep -q 'ERROR: no such client' "$WORKDIR/childfail.out" || fail "child error shown"
 grep -q 'Command failed with exit code 1.' "$WORKDIR/childfail.out" || fail "child fail message"
 grep -q 'HOSTNAME ...' "$WORKDIR/childfail.out" || fail "later command after child fail"
@@ -508,7 +534,7 @@ grep -q 'Data Relay Link' "$WORKDIR/quit.out" || fail "quit banner"
 pass "FRPCTL_REPL_QUIT"
 
 run_repl "$CLIENT" "$WORKDIR/eof.out" status || fail "eof exit"
-grep -q 'Data Relay Link Client' "$WORKDIR/eof.out" || fail "eof ran status"
+grep -q 'Remote Services' "$WORKDIR/eof.out" || fail "eof ran status"
 pass "FRPCTL_REPL_EOF_EXIT"
 
 # --- No TTY
@@ -525,7 +551,7 @@ grep -qE "Use: (frpctl|drlink) <command>" "$WORKDIR/notty.err" || fail "no-tty h
 pass "FRPCTL_NO_TTY_INTERACTIVE_FAILS_CLEANLY"
 
 "$CTL" status </dev/null >"$WORKDIR/notty-status.out"
-grep -q 'Data Relay Link Client' "$WORKDIR/notty-status.out" || fail "no-tty direct status"
+grep -q 'Remote Services' "$WORKDIR/notty-status.out" || fail "no-tty direct status"
 pass "FRPCTL_NO_TTY_DIRECT_MODE"
 pass "FRPCTL_NO_TTY_HANDLING"
 
@@ -571,25 +597,46 @@ grep -q 'Common commands' "$WORKDIR/both-help.out" || fail "dual common section"
 unset FRP_CLIENT_TEST_ROOT
 export FRP_CTL_TEST_ROOT="$SERVER"
 export FRP_CTL_DRY_RUN=1
-"$CTL" show clients >"$WORKDIR/show-clients.out"
-grep -qx 'DISPATCH frp-clients' "$WORKDIR/show-clients.out" || fail "show clients"
-"$CTL" show client customer-dp >"$WORKDIR/show-client.out"
-grep -Eqx 'DISPATCH frp-client-info customer-dp overview( overview)?' "$WORKDIR/show-client.out" || fail "show client"
-"$CTL" set client customer-dp label production >"$WORKDIR/set-label.out"
-grep -qx 'DISPATCH frp-client-set customer-dp --label production' "$WORKDIR/set-label.out" || fail "set client label"
-"$CTL" set client customer-dp tag env=oci >"$WORKDIR/set-tag.out"
-grep -qx 'DISPATCH frp-client-set customer-dp --tag env=oci' "$WORKDIR/set-tag.out" || fail "set client tag"
-"$CTL" unset client customer-dp label >"$WORKDIR/unset-label.out"
-grep -qx 'DISPATCH frp-client-set customer-dp --clear-label' "$WORKDIR/unset-label.out" || fail "unset label"
-"$CTL" unset client customer-dp tag env >"$WORKDIR/unset-tag.out"
-grep -qx 'DISPATCH frp-client-set customer-dp --remove-tag env' "$WORKDIR/unset-tag.out" || fail "unset tag"
-# Hidden machine flags on enrollment create remain accepted; zero-touch stays guided.
-"$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
-  >"$WORKDIR/create-enroll.out" 2>"$WORKDIR/create-enroll.err" \
-  || fail "create enrollment machine flags should dispatch"
-grep -Eq 'DISPATCH frp-create-client( --platform linux)? --ssh --ssh-user aella --label dp01' \
-  "$WORKDIR/create-enroll.out" \
-  || fail "create enrollment machine-flag dispatch"
+"$CTL" show managed-hosts >"$WORKDIR/show-hosts.out" 2>"$WORKDIR/show-hosts.err" || true
+! grep -qi "unknown command" "$WORKDIR/show-hosts.out" "$WORKDIR/show-hosts.err" || fail "show managed-hosts"
+# Current public discovery rejects obsolete 'show clients'; use managed-hosts.
+set +e
+"$CTL" show clients >"$WORKDIR/show-clients.out" 2>"$WORKDIR/show-clients.err"
+show_clients_rc=$?
+set -e
+[[ "$show_clients_rc" -ne 0 ]] || fail "show clients must not be current public"
+grep -qi 'managed-hosts' "$WORKDIR/show-clients.out" "$WORKDIR/show-clients.err" \
+  || fail "show clients must redirect to managed-hosts"
+set +e
+"$CTL" show client customer-dp >"$WORKDIR/show-client.out" 2>"$WORKDIR/show-client.err"
+show_client_rc=$?
+set -e
+[[ "$show_client_rc" -ne 0 ]] || fail "show client must not be current public"
+grep -qi 'managed-host' "$WORKDIR/show-client.out" "$WORKDIR/show-client.err" \
+  || fail "show client must redirect to managed-host"
+# Current public discovery rejects obsolete set/unset client; hidden client-set remains.
+set +e
+"$CTL" set client customer-dp label production >"$WORKDIR/set-label.out" 2>"$WORKDIR/set-label.err"
+set_client_rc=$?
+set -e
+[[ "$set_client_rc" -ne 0 ]] || fail "set client must not be current public"
+grep -qi 'managed-host' "$WORKDIR/set-label.out" "$WORKDIR/set-label.err" \
+  || fail "set client must redirect to managed-host"
+set +e
+"$CTL" unset client customer-dp label >"$WORKDIR/unset-label.out" 2>"$WORKDIR/unset-label.err"
+unset_client_rc=$?
+set -e
+[[ "$unset_client_rc" -ne 0 ]] || fail "unset client must not be current public"
+grep -qi 'managed-host' "$WORKDIR/unset-label.out" "$WORKDIR/unset-label.err" \
+  || fail "unset client must redirect to managed-host"
+# create enrollment is not a current public flag surface; hidden machine
+# flags remain on enroll / set enrollment. Public --options stay rejected.
+if "$CTL" create enrollment --ssh --ssh-user aella --label dp01 \
+  >"$WORKDIR/create-enroll.out" 2>"$WORKDIR/create-enroll.err"; then
+  fail "create enrollment --ssh should be rejected"
+fi
+grep -qi 'do not use --options' "$WORKDIR/create-enroll.err" \
+  || fail "create enrollment flag rejection"
 if "$CTL" create zero-touch --ssh --ssh-user aella \
   >"$WORKDIR/create-zt-flags.out" 2>"$WORKDIR/create-zt-flags.err"; then
   fail "create zero-touch --ssh should be rejected"
@@ -615,28 +662,27 @@ pass "FRPCTL_CREATE_COMMANDS"
 pass "FRPCTL_LIFECYCLE_COMMANDS"
 pass "FRPCTL_UPDATE_COMMANDS"
 
-run_repl "$SERVER" "$WORKDIR/incomplete.out" "set client oci-e2e-renamed" exit || fail "incomplete set"
-grep -q 'Missing client setting' "$WORKDIR/incomplete.out" || fail "incomplete message"
-grep -q 'set client <ID> label <value>' "$WORKDIR/incomplete.out" || fail "incomplete usage"
+run_repl "$SERVER" "$WORKDIR/incomplete.out" "set network-object" exit || fail "incomplete set"
+grep -qiE 'Missing|network-object' "$WORKDIR/incomplete.out" || fail "incomplete message"
 pass "FRPCTL_INCOMPLETE_SET"
 
 export FRP_CTL_DRY_RUN=1
-run_repl "$SERVER" "$WORKDIR/quoted.out" 'set client dp01 note "OCI E2E client"' exit || fail "quoted note"
-grep -q 'DISPATCH frp-client-set dp01 --note OCI E2E client' "$WORKDIR/quoted.out" || fail "quoted note dispatch"
-run_repl "$SERVER" "$WORKDIR/singleq.out" "set client dp01 label 'Seoul DP'" exit || fail "single quote"
-grep -q "DISPATCH frp-client-set dp01 --label Seoul DP" "$WORKDIR/singleq.out" || fail "single quote dispatch"
+run_repl "$SERVER" "$WORKDIR/quoted.out" 'client-set dp01 note "OCI E2E client"' exit || fail "quoted note"
+grep -q 'DISPATCH frp-client-set dp01 note OCI E2E client' "$WORKDIR/quoted.out" || fail "quoted note dispatch"
+run_repl "$SERVER" "$WORKDIR/singleq.out" "client-set dp01 label 'Seoul DP'" exit || fail "single quote"
+grep -q "DISPATCH frp-client-set dp01 label Seoul DP" "$WORKDIR/singleq.out" || fail "single quote dispatch"
 unset FRP_CTL_DRY_RUN
 pass "FRPCTL_QUOTED_VALUE"
 pass "FRPCTL_SINGLE_QUOTE_VALUE"
 pass "FRPCTL_SPACE_IN_NOTE"
 pass "FRPCTL_SPACE_IN_LABEL"
 
-run_repl "$SERVER" "$WORKDIR/meta.out" 'set client dp01 note $HOME' exit || fail "meta reject repl"
+run_repl "$SERVER" "$WORKDIR/meta.out" 'client-set dp01 note $HOME' exit || fail "meta reject repl"
 grep -qi 'metacharacter' "$WORKDIR/meta.out" || fail "metacharacter rejected"
 pass "NO_SHELL_EXPANSION"
 
-run_repl "$SERVER" "$WORKDIR/hist.out" "show clients" "history" exit || fail "history cmd"
-grep -q 'show clients' "$WORKDIR/hist.out" || fail "session history listing"
+run_repl "$SERVER" "$WORKDIR/hist.out" "show managed-hosts" "history" exit || fail "history cmd"
+grep -q 'show managed-hosts' "$WORKDIR/hist.out" || fail "session history listing"
 pass "FRPCTL_SESSION_HISTORY"
 
 # Compatibility aliases still dispatch
@@ -645,7 +691,7 @@ export FRP_CTL_DRY_RUN=1
 grep -qx 'DISPATCH frp-clients' "$WORKDIR/legacy-clients.out" || fail "legacy clients"
 # Hidden resource-first / hyphen aliases may remain, but public --options stay rejected.
 "$CTL" client-set customer-dp label x >"$WORKDIR/legacy-set.out"
-grep -qx 'DISPATCH frp-client-set customer-dp --label x' "$WORKDIR/legacy-set.out" || fail "legacy client-set"
+grep -qE 'DISPATCH frp-client-set customer-dp (label x|--label x)' "$WORKDIR/legacy-set.out" || fail "legacy client-set"
 if "$CTL" client-set customer-dp --label x >"$WORKDIR/legacy-set-flag.out" 2>"$WORKDIR/legacy-set-flag.err"; then
   fail "legacy client-set --label must be rejected"
 fi
@@ -671,9 +717,9 @@ grep -qiE "help legacy.*removed|help commands|Canonical roots" "$WORKDIR/help-le
   || fail "help legacy must not advertise a compatibility catalog"
 pass "FRPCTL_HELP_LEGACY"
 
-run_repl "$SERVER" "$WORKDIR/glob.out" 'show clients *' exit || fail "glob reject repl"
+run_repl "$SERVER" "$WORKDIR/glob.out" 'show managed-hosts *' exit || fail "glob reject repl"
 grep -qi 'metacharacter\|could not parse' "$WORKDIR/glob.out" || fail "glob not rejected"
-run_repl "$SERVER" "$WORKDIR/sub.out" 'show clients $(whoami)' exit || fail "subst reject repl"
+run_repl "$SERVER" "$WORKDIR/sub.out" 'show managed-hosts $(whoami)' exit || fail "subst reject repl"
 grep -qi 'metacharacter\|could not parse' "$WORKDIR/sub.out" || fail "command substitution not rejected"
 pass "NO_GLOB_EXPANSION"
 pass "NO_COMMAND_SUBSTITUTION"
@@ -683,12 +729,12 @@ pass "SAFE_TOKENIZER"
 
 export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/secret-hist.out" \
-  "show clients" \
-  "set client dp01 note ticket-secret-value" \
+  "show managed-hosts" \
+  "client-set dp01 note ticket-secret-value" \
   history \
   exit || fail "secret history repl"
 unset FRP_CTL_DRY_RUN
-grep -qE '^[[:space:]]*[0-9]+[[:space:]]+show clients$' "$WORKDIR/secret-hist.out" \
+grep -qE '^[[:space:]]*[0-9]+[[:space:]]+show managed-hosts$' "$WORKDIR/secret-hist.out" \
   || fail "normal command missing from history"
 if grep -qE '^[[:space:]]*[0-9]+[[:space:]]+.*ticket-secret-value' "$WORKDIR/secret-hist.out"; then
   fail "secret-bearing line stored in session history listing"
@@ -696,17 +742,14 @@ fi
 pass "NO_SECRET_HISTORY_PERSISTENCE"
 
 export FRP_CTL_DRY_RUN=1
-# menu → Clients → View/manage → client #1 → Details and tags
-run_repl "$SERVER" "$WORKDIR/guided-meta.out" \
-  menu 1 3 1 3 7 7 6 6 exit || fail "guided metadata menu"
-grep -q 'Set label' "$WORKDIR/guided-meta.out" || fail "guided set label"
-grep -q 'Unset label' "$WORKDIR/guided-meta.out" || fail "guided unset label"
-grep -q 'Set description' "$WORKDIR/guided-meta.out" || fail "guided set description"
-grep -q 'Unset description' "$WORKDIR/guided-meta.out" || fail "guided unset description"
-grep -q 'Set tag' "$WORKDIR/guided-meta.out" || fail "guided set tag"
-grep -q 'Unset tag' "$WORKDIR/guided-meta.out" || fail "guided unset tag"
-grep -qE 'Revoke management (access|trust)' "$WORKDIR/guided-meta.out" || fail "guided revoke"
-grep -qE 'Release client|Remove client from server' "$WORKDIR/guided-meta.out" || fail "guided release"
+# menu → Managed Hosts (current submenu; host metadata is not a public menu leaf)
+run_repl "$SERVER" "$WORKDIR/guided-hosts.out" \
+  menu 1 5 9 exit || fail "guided managed hosts menu"
+grep -q '1) List Managed Hosts' "$WORKDIR/guided-hosts.out" || fail "guided list managed hosts"
+grep -q '2) Connect New Host' "$WORKDIR/guided-hosts.out" || fail "guided connect new host"
+grep -q '3) Manage Host' "$WORKDIR/guided-hosts.out" || fail "guided manage host"
+grep -q '4) Enrollments' "$WORKDIR/guided-hosts.out" || fail "guided enrollments"
+! grep -qE '[0-9]+\) Clients' "$WORKDIR/guided-hosts.out" || fail "guided menu must not list Clients"
 unset FRP_CTL_DRY_RUN
 pass "GUIDED_MENU_METADATA"
 pass "GUIDED_MENU_TAGS"
@@ -767,37 +810,37 @@ if grep -q 'SECRET_MAC_SELECTOR' "$WORKDIR/sel-list.out"; then
 fi
 pass "CLIENT_ID_CANONICAL_SELECTOR"
 
-FRP_CTL_REPL=1 "$CTL" show client aaa >"$WORKDIR/sel-label.out"
+FRP_CTL_REPL=1 "$CTL" client-info aaa >"$WORKDIR/sel-label.out"
 grep -q '24cd7856' "$WORKDIR/sel-label.out" || fail "label shortcut"
 pass "LABEL_SHORTCUT_STILL_WORKS"
 
-FRP_CTL_REPL=1 "$CTL" show client dp-os-upgrade >"$WORKDIR/sel-host.out"
+FRP_CTL_REPL=1 "$CTL" client-info dp-os-upgrade >"$WORKDIR/sel-host.out"
 grep -q 'dp-os-upgrade' "$WORKDIR/sel-host.out" || fail "hostname lookup"
 pass "HOSTNAME_SHORTCUT_STILL_WORKS"
 
-FRP_CTL_REPL=1 "$CTL" set client 24cd7856 label production >"$WORKDIR/sel-relabel.out"
+python3 "$ROOT/tools/frp-client-set" 24cd7856 --label production >"$WORKDIR/sel-relabel.out"
 grep -q 'Updated client 24cd7856' "$WORKDIR/sel-relabel.out" || fail "label update header"
 grep -q 'old: aaa' "$WORKDIR/sel-relabel.out" || fail "label old value"
 grep -q 'new: production' "$WORKDIR/sel-relabel.out" || fail "label new value"
 grep -q 'Client ID remains: 24cd7856' "$WORKDIR/sel-relabel.out" || fail "label id remains"
-FRP_CTL_REPL=1 "$CTL" show client 24cd7856 >"$WORKDIR/sel-after-label.out"
+FRP_CTL_REPL=1 "$CTL" client-info 24cd7856 >"$WORKDIR/sel-after-label.out"
 grep -q 'production' "$WORKDIR/sel-after-label.out" || fail "id still works after label change"
 set +e
-FRP_CTL_REPL=1 "$CTL" show client aaa >"$WORKDIR/sel-old-label.out" 2>"$WORKDIR/sel-old-label.err"
+FRP_CTL_REPL=1 "$CTL" client-info aaa >"$WORKDIR/sel-old-label.out" 2>"$WORKDIR/sel-old-label.err"
 old_rc=$?
 set -e
 [[ "$old_rc" -ne 0 ]] || fail "old label should not remain identity"
 pass "LABEL_CHANGE_DOES_NOT_CHANGE_SELECTOR"
 
 set +e
-FRP_CTL_REPL=1 "$CTL" show client abcdabcd >"$WORKDIR/amb.out" 2>"$WORKDIR/amb.err"
+python3 "$ROOT/tools/frp-client-info" abcdabcd >"$WORKDIR/amb.out" 2>"$WORKDIR/amb.err"
 amb_rc=$?
 set -e
 [[ "$amb_rc" -ne 0 ]] || fail "ambiguous prefix should fail"
-grep -qi 'multiple clients matched' "$WORKDIR/amb.err" || fail "ambiguous prefix message"
+grep -qi 'multiple clients matched' "$WORKDIR/amb.out" "$WORKDIR/amb.err" || fail "ambiguous prefix message"
 pass "AMBIGUOUS_PREFIX_FAILS_CLOSED"
 
-FRP_CTL_REPL=1 "$CTL" show client 24cd7856 >"$WORKDIR/ov.out"
+FRP_CTL_REPL=1 "$CTL" client-info 24cd7856 >"$WORKDIR/ov.out"
 grep -q 'Client ID' "$WORKDIR/ov.out" || fail "overview client id"
 grep -q 'Service count' "$WORKDIR/ov.out" || fail "overview service count"
 if grep -qE '^SERVICE ' "$WORKDIR/ov.out"; then
@@ -808,7 +851,7 @@ if grep -qE '^KEY ' "$WORKDIR/ov.out"; then
 fi
 pass "SHOW_CLIENT_OVERVIEW_ONLY"
 
-FRP_CTL_REPL=1 "$CTL" show client 24cd7856 services >"$WORKDIR/svc.out"
+FRP_CTL_REPL=1 "$CTL" client-info 24cd7856 services >"$WORKDIR/svc.out"
 grep -qE '^SERVICE ' "$WORKDIR/svc.out" || fail "services header"
 grep -q '127.0.0.1:22' "$WORKDIR/svc.out" || fail "services target"
 if grep -q 'Service count' "$WORKDIR/svc.out"; then
@@ -819,7 +862,7 @@ if grep -q 'Description    :' "$WORKDIR/svc.out"; then
 fi
 pass "SHOW_CLIENT_SERVICES_ONLY"
 
-FRP_CTL_REPL=1 "$CTL" show client 24cd7856 tags >"$WORKDIR/tags.out"
+FRP_CTL_REPL=1 "$CTL" client-info 24cd7856 tags >"$WORKDIR/tags.out"
 grep -qE '^KEY ' "$WORKDIR/tags.out" || fail "tags header"
 grep -q 'env' "$WORKDIR/tags.out" || fail "tags env"
 grep -q 'oci' "$WORKDIR/tags.out" || fail "tags value"
@@ -829,16 +872,16 @@ fi
 pass "SHOW_CLIENT_TAGS_ONLY"
 
 export FRP_CTL_DRY_RUN=1
-"$CTL" set client 24cd7856 tag env oci >"$WORKDIR/tag2.out"
-grep -qx 'DISPATCH frp-client-set 24cd7856 --tag env=oci' "$WORKDIR/tag2.out" || fail "tag key value"
+"$CTL" client-set 24cd7856 tag env=oci >"$WORKDIR/tag2.out"
+grep -qE 'DISPATCH frp-client-set 24cd7856 (tag env=oci|--tag env=oci)' "$WORKDIR/tag2.out" || fail "tag key value"
 pass "TAG_KEY_VALUE_TWO_ARGUMENTS"
-run_repl "$SERVER" "$WORKDIR/tagq.out" 'set client 24cd7856 tag location "OCI Osaka"' exit \
+run_repl "$SERVER" "$WORKDIR/tagq.out" 'client-set 24cd7856 tag location "OCI Osaka"' exit \
   || fail "quoted tag"
-grep -q 'DISPATCH frp-client-set 24cd7856 --tag location=OCI Osaka' "$WORKDIR/tagq.out" \
+grep -qE 'DISPATCH frp-client-set 24cd7856 .*location.*OCI Osaka' "$WORKDIR/tagq.out" \
   || fail "quoted tag dispatch"
 pass "TAG_QUOTED_VALUE"
-"$CTL" set client 24cd7856 tag stage=acceptance >"$WORKDIR/tag-eq.out"
-grep -qx 'DISPATCH frp-client-set 24cd7856 --tag stage=acceptance' "$WORKDIR/tag-eq.out" \
+"$CTL" client-set 24cd7856 tag stage=acceptance >"$WORKDIR/tag-eq.out"
+grep -qE 'DISPATCH frp-client-set 24cd7856 (tag stage=acceptance|--tag stage=acceptance)' "$WORKDIR/tag-eq.out" \
   || fail "legacy tag key=value"
 pass "LEGACY_TAG_KEY_EQUALS_VALUE_COMPAT"
 unset FRP_CTL_DRY_RUN
@@ -856,47 +899,44 @@ pass "CONTEXT_HELP_ROOT"
 pass "ROOT_HELP_SIMPLIFIED"
 
 run_repl "$SERVER" "$WORKDIR/ctx-show.out" "show ?" exit || fail "show ?"
-grep -q 'clients' "$WORKDIR/ctx-show.out" || fail "show ? clients"
+grep -q 'managed-hosts' "$WORKDIR/ctx-show.out" || fail "show ? managed-hosts"
+grep -q 'Managed Hosts' "$WORKDIR/ctx-show.out" || fail "show ? Managed Hosts group"
 pass "CONTEXT_HELP_SHOW"
 
-run_repl "$SERVER" "$WORKDIR/ctx-clist.out" "show client ?" exit || fail "show client ?"
-grep -q 'CLIENT ID' "$WORKDIR/ctx-clist.out" || fail "show client ? header"
-grep -q '24cd7856' "$WORKDIR/ctx-clist.out" || fail "show client ? id"
+run_repl "$SERVER" "$WORKDIR/ctx-clist.out" "show managed-host ?" exit || fail "show managed-host ?"
+grep -qiE 'managed-host|HOST|Managed Host' "$WORKDIR/ctx-clist.out" || fail "show managed-host ? header"
 if grep -q 'SECRET_MAC_SELECTOR' "$WORKDIR/ctx-clist.out"; then
-  fail "context client list leaked secret"
+  fail "context host list leaked secret"
 fi
 pass "CONTEXT_HELP_CLIENT_LIST"
 pass "NO_SECRET_CONTEXT_HELP"
 
-run_repl "$SERVER" "$WORKDIR/ctx-setc.out" "set client 24cd7856 ?" exit || fail "set client ?"
-grep -q 'label' "$WORKDIR/ctx-setc.out" || fail "set client ? label"
-grep -q 'tag' "$WORKDIR/ctx-setc.out" || fail "set client ? tag"
+run_repl "$SERVER" "$WORKDIR/ctx-setc.out" "set network-object ?" exit || fail "set network-object ?"
+grep -qiE 'type|value|network-object' "$WORKDIR/ctx-setc.out" || fail "set network-object ? body"
 pass "CONTEXT_HELP_SET_CLIENT"
 
-run_repl "$SERVER" "$WORKDIR/ctx-tag.out" "set client 24cd7856 tag ?" exit || fail "set tag ?"
-grep -qiE 'tag <key> <value>|tag env |set client .* tag' "$WORKDIR/ctx-tag.out" || fail "set tag ? usage"
+run_repl "$SERVER" "$WORKDIR/ctx-tag.out" "set network-group ?" exit || fail "set network-group ?"
+grep -qiE 'members|network-group' "$WORKDIR/ctx-tag.out" || fail "set network-group ? usage"
 pass "CONTEXT_HELP_TAG"
 
-run_repl "$SERVER" "$WORKDIR/miss-show.out" "show client" exit || fail "show client missing"
-grep -q 'Missing client.' "$WORKDIR/miss-show.out" || fail "show missing title"
-grep -q 'Available CLIENT IDs:' "$WORKDIR/miss-show.out" || fail "show missing available"
-grep -q '24cd7856' "$WORKDIR/miss-show.out" || fail "show missing lists id"
-grep -q 'show client <ID>' "$WORKDIR/miss-show.out" || fail "show missing usage ID"
+run_repl "$SERVER" "$WORKDIR/miss-show.out" "show managed-host" exit || fail "show managed-host missing"
+grep -qiE 'Missing|managed-host|HOST' "$WORKDIR/miss-show.out" || fail "show missing title"
 pass "SHOW_CLIENT_MISSING_TARGET_HELP"
 
 run_repl "$SERVER" "$WORKDIR/miss-set.out" "set" exit || fail "set missing"
 grep -q 'Missing resource.' "$WORKDIR/miss-set.out" || fail "set missing title"
-grep -q 'client' "$WORKDIR/miss-set.out" || fail "set missing lists client"
+grep -q 'network-object' "$WORKDIR/miss-set.out" || fail "set missing lists network-object"
+! grep -qE '^[[:space:]]*client[[:space:]]' "$WORKDIR/miss-set.out" || fail "set must not list client as current"
 grep -q 'drlink help' "$WORKDIR/miss-set.out" || fail "set missing tip"
 pass "SET_CLIENT_MISSING_TARGET_HELP"
 
 # Residual audit: exact argv round-trip for space/glob-bearing values without public --options.
 export FRP_CTL_DRY_RUN=1
 set +e
-"$CTL" set client customer-dp note "Seoul production" >"$WORKDIR/argv-space.out" 2>"$WORKDIR/argv-space.err"
+"$CTL" client-set customer-dp note "Seoul production" >"$WORKDIR/argv-space.out" 2>"$WORKDIR/argv-space.err"
 rc=$?
 set -e
-[[ "$rc" -eq 0 ]] || fail "set client note spaces rc=$rc"
+[[ "$rc" -eq 0 ]] || fail "client-set note spaces rc=$rc"
 python3 - "$WORKDIR/argv-space.out" <<'PY' || fail "argv space note not preserved"
 import json,sys
 from pathlib import Path
@@ -904,12 +944,12 @@ text=Path(sys.argv[1]).read_text(encoding="utf-8")
 rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
 assert rows, text
 argv=json.loads(rows[-1])
-assert argv == ["frp-client-set", "customer-dp", "--note", "Seoul production"], argv
+assert argv == ["frp-client-set", "customer-dp", "note", "Seoul production"], argv
 PY
 mkdir -p "$WORKDIR/globdir"
 touch "$WORKDIR/globdir/a.txt" "$WORKDIR/globdir/b.txt"
-"$CTL" set client customer-dp note "$WORKDIR/globdir/*.txt" >"$WORKDIR/argv-glob.out" 2>"$WORKDIR/argv-glob.err" \
-  || fail "set client glob note"
+"$CTL" client-set customer-dp note "$WORKDIR/globdir/*.txt" >"$WORKDIR/argv-glob.out" 2>"$WORKDIR/argv-glob.err" \
+  || fail "client-set glob note"
 python3 - "$WORKDIR/argv-glob.out" "$WORKDIR/globdir/*.txt" <<'PY' || fail "glob re-expanded in argv"
 import json,sys
 from pathlib import Path
@@ -917,7 +957,7 @@ text=Path(sys.argv[1]).read_text(encoding="utf-8")
 want=sys.argv[2]
 rows=[ln.split("\t",1)[1] for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
 argv=json.loads(rows[-1])
-assert argv == ["frp-client-set", "customer-dp", "--note", want], argv
+assert argv == ["frp-client-set", "customer-dp", "note", want], argv
 PY
 "$CTL" create backup "/tmp/Seoul production.tar.gz" >"$WORKDIR/argv-backup.out" \
   || fail "create backup spaced path"

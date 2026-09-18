@@ -93,7 +93,7 @@ pass "ZERO_TOUCH_SECRET_NOT_COMPLETED"
 
 # --- help create is not a public topic; prefer set client / help clients ---
 help_create="$(frpctl_grammar_call help '{"tokens":["create"]}')"
-echo "$help_create" | grep -qiE 'Unknown help topic: create|help commands|not a current public root|set client' \
+echo "$help_create" | grep -qiE 'Unknown help topic: create|help commands|not a current public root|set enrollment|set client' \
   || fail "help create should redirect away from a create topic"
 ! echo "$help_create" | grep -qiE 'Current grammar is resource-first' \
   || fail "help create still says resource-first is current"
@@ -103,7 +103,7 @@ help_legacy="$(frpctl_grammar_call help '{"tokens":["legacy"]}')"
 echo "$help_legacy" | grep -qiE "help legacy.*removed|help commands|Canonical roots" \
   || fail "help legacy must report removal and point to help commands"
 help_clients="$(frpctl_grammar_call help '{"tokens":["clients"]}')"
-echo "$help_clients" | grep -qiE 'set client|Connect a new client|zero-touch|Zero-Touch' \
+echo "$help_clients" | grep -qiE 'set enrollment|set client|Connect a new client|zero-touch|Zero-Touch|Managed Hosts' \
   || fail "help clients missing onboarding path"
 root_help="$(frpctl_grammar_call help '{"tokens":[]}')"
 echo "$root_help" | grep -qE '^[[:space:]]*set([[:space:]]|$)' || fail "root help missing set"
@@ -120,8 +120,8 @@ import json, sys
 msg = json.loads(sys.argv[1]).get("message", "")
 if "not a current public root" not in msg.lower() and "legacy" not in msg.lower():
     raise SystemExit("create ? should identify non-current root")
-if "set client" not in msg:
-    raise SystemExit("create ? missing set client current command")
+if "set enrollment" not in msg and "set client" not in msg:
+    raise SystemExit("create ? missing set enrollment current command")
 if "help legacy" in msg:
     raise SystemExit("create ? must not advertise help legacy")
 if "service-profile" in msg or "internet-profile" in msg or "access-rule" in msg:

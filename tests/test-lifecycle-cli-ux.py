@@ -18,15 +18,11 @@ import frp_ctl_grammar as grammar  # noqa: E402
 
 class LifecycleCliUx(unittest.TestCase):
     def test_client_system_menu_lifecycle_entries(self):
-        labels = [row[1] for row in catalog.navigation_entries("client.system")]
-        for need in (
-            "Pause client",
-            "Resume client",
-            "Restart client",
-            "Autostart",
-            "Uninstall Data Relay Link",
-        ):
-            self.assertIn(need, labels)
+        agent_labels = [row[1] for row in catalog.navigation_entries("client.agent")]
+        for need in ("Pause", "Resume", "Restart", "Autostart"):
+            self.assertIn(need, agent_labels)
+        system_labels = [row[1] for row in catalog.navigation_entries("client.system")]
+        self.assertIn("Uninstall Data Relay Link", system_labels)
 
     def test_server_system_menu_uninstall(self):
         labels = [row[1] for row in catalog.navigation_entries("server.system")]
@@ -34,7 +30,7 @@ class LifecycleCliUx(unittest.TestCase):
 
     def test_both_system_menu_has_client_lifecycle_and_uninstall(self):
         labels = [row[1] for row in catalog.navigation_entries("both.system")]
-        for need in ("Pause client", "Resume client", "Uninstall Data Relay Link"):
+        for need in ("Pause Agent", "Resume Agent", "Uninstall Data Relay Link"):
             self.assertIn(need, labels)
 
     def test_client_lifecycle_match_actions(self):

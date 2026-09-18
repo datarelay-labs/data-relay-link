@@ -876,8 +876,9 @@ def _create_help(role):
         "======\n\n"
         '"create" is not a current public root.\n\n'
         "Preferred onboarding:\n"
-        "  set client\n"
-        "  help clients\n\n"
+        "  set enrollment\n"
+        "  set enrollment zero-touch\n"
+        "  help managed-hosts\n\n"
         "Hidden compatibility forms still accepted:\n"
         "  create zero-touch\n"
         "  create enrollment\n"
@@ -1098,7 +1099,7 @@ def context_help(tokens, role, names=None, clients=None):
             "  system support-bundle\n\n"
             "Use:\n"
             "  ?\n"
-            "  help clients\n"
+            "  help managed-hosts\n"
             "  help commands\n"
         ),
         "add": (
@@ -1192,10 +1193,10 @@ def context_help(tokens, role, names=None, clients=None):
         "client": (
             '"client" is not a current public root.\n\n'
             "Prefer:\n"
-            "  show clients / show client …\n"
-            "  set client …\n"
-            "  unset client …\n\n"
-            "See: help clients / help commands\n"
+            "  show managed-hosts / show managed-host …\n"
+            "  set enrollment\n"
+            "  unset managed-host …\n\n"
+            "See: help managed-hosts / help commands\n"
         ),
         "service": (
             '"service" is not a current public root.\n\n'
@@ -1210,7 +1211,7 @@ def context_help(tokens, role, names=None, clients=None):
         "enrollment": (
             '"enrollment" is not a current public root.\n\n'
             "Prefer set enrollment / show enrollments / unset enrollment.\n"
-            "See: help clients / help commands\n"
+            "See: help managed-hosts / help commands\n"
         ),
         "apply": (
             '"apply" is not a current public root.\n\n'
@@ -1687,6 +1688,8 @@ def public_option_rejection(tokens):
         ("create", "enrollment"),
         ("create", "enrollments"),
         ("create", "zero-touch"),
+        ("create-client",),
+        ("enroll",),
         ("add", "egress-destination"),
         ("delete", "enrollment"),
         ("enrollment", "create"),
@@ -1732,8 +1735,19 @@ def _machine_allowed_flags(tokens):
         ["update", "engine"],
         ["update", "project"],
         ["update", "frp"],
+    ) or toks[:3] in (
+        ["system", "update", "product"],
+        ["system", "update", "engine"],
+        ["system", "update", "project"],
+        ["system", "update", "frp"],
     ):
         allowed.add("--check")
+    if toks[:1] == ["release-client"] or toks[:2] == ["release", "client"]:
+        allowed.add("--yes")
+    # Flag allowlisting must use the canonical public path only. Alias lookup
+    # here would let obsolete forms such as `enroll --one-line` inherit hidden
+    # machine flags from `set enrollment`. Those flags stay valid on the
+    # current command; obsolete aliases remain guided and reject --options.
     cmd = CATALOG.find(toks)
     if cmd is None:
         focus = [t for t in toks if not t.startswith("-")]
@@ -1782,7 +1796,12 @@ def _canonical_result(tokens, role, names=None):
     if opt_err is not None:
         return None, opt_err
 
-    cmd = CATALOG.find(work)
+    # Alias-aware lookup is required: resolve_tokens may already have lifted a
+    # hidden form such as `update engine` to `system update engine`, but this
+    # helper is called with the pre-resolve tokens. Without aliases, find()
+    # misses the command, to_internal never runs, and match() then feeds the
+    # lifted `system …` tokens to _match_system as a dead-end.
+    cmd = CATALOG.find(work, include_aliases=True)
     if cmd is None:
         root = canonical_root(work[0])
         if root == "client" and _client_legacy_selector(work, names=names):
@@ -2245,6 +2264,20 @@ def _match_system(tokens, role, names=None):
         "object",
     ):
         return _control_plane_ok(tokens)
+    if op == "revoke":
+        return _match_revoke(["revoke"] + list(tokens[2:]), role, names)
+    if op == "info":
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["system info", "info"])
+        return {"status": "ok", "action": "show_info"}
+    if op == "update":
+        return _match_update(["update"] + list(tokens[2:]), role, names)
+    if op == "pause":
+        return {"status": "ok", "action": "client_pause"}
+    if op == "resume":
+        return {"status": "ok", "action": "client_resume"}
+    if op == "restart":
+        return {"status": "ok", "action": "client_restart"}
     # Prefer catalog-driven rewrite via to_internal; if we still see system *,
     # the rewrite missed — guide the operator.
     return incomplete(
@@ -3252,7 +3285,7 @@ def _match_update(tokens, role, names=None):
     if len(tokens) == 1:
         return incomplete(
             "Missing update target.",
-            ["update product", "update engine"],
+            ["system update product", "system update engine"],
             ["product", "engine"],
             tip="drlink help update",
         )
@@ -3271,7 +3304,7 @@ def _match_update(tokens, role, names=None):
     avail = ["product", "engine"]
     return incomplete(
         "Unknown update target.",
-        ["update product", "update engine"],
+        ["system update product", "system update engine"],
         avail,
         tip="drlink help update",
     )

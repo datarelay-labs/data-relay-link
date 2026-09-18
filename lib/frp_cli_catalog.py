@@ -1607,7 +1607,8 @@ def domain_help(topic, role):
             "  show managed-host <HOST>\n"
             "  show managed-host <HOST> remote-services\n"
             "  set enrollment\n"
-            "  system revoke client <HOST>\n\n"
+            "  set enrollment zero-touch\n"
+            "  unset managed-host <HOST>\n\n"
             "Obsolete noun 'clients' redirects here.\n"
         )
     if topic in ("network-object", "network-objects", "object", "objects"):
@@ -1737,7 +1738,7 @@ def domain_help(topic, role):
                     "  system restore <PATH>",
                     "  system revisions",
                     "  system audit",
-                    "  system export configuration --output <PATH>",
+                    "  system export configuration <PATH>",
                     "  test configuration <PATH|->",
                     "  system diff configuration <PATH|->",
                     "  system apply configuration <PATH|->",

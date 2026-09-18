@@ -448,7 +448,7 @@ Finding=
 TEST ID=H1
 Objective=Full Bundle loop including stdin paste
 Exact public command / operator action=
-  system export configuration --output /tmp/drlink-rick.yaml
+  system export configuration /tmp/drlink-rick.yaml
   test configuration /tmp/drlink-rick.yaml
   system diff configuration /tmp/drlink-rick.yaml
   system apply configuration /tmp/drlink-rick.yaml
