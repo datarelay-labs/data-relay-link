@@ -419,7 +419,8 @@ class MgmtApiAuthTests(unittest.TestCase):
             target_port=22,
             target_mode="self",
         )
-        self.assertEqual(result["status"], "HEALTHY")
+        # Server reservation alone is not HEALTHY — runtime verification required.
+        self.assertEqual(result["status"], "DEGRADED")
         self.assertIsNotNone(result["endpoint_port"])
         self.assertEqual(result["machine_id"], MACHINE_A)
         pub = self.server.conn.execute(
@@ -427,6 +428,21 @@ class MgmtApiAuthTests(unittest.TestCase):
             ("ssh-access",),
         ).fetchone()
         self.assertEqual(pub["client_id"], MACHINE_A)
+        acked = mgmt.upsert_remote_service_on_server(
+            root=self.agent_tmp,
+            name="ssh-access",
+            destination="this-host",
+            service="ssh",
+            enabled=True,
+            pool_class="normal",
+            target_host="127.0.0.1",
+            target_port=22,
+            target_mode="self",
+            preserve_endpoint_port=result["endpoint_port"],
+            runtime_verified=True,
+        )
+        self.assertEqual(acked["status"], "HEALTHY")
+        self.assertEqual(acked["endpoint_port"], result["endpoint_port"])
 
     def test_MGMT_AUTH_REMOTE_SERVICE_DELETE_VALID_AGENT_PASS(self):
         mgmt.upsert_remote_service_on_server(

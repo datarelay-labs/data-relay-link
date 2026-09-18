@@ -4801,6 +4801,15 @@ frp_client_install_management_files() {
   if [[ -f "${source}/lib/drlink_mgmt_sync.py" ]]; then
     install -m 0644 "${source}/lib/drlink_mgmt_sync.py" "${libdir}/drlink_mgmt_sync.py"
   fi
+  if [[ -f "${source}/lib/drlink_v24.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_v24.py" "${libdir}/drlink_v24.py"
+  fi
+  if [[ -f "${source}/lib/drlink_v24_runtime.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_v24_runtime.py" "${libdir}/drlink_v24_runtime.py"
+  fi
+  if [[ -f "${source}/lib/drlink_v24_cli.py" ]]; then
+    install -m 0644 "${source}/lib/drlink_v24_cli.py" "${libdir}/drlink_v24_cli.py"
+  fi
   if [[ -f "${source}/lib/frp-role-ownership.sh" ]]; then
     install -m 0644 "${source}/lib/frp-role-ownership.sh" "${libdir}/frp-role-ownership.sh"
   fi
@@ -4859,6 +4868,8 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/drlink_control_db.py:0644:lib/drlink_control_db.py" \
     "usr/local/lib/drlink/drlink_control_plane.py:0644:lib/drlink_control_plane.py" \
     "usr/local/lib/drlink/drlink_mgmt_sync.py:0644:lib/drlink_mgmt_sync.py" \
+    "usr/local/lib/drlink/drlink_v24.py:0644:lib/drlink_v24.py" \
+    "usr/local/lib/drlink/drlink_v24_runtime.py:0644:lib/drlink_v24_runtime.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \

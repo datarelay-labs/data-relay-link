@@ -13,6 +13,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -59,6 +60,8 @@ POLICY_MODES = ("blacklist", "whitelist")
 
 NORMAL_PORT_START, NORMAL_PORT_END = 6000, 6099
 FIXED_PORT_START, FIXED_PORT_END = 6200, 6299
+
+_ENDPOINT_ALLOC_LOCK = threading.Lock()
 
 V2_SCHEMA_SQL = r"""
 CREATE TABLE IF NOT EXISTS access_policies (
@@ -1922,30 +1925,125 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
             )
             plane_db.conn.commit()
         updated += 1
+    # Final runtime reconciliation for all desired services.
+    try:
+        import drlink_v24_runtime as runtime
+
+        applied = runtime.apply_agent_runtime(plane_db, root=root)
+        if not applied.get("ok") and not applied.get("skipped"):
+            runtime.mark_runtime_status(
+                plane_db, ok=False, reason=applied.get("error") or "Runtime activation failed"
+            )
+            return {
+                "status": "DEGRADED",
+                "updated": updated,
+                "runtime_error": applied.get("error") or "Runtime activation failed",
+            }
+        if applied.get("ok") and not applied.get("skipped"):
+            runtime.mark_runtime_status(plane_db, ok=True)
+    except Exception as exc:
+        return {"status": "DEGRADED", "updated": updated, "runtime_error": str(exc)}
     return {"status": "SYNCHRONIZED", "updated": updated}
 
 
 def allocate_endpoint_port(plane_db, client_id: str, service_name: str, pool_class: str) -> int:
-    used = {r[0] for r in plane_db.conn.execute("SELECT public_port FROM port_reservations WHERE released = 0")}
-    used |= {
-        r[0]
-        for r in plane_db.conn.execute(
-            "SELECT public_port FROM published_services WHERE public_port IS NOT NULL AND released = 0"
-        )
-    }
-    start, end = (FIXED_PORT_START, FIXED_PORT_END) if pool_class == "fixed-tcp" else (NORMAL_PORT_START, NORMAL_PORT_END)
-    for port in range(start, end + 1):
-        if port not in used:
+    """Allocate an endpoint for local/test paths.
+
+    Production online allocation must go through the FRP Allocator registry.
+    This helper still consults any local registry projection and OS bind state
+    so unit tests and offline-adjacent paths cannot ignore legacy ports.
+    """
+    with _ENDPOINT_ALLOC_LOCK:
+        used = {r[0] for r in plane_db.conn.execute("SELECT public_port FROM port_reservations WHERE released = 0")}
+        used |= {
+            r[0]
+            for r in plane_db.conn.execute(
+                "SELECT public_port FROM published_services WHERE public_port IS NOT NULL AND released = 0"
+            )
+        }
+        # Merge authoritative registry used ports when present under the plane root.
+        root = getattr(plane_db, "root", None)
+        base = Path(root) if root else Path("/")
+        for rel in (
+            "var/lib/drlink/runtime/client-inventory.json",
+            "var/lib/drlink/registry.json",
+        ):
+            path = base / rel
+            if not path.is_file():
+                continue
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+            for item in state.get("reserved") or []:
+                try:
+                    used.add(int(item))
+                except (TypeError, ValueError):
+                    pass
+            for client in (state.get("clients") or {}).values():
+                if not isinstance(client, dict):
+                    continue
+                for svc in (client.get("services") or {}).values():
+                    if not isinstance(svc, dict):
+                        continue
+                    try:
+                        port = int(svc.get("remote_port"))
+                    except (TypeError, ValueError):
+                        continue
+                    used.add(port)
+        protected = set()
+        try:
+            import frp_infrastructure_ports as infra
+
+            cfg_path = base / "etc/drlink/config.json"
+            cfg = {}
+            if cfg_path.is_file():
+                try:
+                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    cfg = {}
+            protected = set(infra.infrastructure_ports(cfg if isinstance(cfg, dict) else {}))
+            if pool_class == "fixed-tcp":
+                start, end = infra.tcp_relay_port_range(cfg if isinstance(cfg, dict) else {})
+            else:
+                start, end = infra.service_port_range(cfg if isinstance(cfg, dict) else {})
+        except Exception:
+            start, end = (
+                (FIXED_PORT_START, FIXED_PORT_END)
+                if pool_class == "fixed-tcp"
+                else (NORMAL_PORT_START, NORMAL_PORT_END)
+            )
+
+        def _os_free(port: int) -> bool:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", int(port)))
+                return True
+            except OSError:
+                return False
+            finally:
+                s.close()
+
+        for port in range(int(start), int(end) + 1):
+            if port in used or port in protected:
+                continue
+            if not _os_free(port):
+                continue
             plane_db.conn.execute(
                 "INSERT OR REPLACE INTO port_reservations(public_port, client_id, service_id, service_name, released, created_at) "
                 "VALUES (?, ?, '', ?, 0, ?)",
                 (port, client_id, service_name, utc_now_iso()),
             )
+            if not getattr(plane_db, "_batch_mode", False):
+                plane_db.conn.commit()
             return port
-    label = "Fixed TCP" if pool_class == "fixed-tcp" else "Remote Service"
-    raise ControlPlaneError(
-        "ERROR:\nNo %s ports are available.\n\nNo changes were applied." % label
-    )
+        label = "Fixed TCP" if pool_class == "fixed-tcp" else "Remote Service"
+        raise ControlPlaneError(
+            "ERROR:\nNo %s ports are available.\n\nNo changes were applied." % label
+        )
 
 
 def set_remote_service_agent(
@@ -2096,10 +2194,12 @@ def set_remote_service_agent(
     endpoint_host = os.environ.get("DRLINK_HOST") or "drlink.local"
     endpoint_port = existing["endpoint_port"] if existing else None
     pending = 0
-    status = "DISABLED" if not en else "HEALTHY"
-    reason = ""
+    status = "DISABLED" if not en else "DEGRADED"
+    reason = "Runtime activation pending."
     client = None
     live_mgmt = False
+    target_host_for_runtime = target_host
+    sport_for_runtime = sport
 
     if not server_reachable:
         pending = 1 if endpoint_port is None else 0
@@ -2128,12 +2228,13 @@ def set_remote_service_agent(
                     target_port=sport,
                     target_mode=target_mode,
                     preserve_endpoint_port=endpoint_port,
+                    runtime_verified=False,
                 )
                 endpoint_host = remote.get("endpoint_host") or endpoint_host
                 endpoint_port = remote.get("endpoint_port")
                 pending = int(remote.get("pending_allocation") or 0)
-                status = remote.get("status") or ("DISABLED" if not en else "HEALTHY")
-                reason = remote.get("reason") or ""
+                status = remote.get("status") or ("DISABLED" if not en else "DEGRADED")
+                reason = remote.get("reason") or "Runtime activation pending."
                 if en and pending:
                     status = "DEGRADED"
                     reason = reason or "Endpoint allocation is pending on the Server."
@@ -2179,7 +2280,7 @@ def set_remote_service_agent(
                     status = "DEGRADED"
                     reason = "No endpoint port is currently available"
             # Reachability probe for relay destinations (non-fatal)
-            if en and target_mode == "routed" and status == "HEALTHY":
+            if en and target_mode == "routed" and status in ("HEALTHY", "DEGRADED") and endpoint_port is not None:
                 if not _probe_tcp(target_host, sport):
                     status = "DEGRADED"
                     reason = "Destination is currently unreachable from Relay Host."
@@ -2253,6 +2354,93 @@ def set_remote_service_agent(
             plane_db._batch_mode = nested_prev
 
     result = plane_db._mutate("set remote-service %s" % name, "set remote service", write_all)
+
+    # Runtime activation: desired DB alone must never imply HEALTHY.
+    runtime_ok = False
+    runtime_error = ""
+    if en and endpoint_port is not None and pending == 0 and server_reachable:
+        try:
+            import drlink_v24_runtime as runtime
+
+            applied = runtime.apply_agent_runtime(plane_db, root=root)
+            if applied.get("skipped"):
+                # Unit-test shortcut: treat allocation success as verified.
+                runtime_ok = True
+            elif applied.get("ok"):
+                runtime_ok = True
+            else:
+                runtime_error = applied.get("error") or "Runtime activation failed"
+        except Exception as exc:
+            runtime_error = str(exc)
+        if runtime_ok:
+            status = "HEALTHY"
+            reason = ""
+            if live_mgmt:
+                try:
+                    import drlink_mgmt_sync as mgmt
+
+                    ack = mgmt.upsert_remote_service_on_server(
+                        root=root,
+                        name=name,
+                        destination=dest_token,
+                        service=svc_name,
+                        enabled=en,
+                        pool_class=pool_class,
+                        target_host=target_host_for_runtime,
+                        target_port=sport_for_runtime,
+                        target_mode=target_mode,
+                        preserve_endpoint_port=endpoint_port,
+                        runtime_verified=True,
+                    )
+                    status = ack.get("status") or status
+                    reason = ack.get("reason") or ""
+                except Exception as exc:
+                    status = "DEGRADED"
+                    reason = "Runtime applied locally but Server acknowledgement failed: %s" % exc
+                    runtime_ok = False
+            plane_db.conn.execute(
+                "UPDATE agent_remote_services SET status = ?, reason = ?, updated_at = ? WHERE name = ?",
+                (status, reason, utc_now_iso(), name),
+            )
+            if not getattr(plane_db, "_batch_mode", False):
+                plane_db.conn.commit()
+        else:
+            status = "DEGRADED"
+            reason = runtime_error or "Runtime activation pending."
+            plane_db.conn.execute(
+                "UPDATE agent_remote_services SET status = ?, reason = ?, updated_at = ? WHERE name = ?",
+                (status, reason, utc_now_iso(), name),
+            )
+            if not getattr(plane_db, "_batch_mode", False):
+                plane_db.conn.commit()
+            # New service whose runtime failed: release Server reservation when safe.
+            if existing is None and live_mgmt:
+                try:
+                    import drlink_mgmt_sync as mgmt
+
+                    mgmt.delete_remote_service_on_server(root=root, name=name)
+                    plane_db.conn.execute(
+                        "UPDATE agent_remote_services SET endpoint_port = NULL, pending_allocation = 1, "
+                        "status = 'DEGRADED', reason = ?, updated_at = ? WHERE name = ?",
+                        (reason, utc_now_iso(), name),
+                    )
+                    if not getattr(plane_db, "_batch_mode", False):
+                        plane_db.conn.commit()
+                    endpoint_port = None
+                    pending = 1
+                except Exception:
+                    pass
+    elif not en:
+        # Disabled: ensure runtime proxy removed.
+        try:
+            import drlink_v24_runtime as runtime
+
+            runtime.apply_agent_runtime(plane_db, root=root)
+        except Exception:
+            pass
+        status = "DISABLED"
+        reason = ""
+
     result["view"] = {
         "name": name,
         "destination": dest_token,
@@ -2270,7 +2458,7 @@ def set_remote_service_agent(
         "reason": reason,
         "connection": (
             None
-            if pending or endpoint_port is None
+            if pending or endpoint_port is None or status != "HEALTHY"
             else "ssh -p %s user@%s" % (endpoint_port, endpoint_host)
             if sport == 22
             else "%s:%s" % (endpoint_host, endpoint_port)
@@ -2349,12 +2537,27 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
             )
         return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "delete"}
 
-    return plane_db._mutate("unset remote-service %s" % name, "delete remote service", write)
+    result = plane_db._mutate("unset remote-service %s" % name, "delete remote service", write)
+    # Always remove local runtime proxy immediately (including offline tombstone deletes).
+    try:
+        import drlink_v24_runtime as runtime
+
+        runtime.apply_agent_runtime(plane_db, root=root)
+    except Exception:
+        pass
+    return result
 
 
 def format_remote_service_view(view: dict) -> str:
+    status = str(view.get("status") or "")
+    if status == "HEALTHY":
+        headline = "Remote Service activated."
+    elif status == "DISABLED":
+        headline = "Remote Service configuration saved."
+    else:
+        headline = "Remote Service configuration saved.\nRuntime activation pending."
     lines = [
-        "Remote Service activated." if view.get("status") != "DEGRADED" else "Remote Service created.",
+        headline,
         "",
         "Name        : %s" % view["name"],
         "Destination : %s" % view["destination"],
@@ -2373,15 +2576,14 @@ def format_remote_service_view(view: dict) -> str:
     if view.get("connection") and view["status"] == "HEALTHY":
         lines.extend(["", "Connection:", "  %s" % view["connection"]])
     if view.get("status") == "DEGRADED":
-        lines.extend(
-            [
-                "",
-                "Configuration was saved.",
-                "The service will become available automatically when connectivity is restored."
-                if "unreachable" in (view.get("reason") or "").lower()
-                else "Endpoint allocation and activation will complete automatically after reconnect.",
-            ]
-        )
+        reason_l = (view.get("reason") or "").lower()
+        if "unreachable" in reason_l:
+            follow = "The service will become available automatically when connectivity is restored."
+        elif "runtime" in reason_l:
+            follow = "Runtime activation will complete after a successful Agent/frpc apply."
+        else:
+            follow = "Endpoint allocation and activation will complete automatically after reconnect."
+        lines.extend(["", "Configuration was saved.", follow])
     return "\n".join(lines) + "\n"
 
 

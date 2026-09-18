@@ -3899,9 +3899,10 @@ class ControlPlane:
             "",
             "Control DB       : %s" % db_line,
             "DB Revision      : %s" % st["revision"],
-            "Managed Hosts    : %s" % st["clients"],
-            "Remote Services  : %s" % st["services"],
         ]
+        if role == "server":
+            extra.append("Managed Hosts    : %s" % st["clients"])
+        extra.append("Remote Services  : %s" % st["services"])
         return base.rstrip() + "\n" + "\n".join(extra) + "\n"
 
     def _read_server_config(self) -> dict:

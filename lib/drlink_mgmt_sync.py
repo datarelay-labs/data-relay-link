@@ -64,13 +64,14 @@ _INSECURE_FLAGS = ("1", "yes", "true")
 
 
 class MgmtAuthContext:
-    __slots__ = ("machine_id", "client", "nonce", "now")
+    __slots__ = ("machine_id", "client", "nonce", "now", "allocator")
 
-    def __init__(self, machine_id: str, client: dict, nonce: str, now: int):
+    def __init__(self, machine_id: str, client: dict, nonce: str, now: int, allocator=None):
         self.machine_id = machine_id
         self.client = client if isinstance(client, dict) else {}
         self.nonce = nonce
         self.now = int(now)
+        self.allocator = allocator
 
 
 def resolve_mgmt_base_url(root: Optional[str] = None) -> Optional[str]:
@@ -378,6 +379,7 @@ def upsert_remote_service_on_server(
     target_port: int,
     target_mode: str,
     preserve_endpoint_port: Optional[int] = None,
+    runtime_verified: bool = False,
 ) -> dict:
     base = resolve_mgmt_base_url(root)
     if not base:
@@ -394,6 +396,7 @@ def upsert_remote_service_on_server(
         "target_host": target_host,
         "target_port": int(target_port),
         "target_mode": target_mode,
+        "runtime_verified": bool(runtime_verified),
     }
     if preserve_endpoint_port is not None:
         body["preserve_endpoint_port"] = int(preserve_endpoint_port)
@@ -473,7 +476,7 @@ class AllocatorMgmtVerifier:
                 raise MgmtAuthError(error)
             if not isinstance(client, dict):
                 raise MgmtAuthError("unknown client identity")
-        return MgmtAuthContext(machine_id, client, nonce, int(now or time.time()))
+        return MgmtAuthContext(machine_id, client, nonce, int(now or time.time()), allocator=self.allocator)
 
     def commit_nonce(self, machine_id, nonce, now):
         with self.allocator.registry_lock():
@@ -694,6 +697,7 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     target_port = int(body.get("target_port") or 0)
     target_mode = str(body.get("target_mode") or "self").strip()
     preserve = body.get("preserve_endpoint_port")
+    runtime_verified = bool(body.get("runtime_verified", False))
     if not name or not destination or not service:
         raise MgmtSyncError("Remote Service name, destination, and service are required")
     if target_port < 1 or target_port > 65535:
@@ -713,7 +717,7 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     host_label = client["label"] or client["hostname"] or machine_id
 
     existing = plane.conn.execute(
-        "SELECT s.id, s.public_port, m.pool_class FROM published_services s "
+        "SELECT s.id, s.public_port, m.pool_class, m.status FROM published_services s "
         "LEFT JOIN remote_service_meta m ON m.service_id = s.id "
         "WHERE s.client_id = ? AND s.name = ? COLLATE NOCASE AND s.released = 0",
         (client["id"], name),
@@ -725,15 +729,56 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         )
 
     endpoint_port = None
+    proxy_id = None
     if preserve is not None:
         endpoint_port = int(preserve)
     elif existing and existing["public_port"]:
         endpoint_port = int(existing["public_port"])
-    if endpoint_port is None and enabled:
+
+    allocator = getattr(auth, "allocator", None)
+    if endpoint_port is None and not enabled:
+        pass
+    elif allocator is not None and enabled:
+        # Authoritative FRP registry allocation (single allocator authority).
+        extra_used = {
+            r[0]
+            for r in plane.conn.execute(
+                "SELECT public_port FROM port_reservations WHERE released = 0 AND public_port IS NOT NULL"
+            )
+        }
+        extra_used |= {
+            r[0]
+            for r in plane.conn.execute(
+                "SELECT public_port FROM published_services WHERE public_port IS NOT NULL AND released = 0"
+            )
+        }
+        try:
+            reserved = allocator.reserve_remote_service_endpoint(
+                machine_id,
+                name,
+                pool_class,
+                local_ip=target_host,
+                local_port=target_port,
+                preserve_port=endpoint_port,
+                extra_used=extra_used,
+            )
+        except Exception as exc:
+            raise MgmtSyncError("Endpoint allocation failed: %s" % exc) from exc
+        endpoint_port = int(reserved["remote_port"])
+        proxy_id = reserved.get("proxy_id")
+    elif endpoint_port is None and enabled:
+        # Test/local path without a live Allocator instance.
         endpoint_port = v24.allocate_endpoint_port(plane, client["id"], name, pool_class)
 
-    status = "DISABLED" if not enabled else "HEALTHY"
-    reason = ""
+    if enabled and runtime_verified and endpoint_port is not None:
+        status = "HEALTHY"
+        reason = ""
+    elif not enabled:
+        status = "DISABLED"
+        reason = ""
+    else:
+        status = "DEGRADED"
+        reason = "Runtime activation pending."
 
     def write():
         nested_prev = getattr(plane, "_batch_mode", False)
@@ -766,6 +811,13 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
                     reason,
                 ),
             )
+            if endpoint_port is not None:
+                plane.conn.execute(
+                    "INSERT OR REPLACE INTO port_reservations"
+                    "(public_port, client_id, service_id, service_name, released, created_at) "
+                    "VALUES (?, ?, ?, ?, 0, ?)",
+                    (endpoint_port, client["id"], pub["id"], name, utc_now_iso()),
+                )
             return {
                 "entity": {"type": "remote-service", "id": name, "name": name},
                 "operation": "set",
@@ -793,7 +845,9 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         "reason": reason,
         "managed_host": host_label,
         "machine_id": machine_id,
+        "proxy_id": proxy_id,
         "generation": 1,
+        "runtime_verified": runtime_verified,
     }
 
 
@@ -806,6 +860,13 @@ def server_delete_remote_service(plane, auth: MgmtAuthContext, name: str) -> dic
     ).fetchone()
     if not pub:
         return {"status": "ABSENT", "name": name}
+
+    allocator = getattr(auth, "allocator", None)
+    if allocator is not None:
+        try:
+            allocator.release_remote_service_endpoint(machine_id, name)
+        except Exception:
+            pass
 
     def write():
         if pub["public_port"] is not None:
