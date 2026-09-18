@@ -190,6 +190,9 @@ class ControlPlane:
         self._db_ident = self._db_file_ident()
         self._batch_mode = False
         self._batch_results: list = []
+        # Agent Bundle / nested Apply: Server-side Remote Service creates to
+        # reverse if the local transaction rolls back. Not a distributed txn.
+        self._agent_mgmt_side_effects: list = []
 
     def close(self) -> None:
         if self.conn is not None:
@@ -387,6 +390,30 @@ class ControlPlane:
             "true",
         )
 
+    def _commit_open_transaction(self) -> None:
+        """COMMIT only when this connection still owns an open transaction."""
+        try:
+            if self.conn is not None and self.conn.in_transaction:
+                self.conn.execute("COMMIT")
+        except sqlite3.OperationalError as exc:
+            if "no transaction is active" not in str(exc).lower():
+                raise
+
+    def _rollback_open_transaction(self) -> None:
+        """ROLLBACK only when this connection still owns an open transaction."""
+        try:
+            if self.conn is not None and self.conn.in_transaction:
+                self.conn.execute("ROLLBACK")
+        except sqlite3.OperationalError as exc:
+            if "no transaction is active" not in str(exc).lower():
+                raise
+
+    def commit_if_autonomous(self) -> None:
+        """Commit only when this plane is not participating in an outer batch."""
+        if self._batch_mode:
+            return
+        self._commit_open_transaction()
+
     def _mutate(
         self,
         command: str,
@@ -458,21 +485,21 @@ class ControlPlane:
                     after=summary,
                     impact=json.dumps(impact or {}, sort_keys=True)[:2000],
                 )
-            self.conn.execute("COMMIT")
+            self._commit_open_transaction()
         except ConfirmationRequired:
-            self.conn.execute("ROLLBACK")
+            self._rollback_open_transaction()
             self._cleanup_activation_checkpoint(checkpoint)
             raise
         except ConcurrencyError:
-            self.conn.execute("ROLLBACK")
+            self._rollback_open_transaction()
             self._cleanup_activation_checkpoint(checkpoint)
             raise
         except ControlPlaneError:
-            self.conn.execute("ROLLBACK")
+            self._rollback_open_transaction()
             self._cleanup_activation_checkpoint(checkpoint)
             raise
         except Exception as exc:
-            self.conn.execute("ROLLBACK")
+            self._rollback_open_transaction()
             self._cleanup_activation_checkpoint(checkpoint)
             raise ControlPlaneError("No changes were applied. %s" % exc) from exc
         if compile_runtime and self._activation_should_run():
@@ -751,6 +778,73 @@ class ControlPlane:
         return self._mutate(
             "set object %s value %s" % (name, normalized),
             "add object value",
+            write,
+            expected=expected,
+            impact=impact,
+            confirm=confirm,
+        )
+
+    def replace_object_value(
+        self,
+        name: str,
+        value: str,
+        *,
+        confirm: Optional[bool] = None,
+        expected_row_version: Optional[int] = None,
+    ) -> dict:
+        """Public v2.4 Network Object edit: one object → one canonical value.
+
+        Replaces every stored value atomically. Managed Host objects are rejected.
+        Legacy multi-value add remains on set_object_value() for compatibility.
+        """
+        obj = self.require_object(name)
+        if obj["origin"] == "managed":
+            raise ControlPlaneError("Cannot edit Managed Endpoint values through Object CRUD.")
+        normalized = normalize_object_value(obj["type"], value)
+        current = [
+            r["normalized"]
+            for r in self.conn.execute(
+                "SELECT normalized FROM object_values WHERE object_id = ? ORDER BY normalized",
+                (obj["id"],),
+            )
+        ]
+        if current == [normalized]:
+            return {
+                "entity": {"type": "object", "id": obj["id"], "name": obj["name"]},
+                "operation": "noop",
+                "after": normalized,
+            }
+        impact = self._value_add_impact(obj, normalized)
+
+        def write():
+            cur = self.conn.execute("SELECT * FROM objects WHERE id = ?", (obj["id"],)).fetchone()
+            if expected_row_version is not None and int(cur["row_version"]) != int(expected_row_version):
+                raise ConcurrencyError(
+                    "Object changed while you were editing it.\n"
+                    "No changes were applied.\n"
+                    "Review current state and retry."
+                )
+            self.conn.execute("DELETE FROM object_values WHERE object_id = ?", (obj["id"],))
+            self.conn.execute(
+                "INSERT INTO object_values(object_id, value, normalized) VALUES (?, ?, ?)",
+                (obj["id"], value.strip(), normalized),
+            )
+            self.conn.execute(
+                "UPDATE objects SET row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                (utc_now_iso(), obj["id"]),
+            )
+            return {
+                "entity": {"type": "object", "id": obj["id"], "name": obj["name"]},
+                "operation": "replace-value",
+                "after": normalized,
+            }
+
+        expected = None
+        if expected_row_version is not None:
+            expected = {"rows": [("objects", obj["id"], expected_row_version)]}
+        return self._mutate(
+            "set object %s value %s" % (name, normalized),
+            "replace object value",
             write,
             expected=expected,
             impact=impact,
@@ -2245,7 +2339,7 @@ class ControlPlane:
                 "",
                 "Final Result",
                 "------------",
-                result["action"] if not result["implicit"] else "DENY",
+                result["action"] if not result["implicit"] else "implicit DENY",
                 "Reason: %s" % result["reason"],
             ]
         )

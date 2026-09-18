@@ -245,7 +245,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 sys.path.insert(0, str(Path(os.environ.get("FRP_TEST_LOCKS_LIB", ""))))
 # Non-blocking attempt: writer must not observe a half-copied registry.
-lock = root / "var/lib/drlink/registry.lock"
+lock = root / "var/lib/drlink/runtime/registry.lock"
 import fcntl
 fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
 Path(sys.argv[2]).write_text("started\n")

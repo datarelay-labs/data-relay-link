@@ -60,9 +60,18 @@ def _role(plane: ControlPlane) -> str:
     return v24.detect_cli_role(plane.root)
 
 
+def _policy_resource_label(res: str) -> str:
+    mapping = {
+        "remote-access": "Remote Access policy",
+        "internet-access": "Internet Access policy",
+        "ai-access": "AI Access policy",
+    }
+    return mapping.get(res, res.replace("-", " ").title())
+
+
 def _require_server(plane: ControlPlane, resource: str) -> None:
     if _role(plane) == "agent":
-        raise ControlPlaneError(v24.role_error_server_resource(resource.replace("-", " ").title()))
+        raise ControlPlaneError(v24.role_error_server_resource(resource))
 
 
 def _require_agent(plane: ControlPlane) -> None:
@@ -78,11 +87,44 @@ def maybe_handle_obsolete(res: str) -> None:
         )
 
 
+def _legacy_backend_resource(res: str) -> bool:
+    """True when a non-canonical noun still has a working backend implementation.
+
+    Discovery omits these names. Explicit invocation falls through to the
+    control-plane backend rather than hard-failing operators and MCP tests.
+    """
+    return res in OBSOLETE
+
+
+def _guided_create_available() -> bool:
+    from drlink_v24_wizard import wizard_available
+
+    return wizard_available()
+
+
+def _v24_named_kv(tokens: list[str]) -> bool:
+    """True when tokens look like the v2.4 named-key oneshot form."""
+    if not tokens:
+        return False
+    return str(tokens[0]).strip().lower() in (
+        "mode",
+        "source",
+        "destination",
+        "service",
+        "permission",
+        "type",
+        "value",
+        "members",
+        "port",
+    )
+
+
 def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     if not rest:
         return None
     res = rest[0]
-    maybe_handle_obsolete(res)
+    if _legacy_backend_resource(res):
+        return None
     if res == "status":
         sys.stdout.write(plane.format_status())
         return 0
@@ -307,13 +349,29 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         sys.stdout.write("AI Identity : %s\nStatus      : %s\n" % (p["name"], status))
         return 0
     if res == "remote-access":
-        _require_server(plane, "Remote Access")
+        _require_server(plane, "Remote Access policy")
         return _show_policy(plane, "remote", rest)
     if res == "internet-access":
-        _require_server(plane, "Internet Access")
+        _require_server(plane, "Internet Access policy")
         return _show_policy(plane, "internet", rest)
     if res == "ai-access":
-        _require_server(plane, "AI Access")
+        _require_server(plane, "AI Access policy")
+        if len(rest) == 1:
+            cap_n = plane.conn.execute("SELECT COUNT(*) FROM ai_access_rules").fetchone()[0]
+            v24_n = plane.conn.execute("SELECT COUNT(*) FROM ai_policy_rules").fetchone()[0]
+            if int(cap_n or 0) and not int(v24_n or 0):
+                return None
+        if len(rest) >= 3 and rest[2] in ("impact",):
+            return None
+        if len(rest) >= 2:
+            v24_row = plane.conn.execute(
+                "SELECT id FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rest[1],)
+            ).fetchone()
+            cap_row = plane.conn.execute(
+                "SELECT id FROM ai_access_rules WHERE name = ? COLLATE NOCASE", (rest[1],)
+            ).fetchone()
+            if cap_row is not None and v24_row is None:
+                return None
         return _show_ai_policy(plane, rest)
     if res == "ai-access-log":
         _require_server(plane, "AI Access Log")
@@ -498,10 +556,11 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     if not rest:
         return None
     res = rest[0]
-    maybe_handle_obsolete(res)
+    if _legacy_backend_resource(res):
+        return None
     # Policy enable/disable without rule name
     if res in ("remote-access", "internet-access", "ai-access") and len(rest) == 2 and rest[1] in ("enabled", "disabled"):
-        _require_server(plane, res.replace("-", " ").title())
+        _require_server(plane, _policy_resource_label(res))
         from drlink_control_cli import _run
 
         _run(v24.set_policy_enforcement, plane, res, rest[1] == "enabled")
@@ -605,19 +664,24 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         sys.stdout.write("Permission Group set: %s\n" % name)
         return 0
     if res in ("remote-access", "internet-access"):
-        _require_server(plane, res.replace("-", " ").title())
+        _require_server(plane, _policy_resource_label(res))
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set %s <RULE> ..." % res)
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
-        enabled = None
-        if "enabled" in kv:
-            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
-        oneshot = bool(rest[2:])
-        if not oneshot:
+        extra = rest[2:]
+        if not extra:
+            if not _guided_create_available():
+                return None
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, res, name)
+        extra_l = [str(t).strip().lower() for t in extra]
+        if "mode" not in extra_l:
+            return None
+        kv = v24.parse_kv_tokens(extra)
+        enabled = None
+        if "enabled" in kv:
+            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         v24.set_access_rule(
             plane,
             res,
@@ -632,18 +696,24 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         sys.stdout.write("%s rule set: %s\n" % (res, name))
         return 0
     if res == "ai-access":
-        _require_server(plane, "AI Access")
+        _require_server(plane, "AI Access policy")
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set ai-access <RULE> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
-        enabled = None
-        if "enabled" in kv:
-            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
-        if not rest[2:]:
+        extra = rest[2:]
+        if not extra:
+            if not _guided_create_available():
+                return None
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "ai-access", name)
+        extra_l = [str(t).strip().lower() for t in extra]
+        if "mode" not in extra_l and "permission" not in extra_l:
+            return None
+        kv = v24.parse_kv_tokens(extra)
+        enabled = None
+        if "enabled" in kv:
+            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         v24.set_ai_access_rule(
             plane,
             name,
@@ -697,9 +767,10 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     if not rest:
         return None
     res = rest[0]
-    maybe_handle_obsolete(res)
+    if _legacy_backend_resource(res):
+        return None
     if res in ("remote-access", "internet-access", "ai-access") and len(rest) >= 2 and rest[1] == "policy":
-        _require_server(plane, res.replace("-", " ").title())
+        _require_server(plane, _policy_resource_label(res))
         from drlink_control_cli import _run
 
         result = _run(v24.reset_access_policy, plane, res)
@@ -777,20 +848,29 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         sys.stdout.write("Permission Group deleted: %s\n" % rest[1])
         return 0
     if res in ("remote-access", "internet-access"):
-        _require_server(plane, res.replace("-", " ").title())
+        _require_server(plane, _policy_resource_label(res))
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset %s <RULE>|policy" % res)
+        if len(rest) >= 3:
+            return None
         v24.unset_access_rule(plane, res, rest[1])
         sys.stdout.write("Rule deleted: %s\n" % rest[1])
         return 0
     if res == "ai-access":
-        _require_server(plane, "AI Access")
+        _require_server(plane, "AI Access policy")
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset ai-access <RULE>|policy")
+        if len(rest) >= 3:
+            return None
         row = plane.conn.execute(
             "SELECT * FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rest[1],)
         ).fetchone()
         if not row:
+            cap = plane.conn.execute(
+                "SELECT id FROM ai_access_rules WHERE name = ? COLLATE NOCASE", (rest[1],)
+            ).fetchone()
+            if cap is not None:
+                return None
             raise ControlPlaneError(v24.cli_error("Rule '%s' was not found." % rest[1]))
 
         def write():
@@ -853,8 +933,11 @@ def handle_test(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     if not rest:
         return None
     res = rest[0]
+    extra = rest[1:]
+    if extra and not _v24_named_kv(extra):
+        return None
     if res == "remote-access":
-        _require_server(plane, "Remote Access")
+        _require_server(plane, "Remote Access policy")
         kv = v24.parse_kv_tokens(rest[1:])
         for req in ("source", "destination", "service"):
             if req not in kv:
@@ -877,7 +960,7 @@ def handle_test(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         )
         return 0
     if res == "internet-access":
-        _require_server(plane, "Internet Access")
+        _require_server(plane, "Internet Access policy")
         kv = v24.parse_kv_tokens(rest[1:])
         for req in ("source", "destination", "service"):
             if req not in kv:
@@ -900,7 +983,7 @@ def handle_test(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         )
         return 0
     if res == "ai-access":
-        _require_server(plane, "AI Access")
+        _require_server(plane, "AI Access policy")
         kv = v24.parse_kv_tokens(rest[1:])
         for req in ("source", "destination", "permission"):
             if req not in kv:

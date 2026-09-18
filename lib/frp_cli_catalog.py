@@ -693,9 +693,27 @@ def root_rows(role):
     """(name, summary) rows for the canonical root actions."""
     rows = []
     allowed = set(roots_for_role(role))
+    client, server = role_parts(role)
     for name, roles, _category, summary in ROOTS:
         if name not in allowed:
             continue
+        if name == "show":
+            if server and not client:
+                summary = "View Managed Hosts, policies and status"
+            elif client and not server:
+                summary = "View Remote Services and status"
+        elif name == "set":
+            if client and not server:
+                summary = "Create or change Remote Services on this Agent Host"
+            elif server and not client:
+                summary = "Create, add, change or enable Server configuration"
+        elif name == "unset":
+            if client and not server:
+                summary = "Remove or disable Remote Services on this Agent Host"
+            elif server and not client:
+                summary = "Remove, delete, revoke, release or disable Server configuration"
+        elif name == "test":
+            summary = "Check policy decisions without changing configuration"
         rows.append((name, summary))
     return rows
 
@@ -1567,15 +1585,23 @@ def root_command_overview(role, detailed=False):
         ]
     )
     if detailed:
+        lines.extend(["Help topics:"])
+        client, server = role_parts(role)
+        if server or not client:
+            lines.extend(
+                [
+                    "  help managed-hosts",
+                    "  help network-objects",
+                    "  help service-objects",
+                    "  help remote-access",
+                    "  help internet-access",
+                    "  help ai-access",
+                ]
+            )
+        if client or not server:
+            lines.append("  help remote-services")
         lines.extend(
             [
-                "Help topics:",
-                "  help managed-hosts",
-                "  help network-objects",
-                "  help service-objects",
-                "  help remote-access",
-                "  help internet-access",
-                "  help ai-access",
                 "  help system",
                 "  help workflows",
                 "  help commands",
@@ -1657,7 +1683,7 @@ def domain_help(topic, role):
             "  set remote-access <RULE>\n"
             "  test remote-access source <SRC> destination <DST> service <SVC>\n"
         )
-    if topic in ("service", "services"):
+    if topic in ("service", "services", "remote-service", "remote-services"):
         if server:
             return (
                 "Remote Services are owned by Agent Hosts.\n\n"

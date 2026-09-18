@@ -85,6 +85,14 @@ ENROLLMENTS_TREE = StatePathSpec(
     restore_policy="tree",
     sensitivity="secret",
 )
+# Zero-Touch / enrollment bootstrap tickets. Historical backup/restore SSOT.
+BOOTSTRAP_TREE = StatePathSpec(
+    path="var/lib/drlink/bootstrap",
+    type="tree",
+    backup_policy="tree",
+    restore_policy="tree",
+    sensitivity="secret",
+)
 MCP_TLS_TREE = StatePathSpec(
     path="var/lib/drlink/tls/mcp",
     type="tree",

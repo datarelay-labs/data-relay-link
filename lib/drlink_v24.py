@@ -31,6 +31,9 @@ NETWORK_DISPLAY = {
     "managed_endpoint": "Managed Host",
 }
 
+DESTINATION_UNREACHABLE_REASON = "Destination is currently unreachable from Relay Host."
+DISABLED_OPERATOR_REASON = ""
+
 SERVICE_TYPES = ("tcp", "udp", "fixed-tcp")
 PERMISSIONS = (
     "host-info",
@@ -251,6 +254,55 @@ def ensure_v2_schema(conn: sqlite3.Connection) -> None:
                 "VALUES (?, ?, ?, ?, '', 1, ?, ?)",
                 (_new_id("sobj"), name, stype, port, now, now),
             )
+
+
+def _commit_if_autonomous(plane_db) -> None:
+    """Never COMMIT an outer Bundle / batch transaction from a nested helper."""
+    commit = getattr(plane_db, "commit_if_autonomous", None)
+    if callable(commit):
+        commit()
+        return
+    if getattr(plane_db, "_batch_mode", False):
+        return
+    conn = getattr(plane_db, "conn", None)
+    if conn is None:
+        return
+    try:
+        if conn.in_transaction:
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _record_agent_mgmt_create(plane_db, name: str, *, root: Optional[str] = None) -> None:
+    effects = getattr(plane_db, "_agent_mgmt_side_effects", None)
+    if effects is None:
+        plane_db._agent_mgmt_side_effects = []
+        effects = plane_db._agent_mgmt_side_effects
+    effects.append({"op": "create-rs", "name": name, "root": root})
+
+
+def reconcile_agent_mgmt_side_effects(plane_db, *, root: Optional[str] = None, keep_names: Optional[list] = None) -> None:
+    """Best-effort reverse of Server Remote Service creates after local rollback."""
+    effects = list(getattr(plane_db, "_agent_mgmt_side_effects", None) or [])
+    plane_db._agent_mgmt_side_effects = []
+    keep = {str(n).lower() for n in (keep_names or []) if n}
+    if not effects:
+        return
+    try:
+        import drlink_mgmt_sync as mgmt
+    except Exception:
+        return
+    for item in effects:
+        name = str(item.get("name") or "").strip()
+        if not name or name.lower() in keep:
+            continue
+        if item.get("op") != "create-rs":
+            continue
+        try:
+            mgmt.delete_remote_service_on_server(root=item.get("root") or root, name=name)
+        except Exception:
+            pass
 
 
 def cli_error(what: str, expected: str = "", next_step: str = "", applied: bool = False) -> str:
@@ -668,7 +720,7 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
                 raise ControlPlaneError(
                     cli_error("Cannot change Network Object type after creation.")
                 )
-            plane_db.set_object_value(name, value)
+            plane_db.replace_object_value(name, value)
             return {"operation": "update", "name": name}
         plane_db.set_object_type(name, store)
         plane_db.set_object_value(name, value)
@@ -1776,7 +1828,7 @@ def sync_agent_catalog_from_server(plane_db, server_plane=None, *, root: Optiona
             ("service-object", sobj["name"], payload, now),
         )
         count += 1
-    plane_db.conn.commit()
+    _commit_if_autonomous(plane_db)
     return count
 
 
@@ -1967,8 +2019,46 @@ def _reconcile_agent_from_server_status(plane_db, result: dict) -> int:
         )
         changed += 1
     if changed and not getattr(plane_db, "_batch_mode", False):
-        plane_db.conn.commit()
+        _commit_if_autonomous(plane_db)
     return changed
+
+
+def _collect_degraded_remote_services(plane_db) -> list[dict]:
+    rows = []
+    for row in plane_db.conn.execute(
+        "SELECT name, reason FROM agent_remote_services WHERE delete_pending = 0 AND status = 'DEGRADED' ORDER BY name"
+    ):
+        rows.append({"name": row["name"], "reason": str(row["reason"] or "").strip()})
+    return rows
+
+
+def format_synchronize_result(result: dict) -> str:
+    status = str(result.get("status") or "SYNCHRONIZED").upper()
+    affected = list(result.get("affected") or [])
+    if status == "OFFLINE":
+        return "Synchronization OFFLINE. DRLink Server is currently unreachable.\n"
+    if status != "DEGRADED":
+        return "Synchronization %s (%s Remote Service(s) updated).\n" % (
+            status,
+            result.get("updated", 0),
+        )
+    lines = ["Synchronization DEGRADED.", ""]
+    if affected:
+        lines.append("Affected:")
+        for item in affected:
+            reason = str(item.get("reason") or "").strip() or "Requires operator attention."
+            lines.append("  %s — %s" % (item.get("name"), reason))
+        lines.append("")
+    runtime_error = str(result.get("runtime_error") or "").strip()
+    if runtime_error and not affected:
+        lines.append(runtime_error)
+        lines.append("")
+    first = (affected[0].get("name") if affected else "") or ""
+    if first:
+        lines.extend(["Use:", "  show remote-service %s" % first])
+    else:
+        lines.extend(["Use:", "  show remote-services"])
+    return "\n".join(lines) + "\n"
 
 
 def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -> dict:
@@ -1997,7 +2087,7 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
                 "WHERE name = ?",
                 (str(exc).split("\n", 2)[1] if "\n" in str(exc) else str(exc), utc_now_iso(), row["name"]),
             )
-            plane_db.conn.commit()
+            _commit_if_autonomous(plane_db)
         updated += 1
     # Revalidate + activate remaining services
     for row in list(
@@ -2013,7 +2103,7 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
                 "WHERE name = ?",
                 (reason, utc_now_iso(), row["name"]),
             )
-            plane_db.conn.commit()
+            _commit_if_autonomous(plane_db)
             updated += 1
             continue
         # Re-apply to allocate pending endpoints / refresh HEALTHY
@@ -2038,7 +2128,7 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
                 "WHERE name = ?",
                 (brief, utc_now_iso(), row["name"]),
             )
-            plane_db.conn.commit()
+            _commit_if_autonomous(plane_db)
         updated += 1
     # Reconcile endpoint ownership with Server before runtime projection so a
     # stale Agent claim cannot keep advertising or activating a revoked port.
@@ -2053,18 +2143,31 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
                 plane_db, ok=False, reason=applied.get("error") or "Runtime activation failed"
             )
             _push_agent_remote_service_status(plane_db, root=root)
+            affected = _collect_degraded_remote_services(plane_db)
             return {
                 "status": "DEGRADED",
                 "updated": updated,
+                "affected": affected,
                 "runtime_error": applied.get("error") or "Runtime activation failed",
             }
         if applied.get("ok") and not applied.get("skipped"):
             runtime.mark_runtime_status(plane_db, ok=True)
     except Exception as exc:
         _push_agent_remote_service_status(plane_db, root=root)
-        return {"status": "DEGRADED", "updated": updated, "runtime_error": str(exc)}
+        affected = _collect_degraded_remote_services(plane_db)
+        return {
+            "status": "DEGRADED",
+            "updated": updated,
+            "affected": affected,
+            "runtime_error": str(exc),
+        }
     _push_agent_remote_service_status(plane_db, root=root)
-    return {"status": "SYNCHRONIZED", "updated": updated}
+    affected = _collect_degraded_remote_services(plane_db)
+    return {
+        "status": "DEGRADED" if affected else "SYNCHRONIZED",
+        "updated": updated,
+        "affected": affected,
+    }
 
 
 def allocate_endpoint_port(plane_db, client_id: str, service_name: str, pool_class: str) -> int:
@@ -2159,7 +2262,7 @@ def allocate_endpoint_port(plane_db, client_id: str, service_name: str, pool_cla
                 (port, client_id, service_name, utc_now_iso()),
             )
             if not getattr(plane_db, "_batch_mode", False):
-                plane_db.conn.commit()
+                _commit_if_autonomous(plane_db)
             return port
         label = "Fixed TCP" if pool_class == "fixed-tcp" else "Remote Service"
         raise ControlPlaneError(
@@ -2322,9 +2425,15 @@ def set_remote_service_agent(
     target_host_for_runtime = target_host
     sport_for_runtime = sport
 
-    if not server_reachable:
+    destination_unreachable = False
+    in_batch = bool(getattr(plane_db, "_batch_mode", False))
+
+    if not en:
+        status = "DISABLED"
+        reason = DISABLED_OPERATOR_REASON
+    elif not server_reachable:
         pending = 1 if endpoint_port is None else 0
-        status = "DISABLED" if not en else "DEGRADED"
+        status = "DEGRADED"
         reason = "DRLink Server is currently unreachable."
     else:
         import drlink_mgmt_sync as mgmt
@@ -2351,12 +2460,14 @@ def set_remote_service_agent(
                     preserve_endpoint_port=endpoint_port,
                     runtime_verified=False,
                 )
+                if existing is None:
+                    _record_agent_mgmt_create(plane_db, name, root=root)
                 endpoint_host = remote.get("endpoint_host") or endpoint_host
                 endpoint_port = remote.get("endpoint_port")
                 pending = int(remote.get("pending_allocation") or 0)
-                status = remote.get("status") or ("DISABLED" if not en else "DEGRADED")
+                status = remote.get("status") or "DEGRADED"
                 reason = remote.get("reason") or "Runtime activation pending."
-                if en and pending:
+                if pending:
                     status = "DEGRADED"
                     reason = reason or "Endpoint allocation is pending on the Server."
             except ControlPlaneError:
@@ -2400,11 +2511,13 @@ def set_remote_service_agent(
                     pending = 1
                     status = "DEGRADED"
                     reason = "No endpoint port is currently available"
-            # Reachability probe for relay destinations (non-fatal)
-            if en and target_mode == "routed" and status in ("HEALTHY", "DEGRADED") and endpoint_port is not None:
-                if not _probe_tcp(target_host, sport):
-                    status = "DEGRADED"
-                    reason = "Destination is currently unreachable from Relay Host."
+
+    # Routed destination reachability is independent of proxy registration.
+    if en and target_mode == "routed" and endpoint_port is not None and pending == 0:
+        if not _probe_tcp(target_host, sport):
+            destination_unreachable = True
+            status = "DEGRADED"
+            reason = DESTINATION_UNREACHABLE_REASON
 
     now = utc_now_iso()
     client_for_pub = client
@@ -2476,6 +2589,34 @@ def set_remote_service_agent(
 
     result = plane_db._mutate("set remote-service %s" % name, "set remote service", write_all)
 
+    def _persist_status(next_status: str, next_reason: str) -> None:
+        plane_db.conn.execute(
+            "UPDATE agent_remote_services SET status = ?, reason = ?, updated_at = ? WHERE name = ?",
+            (next_status, next_reason, utc_now_iso(), name),
+        )
+        _commit_if_autonomous(plane_db)
+
+    # Nested Bundle Apply writes desired state only; the outer plan activates runtime.
+    if in_batch:
+        result["view"] = {
+            "name": name,
+            "destination": dest_token,
+            "relay_host": host_name if relay else "-",
+            "service": svc_name,
+            "enabled": en,
+            "status": status if en else "DISABLED",
+            "endpoint": (
+                "Pending allocation"
+                if pending or endpoint_port is None
+                else "%s:%s" % (endpoint_host, endpoint_port)
+            ),
+            "endpoint_host": endpoint_host,
+            "endpoint_port": endpoint_port,
+            "reason": reason,
+            "connection": None,
+        }
+        return result
+
     # Runtime activation: desired DB alone must never imply HEALTHY.
     runtime_ok = False
     runtime_error = ""
@@ -2493,7 +2634,13 @@ def set_remote_service_agent(
                 runtime_error = applied.get("error") or "Runtime activation failed"
         except Exception as exc:
             runtime_error = str(exc)
-        if runtime_ok:
+        if runtime_ok and destination_unreachable:
+            status = "DEGRADED"
+            reason = DESTINATION_UNREACHABLE_REASON
+            _persist_status(status, reason)
+            if live_mgmt:
+                _push_agent_remote_service_status(plane_db, root=root, names=[name])
+        elif runtime_ok:
             status = "HEALTHY"
             reason = ""
             if live_mgmt:
@@ -2513,27 +2660,26 @@ def set_remote_service_agent(
                         preserve_endpoint_port=endpoint_port,
                         runtime_verified=True,
                     )
-                    status = ack.get("status") or status
-                    reason = ack.get("reason") or ""
+                    # Server HEALTHY must not overwrite a local unreachable probe.
+                    ack_status = str(ack.get("status") or status).upper()
+                    ack_reason = str(ack.get("reason") or "")
+                    if ack_status == "DEGRADED":
+                        status = "DEGRADED"
+                        reason = ack_reason or "Runtime activation pending."
+                    else:
+                        status = "HEALTHY"
+                        reason = ""
                 except Exception as exc:
                     status = "DEGRADED"
                     reason = "Runtime applied locally but Server acknowledgement failed: %s" % exc
                     runtime_ok = False
-            plane_db.conn.execute(
-                "UPDATE agent_remote_services SET status = ?, reason = ?, updated_at = ? WHERE name = ?",
-                (status, reason, utc_now_iso(), name),
-            )
-            if not getattr(plane_db, "_batch_mode", False):
-                plane_db.conn.commit()
+            _persist_status(status, reason)
+            if live_mgmt and status != "HEALTHY":
+                _push_agent_remote_service_status(plane_db, root=root, names=[name])
         else:
             status = "DEGRADED"
             reason = runtime_error or "Runtime activation pending."
-            plane_db.conn.execute(
-                "UPDATE agent_remote_services SET status = ?, reason = ?, updated_at = ? WHERE name = ?",
-                (status, reason, utc_now_iso(), name),
-            )
-            if not getattr(plane_db, "_batch_mode", False):
-                plane_db.conn.commit()
+            _persist_status(status, reason)
             # New service whose runtime failed: release Server reservation when safe.
             if existing is None and live_mgmt:
                 try:
@@ -2545,8 +2691,7 @@ def set_remote_service_agent(
                         "status = 'DEGRADED', reason = ?, updated_at = ? WHERE name = ?",
                         (reason, utc_now_iso(), name),
                     )
-                    if not getattr(plane_db, "_batch_mode", False):
-                        plane_db.conn.commit()
+                    _commit_if_autonomous(plane_db)
                     endpoint_port = None
                     pending = 1
                 except Exception:
@@ -2562,7 +2707,10 @@ def set_remote_service_agent(
         except Exception:
             pass
         status = "DISABLED"
-        reason = ""
+        reason = DISABLED_OPERATOR_REASON
+        _persist_status(status, reason)
+        if live_mgmt:
+            _push_agent_remote_service_status(plane_db, root=root, names=[name])
 
     result["view"] = {
         "name": name,

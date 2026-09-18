@@ -976,13 +976,56 @@ def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False)
             "operation": "apply",
         }
 
-    plane._mutate(
-        "system apply configuration",
-        "apply configuration bundle",
-        write_all,
-        confirm=True,
-    )
+    plane._agent_mgmt_side_effects = []
+    checkpoint = None
+    is_agent = str(plan.context or "").lower() == "agent"
+    try:
+        if is_agent and plane._activation_should_run():
+            checkpoint = plane._pre_activation_checkpoint()
+        plane._mutate(
+            "system apply configuration",
+            "apply configuration bundle",
+            write_all,
+            confirm=True,
+            compile_runtime=not is_agent,
+        )
+        if is_agent:
+            _finalize_agent_bundle_runtime(plane, plan, checkpoint)
+    except Exception:
+        v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+        raise
+    finally:
+        plane._cleanup_activation_checkpoint(checkpoint)
+        plane._agent_mgmt_side_effects = []
     return {"status": "APPLIED", "revision": plane.current_revision()}
+
+
+def _finalize_agent_bundle_runtime(plane: ControlPlane, plan: V24Plan, checkpoint) -> None:
+    """Activate Agent runtime after the desired-state transaction commits."""
+    import drlink_v24_runtime as runtime
+
+    applied = runtime.apply_agent_runtime(plane, root=plane.root)
+    if applied.get("skipped") or applied.get("ok"):
+        runtime.mark_runtime_status(plane, ok=True, generation=int(applied.get("generation") or 0))
+        v24._push_agent_remote_service_status(plane, root=plane.root)
+        plane._agent_mgmt_side_effects = []
+        return
+    if checkpoint:
+        try:
+            plane._rollback_activation(checkpoint)
+        except Exception:
+            v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+            raise ControlPlaneError(
+                "ERROR:\nApply failed and automatic rollback was not fully successful.\n\n"
+                "The current runtime state may require operator attention.\n\n"
+                "Run:\n  system diagnostics"
+            ) from None
+    v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+    raise ControlPlaneError(
+        "ERROR:\nRuntime activation failed.\n\n"
+        "Previous configuration was restored.\n"
+        "No configuration changes remain active."
+    )
 
 
 def _apply_one(plane: ControlPlane, change: dict) -> None:

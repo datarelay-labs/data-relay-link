@@ -34,7 +34,9 @@ rows=[]
 for name in sys.argv[1:3]:
     with open(name,newline='') as f:
         batch=list(csv.DictReader(f))
-        assert len({row['expires'] for row in batch})==len(batch)
+        assert all(row.get('expires') for row in batch)
+        assert all(row.get('bootstrap_command') for row in batch)
+        assert len({row['label'] for row in batch})==len(batch)
         rows.extend(batch)
 assert len(rows)==5
 tickets=[]

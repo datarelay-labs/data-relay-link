@@ -108,7 +108,7 @@ import json, sys
 cfg = json.loads(open(sys.argv[1], encoding="utf-8").read())
 assert cfg.get("egress_listen_addr") == "127.0.0.1", cfg
 assert int(cfg.get("egress_listen_port")) == 6122, cfg
-assert cfg.get("egress_control_file") == "/var/lib/drlink/custom-egress.json", cfg
+assert "egress_control_file" not in cfg, cfg
 assert cfg.get("egress_conn_log_file") == "/var/log/drlink/egress/custom.jsonl", cfg
 print("ok")
 PY

@@ -58,7 +58,7 @@ class TtyIO(WizardIO):
     def ask(self, prompt: str = "") -> str:
         try:
             return input(prompt)
-        except EOFError as exc:
+        except (EOFError, KeyboardInterrupt) as exc:
             raise WizardCancelled() from exc
 
 
@@ -88,7 +88,7 @@ def _io() -> WizardIO:
     if env is not None:
         answers = env.split("\n") if env else []
         return ScriptedIO(answers)
-    if sys.stdin.isatty():
+    if sys.stdin.isatty() and sys.stdout.isatty():
         return TtyIO()
     raise ControlPlaneError(
         "ERROR:\nInteractive wizard requires a TTY session.\n\nNo changes were applied."
@@ -100,7 +100,10 @@ def wizard_available() -> bool:
         return True
     if os.environ.get("DRLINK_WIZARD_ANSWERS") is not None:
         return True
-    return bool(sys.stdin.isatty())
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
 
 
 @dataclass
@@ -127,6 +130,13 @@ def _emit(io: WizardIO, text: str) -> None:
     io.write(text)
 
 
+CANCEL_TOKENS = frozenset({"cancel", "c"})
+
+
+def _is_cancel(raw: str) -> bool:
+    return str(raw or "").strip().lower() in CANCEL_TOKENS
+
+
 def _ask_choice(io: WizardIO, title: str, options: list[str], *, allow_create: list[tuple[str, str]] = None) -> str:
     """Return selected option text, or '+create:<kind>' for inline create markers."""
     while True:
@@ -144,7 +154,10 @@ def _ask_choice(io: WizardIO, title: str, options: list[str], *, allow_create: l
             _emit(io, "%d) %s" % (idx, label))
             mapping[str(idx)] = token
             idx += 1
+        _emit(io, "c) Cancel")
         raw = io.ask("Select: ").strip()
+        if _is_cancel(raw):
+            raise WizardCancelled()
         if raw in mapping:
             return mapping[raw]
         # allow typing the option name directly
@@ -158,6 +171,8 @@ def _ask_text(io: WizardIO, prompt: str, *, default: Optional[str] = None, valid
     while True:
         suffix = " [%s]" % default if default not in (None, "") else ""
         raw = io.ask("%s%s: " % (prompt, suffix)).strip()
+        if _is_cancel(raw):
+            raise WizardCancelled()
         if not raw and default is not None:
             raw = default
         if validate:
@@ -172,13 +187,15 @@ def _ask_yes_no(io: WizardIO, prompt: str, *, default: Optional[bool] = None) ->
     while True:
         hint = " [Y/n]" if default is True else (" [y/N]" if default is False else "")
         raw = io.ask("%s%s: " % (prompt, hint)).strip().lower()
+        if _is_cancel(raw):
+            raise WizardCancelled()
         if not raw and default is not None:
             return default
         if raw in ("y", "yes", "1"):
             return True
         if raw in ("n", "no", "0"):
             return False
-        _emit(io, "ERROR: Enter yes or no.")
+        _emit(io, "ERROR: Enter yes or no. Type cancel to abort.")
 
 
 def _validate_network_value(typ: str, value: str) -> Optional[str]:
@@ -390,9 +407,9 @@ def _review_menu(io: WizardIO, session: WizardSession, lines: list[str]) -> str:
             return "apply"
         if raw in ("2", "edit"):
             return "edit"
-        if raw in ("3", "cancel"):
+        if raw in ("3", "cancel", "c"):
             return "cancel"
-        _emit(io, "ERROR: Invalid selection.")
+        _emit(io, "ERROR: Invalid selection. Type 1, 2, 3, or cancel.")
 
 
 def _cancel_message() -> str:
@@ -1080,4 +1097,8 @@ def run_wizard(plane: ControlPlane, resource: str, name: str) -> int:
             "ERROR:\nInteractive %s wizard requires a TTY session.\n\nNo changes were applied."
             % resource.replace("-", " ").title()
         )
-    return fn(plane, name)
+    try:
+        return fn(plane, name)
+    except (WizardCancelled, KeyboardInterrupt, EOFError):
+        sys.stdout.write(_cancel_message())
+        return 0

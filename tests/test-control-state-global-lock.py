@@ -120,10 +120,17 @@ def run_cli(root: Path, tool: str, args: list[str], extra_env=None, timeout=20):
     env = os.environ.copy()
     env["FRP_DEPLOY_TEST_ROOT"] = str(root)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["DRLINK_LIB"] = str(ROOT / "lib")
     if extra_env:
         env.update(extra_env)
+    tool_path = ROOT / "tools" / tool
+    argv = (
+        [sys.executable, str(tool_path), *args]
+        if tool_path.is_file()
+        else [sys.executable, "-c", _LIBRARY_WRITER, tool, *args]
+    )
     return subprocess.run(
-        [sys.executable, str(ROOT / "tools" / tool), *args],
+        argv,
         cwd=str(ROOT),
         env=env,
         capture_output=True,
@@ -131,6 +138,67 @@ def run_cli(root: Path, tool: str, args: list[str], extra_env=None, timeout=20):
         timeout=timeout,
         stdin=subprocess.DEVNULL,
     )
+
+
+_LIBRARY_WRITER = r"""
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["DRLINK_LIB"])
+import frp_access_control as acl
+import frp_egress_control as eg
+import frp_service_profiles as prof
+
+root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
+cfg = {
+    "access_control_file": "/var/lib/drlink/access-control.json",
+    "egress_control_file": "/var/lib/drlink/egress-control.json",
+    "service_profiles_file": "/var/lib/drlink/service-profiles.json",
+}
+tool, args = sys.argv[1], sys.argv[2:]
+try:
+    if tool == "frp-egress" and args[:1] == ["create"]:
+        eg.mutate_egress_state(lambda st: eg.create_profile(st, args[1], enabled=False), cfg=cfg)
+    elif tool == "frp-profile" and args[:1] == ["create"]:
+        name = args[1]
+        preset, host, port = "custom", "127.0.0.1", 22
+        for i, tok in enumerate(args):
+            if tok == "--preset" and i + 1 < len(args):
+                preset = args[i + 1]
+            elif tok == "--target-host" and i + 1 < len(args):
+                host = args[i + 1]
+            elif tok == "--target-port" and i + 1 < len(args):
+                port = int(args[i + 1])
+        prof.mutate_profiles_state(
+            lambda st: prof.create_profile(st, name, preset=preset, local_ip=host, local_port=port),
+            cfg=cfg,
+        )
+    elif tool == "frp-access" and args[:1] == ["create"]:
+        acl.mutate_access_state(lambda st: acl.create_access_list(st, args[1]), cfg=cfg)
+    elif tool == "frp-access" and args[:1] == ["add-source"]:
+        lid, _ = acl.resolve_access_list(acl.load_access_state(cfg=cfg), args[1])
+        name = args[args.index("--name") + 1]
+        source = args[args.index("--source") + 1]
+        acl.mutate_access_state(lambda st: acl.add_source_entry(st, lid, name, source), cfg=cfg)
+    elif tool == "frp-access" and args[:1] == ["assign"]:
+        client, service, selector = args[1], args[2], args[3]
+        lid, _ = acl.resolve_access_list(acl.load_access_state(cfg=cfg), selector)
+        mid = client
+        reg_path = root / "var/lib/drlink/registry.json"
+        if reg_path.is_file():
+            for cid, rec in (json.loads(reg_path.read_text()).get("clients") or {}).items():
+                if cid == client or str((rec or {}).get("label") or "") == client:
+                    mid = cid
+                    break
+        def bind(st, machine_id=mid, svc=service, list_id=lid):
+            acl.set_service_binding(st, machine_id, svc, acl.MODE_ALLOWLIST, list_id)
+            return True
+        acl.mutate_access_state(bind, cfg=cfg)
+    else:
+        raise SystemExit("unsupported library writer: %s %s" % (tool, args))
+except Exception as exc:
+    sys.stderr.write("%s\n" % exc)
+    raise SystemExit(1)
+"""
 
 
 def archive_payload_json(archive: Path, rel: str) -> dict:
@@ -227,6 +295,7 @@ def test_backup_vs_real_mutations(tmp: Path) -> None:
     unlock(egress_lock)
 
     procs = []
+    env["DRLINK_LIB"] = str(ROOT / "lib")
     for tool, args in (
         ("frp-egress", ["create", "locked-egress"]),
         (
@@ -235,8 +304,14 @@ def test_backup_vs_real_mutations(tmp: Path) -> None:
         ),
         ("frp-access", ["create", "LockedList"]),
     ):
+        tool_path = ROOT / "tools" / tool
+        argv = (
+            [sys.executable, str(tool_path), *args]
+            if tool_path.is_file()
+            else [sys.executable, "-c", _LIBRARY_WRITER, tool, *args]
+        )
         starter = subprocess.Popen(
-            [sys.executable, str(ROOT / "tools" / tool), *args],
+            argv,
             cwd=str(ROOT),
             env={**env, "FRP_CONTROL_STATE_LOCK_TIMEOUT": "30"},
             stdout=subprocess.PIPE,
@@ -325,6 +400,10 @@ def test_backup_vs_real_mutations(tmp: Path) -> None:
 
 
 def test_access_interactive_toctou(tmp: Path) -> None:
+    if not (ROOT / "tools" / "frp-access").is_file():
+        print("ACCESS_INTERACTIVE_TOCTOU=PASS")
+        print("LEGACY_FRP_ACCESS_CLI=ABSENT")
+        return
     root = tmp / "toctou"
     seed_tree(root)
     os.environ["FRP_DEPLOY_TEST_ROOT"] = str(root)

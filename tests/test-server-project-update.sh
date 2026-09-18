@@ -69,7 +69,8 @@ EOF
   "port_start": 6000,
   "port_end": 6098,
   "client_installer_url": "https://updates.example/client.sh",
-  "egress_control_file": "/var/lib/drlink/egress-control.json",
+  "registry_file": "/var/lib/drlink/runtime/client-inventory.json",
+  "control_db_file": "/var/lib/drlink/drlink.db",
   "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
   "egress_listen_addr": "0.0.0.0",
   "egress_listen_port": 6102
@@ -219,11 +220,12 @@ import json, sys
 from pathlib import Path
 cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 required = {
-    "egress_control_file": "/var/lib/drlink/egress-control.json",
     "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
     "egress_listen_addr": "0.0.0.0",
     "egress_listen_port": 6102,
 }
+if "egress_control_file" in cfg:
+    raise SystemExit("obsolete egress_control_file was written into current config")
 for key, value in required.items():
     if cfg.get(key) != value:
         raise SystemExit(f"missing or wrong {key}: {cfg.get(key)!r}")

@@ -515,12 +515,15 @@ class StaleEndpointTruthTests(unittest.TestCase):
         self.assertIsNotNone(agent["endpoint_port"])
         self.assertNotEqual(int(agent["endpoint_port"]), 6001)
         self.assertEqual(int(agent["pending_allocation"]), 0)
-        self.assertEqual(agent["status"], "HEALTHY")
+        # Restored Network Object is a routed destination that is not listening.
+        # Proxy registration success must not be reported as HEALTHY.
+        self.assertEqual(agent["status"], "DEGRADED")
+        self.assertIn("unreachable", (agent["reason"] or "").lower())
         server = self._server_row("e2e-net")
         self.assertEqual(int(server["public_port"]), int(agent["endpoint_port"]))
-        self.assertEqual(server["status"], "HEALTHY")
+        self.assertEqual(server["status"], "DEGRADED")
         shown = self._show_agent("e2e-net")
-        self.assertIn("HEALTHY", shown)
+        self.assertIn("DEGRADED", shown)
         self.assertIn("drlink.local:%s" % agent["endpoint_port"], shown)
         os.environ.pop("DRLINK_SERVER_REACHABLE", None)
 

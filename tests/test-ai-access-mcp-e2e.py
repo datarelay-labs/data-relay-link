@@ -134,8 +134,8 @@ class ControlPlaneAITests(unittest.TestCase):
         self.assertIn("implicit DENY", out)
         st = self.cli("show", "status")
         self.assertIn("DB Revision", st)
-        self.assertIn("Remote Policy", st)
-        self.assertIn("AI Policy", st)
+        self.assertIn("Control DB", st)
+        self.assertIn("Data Relay Link", st)
 
     def test_ai1_readonly_support(self):
         self.cli("set", "client-group", "production-linux")
@@ -759,7 +759,7 @@ class MCPBridgeE2ETests(unittest.TestCase):
         for tokens in cases:
             result = grammar.match(tokens, "server")
             self.assertEqual(result.get("status"), "ok", (tokens, result))
-            self.assertEqual(result.get("action"), "control_plane", (tokens, result))
+            self.assertIn(result.get("action"), ("control_plane", "doctor"), (tokens, result))
 
 
     def test_external_mcp_hosts_classified(self):

@@ -229,6 +229,10 @@ mkdir -p "$SRV"
 write_dummy_frps "$WORKDIR/frps-0.71.0" "0.71.0"
 export FRP_SERVER_TEST_ROOT="$SRV"
 export FRP_PUBLIC_HOST='203.0.113.10'
+# New installer prompts read /dev/tty when present. Supply the documented
+# non-interactive answers so isolated lifecycle tests never hang.
+export FRP_PUBLIC_HOSTNAME="${FRP_PUBLIC_HOSTNAME-}"
+export FRP_INTERNAL_IP="${FRP_INTERNAL_IP:-10.0.0.1}"
 export FRP_CONTROL_PUBLIC_PORT=443
 export FRP_CONTROL_LISTEN_PORT=443
 export FRP_ALLOCATOR_PUBLIC_PORT=6099
@@ -248,7 +252,7 @@ assert_no_leak "$WORKDIR/fresh-server.err"
 [[ -s "$SRV/etc/frp/server_token" ]] || fail "token missing"
 assert_mode "$SRV/etc/frp/server_token" "0o600"
 assert_mode "$SRV/etc/frp/frps.toml" "0o600"
-assert_mode "$SRV/var/lib/drlink/registry.json" "0o600"
+assert_mode "$SRV/var/lib/drlink/runtime/client-inventory.json" "0o600"
 assert_mode "$SRV/etc/drlink/pki/ca.key" "0o600"
 assert_mode "$SRV/etc/drlink/pki/server.key" "0o600"
 [[ -f "$SRV/etc/drlink/pki/ca.crt" ]] || fail "CA missing"
@@ -298,8 +302,8 @@ Path(der.name).unlink()
 PY
 )"
 TOKEN_SHA="$(frp_file_sha256 "$SRV/etc/frp/server_token")"
-REG_SHA="$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")"
-python3 - "$SRV/var/lib/drlink/registry.json" <<'PY'
+REG_SHA="$(frp_file_sha256 "$SRV/var/lib/drlink/runtime/client-inventory.json")"
+python3 - "$SRV/var/lib/drlink/runtime/client-inventory.json" <<'PY'
 import json, sys
 from pathlib import Path
 state = json.loads(Path(sys.argv[1]).read_text())
@@ -310,8 +314,8 @@ state.setdefault("clients", {})["machine-a"] = {
 }
 Path(sys.argv[1]).write_text(json.dumps(state, indent=2) + "\n")
 PY
-chmod 600 "$SRV/var/lib/drlink/registry.json"
-REG_SHA="$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")"
+chmod 600 "$SRV/var/lib/drlink/runtime/client-inventory.json"
+REG_SHA="$(frp_file_sha256 "$SRV/var/lib/drlink/runtime/client-inventory.json")"
 
 # Reinstall must preserve CA/token/registry and skip unnecessary restart.
 cp "$WORKDIR/fresh-server.out" "$WORKDIR/before-reinstall.out"
@@ -332,7 +336,7 @@ PY
 )"
 [[ "$CA_FP" == "$CA_FP2" ]] || fail "CA rotated on reinstall"
 [[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "token rotated on reinstall"
-[[ "$(frp_file_sha256 "$SRV/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "registry rewritten on reinstall"
+[[ "$(frp_file_sha256 "$SRV/var/lib/drlink/runtime/client-inventory.json")" == "$REG_SHA" ]] || fail "registry rewritten on reinstall"
 grep -q 'Existing allocator CA preserved' "$WORKDIR/reinstall-server.out" || fail "CA preserved message"
 if grep -q 'restart drlink-server' "$SRV/var/lib/drlink/install-actions.log"; then
   # first install records restart; reinstall of same binary/config should not add another after the last success
@@ -492,7 +496,7 @@ Path(der.name).unlink()
 PY
 )" == "$CA_FP" ]] || fail "mode switch rotated CA"
 [[ "$(frp_file_sha256 "$SWITCH/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "mode switch rotated token"
-[[ "$(frp_file_sha256 "$SWITCH/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "mode switch rewrote registry"
+[[ "$(frp_file_sha256 "$SWITCH/var/lib/drlink/runtime/client-inventory.json")" == "$REG_SHA" ]] || fail "mode switch rewrote registry"
 grep -q 'bindAddr = "127.0.0.1"' "$SWITCH/etc/frp/frps.toml" || fail "switch bindAddr"
 grep -q 'bindPort = 7000' "$SWITCH/etc/frp/frps.toml" || fail "switch bindPort"
 [[ -f "$SWITCH/etc/systemd/system/drlink-frontend.service" ]] || fail "switch frontend unit"
@@ -552,7 +556,7 @@ PY
 grep -q 'bindAddr = "127.0.0.1"' "$LEGACY19/etc/frp/frps.toml" || fail "legacy switch bindAddr"
 grep -q 'bindPort = 7000' "$LEGACY19/etc/frp/frps.toml" || fail "legacy switch bindPort"
 [[ "$(frp_file_sha256 "$LEGACY19/etc/frp/server_token")" == "$TOKEN_SHA" ]] || fail "legacy switch rotated token"
-[[ "$(frp_file_sha256 "$LEGACY19/var/lib/drlink/registry.json")" == "$REG_SHA" ]] || fail "legacy switch rewrote registry"
+[[ "$(frp_file_sha256 "$LEGACY19/var/lib/drlink/runtime/client-inventory.json")" == "$REG_SHA" ]] || fail "legacy switch rewrote registry"
 [[ "$(python3 - "$LEGACY19/etc/drlink/pki/ca.crt" <<'PY'
 import hashlib, subprocess, sys, tempfile
 from pathlib import Path
@@ -842,7 +846,7 @@ if ! frp_server_main >"$WORKDIR/re-after.out" 2>"$WORKDIR/re-after.err"; then
 fi
 [[ -s "$SRV/etc/frp/server_token" ]] || fail "fresh reinstall missing token"
 [[ -f "$SRV/etc/drlink/pki/ca.key" ]] || fail "fresh reinstall missing CA"
-[[ -f "$SRV/var/lib/drlink/registry.json" ]] || fail "fresh reinstall missing registry"
+[[ -f "$SRV/var/lib/drlink/runtime/client-inventory.json" ]] || fail "fresh reinstall missing registry"
 [[ "$(frp_file_sha256 "$SRV/etc/frp/server_token")" != "$TOKEN_SHA" ]] \
   || fail "fresh reinstall reused old token"
 if grep -qi 'already installed\|partial install\|resume pending' "$WORKDIR/re-after.out" "$WORKDIR/re-after.err"; then

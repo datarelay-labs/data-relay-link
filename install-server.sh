@@ -909,6 +909,12 @@ resolve_server_settings() {
 
   FRP_PUBLIC_IP="${FRP_PUBLIC_IP:-${EXISTING_PUBLIC_IP:-}}"
   FRP_PUBLIC_HOST="${FRP_PUBLIC_HOST:-$FRP_PUBLIC_IP}"
+  # Remember whether the operator/test supplied the hostname (including empty).
+  # An explicit empty value means "use the public IP only" and must not prompt.
+  local public_hostname_explicit=0
+  if [[ -n "${FRP_PUBLIC_HOSTNAME+x}" ]]; then
+    public_hostname_explicit=1
+  fi
   FRP_PUBLIC_HOSTNAME="${FRP_PUBLIC_HOSTNAME:-${EXISTING_PUBLIC_HOSTNAME:-}}"
   FRP_BOOTSTRAP_HOSTNAME="${FRP_BOOTSTRAP_HOSTNAME:-${EXISTING_BOOTSTRAP_HOSTNAME:-}}"
   FRP_INTERNAL_IP="${FRP_INTERNAL_IP:-}"
@@ -1007,7 +1013,7 @@ resolve_server_settings() {
   fi
   FRP_PUBLIC_HOST="$FRP_PUBLIC_IP"
 
-  if [[ -z "${FRP_PUBLIC_HOSTNAME}" ]]; then
+  if [[ "$public_hostname_explicit" != "1" && -z "${FRP_PUBLIC_HOSTNAME}" ]]; then
     if frp_has_tty && [[ "${EXISTING_SERVER_CONFIG:-}" != "1" ]]; then
       echo
       echo "Optional DNS name pointing to this server's public IP."

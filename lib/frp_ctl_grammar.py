@@ -87,8 +87,6 @@ CONTROL_PLANE_SHOW = frozenset(
         "ai-principal",
         "ai-activity",
         "fixed-tcp",
-        "clients",
-        "client",
     }
 )
 CONTROL_PLANE_MUTATE = frozenset(
@@ -116,7 +114,6 @@ CONTROL_PLANE_MUTATE = frozenset(
         "service-preset",
         "ai-principal",
         "fixed-tcp",
-        "client",
     }
 )
 CONTROL_PLANE_TEST = frozenset({"remote-access", "internet-access", "ai-access", "configuration"})
@@ -1772,6 +1769,71 @@ def _option_rejection_message(tok, focus):
     }
 
 
+def _ownership_error_message(path, need):
+    """Actionable wrong-role error using the canonical CLI helpers when available."""
+    resource = path[1] if len(path) > 1 else (path[0] if path else "that command")
+    need_s = str(need or "").strip().lower()
+    agent_resource = resource in ("remote-service", "remote-services") or need_s in (
+        "client",
+        "agent",
+    )
+    try:
+        import drlink_v24 as v24
+    except ImportError:
+        v24 = None
+    if agent_resource and resource in ("remote-service", "remote-services"):
+        if v24 is not None:
+            return v24.role_error_agent_resource()
+        return (
+            "ERROR:\n"
+            "Remote Service is managed from the DRLink Agent Host.\n\n"
+            "Run this command on the Agent Host that will own the Remote Service.\n\n"
+            "No changes were applied."
+        )
+    if agent_resource and need_s in ("client", "agent"):
+        if v24 is not None:
+            return v24.role_error_agent_resource(str(resource).replace("-", " ").title())
+        return (
+            "ERROR:\n"
+            "%s is managed from the DRLink Agent Host.\n\n"
+            "Run this command on the Agent Host that will own the Remote Service.\n\n"
+            "No changes were applied." % str(resource).replace("-", " ").title()
+        )
+    labels = {
+        "internet-access": "Internet Access policy",
+        "remote-access": "Remote Access policy",
+        "ai-access": "AI Access policy",
+        "ai-access-log": "AI Access Log",
+        "managed-host": "Managed Host",
+        "managed-hosts": "Managed Hosts",
+        "network-object": "Network Object",
+        "network-objects": "Network Objects",
+        "network-group": "Network Group",
+        "network-groups": "Network Groups",
+        "service-object": "Service Object",
+        "service-objects": "Service Objects",
+        "service-group": "Service Group",
+        "service-groups": "Service Groups",
+        "permission-object": "Permission Object",
+        "permission-objects": "Permission Objects",
+        "permission-group": "Permission Group",
+        "permission-groups": "Permission Groups",
+        "ai-identity": "AI Identity",
+        "ai-identities": "AI Identities",
+        "enrollment": "Enrollment",
+        "enrollments": "Enrollments",
+    }
+    label = labels.get(resource, str(resource).replace("-", " ").title())
+    if v24 is not None:
+        return v24.role_error_server_resource(label)
+    return (
+        "ERROR:\n"
+        "%s is managed on the DRLink Server.\n\n"
+        "Run this command on the DRLink Server.\n\n"
+        "No changes were applied." % label
+    )
+
+
 def _canonical_result(tokens, role, names=None):
     """Resolve canonical action-first commands; expand hidden resource-first.
 
@@ -1811,10 +1873,12 @@ def _canonical_result(tokens, role, names=None):
         return None, None
 
     if not CATALOG.role_allows(cmd["roles"], role):
+        path = tuple(cmd.get("path") or ())
         return None, {
             "status": "role",
             "need": cmd["roles"],
-            "command": " ".join(cmd["path"]),
+            "command": " ".join(path) if path else " ".join(work[:2]),
+            "message": _ownership_error_message(path, cmd["roles"]),
         }
     # Documented enrollment modes rewrite before strict positional checks
     # (set enrollment has tail=flags and would otherwise reject zero-touch/manual).

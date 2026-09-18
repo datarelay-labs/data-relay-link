@@ -223,6 +223,12 @@ def dispatch(tokens, *, root=None, plane: Optional[ControlPlane] = None, client_
         return _dispatch(plane, verb, tokens, client_sel)
     except ConfirmationRequired:
         raise
+    except KeyboardInterrupt:
+        sys.stdout.write("No changes were applied.\n")
+        return 0
+    except EOFError:
+        sys.stdout.write("No changes were applied.\n")
+        return 0
     except (ControlPlaneError, ConcurrencyError, SchemaTooNewError, DatabaseCorruptError) as exc:
         sys.stderr.write("%s\n" % exc)
         return 1
@@ -981,6 +987,30 @@ def _test(plane: ControlPlane, rest):
     handled = v24cli.handle_test(plane, rest)
     if handled is not None:
         return handled
+    if rest[0] == "remote-access":
+        _need(rest, 5, "test remote-access <SOURCE_IP> <DESTINATION> <PROTOCOL> <PORT>")
+        result = plane.evaluate_remote_access(rest[1], rest[2], rest[3], int(rest[4]))
+        sys.stdout.write(plane.format_remote_explain(result))
+        return 0
+    if rest[0] == "internet-access":
+        _need(rest, 5, "test internet-access <SOURCE_IP> <DESTINATION> <PORT> <PROTOCOL>")
+        result = plane.evaluate_internet_access(rest[1], rest[2], int(rest[3]), rest[4])
+        sys.stdout.write(
+            plane.format_internet_explain(
+                result,
+                dns={
+                    "status": "not executed (explain only)",
+                    "security": "server-side DNS required at runtime",
+                },
+            )
+        )
+        return 0
+    if rest[0] == "ai-access":
+        _need(rest, 4, "test ai-access <PRINCIPAL> <ENDPOINT> <CAPABILITY> [OPERAND]")
+        operand = rest[4] if len(rest) > 4 else None
+        result = plane.evaluate_ai_access(rest[1], rest[2], rest[3], operand)
+        sys.stdout.write(plane.format_ai_explain(result))
+        return 0
     raise SystemExit(
         "Unknown test target.\n\n"
         "Usage:\n"
@@ -1007,10 +1037,7 @@ def _system(plane: ControlPlane, rest):
                 "ERROR:\nsystem synchronize is an Agent Host operation.\n\nNo changes were applied."
             )
         result = v24.synchronize_agent_remote_services(plane, root=plane.root)
-        sys.stdout.write(
-            "Synchronization %s (%s Remote Service(s) updated).\n"
-            % (result.get("status"), result.get("updated", 0))
-        )
+        sys.stdout.write(v24.format_synchronize_result(result))
         return 0
     if rest[0] == "diagnostics":
         kind = rest[1] if len(rest) > 1 else "all"

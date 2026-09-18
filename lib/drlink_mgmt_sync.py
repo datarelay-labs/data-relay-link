@@ -699,7 +699,11 @@ def apply_catalog_to_agent(plane_db, catalog: dict) -> int:
             ("managed-host", host["name"], payload, now),
         )
         count += 1
-    plane_db.conn.commit()
+    commit = getattr(plane_db, "commit_if_autonomous", None)
+    if callable(commit):
+        commit()
+    elif not getattr(plane_db, "_batch_mode", False):
+        plane_db.conn.commit()
     return count
 
 

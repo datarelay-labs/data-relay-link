@@ -484,12 +484,13 @@ def mark_runtime_status(plane_db, *, ok: bool, reason: str = "", generation: int
     now = utc_now_iso()
     if ok:
         # Only promote rows that were waiting on runtime (or already healthy).
+        # Never overwrite destination-unreachable or other non-runtime DEGRADED reasons.
         plane_db.conn.execute(
             "UPDATE agent_remote_services SET status = 'HEALTHY', reason = '', updated_at = ? "
             "WHERE delete_pending = 0 AND endpoint_port IS NOT NULL AND pending_allocation = 0 "
             "AND enabled = 1 AND ("
             "  reason = '' OR lower(reason) LIKE 'runtime%' OR lower(reason) LIKE '%activation%'"
-            ")",
+            ") AND lower(reason) NOT LIKE '%unreachable%'",
             (now,),
         )
     else:
@@ -503,7 +504,11 @@ def mark_runtime_status(plane_db, *, ok: bool, reason: str = "", generation: int
             (brief[:500], now),
         )
     if not getattr(plane_db, "_batch_mode", False):
-        plane_db.conn.commit()
+        commit = getattr(plane_db, "commit_if_autonomous", None)
+        if callable(commit):
+            commit()
+        else:
+            plane_db.conn.commit()
 
 
 def remove_remote_service_from_runtime(

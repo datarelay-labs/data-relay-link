@@ -200,12 +200,34 @@ def main(argv=None):
                 'enrollment.created',
                 details={'label': label, 'batch_id': batch_id, 'ticket_id': ticket_id},
             )
+            hook_after = int(os.environ.get('FRP_ENROLL_BULK_HOOK_FAIL_AFTER') or '0')
+            if hook_after and len(issued) >= hook_after:
+                raise RuntimeError('simulated bulk mid-batch failure')
     except Exception as exc:
         allocator.revoke_bootstrap_tickets_by_batch(bootstrap, batch_id)
+        # Commands were never emitted; remove this unused batch so rollback
+        # leaves no leftover Zero-Touch pairs.
+        for path in list(bootstrap.glob('*.json')):
+            try:
+                rec = json.loads(path.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            if str(rec.get('batch_id') or '') != str(batch_id):
+                continue
+            enroll_id = str(rec.get('enrollment_id') or rec.get('id') or '')
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            if enroll_id:
+                try:
+                    (enrollments / (enroll_id + '.json')).unlink()
+                except OSError:
+                    pass
         _audit_emit('enrollment.bulk_failed', details={'batch_id': batch_id, 'created': len(issued)})
         raise SystemExit(f'ERROR: bulk enrollment failed; issued tickets from this batch were revoked: {exc}')
 
-    print('This credential will not be shown again.')
+    print('This credential will not be shown again.', file=sys.stderr)
     print('label,expires,bootstrap_command')
     for label, expires, command in issued:
         print(','.join([
