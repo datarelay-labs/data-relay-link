@@ -3062,10 +3062,18 @@ def check_server(report, paths, facts, skip_network):
 
     # MCP public TLS (read-only).
     try:
+        import sqlite3
+
         import drlink_mcp_tls as mcp_tls
+        from drlink_control_db import db_path
         from drlink_control_plane import ControlPlane
 
-        plane = ControlPlane(paths.root or None)
+        db_file = db_path(paths.root or None)
+        plane = None
+        if db_file.is_file():
+            conn = sqlite3.connect("file:%s?mode=ro" % db_file.as_posix(), uri=True)
+            conn.row_factory = sqlite3.Row
+            plane = ControlPlane(paths.root or None, conn=conn)
         status_map = {'PASS': PASS, 'FAIL': FAIL, 'WARN': WARN, 'INFO': INFO}
         for check in mcp_tls.doctor_checks(plane, paths.root or None):
             report.add(
@@ -3076,6 +3084,8 @@ def check_server(report, paths, facts, skip_network):
                 '',
                 'security',
             )
+        if plane is not None:
+            plane.close()
     except Exception as exc:
         report.add(
             'mcp_tls_doctor',

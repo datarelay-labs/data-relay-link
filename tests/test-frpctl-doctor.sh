@@ -274,6 +274,20 @@ Path(sys.argv[1]).write_text(json.dumps({
 }, indent=2, sort_keys=True) + "\n")
 PY
   chmod 600 "$tree/var/lib/drlink/registry.json"
+  python3 - "$ROOT/lib" "$tree" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from drlink_control_plane import ControlPlane
+plane = ControlPlane(sys.argv[2])
+plane.conn.execute("PRAGMA journal_mode=DELETE")
+plane.conn.commit()
+plane.close()
+db = Path(sys.argv[2], "var/lib/drlink/drlink.db")
+db.chmod(0o600)
+for extra in (str(db) + "-wal", str(db) + "-shm"):
+    Path(extra).unlink(missing_ok=True)
+PY
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/drlink/access-control.json"
   chmod 600 "$tree/var/lib/drlink/access-control.json"
