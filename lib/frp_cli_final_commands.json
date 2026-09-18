@@ -4695,16 +4695,20 @@
     "summary": "Show a Managed Host",
     "detail": "Show a Managed Host",
     "examples": [
-      "show managed-host"
+      "show managed-host <HOST>",
+      "show managed-host <HOST> remote-services"
     ],
     "args": [
       {
         "name": "HOST",
-        "complete": "clients",
         "required": true
+      },
+      {
+        "name": "[VIEW]",
+        "required": false
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
