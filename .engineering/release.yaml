@@ -4,6 +4,10 @@ exact_head_required: true
 artifact_hash_required: true
 provenance_required: true
 sbom_required: true
+
+preflight_required: true
+preflight_command: "./tests/test-client-allocator-url.sh && ./tests/test-public-hostname.sh && python3 tests/test-v24-runtime-allocator.py && ./scripts/check-release-governance.sh"
+
 operational_e2e_required: true
 full_e2e_passes: 2
 public_smoke_required: true
