@@ -1,6 +1,14 @@
 version: 1
 
 paths:
+  "AGENTS.md":
+    domains: [engineering-governance]
+  ".engineering/**":
+    domains: [engineering-governance]
+  ".cursor/**":
+    domains: [engineering-governance]
+  ".github/workflows/engineering-system.yml":
+    domains: [engineering-governance]
   "server/frp-port-allocator.py":
     domains: [allocator, remote-service, server]
   "server/frp-egress-gateway.py":
@@ -37,22 +45,24 @@ paths:
     domains: [release, installer]
 
 scenarios:
-  - id: DRL-FULL-REG-001
-    name: Full local deterministic regression
-    level: integration
-    domains: [server, agent, control-plane, cli, enrollment, allocator, remote-service, remote-access, internet-access, configuration-bundle, installer, diagnostics, lifecycle]
-    triggers: [pr, rc, release]
+  - id: DRL-PR-PREFLIGHT-001
+    name: Fast critical regression and release-governance guardrail
+    level: feature
+    domains: [engineering-governance, server, agent, enrollment, zero-touch, allocator, release]
+    triggers: [pr, preflight, rc, release]
     platforms: [linux]
-    command: "./tests/run-all.sh"
+    command: "./tests/test-client-allocator-url.sh && ./tests/test-public-hostname.sh && python3 tests/test-v24-runtime-allocator.py && ./scripts/check-release-governance.sh"
     invariants:
-      - "all mandatory local deterministic regressions pass"
+      - "allocator/control URL and public-host semantics remain canonical"
+      - "critical runtime allocator regression stays closed"
+      - "release governance remains valid"
     release_gate: true
 
   - id: DRL-HUX-001
     name: Human UX Adversarial E2E
     level: ux
     domains: [ux, cli, server, agent]
-    triggers: [affected, pr, rc, release]
+    triggers: [affected, rc, release]
     platforms: [linux]
     command: "./tests/run-human-ux-e2e.sh"
     invariants:
@@ -65,10 +75,21 @@ scenarios:
     name: Rick manual E2E findings regressions
     level: feature
     domains: [ux, cli, zero-touch, remote-service, diagnostics, installer]
-    triggers: [affected, pr, rc, release]
+    triggers: [affected, rc, release]
     platforms: [linux]
     command: "python3 tests/test-v24-manual-e2e-findings.py"
     invariants:
       - "manual E2E defects remain permanently regressed"
     origin: "Rick v2.4.0 manual E2E"
+    release_gate: true
+
+  - id: DRL-FULL-REG-001
+    name: Full local deterministic regression
+    level: integration
+    domains: [server, agent, control-plane, cli, enrollment, allocator, remote-service, remote-access, internet-access, configuration-bundle, installer, diagnostics, lifecycle]
+    triggers: [rc, release]
+    platforms: [linux]
+    command: "./tests/run-all.sh"
+    invariants:
+      - "all mandatory local deterministic regressions pass"
     release_gate: true
