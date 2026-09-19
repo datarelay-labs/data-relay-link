@@ -2,6 +2,8 @@
 
 **Secure Connectivity for Isolated Networks**
 
+> **License — Source Available:** Data Relay Link is free for personal use and for an organization's own internal commercial operations. Internal source modifications are allowed. Resale, commercial redistribution, OEM/white-label use, competing or derivative commercial products, and SaaS/hosted/managed-service offerings require a separate written commercial license. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
+
 Data Relay Link relays only the connections that are actually needed instead of joining entire networks.
 
 ```text
