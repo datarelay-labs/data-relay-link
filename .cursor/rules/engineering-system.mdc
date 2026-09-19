@@ -5,16 +5,16 @@ alwaysApply: true
 
 # Mandatory Engineering System Rule
 
-This repository follows the Data Relay Labs Engineering System.
+This repository follows Data Relay Labs Engineering System 1.1.0.
 
-Before planning, editing, refactoring, fixing, testing, or releasing code:
+Before planning, editing, refactoring, fixing, testing, releasing, upgrading, operating, or documenting:
 
 1. Read @AGENTS.md.
 2. Read @.engineering/project.yaml.
 3. Read @.engineering/tests.yaml.
 4. For release/version/artifact work, read @.engineering/release.yaml.
-5. Follow Engineering System baseline f1e6294053562db2a6fa7d27797689e871c469b3.
-6. Identify the change class and affected domains before implementation.
+5. Follow Engineering System baseline b2ad6e6e81e436a2c1b453b6e78fb44f604e7fba.
+6. Identify the change class and affected domains/contracts/security/operations before implementation.
 7. Inspect relevant existing implementation and tests.
 8. Make the smallest correct change; do not silently expand scope.
 9. Run affected tests first, then wider gates required by risk/release policy.
