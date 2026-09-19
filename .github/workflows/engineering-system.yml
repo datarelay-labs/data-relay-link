@@ -7,17 +7,20 @@ on:
       - main
 
 jobs:
+  adoption-compliance:
+    uses: datarelay-labs/engineering-system/.github/workflows/adoption-compliance.yml@f1e6294053562db2a6fa7d27797689e871c469b3
+
   deterministic-regression:
-    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@0f97b4c1e30ea6bf588b24b9890a48b7aee01adf
+    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@f1e6294053562db2a6fa7d27797689e871c469b3
     with:
       test_command: "./tests/run-all.sh"
 
   human-ux:
-    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@0f97b4c1e30ea6bf588b24b9890a48b7aee01adf
+    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@f1e6294053562db2a6fa7d27797689e871c469b3
     with:
       test_command: "./tests/run-human-ux-e2e.sh"
 
   manual-e2e-regressions:
-    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@0f97b4c1e30ea6bf588b24b9890a48b7aee01adf
+    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@f1e6294053562db2a6fa7d27797689e871c469b3
     with:
       test_command: "python3 tests/test-v24-manual-e2e-findings.py"
