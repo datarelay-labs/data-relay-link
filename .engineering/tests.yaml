@@ -7,7 +7,7 @@ paths:
     domains: [engineering-governance]
   ".cursor/**":
     domains: [engineering-governance]
-  ".github/workflows/engineering-system.yml":
+  ".github/workflows/**":
     domains: [engineering-governance]
   "server/frp-port-allocator.py":
     domains: [allocator, remote-service, server]
