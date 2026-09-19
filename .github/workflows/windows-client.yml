@@ -1,7 +1,26 @@
 name: windows-client
 on:
-  push:
   pull_request:
+    paths:
+      - "windows/**"
+      - "tests/windows/**"
+      - "lib/**"
+      - "install-client.sh"
+      - "VERSION"
+      - "scripts/build-bundles.py"
+      - ".github/workflows/windows-client.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "windows/**"
+      - "tests/windows/**"
+      - "lib/**"
+      - "install-client.sh"
+      - "VERSION"
+      - "scripts/build-bundles.py"
+      - ".github/workflows/windows-client.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,7 +32,6 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Setup Python
-        # actions/setup-python@v5.6.0
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
@@ -25,7 +43,6 @@ jobs:
       - name: Run Windows client test suite
         shell: powershell
         run: |
-          # StrictMode avoided: PS 5.1 lacks $IsWindows
           $ErrorActionPreference = 'Stop'
           & .\tests\windows\run-all.ps1
       - name: FRP binary smoke (download + hash + version)
@@ -55,7 +72,6 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Setup Python
-        # actions/setup-python@v5.6.0
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
@@ -67,7 +83,6 @@ jobs:
       - name: Run Windows client test suite
         shell: pwsh
         run: |
-          # StrictMode avoided: PS 5.1 lacks $IsWindows
           $ErrorActionPreference = 'Stop'
           & .\tests\windows\run-all.ps1
 
@@ -81,8 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v pwsh >/dev/null 2>&1; then
-            curl -fsSL -o /tmp/packages-microsoft-prod.deb \
-              https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+            curl -fsSL -o /tmp/packages-microsoft-prod.deb               https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
             sudo dpkg -i /tmp/packages-microsoft-prod.deb
             sudo apt-get update -qq
             sudo apt-get install -y powershell
