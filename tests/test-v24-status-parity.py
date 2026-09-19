@@ -527,6 +527,60 @@ class StaleEndpointTruthTests(unittest.TestCase):
         self.assertIn("drlink.local:%s" % agent["endpoint_port"], shown)
         os.environ.pop("DRLINK_SERVER_REACHABLE", None)
 
+    def test_AGENT_STATUS_COUNTS_LOCAL_REMOTE_SERVICES(self):
+        v24.ensure_v2_schema(self.agent.conn)
+        self.agent.conn.execute(
+            "INSERT INTO agent_remote_services("
+            "name, destination, service_object, enabled, status, pending_allocation, "
+            "delete_pending, pool_class, reason, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ssh-access",
+                "this-host",
+                "ssh",
+                1,
+                "HEALTHY",
+                0,
+                0,
+                "normal",
+                "",
+                "2026-09-19T00:00:00Z",
+            ),
+        )
+        self.agent.conn.commit()
+        out = self.agent.format_status()
+        self.assertIn("Role: Agent Host", out)
+        self.assertIn("Remote Services  : 1", out)
+        self.assertNotIn("Role: Unknown", out)
+
+
+class MacosRoleDetectionTests(unittest.TestCase):
+    def test_macos_application_support_layout_is_agent(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-macos-role-")
+        state = Path(tmp) / "Library/Application Support/drlink"
+        state.mkdir(parents=True)
+        (state / "client-state.json").write_text(
+            '{"machine_id":"%s","hostname":"mac-agent"}\n' % MACHINE,
+            encoding="utf-8",
+        )
+        (state / "frpc.toml").write_text("[common]\n", encoding="utf-8")
+        self.assertEqual(v24.detect_cli_role(tmp), "agent")
+        self.assertEqual(v24.role_label(v24.detect_cli_role(tmp)), "Agent Host")
+
+    def test_macos_env_state_root_is_agent(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-macos-env-")
+        state = Path(tmp) / "drlink-state"
+        state.mkdir(parents=True)
+        (state / "client-state.json").write_text("{}\n", encoding="utf-8")
+        prev = os.environ.get("FRP_MACOS_STATE_ROOT")
+        os.environ["FRP_MACOS_STATE_ROOT"] = str(state)
+        try:
+            self.assertEqual(v24.detect_cli_role("/nonexistent-root"), "agent")
+        finally:
+            if prev is None:
+                os.environ.pop("FRP_MACOS_STATE_ROOT", None)
+            else:
+                os.environ["FRP_MACOS_STATE_ROOT"] = prev
+
 
 if __name__ == "__main__":
     unittest.main()

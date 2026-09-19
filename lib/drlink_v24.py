@@ -329,6 +329,33 @@ def role_error_agent_resource(resource: str = "Remote Service") -> str:
     )
 
 
+def _macos_agent_state_roots(root: Optional[str] = None) -> list[Path]:
+    """macOS Agent state lives under Application Support, not /etc/frp."""
+    roots: list[Path] = []
+    env = str(os.environ.get("FRP_MACOS_STATE_ROOT") or "").strip()
+    if env:
+        roots.append(Path(env))
+    roots.append(Path("/Library/Application Support/drlink"))
+    if root and str(root) not in ("/", ""):
+        base = Path(root)
+        roots.append(base / "Library/Application Support/drlink")
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in roots:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _is_agent_state_dir(state: Path) -> bool:
+    if (state / "client-state.json").is_file():
+        return True
+    return (state / "frpc.toml").is_file() and (state / "client-identity.key").is_file()
+
+
 def detect_cli_role(root: Optional[str] = None) -> str:
     """Return 'server', 'agent', or 'unknown'."""
     base = Path(root) if root else Path("/")
@@ -343,6 +370,9 @@ def detect_cli_role(root: Optional[str] = None) -> str:
         return "agent"
     if (base / "etc/frp/frpc.toml").is_file() and (base / "etc/frp/client-identity.key").is_file():
         return "agent"
+    for state in _macos_agent_state_roots(root):
+        if _is_agent_state_dir(state):
+            return "agent"
     return "unknown"
 
 

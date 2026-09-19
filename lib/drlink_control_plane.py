@@ -3996,7 +3996,16 @@ class ControlPlane:
         ]
         if role == "server":
             extra.append("Managed Hosts    : %s" % st["clients"])
-        extra.append("Remote Services  : %s" % st["services"])
+        if role == "agent":
+            try:
+                rs_count = self.conn.execute(
+                    "SELECT COUNT(*) FROM agent_remote_services"
+                ).fetchone()[0]
+            except Exception:
+                rs_count = 0
+            extra.append("Remote Services  : %s" % rs_count)
+        else:
+            extra.append("Remote Services  : %s" % st["services"])
         if role == "server":
             mcp = self.mcp_endpoint_status()
             extra.append("MCP Public Endpoint : %s" % (
