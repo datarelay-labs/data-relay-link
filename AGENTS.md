@@ -4,28 +4,33 @@ This repository adopts the canonical Solo AI Engineering System.
 
 Canonical engineering system:
 - repository: https://github.com/datarelay-labs/engineering-system
-- version: 1.1.1
-- baseline commit: 9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1
+- version: 1.2.0
+- baseline commit: 30a13549e1be027e1709373b3c845f4e2d1a7e4b
 
-## Mandatory entry sequence
+## Minimum context first
 
-Before planning, editing, refactoring, fixing, testing, releasing, upgrading, operating, or documenting this product:
-
+Always:
 1. Read this `AGENTS.md`.
 2. Read `.engineering/project.yaml`.
-3. Read `.engineering/tests.yaml`.
-4. Read `.engineering/release.yaml` for release-related work.
-5. Follow the pinned Engineering System baseline.
-6. Identify affected domains, public contracts, persisted state, security boundaries, operational impact, and required tests.
-7. Inspect relevant existing implementation and tests.
-8. Make the smallest correct change and avoid unrelated refactors.
-9. Run affected deterministic tests first, then wider gates based on risk.
-10. Bug fixes require durable regression coverage whenever practical.
-11. Never weaken a valid test merely to obtain PASS.
-12. Never claim release readiness from historical evidence or a different source HEAD.
 
-If mandatory engineering context is missing or contradictory, stop implementation and report the configuration defect instead of guessing.
+Only when relevant:
+3. For implementation/debugging/testing, read `.engineering/tests.yaml`.
+4. For release/version/artifact work, read `.engineering/release.yaml`.
+5. Read only the relevant product specification/ADR/runbook/Engineering System standard.
 
-Cursor also receives the always-applied `.cursor/rules/engineering-system.mdc` rule.
+Do not preload all standards, Wiki pages, archived specifications, or historical discussion.
+
+## Data Relay Link execution rules
+
+1. Identify affected domains, public contracts, persisted state, security boundaries, operational impact, and required tests.
+2. Make the smallest correct change.
+3. Run affected deterministic tests first.
+4. Ordinary PRs use affected tests plus the fast PR guardrail; they do not run `./tests/run-all.sh` by default.
+5. Full deterministic/lifecycle/platform/performance/operational E2E qualification belongs at the exact release-candidate boundary.
+6. A known blocking deterministic regression stops expensive downstream qualification.
+7. Do not duplicate equivalent native and shared CI evidence.
+8. Bug fixes require durable regression coverage whenever practical.
+9. Never weaken a valid test merely to obtain PASS.
+10. Never claim release readiness from historical evidence or a different source HEAD.
 
 Data Relay Link release qualification remains exact-HEAD and operational-E2E driven.
