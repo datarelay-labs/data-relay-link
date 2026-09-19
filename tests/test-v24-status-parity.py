@@ -629,6 +629,11 @@ class MacosRoleDetectionTests(unittest.TestCase):
                 v24.agent_identity_mac_path("/nonexistent-root"),
                 state / "client-identity.mac",
             )
+            import drlink_v24_runtime as runtime
+
+            loaded = runtime.load_client_state("/nonexistent-root")
+            self.assertEqual(loaded.get("machine_id"), MACHINE)
+            self.assertEqual(runtime._frpc_toml_path("/nonexistent-root"), state / "frpc.toml")
         finally:
             if prev is None:
                 os.environ.pop("FRP_MACOS_STATE_ROOT", None)

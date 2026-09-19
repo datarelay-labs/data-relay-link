@@ -46,8 +46,28 @@ def _base(root: Optional[str]) -> Path:
     return Path(root) if root else Path("/")
 
 
+def _client_state_path(root: Optional[str] = None) -> Path:
+    import drlink_v24 as v24
+
+    for path in v24._agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", root
+    ):
+        if path.is_file():
+            return path
+    return _base(root) / "etc/frp/client-state.json"
+
+
+def _frpc_toml_path(root: Optional[str] = None) -> Path:
+    import drlink_v24 as v24
+
+    for path in v24._agent_state_file_candidates("etc/frp/frpc.toml", "frpc.toml", root):
+        if path.is_file():
+            return path
+    return _base(root) / "etc/frp/frpc.toml"
+
+
 def load_client_state(root: Optional[str] = None) -> dict:
-    path = _base(root) / "etc/frp/client-state.json"
+    path = _client_state_path(root)
     if not path.is_file():
         return {}
     try:
@@ -274,7 +294,19 @@ def _restart_frpc(root: Optional[str] = None) -> None:
             timeout=60,
         )
     except FileNotFoundError:
-        # Non-systemd environments: best-effort no-op after config write.
+        try:
+            subprocess.run(
+                ["launchctl", "kickstart", "-k", "system/com.datarelay.drlink.frpc"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except FileNotFoundError:
+            return
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or str(exc)).strip()
+            raise ControlPlaneError("failed to restart macOS Agent runtime: %s" % detail) from exc
         return
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
@@ -366,8 +398,8 @@ def apply_agent_runtime(
             "generation": 0,
         }
 
-    prev_toml = _base(root) / "etc/frp/frpc.toml"
-    prev_state_path = _base(root) / "etc/frp/client-state.json"
+    prev_toml = _frpc_toml_path(root)
+    prev_state_path = _client_state_path(root)
     backup_toml = None
     backup_state = None
     try:
