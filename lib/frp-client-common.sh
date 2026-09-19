@@ -685,7 +685,22 @@ frp_client_has_verified_build_identity() {
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
 }
 
+frp_client_admin_expected_channel() {
+  # Administrator opt-in for legacy secure-bridge recovery.
+  # Bundle-stamped FRP_RELEASE_CHANNEL alone is candidate provenance and must
+  # not bypass the legacy bridge.
+  local raw="${FRP_EXPECTED_RELEASE_CHANNEL:-}"
+  if [[ -z "$raw" && -n "${FRP_RELEASE_CHANNEL:-}" && \
+        "${FRP_BUNDLE_STAMPED_CHANNEL:-0}" != "1" ]]; then
+    raw="$FRP_RELEASE_CHANNEL"
+  fi
+  [[ -n "$raw" ]] || return 1
+  frp_client_known_release_channel "$raw"
+}
+
 frp_client_explicit_expected_channel() {
+  # Prefer admin opt-in; otherwise accept bundle-stamped FRP_RELEASE_CHANNEL as
+  # the candidate's declared release line (for metadata agreement checks).
   local raw="${FRP_EXPECTED_RELEASE_CHANNEL:-${FRP_RELEASE_CHANNEL:-}}"
   [[ -n "$raw" ]] || return 1
   frp_client_known_release_channel "$raw"
@@ -1006,18 +1021,74 @@ EOF
   fi
 }
 
+frp_ux_service_id_py() {
+  local cand
+  for cand in \
+    "${_FRP_CLIENT_COMMON_DIR}/frp_service_id.py" \
+    "${FRP_SOURCE_ROOT:-}/lib/frp_service_id.py" \
+    "${FRP_CLIENT_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    "${FRP_DEPLOY_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    /usr/local/lib/frp-auto-deploy/frp_service_id.py
+  do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  return 1
+}
+
+frp_ux_used_service_ids_json() {
+  python3 - "${SERVICES_FILE:-}" <<'PY'
+import json, sys
+from pathlib import Path
+used = []
+path = Path(sys.argv[1]) if sys.argv[1] else None
+if path and path.is_file():
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        data = None
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                sid = str(item.get("id") or "").strip().lower()
+                if sid:
+                    used.append(sid)
+    elif isinstance(data, dict):
+        for sid in (data.get("services") or {}):
+            text = str(sid or "").strip().lower()
+            if text:
+                used.append(text)
+print(json.dumps(used))
+PY
+}
+
+frp_ux_suggest_service_id() {
+  local preset="$1" port="${2:--}"
+  local py used
+  py="$(frp_ux_service_id_py)" || {
+    echo "ERROR: missing frp_service_id.py" >&2
+    return 1
+  }
+  used="$(frp_ux_used_service_ids_json)"
+  python3 "$py" suggest "$preset" "$port" "$used"
+}
+
 frp_ux_target_host_help() {
+  local py
+  py="$(frp_ux_service_id_py)" || true
+  if [[ -n "${py:-}" ]]; then
+    python3 "$py" target-host-help
+    echo
+    return 0
+  fi
   cat <<'EOF'
-Target host
-  The IP address or hostname where the actual service runs.
+Target host is the service machine as seen from this FRP client.
 
-  Use 127.0.0.1 if the service is running on this machine.
-  Enter another reachable internal IP if it runs on another server.
-
-  Examples:
-    127.0.0.1
-    192.168.10.20
-    internal-api.example.local
+Use:
+  127.0.0.1       service runs on this FRP client
+  192.168.x.x     another server reachable on the LAN
+  hostname        another resolvable internal host
 
 EOF
 }
@@ -1172,10 +1243,20 @@ frp_prompt_service_id() {
 }
 
 frp_prompt_target_host() {
-  local default="${1:-127.0.0.1}"
+  local default="${1-127.0.0.1}"
   local -n _frp_host_out="$2"
   frp_ux_target_host_help
-  _frp_host_out="$(read_tty "Target host [${default}]: " "$default")"
+  if [[ -n "$default" ]]; then
+    _frp_host_out="$(read_tty "Target host [${default}]: " "$default")"
+  else
+    while true; do
+      _frp_host_out="$(read_tty "Target host: " "")"
+      _frp_host_out="${_frp_host_out#"${_frp_host_out%%[![:space:]]*}"}"
+      _frp_host_out="${_frp_host_out%"${_frp_host_out##*[![:space:]]}"}"
+      [[ -n "$_frp_host_out" ]] && break
+      echo "ERROR: target host is required." >&2
+    done
+  fi
 }
 
 frp_prompt_target_port() {
@@ -1206,42 +1287,67 @@ frp_prompt_ssh_user() {
 
 frp_ux_prompt_new_service() {
   local dest="${1:-}"
-  local choice sid host port user name _frp_new_payload
+  local choice sid host port user name _frp_new_payload loc
   while true; do
     echo
     frp_ux_add_service_menu
-    choice="$(read_tty "Select: " "")"
+    choice="$(read_tty "Select [1]: " "1")"
+    choice="${choice#"${choice%%[![:space:]]*}"}"
+    choice="${choice%"${choice##*[![:space:]]}"}"
+    choice="${choice//$'\r'/}"
     case "$choice" in
       1)
-        frp_prompt_service_id ssh sid
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port ssh 22 port
-        frp_prompt_ssh_user user
+        frp_prompt_ssh_user user "${FRP_SSH_USER:-${SUDO_USER:-${USER:-}}}"
         maybe_warn_connectivity "$host" "$port" "SSH"
+        sid="$(frp_ux_suggest_service_id ssh)" || return 1
         _frp_new_payload="$(service_payload ssh "$sid" SSH "$host" "$port" "$user")"
         ;;
       2)
-        frp_prompt_service_id http sid
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port http 80 port
         maybe_warn_connectivity "$host" "$port" "HTTP"
+        sid="$(frp_ux_suggest_service_id http)" || return 1
         _frp_new_payload="$(service_payload http "$sid" HTTP "$host" "$port")"
         ;;
       3)
-        frp_prompt_service_id https sid
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port https 443 port
         maybe_warn_connectivity "$host" "$port" "HTTPS"
+        sid="$(frp_ux_suggest_service_id https)" || return 1
         _frp_new_payload="$(service_payload https "$sid" HTTPS "$host" "$port")"
         ;;
       4)
-        frp_ux_service_id_help
-        echo
-        sid="$(read_tty "Service ID: " "")"
-        name="$(read_tty "Display name [${sid}]: " "$sid")"
-        frp_prompt_target_host 127.0.0.1 host
+        loc="$(read_tty "Where is this service? 1=This FRP client 2=Another host [1]: " "1")"
+        loc="${loc#"${loc%%[![:space:]]*}"}"
+        if [[ "$loc" == "2" ]]; then
+          frp_prompt_target_host "" host
+        else
+          host="127.0.0.1"
+        fi
         frp_prompt_target_port custom "" port
         maybe_warn_connectivity "$host" "$port" "TCP"
+        sid="$(frp_ux_suggest_service_id custom "$port")" || return 1
+        name="$(read_tty "Display name [TCP ${port}]: " "TCP ${port}")"
         _frp_new_payload="$(service_payload custom "$sid" "$name" "$host" "$port")"
         ;;
       5)
@@ -2063,6 +2169,16 @@ for item in services:
 PY
 }
 
+frp_client_dump_frpc_logs() {
+  # Diagnostic dump for failure / explicit verbose paths only.
+  local lines="${1:-80}"
+  if frp_is_darwin; then
+    frp_macos_recent_logs "$lines" >&2 || true
+  else
+    journalctl -u frpc -n "$lines" --no-pager >&2 || true
+  fi
+}
+
 wait_for_proxies() {
   local logs proxy missing
   local -a names=("$@")
@@ -2079,12 +2195,16 @@ wait_for_proxies() {
     fi
     missing=""
     for proxy in "${names[@]}"; do
-      if ! grep -F "[${proxy}] start proxy success" <<<"$logs"; then
+      # Quiet match: never print historical journal lines on success.
+      if ! grep -qF "[${proxy}] start proxy success" <<<"$logs"; then
         missing="$proxy"
         break
       fi
     done
     if [[ -z "$missing" ]]; then
+      if [[ "${FRP_APPLY_VERBOSE:-}" == "1" ]]; then
+        frp_client_dump_frpc_logs 80
+      fi
       return 0
     fi
   done
@@ -3971,6 +4091,7 @@ frp_client_restart() {
     return 1
   fi
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    frp_client_clear_pause_marker
     return 0
   fi
   if frp_is_darwin; then
@@ -3985,9 +4106,131 @@ frp_client_restart() {
   fi
 }
 
+frp_client_pause_marker_path() {
+  frp_client_path /etc/frp/client-paused
+}
+
+frp_client_write_pause_marker() {
+  local path parent
+  path="$(frp_client_pause_marker_path)"
+  parent="$(dirname "$path")"
+  mkdir -p "$parent"
+  printf 'paused\n' >"$path"
+}
+
+frp_client_clear_pause_marker() {
+  rm -f "$(frp_client_pause_marker_path)" 2>/dev/null || true
+}
+
+frp_client_is_paused() {
+  # Prefer live autostart state; fall back to test marker under fixtures.
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    [[ -f "$(frp_client_pause_marker_path)" ]]
+    return $?
+  fi
+  if frp_is_darwin; then
+    # launchctl print disabled state is not always queryable in older macOS;
+    # inactive + missing enabled unit is treated as paused when marker exists,
+    # otherwise rely on systemd-style disable via launchctl print when available.
+    if [[ -f "$(frp_client_pause_marker_path)" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+  local enabled
+  enabled="$(systemctl is-enabled frpc 2>/dev/null || true)"
+  case "$enabled" in
+    disabled|masked) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_client_autostart_label() {
+  if frp_client_is_paused; then
+    printf 'disabled'
+  else
+    if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+      printf 'enabled'
+      return 0
+    fi
+    if frp_is_darwin; then
+      printf 'enabled'
+      return 0
+    fi
+    local enabled
+    enabled="$(systemctl is-enabled frpc 2>/dev/null || true)"
+    case "$enabled" in
+      enabled|static|alias|indirect|generated) printf 'enabled' ;;
+      *) printf '%s' "${enabled:-unknown}" ;;
+    esac
+  fi
+}
+
+frp_client_lifecycle_label() {
+  if frp_client_is_paused; then
+    printf 'PAUSED'
+  else
+    printf 'ACTIVE'
+  fi
+}
+
+frp_client_pause() {
+  frp_client_hook_log pause
+  if frp_client_is_paused; then
+    echo "Client already paused. FRP remote access remains blocked."
+    return 0
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    frp_client_write_pause_marker
+    echo "Client paused. All FRP remote access is blocked."
+    echo "Identity, services, and public ports are preserved."
+    return 0
+  fi
+  if frp_is_darwin; then
+    frp_macos_launchd_set_enabled disable || return 1
+    frp_macos_launchd_bootout
+    frp_client_write_pause_marker
+  else
+    systemctl stop frpc >/dev/null 2>&1 || true
+    systemctl disable frpc >/dev/null 2>&1 || {
+      echo "ERROR: failed to disable frpc autostart" >&2
+      return 1
+    }
+  fi
+  echo "Client paused. All FRP remote access is blocked."
+  echo "Identity, services, and public ports are preserved."
+}
+
+frp_client_resume() {
+  frp_client_hook_log resume
+  if ! frp_client_is_paused; then
+    local active
+    active="$(frp_client_service_status 2>/dev/null || printf 'unknown')"
+    if [[ "$active" == "active" || "$active" == "test" ]]; then
+      echo "Client already running."
+      return 0
+    fi
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    frp_client_clear_pause_marker
+    echo "Client resumed. FRP remote access is restored."
+    return 0
+  fi
+  frp_client_clear_pause_marker
+  if ! frp_client_restart; then
+    echo "ERROR: failed to resume FRP client" >&2
+    return 1
+  fi
+  echo "Client resumed. FRP remote access is restored."
+}
+
 frp_client_service_status() {
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
-    printf 'test'
+    if frp_client_is_paused; then
+      printf 'inactive'
+    else
+      printf 'test'
+    fi
   elif frp_is_darwin; then
     frp_macos_launchd_running && printf 'active' || printf 'inactive'
   else
@@ -4004,7 +4247,12 @@ frp_client_wait_proxies() {
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     return 0
   fi
-  wait_for_proxies "$@"
+  if wait_for_proxies "$@"; then
+    return 0
+  fi
+  echo "ERROR: frpc did not register every requested proxy successfully" >&2
+  frp_client_dump_frpc_logs 80
+  return 1
 }
 
 frp_print_state_services() {
@@ -4127,6 +4375,10 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/lib/frp_ctl_grammar.py" >&2
     return 1
   }
+  [[ -f "${source}/lib/frp_service_id.py" ]] || {
+    echo "ERROR: missing ${source}/lib/frp_service_id.py" >&2
+    return 1
+  }
   [[ -f "${source}/lib/frp_ctl_repl.py" ]] || {
     echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
     return 1
@@ -4152,7 +4404,16 @@ frp_client_install_management_files() {
   install -m 0644 "${source}/lib/frp_doctor.py" "${libdir}/frp_doctor.py"
   install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
   install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
+  install -m 0644 "${source}/lib/frp_service_id.py" "${libdir}/frp_service_id.py"
   install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
+  if [[ -f "${source}/uninstall-client.sh" ]]; then
+    install -m 0755 "${source}/uninstall-client.sh" "${libdir}/uninstall-client.sh"
+  elif [[ -f "${source}/dist/uninstall-client.sh" ]]; then
+    install -m 0755 "${source}/dist/uninstall-client.sh" "${libdir}/uninstall-client.sh"
+  else
+    echo "ERROR: missing ${source}/uninstall-client.sh" >&2
+    return 1
+  fi
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
   install -m 0755 "${source}/tools/frpctl" "${bindir}/frpctl"
   install -m 0755 "${source}/tools/frp-support-bundle" "${bindir}/frp-support-bundle"
@@ -4178,8 +4439,10 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/frp-auto-deploy/frp_doctor.py:0644:lib/frp_doctor.py" \
     "usr/local/lib/frp-auto-deploy/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
+    "usr/local/lib/frp-auto-deploy/frp_service_id.py:0644:lib/frp_service_id.py" \
     "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
     "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
+    "usr/local/lib/frp-auto-deploy/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
@@ -4282,6 +4545,7 @@ frp_client_upgrade_validate_staged() {
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_doctor.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_support_bundle.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_service_id.py" || return 1
   python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_repl.py" || return 1
   python3 -m py_compile "${staged}/usr/local/bin/frp-support-bundle" || return 1
   rm -rf "${staged}/usr/local/lib/frp-auto-deploy/__pycache__" \
@@ -4627,7 +4891,21 @@ frp_client_apply_upgrade() {
     return 1
   fi
   if [[ "$kind" != "source" ]] && ! frp_client_has_trustworthy_release_line \
-      && [[ -z "$expected_channel" ]]; then
+      && [[ -z "$(frp_client_admin_expected_channel || true)" ]]; then
+    frp_client_report_identity "$previous" "unknown" \
+      "$installed_channel" "unknown" "$installed_ref" "unknown" \
+      "$installed_bundle" "${target_bundle:-unknown}"
+    echo "FRP version               : ${FRP_VERSION}"
+    echo
+    frp_client_emit_legacy_secure_bridge
+    return 1
+  fi
+  # Channel+ref without an external verified SHA is still not a safe auto-upgrade
+  # target. A bundle stamp alone must not reinterpret that identity (e.g. stable
+  # / v2.1.0 / unknown SHA → silent dev).
+  if [[ "$kind" != "source" ]] && frp_client_has_trustworthy_release_line \
+      && ! frp_client_has_verified_build_identity \
+      && [[ -z "$(frp_client_admin_expected_channel || true)" ]]; then
     frp_client_report_identity "$previous" "unknown" \
       "$installed_channel" "unknown" "$installed_ref" "unknown" \
       "$installed_bundle" "${target_bundle:-unknown}"
@@ -4893,8 +5171,9 @@ frp_client_fetch_and_upgrade() {
     return 1
   fi
   explicit_channel="$(frp_client_explicit_expected_channel || true)"
+  admin_channel="$(frp_client_admin_expected_channel || true)"
   if frp_client_has_existing_install; then
-    if ! frp_client_has_trustworthy_release_line && [[ -z "$explicit_channel" ]]; then
+    if ! frp_client_has_trustworthy_release_line && [[ -z "$admin_channel" ]]; then
       frp_client_report_identity \
         "$(frp_client_installed_project_version)" "unknown" \
         "$(frp_client_installed_release_channel)" "unknown" \
@@ -4911,8 +5190,13 @@ frp_client_fetch_and_upgrade() {
   else
     channel="$(frp_release_channel)"
   fi
+  installed_ref="$(frp_client_installed_source_ref)"
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     source_ref="$FRP_EXPECTED_SOURCE_REF"
+  elif [[ -n "$installed_ref" && "$installed_ref" != "unknown" ]] && \
+       frp_is_commit_source_ref "$installed_ref"; then
+    # Keep PR/commit installs pinned to the same immutable source ref.
+    source_ref="$installed_ref"
   elif [[ "$channel" == "dev" ]]; then
     source_ref="main"
   else

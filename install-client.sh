@@ -163,7 +163,9 @@ print()
 if not services:
     print('Management identity enrolled (management-only mode).')
     print('No services are published and no public ports were allocated.')
-    print('Add a service later with: sudo frp-client')
+    print('Add a service later with:')
+    print('  sudo frpctl')
+    print('  sudo frpctl service add')
 else:
     print('The requested remote service is connected.')
 print('You can close this terminal.')
@@ -303,17 +305,21 @@ print('For normal operation, this is the only command you need to remember:')
 print()
 print('  sudo frpctl')
 print()
-print('Then type help inside the CLI.')
+print('Then use Tab or ? to discover commands.')
 print()
 print('Useful commands')
 print('---------------')
 print()
-print('Everyday CLI / status / update:')
 print('  sudo frpctl')
-print('  sudo frpctl status')
-print('  sudo frpctl update')
+print('  sudo frpctl show status')
+print('  sudo frpctl show services')
+print('  sudo frpctl show info')
+print('  sudo frpctl service ...')
+print('  sudo frpctl client ...')
+print('  sudo frpctl system ...')
+print('  sudo frpctl system update')
 print()
-print('Advanced direct commands (still supported):')
+print('Advanced / troubleshooting:')
 print('  sudo frp-client')
 print('  sudo frp-client status')
 print('  sudo frp-client info')
@@ -373,7 +379,7 @@ frp_client_service_start() {
 frp_client_existing_install_message() {
   if frp_zero_touch_active; then
     echo "This client is already installed." >&2
-    echo "Use sudo frpctl update or sudo frp-client manage." >&2
+    echo "Use sudo frpctl system update to upgrade in place." >&2
     return 0
   fi
   echo "ERROR: this host already has an FRP client installed." >&2
@@ -382,12 +388,12 @@ frp_client_existing_install_message() {
   echo "require an Enrollment Code." >&2
   echo >&2
   echo "Upgrade in place with:" >&2
-  echo "  sudo frpctl update" >&2
+  echo "  sudo frpctl system update" >&2
   echo >&2
   echo "or, from the bootstrap bundle:" >&2
   echo "  curl -fsSL https://${FRP_GITHUB_RAW_HOST}/${FRP_GITHUB_OWNER}/${FRP_GITHUB_REPO}/v${PROJECT_VERSION}/dist/bootstrap-client.sh | sudo bash -s -- --upgrade" >&2
   echo >&2
-  echo "Use sudo frp-client to change published services." >&2
+  echo "Use sudo frpctl to change published services." >&2
   echo "An Enrollment Code is only for first install or trust recovery." >&2
 }
 
@@ -438,7 +444,7 @@ frp_client_main() {
   fi
   if frp_client_has_partial_install && [[ "$FRP_RESUME_PENDING" != "1" ]]; then
     echo "ERROR: a partial FRP client installation was found." >&2
-    echo "Repair it with: sudo frpctl update" >&2
+    echo "Repair it with: sudo frpctl system update" >&2
     echo "or uninstall locally and enroll again." >&2
     echo "Do not re-run first-install bootstrap on a partial client." >&2
     frp_emit_failure_class RECOVERY_REQUIRED
@@ -739,7 +745,7 @@ Usage: install-client.sh [--upgrade] [--source DIR] [--check]
   --source    Source tree for --upgrade (default: this installer tree)
   --check     With --upgrade, report versions without changing files
 
-An already-installed client is not re-enrolled. Use --upgrade / frpctl update
+An already-installed client is not re-enrolled. Use --upgrade / frpctl system update
 for software updates. An Enrollment Code is not required for a software update.
 EOF
 }

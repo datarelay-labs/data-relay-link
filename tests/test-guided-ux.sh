@@ -31,9 +31,9 @@ need "$WORKDIR/guide.out" 'Press Enter to accept the default' 'bracket defaults'
 need "$WORKDIR/guide.out" 'Service ID' 'service id heading'
 need "$WORKDIR/guide.out" 'lowercase and case-insensitive' 'service id case'
 need "$WORKDIR/guide.out" 'public port' 'service id persistence'
-need "$WORKDIR/guide.out" 'Target host' 'target host heading'
+need "$WORKDIR/guide.out" 'The target is viewed from this FRP client' 'target host heading'
 need "$WORKDIR/guide.out" '127.0.0.1' 'local target example'
-need "$WORKDIR/guide.out" 'another reachable internal IP' 'remote internal target'
+need "$WORKDIR/guide.out" '192.168.10.20' 'remote internal target'
 need "$WORKDIR/guide.out" 'Target port' 'target port heading'
 need "$WORKDIR/guide.out" 'Standard SSH uses port 22' 'ssh port help'
 need "$WORKDIR/guide.out" 'Standard HTTP uses port 80' 'http port help'
@@ -60,7 +60,7 @@ run_preset() {
   frp_reset_test_input
 }
 
-run_preset $'1\n\n\n\n\n' "$WORKDIR/ssh.json"
+run_preset $'1\n\n\n\n' "$WORKDIR/ssh.json"
 python3 - "$WORKDIR/ssh.json" <<'PY' || fail "ssh defaults"
 import json,sys
 p=json.loads(open(sys.argv[1]).read())
@@ -72,7 +72,7 @@ assert p['ssh_user']=='aella'
 PY
 pass "SSH defaults accepted by Enter"
 
-run_preset $'2\n\n\n\n' "$WORKDIR/http.json"
+run_preset $'2\n\n\n' "$WORKDIR/http.json"
 python3 - "$WORKDIR/http.json" <<'PY' || fail "http defaults"
 import json,sys
 p=json.loads(open(sys.argv[1]).read())
@@ -83,7 +83,7 @@ assert int(p['local_port'])==80
 PY
 pass "HTTP defaults accepted by Enter"
 
-run_preset $'3\n\n\n\n' "$WORKDIR/https.json"
+run_preset $'3\n\n\n' "$WORKDIR/https.json"
 python3 - "$WORKDIR/https.json" <<'PY' || fail "https defaults"
 import json,sys
 p=json.loads(open(sys.argv[1]).read())
@@ -94,11 +94,11 @@ assert int(p['local_port'])==443
 PY
 pass "HTTPS defaults accepted by Enter"
 
-run_preset $'4\ngrafana\nGrafana\n\n3000\n' "$WORKDIR/custom.json"
+run_preset $'4\n\n3000\nGrafana\n' "$WORKDIR/custom.json"
 python3 - "$WORKDIR/custom.json" <<'PY' || fail "custom tcp"
 import json,sys
 p=json.loads(open(sys.argv[1]).read())
-assert p['id']=='grafana', p
+assert p['id']=='tcp-3000', p
 assert p['name']=='Grafana'
 assert p['preset']=='custom'
 assert p['local_ip']=='127.0.0.1'
@@ -124,7 +124,7 @@ SERVICES_FILE="$WORKDIR/services.json"
 services_init
 frp_reset_test_input
 # empty menu -> default add; SSH with defaults; Install; No; Cancel
-export FRP_CLIENT_TEST_INPUT=$'\n1\n\n\n\n\n3\nn\n4\n'
+export FRP_CLIENT_TEST_INPUT=$'\n1\n\n\n\n3\nn\n4\n'
 if collect_services_interactive >"$WORKDIR/noconfirm.out" 2>"$WORKDIR/noconfirm.err"; then
   fail "cancel after No should exit non-zero"
 fi
@@ -140,7 +140,7 @@ pass "install confirmation No returns to menu"
 SERVICES_FILE="$WORKDIR/services.json"
 services_init
 frp_reset_test_input
-export FRP_CLIENT_TEST_INPUT=$'\n1\n\n\n\n\n3\nY\n'
+export FRP_CLIENT_TEST_INPUT=$'\n1\n\n\n\n3\nY\n'
 if ! collect_services_interactive >"$WORKDIR/yes.out" 2>"$WORKDIR/yes.err"; then
   fail "Yes should complete collect_services_interactive"
 fi
@@ -170,9 +170,11 @@ need "$WORKDIR/complete.out" 'Local target : 127.0.0.1:22' 'complete target'
 need "$WORKDIR/complete.out" 'Public port  : 6002' 'complete public'
 need "$WORKDIR/complete.out" 'ssh -p 6002 aella@203.0.113.10' 'complete ssh'
 need "$WORKDIR/complete.out" 'sudo frpctl' 'complete frpctl'
-need "$WORKDIR/complete.out" 'sudo frp-client' 'complete manage'
-need "$WORKDIR/complete.out" 'sudo frp-client status' 'complete status'
-need "$WORKDIR/complete.out" 'sudo frp-client info' 'complete info'
+need "$WORKDIR/complete.out" 'sudo frpctl show status' 'complete status'
+need "$WORKDIR/complete.out" 'sudo frpctl show services' 'complete services'
+need "$WORKDIR/complete.out" 'sudo frpctl system update' 'complete system update'
+need "$WORKDIR/complete.out" 'Advanced / troubleshooting' 'complete advanced'
+need "$WORKDIR/complete.out" 'sudo frp-client' 'complete advanced frp-client'
 pass "installation complete screen"
 
 # --- Apply summary ---------------------------------------------------------

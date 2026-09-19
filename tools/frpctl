@@ -314,11 +314,12 @@ frpctl_role_token() {
 
 frpctl_grammar_payload() {
   python3 - "$(frpctl_role_token)" "$(frpctl_path /etc/frp-auto-deploy/config.json)" \
-    "${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}" "$(frpctl_path /etc/frp/client-state.json)" <<'PY'
+    "${FRP_CTL_TEST_ROOT:-${FRP_DEPLOY_TEST_ROOT:-}}" "$(frpctl_path /etc/frp/client-state.json)" \
+    "$(frpctl_path /var/lib/frp-auto-deploy/client-draft.json)" <<'PY'
 import json, sys
 from pathlib import Path
-role, cfg_path, root, state_path = sys.argv[1:5]
-names, services, local_services, clients_meta, groups = [], {}, [], [], []
+role, cfg_path, root, state_path, draft_path = sys.argv[1:6]
+names, services, local_services, local_service_details, clients_meta, groups, profiles = [], {}, [], [], [], [], []
 inventory_warning = False
 server_role = role in ("server", "both", "dual")
 client_role = role in ("client", "both", "dual")
@@ -333,6 +334,22 @@ def unique_short(mid, mids, n=8):
             return prefix
         length += 1
     return text
+
+def service_detail(sid, item):
+    if not isinstance(item, dict):
+        item = {}
+    host = str(item.get("local_ip") or "").strip()
+    port = item.get("local_port")
+    target = "%s:%s" % (host, port) if host and port is not None else (host or "-")
+    enabled = item.get("enabled", True) is not False
+    return {
+        "id": sid,
+        "name": str(item.get("name") or sid),
+        "preset": str(item.get("preset") or "custom"),
+        "target": target,
+        "enabled": enabled,
+        "remote_port": item.get("remote_port"),
+    }
 
 if server_role and not cfg.is_file():
     inventory_warning = True
@@ -364,6 +381,13 @@ if cfg.is_file():
                         groups.extend([str(gid), str(group.get("name") or "")])
             else:
                 inventory_warning = True
+            raw_profiles = (state or {}).get("service_profiles") or (state or {}).get("profiles") or {}
+            if isinstance(raw_profiles, dict):
+                for pid, profile in raw_profiles.items():
+                    if isinstance(profile, dict):
+                        profiles.extend([str(pid), str(profile.get("name") or "")])
+                    else:
+                        profiles.append(str(pid))
             for mid, client in items:
                 cid = unique_short(mid, mids)
                 if not cid or "\n" in cid or "\r" in cid:
@@ -386,11 +410,31 @@ if cfg.is_file():
                     services[host] = sids
         elif server_role:
             inventory_warning = True
+        # Also try profiles file referenced by config when present.
+        prof_raw = str((data or {}).get("profiles_file") or (data or {}).get("service_profiles_file") or "")
+        if prof_raw:
+            pref = Path(prof_raw)
+            if root and not str(pref).startswith(root):
+                pref = Path(root + str(pref))
+            if pref.is_file():
+                try:
+                    pdata = json.loads(pref.read_text(encoding="utf-8"))
+                    blob = pdata.get("profiles") if isinstance(pdata, dict) else None
+                    if isinstance(blob, dict):
+                        for pid, profile in blob.items():
+                            if isinstance(profile, dict):
+                                profiles.extend([str(pid), str(profile.get("name") or "")])
+                            else:
+                                profiles.append(str(pid))
+                except Exception:
+                    pass
     except Exception:
         inventory_warning = True
 st = Path(state_path)
+draft = Path(draft_path)
 if client_role and not st.is_file():
     inventory_warning = True
+svc_map = {}
 if st.is_file():
     try:
         data = json.loads(st.read_text(encoding="utf-8"))
@@ -398,17 +442,32 @@ if st.is_file():
         if not isinstance(raw_services, dict):
             inventory_warning = True
         else:
-            local_services = sorted(str(s) for s in raw_services if s)
+            svc_map = dict(raw_services)
     except Exception:
         inventory_warning = True
+if draft.is_file():
+    try:
+        data = json.loads(draft.read_text(encoding="utf-8"))
+        raw_services = (data or {}).get("services") or {}
+        if isinstance(raw_services, dict):
+            svc_map.update(raw_services)
+    except Exception:
+        pass
+if client_role and svc_map:
+    local_services = sorted(str(s) for s in svc_map if s)
+    for sid in local_services:
+        local_service_details.append(service_detail(sid, svc_map.get(sid) or {}))
 json.dump({
     "role": role,
     "names": sorted(set(names)),
     "clients": clients_meta,
     "services": services,
     "local_services": local_services,
+    "local_service_details": local_service_details,
     "groups": sorted(set(item for item in groups if item)),
+    "profiles": sorted(set(item for item in profiles if item)),
     "inventory_warning": inventory_warning,
+    "pending_draft": draft.is_file(),
 }, sys.stdout)
 PY
 }
@@ -444,21 +503,21 @@ Type '?' for context help, or 'help' for full syntax. Press Tab to complete
 a unique match or list next-token candidates. Type 'menu'
 for the guided numbered menu.
 
-Canonical grammar:
-  <verb> <resource> [target] [property] [value]
+Commands are grouped by resource. On servers:
 
-  show status | show version | show clients | show client ID
-  set client ID label|note VALUE
-  set client ID tag KEY VALUE
-  unset client ID label|note|tag [KEY]
-  create zero-touch | create enrollment | create backup
-  revoke client ID | release client ID | release service ID SID
-  access | access list | access menu
-  update project [--check] | update frp [--check]
-  doctor | support-bundle | help | menu | history | exit
+  show | client | enrollment | group | profile | access | server | system
 
-status and version remain shortcuts. Older flat commands (clients,
-client-set, enroll, ...) still work for scripts. See 'help legacy'.
+Examples:
+  show status | show version | show health | show clients
+  client set ID label|note VALUE
+  enrollment zero-touch | enrollment list
+  group list | profile list
+  server show | server installer URL
+  system update | system doctor | system support-bundle
+  access | help | menu | history | exit
+
+Legacy verb forms (set/create/revoke/doctor/...) still work for scripts.
+See 'help legacy'.
 
 Official upstream FRP binaries are frps (server) and frpc (client).
 This project does not fork FRP.
@@ -488,30 +547,118 @@ frpctl_print_version() {
 }
 
 frpctl_print_client_menu() {
-  echo "1) Show status"
-  echo "2) Show services"
-  echo "3) Show connection information"
-  echo "4) Manage services"
-  echo "5) Update project"
-  echo "6) Doctor"
-  echo "7) Help"
-  echo "8) Exit"
+  echo "1) Show"
+  echo "2) Service"
+  echo "3) Client"
+  echo "4) System"
+  echo "5) Exit"
+}
+
+frpctl_print_client_show_menu() {
+  echo "1) Status"
+  echo "2) Services"
+  echo "3) Connection information"
+  echo "4) Back"
+}
+
+frpctl_print_client_service_menu() {
+  echo "1) Add"
+  echo "2) Set"
+  echo "3) Enable"
+  echo "4) Disable"
+  echo "5) Apply"
+  echo "6) Discard"
+  echo "7) Back"
+}
+
+frpctl_print_client_lifecycle_menu() {
+  echo "1) Pause"
+  echo "2) Resume"
+  echo "3) Uninstall"
+  echo "4) Back"
+}
+
+frpctl_print_client_system_menu() {
+  echo "1) Update"
+  echo "2) Doctor"
+  echo "3) Support Bundle"
+  echo "4) Back"
 }
 
 frpctl_print_server_menu() {
-  echo "1) Show status"
-  echo "2) Manage clients"
-  echo "3) Create enrollment"
-  echo "4) Create enrollments"
-  echo "5) Show enrollments"
-  echo "6) Create backup / Restore backup"
-  echo "7) Access Control"
-  echo "8) Update project"
-  echo "9) Update FRP"
-  echo "10) Doctor"
-  echo "11) Show audit"
-  echo "12) Help"
-  echo "13) Exit"
+  echo "1) Show"
+  echo "2) Clients"
+  echo "3) Enrollment"
+  echo "4) Groups"
+  echo "5) Service Profiles"
+  echo "6) Access Control"
+  echo "7) Server Settings"
+  echo "8) Backup / Restore"
+  echo "9) System"
+  echo "10) Exit"
+}
+
+frpctl_print_server_show_menu() {
+  echo "1) Status"
+  echo "2) Clients"
+  echo "3) Enrollments"
+  echo "4) Groups"
+  echo "5) Service Profiles"
+  echo "6) Audit"
+  echo "7) Upstream FRP"
+  echo "8) Back"
+}
+
+frpctl_print_server_enrollment_menu() {
+  echo "1) Create Zero-Touch client (Recommended)"
+  echo "2) Create Manual Enrollment Code"
+  echo "3) Bulk enrollment"
+  echo "4) Show enrollments"
+  echo "5) Revoke enrollment"
+  echo "6) Purge terminal enrollment"
+  echo "7) Back"
+}
+
+frpctl_print_server_groups_menu() {
+  echo "1) List"
+  echo "2) Show"
+  echo "3) Create"
+  echo "4) Rename"
+  echo "5) Edit description"
+  echo "6) Add client"
+  echo "7) Remove client"
+  echo "8) Delete"
+  echo "9) Back"
+}
+
+frpctl_print_server_profiles_menu() {
+  echo "1) List"
+  echo "2) Show"
+  echo "3) Create"
+  echo "4) Edit"
+  echo "5) Delete"
+  echo "6) Back"
+}
+
+frpctl_print_server_settings_menu() {
+  echo "1) Public hostname"
+  echo "2) Bootstrap hostname"
+  echo "3) Client installer URL"
+  echo "4) Back"
+}
+
+frpctl_print_server_backup_menu() {
+  echo "1) Create backup"
+  echo "2) Restore backup"
+  echo "3) Back"
+}
+
+frpctl_print_server_system_menu() {
+  echo "1) Update project"
+  echo "2) Update FRP"
+  echo "3) Doctor"
+  echo "4) Support Bundle"
+  echo "5) Back"
 }
 
 frpctl_print_both_menu() {
@@ -593,20 +740,299 @@ frpctl_client_menu() {
     fi
     choice="$(frpctl_read "Select: " "")" || return 1
     case "$choice" in
-      1) frpctl_run frp-client status ;;
-      2) frpctl_run frp-client list ;;
-      3) frpctl_run frp-client info ;;
-      4) frpctl_run frp-client ;;
-      5) frpctl_client_update ;;
-      6) frpctl_dispatch doctor || true ;;
-      7) frpctl_repl_help ;;
-      8)
+      1) frpctl_client_show_menu ;;
+      2) frpctl_client_service_menu ;;
+      3) frpctl_client_lifecycle_menu ;;
+      4) frpctl_client_system_menu ;;
+      5)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-8" >&2 ;;
+      *) echo "ERROR: select 1-5" >&2 ;;
     esac
   done
+}
+
+frpctl_client_show_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_client_show_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_run frp-client status ;;
+      2) frpctl_run frp-client list ;;
+      3) frpctl_run frp-client info ;;
+      4) return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_service_menu() {
+  local choice sid prop value
+  while true; do
+    echo
+    frpctl_print_client_service_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_client_service_add_menu ;;
+      2) frpctl_client_service_set_menu ;;
+      3) frpctl_client_service_enable_menu 1 ;;
+      4) frpctl_client_service_enable_menu 0 ;;
+      5) frpctl_invoke frp-client apply-pending ;;
+      6) frpctl_invoke frp-client discard-pending ;;
+      7) return 0 ;;
+      *) echo "ERROR: select 1-7" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_service_add_menu() {
+  # Same dedicated add wizard as `service add` (not the full frp-client menu).
+  frpctl_invoke frp-client add-service
+}
+
+frpctl_client_list_services_numbered() {
+  # Prints numbered local services; sets _FRP_CTL_SVC_IDS array.
+  _FRP_CTL_SVC_IDS=()
+  python3 - "$(frpctl_path /etc/frp/client-state.json)" \
+    "$(frpctl_path /var/lib/frp-auto-deploy/client-draft.json)" <<'PY'
+import json, sys
+from pathlib import Path
+
+def load(path):
+    p = Path(path)
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    raw = data.get("services") or {}
+    return raw if isinstance(raw, dict) else {}
+
+committed = load(sys.argv[1])
+draft = load(sys.argv[2])
+svc = dict(committed)
+svc.update(draft)
+if not svc:
+    print("(no services configured)")
+    raise SystemExit(0)
+print("ID           NAME           TARGET")
+print("--           ----           ------")
+for idx, sid in enumerate(sorted(svc), start=1):
+    item = svc[sid] if isinstance(svc[sid], dict) else {}
+    name = item.get("name") or sid
+    host = item.get("local_ip") or "-"
+    port = item.get("local_port")
+    target = "%s:%s" % (host, port) if port is not None else str(host)
+    print("%d) %-12s %-14s %s" % (idx, sid, name, target))
+    print("ID\t%s" % sid)
+PY
+}
+
+frpctl_client_pick_service() {
+  local prompt="${1:-Select service: }"
+  local out choice
+  out="$(frpctl_client_list_services_numbered)" || return 1
+  # Strip ID lines from display, collect IDs.
+  _FRP_CTL_SVC_IDS=()
+  while IFS= read -r line; do
+    if [[ "$line" == ID$'\t'* ]]; then
+      _FRP_CTL_SVC_IDS+=("${line#ID	}")
+    else
+      printf '%s\n' "$line"
+    fi
+  done <<<"$out"
+  echo
+  if [[ ${#_FRP_CTL_SVC_IDS[@]} -eq 0 ]]; then
+    echo "No services available."
+    return 1
+  fi
+  choice="$(frpctl_read "$prompt" "")" || return 1
+  if [[ ! "$choice" =~ ^[0-9]+$ ]] || ((choice < 1 || choice > ${#_FRP_CTL_SVC_IDS[@]})); then
+    echo "ERROR: select 1-${#_FRP_CTL_SVC_IDS[@]}" >&2
+    return 1
+  fi
+  printf '%s' "${_FRP_CTL_SVC_IDS[$((choice - 1))]}"
+}
+
+frpctl_client_service_set_menu() {
+  local sid prop value choice
+  sid="$(frpctl_client_pick_service "Select service: ")" || return 1
+  echo
+  echo "What do you want to change?"
+  echo
+  echo "1) Target host"
+  echo "2) Target port"
+  echo "3) SSH user"
+  echo "4) Display name"
+  echo "5) Health check"
+  echo "6) Back"
+  echo
+  choice="$(frpctl_read "Select: " "")" || return 1
+  case "$choice" in
+    1) prop="target-host" ;;
+    2) prop="target-port" ;;
+    3) prop="ssh-user" ;;
+    4) prop="name" ;;
+    5)
+      echo
+      echo "1) health-type"
+      echo "2) health-timeout"
+      echo "3) health-interval"
+      echo "4) health-max-failed"
+      echo "5) health-path"
+      echo "6) Back"
+      echo
+      choice="$(frpctl_read "Select: " "")" || return 1
+      case "$choice" in
+        1) prop="health-type" ;;
+        2) prop="health-timeout" ;;
+        3) prop="health-interval" ;;
+        4) prop="health-max-failed" ;;
+        5) prop="health-path" ;;
+        6|"") return 0 ;;
+        *) echo "ERROR: select 1-6" >&2; return 1 ;;
+      esac
+      ;;
+    6|"") return 0 ;;
+    *) echo "ERROR: select 1-6" >&2; return 1 ;;
+  esac
+  if [[ "$prop" == "target-host" ]]; then
+    echo
+    echo "Target host is the service machine as seen from this FRP client."
+    echo
+    echo "Use:"
+    echo "  127.0.0.1       service runs on this FRP client"
+    echo "  192.168.x.x     another server reachable on the LAN"
+    echo "  hostname        another resolvable internal host"
+    echo
+  fi
+  value="$(frpctl_read "Value: " "")" || return 1
+  frpctl_invoke frp-client set-service "$sid" "$prop" "$value"
+}
+
+frpctl_client_service_enable_menu() {
+  local enable="$1" sid label
+  if [[ "$enable" == "1" ]]; then
+    label="enable"
+  else
+    label="disable"
+  fi
+  sid="$(frpctl_client_pick_service "Select service to ${label}: ")" || return 1
+  if [[ "$enable" == "1" ]]; then
+    frpctl_invoke frp-client enable-service "$sid"
+  else
+    frpctl_invoke frp-client disable-service "$sid"
+  fi
+}
+
+frpctl_client_lifecycle_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_client_lifecycle_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_client_pause ;;
+      2) frpctl_client_resume ;;
+      3) frpctl_client_uninstall; return $? ;;
+      4) return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_system_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_client_system_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_client_update ;;
+      2) frpctl_dispatch doctor || true ;;
+      3) frpctl_dispatch support-bundle || true ;;
+      4) return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_client_pause() {
+  frpctl_require_client || return 1
+  frpctl_invoke frp-client pause
+}
+
+frpctl_client_resume() {
+  frpctl_require_client || return 1
+  frpctl_invoke frp-client resume
+}
+
+frpctl_find_uninstall_client() {
+  local cand
+  # Prefer the packaged install path so offline uninstall works after normal enroll.
+  for cand in \
+    "$(frpctl_path /usr/local/lib/frp-auto-deploy/uninstall-client.sh)" \
+    "${FRP_CTL_BIN_DIR:-}/uninstall-client.sh" \
+    /usr/local/lib/frp-auto-deploy/uninstall-client.sh \
+    /usr/local/sbin/uninstall-client.sh \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/uninstall-client.sh" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/uninstall-client.sh"; do
+    if [[ -n "$cand" && -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+frpctl_client_uninstall() {
+  local confirm script yes=0 arg
+  frpctl_require_client || return 1
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) yes=1 ;;
+    esac
+  done
+  echo "This removes FRP Auto Deploy from this machine."
+  echo
+  echo "Local client identity and configuration will be removed."
+  echo "Server-side client records and public-port reservations will remain."
+  echo
+  if [[ "$yes" != "1" ]]; then
+    if [[ -n "${FRP_CTL_TEST_INPUT:-}" || -t 0 ]]; then
+      confirm="$(frpctl_read "Type UNINSTALL to continue: " "")" || return 1
+      if [[ "$confirm" != "UNINSTALL" ]]; then
+        echo "Uninstall cancelled."
+        return 1
+      fi
+    else
+      echo "ERROR: non-interactive uninstall requires --yes" >&2
+      return 1
+    fi
+  fi
+  if [[ "${FRP_CTL_DRY_RUN:-}" == "1" ]]; then
+    echo "DISPATCH uninstall-client.sh"
+    return 0
+  fi
+  if ! script="$(frpctl_find_uninstall_client)"; then
+    echo "ERROR: uninstall-client.sh not found" >&2
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  if ! bash "$script"; then
+    return 1
+  fi
+  echo "FRP Auto Deploy client removed."
+  # REPL / interactive session cannot continue on a deleted installation.
+  exit 0
 }
 
 frpctl_zt_prompt_client_identification() {
@@ -744,21 +1170,54 @@ print(json.dumps(payload))
 PY
 }
 
+frpctl_zt_suggest_service_id() {
+  # Args: preset port used_json_array_string
+  local preset="$1" port="${2:-}" used="${3:-[]}"
+  local py
+  py="$(frpctl_service_id_py)" || return 1
+  python3 "$py" suggest "$preset" "${port:--}" "$used"
+}
+
+frpctl_service_id_py() {
+  local here cand
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for cand in \
+    "${FRP_SOURCE_ROOT:-}/lib/frp_service_id.py" \
+    "$here/../lib/frp_service_id.py" \
+    "${FRP_CTL_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    "${FRP_DEPLOY_TEST_ROOT:-}/usr/local/lib/frp-auto-deploy/frp_service_id.py" \
+    /usr/local/lib/frp-auto-deploy/frp_service_id.py
+  do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  echo "ERROR: missing frp_service_id.py" >&2
+  return 1
+}
+
+frpctl_zt_print_target_host_help() {
+  echo "Target host is the service machine as seen from this FRP client."
+  echo
+  echo "Use:"
+  echo "  127.0.0.1       service runs on this FRP client"
+  echo "  192.168.x.x     another server reachable on the LAN"
+  echo "  hostname        another resolvable internal host"
+  echo
+}
+
 frpctl_zt_prompt_service_fields() {
-  # Sets _FRP_ZT_SVC_JSON for one service. Args: preset default_id default_name default_host default_port
-  local preset="$1" default_id="$2" default_name="$3" default_host="$4" default_port="$5"
+  # Sets _FRP_ZT_SVC_JSON for one service.
+  # Args: preset default_name default_host default_port used_ids_json
+  local preset="$1" default_name="$2" default_host="$3" default_port="$4" used_json="${5:-[]}"
   local sid host port user name
-  if [[ -n "$default_id" ]]; then
-    sid="$(frpctl_read "Service ID [${default_id}]: " "$default_id")" || return 1
-  else
-    sid="$(frpctl_read "Service ID: " "")" || return 1
+  local explained="${_FRP_ZT_TARGET_HELP_SHOWN:-0}"
+
+  if [[ "$explained" != "1" ]]; then
+    frpctl_zt_print_target_host_help
+    _FRP_ZT_TARGET_HELP_SHOWN=1
   fi
-  sid="${sid#"${sid%%[![:space:]]*}"}"
-  sid="${sid%"${sid##*[![:space:]]}"}"
-  if [[ -z "$sid" ]]; then
-    echo "ERROR: Service ID is required." >&2
-    return 1
-  fi
+
   host="$(frpctl_read "Target host [${default_host}]: " "$default_host")" || return 1
   host="${host#"${host%%[![:space:]]*}"}"
   host="${host%"${host##*[![:space:]]}"}"
@@ -779,10 +1238,10 @@ frpctl_zt_prompt_service_fields() {
   fi
   name="$default_name"
   if [[ "$preset" == "custom" ]]; then
-    name="$(frpctl_read "Display name [${sid}]: " "$sid")" || return 1
+    name="$(frpctl_read "Display name [TCP ${port}]: " "TCP ${port}")" || return 1
     name="${name#"${name%%[![:space:]]*}"}"
     name="${name%"${name##*[![:space:]]}"}"
-    [[ -n "$name" ]] || name="$sid"
+    [[ -n "$name" ]] || name="TCP ${port}"
   fi
   if [[ "$preset" == "ssh" ]]; then
     while true; do
@@ -794,11 +1253,33 @@ frpctl_zt_prompt_service_fields() {
       fi
       echo "ERROR: SSH user is required." >&2
     done
+  fi
+  sid="$(frpctl_zt_suggest_service_id "$preset" "$port" "$used_json")" || return 1
+  echo "Service ID : ${sid} (automatic)"
+  if [[ "$preset" == "ssh" ]]; then
     _FRP_ZT_SVC_JSON="$(frpctl_zt_service_payload "$preset" "$sid" "$name" "$host" "$port" "$user")" || return 1
   else
     _FRP_ZT_SVC_JSON="$(frpctl_zt_service_payload "$preset" "$sid" "$name" "$host" "$port")" || return 1
   fi
+  _FRP_ZT_LAST_SID="$sid"
   return 0
+}
+
+frpctl_zt_used_ids_json() {
+  # Build used ID list from collected service JSON payloads.
+  python3 - "$@" <<'PY'
+import json, sys
+used = []
+for raw in sys.argv[1:]:
+    try:
+        item = json.loads(raw)
+    except Exception:
+        continue
+    sid = str(item.get("id") or "").strip().lower()
+    if sid:
+        used.append(sid)
+print(json.dumps(used))
+PY
 }
 
 frpctl_zt_write_services_file() {
@@ -816,12 +1297,13 @@ PY
 }
 
 frpctl_zt_run_services() {
-  local choice services_file="" rc=0
+  local choice services_file="" rc=0 used_json="[]"
   local -a svc_jsons=()
   _FRP_ZT_CLIENT_NAME=""
   _FRP_ZT_NOTE=""
   _FRP_ZT_SVC_JSON=""
   _FRP_ZT_PLATFORM="${_FRP_ZT_PLATFORM:-linux}"
+  _FRP_ZT_TARGET_HELP_SHOWN=0
 
   frpctl_zt_prompt_client_identification || return 1
 
@@ -838,26 +1320,30 @@ frpctl_zt_run_services() {
     echo "6) Cancel"
     echo
     choice="$(frpctl_read "Select: " "")" || return 1
+    used_json="[]"
+    if [[ ${#svc_jsons[@]} -gt 0 ]]; then
+      used_json="$(frpctl_zt_used_ids_json "${svc_jsons[@]}")"
+    fi
     case "$choice" in
       1)
-        frpctl_zt_prompt_service_fields ssh ssh SSH 127.0.0.1 22 || continue
+        frpctl_zt_prompt_service_fields ssh SSH 127.0.0.1 22 "$used_json" || continue
         svc_jsons+=("$_FRP_ZT_SVC_JSON")
-        echo "Added SSH service."
+        echo "Added SSH service '${_FRP_ZT_LAST_SID}'."
         ;;
       2)
-        frpctl_zt_prompt_service_fields http http HTTP 127.0.0.1 80 || continue
+        frpctl_zt_prompt_service_fields http HTTP 127.0.0.1 80 "$used_json" || continue
         svc_jsons+=("$_FRP_ZT_SVC_JSON")
-        echo "Added HTTP service."
+        echo "Added HTTP service '${_FRP_ZT_LAST_SID}'."
         ;;
       3)
-        frpctl_zt_prompt_service_fields https https HTTPS 127.0.0.1 443 || continue
+        frpctl_zt_prompt_service_fields https HTTPS 127.0.0.1 443 "$used_json" || continue
         svc_jsons+=("$_FRP_ZT_SVC_JSON")
-        echo "Added HTTPS service."
+        echo "Added HTTPS service '${_FRP_ZT_LAST_SID}'."
         ;;
       4)
-        frpctl_zt_prompt_service_fields custom "" "Custom TCP" 127.0.0.1 "" || continue
+        frpctl_zt_prompt_service_fields custom "Custom TCP" 127.0.0.1 "" "$used_json" || continue
         svc_jsons+=("$_FRP_ZT_SVC_JSON")
-        echo "Added Custom TCP service."
+        echo "Added Custom TCP service '${_FRP_ZT_LAST_SID}'."
         ;;
       5)
         if [[ ${#svc_jsons[@]} -eq 0 ]]; then
@@ -1186,8 +1672,352 @@ PY
   frpctl_manage_one_client "$mid"
 }
 
+frpctl_server_show_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_server_show_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_run frp-server-status ;;
+      2) frpctl_invoke frp-clients ;;
+      3) frpctl_invoke frp-enrollments ;;
+      4) frpctl_invoke frp-groups ;;
+      5) frpctl_invoke frp-profile list ;;
+      6) frpctl_audit_tail ;;
+      7) frpctl_run frp-upstream ;;
+      8|"") return 0 ;;
+      *) echo "ERROR: select 1-8" >&2 ;;
+    esac
+  done
+}
+
+frpctl_server_enrollment_menu() {
+  local choice eid
+  while true; do
+    echo
+    frpctl_print_server_enrollment_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_guided_zero_touch ;;
+      2) frpctl_run frp-create-client ;;
+      3) frpctl_run frp-enroll-bulk ;;
+      4) frpctl_invoke frp-enrollments ;;
+      5)
+        eid="$(frpctl_read "Enrollment ID: " "")" || return 1
+        if [[ -z "$eid" ]]; then
+          echo "ERROR: enrollment ID is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-enrollment-revoke "$eid" || true
+        ;;
+      6)
+        eid="$(frpctl_read "Enrollment ID: " "")" || return 1
+        if [[ -z "$eid" ]]; then
+          echo "ERROR: enrollment ID is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-enrollment-purge enrollment "$eid" || true
+        ;;
+      7|"") return 0 ;;
+      *) echo "ERROR: select 1-7" >&2 ;;
+    esac
+  done
+}
+
+frpctl_server_groups_menu() {
+  local choice name desc client group
+  while true; do
+    echo
+    frpctl_print_server_groups_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_invoke frp-groups ;;
+      2)
+        group="$(frpctl_read "Group name or ID: " "")" || return 1
+        if [[ -z "$group" ]]; then
+          echo "ERROR: group is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-groups "$group" || true
+        ;;
+      3)
+        name="$(frpctl_read "Group name: " "")" || return 1
+        if [[ -z "$name" ]]; then
+          echo "ERROR: group name is required" >&2
+          continue
+        fi
+        desc="$(frpctl_read "Description (optional): " "")" || return 1
+        if [[ -n "$desc" ]]; then
+          frpctl_invoke frp-group-set create "$name" --description "$desc" || true
+        else
+          frpctl_invoke frp-group-set create "$name" || true
+        fi
+        ;;
+      4)
+        group="$(frpctl_read "Group name or ID: " "")" || return 1
+        name="$(frpctl_read "New name: " "")" || return 1
+        if [[ -z "$group" || -z "$name" ]]; then
+          echo "ERROR: group and new name are required" >&2
+          continue
+        fi
+        frpctl_invoke frp-group-set set "$group" name "$name" || true
+        ;;
+      5)
+        group="$(frpctl_read "Group name or ID: " "")" || return 1
+        desc="$(frpctl_read "New description: " "")" || return 1
+        if [[ -z "$group" ]]; then
+          echo "ERROR: group is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-group-set set "$group" description "$desc" || true
+        ;;
+      6)
+        client="$(frpctl_read "Client ID or label: " "")" || return 1
+        group="$(frpctl_read "Group name or ID: " "")" || return 1
+        if [[ -z "$client" || -z "$group" ]]; then
+          echo "ERROR: client and group are required" >&2
+          continue
+        fi
+        frpctl_invoke frp-group-set add-member "$client" "$group" || true
+        ;;
+      7)
+        client="$(frpctl_read "Client ID or label: " "")" || return 1
+        group="$(frpctl_read "Group name or ID: " "")" || return 1
+        if [[ -z "$client" || -z "$group" ]]; then
+          echo "ERROR: client and group are required" >&2
+          continue
+        fi
+        frpctl_invoke frp-group-set remove-member "$client" "$group" || true
+        ;;
+      8)
+        group="$(frpctl_read "Group name or ID: " "")" || return 1
+        if [[ -z "$group" ]]; then
+          echo "ERROR: group is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-group-set delete "$group" || true
+        ;;
+      9|"") return 0 ;;
+      *) echo "ERROR: select 1-9" >&2 ;;
+    esac
+  done
+}
+
+frpctl_server_guided_create_profile() {
+  local choice name host port user desc preset
+  echo
+  echo "Create Service Profile"
+  echo "======================"
+  echo
+  echo "The target is interpreted on the future FRP client."
+  echo
+  echo "  127.0.0.1       service on that client"
+  echo "  LAN IP/hostname another service reachable from that client"
+  echo
+  echo "1) SSH   (default 127.0.0.1:22)"
+  echo "2) HTTP  (default 127.0.0.1:80)"
+  echo "3) HTTPS (default 127.0.0.1:443)"
+  echo "4) Custom (port required)"
+  echo "5) Back"
+  echo
+  choice="$(frpctl_read "Select preset: " "")" || return 1
+  case "$choice" in
+    1) preset=ssh; port=22 ;;
+    2) preset=http; port=80 ;;
+    3) preset=https; port=443 ;;
+    4) preset=custom; port="" ;;
+    5|"") return 0 ;;
+    *) echo "ERROR: select 1-5" >&2; return 1 ;;
+  esac
+  name="$(frpctl_read "Profile name: " "")" || return 1
+  if [[ -z "$name" ]]; then
+    echo "ERROR: profile name is required" >&2
+    return 1
+  fi
+  host="$(frpctl_read "Target host [127.0.0.1]: " "127.0.0.1")" || return 1
+  if [[ "$preset" == "custom" ]]; then
+    port="$(frpctl_read "Target port: " "")" || return 1
+    if [[ -z "$port" ]]; then
+      echo "ERROR: target port is required for custom profiles" >&2
+      return 1
+    fi
+  else
+    port="$(frpctl_read "Target port [${port}]: " "$port")" || return 1
+  fi
+  user=""
+  if [[ "$preset" == "ssh" ]]; then
+    user="$(frpctl_read "SSH user (optional): " "")" || return 1
+  fi
+  desc="$(frpctl_read "Description (optional): " "")" || return 1
+  if [[ -n "$user" ]]; then
+    frpctl_invoke frp-profile create "$name" --preset "$preset" \
+      --target-host "$host" --target-port "$port" --ssh-user "$user" \
+      --description "$desc" || true
+  else
+    frpctl_invoke frp-profile create "$name" --preset "$preset" \
+      --target-host "$host" --target-port "$port" \
+      --description "$desc" || true
+  fi
+}
+
+frpctl_server_profiles_menu() {
+  local choice profile prop value
+  while true; do
+    echo
+    frpctl_print_server_profiles_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_invoke frp-profile list ;;
+      2)
+        profile="$(frpctl_read "Profile name or ID: " "")" || return 1
+        if [[ -z "$profile" ]]; then
+          echo "ERROR: profile is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-profile show "$profile" || true
+        ;;
+      3) frpctl_server_guided_create_profile ;;
+      4)
+        profile="$(frpctl_read "Profile name or ID: " "")" || return 1
+        if [[ -z "$profile" ]]; then
+          echo "ERROR: profile is required" >&2
+          continue
+        fi
+        echo
+        echo "1) name"
+        echo "2) description"
+        echo "3) target-host"
+        echo "4) target-port"
+        echo "5) ssh-user"
+        echo "6) preset"
+        echo "7) Back"
+        echo
+        choice="$(frpctl_read "Property: " "")" || return 1
+        case "$choice" in
+          1) prop=name ;;
+          2) prop=description ;;
+          3) prop=target-host ;;
+          4) prop=target-port ;;
+          5) prop=ssh-user ;;
+          6) prop=preset ;;
+          7|"") continue ;;
+          *) echo "ERROR: select 1-7" >&2; continue ;;
+        esac
+        value="$(frpctl_read "Value: " "")" || return 1
+        frpctl_invoke frp-profile set "$profile" "$prop" "$value" || true
+        ;;
+      5)
+        profile="$(frpctl_read "Profile name or ID: " "")" || return 1
+        if [[ -z "$profile" ]]; then
+          echo "ERROR: profile is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-profile delete "$profile" || true
+        ;;
+      6|"") return 0 ;;
+      *) echo "ERROR: select 1-6" >&2 ;;
+    esac
+  done
+}
+
+frpctl_server_settings_menu() {
+  local choice value
+  while true; do
+    echo
+    frpctl_print_server_settings_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1)
+        echo
+        echo "Public hostname"
+        echo "  Human-friendly hostname for published-service access."
+        echo
+        value="$(frpctl_read "Public hostname (empty to clear): " "")" || return 1
+        if [[ -z "$value" ]]; then
+          frpctl_invoke frp-server-set hostname --unset || true
+        else
+          frpctl_invoke frp-server-set hostname "$value" || true
+        fi
+        ;;
+      2)
+        echo
+        echo "Bootstrap hostname"
+        echo "  Optional trusted hostname for short Zero-Touch URL."
+        echo
+        value="$(frpctl_read "Bootstrap hostname (empty to clear): " "")" || return 1
+        if [[ -z "$value" ]]; then
+          frpctl_invoke frp-server-set bootstrap-hostname --unset || true
+        else
+          frpctl_invoke frp-server-set bootstrap-hostname "$value" || true
+        fi
+        ;;
+      3)
+        echo
+        echo "Installer URL"
+        echo "  Client bootstrap source."
+        echo
+        value="$(frpctl_read "Client installer URL: " "")" || return 1
+        if [[ -z "$value" ]]; then
+          echo "ERROR: installer URL is required" >&2
+          continue
+        fi
+        frpctl_invoke frp-set-client-installer-url "$value" || true
+        ;;
+      4|"") return 0 ;;
+      *) echo "ERROR: select 1-4" >&2 ;;
+    esac
+  done
+}
+
+frpctl_server_backup_menu() {
+  local choice path
+  while true; do
+    echo
+    frpctl_print_server_backup_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_run frp-backup ;;
+      2)
+        path="$(frpctl_read "Backup path: " "")" || return 1
+        if [[ -z "$path" ]]; then
+          echo "ERROR: backup path is required" >&2
+          continue
+        fi
+        frpctl_run frp-restore "$path"
+        ;;
+      3|"") return 0 ;;
+      *) echo "ERROR: select 1-3" >&2 ;;
+    esac
+  done
+}
+
+frpctl_server_system_menu() {
+  local choice
+  while true; do
+    echo
+    frpctl_print_server_system_menu
+    echo
+    choice="$(frpctl_read "Select: " "")" || return 1
+    case "$choice" in
+      1) frpctl_run frp-project-update ;;
+      2) frpctl_run frp-update ;;
+      3) frpctl_dispatch doctor || true ;;
+      4) frpctl_dispatch support-bundle || true ;;
+      5|"") return 0 ;;
+      *) echo "ERROR: select 1-5" >&2 ;;
+    esac
+  done
+}
+
 frpctl_server_menu() {
-  local choice client sid
+  local choice
   while true; do
     echo
     frpctl_header
@@ -1198,39 +2028,20 @@ frpctl_server_menu() {
     fi
     choice="$(frpctl_read "Select: " "")" || return 1
     case "$choice" in
-      1) frpctl_run frp-server-status ;;
+      1) frpctl_server_show_menu ;;
       2) frpctl_manage_clients ;;
-      3) frpctl_guided_enroll ;;
-      4) frpctl_run frp-enroll-bulk ;;
-      5) frpctl_run frp-enrollments ;;
-      6)
-        echo "1) Backup"
-        echo "2) Restore"
-        sub="$(frpctl_read "Select: " "")"
-        case "$sub" in
-          1) frpctl_run frp-backup ;;
-          2)
-            path="$(frpctl_read "Backup path: " "")"
-            if [[ -z "$path" ]]; then
-              echo "ERROR: backup path is required" >&2
-              continue
-            fi
-            frpctl_run frp-restore "$path"
-            ;;
-          *) echo "ERROR: select 1-2" >&2 ;;
-        esac
-        ;;
-      7) frpctl_run frp-access menu ;;
-      8) frpctl_run frp-project-update ;;
-      9) frpctl_run frp-update ;;
-      10) frpctl_dispatch doctor || true ;;
-      11) frpctl_audit_tail ;;
-      12) frpctl_usage ;;
-      13)
+      3) frpctl_server_enrollment_menu ;;
+      4) frpctl_server_groups_menu ;;
+      5) frpctl_server_profiles_menu ;;
+      6) frpctl_run frp-access menu ;;
+      7) frpctl_server_settings_menu ;;
+      8) frpctl_server_backup_menu ;;
+      9) frpctl_server_system_menu ;;
+      10)
         echo "Exit."
         return 0
         ;;
-      *) echo "ERROR: select 1-13" >&2 ;;
+      *) echo "ERROR: select 1-10" >&2 ;;
     esac
   done
 }
@@ -1384,13 +2195,6 @@ frpctl_repl_help() {
     echo
     echo "This host has both an FRP client and an FRP server installed."
     echo
-    echo "Client commands"
-    echo "---------------"
-    echo "Server commands"
-    echo "---------------"
-    echo "Common commands"
-    echo "---------------"
-    echo
   elif [[ "$client" == "1" ]]; then
     echo "FRP Auto Deploy — Client Commands"
     echo "================================="
@@ -1439,7 +2243,8 @@ frpctl_known_commands() {
   printf '%s\n' help menu status doctor support-bundle version update clear exit quit q history show
   if [[ "$client" == "1" ]]; then
     printf '%s\n' services manage info client-status client-update \
-      add enable disable apply discard set
+      add enable disable apply discard set \
+      service client system
   fi
   if [[ "$server" == "1" ]]; then
     printf '%s\n' clients client client-info client-set edit-client enroll create-client \
@@ -1835,10 +2640,22 @@ frpctl_dispatch_canonical() {
       echo
       ;;
     show_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enrollments ;;
+    show_enrollment)
+      frpctl_require_server || return 1
+      frpctl_show_enrollment "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("id",""))' "$result")"
+      ;;
     show_audit) frpctl_require_server || return 1; frpctl_audit_tail ;;
     show_upstream) frpctl_require_server || return 1; frpctl_run frp-upstream $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     show_services) frpctl_require_client || return 1; frpctl_invoke frp-client list ;;
     show_info) frpctl_require_client || return 1; frpctl_invoke frp-client info ;;
+    server_show)
+      frpctl_require_server || return 1
+      frpctl_server_show
+      ;;
+    server_reconfigure)
+      frpctl_require_server || return 1
+      frpctl_server_reconfigure
+      ;;
     set_client)
       frpctl_require_server || return 1
       frpctl_set_client_from_canon "$result"
@@ -1900,8 +2717,13 @@ frpctl_dispatch_canonical() {
       frpctl_require_client || return 1
       frpctl_invoke frp-client disable-service "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("service",""))' "$result")"
       ;;
-    apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending ;;
+    apply) frpctl_require_client || return 1; frpctl_invoke frp-client apply-pending $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     discard) frpctl_require_client || return 1; frpctl_invoke frp-client discard-pending ;;
+    client_pause) frpctl_client_pause ;;
+    client_resume) frpctl_client_resume ;;
+    client_uninstall)
+      frpctl_client_uninstall $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result")
+      ;;
     create_zero_touch) frpctl_require_server || return 1; frpctl_guided_zero_touch ;;
     create_enrollment) frpctl_require_server || return 1; frpctl_invoke frp-create-client $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
     create_enrollments) frpctl_require_server || return 1; frpctl_invoke frp-enroll-bulk $(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1]).get("passthrough") or []))' "$result") ;;
@@ -2007,6 +2829,218 @@ frpctl_dispatch_canonical() {
   _FRP_CTL_RC=$?
   set -e
   return 0
+}
+
+frpctl_server_show() {
+  local cfg
+  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  if [[ ! -f "$cfg" ]]; then
+    echo "ERROR: server config.json is missing." >&2
+    return 1
+  fi
+  python3 - "$cfg" <<'PY'
+import json, sys
+from pathlib import Path
+
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(cfg, dict):
+    raise SystemExit("ERROR: server config.json is invalid")
+
+def text(value, default="-"):
+    s = str(value or "").strip()
+    return s if s else default
+
+public_ip = text(cfg.get("public_ip") or cfg.get("public_host"))
+public_hostname = text(cfg.get("public_hostname"))
+allocator = text(cfg.get("allocator_public_url"))
+bootstrap = text(cfg.get("bootstrap_hostname"))
+installer = text(cfg.get("client_installer_url"))
+mode = text(cfg.get("deployment_mode") or "direct").lower().replace("-", "").replace("_", "")
+if mode in ("single443", "enterprise", "enterprisesingle443"):
+    mode = "single443"
+else:
+    mode = "direct"
+control = cfg.get("frp_control_public_port")
+if control in (None, ""):
+    control = cfg.get("control_port")
+control = text(control)
+port_start = cfg.get("port_start")
+port_end = cfg.get("port_end")
+if port_start not in (None, "") and port_end not in (None, ""):
+    service_range = "%s-%s" % (port_start, port_end)
+else:
+    service_range = "-"
+
+print("Server public configuration")
+print("===========================")
+print()
+print("Public IP            : %s" % public_ip)
+print("Public hostname      : %s" % public_hostname)
+print("Allocator URL        : %s" % allocator)
+print("Bootstrap hostname   : %s" % bootstrap)
+print("Client installer URL : %s" % installer)
+print("Deployment mode      : %s" % mode)
+print("Control port         : %s" % control)
+print("Service port range   : %s" % service_range)
+PY
+}
+
+frpctl_server_reconfigure() {
+  local cfg reg_path pki_dir pki_py reconfig_py alt path
+  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  reg_path="$(frpctl_path /var/lib/frp-auto-deploy/registry.json)"
+  if [[ ! -f "$reg_path" && -f "$cfg" ]]; then
+    alt="$(python3 - "$cfg" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+try:
+    cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+print(str(cfg.get("registry_file") or "").strip())
+PY
+)"
+    if [[ -n "$alt" ]]; then
+      if [[ "$alt" == /* ]]; then
+        reg_path="$(frpctl_path "$alt")"
+      else
+        reg_path="$alt"
+      fi
+    fi
+  fi
+  pki_dir="$(frpctl_path /etc/frp-auto-deploy/pki)"
+  pki_py=""
+  if path="$(frpctl_lib_candidate frp_pki.py 2>/dev/null)"; then
+    pki_py="$path"
+  elif [[ -f "${_FRPCTL_DIR}/../lib/frp_pki.py" ]]; then
+    pki_py="$(cd "${_FRPCTL_DIR}/../lib" && pwd)/frp_pki.py"
+  elif [[ -f /usr/local/lib/frp-auto-deploy/frp_pki.py ]]; then
+    pki_py=/usr/local/lib/frp-auto-deploy/frp_pki.py
+  fi
+  reconfig_py=""
+  if path="$(frpctl_lib_candidate frp_server_reconfigure.py 2>/dev/null)"; then
+    reconfig_py="$path"
+  elif [[ -f "${_FRPCTL_DIR}/../lib/frp_server_reconfigure.py" ]]; then
+    reconfig_py="$(cd "${_FRPCTL_DIR}/../lib" && pwd)/frp_server_reconfigure.py"
+  elif [[ -f /usr/local/lib/frp-auto-deploy/frp_server_reconfigure.py ]]; then
+    reconfig_py=/usr/local/lib/frp-auto-deploy/frp_server_reconfigure.py
+  fi
+  if [[ ! -f "$cfg" ]]; then
+    echo "ERROR: server config.json is missing." >&2
+    return 1
+  fi
+  if [[ -z "$reconfig_py" || ! -f "$reconfig_py" ]]; then
+    echo "ERROR: frp_server_reconfigure.py not found" >&2
+    return 1
+  fi
+  python3 "$reconfig_py" \
+    --config "$cfg" \
+    --registry "$reg_path" \
+    --pki-dir "$pki_dir" \
+    --pki-py "$pki_py" \
+    --test-root "${FRP_CTL_TEST_ROOT:-}"
+}
+
+frpctl_show_enrollment() {
+  local eid="$1" cfg
+  cfg="$(frpctl_path /etc/frp-auto-deploy/config.json)"
+  if [[ -z "$eid" ]]; then
+    echo "ERROR: enrollment id is required." >&2
+    return 1
+  fi
+  if [[ ! -f "$cfg" ]]; then
+    echo "ERROR: server config.json is missing." >&2
+    return 1
+  fi
+  python3 - "$cfg" "$eid" <<'PY'
+import json, sys, time, unicodedata
+from pathlib import Path
+
+cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+want = str(sys.argv[2] or "").strip().lower()
+root = Path(__import__("os").environ.get("FRP_CTL_TEST_ROOT")
+            or __import__("os").environ.get("FRP_DEPLOY_TEST_ROOT")
+            or "")
+
+def remap(path):
+    path = Path(path)
+    if root and not str(path).startswith(str(root)):
+        return Path(str(root) + str(path))
+    return path
+
+def safe(value, default="-"):
+    text = str(value or "")
+    cleaned = "".join(
+        " " if unicodedata.category(ch).startswith("C") else ch for ch in text
+    ).strip()
+    return cleaned or default
+
+def parse_epoch(value):
+    if value in (None, ""):
+        return 0, True
+    try:
+        return int(value), True
+    except (TypeError, ValueError):
+        return 0, False
+
+def state_of(record, now):
+    if record.get("revoked_at"):
+        return "revoked"
+    if record.get("completed_at") or record.get("used_at"):
+        return "completed"
+    expires, valid = parse_epoch(record.get("expires_at"))
+    if not valid:
+        return "invalid"
+    if expires and expires < now:
+        return "expired"
+    if record.get("bound_machine_id"):
+        return "bound"
+    return "pending"
+
+enrollments = remap(cfg.get("enrollments_dir") or "/var/lib/frp-auto-deploy/enrollments")
+bootstrap = remap(
+    cfg.get("bootstrap_dir")
+    or str(Path(cfg.get("enrollments_dir") or "/var/lib/frp-auto-deploy/enrollments").parent / "bootstrap")
+)
+now = int(time.time())
+found = None
+kind = None
+for directory, label in ((bootstrap, "zero-touch"), (enrollments, "manual")):
+    if not directory.is_dir():
+        continue
+    for path in directory.glob("*.json"):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        rid = str(rec.get("id") or "").strip().lower()
+        if rid == want:
+            found, kind = rec, label
+            break
+    if found is not None:
+        break
+
+if found is None:
+    print("ERROR: enrollment %s not found." % want, file=sys.stderr)
+    raise SystemExit(1)
+
+# Never print secrets (enroll_secret, ticket, tokens, keys).
+print("Enrollment")
+print("==========")
+print()
+print("ID      : %s" % safe(found.get("id")))
+print("Type    : %s" % kind)
+print("Label   : %s" % safe(found.get("label")))
+print("State   : %s" % state_of(found, now))
+print("Created : %s" % safe(found.get("created_at")))
+print("Expires : %s" % safe(found.get("expires_at_iso") or found.get("expires_at")))
+if found.get("bound_machine_id"):
+    print("Bound   : %s" % safe(found.get("bound_machine_id")))
+if found.get("hostname"):
+    print("Host    : %s" % safe(found.get("hostname")))
+PY
 }
 
 frpctl_set_client_from_canon() {
@@ -2229,7 +3263,7 @@ frpctl_dispatch() {
       fi
       frpctl_invoke frp-release-client "$@"
       ;;
-    shell|exec|bash|sh|system)
+    shell|exec|bash|sh)
       frpctl_reject_shell
       ;;
     '!'*|\!*)
@@ -2398,7 +3432,7 @@ frpctl_repl() {
     fi
     frpctl_history_maybe_record "$_FRP_CTL_LINE"
     case "${_FRP_CTL_TOKENS[0]}" in
-      '!'*|shell|exec|bash|sh|system)
+      '!'*|shell|exec|bash|sh)
         frpctl_reject_shell || true
         continue
         ;;
@@ -2408,7 +3442,7 @@ frpctl_repl() {
     if [[ "${_FRP_CTL_SHOULD_EXIT}" == "1" ]]; then
       break
     fi
-    if [[ "$rc" -ne 0 && "$rc" -ne 130 ]]; then
+    if [[ "$rc" -ne 0 && "$rc" -ne 130 && "$rc" -ne 2 ]]; then
       echo
       echo "Command failed with exit code ${rc}."
       echo

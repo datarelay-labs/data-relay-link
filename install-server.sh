@@ -28,12 +28,14 @@ for f in \
   "$BASE_DIR/lib/frp_project_files.py" \
   "$BASE_DIR/lib/frp_control_locks.py" \
   "$BASE_DIR/lib/frp_server_config.py" \
+  "$BASE_DIR/lib/frp_server_reconfigure.py" \
   "$BASE_DIR/lib/server-project-files.manifest" \
   "$BASE_DIR/lib/frp-doctor-common.sh" \
   "$BASE_DIR/lib/frp_doctor.py" \
   "$BASE_DIR/lib/frp_support_bundle.py" \
   "$BASE_DIR/lib/frp_ctl_grammar.py" \
   "$BASE_DIR/lib/frp_ctl_repl.py" \
+  "$BASE_DIR/lib/frp_service_id.py" \
   "$BASE_DIR/release-manifest.json" \
   "$BASE_DIR/tools/frp-create-client" \
   "$BASE_DIR/tools/frp-enrollments" \
@@ -790,9 +792,28 @@ resolve_server_settings() {
   FRP_INTERNAL_IP="${FRP_INTERNAL_IP:-}"
   FRP_PORT_START="${FRP_PORT_START:-${EXISTING_PORT_START:-}}"
   FRP_PORT_END="${FRP_PORT_END:-${EXISTING_PORT_END:-}}"
-  CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
+  # Recompute defaults from DISTRIBUTION_REF (bootstrap location), not content SHA.
+  DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
+  DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
+  if [[ -n "${FRP_CLIENT_INSTALLER_URL:-}" ]]; then
+    CLIENT_INSTALLER_URL="$FRP_CLIENT_INSTALLER_URL"
+  elif [[ -n "${EXISTING_CLIENT_INSTALLER_URL:-}" ]] && \
+       ! frp_is_official_client_installer_url "$EXISTING_CLIENT_INSTALLER_URL"; then
+    # Administrator override (non-official URL) wins.
+    CLIENT_INSTALLER_URL="$EXISTING_CLIENT_INSTALLER_URL"
+  else
+    # Empty or previous official auto-default → follow current source ref.
+    CLIENT_INSTALLER_URL="$DEFAULT_CLIENT_INSTALLER_URL"
+  fi
   frp_migrate_legacy_client_installer_url
-  WINDOWS_CLIENT_INSTALLER_URL="${FRP_WINDOWS_CLIENT_INSTALLER_URL:-${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL}}"
+  if [[ -n "${FRP_WINDOWS_CLIENT_INSTALLER_URL:-}" ]]; then
+    WINDOWS_CLIENT_INSTALLER_URL="$FRP_WINDOWS_CLIENT_INSTALLER_URL"
+  elif [[ -n "${EXISTING_WINDOWS_CLIENT_INSTALLER_URL:-}" ]] && \
+       ! frp_is_official_client_installer_url "$EXISTING_WINDOWS_CLIENT_INSTALLER_URL"; then
+    WINDOWS_CLIENT_INSTALLER_URL="$EXISTING_WINDOWS_CLIENT_INSTALLER_URL"
+  else
+    WINDOWS_CLIENT_INSTALLER_URL="$DEFAULT_WINDOWS_CLIENT_INSTALLER_URL"
+  fi
   if ! frp_validate_https_url "$CLIENT_INSTALLER_URL"; then
     echo "ERROR: client_installer_url must be a valid https:// URL" >&2
     exit 1
@@ -1000,8 +1021,12 @@ resolve_server_settings() {
     FRP_TRANSPORT=tcp
   fi
 
-  local derived_url
-  derived_url="$(frp_format_https_url "$FRP_PUBLIC_HOST" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+  local derived_url allocator_host
+  allocator_host="$FRP_PUBLIC_IP"
+  if [[ -n "${FRP_PUBLIC_HOSTNAME:-}" ]]; then
+    allocator_host="$FRP_PUBLIC_HOSTNAME"
+  fi
+  derived_url="$(frp_format_https_url "$allocator_host" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
   if [[ -n "${FRP_ALLOCATOR_PUBLIC_URL:-}" ]]; then
     if [[ "${FRP_ALLOCATOR_PUBLIC_URL,,}" == http://* ]]; then
       echo "ERROR: allocator public URL must be HTTPS; plain HTTP is not supported" >&2
@@ -2192,25 +2217,38 @@ EOF2
   fi
   frp_print_nat_summary
   cat <<EOF2
-Create a client enrollment:
-  sudo frpctl create-client
-  sudo frp-create-client
+Everyday management
+====================
 
-Everyday command (remember this one):
   sudo frpctl
-  Then type help inside the CLI.
 
-Check schema v2 deployment readiness:
-  sudo frpctl status
-  sudo frp-server-status
-  sudo frp-server-status --check
+Then use Tab or '?' to discover commands.
 
-Update FRP to the tested version:
-  sudo frpctl update
-  sudo frp-update
+Next steps
+==========
+
+Create a Zero-Touch client:
+  sudo frpctl create zero-touch
+
+Create a Manual Enrollment Code:
+  sudo frpctl create enrollment
+
+Check server status:
+  sudo frpctl show status
 
 List clients:
+  sudo frpctl show clients
+
+Run diagnostics:
+  sudo frpctl doctor
+
+Advanced / troubleshooting
+==========================
+
+  sudo frp-create-client
   sudo frp-clients
+  sudo frp-server-status
+  sudo frp-update
 
 ============================================================
 EOF2

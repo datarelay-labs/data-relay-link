@@ -12,7 +12,7 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
 reset_env() {
-  unset FRP_PUBLIC_IP FRP_PUBLIC_HOST FRP_INTERNAL_IP FRP_CONTROL_PORT \
+  unset FRP_PUBLIC_IP FRP_PUBLIC_HOST FRP_PUBLIC_HOSTNAME FRP_INTERNAL_IP FRP_CONTROL_PORT \
     FRP_CONTROL_PUBLIC_PORT FRP_CONTROL_LISTEN_PORT \
     FRP_PORT_START FRP_PORT_END FRP_ALLOCATOR_PORT \
     FRP_ALLOCATOR_PUBLIC_PORT FRP_ALLOCATOR_LISTEN_PORT \
@@ -56,6 +56,39 @@ load_existing_server_config
 resolve_server_settings
 [[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://203.0.113.10:6099/enroll' ]] || fail "derived allocator URL"
 pass "derived allocator URL from public host"
+
+# Prefer public DNS hostname for allocator URL default when configured.
+reset_env
+export FRP_PUBLIC_IP='221.139.249.113'
+export FRP_PUBLIC_HOSTNAME='xyz.xdr.ooo'
+export FRP_ALLOCATOR_PUBLIC_PORT='6099'
+export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_PUBLIC_HOST" == '221.139.249.113' ]] || fail "public host remains IP"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://xyz.xdr.ooo:6099/enroll' ]] || fail "hostname allocator default"
+pass "derived allocator URL prefers public hostname"
+
+# Empty hostname keeps IP default.
+reset_env
+export FRP_PUBLIC_IP='221.139.249.113'
+export FRP_ALLOCATOR_PUBLIC_PORT='6099'
+export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://221.139.249.113:6099/enroll' ]] || fail "IP allocator default without hostname"
+pass "derived allocator URL falls back to public IP"
+
+# Explicit allocator URL wins over hostname default.
+reset_env
+export FRP_PUBLIC_IP='221.139.249.113'
+export FRP_PUBLIC_HOSTNAME='xyz.xdr.ooo'
+export FRP_ALLOCATOR_PUBLIC_URL='https://custom.example.com:7443/enroll'
+export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://custom.example.com:7443/enroll' ]] || fail "explicit URL not preserved with hostname"
+pass "explicit allocator URL preserved with hostname present"
 
 # NAT split: public ports differ from listen ports.
 reset_env
