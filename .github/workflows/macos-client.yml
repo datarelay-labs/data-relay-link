@@ -12,7 +12,6 @@ on:
       - "tests/test-macos-*.sh"
       - "tests/test-frpctl-pty-completion.sh"
       - "tests/test-frp-compat-gate.sh"
-      - ".github/workflows/macos-client.yml"
   push:
     branches:
       - main
@@ -27,7 +26,6 @@ on:
       - "tests/test-macos-*.sh"
       - "tests/test-frpctl-pty-completion.sh"
       - "tests/test-frp-compat-gate.sh"
-      - ".github/workflows/macos-client.yml"
   workflow_dispatch:
 
 permissions:
