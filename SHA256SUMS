@@ -1,4 +1,4 @@
-44bee395e505f2b33c440e8ea93d3aef46b131e8022554a69563f8659d49a7a7  .github/workflows/lint.yml
+ae6468a66fe3dab9865971ae4b5371a33a2a6ea8f9964d4e039c829c4d34d7e6  .github/workflows/lint.yml
 a274f046c3ce57bcbd18343e5662429a53e49e23b0c47a230fb43867f83b717f  .github/workflows/macos-client.yml
 f7afba053d5d24f4b6c344ea29cf7ad67896706dacb12759f558a158694cedd7  .github/workflows/release-attest.yml
 d528f29f21e8501c18f54653082066b4e188987b6da66b971bfd6f04504216dd  .github/workflows/windows-client.yml
@@ -406,7 +406,7 @@ bdc2f6476f98aa53aff49709175123a40d0b9c6035edd73b413ee7efc23bf914  tests/test-v24
 e9259a2b7b15042501b5ee249d697fe99155672fb4480e5574b9af1c1d78f241  tests/test-v24-status-parity.py
 97edf2e7c1b35cdb81876bd21919b4cf305e9df0883c23837e91a05243095cd3  tests/test-v24-upgrade-reconcile.py
 97c77ccacbb26fdfd1faf884ef55c55e30e546ccc5a8d08250b0eec7bd0776b7  tests/test-verb-first-cli-ux.sh
-823046bc84890d0b66efc5febd411be2b10157fd50e43cdd80e92799af2c7db5  tests/test-version-governance.sh
+e525c0dcbd435bd4a6ca80afbfb5da3b61d50d241630ac4bee11ca9da9c17e7c  tests/test-version-governance.sh
 d2dcf46501ca9efd9203ee9103aada6520b00666d0f80a40f4ad775fa7701298  tests/test-workflow-cli-ux-closure.py
 f96a094716e0c973612a1b83b15d151d8f4ee01c8dcf55aeaf3f969fc538e87a  tests/test-zero-service-client.sh
 6d6aecf44d3540d98c12805ca1f8af48663c8faf55e37d80d9a22f9051191a5e  tests/test-zero-touch-bootstrap.sh

@@ -29,6 +29,24 @@ pass "VERSION_SSOT"
 }
 pass "RELEASE_GOVERNANCE"
 
+# CI harness: the lint job that runs release governance must fetch full history/tags.
+# A shallow tagless checkout makes HISTORICAL_TAG_PRESENT_* fail even when tags exist.
+python3 - <<'PY' || fail "lint.yml release-governance checkout must use fetch-depth: 0"
+from pathlib import Path
+
+text = Path(".github/workflows/lint.yml").read_text(encoding="utf-8")
+# Isolate the lint job (before portability-containers) so other checkouts are untouched.
+marker = "portability-containers:"
+lint_job = text.split(marker, 1)[0]
+if "check-release-governance.sh" not in lint_job:
+    raise SystemExit("lint job missing release governance step")
+# Require the established release-attest pattern on the governance checkout.
+if "fetch-depth: 0" not in lint_job:
+    raise SystemExit("lint job checkout missing fetch-depth: 0")
+print("OK")
+PY
+pass "LINT_CHECKOUT_FETCHES_HISTORICAL_TAGS"
+
 python3 tests/test-release-manifest-schema.py >/tmp/vg-schema.out 2>&1 || {
   cat /tmp/vg-schema.out >&2
   fail "manifest schema tests"
