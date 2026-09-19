@@ -1,11 +1,11 @@
 # Data Relay Link Engineering Rules
 
-This repository adopts the Data Relay Labs Solo AI Engineering System.
+This repository adopts the canonical Solo AI Engineering System.
 
 Canonical engineering system:
 - repository: https://github.com/datarelay-labs/engineering-system
-- version: 1.1.0
-- baseline commit: b2ad6e6e81e436a2c1b453b6e78fb44f604e7fba
+- version: 1.1.1
+- baseline commit: 9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1
 
 ## Mandatory entry sequence
 
