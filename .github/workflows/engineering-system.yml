@@ -8,10 +8,10 @@ on:
 
 jobs:
   adoption-compliance:
-    uses: datarelay-labs/engineering-system/.github/workflows/adoption-compliance.yml@30a13549e1be027e1709373b3c845f4e2d1a7e4b
+    uses: datarelay-labs/engineering-system/.github/workflows/adoption-compliance.yml@540d00edd438f6656fb865902bd295126265bd4f
 
   affected-tests:
-    uses: datarelay-labs/engineering-system/.github/workflows/affected-tests.yml@30a13549e1be027e1709373b3c845f4e2d1a7e4b
+    uses: datarelay-labs/engineering-system/.github/workflows/affected-tests.yml@540d00edd438f6656fb865902bd295126265bd4f
     with:
       manifest_path: ".engineering/tests.yaml"
       trigger: "pr"
