@@ -1,6 +1,6 @@
 engineering_system:
-  version: "1.0.0"
-  baseline_commit: "f1e6294053562db2a6fa7d27797689e871c469b3"
+  version: "1.1.0"
+  baseline_commit: "b2ad6e6e81e436a2c1b453b6e78fb44f604e7fba"
 
 project:
   name: "data-relay-link"
