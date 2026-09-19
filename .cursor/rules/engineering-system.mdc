@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Mandatory Engineering System Rule
 
-This repository follows Engineering System 1.2.0 at baseline 30a13549e1be027e1709373b3c845f4e2d1a7e4b.
+This repository follows Engineering System 1.2.1 at baseline 540d00edd438f6656fb865902bd295126265bd4f.
 
 Always read:
 1. @AGENTS.md
