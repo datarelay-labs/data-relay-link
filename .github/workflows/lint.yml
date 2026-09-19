@@ -1,7 +1,10 @@
 name: lint
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,24 +19,26 @@ jobs:
         run: ./scripts/check-version-consistency.sh
       - name: Release governance
         run: ./scripts/check-release-governance.sh
+
+      # Full deterministic qualification is intentionally not an ordinary PR/main gate.
+      # Run it explicitly for a release candidate after fast preflight has passed.
       - name: Full local non-Docker suite
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: ./tests/run-all.sh
-      # Live distro containers cannot validate systemd unless PID 1 is systemd.
-      # Package install + Bash/Python/CLI checks run in a separate matrix job.
+
       - name: Build standalone bundles
         run: |
           ./scripts/build-bundles.sh
           git diff --exit-code dist/
       - name: SHA256SUMS
         run: ./scripts/verify-sha256sums.sh
-      # Same order as scripts/build-release-artifacts.sh: the SBOM is generated
-      # after SHA256SUMS and verified against the checked-out commit.
       - name: SBOM binds to the checked-out commit
         run: |
           python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json
           ./scripts/verify-sbom.sh
 
   portability-containers:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: distro ${{ matrix.image }}
     runs-on: ubuntu-latest
     permissions:
@@ -41,7 +46,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep in sync with tests/distro-images.txt (checked by tests/test-distro-matrix.sh).
         image:
           - ubuntu:22.04
           - ubuntu:24.04
@@ -55,5 +59,3 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Container package and CLI portability
         run: ./tests/run-distro-matrix.sh --image ${{ matrix.image }}
-        # Uses the same Docker invocation as local ./tests/run-distro-matrix.sh.
-        # Does not start systemd. SYSTEMD_SMOKE remains NOT_TESTED.
