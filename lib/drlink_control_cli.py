@@ -29,6 +29,39 @@ from drlink_mcp_tls import McpTlsError
 USAGE_HINT = "No changes were applied."
 
 
+def _looks_like_v24_bundle(raw: str) -> bool:
+    text = str(raw or "")
+    stripped = text.lstrip()
+    return stripped.startswith("configurationBundle:") or "configurationBundle:" in text[:400]
+
+
+def _looks_like_legacy_bundle(raw: str) -> bool:
+    head = str(raw or "")[:800]
+    return "kind: ConfigurationBundle" in head or 'kind: "ConfigurationBundle"' in head or "kind: 'ConfigurationBundle'" in head
+
+
+def _exit_bundle_error(exc: BaseException) -> None:
+    msg = str(exc).rstrip()
+    if USAGE_HINT not in msg:
+        msg = "ERROR:\n%s\n\n%s" % (msg, USAGE_HINT)
+    raise SystemExit(msg) from exc
+
+
+def _prepare_public_bundle(plane: ControlPlane, raw: str):
+    """Public CLI always prefers the canonical v2.4 bundle parser.
+
+    Legacy apiVersion/kind documents remain accepted only when that schema is
+    explicit, so existing transition tests keep working. Garbage / prose / invalid
+    YAML is routed through the v2.4 parser so operators always see
+    'No changes were applied.'
+    """
+    if _looks_like_v24_bundle(raw) or not _looks_like_legacy_bundle(raw):
+        from drlink_v24_bundle import prepare_v24_plan
+
+        return "v24", prepare_v24_plan(plane, raw)
+    return "legacy", prepare_plan(plane, raw, input_path="cli", run_tests=True)
+
+
 def _parse_output_flag(tokens):
     """Parse [--output PATH] from trailing tokens; return (path_or_none, remaining)."""
     out = None
@@ -75,20 +108,15 @@ def _configuration_test(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing configuration path.\n\nUsage:\n  test configuration <file|->")
     raw, label = _read_config_input(rest[0])
-    if "configurationBundle" in raw or raw.lstrip().startswith("configurationBundle:"):
-        from drlink_v24_bundle import BundleError as _BE
-        from drlink_v24_bundle import format_v24_plan, prepare_v24_plan
+    try:
+        kind, plan = _prepare_public_bundle(plane, raw)
+    except Exception as exc:
+        _exit_bundle_error(exc)
+    if kind == "v24":
+        from drlink_v24_bundle import format_v24_plan
 
-        try:
-            plan = prepare_v24_plan(plane, raw)
-        except Exception as exc:
-            raise SystemExit(str(exc)) from exc
         sys.stdout.write(format_v24_plan(plan))
         return 0
-    try:
-        plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
-    except BundleError as exc:
-        raise SystemExit(str(exc)) from exc
     sys.stdout.write(format_plan_review(plan))
     sys.stdout.write("Configuration test: PASS\n")
     return 0
@@ -98,23 +126,19 @@ def _configuration_diff(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing configuration path.\n\nUsage:\n  system diff configuration <file|->")
     raw, label = _read_config_input(rest[0])
-    if raw.lstrip().startswith("configurationBundle:") or "configurationBundle:" in raw[:200]:
-        from drlink_v24_bundle import format_v24_plan, prepare_v24_plan
+    try:
+        kind, plan = _prepare_public_bundle(plane, raw)
+    except Exception as exc:
+        _exit_bundle_error(exc)
+    if kind == "v24":
+        from drlink_v24_bundle import format_v24_plan
 
-        try:
-            plan = prepare_v24_plan(plane, raw)
-        except Exception as exc:
-            raise SystemExit(str(exc)) from exc
         sys.stdout.write(format_v24_plan(plan))
         if plan.no_change:
             sys.stdout.write("Diff result: NO CHANGE\n")
         else:
             sys.stdout.write("Diff result: CHANGES PENDING (no mutation performed)\n")
         return 0
-    try:
-        plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
-    except BundleError as exc:
-        raise SystemExit(str(exc)) from exc
     sys.stdout.write(format_plan_review(plan))
     if not plan.mutating_changes and not plan.client_action_required:
         sys.stdout.write("Diff result: NO CHANGE\n")
@@ -127,13 +151,13 @@ def _configuration_apply(plane: ControlPlane, rest):
     if not rest:
         raise SystemExit("Missing configuration path.\n\nUsage:\n  system apply configuration <file|->")
     raw, label = _read_config_input(rest[0])
-    if raw.lstrip().startswith("configurationBundle:") or "configurationBundle:" in raw[:200]:
-        from drlink_v24_bundle import apply_v24_plan, format_v24_plan, prepare_v24_plan
+    try:
+        kind, plan = _prepare_public_bundle(plane, raw)
+    except Exception as exc:
+        _exit_bundle_error(exc)
+    if kind == "v24":
+        from drlink_v24_bundle import apply_v24_plan, format_v24_plan
 
-        try:
-            plan = prepare_v24_plan(plane, raw)
-        except Exception as exc:
-            raise SystemExit(str(exc)) from exc
         sys.stdout.write(format_v24_plan(plan).replace("No changes were applied.\n", ""))
         result = _run(apply_v24_plan, plane, plan)
         if isinstance(result, dict) and result.get("cancelled"):
@@ -148,7 +172,7 @@ def _configuration_apply(plane: ControlPlane, rest):
     try:
         plan = prepare_plan(plane, raw, input_path=label, run_tests=True)
     except BundleError as exc:
-        raise SystemExit(str(exc)) from exc
+        _exit_bundle_error(exc)
     sys.stdout.write(format_plan_review(plan))
     result = _run(apply_change_plan, plane, plan)
     if isinstance(result, dict) and result.get("cancelled"):

@@ -532,6 +532,21 @@ class LifecycleConformanceHardening(unittest.TestCase):
         self.assertNotIn("Traceback", out.getvalue())
         self.assertIsNone(self.plane.get_object("ctrlc-obj"))
 
+    def test_invalid_stdin_bundle_reports_no_changes(self):
+        import drlink_control_cli as cli
+        from contextlib import redirect_stdout, redirect_stderr
+
+        path = Path(self.tmp, "bad-paste.yaml")
+        path.write_text("this is not yaml\n", encoding="utf-8")
+        out = io.StringIO()
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with redirect_stdout(out), redirect_stderr(err):
+                cli.dispatch(["system", "apply", "configuration", str(path)], root=self.tmp, plane=self.plane)
+        msg = str(ctx.exception)
+        self.assertIn("No changes were applied", msg)
+        self.assertIsNone(self.plane.get_object("this"))
+
     def test_state_paths_import(self):
         import frp_state_paths as paths
 
