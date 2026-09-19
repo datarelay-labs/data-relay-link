@@ -1,11 +1,11 @@
 ---
-description: Data Relay Labs mandatory engineering workflow and qualification rules
+description: Mandatory engineering workflow and qualification rules
 alwaysApply: true
 ---
 
 # Mandatory Engineering System Rule
 
-This repository follows Data Relay Labs Engineering System 1.1.0.
+This repository follows Engineering System 1.1.1.
 
 Before planning, editing, refactoring, fixing, testing, releasing, upgrading, operating, or documenting:
 
@@ -13,7 +13,7 @@ Before planning, editing, refactoring, fixing, testing, releasing, upgrading, op
 2. Read @.engineering/project.yaml.
 3. Read @.engineering/tests.yaml.
 4. For release/version/artifact work, read @.engineering/release.yaml.
-5. Follow Engineering System baseline b2ad6e6e81e436a2c1b453b6e78fb44f604e7fba.
+5. Follow Engineering System baseline 9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1.
 6. Identify the change class and affected domains/contracts/security/operations before implementation.
 7. Inspect relevant existing implementation and tests.
 8. Make the smallest correct change; do not silently expand scope.
