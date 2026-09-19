@@ -13,8 +13,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout@v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - name: Version consistency
         run: ./scripts/check-version-consistency.sh
       - name: Release governance
@@ -56,6 +59,6 @@ jobs:
           - amazonlinux:2
     steps:
       # actions/checkout@v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Container package and CLI portability
         run: ./tests/run-distro-matrix.sh --image ${{ matrix.image }}
