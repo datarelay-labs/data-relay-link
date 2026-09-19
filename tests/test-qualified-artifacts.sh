@@ -19,6 +19,79 @@ python3 "$ROOT/lib/drlink_qualified_artifacts.py" install \
   --agent-windows "$ROOT/dist/bootstrap-client.ps1" \
   >/dev/null || fail "install artifacts"
 
+python3 "$ROOT/lib/drlink_qualified_artifacts.py" verify-tree \
+  --root "$WORKDIR/artifacts" >/dev/null || fail "verify-tree after install"
+python3 - "$WORKDIR/artifacts" <<'PY' || fail "artifact hash parity"
+import hashlib, json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+sums = {}
+for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+    digest, rel = line.split()
+    sums[rel] = digest
+assert len(str(manifest.get("source_head") or "")) == 40, manifest.get("source_head")
+for item in manifest["artifacts"]:
+    rel = item["relative_path"]
+    actual = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+    assert actual == item["sha256"] == sums[rel], (rel, actual, item["sha256"], sums[rel])
+print("ARTIFACT_HASH_PARITY=PASS")
+PY
+pass "ARTIFACT_HASH_PARITY"
+
+STALE="$WORKDIR/stale-root"
+python3 "$ROOT/lib/drlink_qualified_artifacts.py" install \
+  --source "$ROOT" --dest "$STALE" \
+  --agent-linux "$ROOT/dist/bootstrap-client.sh" \
+  --agent-windows "$ROOT/dist/bootstrap-client.ps1" >/dev/null
+OLD_SHA="$(sha256sum "$STALE/agent/bootstrap-client.sh" | awk '{print $1}')"
+printf '\n# stale\n' >>"$STALE/agent/bootstrap-client.sh"
+python3 - "$STALE" "$OLD_SHA" <<'PY'
+from pathlib import Path
+import json, sys
+root = Path(sys.argv[1])
+old = sys.argv[2]
+text = (root / "SHA256SUMS").read_text(encoding="utf-8")
+(root / "SHA256SUMS").write_text(text.replace(old, "a" * 64), encoding="utf-8")
+man = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+for item in man["artifacts"]:
+    if item.get("relative_path") == "agent/bootstrap-client.sh":
+        item["sha256"] = "b" * 64
+(root / "manifest.json").write_text(json.dumps(man, indent=2) + "\n", encoding="utf-8")
+PY
+if DRLINK_ARTIFACT_INSTALL_FAIL=before-swap python3 "$ROOT/lib/drlink_qualified_artifacts.py" install \
+  --source "$ROOT" --dest "$STALE" \
+  --agent-linux "$ROOT/dist/bootstrap-client.sh" \
+  --agent-windows "$ROOT/dist/bootstrap-client.ps1" >/dev/null 2>"$WORKDIR/fail-swap.err"; then
+  fail "failed artifact update should not commit"
+fi
+grep -q 'No changes were applied' "$WORKDIR/fail-swap.err" || fail "failed update public error"
+python3 "$ROOT/lib/drlink_qualified_artifacts.py" install \
+  --source "$ROOT" --dest "$STALE" \
+  --agent-linux "$ROOT/dist/bootstrap-client.sh" \
+  --agent-windows "$ROOT/dist/bootstrap-client.ps1" >/dev/null || fail "repair install"
+python3 "$ROOT/lib/drlink_qualified_artifacts.py" verify-tree --root "$STALE" >/dev/null \
+  || fail "repaired tree verify"
+REPAIRED="$(sha256sum "$STALE/agent/bootstrap-client.sh" | awk '{print $1}')"
+[[ "$REPAIRED" == "$OLD_SHA" ]] || fail "repaired linux installer sha"
+pass "SERVER_LOCAL_ARTIFACT_ATOMIC_UPDATE"
+pass "STALE_ARTIFACT_METADATA_REPAIRED"
+
+EXTRACT="$WORKDIR/extract"
+mkdir -p "$EXTRACT"
+cp "$ROOT/release-manifest.json" "$EXTRACT/release-manifest.json"
+cp "$ROOT/VERSION" "$EXTRACT/VERSION"
+unset FRP_EXPECTED_SOURCE_REF FRP_EXPECTED_SOURCE_HEAD FRP_TXN_SOURCE_REF \
+  FRP_RELEASE_CHANNEL FRP_BOOTSTRAP_URL FRP_CLIENT_INSTALLER_URL || true
+frp_infer_expected_source_from_release_manifest "$EXTRACT"
+[[ "${FRP_EXPECTED_SOURCE_HEAD:-}" =~ ^[0-9a-fA-F]{40}$ ]] \
+  || fail "extract SOURCE_HEAD missing"
+mkdir -p "$WORKDIR/version-dest"
+frp_write_version_file "$WORKDIR/version-dest/version"
+grep -q "SOURCE_HEAD=${FRP_EXPECTED_SOURCE_HEAD}" "$WORKDIR/version-dest/version" \
+  || fail "version file missing SOURCE_HEAD"
+pass "ZERO_TOUCH_MANIFEST_SOURCE_HEAD"
+
 python3 "$ROOT/lib/drlink_qualified_artifacts.py" lookup \
   --root "$WORKDIR/artifacts" --type frp-archive \
   --platform linux --architecture amd64 >/dev/null || fail "lookup amd64"

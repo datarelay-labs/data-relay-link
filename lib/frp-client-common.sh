@@ -4802,6 +4802,8 @@ frp_client_install_management_files() {
   fi
   frp_client_write_runtime_lineage "${source}/lib" || return 1
   frp_client_upgrade_source_version "$source"
+  frp_infer_expected_source_ref_from_git_source "$source"
+  frp_infer_expected_source_from_release_manifest "$source"
   frp_client_write_version_file
 }
 

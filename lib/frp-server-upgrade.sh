@@ -75,6 +75,8 @@ frp_install_qualified_artifacts_from() {
     echo "No changes were applied." >&2
     return 1
   fi
+  frp_infer_expected_source_ref_from_git_source "$source"
+  frp_infer_expected_source_from_release_manifest "$source"
   python3 "$py" install \
     --source "$source" --dest "$dest" \
     --agent-linux "$agent_linux" --agent-windows "$agent_windows"
@@ -840,6 +842,7 @@ frp_server_apply_project_upgrade() {
   [[ -d "$source" ]] || { echo "ERROR: update source directory is required" >&2; return 1; }
   # Local git checkouts persist exact HEAD as SOURCE_REF (pretags-safe Zero-Touch).
   frp_infer_expected_source_ref_from_git_source "$source"
+  frp_infer_expected_source_from_release_manifest "$source"
   if [[ ${EUID} -ne 0 && -z "${FRP_SERVER_TEST_ROOT:-}" ]]; then
     echo "ERROR: run with sudo" >&2
     return 1
@@ -1115,6 +1118,7 @@ frp_server_apply_project_upgrade() {
 
   if ! FRP_RELEASE_CHANNEL="$target_channel" \
       FRP_EXPECTED_SOURCE_REF="$target_ref" \
+      FRP_EXPECTED_SOURCE_HEAD="${FRP_EXPECTED_SOURCE_HEAD:-}" \
       FRP_BUNDLE_SHA256="$target_bundle" \
       FRP_VERSION_REQUIRE_VERIFIED_BUNDLE=1 \
       PROJECT_VERSION="$target" \

@@ -67,6 +67,7 @@ def test_install_and_lookup():
         dest = Path(tmp) / "artifacts"
         manifest = qa.install_artifacts(str(ROOT), str(dest), str(agent_linux), str(agent_win))
         assert manifest["frp_upstream_commit"] == qa.FRP_UPSTREAM_COMMIT
+        assert len(str(manifest.get("source_head") or "")) == 40
         item = qa.lookup_installed(dest, "frp-archive", "linux", "amd64")
         assert Path(item["path"]).is_file()
         agent = qa.lookup_installed(dest, "agent-installer", "linux", "any")
@@ -96,6 +97,98 @@ def test_install_and_lookup():
     pass_("MISSING_ARTIFACT")
     pass_("CHECKSUM_NEGATIVE")
     pass_("PLATFORM_ARCH_NEGATIVE")
+
+
+def _artifact_digests(root):
+    dest = Path(root)
+    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    sums = {}
+    for line in (dest / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        digest, rel = line.split()
+        sums[rel] = digest
+    out = {}
+    for item in manifest["artifacts"]:
+        rel = item["relative_path"]
+        actual = hashlib.sha256((dest / rel).read_bytes()).hexdigest()
+        out[rel] = {
+            "actual": actual,
+            "manifest": item["sha256"],
+            "sums": sums[rel],
+        }
+    return manifest, out
+
+
+def test_atomic_stale_repair_and_rollback():
+    agent_linux = ROOT / "dist" / "bootstrap-client.sh"
+    agent_win = ROOT / "dist" / "bootstrap-client.ps1"
+    if not agent_linux.is_file() or not agent_win.is_file():
+        fail("atomic update", "dist bootstrap clients missing")
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "artifacts"
+        qa.install_artifacts(str(ROOT), str(dest), str(agent_linux), str(agent_win))
+        qa.verify_tree(dest)
+        linux_rel = "agent/bootstrap-client.sh"
+        old_linux = dest / linux_rel
+        old_body = old_linux.read_bytes()
+        old_sha = hashlib.sha256(old_body).hexdigest()
+        stale_linux = Path(tmp) / "stale-bootstrap-client.sh"
+        stale_linux.write_bytes(old_body + b"\n# stale-artifact-marker\n")
+        stale_sha = hashlib.sha256(stale_linux.read_bytes()).hexdigest()
+        assert stale_sha != old_sha
+        old_linux.write_bytes(stale_linux.read_bytes())
+        (dest / "SHA256SUMS").write_text(
+            (dest / "SHA256SUMS").read_text(encoding="utf-8").replace(old_sha, "0" * 64),
+            encoding="utf-8",
+        )
+        man = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+        for item in man["artifacts"]:
+            if item.get("relative_path") == linux_rel:
+                item["sha256"] = "1" * 64
+        (dest / "manifest.json").write_text(json.dumps(man, indent=2) + "\n", encoding="utf-8")
+        try:
+            qa.verify_tree(dest)
+            fail("stale tree verified")
+        except qa.ArtifactError:
+            pass
+
+        os.environ["DRLINK_ARTIFACT_INSTALL_FAIL"] = "before-swap"
+        try:
+            qa.install_artifacts(str(ROOT), str(dest), str(stale_linux), str(agent_win))
+            fail("failed update succeeded")
+        except qa.ArtifactError as exc:
+            if "No changes were applied" not in exc.public_message:
+                fail("failed update public error", exc.public_message)
+        finally:
+            os.environ.pop("DRLINK_ARTIFACT_INSTALL_FAIL", None)
+        after_fail = (dest / linux_rel).read_bytes()
+        if after_fail != stale_linux.read_bytes() and after_fail != old_body:
+            fail("failed update mixed dest")
+        # Staging leftovers must not remain as a completed tree.
+        leftovers = list(dest.parent.glob(".artifacts.staging.*"))
+        leftovers += list(dest.parent.glob(".artifacts.prev.*"))
+        if leftovers:
+            fail("staging leftover", str(leftovers))
+
+        manifest = qa.install_artifacts(
+            str(ROOT), str(dest), str(agent_linux), str(agent_win)
+        )
+        qa.verify_tree(dest)
+        _, digests = _artifact_digests(dest)
+        linux = digests[linux_rel]
+        if not (linux["actual"] == linux["manifest"] == linux["sums"] == old_sha):
+            fail("stale metadata not repaired", linux)
+        win = digests["agent/bootstrap-client.ps1"]
+        if not (win["actual"] == win["manifest"] == win["sums"]):
+            fail("windows installer hash mismatch", win)
+        for rel, item in digests.items():
+            if not (item["actual"] == item["manifest"] == item["sums"]):
+                fail("artifact hash mismatch", rel)
+        head = str(manifest.get("source_head") or "")
+        if len(head) != 40:
+            fail("missing source_head", head)
+        pass_("SERVER_LOCAL_ARTIFACT_ATOMIC_UPDATE")
+        pass_("STALE_ARTIFACT_METADATA_REPAIRED")
+        pass_("ARTIFACT_PROVENANCE_STAMPED")
 
 
 def test_no_public_fallback_constants():
@@ -265,6 +358,7 @@ def main():
     test_pin()
     test_urls()
     test_install_and_lookup()
+    test_atomic_stale_repair_and_rollback()
     test_no_public_fallback_constants()
     test_create_client_installer_resolution()
     print("QUALIFIED_ARTIFACT_UNIT_TESTS=PASS")

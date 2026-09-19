@@ -970,6 +970,7 @@ resolve_server_settings() {
   # URL left in config from an earlier pretags install.
   frp_infer_expected_source_ref
   frp_infer_expected_source_ref_from_git_source "$BASE_DIR"
+  frp_infer_expected_source_from_release_manifest "$BASE_DIR"
   DEFAULT_CLIENT_INSTALLER_URL="$(frp_default_client_installer_url)"
   DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url)"
   CLIENT_INSTALLER_URL="${FRP_CLIENT_INSTALLER_URL:-${EXISTING_CLIENT_INSTALLER_URL:-$DEFAULT_CLIENT_INSTALLER_URL}}"
@@ -2764,6 +2765,7 @@ PY
   # Version metadata is written only after a successful install/reinstall.
   frp_infer_expected_source_ref
   frp_infer_expected_source_ref_from_git_source "$BASE_DIR"
+  frp_infer_expected_source_from_release_manifest "$BASE_DIR"
   frp_write_version_file "$(frp_server_fs /etc/drlink/version)"
   frp_txn_clear server
   frp_prune_backup_dirs "$backups_dir" "$FRP_BACKUP_KEEP"

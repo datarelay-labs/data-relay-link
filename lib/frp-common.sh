@@ -408,6 +408,10 @@ frp_infer_expected_source_ref_from_git_source() {
   # release-line tag so Zero-Touch URLs remain fetchable before the tag exists.
   local source="${1:-}" ref="" channel=""
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    if [[ -z "${FRP_EXPECTED_SOURCE_HEAD:-}" && "${FRP_EXPECTED_SOURCE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      FRP_EXPECTED_SOURCE_HEAD="$FRP_EXPECTED_SOURCE_REF"
+      export FRP_EXPECTED_SOURCE_HEAD
+    fi
     return 0
   fi
   # Only an *explicit* stable channel keeps the immutable vPROJECT_VERSION
@@ -422,6 +426,8 @@ frp_infer_expected_source_ref_from_git_source() {
   if ref="$(frp_git_head_source_ref "$source")"; then
     FRP_EXPECTED_SOURCE_REF="$ref"
     export FRP_EXPECTED_SOURCE_REF
+    FRP_EXPECTED_SOURCE_HEAD="$ref"
+    export FRP_EXPECTED_SOURCE_HEAD
   fi
   return 0
 }
@@ -431,6 +437,10 @@ frp_infer_expected_source_ref() {
   # Never invent a second provenance mechanism or guess from PROJECT_VERSION.
   local ref="" url=""
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
+    if [[ -z "${FRP_EXPECTED_SOURCE_HEAD:-}" && "${FRP_EXPECTED_SOURCE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      FRP_EXPECTED_SOURCE_HEAD="$FRP_EXPECTED_SOURCE_REF"
+      export FRP_EXPECTED_SOURCE_HEAD
+    fi
     return 0
   fi
   for url in \
@@ -440,9 +450,45 @@ frp_infer_expected_source_ref() {
     if [[ -n "$url" ]] && ref="$(frp_source_ref_from_github_raw_url "$url")"; then
       FRP_EXPECTED_SOURCE_REF="$ref"
       export FRP_EXPECTED_SOURCE_REF
+      if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        FRP_EXPECTED_SOURCE_HEAD="$ref"
+        export FRP_EXPECTED_SOURCE_HEAD
+      fi
       return 0
     fi
   done
+  return 0
+}
+
+frp_infer_expected_source_from_release_manifest() {
+  # Trusted local artifact metadata: the install source's release-manifest.json
+  # already traveled with checksum-verified bundles. Used when GitHub URLs no
+  # longer encode a SHA (Server-local /artifacts/agent/...).
+  local source="${1:-}"
+  local head="" ref=""
+  [[ -n "$source" && -f "${source}/release-manifest.json" ]] || return 0
+  head="$(python3 - "${source}/release-manifest.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+print((data.get("source_head") or "").strip())
+print((data.get("git_ref") or "").strip())
+PY
+)" || return 0
+  ref="$(printf '%s\n' "$head" | sed -n '2p')"
+  head="$(printf '%s\n' "$head" | sed -n '1p')"
+  if [[ -z "${FRP_EXPECTED_SOURCE_HEAD:-}" ]]; then
+    if [[ "$head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      FRP_EXPECTED_SOURCE_HEAD="$head"
+      export FRP_EXPECTED_SOURCE_HEAD
+    elif [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      FRP_EXPECTED_SOURCE_HEAD="$ref"
+      export FRP_EXPECTED_SOURCE_HEAD
+    fi
+  fi
+  if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" && "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    FRP_EXPECTED_SOURCE_REF="$ref"
+    export FRP_EXPECTED_SOURCE_REF
+  fi
   return 0
 }
 
@@ -1138,6 +1184,8 @@ frp_write_version_file() {
     existing="$(frp_read_kv_file "$dest" RELEASE_CHANNEL)"
     if [[ -n "$existing" ]]; then
       channel="$(frp_normalize_release_channel "$existing")"
+    elif [[ -n "${RELEASE_CHANNEL:-}" ]]; then
+      channel="$(frp_normalize_release_channel "$RELEASE_CHANNEL")"
     else
       channel="$(frp_release_channel)"
     fi
@@ -1162,13 +1210,12 @@ frp_write_version_file() {
     fi
   fi
   source_head=""
-  if [[ "$source_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  if [[ -n "${FRP_EXPECTED_SOURCE_HEAD:-}" && "${FRP_EXPECTED_SOURCE_HEAD}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    source_head="$FRP_EXPECTED_SOURCE_HEAD"
+  elif [[ "$source_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
     source_head="$source_ref"
   else
     source_head="$(frp_read_kv_file "$dest" SOURCE_HEAD)"
-    if [[ -z "$source_head" && -n "${FRP_EXPECTED_SOURCE_HEAD:-}" ]]; then
-      source_head="$FRP_EXPECTED_SOURCE_HEAD"
-    fi
   fi
   bundle="${FRP_BUNDLE_SHA256:-}"
   if [[ "${FRP_VERSION_REQUIRE_VERIFIED_BUNDLE:-}" == "1" ]]; then

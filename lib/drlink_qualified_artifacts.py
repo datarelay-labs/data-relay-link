@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -42,6 +43,7 @@ SUPPORTED = (
 )
 
 _SAFE_REL = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+_FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _HTTP_ALLOWED_PREFIXES = (
     "manifest.json",
     "SHA256SUMS",
@@ -49,6 +51,10 @@ _HTTP_ALLOWED_PREFIXES = (
     "agent/",
     "frp/",
 )
+
+
+def is_full_sha(value):
+    return bool(value and _FULL_SHA.fullmatch(str(value).strip()))
 
 
 class ArtifactError(Exception):
@@ -317,6 +323,175 @@ def _copy_file(src, dest, mode=0o644):
     tmp.replace(dest)
 
 
+def load_build_provenance(source_root):
+    """Immutable build source for Server-local artifact metadata.
+
+    Precedence: expected env SHA, local git HEAD, then release-manifest.json.
+    A committed manifest may lag HEAD; git/env must win when available.
+    """
+    channel = ""
+    git_ref = ""
+    source_head = ""
+    project_version = DRLINK_VERSION
+    source = Path(source_root)
+    manifest_path = source / "release-manifest.json"
+    if manifest_path.is_file():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            channel = str(data.get("channel") or "").strip()
+            git_ref = str(data.get("git_ref") or "").strip()
+            source_head = str(data.get("source_head") or "").strip()
+            project_version = str(data.get("project_version") or project_version)
+    version_path = source / "VERSION"
+    if version_path.is_file():
+        try:
+            for line in version_path.read_text(encoding="utf-8").splitlines():
+                if "=" not in line or line.lstrip().startswith("#"):
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key == "RELEASE_CHANNEL" and not channel:
+                    channel = value
+                if key == "PROJECT_VERSION" and value:
+                    project_version = value
+        except OSError:
+            pass
+    for candidate in (
+        os.environ.get("FRP_EXPECTED_SOURCE_HEAD", ""),
+        os.environ.get("FRP_EXPECTED_SOURCE_REF", ""),
+        os.environ.get("FRP_TXN_SOURCE_REF", ""),
+    ):
+        if is_full_sha(candidate):
+            source_head = candidate.strip().lower()
+            break
+    else:
+        try:
+            head = subprocess.check_output(
+                ["git", "-C", str(source), "rev-parse", "HEAD"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            head = ""
+        if is_full_sha(head):
+            source_head = head.lower()
+        elif is_full_sha(source_head):
+            source_head = source_head.lower()
+        elif is_full_sha(git_ref):
+            source_head = git_ref.lower()
+        else:
+            source_head = ""
+    if is_full_sha(git_ref):
+        git_ref = git_ref.lower()
+        if source_head and git_ref != source_head:
+            git_ref = source_head
+    elif not git_ref and source_head:
+        git_ref = source_head
+    return {
+        "project_version": project_version or DRLINK_VERSION,
+        "channel": channel or "",
+        "git_ref": git_ref,
+        "source_head": source_head,
+    }
+
+
+def _atomic_replace_dir(staging, dest):
+    dest = Path(dest)
+    staging = Path(staging)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    backup = None
+    if dest.exists():
+        backup = dest.with_name(".%s.prev.%s" % (dest.name, os.getpid()))
+        if backup.exists():
+            shutil.rmtree(backup)
+        dest.rename(backup)
+    try:
+        staging.rename(dest)
+    except Exception:
+        if backup is not None and backup.exists() and not dest.exists():
+            backup.rename(dest)
+        raise
+    if backup is not None and backup.exists():
+        shutil.rmtree(backup, ignore_errors=True)
+
+
+def parse_sha256sums(root):
+    path = Path(root) / "SHA256SUMS"
+    if not path.is_file():
+        raise ArtifactError(missing_artifact_error(), "ARTIFACT_SUMS_MISSING")
+    out = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ArtifactError(missing_artifact_error(), "ARTIFACT_SUMS_INVALID") from exc
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            raise ArtifactError(missing_artifact_error(), "ARTIFACT_SUMS_INVALID")
+        digest, rel = parts[0], parts[-1].lstrip("*")
+        if not _SAFE_REL.fullmatch(rel):
+            raise ArtifactError(missing_artifact_error(), "ARTIFACT_SUMS_INVALID")
+        out[rel] = digest.lower()
+    return out
+
+
+def verify_tree(root):
+    """Require actual file SHA == SHA256SUMS == manifest.json for every artifact."""
+    dest = Path(root)
+    manifest = load_manifest(dest)
+    _require_versions(manifest)
+    sums = parse_sha256sums(dest)
+    artifacts = manifest.get("artifacts") or []
+    if not artifacts:
+        raise ArtifactError(missing_artifact_error(), "ARTIFACT_MANIFEST_INVALID")
+    for item in artifacts:
+        if not isinstance(item, dict):
+            raise ArtifactError(missing_artifact_error(), "ARTIFACT_MANIFEST_INVALID")
+        rel = str(item.get("relative_path") or item.get("filename") or "")
+        expected = str(item.get("sha256") or "").strip().lower()
+        if not rel or not _SAFE_REL.fullmatch(rel) or not expected:
+            raise ArtifactError(missing_artifact_error(), "ARTIFACT_MANIFEST_INVALID")
+        if rel not in sums:
+            raise ArtifactError(
+                integrity_error(str(item.get("artifact_type") or "artifact")),
+                "ARTIFACT_SUMS_MISSING",
+            )
+        if sums[rel] != expected:
+            raise ArtifactError(
+                integrity_error(str(item.get("artifact_type") or "artifact")),
+                "ARTIFACT_CHECKSUM",
+            )
+        verify_file(
+            dest / rel,
+            expected,
+            kind=str(item.get("artifact_type") or "artifact"),
+            platform=str(item.get("platform") or ""),
+            architecture=str(item.get("architecture") or ""),
+        )
+        size = item.get("size")
+        actual_size = (dest / rel).stat().st_size
+        if size not in (None, "", actual_size) and int(size) != actual_size:
+            raise ArtifactError(
+                integrity_error(str(item.get("artifact_type") or "artifact")),
+                "ARTIFACT_SIZE",
+            )
+    extra = set(sums) - {
+        str(item.get("relative_path") or item.get("filename") or "")
+        for item in artifacts
+        if isinstance(item, dict)
+    }
+    if extra:
+        raise ArtifactError(missing_artifact_error(), "ARTIFACT_SUMS_INVALID")
+    return manifest
+
+
 def _qualify_source(source_root):
     frp_root = repo_frp_root(source_root)
     qual_path = frp_root / "QUALIFICATION.json"
@@ -335,10 +510,13 @@ def _qualify_source(source_root):
     return frp_root, qual
 
 
-def install_artifacts(source_root, dest_root, agent_linux=None, agent_windows=None):
+def _populate_artifact_staging(
+    source_root, staging, agent_linux=None, agent_windows=None
+):
     frp_root, qual = _qualify_source(source_root)
-    dest = Path(dest_root)
+    dest = Path(staging)
     dest.mkdir(parents=True, exist_ok=True)
+    provenance = load_build_provenance(source_root)
 
     artifacts = []
     for plat, arch, filename, sha256 in SUPPORTED:
@@ -406,6 +584,7 @@ def install_artifacts(source_root, dest_root, agent_linux=None, agent_windows=No
             "relative_path": rel,
             "size": (dest / rel).stat().st_size,
             "sha256": digest,
+            "source_head": provenance.get("source_head") or "",
         })
 
     manifest = {
@@ -417,6 +596,13 @@ def install_artifacts(source_root, dest_root, agent_linux=None, agent_windows=No
         "frp_upstream_commit": FRP_UPSTREAM_COMMIT,
         "frp_upstream_source_url": FRP_UPSTREAM_SOURCE_URL,
         "qualification_status": QUALIFICATION_STATUS,
+        "project_version": provenance.get("project_version") or DRLINK_VERSION,
+        "channel": provenance.get("channel") or "",
+        "source_head": provenance.get("source_head") or "",
+        "git_ref": provenance.get("git_ref") or provenance.get("source_head") or "",
+        "immutable_source_ref": (
+            provenance.get("git_ref") or provenance.get("source_head") or ""
+        ),
         "attribution": qual.get("attribution")
         or "FRP is copyright the fatedier/frp authors and is not DataRelay Labs proprietary code.",
         "artifacts": artifacts,
@@ -436,7 +622,34 @@ def install_artifacts(source_root, dest_root, agent_linux=None, agent_windows=No
     tmp.write_text("\n".join(sums_lines) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o644)
     tmp.replace(sums_path)
+    verify_tree(dest)
     return manifest
+
+
+def install_artifacts(source_root, dest_root, agent_linux=None, agent_windows=None):
+    dest = Path(dest_root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging = dest.parent / (".%s.staging.%s" % (dest.name, os.getpid()))
+    if staging.exists():
+        shutil.rmtree(staging)
+    swapped = False
+    try:
+        staging.mkdir(parents=True, exist_ok=True)
+        manifest = _populate_artifact_staging(
+            source_root, staging, agent_linux, agent_windows
+        )
+        if os.environ.get("DRLINK_ARTIFACT_INSTALL_FAIL", "").strip() == "before-swap":
+            raise ArtifactError(
+                "ERROR: simulated artifact install failure before swap.\n"
+                "No changes were applied.\n",
+                "ARTIFACT_INSTALL_FAILED",
+            )
+        _atomic_replace_dir(staging, dest)
+        swapped = True
+        return verify_tree(dest)
+    finally:
+        if not swapped and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def content_type_for(path):
@@ -508,6 +721,9 @@ def main(argv=None):
     p_http.add_argument("--root", required=True)
     p_http.add_argument("--path", required=True)
 
+    p_tree = sub.add_parser("verify-tree")
+    p_tree.add_argument("--root", required=True)
+
     p_pin = sub.add_parser("pin")
     args = parser.parse_args(argv)
     try:
@@ -549,6 +765,17 @@ def main(argv=None):
         if args.cmd == "resolve-http":
             path = resolve_http_path(args.root, args.path)
             sys.stdout.write(str(path) + "\n")
+            return 0
+        if args.cmd == "verify-tree":
+            manifest = verify_tree(args.root)
+            sys.stdout.write(
+                json.dumps({
+                    "status": "ok",
+                    "count": len(manifest.get("artifacts") or []),
+                    "source_head": manifest.get("source_head") or "",
+                })
+                + "\n"
+            )
             return 0
         if args.cmd == "pin":
             sys.stdout.write(
