@@ -2446,7 +2446,17 @@ def set_remote_service_agent(
                 "SELECT payload FROM agent_object_catalog WHERE kind = 'network-object' AND name = ? COLLATE NOCASE",
                 (dest_token,),
             ).fetchone()
-            if not obj and not catalog and dest_token.lower() != host_name.lower():
+            catalog_vals = []
+            if catalog:
+                try:
+                    payload = json.loads(catalog["payload"] or "{}")
+                except (TypeError, ValueError):
+                    payload = {}
+                catalog_vals = [str(v) for v in (payload.get("values") or []) if v not in (None, "")]
+            if catalog_vals:
+                # Probe the Network Object value (IP/FQDN), never the object name.
+                target_host = catalog_vals[0]
+            elif not obj and dest_token.lower() != host_name.lower():
                 # Still allow IP/FQDN literals for relay destinations
                 try:
                     target_host = str(ipaddress.ip_address(dest_token))

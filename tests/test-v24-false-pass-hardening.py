@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -346,6 +347,57 @@ class LifecycleConformanceHardening(unittest.TestCase):
             self.assertIn("unreachable", (row["reason"] or "").lower())
             self.assertIsNotNone(row["endpoint_port"])
         finally:
+            plane.close()
+
+    def test_relay_catalog_ip_object_probes_value_not_name(self):
+        agent = tempfile.mkdtemp(prefix="drlink-relay-ip-")
+        Path(agent, "etc/frp").mkdir(parents=True, exist_ok=True)
+        Path(agent, "etc/frp/client-state.json").write_text(
+            '{"machine_id":"aabbccddeeff00112233445566778899","hostname":"ubuntu-prod","label":"ubuntu-prod"}\n',
+            encoding="utf-8",
+        )
+        Path(agent, "etc/frp/frpc.toml").write_text("[common]\n", encoding="utf-8")
+        Path(agent, "etc/frp/client-identity.key").write_text("x", encoding="utf-8")
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        listener.listen(1)
+        plane = ControlPlane(agent)
+        try:
+            v24.ensure_v2_schema(plane.conn)
+            v24.set_service_object(plane, "tcp-loop", type="tcp", port=port, oneshot=True)
+            now = v24.utc_now_iso()
+            plane.conn.execute(
+                "INSERT OR REPLACE INTO agent_object_catalog(kind, name, payload, synced_at) VALUES (?, ?, ?, ?)",
+                ("service-object", "tcp-loop", '{"name":"tcp-loop","type":"tcp","port":%s}' % port, now),
+            )
+            plane.conn.execute(
+                "INSERT OR REPLACE INTO agent_object_catalog(kind, name, payload, synced_at) VALUES (?, ?, ?, ?)",
+                (
+                    "network-object",
+                    "loop-ip",
+                    '{"name":"loop-ip","type":"ip","values":["127.0.0.1"]}',
+                    now,
+                ),
+            )
+            v24.set_remote_service_agent(
+                plane,
+                "catalog-relay",
+                destination="loop-ip",
+                service="tcp-loop",
+                enabled=True,
+                oneshot=True,
+                root=agent,
+                server_reachable=True,
+            )
+            row = plane.conn.execute(
+                "SELECT * FROM agent_remote_services WHERE name='catalog-relay'"
+            ).fetchone()
+            self.assertNotIn("unreachable", (row["reason"] or "").lower())
+            self.assertIsNotNone(row["endpoint_port"])
+        finally:
+            listener.close()
             plane.close()
 
     def test_disabled_remote_service_reason_not_runtime_pending(self):
