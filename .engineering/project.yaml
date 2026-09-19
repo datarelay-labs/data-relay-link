@@ -1,0 +1,39 @@
+engineering_system:
+  version: "1.0.0"
+  baseline_commit: "0f97b4c1e30ea6bf588b24b9890a48b7aee01adf"
+
+project:
+  name: "data-relay-link"
+  type: "distributed-network-product"
+  maturity: "production"
+
+domains:
+  - server
+  - agent
+  - control-plane
+  - cli
+  - ux
+  - enrollment
+  - zero-touch
+  - allocator
+  - remote-service
+  - remote-access
+  - internet-access
+  - ai-access
+  - configuration-bundle
+  - installer
+  - diagnostics
+  - lifecycle
+  - release
+
+platforms:
+  - ubuntu24
+  - rocky8
+  - rocky9
+  - amazon-linux-2023
+  - macos-arm64
+  - windows10
+
+operations:
+  production_oriented: true
+  runbook_required: true
