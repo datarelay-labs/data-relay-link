@@ -705,7 +705,7 @@ cp -a "$CL" "$NOTOML"
 rm -f "$NOTOML/etc/frp/frpc.toml"
 run_json "$NOTOML" "$WORKDIR/notoml.json" || true
 [[ "$(check_status "$WORKDIR/notoml.json" frpc_config)" == "FAIL" ]] || fail "missing toml"
-grep -q 'drlink system services apply' "$WORKDIR/notoml.json" || fail "toml recovery guidance"
+grep -q 'sudo drlink system synchronize' "$WORKDIR/notoml.json" || fail "toml recovery guidance"
 pass "MISSING_FRPC_TOML"
 
 DRIFT="$WORKDIR/drift"
