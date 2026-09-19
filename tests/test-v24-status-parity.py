@@ -588,6 +588,8 @@ class MacosRoleDetectionTests(unittest.TestCase):
         (state / "client-state.json").write_text(
             json.dumps(
                 {
+                    "machine_id": MACHINE,
+                    "hostname": "mac-agent",
                     "allocator_url": "https://221.139.249.113:6099/enroll",
                     "frp_server": "221.139.249.113",
                     "frp_server_port": 443,
@@ -600,6 +602,8 @@ class MacosRoleDetectionTests(unittest.TestCase):
             'serverAddr = "221.139.249.113"\nserverPort = 443\n', encoding="utf-8"
         )
         (state / "allocator-ca.crt").write_text("dummy-ca\n", encoding="utf-8")
+        (state / "client-identity.key").write_text("dummy-key\n", encoding="utf-8")
+        (state / "client-identity.mac").write_text("dummy-mac\n", encoding="utf-8")
         prev = os.environ.get("FRP_MACOS_STATE_ROOT")
         os.environ["FRP_MACOS_STATE_ROOT"] = str(state)
         try:
@@ -614,6 +618,16 @@ class MacosRoleDetectionTests(unittest.TestCase):
             self.assertEqual(
                 mgmt.allocator_ca_path("/nonexistent-root"),
                 state / "allocator-ca.crt",
+            )
+            ident = v24.load_agent_identity("/nonexistent-root")
+            self.assertEqual(ident.get("machine_id"), MACHINE)
+            self.assertEqual(
+                v24.agent_identity_key_path("/nonexistent-root"),
+                state / "client-identity.key",
+            )
+            self.assertEqual(
+                v24.agent_identity_mac_path("/nonexistent-root"),
+                state / "client-identity.mac",
             )
         finally:
             if prev is None:

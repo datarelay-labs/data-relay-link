@@ -402,21 +402,41 @@ def role_label(role: str) -> str:
 
 
 def load_agent_identity(root: Optional[str] = None) -> dict:
-    base = Path(root) if root else Path("/")
-    path = base / "etc/frp/client-state.json"
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        "machine_id": str(data.get("machine_id") or data.get("id") or "").strip(),
-        "hostname": str(data.get("hostname") or data.get("label") or "").strip(),
-        "label": str(data.get("label") or data.get("hostname") or "").strip(),
-    }
+    for path in _agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", root
+    ):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        return {
+            "machine_id": str(data.get("machine_id") or data.get("id") or "").strip(),
+            "hostname": str(data.get("hostname") or data.get("label") or "").strip(),
+            "label": str(data.get("label") or data.get("hostname") or "").strip(),
+        }
+    return {}
+
+
+def agent_identity_key_path(root: Optional[str] = None) -> Optional[Path]:
+    for path in _agent_state_file_candidates(
+        "etc/frp/client-identity.key", "client-identity.key", root
+    ):
+        if path.is_file():
+            return path
+    return None
+
+
+def agent_identity_mac_path(root: Optional[str] = None) -> Optional[Path]:
+    for path in _agent_state_file_candidates(
+        "etc/frp/client-identity.mac", "client-identity.mac", root
+    ):
+        if path.is_file():
+            return path
+    return None
 
 
 def load_agent_server_endpoint(root: Optional[str] = None) -> Optional[tuple[str, int]]:

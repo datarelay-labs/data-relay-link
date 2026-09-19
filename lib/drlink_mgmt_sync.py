@@ -197,13 +197,19 @@ def _agent_identity(root: Optional[str] = None) -> dict:
 
 
 def _identity_key_path(root: Optional[str] = None) -> Path:
-    base = Path(root) if root else Path("/")
-    return base / "etc/frp/client-identity.key"
+    path = v24.agent_identity_key_path(root)
+    if path is None:
+        base = Path(root) if root else Path("/")
+        return base / "etc/frp/client-identity.key"
+    return path
 
 
 def _identity_mac_path(root: Optional[str] = None) -> Path:
-    base = Path(root) if root else Path("/")
-    return base / "etc/frp/client-identity.mac"
+    path = v24.agent_identity_mac_path(root)
+    if path is None:
+        base = Path(root) if root else Path("/")
+        return base / "etc/frp/client-identity.mac"
+    return path
 
 
 def _canonical_operation(method: str, path: str) -> Optional[tuple[str, str]]:
