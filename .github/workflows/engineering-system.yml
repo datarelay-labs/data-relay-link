@@ -1,0 +1,23 @@
+name: Engineering System Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  deterministic-regression:
+    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@0f97b4c1e30ea6bf588b24b9890a48b7aee01adf
+    with:
+      test_command: "./tests/run-all.sh"
+
+  human-ux:
+    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@0f97b4c1e30ea6bf588b24b9890a48b7aee01adf
+    with:
+      test_command: "./tests/run-human-ux-e2e.sh"
+
+  manual-e2e-regressions:
+    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@0f97b4c1e30ea6bf588b24b9890a48b7aee01adf
+    with:
+      test_command: "python3 tests/test-v24-manual-e2e-findings.py"
