@@ -747,11 +747,16 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(sys.argv[1]))
-import drlink_control_cli as cli
-
-result = json.loads(sys.argv[2])
-tokens = result.get("tokens") or []
-raise SystemExit(cli.main(tokens) or 0)
+try:
+    import drlink_control_cli as cli
+    result = json.loads(sys.argv[2])
+    tokens = result.get("tokens") or []
+    raise SystemExit(cli.main(tokens) or 0)
+except SystemExit:
+    raise
+except Exception as exc:
+    sys.stderr.write("ERROR: %s\n" % exc)
+    raise SystemExit(1)
 ' "$cli_py" "$result"
 }
 

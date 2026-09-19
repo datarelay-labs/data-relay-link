@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import yaml
-
 from drlink_control_db import ControlPlaneError, utc_now_iso
 from drlink_control_plane import (
     AI_CAPABILITIES,
@@ -150,7 +148,20 @@ class ChangePlan:
         )
 
 
+def _yaml():
+    """Load PyYAML only when ConfigurationBundle YAML is actually used."""
+    try:
+        import yaml as _mod
+    except ImportError as exc:
+        raise BundleError(
+            "PyYAML is required for ConfigurationBundle YAML input and export.\n"
+            "Install the python3-yaml (or PyYAML) package, then retry."
+        ) from exc
+    return _mod
+
+
 def _safe_load_yaml(text: str) -> Any:
+    yaml = _yaml()
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -633,7 +644,7 @@ def export_configuration(plane: ControlPlane) -> str:
         },
         "spec": spec,
     }
-    return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+    return _yaml().safe_dump(doc, sort_keys=False, default_flow_style=False)
 
 
 def _dup_check(items: list[dict], family: str) -> None:

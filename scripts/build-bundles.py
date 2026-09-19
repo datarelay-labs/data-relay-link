@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import base64
 import json
+import sys
 from pathlib import Path
 
 root=Path(__file__).resolve().parents[1]
 dist=root/'dist'
 dist.mkdir(exist_ok=True)
+sys.path.insert(0, str(root / 'lib'))
+from drlink_agent_payload import agent_source_rels
 
 def bundle_payload(rel):
     data = (root / rel).read_bytes()
@@ -196,39 +199,7 @@ client_files=[
  'release-manifest.json',
  'install-client.sh',
  'uninstall-client.sh',
- 'lib/frp-common.sh',
- 'lib/frp-macos.sh',
- 'lib/frp-client-common.sh',
- 'lib/drlink_qualified_artifacts.py',
- 'lib/frp_mgmt_auth.py',
- 'lib/frp_health_check.py',
- 'lib/frp-doctor-common.sh',
- 'lib/frp_doctor.py',
- 'lib/frp_support_bundle.py',
- 'lib/frp_ctl_grammar.py',
- 'lib/frp_cli_catalog.py',
- 'lib/frp_version_identity.py',
- 'lib/frp_cli_final_commands.json',
- 'lib/frp_service_profiles.py',
- 'lib/frp_ctl_repl.py',
- 'lib/drlink_ai_agent.py',
- 'lib/drlink_control_db.py',
- 'lib/drlink_control_plane.py',
- 'lib/drlink_mgmt_sync.py',
- 'lib/drlink_v24.py',
- 'lib/drlink_v24_runtime.py',
- 'lib/drlink_v24_cli.py',
- 'lib/drlink_control_cli.py',
- 'lib/drlink_configuration_bundle.py',
- 'lib/drlink_mcp_tls.py',
- 'lib/drlink_runtime_policy.py',
- 'lib/drlink_upgrade_reconcile.py',
- 'lib/drlink_v24_ai_identity.py',
- 'lib/drlink_v24_bundle.py',
- 'lib/drlink_v24_wizard.py',
- 'lib/frp_control_locks.py',
- 'lib/frp_infrastructure_ports.py',
- 'lib/frp-role-ownership.sh',
+] + agent_source_rels() + [
  'tools/frp-client',
  'tools/drlink',
  'tools/frpctl',

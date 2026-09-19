@@ -4697,70 +4697,49 @@ frp_client_upgrade_source_version() {
   fi
 }
 
+frp_agent_payload_libdir() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  printf '%s' "$here"
+}
+
+frp_agent_lib_payload_files() {
+  local here
+  here="$(frp_agent_payload_libdir)"
+  PYTHONPATH="${here}${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'from drlink_agent_payload import agent_lib_files; print("\n".join(agent_lib_files()))'
+}
+
+frp_client_write_runtime_lineage() {
+  local dest_lib source_lib
+  dest_lib="$(frp_client_lib_dir)"
+  source_lib="${1:-$dest_lib}"
+  PYTHONPATH="${dest_lib}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$dest_lib" "$source_lib" <<'PY'
+from pathlib import Path
+import sys
+from drlink_agent_payload import write_installed_manifest, verify_payload_match
+
+dest = Path(sys.argv[1])
+source = Path(sys.argv[2])
+write_installed_manifest(dest)
+problems = verify_payload_match(source, dest)
+if problems:
+    sys.stderr.write("ERROR: Agent runtime lineage mismatch\n")
+    for item in problems:
+        sys.stderr.write("  %s\n" % item)
+    raise SystemExit(1)
+print("AGENT_RUNTIME_LINEAGE_MATCH=PASS")
+PY
+}
+
 frp_client_install_management_files() {
   local source="$1"
-  local libdir bindir
+  local libdir bindir f
   libdir="$(frp_client_lib_dir)"
   bindir="$(frp_client_path /usr/local/bin)"
   mkdir -p "$libdir" "$bindir"
-  [[ -f "${source}/lib/frp-client-common.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-client-common.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp-common.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-common.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp-macos.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-macos.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_mgmt_auth.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_mgmt_auth.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_health_check.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_health_check.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp-doctor-common.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-doctor-common.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_doctor.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_doctor.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_support_bundle.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_support_bundle.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_ctl_grammar.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_ctl_grammar.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_cli_catalog.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_cli_catalog.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_version_identity.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_version_identity.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_cli_final_commands.json" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_cli_final_commands.json" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_service_profiles.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_service_profiles.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_ctl_repl.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/drlink_mgmt_sync.py" ]] || {
-    echo "ERROR: missing ${source}/lib/drlink_mgmt_sync.py" >&2
+  [[ -f "${source}/lib/drlink_agent_payload.py" ]] || {
+    echo "ERROR: missing ${source}/lib/drlink_agent_payload.py" >&2
     return 1
   }
   [[ -f "${source}/tools/frp-client" ]] || {
@@ -4771,64 +4750,27 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/tools/frpctl" >&2
     return 1
   }
+  [[ -f "${source}/tools/drlink" ]] || {
+    echo "ERROR: missing ${source}/tools/drlink" >&2
+    return 1
+  }
   [[ -f "${source}/tools/frp-support-bundle" ]] || {
     echo "ERROR: missing ${source}/tools/frp-support-bundle" >&2
     return 1
   }
-  install -m 0644 "${source}/lib/frp-client-common.sh" "${libdir}/frp-client-common.sh"
-  install -m 0644 "${source}/lib/frp-common.sh" "${libdir}/frp-common.sh"
-  install -m 0644 "${source}/lib/frp-macos.sh" "${libdir}/frp-macos.sh"
-  install -m 0644 "${source}/lib/frp_mgmt_auth.py" "${libdir}/frp_mgmt_auth.py"
-  install -m 0644 "${source}/lib/frp_health_check.py" "${libdir}/frp_health_check.py"
-  install -m 0644 "${source}/lib/frp-doctor-common.sh" "${libdir}/frp-doctor-common.sh"
-  install -m 0644 "${source}/lib/frp_doctor.py" "${libdir}/frp_doctor.py"
-  install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
-  install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
-  install -m 0644 "${source}/lib/frp_cli_catalog.py" "${libdir}/frp_cli_catalog.py"
-  install -m 0644 "${source}/lib/frp_version_identity.py" "${libdir}/frp_version_identity.py"
-  install -m 0644 "${source}/lib/frp_cli_final_commands.json" "${libdir}/frp_cli_final_commands.json"
-  install -m 0644 "${source}/lib/frp_service_profiles.py" "${libdir}/frp_service_profiles.py"
-  install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
-  if [[ -f "${source}/lib/drlink_ai_agent.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_ai_agent.py" "${libdir}/drlink_ai_agent.py"
-  fi
-  if [[ -f "${source}/lib/drlink_control_db.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_control_db.py" "${libdir}/drlink_control_db.py"
-  fi
-  if [[ -f "${source}/lib/drlink_control_plane.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_control_plane.py" "${libdir}/drlink_control_plane.py"
-  fi
-  if [[ -f "${source}/lib/drlink_mgmt_sync.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_mgmt_sync.py" "${libdir}/drlink_mgmt_sync.py"
-  fi
-  if [[ -f "${source}/lib/drlink_v24.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_v24.py" "${libdir}/drlink_v24.py"
-  fi
-  if [[ -f "${source}/lib/drlink_v24_runtime.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_v24_runtime.py" "${libdir}/drlink_v24_runtime.py"
-  fi
-  if [[ -f "${source}/lib/drlink_v24_cli.py" ]]; then
-    install -m 0644 "${source}/lib/drlink_v24_cli.py" "${libdir}/drlink_v24_cli.py"
-  fi
-  for _cli_py in \
-    drlink_control_cli.py \
-    drlink_configuration_bundle.py \
-    drlink_mcp_tls.py \
-    drlink_runtime_policy.py \
-    drlink_upgrade_reconcile.py \
-    drlink_v24_ai_identity.py \
-    drlink_v24_bundle.py \
-    drlink_v24_wizard.py \
-    frp_control_locks.py \
-    frp_infrastructure_ports.py
-  do
-    if [[ -f "${source}/lib/${_cli_py}" ]]; then
-      install -m 0644 "${source}/lib/${_cli_py}" "${libdir}/${_cli_py}"
-    fi
-  done
-  if [[ -f "${source}/lib/frp-role-ownership.sh" ]]; then
-    install -m 0644 "${source}/lib/frp-role-ownership.sh" "${libdir}/frp-role-ownership.sh"
-  fi
+  [[ -f "${source}/tools/frp-update" ]] || {
+    echo "ERROR: missing ${source}/tools/frp-update" >&2
+    return 1
+  }
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    [[ -f "${source}/lib/${f}" ]] || {
+      echo "ERROR: missing ${source}/lib/${f}" >&2
+      return 1
+    }
+    install -m 0644 "${source}/lib/${f}" "${libdir}/${f}"
+  done < <(PYTHONPATH="${source}/lib${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'from drlink_agent_payload import agent_lib_files; print("\n".join(agent_lib_files()))')
   if [[ -f "${source}/uninstall-client.sh" ]]; then
     install -m 0755 "${source}/uninstall-client.sh" "${libdir}/uninstall-client.sh"
   fi
@@ -4858,57 +4800,30 @@ frp_client_install_management_files() {
     install -m 0644 "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" \
       "${libdir}/${FRP_MACOS_LAUNCHD_LABEL}.plist"
   fi
+  frp_client_write_runtime_lineage "${source}/lib" || return 1
   frp_client_upgrade_source_version "$source"
   frp_client_write_version_file
 }
 
 frp_client_upgrade_destinations() {
-  # dest_rel:mode:source_rel
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    printf '%s\n' "usr/local/lib/drlink/${f}:0644:lib/${f}"
+  done < <(frp_agent_lib_payload_files)
   printf '%s\n' \
-    "usr/local/lib/drlink/frp-client-common.sh:0644:lib/frp-client-common.sh" \
-    "usr/local/lib/drlink/frp-common.sh:0644:lib/frp-common.sh" \
-    "usr/local/lib/drlink/frp-macos.sh:0644:lib/frp-macos.sh" \
     "usr/local/lib/drlink/com.datarelay.drlink.frpc.plist:0644:client/com.datarelay.drlink.frpc.plist" \
-    "usr/local/lib/drlink/frp_mgmt_auth.py:0644:lib/frp_mgmt_auth.py" \
-    "usr/local/lib/drlink/frp_health_check.py:0644:lib/frp_health_check.py" \
-    "usr/local/lib/drlink/frp-doctor-common.sh:0644:lib/frp-doctor-common.sh" \
-    "usr/local/lib/drlink/frp_doctor.py:0644:lib/frp_doctor.py" \
-    "usr/local/lib/drlink/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
-    "usr/local/lib/drlink/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
-    "usr/local/lib/drlink/frp_cli_catalog.py:0644:lib/frp_cli_catalog.py" \
-    "usr/local/lib/drlink/frp_version_identity.py:0644:lib/frp_version_identity.py" \
-    "usr/local/lib/drlink/frp_cli_final_commands.json:0644:lib/frp_cli_final_commands.json" \
-    "usr/local/lib/drlink/frp_service_profiles.py:0644:lib/frp_service_profiles.py" \
-    "usr/local/lib/drlink/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
-    "usr/local/lib/drlink/drlink_ai_agent.py:0644:lib/drlink_ai_agent.py" \
-    "usr/local/lib/drlink/drlink_control_db.py:0644:lib/drlink_control_db.py" \
-    "usr/local/lib/drlink/drlink_control_plane.py:0644:lib/drlink_control_plane.py" \
-    "usr/local/lib/drlink/drlink_mgmt_sync.py:0644:lib/drlink_mgmt_sync.py" \
-    "usr/local/lib/drlink/drlink_v24.py:0644:lib/drlink_v24.py" \
-    "usr/local/lib/drlink/drlink_v24_runtime.py:0644:lib/drlink_v24_runtime.py" \
-    "usr/local/lib/drlink/drlink_v24_cli.py:0644:lib/drlink_v24_cli.py" \
-    "usr/local/lib/drlink/drlink_control_cli.py:0644:lib/drlink_control_cli.py" \
-    "usr/local/lib/drlink/drlink_configuration_bundle.py:0644:lib/drlink_configuration_bundle.py" \
-    "usr/local/lib/drlink/drlink_mcp_tls.py:0644:lib/drlink_mcp_tls.py" \
-    "usr/local/lib/drlink/drlink_runtime_policy.py:0644:lib/drlink_runtime_policy.py" \
-    "usr/local/lib/drlink/drlink_upgrade_reconcile.py:0644:lib/drlink_upgrade_reconcile.py" \
-    "usr/local/lib/drlink/drlink_v24_ai_identity.py:0644:lib/drlink_v24_ai_identity.py" \
-    "usr/local/lib/drlink/drlink_v24_bundle.py:0644:lib/drlink_v24_bundle.py" \
-    "usr/local/lib/drlink/drlink_v24_wizard.py:0644:lib/drlink_v24_wizard.py" \
-    "usr/local/lib/drlink/frp_control_locks.py:0644:lib/frp_control_locks.py" \
-    "usr/local/lib/drlink/frp_infrastructure_ports.py:0644:lib/frp_infrastructure_ports.py" \
-    "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
     "usr/local/bin/drlink:0755:tools/drlink" \
     "usr/local/lib/drlink/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
-  # Linux-only sudo secure_path helper; SIP blocks /usr/bin writes on macOS.
   if ! frp_is_darwin; then
     printf '%s\n' "usr/bin/drlink:0755:tools/drlink"
   fi
 }
+
 
 frp_client_upgrade_validate_existing() {
   local state toml ident
@@ -5259,6 +5174,7 @@ frp_client_upgrade_verify() {
     echo "ERROR: simulated post-upgrade verification failure" >&2
     return 1
   fi
+  frp_client_write_runtime_lineage "$(frp_client_lib_dir)" || return 1
   return 0
 }
 

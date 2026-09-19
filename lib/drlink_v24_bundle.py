@@ -15,12 +15,21 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import yaml
-
 from drlink_control_db import ControlPlaneError, utc_now_iso
 from drlink_control_plane import ConfirmationRequired, ControlPlane
 from drlink_configuration_bundle import BundleError
 import drlink_v24 as v24
+
+
+def _yaml():
+    try:
+        import yaml as _mod
+    except ImportError as exc:
+        raise BundleError(
+            "PyYAML is required for ConfigurationBundle YAML input and export.\n"
+            "Install the python3-yaml (or PyYAML) package, then retry."
+        ) from exc
+    return _mod
 
 SERVER_SECTIONS = (
     "networkObjects",
@@ -505,6 +514,7 @@ def _reject_markdown_prose(text: str) -> None:
 def parse_v24_bundle(raw_text: str) -> dict:
     text = _strip_end_terminator(raw_text)
     _reject_markdown_prose(text)
+    yaml = _yaml()
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -1293,7 +1303,7 @@ def export_configuration_v24(plane: ControlPlane) -> str:
                 "rules": rules,
             }
         doc = {"configurationBundle": body}
-    return yaml.safe_dump(doc, sort_keys=False)
+    return _yaml().safe_dump(doc, sort_keys=False)
 
 
 def read_bundle_stdin_with_end(stdin_text: Optional[str] = None) -> str:

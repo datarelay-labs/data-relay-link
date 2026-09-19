@@ -675,10 +675,17 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, res, name)
-        extra_l = [str(t).strip().lower() for t in extra]
-        if "mode" not in extra_l:
-            return None
         kv = v24.parse_kv_tokens(extra)
+        allowed = {"mode", "source", "destination", "service", "enabled"}
+        unknown = [k for k in kv if k not in allowed]
+        if unknown:
+            title = "Remote Access" if res == "remote-access" else "Internet Access"
+            raise ControlPlaneError(
+                "ERROR:\n%s does not accept '%s'.\n\n"
+                "Use: source, destination, service, mode, enabled|disabled\n\n"
+                "No changes were applied."
+                % (title, unknown[0])
+            )
         enabled = None
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")

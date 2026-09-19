@@ -714,6 +714,11 @@ def root_rows(role):
                 summary = "Remove, delete, revoke, release or disable Server configuration"
         elif name == "test":
             summary = "Check policy decisions without changing configuration"
+        elif name == "system":
+            if client and not server:
+                summary = "Updates, diagnostics and Agent system operations"
+            elif server and not client:
+                summary = "Updates, backup, restore, diagnostics and system operations"
         rows.append((name, summary))
     return rows
 
@@ -1736,12 +1741,16 @@ def domain_help(topic, role):
             "  show ai-access-log\n"
         )
     if topic in ("system", "operate"):
+        client, server = role_parts(role)
+        if client and not server:
+            intro = "Operate Data Relay Link itself: updates, diagnostics and Agent system operations."
+        else:
+            intro = "Operate Data Relay Link itself: status, settings, backup, updates, and diagnostics."
         lines = [
             "System",
             "======",
             "",
-            "Operate Data Relay Link itself: status, settings, backup,",
-            "updates, and diagnostics.",
+            intro,
             "",
             "Guided path:",
             "  menu → System",
@@ -1795,6 +1804,11 @@ def domain_help(topic, role):
                     "  system autostart",
                     "  system autostart enable",
                     "  system autostart disable",
+                    "  system synchronize",
+                    "  system export configuration <PATH>",
+                    "  test configuration <PATH|->",
+                    "  system diff configuration <PATH|->",
+                    "  system apply configuration <PATH|->",
                 ]
             )
         return "\n".join(lines) + "\n"
@@ -1852,6 +1866,12 @@ def resource_help(root, role):
     for name, roles, _category, text in ROOTS:
         if name == root and role_allows(roles, role):
             summary = text
+    if root == "system":
+        client, server = role_parts(role)
+        if client and not server:
+            summary = "Updates, diagnostics and Agent system operations"
+        elif server and not client:
+            summary = "Updates, backup, restore, diagnostics and system operations"
     if summary:
         lines.extend([summary, ""])
     lines.append("Usage:")
@@ -1974,7 +1994,7 @@ WORKFLOWS = (
     (
         "Internet Access WHITELIST",
         (
-            "set internet-access github-https mode whitelist source ubuntu-prod destination github service https",
+            "set internet-access github-https mode whitelist source ubuntu-prod destination github service https enabled",
             "test internet-access source ubuntu-prod destination github service https",
         ),
         "Internet Access uses explicit WHITELIST or BLACKLIST mode.",

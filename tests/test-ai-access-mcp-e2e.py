@@ -120,18 +120,45 @@ class ControlPlaneAITests(unittest.TestCase):
         return line.split(" ", 1)[1].strip()
 
     def test_objects_and_first_match_network_plane(self):
-        self.cli("set", "object", "office-net", "type", "network")
-        self.cli("set", "object", "office-net", "value", "10.10.10.0/24")
-        self.cli("set", "remote-access", "allow-office")
-        self.cli("set", "remote-access", "allow-office", "source", "office-net")
-        self.cli("set", "remote-access", "allow-office", "destination", "Expernet-DP1")
-        self.cli("set", "remote-access", "allow-office", "service", "tcp", "22")
-        self.cli("set", "remote-access", "allow-office", "action", "allow")
-        self.cli("set", "remote-access", "allow-office", "enabled")
-        out = self.cli("test", "remote-access", "10.10.10.25", "Expernet-DP1", "tcp", "22")
+        self.cli("set", "network-object", "office-net", "type", "cidr", "value", "10.10.10.0/24")
+        self.cli("set", "network-object", "other-net", "type", "cidr", "value", "8.8.8.0/24")
+        self.cli("set", "service-object", "ssh", "type", "tcp", "port", "22")
+        self.cli(
+            "set",
+            "remote-access",
+            "allow-office",
+            "mode",
+            "whitelist",
+            "source",
+            "office-net",
+            "destination",
+            "Expernet-DP1",
+            "service",
+            "ssh",
+            "enabled",
+        )
+        out = self.cli(
+            "test",
+            "remote-access",
+            "source",
+            "office-net",
+            "destination",
+            "Expernet-DP1",
+            "service",
+            "ssh",
+        )
         self.assertIn("ALLOW", out)
-        out = self.cli("test", "remote-access", "8.8.8.8", "Expernet-DP1", "tcp", "22")
-        self.assertIn("implicit DENY", out)
+        out = self.cli(
+            "test",
+            "remote-access",
+            "source",
+            "other-net",
+            "destination",
+            "Expernet-DP1",
+            "service",
+            "ssh",
+        )
+        self.assertIn("DENY", out)
         st = self.cli("show", "status")
         self.assertIn("DB Revision", st)
         self.assertIn("Control DB", st)
