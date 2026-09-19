@@ -1,0 +1,74 @@
+version: 1
+
+paths:
+  "server/frp-port-allocator.py":
+    domains: [allocator, remote-service, server]
+  "server/frp-egress-gateway.py":
+    domains: [internet-access, server]
+  "server/drlink-tcp-egress.py":
+    domains: [internet-access, server]
+  "lib/drlink_v24*.py":
+    domains: [control-plane, cli, ux]
+  "lib/frp_ctl_*.py":
+    domains: [cli, ux]
+  "lib/frp_access_control.py":
+    domains: [remote-access]
+  "lib/frp_egress_*.py":
+    domains: [internet-access]
+  "lib/frp_zero_touch.py":
+    domains: [enrollment, zero-touch]
+  "lib/frp_doctor.py":
+    domains: [diagnostics, lifecycle]
+  "lib/frp-client-common.sh":
+    domains: [agent, installer, lifecycle]
+  "install-client.sh":
+    domains: [agent, installer, lifecycle, enrollment]
+  "install-server.sh":
+    domains: [server, installer, lifecycle]
+  "tools/frp-create-client":
+    domains: [enrollment, zero-touch, agent]
+  "tools/frpctl":
+    domains: [cli, control-plane]
+  "tests/human-ux-e2e/**":
+    domains: [ux, cli]
+  "scripts/build-release-artifacts.sh":
+    domains: [release]
+  "scripts/build-bundles.py":
+    domains: [release, installer]
+
+scenarios:
+  - id: DRL-FULL-REG-001
+    name: Full local deterministic regression
+    level: integration
+    domains: [server, agent, control-plane, cli, enrollment, allocator, remote-service, remote-access, internet-access, configuration-bundle, installer, diagnostics, lifecycle]
+    triggers: [pr, rc, release]
+    platforms: [linux]
+    command: "./tests/run-all.sh"
+    invariants:
+      - "all mandatory local deterministic regressions pass"
+    release_gate: true
+
+  - id: DRL-HUX-001
+    name: Human UX Adversarial E2E
+    level: ux
+    domains: [ux, cli, server, agent]
+    triggers: [affected, pr, rc, release]
+    platforms: [linux]
+    command: "./tests/run-human-ux-e2e.sh"
+    invariants:
+      - "deterministic operator-emulation scenarios pass"
+      - "server/agent context and generated guidance remain consistent"
+    origin: "Rick v2.4.0 manual E2E findings"
+    release_gate: true
+
+  - id: DRL-MANUAL-REG-001
+    name: Rick manual E2E findings regressions
+    level: feature
+    domains: [ux, cli, zero-touch, remote-service, diagnostics, installer]
+    triggers: [affected, pr, rc, release]
+    platforms: [linux]
+    command: "python3 tests/test-v24-manual-e2e-findings.py"
+    invariants:
+      - "manual E2E defects remain permanently regressed"
+    origin: "Rick v2.4.0 manual E2E"
+    release_gate: true
