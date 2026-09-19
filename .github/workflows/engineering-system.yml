@@ -8,19 +8,10 @@ on:
 
 jobs:
   adoption-compliance:
-    uses: datarelay-labs/engineering-system/.github/workflows/adoption-compliance.yml@9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1
+    uses: datarelay-labs/engineering-system/.github/workflows/adoption-compliance.yml@30a13549e1be027e1709373b3c845f4e2d1a7e4b
 
-  deterministic-regression:
-    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1
+  affected-tests:
+    uses: datarelay-labs/engineering-system/.github/workflows/affected-tests.yml@30a13549e1be027e1709373b3c845f4e2d1a7e4b
     with:
-      test_command: "./tests/run-all.sh"
-
-  human-ux:
-    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1
-    with:
-      test_command: "./tests/run-human-ux-e2e.sh"
-
-  manual-e2e-regressions:
-    uses: datarelay-labs/engineering-system/.github/workflows/standard-tests.yml@9eccc9e778aca987515d1a7eb91fd0a28c8cd8b1
-    with:
-      test_command: "python3 tests/test-v24-manual-e2e-findings.py"
+      manifest_path: ".engineering/tests.yaml"
+      trigger: "pr"
