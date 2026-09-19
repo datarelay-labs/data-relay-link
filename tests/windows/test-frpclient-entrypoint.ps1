@@ -23,11 +23,14 @@ if ($env:SystemRoot) {
 $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-entry-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 $env:FRP_WINDOWS_ROOT = $tmpRoot
+# Unenrolled entrypoint root has no client-state allocator_url; provide an
+# origin so update -Check can resolve the qualified windows/amd64 artifact URL.
+$env:FRP_ALLOCATOR_URL = 'https://example.test/enroll'
 try {
     foreach ($exe in @($hosts | Select-Object -Unique)) {
         $label = Split-Path -Leaf $exe
         $doctorOut = & $exe -NoProfile -ExecutionPolicy Bypass -File $clientPath -Command doctor 2>&1 | Out-String
-        Assert-FrpTrue ($doctorOut -match 'frp-client doctor') "$label doctor entrypoint ran"
+        Assert-FrpTrue ($doctorOut -match 'Data Relay Link client diagnostics') "$label doctor entrypoint ran"
         Assert-FrpTrue ($doctorOut -match 'Root:') "$label doctor called Get-FrpWindowsRoot"
         Assert-FrpTrue ($doctorOut -notmatch 'is not recognized') "$label doctor has module functions"
 
@@ -44,5 +47,6 @@ try {
     Write-FrpTestPass 'test-frpclient-entrypoint'
 } finally {
     Remove-Item Env:FRP_WINDOWS_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:FRP_ALLOCATOR_URL -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

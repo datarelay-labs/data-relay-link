@@ -51,9 +51,10 @@ try {
     $client = Get-Content -LiteralPath $clientPath -Raw
     Assert-FrpTrue ($client -match 'SERVER-SIDE RESERVATIONS PRESERVED') 'uninstall message in tool'
     Assert-FrpTrue ($client -match 'leaving product files in place') 'fail-closed uninstall message in tool'
-    Assert-FrpTrue ($client -match 'unset client <CLIENT> service <SERVICE>') 'service release guidance'
-    Assert-FrpTrue ($client -match 'unset client <CLIENT>') 'client release guidance'
+    Assert-FrpTrue ($client -match 'unset managed-host <HOST>') 'managed-host release guidance'
+    Assert-FrpTrue ($client -match 'does not release ports') 'uninstall does not release ports'
     Assert-FrpTrue ($client -notmatch 'drlink client release') 'no obsolete release grammar'
+    Assert-FrpTrue ($client -notmatch 'unset client <CLIENT>') 'no obsolete unset-client grammar'
     Assert-FrpTrue ($client -notmatch 'remain until an administrator revokes them') 'no revoke-for-ports wording'
 
     Write-FrpTestPass 'test-uninstall'

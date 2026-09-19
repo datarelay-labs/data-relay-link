@@ -138,6 +138,22 @@ No changes were applied.
     if ($env:FRP_ALLOCATOR_URL -and $env:FRP_ALLOCATOR_URL.Trim().Length -gt 0) {
         $allocator = $env:FRP_ALLOCATOR_URL.Trim()
     }
+    # Enrolled clients persist allocator_url in client-state.json. update -Check
+    # and engine apply must resolve qualified artifacts from that origin without
+    # requiring FRP_ALLOCATOR_URL to be re-exported in the operator shell.
+    if (-not $allocator) {
+        $statePath = Get-FrpStatePath
+        if (Test-Path -LiteralPath $statePath) {
+            try {
+                $raw = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($raw -and $raw.allocator_url) {
+                    $allocator = [string]$raw.allocator_url
+                }
+            } catch {
+                # Ignore unreadable/partial state; fall through to fail-closed.
+            }
+        }
+    }
     if ($allocator -match '^https://') {
         $uri = [Uri]$allocator
         $origin = '{0}://{1}' -f $uri.Scheme, $uri.Authority

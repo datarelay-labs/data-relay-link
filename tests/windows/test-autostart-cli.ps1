@@ -28,7 +28,7 @@ $isWin = ($env:OS -match 'Windows' -or $env:WinDir)
 try {
     $statusOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart status exits 0'
-    Assert-FrpTrue ($statusOut -match 'not configured') 'autostart initially not configured'
+    Assert-FrpTrue ($statusOut -match 'Autostart\s*:\s*disabled') 'autostart initially not configured'
 
     $enableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart -Enable exits 0'
@@ -43,14 +43,15 @@ try {
     }
 
     $statusOut2 = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart 2>&1 | Out-String
-    Assert-FrpTrue ($statusOut2 -match ('enabled \({0}\)' -f [regex]::Escape($env:FRP_AUTOSTART_TASK_NAME))) 'autostart status shows enabled'
+    Assert-FrpTrue ($statusOut2 -match 'Autostart\s*:\s*enabled') 'autostart status shows enabled'
+    Assert-FrpTrue ($statusOut2 -notmatch 'Autostart\s*:\s*disabled') 'autostart status not disabled when enabled'
 
     $bothOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Enable -Disable 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -ne 0) '-Enable and -Disable together is rejected'
 
     $disableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath autostart -Disable 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'autostart -Disable exits 0'
-    Assert-FrpTrue ($disableOut -match 'Autostart disabled') 'autostart -Disable message'
+    Assert-FrpTrue ($disableOut -match 'Autostart\s*:\s*disabled') 'autostart -Disable message'
     if ($isWin) {
         Assert-FrpTrue (-not (Test-FrpSchtasksExists -TaskName $env:FRP_AUTOSTART_TASK_NAME)) 'schtasks task removed after -Disable'
     } else {
@@ -66,7 +67,7 @@ try {
     }
     $uninstallOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath uninstall 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'uninstall exits 0'
-    Assert-FrpTrue ($uninstallOut -match 'SERVER RESERVATIONS PRESERVED') 'uninstall message'
+    Assert-FrpTrue ($uninstallOut -match 'SERVER-SIDE RESERVATIONS PRESERVED') 'uninstall message'
     if ($isWin) {
         Assert-FrpTrue (-not (Test-FrpSchtasksExists -TaskName $env:FRP_AUTOSTART_TASK_NAME)) 'schtasks task gone after uninstall'
     } else {
