@@ -1,7 +1,32 @@
 name: macos-client
 on:
-  push:
   pull_request:
+    paths:
+      - "macos/**"
+      - "lib/**"
+      - "install-client.sh"
+      - "tools/frpctl"
+      - "VERSION"
+      - "scripts/build-bundles.py"
+      - "scripts/check-public-metadata.sh"
+      - "tests/test-macos-*.sh"
+      - "tests/test-frpctl-pty-completion.sh"
+      - "tests/test-frp-compat-gate.sh"
+  push:
+    branches:
+      - main
+    paths:
+      - "macos/**"
+      - "lib/**"
+      - "install-client.sh"
+      - "tools/frpctl"
+      - "VERSION"
+      - "scripts/build-bundles.py"
+      - "scripts/check-public-metadata.sh"
+      - "tests/test-macos-*.sh"
+      - "tests/test-frpctl-pty-completion.sh"
+      - "tests/test-frp-compat-gate.sh"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,7 +35,7 @@ jobs:
   portable:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - run: |
           for test in tests/test-macos-*.sh; do
             bash "$test"
@@ -22,7 +47,7 @@ jobs:
   apple-silicon:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Verify client port
         run: |
           test "$(uname -m)" = arm64
@@ -36,7 +61,6 @@ jobs:
         run: |
           version=0.71.0
           archive="$RUNNER_TEMP/frp.tar.gz"
-          curl -fsSL -o "$archive" \
-            "https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_darwin_arm64.tar.gz"
+          curl -fsSL -o "$archive"             "https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_darwin_arm64.tar.gz"
           echo "45be02b186860d375ed49a8941ae9569628a54bf14e67fc36b29c98c99dabcc6  $archive" |
             shasum -a 256 -c -

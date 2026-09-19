@@ -1,0 +1,29 @@
+---
+description: Mandatory engineering workflow and qualification rules
+alwaysApply: true
+---
+
+# Mandatory Engineering System Rule
+
+This repository follows Engineering System 1.2.1 at baseline 540d00edd438f6656fb865902bd295126265bd4f.
+
+Always read:
+1. @AGENTS.md
+2. @.engineering/project.yaml
+
+Read only when relevant:
+3. @.engineering/tests.yaml for implementation/debugging/testing
+4. @.engineering/release.yaml for release/version/artifact work
+5. only the relevant product specification/ADR/runbook/Engineering System standard
+
+Then:
+- identify the change class and affected domains/contracts/security/operations
+- make the smallest correct change
+- run the cheapest affected deterministic tests first
+- keep ordinary PR validation fast
+- do not duplicate equivalent native/shared CI
+- do not run `./tests/run-all.sh` as an ordinary PR gate
+- do not start expensive release qualification while a blocking deterministic regression exists
+- never weaken a valid test merely to obtain PASS
+- never report unexecuted, skipped, blocked, or historical evidence as current PASS
+- never reuse release qualification evidence from another source HEAD

@@ -1,0 +1,115 @@
+version: 1
+
+paths:
+  "AGENTS.md":
+    domains: [engineering-governance]
+  ".engineering/**":
+    domains: [engineering-governance]
+  ".cursor/**":
+    domains: [engineering-governance]
+  ".github/workflows/**":
+    domains: [engineering-governance]
+  "server/frp-port-allocator.py":
+    domains: [allocator, remote-service, server]
+  "server/frp-egress-gateway.py":
+    domains: [internet-access, server]
+  "server/drlink-tcp-egress.py":
+    domains: [internet-access, server]
+  "lib/drlink_v24*.py":
+    domains: [control-plane, cli, ux]
+  "lib/frp_ctl_*.py":
+    domains: [cli, ux]
+  "lib/frp_access_control.py":
+    domains: [remote-access]
+  "lib/frp_egress_*.py":
+    domains: [internet-access]
+  "lib/frp_zero_touch.py":
+    domains: [enrollment, zero-touch]
+  "lib/frp_doctor.py":
+    domains: [diagnostics, lifecycle]
+  "lib/frp-client-common.sh":
+    domains: [agent, installer, lifecycle]
+  "install-client.sh":
+    domains: [agent, installer, lifecycle, enrollment]
+  "install-server.sh":
+    domains: [server, installer, lifecycle]
+  "tools/frp-create-client":
+    domains: [enrollment, zero-touch, agent]
+  "tools/frpctl":
+    domains: [cli, control-plane]
+  "tests/human-ux-e2e/**":
+    domains: [ux, cli]
+  "VERSION":
+    domains: [release]
+  "release-manifest.json":
+    domains: [release]
+  "SHA256SUMS":
+    domains: [release]
+  "dist/**":
+    domains: [release]
+  "scripts/build-release-artifacts.sh":
+    domains: [release]
+  "scripts/build-bundles.py":
+    domains: [release, installer]
+
+scenarios:
+  - id: DRL-PR-PREFLIGHT-001
+    name: Fast critical regression and release-governance guardrail
+    level: feature
+    domains: [engineering-governance, server, agent, enrollment, zero-touch, allocator, release]
+    triggers: [pr, preflight, rc, release]
+    platforms: [linux]
+    command: "./tests/test-client-allocator-url.sh && ./tests/test-public-hostname.sh && python3 tests/test-v24-runtime-allocator.py && ./scripts/check-release-governance.sh"
+    invariants:
+      - "allocator/control URL and public-host semantics remain canonical"
+      - "critical runtime allocator regression stays closed"
+      - "release governance remains valid"
+    release_gate: true
+
+  - id: DRL-HUX-001
+    name: Human UX Adversarial E2E
+    level: ux
+    domains: [ux, cli, server, agent]
+    triggers: [affected, rc, release]
+    platforms: [linux]
+    command: "./tests/run-human-ux-e2e.sh"
+    invariants:
+      - "deterministic operator-emulation scenarios pass"
+      - "server/agent context and generated guidance remain consistent"
+    origin: "Rick v2.4.0 manual E2E findings"
+    release_gate: true
+
+  - id: DRL-MANUAL-REG-001
+    name: Rick manual E2E findings regressions
+    level: feature
+    domains: [ux, cli, zero-touch, remote-service, diagnostics, installer]
+    triggers: [affected, rc, release]
+    platforms: [linux]
+    command: "python3 tests/test-v24-manual-e2e-findings.py"
+    invariants:
+      - "manual E2E defects remain permanently regressed"
+    origin: "Rick v2.4.0 manual E2E"
+    release_gate: true
+
+  - id: DRL-ARTIFACT-PARITY-001
+    name: Release artifact parity for affected release or installer changes
+    level: integration
+    domains: [release, installer]
+    triggers: [affected, preflight, rc, release]
+    platforms: [linux]
+    command: "./scripts/build-bundles.sh && git diff --exit-code dist/ && ./scripts/verify-sha256sums.sh && python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json && ./scripts/verify-sbom.sh"
+    invariants:
+      - "generated release bundles match canonical source"
+      - "artifact hashes and SBOM remain valid"
+    release_gate: true
+
+  - id: DRL-FULL-REG-001
+    name: Full local deterministic regression
+    level: integration
+    domains: [server, agent, control-plane, cli, enrollment, allocator, remote-service, remote-access, internet-access, configuration-bundle, installer, diagnostics, lifecycle]
+    triggers: [rc, release]
+    platforms: [linux]
+    command: "./tests/run-all.sh"
+    invariants:
+      - "all mandatory local deterministic regressions pass"
+    release_gate: true
