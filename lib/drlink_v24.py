@@ -2496,7 +2496,10 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
                 "affected": affected,
                 "runtime_error": applied.get("error") or "Runtime activation failed",
             }
-        if applied.get("ok") and not applied.get("skipped"):
+        # skipped=True is the DRLINK_SKIP_ACTIVATION unit-test shortcut; treat it
+        # as verified the same way set_remote_service_agent does, so reconnect
+        # sync can promote runtime-pending rows to HEALTHY.
+        if applied.get("ok") or applied.get("skipped"):
             runtime.mark_runtime_status(plane_db, ok=True)
     except Exception as exc:
         _push_agent_remote_service_status(plane_db, root=root)
