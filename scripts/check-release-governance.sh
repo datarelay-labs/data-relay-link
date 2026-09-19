@@ -178,9 +178,13 @@ fi
 if python3 - <<'PY'
 import ast
 import re
+import sys
 from pathlib import Path
 
 root = Path('.')
+sys.path.insert(0, str(root / 'lib'))
+from drlink_agent_payload import agent_source_rels
+
 cc = (root / 'lib/frp-client-common.sh').read_text(encoding='utf-8')
 m = re.search(
     r"frp_client_upgrade_destinations\(\) \{.*?printf '%s\\n' \\\n(.*?)\}",
@@ -200,11 +204,17 @@ for line in m.group(1).splitlines():
 bb = (root / 'scripts/build-bundles.py').read_text(encoding='utf-8')
 tree = ast.parse(bb)
 client_files = None
+ns = {'agent_source_rels': agent_source_rels}
 for node in tree.body:
     if isinstance(node, ast.Assign):
         for t in node.targets:
             if isinstance(t, ast.Name) and t.id == 'client_files':
-                client_files = ast.literal_eval(node.value)
+                client_files = eval(
+                    compile(ast.Expression(node.value), '<client_files>', 'eval'),
+                    ns,
+                )
+if not isinstance(client_files, list):
+    raise SystemExit('client_files parser failed')
 missing = sorted({s for s in srcs if s not in client_files})
 if missing:
     print('MISSING', ','.join(missing))
