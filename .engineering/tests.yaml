@@ -39,6 +39,14 @@ paths:
     domains: [cli, control-plane]
   "tests/human-ux-e2e/**":
     domains: [ux, cli]
+  "VERSION":
+    domains: [release]
+  "release-manifest.json":
+    domains: [release]
+  "SHA256SUMS":
+    domains: [release]
+  "dist/**":
+    domains: [release]
   "scripts/build-release-artifacts.sh":
     domains: [release]
   "scripts/build-bundles.py":
@@ -81,6 +89,18 @@ scenarios:
     invariants:
       - "manual E2E defects remain permanently regressed"
     origin: "Rick v2.4.0 manual E2E"
+    release_gate: true
+
+  - id: DRL-ARTIFACT-PARITY-001
+    name: Release artifact parity for affected release or installer changes
+    level: integration
+    domains: [release, installer]
+    triggers: [affected, preflight, rc, release]
+    platforms: [linux]
+    command: "./scripts/build-bundles.sh && git diff --exit-code dist/ && ./scripts/verify-sha256sums.sh && python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json && ./scripts/verify-sbom.sh"
+    invariants:
+      - "generated release bundles match canonical source"
+      - "artifact hashes and SBOM remain valid"
     release_gate: true
 
   - id: DRL-FULL-REG-001
