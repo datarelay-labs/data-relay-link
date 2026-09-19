@@ -4810,6 +4810,22 @@ frp_client_install_management_files() {
   if [[ -f "${source}/lib/drlink_v24_cli.py" ]]; then
     install -m 0644 "${source}/lib/drlink_v24_cli.py" "${libdir}/drlink_v24_cli.py"
   fi
+  for _cli_py in \
+    drlink_control_cli.py \
+    drlink_configuration_bundle.py \
+    drlink_mcp_tls.py \
+    drlink_runtime_policy.py \
+    drlink_upgrade_reconcile.py \
+    drlink_v24_ai_identity.py \
+    drlink_v24_bundle.py \
+    drlink_v24_wizard.py \
+    frp_control_locks.py \
+    frp_infrastructure_ports.py
+  do
+    if [[ -f "${source}/lib/${_cli_py}" ]]; then
+      install -m 0644 "${source}/lib/${_cli_py}" "${libdir}/${_cli_py}"
+    fi
+  done
   if [[ -f "${source}/lib/frp-role-ownership.sh" ]]; then
     install -m 0644 "${source}/lib/frp-role-ownership.sh" "${libdir}/frp-role-ownership.sh"
   fi
@@ -4870,6 +4886,17 @@ frp_client_upgrade_destinations() {
     "usr/local/lib/drlink/drlink_mgmt_sync.py:0644:lib/drlink_mgmt_sync.py" \
     "usr/local/lib/drlink/drlink_v24.py:0644:lib/drlink_v24.py" \
     "usr/local/lib/drlink/drlink_v24_runtime.py:0644:lib/drlink_v24_runtime.py" \
+    "usr/local/lib/drlink/drlink_v24_cli.py:0644:lib/drlink_v24_cli.py" \
+    "usr/local/lib/drlink/drlink_control_cli.py:0644:lib/drlink_control_cli.py" \
+    "usr/local/lib/drlink/drlink_configuration_bundle.py:0644:lib/drlink_configuration_bundle.py" \
+    "usr/local/lib/drlink/drlink_mcp_tls.py:0644:lib/drlink_mcp_tls.py" \
+    "usr/local/lib/drlink/drlink_runtime_policy.py:0644:lib/drlink_runtime_policy.py" \
+    "usr/local/lib/drlink/drlink_upgrade_reconcile.py:0644:lib/drlink_upgrade_reconcile.py" \
+    "usr/local/lib/drlink/drlink_v24_ai_identity.py:0644:lib/drlink_v24_ai_identity.py" \
+    "usr/local/lib/drlink/drlink_v24_bundle.py:0644:lib/drlink_v24_bundle.py" \
+    "usr/local/lib/drlink/drlink_v24_wizard.py:0644:lib/drlink_v24_wizard.py" \
+    "usr/local/lib/drlink/frp_control_locks.py:0644:lib/frp_control_locks.py" \
+    "usr/local/lib/drlink/frp_infrastructure_ports.py:0644:lib/frp_infrastructure_ports.py" \
     "usr/local/lib/drlink/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
     "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
