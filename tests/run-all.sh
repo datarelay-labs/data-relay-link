@@ -111,6 +111,7 @@ bash ./tests/test-installed-client-update.sh
 ./tests/test-frpctl-pty-completion.sh
 ./tests/test-frpctl-pty-prompt-backspace.sh
 ./tests/test-frpctl-pty-create-confirm.sh
+./tests/test-installer-dns-prompt-pty.sh
 ./tests/test-frp-compat-gate.sh
 ./tests/test-create-zero-touch.sh
 python3 tests/test-bounded-zero-touch.py
@@ -202,6 +203,9 @@ python3 tests/test-v24-false-pass-hardening.py
 python3 tests/test-v24-final-closure.py
 python3 tests/test-v24-doc-consistency.py
 python3 tests/test-v24-ai-policy-cli-parity.py
+python3 tests/test-v24-manual-e2e-findings.py
+python3 tests/test-v24-cli-workflow-semantic-parity.py
+python3 tests/test-human-ux-framework-unit.py
 ./tests/test-agent-runtime-payload.sh
 ./tests/test-orphan-suite-coverage.sh
 
