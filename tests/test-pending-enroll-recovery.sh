@@ -28,10 +28,13 @@ extract_bootstrap_ticket() {
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
+if not m:
+    m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
 if not m:
     raise SystemExit('missing ticket')
-parts = m.group(1).split('.', 1)
+package = m.group(1) if m.lastindex else m.group(0)
+parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 print(payload['t'])
