@@ -131,4 +131,26 @@ assert zt.linux_installer_sum_names(url) == ("agent/bootstrap-client.sh",)
 PY
 pass "ZERO_TOUCH_ARTIFACT_MAPPING"
 
+python3 - <<PY || fail "create-client server-local installer resolution"
+import importlib.machinery
+import importlib.util
+path = "$ROOT/tools/frp-create-client"
+spec = importlib.util.spec_from_loader(
+    "frp_create_client_qa_sh",
+    loader=importlib.machinery.SourceFileLoader("frp_create_client_qa_sh", path),
+)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+cfg = {"allocator_public_url": "https://203.0.113.10:6099/enroll"}
+linux = mod.resolve_configured_installer_url(cfg, windows=False)
+windows = mod.resolve_configured_installer_url(cfg, windows=True)
+assert linux == "https://203.0.113.10:6099/artifacts/agent/bootstrap-client.sh", linux
+assert windows == "https://203.0.113.10:6099/artifacts/agent/bootstrap-client.ps1", windows
+for url in (linux, windows):
+    assert "raw.githubusercontent.com" not in url
+    assert "github.com/datarelay-labs" not in url
+    assert "github.com/fatedier" not in url
+PY
+pass "CREATE_CLIENT_NO_PUBLIC_INSTALLER_FALLBACK"
+
 echo "QUALIFIED_ARTIFACT_TESTS=PASS"

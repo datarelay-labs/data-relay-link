@@ -158,76 +158,110 @@ def installed_source_ref():
     return ''
 
 
-def default_client_installer_url():
-    """Default GitHub raw installer URL from real provenance only.
-
-    Never invent a future stable tag such as vPROJECT_VERSION when SOURCE_REF is
-    missing. Empty means "not configured" so callers fail closed.
-    """
-    ref = installed_source_ref()
-    if not ref:
-        channel = installed_release_channel()
-        if channel == 'stable':
-            ref = 'v%s' % installed_project_version()
-        else:
-            return ''
-    return (
-        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
-        '%s/dist/bootstrap-client.sh' % ref
+def load_qualified_artifacts():
+    return load_module(
+        'drlink_qualified_artifacts',
+        'lib/drlink_qualified_artifacts.py',
+        '/usr/local/lib/drlink/drlink_qualified_artifacts.py',
     )
 
 
-def default_windows_client_installer_url():
-    ref = installed_source_ref()
-    if not ref:
-        channel = installed_release_channel()
-        if channel == 'stable':
-            ref = 'v%s' % installed_project_version()
-        else:
-            return ''
-    return (
-        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
-        '%s/dist/bootstrap-client.ps1' % ref
-    )
-
-
-
-def _is_official_raw_installer_url(url, windows=False):
-    suffix = 'bootstrap-client.ps1' if windows else 'bootstrap-client.sh'
-    prefix = (
-        'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/'
-    )
-    if not str(url or '').startswith(prefix):
+def _is_forbidden_public_installer_url(url):
+    """Former official DataRelay/fatedier public artifact URLs are forbidden."""
+    qa = load_qualified_artifacts()
+    if qa is not None and hasattr(qa, 'is_forbidden_public_installer_url'):
+        return bool(qa.is_forbidden_public_installer_url(url))
+    text = str(url or '').strip().lower()
+    if not text:
         return False
-    return str(url).endswith('/dist/' + suffix)
+    return (
+        'raw.githubusercontent.com' in text
+        or 'github.com/datarelay-labs' in text
+        or 'github.com/fatedier' in text
+    )
+
+
+def _installer_unavailable_message(platform='linux'):
+    qa = load_qualified_artifacts()
+    plat = 'windows' if str(platform or '').strip().lower() == 'windows' else 'linux'
+    arch = 'amd64' if plat == 'windows' else 'any'
+    if qa is not None:
+        return qa.missing_artifact_error(plat, arch)
+    return (
+        'ERROR:\n'
+        'Required qualified Agent artifact is not available from this DRLink Server.\n'
+        '\n'
+        'Run:\n'
+        '  system diagnostics\n'
+        '\n'
+        'Reinstall or update the DRLink Server package containing\n'
+        'the required qualified artifacts.\n'
+        '\n'
+        'No changes were applied.\n'
+    )
+
+
+def fail_closed_installer(platform='linux'):
+    msg = _installer_unavailable_message(platform)
+    sys.stderr.write(msg if str(msg).endswith('\n') else '%s\n' % msg)
+    raise SystemExit(2)
+
+
+def server_local_installer_url(cfg, *, windows=False):
+    """Derive the canonical Server-local Agent installer URL. Never public."""
+    platform = 'windows' if windows else 'linux'
+    qa = load_qualified_artifacts()
+    if qa is None:
+        fail_closed_installer(platform)
+    allocator = str((cfg or {}).get('allocator_public_url') or '').strip()
+    try:
+        url = qa.agent_installer_url(allocator, platform)
+    except Exception:
+        fail_closed_installer(platform)
+    if not url or _is_forbidden_public_installer_url(url):
+        fail_closed_installer(platform)
+    return url
+
+
+def default_client_installer_url(cfg=None):
+    """Canonical Server-local Linux Agent installer URL, or empty.
+
+    Never returns a public GitHub/DataRelay/fatedier fallback. Callers that
+    must fail closed should use resolve_configured_installer_url().
+    """
+    if not cfg:
+        return ''
+    try:
+        return server_local_installer_url(cfg, windows=False)
+    except SystemExit:
+        return ''
+
+
+def default_windows_client_installer_url(cfg=None):
+    """Canonical Server-local Windows Agent installer URL, or empty."""
+    if not cfg:
+        return ''
+    try:
+        return server_local_installer_url(cfg, windows=True)
+    except SystemExit:
+        return ''
 
 
 def resolve_configured_installer_url(cfg, *, windows=False):
-    """Prefer exact SOURCE_REF for official GitHub raw defaults.
+    """Resolve Managed Host installer URL from Server-local artifacts only.
 
-    Explicit non-default overrides are preserved. Premature vPROJECT_VERSION
-    URLs on an exact-SHA install are rewritten to the installed SOURCE_REF.
+    Configured Server-local and unrelated administrator URLs are preserved.
+    Missing URLs and former official public DataRelay/fatedier URLs are
+    derived from allocator_public_url. Fail closed if that is impossible.
     """
+    platform = 'windows' if windows else 'linux'
+    if not isinstance(cfg, dict):
+        fail_closed_installer(platform)
     key = 'windows_client_installer_url' if windows else 'client_installer_url'
     configured = str(cfg.get(key, '') or '').strip()
-    default_fn = (
-        default_windows_client_installer_url if windows else default_client_installer_url
-    )
-    default = default_fn()
-    if not configured:
-        return default
-    ref = installed_source_ref()
-    ver = installed_project_version()
-    premature = '/v%s/' % ver
-    if (
-        ref
-        and len(ref) >= 40
-        and all(c in '0123456789abcdefABCDEF' for c in ref)
-        and _is_official_raw_installer_url(configured, windows=windows)
-        and premature in configured
-    ):
-        return default
-    return configured
+    if configured and not _is_forbidden_public_installer_url(configured):
+        return configured
+    return server_local_installer_url(cfg, windows=windows)
 
 
 def preflight_installer_url(url, *, label='Client installer'):
@@ -647,8 +681,16 @@ def ps_single_quote(value):
 
 
 def derive_sha256sums_url(installer_url):
-    suffix = '/dist/bootstrap-client.ps1'
+    zt = load_zero_touch()
+    if zt is not None:
+        try:
+            return zt.sha256sums_url_for_installer(installer_url)
+        except ValueError:
+            return ''
     url = str(installer_url or '').strip()
+    if '/artifacts/' in url:
+        return url.split('/artifacts/', 1)[0] + '/artifacts/SHA256SUMS'
+    suffix = '/dist/bootstrap-client.ps1'
     if url.endswith(suffix):
         return url[:-len(suffix)] + '/SHA256SUMS'
     return ''
@@ -938,8 +980,8 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     else:
         print('Set the client installer URL, then re-run this command:')
         print('  sudo drlink set installer-url <URL>')
-        suggested = default_client_installer_url()
-        if suggested:
+        suggested = default_client_installer_url(cfg)
+        if suggested and not _is_forbidden_public_installer_url(suggested):
             print('Example:')
             print('  sudo drlink set installer-url %s' % suggested)
         if not allocator:
@@ -966,8 +1008,8 @@ def print_one_line_windows(
         sums_url = derive_sha256sums_url(installer)
         if not sums_url:
             fail(
-                'cannot derive SHA256SUMS URL from Windows installer URL; '
-                'use an official .../dist/bootstrap-client.ps1 path'
+                'cannot derive SHA256SUMS URL from Windows installer URL.\n'
+                'No changes were applied.'
             )
         inner = (
             "$ErrorActionPreference='Stop';"
@@ -980,7 +1022,7 @@ def print_one_line_windows(
             "(New-Object Net.WebClient).DownloadFile(__SUMS__,$m);"
             "(New-Object Net.WebClient).DownloadFile(__INSTALLER__,$p);"
             "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
-            "if($_ -match '^([0-9a-fA-F]{64})\\s+dist/bootstrap-client\\.ps1\\s*$'){"
+            "if($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$'){"
             "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
             "$w=$Matches[1].ToLowerInvariant()}};"
             "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"

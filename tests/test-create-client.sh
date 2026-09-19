@@ -28,7 +28,8 @@ cfg.write_text(json.dumps({
   "frp_control_listen_port": 443,
   "allocator_public_url": "https://203.0.113.10:9443/enroll",
   "tls_ca_cert": sys.argv[3],
-  "client_installer_url": "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh",
+  "client_installer_url": "",
+  "windows_client_installer_url": "",
   "enrollments_dir": str(enroll),
 }, indent=2) + "\n")
 PY
@@ -55,7 +56,10 @@ sudo_line="$(grep 'sudo env FRP_ALLOCATOR_URL=' "$OUT")"
 if grep -F "$code" <<<"$sudo_line" >/dev/null; then
   fail "enrollment code leaked into sudo command"
 fi
-grep -q 'datarelay-labs/data-relay-link' "$OUT" || fail "canonical repository URL"
+grep -q 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh' "$OUT" || fail "server-local installer URL"
+if grep -qE 'raw\.githubusercontent\.com|github\.com/datarelay-labs|github\.com/fatedier' "$OUT"; then
+  fail "public installer fallback in create-client output"
+fi
 if grep -F 'RickLee-kr' "$OUT" >/dev/null; then
   fail "stale repository owner in frp-create-client output"
 fi

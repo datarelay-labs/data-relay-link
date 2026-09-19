@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -218,29 +220,37 @@ class CreateClientWorkflowTests(unittest.TestCase):
         self.assertIn("set server installer-url", msg)
 
     def test_exact_sha_installer_resolve(self):
-        sha = "0123456789abcdef0123456789abcdef01234567"
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "etc/drlink").mkdir(parents=True)
-            (root / "etc/drlink/version").write_text(
-                "PROJECT_VERSION=2.4.0\nSOURCE_REF=%s\nRELEASE_CHANNEL=stable\n" % sha,
-                encoding="utf-8",
-            )
-            os.environ["FRP_CTL_TEST_ROOT"] = str(root)
-            os.environ["FRP_DEPLOY_TEST_ROOT"] = str(root)
-            try:
-                cfg = {
-                    "client_installer_url": (
-                        "https://raw.githubusercontent.com/datarelay-labs/"
-                        "data-relay-link/v2.4.0/dist/bootstrap-client.sh"
-                    )
-                }
-                url = CREATE.resolve_configured_installer_url(cfg, windows=False)
-                self.assertIn("/%s/" % sha, url)
-                self.assertNotIn("/v2.4.0/", url)
-            finally:
-                os.environ.pop("FRP_CTL_TEST_ROOT", None)
-                os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
+        alloc = "https://203.0.113.10:6099/enroll"
+        expected = "https://203.0.113.10:6099/artifacts/agent/bootstrap-client.sh"
+        cfg = {
+            "allocator_public_url": alloc,
+            "client_installer_url": (
+                "https://raw.githubusercontent.com/datarelay-labs/"
+                "data-relay-link/v2.4.0/dist/bootstrap-client.sh"
+            ),
+        }
+        url = CREATE.resolve_configured_installer_url(cfg, windows=False)
+        self.assertEqual(url, expected)
+        self.assertNotIn("raw.githubusercontent.com", url)
+        self.assertNotIn("github.com/datarelay-labs", url)
+        self.assertNotIn("/v2.4.0/", url)
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                CREATE.resolve_configured_installer_url(
+                    {
+                        "client_installer_url": (
+                            "https://raw.githubusercontent.com/datarelay-labs/"
+                            "data-relay-link/v2.4.0/dist/bootstrap-client.sh"
+                        )
+                    },
+                    windows=False,
+                )
+        closed = stderr.getvalue()
+        self.assertIn("No changes were applied", closed)
+        self.assertNotIn("Traceback", closed)
+        self.assertNotIn("raw.githubusercontent.com", closed)
 
 
 class BackendProductOutputTests(unittest.TestCase):

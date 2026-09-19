@@ -116,6 +116,18 @@ def integrity_error(kind, platform="", architecture=""):
     )
 
 
+def is_forbidden_public_installer_url(url):
+    """True when a Managed Host installer URL is a forbidden public fallback."""
+    text = str(url or "").strip().lower()
+    if not text:
+        return False
+    return (
+        "raw.githubusercontent.com" in text
+        or "github.com/datarelay-labs" in text
+        or "github.com/fatedier" in text
+    )
+
+
 def allocator_origin(allocator_url):
     parsed = urlparse(str(allocator_url or "").strip())
     if parsed.scheme != "https" or not parsed.netloc:

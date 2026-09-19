@@ -118,7 +118,8 @@ tree = Path(sys.argv[1])
     'frp_control_listen_port': 443,
     'allocator_public_url': 'https://203.0.113.10:9443/enroll',
     'tls_ca_cert': str(tree / 'etc/drlink/pki/ca.crt'),
-    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://example.test/bootstrap-client.sh',
+    'windows_client_installer_url': 'https://example.test/bootstrap-client.ps1',
     'enrollments_dir': str(tree / 'var/lib/drlink/enrollments'),
     'bootstrap_dir': str(tree / 'var/lib/drlink/bootstrap'),
     'registry_file': str(tree / 'var/lib/drlink/registry.json'),
@@ -502,33 +503,68 @@ from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
 cfg['allocator_public_url'] = 'https://203.0.113.10:9443/enroll'
-cfg['client_installer_url'] = 'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh'
+cfg['client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh'
+cfg['windows_client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.ps1'
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
 
-# Missing installer URL
+# Missing installer URL with a valid allocator derives the Server-local URL.
 python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
 cfg['client_installer_url'] = ''
+cfg['windows_client_installer_url'] = ''
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
-set +e
-FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella >"$WORKDIR/nourl.out" 2>"$WORKDIR/nourl.err"
-rc=$?
-set -e
-[[ "$rc" -ne 0 ]] || fail "missing installer URL should fail"
-grep -qi 'installer URL' "$WORKDIR/nourl.out" "$WORKDIR/nourl.err" || fail "installer URL error"
+FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella \
+  >"$WORKDIR/derived.out" 2>"$WORKDIR/derived.err" \
+  || fail "missing installer with allocator should derive server-local URL"
+grep -q 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh' "$WORKDIR/derived.out" \
+  || fail "derived server-local installer URL"
+if grep -qE 'raw\.githubusercontent\.com|github\.com/datarelay-labs|github\.com/fatedier' \
+    "$WORKDIR/derived.out" "$WORKDIR/derived.err"; then
+  fail "public installer fallback when deriving from allocator"
+fi
+pass "CONFIG_MISSING_LINUX_INSTALLER_URL_USES_SERVER_LOCAL"
+
+# Missing installer URL without allocator fails closed.
 python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
-cfg['client_installer_url'] = 'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh'
+cfg['client_installer_url'] = ''
+cfg['windows_client_installer_url'] = ''
+cfg['allocator_public_url'] = ''
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
+set +e
+FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella \
+  >"$WORKDIR/nourl.out" 2>"$WORKDIR/nourl.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "missing installer URL without allocator should fail closed"
+grep -q 'No changes were applied' "$WORKDIR/nourl.err" || fail "fail-closed public error"
+if grep -q 'Traceback' "$WORKDIR/nourl.out" "$WORKDIR/nourl.err"; then
+  fail "traceback leaked on missing installer without allocator"
+fi
+if grep -qE 'raw\.githubusercontent\.com|github\.com/datarelay-labs|github\.com/fatedier' \
+    "$WORKDIR/nourl.out" "$WORKDIR/nourl.err"; then
+  fail "public installer fallback on fail-closed path"
+fi
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text())
+cfg['allocator_public_url'] = 'https://203.0.113.10:9443/enroll'
+cfg['client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh'
+cfg['windows_client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.ps1'
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
+pass "CONFIG_MISSING_INSTALLER_URL_WITHOUT_ALLOCATOR_FAILS_CLOSED"
 pass "INSTALLER_URL_REQUIRED"
 
 # Manual mode regression still prints Enrollment Code and no ticket.
@@ -580,7 +616,8 @@ pki = root / 'pki'
     'enrollments_dir': str(root / 'enrollments'),
     'bootstrap_dir': str(root / 'bootstrap'),
     'token_file': str(root / 'server_token'),
-    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://example.test/bootstrap-client.sh',
+    'windows_client_installer_url': 'https://example.test/bootstrap-client.ps1',
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
 }, indent=2) + '\n')
 PY
@@ -606,7 +643,8 @@ port = int(sys.argv[2])
     'tls_ca_cert': '/etc/drlink/pki/ca.crt',
     'tls_server_cert': '/etc/drlink/pki/server.crt',
     'tls_server_key': '/etc/drlink/pki/server.key',
-    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://example.test/bootstrap-client.sh',
+    'windows_client_installer_url': 'https://example.test/bootstrap-client.ps1',
     'enrollments_dir': '/var/lib/drlink/enrollments',
     'bootstrap_dir': '/var/lib/drlink/bootstrap',
     'registry_file': '/var/lib/drlink/registry.json',

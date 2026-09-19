@@ -118,25 +118,30 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 sha_or_tag = sys.argv[3]
+cfg = {
+    "allocator_public_url": "https://203.0.113.10:6099/enroll",
+    "client_installer_url": "",
+    "windows_client_installer_url": "",
+}
+linux = mod.resolve_configured_installer_url(cfg, windows=False)
+windows = mod.resolve_configured_installer_url(cfg, windows=True)
+assert linux.endswith("/artifacts/agent/bootstrap-client.sh"), linux
+assert windows.endswith("/artifacts/agent/bootstrap-client.ps1"), windows
+for url in (linux, windows):
+    assert "raw.githubusercontent.com" not in url, url
+    assert "github.com/datarelay-labs" not in url, url
+    assert "github.com/fatedier" not in url, url
 if sha_or_tag.startswith("v") and sha_or_tag.count(".") >= 1 and len(sha_or_tag) < 20:
     assert mod.installed_source_ref() == sha_or_tag, mod.installed_source_ref()
-    linux = mod.default_client_installer_url()
-    windows = mod.default_windows_client_installer_url()
-    assert f"/{sha_or_tag}/dist/bootstrap-client.sh" in linux, linux
-    assert f"/{sha_or_tag}/dist/bootstrap-client.ps1" in windows, windows
     print("TAGGED_DEFAULTS_OK")
 else:
     sha = sha_or_tag
     assert mod.installed_source_ref() == sha, mod.installed_source_ref()
-    linux = mod.default_client_installer_url()
-    windows = mod.default_windows_client_installer_url()
-    assert f"/{sha}/dist/bootstrap-client.sh" in linux, linux
-    assert f"/{sha}/dist/bootstrap-client.ps1" in windows, windows
     ver = mod.installed_project_version()
     assert f"/v{ver}/" not in linux, linux
     assert f"/v{ver}/" not in windows, windows
-    print("LINUX_ZERO_TOUCH_INSTALLER_REF=EXACT_SHA")
-    print("WINDOWS_ZERO_TOUCH_INSTALLER_REF=EXACT_SHA")
+    print("LINUX_ZERO_TOUCH_INSTALLER_REF=SERVER_LOCAL")
+    print("WINDOWS_ZERO_TOUCH_INSTALLER_REF=SERVER_LOCAL")
 PY
 }
 
