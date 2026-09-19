@@ -252,7 +252,21 @@ def build_desired_runtime_services(
                     if vals:
                         target_host = vals[0]
                 else:
-                    target_host = dest
+                    cat = plane_db.conn.execute(
+                        "SELECT payload FROM agent_object_catalog WHERE kind='network-object' AND name=? COLLATE NOCASE",
+                        (dest,),
+                    ).fetchone()
+                    catalog_vals = []
+                    if cat:
+                        try:
+                            payload = json.loads(cat["payload"] or "{}")
+                        except (TypeError, ValueError):
+                            payload = {}
+                        catalog_vals = [str(v) for v in (payload.get("values") or []) if v not in (None, "")]
+                    if catalog_vals:
+                        target_host = catalog_vals[0]
+                    else:
+                        target_host = dest
         except Exception:
             pass
         if target_port is None:
