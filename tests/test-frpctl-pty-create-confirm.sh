@@ -120,7 +120,7 @@ def run_session(answers_after_confirm, label):
         os.kill(pid, 9)
         raise SystemExit("%s: no initial prompt: %r" % (label, buf[-400:]))
 
-    # Guided Zero-Touch: method -> Linux -> name -> blank note -> SSH only -> user -> default port
+    # Guided Zero-Touch: method -> Linux -> name -> blank note -> SSH only -> optional user -> default port
     send(b"create zero-touch\n")
     steps = [
         (b"Installation method", b"1\n"),
@@ -128,7 +128,7 @@ def run_session(answers_after_confirm, label):
         (b"Client name:", b"pty-confirm\n"),
         (b"Description", b"\n"),
         (b"SSH only", b"1\n"),
-        (b"SSH user:", b"aella\n"),
+        (b"SSH username [optional]:", b"aella\n"),
         (b"SSH port", b"\n"),
     ]
     for needle, reply in steps:
