@@ -489,8 +489,6 @@ fi
 
 echo 'Data Relay Link client removed locally.'
 echo 'This uninstall does not contact the server and does not release ports.'
-echo 'Remote client records and reservations remain until removed on the server.'
-echo 'To release a published service on the server:'
-echo '  unset client <CLIENT> service <SERVICE>'
-echo 'To remove the client record and all of its reservations on the server:'
-echo '  unset client <CLIENT>'
+echo 'Remote Managed Host records and reservations remain until removed on the server.'
+echo 'On the DRLink Server:'
+echo '  unset managed-host <HOST>'

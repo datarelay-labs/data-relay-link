@@ -19,9 +19,9 @@ extract_bootstrap_ticket() {
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 if m:
-    parts = m.group(1).split('.', 1)
+    parts = m.group(0).split('.', 1)
     padded = parts[1] + ('=' * (-len(parts[1]) % 4))
     payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
     print(payload['t'])
@@ -150,7 +150,8 @@ grep -q 'frp-create-client --one-line --ssh --ssh-user aella' "$WORKDIR/help.out
 pass "CREATE_CLIENT_HELP"
 
 "$CREATE" --one-line --client-name inventory-only >"$WORKDIR/nosvc.out" 2>"$WORKDIR/nosvc.err"
-grep -q 'sudo bash -s --' "$WORKDIR/nosvc.out" || fail "short command shape"
+grep -q 'bash -s --' "$WORKDIR/nosvc.out" || fail "short command shape"
+grep -q 'sudo bash -c' "$WORKDIR/nosvc.out" || fail "pinned-CA wrapper missing"
 grep -q 'zt1.' "$WORKDIR/nosvc.out" || fail "opaque package token"
 grep -q 'no service or public port' "$WORKDIR/nosvc.out" || fail "management-only explanation"
 # Legacy env marker is no longer required; profile is server-side.
@@ -277,7 +278,7 @@ grep -q 'Client name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmat
 grep -qE 'SSH user[[:space:]]*:[[:space:]]*aella' "$WORKDIR/prompt.out" || fail "confirmation user"
 grep -qE 'Target[[:space:]]*:[[:space:]]*127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"
 grep -q 'zt1\.' "$WORKDIR/prompt.out" || fail "generated command missing opaque package"
-grep -q 'sudo bash -s --' "$WORKDIR/prompt.out" || fail "generated command missing short runner"
+grep -q 'bash -s --' "$WORKDIR/prompt.out" || fail "generated command missing short runner"
 if grep -E 'FRP_SSH_USER=.ubuntu|Client SSH user: ubuntu|SSH user : ubuntu' \
   "$WORKDIR/prompt.out" "$WORKDIR/prompt.err"; then
   fail "prompt defaulted to ubuntu"
@@ -321,21 +322,23 @@ fi
 if grep -q '\\$' "$WORKDIR/oneline.out"; then
   fail "one-line used backslash continuation"
 fi
-CMD_LINE="$(grep -E '^curl -fsSL ' "$WORKDIR/oneline.out" | head -n1)"
-[[ -n "$CMD_LINE" ]] || fail "missing curl command"
-[[ "$(grep -cE '^curl -fsSL ' "$WORKDIR/oneline.out")" == "1" ]] || fail "more than one curl line"
-printf '%s' "$CMD_LINE" | grep -q "sudo bash -s --" || fail "missing short package runner"
+CMD_LINE="$(grep -E '^sudo bash -c ' "$WORKDIR/oneline.out" | head -n1)"
+[[ -n "$CMD_LINE" ]] || fail "missing pinned-CA install command"
+[[ "$(grep -cE '^sudo bash -c ' "$WORKDIR/oneline.out")" == "1" ]] || fail "more than one install command"
+printf '%s' "$CMD_LINE" | grep -q "bash -s --" || fail "missing short package runner"
 printf '%s' "$CMD_LINE" | grep -q "zt1\." || fail "missing opaque package"
+printf '%s' "$CMD_LINE" | grep -q "/ca.crt" || fail "missing CA bootstrap URL"
+printf '%s' "$CMD_LINE" | grep -q -- "--cacert" || fail "installer fetch missing --cacert"
 printf '%s' "$CMD_LINE" | grep -q "FRP_SERVICES_JSON=" && fail "services JSON in command"
-if printf '%s' "$CMD_LINE" | grep -qiE 'curl -k|curl --insecure|wget --no-check-certificate'; then
-  fail "insecure TLS in zero-touch command"
+if printf '%s' "$CMD_LINE" | grep -qiE 'curl -fsSL --insecure|curl -k .*/bootstrap-client'; then
+  fail "insecure TLS on installer fetch"
 fi
 echo "$CMD_LINE" | python3 -c 'import sys; line=sys.stdin.read(); assert "\n" not in line.strip()' || fail "command not one line"
 TICKET="$(python3 - "$WORKDIR/oneline.out" <<'PY'
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 if not m:
     # Legacy long form fallback
     m2 = re.search(r"FRP_BOOTSTRAP_TICKET=(?:'([^']+)'|\"([^\"]+)\"|(\S+))", text)
@@ -343,7 +346,7 @@ if not m:
         raise SystemExit('missing ticket')
     print(next(g for g in m2.groups() if g))
     raise SystemExit(0)
-package = m.group(1)
+package = m.group(0)
 parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
@@ -386,9 +389,9 @@ python3 - "$WORKDIR/sshport.out" "$TREE/var/lib/drlink/bootstrap" <<'PY' || fail
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 assert m, text
-package = m.group(1)
+package = m.group(0)
 parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
@@ -422,23 +425,20 @@ python3 - "$WORKDIR/quoted.out" <<'PY' || fail "command injection"
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"^curl -fsSL (.+) \| sudo bash -s -- (.+)$", text, re.M)
-if not m:
+if "https://example.test/bootstrap-client.sh;uname" not in text:
+    raise SystemExit('installer URL missing')
+if "bash -s --" not in text:
     raise SystemExit('missing one-line command')
-line = m.group(0)
-if "'https://example.test/bootstrap-client.sh;uname'" not in line:
-    raise SystemExit('installer URL not quoted')
-# Opaque package must carry the allocator URL safely (decoded value, not shell-evaled).
-pm = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", line)
+pm = re.search(r"(zt1\.[A-Za-z0-9_-]+)", text)
 if not pm:
     raise SystemExit('missing opaque package')
-parts = pm.group(1).split('.', 1)
+pkg = pm.group(1)
+parts = pkg.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 if payload.get('u') != 'https://203.0.113.10/enroll;id':
     raise SystemExit('allocator URL not preserved in package')
-cmd = [l for l in text.splitlines() if l.startswith('curl ')][0]
-if 'rm -rf' in cmd:
+if 'rm -rf /' in text.split('Zero-touch client command', 1)[-1].split('Expires:', 1)[0].replace('trap "rm -rf $d"', ''):
     raise SystemExit('note leaked into command')
 print('ok')
 PY
@@ -478,9 +478,9 @@ python3 - "$WORKDIR/safeuser.out" "$TREE/var/lib/drlink/bootstrap" <<'PY' || fai
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 assert m
-parts = m.group(1).split('.', 1)
+parts = m.group(0).split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 tid = payload['t'].split('.')[1]

@@ -105,14 +105,16 @@ class LifecycleCliUx(unittest.TestCase):
 
     def test_windows_uninstall_guidance_canonical(self):
         text = (ROOT / "windows/tools/FrpClient.ps1").read_text(encoding="utf-8")
-        self.assertIn("unset client <CLIENT> service <SERVICE>", text)
-        self.assertIn("unset client <CLIENT>", text)
+        self.assertIn("unset managed-host <HOST>", text)
+        self.assertNotIn("unset client <CLIENT>", text)
         self.assertNotIn("drlink client release", text)
 
     def test_client_uninstall_message_product_identity(self):
         text = (ROOT / "uninstall-client.sh").read_text(encoding="utf-8")
         self.assertIn("Data Relay Link client removed locally", text)
         self.assertNotIn("FRP client removed locally", text)
+        self.assertIn("unset managed-host <HOST>", text)
+        self.assertNotIn("unset client <CLIENT>", text)
 
     def test_lifecycle_helpers_under_test_root(self):
         with tempfile.TemporaryDirectory() as tmp:

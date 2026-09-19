@@ -10,6 +10,7 @@ import base64
 import json
 import re
 import shlex
+from urllib.parse import urlparse
 
 ZERO_TOUCH_PACKAGE_PREFIX = 'zt1'
 BOOTSTRAP_TICKET_RE = re.compile(
@@ -90,6 +91,131 @@ def short_url_for_ticket(hostname, ticket):
 def short_url_command(hostname, ticket):
     url = short_url_for_ticket(hostname, ticket)
     return 'curl -fsSL %s | sudo bash' % shell_quote(url)
+
+
+def https_origin(url):
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("URL must be HTTPS")
+    return "https://%s" % parsed.netloc
+
+
+def ca_crt_url(allocator_url):
+    return https_origin(allocator_url) + "/ca.crt"
+
+
+def pinned_ca_linux_command(installer_url, allocator_url, ca_sha256, package):
+    """Pasteable Linux/macOS Zero-Touch command for a Private CA allocator.
+
+    Stock ``curl -fsSL`` cannot fetch the Server-local installer until the
+    allocator CA is trusted. Download ``/ca.crt`` insecurely, pin it by the
+    SHA-256 already carried in the zt1 package, then fetch the installer
+    with ``--cacert``. Same bootstrap rule as ``frp_bootstrap_allocator_ca``.
+    """
+    installer = str(installer_url or "").strip()
+    fp = str(ca_sha256 or "").strip().lower()
+    pkg = str(package or "").strip()
+    if not installer.lower().startswith("https://"):
+        raise ValueError("installer URL must be HTTPS")
+    if len(fp) != 64 or any(ch not in "0123456789abcdef" for ch in fp):
+        raise ValueError("invalid CA fingerprint")
+    if not pkg.startswith("zt1."):
+        raise ValueError("invalid zero-touch package")
+    ca_url = ca_crt_url(allocator_url)
+    inner = (
+        "set -euo pipefail; "
+        "d=$(mktemp -d /tmp/drlink-zt.XXXXXX); "
+        'trap "rm -rf $d" EXIT; '
+        "curl --fail --silent --show-error --max-time 30 --proto =https --insecure "
+        "-o $d/ca.crt %s; "
+        "openssl x509 -in $d/ca.crt -outform DER -out $d/ca.der >/dev/null; "
+        'fp=$(openssl dgst -sha256 $d/ca.der | awk "{print \\$NF}" | tr A-F a-f); '
+        "test \"$fp\" = %s; "
+        "curl -fsSL --proto =https --cacert $d/ca.crt %s | bash -s -- %s"
+    ) % (
+        shell_quote(ca_url),
+        shell_quote(fp),
+        shell_quote(installer),
+        shell_quote(pkg),
+    )
+    return "sudo bash -c %s" % shell_quote(inner)
+
+
+def pinned_ca_windows_inner(
+    installer_url, allocator_url, ca_sha256, ticket, sums_url
+):
+    """PowerShell -Command body: pin /ca.crt, then verified installer download."""
+    installer = str(installer_url or "").strip()
+    fp = str(ca_sha256 or "").strip().lower()
+    ticket = str(ticket or "").strip()
+    allocator = str(allocator_url or "").strip()
+    sums = str(sums_url or "").strip()
+    if not installer.lower().startswith("https://"):
+        raise ValueError("installer URL must be HTTPS")
+    if not allocator.lower().startswith("https://"):
+        raise ValueError("allocator URL must be HTTPS")
+    if not sums.lower().startswith("https://"):
+        raise ValueError("SHA256SUMS URL must be HTTPS")
+    if len(fp) != 64 or any(ch not in "0123456789abcdef" for ch in fp):
+        raise ValueError("invalid CA fingerprint")
+    ca_url = ca_crt_url(allocator_url)
+    return (
+        "$ErrorActionPreference='Stop';"
+        "$ProgressPreference='SilentlyContinue';"
+        "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+        "$d=Join-Path $env:TEMP ('frp-bs-'+[guid]::NewGuid().ToString('N'));"
+        "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
+        "try{"
+        "$ca=Join-Path $d 'ca.crt';$m=Join-Path $d 'SHA256SUMS';$p=Join-Path $d 'bootstrap-client.ps1';"
+        "$curl=Get-Command curl.exe -ErrorAction Stop;"
+        "& $curl.Source --fail --silent --show-error --max-time 30 --proto =https --insecure -o $ca "
+        + powershell_quote(ca_url)
+        + ";"
+        "$cert=New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($ca);"
+        "$fp=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData)) -replace '-','' ;"
+        "if($fp.ToLowerInvariant() -ne "
+        + powershell_quote(fp)
+        + "){throw 'CA fingerprint mismatch'};"
+        "& $curl.Source --fail --silent --show-error --max-time 60 --proto =https --cacert $ca -o $m "
+        + powershell_quote(sums)
+        + ";"
+        "& $curl.Source --fail --silent --show-error --max-time 60 --proto =https --cacert $ca -o $p "
+        + powershell_quote(installer)
+        + ";"
+        "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
+        "if($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$'){"
+        "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
+        "$w=$Matches[1].ToLowerInvariant()}};"
+        "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"
+        "$g=(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant();"
+        "if($g -ne $w){throw 'bootstrap-client.ps1 SHA256 mismatch'};"
+        "$env:FRP_ALLOCATOR_URL="
+        + powershell_quote(allocator)
+        + ";"
+        "$env:FRP_ALLOCATOR_CA_SHA256="
+        + powershell_quote(fp)
+        + ";"
+        "$env:FRP_BOOTSTRAP_TICKET="
+        + powershell_quote(ticket)
+        + ";"
+        "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
+        "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
+        "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
+        "if($rc -ne 0){exit $rc}"
+        "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"
+    )
+
+
+def pinned_ca_windows_command(
+    installer_url, allocator_url, ca_sha256, ticket, sums_url
+):
+    inner = pinned_ca_windows_inner(
+        installer_url, allocator_url, ca_sha256, ticket, sums_url
+    )
+    return (
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        + powershell_quote(inner)
+    )
 
 
 def powershell_quote(value):

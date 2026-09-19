@@ -87,13 +87,14 @@ OUT="$WORKDIR/one-line.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --client-name short-zt --note 'pkg' \
   >"$OUT" || { cat "$OUT"; fail "create one-line"; }
 grep -q 'Zero-touch client command' "$OUT" || fail "header"
-grep -E -q "curl -fsSL '.+' \| sudo bash -s -- 'zt1\." "$OUT" \
-  || { cat "$OUT"; fail "short command shape"; }
+grep -q "curl -fsSL --proto =https --cacert" "$OUT" || { cat "$OUT"; fail "pinned installer curl missing"; }
+grep -q '/ca.crt' "$OUT" || { cat "$OUT"; fail "ca.crt bootstrap missing"; }
+grep -q 'zt1\.' "$OUT" || { cat "$OUT"; fail "zt1 package missing"; }
+if grep -qiE 'curl -fsSL --insecure .*/bootstrap-client|curl -k .*/bootstrap-client' "$OUT"; then
+  fail "insecure TLS on installer fetch"
+fi
 if grep -q 'FRP_BOOTSTRAP_TICKET=' "$OUT"; then
   fail "legacy env block still preferred"
-fi
-if grep -qiE 'curl -k|curl --insecure|wget --no-check-certificate' "$OUT"; then
-  fail "insecure TLS in command"
 fi
 pass "ZERO_TOUCH_SHORT_COMMAND_SHAPE"
 
@@ -105,9 +106,9 @@ PACKAGE="$(python3 - "$OUT" <<'PY'
 import re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 assert m, text
-print(m.group(1))
+print(m.group(0))
 PY
 )"
 frp_zero_touch_apply_package "$PACKAGE" || fail "apply package"

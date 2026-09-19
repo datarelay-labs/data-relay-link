@@ -688,10 +688,9 @@ function Invoke-FrpClientUninstallLocked {
     Write-Host 'Server-side policy state'
     Write-Host ''
     Write-Host 'This uninstall does not contact the server and does not release ports.'
-    Write-Host 'To release a published service on the server:'
-    Write-Host '  unset client <CLIENT> service <SERVICE>'
-    Write-Host 'To remove the client record and all of its reservations on the server:'
-    Write-Host '  unset client <CLIENT>'
+    Write-Host 'Remote Managed Host records and reservations remain until removed on the server.'
+    Write-Host 'On the DRLink Server:'
+    Write-Host '  unset managed-host <HOST>'
     try {
         Stop-FrpClient | Out-Null
     } catch {

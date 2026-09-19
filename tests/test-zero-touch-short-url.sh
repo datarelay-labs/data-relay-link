@@ -103,8 +103,9 @@ python3 "$ROOT/tools/frp-server-set" bootstrap-hostname --unset >/dev/null
 OUT_ZT1="$WORKDIR/zt1.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --client-name mgmt-only --note 'n1' \
   >"$OUT_ZT1" || fail "one-line without bootstrap hostname"
-grep -E -q "curl -fsSL '.+' \| sudo bash -s -- 'zt1\." "$OUT_ZT1" \
+grep -q "curl -fsSL --proto =https --cacert" "$OUT_ZT1" \
   || { cat "$OUT_ZT1"; fail "zt1 fallback missing"; }
+grep -q 'zt1\.' "$OUT_ZT1" || { cat "$OUT_ZT1"; fail "zt1 package missing"; }
 if grep -q '/i/' "$OUT_ZT1"; then
   fail "short URL unexpectedly printed without bootstrap_hostname"
 fi
@@ -480,10 +481,32 @@ grep -F "$NEW_INSTALLER" "$SCRIPT_RELOAD" \
   || { cat "$SCRIPT_RELOAD"; fail "GET /i did not pick up reloaded installer URL"; }
 pass "CONFIG_RELOAD_WITHOUT_RESTART"
 
-if grep -RInE 'curl -k|curl --insecure|wget --no-check-certificate' \
-  "$ROOT/lib/frp_zero_touch.py" 2>/dev/null; then
-  fail "insecure TLS found in short URL helper"
-fi
+python3 - "$ROOT/lib/frp_zero_touch.py" <<'PY' || fail "insecure TLS found in short URL helper"
+import importlib.util
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("zt", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+script = mod.render_short_url_bootstrap_script(
+    "https://203.0.113.10/enroll",
+    "a" * 64,
+    "bt1." + ("b" * 16) + "." + ("c" * 64),
+    "https://bootstrap.example.com/artifacts/agent/bootstrap-client.sh",
+)
+win = mod.render_short_url_windows_bootstrap_script(
+    "https://203.0.113.10/enroll",
+    "a" * 64,
+    "bt1." + ("b" * 16) + "." + ("c" * 64),
+    "https://bootstrap.example.com/artifacts/agent/bootstrap-client.ps1",
+)
+cmd = mod.short_url_command("bootstrap.example.com", "bt1." + ("b" * 16) + "." + ("c" * 64))
+blob = "\n".join([script, win, cmd])
+if "insecure" in blob or "curl -k" in blob or "no-check-certificate" in blob:
+    raise SystemExit("insecure TLS in short URL helper")
+print("ok")
+PY
 pass "NO_INSECURE_TLS_SHORT_URL_PATH"
 
 python3 - "$ROOT/lib/frp_zero_touch.py" "$TICKET" <<'PY' || fail "redact helper"

@@ -1011,43 +1011,49 @@ def print_one_line_windows(
                 'cannot derive SHA256SUMS URL from Windows installer URL.\n'
                 'No changes were applied.'
             )
-        inner = (
-            "$ErrorActionPreference='Stop';"
-            "$ProgressPreference='SilentlyContinue';"
-            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
-            "$d=Join-Path $env:TEMP ('frp-bs-'+[guid]::NewGuid().ToString('N'));"
-            "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
-            "try{"
-            "$m=Join-Path $d 'SHA256SUMS';$p=Join-Path $d 'bootstrap-client.ps1';"
-            "(New-Object Net.WebClient).DownloadFile(__SUMS__,$m);"
-            "(New-Object Net.WebClient).DownloadFile(__INSTALLER__,$p);"
-            "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
-            "if($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$'){"
-            "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
-            "$w=$Matches[1].ToLowerInvariant()}};"
-            "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"
-            "$g=(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant();"
-            "if($g -ne $w){throw 'bootstrap-client.ps1 SHA256 mismatch'};"
-            "$env:FRP_ALLOCATOR_URL=__ALLOCATOR__;"
-            "$env:FRP_ALLOCATOR_CA_SHA256=__CA__;"
-            "$env:FRP_BOOTSTRAP_TICKET=__TICKET__;"
-            "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
-            "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
-            "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
-            "if($rc -ne 0){exit $rc}"
-            "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"
-        )
-        inner = (
-            inner.replace('__SUMS__', ps_single_quote(sums_url))
-            .replace('__INSTALLER__', ps_single_quote(installer))
-            .replace('__ALLOCATOR__', ps_single_quote(allocator))
-            .replace('__CA__', ps_single_quote(ca_fp))
-            .replace('__TICKET__', ps_single_quote(ticket))
-        )
-        command = (
-            'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
-            + ps_single_quote(inner)
-        )
+        zt_mod = _zt()
+        if zt_mod is not None:
+            command = zt_mod.pinned_ca_windows_command(
+                installer, allocator, ca_fp, ticket, sums_url
+            )
+        else:
+            inner = (
+                "$ErrorActionPreference='Stop';"
+                "$ProgressPreference='SilentlyContinue';"
+                "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+                "$d=Join-Path $env:TEMP ('frp-bs-'+[guid]::NewGuid().ToString('N'));"
+                "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
+                "try{"
+                "$m=Join-Path $d 'SHA256SUMS';$p=Join-Path $d 'bootstrap-client.ps1';"
+                "(New-Object Net.WebClient).DownloadFile(__SUMS__,$m);"
+                "(New-Object Net.WebClient).DownloadFile(__INSTALLER__,$p);"
+                "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
+                "if($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$'){"
+                "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
+                "$w=$Matches[1].ToLowerInvariant()}};"
+                "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"
+                "$g=(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant();"
+                "if($g -ne $w){throw 'bootstrap-client.ps1 SHA256 mismatch'};"
+                "$env:FRP_ALLOCATOR_URL=__ALLOCATOR__;"
+                "$env:FRP_ALLOCATOR_CA_SHA256=__CA__;"
+                "$env:FRP_BOOTSTRAP_TICKET=__TICKET__;"
+                "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
+                "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
+                "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
+                "if($rc -ne 0){exit $rc}"
+                "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"
+            )
+            inner = (
+                inner.replace('__SUMS__', ps_single_quote(sums_url))
+                .replace('__INSTALLER__', ps_single_quote(installer))
+                .replace('__ALLOCATOR__', ps_single_quote(allocator))
+                .replace('__CA__', ps_single_quote(ca_fp))
+                .replace('__TICKET__', ps_single_quote(ticket))
+            )
+            command = (
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+                + ps_single_quote(inner)
+            )
 
     tracking_id = str(ticket_id or '').strip()
     print()
@@ -1113,10 +1119,16 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     if not command:
         try:
             package = encode_zero_touch_package(allocator, ca_fp, ticket)
-            command = 'curl -fsSL %s | sudo bash -s -- %s' % (
-                shell_quote(installer),
-                shell_quote(package),
-            )
+            zt_mod = _zt()
+            if zt_mod is not None:
+                command = zt_mod.pinned_ca_linux_command(
+                    installer, allocator, ca_fp, package
+                )
+            else:
+                command = 'curl -fsSL %s | sudo bash -s -- %s' % (
+                    shell_quote(installer),
+                    shell_quote(package),
+                )
         except ValueError:
             legacy_env = True
 
