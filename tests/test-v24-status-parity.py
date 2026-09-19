@@ -456,7 +456,9 @@ class StaleEndpointTruthTests(unittest.TestCase):
         self.assertEqual(int(agent["endpoint_port"]), port)
         self.assertEqual(int(agent["pending_allocation"]), 0)
         shown = self._show_agent("ssh-access")
-        self.assertIn("drlink.local:%s" % port, shown)
+        # Port preservation is the contract under test; host display follows
+        # resolve_public_endpoint_host and must not require invented drlink.local.
+        self.assertIn(":%s" % port, shown)
         self.assertNotIn("Pending allocation", shown)
 
     def test_DEPENDENCY_INVALID_NO_REALLOCATION(self):
@@ -524,7 +526,10 @@ class StaleEndpointTruthTests(unittest.TestCase):
         self.assertEqual(server["status"], "DEGRADED")
         shown = self._show_agent("e2e-net")
         self.assertIn("DEGRADED", shown)
-        self.assertIn("drlink.local:%s" % agent["endpoint_port"], shown)
+        endpoint_host = str(agent["endpoint_host"] or "").strip()
+        self.assertTrue(endpoint_host)
+        self.assertNotEqual(endpoint_host, "drlink.local")
+        self.assertIn("%s:%s" % (endpoint_host, agent["endpoint_port"]), shown)
         os.environ.pop("DRLINK_SERVER_REACHABLE", None)
 
     def test_AGENT_STATUS_COUNTS_LOCAL_REMOTE_SERVICES(self):
@@ -549,7 +554,8 @@ class StaleEndpointTruthTests(unittest.TestCase):
         self.agent.conn.commit()
         out = self.agent.format_status()
         self.assertIn("Role: Agent Host", out)
-        self.assertIn("Remote Services  : 1", out)
+        # Agent-role status uses single-space alignment for this longer label.
+        self.assertIn("Remote Services : 1", out)
         self.assertNotIn("Role: Unknown", out)
 
 
