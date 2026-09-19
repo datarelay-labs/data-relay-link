@@ -80,12 +80,13 @@ def resolve_mgmt_base_url(root: Optional[str] = None) -> Optional[str]:
     if forced:
         return forced.rstrip("/")
     base = Path(root) if root else Path("/")
-    for rel in (
-        "etc/frp/server-endpoint.json",
-        "var/lib/drlink/server-endpoint.json",
-        "etc/drlink/server-endpoint.json",
-    ):
-        path = base / rel
+    search = [
+        base / "etc/frp/server-endpoint.json",
+        base / "var/lib/drlink/server-endpoint.json",
+        base / "etc/drlink/server-endpoint.json",
+    ]
+    search.extend(v24._agent_state_file_candidates("etc/frp/server-endpoint.json", "server-endpoint.json", root))
+    for path in search:
         if not path.is_file():
             continue
         try:
@@ -103,8 +104,11 @@ def resolve_mgmt_base_url(root: Optional[str] = None) -> Optional[str]:
         scheme = str(data.get("scheme") or "https").strip() or "https"
         if host and port:
             return "%s://%s:%s" % (scheme, host, int(port))
-    state_path = base / "etc/frp/client-state.json"
-    if state_path.is_file():
+    for state_path in v24._agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", root
+    ):
+        if not state_path.is_file():
+            continue
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -155,6 +159,11 @@ def allocator_ca_path(root: Optional[str] = None) -> Optional[Path]:
         "var/lib/drlink/allocator-ca.crt",
     ):
         path = base / rel
+        if path.is_file():
+            return path
+    for path in v24._agent_state_file_candidates(
+        "etc/drlink/allocator-ca.crt", "allocator-ca.crt", root
+    ):
         if path.is_file():
             return path
     return None

@@ -581,6 +581,46 @@ class MacosRoleDetectionTests(unittest.TestCase):
             else:
                 os.environ["FRP_MACOS_STATE_ROOT"] = prev
 
+    def test_macos_flat_state_resolves_server_endpoint_and_mgmt_url(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-macos-ep-")
+        state = Path(tmp) / "drlink-state"
+        state.mkdir(parents=True)
+        (state / "client-state.json").write_text(
+            json.dumps(
+                {
+                    "allocator_url": "https://221.139.249.113:6099/enroll",
+                    "frp_server": "221.139.249.113",
+                    "frp_server_port": 443,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (state / "frpc.toml").write_text(
+            'serverAddr = "221.139.249.113"\nserverPort = 443\n', encoding="utf-8"
+        )
+        (state / "allocator-ca.crt").write_text("dummy-ca\n", encoding="utf-8")
+        prev = os.environ.get("FRP_MACOS_STATE_ROOT")
+        os.environ["FRP_MACOS_STATE_ROOT"] = str(state)
+        try:
+            self.assertEqual(
+                v24.load_agent_server_endpoint("/nonexistent-root"),
+                ("221.139.249.113", 443),
+            )
+            self.assertEqual(
+                mgmt.resolve_mgmt_base_url("/nonexistent-root"),
+                "https://221.139.249.113:6099",
+            )
+            self.assertEqual(
+                mgmt.allocator_ca_path("/nonexistent-root"),
+                state / "allocator-ca.crt",
+            )
+        finally:
+            if prev is None:
+                os.environ.pop("FRP_MACOS_STATE_ROOT", None)
+            else:
+                os.environ["FRP_MACOS_STATE_ROOT"] = prev
+
 
 if __name__ == "__main__":
     unittest.main()

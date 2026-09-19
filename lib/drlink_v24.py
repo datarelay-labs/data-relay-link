@@ -356,6 +356,23 @@ def _is_agent_state_dir(state: Path) -> bool:
     return (state / "frpc.toml").is_file() and (state / "client-identity.key").is_file()
 
 
+def _agent_state_file_candidates(rel_linux: str, rel_macos: str, root: Optional[str] = None) -> list[Path]:
+    """Linux nested paths plus macOS flat Application Support files."""
+    base = Path(root) if root else Path("/")
+    out: list[Path] = [base / rel_linux]
+    for mac in _macos_agent_state_roots(root):
+        out.append(mac / rel_macos)
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for path in out:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(path)
+    return uniq
+
+
 def detect_cli_role(root: Optional[str] = None) -> str:
     """Return 'server', 'agent', or 'unknown'."""
     base = Path(root) if root else Path("/")
@@ -409,12 +426,15 @@ def load_agent_server_endpoint(root: Optional[str] = None) -> Optional[tuple[str
     """
     base = Path(root) if root else Path("/")
     # Explicit connection info written by enrollment / Apply.
-    for rel in (
-        "etc/frp/server-endpoint.json",
-        "var/lib/drlink/server-endpoint.json",
-        "etc/drlink/server-endpoint.json",
-    ):
-        path = base / rel
+    endpoint_paths = [
+        base / "etc/frp/server-endpoint.json",
+        base / "var/lib/drlink/server-endpoint.json",
+        base / "etc/drlink/server-endpoint.json",
+    ]
+    endpoint_paths.extend(
+        _agent_state_file_candidates("etc/frp/server-endpoint.json", "server-endpoint.json", root)
+    )
+    for path in endpoint_paths:
         if path.is_file():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -429,21 +449,40 @@ def load_agent_server_endpoint(root: Optional[str] = None) -> Optional[tuple[str
                     except (TypeError, ValueError):
                         pass
     # client-state may carry allocator / server URL fragments.
-    state_path = base / "etc/frp/client-state.json"
-    if state_path.is_file():
+    for state_path in _agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", root
+    ):
+        if not state_path.is_file():
+            continue
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             state = None
         if isinstance(state, dict):
-            host = str(state.get("server_addr") or state.get("server_host") or "").strip()
-            port = state.get("server_port") or state.get("allocator_port")
+            host = str(
+                state.get("server_addr")
+                or state.get("server_host")
+                or state.get("frp_server")
+                or ""
+            ).strip()
+            port = (
+                state.get("server_port")
+                or state.get("allocator_port")
+                or state.get("frp_server_port")
+            )
             if host and port:
                 try:
                     return host, int(port)
                 except (TypeError, ValueError):
                     pass
-            for key in ("allocator_public_url", "server_url", "enroll_url"):
+            for key in (
+                "allocator_url",
+                "allocator_public_url",
+                "mgmt_url",
+                "management_url",
+                "server_url",
+                "enroll_url",
+            ):
                 url = str(state.get(key) or "").strip()
                 if not url:
                     continue
@@ -451,8 +490,9 @@ def load_agent_server_endpoint(root: Optional[str] = None) -> Optional[tuple[str
                 if parsed:
                     return parsed
     # frpc.toml / frpc.ini serverAddr + serverPort
-    for rel in ("etc/frp/frpc.toml", "etc/frp/frpc.ini"):
-        path = base / rel
+    toml_paths = _agent_state_file_candidates("etc/frp/frpc.toml", "frpc.toml", root)
+    toml_paths.extend(_agent_state_file_candidates("etc/frp/frpc.ini", "frpc.ini", root))
+    for path in toml_paths:
         if not path.is_file():
             continue
         try:
