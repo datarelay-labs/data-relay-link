@@ -165,6 +165,8 @@ Data Relay Link — Agent Host
 ```
 
 The root and `show status` must identify the role as `Agent Host`.
+Diagnostics, support-bundle human output, menus, help, and errors use the same
+`Agent Host` label. `show agent` is a required read-only Agent Host command.
 
 ## 7. Canonical terminology
 
@@ -174,7 +176,7 @@ The root and `show status` must identify the role as `Agent Host`.
 | DRLink Agent | Software installed on a Managed Host |
 | Network Object | IP, CIDR, FQDN, or Managed Host selector |
 | Network Group | Flat reusable collection of Network Objects |
-| Service Object | TCP, UDP, or Fixed TCP service definition |
+| Service Object | TCP, UDP, or Fixed TCP service definition (public Wizard: SSH/HTTP/HTTPS/RDP/Custom TCP/Fixed TCP; UDP not offered in normal Wizard) |
 | Service Group | Flat reusable collection of Service Objects |
 | Permission Object | Reusable AI permission set |
 | Permission Group | Reusable collection of Permission Objects |

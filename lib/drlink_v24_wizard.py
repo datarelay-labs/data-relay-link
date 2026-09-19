@@ -131,10 +131,40 @@ def _emit(io: WizardIO, text: str) -> None:
 
 
 CANCEL_TOKENS = frozenset({"cancel", "c"})
+DRLINK_CMD_RE = re.compile(
+    r"^(show|set|unset|test|system|create|help|menu|exit|quit)\b",
+    re.IGNORECASE,
+)
 
 
 def _is_cancel(raw: str) -> bool:
     return str(raw or "").strip().lower() in CANCEL_TOKENS
+
+
+def _looks_like_drlink_command(raw: str) -> bool:
+    text = str(raw or "").strip()
+    if not text:
+        return False
+    if "\n" in text or "\r" in text:
+        # Multi-line paste almost always means the operator intended REPL commands.
+        first = text.splitlines()[0].strip()
+        return bool(DRLINK_CMD_RE.match(first) or DRLINK_CMD_RE.match(text))
+    return bool(DRLINK_CMD_RE.match(text))
+
+
+def _menu_selection_error(io: WizardIO, raw: str, lo: int, hi: int) -> None:
+    if _looks_like_drlink_command(raw):
+        _emit(
+            io,
+            "ERROR:\n"
+            "This prompt is waiting for a menu selection (%d-%d).\n\n"
+            "The entered text looks like a DRLink command.\n\n"
+            "Choose Back/Cancel to leave this Wizard,\n"
+            "then run the command at the drlink> prompt.\n\n"
+            "No changes were applied." % (lo, hi),
+        )
+        return
+    _emit(io, "ERROR: Invalid selection. Stay on this step.")
 
 
 def _ask_choice(io: WizardIO, title: str, options: list[str], *, allow_create: list[tuple[str, str]] = None) -> str:
@@ -164,7 +194,7 @@ def _ask_choice(io: WizardIO, title: str, options: list[str], *, allow_create: l
         for opt in options:
             if raw.lower() == opt.lower():
                 return opt
-        _emit(io, "ERROR: Invalid selection. Stay on this step.")
+        _menu_selection_error(io, raw, 1, max(1, idx - 1))
 
 
 def _ask_text(io: WizardIO, prompt: str, *, default: Optional[str] = None, validate: Callable[[str], Optional[str]] = None) -> str:
@@ -409,6 +439,17 @@ def _review_menu(io: WizardIO, session: WizardSession, lines: list[str]) -> str:
             return "edit"
         if raw in ("3", "cancel", "c"):
             return "cancel"
+        if _looks_like_drlink_command(raw):
+            _emit(
+                io,
+                "ERROR:\n"
+                "This prompt is waiting for a menu selection (1-3).\n\n"
+                "The entered text looks like a DRLink command.\n\n"
+                "Choose Cancel (3) to leave this Wizard,\n"
+                "then run the command at the drlink> prompt.\n\n"
+                "No changes were applied.",
+            )
+            continue
         _emit(io, "ERROR: Invalid selection. Type 1, 2, 3, or cancel.")
 
 
@@ -538,24 +579,71 @@ def run_service_object_wizard(plane: ControlPlane, name: str) -> int:
         "edit" if existing else "create",
         before={"type": existing["type"], "port": str(existing["port"])} if existing else {},
     )
+    # User-recognizable presets. UDP is intentionally omitted from the normal
+    # public Wizard (v2.4 Remote Service is TCP / Fixed TCP only).
+    presets = [
+        ("SSH", "tcp", 22),
+        ("HTTP", "tcp", 80),
+        ("HTTPS", "tcp", 443),
+        ("RDP", "tcp", 3389),
+        ("Custom TCP", "tcp", None),
+        ("Fixed TCP", "fixed-tcp", None),
+    ]
     try:
         while True:
-            typ = _ask_choice(io, "Service Object type", ["tcp", "udp", "fixed-tcp"])
-            port_s = _ask_text(
+            _emit(io, "")
+            _emit(io, "Service Object type")
+            _emit(io, "------------------")
+            for i, (label, _typ, port) in enumerate(presets, 1):
+                if port is not None:
+                    _emit(io, "%d) %s (TCP/%d)" % (i, label, port))
+                else:
+                    _emit(io, "%d) %s" % (i, label))
+            _emit(io, "c) Cancel")
+            _emit(io, "")
+            _emit(
                 io,
-                "Port",
-                default=session.draft.get("port") or session.before.get("port"),
-                validate=lambda p: (
-                    None
-                    if p.isdigit() and 1 <= int(p) <= 65535
-                    else "Enter a port between 1 and 65535."
-                ),
+                "Custom TCP uses the normal published-service port pool.\n"
+                "Fixed TCP reserves a stable public port equal to the service port.",
             )
-            session.draft = {"type": typ, "port": port_s}
+            raw = io.ask("Select: ").strip()
+            if _is_cancel(raw):
+                sys.stdout.write(_cancel_message())
+                return 0
+            choice = None
+            if raw.isdigit() and 1 <= int(raw) <= len(presets):
+                choice = presets[int(raw) - 1]
+            else:
+                for preset in presets:
+                    if raw.lower() == preset[0].lower():
+                        choice = preset
+                        break
+            if choice is None:
+                _menu_selection_error(io, raw, 1, len(presets))
+                continue
+            label, typ, default_port = choice
+            if default_port is None:
+                port_s = _ask_text(
+                    io,
+                    "Port",
+                    default=session.draft.get("port") or session.before.get("port"),
+                    validate=lambda p: (
+                        None
+                        if p.isdigit() and 1 <= int(p) <= 65535
+                        else "Enter a port between 1 and 65535."
+                    ),
+                )
+            else:
+                port_s = str(default_port)
+            session.draft = {"type": typ, "port": port_s, "label": label}
             action = _review_menu(
                 io,
                 session,
-                ["Name : %s" % name, "Type : %s" % typ, "Port : %s" % port_s],
+                [
+                    "Name : %s" % name,
+                    "Type : %s (%s)" % (label, typ),
+                    "Port : %s" % port_s,
+                ],
             )
             if action == "cancel":
                 sys.stdout.write(_cancel_message())

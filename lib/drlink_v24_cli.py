@@ -9,6 +9,22 @@ from drlink_control_db import ControlPlaneError
 from drlink_control_plane import ControlPlane
 import drlink_v24 as v24
 
+try:
+    import frp_server_config as _scfg
+except ImportError:  # pragma: no cover
+    _scfg = None
+
+
+def _public_endpoint_host(plane: ControlPlane, stored: str = "") -> str:
+    stored = str(stored or "").strip()
+    if stored and stored not in ("drlink.local", "localhost"):
+        return stored
+    if _scfg is not None:
+        resolved = _scfg.resolve_public_endpoint_host(root=getattr(plane, "root", None), fallback="")
+        if resolved:
+            return resolved
+    return stored or "pending"
+
 
 SERVER_ONLY = frozenset(
     {
@@ -127,6 +143,17 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         return None
     if res == "status":
         sys.stdout.write(plane.format_status())
+        return 0
+    if res == "agent":
+        # Agent Host local view (canonical). Server uses show managed-host <HOST> agent.
+        if _role(plane) == "server":
+            raise ControlPlaneError(
+                v24.cli_error(
+                    "Use show managed-host <HOST> agent on the DRLink Server.",
+                    expected="  show managed-host <HOST> agent",
+                )
+            )
+        sys.stdout.write(v24.format_show_agent(plane.root))
         return 0
     if res in ("network-objects",):
         _require_server(plane, "Network Objects")
@@ -332,7 +359,11 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 endpoint = (
                     "Pending allocation"
                     if s["pending_allocation"]
-                    else ("drlink.local:%s" % s["public_port"] if s["public_port"] else "-")
+                    else (
+                        "%s:%s" % (_public_endpoint_host(plane), s["public_port"])
+                        if s["public_port"]
+                        else "-"
+                    )
                 )
                 status = s["status"] or ("DISABLED" if not s["enabled"] else "DEGRADED")
                 sys.stdout.write(
@@ -462,7 +493,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             endpoint = (
                 "Pending allocation"
                 if row["pending_allocation"] or row["endpoint_port"] is None
-                else "%s:%s" % (row["endpoint_host"] or "drlink.local", row["endpoint_port"])
+                else "%s:%s" % (_public_endpoint_host(plane, row["endpoint_host"]), row["endpoint_port"])
             )
             sys.stdout.write(
                 "%-18s %-14s %-10s %-24s %s\n"
@@ -481,7 +512,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         endpoint = (
             "Pending allocation"
             if row["pending_allocation"] or row["endpoint_port"] is None
-            else "%s:%s" % (row["endpoint_host"] or "drlink.local", row["endpoint_port"])
+            else "%s:%s" % (_public_endpoint_host(plane, row["endpoint_host"]), row["endpoint_port"])
         )
         sys.stdout.write(
             "Remote Service: %s\nDestination: %s\nService: %s\nStatus: %s\nEndpoint: %s\nEnabled: %s\n"

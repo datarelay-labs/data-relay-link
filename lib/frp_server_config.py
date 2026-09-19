@@ -4,12 +4,14 @@
 control_host  — FRP control / infrastructure endpoint (public_ip, legacy public_host)
 access_host   — user-facing published-service endpoint (public_hostname or control_host)
 
-public_hostname is an optional DNS alias only. It must never become the default
-FRP control destination, allocator URL host, or PKI identity by itself.
+public_hostname is an optional DNS alias for published-service access and,
+when the operator selects it during install, Enrollment HTTPS URLs. It must
+never become the default FRP control destination or PKI identity by itself.
 
 bootstrap_hostname is a separate optional DNS name used only for the publicly
-trusted Zero-Touch short URL entrypoint (operator reverse proxy). It must not
-be overloaded onto public_hostname or FRP control identity.
+trusted Zero-Touch short URL entrypoint (operator reverse proxy). When unset,
+public_hostname may be used as the short-URL host when Enrollment HTTPS already
+publishes that name.
 """
 from __future__ import annotations
 
@@ -147,6 +149,55 @@ def access_host(cfg):
     if alias:
         return alias
     return control_host(cfg)
+
+
+def resolve_public_endpoint_host(cfg=None, *, root=None, fallback=""):
+    """Resolve the operator-facing public endpoint host for Remote Services.
+
+    Prefer an explicit DRLINK_HOST override, then configured public_hostname,
+    then the control/public IP. Never invent ``drlink.local`` as a public
+    Internet target unless that name is actually configured.
+    """
+    env = _strip(os.environ.get("DRLINK_HOST") or "")
+    if env:
+        return env
+    data = cfg if isinstance(cfg, dict) else None
+    if data is None and root is not None:
+        path = Path(root) / "etc/drlink/config.json"
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                loaded = None
+            if isinstance(loaded, dict):
+                data = loaded
+    if data is None:
+        # Agent Host: public_hostname may live in client-state.
+        if root is not None:
+            for rel in ("etc/frp/client-state.json", "client-state.json"):
+                path = Path(root) / rel
+                if not path.is_file():
+                    continue
+                try:
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(state, dict):
+                    alias = _strip(state.get("public_hostname") or "")
+                    if alias:
+                        return alias
+                    server = _strip(state.get("frp_server") or state.get("server") or "")
+                    if server:
+                        return server
+        fb = _strip(fallback)
+        return fb
+    alias = public_hostname(data)
+    if alias:
+        return alias
+    host = control_host(data)
+    if host:
+        return host
+    return _strip(fallback)
 
 
 def format_host_for_url(host):

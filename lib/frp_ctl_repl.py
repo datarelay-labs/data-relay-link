@@ -420,6 +420,10 @@ def run_repl(frpctl_bin, payload):
                 "ERROR: could not run the Data Relay Link CLI backend: %s\n" % exc
             )
             continue
+        # Successful uninstall of the active product role exits the REPL cleanly
+        # before any deleted backend can be invoked again.
+        if proc.returncode == 75:
+            return 0
         if proc.returncode == 0 and _should_refresh_inventory(tokens):
             _refresh_editor_inventory(editor, frpctl_bin)
         if proc.returncode not in (0, 130) and tokens[0] not in ("?", "help"):

@@ -126,7 +126,14 @@ files=[
 ]
 
 def write_server_bundle(rels):
-    out=['#!/usr/bin/env bash','set -euo pipefail','TMP="$(mktemp -d)"','trap \'rm -rf "$TMP"\' EXIT']
+    out=[
+        '#!/usr/bin/env bash',
+        'set -euo pipefail',
+        'echo "Downloading qualified Data Relay Link installer..."',
+        'TMP="$(mktemp -d)"',
+        'trap \'rm -rf "$TMP"\' EXIT',
+        'echo "Validating installer..."',
+    ]
     for rel in rels:
         data=base64.b64encode(bundle_payload(rel)).decode()
         parent=str(Path(rel).parent)
@@ -137,6 +144,8 @@ def write_server_bundle(rels):
     for rel in rels:
         if rel.endswith('.sh') or rel.startswith('tools/') or rel.endswith('.py'):
             out.append(f'chmod +x "$TMP/{rel}"')
+    out.append('echo "Preparing installation..."')
+    out.append('echo "Installing Data Relay Link Server..."')
     return out
 
 # Client bundles are generated first so the server payload can include them.
@@ -211,9 +220,11 @@ client_files=[
 client_lines=[
  '#!/usr/bin/env bash',
  'set -euo pipefail',
+ 'echo "Downloading qualified Data Relay Link installer..."',
  '_frp_b64d() { base64 --decode 2>/dev/null || base64 -D; }',
  'TMP="$(mktemp -d)"',
  'trap \'rm -rf "$TMP"\' EXIT',
+ 'echo "Validating installer..."',
 ]
 for rel in client_files:
     data=base64.b64encode(bundle_payload(rel)).decode()
@@ -225,6 +236,8 @@ for rel in client_files:
 for rel in client_files:
     if rel.endswith('.sh') or rel.startswith('tools/'):
         client_lines.append(f'chmod +x "$TMP/{rel}"')
+client_lines.append('echo "Preparing installation..."')
+client_lines.append('echo "Installing Data Relay Link Agent Host..."')
 client_lines.append('exec "$TMP/install-client.sh" "$@"')
 (dist/'bootstrap-client.sh').write_text('\n'.join(client_lines)+'\n')
 (dist/'bootstrap-client.sh').chmod(0o755)

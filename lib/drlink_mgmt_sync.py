@@ -879,7 +879,16 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         "mgmt set remote service",
         write,
     )
-    endpoint_host = os.environ.get("DRLINK_HOST") or "drlink.local"
+    endpoint_host = "127.0.0.1"
+    try:
+        import frp_server_config as scfg
+
+        endpoint_host = (
+            scfg.resolve_public_endpoint_host(root=getattr(plane, "root", None), fallback="")
+            or endpoint_host
+        )
+    except Exception:
+        endpoint_host = os.environ.get("DRLINK_HOST") or endpoint_host
     return {
         "name": name,
         "destination": destination,

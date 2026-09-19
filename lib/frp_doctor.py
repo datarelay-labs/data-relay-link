@@ -513,7 +513,7 @@ def detect_role(paths):
     if server_n >= 2 and client_n >= 2:
         result.update({
             'role': 'dual',
-            'label': 'Server + Client',
+            'label': 'DRLink Server + Agent Host',
             'confidence': 'complete',
             'status': PASS,
             'reason': 'server and client markers are both present',
@@ -543,7 +543,7 @@ def detect_role(paths):
             return result
         result.update({
             'role': 'server',
-            'label': 'Server',
+            'label': 'DRLink Server',
             'confidence': 'complete' if server_n >= 4 else 'partial',
             'status': PASS if server_n >= 3 else WARN,
             'reason': 'server installation markers are present',
@@ -554,7 +554,7 @@ def detect_role(paths):
         if has_client_state and not has_frpc_unit:
             result.update({
                 'role': 'partial_client',
-                'label': 'Partial client installation',
+                'label': 'Partial Agent Host installation',
                 'confidence': 'partial',
                 'status': FAIL,
                 'reason': 'client-state exists but frpc unit is missing',
@@ -563,7 +563,7 @@ def detect_role(paths):
         if client_n == 1 and not has_client_state:
             result.update({
                 'role': 'partial_client',
-                'label': 'Partial client installation',
+                'label': 'Partial Agent Host installation',
                 'confidence': 'partial',
                 'status': FAIL,
                 'reason': 'only one client marker is present',
@@ -571,10 +571,10 @@ def detect_role(paths):
             return result
         result.update({
             'role': 'client',
-            'label': 'Client',
+            'label': 'Agent Host',
             'confidence': 'complete' if client_n >= 4 else 'partial',
             'status': PASS if client_n >= 3 else WARN,
-            'reason': 'client installation markers are present',
+            'reason': 'Agent Host installation markers are present',
         })
         return result
 
@@ -1358,13 +1358,41 @@ def check_versions(report, paths, facts):
     installed_frp = kv_file(paths, '/etc/drlink/version', 'FRP_VERSION')
     embedded = str(facts.get('embedded_version') or '')
     pinned = str(facts.get('pinned_frp') or PINNED_FRP_DEFAULT)
-    report.project_version = installed_proj or 'legacy / unknown'
-    report.frp_version = installed_frp or pinned
     report.release_channel = kv_file(paths, '/etc/drlink/version', 'RELEASE_CHANNEL') or 'unknown'
     report.source_ref = kv_file(paths, '/etc/drlink/version', 'SOURCE_REF') or 'unknown'
-    report.bundle_sha256 = kv_file(paths, '/etc/drlink/version', 'BUNDLE_SHA256') or 'unknown'
+    report.source_head = kv_file(paths, '/etc/drlink/version', 'SOURCE_HEAD') or ''
+    if not report.source_head and re.fullmatch(r'[0-9a-fA-F]{40}', str(report.source_ref or '')):
+        report.source_head = report.source_ref
+    bundle_raw = kv_file(paths, '/etc/drlink/version', 'BUNDLE_SHA256') or ''
+    if re.fullmatch(r'[0-9a-fA-F]{64}', bundle_raw):
+        report.bundle_sha256 = bundle_raw.lower()
+    elif report.role in ('uninstalled',):
+        report.bundle_sha256 = 'not applicable'
+    elif not installed_proj:
+        report.bundle_sha256 = 'not applicable'
+    else:
+        # Installed without a recorded artifact digest (source tree / unpackaged).
+        report.bundle_sha256 = 'not applicable'
+    report.frp_version = installed_frp or pinned
     report.embedded_version = embedded
     report.pinned_frp = pinned
+    report.project_version = installed_proj or 'legacy / unknown'
+    try:
+        from frp_version_identity import derive_display_identity
+
+        ident = derive_display_identity(
+            project_version=installed_proj or '0.0.0',
+            channel=report.release_channel,
+            source_ref=report.source_ref,
+            source_head=report.source_head,
+        )
+        report.display_identity = ident.get('display_identity') or report.project_version
+        report.release_channel = ident.get('channel') or report.release_channel
+        if ident.get('source_head'):
+            report.source_head = ident['source_head']
+    except Exception:
+        report.display_identity = report.project_version
+
 
     if not installed_proj:
         if report.role in ('uninstalled',):
@@ -1524,7 +1552,7 @@ def check_pending(report, paths):
                 'pending_apply', FAIL,
                 'client Apply pending marker is unreadable',
                 err,
-                'inspect /etc/frp/apply-pending.json; run sudo drlink system services apply after recovery. doctor does not clear it',
+                'inspect /etc/frp/apply-pending.json; run sudo drlink system synchronize after recovery. doctor does not clear it',
                 'state',
             )
         else:
@@ -1538,7 +1566,7 @@ def check_pending(report, paths):
                 'pending_apply', status,
                 'pending client Apply transaction',
                 detail,
-                'sudo drlink system services apply\nDoctor does not clear the pending marker.',
+                'sudo drlink system synchronize\nDoctor does not clear the pending marker.',
                 'state',
             )
             report.display['pending_apply'] = {'phase': phase, 'failure_class': failure}
@@ -3243,7 +3271,7 @@ def check_client(report, paths, facts, skip_network):
                 'client_state', FAIL,
                 'client-state.json schema is unsupported',
                 'schema_version=%s' % state.get('schema_version'),
-                'Restore a schema v1 client-state.json from backup, then run sudo drlink system services apply.',
+                'Restore a schema v1 client-state.json from backup, then run sudo drlink system synchronize.',
                 'state',
             )
         elif 'services' not in state:
@@ -3370,7 +3398,7 @@ def check_client(report, paths, facts, skip_network):
                 'frpc_config', FAIL,
                 'client-state is valid but frpc.toml is missing',
                 '',
-                'sudo drlink system services apply',
+                'sudo drlink system synchronize',
                 'state',
             )
         else:
@@ -3402,7 +3430,7 @@ def check_client(report, paths, facts, skip_network):
                     'frpc_config', FAIL,
                     'frpc.toml has drifted from client-state.json',
                     'missing proxies=%s port mismatches=%s' % (','.join(missing_proxy) or 'none', ','.join(port_mismatch) or 'none'),
-                    'sudo drlink system services apply',
+                    'sudo drlink system synchronize',
                     'state',
                 )
             elif extra_enabled:
@@ -3410,7 +3438,7 @@ def check_client(report, paths, facts, skip_network):
                     'frpc_config', WARN,
                     'disabled services still appear in frpc.toml',
                     ','.join(extra_enabled),
-                    'sudo drlink system services apply',
+                    'sudo drlink system synchronize',
                     'state',
                 )
             else:
@@ -3431,7 +3459,7 @@ def check_client(report, paths, facts, skip_network):
         else:
             report.add('access_info', PASS, 'access-info.txt is present', '', '', 'state')
     elif not paths.is_file(toml_path) and report.role in ('client', 'dual', 'partial_client'):
-        report.add('frpc_config', FAIL, 'frpc.toml is missing', '', 'sudo drlink system services apply, or restore from backup', 'state')
+        report.add('frpc_config', FAIL, 'frpc.toml is missing', '', 'sudo drlink system synchronize, or restore from backup', 'state')
 
     if state is not None and not client_has_enabled_services(state):
         info = (facts.get('units') or {}).get('frpc') or {}
@@ -3545,11 +3573,17 @@ def render_human(report, quiet=False, verbose=False):
             '----',
             'Role            : %s' % report.role_label,
             'Confidence      : %s' % report.confidence,
-            'Project version : %s' % (report.project_version or 'unknown'),
-            'Release channel : %s' % (getattr(report, 'release_channel', None) or 'unknown'),
-            'Source ref      : %s' % (getattr(report, 'source_ref', None) or 'unknown'),
-            'FRP version     : %s' % (report.frp_version or report.pinned_frp),
-            'Bundle SHA256   : %s' % (getattr(report, 'bundle_sha256', None) or 'unknown'),
+            'Data Relay Link : %s' % (
+                getattr(report, 'display_identity', None) or report.project_version or 'unknown'
+            ),
+            'Channel         : %s' % (getattr(report, 'release_channel', None) or 'unknown'),
+            'Source HEAD     : %s' % (
+                getattr(report, 'source_head', None)
+                or getattr(report, 'source_ref', None)
+                or 'unknown'
+            ),
+            'Relay Engine (FRP): %s' % (report.frp_version or report.pinned_frp),
+            'Bundle SHA256   : %s' % (getattr(report, 'bundle_sha256', None) or 'not applicable'),
             '',
         ])
         role_check = next((c for c in report.checks if c['id'] == 'host_role'), None)
@@ -3600,21 +3634,24 @@ def render_human(report, quiet=False, verbose=False):
                 continue
             lines.append(title)
             lines.append('-' * len(title))
+            # Readable labels: never truncate semantic check names to a fixed width.
+            label_width = max(len(str(c.get('id') or '')) for c in items)
+            label_width = max(label_width, 12)
             for item in items:
                 if not verbose and item['status'] in (PASS, INFO, NOT_APPLICABLE) and key == 'host':
                     if item['id'] in ('host_facts', 'distro_support', 'macos_support'):
-                        lines.append('%-18s %s — %s' % (item['id'][:18], item['status'], item['message']))
+                        lines.append('%-*s %s — %s' % (label_width, item['id'], item['status'], item['message']))
                         continue
                 if not verbose and item['status'] in (PASS, INFO) and key not in ('security', 'state', 'runtime', 'network', 'installation'):
                     continue
                 msg = item['message']
-                lines.append('%-18s %s — %s' % (item['id'][:18], item['status'], msg))
+                lines.append('%-*s %s — %s' % (label_width, item['id'], item['status'], msg))
                 if verbose and item.get('detail'):
                     for dline in str(item['detail']).splitlines():
-                        lines.append('                     %s' % dline)
+                        lines.append(' %s %s' % (' ' * label_width, dline))
                 if item['status'] in (FAIL, WARN) and item.get('recommendation') and not quiet:
                     rec = item['recommendation'].splitlines()[0]
-                    lines.append('                     next: %s' % rec)
+                    lines.append(' %s next: %s' % (' ' * label_width, rec))
             lines.append('')
 
         pending = report.display.get('pending_apply') or report.display.get('pending_update')

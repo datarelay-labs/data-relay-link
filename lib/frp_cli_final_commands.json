@@ -29,6 +29,29 @@
   {
     "path": [
       "show",
+      "agent"
+    ],
+    "roles": "client",
+    "category": "Status",
+    "summary": "Show Agent Host identity and runtime",
+    "detail": "Agent Host local view: role, server connection, runtime and autostart state.",
+    "examples": [
+      "show agent"
+    ],
+    "args": [],
+    "tail": null,
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "show",
       "clients"
     ],
     "roles": "server",

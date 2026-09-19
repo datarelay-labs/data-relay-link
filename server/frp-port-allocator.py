@@ -1430,11 +1430,11 @@ def normalize_service(raw):
     }
     if preset == 'ssh':
         ssh_user = str(raw.get('ssh_user', '') or '').strip()
-        if not ssh_user:
-            raise ServiceValidationError('ssh_user is required for ssh services')
-        if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
-            raise ServiceValidationError('invalid ssh_user')
-        service['ssh_user'] = ssh_user
+        if ssh_user:
+            if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
+                raise ServiceValidationError('invalid ssh_user')
+            service['ssh_user'] = ssh_user
+        # ssh_user is optional connection-example metadata; enrollment does not require it.
     if 'health_check' in raw:
         if HC is None:
             raise ServiceValidationError('health_check helpers unavailable')

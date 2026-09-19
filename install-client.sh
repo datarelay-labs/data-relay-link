@@ -181,7 +181,8 @@ if not services:
     print('No services are published and no public ports were allocated.')
     print('Add a service later with: sudo drlink')
 else:
-    print('The requested remote service is connected.')
+    print('Enrollment finished. Review Remote Service status with:')
+    print('  sudo drlink show remote-services')
 print('You can close this terminal.')
 print()
 for item in services:
@@ -191,20 +192,19 @@ for item in services:
     remote_port = item.get('remote_port')
     host = preferred or server
     if preset == 'ssh':
-        user = item.get('ssh_user')
+        user = item.get('ssh_user') or '<username>'
         print('SSH tunnel ready')
         print()
-        if user:
-            print('Connect:')
-            if preferred:
-                print('  Preferred:')
-                print('    ssh -p %s %s@%s' % (remote_port, user, preferred))
-                print('  Fallback:')
-                print('    ssh -p %s %s@%s' % (remote_port, user, server))
-            else:
-                print('  ssh -p %s %s@%s' % (remote_port, user, server))
+        print('Connect:')
+        if not item.get('ssh_user'):
+            print('  (SSH username is connection-example metadata; not validated at enrollment)')
+        if preferred:
+            print('  Preferred:')
+            print('    ssh -p %s %s@%s' % (remote_port, user, preferred))
+            print('  Fallback:')
+            print('    ssh -p %s %s@%s' % (remote_port, user, server))
         else:
-            print('SSH user: legacy / unspecified')
+            print('  ssh -p %s %s@%s' % (remote_port, user, server))
         print()
     elif preset == 'http':
         print('Connect:')
@@ -861,12 +861,68 @@ frp_client_main() {
     echo "ERROR: client-state.json must not contain secrets" >&2
     exit 1
   }
+  # Reconcile frpc.toml from the committed client-state so Doctor never reports
+  # immediate frpc_config drift after a clean Zero-Touch install.
+  if [[ "$(services_count)" != "0" ]]; then
+    if ! render_frpc_toml "$FRPC_TOML" "$FRP_SERVER" "$FRP_SERVER_PORT" "$FRP_TOKEN" "$HOST_ID" \
+      "$(frp_client_state_path)" "${FRP_TRANSPORT:-tcp}"; then
+      # Fall back to the enrollment services file if state-shaped render fails.
+      render_frpc_toml "$FRPC_TOML" "$FRP_SERVER" "$FRP_SERVER_PORT" "$FRP_TOKEN" "$HOST_ID" \
+        "$SERVICES_FILE" "${FRP_TRANSPORT:-tcp}" || {
+        echo "ERROR: failed to reconcile frpc.toml with client-state.json" >&2
+        exit 1
+      }
+    fi
+    frp_client_verify_config "$FRPC_TOML" || exit 1
+  fi
 
   # Local state (client-state.json + frpc.toml + management identity, all
   # written above) is now committed. The crash-safe recovery transaction is
   # no longer needed; clear it so it is never replayed against a future,
   # unrelated Enrollment Code.
   frp_pending_enroll_clear
+
+  # Promote enrolled services into v2.4 Remote Services (reuse allocated ports).
+  if [[ "$(services_count)" != "0" ]]; then
+    python3 -c '
+import os, sys
+from pathlib import Path
+root = os.environ.get("FRP_CLIENT_TEST_ROOT") or os.environ.get("FRP_DEPLOY_TEST_ROOT") or ""
+cands = []
+if root:
+    cands.append(Path(root) / "usr/local/lib/drlink")
+cands.append(Path("/usr/local/lib/drlink"))
+here = Path(os.environ.get("_FRP_INSTALL_CLIENT_DIR") or ".")
+cands.extend([here / "lib", here.parent / "lib"])
+for base in cands:
+    if (base / "drlink_v24.py").is_file():
+        sys.path.insert(0, str(base))
+        break
+try:
+    import drlink_v24 as v24
+except Exception:
+    raise SystemExit(0)
+results = v24.activate_enrolled_services_as_remote_services(root=root or None)
+healthy = False
+degraded = []
+for result in results:
+    view = (result or {}).get("view") or {}
+    status = str(view.get("status") or "")
+    name = view.get("name") or "?"
+    if status == "HEALTHY":
+        healthy = True
+        print("Remote Service activated: %s (%s)" % (name, view.get("endpoint") or "-"))
+    elif status:
+        degraded.append((name, status, view.get("reason") or ""))
+for name, status, reason in degraded:
+    print("Remote Service not fully activated: %s status=%s" % (name, status))
+    if reason:
+        print("  Reason: %s" % reason)
+if results and not healthy and degraded:
+    print("Zero-Touch enrollment finished, but Remote Service activation is incomplete.")
+    print("Run: sudo drlink show remote-services")
+' || true
+  fi
 
   print_complete "$FRP_SERVER" "$SERVICES_FILE" "${FRP_PUBLIC_HOSTNAME:-}"
   if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then

@@ -8,6 +8,9 @@
 > **Version governance:** `docs/VERSION_POLICY.md`
 
 Current project version: **2.4.0**
+
+Development builds must display an identity equivalent to `2.4.0-dev+g<shortsha>`
+(with exact Source HEAD shown separately), not plain `2.4.0`.
 Current pinned Relay Engine (FRP): **v0.71.0**
 
 ## 1. Product definition
@@ -155,13 +158,21 @@ Internet Access destination must not use a Managed Host, directly or through a N
 
 ## 9. Service Objects
 
-Service Object types:
+Service Object types (schema):
 
 ```text
 TCP
 UDP
 Fixed TCP
 ```
+
+The normal public Service Object Wizard presents operator-facing presets:
+
+```text
+SSH, HTTP, HTTPS, RDP, Custom TCP, Fixed TCP
+```
+
+UDP is not offered in that Wizard. Remote Service remains TCP / Fixed TCP only.
 
 Service Groups are flat reusable collections.
 

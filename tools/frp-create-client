@@ -556,7 +556,7 @@ def write_enrollment(enroll_dir, enrollment_id, secret, ttl, note, label=''):
 
 SSH_USER_RE = re.compile(r'[A-Za-z0-9._@-]{1,32}')
 NONINTERACTIVE_SSH_USER_ERROR = (
-    '--ssh-user is required for non-interactive zero-touch SSH creation.'
+    '--ssh-user may be supplied for connection examples; it is optional for enrollment.'
 )
 _TEST_INPUT_LINES = None
 
@@ -651,16 +651,19 @@ def parse_args(argv=None):
 
 
 def ssh_service(ssh_user, ssh_port):
-    return {
+    payload = {
         'id': 'ssh',
         'name': 'SSH',
         'protocol': 'tcp',
         'local_ip': '127.0.0.1',
         'local_port': int(ssh_port),
         'preset': 'ssh',
-        'ssh_user': ssh_user,
         'enabled': True,
     }
+    user = str(ssh_user or '').strip()
+    if user:
+        payload['ssh_user'] = user
+    return payload
 
 
 def rdp_service(rdp_port):
@@ -859,13 +862,18 @@ def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
     print('SSH service setup')
     print('=================')
     print()
-    print('Enter the SSH login account that already exists on the client machine.')
+    print('SSH username is optional connection-example metadata.')
+    print('It is not required for Agent installation or enrollment.')
+    print('Leave blank to show <username> in connection examples.')
     print()
 
     user = normalize_ssh_user(existing_user)
     if not user:
         while True:
-            entered = read_prompt('Client SSH user: ')
+            entered = read_prompt('SSH username [optional]: ')
+            if not str(entered or '').strip():
+                user = ''
+                break
             user, err = validate_prompt_ssh_user(entered)
             if user:
                 break
@@ -897,7 +905,7 @@ def print_client_configuration(name, note, services=None, ssh_user='', ssh_port=
     print('--------')
     print()
     rows = list(services or [])
-    if not rows and ssh_user:
+    if not rows and (ssh_user or ssh_port):
         rows = [{
             'preset': 'ssh',
             'name': 'SSH',
@@ -925,18 +933,20 @@ def print_client_configuration(name, note, services=None, ssh_user='', ssh_port=
         print(title)
         print('  Target   : %s:%s' % (host, port))
         user = str(svc.get('ssh_user') or '').strip()
-        if user:
-            print('  SSH user : %s' % user)
+        if preset == 'ssh' or str(svc.get('id') or '').lower() == 'ssh':
+            if user:
+                print('  SSH user : %s (connection-example metadata; not validated)' % user)
+            else:
+                print('  SSH user : <username> (optional connection-example metadata)')
         print()
 
 
 def resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit):
     ssh_user = normalize_ssh_user(ssh_user)
-    if ssh_user:
+    if ssh_user or not is_interactive_stdin():
+        # Non-interactive: empty ssh_user is allowed (connection examples use <username>).
         return ssh_user, ssh_port
-    if is_interactive_stdin():
-        return prompt_zero_touch_ssh('', ssh_port, port_explicit)
-    fail(NONINTERACTIVE_SSH_USER_ERROR)
+    return prompt_zero_touch_ssh('', ssh_port, port_explicit)
 
 
 def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp, installer):
@@ -993,11 +1003,11 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
 def print_one_line_windows(
     ticket, ttl, note, public_host, control_public, allocator, ca_fp,
     installer, rdp_port=None, client_name='', management_only=False,
-    ticket_id='', bootstrap_hostname=''
+    ticket_id='', bootstrap_hostname='', public_hostname=''
 ):
     zt = _zt()
     command = ''
-    bootstrap_host = str(bootstrap_hostname or '').strip().lower()
+    bootstrap_host = str(bootstrap_hostname or public_hostname or '').strip().lower()
     if bootstrap_host and zt is not None:
         try:
             command = zt.short_url_windows_command(bootstrap_host, ticket)
@@ -1088,7 +1098,7 @@ def print_one_line_windows(
     print()
     print('The ticket cannot be reused by another machine once bound.')
     print('After reboot, Data Relay Link starts automatically when a service is enabled.')
-    print('If a pending service change remains, apply with:\n  system services apply')
+    print('If a pending service change remains, apply with:\n  system synchronize')
     if tracking_id:
         print()
         for line in _enrollment_track_hints(tracking_id):
@@ -1096,17 +1106,18 @@ def print_one_line_windows(
     print()
 
 
-def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname=''):
+def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname='', public_hostname=''):
     tracking_id = str(ticket_id or '').strip()
     if not tracking_id and ticket:
         parts = str(ticket).split('.')
         if len(parts) >= 2:
             tracking_id = parts[1]
 
-    # Prefer ideal short URL when bootstrap_hostname is configured (Option B).
-    # Otherwise keep the v2.1.2 zt1 opaque-package transitional command.
+    # Prefer short URL when bootstrap_hostname (or public_hostname) is configured.
+    # Low-level CA pin mechanics stay inside the served /i/<ticket> bootstrap
+    # artifact or the zt1 package — never weaken Private CA verification.
     command = ''
-    bootstrap_host = str(bootstrap_hostname or '').strip().lower()
+    bootstrap_host = str(bootstrap_hostname or public_hostname or '').strip().lower()
     if bootstrap_host and not legacy_env:
         try:
             zt = _zt()
@@ -1290,7 +1301,8 @@ def main(argv=None):
         return 0
 
     if a.ssh and not ssh_user and not is_interactive_stdin():
-        fail(NONINTERACTIVE_SSH_USER_ERROR)
+        # Optional connection-example metadata; enrollment proceeds without it.
+        ssh_user = ''
 
     if not installer:
         if platform == 'windows':
@@ -1323,7 +1335,8 @@ def main(argv=None):
     rdp_local = None
     if a.ssh:
         ssh_user, ssh_port = resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit)
-        reject_control_chars('--ssh-user', ssh_user)
+        if ssh_user:
+            reject_control_chars('--ssh-user', ssh_user)
         raw_services = [ssh_service(ssh_user, ssh_port)]
     elif a.rdp:
         raw_services = [rdp_service(rdp_port)]
@@ -1367,6 +1380,7 @@ def main(argv=None):
 
     ticket_id = str((ticket_record or {}).get('id') or '')
     bootstrap_hostname = str(cfg.get('bootstrap_hostname') or '').strip()
+    public_hostname = str(cfg.get('public_hostname') or '').strip()
     if platform == 'windows':
         print_one_line_windows(
             ticket,
@@ -1382,6 +1396,7 @@ def main(argv=None):
             management_only=not services,
             ticket_id=ticket_id,
             bootstrap_hostname=bootstrap_hostname,
+            public_hostname=public_hostname,
         )
     else:
         print_one_line(
@@ -1399,6 +1414,7 @@ def main(argv=None):
             management_only=not services,
             ticket_id=ticket_id,
             bootstrap_hostname=bootstrap_hostname,
+            public_hostname=public_hostname,
         )
     try:
         here = Path(__file__).resolve()

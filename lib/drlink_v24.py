@@ -405,9 +405,9 @@ def load_agent_identity(root: Optional[str] = None) -> dict:
     for path in _agent_state_file_candidates(
         "etc/frp/client-state.json", "client-state.json", root
     ):
-        if not path.is_file():
-            continue
         try:
+            if not path.is_file():
+                continue
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
@@ -2771,7 +2771,13 @@ def set_remote_service_agent(
             "No changes were applied." % (dest_token, svc_name, dup["name"])
         )
 
-    endpoint_host = os.environ.get("DRLINK_HOST") or "drlink.local"
+    endpoint_host = "127.0.0.1"
+    try:
+        import frp_server_config as scfg
+
+        endpoint_host = scfg.resolve_public_endpoint_host(root=root, fallback="") or endpoint_host
+    except Exception:
+        endpoint_host = os.environ.get("DRLINK_HOST") or endpoint_host
     endpoint_port = existing["endpoint_port"] if existing else None
     pending = 0
     status = "DISABLED" if not en else "DEGRADED"
@@ -3086,7 +3092,7 @@ def set_remote_service_agent(
         "connection": (
             None
             if pending or endpoint_port is None or status != "HEALTHY"
-            else "ssh -p %s user@%s" % (endpoint_port, endpoint_host)
+            else "ssh -p %s <username>@%s" % (endpoint_port, endpoint_host)
             if sport == 22
             else "%s:%s" % (endpoint_host, endpoint_port)
         ),
@@ -3303,6 +3309,110 @@ def probe_agent_runtime_unit(*, root: Optional[str] = None) -> dict:
     return {"level": "Unknown", "detail": "drlink-client.service status could not be read"}
 
 
+def activate_enrolled_services_as_remote_services(
+    *,
+    root: Optional[str] = None,
+    state: Optional[dict] = None,
+) -> list:
+    """Promote enrolled client-state services into Agent Remote Services.
+
+    Reuses allocated public ports when present and attempts full runtime
+    activation. Returns a list of result dicts (may be empty).
+    """
+    data = state if isinstance(state, dict) else None
+    if data is None:
+        for path in _agent_state_file_candidates(
+            "etc/frp/client-state.json", "client-state.json", root
+        ):
+            if not path.is_file():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(loaded, dict):
+                data = loaded
+                break
+    if not isinstance(data, dict):
+        return []
+    services = data.get("services") or {}
+    if not isinstance(services, dict) or not services:
+        return []
+    alias = str(data.get("public_hostname") or data.get("frp_server") or "").strip()
+    if alias and not os.environ.get("DRLINK_HOST"):
+        os.environ["DRLINK_HOST"] = alias
+    from drlink_control_plane import ControlPlane
+
+    plane = ControlPlane(root)
+    results = []
+    reachable = detect_server_reachable(plane, root)
+    for sid, rec in services.items():
+        if not isinstance(rec, dict) or rec.get("enabled", True) is False:
+            continue
+        preset = str(rec.get("preset") or "").strip().lower()
+        sid_s = str(rec.get("id") or sid).strip()
+        if preset == "ssh" or sid_s.lower() == "ssh":
+            name = "ssh-access"
+            service_obj = "ssh"
+        else:
+            name = str(rec.get("name") or sid_s)
+            service_obj = sid_s
+        if service_obj == "ssh" and not get_service_object(plane, "ssh"):
+            try:
+                set_service_object(plane, "ssh", type="tcp", port=22, oneshot=True)
+            except ControlPlaneError:
+                pass
+        existing = plane.conn.execute(
+            "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+        try:
+            result = set_remote_service_agent(
+                plane,
+                name,
+                destination="this-host",
+                service=service_obj,
+                enabled=True,
+                oneshot=True,
+                root=root,
+                server_reachable=reachable,
+            )
+            # Prefer the enrolled public port when the brand-new Remote Service
+            # received a different allocation (stability for Zero-Touch).
+            enrolled_port = None
+            try:
+                if rec.get("remote_port") is not None:
+                    enrolled_port = int(rec.get("remote_port"))
+            except (TypeError, ValueError):
+                enrolled_port = None
+            view = (result or {}).get("view") or {}
+            if (
+                existing is None
+                and enrolled_port is not None
+                and view.get("endpoint_port") not in (None, enrolled_port)
+            ):
+                plane.conn.execute(
+                    "UPDATE agent_remote_services SET endpoint_port = ? WHERE name = ? COLLATE NOCASE",
+                    (enrolled_port, name),
+                )
+                _commit_if_autonomous(plane)
+                result = set_remote_service_agent(
+                    plane,
+                    name,
+                    destination="this-host",
+                    service=service_obj,
+                    enabled=True,
+                    oneshot=True,
+                    root=root,
+                    server_reachable=reachable,
+                )
+            results.append(result)
+        except ControlPlaneError:
+            continue
+        except Exception:
+            continue
+    return results
+
+
 def format_show_status(role: str, plane_db=None) -> str:
     lines = [
         "Data Relay Link",
@@ -3358,6 +3468,58 @@ def format_show_status(role: str, plane_db=None) -> str:
     elif role == "agent":
         lines.append("Agent Host local configuration.")
         lines.append("Use: show remote-services")
+    return "\n".join(lines) + "\n"
+
+
+def format_show_agent(root: Optional[str] = None) -> str:
+    """Canonical Agent Host ``show agent`` read-only view."""
+    identity = load_agent_identity(root)
+    runtime = probe_agent_runtime_unit(root=root)
+    autostart = "unknown"
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            ["systemctl", "is-enabled", "drlink-client.service"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            universal_newlines=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            autostart = (proc.stdout or "").strip() or "enabled"
+        elif (proc.stdout or "").strip():
+            autostart = (proc.stdout or "").strip()
+    except Exception:
+        pass
+    server = ""
+    for path in _agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", root
+    ):
+        try:
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            server = str(data.get("frp_server") or data.get("allocator_url") or "").strip()
+            break
+    lines = [
+        "Data Relay Link",
+        "",
+        "Role: Agent Host",
+        "",
+        "Server connection : %s" % (server or "not configured"),
+        "Hostname          : %s" % (identity.get("hostname") or identity.get("label") or "-"),
+        "Machine ID        : %s" % (identity.get("machine_id") or "-"),
+        "Agent runtime     : %s" % (runtime.get("level") or "Unknown"),
+        "Runtime detail    : %s" % (runtime.get("detail") or "-"),
+        "Autostart         : %s" % autostart,
+        "",
+        "Remote Services:",
+        "  show remote-services",
+    ]
     return "\n".join(lines) + "\n"
 
 

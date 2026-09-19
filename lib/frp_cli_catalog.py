@@ -2164,6 +2164,7 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "client.agent": (
+        ("client_agent_show", "Show Agent", "", "command", "show agent"),
         ("client_sys_pause", "Pause", "", "command", "system pause"),
         ("client_sys_resume", "Resume", "", "command", "system resume"),
         ("client_sys_restart", "Restart", "", "command", "system restart"),

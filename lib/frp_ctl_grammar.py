@@ -1240,7 +1240,7 @@ def context_help(tokens, role, names=None, clients=None):
         ),
         "apply": (
             '"apply" is not a current public root.\n\n'
-            "Prefer: system services apply\n"
+            "Prefer: system synchronize\n"
             "Or ConfigurationBundle: system apply configuration <PATH|->\n"
         ),
         "discard": (
@@ -1249,7 +1249,7 @@ def context_help(tokens, role, names=None, clients=None):
         ),
         "sync": (
             '"sync" is not a current public root.\n\n'
-            "Prefer: system services sync\n"
+            "Prefer: system synchronize\n"
         ),
         "restore": (
             '"restore" is not a current public root.\n\n'

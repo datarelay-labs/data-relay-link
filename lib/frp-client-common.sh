@@ -1054,9 +1054,8 @@ payload = {
   'preset': preset,
 }
 if preset == 'ssh':
-    if len(sys.argv) <= 6 or not sys.argv[6].strip():
-        raise SystemExit('ERROR: ssh_user is required for ssh services')
-    payload['ssh_user'] = sys.argv[6].strip()
+    if len(sys.argv) > 6 and sys.argv[6].strip():
+        payload['ssh_user'] = sys.argv[6].strip()
 print(json.dumps(payload))
 PY
 }
@@ -1203,11 +1202,12 @@ EOF
 
 frp_ux_ssh_user_help() {
   cat <<'EOF'
-SSH user
-  Linux username shown in the generated SSH command.
+SSH user (optional connection example)
+  Linux username shown in the generated SSH command only.
 
   This does NOT create an operating-system account,
   change a password, or configure SSH authentication.
+  Leave blank to show <username> in connection examples.
 
 EOF
 }
@@ -1331,14 +1331,11 @@ frp_prompt_ssh_user() {
   local default="${2:-${FRP_SSH_USER:-}}"
   local _frp_user_tmp=""
   frp_ux_ssh_user_help
-  while [[ -z "$_frp_user_tmp" ]]; do
-    if [[ -n "$default" ]]; then
-      _frp_user_tmp="$(read_tty "SSH user [${default}]: " "$default")"
-    else
-      _frp_user_tmp="$(read_tty "SSH user (required): ")"
-    fi
-    [[ -n "$_frp_user_tmp" ]] || echo "ERROR: SSH user is required." >&2
-  done
+  if [[ -n "$default" ]]; then
+    _frp_user_tmp="$(read_tty "SSH user [optional, ${default}]: " "$default")"
+  else
+    _frp_user_tmp="$(read_tty "SSH user [optional]: " "")"
+  fi
   printf -v "$out_var" '%s' "$_frp_user_tmp"
 }
 
@@ -1864,11 +1861,10 @@ item = {
 }
 if preset == 'ssh':
     ssh_user = str(raw.get('ssh_user', '') or '').strip()
-    if not ssh_user:
-        raise SystemExit('ERROR: ssh_user is required for ssh services')
-    if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
-        raise SystemExit('ERROR: invalid ssh_user')
-    item['ssh_user'] = ssh_user
+    if ssh_user:
+        if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
+            raise SystemExit('ERROR: invalid ssh_user')
+        item['ssh_user'] = ssh_user
 try:
     HC.copy_health_check(raw, item)
 except HC.HealthCheckError as exc:
@@ -1932,11 +1928,10 @@ def add(path, raw):
     }
     if preset == 'ssh':
         ssh_user = str(raw.get('ssh_user', '') or '').strip()
-        if not ssh_user:
-            raise SystemExit('ERROR: ssh_user is required for ssh services')
-        if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
-            raise SystemExit('ERROR: invalid ssh_user')
-        item['ssh_user'] = ssh_user
+        if ssh_user:
+            if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
+                raise SystemExit('ERROR: invalid ssh_user')
+            item['ssh_user'] = ssh_user
     try:
         HC.copy_health_check(raw, item)
     except HC.HealthCheckError as exc:
@@ -2177,18 +2172,16 @@ for item in services:
     else:
         lines.append(f'  Public : {host_port(server, remote_port)}')
     if preset == 'ssh':
-        user = clean(item.get('ssh_user'), 32)
-        if user:
-            lines.append('  Connect:')
-            if preferred:
-                lines.append('    Preferred:')
-                lines.append(f'      ssh -p {remote_port} {user}@{preferred}')
-                lines.append('    Fallback:')
-                lines.append(f'      ssh -p {remote_port} {user}@{server}')
-            else:
-                lines.append(f'    ssh -p {remote_port} {user}@{server}')
+        user = clean(item.get('ssh_user'), 32) or '<username>'
+        lines.append('  Connect:')
+        lines.append('    (SSH username is connection-example metadata; not validated at enrollment)')
+        if preferred:
+            lines.append('    Preferred:')
+            lines.append(f'      ssh -p {remote_port} {user}@{preferred}')
+            lines.append('    Fallback:')
+            lines.append(f'      ssh -p {remote_port} {user}@{server}')
         else:
-            lines.append('  SSH user: legacy / unspecified')
+            lines.append(f'    ssh -p {remote_port} {user}@{server}')
     elif preset == 'http':
         lines.append('  URL:')
         if preferred:

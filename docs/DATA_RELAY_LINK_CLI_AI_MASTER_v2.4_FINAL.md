@@ -464,18 +464,22 @@ Human creation:
 set service-object postgres
 ```
 
-Wizard:
+Normal public Wizard (v2.4):
 
 ```text
 Create Service Object
 =====================
 
-Service Type:
-1) TCP
-2) UDP
-3) Fixed TCP
+Service Object type
+-------------------
+1) SSH
+2) HTTP
+3) HTTPS
+4) RDP
+5) Custom TCP
+6) Fixed TCP
 
-Select: 1
+Select: 5
 
 Port:
 5432
@@ -491,19 +495,39 @@ Port : 5432
 3) Cancel
 ```
 
+Preset mapping:
+
+```text
+SSH        → TCP/22
+HTTP       → TCP/80
+HTTPS      → TCP/443
+RDP        → TCP/3389
+Custom TCP → TCP/<user port>   (normal published-service port pool)
+Fixed TCP  → Fixed TCP/<user port>  (stable public port equals service port)
+```
+
+UDP is not offered in the normal public Service Object Wizard. v2.4 Remote Service
+consumers are TCP / Fixed TCP only. UDP remains creatable via explicit AI/one-shot
+commands where a non-Remote-Service consumer still needs it.
+
 AI one-shot:
 
 ```text
 set service-object postgres type tcp port 5432
 ```
 
-UDP example:
+UDP example (explicit; not Wizard menu):
 
 ```text
 set service-object dns-udp type udp port 53
 ```
 
 Feature-specific protocol support is validated at the point where the Service Object is used.
+
+When a Wizard expects a numeric menu choice and the operator pastes text that
+clearly resembles a DRLink command, the Wizard must reject the input with guidance
+to leave the Wizard (Back/Cancel) and run the command at the `drlink>` prompt.
+It must not execute pasted commands inside the Wizard.
 
 ---
 
@@ -536,12 +560,16 @@ Wizard:
 Create Service Object
 =====================
 
-Service Type:
-1) TCP
-2) UDP
-3) Fixed TCP
+Service Object type
+-------------------
+1) SSH
+2) HTTP
+3) HTTPS
+4) RDP
+5) Custom TCP
+6) Fixed TCP
 
-Select: 3
+Select: 6
 
 Destination Port:
 1521
@@ -2269,6 +2297,16 @@ system version
 system uninstall
 ```
 
+`system uninstall` of the active product role must exit the interactive REPL
+cleanly after successful removal (no further backend invocation on the deleted
+install). User-facing diagnostics and support output label the role as
+`Agent Host` (not `Client`). Development builds present version identity as
+`2.4.0-dev+g<shortsha>` while preserving the exact 40-character Source HEAD
+separately. Bundle SHA256 reports a real digest when known, otherwise
+`not applicable` (never ambiguous `unknown`). Doctor recommended actions must
+be public, role-correct commands that parse (for Agent Host frpc drift:
+`sudo drlink system synchronize`).
+
 The Server does not remotely execute these lifecycle mutations through the Server CLI.
 
 ---
@@ -3751,6 +3789,22 @@ Server:
 set enrollment zero-touch
 ```
 
+When a public DNS hostname is configured, Enrollment HTTPS and Zero-Touch
+bootstrap URLs use that hostname (public IP may still be shown as fallback).
+The operator-facing Zero-Touch install command is a short HTTPS launcher
+(`curl … https://<host>/i/<ticket> | sudo bash` or equivalent) that preserves
+private-CA fingerprint verification and one-time ticket semantics inside the
+maintained bootstrap artifact—not a long inline shell program.
+
+SSH connection-example username is optional metadata for the hint only; it is
+not required for Agent install/enrollment. Prefer a verified local account, or
+show `<username>` rather than inventing an unverified account name.
+
+A Zero-Touch flow that declares an initial Remote Service must complete
+allocation → runtime generation → activation before claiming the service is
+connected. Preferred endpoint presentation uses the configured public hostname
+and a stable reserved port for that Remote Service identity.
+
 After registration:
 
 ```text
@@ -3760,7 +3814,7 @@ Host  : ubuntu-prod
 Agent : Connected
 ```
 
-On `ubuntu-prod`:
+On `ubuntu-prod` (when not already created by Zero-Touch initial service):
 
 ```text
 set remote-service ssh-access
@@ -3778,10 +3832,10 @@ Result:
 Remote Service activated.
 
 Status   : HEALTHY
-Endpoint : drlink.example:6101
+Endpoint : remote.example:6101
 
 Connection:
-  ssh -p 6101 user@drlink.example
+  ssh -p 6101 <username>@remote.example
 ```
 
 No Remote Access Policy exists yet:

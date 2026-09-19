@@ -652,13 +652,16 @@ prompt() {
   local label="$1" default="$2" var="$3"
   local current="${!var:-}"
   if [[ -n "$current" ]]; then return 0; fi
-  local value=""
+  local value="" prompt_text
+  # Keep the immutable prompt text visually separate from the editable value.
+  # Use readline (-e) with -p so Backspace never walks into the prompt prefix.
+  if [[ -n "$default" ]]; then
+    prompt_text="${label} [${default}]: "
+  else
+    prompt_text="${label}: "
+  fi
   if frp_has_tty; then
-    if [[ -n "$default" ]]; then
-      read -r -p "$label [$default]: " value </dev/tty || true
-    else
-      read -r -p "$label: " value </dev/tty || true
-    fi
+    IFS= read -e -r -p "$prompt_text" value </dev/tty || true
   fi
   printf -v "$var" '%s' "${value:-$default}"
 }
@@ -1065,10 +1068,16 @@ resolve_server_settings() {
       echo "Example:"
       echo "  frp.example.com"
       echo
-      echo "Press Enter to use the public IP only."
+      echo "Press Enter to leave Public DNS hostname not configured."
       echo
       echo "Data Relay Link does not create or manage DNS records."
       prompt "Public DNS hostname [optional]" "" FRP_PUBLIC_HOSTNAME
+      echo
+      if [[ -n "${FRP_PUBLIC_HOSTNAME}" ]]; then
+        echo "Public DNS hostname: ${FRP_PUBLIC_HOSTNAME}"
+      else
+        echo "Public DNS hostname: not configured"
+      fi
     fi
   fi
   if [[ -n "${FRP_PUBLIC_HOSTNAME}" ]]; then
@@ -1076,6 +1085,36 @@ resolve_server_settings() {
       echo "ERROR: Public DNS hostname is invalid" >&2
       echo "Use a bare DNS name such as frp.example.com (no scheme, port, or path)." >&2
       exit 1
+    fi
+  fi
+
+  # When a Public DNS hostname is configured, establish which public identity
+  # Enrollment HTTPS / bootstrap URLs use. Control identity stays on the IP.
+  FRP_ENROLLMENT_PUBLIC_HOST="${FRP_ENROLLMENT_PUBLIC_HOST:-}"
+  if [[ -z "${FRP_ENROLLMENT_PUBLIC_HOST}" ]]; then
+    if [[ -n "${FRP_PUBLIC_HOSTNAME}" ]]; then
+      if frp_has_tty && [[ "${EXISTING_SERVER_CONFIG:-}" != "1" ]] && \
+         [[ -z "${FRP_ALLOCATOR_PUBLIC_URL:-}" && -z "${EXISTING_ALLOCATOR_URL:-}" ]]; then
+        echo
+        echo "Enrollment HTTPS public identity"
+        echo "--------------------------------"
+        echo "1) Public IP"
+        echo "   ${FRP_PUBLIC_IP}"
+        echo "2) Public DNS hostname"
+        echo "   ${FRP_PUBLIC_HOSTNAME}"
+        echo
+        local enroll_choice=""
+        prompt "Select 1 or 2" "2" enroll_choice
+        case "$enroll_choice" in
+          1) FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_IP" ;;
+          *) FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_HOSTNAME" ;;
+        esac
+      else
+        # Non-interactive / reinstall: prefer the configured DNS hostname.
+        FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_HOSTNAME"
+      fi
+    else
+      FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_IP"
     fi
   fi
 
@@ -1198,10 +1237,12 @@ resolve_server_settings() {
     FRP_TRANSPORT=tcp
   fi
 
-  # Allocator/control identity uses FRP_PUBLIC_HOST (public IP), not public_hostname.
-  # public_hostname remains the published-service access alias only.
-  local derived_url
-  derived_url="$(frp_format_https_url "$FRP_PUBLIC_HOST" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
+  # FRP control identity stays on FRP_PUBLIC_HOST (public IP).
+  # Enrollment HTTPS uses the operator-selected enrollment public identity
+  # (Public DNS hostname when chosen, otherwise the public IP).
+  local derived_url enrollment_host
+  enrollment_host="${FRP_ENROLLMENT_PUBLIC_HOST:-$FRP_PUBLIC_HOST}"
+  derived_url="$(frp_format_https_url "$enrollment_host" "$FRP_ALLOCATOR_PUBLIC_PORT" /enroll)"
 
   # Normalize a bare hostname (or host:port) into the enrollment HTTPS URL when
   # the operator supplied an incomplete FRP_ALLOCATOR_PUBLIC_URL / FRP_ALLOCATOR_URL.
@@ -1914,6 +1955,22 @@ Enrollment HTTPS
   Public:
     TCP ${FRP_PUBLIC_HOST}:${FRP_ALLOCATOR_PUBLIC_PORT}
     ${FRP_ALLOCATOR_PUBLIC_URL}
+EOF2
+  if [[ -n "${FRP_PUBLIC_HOSTNAME:-}" ]]; then
+    local enroll_host
+    enroll_host="$(python3 - "$FRP_ALLOCATOR_PUBLIC_URL" <<'PY'
+from urllib.parse import urlparse
+import sys
+print(urlparse(sys.argv[1]).hostname or '')
+PY
+)"
+    cat <<EOF2
+  Public DNS hostname: ${FRP_PUBLIC_HOSTNAME}
+  Enrollment identity: ${enroll_host:-unknown}
+  Fallback Public IP : ${FRP_PUBLIC_HOST}
+EOF2
+  fi
+  cat <<EOF2
 
   Forward to:
     ${alloc_target}
@@ -2784,6 +2841,7 @@ Deployment mode   : ${FRP_DEPLOYMENT_MODE}
 Public IP         : ${FRP_PUBLIC_IP}
 Public hostname   : ${FRP_PUBLIC_HOSTNAME:-not configured}
 Bootstrap hostname: ${FRP_BOOTSTRAP_HOSTNAME:-not configured}
+Enrollment HTTPS  : ${FRP_ALLOCATOR_PUBLIC_URL}
 FRP control public: TCP/${FRP_CONTROL_PUBLIC_PORT}
 FRP transport     : ${FRP_TRANSPORT}
 FRP control listen: TCP/${FRP_CONTROL_LISTEN_PORT} (${FRP_CONTROL_BIND_ADDR})

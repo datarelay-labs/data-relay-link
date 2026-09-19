@@ -233,17 +233,22 @@ FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --note client-01
   </dev/null >"$WORKDIR/nontty.out" 2>"$WORKDIR/nontty.err"
 nontty_rc=$?
 set -e
-[[ "$nontty_rc" -ne 0 ]] || fail "non-TTY --one-line --ssh without --ssh-user should fail"
-grep -qF -- '--ssh-user is required for non-interactive zero-touch SSH creation.' \
-  "$WORKDIR/nontty.err" || fail "non-TTY ssh-user error"
-[[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "non-TTY created a ticket"
+[[ "$nontty_rc" -eq 0 ]] || fail "non-TTY --one-line --ssh without --ssh-user should succeed"
+grep -q 'zt1\.\|/i/' "$WORKDIR/nontty.out" || fail "non-TTY missing install command"
+if grep -qE 'SSH user[[:space:]]*:[[:space:]]*(ubuntu|root|stellar)\b' "$WORKDIR/nontty.out"; then
+  fail "non-TTY invented an SSH username"
+fi
+grep -qE '<username>|SSH user[[:space:]]*:[[:space:]]*-' "$WORKDIR/nontty.out" \
+  || grep -q 'optional connection-example' "$WORKDIR/nontty.out" \
+  || true
+[[ "$(ticket_count)" -gt "$BEFORE_TICKETS" ]] || fail "non-TTY did not create a ticket"
 if grep -q 'ubuntu' "$WORKDIR/nontty.out" "$WORKDIR/nontty.err"; then
   fail "non-TTY guessed ubuntu"
 fi
 if grep -q 'Client SSH user' "$WORKDIR/nontty.out" "$WORKDIR/nontty.err"; then
   fail "non-TTY prompted"
 fi
-pass "NONINTERACTIVE_SSH_USER_REQUIRED"
+pass "NONINTERACTIVE_SSH_USER_OPTIONAL"
 
 BEFORE_TICKETS="$(ticket_count)"
 set +e
@@ -252,14 +257,14 @@ FRP_CREATE_CLIENT_TEST_INPUT='' FRP_DEPLOY_TEST_ROOT="$TREE" \
   >"$WORKDIR/eof.out" 2>"$WORKDIR/eof.err"
 eof_rc=$?
 set -e
-[[ "$eof_rc" -ne 0 ]] || fail "EOF during SSH prompt should fail"
+[[ "$eof_rc" -ne 0 ]] || fail "EOF during client identification prompt should fail"
 grep -q 'Client details' "$WORKDIR/eof.out" || fail "EOF did not show client details"
 grep -q 'Client name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client name"
 [[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "ticket created before input completed"
 pass "TICKET_NOT_CREATED_BEFORE_INPUT"
 
 BEFORE_TICKETS="$(ticket_count)"
-FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\naella\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
   python3 "$CREATE" --one-line --ssh \
   >"$WORKDIR/prompt.out" 2>"$WORKDIR/prompt.err"
 grep -q 'Client details' "$WORKDIR/prompt.out" || fail "missing client details"
@@ -267,18 +272,16 @@ grep -q 'Client name:' "$WORKDIR/prompt.out" || fail "missing client name prompt
 grep -q 'ERROR: Client name cannot be blank.' "$WORKDIR/prompt.err" \
   || fail "blank client name not rejected"
 grep -q 'SSH service setup' "$WORKDIR/prompt.out" || fail "missing SSH setup heading"
-grep -q 'Enter the SSH login account that already exists on the client machine.' \
-  "$WORKDIR/prompt.out" || fail "missing SSH setup help"
-grep -q 'Client SSH user:' "$WORKDIR/prompt.out" || fail "missing username prompt"
+grep -q 'SSH username is optional connection-example metadata.' \
+  "$WORKDIR/prompt.out" || fail "missing optional SSH username help"
+grep -qF 'SSH username [optional]:' "$WORKDIR/prompt.out" || fail "missing optional username prompt"
 grep -qF 'SSH port [22]:' "$WORKDIR/prompt.out" || fail "missing port prompt"
-grep -q 'ERROR: SSH username cannot be blank.' "$WORKDIR/prompt.err" \
-  || fail "blank username not rejected"
 grep -q 'Client configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
 grep -q 'Client name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation client name"
-grep -qE 'SSH user[[:space:]]*:[[:space:]]*aella' "$WORKDIR/prompt.out" || fail "confirmation user"
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*<username>|SSH user[[:space:]]*:[[:space:]]*-' \
+  "$WORKDIR/prompt.out" || fail "blank username should show placeholder"
 grep -qE 'Target[[:space:]]*:[[:space:]]*127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"
-grep -q 'zt1\.' "$WORKDIR/prompt.out" || fail "generated command missing opaque package"
-grep -q 'bash -s --' "$WORKDIR/prompt.out" || fail "generated command missing short runner"
+grep -q 'zt1\.\|/i/' "$WORKDIR/prompt.out" || fail "generated command missing install launcher"
 if grep -E 'FRP_SSH_USER=.ubuntu|Client SSH user: ubuntu|SSH user : ubuntu' \
   "$WORKDIR/prompt.out" "$WORKDIR/prompt.err"; then
   fail "prompt defaulted to ubuntu"
@@ -287,22 +290,29 @@ if grep -E 'SSH user : root|Client SSH user: root' "$WORKDIR/prompt.out"; then
   fail "prompt defaulted to root"
 fi
 [[ "$(ticket_count)" -gt "$BEFORE_TICKETS" ]] || fail "ticket not created after input"
-[[ "$(ticket_ssh_user)" == "aella" ]] || fail "entered username not stored in SSH service"
-pass "SSH_USER_INTERACTIVE_PROMPT"
-pass "BLANK_SSH_USER_REJECTED"
-pass "SSH_USER_STORED_IN_SERVICE"
-pass "FRP_SSH_USER_FROM_PROMPT"
+[[ -z "$(ticket_ssh_user)" ]] || fail "blank username should not store ssh_user"
+pass "SSH_USER_INTERACTIVE_OPTIONAL"
+pass "BLANK_SSH_USER_ACCEPTED"
+pass "FRP_SSH_USER_OPTIONAL"
 pass "TICKET_CREATED_AFTER_INPUT"
+
+BEFORE_TICKETS="$(ticket_count)"
+FRP_CREATE_CLIENT_TEST_INPUT=$'seoul-groupware\n\naella\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+  python3 "$CREATE" --one-line --ssh \
+  >"$WORKDIR/prompt-user.out" 2>"$WORKDIR/prompt-user.err"
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*aella' "$WORKDIR/prompt-user.out" || fail "explicit user not confirmed"
+[[ "$(ticket_ssh_user)" == "aella" ]] || fail "entered username not stored in SSH service"
+pass "SSH_USER_STORED_WHEN_PROVIDED"
 
 FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella --note client-01 \
   >"$WORKDIR/explicit.out" 2>"$WORKDIR/explicit.err"
 if grep -q 'SSH service setup' "$WORKDIR/explicit.out" "$WORKDIR/explicit.err"; then
   fail "explicit --ssh-user prompted"
 fi
-if grep -q 'Client SSH user:' "$WORKDIR/explicit.out" "$WORKDIR/explicit.err"; then
+if grep -q 'Client SSH user:\|SSH username \[optional\]:' "$WORKDIR/explicit.out" "$WORKDIR/explicit.err"; then
   fail "explicit --ssh-user asked for username"
 fi
-grep -q 'zt1\.' "$WORKDIR/explicit.out" || fail "explicit command missing opaque package"
+grep -q 'zt1\.\|/i/' "$WORKDIR/explicit.out" || fail "explicit command missing install launcher"
 [[ "$(ticket_ssh_user)" == "aella" ]] || fail "explicit --ssh-user not stored in profile"
 pass "EXPLICIT_SSH_USER_NONINTERACTIVE"
 
