@@ -1,0 +1,20 @@
+version: 1
+
+exact_head_required: true
+artifact_hash_required: true
+provenance_required: true
+sbom_required: true
+operational_e2e_required: true
+full_e2e_passes: 2
+public_smoke_required: true
+
+blockers:
+  p0: true
+  p1: true
+  user_blocking_p2: true
+
+release_identity:
+  product: "Data Relay Link"
+  target_version: "2.4.0"
+  primary_cli: "drlink"
+  upstream_engine: "FRP 0.71.0"
