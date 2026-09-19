@@ -396,7 +396,7 @@ b0a5e4fd71cd204939f6d9cddd9878938b26cca2b8e187bac88d7da9c8cf98aa  tests/test-uni
 655bf590d7b6450f37c457db9ae8363bedbc0a306411af031c1925d17665c61f  tests/test-v24-cli-ai-master.py
 f3514a219c5ddd227e883b6aee5535b4e2a71f7693e69030e5dc63da9c5fba71  tests/test-v24-cli-workflow-semantic-parity.py
 227562b392e449cc5393f899c135c77c176b9cbc6cfb5938de8c20a8e6e90f7b  tests/test-v24-doc-consistency.py
-b28ac40a51f807eaf326db9d94143987ec8ff9c6c84ed6098a8846d9332415e9  tests/test-v24-false-pass-hardening.py
+c2f3de56a39bade171ce2101c87f1a8a5552623a434f07a05646aae07736a201  tests/test-v24-false-pass-hardening.py
 75ad043ca98db8418756fc72707235e2d0550ee3cbd7f133ea72eb133a312523  tests/test-v24-final-closure.py
 4e6a66f9388e16ada265f8ed5e488f03f089672572cd553de06bb0e5af0a9d95  tests/test-v24-managed-host-policy.py
 c12e843877910c84fe581140740088e0a9aafad5d8cfe59d53f3da4fc8860e9e  tests/test-v24-manual-e2e-findings.py

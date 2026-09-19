@@ -164,10 +164,13 @@ class FalsePassHardening(unittest.TestCase):
         self.assertIn("Version Information", sys_labels)
         self.assertIn("Updates", sys_labels)
         self.assertIn("Uninstall Data Relay Link", sys_labels)
-        # Lifecycle stays under Agent, not System.
+        # Lifecycle stays under Agent, not System. Show Agent is the read-only
+        # identity/runtime view added with the v2.4 Agent Host UX closure.
         agent = catalog.navigation_entries("client.agent")
         agent_labels = [e[1] for e in agent if e[1] != "Back"]
-        self.assertEqual(agent_labels, ["Pause", "Resume", "Restart", "Autostart"])
+        self.assertEqual(
+            agent_labels, ["Show Agent", "Pause", "Resume", "Restart", "Autostart"]
+        )
         # No competing root Status/Diagnostics outside System.
         self.assertNotIn("Status", labels)
         self.assertNotIn("Diagnostics", labels)
