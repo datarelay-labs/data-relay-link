@@ -7,11 +7,14 @@ default and matches 2.0.0. Enterprise single-443 is optional. Project version
 Published service ports stay **TCP/6000-6098** (1:1) in both modes.
 
 **Public IP** is the default and primary infrastructure endpoint used for FRP
-control and the default allocator URL. An optional **public hostname** may be
+control identity (`FRP_PUBLIC_HOST`). An optional **public hostname** may be
 configured as a user-facing DNS alias for published services (SSH/HTTP/HTTPS/
-custom TCP). Setting or unsetting that hostname does not change Direct or
-single-443 control paths, frontend proxy configuration, or CA identity. DNS
-records are managed outside Data Relay Link. HTTPS published services remain
+custom TCP). When that hostname is configured, non-interactive Enrollment HTTPS
+/ the allocator enroll URL prefers it (`FRP_ENROLLMENT_PUBLIC_HOST` derived from
+the hostname). Operators may force enrollment via the public IP with
+`FRP_ENROLLMENT_PUBLIC_HOST=<ip>`. Setting or unsetting the public hostname does
+not move the FRP control path, frontend proxy configuration, or CA identity.
+DNS records are managed outside Data Relay Link. HTTPS published services remain
 TCP passthrough.
 
 An optional **bootstrap hostname** may be configured separately for publicly

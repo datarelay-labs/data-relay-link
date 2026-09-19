@@ -24,7 +24,8 @@ reset_env() {
     FRP_LISTEN_HOST FRP_CONTROL_BIND_ADDR FRP_TRANSPORT FRP_MODE_SWITCH \
     EXISTING_DEPLOYMENT_MODE EXISTING_SERVER_CONFIG EXISTING_ALLOCATOR_URL \
     FRP_RELEASE_CHANNEL FRP_EXPECTED_SOURCE_REF FRP_TXN_SOURCE_REF \
-    FRP_EXPECTED_SOURCE_HEAD FRP_EXPECTED_RELEASE_CHANNEL || true
+    FRP_EXPECTED_SOURCE_HEAD FRP_EXPECTED_RELEASE_CHANNEL \
+    FRP_ENROLLMENT_PUBLIC_HOST || true
 }
 
 reset_env
@@ -59,7 +60,10 @@ resolve_server_settings
 [[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://203.0.113.10:6099/enroll' ]] || fail "derived allocator URL"
 pass "derived allocator URL from public host"
 
-# public_hostname is a published-service alias only; allocator URL stays on public IP.
+# Control identity stays on public IP. Non-interactive Enrollment HTTPS prefers
+# the configured public DNS hostname (v2.4 contract / Rick manual E2E findings).
+# reset_env must clear FRP_ENROLLMENT_PUBLIC_HOST so prior cases cannot leak
+# (the observed FAIL used 203.0.113.10 from CASE B via that leak).
 reset_env
 export FRP_PUBLIC_IP='129.225.184.60'
 export FRP_PUBLIC_HOSTNAME='remote.xdr.ooo'
@@ -68,8 +72,22 @@ load_existing_server_config
 resolve_server_settings
 [[ "$FRP_PUBLIC_HOST" == '129.225.184.60' ]] || fail "FQDN default keeps public_host as IP"
 [[ "$FRP_PUBLIC_HOSTNAME" == 'remote.xdr.ooo' ]] || fail "FQDN default keeps public_hostname"
-[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://129.225.184.60:6099/enroll' ]] || fail "allocator URL stays on public IP (got ${FRP_ALLOCATOR_PUBLIC_URL})"
+[[ "$FRP_ENROLLMENT_PUBLIC_HOST" == 'remote.xdr.ooo' ]] || fail "non-interactive enrollment prefers public hostname (got ${FRP_ENROLLMENT_PUBLIC_HOST:-})"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://remote.xdr.ooo:6099/enroll' ]] || fail "allocator URL uses public hostname (got ${FRP_ALLOCATOR_PUBLIC_URL})"
 pass "ALLOCATOR_SEPARATE_FROM_PUBLIC_HOSTNAME"
+
+# Explicit enrollment identity on public IP remains supported (operator override).
+reset_env
+export FRP_PUBLIC_IP='129.225.184.60'
+export FRP_PUBLIC_HOSTNAME='remote.xdr.ooo'
+export FRP_ENROLLMENT_PUBLIC_HOST='129.225.184.60'
+export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_PUBLIC_HOST" == '129.225.184.60' ]] || fail "override keeps public_host as IP"
+[[ "$FRP_ENROLLMENT_PUBLIC_HOST" == '129.225.184.60' ]] || fail "override keeps enrollment on IP"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://129.225.184.60:6099/enroll' ]] || fail "allocator URL stays on public IP when enrollment host is IP (got ${FRP_ALLOCATOR_PUBLIC_URL})"
+pass "ALLOCATOR_ENROLLMENT_HOST_IP_OVERRIDE"
 
 # Bare hostname FRP_ALLOCATOR_PUBLIC_URL is normalized to the enrollment URL.
 reset_env
