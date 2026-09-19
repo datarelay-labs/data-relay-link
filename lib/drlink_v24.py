@@ -997,13 +997,28 @@ def service_object_references(plane_db, name: str) -> list[dict]:
         (obj["id"],),
     ):
         family = "Remote Access" if row["plane"] == "remote" else "Internet Access"
-        refs.append({"kind": "policy", "display": "%s: %s" % (family, row["name"])})
+        refs.append(
+            {
+                "kind": "policy",
+                "plane": row["plane"],
+                "name": row["name"],
+                "section": family,
+                "display": "%s: %s" % (family, row["name"]),
+            }
+        )
     for g in plane_db.conn.execute(
         "SELECT g.name FROM service_group_members m JOIN service_groups g ON g.id = m.group_id "
         "WHERE m.service_object_id = ?",
         (obj["id"],),
     ):
-        refs.append({"kind": "service-group", "display": "Service Group: %s" % g["name"]})
+        refs.append(
+            {
+                "kind": "service-group",
+                "name": g["name"],
+                "section": "Service Groups",
+                "display": "Service Group: %s" % g["name"],
+            }
+        )
     for meta in plane_db.conn.execute(
         "SELECT s.name, c.label, c.hostname FROM remote_service_meta m "
         "JOIN published_services s ON s.id = m.service_id "
@@ -1014,6 +1029,8 @@ def service_object_references(plane_db, name: str) -> list[dict]:
         refs.append(
             {
                 "kind": "remote-service",
+                "name": meta["name"],
+                "section": "Remote Services",
                 "display": "%s / %s" % (host, meta["name"]),
             }
         )
@@ -1021,8 +1038,153 @@ def service_object_references(plane_db, name: str) -> list[dict]:
         "SELECT name FROM agent_remote_services WHERE service_object = ? COLLATE NOCASE",
         (name,),
     ):
-        refs.append({"kind": "remote-service", "display": "Remote Service: %s" % local["name"]})
+        refs.append(
+            {
+                "kind": "remote-service",
+                "name": local["name"],
+                "section": "Remote Services",
+                "display": "Remote Service: %s" % local["name"],
+            }
+        )
     return refs
+
+
+def network_group_references(plane_db, name: str) -> list[dict]:
+    grp = plane_db.get_object_group(name)
+    if not grp:
+        return []
+    refs = []
+    for table, _field in (("rule_sources", "source"), ("rule_destinations", "destination")):
+        for row in plane_db.conn.execute(
+            "SELECT r.plane, r.name FROM %s s JOIN policy_rules r ON r.id = s.rule_id "
+            "WHERE s.ref_kind = 'group' AND s.ref_id = ?" % table,
+            (grp["id"],),
+        ):
+            family = "Remote Access" if row["plane"] == "remote" else "Internet Access"
+            refs.append(
+                {
+                    "kind": "policy",
+                    "plane": row["plane"],
+                    "name": row["name"],
+                    "section": family,
+                    "display": "%s: %s" % (family, row["name"]),
+                }
+            )
+    for row in plane_db.conn.execute(
+        "SELECT g.name FROM object_group_members m JOIN object_groups g ON g.id = m.group_id "
+        "WHERE m.member_kind = 'group' AND m.member_id = ?",
+        (grp["id"],),
+    ):
+        refs.append(
+            {
+                "kind": "network-group",
+                "name": row["name"],
+                "section": "Network Groups",
+                "display": "Network Group: %s" % row["name"],
+            }
+        )
+    return refs
+
+
+def service_group_references(plane_db, name: str) -> list[dict]:
+    grp = get_service_group(plane_db, name)
+    if not grp:
+        return []
+    refs = []
+    for row in plane_db.conn.execute(
+        "SELECT r.plane, r.name FROM rule_service_refs x "
+        "JOIN policy_rules r ON r.id = x.rule_id WHERE x.ref_kind = 'service_group' AND x.ref_id = ?",
+        (grp["id"],),
+    ):
+        family = "Remote Access" if row["plane"] == "remote" else "Internet Access"
+        refs.append(
+            {
+                "kind": "policy",
+                "plane": row["plane"],
+                "name": row["name"],
+                "section": family,
+                "display": "%s: %s" % (family, row["name"]),
+            }
+        )
+    return refs
+
+
+def format_references_view(refs: list[dict]) -> str:
+    """Render dependency references for show … references subviews."""
+    if not refs:
+        return "References:\n  None\n"
+    order = (
+        "Remote Access",
+        "Internet Access",
+        "AI Access",
+        "Network Groups",
+        "Service Groups",
+        "Remote Services",
+        "Fixed TCP",
+    )
+    buckets: dict[str, list[str]] = {k: [] for k in order}
+    other: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for ref in refs:
+        section = str(ref.get("section") or "").strip()
+        if not section:
+            kind = str(ref.get("kind") or "")
+            plane = str(ref.get("plane") or "")
+            if kind == "policy" or plane in ("remote", "internet"):
+                section = "Remote Access" if plane == "remote" else "Internet Access"
+            elif kind in ("object-group", "network-group"):
+                section = "Network Groups"
+            elif kind == "service-group":
+                section = "Service Groups"
+            elif kind == "ai-access":
+                section = "AI Access"
+            elif kind == "fixed-tcp":
+                section = "Fixed TCP"
+            elif kind == "remote-service":
+                section = "Remote Services"
+            else:
+                section = "Other"
+        label = str(ref.get("name") or ref.get("display") or "").strip()
+        if ":" in label and label.split(":", 1)[0].strip() in (
+            "Remote Access",
+            "Internet Access",
+            "Service Group",
+            "Network Group",
+            "Remote Service",
+        ):
+            label = label.split(":", 1)[1].strip()
+        if label.lower().startswith("remote-access ") or label.lower().startswith("internet-access "):
+            label = label.split(" ", 1)[1].strip()
+        if label.lower().startswith("object-group "):
+            label = label.split(" ", 1)[1].strip()
+            section = "Network Groups"
+        if label.lower().startswith("ai-access "):
+            label = label.split(" ", 1)[1].strip()
+            section = "AI Access"
+        if label.lower().startswith("fixed-tcp "):
+            label = label.split(" ", 1)[1].strip()
+            section = "Fixed TCP"
+        key = (section, label.lower())
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        if section in buckets:
+            buckets[section].append(label)
+        else:
+            other.append(label)
+    lines = ["References:"]
+    for section in order:
+        items = buckets.get(section) or []
+        if not items:
+            continue
+        lines.append("%s:" % section)
+        for item in items:
+            lines.append("  %s" % item)
+    if other:
+        lines.append("Other:")
+        for item in other:
+            lines.append("  %s" % item)
+    return "\n".join(lines) + "\n"
 
 
 def unset_service_object(plane_db, name: str) -> dict:
@@ -1449,6 +1611,97 @@ def unset_access_rule(plane_db, family: str, name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _representative_ip_from_value(value: str) -> str:
+    """Pick a concrete IP for policy test when the selector is a CIDR."""
+    text = str(value or "").strip()
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        pass
+    try:
+        net = ipaddress.ip_network(text, strict=False)
+    except ValueError as exc:
+        raise ControlPlaneError(cli_error("Value '%s' is not a usable IP or CIDR." % text)) from exc
+    hosts = list(net.hosts())
+    return str(hosts[0] if hosts else net.network_address)
+
+
+def _resolve_test_source_ip(plane_db, source_name: str) -> str:
+    """Resolve a Network Object/Group to a runtime-equivalent source IP."""
+    from drlink_control_plane import membership_eligible
+
+    obj = plane_db.get_object(source_name)
+    if obj is not None:
+        if obj["type"] == "managed_endpoint":
+            for addr in plane_db.endpoint_addresses(obj["name"]):
+                if addr.get("active") and membership_eligible(str(addr.get("address") or "")):
+                    return str(addr["address"])
+            raise ControlPlaneError(
+                cli_error(
+                    "Managed Host '%s' has no usable address for policy test." % source_name,
+                    next_step="Ensure the Agent has reported addresses, then retry.",
+                )
+            )
+        vals = plane_db._object_values(obj["id"])
+        if not vals:
+            raise ControlPlaneError(cli_error("Network Object '%s' has no value." % source_name))
+        if obj["type"] == "fqdn":
+            # FQDN sources are unusual; still allow exact-string evaluation via host match path.
+            return str(vals[0])
+        return _representative_ip_from_value(vals[0])
+    grp = plane_db.get_object_group(source_name)
+    if grp is not None:
+        members = plane_db._expand_group_members(grp["id"], set())
+        if not members:
+            raise ControlPlaneError(cli_error("Network Group '%s' has no members." % source_name))
+        return _resolve_test_source_ip(plane_db, members[0]["name"])
+    raise ControlPlaneError(cli_error("Network Object '%s' was not found." % source_name))
+
+
+def _resolve_test_destination(plane_db, destination_name: str, *, plane: str) -> str:
+    """Resolve a Network Object/Group to a runtime-equivalent destination token."""
+    obj = plane_db.get_object(destination_name)
+    if obj is not None:
+        if obj["type"] == "managed_endpoint":
+            # Remote Access runtime matches Managed Host by identity as well as address.
+            if plane == "remote":
+                return obj["name"]
+            raise ControlPlaneError(
+                cli_error("Managed Host cannot be used as an Internet Access destination.")
+            )
+        vals = plane_db._object_values(obj["id"])
+        if not vals:
+            raise ControlPlaneError(cli_error("Network Object '%s' has no value." % destination_name))
+        if obj["type"] == "fqdn":
+            return str(vals[0]).rstrip(".").lower()
+        if obj["type"] == "network":
+            return _representative_ip_from_value(vals[0])
+        return str(vals[0])
+    grp = plane_db.get_object_group(destination_name)
+    if grp is not None:
+        members = plane_db._expand_group_members(grp["id"], set())
+        if not members:
+            raise ControlPlaneError(cli_error("Network Group '%s' has no members." % destination_name))
+        return _resolve_test_destination(plane_db, members[0]["name"], plane=plane)
+    # Allow literal IP / hostname tokens for AI/operator convenience.
+    try:
+        return str(ipaddress.ip_address(str(destination_name).strip()))
+    except ValueError:
+        pass
+    if plane == "internet" and "." in str(destination_name):
+        return str(destination_name).rstrip(".").lower()
+    raise ControlPlaneError(cli_error("Network Object '%s' was not found." % destination_name))
+
+
+def _resolve_test_service(plane_db, service_name: str) -> tuple[str, int]:
+    """Resolve a Service Object/Group to protocol + port used by runtime matching."""
+    members = expand_service_ref(plane_db, service_name)
+    sobj = members[0]
+    stype = str(sobj["type"] or "tcp").lower()
+    proto = "tcp" if stype in ("tcp", "fixed-tcp", "http", "https") else stype
+    return proto, int(sobj["port"])
+
+
 def evaluate_selector_policy(
     plane_db,
     family: str,
@@ -1461,7 +1714,48 @@ def evaluate_selector_policy(
     destination_name: Optional[str] = None,
     service_name: Optional[str] = None,
 ) -> dict:
+    """Evaluate Remote/Internet Access using runtime-equivalent semantics.
+
+    Named Object selectors are resolved to canonical values (IP/FQDN/protocol/port)
+    so Object identity alone never decides the match — matching the datapath.
+    """
     plane = _plane_key(family)
+
+    # Public CLI path: named selectors → resolve → same evaluators as runtime.
+    if source_name is not None or destination_name is not None or service_name is not None:
+        src = source_ip
+        dest = destination
+        proto = protocol
+        prt = port
+        if source_name is not None:
+            src = _resolve_test_source_ip(plane_db, source_name)
+        if destination_name is not None:
+            dest = _resolve_test_destination(plane_db, destination_name, plane=plane)
+        if service_name is not None:
+            proto, prt = _resolve_test_service(plane_db, service_name)
+        if src is None or dest is None or proto is None or prt is None:
+            raise ControlPlaneError(
+                cli_error(
+                    "Policy test requires source, destination, and service.",
+                    expected="  source\n  destination\n  service",
+                )
+            )
+        if plane == "remote":
+            evaluation = plane_db.evaluate_remote_access(str(src), str(dest), str(proto), int(prt))
+        else:
+            evaluation = plane_db.evaluate_internet_access(
+                str(src), str(dest), int(prt), str(proto)
+            )
+        action = str(evaluation.get("effective") or evaluation.get("action") or "DENY").upper()
+        return {
+            "mode": evaluation.get("mode"),
+            "enforcement": evaluation.get("enforcement"),
+            "matched_rules": list(evaluation.get("matched_rules") or []),
+            "result": action,
+            "plane": plane,
+        }
+
+    # Direct IP/protocol/port path (internal / legacy callers).
     pol = get_access_policy(plane_db, plane)
     matched_rules = []
     for rule_row in plane_db.conn.execute(
@@ -1471,33 +1765,17 @@ def evaluate_selector_policy(
             continue
         view = plane_db._rule_view(rule_row)
         src_ok = False
-        if source_name:
-            for s in plane_db.conn.execute(
-                "SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ?", (rule_row["id"],)
-            ):
-                if _ref_name_match(plane_db, s["ref_kind"], s["ref_id"], source_name):
-                    src_ok = True
-                    break
-        elif source_ip:
+        if source_ip:
             for s in plane_db.conn.execute(
                 "SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ?", (rule_row["id"],)
             ):
                 if plane_db._ref_matches_ip(s["ref_kind"], s["ref_id"], source_ip, role="source"):
                     src_ok = True
                     break
-                # Managed Host name as Internet Access source via endpoint addrs already covered;
-                # also allow identity match when source_name not provided but dest is MH.
         else:
             src_ok = True
         dst_ok = False
-        if destination_name:
-            for s in plane_db.conn.execute(
-                "SELECT ref_kind, ref_id FROM rule_destinations WHERE rule_id = ?", (rule_row["id"],)
-            ):
-                if _ref_name_match(plane_db, s["ref_kind"], s["ref_id"], destination_name):
-                    dst_ok = True
-                    break
-        elif destination:
+        if destination:
             dest_obj = plane_db.get_object(destination)
             for s in plane_db.conn.execute(
                 "SELECT ref_kind, ref_id FROM rule_destinations WHERE rule_id = ?", (rule_row["id"],)
@@ -1520,35 +1798,7 @@ def evaluate_selector_policy(
         else:
             dst_ok = True
         svc_ok = False
-        if service_name:
-            for s in plane_db.conn.execute(
-                "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ?", (rule_row["id"],)
-            ):
-                if s["ref_kind"] == "service_object":
-                    sobj = plane_db.conn.execute(
-                        "SELECT name FROM service_objects WHERE id = ?", (s["ref_id"],)
-                    ).fetchone()
-                    if sobj and sobj["name"].lower() == service_name.lower():
-                        svc_ok = True
-                        break
-                else:
-                    names = [
-                        r["name"]
-                        for r in plane_db.conn.execute(
-                            "SELECT s.name FROM service_group_members m "
-                            "JOIN service_objects s ON s.id = m.service_object_id WHERE m.group_id = ?",
-                            (s["ref_id"],),
-                        )
-                    ]
-                    grp = plane_db.conn.execute(
-                        "SELECT name FROM service_groups WHERE id = ?", (s["ref_id"],)
-                    ).fetchone()
-                    if (grp and grp["name"].lower() == service_name.lower()) or any(
-                        n.lower() == service_name.lower() for n in names
-                    ):
-                        svc_ok = True
-                        break
-        elif protocol is not None and port is not None:
+        if protocol is not None and port is not None:
             proto = str(protocol).lower()
             if proto in ("http", "https"):
                 proto = "tcp"
@@ -2165,61 +2415,67 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
         # Catalog sync failure should not wipe desired state; mark degraded later.
         pass
     updated = 0
-    # Process delete_pending tombstones
-    for row in list(
-        plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 1")
-    ):
-        try:
-            unset_remote_service_agent(plane_db, row["name"], root=root, server_reachable=True)
-        except ControlPlaneError as exc:
-            plane_db.conn.execute(
-                "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
-                "WHERE name = ?",
-                (str(exc).split("\n", 2)[1] if "\n" in str(exc) else str(exc), utc_now_iso(), row["name"]),
-            )
-            _commit_if_autonomous(plane_db)
-        updated += 1
-    # Revalidate + activate remaining services
-    for row in list(
-        plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
-    ):
-        svc_name = row["service_object"]
-        dest_reason = _destination_dependency_status(plane_db, row["destination"], root=root)
-        svc_reason = _service_dependency_status(plane_db, svc_name)
-        reason = dest_reason or svc_reason
-        if reason:
-            plane_db.conn.execute(
-                "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
-                "WHERE name = ?",
-                (reason, utc_now_iso(), row["name"]),
-            )
-            _commit_if_autonomous(plane_db)
+    # Defer runtime restarts to a single apply at the end of this synchronize.
+    prev_batch = bool(getattr(plane_db, "_batch_mode", False))
+    plane_db._batch_mode = True
+    try:
+        # Process delete_pending tombstones
+        for row in list(
+            plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 1")
+        ):
+            try:
+                unset_remote_service_agent(plane_db, row["name"], root=root, server_reachable=True)
+            except ControlPlaneError as exc:
+                plane_db.conn.execute(
+                    "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                    "WHERE name = ?",
+                    (str(exc).split("\n", 2)[1] if "\n" in str(exc) else str(exc), utc_now_iso(), row["name"]),
+                )
+                _commit_if_autonomous(plane_db)
             updated += 1
-            continue
-        # Re-apply to allocate pending endpoints / refresh HEALTHY
-        try:
-            set_remote_service_agent(
-                plane_db,
-                row["name"],
-                destination=row["destination"],
-                service=row["service_object"],
-                enabled=bool(row["enabled"]),
-                oneshot=True,
-                root=root,
-                server_reachable=True,
-            )
-        except ControlPlaneError as exc:
-            msg = str(exc)
-            brief = msg
-            if msg.startswith("ERROR:\n"):
-                brief = msg[7:].split("\n\n")[0]
-            plane_db.conn.execute(
-                "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
-                "WHERE name = ?",
-                (brief, utc_now_iso(), row["name"]),
-            )
-            _commit_if_autonomous(plane_db)
-        updated += 1
+        # Revalidate + activate remaining services
+        for row in list(
+            plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
+        ):
+            svc_name = row["service_object"]
+            dest_reason = _destination_dependency_status(plane_db, row["destination"], root=root)
+            svc_reason = _service_dependency_status(plane_db, svc_name)
+            reason = dest_reason or svc_reason
+            if reason:
+                plane_db.conn.execute(
+                    "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                    "WHERE name = ?",
+                    (reason, utc_now_iso(), row["name"]),
+                )
+                _commit_if_autonomous(plane_db)
+                updated += 1
+                continue
+            # Re-apply to allocate pending endpoints / refresh HEALTHY
+            try:
+                set_remote_service_agent(
+                    plane_db,
+                    row["name"],
+                    destination=row["destination"],
+                    service=row["service_object"],
+                    enabled=bool(row["enabled"]),
+                    oneshot=True,
+                    root=root,
+                    server_reachable=True,
+                )
+            except ControlPlaneError as exc:
+                msg = str(exc)
+                brief = msg
+                if msg.startswith("ERROR:\n"):
+                    brief = msg[7:].split("\n\n")[0]
+                plane_db.conn.execute(
+                    "UPDATE agent_remote_services SET status = 'DEGRADED', reason = ?, updated_at = ? "
+                    "WHERE name = ?",
+                    (brief, utc_now_iso(), row["name"]),
+                )
+                _commit_if_autonomous(plane_db)
+            updated += 1
+    finally:
+        plane_db._batch_mode = prev_batch
     # Reconcile endpoint ownership with Server before runtime projection so a
     # stale Agent claim cannot keep advertising or activating a revoked port.
     _push_agent_remote_service_status(plane_db, root=root)
@@ -2909,6 +3165,9 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
         return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "delete"}
 
     result = plane_db._mutate("unset remote-service %s" % name, "delete remote service", write)
+    # Nested synchronize / Bundle Apply defers runtime to one final apply.
+    if getattr(plane_db, "_batch_mode", False):
+        return result
     # Always remove local runtime proxy immediately (including offline tombstone deletes).
     try:
         import drlink_v24_runtime as runtime
@@ -2958,6 +3217,92 @@ def format_remote_service_view(view: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def probe_agent_runtime_unit(*, root: Optional[str] = None) -> dict:
+    """Read-only probe of the Agent frpc unit (drlink-client / launchd).
+
+    Returns {level, detail} where level is Healthy|Critical|Warning|Unknown.
+    Does not start/stop services. Test roots may inject DRLINK_TEST_RUNTIME_UNIT.
+    """
+    inject = str(os.environ.get("DRLINK_TEST_RUNTIME_UNIT") or "").strip()
+    if inject:
+        # Formats: "failed:start-limit-hit" | "active" | "inactive" | "unknown:reason"
+        parts = inject.split(":", 1)
+        state = parts[0].strip().lower()
+        detail = parts[1].strip() if len(parts) > 1 else ""
+        if state in ("failed", "critical"):
+            msg = "drlink-client.service is failed"
+            if detail:
+                msg = "%s (Result=%s)" % (msg, detail)
+            return {"level": "Critical", "detail": msg}
+        if state in ("active", "healthy", "running"):
+            return {"level": "Healthy", "detail": "drlink-client.service is active"}
+        if state in ("inactive", "dead"):
+            return {"level": "Critical", "detail": "drlink-client.service is inactive"}
+        return {"level": "Unknown", "detail": detail or inject}
+
+    root_s = str(root or "").rstrip("/")
+    if root_s not in ("", "/") or str(os.environ.get("FRP_SKIP_SYSTEMD") or "").strip() == "1":
+        return {
+            "level": "Unknown",
+            "detail": "Runtime unit status unavailable in this environment",
+        }
+
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["systemctl", "show", "drlink-client", "-p", "ActiveState", "-p", "Result", "-p", "SubState"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        # macOS / systems without systemctl
+        try:
+            proc = subprocess.run(
+                ["launchctl", "print", "system/com.datarelay.drlink.frpc"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            text = (proc.stdout or "") + (proc.stderr or "")
+            if proc.returncode != 0:
+                return {
+                    "level": "Critical",
+                    "detail": "macOS Agent runtime job is not loaded",
+                }
+            if "state = running" in text.lower() or "runs = 1" in text.lower():
+                return {"level": "Healthy", "detail": "macOS Agent runtime is running"}
+            return {"level": "Warning", "detail": "macOS Agent runtime is loaded but not running"}
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return {
+                "level": "Unknown",
+                "detail": "Runtime unit status unavailable on this platform",
+            }
+
+    props = {}
+    for line in (proc.stdout or "").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            props[k.strip()] = v.strip()
+    active = str(props.get("ActiveState") or "").lower()
+    result = str(props.get("Result") or "").strip()
+    if active == "failed" or result not in ("", "success"):
+        msg = "drlink-client.service is failed"
+        if result and result != "success":
+            msg = "%s (Result=%s)" % (msg, result)
+        return {"level": "Critical", "detail": msg}
+    if active == "active":
+        return {"level": "Healthy", "detail": "drlink-client.service is active"}
+    if active in ("inactive", "dead"):
+        return {"level": "Critical", "detail": "drlink-client.service is inactive"}
+    if active:
+        return {"level": "Warning", "detail": "drlink-client.service is %s" % active}
+    return {"level": "Unknown", "detail": "drlink-client.service status could not be read"}
+
+
 def format_show_status(role: str, plane_db=None) -> str:
     lines = [
         "Data Relay Link",
@@ -2975,7 +3320,6 @@ def format_show_status(role: str, plane_db=None) -> str:
                 policies.append("  %s: No Policy (ALLOW)" % title)
             else:
                 configured = True
-                eff = effective_policy_result(pol["mode"], pol["enforcement"], matched=False)
                 # Show mode summary
                 policies.append(
                     "  %s: %s / %s"

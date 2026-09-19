@@ -443,17 +443,44 @@ def _security_impact_for_plan(plane: ControlPlane, context: str, body: dict, cha
                     "WARNING: This change broadens %s by removing the last BLACKLIST blocking Rule."
                     % title
                 )
-        # whitelist → zero enabled rules
+        # whitelist → zero enabled rules after merge with authoritative state
         want_mode = section.get("mode") or pol.get("mode")
         if want_mode == "whitelist":
             rules = section.get("rules")
             if rules is not None:
-                enabled_after = sum(
-                    1
-                    for r in rules
-                    if r.get("state") != "absent" and r.get("enabled", True)
-                )
-                if enabled_after == 0 and str(section.get("enforcement") or pol.get("enforcement")).lower() != "disabled":
+                if family == "ai":
+                    current = {
+                        str(r["name"])
+                        for r in plane.conn.execute(
+                            "SELECT name FROM ai_policy_rules WHERE enabled = 1"
+                        )
+                    }
+                else:
+                    current = {
+                        str(r["name"])
+                        for r in plane.conn.execute(
+                            "SELECT name FROM policy_rules WHERE plane = ? AND enabled = 1",
+                            (family,),
+                        )
+                    }
+                for rule in rules:
+                    name = str(rule.get("name") or "").strip()
+                    if not name:
+                        continue
+                    if rule.get("state") == "absent":
+                        current.discard(name)
+                        # case-insensitive discard
+                        current = {n for n in current if n.lower() != name.lower()}
+                    elif rule.get("enabled") is False:
+                        current = {n for n in current if n.lower() != name.lower()}
+                    else:
+                        # enabled true/default → present after apply
+                        current = {n for n in current if n.lower() != name.lower()}
+                        current.add(name)
+                enabled_after = len(current)
+                if enabled_after == 0 and str(
+                    section.get("enforcement") or pol.get("enforcement")
+                ).lower() != "disabled":
                     impact.append(
                         "WARNING: %s WHITELIST with zero enabled Rules → DENY ALL." % title
                     )

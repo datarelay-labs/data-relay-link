@@ -85,6 +85,8 @@ class PublicGrammarClosure(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_REMOTE_ACCESS_TEST_NAMED_GRAMMAR(self):
+        self._cli("set", "network-object", "a", "type", "ip", "value", "198.51.100.10")
+        self._cli("set", "network-object", "b", "type", "ip", "value", "198.51.100.20")
         r = self._cli(
             "test",
             "remote-access",
@@ -99,6 +101,8 @@ class PublicGrammarClosure(unittest.TestCase):
         self.assertIn("Remote Access Test", r.stdout)
 
     def test_INTERNET_ACCESS_TEST_NAMED_GRAMMAR(self):
+        self._cli("set", "network-object", "a", "type", "ip", "value", "198.51.100.10")
+        self._cli("set", "network-object", "b", "type", "fqdn", "value", "example.com")
         r = self._cli(
             "test",
             "internet-access",

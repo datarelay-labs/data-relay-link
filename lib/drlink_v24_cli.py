@@ -144,12 +144,15 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             raise ControlPlaneError(v24.cli_error("Network Object '%s' was not found." % name))
         if len(rest) >= 3 and rest[2] == "references":
             refs = plane.object_references(name)
-            if not refs:
-                sys.stdout.write("(no references)\n")
-            else:
-                for r in refs:
-                    sys.stdout.write("%s\n" % r["display"])
+            sys.stdout.write(v24.format_references_view(refs))
             return 0
+        if len(rest) >= 3:
+            raise ControlPlaneError(
+                v24.cli_error(
+                    "Unknown Network Object view '%s'." % rest[2],
+                    expected="  references",
+                )
+            )
         if obj["type"] == "managed_endpoint" or obj["origin"] == "managed":
             client = None
             try:
@@ -186,6 +189,17 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         g = plane.get_object_group(rest[1])
         if not g:
             raise ControlPlaneError(v24.cli_error("Network Group '%s' was not found." % rest[1]))
+        if len(rest) >= 3 and rest[2] == "references":
+            refs = v24.network_group_references(plane, rest[1])
+            sys.stdout.write(v24.format_references_view(refs))
+            return 0
+        if len(rest) >= 3:
+            raise ControlPlaneError(
+                v24.cli_error(
+                    "Unknown Network Group view '%s'." % rest[2],
+                    expected="  references",
+                )
+            )
         sys.stdout.write("Network Group: %s\n" % g["name"])
         for mem in plane._expand_group_members(g["id"], set()):
             sys.stdout.write("  %s\n" % mem["name"])
@@ -205,12 +219,15 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             raise ControlPlaneError(v24.cli_error("Service Object '%s' was not found." % rest[1]))
         if len(rest) >= 3 and rest[2] == "references":
             refs = v24.service_object_references(plane, rest[1])
-            if not refs:
-                sys.stdout.write("(no references)\n")
-            else:
-                for r in refs:
-                    sys.stdout.write("%s\n" % r["display"])
+            sys.stdout.write(v24.format_references_view(refs))
             return 0
+        if len(rest) >= 3:
+            raise ControlPlaneError(
+                v24.cli_error(
+                    "Unknown Service Object view '%s'." % rest[2],
+                    expected="  references",
+                )
+            )
         sys.stdout.write(
             "Service Object: %s\nType : %s\nPort : %s\n" % (sobj["name"], sobj["type"], sobj["port"])
         )
@@ -227,6 +244,17 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         g = v24.get_service_group(plane, rest[1])
         if not g:
             raise ControlPlaneError(v24.cli_error("Service Group '%s' was not found." % rest[1]))
+        if len(rest) >= 3 and rest[2] == "references":
+            refs = v24.service_group_references(plane, rest[1])
+            sys.stdout.write(v24.format_references_view(refs))
+            return 0
+        if len(rest) >= 3:
+            raise ControlPlaneError(
+                v24.cli_error(
+                    "Unknown Service Group view '%s'." % rest[2],
+                    expected="  references",
+                )
+            )
         sys.stdout.write("Service Group: %s\n" % g["name"])
         for m in plane.conn.execute(
             "SELECT s.name FROM service_group_members x JOIN service_objects s ON s.id = x.service_object_id WHERE x.group_id = ?",
@@ -318,6 +346,57 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                     )
                 )
             return 0
+        if view == "agent":
+            host_label = client["label"] or client["hostname"] or client["id"][:8]
+            connection = "Connected" if client["connected"] else "Disconnected"
+            last_seen = client["last_seen"] or "Never"
+            lines = [
+                "Managed Host Agent: %s" % host_label,
+                "Connection   : %s" % connection,
+                "Host status  : %s" % (client["status"] or "-"),
+                "Last seen    : %s" % last_seen,
+                "Agent version: Not reported to Server",
+                "Source HEAD  : Not reported to Server",
+                "FRP version  : Not reported to Server",
+                "",
+                "Runtime health details are reported by the Agent Host via:",
+                "  show status",
+            ]
+            sys.stdout.write("\n".join(lines) + "\n")
+            return 0
+        if view == "addresses":
+            host_label = client["label"] or client["hostname"] or client["id"][:8]
+            ep = plane.conn.execute(
+                "SELECT o.name FROM objects o JOIN managed_endpoints e ON e.object_id = o.id "
+                "WHERE e.client_id = ?",
+                (client["id"],),
+            ).fetchone()
+            sys.stdout.write("Managed Host Addresses: %s\n" % host_label)
+            if not ep:
+                sys.stdout.write("  None\n")
+                return 0
+            addrs = plane.endpoint_addresses(ep["name"])
+            usable = [
+                a
+                for a in addrs
+                if a.get("active") and str(a.get("scope") or "") not in ("loopback", "link-local", "special")
+            ]
+            if not usable:
+                sys.stdout.write("  None\n")
+                return 0
+            for a in usable:
+                sys.stdout.write(
+                    "  %-18s %-8s %s\n"
+                    % (a.get("address") or "-", a.get("scope") or "-", a.get("interface_name") or "-")
+                )
+            return 0
+        if view != "overview":
+            raise ControlPlaneError(
+                v24.cli_error(
+                    "Unknown Managed Host view '%s'." % view,
+                    expected="  remote-services\n  agent\n  addresses",
+                )
+            )
         sys.stdout.write(
             "Managed Host: %s\nHostname: %s\nStatus: %s\nAgent: %s\n"
             % (
@@ -509,10 +588,39 @@ def _show_ai_policy(plane: ControlPlane, rest: list[str]) -> int:
     principal = plane.conn.execute(
         "SELECT name FROM ai_principals WHERE id = ?", (row["source_identity_id"],)
     ).fetchone()
-    sys.stdout.write(
-        "AI Access Rule: %s\nSource: %s\nEnabled: %s\n"
-        % (row["name"], principal["name"] if principal else "-", "YES" if row["enabled"] else "NO")
-    )
+    dest_label = "-"
+    if row["destination_ref_kind"] == "object" and row["destination_ref_id"]:
+        dest = plane.conn.execute(
+            "SELECT name FROM objects WHERE id = ?", (row["destination_ref_id"],)
+        ).fetchone()
+        dest_label = dest["name"] if dest else "-"
+    elif row["destination_ref_kind"] == "group" and row["destination_ref_id"]:
+        dest = plane.conn.execute(
+            "SELECT name FROM object_groups WHERE id = ?", (row["destination_ref_id"],)
+        ).fetchone()
+        dest_label = dest["name"] if dest else "-"
+    perm_label = "-"
+    if row["permission_ref_kind"] == "permission_object" and row["permission_ref_id"]:
+        perm = plane.conn.execute(
+            "SELECT name FROM permission_objects WHERE id = ?", (row["permission_ref_id"],)
+        ).fetchone()
+        perm_label = perm["name"] if perm else "-"
+    elif row["permission_ref_kind"] == "permission_group" and row["permission_ref_id"]:
+        perm = plane.conn.execute(
+            "SELECT name FROM permission_groups WHERE id = ?", (row["permission_ref_id"],)
+        ).fetchone()
+        perm_label = perm["name"] if perm else "-"
+    lines = [
+        "AI Access Rule: %s" % row["name"],
+        "Source      : %s" % (principal["name"] if principal else "-"),
+        "Destination : %s" % dest_label,
+        "Permission  : %s" % perm_label,
+        "Enabled     : %s" % ("YES" if row["enabled"] else "NO"),
+    ]
+    if pol.get("mode"):
+        lines.append("Mode        : %s" % str(pol["mode"]).upper())
+        lines.append("Enforcement : %s" % str(pol.get("enforcement") or "-").upper())
+    sys.stdout.write("\n".join(lines) + "\n")
     return 0
 
 
@@ -716,6 +824,18 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             return run_wizard(plane, "ai-access", name)
         extra_l = [str(t).strip().lower() for t in extra]
         if "mode" not in extra_l and "permission" not in extra_l:
+            if len(extra) == 1 and extra_l[0] in ("enabled", "disabled"):
+                existing = plane.conn.execute(
+                    "SELECT id FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (name,)
+                ).fetchone()
+                if existing:
+                    raise ControlPlaneError(
+                        "ERROR:\nAI Access does not support partial enable/disable via:\n"
+                        "  set ai-access <RULE> enabled|disabled\n\n"
+                        "Re-set the Rule with source, destination, permission, and enabled|disabled,\n"
+                        "or apply a ConfigurationBundle.\n\n"
+                        "No changes were applied."
+                    )
             return None
         kv = v24.parse_kv_tokens(extra)
         enabled = None

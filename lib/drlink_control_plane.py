@@ -926,6 +926,7 @@ class ControlPlane:
                 "WHERE s.ref_kind = 'object' AND s.ref_id = ?" % table,
                 (obj["id"],),
             ):
+                family = "Remote Access" if row["plane"] == "remote" else "Internet Access"
                 refs.append(
                     {
                         "kind": "policy",
@@ -934,7 +935,8 @@ class ControlPlane:
                         "field": kind,
                         "action": row["action"],
                         "enabled": bool(row["enabled"]),
-                        "display": "%s-access %s" % ("remote" if row["plane"] == "remote" else "internet", row["name"]),
+                        "section": family,
+                        "display": "%s: %s" % (family, row["name"]),
                     }
                 )
         for row in self.conn.execute(
@@ -942,18 +944,52 @@ class ControlPlane:
             "WHERE m.member_kind = 'object' AND m.member_id = ?",
             (obj["id"],),
         ):
-            refs.append({"kind": "object-group", "name": row["name"], "display": "object-group %s" % row["name"]})
+            refs.append(
+                {
+                    "kind": "object-group",
+                    "name": row["name"],
+                    "section": "Network Groups",
+                    "display": "Network Group: %s" % row["name"],
+                }
+            )
         for row in self.conn.execute(
             "SELECT name FROM fixed_tcp WHERE destination_object_id = ?", (obj["id"],)
         ):
-            refs.append({"kind": "fixed-tcp", "name": row["name"], "display": "fixed-tcp %s" % row["name"]})
+            refs.append(
+                {
+                    "kind": "fixed-tcp",
+                    "name": row["name"],
+                    "section": "Fixed TCP",
+                    "display": "Fixed TCP: %s" % row["name"],
+                }
+            )
         if obj["type"] == "managed_endpoint":
             for row in self.conn.execute(
                 "SELECT r.name FROM ai_rule_targets t JOIN ai_access_rules r ON r.id = t.rule_id "
                 "WHERE t.target_kind = 'endpoint' AND t.target_id = ?",
                 (obj["id"],),
             ):
-                refs.append({"kind": "ai-access", "name": row["name"], "display": "ai-access %s" % row["name"]})
+                refs.append(
+                    {
+                        "kind": "ai-access",
+                        "name": row["name"],
+                        "section": "AI Access",
+                        "display": "AI Access: %s" % row["name"],
+                    }
+                )
+            for row in self.conn.execute(
+                "SELECT r.name FROM ai_policy_rules r "
+                "WHERE r.destination_ref_kind = 'object' AND r.destination_ref_id = ?",
+                (obj["id"],),
+            ):
+                refs.append(
+                    {
+                        "kind": "ai-access",
+                        "name": row["name"],
+                        "section": "AI Access",
+                        "display": "AI Access: %s" % row["name"],
+                    }
+                )
         return refs
 
     def unset_object(self, name: str) -> dict:
@@ -3980,7 +4016,7 @@ class ControlPlane:
         }
 
     def format_status(self) -> str:
-        from drlink_v24 import detect_cli_role, format_show_status
+        from drlink_v24 import detect_cli_role, format_show_status, probe_agent_runtime_unit
 
         role = detect_cli_role(self.root)
         base = format_show_status(role, self)
@@ -3997,13 +4033,33 @@ class ControlPlane:
         if role == "server":
             extra.append("Managed Hosts    : %s" % st["clients"])
         if role == "agent":
+            runtime = probe_agent_runtime_unit(root=self.root)
+            level = runtime.get("level") or "Unknown"
+            detail = runtime.get("detail") or "unavailable"
+            if level == "Healthy":
+                extra.append("Agent Runtime   : Healthy")
+            else:
+                extra.append("Agent Runtime   : %s — %s" % (level, detail))
+            # Server connection from local identity / client-state when present.
+            server_line = "Unknown"
+            try:
+                from drlink_v24 import load_agent_identity, detect_server_reachable
+
+                identity = load_agent_identity(self.root) or {}
+                if detect_server_reachable(self, self.root):
+                    server_line = "Connected"
+                elif identity:
+                    server_line = "Disconnected"
+            except Exception:
+                server_line = "Unknown"
+            extra.append("Server          : %s" % server_line)
             try:
                 rs_count = self.conn.execute(
-                    "SELECT COUNT(*) FROM agent_remote_services"
+                    "SELECT COUNT(*) FROM agent_remote_services WHERE delete_pending = 0"
                 ).fetchone()[0]
             except Exception:
                 rs_count = 0
-            extra.append("Remote Services  : %s" % rs_count)
+            extra.append("Remote Services : %s" % rs_count)
         else:
             extra.append("Remote Services  : %s" % st["services"])
         if role == "server":

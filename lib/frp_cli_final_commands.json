@@ -4051,16 +4051,21 @@
     "summary": "Show a Network Object",
     "detail": "Show a Network Object",
     "examples": [
-      "show network-object"
+      "show network-object <OBJECT>",
+      "show network-object <OBJECT> references"
     ],
     "args": [
       {
         "name": "OBJECT",
         "complete": "objects",
         "required": true
+      },
+      {
+        "name": "[VIEW]",
+        "required": false
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4103,16 +4108,21 @@
     "summary": "Show a Network Group",
     "detail": "Show a Network Group",
     "examples": [
-      "show network-group"
+      "show network-group <GROUP>",
+      "show network-group <GROUP> references"
     ],
     "args": [
       {
         "name": "GROUP",
         "complete": "object-groups",
         "required": true
+      },
+      {
+        "name": "[VIEW]",
+        "required": false
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4271,15 +4281,20 @@
     "summary": "Show a Service Object",
     "detail": "Show a Service Object",
     "examples": [
-      "show service-object"
+      "show service-object <SERVICE>",
+      "show service-object <SERVICE> references"
     ],
     "args": [
       {
         "name": "SERVICE",
         "required": true
+      },
+      {
+        "name": "[VIEW]",
+        "required": false
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4322,15 +4337,20 @@
     "summary": "Show a Service Group",
     "detail": "Show a Service Group",
     "examples": [
-      "show service-group"
+      "show service-group <GROUP>",
+      "show service-group <GROUP> references"
     ],
     "args": [
       {
         "name": "GROUP",
         "required": true
+      },
+      {
+        "name": "[VIEW]",
+        "required": false
       }
     ],
-    "tail": null,
+    "tail": "any",
     "internal": null,
     "aliases": [],
     "destructive": false,
@@ -4704,7 +4724,9 @@
     "detail": "Show a Managed Host",
     "examples": [
       "show managed-host <HOST>",
-      "show managed-host <HOST> remote-services"
+      "show managed-host <HOST> remote-services",
+      "show managed-host <HOST> agent",
+      "show managed-host <HOST> addresses"
     ],
     "args": [
       {

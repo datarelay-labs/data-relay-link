@@ -1637,6 +1637,8 @@ def domain_help(topic, role):
             "  show managed-hosts\n"
             "  show managed-host <HOST>\n"
             "  show managed-host <HOST> remote-services\n"
+            "  show managed-host <HOST> agent\n"
+            "  show managed-host <HOST> addresses\n"
             "  set enrollment\n"
             "  set enrollment zero-touch\n"
             "  unset managed-host <HOST>\n\n"
@@ -1654,8 +1656,11 @@ def domain_help(topic, role):
             "  menu → Network Objects\n\n"
             "Everyday commands:\n"
             "  show network-objects\n"
+            "  show network-object <NAME>\n"
+            "  show network-object <NAME> references\n"
             "  set network-object <NAME> type <ip|cidr|fqdn> value <VALUE>\n"
             "  set network-group <NAME> members a,b,c\n"
+            "  show network-group <NAME> references\n"
             "  unset network-object <NAME>\n"
         )
     if topic in ("service-object", "service-objects"):
@@ -1670,8 +1675,11 @@ def domain_help(topic, role):
             "  menu → Service Objects\n\n"
             "Everyday commands:\n"
             "  show service-objects\n"
+            "  show service-object <NAME>\n"
+            "  show service-object <NAME> references\n"
             "  set service-object <NAME> type <tcp|udp|fixed-tcp> port <PORT>\n"
             "  set service-group <NAME> members a,b\n"
+            "  show service-group <NAME> references\n"
         )
     if topic in ("remote-access", "remote"):
         if not server:
