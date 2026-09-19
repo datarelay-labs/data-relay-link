@@ -176,12 +176,14 @@ def pinned_ca_windows_inner(
         "if($fp.ToLowerInvariant() -ne "
         + powershell_quote(fp)
         + "){throw 'CA fingerprint mismatch'};"
-        "& $curl.Source --fail --silent --show-error --max-time 60 --proto =https --cacert $ca -o $m "
+        "& $curl.Source --fail --silent --show-error --max-time 60 --proto =https --cacert $ca --ssl-no-revoke -o $m "
         + powershell_quote(sums)
         + ";"
-        "& $curl.Source --fail --silent --show-error --max-time 60 --proto =https --cacert $ca -o $p "
+        "if($LASTEXITCODE -ne 0){throw 'SHA256SUMS download failed'};"
+        "& $curl.Source --fail --silent --show-error --max-time 60 --proto =https --cacert $ca --ssl-no-revoke -o $p "
         + powershell_quote(installer)
         + ";"
+        "if($LASTEXITCODE -ne 0){throw 'bootstrap-client.ps1 download failed'};"
         "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
         "if($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$'){"
         "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"

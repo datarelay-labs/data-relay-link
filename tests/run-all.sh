@@ -116,6 +116,7 @@ python3 tests/test-bounded-zero-touch.py
 python3 tests/test-configuration-bundle.py
 ./tests/test-zero-touch-short-command.sh
 ./tests/test-zero-touch-short-url.sh
+python3 tests/test-zero-touch-windows-pin.py
 ./tests/test-product-upgrade-policy.sh
 ./tests/test-frpctl-doctor.sh
 ./tests/test-port-architecture.sh
