@@ -45,6 +45,8 @@ echo "$HELP" | grep -q '^set$' || fail "root help missing set"
 echo "$HELP" | grep -q 'unset' || fail "root help missing unset"
 echo "$HELP" | grep -q 'system' || fail "root help missing system"
 echo "$(python3 - <<'PY'
+import sys
+sys.path.insert(0, "lib")
 import frp_ctl_grammar as g
 print(g.help_text(["internet"], "server"))
 PY
