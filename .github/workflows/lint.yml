@@ -29,13 +29,17 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: ./tests/run-all.sh
 
+      # Artifact parity belongs to affected release/installer validation or explicit RC qualification.
       - name: Build standalone bundles
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           ./scripts/build-bundles.sh
           git diff --exit-code dist/
       - name: SHA256SUMS
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: ./scripts/verify-sha256sums.sh
       - name: SBOM binds to the checked-out commit
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json
           ./scripts/verify-sbom.sh
