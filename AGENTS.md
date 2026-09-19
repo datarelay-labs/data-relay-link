@@ -4,8 +4,8 @@ This repository adopts the canonical Solo AI Engineering System.
 
 Canonical engineering system:
 - repository: https://github.com/datarelay-labs/engineering-system
-- version: 1.2.0
-- baseline commit: 30a13549e1be027e1709373b3c845f4e2d1a7e4b
+- version: 1.2.1
+- baseline commit: 540d00edd438f6656fb865902bd295126265bd4f
 
 ## Minimum context first
 
