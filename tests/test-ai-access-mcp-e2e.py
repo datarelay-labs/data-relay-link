@@ -713,6 +713,18 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.assertIn("list_hosts", names)
         self.assertIn("read_file", names)
 
+    def test_agent_poll_does_not_rate_limit_mcp_clients(self):
+        """Local agents poll /agent/v1/claim at 20Hz and must not 429 /mcp."""
+        time.sleep(4)
+        status, payload = rpc(
+            self.url,
+            {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}},
+            self.chatgpt,
+            method="server/discover",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
+
     def test_official_mcp_sdk_client(self):
         sdk_py = os.environ.get("DRLINK_MCP_SDK_PYTHON") or "/tmp/mcp-sdk-venv/bin/python"
         if not os.path.isfile(sdk_py):

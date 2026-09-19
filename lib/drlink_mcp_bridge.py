@@ -740,10 +740,15 @@ def make_handler(bridge: MCPBridge):
         def do_POST(self):
             if self._origin_denied():
                 return
-            if self._rate_limited("post", limit=120, window_s=60):
+            parsed = urlparse(self.path)
+            # Agent claim/complete polls ~20Hz per Managed Host. Those POSTs must
+            # not share the public 120/min budget with MCP clients, or official
+            # SDK sessions 429 within a few seconds of bridge start.
+            if not parsed.path.startswith("/agent/v1/") and self._rate_limited(
+                "post", limit=120, window_s=60
+            ):
                 self._send(429, {"error": "rate_limited"})
                 return
-            parsed = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
             if length > 2_000_000:
                 self._send(413, _jsonrpc_error(None, -32700, "payload too large"))
