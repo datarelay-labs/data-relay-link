@@ -37,7 +37,7 @@ jobs:
   portable:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - run: |
           for test in tests/test-macos-*.sh; do
             bash "$test"
@@ -49,7 +49,7 @@ jobs:
   apple-silicon:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Verify client port
         run: |
           test "$(uname -m)" = arm64
