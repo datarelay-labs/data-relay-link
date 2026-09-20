@@ -2206,7 +2206,7 @@ class ControlPlane:
         return names
 
     def evaluate_remote_access(self, source_ip: str, destination: str, protocol: str, port: int) -> dict:
-        from drlink_v24 import effective_policy_result, get_access_policy
+        from drlink_v24 import effective_policy_result, get_access_policy, rule_matches_service
 
         proto = str(protocol).lower()
         if proto in ("https", "http"):
@@ -2246,11 +2246,7 @@ class ControlPlane:
                 if dest_obj and s["ref_kind"] == "object" and s["ref_id"] == dest_obj["id"]:
                     dst_ok = True
                     break
-            svc_ok = False
-            for s in self.conn.execute("SELECT protocol, port FROM rule_services WHERE rule_id = ?", (rule_row["id"],)):
-                if s["protocol"] == proto and int(s["port"]) == int(port):
-                    svc_ok = True
-                    break
+            svc_ok = rule_matches_service(self, rule_row["id"], proto, port)
             hit = bool(src_ok and dst_ok and svc_ok)
             traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok, "match": hit})
             if hit:
@@ -2382,13 +2378,9 @@ class ControlPlane:
         return "\n".join(lines) + "\n"
 
     def evaluate_internet_access(self, source_ip: str, destination: str, port: int, protocol: str) -> dict:
-        from drlink_v24 import effective_policy_result, get_access_policy
+        from drlink_v24 import effective_policy_result, get_access_policy, rule_matches_service
 
         proto = str(protocol).lower()
-        if proto in ("https", "http"):
-            want_tcp = True
-        else:
-            want_tcp = proto in ("tcp", "udp")
         src_matches = self.matching_objects_for_ip(source_ip, role="source")
         dst_matches = self.matching_objects_for_host(destination)
         pol = get_access_policy(self, "internet")
@@ -2410,16 +2402,8 @@ class ControlPlane:
                 if self._ref_matches_host(s["ref_kind"], s["ref_id"], destination):
                     dst_ok = True
                     break
-            svc_ok = False
-            for s in self.conn.execute("SELECT protocol, port FROM rule_services WHERE rule_id = ?", (rule_row["id"],)):
-                if int(s["port"]) == int(port) and (
-                    s["protocol"] == proto
-                    or (want_tcp and s["protocol"] == "tcp")
-                    or (proto in ("https",) and int(s["port"]) == 443)
-                    or (proto in ("http",) and int(s["port"]) == 80)
-                ):
-                    svc_ok = True
-                    break
+            # http/https normalize to tcp inside rule_matches_service (live Service Object/Group).
+            svc_ok = rule_matches_service(self, rule_row["id"], proto, port)
             hit = bool(src_ok and dst_ok and svc_ok)
             traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok, "match": hit})
             if hit:

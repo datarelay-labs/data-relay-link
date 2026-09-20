@@ -961,16 +961,7 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         _require_server(plane, "Service Groups")
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset service-group <NAME>")
-        g = v24.get_service_group(plane, rest[1])
-        if not g:
-            raise ControlPlaneError(v24.cli_error("Service Group '%s' was not found." % rest[1]))
-
-        def write():
-            plane.conn.execute("DELETE FROM service_group_members WHERE group_id = ?", (g["id"],))
-            plane.conn.execute("DELETE FROM service_groups WHERE id = ?", (g["id"],))
-            return {"entity": {"type": "service-group", "id": g["id"], "name": rest[1]}, "operation": "delete"}
-
-        plane._mutate("unset service-group %s" % rest[1], "delete service group", write)
+        v24.unset_service_group(plane, rest[1])
         sys.stdout.write("Service Group deleted: %s\n" % rest[1])
         return 0
     if res == "permission-object":

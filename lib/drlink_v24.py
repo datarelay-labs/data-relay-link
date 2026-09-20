@@ -968,6 +968,10 @@ def set_service_object(
                     "updated_at = ? WHERE id = ?",
                     (stype, port, utc_now_iso(), existing["id"]),
                 )
+                # Keep policy enforcement aligned with the reusable Service Object:
+                # rematerialize every Remote/Internet rule that references this object
+                # (directly or via a Service Group).
+                rematerialize_dependent_rules_for_service_object(plane_db, existing["id"])
                 return {"entity": {"type": "service-object", "id": existing["id"], "name": name}, "operation": "update"}
 
             return plane_db._mutate("set service-object %s" % name, "set service object", write)
@@ -984,6 +988,105 @@ def set_service_object(
 
         return plane_db._mutate("set service-object %s" % name, "create service object", write_create)
     raise ControlPlaneError("Interactive Service Object wizard requires a TTY session")
+
+
+def _service_object_wire_protocol(sobj) -> str:
+    return "tcp" if sobj["type"] in ("tcp", "fixed-tcp") else "udp"
+
+
+def rematerialize_rule_services(plane_db, rule_id: str) -> None:
+    """Rebuild materialized rule_services from current rule_service_refs + definitions."""
+    plane_db.conn.execute("DELETE FROM rule_services WHERE rule_id = ?", (rule_id,))
+    for ref in plane_db.conn.execute(
+        "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ?", (rule_id,)
+    ):
+        if ref["ref_kind"] == "service_object":
+            sobj = plane_db.conn.execute(
+                "SELECT type, port FROM service_objects WHERE id = ?", (ref["ref_id"],)
+            ).fetchone()
+            if not sobj:
+                continue
+            plane_db.conn.execute(
+                "INSERT OR IGNORE INTO rule_services(rule_id, protocol, port) VALUES (?, ?, ?)",
+                (rule_id, _service_object_wire_protocol(sobj), int(sobj["port"])),
+            )
+        elif ref["ref_kind"] == "service_group":
+            for member in plane_db.conn.execute(
+                "SELECT s.type AS type, s.port AS port FROM service_group_members m "
+                "JOIN service_objects s ON s.id = m.service_object_id WHERE m.group_id = ?",
+                (ref["ref_id"],),
+            ):
+                plane_db.conn.execute(
+                    "INSERT OR IGNORE INTO rule_services(rule_id, protocol, port) VALUES (?, ?, ?)",
+                    (rule_id, _service_object_wire_protocol(member), int(member["port"])),
+                )
+
+
+def rematerialize_dependent_rules_for_service_object(plane_db, sobj_id: str) -> None:
+    rule_ids = {
+        row["rule_id"]
+        for row in plane_db.conn.execute(
+            "SELECT rule_id FROM rule_service_refs WHERE ref_kind = 'service_object' AND ref_id = ?",
+            (sobj_id,),
+        )
+    }
+    for row in plane_db.conn.execute(
+        "SELECT x.rule_id AS rule_id FROM rule_service_refs x "
+        "JOIN service_group_members m ON m.group_id = x.ref_id "
+        "WHERE x.ref_kind = 'service_group' AND m.service_object_id = ?",
+        (sobj_id,),
+    ):
+        rule_ids.add(row["rule_id"])
+    for rid in sorted(rule_ids):
+        rematerialize_rule_services(plane_db, rid)
+
+
+def rematerialize_dependent_rules_for_service_group(plane_db, grp_id: str) -> None:
+    for row in plane_db.conn.execute(
+        "SELECT rule_id FROM rule_service_refs WHERE ref_kind = 'service_group' AND ref_id = ?",
+        (grp_id,),
+    ):
+        rematerialize_rule_services(plane_db, row["rule_id"])
+
+
+def rule_matches_service(plane_db, rule_id: str, protocol: str, port: int) -> bool:
+    """Match protocol/port against live Service Object/Group defs via rule_service_refs.
+
+    Falls back to materialized rule_services only when a rule has no semantic refs
+    (legacy / incomplete rows).
+    """
+    proto = str(protocol).lower()
+    if proto in ("http", "https"):
+        proto = "tcp"
+    wanted = (proto, int(port))
+    refs = list(
+        plane_db.conn.execute(
+            "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ?", (rule_id,)
+        )
+    )
+    if refs:
+        for ref in refs:
+            if ref["ref_kind"] == "service_object":
+                sobj = plane_db.conn.execute(
+                    "SELECT type, port FROM service_objects WHERE id = ?", (ref["ref_id"],)
+                ).fetchone()
+                if sobj and (_service_object_wire_protocol(sobj), int(sobj["port"])) == wanted:
+                    return True
+            elif ref["ref_kind"] == "service_group":
+                for member in plane_db.conn.execute(
+                    "SELECT s.type AS type, s.port AS port FROM service_group_members m "
+                    "JOIN service_objects s ON s.id = m.service_object_id WHERE m.group_id = ?",
+                    (ref["ref_id"],),
+                ):
+                    if (_service_object_wire_protocol(member), int(member["port"])) == wanted:
+                        return True
+        return False
+    for s in plane_db.conn.execute(
+        "SELECT protocol, port FROM rule_services WHERE rule_id = ?", (rule_id,)
+    ):
+        if (s["protocol"], int(s["port"])) == wanted:
+            return True
+    return False
 
 
 def service_object_references(plane_db, name: str) -> list[dict]:
@@ -1242,9 +1345,32 @@ def set_service_group(plane_db, name: str, *, members: Optional[list[str]] = Non
                 "INSERT OR IGNORE INTO service_group_members(group_id, service_object_id) VALUES (?, ?)",
                 (gid, sobj["id"]),
             )
+        # Membership edits must refresh materialized policy services for referencing rules.
+        rematerialize_dependent_rules_for_service_group(plane_db, gid)
         return {"entity": {"type": "service-group", "id": gid, "name": name}, "operation": op}
 
     return plane_db._mutate("set service-group %s" % name, "set service group", write)
+
+
+def unset_service_group(plane_db, name: str) -> dict:
+    name = validate_public_name(name, "Service Group name")
+    grp = get_service_group(plane_db, name)
+    if not grp:
+        raise ControlPlaneError(cli_error("Service Group '%s' was not found." % name))
+    refs = service_group_references(plane_db, name)
+    if refs:
+        raise ControlPlaneError(
+            "ERROR:\nService Group '%s' is still referenced.\n\nReferences:\n%s\n\n"
+            "No changes were applied."
+            % (name, "\n".join("  %s" % r["display"] for r in refs))
+        )
+
+    def write():
+        plane_db.conn.execute("DELETE FROM service_group_members WHERE group_id = ?", (grp["id"],))
+        plane_db.conn.execute("DELETE FROM service_groups WHERE id = ?", (grp["id"],))
+        return {"entity": {"type": "service-group", "id": grp["id"], "name": name}, "operation": "delete"}
+
+    return plane_db._mutate("unset service-group %s" % name, "delete service group", write)
 
 
 def expand_service_ref(plane_db, token: str) -> list[sqlite3.Row]:
@@ -1929,15 +2055,7 @@ def evaluate_selector_policy(
             dst_ok = True
         svc_ok = False
         if protocol is not None and port is not None:
-            proto = str(protocol).lower()
-            if proto in ("http", "https"):
-                proto = "tcp"
-            for s in plane_db.conn.execute(
-                "SELECT protocol, port FROM rule_services WHERE rule_id = ?", (rule_row["id"],)
-            ):
-                if s["protocol"] == proto and int(s["port"]) == int(port):
-                    svc_ok = True
-                    break
+            svc_ok = rule_matches_service(plane_db, rule_row["id"], protocol, port)
         else:
             svc_ok = True
         if src_ok and dst_ok and svc_ok:

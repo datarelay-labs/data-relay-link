@@ -1095,10 +1095,7 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
             )
     elif kind == "service-group":
         if op == "DELETE":
-            g = v24.get_service_group(plane, name)
-            if g:
-                plane.conn.execute("DELETE FROM service_group_members WHERE group_id = ?", (g["id"],))
-                plane.conn.execute("DELETE FROM service_groups WHERE id = ?", (g["id"],))
+            v24.unset_service_group(plane, name)
         else:
             v24.set_service_group(plane, name, members=list(item.get("members") or []), oneshot=True)
     elif kind == "permission-object":
