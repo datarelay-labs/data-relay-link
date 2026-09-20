@@ -1036,25 +1036,20 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         _require_server(plane, "Managed Hosts")
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset managed-host <HOST>")
-        # Reuse client revoke/delete path if present
-        client = plane.require_client(rest[1])
-        # Check policy references via managed endpoint object
-        ep = plane.conn.execute(
-            "SELECT o.name FROM objects o JOIN managed_endpoints e ON e.object_id = o.id WHERE e.client_id = ?",
-            (client["id"],),
-        ).fetchone()
-        if ep:
-            refs = plane.object_references(ep["name"])
-            if refs:
-                raise ControlPlaneError(
-                    "ERROR:\nManaged Host '%s' is still referenced.\n\nReferences:\n%s\n\nNo changes were applied."
-                    % (rest[1], "\n".join("  %s" % r["display"] for r in refs))
-                )
-        # Reference-safe cleanup is required; full client lifecycle delete is server inventory work.
-        raise ControlPlaneError(
-            "ERROR:\nManaged Host removal must use the Managed Host lifecycle path with impact review.\n\n"
-            "Host: %s\n\nNo changes were applied." % rest[1]
-        )
+        from drlink_control_cli import _confirm_from_stdin
+        from drlink_control_plane import ConfirmationRequired
+
+        try:
+            result = plane.unset_managed_host(rest[1])
+        except ConfirmationRequired as exc:
+            if _confirm_from_stdin(str(exc)):
+                result = plane.unset_managed_host(rest[1], confirm=True)
+            else:
+                sys.stdout.write("Cancelled.\nNo changes were applied.\n")
+                return 0
+        host = (result.get("entity") or {}).get("name") or rest[1]
+        sys.stdout.write("Managed Host removed: %s\n" % host)
+        return 0
     if res == "remote-service":
         _require_agent(plane)
         if len(rest) < 2:

@@ -425,8 +425,11 @@ class ControlPlane:
         confirm: Optional[bool] = None,
         compile_runtime: bool = True,
     ) -> Any:
-        if impact and impact.get("access_broadened") and not _confirm_requested(confirm):
-            if not self._batch_mode:
+        if impact and not _confirm_requested(confirm):
+            needs_confirm = bool(
+                impact.get("access_broadened") or impact.get("requires_confirmation")
+            )
+            if needs_confirm and not self._batch_mode:
                 raise ConfirmationRequired(self._format_impact(impact), impact)
         if self._batch_mode:
             if expected:
@@ -537,6 +540,27 @@ class ControlPlane:
         return result
 
     def _format_impact(self, impact: dict) -> str:
+        if impact.get("kind") == "managed-host-retire":
+            lines = [
+                str(impact.get("warning") or "Managed Host will be removed"),
+                "",
+                "Host: %s" % (impact.get("host") or "-"),
+            ]
+            if impact.get("cleanup"):
+                lines.append("")
+                lines.append("Cleanup:")
+                for item in impact["cleanup"]:
+                    lines.append("  %s" % item)
+            if impact.get("before") or impact.get("after"):
+                lines.append("")
+                lines.append("Before:")
+                lines.append("  %s" % (impact.get("before") or "-"))
+                lines.append("")
+                lines.append("After:")
+                lines.append("  %s" % (impact.get("after") or "Host removed"))
+            lines.append("")
+            lines.append("Continue? [y/N]:")
+            return "\n".join(lines)
         lines = [
             "Policy behavior will change",
             "",
@@ -1371,6 +1395,38 @@ class ControlPlane:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
+    def _retire_client_owned_state(self, client_id: str) -> list[str]:
+        """Release reservations and delete Agent-owned published services for a client."""
+        cleaned: list[str] = []
+        pubs = list(
+            self.conn.execute(
+                "SELECT id, name, public_port FROM published_services WHERE client_id = ?",
+                (client_id,),
+            )
+        )
+        for pub in pubs:
+            if pub["public_port"] is not None:
+                self.conn.execute(
+                    "UPDATE port_reservations SET released = 1 WHERE public_port = ?",
+                    (int(pub["public_port"]),),
+                )
+                cleaned.append("release port reservation %s" % pub["public_port"])
+            # remote_service_meta cascades from published_services
+            self.conn.execute("DELETE FROM published_services WHERE id = ?", (pub["id"],))
+            cleaned.append("delete published service %s" % pub["name"])
+        for res in self.conn.execute(
+            "SELECT public_port FROM port_reservations WHERE client_id = ? AND released = 0",
+            (client_id,),
+        ):
+            self.conn.execute(
+                "UPDATE port_reservations SET released = 1 WHERE public_port = ?",
+                (int(res["public_port"]),),
+            )
+            cleaned.append("release port reservation %s" % res["public_port"])
+        self.conn.execute("DELETE FROM client_group_members WHERE client_id = ?", (client_id,))
+        self.conn.execute("DELETE FROM client_tags WHERE client_id = ?", (client_id,))
+        return cleaned
+
     def remove_client(self, selector: str, *, revoke_only: bool = False) -> dict:
         client = self.require_client(selector)
         ep = self.conn.execute(
@@ -1388,6 +1444,7 @@ class ControlPlane:
             refs = []
             if ep:
                 refs = self.object_references(ep["name"])
+            self._retire_client_owned_state(client["id"])
             if ep and refs:
                 self.conn.execute(
                     "UPDATE objects SET status = 'orphaned', orphan_reason = 'Client removed', updated_at = ? WHERE id = ?",
@@ -1401,12 +1458,6 @@ class ControlPlane:
                 self.conn.execute("DELETE FROM endpoint_addresses WHERE endpoint_object_id = ?", (ep["id"],))
                 self.conn.execute("DELETE FROM managed_endpoints WHERE object_id = ?", (ep["id"],))
                 self.conn.execute("DELETE FROM objects WHERE id = ?", (ep["id"],))
-            self.conn.execute("DELETE FROM client_group_members WHERE client_id = ?", (client["id"],))
-            self.conn.execute("DELETE FROM client_tags WHERE client_id = ?", (client["id"],))
-            self.conn.execute(
-                "UPDATE published_services SET enabled = 0 WHERE client_id = ?",
-                (client["id"],),
-            )
             self.conn.execute("DELETE FROM clients WHERE id = ?", (client["id"],))
             return {"entity": {"type": "client", "id": client["id"]}, "operation": "remove"}
 
@@ -1414,6 +1465,98 @@ class ControlPlane:
             "system revoke client" if revoke_only else "unset client %s" % selector,
             "revoke" if revoke_only else "remove client",
             write,
+        )
+
+    def unset_managed_host(
+        self, selector: str, *, confirm: Optional[bool] = None
+    ) -> dict:
+        """Canonical server-side Managed Host retirement with impact review."""
+        client = self.get_client(selector)
+        if client is None:
+            raise ControlPlaneError(
+                "ERROR:\nManaged Host '%s' was not found.\n\nNo changes were applied." % selector
+            )
+        ep = self.conn.execute(
+            "SELECT o.* FROM objects o JOIN managed_endpoints e ON e.object_id = o.id WHERE e.client_id = ?",
+            (client["id"],),
+        ).fetchone()
+        host_name = (ep["name"] if ep else None) or client["label"] or client["id"][:8]
+        if ep:
+            refs = self.object_references(ep["name"])
+            if refs:
+                raise ControlPlaneError(
+                    "ERROR:\nManaged Host '%s' is still referenced.\n\nReferences:\n%s\n\n"
+                    "Remove or change those references first.\n\nNo changes were applied."
+                    % (host_name, "\n".join("  %s" % r["display"] for r in refs))
+                )
+
+        pubs = list(
+            self.conn.execute(
+                "SELECT name, public_port FROM published_services WHERE client_id = ? ORDER BY name",
+                (client["id"],),
+            )
+        )
+        ports = [
+            int(r["public_port"])
+            for r in self.conn.execute(
+                "SELECT public_port FROM port_reservations WHERE client_id = ? AND released = 0 "
+                "ORDER BY public_port",
+                (client["id"],),
+            )
+        ]
+        cleanup_preview: list[str] = []
+        for pub in pubs:
+            cleanup_preview.append("published service %s" % pub["name"])
+            if pub["public_port"] is not None:
+                cleanup_preview.append("port reservation %s" % pub["public_port"])
+        for port in ports:
+            label = "port reservation %s" % port
+            if label not in cleanup_preview:
+                cleanup_preview.append(label)
+        if ep:
+            cleanup_preview.append("managed endpoint inventory %s" % ep["name"])
+        cleanup_preview.append("client trust/inventory %s" % (client["id"][:8],))
+
+        def write():
+            self._retire_client_owned_state(client["id"])
+            if ep:
+                self.conn.execute(
+                    "DELETE FROM endpoint_addresses WHERE endpoint_object_id = ?", (ep["id"],)
+                )
+                self.conn.execute("DELETE FROM managed_endpoints WHERE object_id = ?", (ep["id"],))
+                self.conn.execute("DELETE FROM objects WHERE id = ?", (ep["id"],))
+            self.conn.execute("DELETE FROM clients WHERE id = ?", (client["id"],))
+            return {
+                "entity": {"type": "managed-host", "id": client["id"], "name": host_name},
+                "operation": "remove",
+            }
+
+        impact = {
+            "kind": "managed-host-retire",
+            "requires_confirmation": True,
+            "access_broadened": False,
+            "access_narrowed": False,
+            "host": host_name,
+            "warning": (
+                "This will permanently remove Managed Host '%s' and owned server-side state."
+                % host_name
+            ),
+            "cleanup": cleanup_preview,
+            "before": "trust=%s connected=%s services=%s active_reservations=%s"
+            % (
+                client["trust_status"],
+                "yes" if client["connected"] else "no",
+                len(pubs),
+                len(ports),
+            ),
+            "after": "Managed Host removed; published services deleted; port reservations released",
+        }
+        return self._mutate(
+            "unset managed-host %s" % host_name,
+            "retire managed host",
+            write,
+            impact=impact,
+            confirm=confirm,
         )
 
     def set_client_label(self, selector: str, label: str) -> dict:
