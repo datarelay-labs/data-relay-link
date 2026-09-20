@@ -1,0 +1,6 @@
+# Pinned official MCP Python SDK for deterministic interop regressions.
+# Provisioned by tests/ensure-mcp-sdk-venv.sh (CI + local Full Suite).
+# Do not rely on a pre-existing host-global /tmp/mcp-sdk-venv.
+mcp==2.2.0
+mcp-types==2.2.0
+httpx2==2.13.0

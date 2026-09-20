@@ -21,6 +21,11 @@ jobs:
         run: ./scripts/check-version-consistency.sh
       - name: Release governance
         run: ./scripts/check-release-governance.sh
+      - name: Provision pinned official MCP SDK
+        # VERSION_POLICY: MCP is included and release-blocking; do not skip.
+        run: |
+          SDK_PY="$(./tests/ensure-mcp-sdk-venv.sh)"
+          echo "DRLINK_MCP_SDK_PYTHON=$SDK_PY" >> "$GITHUB_ENV"
       - name: Full local non-Docker suite
         run: ./tests/run-all.sh
       # Live distro containers cannot validate systemd unless PID 1 is systemd.

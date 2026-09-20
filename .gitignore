@@ -24,6 +24,9 @@ mgmt-nonces.json
 # Produced by ./scripts/build-release-artifacts.sh and attested in CI.
 dist/sbom.spdx.json
 
+# Local test dependency venv (official MCP SDK interop; see tests/ensure-mcp-sdk-venv.sh)
+.venv/
+
 # Runtime Real E2E / overnight validation output (harness source stays in tests/)
 e2e-reports/
 OVERNIGHT_*.md

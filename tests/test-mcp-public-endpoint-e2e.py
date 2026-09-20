@@ -40,6 +40,9 @@ from drlink_mcp_bridge import (  # noqa: E402
 import frp_frontend  # noqa: E402
 import frp_pki  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+from mcp_sdk_env import resolve_mcp_sdk_python  # noqa: E402
+
 
 def free_port():
     sock = socket.socket()
@@ -411,9 +414,12 @@ class PublicMcpEndpointTests(unittest.TestCase):
     def test_official_sdk_through_https_frontend(self):
         if not self.https_url:
             self.skipTest("nginx not available")
-        sdk_py = os.environ.get("DRLINK_MCP_SDK_PYTHON") or "/tmp/mcp-sdk-venv/bin/python"
-        if not os.path.isfile(sdk_py):
-            self.fail("official MCP SDK python missing")
+        sdk_py = resolve_mcp_sdk_python()
+        if not sdk_py:
+            self.fail(
+                "official MCP SDK python missing; run tests/ensure-mcp-sdk-venv.sh "
+                "or set DRLINK_MCP_SDK_PYTHON"
+            )
         helper = ROOT / "tests" / "mcp_sdk_interop_client.py"
         proc = subprocess.run(
             [sdk_py, str(helper), "--url", self.https_url, "--token", self.token, "--endpoint", "Expernet-DP1", "--path", str(self.vendor / "app.log"), "--ca", self.ca],

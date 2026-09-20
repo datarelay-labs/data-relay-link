@@ -26,6 +26,9 @@ from drlink_control_plane import ControlPlane, path_allowed  # noqa: E402
 from drlink_mcp_bridge import MCP_PROTOCOL_VERSION, MCPBridge, make_handler  # noqa: E402
 from drlink_mcp_bridge import ThreadingHTTPServer  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+from mcp_sdk_env import resolve_mcp_sdk_python  # noqa: E402
+
 
 def run_cli(root, tokens):
     buf = io.StringIO()
@@ -726,8 +729,8 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.assertEqual(payload["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
 
     def test_official_mcp_sdk_client(self):
-        sdk_py = os.environ.get("DRLINK_MCP_SDK_PYTHON") or "/tmp/mcp-sdk-venv/bin/python"
-        if not os.path.isfile(sdk_py):
+        sdk_py = resolve_mcp_sdk_python()
+        if not sdk_py:
             try:
                 import mcp  # noqa: F401
 
