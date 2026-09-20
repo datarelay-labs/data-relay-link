@@ -132,22 +132,28 @@ ZT_ID="$(awk '/^Enrollment ID:/{print $3; exit}' "$WORK/zt.out")"
 ZT_TICKET="$(python3 - "$WORK/zt.out" <<'PY'
 import base64, json, re, sys
 t = open(sys.argv[1]).read()
+m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", t)
+if m:
+    print(m.group(1))
+    raise SystemExit(0)
 m = re.search(r"zt1\.[A-Za-z0-9_-]+", t)
 if m:
     parts = m.group(0).split('.', 1)
     padded = parts[1] + ('=' * (-len(parts[1]) % 4))
     payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
     print(payload['t'])
-else:
-    m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", t)
-    if m:
-        parts = m.group(1).split('.', 1)
-        padded = parts[1] + ('=' * (-len(parts[1]) % 4))
-        payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
-        print(payload['t'])
-    else:
-        m = re.search(r"FRP_BOOTSTRAP_TICKET='([^']+)'", t)
-        print(m.group(1))
+    raise SystemExit(0)
+m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", t)
+if m:
+    parts = m.group(1).split('.', 1)
+    padded = parts[1] + ('=' * (-len(parts[1]) % 4))
+    payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
+    print(payload['t'])
+    raise SystemExit(0)
+m = re.search(r"FRP_BOOTSTRAP_TICKET='([^']+)'", t)
+if not m:
+    raise SystemExit('unable to extract bootstrap ticket from create output')
+print(m.group(1))
 PY
 )"
 ZT_SECRET="${ZT_TICKET##*.}"

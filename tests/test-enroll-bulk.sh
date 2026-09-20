@@ -41,6 +41,10 @@ for name in sys.argv[1:3]:
 assert len(rows)==5
 tickets=[]
 for row in rows:
+    m=re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", row['bootstrap_command'])
+    if m:
+        tickets.append(m.group(1))
+        continue
     m=re.search(r"zt1\.[A-Za-z0-9_-]+", row['bootstrap_command'])
     if m:
         parts=m.group(0).split('.',1)
@@ -48,18 +52,18 @@ for row in rows:
         import base64
         payload=json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
         tickets.append(payload['t'])
-    else:
-        m=re.search(r"sudo bash -s -- '(zt1\.[^']+)'", row['bootstrap_command'])
-        if m:
-            parts=m.group(1).split('.',1)
-            padded=parts[1]+('='*((-len(parts[1]))%4))
-            import base64
-            payload=json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
-            tickets.append(payload['t'])
-        else:
-            m=re.search(r"FRP_BOOTSTRAP_TICKET='([^']+)'",row['bootstrap_command'])
-            assert m, row
-            tickets.append(m.group(1))
+        continue
+    m=re.search(r"sudo bash -s -- '(zt1\.[^']+)'", row['bootstrap_command'])
+    if m:
+        parts=m.group(1).split('.',1)
+        padded=parts[1]+('='*((-len(parts[1]))%4))
+        import base64
+        payload=json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
+        tickets.append(payload['t'])
+        continue
+    m=re.search(r"FRP_BOOTSTRAP_TICKET='([^']+)'",row['bootstrap_command'])
+    assert m, row
+    tickets.append(m.group(1))
 assert len(set(tickets))==5
 records=[json.loads(p.read_text()) for p in Path(sys.argv[3]).glob('*.json')]
 assert len(records)==5
