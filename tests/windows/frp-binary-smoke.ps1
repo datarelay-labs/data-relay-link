@@ -4,8 +4,8 @@
 # Preserves product fail-closed / no-public-fallback behavior. Does not weaken
 # Get-FrpWindowsAmd64Url or Install-FrpWindowsBinary.
 #
-# On Windows (CI target: PowerShell 5.1) the HTTPS fixture is .NET SslStream +
-# CertificateRequest (no OpenSSL). Non-Windows hosts only verify the URL contract.
+# On Windows (CI target: PowerShell 5.1) the HTTPS fixture is .NET SslStream with
+# a CA-signed leaf (product pin requires a real chain). Non-Windows: URL contract only.
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -17,59 +17,55 @@ Set-Location -LiteralPath $RepoRoot
 . .\windows\lib\FrpTls.ps1
 . .\windows\lib\FrpBootstrap.ps1
 
-function New-FrpSmokeServerCertificate {
-    # CertificateRequest + IP SAN — same API surface already used by WinPS 5.1
-    # unit tests (e.g. test-ticket-scope.ps1).
-    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider 2048
-    $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest(
-        'CN=127.0.0.1',
-        $rsa,
-        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
-        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
-    )
-    $san = New-Object System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder
-    $san.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
-    $req.CertificateExtensions.Add($san.Build($false))
-    $req.CertificateExtensions.Add(
-        (New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension($true, $false, 0, $true))
-    )
-    $ku = [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign
-    $req.CertificateExtensions.Add(
-        (New-Object System.Security.Cryptography.X509Certificates.X509KeyUsageExtension($ku, $true))
-    )
-    $oids = New-Object System.Security.Cryptography.OidCollection
-    [void]$oids.Add((New-Object System.Security.Cryptography.Oid '1.3.6.1.5.5.7.3.1'))
-    $req.CertificateExtensions.Add(
-        (New-Object System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($oids, $false))
-    )
-    $ephemeral = $req.CreateSelfSigned(
-        [DateTimeOffset]::UtcNow.AddDays(-1),
-        [DateTimeOffset]::UtcNow.AddDays(2)
-    )
+function New-FrpSmokeTlsMaterials {
+    # Separate CA + leaf so New-FrpPinnedServerCertificateValidator chain.Build
+    # succeeds on WinPS 5.1. New-SelfSignedCertificate -Signer yields a leaf with
+    # a usable private key (CertificateRequest.Create does not on Framework).
+    $ca = New-SelfSignedCertificate `
+        -Subject 'CN=DRLink FRP Smoke CA' `
+        -KeyUsage CertSign, CRLSign, DigitalSignature `
+        -KeyExportPolicy Exportable `
+        -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -NotAfter (Get-Date).AddHours(6) `
+        -HashAlgorithm SHA256 `
+        -KeyLength 2048 `
+        -TextExtension @('2.5.29.19={critical}{text}ca=true&pathlength=0')
+
+    $leaf = New-SelfSignedCertificate `
+        -Subject 'CN=127.0.0.1' `
+        -Signer $ca `
+        -KeyExportPolicy Exportable `
+        -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -NotAfter (Get-Date).AddHours(6) `
+        -HashAlgorithm SHA256 `
+        -KeyLength 2048 `
+        -TextExtension @(
+            '2.5.29.17={text}IPAddress=127.0.0.1',
+            '2.5.29.37={text}1.3.6.1.5.5.7.3.1'
+        )
+
+    $caDer = $ca.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     $pfxPassPlain = [guid]::NewGuid().ToString('N')
     $pfxPass = New-Object System.Security.SecureString
     foreach ($ch in $pfxPassPlain.ToCharArray()) { $pfxPass.AppendChar($ch) }
-    $pfxBytes = $ephemeral.Export(
+    $leafPfx = $leaf.Export(
         [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
         $pfxPass
     )
-    $der = $ephemeral.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    $ephemeral.Dispose()
-    $rsa.Dispose()
+    $leafDer = $leaf.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+
+    Remove-Item -LiteralPath ("Cert:\CurrentUser\My\$($leaf.Thumbprint)") -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath ("Cert:\CurrentUser\My\$($ca.Thumbprint)") -ErrorAction SilentlyContinue
+
     return @{
-        PfxBytes     = $pfxBytes
+        CaDer        = $caDer
+        LeafDer      = $leafDer
+        LeafPfx      = $leafPfx
         PfxPassPlain = $pfxPassPlain
-        DerBytes     = $der
     }
 }
 
 function Start-FrpQualifiedArtifactHttpsFixture {
-    <#
-    .SYNOPSIS
-      Loopback TLS server that serves one qualified Windows FRP zip path.
-      Reconstructs the X509Certificate2 inside the accept thread from PFX bytes
-      so WinPS 5.1 runspaces do not lose the private key handle.
-    #>
     param(
         [Parameter(Mandatory = $true)][string]$ZipPath,
         [Parameter(Mandatory = $true)][string]$ArtifactPath,
@@ -79,29 +75,29 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         New-Item -ItemType Directory -Path $PkiDir -Force | Out-Null
     }
 
-    $built = New-FrpSmokeServerCertificate
+    $mat = New-FrpSmokeTlsMaterials
     $caDerPath = Join-Path $PkiDir 'ca.crt'
-    [System.IO.File]::WriteAllBytes($caDerPath, $built.DerBytes)
+    [System.IO.File]::WriteAllBytes($caDerPath, $mat.CaDer)
 
-    $probe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $built.DerBytes)
+    $leafProbe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $mat.LeafDer)
     try {
-        if (-not (Test-FrpCertificateHostname -Certificate $probe -Hostname '127.0.0.1')) {
-            $san = Get-FrpCertificateSanEntries -Certificate $probe
-            throw ("fixture cert rejected by Test-FrpCertificateHostname; dns=[{0}] ip=[{1}] parseFailed={2}" -f `
+        if (-not (Test-FrpCertificateHostname -Certificate $leafProbe -Hostname '127.0.0.1')) {
+            $san = Get-FrpCertificateSanEntries -Certificate $leafProbe
+            throw ("fixture leaf rejected by Test-FrpCertificateHostname; dns=[{0}] ip=[{1}] parseFailed={2}" -f `
                 (($san.DnsNames) -join ','), (($san.IpAddresses) -join ','), [bool]$san.ParseFailed)
         }
         $pin = New-FrpPinnedServerCertificateValidator -CaPath $caDerPath -ExpectedHost '127.0.0.1'
         try {
-            $pinOk = [bool](& $pin.Callback $null $probe $null ([System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors))
+            $pinOk = [bool](& $pin.Callback $null $leafProbe $null ([System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors))
             if (-not $pinOk) {
-                throw 'fixture cert rejected by New-FrpPinnedServerCertificateValidator (chain/host pin)'
+                throw 'fixture leaf rejected by New-FrpPinnedServerCertificateValidator (chain/host pin)'
             }
             Write-Host 'FRP_SMOKE_PIN_PROBE=PASS'
         } finally {
             if ($pin.Ca) { $pin.Ca.Dispose() }
         }
     } finally {
-        $probe.Dispose()
+        $leafProbe.Dispose()
     }
 
     $payload = [System.IO.File]::ReadAllBytes($ZipPath)
@@ -113,8 +109,8 @@ function Start-FrpQualifiedArtifactHttpsFixture {
     $runspace = [runspacefactory]::CreateRunspace()
     $runspace.Open()
     $runspace.SessionStateProxy.SetVariable('Listener', $listener)
-    $runspace.SessionStateProxy.SetVariable('PfxBytes', $built.PfxBytes)
-    $runspace.SessionStateProxy.SetVariable('PfxPassPlain', $built.PfxPassPlain)
+    $runspace.SessionStateProxy.SetVariable('PfxBytes', $mat.LeafPfx)
+    $runspace.SessionStateProxy.SetVariable('PfxPassPlain', $mat.PfxPassPlain)
     $runspace.SessionStateProxy.SetVariable('ArtifactPath', $ArtifactPath)
     $runspace.SessionStateProxy.SetVariable('Payload', $payload)
     $runspace.SessionStateProxy.SetVariable('ServerError', '')
@@ -266,7 +262,6 @@ try {
             throw "live URL mismatch: got=$resolvedLive expected=$expectedLive"
         }
 
-        # Surface WebException details (product helper swallows them).
         function Invoke-FrpHttpsDownload {
             param(
                 [Parameter(Mandatory = $true)][string]$Url,
