@@ -212,6 +212,11 @@ python3 tests/test-v24-doc-consistency.py
 python3 tests/test-v24-ai-policy-cli-parity.py
 python3 tests/test-v24-manual-e2e-findings.py
 python3 tests/test-v24-cli-workflow-semantic-parity.py
+python3 tests/test-v24-ai-access-reference-integrity.py
+python3 tests/test-v24-service-policy-consistency.py
+python3 tests/test-v24-access-broadening-bundle-order.py
+python3 tests/test-v24-managed-host-retirement.py
+python3 tests/test-v24-user-lifecycle-ux.py
 python3 tests/test-human-ux-framework-unit.py
 ./tests/test-agent-runtime-payload.sh
 ./tests/test-orphan-suite-coverage.sh
