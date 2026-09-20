@@ -342,7 +342,22 @@ function New-FrpPinnedServerCertificateValidator {
         param($sender, $certificate, $chain, $sslPolicyErrors)
         try {
             if ($null -eq $certificate) { return $false }
-            $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $certificate
+            # Always rebuild the leaf from DER. On .NET Framework / WinPS 5.1,
+            # `New-Object X509Certificate2 $existingCert2` can drop SAN/extension
+            # context and false-fail hostname pinning during live SslStream
+            # callbacks even when the same leaf DER verifies offline.
+            $leafRaw = $null
+            if ($certificate -is [byte[]]) {
+                $leafRaw = [byte[]]$certificate
+            } else {
+                try {
+                    $leafRaw = $certificate.GetRawCertData()
+                } catch {
+                    return $false
+                }
+            }
+            if ($null -eq $leafRaw -or $leafRaw.Length -lt 1) { return $false }
+            $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $leafRaw)
             $build = New-Object System.Security.Cryptography.X509Certificates.X509Chain
             # X509ChainPolicy.Revision is not settable on .NET Framework / WinPS 5.1.
             $build.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
@@ -541,7 +556,11 @@ function Invoke-FrpHttpsDownload {
             $resp.Close()
         }
     } catch [System.Net.WebException] {
-        throw 'ERROR: FRP download failed'
+        $detail = $_.Exception.Message
+        if ($_.Exception.InnerException) {
+            $detail = $detail + ' | inner=' + $_.Exception.InnerException.Message
+        }
+        throw ('ERROR: FRP download failed: ' + $detail)
     } finally {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
         if ($pin.Ca) { $pin.Ca.Dispose() }
