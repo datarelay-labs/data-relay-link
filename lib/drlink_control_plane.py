@@ -4280,7 +4280,18 @@ class ControlPlane:
         mode = str(data.get("deployment_mode") or "direct").strip().lower().replace("-", "").replace("_", "")
         if mode not in ("single443", "enterprise", "enterprisesingle443"):
             return "Not configured"
-        host = str(data.get("public_hostname") or data.get("public_ip") or data.get("public_host") or "").strip()
+        try:
+            import frp_server_config as scfg
+
+            host = str(scfg.public_url_host(data) or "").strip()
+        except Exception:
+            host = str(
+                data.get("public_url_host")
+                or data.get("public_hostname")
+                or data.get("public_ip")
+                or data.get("public_host")
+                or ""
+            ).strip()
         if not host:
             return "Not configured"
         port = str(data.get("frp_control_public_port") or data.get("frontend_port") or "443")

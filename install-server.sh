@@ -817,6 +817,9 @@ load_existing_server_config() {
   EXISTING_WINDOWS_CLIENT_INSTALLER_URL=""
   EXISTING_DEPLOYMENT_MODE=""
   EXISTING_SERVER_CONFIG=""
+  EXISTING_PUBLIC_HOSTNAME=""
+  EXISTING_BOOTSTRAP_HOSTNAME=""
+  EXISTING_PUBLIC_URL_HOST=""
   EXISTING_EGRESS_LISTEN_ADDR=""
   EXISTING_EGRESS_LISTEN_PORT=""
   EXISTING_EGRESS_CONTROL_FILE=""
@@ -868,6 +871,8 @@ mapping = {
     'public_ip': 'EXISTING_PUBLIC_IP',
     'public_hostname': 'EXISTING_PUBLIC_HOSTNAME',
     'bootstrap_hostname': 'EXISTING_BOOTSTRAP_HOSTNAME',
+    'public_url_host': 'EXISTING_PUBLIC_URL_HOST',
+    'enrollment_public_host': 'EXISTING_PUBLIC_URL_HOST',
     'control_port': 'EXISTING_CONTROL_PORT',
     'frp_control_public_port': 'EXISTING_CONTROL_PUBLIC_PORT',
     'frp_control_listen_port': 'EXISTING_CONTROL_LISTEN_PORT',
@@ -888,6 +893,7 @@ mapping = {
 # Prefer public_ip when both exist so a stale public_host cannot override IP.
 order = [
     'public_host', 'public_ip', 'public_hostname', 'bootstrap_hostname',
+    'public_url_host', 'enrollment_public_host',
     'control_port', 'frp_control_public_port', 'frp_control_listen_port',
     'port_start', 'port_end',
     'listen_port', 'allocator_listen_port', 'allocator_public_port',
@@ -1090,14 +1096,19 @@ resolve_server_settings() {
 
   # When a Public DNS hostname is configured, establish which public identity
   # Enrollment HTTPS / bootstrap URLs use. Control identity stays on the IP.
-  FRP_ENROLLMENT_PUBLIC_HOST="${FRP_ENROLLMENT_PUBLIC_HOST:-}"
+  # Choice is made once at install and persisted as public_url_host.
+  FRP_ENROLLMENT_PUBLIC_HOST="${FRP_ENROLLMENT_PUBLIC_HOST:-${EXISTING_PUBLIC_URL_HOST:-}}"
   if [[ -z "${FRP_ENROLLMENT_PUBLIC_HOST}" ]]; then
     if [[ -n "${FRP_PUBLIC_HOSTNAME}" ]]; then
       if frp_has_tty && [[ "${EXISTING_SERVER_CONFIG:-}" != "1" ]] && \
          [[ -z "${FRP_ALLOCATOR_PUBLIC_URL:-}" && -z "${EXISTING_ALLOCATOR_URL:-}" ]]; then
         echo
-        echo "Enrollment HTTPS public identity"
-        echo "--------------------------------"
+        echo "Public URL identity"
+        echo "-------------------"
+        echo "Choose once. This hostname or IP is used for Enrollment / Management"
+        echo "HTTPS, allocator URL, Server-local installer links, Zero-Touch commands,"
+        echo "and status/help public links. Zero-Touch will not ask again."
+        echo
         echo "1) Public IP"
         echo "   ${FRP_PUBLIC_IP}"
         echo "2) Public DNS hostname"
@@ -1110,13 +1121,15 @@ resolve_server_settings() {
           *) FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_HOSTNAME" ;;
         esac
       else
-        # Non-interactive / reinstall: prefer the configured DNS hostname.
+        # Non-interactive / reinstall without persisted identity: prefer DNS hostname.
         FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_HOSTNAME"
       fi
     else
       FRP_ENROLLMENT_PUBLIC_HOST="$FRP_PUBLIC_IP"
     fi
   fi
+  # Canonical alias used when writing config.json.
+  FRP_PUBLIC_URL_HOST="$FRP_ENROLLMENT_PUBLIC_HOST"
 
   local internal_default="${FRP_INTERNAL_IP:-${detected_internal:-}}"
   prompt "Internal FRP server IP (display only)" "$internal_default" FRP_INTERNAL_IP
@@ -1442,7 +1455,8 @@ write_server_config() {
     "$WINDOWS_CLIENT_INSTALLER_URL" \
     "$pki" \
     "${FRP_PUBLIC_HOSTNAME:-}" \
-    "${FRP_BOOTSTRAP_HOSTNAME:-}" <<'PY'
+    "${FRP_BOOTSTRAP_HOSTNAME:-}" \
+    "${FRP_PUBLIC_URL_HOST:-${FRP_ENROLLMENT_PUBLIC_HOST:-}}" <<'PY'
 import json, os, sys, tempfile
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -1450,6 +1464,7 @@ pki = sys.argv[12]
 host = sys.argv[2]
 hostname = (sys.argv[13] if len(sys.argv) > 13 else '').strip()
 bootstrap_hostname = (sys.argv[14] if len(sys.argv) > 14 else '').strip()
+public_url_host = (sys.argv[15] if len(sys.argv) > 15 else '').strip()
 existing = {}
 if path.is_file():
     try:
@@ -1519,6 +1534,8 @@ if hostname:
     cfg['public_hostname'] = hostname
 if bootstrap_hostname:
     cfg['bootstrap_hostname'] = bootstrap_hostname.lower()
+if public_url_host:
+    cfg['public_url_host'] = public_url_host
 payload = json.dumps(cfg, indent=2, sort_keys=True) + '\n'
 path.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=str(path.parent))

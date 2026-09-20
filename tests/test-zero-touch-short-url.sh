@@ -111,6 +111,54 @@ if grep -q '/i/' "$OUT_ZT1"; then
 fi
 pass "ZT1_FALLBACK_ABSENT_HOSTNAME"
 
+# Install-time DNS public_url_host enables short URL without a second bootstrap hostname.
+python3 - "$TREE/etc/drlink/config.json" <<'PY' || fail "set public_url_host domain"
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text())
+cfg.pop('bootstrap_hostname', None)
+cfg['public_hostname'] = 'remote.xdr.ooo'
+cfg['public_url_host'] = 'remote.xdr.ooo'
+cfg['allocator_public_url'] = 'https://remote.xdr.ooo:%s/enroll' % (
+    cfg.get('allocator_listen_port') or cfg.get('listen_port')
+)
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
+OUT_DOMAIN="$WORKDIR/domain-short.out"
+python3 "$ROOT/tools/frp-create-client" --one-line --client-name domain-short --note 'dns' \
+  >"$OUT_DOMAIN" || fail "one-line with public_url_host domain"
+grep -E -q "curl -fsSL 'https://remote\.xdr\.ooo/i/bt1\.[0-9a-f]+\.[0-9a-f]+' \| sudo bash$" \
+  "$OUT_DOMAIN" || { cat "$OUT_DOMAIN"; fail "domain public_url_host short URL shape"; }
+if grep -q 'zt1\.' "$OUT_DOMAIN"; then
+  fail "domain short URL still printed zt1"
+fi
+pass "PUBLIC_URL_HOST_DOMAIN_SHORT_URL"
+
+# IP-selected public_url_host must not invent short URL from public_hostname.
+python3 - "$TREE/etc/drlink/config.json" <<'PY' || fail "set public_url_host IP"
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text())
+cfg.pop('bootstrap_hostname', None)
+cfg['public_hostname'] = 'remote.xdr.ooo'
+cfg['public_url_host'] = '203.0.113.10'
+cfg['allocator_public_url'] = 'https://203.0.113.10:%s/enroll' % (
+    cfg.get('allocator_listen_port') or cfg.get('listen_port')
+)
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
+OUT_IP_ID="$WORKDIR/ip-identity.out"
+python3 "$ROOT/tools/frp-create-client" --one-line --client-name ip-identity --note 'ip' \
+  >"$OUT_IP_ID" || fail "one-line with public_url_host IP"
+grep -q "curl -fsSL --proto =https --cacert" "$OUT_IP_ID" \
+  || { cat "$OUT_IP_ID"; fail "IP identity should use pinned long command"; }
+if grep -q '/i/' "$OUT_IP_ID"; then
+  fail "IP public_url_host unexpectedly printed short URL"
+fi
+pass "PUBLIC_URL_HOST_IP_NO_SHORT_URL"
+
 python3 "$ROOT/tools/frp-server-set" bootstrap-hostname bootstrap.example.com >/dev/null
 
 OUT_MGMT="$WORKDIR/mgmt.out"

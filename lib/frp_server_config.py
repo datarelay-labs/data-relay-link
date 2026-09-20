@@ -3,15 +3,18 @@
 
 control_host  — FRP control / infrastructure endpoint (public_ip, legacy public_host)
 access_host   — user-facing published-service endpoint (public_hostname or control_host)
+public_url_host — install-time canonical host for Enrollment/Management HTTPS,
+                  allocator URL, Server-local installer links, Zero-Touch commands,
+                  and status/help public links (domain or IP, chosen once at install)
 
-public_hostname is an optional DNS alias for published-service access and,
-when the operator selects it during install, Enrollment HTTPS URLs. It must
-never become the default FRP control destination or PKI identity by itself.
+public_hostname is an optional DNS alias for published-service access and may
+also be selected as public_url_host. It must never become the default FRP
+control destination or PKI identity by itself.
 
-bootstrap_hostname is a separate optional DNS name used only for the publicly
-trusted Zero-Touch short URL entrypoint (operator reverse proxy). When unset,
-public_hostname may be used as the short-URL host when Enrollment HTTPS already
-publishes that name.
+bootstrap_hostname is an optional advanced override for the publicly trusted
+Zero-Touch short URL entrypoint only. When unset, a DNS public_url_host is
+used for short URLs — operators must not configure a second hostname merely
+to get the short Zero-Touch command.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ import socket
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def durable_replace(tmp, path):
@@ -134,11 +138,71 @@ def public_hostname(cfg):
 
 
 def bootstrap_hostname(cfg):
-    """Optional Zero-Touch public TLS bootstrap hostname (not public_hostname)."""
+    """Optional Zero-Touch public TLS bootstrap hostname (advanced override)."""
     if not isinstance(cfg, dict):
         return ''
     try:
         return validate_public_hostname(cfg.get('bootstrap_hostname') or '', required=False)
+    except ConfigError:
+        return ''
+
+
+def public_url_host(cfg):
+    """Install-time canonical host for user-facing public HTTPS / ZT / installer URLs.
+
+    Preference: explicit public_url_host (or legacy enrollment_public_host),
+    then allocator_public_url authority, then public_hostname, then control IP.
+    """
+    if not isinstance(cfg, dict):
+        return ''
+    for key in ('public_url_host', 'enrollment_public_host'):
+        value = _strip(cfg.get(key))
+        if not value:
+            continue
+        if is_ip_literal(value):
+            return validate_public_ip(value, required=True)
+        try:
+            return validate_public_hostname(value, required=True)
+        except ConfigError:
+            return value
+    url = _strip(cfg.get('allocator_public_url') or '')
+    if url:
+        try:
+            host = urlparse(url).hostname or ''
+        except Exception:
+            host = ''
+        host = _strip(host)
+        if host:
+            if is_ip_literal(host):
+                return host
+            try:
+                return validate_public_hostname(host, required=True)
+            except ConfigError:
+                return host
+    alias = public_hostname(cfg)
+    if alias:
+        return alias
+    try:
+        return control_host(cfg)
+    except ConfigError:
+        return ''
+
+
+def short_url_hostname(cfg):
+    """Hostname for Zero-Touch short URL commands.
+
+    Advanced bootstrap_hostname wins when set. Otherwise use public_url_host
+    when it is a DNS name. IP-selected public URL identity does not invent a
+    short-URL hostname from a separate public_hostname alias.
+    """
+    boot = bootstrap_hostname(cfg)
+    if boot:
+        return boot
+    host = public_url_host(cfg)
+    if not host or is_ip_literal(host):
+        return ''
+    try:
+        return validate_public_hostname(host, required=True)
     except ConfigError:
         return ''
 

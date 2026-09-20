@@ -23,9 +23,10 @@ reset_env() {
     FRP_DEPLOYMENT_MODE FRP_CONFIRM_MODE_SWITCH \
     FRP_LISTEN_HOST FRP_CONTROL_BIND_ADDR FRP_TRANSPORT FRP_MODE_SWITCH \
     EXISTING_DEPLOYMENT_MODE EXISTING_SERVER_CONFIG EXISTING_ALLOCATOR_URL \
+    EXISTING_PUBLIC_URL_HOST EXISTING_PUBLIC_HOSTNAME EXISTING_BOOTSTRAP_HOSTNAME \
     FRP_RELEASE_CHANNEL FRP_EXPECTED_SOURCE_REF FRP_TXN_SOURCE_REF \
     FRP_EXPECTED_SOURCE_HEAD FRP_EXPECTED_RELEASE_CHANNEL \
-    FRP_ENROLLMENT_PUBLIC_HOST || true
+    FRP_ENROLLMENT_PUBLIC_HOST FRP_PUBLIC_URL_HOST FRP_BOOTSTRAP_HOSTNAME || true
 }
 
 reset_env
@@ -421,6 +422,124 @@ resolve_server_settings
 [[ "$FRP_CONTROL_PUBLIC_PORT" == '443' ]] || fail "legacy control public"
 [[ "$FRP_CONTROL_LISTEN_PORT" == '443' ]] || fail "legacy control listen"
 pass "legacy control_port maps to public and listen equally"
+
+# --- Packet 5 clarification: install-time public URL identity persistence ---
+# Domain-selected: persist public_url_host=DNS; allocator/installer hosts use DNS.
+DOMAIN_CFG="$WORKDIR/public-url-domain.json"
+reset_env
+export FRP_PUBLIC_IP='129.225.184.60'
+export FRP_PUBLIC_HOSTNAME='remote.xdr.ooo'
+export FRP_ENROLLMENT_PUBLIC_HOST='remote.xdr.ooo'
+export FRP_SERVER_CONFIG="$DOMAIN_CFG"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_PUBLIC_URL_HOST" == 'remote.xdr.ooo' ]] || fail "domain identity FRP_PUBLIC_URL_HOST"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://remote.xdr.ooo:6099/enroll' ]] || fail "domain allocator URL"
+write_server_config
+python3 - "$DOMAIN_CFG" <<'PY' || fail "domain public_url_host not persisted"
+import json, sys
+from pathlib import Path
+from urllib.parse import urlparse
+cfg = json.loads(Path(sys.argv[1]).read_text())
+assert cfg.get('public_url_host') == 'remote.xdr.ooo', cfg
+assert cfg.get('public_ip') == '129.225.184.60', cfg
+assert cfg.get('public_hostname') == 'remote.xdr.ooo', cfg
+assert urlparse(cfg['allocator_public_url']).hostname == 'remote.xdr.ooo', cfg
+assert 'remote.xdr.ooo' in cfg.get('client_installer_url', ''), cfg
+print('ok')
+PY
+pass "DOMAIN_PUBLIC_URL_IDENTITY_PERSISTED"
+
+# Reinstall loads persisted domain identity without FRP_ENROLLMENT_PUBLIC_HOST.
+reset_env
+export FRP_SERVER_CONFIG="$DOMAIN_CFG"
+load_existing_server_config
+[[ "$EXISTING_PUBLIC_URL_HOST" == 'remote.xdr.ooo' ]] || fail "reload EXISTING_PUBLIC_URL_HOST"
+resolve_server_settings
+[[ "$FRP_PUBLIC_URL_HOST" == 'remote.xdr.ooo' ]] || fail "reinstall keeps domain public_url_host"
+[[ "$FRP_ENROLLMENT_PUBLIC_HOST" == 'remote.xdr.ooo' ]] || fail "reinstall keeps enrollment host"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://remote.xdr.ooo:6099/enroll' ]] || fail "reinstall keeps domain allocator"
+pass "DOMAIN_PUBLIC_URL_IDENTITY_RELOAD"
+
+# IP-selected: persist public_url_host=IP even when public_hostname is configured.
+IP_CFG="$WORKDIR/public-url-ip.json"
+reset_env
+export FRP_PUBLIC_IP='129.225.184.60'
+export FRP_PUBLIC_HOSTNAME='remote.xdr.ooo'
+export FRP_ENROLLMENT_PUBLIC_HOST='129.225.184.60'
+export FRP_SERVER_CONFIG="$IP_CFG"
+load_existing_server_config
+resolve_server_settings
+[[ "$FRP_PUBLIC_URL_HOST" == '129.225.184.60' ]] || fail "IP identity FRP_PUBLIC_URL_HOST"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://129.225.184.60:6099/enroll' ]] || fail "IP allocator URL"
+write_server_config
+python3 - "$IP_CFG" <<'PY' || fail "IP public_url_host not persisted"
+import json, sys
+from pathlib import Path
+from urllib.parse import urlparse
+cfg = json.loads(Path(sys.argv[1]).read_text())
+assert cfg.get('public_url_host') == '129.225.184.60', cfg
+assert cfg.get('public_hostname') == 'remote.xdr.ooo', cfg
+assert urlparse(cfg['allocator_public_url']).hostname == '129.225.184.60', cfg
+assert '129.225.184.60' in cfg.get('client_installer_url', ''), cfg
+print('ok')
+PY
+pass "IP_PUBLIC_URL_IDENTITY_PERSISTED"
+
+# Reinstall keeps IP identity; public_hostname must not override user-facing URLs.
+reset_env
+export FRP_SERVER_CONFIG="$IP_CFG"
+load_existing_server_config
+[[ "$EXISTING_PUBLIC_URL_HOST" == '129.225.184.60' ]] || fail "reload IP EXISTING_PUBLIC_URL_HOST"
+resolve_server_settings
+[[ "$FRP_PUBLIC_URL_HOST" == '129.225.184.60' ]] || fail "reinstall keeps IP public_url_host"
+[[ "$FRP_ALLOCATOR_PUBLIC_URL" == 'https://129.225.184.60:6099/enroll' ]] || fail "reinstall keeps IP allocator"
+pass "IP_PUBLIC_URL_IDENTITY_RELOAD"
+
+# Zero-Touch short URL generation follows persisted public_url_host (no second bootstrap).
+python3 - "$ROOT" "$DOMAIN_CFG" "$IP_CFG" <<'PY' || fail "ZT short URL from public_url_host"
+import importlib.machinery
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / 'lib'))
+import frp_server_config as S
+import frp_zero_touch as zt
+
+create_path = root / 'tools' / 'frp-create-client'
+spec = importlib.util.spec_from_file_location(
+    'frp_create_client', str(create_path),
+    loader=importlib.machinery.SourceFileLoader('frp_create_client', str(create_path)),
+)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+domain_cfg = json.loads(Path(sys.argv[2]).read_text())
+ip_cfg = json.loads(Path(sys.argv[3]).read_text())
+ticket = 'bt1.' + ('a' * 16) + '.' + ('b' * 64)
+
+assert S.short_url_hostname(domain_cfg) == 'remote.xdr.ooo'
+assert mod.short_url_host_for_cfg(domain_cfg) == 'remote.xdr.ooo'
+cmd = zt.short_url_command(mod.short_url_host_for_cfg(domain_cfg), ticket)
+assert "https://remote.xdr.ooo/i/" in cmd, cmd
+assert 'bootstrap' not in cmd
+
+assert S.short_url_hostname(ip_cfg) == ''
+assert mod.short_url_host_for_cfg(ip_cfg) == ''
+# IP identity + public_hostname must not invent short URL.
+assert ip_cfg.get('public_hostname') == 'remote.xdr.ooo'
+assert mod.short_url_host_for_cfg(ip_cfg) == ''
+
+# Advanced bootstrap override still wins when explicitly set.
+override = dict(ip_cfg)
+override['bootstrap_hostname'] = 'bootstrap.example.com'
+assert mod.short_url_host_for_cfg(override) == 'bootstrap.example.com'
+print('ok')
+PY
+pass "ZT_SHORT_URL_FOLLOWS_PUBLIC_URL_HOST"
 
 echo
 echo "SERVER_INSTALL_CONFIG_TEST=PASS"

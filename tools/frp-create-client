@@ -423,6 +423,33 @@ def load_zero_touch():
     )
 
 
+def load_server_config():
+    return load_module(
+        'frp_server_config',
+        'lib/frp_server_config.py',
+        '/usr/local/lib/drlink/frp_server_config.py',
+    )
+
+
+def short_url_host_for_cfg(cfg, bootstrap_hostname='', public_hostname=''):
+    """Resolve Zero-Touch short URL hostname from install-time public identity.
+
+    Prefer frp_server_config.short_url_hostname(cfg): advanced bootstrap_hostname
+    override, else DNS public_url_host. IP-selected public identity does not
+    invent a short URL from a separate public_hostname alias.
+    """
+    scfg = load_server_config()
+    if scfg is not None and isinstance(cfg, dict):
+        try:
+            host = scfg.short_url_hostname(cfg)
+        except Exception:
+            host = ''
+        if host:
+            return str(host).strip().lower()
+        return ''
+    return str(bootstrap_hostname or public_hostname or '').strip().lower()
+
+
 _ZT = None
 
 
@@ -1003,11 +1030,13 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
 def print_one_line_windows(
     ticket, ttl, note, public_host, control_public, allocator, ca_fp,
     installer, rdp_port=None, client_name='', management_only=False,
-    ticket_id='', bootstrap_hostname='', public_hostname=''
+    ticket_id='', bootstrap_hostname='', public_hostname='', cfg=None
 ):
     zt = _zt()
     command = ''
-    bootstrap_host = str(bootstrap_hostname or public_hostname or '').strip().lower()
+    bootstrap_host = short_url_host_for_cfg(
+        cfg, bootstrap_hostname=bootstrap_hostname, public_hostname=public_hostname
+    )
     if bootstrap_host and zt is not None:
         try:
             command = zt.short_url_windows_command(bootstrap_host, ticket)
@@ -1106,18 +1135,21 @@ def print_one_line_windows(
     print()
 
 
-def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname='', public_hostname=''):
+def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname='', public_hostname='', cfg=None):
     tracking_id = str(ticket_id or '').strip()
     if not tracking_id and ticket:
         parts = str(ticket).split('.')
         if len(parts) >= 2:
             tracking_id = parts[1]
 
-    # Prefer short URL when bootstrap_hostname (or public_hostname) is configured.
-    # Low-level CA pin mechanics stay inside the served /i/<ticket> bootstrap
-    # artifact or the zt1 package — never weaken Private CA verification.
+    # Prefer short URL when install-time public_url_host is DNS (or advanced
+    # bootstrap_hostname override). Do not require a second bootstrap hostname
+    # merely to get the short command. Low-level CA pin mechanics stay inside
+    # the served /i/<ticket> bootstrap artifact or the zt1 package.
     command = ''
-    bootstrap_host = str(bootstrap_hostname or public_hostname or '').strip().lower()
+    bootstrap_host = short_url_host_for_cfg(
+        cfg, bootstrap_hostname=bootstrap_hostname, public_hostname=public_hostname
+    )
     if bootstrap_host and not legacy_env:
         try:
             zt = _zt()
@@ -1397,6 +1429,7 @@ def main(argv=None):
             ticket_id=ticket_id,
             bootstrap_hostname=bootstrap_hostname,
             public_hostname=public_hostname,
+            cfg=cfg,
         )
     else:
         print_one_line(
@@ -1415,6 +1448,7 @@ def main(argv=None):
             ticket_id=ticket_id,
             bootstrap_hostname=bootstrap_hostname,
             public_hostname=public_hostname,
+            cfg=cfg,
         )
     try:
         here = Path(__file__).resolve()

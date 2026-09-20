@@ -53,6 +53,28 @@ assert S.access_host(cfg) == '203.0.113.10'
 cfg['public_hostname'] = 'frp.example.com'
 assert S.control_host(cfg) == '203.0.113.10'
 assert S.access_host(cfg) == 'frp.example.com'
+
+# Install-time public URL identity (domain vs IP) drives enrollment/ZT hosts.
+assert S.public_url_host(cfg) == 'frp.example.com'  # falls back to public_hostname
+assert S.short_url_hostname(cfg) == 'frp.example.com'
+cfg['public_url_host'] = 'frp.example.com'
+assert S.public_url_host(cfg) == 'frp.example.com'
+assert S.short_url_hostname(cfg) == 'frp.example.com'
+# IP-selected identity must not invent short URL from public_hostname alias.
+cfg['public_url_host'] = '203.0.113.10'
+assert S.public_url_host(cfg) == '203.0.113.10'
+assert S.short_url_hostname(cfg) == ''
+# Advanced bootstrap_hostname override still wins for short URL only.
+cfg['bootstrap_hostname'] = 'bootstrap.example.com'
+assert S.short_url_hostname(cfg) == 'bootstrap.example.com'
+assert S.public_url_host(cfg) == '203.0.113.10'
+del cfg['bootstrap_hostname']
+# Legacy enrollment_public_host alias.
+del cfg['public_url_host']
+cfg['enrollment_public_host'] = 'legacy.example.com'
+assert S.public_url_host(cfg) == 'legacy.example.com'
+assert S.short_url_hostname(cfg) == 'legacy.example.com'
+
 assert S.format_http_url('https', '2001:db8::1', 6005) == 'https://[2001:db8::1]:6005'
 lines = S.render_access_lines('203.0.113.10', 'frp.example.com', 6000, preset='ssh', ssh_user='ubuntu')
 assert any('Preferred' in x for x in lines)
