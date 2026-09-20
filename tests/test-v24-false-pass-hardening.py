@@ -147,6 +147,7 @@ class FalsePassHardening(unittest.TestCase):
         self.assertIn("set remote-service", catalog.workflow_help("client"))
         self.assertIn("Remote Access BLACKLIST", text)
         self.assertIn("Internet Access WHITELIST", text)
+        self.assertIn("AI Access lifecycle", text)
         self.assertIn("ConfigurationBundle", text)
 
     def test_agent_menu_system_hierarchy_parity(self):

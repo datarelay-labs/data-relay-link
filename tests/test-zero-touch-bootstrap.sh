@@ -258,8 +258,8 @@ FRP_CREATE_CLIENT_TEST_INPUT='' FRP_DEPLOY_TEST_ROOT="$TREE" \
 eof_rc=$?
 set -e
 [[ "$eof_rc" -ne 0 ]] || fail "EOF during client identification prompt should fail"
-grep -q 'Client details' "$WORKDIR/eof.out" || fail "EOF did not show client details"
-grep -q 'Client name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client name"
+grep -q 'Managed Host details' "$WORKDIR/eof.out" || fail "EOF did not show Managed Host details"
+grep -q 'Managed Host name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client name"
 [[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "ticket created before input completed"
 pass "TICKET_NOT_CREATED_BEFORE_INPUT"
 
@@ -267,9 +267,9 @@ BEFORE_TICKETS="$(ticket_count)"
 FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
   python3 "$CREATE" --one-line --ssh \
   >"$WORKDIR/prompt.out" 2>"$WORKDIR/prompt.err"
-grep -q 'Client details' "$WORKDIR/prompt.out" || fail "missing client details"
-grep -q 'Client name:' "$WORKDIR/prompt.out" || fail "missing client name prompt"
-grep -q 'ERROR: Client name cannot be blank.' "$WORKDIR/prompt.err" \
+grep -q 'Managed Host details' "$WORKDIR/prompt.out" || fail "missing Managed Host details"
+grep -q 'Managed Host name:' "$WORKDIR/prompt.out" || fail "missing Managed Host name prompt"
+grep -q 'ERROR: Managed Host name cannot be blank.' "$WORKDIR/prompt.err" \
   || fail "blank client name not rejected"
 grep -q 'SSH service setup' "$WORKDIR/prompt.out" || fail "missing SSH setup heading"
 grep -q 'SSH username is optional connection-example metadata.' \
@@ -277,7 +277,7 @@ grep -q 'SSH username is optional connection-example metadata.' \
 grep -qF 'SSH username [optional]:' "$WORKDIR/prompt.out" || fail "missing optional username prompt"
 grep -qF 'SSH port [22]:' "$WORKDIR/prompt.out" || fail "missing port prompt"
 grep -q 'Client configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
-grep -q 'Client name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation client name"
+grep -q 'Managed Host name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation Managed Host name"
 grep -qE 'SSH user[[:space:]]*:[[:space:]]*<username>|SSH user[[:space:]]*:[[:space:]]*-' \
   "$WORKDIR/prompt.out" || fail "blank username should show placeholder"
 grep -qE 'Target[[:space:]]*:[[:space:]]*127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"

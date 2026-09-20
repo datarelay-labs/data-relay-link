@@ -798,20 +798,20 @@ def validate_prompt_ssh_user(raw):
 def validate_prompt_label(raw):
     text = '' if raw is None else str(raw).strip()
     if not text:
-        return '', 'Client name cannot be blank.'
+        return '', 'Managed Host name cannot be blank.'
     if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text):
-        return '', 'Client name must not contain control characters or newlines'
+        return '', 'Managed Host name must not contain control characters or newlines'
     if len(text) > 64:
-        return '', 'Client name must be at most 64 characters'
+        return '', 'Managed Host name must be at most 64 characters'
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,63}', text):
-        return '', 'invalid client name'
+        return '', 'invalid Managed Host name'
     return text, ''
 
 
 def prompt_client_identification(existing_name, existing_note):
     print()
-    print('Client details')
-    print('==============')
+    print('Managed Host details')
+    print('====================')
     print()
     print('Enter a name that will help you identify this machine later.')
     print()
@@ -819,7 +819,7 @@ def prompt_client_identification(existing_name, existing_note):
     name = '' if existing_name is None else str(existing_name).strip()
     if not name:
         while True:
-            entered = read_prompt('Client name: ')
+            entered = read_prompt('Managed Host name: ')
             name, err = validate_prompt_label(entered)
             if name:
                 break
@@ -895,10 +895,10 @@ def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
 
 def print_client_configuration(name, note, services=None, ssh_user='', ssh_port=None):
     print()
-    print('Client configuration')
-    print('====================')
+    print('Managed Host configuration')
+    print('==========================')
     print()
-    print('Client name : %s' % (name or '(hostname after enrollment)'))
+    print('Managed Host name : %s' % (name or '(hostname after enrollment)'))
     print('Description : %s' % (note or '-'))
     print()
     print('Services')
@@ -1080,7 +1080,7 @@ def print_one_line_windows(
     print()
     print('Expires: %s (%s seconds)' % (iso(int(time.time()) + ttl), ttl))
     if client_name:
-        print('Client name: %s' % client_name)
+        print('Managed Host name: %s' % client_name)
     if note:
         print('Note: %s' % note)
     if public_host and control_public:
@@ -1176,7 +1176,7 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     print()
     print('Expires: %s (%s seconds)' % (iso(int(time.time()) + ttl), ttl))
     if client_name:
-        print('Client name: %s' % client_name)
+        print('Managed Host name: %s' % client_name)
     if note:
         print('Note: %s' % note)
     if public_host and control_public:

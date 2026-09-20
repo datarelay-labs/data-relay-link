@@ -224,7 +224,7 @@ if "$CTL" create-client >"$WORKDIR/server-create.out" 2>"$WORKDIR/server-create.
   grep -q 'DISPATCH frp-create-client' "$WORKDIR/server-create.out" \
     || fail "create-client unexpected success without dispatch"
 else
-  grep -qiE 'Create Enrollment|Client name|no TTY|do not use --options' \
+  grep -qiE 'Create Enrollment|Managed Host name|no TTY|do not use --options' \
     "$WORKDIR/server-create.out" "$WORKDIR/server-create.err" \
     || fail "create-client should guide or reject non-interactively"
 fi
@@ -232,7 +232,7 @@ if "$CTL" enroll >"$WORKDIR/server-enroll.out" 2>"$WORKDIR/server-enroll.err"; t
   grep -q 'DISPATCH frp-create-client' "$WORKDIR/server-enroll.out" \
     || fail "enroll unexpected success without dispatch"
 else
-  grep -qiE 'Create Enrollment|Client name|no TTY|do not use --options' \
+  grep -qiE 'Create Enrollment|Managed Host name|no TTY|do not use --options' \
     "$WORKDIR/server-enroll.out" "$WORKDIR/server-enroll.err" \
     || fail "enroll should guide or reject non-interactively"
 fi
@@ -433,7 +433,7 @@ pass "FRPCTL_REPL_SERVER_CLIENT_INFO"
 run_repl "$SERVER" "$WORKDIR/server-enroll-guided.out" \
   "create enrollment" "" "" "" "" exit \
   || fail "repl create enrollment"
-grep -qiE 'Create Enrollment|DISPATCH frp-create-client|Client name|TTL|note' \
+grep -qiE 'Create Enrollment|DISPATCH frp-create-client|Managed Host name|TTL|note' \
   "$WORKDIR/server-enroll-guided.out" \
   || fail "repl create enrollment guided"
 pass "FRPCTL_REPL_SERVER_ENROLL_DISPATCH"
@@ -443,7 +443,7 @@ export FRP_CTL_DRY_RUN=1
 run_repl "$SERVER" "$WORKDIR/guided-enroll.out" \
   menu 1 2 1 1 zt-ssh-client "" 1 aella "" 5 9 exit \
   || fail "guided enroll zero-touch"
-grep -q 'Connect a new client' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
+grep -q 'Connect a Managed Host' "$WORKDIR/guided-enroll.out" || fail "guided enroll heading"
 grep -q 'Zero-Touch' "$WORKDIR/guided-enroll.out" || fail "guided enroll zero-touch option"
 grep -q 'Manual Enrollment Code' "$WORKDIR/guided-enroll.out" || fail "guided enroll manual option"
 grep -Eq 'DISPATCH frp-create-client( --platform linux)? --one-line --ssh --ssh-user aella --ssh-port 22 --client-name zt-ssh-client( --note.*)?' \

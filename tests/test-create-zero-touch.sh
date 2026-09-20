@@ -103,7 +103,7 @@ help_legacy="$(frpctl_grammar_call help '{"tokens":["legacy"]}')"
 echo "$help_legacy" | grep -qiE "help legacy.*removed|help commands|Canonical roots" \
   || fail "help legacy must report removal and point to help commands"
 help_clients="$(frpctl_grammar_call help '{"tokens":["clients"]}')"
-echo "$help_clients" | grep -qiE 'set enrollment|set client|Connect a new client|zero-touch|Zero-Touch|Managed Hosts' \
+echo "$help_clients" | grep -qiE 'set enrollment|set client|Connect a Managed Host|zero-touch|Zero-Touch|Managed Hosts' \
   || fail "help clients missing onboarding path"
 root_help="$(frpctl_grammar_call help '{"tokens":[]}')"
 echo "$root_help" | grep -qE '^[[:space:]]*set([[:space:]]|$)' || fail "root help missing set"
@@ -149,7 +149,7 @@ pass "SET_ENROLLMENT_ZERO_TOUCH_PUBLIC"
 run_repl "$SERVER" "$WORKDIR/zt-ssh.out" \
   "create zero-touch" 1 1 office-ssh "Seoul office" 1 aella 22 exit \
   || fail "zero-touch ssh guided"
-grep -qiE 'Connect a new client|Client details|zero-touch|Zero-Touch' "$WORKDIR/zt-ssh.out" || fail "zero-touch heading"
+grep -qiE 'Connect a Managed Host|Managed Host details|zero-touch|Zero-Touch' "$WORKDIR/zt-ssh.out" || fail "zero-touch heading"
 grep -q '1) SSH only' "$WORKDIR/zt-ssh.out" || fail "ssh only option"
 grep -q 'DISPATCH frp-create-client --platform linux --one-line --ssh --ssh-user aella --ssh-port 22 --client-name office-ssh --note Seoul office' \
   "$WORKDIR/zt-ssh.out" || fail "ssh only dispatch"
@@ -170,7 +170,7 @@ pass "MACOS_MENU_DEAD_END_NO"
 run_repl "$SERVER" "$WORKDIR/zt-rdp.out" \
   "create zero-touch" 1 2 office-rdp "Windows desktop" 1 3389 exit \
   || fail "zero-touch Windows RDP guided"
-grep -qiE 'Windows|Connect a new client|RDP|Client details' "$WORKDIR/zt-rdp.out" \
+grep -qiE 'Windows|Connect a Managed Host|RDP|Managed Host details' "$WORKDIR/zt-rdp.out" \
   || fail "Windows platform menu"
 grep -q 'DISPATCH frp-create-client --platform windows --one-line --rdp --rdp-port 3389 --client-name office-rdp --note Windows desktop' \
   "$WORKDIR/zt-rdp.out" || fail "Windows RDP dispatch"
@@ -190,11 +190,11 @@ grep -q '3) Back' "$WORKDIR/zt-mgmt-menu.out" || fail "back option missing"
 if grep -q 'DISPATCH frp-create-client --one-line' "$WORKDIR/zt-mgmt-menu.out"; then
   fail "Back unexpectedly dispatched zero-touch enrollment"
 fi
-# Blank description accepted without a second Client details prompt.
+# Blank description accepted without a second Managed Host details prompt.
 run_repl "$SERVER" "$WORKDIR/zt-blank-note.out" \
   "create zero-touch" 1 1 blank-desc "" 1 aella 22 exit \
   || fail "blank description guided"
-ident_count="$(grep -c 'Client details' "$WORKDIR/zt-blank-note.out" || true)"
+ident_count="$(grep -c 'Managed Host details' "$WORKDIR/zt-blank-note.out" || true)"
 [[ "$ident_count" == "1" ]] || fail "CLIENT_IDENTIFICATION_PROMPT_COUNT expected 1 got $ident_count"
 ! grep -q 'Client identification' "$WORKDIR/zt-blank-note.out" \
   || fail "stale Client identification heading"

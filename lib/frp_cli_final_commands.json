@@ -264,7 +264,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Show recent authorization decisions",
-    "detail": "Requires a client and service. Guided menu: Recent access decisions \u2192 select client \u2192 select service.",
+    "detail": "Requires a client and service. Guided menu: Recent access decisions → select client → select service.",
     "examples": [
       "show access-log dp1 ssh"
     ],
@@ -397,7 +397,7 @@
     ],
     "roles": "server",
     "category": "Change",
-    "summary": "Connect a new client or change client information",
+    "summary": "Connect a Managed Host or change Managed Host information",
     "detail": "Bare 'set client' starts client onboarding (Zero-Touch or Manual Enrollment Code). With a client selector, set label/note/tag or group membership.",
     "examples": [
       "set client",
@@ -1214,7 +1214,7 @@
     "roles": "server",
     "category": "Inventory",
     "summary": "Remove client metadata, trust, a service reservation, group membership, or the client",
-    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> \u2014 require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag \u2026\nGroup membership: unset client <CLIENT> group <GROUP>",
+    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> — require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag …\nGroup membership: unset client <CLIENT> group <GROUP>",
     "examples": [
       "unset client 24cd7856 label",
       "unset client 24cd7856 trust",
@@ -2714,8 +2714,8 @@
     ],
     "roles": "server",
     "category": "Remote Access",
-    "summary": "List Managed Endpoints",
-    "detail": "List Managed Endpoints",
+    "summary": "List Managed Hosts",
+    "detail": "List Managed Hosts",
     "examples": [
       "show managed-endpoints"
     ],
@@ -2737,8 +2737,8 @@
     ],
     "roles": "server",
     "category": "Remote Access",
-    "summary": "Show a Managed Endpoint",
-    "detail": "Show a Managed Endpoint",
+    "summary": "Show a Managed Host",
+    "detail": "Show a Managed Host",
     "examples": [
       "show managed-endpoint"
     ],
@@ -2944,8 +2944,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "List AI Principals",
-    "detail": "List AI Principals",
+    "summary": "List AI Identities",
+    "detail": "List AI Identities",
     "examples": [
       "show ai-principals"
     ],
@@ -2967,8 +2967,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "Show an AI Principal",
-    "detail": "Show an AI Principal",
+    "summary": "Show an AI Identity",
+    "detail": "Show an AI Identity",
     "examples": [
       "show ai-principal"
     ],
@@ -3269,8 +3269,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "Create or edit an AI Principal",
-    "detail": "Create or edit an AI Principal",
+    "summary": "Create or edit an AI Identity",
+    "detail": "Create or edit an AI Identity",
     "examples": [
       "set ai-principal"
     ],
@@ -3501,8 +3501,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "Remove an AI Principal",
-    "detail": "Remove an AI Principal",
+    "summary": "Remove an AI Identity",
+    "detail": "Remove an AI Identity",
     "examples": [
       "unset ai-principal"
     ],
@@ -3653,8 +3653,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "Rotate an AI Principal credential",
-    "detail": "Rotate an AI Principal credential",
+    "summary": "Rotate an AI Identity credential",
+    "detail": "Rotate an AI Identity credential",
     "examples": [
       "system credential rotate ai-principal"
     ],
@@ -3684,8 +3684,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "Revoke an AI Principal credential",
-    "detail": "Revoke an AI Principal credential",
+    "summary": "Revoke an AI Identity credential",
+    "detail": "Revoke an AI Identity credential",
     "examples": [
       "system credential revoke ai-principal"
     ],
@@ -3715,8 +3715,8 @@
     ],
     "roles": "server",
     "category": "AI Access",
-    "summary": "Configure AI Principal authentication",
-    "detail": "Set Static Bearer or OAuth authentication for an AI Principal, or register an OAuth redirect URI. Authentication type names the protocol; Static Bearer is not OAuth.",
+    "summary": "Configure AI Identity authentication",
+    "detail": "Set Static Bearer or OAuth authentication for an AI Identity, or register an OAuth redirect URI. Authentication type names the protocol; Static Bearer is not OAuth.",
     "examples": [
       "system credential configure ai-principal lab authentication static-bearer",
       "system credential configure ai-principal lab authentication oauth",

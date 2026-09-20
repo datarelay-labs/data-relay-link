@@ -469,7 +469,7 @@ PY
     rc=$?
   fi
   # Guard against mangled guided answers (seen when TEST_INPUT newlines were lost).
-  if [[ "$rc" -eq 0 ]] && grep -qE 'Client name[[:space:]]*:[[:space:]]*1$|SSH port[[:space:]]*:[[:space:]]*1$' "$out"; then
+  if [[ "$rc" -eq 0 ]] && grep -qE 'Managed Host name[[:space:]]*:[[:space:]]*1$|SSH port[[:space:]]*:[[:space:]]*1$' "$out"; then
     echo "ERROR: zero-touch guided answers look mangled (client name/port became 1)" >>"$out"
     rc=1
   fi
@@ -506,7 +506,7 @@ open(sys.argv[2], "w", encoding="utf-8").write(
 PY
     rc=$?
   fi
-  if [[ "$rc" -eq 0 ]] && grep -qE 'Client name[[:space:]]*:[[:space:]]*1$|SSH port[[:space:]]*:[[:space:]]*1$' "$out"; then
+  if [[ "$rc" -eq 0 ]] && grep -qE 'Managed Host name[[:space:]]*:[[:space:]]*1$|SSH port[[:space:]]*:[[:space:]]*1$' "$out"; then
     echo "ERROR: zero-touch guided answers look mangled (client name/port became 1)" >>"$out"
     rc=1
   fi

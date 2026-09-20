@@ -883,8 +883,8 @@ spec.loader.exec_module(mod)
 if not title:
     if menu_key in ("server", "both", "client"):
         title = "Data Relay Link"
-    elif menu_key.endswith(".clients"):
-        title = "Clients"
+    elif menu_key.endswith(".clients") or menu_key.endswith(".hosts"):
+        title = "Managed Hosts"
     elif menu_key.endswith(".services") and "internet" not in menu_key:
         title = "Services"
     elif "internet" in menu_key and menu_key.count(".") == 1:
@@ -1531,13 +1531,13 @@ def fail(msg):
 
 if kind == "label":
     if not text:
-        fail("Client name cannot be blank.")
+        fail("Managed Host name cannot be blank.")
     if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text):
-        fail("Client name must not contain control characters or newlines")
+        fail("Managed Host name must not contain control characters or newlines")
     if len(text) > 64:
-        fail("Client name must be at most 64 characters")
+        fail("Managed Host name must be at most 64 characters")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}", text):
-        fail("invalid client name")
+        fail("invalid Managed Host name")
     print(text)
 elif kind == "service_id":
     if not text:
@@ -1577,11 +1577,11 @@ PY
 frpctl_zt_prompt_client_identification() {
   local name="" note=""
   echo
-  echo "Client details"
-  echo "=============="
+  echo "Managed Host details"
+  echo "===================="
   echo
   while true; do
-    name="$(frpctl_read "Client name: " "")" || return 1
+    name="$(frpctl_read "Managed Host name: " "")" || return 1
     if name="$(frpctl_zt_validate_field label "$name")"; then
       break
     fi
@@ -1637,7 +1637,7 @@ frpctl_zt_invoke_create_client() {
     args+=(--client-name "$_FRP_ZT_CLIENT_NAME")
   fi
   # Always pass --note after guided identification so a blank description does
-  # not trigger a second Client details prompt in the backend.
+  # not trigger a second Managed Host details prompt in the backend.
   if [[ -n "${_FRP_ZT_CLIENT_NAME:-}" ]]; then
     args+=(--note "${_FRP_ZT_NOTE:-}")
   fi
@@ -1942,8 +1942,8 @@ frpctl_guided_zero_touch_macos() {
 frpctl_guided_zero_touch() {
   local choice
   echo
-  echo "Connect a new client"
-  echo "===================="
+  echo "Connect a Managed Host"
+  echo "======================"
   echo
   echo "Platform"
   echo "========"
@@ -1984,8 +1984,8 @@ frpctl_guided_zero_touch() {
 frpctl_guided_client_onboarding() {
   local choice
   echo
-  echo "Connect a new client"
-  echo "===================="
+  echo "Connect a Managed Host"
+  echo "======================"
   echo
   echo "Installation method"
   echo
@@ -2015,14 +2015,14 @@ frpctl_guided_manual_enrollment() {
   echo "Create Enrollment"
   echo "================="
   echo
-  client_name="$(frpctl_read "Client name [optional]: " "")" || return 1
+  client_name="$(frpctl_read "Managed Host name [optional]: " "")" || return 1
   lifetime="$(frpctl_read "Lifetime [1h]: " "1h")" || return 1
   [[ -n "$lifetime" ]] || lifetime=1h
   note="$(frpctl_read "Note [optional]: " "")" || return 1
   echo
   echo "Review"
   echo "------"
-  echo "  Client name : ${client_name:-"(none)"}"
+  echo "  Managed Host name : ${client_name:-"(none)"}"
   echo "  Lifetime    : $lifetime"
   echo "  Note        : ${note:-"(none)"}"
   echo

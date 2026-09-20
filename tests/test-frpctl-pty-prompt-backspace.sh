@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PTY regression: Backspace must edit only the user input buffer, never the
-# immutable prompt prefix (e.g. "Client name:").
+# immutable prompt prefix (e.g. "Managed Host name:").
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -40,7 +40,7 @@ frpctl_read() {
   fi
   printf 'SUBMITTED=[%s]\n' "$value"
 }
-frpctl_read "Client name: " ""
+frpctl_read "Managed Host name: " ""
 """
 
 master, slave = pty.openpty()
@@ -111,18 +111,18 @@ while i < len(text):
     i += 1
 visual = "".join(vis)
 
-if "Client nameExpernet" in visual or "Client namexyz" in visual.replace(":", ""):
+if "Managed Host nameExpernet" in visual or "Managed Host namexyz" in visual.replace(":", ""):
     # Colon/space eaten into prompt
-    if re.search(r"Client name[^:\n]*xyz", visual) and "Client name:" not in visual.split("SUBMITTED=")[0]:
+    if re.search(r"Managed Host name[^:\n]*xyz", visual) and "Managed Host name:" not in visual.split("SUBMITTED=")[0]:
         raise SystemExit("prompt prefix corrupted visually: %r" % visual)
 
-if "Client name:" not in visual:
+if "Managed Host name:" not in visual:
     raise SystemExit("prompt prefix missing from visual stream: %r" % visual)
 if "SUBMITTED=[xyz]" not in visual and "SUBMITTED=[xyz]" not in text:
     raise SystemExit("submitted value not xyz: %r" % text)
 # Ensure ':' survived in the prompt region before input
 prompt_region = visual.split("xyz", 1)[0]
-if "Client name:" not in prompt_region:
+if "Managed Host name:" not in prompt_region:
     raise SystemExit("colon not preserved in prompt region: %r" % visual)
 print("VISUAL_OK")
 print("SUBMITTED=xyz")

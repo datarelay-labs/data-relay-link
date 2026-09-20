@@ -3,7 +3,7 @@
 
 Transport: Streamable HTTP POST /mcp (stateless). Legacy HTTP+SSE is not used.
 Authentication modes:
-  Static Bearer — operator-issued drk_ tokens bound to an AI Principal
+  Static Bearer — operator-issued drk_ tokens bound to an AI Identity
   OAuth         — built-in OAuth 2.1 authorization server (authorization_code+PKCE
                   S256 and client_credentials) issuing distinct expiring tokens
 Protected Resource Metadata: RFC 9728
@@ -40,15 +40,15 @@ CLIENT_CAPS_META = "io.modelcontextprotocol/clientCapabilities"
 NAME_BEARING = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 
 TOOL_DEFS = (
-    ("list_hosts", "List Managed Endpoints this principal may target", {}),
-    ("get_host", "Get one Managed Endpoint", {"endpoint": "string"}),
-    ("get_system_info", "Read uname/system identity from a Managed Endpoint", {"endpoint": "string"}),
-    ("exec", "Run a shell command on a Managed Endpoint", {"endpoint": "string", "command": "string"}),
+    ("list_hosts", "List Managed Hosts this identity may target", {}),
+    ("get_host", "Get one Managed Host", {"endpoint": "string"}),
+    ("get_system_info", "Read uname/system identity from a Managed Host", {"endpoint": "string"}),
+    ("exec", "Run a shell command on a Managed Host", {"endpoint": "string", "command": "string"}),
     ("read_file", "Read a file within allowed path scopes", {"endpoint": "string", "path": "string"}),
     ("write_file", "Write a file within allowed path scopes", {"endpoint": "string", "path": "string", "content": "string"}),
     ("upload_file", "Upload bytes to an allowed path", {"endpoint": "string", "path": "string", "content": "string"}),
     ("download_file", "Download a file from an allowed path", {"endpoint": "string", "path": "string"}),
-    ("list_processes", "List processes on a Managed Endpoint", {"endpoint": "string"}),
+    ("list_processes", "List processes on a Managed Host", {"endpoint": "string"}),
 )
 
 ENDPOINT_TOOLS = frozenset(
@@ -351,7 +351,7 @@ class MCPBridge:
                     "cacheScope": "private",
                     "resultType": "complete",
                     "instructions": (
-                        "Data Relay Link MCP Bridge. Tools operate on Managed Endpoints "
+                        "Data Relay Link MCP Bridge. Tools operate on Managed Hosts "
                         "authorized by AI Access policy. Authenticated does not mean authorized."
                     ),
                 },
@@ -697,7 +697,7 @@ def make_handler(bridge: MCPBridge):
                     return
                 if pending.get("unbound"):
                     hint = (
-                        "system credential approve-oauth %s &lt;AI-PRINCIPAL&gt;" % pending["id"]
+                        "system credential approve-oauth %s &lt;AI-IDENTITY&gt;" % pending["id"]
                     )
                 else:
                     hint = "system credential approve-oauth %s" % pending["id"]

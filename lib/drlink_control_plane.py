@@ -732,8 +732,8 @@ class ControlPlane:
         obj_type = str(obj_type or "").strip().lower()
         if obj_type == "managed_endpoint" or obj_type in ("managed", "endpoint"):
             raise ControlPlaneError(
-                "Managed Endpoint is not a creatable Object type.\n"
-                "Managed Endpoints follow Client lifecycle."
+                "Managed Host is not a creatable Object type.\n"
+                "Managed Hosts follow the Managed Host lifecycle."
             )
         if obj_type not in OBJECT_TYPES:
             raise ControlPlaneError("Object type must be host, network, or fqdn")
@@ -743,7 +743,7 @@ class ControlPlane:
             existing = self.get_object(name)
             if existing:
                 if existing["origin"] == "managed":
-                    raise ControlPlaneError("Cannot change type of a Managed Endpoint through Object CRUD.")
+                    raise ControlPlaneError("Cannot change type of a Managed Host through Object CRUD.")
                 values = self._object_values(existing["id"])
                 refs = self.object_references(existing["name"])
                 if existing["type"] != obj_type and (values or refs):
@@ -771,7 +771,7 @@ class ControlPlane:
     def set_object_value(self, name: str, value: str, *, confirm: Optional[bool] = None, expected_row_version: Optional[int] = None) -> dict:
         obj = self.require_object(name)
         if obj["origin"] == "managed":
-            raise ControlPlaneError("Cannot edit Managed Endpoint values through Object CRUD.")
+            raise ControlPlaneError("Cannot edit Managed Host values through Object CRUD.")
         normalized = normalize_object_value(obj["type"], value)
         impact = self._value_add_impact(obj, normalized)
 
@@ -830,7 +830,7 @@ class ControlPlane:
         """
         obj = self.require_object(name)
         if obj["origin"] == "managed":
-            raise ControlPlaneError("Cannot edit Managed Endpoint values through Object CRUD.")
+            raise ControlPlaneError("Cannot edit Managed Host values through Object CRUD.")
         normalized = normalize_object_value(obj["type"], value)
         current = [
             r["normalized"]
@@ -899,7 +899,7 @@ class ControlPlane:
     def unset_object_value(self, name: str, value: str, *, confirm: Optional[bool] = None) -> dict:
         obj = self.require_object(name)
         if obj["origin"] == "managed":
-            raise ControlPlaneError("Cannot edit Managed Endpoint values through Object CRUD.")
+            raise ControlPlaneError("Cannot edit Managed Host values through Object CRUD.")
         normalized = normalize_object_value(obj["type"], value)
 
         def write():
@@ -933,7 +933,7 @@ class ControlPlane:
         obj = self.require_object(name)
         new_name = _validate_name(new_name, "Object name")
         if obj["origin"] == "managed":
-            raise ControlPlaneError("Rename a Managed Endpoint through Client label, not Object CRUD.")
+            raise ControlPlaneError("Rename a Managed Host with set managed-host / client label, not Object CRUD.")
 
         def write():
             clash = self.get_object(new_name)
@@ -1027,9 +1027,9 @@ class ControlPlane:
         obj = self.require_object(name)
         if obj["origin"] == "managed":
             raise ControlPlaneError(
-                "Cannot remove Managed Endpoint %s through Object CRUD.\n"
-                "Use Client lifecycle operations."
-                % name
+                "Cannot remove Managed Host %s through Object CRUD.\n"
+                "Use: unset managed-host %s"
+                % (name, name)
             )
         refs = self.object_references(name)
         if refs:
@@ -1052,7 +1052,7 @@ class ControlPlane:
             "host": "Host",
             "network": "Network",
             "fqdn": "FQDN",
-            "managed_endpoint": "Managed Endpoint",
+            "managed_endpoint": "Managed Host",
         }.get(view["type"], view["type"])
         origin = "Data Relay" if view["origin"] == "managed" else "Static"
         lines = [
@@ -1332,7 +1332,7 @@ class ControlPlane:
     def set_endpoint_addresses(self, endpoint: str, addresses: list[dict]) -> dict:
         obj = self.require_object(endpoint)
         if obj["type"] != "managed_endpoint":
-            raise ControlPlaneError("Not a Managed Endpoint: %s" % endpoint)
+            raise ControlPlaneError("Not a Managed Host: %s" % endpoint)
 
         def write():
             self._replace_addresses(obj["id"], addresses, utc_now_iso())
@@ -1365,7 +1365,7 @@ class ControlPlane:
     def format_managed_endpoint(self, name: str) -> str:
         obj = self.require_object(name)
         if obj["type"] != "managed_endpoint":
-            raise ControlPlaneError("Not a Managed Endpoint: %s" % name)
+            raise ControlPlaneError("Not a Managed Host: %s" % name)
         ep = self.conn.execute(
             "SELECT * FROM managed_endpoints WHERE object_id = ?", (obj["id"],)
         ).fetchone()
@@ -1376,7 +1376,7 @@ class ControlPlane:
             "Connected" if client and client["connected"] else "Disconnected"
         )
         lines = [
-            "Managed Endpoint: %s" % obj["name"],
+            "Managed Host: %s" % obj["name"],
             "Client ID       : %s" % ((client["id"][:8] if client else (ep["client_id"][:8] if ep and ep["client_id"] else "-"))),
             "Status          : %s" % status,
             "Origin          : Data Relay",
@@ -3609,7 +3609,7 @@ class ControlPlane:
         if kind in ("endpoint", "managed-endpoint"):
             obj = self.require_object(token)
             if obj["type"] != "managed_endpoint":
-                raise ControlPlaneError("AI target endpoint must be a Managed Endpoint")
+                raise ControlPlaneError("AI target endpoint must be a Managed Host")
             tkind, tid = "endpoint", obj["id"]
         elif kind in ("client-group", "group"):
             grp = self.conn.execute(

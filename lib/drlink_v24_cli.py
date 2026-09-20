@@ -537,9 +537,9 @@ def _show_policy(plane: ControlPlane, family: str, rest: list[str]) -> int:
     if len(rest) == 1:
         sys.stdout.write("%s\n%s\n\n" % (title, "=" * len(title)))
         if pol["mode"] is None:
-            sys.stdout.write("Mode        : No Policy\nEnforcement : -\nEffective   : ALLOW\n")
+            sys.stdout.write("Mode        : No Policy\nEnforcement : -\nUnmatched   : ALLOW\n")
         else:
-            # effective with no match is mode default
+            # unmatched / default action when no rule matches
             eff = v24.effective_policy_result(pol["mode"], pol["enforcement"], False)
             if str(pol["enforcement"]).lower() == "disabled":
                 eff = "ALLOW ALL"
@@ -563,7 +563,7 @@ def _show_policy(plane: ControlPlane, family: str, rest: list[str]) -> int:
                 if int(count or 0) == 0:
                     eff = "ALLOW ALL"
             sys.stdout.write(
-                "Mode        : %s\nEnforcement : %s\nEffective   : %s\n"
+                "Mode        : %s\nEnforcement : %s\nUnmatched   : %s\n"
                 % (pol["mode"].upper(), str(pol["enforcement"]).upper(), eff)
             )
         sys.stdout.write("\nRules:\n")
@@ -595,7 +595,7 @@ def _show_ai_policy(plane: ControlPlane, rest: list[str]) -> int:
     if len(rest) == 1:
         sys.stdout.write("AI Access\n=========\n\n")
         if pol["mode"] is None:
-            sys.stdout.write("Mode        : No Policy\nEnforcement : -\nEffective   : ALLOW\n")
+            sys.stdout.write("Mode        : No Policy\nEnforcement : -\nUnmatched   : ALLOW\n")
         else:
             eff = "ALLOW ALL" if str(pol["enforcement"]).lower() == "disabled" else (
                 "DENY ALL" if pol["mode"] == "whitelist" else "ALLOW ALL"
@@ -604,7 +604,7 @@ def _show_ai_policy(plane: ControlPlane, rest: list[str]) -> int:
             if pol["mode"] == "whitelist" and int(count or 0) == 0 and str(pol["enforcement"]).lower() != "disabled":
                 eff = "DENY ALL"
             sys.stdout.write(
-                "Mode        : %s\nEnforcement : %s\nEffective   : %s\n"
+                "Mode        : %s\nEnforcement : %s\nUnmatched   : %s\n"
                 % (pol["mode"].upper(), str(pol["enforcement"]).upper(), eff)
             )
         sys.stdout.write("\nRules:\n")
@@ -706,7 +706,7 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         title = res.replace("-", " ").title()
         pol = v24.get_access_policy(plane, res)
         sys.stdout.write(
-            "%s\n%s\n\nMode        : %s\nEnforcement : %s\nEffective   : ALLOW ALL\n\nSaved rules remain unchanged.\n"
+            "%s\n%s\n\nMode        : %s\nEnforcement : %s\nUnmatched   : ALLOW ALL\n\nSaved rules remain unchanged.\n"
             % (
                 title,
                 "=" * len(title),

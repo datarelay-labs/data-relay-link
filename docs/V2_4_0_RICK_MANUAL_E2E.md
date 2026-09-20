@@ -60,7 +60,7 @@ Target: `MANUAL_CLI_DEAD_ENDS=0`
 
 ```text
 menu
-1) Clients
+1) Managed Hosts
 2) Objects
 3) Remote Access
 4) Internet Access
@@ -73,7 +73,7 @@ Discoverability tips:
 ```text
 ?
 help
-help clients | objects | remote-access | internet-access | ai-access | system | workflows | commands
+help managed-hosts | objects | remote-access | internet-access | ai-access | system | workflows | commands
 <command> ?
 Tab
 ```
@@ -174,7 +174,7 @@ Exact public command / operator action=
   system diagnostics
 Expected result=
   Canonical roots only (show/set/unset/test/system/menu/help/exit)
-  Menu matches Clients/Objects/Remote Access/Internet Access/AI Access/System
+  Menu matches Managed Hosts/Objects/Remote Access/Internet Access/AI Access/System
   No help legacy advertisement
   No traceback
 PASS/FAIL=
@@ -185,7 +185,7 @@ Finding=
 
 # SECTION B — Zero-Touch
 
-Prefer discovery via `menu → Clients → Connect a new client` or `set client`.
+Prefer discovery via `menu → Managed Hosts → Connect a Managed Host` or `set enrollment zero-touch`.
 
 ### TEST B1 — Issue one ticket (default TTL)
 
@@ -193,8 +193,8 @@ Prefer discovery via `menu → Clients → Connect a new client` or `set client`
 TEST ID=B1
 Objective=Issue one Zero-Touch ticket; default TTL; one-time secret display
 Exact public command / operator action=
-  set client
-  (follow prompts: Zero-Touch path)
+  set enrollment zero-touch
+  (or menu → Managed Hosts → Connect a Managed Host)
 Expected result=
   Ticket/command shown once with secret material
   Default TTL accepted without inventing syntax from source
@@ -209,7 +209,7 @@ TEST ID=B2
 Objective=Subsequent show does not reveal secret
 Exact public command / operator action=
   show enrollments
-  show clients
+  show managed-hosts
 Expected result=No full secret/ticket reuse material displayed
 PASS/FAIL=
 Finding=

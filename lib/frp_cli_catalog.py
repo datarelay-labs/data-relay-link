@@ -1739,13 +1739,22 @@ def domain_help(topic, role):
             "=========\n\n"
             "AI Identity authentication is separate from AI Access authorization.\n"
             "Display name alone is not a verified identity.\n\n"
+            "Lifecycle:\n"
+            "  1. Create and authenticate an AI Identity\n"
+            "  2. Create Permission Object(s) and optional Permission Group(s)\n"
+            "  3. Create an AI Access Rule binding Identity → Destination → Permission\n"
+            "  4. Test / explain, then review the Access Log\n\n"
             "Guided path:\n"
             "  menu → AI Access\n\n"
             "Everyday commands:\n"
             "  set ai-identity <NAME>\n"
             "  show ai-identities\n"
-            "  set ai-access <RULE>\n"
+            "  set permission-object <NAME> permissions <PERM>[,PERM...]\n"
+            "  set permission-group <NAME> members <PO>[,PO...]\n"
+            "  set ai-access <RULE> mode <blacklist|whitelist> source <IDENTITY> \\\n"
+            "      destination <DEST> permission <PERM|GROUP> enabled\n"
             "  test ai-access source <IDENTITY> destination <DEST> permission <PERM>\n"
+            "  show ai-access\n"
             "  show ai-access-log\n"
         )
     if topic in ("system", "operate"):
@@ -2006,6 +2015,20 @@ WORKFLOWS = (
             "test internet-access source ubuntu-prod destination github service https",
         ),
         "Internet Access uses explicit WHITELIST or BLACKLIST mode.",
+        "server",
+    ),
+    (
+        "AI Access lifecycle",
+        (
+            "set ai-identity automation-bot",
+            "set permission-object exec-only permissions command-exec",
+            "set ai-access allow-exec mode whitelist source automation-bot destination ubuntu-prod permission exec-only enabled",
+            "test ai-access source automation-bot destination ubuntu-prod permission command-exec",
+            "show ai-access",
+            "show ai-access-log",
+        ),
+        "Authenticate the AI Identity before authorization. Permission Objects/Groups "
+        "are required for AI Access Rules.",
         "server",
     ),
     (

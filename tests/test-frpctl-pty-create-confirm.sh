@@ -125,7 +125,7 @@ def run_session(answers_after_confirm, label):
     steps = [
         (b"Installation method", b"1\n"),
         (b"Platform", b"1\n"),
-        (b"Client name:", b"pty-confirm\n"),
+        (b"Managed Host name:", b"pty-confirm\n"),
         (b"Description", b"\n"),
         (b"SSH only", b"1\n"),
         (b"SSH username [optional]:", b"aella\n"),

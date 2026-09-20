@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from scenarios import (  # noqa: F401
+    ai_access,
     bundle,
     consistency,
     cross_role,
