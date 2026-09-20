@@ -4,8 +4,8 @@
 # Preserves product fail-closed / no-public-fallback behavior. Does not weaken
 # Get-FrpWindowsAmd64Url or Install-FrpWindowsBinary.
 #
-# TLS materials come from tests/windows/gen_frp_smoke_certs.py (cryptography),
-# producing a real CA→leaf chain the product pin validator accepts on WinPS 5.1.
+# TLS materials: tests/windows/gen_frp_smoke_certs.py (cryptography).
+# HTTPS fixture: tests/windows/serve_frp_smoke_https.py (stdlib ssl).
 # Non-Windows hosts only verify the URL contract.
 $ErrorActionPreference = 'Stop'
 
@@ -23,172 +23,7 @@ function Get-FrpSmokePython {
         $cmd = Get-Command $cand -ErrorAction SilentlyContinue
         if ($cmd) { return $cmd.Source }
     }
-    throw 'python/python3 required to generate FRP smoke TLS materials'
-}
-
-function New-FrpSmokeTlsMaterials {
-    param([Parameter(Mandatory = $true)][string]$PkiDir)
-    $python = Get-FrpSmokePython
-    $gen = Join-Path $RepoRoot 'tests\windows\gen_frp_smoke_certs.py'
-    & $python $gen --out-dir $PkiDir
-    if ($LASTEXITCODE -ne 0) { throw "gen_frp_smoke_certs.py failed (exit=$LASTEXITCODE)" }
-    $status = Join-Path $PkiDir 'status.txt'
-    $map = @{}
-    Get-Content -LiteralPath $status | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -match '^(CA_DER|LEAF_DER|LEAF_PFX|LEAF_PASS)=(.*)$') {
-            $map[$Matches[1]] = $Matches[2].Trim()
-        }
-    }
-    if ($map.Count -lt 4) {
-        Write-Host "smoke cert status dump:`n$((Get-Content -LiteralPath $status) -join "`n")"
-    }
-    foreach ($k in @('CA_DER', 'LEAF_DER', 'LEAF_PFX', 'LEAF_PASS')) {
-        if (-not $map.ContainsKey($k)) { throw "smoke cert status missing $k" }
-        if (-not (Test-Path -LiteralPath $map[$k])) { throw "smoke cert file missing: $($map[$k])" }
-    }
-    return @{
-        CaDerPath    = $map['CA_DER']
-        LeafPfxPath  = $map['LEAF_PFX']
-        LeafPassPath = $map['LEAF_PASS']
-        PfxBytes     = [System.IO.File]::ReadAllBytes($map['LEAF_PFX'])
-        PfxPassPlain = ([System.IO.File]::ReadAllText($map['LEAF_PASS'])).Trim()
-        LeafDer      = [System.IO.File]::ReadAllBytes($map['LEAF_DER'])
-    }
-}
-
-function Start-FrpQualifiedArtifactHttpsFixture {
-    param(
-        [Parameter(Mandatory = $true)][string]$ZipPath,
-        [Parameter(Mandatory = $true)][string]$ArtifactPath,
-        [Parameter(Mandatory = $true)][string]$PkiDir
-    )
-    if (-not (Test-Path -LiteralPath $PkiDir)) {
-        New-Item -ItemType Directory -Path $PkiDir -Force | Out-Null
-    }
-
-    $mat = New-FrpSmokeTlsMaterials -PkiDir $PkiDir
-    $caDerPath = $mat.CaDerPath
-
-    $leafProbe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $mat.LeafDer)
-    try {
-        if (-not (Test-FrpCertificateHostname -Certificate $leafProbe -Hostname '127.0.0.1')) {
-            $san = Get-FrpCertificateSanEntries -Certificate $leafProbe
-            throw ("fixture leaf rejected by Test-FrpCertificateHostname; dns=[{0}] ip=[{1}] parseFailed={2}" -f `
-                (($san.DnsNames) -join ','), (($san.IpAddresses) -join ','), [bool]$san.ParseFailed)
-        }
-        Write-Host 'FRP_SMOKE_HOSTNAME_PROBE=PASS'
-    } finally {
-        $leafProbe.Dispose()
-    }
-
-    $payload = [System.IO.File]::ReadAllBytes($ZipPath)
-    $listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
-    [void]$listener.Start()
-    $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
-    $origin = "https://127.0.0.1:$port"
-
-    $runspace = [runspacefactory]::CreateRunspace()
-    $runspace.Open()
-    $runspace.SessionStateProxy.SetVariable('Listener', $listener)
-    $runspace.SessionStateProxy.SetVariable('PfxBytes', $mat.PfxBytes)
-    $runspace.SessionStateProxy.SetVariable('PfxPassPlain', $mat.PfxPassPlain)
-    $runspace.SessionStateProxy.SetVariable('ArtifactPath', $ArtifactPath)
-    $runspace.SessionStateProxy.SetVariable('Payload', $payload)
-    $runspace.SessionStateProxy.SetVariable('ServerError', '')
-    $ps = [powershell]::Create()
-    $ps.Runspace = $runspace
-    $null = $ps.AddScript({
-        $ErrorActionPreference = 'Stop'
-        try {
-            $pass = New-Object System.Security.SecureString
-            foreach ($ch in $PfxPassPlain.ToCharArray()) { $pass.AppendChar($ch) }
-            $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
-            $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($PfxBytes, $pass, $keyFlags)
-            try {
-                while ($true) {
-                    $client = $Listener.AcceptTcpClient()
-                    try {
-                        $stream = $client.GetStream()
-                        $ssl = New-Object System.Net.Security.SslStream($stream, $false)
-                        try {
-                            $ssl.AuthenticateAsServer(
-                                $serverCert,
-                                $false,
-                                [System.Security.Authentication.SslProtocols]::Tls12,
-                                $false
-                            )
-                            $reader = New-Object System.IO.StreamReader($ssl, [System.Text.Encoding]::ASCII, $false, 1024, $true)
-                            $requestLine = $reader.ReadLine()
-                            while ($true) {
-                                $line = $reader.ReadLine()
-                                if ($null -eq $line -or $line.Length -eq 0) { break }
-                            }
-                            $path = ''
-                            if ($requestLine -match '^(GET|HEAD)\s+(\S+)\s+HTTP/') {
-                                $path = $Matches[2]
-                            }
-                            if ($path -eq $ArtifactPath) {
-                                $header = "HTTP/1.1 200 OK`r`nContent-Type: application/zip`r`nContent-Length: $($Payload.Length)`r`nConnection: close`r`n`r`n"
-                                $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
-                                $ssl.Write($headerBytes, 0, $headerBytes.Length)
-                                if ($requestLine.StartsWith('GET')) {
-                                    $ssl.Write($Payload, 0, $Payload.Length)
-                                }
-                                $ssl.Flush()
-                            } else {
-                                $body = [System.Text.Encoding]::ASCII.GetBytes('not found')
-                                $header = "HTTP/1.1 404 Not Found`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
-                                $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
-                                $ssl.Write($headerBytes, 0, $headerBytes.Length)
-                                $ssl.Write($body, 0, $body.Length)
-                                $ssl.Flush()
-                            }
-                        } finally {
-                            $ssl.Dispose()
-                        }
-                    } finally {
-                        $client.Close()
-                    }
-                }
-            } finally {
-                $serverCert.Dispose()
-            }
-        } catch {
-            $ServerError = ($_ | Out-String)
-        }
-    })
-    $handle = $ps.BeginInvoke()
-    Start-Sleep -Milliseconds 200
-
-    return @{
-        Origin     = $origin
-        Port       = $port
-        CaPemPath  = $caDerPath
-        Listener   = $listener
-        PowerShell = $ps
-        Handle     = $handle
-        Runspace   = $runspace
-    }
-}
-
-function Stop-FrpQualifiedArtifactHttpsFixture {
-    param($Fixture)
-    if (-not $Fixture) { return }
-    try { if ($Fixture.Listener) { $Fixture.Listener.Stop() } } catch { }
-    try {
-        if ($Fixture.PowerShell -and $Fixture.Handle) {
-            $Fixture.PowerShell.EndInvoke($Fixture.Handle) | Out-Null
-        }
-    } catch { }
-    try {
-        if ($Fixture.Runspace) {
-            $err = $Fixture.Runspace.SessionStateProxy.GetVariable('ServerError')
-            if ($err) { Write-Host "fixture_server_error=$err" }
-        }
-    } catch { }
-    try { if ($Fixture.PowerShell) { $Fixture.PowerShell.Dispose() } } catch { }
-    try { if ($Fixture.Runspace) { $Fixture.Runspace.Dispose() } } catch { }
+    throw 'python/python3 required for FRP smoke TLS fixture'
 }
 
 $ver = Get-FrpUpstreamVersion
@@ -217,21 +52,65 @@ try {
         return
     }
 
+    $python = Get-FrpSmokePython
     $fixtureRoot = Join-Path $tempRoot ('frp-frpc-fixture-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
     $pkiDir = Join-Path $fixtureRoot 'pki'
-    $fixture = $null
+    $statusFile = Join-Path $fixtureRoot 'status.txt'
+    $server = $null
     try {
-        $fixture = Start-FrpQualifiedArtifactHttpsFixture -ZipPath $zipPath -ArtifactPath $artifactPath -PkiDir $pkiDir
-        $origin = $fixture.Origin
-        $caCrt = $fixture.CaPemPath
+        & $python (Join-Path $RepoRoot 'tests\windows\gen_frp_smoke_certs.py') --out-dir $pkiDir
+        if ($LASTEXITCODE -ne 0) { throw "gen_frp_smoke_certs.py failed (exit=$LASTEXITCODE)" }
+
+        $map = @{}
+        Get-Content -LiteralPath (Join-Path $pkiDir 'status.txt') | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -match '^(CA_DER|LEAF_PEM|LEAF_KEY)=(.*)$') {
+                $map[$Matches[1]] = $Matches[2].Trim()
+            }
+        }
+        foreach ($k in @('CA_DER', 'LEAF_PEM', 'LEAF_KEY')) {
+            if (-not $map.ContainsKey($k)) { throw "smoke cert status missing $k" }
+        }
+
+        $leafProbe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, ([System.IO.File]::ReadAllBytes((Join-Path $pkiDir 'leaf.crt'))))
+        try {
+            if (-not (Test-FrpCertificateHostname -Certificate $leafProbe -Hostname '127.0.0.1')) {
+                throw 'fixture leaf rejected by Test-FrpCertificateHostname'
+            }
+            Write-Host 'FRP_SMOKE_HOSTNAME_PROBE=PASS'
+        } finally {
+            $leafProbe.Dispose()
+        }
+
+        $server = Start-Process -FilePath $python -ArgumentList @(
+            (Join-Path $RepoRoot 'tests\windows\serve_frp_smoke_https.py'),
+            '--zip-path', $zipPath,
+            '--artifact-path', $artifactPath,
+            '--cert-pem', $map['LEAF_PEM'],
+            '--key-pem', $map['LEAF_KEY'],
+            '--status-file', $statusFile
+        ) -PassThru -WindowStyle Hidden -WorkingDirectory $RepoRoot
+
+        $origin = $null
+        for ($i = 0; $i -lt 100; $i++) {
+            if (Test-Path -LiteralPath $statusFile) {
+                Get-Content -LiteralPath $statusFile | ForEach-Object {
+                    if ($_ -match '^ORIGIN=(.*)$') { $origin = $Matches[1].Trim() }
+                }
+                if ($origin) { break }
+            }
+            if ($server.HasExited) { throw "smoke HTTPS server exited early (code=$($server.ExitCode))" }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $origin) { throw 'smoke HTTPS server did not publish ORIGIN' }
 
         $caDest = Get-FrpAllocatorCaPath
         $caDir = Split-Path -Parent $caDest
         if (-not (Test-Path -LiteralPath $caDir)) {
             New-Item -ItemType Directory -Path $caDir -Force | Out-Null
         }
-        Copy-Item -LiteralPath $caCrt -Destination $caDest -Force
+        Copy-Item -LiteralPath $map['CA_DER'] -Destination $caDest -Force
 
         try {
             [System.Net.ServicePointManager]::SecurityProtocol = ([System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12)
@@ -301,7 +180,10 @@ try {
         }
         Write-Host 'FRP_BINARY_SMOKE=PASS'
     } finally {
-        Stop-FrpQualifiedArtifactHttpsFixture -Fixture $fixture
+        if ($server -and -not $server.HasExited) {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            try { $server.WaitForExit(5000) | Out-Null } catch { }
+        }
         Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 } finally {

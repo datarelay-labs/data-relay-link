@@ -111,16 +111,28 @@ def main(argv=None) -> int:
 
     ca_der = out / "ca.crt"
     ca_der.write_bytes(ca_cert.public_bytes(serialization.Encoding.DER))
+    ca_pem = out / "ca.pem"
+    ca_pem.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
 
     leaf_der = out / "leaf.crt"
     leaf_der.write_bytes(leaf_cert.public_bytes(serialization.Encoding.DER))
+    leaf_pem = out / "leaf.pem"
+    leaf_pem.write_bytes(leaf_cert.public_bytes(serialization.Encoding.PEM))
+    leaf_key_pem = out / "leaf.key"
+    leaf_key_pem.write_bytes(
+        leaf_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
 
     password = secrets.token_hex(16)
     pfx = pkcs12.serialize_key_and_certificates(
         name=b"drlink-frp-smoke",
         key=leaf_key,
         cert=leaf_cert,
-        cas=[ca_cert],
+        cas=None,
         encryption_algorithm=serialization.BestAvailableEncryption(password.encode("ascii")),
     )
     leaf_pfx = out / "leaf.pfx"
@@ -134,6 +146,8 @@ def main(argv=None) -> int:
             [
                 "CA_DER=%s" % ca_der,
                 "LEAF_DER=%s" % leaf_der,
+                "LEAF_PEM=%s" % leaf_pem,
+                "LEAF_KEY=%s" % leaf_key_pem,
                 "LEAF_PFX=%s" % leaf_pfx,
                 "LEAF_PASS=%s" % pass_path,
                 "",
