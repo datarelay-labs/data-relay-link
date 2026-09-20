@@ -944,7 +944,10 @@ for software updates. An Enrollment Code is not required for a software update.
 EOF
 }
 
-if [[ "${FRP_CLIENT_SOURCED:-}" != "1" ]]; then
+# When this file is executed as a program, always honor CLI args. FRP_CLIENT_SOURCED
+# is only for intentional `. install-client.sh` use; an exported leak from a prior
+# sourced test must not make `install-client.sh --upgrade` become a silent no-op.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --upgrade|upgrade)

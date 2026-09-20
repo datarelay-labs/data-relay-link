@@ -60,4 +60,21 @@ if grep -q 'ERROR: --source requires a directory' "$WORKDIR/ok.err" "$WORKDIR/ok
 fi
 pass "CLIENT_SOURCE_DIR_ACCEPTED"
 
+# Executed installers must still parse CLI even if a parent leaked SOURCED=1.
+# (BASH_SOURCE gate; unsetting alone is not enough when env is polluted.)
+export FRP_CLIENT_SOURCED=1
+export FRP_SERVER_SOURCED=1
+if "$ROOT/install-client.sh" --upgrade --source >"$WORKDIR/leak-client.out" 2>"$WORKDIR/leak-client.err"; then
+  fail "leaked FRP_CLIENT_SOURCED made missing --source succeed"
+fi
+grep -q 'ERROR: --source requires a directory' "$WORKDIR/leak-client.err" \
+  || fail "leaked FRP_CLIENT_SOURCED skipped client entrypoint"
+if "$ROOT/install-server.sh" --upgrade --source >"$WORKDIR/leak-server.out" 2>"$WORKDIR/leak-server.err"; then
+  fail "leaked FRP_SERVER_SOURCED made missing --source succeed"
+fi
+grep -q 'ERROR: --source requires a directory' "$WORKDIR/leak-server.err" \
+  || fail "leaked FRP_SERVER_SOURCED skipped server entrypoint"
+unset FRP_CLIENT_SOURCED FRP_SERVER_SOURCED || true
+pass "SOURCED_LEAK_DOES_NOT_SKIP_EXECUTED_ENTRYPOINT"
+
 echo "SOURCE_ARG_VALIDATION_TEST=PASS"

@@ -2894,7 +2894,8 @@ Backup:
 EOF2
 }
 
-if [[ "${FRP_SERVER_SOURCED:-}" != "1" ]]; then
+# Executed-as-program path must ignore leaked FRP_SERVER_SOURCED from sourced tests.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   if [[ "${1:-}" == "--upgrade" || "${1:-}" == "upgrade" ]]; then
     shift
     FRP_SERVER_UPGRADE_CHECK=0

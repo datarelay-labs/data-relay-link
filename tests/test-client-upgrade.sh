@@ -2,9 +2,11 @@
 # Safe existing-client upgrade, version tracking, and rollback.
 set -euo pipefail
 
-# Ignore leaked roots from prior debug sessions; they divert txn markers.
+# Ignore leaked roots / installer-source flags from prior debug sessions.
 unset FRP_UPDATE_ROOT FRP_DEPLOY_TEST_ROOT FRP_SERVER_TEST_ROOT \
-  FRP_CLIENT_TEST_ROOT FRP_UNINSTALL_TEST_ROOT FRP_ROLE_TEST_ROOT || true
+  FRP_CLIENT_TEST_ROOT FRP_UNINSTALL_TEST_ROOT FRP_ROLE_TEST_ROOT \
+  FRP_CLIENT_SOURCED FRP_CLIENT_UPGRADE FRP_CLIENT_UPDATE_SOURCE \
+  FRP_CLIENT_UPDATE_CHECK || true
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
