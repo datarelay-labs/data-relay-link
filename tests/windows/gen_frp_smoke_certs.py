@@ -69,7 +69,8 @@ def main(argv=None) -> int:
     leaf_cert = (
         x509.CertificateBuilder()
         .subject_name(leaf_name)
-        .issuer_name(ca_name)
+        # Use the issued CA subject bytes exactly (Name object identity matters for chain).
+        .issuer_name(ca_cert.subject)
         .public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(hours=1))
@@ -84,7 +85,7 @@ def main(argv=None) -> int:
             critical=False,
         )
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            x509.AuthorityKeyIdentifier.from_issuer_cert(ca_cert),
             critical=False,
         )
         .add_extension(
@@ -105,7 +106,7 @@ def main(argv=None) -> int:
             ),
             critical=True,
         )
-        .sign(ca_key, hashes.SHA256())
+        .sign(private_key=ca_key, algorithm=hashes.SHA256())
     )
 
     ca_der = out / "ca.crt"
