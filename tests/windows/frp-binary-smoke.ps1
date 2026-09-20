@@ -75,8 +75,8 @@ try {
 
         $leafProbe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, ([System.IO.File]::ReadAllBytes((Join-Path $pkiDir 'leaf.crt'))))
         try {
-            if (-not (Test-FrpCertificateHostname -Certificate $leafProbe -Hostname '127.0.0.1')) {
-                throw 'fixture leaf rejected by Test-FrpCertificateHostname'
+            if (-not (Test-FrpCertificateHostname -Certificate $leafProbe -Hostname 'localhost')) {
+                throw 'fixture leaf rejected by Test-FrpCertificateHostname for localhost'
             }
             Write-Host 'FRP_SMOKE_HOSTNAME_PROBE=PASS'
         } finally {
@@ -89,7 +89,8 @@ try {
             '--artifact-path', $artifactPath,
             '--cert-pem', $map['LEAF_PEM'],
             '--key-pem', $map['LEAF_KEY'],
-            '--status-file', $statusFile
+            '--status-file', $statusFile,
+            '--origin-host', 'localhost'
         ) -PassThru -WindowStyle Hidden -WorkingDirectory $RepoRoot
 
         $origin = $null

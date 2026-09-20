@@ -18,6 +18,7 @@ def main(argv=None) -> int:
     parser.add_argument("--key-pem", required=True)
     parser.add_argument("--status-file", required=True)
     parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--origin-host", default="localhost")
     args = parser.parse_args(argv)
 
     zip_path = Path(args.zip_path)
@@ -47,7 +48,7 @@ def main(argv=None) -> int:
     ctx.load_cert_chain(args.cert_pem, args.key_pem)
     httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
     port = httpd.server_address[1]
-    origin = "https://%s:%d" % (args.bind, port)
+    origin = "https://%s:%d" % (args.origin_host, port)
     Path(args.status_file).write_text(
         "ORIGIN=%s\nPORT=%d\nARTIFACT_PATH=%s\n" % (origin, port, artifact),
         encoding="utf-8",

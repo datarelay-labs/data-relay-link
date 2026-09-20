@@ -65,7 +65,7 @@ def main(argv=None) -> int:
     )
 
     leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    leaf_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    leaf_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
     leaf_cert = (
         x509.CertificateBuilder()
         .subject_name(leaf_name)
@@ -77,7 +77,12 @@ def main(argv=None) -> int:
         .not_valid_after(now + dt.timedelta(hours=6))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
-            x509.SubjectAlternativeName([x509.IPAddress(__import__("ipaddress").ip_address("127.0.0.1"))]),
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(__import__("ipaddress").ip_address("127.0.0.1")),
+                ]
+            ),
             critical=False,
         )
         .add_extension(
