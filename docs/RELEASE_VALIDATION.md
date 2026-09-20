@@ -74,8 +74,8 @@ reference-protected delete
 Object Group membership
 cycle rejection
 context-invalid group assignment fails as a whole
-Managed Endpoint cannot be manually created/deleted
-Orphaned reference semantics
+Managed Host lifecycle remains under Managed Host commands
+Managed Host references do not silently rebind to a different Agent identity
 ```
 
 ## 5. Endpoint address tests
@@ -86,55 +86,48 @@ Reject/inactivate inappropriate loopback/link-local/multicast/special addresses 
 
 Test NAT/public observed source is not substituted for reported internal addresses.
 
-## 6. Published Service tests
+## 6. Remote Service tests
 
-SELF:
-
-```text
-local target 127.0.0.1:22
-effective destination Managed Endpoint
-network Object matching uses endpoint eligible address
-```
-
-ROUTED:
+Prove Agent-owned connectivity through the public Agent Host CLI:
 
 ```text
-connector dp1
-target 10.10.10.20:443
-no agent required on target
-policy destination evaluated against routed target
+Agent Host + destination + Service Object -> Remote Service
+TCP Remote Service works
+Fixed TCP Remote Service works
+UDP Remote Service is rejected with no mutation/allocation
+another-host destination uses the current Agent Host as Relay Host
+endpoint identity remains stable across restart and same-pool-class edits
+valid unreachable target becomes DEGRADED rather than disappearing
 ```
 
-Edit target/mode and verify impact analysis.
+Edit destination/Service Object and verify impact analysis.
 
-## 7. Rule evaluator tests
+## 7. Policy evaluator tests
 
-For Remote and Internet separately:
+For Remote Access and Internet Access separately:
 
 ```text
-disabled rule skipped
-top-down evaluation
-first complete match wins
-explicit ALLOW
-explicit DENY
-implicit final DENY
-later rules not evaluated after match
-rule order independent between planes
+No Policy / No Rules -> effective ALLOW
+BLACKLIST + matching enabled Rule -> DENY
+BLACKLIST + no match -> ALLOW
+WHITELIST + matching enabled Rule -> ALLOW
+WHITELIST + no match -> DENY
+disabled Rule does not match
+Enforcement DISABLED -> effective ALLOW ALL while Mode/Rules are preserved
+Policy Reset -> No Policy / No Rules / effective ALLOW
+Rules have no ordering and no per-rule ALLOW/DENY action
 ```
 
-Include cases where an earlier broad ALLOW shadows a later specific DENY and vice versa.
-
-## 8. Rule-order mutation tests
+## 8. Policy mode / enforcement mutation tests
 
 Prove:
 
 ```text
-new rule disabled at bottom
-before
- after
-sparse internal position/rebalance if used
-stable user-visible ordering
-shadow analysis after reorder
+BLACKLIST <-> WHITELIST mode change uses the documented reset semantics
+Policy Reset removes Mode and Rules
+Enforcement disable/enable preserves configured Mode/Rules
+disabled Rule remains stored but ineffective
+same desired state is idempotent
 ```
 
 ## 9. Policy-impact tests
@@ -144,15 +137,13 @@ For every referenced-entity class, create before/after expected effective behavi
 Required cases:
 
 ```text
-Object value broadens ALLOW
-Object value narrows ALLOW
-Object Group member causes new shadow
-Rule enable broadens
-Rule action ALLOW→DENY narrows
-Rule reorder changes winner
-Published Service SELF→ROUTED changes destination
-Endpoint address membership changes destination membership
-AI capability addition broadens
+Network Object value changes effective membership
+Network Group member changes effective membership
+Rule enable/disable changes effective access
+Policy Mode / Enforcement change alters effective access
+Remote Service destination/Service Object change alters effective connectivity/policy impact
+Managed Host address membership changes destination membership
+AI permission addition broadens
 AI path scope expansion broadens
 ```
 
@@ -252,15 +243,14 @@ Do not use broad wildcards merely to make the application test pass.
 Prove as applicable:
 
 ```text
-SSH SELF service
-HTTP/HTTPS
+SSH Remote Service
+HTTP/HTTPS Remote Service
 Custom TCP
-ROUTED LAN target
-source ALLOW
-explicit DENY exception
-implicit DENY
-first-match behavior
-rule reorder behavior
+Relay Host to another LAN destination
+No Policy effective ALLOW
+BLACKLIST deny match
+WHITELIST allow match and non-match deny
+Enforcement disable/enable behavior
 established session not implicitly killed by policy edit
 new connection uses new policy immediately
 ```
@@ -292,26 +282,28 @@ A claim is not made merely because a generic MCP test client works.
 Prove:
 
 ```text
-valid principal succeeds only within policy
+valid AI Identity succeeds only within policy
 invalid credential denied
 revoked credential denied
 expired credential denied where applicable
-disabled principal denied
-principal attribution stable
+disabled AI Identity denied
+AI Identity attribution stable
 authenticated transport required
 ```
 
 ## 17. MCP authorization tests
 
-First prove AI rulebase semantics:
+First prove AI Access policy semantics:
 
 ```text
-disabled rule skip
-top-down first complete match
-explicit ALLOW
-explicit DENY
-implicit final DENY
-before/after ordering
+AI authentication remains mandatory
+No Policy / No Rules -> effective ALLOW after authentication
+BLACKLIST matching enabled Rule -> DENY
+BLACKLIST no match -> ALLOW
+WHITELIST matching enabled Rule -> ALLOW
+WHITELIST no match -> DENY
+Enforcement DISABLED preserves Mode/Rules and yields policy ALLOW ALL
+Rules have no ordering and no per-rule ALLOW/DENY action
 ```
 
 Then for each required capability:
@@ -329,8 +321,8 @@ prove ALLOW and DENY paths.
 Also test target selection through:
 
 ```text
-Managed Endpoint
-Client Group
+Network Object
+Network Group
 ```
 
 Unknown capability/tool => DENY.
@@ -413,14 +405,14 @@ help topics
 help commands parity
 Tab non-execution
 context-valid Object suggestions
-Object vs Client Group terms
-Service Preset terminology
-Remote/Internet rule order display
-first-match trace
-implicit DENY display
+Managed Host / Network Object terms
+Service Object Wizard preset terminology
+BLACKLIST / WHITELIST Mode display
+Enforcement state display
+effective policy outcome
 impact confirmation
 stale-edit rejection
-AI Principal secret safety
+AI Identity secret safety
 REPL vs shell hints
 backend command isolation
 ```
@@ -586,16 +578,15 @@ SOURCE_HEAD=
 CONTROL_PLANE_DB=
 OBJECT_MODEL=
 OBJECT_GROUP_MODEL=
-MANAGED_ENDPOINT_MODEL=
-ENDPOINT_ADDRESS_INVENTORY=
-PUBLISHED_SERVICE_SELF_ROUTED=
-REMOTE_ACCESS_RULEBASE=
-INTERNET_ACCESS_RULEBASE=
-AI_ACCESS_RULEBASE=
-FIRST_MATCH_ORDERING=
-ALLOW_DENY=
-IMPLICIT_DEFAULT_DENY=
-SHADOW_DETECTION=
+MANAGED_HOST_MODEL=
+MANAGED_HOST_ADDRESS_INVENTORY=
+REMOTE_SERVICE_MODEL=
+REMOTE_ACCESS_POLICY_MODE=
+INTERNET_ACCESS_POLICY_MODE=
+AI_ACCESS_POLICY_MODE=
+BLACKLIST_WHITELIST=
+POLICY_ENFORCEMENT=
+POLICY_RESET_SEMANTICS=
 POLICY_IMPACT_ANALYSIS=
 REFERENCE_PROTECTION=
 CONCURRENT_EDIT_PROTECTION=

@@ -758,7 +758,7 @@ frp_legacy_client_unit_is_product_owned() {
       ExecStart=*) exec_line="${line#ExecStart=}" ;;
     esac
   done <"$unit_file"
-  # Canonical product ExecStart from client/frpc.service (historical + current).
+  # Historical product ExecStart signature used by the pre-drlink-client supervisor.
   case "$exec_line" in
     */usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|*/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;
     /usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml|/usr/local/bin/frpc\ -c\ /etc/frp/frpc.toml\ *) ;;

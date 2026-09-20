@@ -1,7 +1,7 @@
 # Data Relay Link v2.4.0 — ConfigurationBundle and AI-Assisted Configuration
 
 > **Document role:** Canonical design contract for declarative configuration and AI-generated operator input before v2.4.0 stable
-> **Authority:** `PRODUCT_MASTER.md` and `CONTROL_PLANE_ARCHITECTURE.md` remain the product/control-plane SSOT; this document defines the configuration-ingestion surface that must reuse them.
+> **Authority:** `PRODUCT_MASTER.md` and `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md` define public behavior; this document defines the configuration-ingestion surface that must reuse the same control-plane engine.
 
 ## 1. Release decision
 
@@ -73,23 +73,28 @@ Standard input is supported for AI copy/paste workflows:
 
 ```bash
 sudo drlink system apply configuration - <<'DRLINK_CONFIG'
-apiVersion: drlink.datarelay.run/v1alpha1
-kind: ConfigurationBundle
-metadata:
-  name: branch-policy
-spec:
-  objects:
+configurationBundle:
+  context: server
+
+  networkObjects:
     - name: hq-admin
-      type: Network
-      values:
-        - 203.0.113.10/32
+      type: ip
+      value: 203.0.113.10
+
+  serviceObjects:
+    - name: ssh
+      type: tcp
+      port: 22
+
   remoteAccess:
-    - name: hq-admin-ssh
-      sources: [hq-admin]
-      destinations: [existing-managed-endpoint]
-      services: [tcp/22]
-      action: ALLOW
-      enabled: true
+    mode: whitelist
+    enforcement: enabled
+    rules:
+      - name: hq-admin-ssh
+        source: hq-admin
+        destination: ubuntu-prod
+        service: ssh
+        enabled: true
 DRLINK_CONFIG
 ```
 
@@ -143,7 +148,7 @@ The Change Plan contains at least:
 
 ```text
 base revision
-ordered mutations
+dependency-aware mutations
 dependent references
 before/after representation
 policy-impact result
@@ -233,8 +238,8 @@ canonical resource names
 object type/context validation
 reference resolution
 cycle detection
-rule ordering validity
-shadow/conflict analysis
+policy Mode / Enforcement / Rule validity
+duplicate/overlap diagnostics
 Internet Access destination security validation
 AI capability/path-scope validation
 Fixed TCP destination validation
@@ -327,7 +332,7 @@ Result example:
 Next issuable batch: 10
 ```
 
-A plan is not a Client or Managed Endpoint. Client/Managed Endpoint identity is created only by successful enrollment.
+A plan is not a Managed Host or DRLink Agent. Managed Host/Agent identity is created only by successful enrollment.
 
 ## 14. Zero-Touch issuance limits
 

@@ -15,7 +15,7 @@ import tempfile
 import time
 from pathlib import Path
 
-FORMAT = "frp-auto-deploy-server-backup"
+FORMAT = "data-relay-link-server-backup"
 SCHEMA_VERSION = 1
 REQUIRED = (
     "etc/drlink/config.json",

@@ -596,7 +596,7 @@ The user never selects the external listen port.
 
 The external endpoint is allocated when a Remote Service uses this Fixed TCP Service Object.
 
-A Remote Service using a Fixed TCP Service Object uses the Fixed TCP managed endpoint-port pool.
+A Remote Service using a Fixed TCP Service Object uses the Fixed TCP managed port pool.
 
 The Fixed TCP pool is separate from the normal Remote Service endpoint-port pool.
 
@@ -1933,7 +1933,7 @@ No additional user action is required.
 
 # 39. Normal Remote Service pool and Fixed TCP pool
 
-Normal Remote Services and Remote Services using Fixed TCP Service Objects use separate managed endpoint pools.
+Normal Remote Services and Remote Services using Fixed TCP Service Objects use separate managed port pools.
 
 The pools must not overlap.
 

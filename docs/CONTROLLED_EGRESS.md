@@ -2,8 +2,8 @@
 
 > **Document role:** Protocol and security behavior for the Internet Access plane
 > **Status:** v2.4.0 target architecture; implementation qualification pending
-> **Policy model:** Ordered Internet Access rulebase in SQLite
-> **Architecture:** `CONTROL_PLANE_ARCHITECTURE.md`
+> **Policy model:** BLACKLIST / WHITELIST Internet Access policy using the shared v2.4 control plane
+> **Public SSOT:** `PRODUCT_MASTER.md` + `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`
 
 ## 1. Purpose
 
@@ -39,19 +39,19 @@ v2.4.0 target authority:
 /var/lib/drlink/drlink.db
 ```
 
-Internet Access uses neutral Objects/Object Groups and an ordered rulebase.
+Internet Access uses Network Objects/Groups, Service Objects/Groups, and the shared BLACKLIST / WHITELIST policy model.
 
-Example:
+Example semantics:
 
 ```text
-#   NAME              SOURCE       DESTINATION   SERVICE      ACTION
-10  block-github-db   database     github        HTTPS/443    DENY
-20  approved-web      internal1    external2     HTTPS/443    ALLOW
-
-Implicit Default                                          DENY
+No Policy / No Rules -> effective ALLOW
+BLACKLIST + matching enabled Rule -> DENY
+BLACKLIST + no match -> ALLOW
+WHITELIST + matching enabled Rule -> ALLOW
+WHITELIST + no match -> DENY
 ```
 
-Evaluation is top-down and the first complete match wins.
+Rules are not ordered and do not carry per-rule ALLOW/DENY actions. Enforcement can be disabled without deleting the configured Mode or Rules.
 
 ## 4. Destination types
 
@@ -226,7 +226,7 @@ protected host
 → TCP relay
 ```
 
-Fixed TCP cannot bypass unsafe destination checks or implicit default DENY.
+Fixed TCP cannot bypass unsafe destination checks or the effective Internet Access policy outcome.
 
 ## 18. Rule timing
 
@@ -292,13 +292,13 @@ test internet-access 10.10.10.20 google.com 443 https
 The result should show:
 
 ```text
-Source Object matches
-Destination Object matches
+Source Network Object matches
+Destination Network Object matches
+Service Object matches
 DNS/security validation
-Rule #10 ... MATCH / NO MATCH
-First complete match
-Not-evaluated later rules
-Final action
+Policy Mode / Enforcement
+Enabled Rule match / no match
+Final effective action
 ```
 
 `test` is policy explanation unless explicitly documented as a live connection test.
@@ -371,8 +371,8 @@ DNS rebinding-style attempt                 DENY
 IP literal bypass                           DENY
 wildcard boundary bypass                    DENY
 malformed CONNECT                           DENY
-policy order / first-match                  PASS
-explicit DENY exception                     PASS
+BLACKLIST / WHITELIST semantics             PASS
+Enforcement disable/enable                   PASS
 object-change impact                        PASS
 restart                                     policy preserved
 backup/restore                              policy preserved

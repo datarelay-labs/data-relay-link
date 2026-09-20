@@ -4,17 +4,17 @@
 default and matches 2.0.0. Enterprise single-443 is optional. Project version
 **2.3.1** (v2.3.0 remains historical/untouched).
 
-Published service ports stay **TCP/6000-6098** (1:1) in both modes.
+Remote Service ports stay **TCP/6000-6098** (1:1) in both modes.
 
 **Public IP** is the default and primary infrastructure endpoint used for FRP
 control identity (`FRP_PUBLIC_HOST`). An optional **public hostname** may be
-configured as a user-facing DNS alias for published services (SSH/HTTP/HTTPS/
+configured as a user-facing DNS alias for Remote Services (SSH/HTTP/HTTPS/
 custom TCP). When that hostname is configured, non-interactive Enrollment HTTPS
 / the allocator enroll URL prefers it (`FRP_ENROLLMENT_PUBLIC_HOST` derived from
 the hostname). Operators may force enrollment via the public IP with
 `FRP_ENROLLMENT_PUBLIC_HOST=<ip>`. Setting or unsetting the public hostname does
 not move the FRP control path, frontend proxy configuration, or CA identity.
-DNS records are managed outside Data Relay Link. HTTPS published services remain
+DNS records are managed outside Data Relay Link. HTTPS Remote Services remain
 TCP passthrough.
 
 An optional **bootstrap hostname** may be configured separately for publicly
@@ -57,7 +57,7 @@ Internet
    |
    +-- TCP/443  --> frps control (native FRP TLS, token auth)
    +-- TCP/6099 --> allocator HTTPS (project CA)
-   +-- TCP/6000-6098 --> published services
+   +-- TCP/6000-6098 --> Remote Services
 ```
 
 Non-interactive:
@@ -91,7 +91,7 @@ allocator HTTPS                  FRP control over WSS
 ```
 
 Public inbound: **TCP/443** (allocator HTTPS + FRP control over WSS) and
-**TCP/6000-6098** (published services). The allocator backend (default 6099)
+**TCP/6000-6098** (Remote Services). The allocator backend (default 6099)
 and FRP control backend (default 7000) must not be published.
 
 Non-interactive:
@@ -202,8 +202,8 @@ FRP is **not** upgraded to 0.71.0 for this mode.
 This is a **maintenance-window cutover**, not zero-downtime.
 
 For the v2.4.0 target, a deployment-mode change preserves the embedded SQLite
-control plane (`/var/lib/drlink/drlink.db`), client/Managed Endpoint identities,
-Published Services and port reservations, PKI/transport secrets, enrollment state,
+control plane (`/var/lib/drlink/drlink.db`), Managed Host/Agent identities,
+Remote Services and port reservations, PKI/transport secrets, enrollment state,
 and configuration revisions. The installer must not reset the control database.
 
 Historical pre-v2.4 releases used JSON registry/schema-v2 state; any supported
