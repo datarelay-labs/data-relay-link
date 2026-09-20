@@ -92,7 +92,7 @@ curl -fsSL \
 ```bash
 sudo drlink show version
 sudo drlink show status
-sudo drlink doctor
+sudo drlink system diagnostics
 ```
 
 Data Relay Link는 외부 firewall/NAT, cloud security group, DNS provider record, SSH account, application certificate를 자동으로 변경하지 않습니다.

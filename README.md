@@ -235,7 +235,7 @@ Until `v2.4.0` is tagged, install from this branch's exact candidate HEAD / arti
 ```bash
 sudo drlink show version
 sudo drlink show status
-sudo drlink doctor
+sudo drlink system diagnostics
 ```
 
 Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, DNS-provider records, SSH accounts, or application certificates.
