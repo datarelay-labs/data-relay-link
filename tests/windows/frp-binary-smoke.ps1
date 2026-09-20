@@ -34,9 +34,7 @@ function New-FrpSmokeServerCertificate {
     $req.CertificateExtensions.Add(
         (New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension($true, $false, 0, $true))
     )
-    $ku = [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor
-        [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment -bor
-        [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign
+    $ku = [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign
     $req.CertificateExtensions.Add(
         (New-Object System.Security.Cryptography.X509Certificates.X509KeyUsageExtension($ku, $true))
     )
@@ -57,11 +55,11 @@ function New-FrpSmokeServerCertificate {
     )
     $der = $ephemeral.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     $ephemeral.Dispose()
+    $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
     $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
         $pfxBytes,
         $pfxPass,
-        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
-        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
+        $keyFlags
     )
     return @{
         ServerCert = $serverCert
@@ -240,9 +238,7 @@ try {
 
         # WinPS 5.1 defaults can omit TLS1.2; product download requires https.
         try {
-            [System.Net.ServicePointManager]::SecurityProtocol = `
-                [System.Net.ServicePointManager]::SecurityProtocol -bor
-                [System.Net.SecurityProtocolType]::Tls12
+            [System.Net.ServicePointManager]::SecurityProtocol = ([System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12)
         } catch { }
 
         $env:FRP_ALLOCATOR_URL = "$origin/enroll"
