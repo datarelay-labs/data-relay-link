@@ -44,6 +44,10 @@ def main(argv=None) -> int:
         .not_valid_after(now + dt.timedelta(hours=6))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
             x509.KeyUsage(
                 digital_signature=True,
                 key_cert_sign=True,
@@ -73,6 +77,14 @@ def main(argv=None) -> int:
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName([x509.IPAddress(__import__("ipaddress").ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
             critical=False,
         )
         .add_extension(
