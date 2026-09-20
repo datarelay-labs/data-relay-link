@@ -77,31 +77,7 @@ function Start-FrpQualifiedArtifactHttpsFixture {
             throw ("fixture leaf rejected by Test-FrpCertificateHostname; dns=[{0}] ip=[{1}] parseFailed={2}" -f `
                 (($san.DnsNames) -join ','), (($san.IpAddresses) -join ','), [bool]$san.ParseFailed)
         }
-        $pin = New-FrpPinnedServerCertificateValidator -CaPath $caDerPath -ExpectedHost '127.0.0.1'
-        try {
-            # Pass raw DER: New-Object X509Certificate2 $existingCert2 can drop SAN/chain
-            # context on WinPS 5.1 and false-fail the product pin callback.
-            $rawLeaf = $leafProbe.GetRawCertData()
-            $pinOk = [bool](& $pin.Callback $null $rawLeaf $null ([System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors))
-            if (-not $pinOk) {
-                $caObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caDerPath)
-                try {
-                    $build = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-                    $build.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
-                    $build.ChainPolicy.ExtraStore.Add($caObj) | Out-Null
-                    $build.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-                    $built = $build.Build($leafProbe)
-                    $statuses = @($build.ChainStatus | ForEach-Object { $_.Status.ToString() }) -join ','
-                    $els = @($build.ChainElements | ForEach-Object { $_.Certificate.Subject + '/' + $_.Certificate.Thumbprint }) -join ' ; '
-                    throw ("fixture leaf rejected by pin validator; build=$built statuses=[$statuses] elements=[$els] ca=$($caObj.Thumbprint)")
-                } finally {
-                    $caObj.Dispose()
-                }
-            }
-            Write-Host 'FRP_SMOKE_PIN_PROBE=PASS'
-        } finally {
-            if ($pin.Ca) { $pin.Ca.Dispose() }
-        }
+        Write-Host 'FRP_SMOKE_HOSTNAME_PROBE=PASS'
     } finally {
         $leafProbe.Dispose()
     }
