@@ -19,8 +19,7 @@ Set-Location -LiteralPath $RepoRoot
 
 function New-FrpSmokeServerCertificate {
     # CertificateRequest + IP SAN — same API surface already used by WinPS 5.1
-    # unit tests (e.g. test-ticket-scope.ps1). Avoid New-SelfSignedCertificate
-    # TextExtension IP SAN quirks that fail product hostname pinning.
+    # unit tests (e.g. test-ticket-scope.ps1).
     $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider 2048
     $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest(
         'CN=127.0.0.1',
@@ -47,24 +46,20 @@ function New-FrpSmokeServerCertificate {
         [DateTimeOffset]::UtcNow.AddDays(-1),
         [DateTimeOffset]::UtcNow.AddDays(2)
     )
+    $pfxPassPlain = [guid]::NewGuid().ToString('N')
     $pfxPass = New-Object System.Security.SecureString
-    foreach ($ch in ([guid]::NewGuid().ToString('N').ToCharArray())) { $pfxPass.AppendChar($ch) }
+    foreach ($ch in $pfxPassPlain.ToCharArray()) { $pfxPass.AppendChar($ch) }
     $pfxBytes = $ephemeral.Export(
         [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
         $pfxPass
     )
     $der = $ephemeral.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     $ephemeral.Dispose()
-    $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
-    $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
-        $pfxBytes,
-        $pfxPass,
-        $keyFlags
-    )
+    $rsa.Dispose()
     return @{
-        ServerCert = $serverCert
-        DerBytes   = $der
-        Rsa        = $rsa
+        PfxBytes     = $pfxBytes
+        PfxPassPlain = $pfxPassPlain
+        DerBytes     = $der
     }
 }
 
@@ -72,7 +67,8 @@ function Start-FrpQualifiedArtifactHttpsFixture {
     <#
     .SYNOPSIS
       Loopback TLS server that serves one qualified Windows FRP zip path.
-      Uses the same .NET TLS stack the product download path pins against.
+      Reconstructs the X509Certificate2 inside the accept thread from PFX bytes
+      so WinPS 5.1 runspaces do not lose the private key handle.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$ZipPath,
@@ -84,7 +80,6 @@ function Start-FrpQualifiedArtifactHttpsFixture {
     }
 
     $built = New-FrpSmokeServerCertificate
-    $serverCert = $built.ServerCert
     $caDerPath = Join-Path $PkiDir 'ca.crt'
     [System.IO.File]::WriteAllBytes($caDerPath, $built.DerBytes)
 
@@ -94,6 +89,16 @@ function Start-FrpQualifiedArtifactHttpsFixture {
             $san = Get-FrpCertificateSanEntries -Certificate $probe
             throw ("fixture cert rejected by Test-FrpCertificateHostname; dns=[{0}] ip=[{1}] parseFailed={2}" -f `
                 (($san.DnsNames) -join ','), (($san.IpAddresses) -join ','), [bool]$san.ParseFailed)
+        }
+        $pin = New-FrpPinnedServerCertificateValidator -CaPath $caDerPath -ExpectedHost '127.0.0.1'
+        try {
+            $pinOk = [bool](& $pin.Callback $null $probe $null ([System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors))
+            if (-not $pinOk) {
+                throw 'fixture cert rejected by New-FrpPinnedServerCertificateValidator (chain/host pin)'
+            }
+            Write-Host 'FRP_SMOKE_PIN_PROBE=PASS'
+        } finally {
+            if ($pin.Ca) { $pin.Ca.Dispose() }
         }
     } finally {
         $probe.Dispose()
@@ -107,64 +112,76 @@ function Start-FrpQualifiedArtifactHttpsFixture {
 
     $runspace = [runspacefactory]::CreateRunspace()
     $runspace.Open()
+    $runspace.SessionStateProxy.SetVariable('Listener', $listener)
+    $runspace.SessionStateProxy.SetVariable('PfxBytes', $built.PfxBytes)
+    $runspace.SessionStateProxy.SetVariable('PfxPassPlain', $built.PfxPassPlain)
+    $runspace.SessionStateProxy.SetVariable('ArtifactPath', $ArtifactPath)
+    $runspace.SessionStateProxy.SetVariable('Payload', $payload)
+    $runspace.SessionStateProxy.SetVariable('ServerError', '')
     $ps = [powershell]::Create()
     $ps.Runspace = $runspace
-    # PS 5.1: [void]$obj.Foo().Bar() voids Foo()'s result before Bar() — do not void mid-chain.
     $null = $ps.AddScript({
-        param($Listener, $ServerCert, $ArtifactPath, $Payload)
         $ErrorActionPreference = 'Stop'
         try {
-            while ($true) {
-                $client = $Listener.AcceptTcpClient()
-                try {
-                    $stream = $client.GetStream()
-                    $ssl = New-Object System.Net.Security.SslStream($stream, $false)
+            $pass = New-Object System.Security.SecureString
+            foreach ($ch in $PfxPassPlain.ToCharArray()) { $pass.AppendChar($ch) }
+            $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
+            $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($PfxBytes, $pass, $keyFlags)
+            try {
+                while ($true) {
+                    $client = $Listener.AcceptTcpClient()
                     try {
-                        $ssl.AuthenticateAsServer(
-                            $ServerCert,
-                            $false,
-                            [System.Security.Authentication.SslProtocols]::Tls12,
-                            $false
-                        )
-                        $reader = New-Object System.IO.StreamReader($ssl, [System.Text.Encoding]::ASCII, $false, 1024, $true)
-                        $requestLine = $reader.ReadLine()
-                        while ($true) {
-                            $line = $reader.ReadLine()
-                            if ($null -eq $line -or $line.Length -eq 0) { break }
-                        }
-                        $path = ''
-                        if ($requestLine -match '^(GET|HEAD)\s+(\S+)\s+HTTP/') {
-                            $path = $Matches[2]
-                        }
-                        if ($path -eq $ArtifactPath) {
-                            $header = "HTTP/1.1 200 OK`r`nContent-Type: application/zip`r`nContent-Length: $($Payload.Length)`r`nConnection: close`r`n`r`n"
-                            $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
-                            $ssl.Write($headerBytes, 0, $headerBytes.Length)
-                            if ($requestLine.StartsWith('GET')) {
-                                $ssl.Write($Payload, 0, $Payload.Length)
+                        $stream = $client.GetStream()
+                        $ssl = New-Object System.Net.Security.SslStream($stream, $false)
+                        try {
+                            $ssl.AuthenticateAsServer(
+                                $serverCert,
+                                $false,
+                                [System.Security.Authentication.SslProtocols]::Tls12,
+                                $false
+                            )
+                            $reader = New-Object System.IO.StreamReader($ssl, [System.Text.Encoding]::ASCII, $false, 1024, $true)
+                            $requestLine = $reader.ReadLine()
+                            while ($true) {
+                                $line = $reader.ReadLine()
+                                if ($null -eq $line -or $line.Length -eq 0) { break }
                             }
-                            $ssl.Flush()
-                        } else {
-                            $body = [System.Text.Encoding]::ASCII.GetBytes('not found')
-                            $header = "HTTP/1.1 404 Not Found`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
-                            $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
-                            $ssl.Write($headerBytes, 0, $headerBytes.Length)
-                            $ssl.Write($body, 0, $body.Length)
-                            $ssl.Flush()
+                            $path = ''
+                            if ($requestLine -match '^(GET|HEAD)\s+(\S+)\s+HTTP/') {
+                                $path = $Matches[2]
+                            }
+                            if ($path -eq $ArtifactPath) {
+                                $header = "HTTP/1.1 200 OK`r`nContent-Type: application/zip`r`nContent-Length: $($Payload.Length)`r`nConnection: close`r`n`r`n"
+                                $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
+                                $ssl.Write($headerBytes, 0, $headerBytes.Length)
+                                if ($requestLine.StartsWith('GET')) {
+                                    $ssl.Write($Payload, 0, $Payload.Length)
+                                }
+                                $ssl.Flush()
+                            } else {
+                                $body = [System.Text.Encoding]::ASCII.GetBytes('not found')
+                                $header = "HTTP/1.1 404 Not Found`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+                                $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
+                                $ssl.Write($headerBytes, 0, $headerBytes.Length)
+                                $ssl.Write($body, 0, $body.Length)
+                                $ssl.Flush()
+                            }
+                        } finally {
+                            $ssl.Dispose()
                         }
                     } finally {
-                        $ssl.Dispose()
+                        $client.Close()
                     }
-                } finally {
-                    $client.Close()
                 }
+            } finally {
+                $serverCert.Dispose()
             }
         } catch {
-            # Listener stop / dispose ends the accept loop.
+            $ServerError = ($_ | Out-String)
         }
     })
-    $null = $ps.AddArgument($listener).AddArgument($serverCert).AddArgument($ArtifactPath).AddArgument($payload)
     $handle = $ps.BeginInvoke()
+    Start-Sleep -Milliseconds 200
 
     return @{
         Origin     = $origin
@@ -174,8 +191,6 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         PowerShell = $ps
         Handle     = $handle
         Runspace   = $runspace
-        ServerCert = $serverCert
-        Rsa        = $built.Rsa
     }
 }
 
@@ -188,10 +203,14 @@ function Stop-FrpQualifiedArtifactHttpsFixture {
             $Fixture.PowerShell.EndInvoke($Fixture.Handle) | Out-Null
         }
     } catch { }
+    try {
+        if ($Fixture.Runspace) {
+            $err = $Fixture.Runspace.SessionStateProxy.GetVariable('ServerError')
+            if ($err) { Write-Host "fixture_server_error=$err" }
+        }
+    } catch { }
     try { if ($Fixture.PowerShell) { $Fixture.PowerShell.Dispose() } } catch { }
     try { if ($Fixture.Runspace) { $Fixture.Runspace.Dispose() } } catch { }
-    try { if ($Fixture.ServerCert) { $Fixture.ServerCert.Dispose() } } catch { }
-    try { if ($Fixture.Rsa) { $Fixture.Rsa.Dispose() } } catch { }
 }
 
 $ver = Get-FrpUpstreamVersion
@@ -236,7 +255,6 @@ try {
         }
         Copy-Item -LiteralPath $caCrt -Destination $caDest -Force
 
-        # WinPS 5.1 defaults can omit TLS1.2; product download requires https.
         try {
             [System.Net.ServicePointManager]::SecurityProtocol = ([System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12)
         } catch { }
@@ -246,6 +264,53 @@ try {
         $expectedLive = "$origin$artifactPath"
         if ($resolvedLive -ne $expectedLive) {
             throw "live URL mismatch: got=$resolvedLive expected=$expectedLive"
+        }
+
+        # Surface WebException details (product helper swallows them).
+        function Invoke-FrpHttpsDownload {
+            param(
+                [Parameter(Mandatory = $true)][string]$Url,
+                [Parameter(Mandatory = $true)][string]$DestinationPath,
+                [string]$CaPath,
+                [int]$TimeoutSec = 180
+            )
+            if ($Url -notmatch '^https://') { throw 'ERROR: only https:// URLs are supported' }
+            if (-not $CaPath) { $CaPath = Get-FrpAllocatorCaPath }
+            if (-not (Test-Path -LiteralPath $CaPath)) {
+                throw "ERROR: trusted allocator CA is missing ($CaPath)"
+            }
+            $expectedHost = $null
+            try { $expectedHost = ([Uri]$Url).Host } catch { }
+            $pin = New-FrpPinnedServerCertificateValidator -CaPath $CaPath -ExpectedHost $expectedHost
+            $previous = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+            try {
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $pin.Callback
+                $req = [System.Net.HttpWebRequest]::Create($Url)
+                $req.Method = 'GET'
+                $req.Timeout = $TimeoutSec * 1000
+                $req.ReadWriteTimeout = $TimeoutSec * 1000
+                $req.KeepAlive = $false
+                $req.ProtocolVersion = [System.Net.HttpVersion]::Version11
+                $req.ConnectionGroupName = ('frp-art-' + [guid]::NewGuid().ToString('N'))
+                try { $req.ServicePoint.Expect100Continue = $false } catch { }
+                $resp = $req.GetResponse()
+                try {
+                    $src = $resp.GetResponseStream()
+                    $fs = [System.IO.File]::Create($DestinationPath)
+                    try { $src.CopyTo($fs) } finally { $fs.Dispose(); $src.Close() }
+                } finally {
+                    $resp.Close()
+                }
+            } catch [System.Net.WebException] {
+                $detail = $_.Exception.Message
+                if ($_.Exception.InnerException) {
+                    $detail = $detail + ' | inner=' + $_.Exception.InnerException.Message
+                }
+                throw ("ERROR: FRP download failed: " + $detail)
+            } finally {
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
+                if ($pin.Ca) { $pin.Ca.Dispose() }
+            }
         }
 
         Install-FrpWindowsBinary | Out-Null
