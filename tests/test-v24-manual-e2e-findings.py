@@ -222,7 +222,7 @@ class InstallerPromptContractTests(unittest.TestCase):
         src = (ROOT / "install-server.sh").read_text(encoding="utf-8")
         self.assertIn("read -e -r -p", src)
         self.assertIn("Public DNS hostname: not configured", src)
-        self.assertIn("Enrollment HTTPS public identity", src)
+        self.assertIn("Public URL identity", src)
 
 
 class UninstallReplExitTests(unittest.TestCase):
@@ -298,7 +298,7 @@ class EnrollmentHostnameContractTests(unittest.TestCase):
     def test_installer_selects_enrollment_identity(self):
         src = (ROOT / "install-server.sh").read_text(encoding="utf-8")
         self.assertIn("FRP_ENROLLMENT_PUBLIC_HOST", src)
-        self.assertIn("Enrollment HTTPS public identity", src)
+        self.assertIn("Public URL identity", src)
         self.assertIn("frp_format_https_url \"$enrollment_host\"", src)
 
 
