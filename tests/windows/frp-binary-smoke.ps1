@@ -18,20 +18,6 @@ Set-Location -LiteralPath $RepoRoot
 . .\windows\lib\FrpTls.ps1
 . .\windows\lib\FrpBootstrap.ps1
 
-function ConvertTo-FrpPemCertificate {
-    param([Parameter(Mandatory = $true)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
-    $der = $Certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    $b64 = [Convert]::ToBase64String($der)
-    $sb = New-Object System.Text.StringBuilder
-    [void]$sb.AppendLine('-----BEGIN CERTIFICATE-----')
-    for ($i = 0; $i -lt $b64.Length; $i += 64) {
-        $len = [Math]::Min(64, $b64.Length - $i)
-        [void]$sb.AppendLine($b64.Substring($i, $len))
-    }
-    [void]$sb.AppendLine('-----END CERTIFICATE-----')
-    return $sb.ToString()
-}
-
 function Start-FrpQualifiedArtifactHttpsFixture {
     <#
     .SYNOPSIS
@@ -60,8 +46,12 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         -CertStoreLocation 'Cert:\CurrentUser\My' `
         -NotAfter (Get-Date).AddHours(6)
 
-    $caPemPath = Join-Path $PkiDir 'ca.crt'
-    [System.IO.File]::WriteAllText($caPemPath, (ConvertTo-FrpPemCertificate -Certificate $cert))
+    # WinPS 5.1 X509Certificate2(path) reliably loads DER; PEM is not portable here.
+    $caDerPath = Join-Path $PkiDir 'ca.crt'
+    [System.IO.File]::WriteAllBytes(
+        $caDerPath,
+        $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+    )
 
     # Re-import from PFX so SslStream has a usable private key handle.
     $pfxPass = New-Object System.Security.SecureString
@@ -75,8 +65,8 @@ function Start-FrpQualifiedArtifactHttpsFixture {
     Remove-Item -LiteralPath ("Cert:\CurrentUser\My\$($cert.Thumbprint)") -ErrorAction SilentlyContinue
 
     $payload = [System.IO.File]::ReadAllBytes($ZipPath)
-    $listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback), 0
-    $listener.Start()
+    $listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
+    [void]$listener.Start()
     $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
     $origin = "https://127.0.0.1:$port"
 
@@ -84,7 +74,8 @@ function Start-FrpQualifiedArtifactHttpsFixture {
     $runspace.Open()
     $ps = [powershell]::Create()
     $ps.Runspace = $runspace
-    [void]$ps.AddScript({
+    # PS 5.1: [void]$obj.Foo().Bar() voids Foo()'s result before Bar() — do not void mid-chain.
+    $null = $ps.AddScript({
         param($Listener, $ServerCert, $ArtifactPath, $Payload)
         $ErrorActionPreference = 'Stop'
         try {
@@ -136,13 +127,14 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         } catch {
             # Listener stop / dispose ends the accept loop.
         }
-    }).AddArgument($listener).AddArgument($serverCert).AddArgument($ArtifactPath).AddArgument($payload) | Out-Null
+    })
+    $null = $ps.AddArgument($listener).AddArgument($serverCert).AddArgument($ArtifactPath).AddArgument($payload)
     $handle = $ps.BeginInvoke()
 
     return @{
         Origin     = $origin
         Port       = $port
-        CaPemPath  = $caPemPath
+        CaPemPath  = $caDerPath
         Listener   = $listener
         PowerShell = $ps
         Handle     = $handle

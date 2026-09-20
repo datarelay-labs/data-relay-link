@@ -21,6 +21,12 @@ jobs:
         run: ./scripts/check-version-consistency.sh
       - name: Release governance
         run: ./scripts/check-release-governance.sh
+      - name: Install Full Suite OS Python deps
+        # python3-acme is required by AUTO_ACME (lib/drlink_mcp_tls.py). Previously
+        # masked on GHA because the suite failed earlier on the undeclared MCP SDK.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-acme
       - name: Provision pinned official MCP SDK
         # VERSION_POLICY: MCP is included and release-blocking; do not skip.
         run: |
