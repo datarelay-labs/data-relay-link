@@ -228,7 +228,7 @@ v2.3.0 line의 target scale은 약 **1–50 clients**입니다.
 |---|---|
 | 제품 웹사이트 | **https://link.datarelay.run/** |
 | v2.4.0 개발 branch | [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/data-relay-link/tree/feature/v2.4.0-final-product-closure) |
-| v2.3.0 Legacy Documentation | https://frp.xdr.ooo |
+| v2.3.0 / public product docs | **https://link.datarelay.run/** |
 | CLI Reference | [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
 | Deployment Modes | [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md) |
 | Security | [`docs/SECURITY.md`](docs/SECURITY.md) |
