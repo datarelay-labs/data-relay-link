@@ -1118,8 +1118,15 @@ fi
 grep -q 'already has a Data Relay Link client installed' "$WORKDIR/complete-rerun.err" \
   || fail "refuse message"
 grep -q 'sudo drlink system update product' "$WORKDIR/complete-rerun.err" || fail "directs to update"
-cmp -s "$COMPLETE/etc/frp/client-identity.key" <(printf 'test-identity-key\n') \
-  || fail "complete re-run mutated identity"
+# Portable byte compare: minimal RHEL/Amazon images may lack `cmp` (diffutils),
+# and $(cat ...) strips trailing newlines so it cannot be used here.
+python3 - "$COMPLETE/etc/frp/client-identity.key" <<'PY' || fail "complete re-run mutated identity"
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+if path.read_bytes() != b"test-identity-key\n":
+    raise SystemExit(1)
+PY
 pass "CLIENT_REINSTALL_SAFE"
 
 # ---------------------------------------------------------------------------

@@ -330,7 +330,9 @@ def _commit_staged_deletes(staged_paths):
         if staged is None:
             continue
         try:
-            Path(staged).unlink(missing_ok=True)
+            staged_path = Path(staged)
+            if staged_path.exists():
+                staged_path.unlink()
         except OSError as exc:
             errors.append('%s: %s' % (staged, exc))
     return errors
@@ -390,8 +392,9 @@ def reconcile_stale_tombstones(enrollments_dir, bootstrap_dir):
             continue
         for path in base.glob('*.json.purging'):
             try:
-                path.unlink(missing_ok=True)
-                removed += 1
+                if path.exists():
+                    path.unlink()
+                    removed += 1
             except OSError:
                 pass
     return removed

@@ -286,7 +286,10 @@ plane.close()
 db = Path(sys.argv[2], "var/lib/drlink/drlink.db")
 db.chmod(0o600)
 for extra in (str(db) + "-wal", str(db) + "-shm"):
-    Path(extra).unlink(missing_ok=True)
+    # Amazon Linux 2 ships Python < 3.8 (no Path.unlink(missing_ok=...)).
+    path = Path(extra)
+    if path.exists():
+        path.unlink()
 PY
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
     >"$tree/var/lib/drlink/access-control.json"
