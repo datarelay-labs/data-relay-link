@@ -23,11 +23,23 @@ Internal-name mapping used while legacy schema names remain in code:
 ```text
 managed_endpoints  -> Managed Host Network Object projection
 published_services -> Remote Service backing state
-service_presets    -> internal/legacy preset storage; not a public v2.4 resource
+service_presets    -> Service Object wizard convenience only; not a public resource
 ai_principals      -> AI Identity backing state
 ```
 
-## 2. Intermediate architecture snapshot
+Public v2.4 nouns (authoritative for any current-behavior description in this file):
+
+| Current public noun | Intermediate public noun (historical only) | Internal storage / compatibility name |
+| --- | --- | --- |
+| Managed Host | Managed Endpoint | `managed_endpoints` |
+| Remote Service | Published Service | `published_services` |
+| Service Object (wizard presets) | Service Preset | `service_presets` |
+| AI Identity | AI Principal | `ai_principals` |
+| BLACKLIST / WHITELIST Access Policy | ordered first-match ALLOW/DENY rulebases | policy rule tables |
+
+When prose below still narrates the intermediate redesign, it is historical/migration context. Current operator-visible behavior follows the Product Master and CLI/AI Master.
+
+## 2. Intermediate architecture snapshot (historical)
 
 The following values document the intermediate schema/policy design that produced much of the current internal implementation. They are retained for migration and code-reading context only. Where these values conflict with the Product Master or CLI/AI Master, the current public SSOT wins:
 
@@ -89,9 +101,9 @@ Data Relay Link has three access planes sharing one local control plane:
    Remote Access        Internet Access          AI Access
    outside → inside     inside → outside         AI → inside
           │                    │                    │
-   Published Service    proxy / fixed TCP       MCP Bridge
+   Remote Service       proxy / fixed TCP       MCP Bridge
           │                    │                    │
-   Managed Endpoint     policy compiler         Managed Endpoint
+   Managed Host         policy compiler         Managed Host
       or ROUTED target    / runtime artifact       / target host
 ```
 
@@ -282,11 +294,11 @@ Canonical initial kinds:
 Host
 Network
 FQDN
-Managed Endpoint
+Managed Host
 Group
 ```
 
-Static Objects use `origin=static`. Managed Endpoint objects use `origin=managed` and are lifecycle-managed by Data Relay Link.
+Static Objects use `origin=static`. Managed Host Network Objects use `origin=managed` and are lifecycle-managed by Data Relay Link (internal table: `managed_endpoints`).
 
 Objects may contain multiple values when those values form one logical administrative object. Operators are not forced to create one Object per IP/CIDR merely to group them immediately afterward.
 
@@ -319,7 +331,7 @@ Remote Access Source
   Host | Network | compatible Object Group
 
 Remote Access Destination
-  Host | Network | Managed Endpoint | compatible Object Group
+  Host | Network | Managed Host | compatible Object Group
 
 Internet Access Source
   Host | Network | compatible Object Group
@@ -332,25 +344,28 @@ Exact validation rules are compiled from one canonical type/context matrix and r
 
 Tab completion and guided selectors should show only context-valid candidates.
 
-## 12. Managed Endpoint
+## 12. Managed Host
+
+Public noun: **Managed Host**. Intermediate documents called this a Managed Endpoint; storage remains `managed_endpoints`.
+
 
 A connected/enrolled Data Relay Link Client is represented by a managed Object.
 
 Example:
 
 ```text
-Managed Endpoint: dp1
+Managed Host: dp1
 Client ID: facc9a57
 Status: Connected
 ```
 
-Managed Endpoints appear in normal Object discovery but are not manually created with `set object` and are not manually deleted with `unset object`.
+Managed Hosts appear in normal Object discovery but are not manually created with `set object` and are not manually deleted with `unset object`.
 
 Attempting to remove one through Object CRUD must fail and direct the operator to the appropriate Client lifecycle operation.
 
-## 13. Orphaned Managed Endpoints
+## 13. Orphaned Managed Hosts
 
-If a Client is removed while policy still references its Managed Endpoint identity, Data Relay Link must not silently reinterpret the reference or bind it to a new machine with the same label.
+If a Client is removed while policy still references its Managed Host identity, Data Relay Link must not silently reinterpret the reference or bind it to a new machine with the same label.
 
 A referenced endpoint may remain as an orphaned identity:
 
@@ -397,13 +412,16 @@ Object Group
 
 The old generic public `group` name should become `client-group` where ambiguity exists.
 
-AI Access targets may reference Managed Endpoints and Client Groups. A third AI-specific host group is unnecessary.
+AI Access targets may reference Managed Hosts and Client Groups. A third AI-specific host group is unnecessary.
 
-## 16. Published Service
+## 16. Remote Service
 
-Inbound relay definitions are called **Published Services** to distinguish them from firewall-style protocol/port service criteria.
+Public noun: **Remote Service**. Intermediate documents called this a Published Service; storage remains `published_services`.
 
-A Published Service records at least:
+
+Inbound relay definitions are called **Remote Services** to distinguish them from firewall-style protocol/port service criteria.
+
+A Remote Service records at least:
 
 ```text
 id
@@ -422,7 +440,7 @@ updated_at
 
 Service identity and public-port reservation semantics remain stable across ordinary edits unless explicitly released.
 
-## 17. Published Service target modes
+## 17. Remote Service target modes
 
 Canonical modes:
 
@@ -433,7 +451,7 @@ ROUTED
 
 ### SELF
 
-The effective destination is the Managed Endpoint itself, even if the local process target is `127.0.0.1`.
+The effective destination is the Managed Host itself, even if the local process target is `127.0.0.1`.
 
 Example:
 
@@ -449,7 +467,7 @@ Policy matching must not treat literal `127.0.0.1` as the network destination.
 
 ### ROUTED
 
-The Managed Endpoint acts as the connector to another reachable host/service.
+The Managed Host acts as the connector to another reachable host/service.
 
 Example:
 
@@ -472,7 +490,7 @@ Effective access is the intersection:
 ```text
 Rule Match
 +
-Enabled Published Service
+Enabled Remote Service
 +
 Reachable Connector / target
 =
@@ -481,17 +499,17 @@ Effective Remote Access
 
 A broad destination Object therefore does not automatically publish every address or port in that Object.
 
-## 19. Service Preset
+## 19. Service Object wizard presets
 
-The old **Service Profile** public concept is replaced by **Service Preset**.
+Public v2.4 does not expose a standalone Service Preset resource. The old **Service Profile** / intermediate **Service Preset** public concepts are replaced by Service Object wizard presets.
 
-A preset is only a creation convenience. It pre-fills values when a Published Service is created. It does not own the created service and changing the preset later does not mutate existing services.
+A preset is only a creation convenience. It pre-fills values when a Remote Service is created. It does not own the created service, does not participate in policy evaluation, and changing the preset later does not mutate existing services.
 
-Service Presets do not participate in policy evaluation.
+## 20. Intermediate Remote Access rulebase (historical)
 
-## 20. Remote Access rulebase
+> Current public Remote Access uses BLACKLIST / WHITELIST semantics per the Product Master. The ordered first-match ALLOW/DENY narrative below is retained only as intermediate redesign history.
 
-Remote Access is an ordered rulebase.
+Intermediate Remote Access was an ordered rulebase.
 
 Example:
 
@@ -519,9 +537,11 @@ Selector composition is deterministic: multiple selectors in one dimension are O
 
 There is no automatic "most specific rule wins" algorithm.
 
-## 21. Internet Access rulebase
+## 21. Intermediate Internet Access rulebase (historical)
 
-Internet Access is a separate ordered rulebase.
+> Current public Internet Access uses BLACKLIST / WHITELIST semantics per the Product Master. The ordered first-match ALLOW/DENY narrative below is retained only as intermediate redesign history.
+
+Intermediate Internet Access was a separate ordered rulebase.
 
 Example:
 
@@ -622,13 +642,13 @@ Impact analysis applies to:
 - Object values.
 - Object Group membership.
 - Rule source/destination/service/action/order/enablement.
-- Published Service target or mode.
-- Managed Endpoint address inventory changes when they alter policy membership.
+- Remote Service target or mode.
+- Managed Host address inventory changes when they alter policy membership.
 - AI target/capability/path scope changes.
 
 ## 27. Reference protection
 
-Referenced Objects, Object Groups, Managed Endpoint identities, and other durable dependencies are not cascade-deleted.
+Referenced Objects, Object Groups, Managed Host identities, and other durable dependencies are not cascade-deleted.
 
 Deletion must fail with references listed, for example:
 
@@ -664,7 +684,7 @@ Output must show:
 - Rule evaluation order.
 - First complete match.
 - Effective action.
-- Relevant Published Service / reachability state for Remote Access.
+- Relevant Remote Service / reachability state for Remote Access.
 - Final authorization result.
 
 `test` is an explain/simulation operation unless the command explicitly says it performs live connectivity.
@@ -784,7 +804,7 @@ Full schema/CLI/audit semantics are defined by `CONFIGURATION_BUNDLE.md`.
 
 Configuration intent and enrollment secret issuance are separate operations.
 
-A ConfigurationBundle may create enrollment plans, but applying it creates zero raw tickets. Client and Managed Endpoint identity continue to materialize only after successful enrollment.
+A ConfigurationBundle may create enrollment plans, but applying it creates zero raw tickets. Client and Managed Host identity continue to materialize only after successful enrollment.
 
 Server-enforced ticket rules:
 
@@ -895,12 +915,12 @@ ChatGPT / Claude / Cursor / MCP Host (target examples until host E2E is evidence
                 │
      existing DRLink control path
                 │
-        Managed Endpoint
+        Managed Host
                 │
        private / closed host
 ```
 
-MCP does not bypass the existing client identity or transport boundary. The bridge dispatches authorized operations through a dedicated authenticated Data Relay Link management/RPC path implemented by the existing client agent; Published Services and exposed SSH are not prerequisites for an approved AI operation.
+MCP does not bypass the existing client identity or transport boundary. The bridge dispatches authorized operations through a dedicated authenticated Data Relay Link management/RPC path implemented by the existing client agent; Remote Services and exposed SSH are not prerequisites for an approved AI operation.
 
 ## 36. MCP protocol baseline
 
@@ -912,14 +932,17 @@ Modern 2026-07-28 requests do not use `initialize`, `notifications/initialized`,
 
 Do not hard-code assumptions from older MCP revisions when the current standard provides a different authorization, transport, or operation model.
 
-## 37. AI Principal
+## 37. AI Identity
+
+Public noun: **AI Identity**. Intermediate documents called this an AI Principal; storage remains `ai_principals`.
+
 
 AI identity is not a Network Object.
 
-Canonical resource:
+Canonical public resource:
 
 ```text
-AI Principal
+AI Identity
 ```
 
 Examples:
@@ -981,7 +1004,7 @@ A complete AI match means Principal AND Target AND requested Capability AND any 
 Targets:
 
 ```text
-Managed Endpoint
+Managed Host
 Client Group
 ```
 
@@ -1040,7 +1063,7 @@ When `exec=true`, the target OS account, filesystem permissions, sudo policy, na
 
 ## 41. AI authorization timing
 
-Every new MCP tool invocation evaluates the current ordered AI Access rules and current target identity.
+Every new MCP tool invocation evaluates the current AI Access policy and current target identity.
 
 Canonical rule:
 
@@ -1055,7 +1078,7 @@ AI activity records at least:
 ```text
 timestamp
 principal
-target Managed Endpoint
+target Managed Host
 client identity
 tool
 matched rule
@@ -1081,7 +1104,7 @@ Requirements:
 - Least-privilege capabilities and target scopes.
 - Protection against confused-deputy behavior.
 - Rate/resource limits.
-- Audit attribution to the effective AI Principal.
+- Audit attribution to the effective AI Identity.
 
 Exact OAuth/OIDC/token mechanics are selected during implementation after verifying current MCP host support for ChatGPT, Claude, Cursor, and other supported clients.
 
@@ -1099,7 +1122,7 @@ lightweight
 no extra DB daemon
 1–50 clients
 CLI-first operator consent
-strong AI Principal binding
+strong AI Identity binding
 no general identity-management product
 ```
 
@@ -1122,7 +1145,7 @@ OAuth             Data Relay Link is both the built-in OAuth 2.1
                   Client ID Metadata Documents (CIMD) when advertised
                   client_credentials with RFC 8707 resource
                   resource-bound expiring drauth_ access tokens
-                  AI Principal mapping is explicit and revocable
+                  AI Identity mapping is explicit and revocable
 ```
 
 `client_credentials` exists for machine/API MCP clients that can present
@@ -1132,7 +1155,7 @@ Static Bearer token. Cursor typically uses Static Bearer headers.
 Claude/ChatGPT custom connectors are expected to use authorization_code+PKCE,
 with DCR or CIMD for client registration and refresh tokens for persistent
 sessions. DCR/CIMD clients remain unbound until an operator approves OAuth
-consent against a concrete AI Principal (`system credential approve-oauth
+consent against a concrete AI Identity (`system credential approve-oauth
 <PENDING-ID> <PRINCIPAL>`).
 
 Issuer, resource, authorization endpoint, token endpoint, registration
@@ -1153,7 +1176,7 @@ Origin is validated to block loopback DNS rebinding
 Bearer tokens never appear in show/status/audit/support bundles
 OAuth codes are one-time; tokens expire and are resource-bound
 issuer and audience/resource mismatches are rejected
-authenticated != authorized; AI Access still first-match DENY
+authenticated != authorized; AI Access remains fail-closed under current BLACKLIST/WHITELIST semantics
 ```
 
 ## 44. Runtime health and consistency
