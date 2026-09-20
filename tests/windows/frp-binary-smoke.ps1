@@ -35,9 +35,13 @@ function New-FrpSmokeTlsMaterials {
     $status = Join-Path $PkiDir 'status.txt'
     $map = @{}
     Get-Content -LiteralPath $status | ForEach-Object {
-        if ($_ -match '^(CA_DER|LEAF_PFX|LEAF_PASS)=(.*)$') {
-            $map[$Matches[1]] = $Matches[2]
+        $line = $_.Trim()
+        if ($line -match '^(CA_DER|LEAF_DER|LEAF_PFX|LEAF_PASS)=(.*)$') {
+            $map[$Matches[1]] = $Matches[2].Trim()
         }
+    }
+    if ($map.Count -lt 4) {
+        Write-Host "smoke cert status dump:`n$((Get-Content -LiteralPath $status) -join "`n")"
     }
     foreach ($k in @('CA_DER', 'LEAF_DER', 'LEAF_PFX', 'LEAF_PASS')) {
         if (-not $map.ContainsKey($k)) { throw "smoke cert status missing $k" }
