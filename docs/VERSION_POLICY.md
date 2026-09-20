@@ -158,6 +158,25 @@ Installs without `.git` must still retain exact provenance through build/install
 
 Never fabricate `SOURCE_HEAD` or stable provenance.
 
+Never fabricate `SOURCE_HEAD` or stable provenance.
+
+Committed release metadata cannot self-describe the Git commit that contains it.
+For development/preview candidates the canonical workflow is:
+
+```text
+1. Establish the content HEAD to qualify.
+2. Run scripts/build-release-artifacts.sh (stamps release-manifest + embeds
+   provenance into dist/bootstrap-* and regenerates SHA256SUMS/SBOM).
+3. Commit the stamped artifacts as a follow-on provenance commit.
+```
+
+After step 3, `source_head` / embedded installer provenance correctly names the
+content HEAD from step 1. The containing provenance commit differs by design.
+`scripts/sync-release-manifest-provenance.py --check` therefore WARNs on
+development trees when `source_head != HEAD`, and only fails closed under
+`STRICT_SOURCE_HEAD=1` or stable channel. Do not invent a fake self-referential
+SHA to silence that warning.
+
 ## 9. Installer/bootstrap references
 
 Before stable tag:
