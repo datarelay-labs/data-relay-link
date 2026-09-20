@@ -5,8 +5,7 @@
 # Get-FrpWindowsAmd64Url or Install-FrpWindowsBinary.
 #
 # On Windows (CI target: PowerShell 5.1) the HTTPS fixture is .NET SslStream +
-# New-SelfSignedCertificate so we do not depend on OpenSSL (often absent on
-# windows-latest). Non-Windows hosts only verify the URL contract.
+# CertificateRequest (no OpenSSL). Non-Windows hosts only verify the URL contract.
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -17,6 +16,59 @@ Set-Location -LiteralPath $RepoRoot
 . .\windows\lib\FrpState.ps1
 . .\windows\lib\FrpTls.ps1
 . .\windows\lib\FrpBootstrap.ps1
+
+function New-FrpSmokeServerCertificate {
+    # CertificateRequest + IP SAN — same API surface already used by WinPS 5.1
+    # unit tests (e.g. test-ticket-scope.ps1). Avoid New-SelfSignedCertificate
+    # TextExtension IP SAN quirks that fail product hostname pinning.
+    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider 2048
+    $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest(
+        'CN=127.0.0.1',
+        $rsa,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+    )
+    $san = New-Object System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder
+    $san.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
+    $req.CertificateExtensions.Add($san.Build($false))
+    $req.CertificateExtensions.Add(
+        (New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension($true, $false, 0, $true))
+    )
+    $ku = [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor
+        [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment -bor
+        [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign
+    $req.CertificateExtensions.Add(
+        (New-Object System.Security.Cryptography.X509Certificates.X509KeyUsageExtension($ku, $true))
+    )
+    $oids = New-Object System.Security.Cryptography.OidCollection
+    [void]$oids.Add((New-Object System.Security.Cryptography.Oid '1.3.6.1.5.5.7.3.1'))
+    $req.CertificateExtensions.Add(
+        (New-Object System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($oids, $false))
+    )
+    $ephemeral = $req.CreateSelfSigned(
+        [DateTimeOffset]::UtcNow.AddDays(-1),
+        [DateTimeOffset]::UtcNow.AddDays(2)
+    )
+    $pfxPass = New-Object System.Security.SecureString
+    foreach ($ch in ([guid]::NewGuid().ToString('N').ToCharArray())) { $pfxPass.AppendChar($ch) }
+    $pfxBytes = $ephemeral.Export(
+        [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+        $pfxPass
+    )
+    $der = $ephemeral.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+    $ephemeral.Dispose()
+    $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+        $pfxBytes,
+        $pfxPass,
+        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
+        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
+    )
+    return @{
+        ServerCert = $serverCert
+        DerBytes   = $der
+        Rsa        = $rsa
+    }
+}
 
 function Start-FrpQualifiedArtifactHttpsFixture {
     <#
@@ -33,36 +85,21 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         New-Item -ItemType Directory -Path $PkiDir -Force | Out-Null
     }
 
-    # Self-signed server cert with IP SAN 127.0.0.1 (also used as the pinned CA).
-    $cert = New-SelfSignedCertificate `
-        -Subject 'CN=DRLink FRP Smoke' `
-        -TextExtension @(
-            '2.5.29.17={text}IPAddress=127.0.0.1',
-            '2.5.29.37={text}1.3.6.1.5.5.7.3.1'
-        ) `
-        -KeyUsage DigitalSignature, KeyEncipherment `
-        -Type SSLServerAuthentication `
-        -KeyExportPolicy Exportable `
-        -CertStoreLocation 'Cert:\CurrentUser\My' `
-        -NotAfter (Get-Date).AddHours(6)
-
-    # WinPS 5.1 X509Certificate2(path) reliably loads DER; PEM is not portable here.
+    $built = New-FrpSmokeServerCertificate
+    $serverCert = $built.ServerCert
     $caDerPath = Join-Path $PkiDir 'ca.crt'
-    [System.IO.File]::WriteAllBytes(
-        $caDerPath,
-        $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    )
+    [System.IO.File]::WriteAllBytes($caDerPath, $built.DerBytes)
 
-    # Re-import from PFX so SslStream has a usable private key handle.
-    $pfxPass = New-Object System.Security.SecureString
-    foreach ($ch in ([guid]::NewGuid().ToString('N').ToCharArray())) { $pfxPass.AppendChar($ch) }
-    $pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pfxPass)
-    $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
-        $pfxBytes,
-        $pfxPass,
-        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
-    )
-    Remove-Item -LiteralPath ("Cert:\CurrentUser\My\$($cert.Thumbprint)") -ErrorAction SilentlyContinue
+    $probe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $built.DerBytes)
+    try {
+        if (-not (Test-FrpCertificateHostname -Certificate $probe -Hostname '127.0.0.1')) {
+            $san = Get-FrpCertificateSanEntries -Certificate $probe
+            throw ("fixture cert rejected by Test-FrpCertificateHostname; dns=[{0}] ip=[{1}] parseFailed={2}" -f `
+                (($san.DnsNames) -join ','), (($san.IpAddresses) -join ','), [bool]$san.ParseFailed)
+        }
+    } finally {
+        $probe.Dispose()
+    }
 
     $payload = [System.IO.File]::ReadAllBytes($ZipPath)
     $listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
@@ -140,7 +177,7 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         Handle     = $handle
         Runspace   = $runspace
         ServerCert = $serverCert
-        StoreThumb = $cert.Thumbprint
+        Rsa        = $built.Rsa
     }
 }
 
@@ -156,6 +193,7 @@ function Stop-FrpQualifiedArtifactHttpsFixture {
     try { if ($Fixture.PowerShell) { $Fixture.PowerShell.Dispose() } } catch { }
     try { if ($Fixture.Runspace) { $Fixture.Runspace.Dispose() } } catch { }
     try { if ($Fixture.ServerCert) { $Fixture.ServerCert.Dispose() } } catch { }
+    try { if ($Fixture.Rsa) { $Fixture.Rsa.Dispose() } } catch { }
 }
 
 $ver = Get-FrpUpstreamVersion
@@ -199,6 +237,13 @@ try {
             New-Item -ItemType Directory -Path $caDir -Force | Out-Null
         }
         Copy-Item -LiteralPath $caCrt -Destination $caDest -Force
+
+        # WinPS 5.1 defaults can omit TLS1.2; product download requires https.
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = `
+                [System.Net.ServicePointManager]::SecurityProtocol -bor
+                [System.Net.SecurityProtocolType]::Tls12
+        } catch { }
 
         $env:FRP_ALLOCATOR_URL = "$origin/enroll"
         $resolvedLive = Get-FrpWindowsAmd64Url
