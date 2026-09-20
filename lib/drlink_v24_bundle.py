@@ -1103,22 +1103,14 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
             v24.set_service_group(plane, name, members=list(item.get("members") or []), oneshot=True)
     elif kind == "permission-object":
         if op == "DELETE":
-            p = v24.get_permission_object(plane, name)
-            if p:
-                plane.conn.execute(
-                    "DELETE FROM permission_object_members WHERE permission_object_id = ?", (p["id"],)
-                )
-                plane.conn.execute("DELETE FROM permission_objects WHERE id = ?", (p["id"],))
+            v24.unset_permission_object(plane, name)
         else:
             v24.set_permission_object(
                 plane, name, permissions=list(item.get("permissions") or []), oneshot=True
             )
     elif kind == "permission-group":
         if op == "DELETE":
-            g = v24.get_permission_group(plane, name)
-            if g:
-                plane.conn.execute("DELETE FROM permission_group_members WHERE group_id = ?", (g["id"],))
-                plane.conn.execute("DELETE FROM permission_groups WHERE id = ?", (g["id"],))
+            v24.unset_permission_group(plane, name)
         else:
             v24.set_permission_group(plane, name, members=list(item.get("members") or []), oneshot=True)
     elif kind.endswith("-access") and op in ("RESET", "CONFIGURE"):

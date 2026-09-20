@@ -977,32 +977,14 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         _require_server(plane, "Permission Objects")
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset permission-object <NAME>")
-        p = v24.get_permission_object(plane, rest[1])
-        if not p:
-            raise ControlPlaneError(v24.cli_error("Permission Object '%s' was not found." % rest[1]))
-
-        def write():
-            plane.conn.execute("DELETE FROM permission_object_members WHERE permission_object_id = ?", (p["id"],))
-            plane.conn.execute("DELETE FROM permission_objects WHERE id = ?", (p["id"],))
-            return {"entity": {"type": "permission-object", "id": p["id"], "name": rest[1]}, "operation": "delete"}
-
-        plane._mutate("unset permission-object %s" % rest[1], "delete permission object", write)
+        v24.unset_permission_object(plane, rest[1])
         sys.stdout.write("Permission Object deleted: %s\n" % rest[1])
         return 0
     if res == "permission-group":
         _require_server(plane, "Permission Groups")
         if len(rest) < 2:
             raise ControlPlaneError("Usage: unset permission-group <NAME>")
-        g = v24.get_permission_group(plane, rest[1])
-        if not g:
-            raise ControlPlaneError(v24.cli_error("Permission Group '%s' was not found." % rest[1]))
-
-        def write():
-            plane.conn.execute("DELETE FROM permission_group_members WHERE group_id = ?", (g["id"],))
-            plane.conn.execute("DELETE FROM permission_groups WHERE id = ?", (g["id"],))
-            return {"entity": {"type": "permission-group", "id": g["id"], "name": rest[1]}, "operation": "delete"}
-
-        plane._mutate("unset permission-group %s" % rest[1], "delete permission group", write)
+        v24.unset_permission_group(plane, rest[1])
         sys.stdout.write("Permission Group deleted: %s\n" % rest[1])
         return 0
     if res in ("remote-access", "internet-access"):

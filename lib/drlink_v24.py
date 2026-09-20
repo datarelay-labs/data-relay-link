@@ -1294,6 +1294,136 @@ def get_permission_group(plane_db, name: str):
     ).fetchone()
 
 
+def permission_object_references(plane_db, name: str) -> list[dict]:
+    """AI Access rules and Permission Groups that still reference this object."""
+    obj = get_permission_object(plane_db, name)
+    if not obj:
+        return []
+    refs: list[dict] = []
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules WHERE permission_ref_kind = 'permission_object' "
+        "AND permission_ref_id = ? ORDER BY name COLLATE NOCASE",
+        (obj["id"],),
+    ):
+        refs.append(
+            {
+                "kind": "ai-access",
+                "name": row["name"],
+                "display": "ai-access %s" % row["name"],
+            }
+        )
+    for row in plane_db.conn.execute(
+        "SELECT g.name AS name FROM permission_groups g "
+        "JOIN permission_group_members m ON m.group_id = g.id "
+        "WHERE m.permission_object_id = ? ORDER BY g.name COLLATE NOCASE",
+        (obj["id"],),
+    ):
+        refs.append(
+            {
+                "kind": "permission-group",
+                "name": row["name"],
+                "display": "permission-group %s" % row["name"],
+            }
+        )
+    return refs
+
+
+def permission_group_references(plane_db, name: str) -> list[dict]:
+    """AI Access rules that still reference this Permission Group."""
+    grp = get_permission_group(plane_db, name)
+    if not grp:
+        return []
+    refs: list[dict] = []
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules WHERE permission_ref_kind = 'permission_group' "
+        "AND permission_ref_id = ? ORDER BY name COLLATE NOCASE",
+        (grp["id"],),
+    ):
+        refs.append(
+            {
+                "kind": "ai-access",
+                "name": row["name"],
+                "display": "ai-access %s" % row["name"],
+            }
+        )
+    return refs
+
+
+def ai_identity_references(plane_db, name: str) -> list[dict]:
+    """v2.4 AI Access rules and legacy AI Access rules referencing this identity."""
+    principal = plane_db.get_principal(name)
+    if principal is None:
+        return []
+    refs: list[dict] = []
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules WHERE source_identity_id = ? ORDER BY name COLLATE NOCASE",
+        (principal["id"],),
+    ):
+        refs.append(
+            {
+                "kind": "ai-access",
+                "name": row["name"],
+                "display": "ai-access %s" % row["name"],
+            }
+        )
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_access_rules WHERE principal_id = ? ORDER BY name COLLATE NOCASE",
+        (principal["id"],),
+    ):
+        refs.append(
+            {
+                "kind": "ai-access",
+                "name": row["name"],
+                "display": "ai-access %s" % row["name"],
+            }
+        )
+    return refs
+
+
+def unset_permission_object(plane_db, name: str) -> dict:
+    name = validate_public_name(name, "Permission Object name")
+    obj = get_permission_object(plane_db, name)
+    if not obj:
+        raise ControlPlaneError(cli_error("Permission Object '%s' was not found." % name))
+    refs = permission_object_references(plane_db, name)
+    if refs:
+        raise ControlPlaneError(
+            "ERROR:\nPermission Object '%s' is still referenced.\n\nReferences:\n%s\n\n"
+            "No changes were applied."
+            % (name, "\n".join("  %s" % r["display"] for r in refs))
+        )
+
+    def write():
+        plane_db.conn.execute(
+            "DELETE FROM permission_object_members WHERE permission_object_id = ?", (obj["id"],)
+        )
+        plane_db.conn.execute("DELETE FROM permission_objects WHERE id = ?", (obj["id"],))
+        return {"entity": {"type": "permission-object", "id": obj["id"], "name": name}, "operation": "delete"}
+
+    return plane_db._mutate("unset permission-object %s" % name, "delete permission object", write)
+
+
+def unset_permission_group(plane_db, name: str) -> dict:
+    name = validate_public_name(name, "Permission Group name")
+    grp = get_permission_group(plane_db, name)
+    if not grp:
+        raise ControlPlaneError(cli_error("Permission Group '%s' was not found." % name))
+    refs = permission_group_references(plane_db, name)
+    if refs:
+        raise ControlPlaneError(
+            "ERROR:\nPermission Group '%s' is still referenced.\n\nReferences:\n%s\n\n"
+            "No changes were applied."
+            % (name, "\n".join("  %s" % r["display"] for r in refs))
+        )
+
+    def write():
+        plane_db.conn.execute("DELETE FROM permission_group_members WHERE group_id = ?", (grp["id"],))
+        plane_db.conn.execute("DELETE FROM permission_groups WHERE id = ?", (grp["id"],))
+        return {"entity": {"type": "permission-group", "id": grp["id"], "name": name}, "operation": "delete"}
+
+    return plane_db._mutate("unset permission-group %s" % name, "delete permission group", write)
+
+
 def set_permission_object(plane_db, name: str, *, permissions: Optional[list[str]] = None, oneshot: bool = False) -> dict:
     name = validate_public_name(name, "Permission Object name")
     if not (oneshot or permissions is not None):

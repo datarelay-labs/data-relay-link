@@ -2600,13 +2600,24 @@ class ControlPlane:
         existing = self.get_principal(name)
         if existing is None:
             raise ControlPlaneError("AI Principal not found: %s" % name)
-        refs = self.conn.execute(
-            "SELECT name FROM ai_access_rules WHERE principal_id = ?", (existing["id"],)
-        ).fetchall()
+        # v2.4 AI Access stores sources on ai_policy_rules; legacy capability
+        # rules remain on ai_access_rules. Both must block deletion.
+        refs = []
+        for row in self.conn.execute(
+            "SELECT name FROM ai_policy_rules WHERE source_identity_id = ? ORDER BY name COLLATE NOCASE",
+            (existing["id"],),
+        ):
+            refs.append("ai-access %s" % row["name"])
+        for row in self.conn.execute(
+            "SELECT name FROM ai_access_rules WHERE principal_id = ? ORDER BY name COLLATE NOCASE",
+            (existing["id"],),
+        ):
+            refs.append("ai-access %s" % row["name"])
         if refs:
             raise ControlPlaneError(
-                "Cannot remove AI Principal %s.\nReferenced by:\n%s\n\nNo changes were applied."
-                % (name, "\n".join("  ai-access %s" % r["name"] for r in refs))
+                "ERROR:\nAI Identity '%s' is still referenced.\n\nReferences:\n%s\n\n"
+                "No changes were applied."
+                % (name, "\n".join("  %s" % r for r in refs))
             )
 
         def write():
