@@ -363,8 +363,10 @@ function New-FrpPinnedServerCertificateValidator {
             $build.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
             $build.ChainPolicy.ExtraStore.Add($caHandle) | Out-Null
             $build.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-            $ok = $build.Build($serverCert)
-            if (-not $ok) { return $false }
+            # Build populates ChainElements. On .NET Framework / WinPS 5.1, Build can
+            # return $false solely for UntrustedRoot even with AllowUnknownCertificateAuthority
+            # when the pinned project CA is only in ExtraStore — do not require $ok.
+            [void]$build.Build($serverCert)
             $trusted = $false
             foreach ($el in $build.ChainElements) {
                 if ($el.Certificate.Thumbprint -eq $caHandle.Thumbprint) { $trusted = $true; break }
@@ -378,6 +380,18 @@ function New-FrpPinnedServerCertificateValidator {
                 }
             }
             if (-not $trusted) { return $false }
+
+            # Reject hard failures; allow UntrustedRoot / revocation-offline noise for a
+            # deliberately ExtraStore-pinned project CA that is not in the system trust store.
+            foreach ($st in $build.ChainStatus) {
+                switch ([string]$st.Status) {
+                    'UntrustedRoot' { continue }
+                    'OfflineRevocation' { continue }
+                    'RevocationStatusUnknown' { continue }
+                    'NoError' { continue }
+                    default { return $false }
+                }
+            }
 
             # Prefer the caller-provided host. $sender is HttpWebRequest on GET
             # but may be a connection/stream object on POST GetRequestStream.

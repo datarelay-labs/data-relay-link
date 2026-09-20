@@ -125,6 +125,67 @@ try {
         }
         Write-Host "FRP_WINDOWS_AMD64_URL_LIVE=PASS url=$resolvedLive"
 
+        # Live pin preflight with diagnostics (WinPS 5.1). Surfaces callback hits /
+        # chain trust / hostname before Install-FrpWindowsBinary.
+        $caPath = Get-FrpAllocatorCaPath
+        $expectedHost = ([Uri]$resolvedLive).Host
+        $pin = New-FrpPinnedServerCertificateValidator -CaPath $caPath -ExpectedHost $expectedHost
+        $diag = [ordered]@{ Hits = 0; Result = $false; Detail = '' }
+        $innerCb = $pin.Callback
+        $diagCb = {
+            param($sender, $certificate, $chain, $sslPolicyErrors)
+            $diag.Hits++
+            try {
+                if ($null -eq $certificate) {
+                    $diag.Detail = 'certificate=null'
+                    return $false
+                }
+                $leafRaw = $certificate.GetRawCertData()
+                $serverCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $leafRaw)
+                $build = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+                $build.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
+                $build.ChainPolicy.ExtraStore.Add($pin.Ca) | Out-Null
+                $build.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+                $built = $build.Build($serverCert)
+                $statuses = @($build.ChainStatus | ForEach-Object { [string]$_.Status }) -join ','
+                $els = @($build.ChainElements | ForEach-Object { $_.Certificate.Thumbprint }) -join ','
+                $hn = Test-FrpCertificateHostname -Certificate $serverCert -Hostname $expectedHost
+                $r = [bool](& $innerCb $sender $certificate $chain $sslPolicyErrors)
+                $diag.Result = $r
+                $diag.Detail = "errors=$sslPolicyErrors build=$built statuses=[$statuses] elements=[$els] hostname=$hn pin=$r ca=$($pin.Ca.Thumbprint)"
+                return $r
+            } catch {
+                $diag.Detail = "ex=$($_.Exception.Message)"
+                return $false
+            }
+        }.GetNewClosure()
+        $prevCb = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+        $preflightPath = Join-Path $fixtureRoot 'preflight.bin'
+        try {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $diagCb
+            $req = [System.Net.HttpWebRequest]::Create($resolvedLive)
+            $req.Method = 'GET'
+            $req.Timeout = 30000
+            $req.ReadWriteTimeout = 30000
+            $req.KeepAlive = $false
+            $resp = $req.GetResponse()
+            try {
+                $src = $resp.GetResponseStream()
+                $fs = [System.IO.File]::Create($preflightPath)
+                try { $src.CopyTo($fs) } finally { $fs.Dispose(); $src.Close() }
+            } finally {
+                $resp.Close()
+            }
+            Write-Host "FRP_SMOKE_PIN_PREFLIGHT=PASS hits=$($diag.Hits) $($diag.Detail)"
+        } catch {
+            Write-Host "FRP_SMOKE_PIN_PREFLIGHT=FAIL hits=$($diag.Hits) $($diag.Detail) err=$($_.Exception.Message)"
+            throw
+        } finally {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCb
+            if ($pin.Ca) { $pin.Ca.Dispose() }
+            Remove-Item -LiteralPath $preflightPath -Force -ErrorAction SilentlyContinue
+        }
+
         # Exercise the product Install-FrpWindowsBinary → Invoke-FrpHttpsDownload path
         # (no local override) so WinPS 5.1 CI covers the real pin callback.
         Install-FrpWindowsBinary | Out-Null
