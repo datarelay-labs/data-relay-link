@@ -79,7 +79,10 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         }
         $pin = New-FrpPinnedServerCertificateValidator -CaPath $caDerPath -ExpectedHost '127.0.0.1'
         try {
-            $pinOk = [bool](& $pin.Callback $null $leafProbe $null ([System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors))
+            # Pass raw DER: New-Object X509Certificate2 $existingCert2 can drop SAN/chain
+            # context on WinPS 5.1 and false-fail the product pin callback.
+            $rawLeaf = $leafProbe.GetRawCertData()
+            $pinOk = [bool](& $pin.Callback $null $rawLeaf $null ([System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors))
             if (-not $pinOk) {
                 $caObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($caDerPath)
                 try {
