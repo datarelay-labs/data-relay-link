@@ -66,7 +66,19 @@ The server remains Linux-based. macOS and Windows are supported client platforms
 
 ## Release status
 
-This default `main` branch documents the **v2.3.0 stable/audit-closure line** with FRP pinned at **v0.71.0**.
+Current project version: **2.3.0**  
+Current pinned FRP version: **v0.71.0**  
+Current line: **v2.3.0 FINAL AUDIT CLOSURE**
+
+This default `main` branch documents the v2.3.0 stable/audit-closure line. Field installs should follow the immutable release identity rather than mutable `main`.
+
+Following mutable `main` is explicit opt-in only:
+
+```text
+FRP_RELEASE_CHANNEL=dev
+```
+
+A legacy client on an older updater may require the documented **one-time verified bridge** before it can enter the current immutable release flow.
 
 The next-generation v2.4.0 control-plane redesign is developed separately on:
 
@@ -147,7 +159,27 @@ sudo frpctl create enrollment \
   --label branch-a
 ```
 
-The target OS account must already exist. Zero-Touch does not create users, set passwords, install SSH servers, modify SSH keys, or rewrite `sshd_config`.
+Interactive creation may prompt:
+
+```text
+Client SSH user: admin
+```
+
+There is **no default username**. The target OS account must already exist.
+
+Zero-Touch does **not**:
+
+- create an OS user
+- install or enable an SSH server
+- set a password
+- create or modify SSH keys
+- rewrite `sshd_config`
+
+Connect to a published SSH service with the assigned public endpoint:
+
+```bash
+ssh -p <public-port> user@<public-hostname>
+```
 
 ## Service lifecycle
 
