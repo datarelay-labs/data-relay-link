@@ -501,6 +501,13 @@ class ControlPlane:
         except Exception as exc:
             self._rollback_open_transaction()
             self._cleanup_activation_checkpoint(checkpoint)
+            if isinstance(exc, sqlite3.IntegrityError) and "foreign key" in str(exc).lower():
+                raise ControlPlaneError(
+                    "ERROR:\nCannot apply this change because a referenced dependency still exists.\n\n"
+                    "No changes were applied.\n\n"
+                    "Remove dependent Rules or Groups first, or include them in the same "
+                    "ConfigurationBundle with dependency-aware delete ordering."
+                ) from exc
             raise ControlPlaneError("No changes were applied. %s" % exc) from exc
         if compile_runtime and self._activation_should_run():
             try:
@@ -1888,7 +1895,9 @@ class ControlPlane:
 
         return self._mutate("set %s-access description" % plane, "set description", write)
 
-    def set_rule_enabled(self, plane: str, name: str, enabled: bool) -> dict:
+    def set_rule_enabled(
+        self, plane: str, name: str, enabled: bool, *, confirm: Optional[bool] = None
+    ) -> dict:
         rule = self._require_rule(plane, name)
 
         def write():
@@ -1898,7 +1907,19 @@ class ControlPlane:
             )
             return {"entity": {"type": "%s-access" % plane, "id": rule["id"], "name": name}, "operation": "enable" if enabled else "disable"}
 
-        return self._mutate("set %s-access enabled" % plane, "enable/disable rule", write)
+        impact = None
+        if not enabled and bool(rule["enabled"]):
+            import drlink_v24 as v24
+
+            impact = v24.blacklist_last_rule_impact(self, plane, name, disabling=True)
+
+        return self._mutate(
+            "set %s-access enabled" % plane,
+            "enable/disable rule",
+            write,
+            impact=impact,
+            confirm=confirm,
+        )
 
     def move_rule(self, plane: str, name: str, *, before: Optional[str] = None, after: Optional[str] = None) -> dict:
         rule = self._require_rule(plane, name)
@@ -1957,17 +1978,32 @@ class ControlPlane:
 
         return self._mutate("unset %s-access service" % plane, "unset service", write)
 
-    def unset_rule(self, plane: str, name: str) -> dict:
+    def unset_rule(
+        self, plane: str, name: str, *, confirm: Optional[bool] = None
+    ) -> dict:
         rule = self._require_rule(plane, name)
 
         def write():
             self.conn.execute("DELETE FROM rule_sources WHERE rule_id = ?", (rule["id"],))
             self.conn.execute("DELETE FROM rule_destinations WHERE rule_id = ?", (rule["id"],))
             self.conn.execute("DELETE FROM rule_services WHERE rule_id = ?", (rule["id"],))
+            self.conn.execute("DELETE FROM rule_service_refs WHERE rule_id = ?", (rule["id"],))
             self.conn.execute("DELETE FROM policy_rules WHERE id = ?", (rule["id"],))
             return {"entity": {"type": "%s-access" % plane, "id": rule["id"], "name": name}, "operation": "delete"}
 
-        return self._mutate("unset %s-access %s" % (plane, name), "delete rule", write)
+        impact = None
+        if bool(rule["enabled"]):
+            import drlink_v24 as v24
+
+            impact = v24.blacklist_last_rule_impact(self, plane, name, disabling=False)
+
+        return self._mutate(
+            "unset %s-access %s" % (plane, name),
+            "delete rule",
+            write,
+            impact=impact,
+            confirm=confirm,
+        )
 
     def list_rules(self, plane: str) -> list[dict]:
         out = []

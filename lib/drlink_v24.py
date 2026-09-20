@@ -662,6 +662,62 @@ def _count_blocking_rules(plane_db, plane: str) -> int:
     )
 
 
+def _access_family_title(plane: str) -> str:
+    return {
+        "remote": "Remote Access",
+        "internet": "Internet Access",
+        "ai": "AI Access",
+    }[plane]
+
+
+def _rule_is_enabled(plane_db, plane: str, name: str) -> bool:
+    if plane == "ai":
+        row = plane_db.conn.execute(
+            "SELECT enabled FROM ai_policy_rules WHERE name = ? COLLATE NOCASE",
+            (name,),
+        ).fetchone()
+    else:
+        row = plane_db._get_rule(plane, name)
+    return bool(row and row["enabled"])
+
+
+def blacklist_last_rule_impact(
+    plane_db,
+    family: str,
+    rule_name: str,
+    *,
+    disabling: bool = False,
+) -> Optional[dict]:
+    """Return access-broadening impact when this removes the last BLACKLIST block.
+
+    Applies to delete or disable of the final enabled BLACKLIST rule while
+    enforcement is enabled. Matches the policy disable/reset confirmation model.
+    """
+    plane = _plane_key(family)
+    pol = get_access_policy(plane_db, plane)
+    if str(pol.get("mode") or "").lower() != "blacklist":
+        return None
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        return None
+    if not _rule_is_enabled(plane_db, plane, rule_name):
+        return None
+    enabled = _count_blocking_rules(plane_db, plane)
+    if enabled != 1:
+        return None
+    title = _access_family_title(plane)
+    action = "disabling" if disabling else "removing"
+    return {
+        "access_broadened": True,
+        "access_narrowed": False,
+        "warning": "This change broadens %s by %s the last BLACKLIST blocking Rule."
+        % (title, action),
+        "affected_rules": [rule_name],
+        "before": "BLACKLIST / Enforcement ENABLED / Effective blocking rules: 1",
+        "after": "BLACKLIST / last blocking Rule %s / Effective result: ALLOW"
+        % ("disabled" if disabling else "removed"),
+    }
+
+
 def reset_access_policy(plane_db, family: str, *, confirm: Optional[bool] = None) -> dict:
     plane = _plane_key(family)
     title = {
@@ -1710,6 +1766,7 @@ def set_access_rule(
     service: Optional[str] = None,
     enabled: Optional[bool] = None,
     oneshot: bool = False,
+    confirm: Optional[bool] = None,
 ) -> dict:
     plane = _plane_key(family)
     name = validate_public_name(name, "Rule name")
@@ -1854,12 +1911,28 @@ def set_access_rule(
                     )
         return {"entity": {"type": "%s-access" % plane, "id": rule_id, "name": name}, "operation": op}
 
-    return plane_db._mutate("set %s-access %s" % (plane, name), "set access rule", write)
+    impact = None
+    if (
+        enabled is False
+        and existing is not None
+        and bool(existing["enabled"])
+    ):
+        impact = blacklist_last_rule_impact(plane_db, plane, name, disabling=True)
+
+    return plane_db._mutate(
+        "set %s-access %s" % (plane, name),
+        "set access rule",
+        write,
+        impact=impact,
+        confirm=confirm,
+    )
 
 
-def unset_access_rule(plane_db, family: str, name: str) -> dict:
+def unset_access_rule(
+    plane_db, family: str, name: str, *, confirm: Optional[bool] = None
+) -> dict:
     plane = _plane_key(family)
-    return plane_db.unset_rule(plane, name)
+    return plane_db.unset_rule(plane, name, confirm=confirm)
 
 
 # ---------------------------------------------------------------------------
@@ -2153,6 +2226,7 @@ def set_ai_access_rule(
     permission: Optional[str] = None,
     enabled: Optional[bool] = None,
     oneshot: bool = False,
+    confirm: Optional[bool] = None,
 ) -> dict:
     name = validate_public_name(name, "Rule name")
     existing = plane_db.conn.execute(
@@ -2253,7 +2327,48 @@ def set_ai_access_rule(
                 )
         return {"entity": {"type": "ai-access", "id": rule_id, "name": name}, "operation": op}
 
-    return plane_db._mutate("set ai-access %s" % name, "set ai access rule", write)
+    impact = None
+    if (
+        enabled is False
+        and existing is not None
+        and bool(existing["enabled"])
+    ):
+        impact = blacklist_last_rule_impact(plane_db, "ai", name, disabling=True)
+
+    return plane_db._mutate(
+        "set ai-access %s" % name,
+        "set ai access rule",
+        write,
+        impact=impact,
+        confirm=confirm,
+    )
+
+
+def unset_ai_access_rule(
+    plane_db, name: str, *, confirm: Optional[bool] = None
+) -> dict:
+    name = validate_public_name(name, "Rule name")
+    row = plane_db.conn.execute(
+        "SELECT * FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (name,)
+    ).fetchone()
+    if not row:
+        raise ControlPlaneError(cli_error("Rule '%s' was not found." % name))
+
+    def write():
+        plane_db.conn.execute("DELETE FROM ai_policy_rules WHERE id = ?", (row["id"],))
+        return {
+            "entity": {"type": "ai-access", "id": row["id"], "name": name},
+            "operation": "delete",
+        }
+
+    impact = blacklist_last_rule_impact(plane_db, "ai", name, disabling=False)
+    return plane_db._mutate(
+        "unset ai-access %s" % name,
+        "delete ai access rule",
+        write,
+        impact=impact,
+        confirm=confirm,
+    )
 
 
 def evaluate_ai_access_v24(

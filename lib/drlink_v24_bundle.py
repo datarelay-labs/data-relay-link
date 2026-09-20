@@ -425,19 +425,19 @@ def _security_impact_for_plan(plane: ControlPlane, context: str, body: dict, cha
             deleting = 0
             disabling = 0
             for rule in section.get("rules") or []:
+                if family == "ai":
+                    row = plane.conn.execute(
+                        "SELECT enabled FROM ai_policy_rules WHERE name = ? COLLATE NOCASE",
+                        (rule.get("name"),),
+                    ).fetchone()
+                else:
+                    row = plane._get_rule(family, rule.get("name"))
+                if not row or not bool(row["enabled"]):
+                    continue
                 if rule.get("state") == "absent":
                     deleting += 1
                 elif rule.get("enabled") is False:
-                    # count only if currently enabled
-                    if family == "ai":
-                        row = plane.conn.execute(
-                            "SELECT enabled FROM ai_policy_rules WHERE name = ? COLLATE NOCASE",
-                            (rule.get("name"),),
-                        ).fetchone()
-                    else:
-                        row = plane._get_rule(family, rule.get("name"))
-                    if row and bool(row["enabled"]):
-                        disabling += 1
+                    disabling += 1
             if enabled_before > 0 and enabled_before - deleting - disabling <= 0:
                 impact.append(
                     "WARNING: This change broadens %s by removing the last BLACKLIST blocking Rule."
@@ -484,6 +484,59 @@ def _security_impact_for_plan(plane: ControlPlane, context: str, body: dict, cha
                     impact.append(
                         "WARNING: %s WHITELIST with zero enabled Rules → DENY ALL." % title
                     )
+
+    # Indirect broadening: deleting Permission Object/Group still referenced by
+    # enabled AI BLACKLIST rules (and those rules are not deleted in this plan).
+    deleting_ai_rules = {
+        str(c.get("name") or "").lower()
+        for c in changes
+        if c.get("op") == "DELETE" and c.get("kind") == "ai-access-rule"
+    }
+    pol_ai = v24.get_access_policy(plane, "ai")
+    if (
+        str(pol_ai.get("mode") or "").lower() == "blacklist"
+        and str(pol_ai.get("enforcement") or "enabled").lower() == "enabled"
+    ):
+        for c in changes:
+            if c.get("op") != "DELETE":
+                continue
+            kind = c.get("kind")
+            name = str(c.get("name") or "").strip()
+            if not name:
+                continue
+            refs: list[dict] = []
+            if kind == "permission-object":
+                refs = v24.permission_object_references(plane, name)
+            elif kind == "permission-group":
+                refs = v24.permission_group_references(plane, name)
+            elif kind == "ai-identity":
+                refs = v24.ai_identity_references(plane, name)
+            else:
+                continue
+            live = [
+                r
+                for r in refs
+                if r.get("kind") == "ai-access"
+                and str(r.get("name") or "").lower() not in deleting_ai_rules
+            ]
+            if not live:
+                continue
+            # Only warn when at least one remaining referenced rule is enabled BLACKLIST
+            blocking_left = False
+            for r in live:
+                row = plane.conn.execute(
+                    "SELECT enabled FROM ai_policy_rules WHERE name = ? COLLATE NOCASE",
+                    (r.get("name"),),
+                ).fetchone()
+                if row and bool(row["enabled"]):
+                    blocking_left = True
+                    break
+            if blocking_left:
+                impact.append(
+                    "WARNING: This change broadens AI Access by deleting '%s' while enabled "
+                    "BLACKLIST Rule(s) still reference it.\nReferences:\n%s"
+                    % (name, "\n".join("  %s" % r["display"] for r in live))
+                )
     return impact
 
 
@@ -994,7 +1047,24 @@ def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False)
         "ai-access-rule": 80,
         "remote-service": 90,
     }
+    # Deletes must reverse create dependencies: Rules before Groups before Objects.
+    delete_order = {
+        "remote-service": 10,
+        "remote-access-rule": 20,
+        "internet-access-rule": 20,
+        "ai-access-rule": 20,
+        "remote-access": 30,
+        "internet-access": 30,
+        "ai-access": 30,
+        "permission-group": 40,
+        "permission-object": 50,
+        "service-group": 60,
+        "service-object": 70,
+        "network-group": 80,
+        "network-object": 90,
+    }
     delete_first = [c for c in plan.mutating_changes if c["op"] in ("DELETE", "RESET")]
+    delete_first.sort(key=lambda c: delete_order.get(c["kind"], 100))
     others = [c for c in plan.mutating_changes if c["op"] not in ("DELETE", "RESET")]
     others.sort(key=lambda c: order.get(c["kind"], 100))
 
@@ -1127,13 +1197,9 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
         family = kind.replace("-access-rule", "")
         if op == "DELETE":
             if family == "ai":
-                row = plane.conn.execute(
-                    "SELECT id FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (name,)
-                ).fetchone()
-                if row:
-                    plane.conn.execute("DELETE FROM ai_policy_rules WHERE id = ?", (row["id"],))
+                v24.unset_ai_access_rule(plane, name, confirm=True)
             else:
-                v24.unset_access_rule(plane, family, name)
+                v24.unset_access_rule(plane, family, name, confirm=True)
         else:
             enabled = item.get("enabled")
             if enabled is None:
@@ -1148,6 +1214,7 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
                     permission=item.get("permission"),
                     enabled=bool(enabled),
                     oneshot=True,
+                    confirm=True,
                 )
             else:
                 v24.set_access_rule(
@@ -1160,6 +1227,7 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
                     service=item.get("service"),
                     enabled=bool(enabled),
                     oneshot=True,
+                    confirm=True,
                 )
     elif kind == "remote-service":
         reachable = v24.detect_server_reachable(plane, plane.root)

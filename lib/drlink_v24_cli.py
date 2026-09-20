@@ -828,7 +828,10 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         enabled = None
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
-        v24.set_access_rule(
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_access_rule,
             plane,
             res,
             name,
@@ -839,6 +842,8 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             enabled=enabled,
             oneshot=True,
         )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("%s rule set: %s\n" % (res, name))
         return 0
     if res == "ai-access":
@@ -872,7 +877,10 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         enabled = None
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
-        v24.set_ai_access_rule(
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_ai_access_rule,
             plane,
             name,
             mode=kv.get("mode"),
@@ -882,6 +890,8 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             enabled=enabled,
             oneshot=True,
         )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("AI Access rule set: %s\n" % name)
         return 0
     if res == "ai-identity":
@@ -984,7 +994,11 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             raise ControlPlaneError("Usage: unset %s <RULE>|policy" % res)
         if len(rest) >= 3:
             return None
-        v24.unset_access_rule(plane, res, rest[1])
+        from drlink_control_cli import _run
+
+        result = _run(v24.unset_access_rule, plane, res, rest[1])
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Rule deleted: %s\n" % rest[1])
         return 0
     if res == "ai-access":
@@ -1003,12 +1017,11 @@ def handle_unset(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             if cap is not None:
                 return None
             raise ControlPlaneError(v24.cli_error("Rule '%s' was not found." % rest[1]))
+        from drlink_control_cli import _run
 
-        def write():
-            plane.conn.execute("DELETE FROM ai_policy_rules WHERE id = ?", (row["id"],))
-            return {"entity": {"type": "ai-access", "id": row["id"], "name": rest[1]}, "operation": "delete"}
-
-        plane._mutate("unset ai-access %s" % rest[1], "delete ai access rule", write)
+        result = _run(v24.unset_ai_access_rule, plane, rest[1])
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("AI Access rule deleted: %s\n" % rest[1])
         return 0
     if res == "ai-identity":
