@@ -38,6 +38,7 @@ $tls = Get-Content -LiteralPath (Join-Path $lib 'lib\FrpTls.ps1') -Raw
 Assert-FrpTrue ($tls -match 'finally') 'tls finally present'
 Assert-FrpTrue ($tls -match 'ServerCertificateValidationCallback = \$previous') 'tls restores callback'
 Assert-FrpTrue ($tls -match 'GetRawCertData\(\)') 'pin validator rebuilds leaf from DER (WinPS 5.1 safe)'
+Assert-FrpTrue ($tls -match 'thread-pool / default runspace') 'pin callback documents runspace self-containment'
 Assert-FrpTrue ($tls -match '\$previousCallback') 'ca fetch restores previousCallback'
 
 # Hostname validation must never short-circuit with -or $true near MatchesHostname.

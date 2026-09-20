@@ -338,6 +338,150 @@ function New-FrpPinnedServerCertificateValidator {
     $ca = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CaPath)
     $caHandle = $ca
     $expectedHost = [string]$ExpectedHost
+
+    # ServicePointManager invokes this callback on a thread-pool / default runspace
+    # where dot-sourced FrpTls functions are NOT visible (WinPS 5.1). Keep the
+    # callback self-contained: only .NET + this inlined hostname scriptblock.
+    $testHostname = {
+        param(
+            [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+            [string]$Hostname
+        )
+        $hostName = ([string]$Hostname).Trim()
+        if ([string]::IsNullOrWhiteSpace($hostName)) { return $false }
+
+        try {
+            $mi = [System.Security.Cryptography.X509Certificates.X509Certificate2].GetMethod(
+                'MatchesHostname',
+                [type[]]@([string], [bool], [bool])
+            )
+            if ($null -eq $mi) {
+                $mi = [System.Security.Cryptography.X509Certificates.X509Certificate2].GetMethod(
+                    'MatchesHostname',
+                    [type[]]@([string])
+                )
+            }
+            if ($null -ne $mi) {
+                if ($mi.GetParameters().Length -eq 3) {
+                    return [bool]$mi.Invoke($Certificate, @($hostName, $true, $true))
+                }
+                return [bool]$mi.Invoke($Certificate, @($hostName))
+            }
+        } catch { }
+
+        $readLen = {
+            param([byte[]]$Data, [int]$Offset)
+            if ($Offset -ge $Data.Length) { throw 'asn1 truncated' }
+            $b = $Data[$Offset]
+            if ($b -lt 0x80) {
+                return @{ Length = [int]$b; Next = $Offset + 1 }
+            }
+            $n = $b -band 0x7F
+            if ($n -lt 1 -or $n -gt 4) { throw 'asn1 length unsupported' }
+            if (($Offset + $n) -ge $Data.Length) { throw 'asn1 truncated' }
+            $len = 0
+            for ($i = 1; $i -le $n; $i++) {
+                $len = ($len -shl 8) -bor $Data[$Offset + $i]
+            }
+            return @{ Length = [int]$len; Next = $Offset + 1 + $n }
+        }
+
+        $dnsNames = New-Object System.Collections.Generic.List[string]
+        $ipAddresses = New-Object System.Collections.Generic.List[string]
+        $sanPresent = $false
+        $sanParseFailed = $false
+        $ext = $null
+        foreach ($e in $Certificate.Extensions) {
+            if ($e.Oid -and $e.Oid.Value -eq '2.5.29.17') { $ext = $e; break }
+        }
+        if ($null -ne $ext) {
+            $sanPresent = $true
+            $raw = $ext.RawData
+            if ($null -ne $raw -and $raw.Length -ge 2) {
+                try {
+                    $idx = 0
+                    if ($raw[$idx] -ne 0x30) { throw 'san not sequence' }
+                    $idx++
+                    $seqLen = & $readLen $raw $idx
+                    $idx = $seqLen.Next
+                    $end = $idx + $seqLen.Length
+                    if ($end -gt $raw.Length) { throw 'asn1 truncated' }
+                    while ($idx -lt $end) {
+                        $tag = $raw[$idx]
+                        $idx++
+                        $lenInfo = & $readLen $raw $idx
+                        $idx = $lenInfo.Next
+                        $len = $lenInfo.Length
+                        if (($idx + $len) -gt $end) { throw 'asn1 truncated' }
+                        $slice = New-Object byte[] $len
+                        [Array]::Copy($raw, $idx, $slice, 0, $len)
+                        $idx += $len
+                        if ($tag -eq 0x82) {
+                            $dnsNames.Add([System.Text.Encoding]::ASCII.GetString($slice))
+                        } elseif ($tag -eq 0x87) {
+                            if ($len -eq 4 -or $len -eq 16) {
+                                $ipAddresses.Add((New-Object System.Net.IPAddress (, $slice)).ToString())
+                            }
+                        }
+                    }
+                } catch {
+                    $sanParseFailed = $true
+                }
+            }
+        }
+        if ($sanParseFailed) { return $false }
+
+        $dnsMatch = {
+            param([string]$Pattern, [string]$HostValue)
+            $p = $Pattern.Trim().TrimEnd('.').ToLowerInvariant()
+            $h = $HostValue.Trim().TrimEnd('.').ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($p) -or [string]::IsNullOrWhiteSpace($h)) { return $false }
+            if ($p -eq $h) { return $true }
+            if ($p.StartsWith('*.') -and $p.Length -gt 2) {
+                $suffix = $p.Substring(1)
+                if (-not $h.EndsWith($suffix)) { return $false }
+                $prefix = $h.Substring(0, $h.Length - $suffix.Length)
+                if ([string]::IsNullOrEmpty($prefix)) { return $false }
+                if ($prefix.Contains('.')) { return $false }
+                return $true
+            }
+            return $false
+        }
+
+        $parsedIp = $null
+        $isIp = [System.Net.IPAddress]::TryParse($hostName, [ref]$parsedIp)
+        $hasDnsOrIpSan = ($dnsNames.Count -gt 0) -or ($ipAddresses.Count -gt 0)
+        if ($hasDnsOrIpSan) {
+            if ($isIp) {
+                foreach ($ipText in $ipAddresses) {
+                    $sanIp = $null
+                    if ([System.Net.IPAddress]::TryParse($ipText, [ref]$sanIp)) {
+                        if ($sanIp.Equals($parsedIp)) { return $true }
+                    }
+                }
+                return $false
+            }
+            foreach ($dns in $dnsNames) {
+                if (& $dnsMatch $dns $hostName) { return $true }
+            }
+            return $false
+        }
+
+        if (-not $sanPresent) {
+            if ($isIp) { return $false }
+            $cn = $Certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::DnsName, $false)
+            if ([string]::IsNullOrWhiteSpace($cn)) {
+                $subject = $Certificate.Subject
+                if ($subject -match '(?i)(?:^|,)\s*CN\s*=\s*([^,]+)') {
+                    $cn = $Matches[1].Trim().Trim('"')
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($cn)) { return $false }
+            return [bool](& $dnsMatch $cn $hostName)
+        }
+        return $false
+    }.GetNewClosure()
+
     $validator = {
         param($sender, $certificate, $chain, $sslPolicyErrors)
         try {
@@ -370,7 +514,6 @@ function New-FrpPinnedServerCertificateValidator {
             $trusted = $false
             foreach ($el in $build.ChainElements) {
                 if ($el.Certificate.Thumbprint -eq $caHandle.Thumbprint) { $trusted = $true; break }
-                # Also compare raw DER equality
                 $a = $el.Certificate.GetRawCertData()
                 $b = $caHandle.GetRawCertData()
                 if ($a.Length -eq $b.Length) {
@@ -381,8 +524,6 @@ function New-FrpPinnedServerCertificateValidator {
             }
             if (-not $trusted) { return $false }
 
-            # Reject hard failures; allow UntrustedRoot / revocation-offline noise for a
-            # deliberately ExtraStore-pinned project CA that is not in the system trust store.
             foreach ($st in $build.ChainStatus) {
                 switch ([string]$st.Status) {
                     'UntrustedRoot' { continue }
@@ -393,8 +534,6 @@ function New-FrpPinnedServerCertificateValidator {
                 }
             }
 
-            # Prefer the caller-provided host. $sender is HttpWebRequest on GET
-            # but may be a connection/stream object on POST GetRequestStream.
             $hostName = $expectedHost
             if ([string]::IsNullOrWhiteSpace($hostName) -and $sender -is [System.Net.HttpWebRequest]) {
                 $uri = ([System.Net.HttpWebRequest]$sender).RequestUri
@@ -406,13 +545,14 @@ function New-FrpPinnedServerCertificateValidator {
                 } catch { }
             }
             if ([string]::IsNullOrWhiteSpace($hostName)) { return $false }
-            return (Test-FrpCertificateHostname -Certificate $serverCert -Hostname $hostName)
+            return [bool](& $testHostname $serverCert $hostName)
         } catch {
             return $false
         }
     }.GetNewClosure()
     return @{ Callback = $validator; Ca = $caHandle }
 }
+
 
 function Invoke-FrpHttpsJson {
     <#
