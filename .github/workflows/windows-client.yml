@@ -32,7 +32,10 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          # Hermetic qualified server-local artifact contract (no public fallback).
+          # cryptography builds a real CA→leaf chain for the product pin path
+          # (OpenSSL CLI is not present on windows-latest by default).
+          python -m pip install --upgrade pip
+          python -m pip install 'cryptography>=42,<47'
           & .\tests\windows\frp-binary-smoke.ps1
 
   windows-pwsh7:

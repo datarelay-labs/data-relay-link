@@ -4,8 +4,9 @@
 # Preserves product fail-closed / no-public-fallback behavior. Does not weaken
 # Get-FrpWindowsAmd64Url or Install-FrpWindowsBinary.
 #
-# On Windows (CI target: PowerShell 5.1) the HTTPS fixture is .NET SslStream with
-# a CA-signed leaf (product pin requires a real chain). Non-Windows: URL contract only.
+# TLS materials come from tests/windows/gen_frp_smoke_certs.py (cryptography),
+# producing a real CA→leaf chain the product pin validator accepts on WinPS 5.1.
+# Non-Windows hosts only verify the URL contract.
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -17,51 +18,38 @@ Set-Location -LiteralPath $RepoRoot
 . .\windows\lib\FrpTls.ps1
 . .\windows\lib\FrpBootstrap.ps1
 
+function Get-FrpSmokePython {
+    foreach ($cand in @('python', 'python3')) {
+        $cmd = Get-Command $cand -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+    }
+    throw 'python/python3 required to generate FRP smoke TLS materials'
+}
+
 function New-FrpSmokeTlsMaterials {
-    # Separate CA + leaf so New-FrpPinnedServerCertificateValidator chain.Build
-    # succeeds on WinPS 5.1. New-SelfSignedCertificate -Signer yields a leaf with
-    # a usable private key (CertificateRequest.Create does not on Framework).
-    $ca = New-SelfSignedCertificate `
-        -Subject 'CN=DRLink FRP Smoke CA' `
-        -KeyUsage CertSign, CRLSign, DigitalSignature `
-        -KeyExportPolicy Exportable `
-        -CertStoreLocation 'Cert:\CurrentUser\My' `
-        -NotAfter (Get-Date).AddHours(6) `
-        -HashAlgorithm SHA256 `
-        -KeyLength 2048 `
-        -TextExtension @('2.5.29.19={critical}{text}ca=true&pathlength=0')
-
-    $leaf = New-SelfSignedCertificate `
-        -Subject 'CN=127.0.0.1' `
-        -Signer $ca `
-        -KeyExportPolicy Exportable `
-        -CertStoreLocation 'Cert:\CurrentUser\My' `
-        -NotAfter (Get-Date).AddHours(6) `
-        -HashAlgorithm SHA256 `
-        -KeyLength 2048 `
-        -TextExtension @(
-            '2.5.29.17={text}IPAddress=127.0.0.1',
-            '2.5.29.37={text}1.3.6.1.5.5.7.3.1'
-        )
-
-    $caDer = $ca.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    $pfxPassPlain = [guid]::NewGuid().ToString('N')
-    $pfxPass = New-Object System.Security.SecureString
-    foreach ($ch in $pfxPassPlain.ToCharArray()) { $pfxPass.AppendChar($ch) }
-    $leafPfx = $leaf.Export(
-        [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
-        $pfxPass
-    )
-    $leafDer = $leaf.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-
-    Remove-Item -LiteralPath ("Cert:\CurrentUser\My\$($leaf.Thumbprint)") -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath ("Cert:\CurrentUser\My\$($ca.Thumbprint)") -ErrorAction SilentlyContinue
-
+    param([Parameter(Mandatory = $true)][string]$PkiDir)
+    $python = Get-FrpSmokePython
+    $gen = Join-Path $RepoRoot 'tests\windows\gen_frp_smoke_certs.py'
+    & $python $gen --out-dir $PkiDir
+    if ($LASTEXITCODE -ne 0) { throw "gen_frp_smoke_certs.py failed (exit=$LASTEXITCODE)" }
+    $status = Join-Path $PkiDir 'status.txt'
+    $map = @{}
+    Get-Content -LiteralPath $status | ForEach-Object {
+        if ($_ -match '^(CA_DER|LEAF_PFX|LEAF_PASS)=(.*)$') {
+            $map[$Matches[1]] = $Matches[2]
+        }
+    }
+    foreach ($k in @('CA_DER', 'LEAF_DER', 'LEAF_PFX', 'LEAF_PASS')) {
+        if (-not $map.ContainsKey($k)) { throw "smoke cert status missing $k" }
+        if (-not (Test-Path -LiteralPath $map[$k])) { throw "smoke cert file missing: $($map[$k])" }
+    }
     return @{
-        CaDer        = $caDer
-        LeafDer      = $leafDer
-        LeafPfx      = $leafPfx
-        PfxPassPlain = $pfxPassPlain
+        CaDerPath    = $map['CA_DER']
+        LeafPfxPath  = $map['LEAF_PFX']
+        LeafPassPath = $map['LEAF_PASS']
+        PfxBytes     = [System.IO.File]::ReadAllBytes($map['LEAF_PFX'])
+        PfxPassPlain = ([System.IO.File]::ReadAllText($map['LEAF_PASS'])).Trim()
+        LeafDer      = [System.IO.File]::ReadAllBytes($map['LEAF_DER'])
     }
 }
 
@@ -75,9 +63,8 @@ function Start-FrpQualifiedArtifactHttpsFixture {
         New-Item -ItemType Directory -Path $PkiDir -Force | Out-Null
     }
 
-    $mat = New-FrpSmokeTlsMaterials
-    $caDerPath = Join-Path $PkiDir 'ca.crt'
-    [System.IO.File]::WriteAllBytes($caDerPath, $mat.CaDer)
+    $mat = New-FrpSmokeTlsMaterials -PkiDir $PkiDir
+    $caDerPath = $mat.CaDerPath
 
     $leafProbe = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $mat.LeafDer)
     try {
@@ -109,7 +96,7 @@ function Start-FrpQualifiedArtifactHttpsFixture {
     $runspace = [runspacefactory]::CreateRunspace()
     $runspace.Open()
     $runspace.SessionStateProxy.SetVariable('Listener', $listener)
-    $runspace.SessionStateProxy.SetVariable('PfxBytes', $mat.LeafPfx)
+    $runspace.SessionStateProxy.SetVariable('PfxBytes', $mat.PfxBytes)
     $runspace.SessionStateProxy.SetVariable('PfxPassPlain', $mat.PfxPassPlain)
     $runspace.SessionStateProxy.SetVariable('ArtifactPath', $ArtifactPath)
     $runspace.SessionStateProxy.SetVariable('Payload', $payload)
