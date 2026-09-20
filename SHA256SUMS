@@ -405,7 +405,7 @@ b1990524daa2d1c28b827f7daa55a2d2986f80e06c7802aa90ff0d0528959d4e  tests/test-v24
 75ad043ca98db8418756fc72707235e2d0550ee3cbd7f133ea72eb133a312523  tests/test-v24-final-closure.py
 4e6a66f9388e16ada265f8ed5e488f03f089672572cd553de06bb0e5af0a9d95  tests/test-v24-managed-host-policy.py
 6b37ad7f3df7b48d49bb49b188bb1a91da64884078d265140ac4b5a6b8ab6007  tests/test-v24-managed-host-retirement.py
-c12e843877910c84fe581140740088e0a9aafad5d8cfe59d53f3da4fc8860e9e  tests/test-v24-manual-e2e-findings.py
+c8c84232603309a36d0a0ffd61d8e56fef0088bcfca2eb41068f5037a4c6dc39  tests/test-v24-manual-e2e-findings.py
 bdc2f6476f98aa53aff49709175123a40d0b9c6035edd73b413ee7efc23bf914  tests/test-v24-mgmt-api-auth.py
 8b562996677213ffcb4deff8473201c4bb46317863e6dbdae93c972ee8f26dee  tests/test-v24-runtime-allocator.py
 98fa3b9d95e5bbf8b0d9fd291cc590eee415d98e60e99e4566cdbf7346b1760b  tests/test-v24-service-policy-consistency.py
