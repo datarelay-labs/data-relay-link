@@ -31,9 +31,12 @@ if [[ "$need_install" -eq 1 ]]; then
   mkdir -p "$(dirname "$VENV")"
   rm -rf "$VENV"
   "$PY" -m venv "$VENV"
-  "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null
-  "$VENV/bin/python" -m pip install -r "$REQ"
+  # All pip progress must stay off stdout: callers capture the interpreter path
+  # (and GitHub Actions GITHUB_ENV rejects multiline / progress noise).
+  "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1
+  "$VENV/bin/python" -m pip install -r "$REQ" >&2
   "$VENV/bin/python" -c 'import mcp, httpx2; print("MCP_SDK_IMPORT=PASS", mcp.__name__, httpx2.__name__)' >&2
 fi
 
+# Sole stdout line: absolute interpreter path.
 printf '%s\n' "$VENV/bin/python"

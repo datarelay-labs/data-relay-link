@@ -24,7 +24,11 @@ jobs:
       - name: Provision pinned official MCP SDK
         # VERSION_POLICY: MCP is included and release-blocking; do not skip.
         run: |
-          SDK_PY="$(./tests/ensure-mcp-sdk-venv.sh)"
+          SDK_PY="$(./tests/ensure-mcp-sdk-venv.sh | tail -n 1)"
+          if [[ ! -x "$SDK_PY" ]]; then
+            echo "ERROR: MCP SDK python missing or not executable: $SDK_PY" >&2
+            exit 1
+          fi
           echo "DRLINK_MCP_SDK_PYTHON=$SDK_PY" >> "$GITHUB_ENV"
       - name: Full local non-Docker suite
         run: ./tests/run-all.sh

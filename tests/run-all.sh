@@ -19,7 +19,7 @@ echo "=== MCP SDK prerequisite ==="
 # Official MCP SDK is a release-blocking interop dependency (VERSION_POLICY).
 # Provision a pinned, repo-local venv instead of relying on /tmp/mcp-sdk-venv.
 export DRLINK_MCP_SDK_PYTHON
-DRLINK_MCP_SDK_PYTHON="$(./tests/ensure-mcp-sdk-venv.sh)"
+DRLINK_MCP_SDK_PYTHON="$(./tests/ensure-mcp-sdk-venv.sh | tail -n 1)"
 echo "DRLINK_MCP_SDK_PYTHON=$DRLINK_MCP_SDK_PYTHON"
 
 echo "=== shell syntax ==="
