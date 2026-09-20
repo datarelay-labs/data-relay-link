@@ -85,7 +85,7 @@ def main(argv=None) -> int:
             critical=False,
         )
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_cert(ca_cert),
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
             critical=False,
         )
         .add_extension(
