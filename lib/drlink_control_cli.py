@@ -225,10 +225,10 @@ def _run(fn, *args, **kwargs):
             return fn(*args, **kwargs)
         sys.stdout.write("Cancelled.\nNo changes were applied.\n")
         return {"cancelled": True}
-    except ConcurrencyError as exc:
-        raise SystemExit(str(exc)) from exc
-    except ControlPlaneError as exc:
-        raise SystemExit(str(exc)) from exc
+    except (ConcurrencyError, ControlPlaneError):
+        # Let dispatch() map these to stderr + rc=1. Converting to SystemExit
+        # here bypasses that handler and breaks in-process CLI tests.
+        raise
 
 
 def _need(tokens, n, usage):
