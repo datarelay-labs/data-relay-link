@@ -30,8 +30,8 @@ GOLDEN="${FRP_E2E_GOLDEN_BASELINE:-$ROOT/e2e-reports/v2.3.1-golden-upgrade-basel
 V231_TREE="${FRP_V231_TREE:-}"
 if [[ -z "$V231_TREE" ]]; then
   for cand in \
-    "/home/aella/frp-auto-deploy-dev" \
-    "$(dirname "$ROOT")/frp-auto-deploy-dev" \
+    "/home/aella/datarelay-link-dev" \
+    "$(dirname "$ROOT")/datarelay-link-dev" \
     "$ROOT"; do
     if [[ -f "$cand/VERSION" ]] && grep -q '^PROJECT_VERSION=2\.3\.1$' "$cand/VERSION" 2>/dev/null; then
       V231_TREE="$cand"

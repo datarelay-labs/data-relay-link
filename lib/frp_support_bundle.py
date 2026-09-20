@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple
 
-FORMAT = "frp-auto-deploy-support-bundle"
+FORMAT = "data-relay-link-support-bundle"
 SCHEMA_VERSION = 1
 
 # Filenames that must never be copied into a support bundle.

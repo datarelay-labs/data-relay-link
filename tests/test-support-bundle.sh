@@ -242,6 +242,8 @@ grep -qi 'redact' "$WORKDIR/server.out" || fail "missing redaction summary"
 
 assert_member "$ARCHIVE_SERVER" "meta.json"
 assert_member "$ARCHIVE_SERVER" "manifest.json"
+tar -xOzf "$ARCHIVE_SERVER" manifest.json | grep -q '"format": "data-relay-link-support-bundle"' \
+  || fail "server support bundle format is not canonical Data Relay Link"
 assert_member "$ARCHIVE_SERVER" "doctor.txt"
 assert_member "$ARCHIVE_SERVER" "product-config.sanitized.json"
 assert_member "$ARCHIVE_SERVER" "registry-summary.json"

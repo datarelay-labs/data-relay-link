@@ -41,14 +41,14 @@ CONTROL_DB_SCHEMA_VERSION=
 - [ ] `CONTROL_PLANE_ARCHITECTURE.md` matches implementation.
 - [ ] SQLite is authoritative control-plane state.
 - [ ] No dual authoritative JSON state remains.
-- [ ] Neutral Object model implemented.
-- [ ] Object Group model implemented.
-- [ ] Managed Endpoint model implemented.
-- [ ] Endpoint address inventory implemented.
-- [ ] Published Service SELF/ROUTED implemented.
-- [ ] Service Preset replaces legacy public Service Profile.
-- [ ] Remote Access ordered rulebase implemented.
-- [ ] Internet Access ordered rulebase implemented.
+- [ ] Network Object / Network Group model implemented.
+- [ ] Service Object / Service Group model implemented.
+- [ ] Permission Object / Permission Group model implemented.
+- [ ] Managed Host / DRLink Agent model implemented.
+- [ ] Managed Host address inventory implemented.
+- [ ] Agent-owned Remote Service model implemented.
+- [ ] Remote Access BLACKLIST / WHITELIST policy implemented.
+- [ ] Internet Access BLACKLIST / WHITELIST policy implemented.
 - [ ] AI Access/MCP included and implemented.
 - [ ] ConfigurationBundle included in the v2.4.0 stable target.
 - [ ] direct CLI, AI-generated CLI, and ConfigurationBundle share one Change Plan/mutation engine.
@@ -79,16 +79,14 @@ DB_CORRUPTION_FAIL_CLOSED=
 
 ## 4. Object model
 
-- [ ] Host Object CRUD.
-- [ ] Network Object CRUD.
-- [ ] FQDN Object CRUD.
-- [ ] Multiple values per static Object.
-- [ ] Immutable internal Object identity.
-- [ ] Rename preserves references.
-- [ ] Managed Endpoint not manually creatable/deletable.
-- [ ] Orphaned Managed Endpoint semantics proven.
-- [ ] Object Group CRUD.
-- [ ] Nested group cycle rejection where nested groups supported.
+- [ ] Network Object CRUD for IP / CIDR / FQDN.
+- [ ] Registered Managed Hosts appear as Network Objects of type Managed Host.
+- [ ] Network Group CRUD and flat membership semantics.
+- [ ] Service Object / Service Group CRUD.
+- [ ] Permission Object / Permission Group CRUD.
+- [ ] Immutable internal identity and rename/reference preservation where applicable.
+- [ ] Managed Host lifecycle remains under Managed Host commands.
+- [ ] Internet Access destination rejects Managed Host directly or through a Network Group.
 - [ ] Context-invalid group assignment fails as a whole.
 - [ ] Referenced Object/Group deletion blocked.
 
@@ -100,34 +98,32 @@ DB_CORRUPTION_FAIL_CLOSED=
 - [ ] loopback/link-local/multicast/special addresses excluded appropriately.
 - [ ] Network membership uses local inventory rather than NAT/public observed source.
 
-## 6. Published Services
+## 6. Remote Services
 
-- [ ] SELF effective destination uses Managed Endpoint identity/address.
-- [ ] Loopback local target does not break policy matching.
-- [ ] ROUTED effective destination uses explicit routed target.
-- [ ] ROUTED target does not require an agent on that target.
-- [ ] Public port/Service identity persistence preserved.
-- [ ] Target/mode edits run policy-impact analysis.
+- [ ] Remote Service mutation is Agent Host-local; Server inspection is read-only for configuration.
+- [ ] Each Remote Service binds one destination and one Service Object.
+- [ ] TCP and Fixed TCP Service Objects are supported; UDP Remote Service is rejected.
+- [ ] Another-host destination uses the current Agent Host as Relay Host.
+- [ ] Endpoint identity remains stable across restart, temporary disconnect, disable/enable, and same-pool-class edit.
+- [ ] Unreachable but valid targets become DEGRADED rather than being silently deleted.
+- [ ] Destination/Service Object edits run policy-impact analysis.
 
 ## 7. Remote Access policy
 
-- [ ] Top-down ordering.
-- [ ] First complete match wins.
-- [ ] Explicit ALLOW.
-- [ ] Explicit DENY.
-- [ ] Implicit final DENY.
-- [ ] New rule created disabled at bottom.
-- [ ] before/after ordering works.
-- [ ] Shadow/conflict analysis works.
-- [ ] Test/explain shows ordered trace.
-- [ ] Effective access also requires Published Service + reachability.
+- [ ] Initial state is No Policy / No Rules / effective ALLOW.
+- [ ] BLACKLIST: matching enabled Rule DENY; no match ALLOW.
+- [ ] WHITELIST: matching enabled Rule ALLOW; no match DENY.
+- [ ] Rules have no ordering and no per-rule ALLOW/DENY action.
+- [ ] Policy Reset removes Mode and Rules and restores initial ALLOW.
+- [ ] Enforcement DISABLED preserves Mode/Rules and makes policy effective ALLOW ALL.
+- [ ] Effective access also requires an enabled/reachable Remote Service.
 - [ ] Policy changes apply immediately to new connections.
-- [ ] Established connections not implicitly terminated by policy edit.
+- [ ] Established connections are not implicitly terminated by policy edit.
 
 ## 8. Internet Access policy/security
 
-- [ ] Same ordered/first-match/ALLOW/DENY/implicit-DENY semantics proven.
-- [ ] Rule order independent from Remote Access.
+- [ ] Same BLACKLIST / WHITELIST / Enforcement semantics proven independently from Remote Access.
+- [ ] Internet Access source may use Managed Host; destination rejects Managed Host directly or through a Group containing one.
 - [ ] FQDN destinations.
 - [ ] Explicit public Host/CIDR destinations where supported.
 - [ ] server-side DNS.
@@ -146,10 +142,11 @@ DB_CORRUPTION_FAIL_CLOSED=
 
 - [ ] Object value add/remove impact.
 - [ ] Object Group membership impact.
-- [ ] Rule content/action/order/enable impact.
-- [ ] Published Service target/mode impact.
-- [ ] Endpoint-address membership impact.
-- [ ] AI capability/target/path impact.
+- [ ] Rule content/enable impact.
+- [ ] Policy Mode / Enforcement impact.
+- [ ] Remote Service destination/Service Object impact.
+- [ ] Managed Host address membership impact.
+- [ ] AI permission/target/path impact.
 - [ ] Access broadening identified.
 - [ ] Access narrowing identified.
 - [ ] New/removed shadowing identified.
@@ -206,13 +203,13 @@ DB_CORRUPTION_FAIL_CLOSED=
 - [ ] No per-endpoint MCP server required.
 - [ ] Current official MCP spec/SDK re-verified before implementation freeze.
 - [ ] Supported remote MCP transport qualified.
-- [ ] Authentication binds a stable AI Principal.
+- [ ] Authentication binds a stable AI Identity.
 - [ ] Anonymous privileged MCP access denied.
 - [ ] Credential revoke/rotation works.
-- [ ] Target = Managed Endpoint / Client Group.
-- [ ] AI rule top-down first-match ordering.
-- [ ] AI explicit ALLOW/DENY and implicit final DENY.
-- [ ] AI rule before/after ordering.
+- [ ] Target = Network Object / Network Group.
+- [ ] Permission = Permission Object / Permission Group.
+- [ ] AI Access uses BLACKLIST / WHITELIST semantics; authentication remains mandatory.
+- [ ] AI Rules have no ordering and no per-rule ALLOW/DENY action.
 - [ ] `exec` enforcement.
 - [ ] `read_file` enforcement.
 - [ ] `write_file` enforcement.
@@ -282,14 +279,14 @@ MCP_REAL_E2E=
 
 ## 16. CLI UX
 
-- [ ] Server root = Clients / Objects / Remote Access / Internet Access / AI Access / System / Help / Exit.
+- [ ] Server root = Managed Hosts / Network Objects / Service Objects / Remote Access / Internet Access / AI Access / System / Help / Exit.
+- [ ] Agent Host root = Status / Remote Services / Agent / Configuration / Diagnostics / Help / Exit.
 - [ ] Direct roots = show/set/unset/test/system/menu/help/exit.
-- [ ] Object vs Client Group terminology consistent.
-- [ ] Published Service terminology consistent.
-- [ ] Service Preset semantics clear.
-- [ ] rule order visible.
-- [ ] implicit DENY visible.
-- [ ] `test` explains first-match trace.
+- [ ] Managed Host / Network Object terminology consistent.
+- [ ] Remote Service terminology consistent.
+- [ ] Service Object Wizard presets are clear and are not exposed as standalone public resources.
+- [ ] BLACKLIST / WHITELIST Mode and Enforcement state are visible.
+- [ ] `test` explains effective policy outcome without ordered-rule semantics.
 - [ ] Tab context filters invalid Object types.
 - [ ] broadening confirmation visible.
 - [ ] stale edit failure visible.

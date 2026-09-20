@@ -225,7 +225,7 @@ Exact public command / operator action=
   Run the one-line install/redeem command exactly as shown (once)
 Expected result=
   Client created
-  Managed Endpoint created
+  Managed Host created
   Ticket consumed
 PASS/FAIL=
 Finding=
@@ -353,34 +353,34 @@ Finding=
 
 # SECTION E — Objects / Groups
 
-### TEST E1 — Object CRUD
+### TEST E1 — Network Object CRUD
 
 ```text
 TEST ID=E1
-Objective=Host/Network/FQDN objects create/show/edit/delete protection
+Objective=IP/CIDR/FQDN Network Objects create/show/edit/delete protection
 Exact public command / operator action=
-  set object <NAME> type host|network|fqdn
-  set object <NAME> value <VALUE>
-  show objects
-  show object <NAME>
-  (rename/edit if allowed)
-  unset object <NAME>
-Expected result=No silent cascade; in-use delete protected with clear error
+  set network-object <NAME>
+  show network-objects
+  show network-object <NAME>
+  show network-object <NAME> references
+  unset network-object <NAME>
+Expected result=No silent cascade; in-use delete protected with clear error; Managed Hosts remain lifecycle-managed through Managed Host commands
 PASS/FAIL=
 Finding=
 ```
 
-### TEST E2 — Object Group / Client Group
+### TEST E2 — Network Group
 
 ```text
 TEST ID=E2
-Objective=Membership, nested group, cycle rejection
+Objective=Flat membership, context validation, and reference protection
 Exact public command / operator action=
-  set object-group <NAME>
-  set client-group <NAME>
-  add members via guided/set forms
-  attempt cycle
-Expected result=Cycle rejected; membership visible; delete protection when referenced
+  set network-group <NAME>
+  show network-groups
+  show network-group <NAME>
+  show network-group <NAME> references
+  unset network-group <NAME>
+Expected result=Membership visible; invalid context rejected as a whole; delete protection when referenced
 PASS/FAIL=
 Finding=
 ```
@@ -397,7 +397,7 @@ Do **not** widen policy just to make apps pass.
 TEST ID=F1
 Objective=Approved destination allows curl/wget/git/apt as environment permits
 Exact public command / operator action=
-  set object ... / set internet-access ... action allow
+  set network-object ... / set service-object ... / set internet-access <RULE> mode whitelist source <SRC> destination <DST> service <SVC> enabled
   From authorized client source: curl/wget/git/apt to approved FQDN:port
 Expected result=ALLOW only for approved destination+port+source
 PASS/FAIL=
@@ -622,7 +622,7 @@ TEST ID=M1
 Objective=Backup → mutate/delete disposable state → restore → verify
 Exact public command / operator action=
   system backup
-  Change/delete disposable Objects/policies/Published Services/MCP TLS non-secret state/Zero-Touch non-secret lifecycle state
+  Change/delete disposable Objects/policies/Remote Services/MCP TLS non-secret state/Zero-Touch non-secret lifecycle state
   system restore <PATH>
   system diagnostics
   Functional spot-check
@@ -642,7 +642,7 @@ TEST ID=N1
 Objective=Server/client reboot persistence
 Exact public command / operator action=
   reboot server; reboot client
-  verify autostart, identity, Published Services, policies, MCP TLS, ACME timer
+  verify autostart, identity, Remote Services, policies, MCP TLS, ACME timer
 Expected result=No unexpected re-enrollment; MCP TLS persists; timer active if AUTO_ACME
 PASS/FAIL=
 Finding=

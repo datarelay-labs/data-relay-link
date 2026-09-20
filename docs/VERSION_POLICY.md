@@ -205,7 +205,7 @@ MCP_RELEASE_BLOCKER=YES
 features.mcp_included=true   # on the development candidate once MCP Bridge/AI Access are present
 ```
 
-The final v2.4.0 target includes the Control Plane/Object/Policy/MCP architecture defined in `CONTROL_PLANE_ARCHITECTURE.md`.
+The final v2.4.0 target includes the Control Plane/Object/Policy/MCP behavior frozen by `PRODUCT_MASTER.md` and `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`; `CONTROL_PLANE_ARCHITECTURE.md` remains an internal schema/history reference.
 
 The earlier exclusion rule is obsolete historical decision text only (do not treat as current scope):
 

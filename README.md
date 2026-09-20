@@ -9,7 +9,7 @@ Data Relay Link relays only the connections that are actually needed instead of 
 ```text
 Remote Access     outside → inside
 Internet Access   inside → approved Internet destinations
-AI Access         authorized AI/MCP principal → approved private endpoints
+AI Access         authenticated AI Identity → approved target permissions
 ```
 
 > **Development status:** The current v2.4.0 branch is in a pre-stable control-plane redesign. The canonical target architecture is documented, but the exact development HEAD may not yet implement every v2.4.0 target command or feature. Do not treat this branch as a stable release.
@@ -44,52 +44,57 @@ No external database service is required.
 ## Key model
 
 ```text
-Objects / Object Groups
-  reusable Host / Network / FQDN / Managed Endpoint identities
+Managed Host / DRLink Agent
 
-Managed Endpoint
-  policy identity created from a Data Relay Link Client
+Network Object / Network Group
+Service Object / Service Group
+Permission Object / Permission Group
 
-Published Service
-  SELF or ROUTED inbound service
+AI Identity
+Remote Service
 
 Remote Access
-  ordered top-down first-match ALLOW/DENY rules
-
 Internet Access
-  ordered top-down first-match ALLOW/DENY rules
-
 AI Access
-  AI Principal + target + capability/path/exec policy
+
+BLACKLIST / WHITELIST
 ```
 
-All policy planes are implicit default DENY.
+Initial policy state is No Policy / No Rules with effective access ALLOW.
+When a policy is created, BLACKLIST means matching enabled Rules deny and
+WHITELIST means matching enabled Rules allow. Rules are not ordered and do not
+carry per-rule ALLOW/DENY actions.
 
 ## Remote Access
 
 Remote Access uses official pinned `fatedier/frp` as its relay engine. Data Relay Link does not fork FRP.
 
+A Remote Service represents real connectivity owned by an Agent Host:
+
+```text
+Agent Host
++ single destination
++ one Service Object
+→ Remote Service
+→ stable DRLink endpoint
+```
+
+Remote Service supports TCP and Fixed TCP Service Objects. When the destination
+is another host, the current Agent Host is the Relay Host.
+
 Effective inbound access requires:
 
 ```text
-Rule Match
-+
-Enabled Published Service
+Enabled Remote Service
 +
 Reachable connector/target
++
+Remote Access policy permits the flow
+(or no policy is configured)
 ```
 
-Published Service modes:
-
-```text
-SELF
-  service belongs to the Managed Endpoint itself
-  local target may be 127.0.0.1
-
-ROUTED
-  Managed Endpoint relays to another reachable host/service
-  routed host does not need its own agent
-```
+A policy Rule authorizes or denies access according to BLACKLIST/WHITELIST mode;
+it never creates connectivity.
 
 ## Internet Access
 
@@ -98,7 +103,8 @@ Protected hosts can use standard HTTP/HTTPS proxy settings. The gateway allows o
 Security includes:
 
 ```text
-default DENY
+BLACKLIST / WHITELIST policy enforcement
+fail-closed unsafe-destination checks
 server-side DNS
 DNS rebinding resistance
 SSRF/private/local/metadata protection
@@ -123,7 +129,7 @@ Data Relay Link public /mcp
     ↓ loopback
 MCP Bridge 127.0.0.1:6103
     ↓ AI Access authorization
-Managed Endpoint / Client Group
+Network Object / Network Group
     ↓
 private host
 ```
@@ -282,7 +288,7 @@ validation
 → runtime compile/activate
 ```
 
-Object/Group/Published Service edits can change effective policy and are analyzed just like Rule edits.
+Network/Service/Permission Object or Group changes, Remote Service changes, and policy-mode changes can affect effective access and are analyzed before commit.
 
 Canonical timing:
 
@@ -317,7 +323,7 @@ Public docs: https://link.datarelay.run
 Start here:
 
 - [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — product-level decisions.
-- [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — technical SSOT.
+- [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — internal architecture/history; public semantics remain governed by the Product Master and CLI/AI Master.
 - [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX.
 - [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar.
 - [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative configuration, AI copy/paste, and bounded Zero-Touch contract.

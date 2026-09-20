@@ -17,7 +17,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-FORMAT = "frp-auto-deploy-server-backup"
+FORMAT = "data-relay-link-server-backup"
+LEGACY_FORMATS = {"frp-auto-deploy-server-backup"}
 SCHEMA_VERSION = 1
 REQUIRED = {
     "etc/drlink/config.json",
@@ -194,7 +195,7 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RestoreError("backup manifest is invalid") from exc
-    if manifest.get("format") != FORMAT or manifest.get("schema_version") != SCHEMA_VERSION:
+    if manifest.get("format") not in ({FORMAT} | LEGACY_FORMATS) or manifest.get("schema_version") != SCHEMA_VERSION:
         raise RestoreError("unsupported backup format or schema version")
     if not isinstance(manifest.get("created_at"), str):
         raise RestoreError("backup creation time is missing")

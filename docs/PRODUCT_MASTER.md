@@ -522,7 +522,7 @@ CONFIGURATION_BUNDLE.md
   derived Bundle contract
 
 CONTROL_PLANE_ARCHITECTURE.md
-  implementation architecture consistent with the Master
+  internal architecture/schema history; public semantics must remain consistent with the Master
 
 VERSION_POLICY.md / RELEASE_CHECKLIST.md / RELEASE_VALIDATION.md
   version and qualification governance

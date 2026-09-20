@@ -40,7 +40,7 @@ PASSes. Do not destroy the production OCI instance merely to test restore.
 
 ## Zero-service client
 
-1. Enroll with no published service
+1. Enroll with no Remote Service
 2. Visible in `show clients` with 0 services
 3. Add SSH later → port allocated → SSH succeeds
 

@@ -2,7 +2,7 @@
 
 > **Status:** Living roadmap aligned to the v2.4.0 Control Plane / Policy / MCP architecture
 > **Product Master:** `PRODUCT_MASTER.md`
-> **Architecture:** `CONTROL_PLANE_ARCHITECTURE.md`
+> **Public model:** `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`
 
 ## 1. Roadmap principle
 
@@ -12,14 +12,15 @@ Foundation to finish before v2.4.0 stable:
 
 ```text
 SQLite authority
-immutable identities
-Objects / Object Groups
-Managed Endpoint
-endpoint addresses
-Published Service SELF / ROUTED
-ordered Remote Access policy
-ordered Internet Access policy
-AI Access / MCP Bridge
+immutable Managed Host / Agent identity
+Network Objects / Groups
+Service Objects / Groups
+Permission Objects / Groups
+Managed Host address inventory
+Agent-owned Remote Services
+BLACKLIST / WHITELIST Remote Access policy
+BLACKLIST / WHITELIST Internet Access policy
+AI Identity + AI Access / MCP Bridge
 revisions / audit
 runtime generation
 backup / migration
@@ -129,58 +130,54 @@ no Source/Destination object duplication
 multi-value static Objects
 Object Group cycle protection
 context validation
-Managed Endpoint lifecycle ownership
-orphan semantics
-local address inventory
+Managed Host lifecycle ownership
+no silent identity rebinding
+Managed Host local address inventory
 reference-protected deletion
 ```
 
-## 6. Phase DL-4 — Published Service model
+## 6. Phase DL-4 — Remote Service / Service Object model
 
-Implement:
-
-```text
-published_services
-service_presets
-port_reservations
-```
+Internal storage may retain compatibility table names such as `published_services` and `service_presets`, but they do not define the public model.
 
 Acceptance:
 
 ```text
-SELF effective destination
-ROUTED effective destination
-loopback SELF policy matching
-ROUTED no-agent target
-stable service/public-port identity
-policy-impact analysis on target changes
-Service Profile public model removed
-Service Preset semantics clear
+Agent Host owns Remote Service mutation
+single destination + one Service Object
+TCP and Fixed TCP Remote Service
+UDP Remote Service rejected
+Relay Host semantics for another-host destination
+stable endpoint identity
+policy-impact analysis on destination/Service Object changes
+Service Object Wizard presets are creation conveniences, not public resources
 ```
 
-## 7. Phase DL-5 — Remote Access ordered policy
+## 7. Phase DL-5 — Remote Access policy
 
-Implement common network policy tables and Remote Access evaluator/compiler.
+Implement the shared BLACKLIST / WHITELIST policy engine and Remote Access evaluator/compiler.
 
 Acceptance:
 
 ```text
-ALLOW / DENY
-implicit DENY
-top-down first match
-create disabled at bottom
-before / after
-shadow analysis
+No Policy / No Rules = effective ALLOW
+BLACKLIST match DENY / no match ALLOW
+WHITELIST match ALLOW / no match DENY
+rule enable/disable
+no rule ordering
+no per-rule ALLOW/DENY action
+Policy Reset semantics
+Enforcement disable/enable
 impact analysis
 flow test/explain
-Published Service + reachability intersection
+Remote Service + reachability intersection
 ```
 
 Legacy ACL becomes non-canonical and is removed/hidden before stable.
 
-## 8. Phase DL-6 — Internet Access ordered policy
+## 8. Phase DL-6 — Internet Access policy
 
-Replace legacy Internet Profile authoritative policy with Objects + ordered rules.
+Replace legacy Internet Profile authoritative policy with Network/Service Objects plus the shared BLACKLIST / WHITELIST policy model.
 
 Preserve/harden protocol boundary:
 
@@ -253,21 +250,19 @@ Legacy JSON is migration input only, not dual authority.
 Implement server-side MCP Bridge plus:
 
 ```text
-ai_principals
-ai_access_rules
-ai_rule_targets
-ai_rule_capabilities
-ai_path_scopes
-ai_exec_constraints
-ai_sessions
-ai_activity
+AI Identity backing state
+AI Access Rules
+Network Object / Network Group targets
+Permission Object / Permission Group references
+path scopes / exec constraints
+AI sessions / activity
 ```
 
 Targets:
 
 ```text
-Managed Endpoint
-Client Group
+Network Object
+Network Group
 ```
 
 Minimum capabilities:
@@ -295,7 +290,7 @@ Security:
 current official MCP spec
 modern supported remote transport
 authenticated HTTPS
-strong AI Principal binding
+strong AI Identity binding
 per-invocation authorization
 least privilege
 path scopes
@@ -311,8 +306,9 @@ Real interoperability is required for each client explicitly claimed supported.
 Implement guided root:
 
 ```text
-Clients
-Objects
+Managed Hosts
+Network Objects
+Service Objects
 Remote Access
 Internet Access
 AI Access
@@ -502,9 +498,9 @@ The v2.4.0 foundation is done when no further foreseeable core change requires r
 control-plane authority
 identity model
 Object model
-rule ordering semantics
-Published Service destination semantics
-AI trust/authorization model
+BLACKLIST / WHITELIST policy semantics
+Remote Service destination/Service Object semantics
+AI Identity / permission authorization model
 backup/migration model
 canonical CLI nouns
 ```

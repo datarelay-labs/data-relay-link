@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append-only structured audit log for frp-auto-deploy.
+"""Append-only structured audit log for Data Relay Link.
 
 Audit failures must not corrupt the primary operation. Callers should treat
 write errors as warnings unless they explicitly choose fail-closed.
@@ -228,7 +228,7 @@ def main(argv=None):
     import argparse
     import sys
 
-    parser = argparse.ArgumentParser(description="Append or show frp-auto-deploy audit events")
+    parser = argparse.ArgumentParser(description="Append or show Data Relay Link audit events")
     parser.add_argument("action", nargs="?", default="tail", choices=["emit", "tail"])
     parser.add_argument("--event")
     parser.add_argument("--actor", default="local-root")

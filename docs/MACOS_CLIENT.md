@@ -21,9 +21,10 @@ binary live below `/Library/Application Support/drlink`. The
 LaunchDaemon is
 `/Library/LaunchDaemons/com.datarelay.drlink.frpc.plist`.
 
-User-facing `frpctl` and `frp-client` commands are installed below the prefix
-reported by `brew --prefix`, with `/usr/local` as the fallback. The root
-LaunchDaemon never executes a Homebrew-prefix binary.
+The user-facing `drlink` command is installed below the prefix reported by
+`brew --prefix`, with `/usr/local` as the fallback. Internal compatibility
+helpers are not part of the public CLI. The root LaunchDaemon never executes
+a Homebrew-prefix binary.
 
 ## Install and enrollment
 

@@ -25,16 +25,15 @@ v2.4.0 remains a development target. The following is approved architecture scop
 ### Added — target scope
 
 - Embedded SQLite control plane at `/var/lib/drlink/drlink.db` with migration, revision, audit, and runtime-generation metadata.
-- Neutral reusable Objects and Object Groups.
-- Managed Endpoint policy identity and endpoint local-address inventory.
-- Published Service target modes: SELF and ROUTED.
-- Ordered Remote Access rulebase with explicit ALLOW/DENY, top-down first-match, implicit default DENY, shadow detection, and policy-impact analysis.
-- Ordered Internet Access rulebase using the same Object model while retaining controlled-egress DNS/SSRF/rebinding protections.
+- Managed Host / DRLink Agent identity with Managed Hosts selectable as Network Objects where policy context allows it.
+- Network Objects / Groups for IP, CIDR, FQDN, and Managed Host selectors.
+- Service Objects / Groups, including Fixed TCP as a Service Object subtype.
+- Permission Objects / Groups for reusable AI-operation permissions.
+- Agent-owned Remote Services binding one destination and one Service Object, with TCP and Fixed TCP support and stable endpoint allocation.
+- Remote Access, Internet Access, and AI Access using the shared BLACKLIST / WHITELIST Mode and Enforcement model.
+- AI Identity authentication plus server-side MCP Bridge and per-invocation AI Access authorization.
 - Optimistic-concurrency protection for interactive control-plane mutations.
 - Consistent SQLite backup/restore and DB-to-runtime recompilation.
-- AI Principal and AI Access policy model.
-- Server-side MCP Bridge reusing Data Relay Link Managed Endpoints instead of deploying an MCP server per internal host.
-- AI capability/path/exec authorization and AI operation audit.
 - ConfigurationBundle v1alpha1 for idempotent multi-resource change sets using the same Change Plan/control-plane engine as direct CLI.
 - AI-assisted configuration contract: simple changes as canonical public CLI; dependent changes as copy/paste ConfigurationBundle via standard input.
 - Redacted configuration export plus validate/test/diff/atomic-apply workflow.
@@ -43,23 +42,25 @@ v2.4.0 remains a development target. The following is approved architecture scop
 ### Changed — target scope
 
 - Control-plane authority is transferred from multiple authoritative JSON state files to embedded SQLite.
-- Public `Service Profile` is replaced by `Service Preset`, a creation-time convenience with no ownership of existing services.
-- Legacy `Internet Profile` policy is replaced by the ordered Internet Access rulebase.
-- Legacy ACL/Access Rule-centric inbound policy is replaced by the ordered Remote Access rulebase.
-- Ambiguous generic Group terminology is split into Client Group and Object Group.
-- Inbound relay resources are described as Published Services.
-- Canonical guided CLI root becomes Clients / Objects / Remote Access / Internet Access / AI Access / System.
-- Earlier v2.4.x MCP exclusion decision is superseded: MCP/AI Access is now part of the v2.4.0 target and must be qualified before stable release.
+- Public terminology is frozen around Managed Host, Network/Service/Permission Objects and Groups, AI Identity, Remote Service, Remote Access, Internet Access, and AI Access.
+- Initial policy state is No Policy / No Rules with effective ALLOW; BLACKLIST denies matching enabled Rules and WHITELIST allows matching enabled Rules.
+- Rules are not ordered and do not carry per-rule ALLOW/DENY actions; Policy Reset and Enforcement disable/enable have explicit semantics.
+- Remote Service mutation is Agent Host-local; Server-side Remote Service inspection is read-only for configuration.
+- Internet Access source selectors may include Managed Hosts; destinations reject Managed Hosts directly or through a Network Group containing one.
+- Fixed TCP endpoint allocation uses a separate implementation-managed port pool and does not create a separate policy hierarchy.
+- Canonical guided Server CLI root becomes Managed Hosts / Network Objects / Service Objects / Remote Access / Internet Access / AI Access / System / Help / Exit.
+- Canonical Agent Host CLI root becomes Status / Remote Services / Agent / Configuration / Diagnostics / Help / Exit.
+- Earlier v2.4.x MCP exclusion decision is superseded: MCP/AI Access is part of the v2.4.0 target and must be qualified before stable release.
 
 ### Security — target scope
 
-- Explicit ALLOW and DENY with implicit default DENY.
-- Object/Group/Published Service mutations participate in policy-impact analysis.
-- Access broadening requires explicit interactive confirmation.
+- Invalid, ambiguous, corrupt, or unsafe state fails closed; policy behavior itself follows the explicit BLACKLIST / WHITELIST model.
+- Managed Host, Object/Group, Remote Service, policy Mode/Enforcement, and AI permission changes participate in policy-impact analysis.
+- Access broadening requires explicit interactive confirmation where the CLI contract requires it.
 - Referenced policy entities are protected from cascade delete.
 - Unsupported/corrupt DB or unsafe runtime-generation mismatch fails closed where safe enforcement cannot be proven.
 - Internet Access retains server-side DNS, DNS-rebinding resistance, SSRF/special-address protection, and validated exact-destination connection.
-- MCP operations require authenticated AI Principal identity and per-invocation policy authorization.
+- MCP operations require authenticated AI Identity and per-invocation AI Access authorization; authentication remains mandatory even when AI Access enforcement is disabled.
 - True read-only AI policy requires `exec=false`.
 
 ### Removed from target public model
@@ -68,7 +69,8 @@ v2.4.0 remains a development target. The following is approved architecture scop
 - Authoritative `egress-control.json` control-plane model.
 - Canonical public `service-profile` resource.
 - Canonical public `internet-profile` resource.
-- Canonical ACL-only inbound model.
+- Intermediate public models and nouns that conflict with the frozen v2.4 Product Master / CLI-AI Master.
+- Ordered first-match public rule semantics and per-rule ALLOW/DENY actions.
 - v2.4.x MCP-exclusion release rule.
 
 ### Before release

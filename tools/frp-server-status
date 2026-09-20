@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Operator status for an frp-auto-deploy server.
+# Operator status for a Data Relay Link server.
 # Default mode never exits non-zero for missing binaries, config, or upstream lookup failures.
 # --check exits non-zero when the server is not ready for registry schema v2.
 set -uo pipefail

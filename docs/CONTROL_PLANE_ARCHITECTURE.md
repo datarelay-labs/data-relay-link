@@ -1,30 +1,35 @@
-# Data Relay Link v2.4.0 — Control Plane, Policy, and MCP Architecture
+# Data Relay Link v2.4.0 — Internal Control Plane Architecture and Schema History
 
-> **Document role:** Canonical technical architecture SSOT for the v2.4.0 control-plane redesign
-> **Status:** Approved target architecture; implementation and release qualification pending
+> **Document role:** Internal implementation/schema reference retained from the intermediate v2.4 redesign
+> **Status:** Public model and policy semantics in this document are superseded by the Product Master and CLI/AI Master
 > **Product:** Data Relay Link
-> **Phase:** `V2_4_0_CONTROL_PLANE_POLICY_AND_MCP_ARCHITECTURE_CLOSURE`
-> **Applies to:** Server control plane, Objects, Managed Endpoints, Published Services, Remote Access, Internet Access, AI Access/MCP, audit, backup/restore, runtime compilation, and release qualification
+> **Public SSOT:** `PRODUCT_MASTER.md` + `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`
+> **Important:** Internal table/helper names such as `managed_endpoints`, `published_services`, `service_presets`, and `ai_principals` are storage/compatibility names only. They are not public v2.4 product nouns.
 
 ## 1. Purpose and authority
 
-This document freezes the architecture that Data Relay Link must implement before v2.4.0 may become stable.
+This document is retained to describe internal control-plane structure, migration history, and implementation constraints created during the v2.4 redesign. It must not redefine the frozen public model.
 
-The v2.4.0 branch is still pre-stable. There are no production users whose compatibility requirements justify preserving the legacy JSON state, ACL grammar, Internet Profile model, Service Profile model, or MCP exclusion. The goal is therefore to complete the durable foundation now rather than carry avoidable migration debt into a stable release.
+Current public terminology and policy behavior are defined by:
 
-Authority order:
+1. `PRODUCT_MASTER.md`.
+2. `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`.
+3. `Data Relay Link CLI Information Architecture.md`.
 
-1. Actual qualified runtime behavior on an exact Git HEAD.
-2. This architecture plus `PRODUCT_MASTER.md` for the approved v2.4.0 target.
-3. `VERSION_POLICY.md` and release governance.
-4. Canonical CLI IA and CLI reference.
-5. Detailed operator documentation.
+Actual qualified runtime behavior on an exact Git HEAD remains implementation evidence. Where the historical/intermediate terminology below conflicts with the current public SSOT, the current public SSOT wins.
 
-Until implementation is complete, documentation may describe an approved target that the current development HEAD does not yet implement. Such sections must not be presented as released behavior.
+Internal-name mapping used while legacy schema names remain in code:
 
-## 2. Architecture invariants
+```text
+managed_endpoints  -> Managed Host Network Object projection
+published_services -> Remote Service backing state
+service_presets    -> internal/legacy preset storage; not a public v2.4 resource
+ai_principals      -> AI Identity backing state
+```
 
-The following are non-negotiable for v2.4.0:
+## 2. Intermediate architecture snapshot
+
+The following values document the intermediate schema/policy design that produced much of the current internal implementation. They are retained for migration and code-reading context only. Where these values conflict with the Product Master or CLI/AI Master, the current public SSOT wins:
 
 ```text
 CONTROL_PLANE_SSOT=SQLite

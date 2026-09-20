@@ -2,23 +2,23 @@
 
 > **Document role:** Canonical security invariants and trust boundaries
 > **Status:** v2.4.0 target architecture; implementation qualification pending
-> **Technical SSOT:** `CONTROL_PLANE_ARCHITECTURE.md`
+> **Public SSOT:** `PRODUCT_MASTER.md` + `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`
 
 `Data Relay Link` **2.4.0**
 Pinned FRP version: **0.71.0**
 
 ## 1. Security principle
 
-Data Relay Link is default deny and fail closed.
+Data Relay Link fails closed on invalid, ambiguous, or unsafe state; policy behavior follows the v2.4 BLACKLIST / WHITELIST model.
 
-It relays explicitly authorized connections/operations; it does not create broad network trust.
+With no policy configured, effective access is ALLOW. BLACKLIST denies matching enabled Rules and otherwise allows; WHITELIST allows matching enabled Rules and otherwise denies. AI authentication remains mandatory regardless of AI Access policy enforcement.
 
 The product has three policy planes:
 
 ```text
 Remote Access     outside → inside
 Internet Access   inside → outside
-AI Access         authenticated AI principal → internal endpoint capability
+AI Access         authenticated AI Identity → approved target permissions
 ```
 
 Each plane has separate semantics but shares durable identity, revisions, audit, and SQLite transaction infrastructure.
@@ -96,15 +96,15 @@ Names are display identities. Durable references use immutable internal IDs.
 
 This prevents rename operations from silently detaching policy.
 
-Managed Endpoint identity is tied to the enrolled client/machine identity, not label, hostname, or observed public/NAT IP.
+Managed Host identity is tied to the enrolled Agent/machine identity, not label, hostname, or observed public/NAT IP.
 
 ## 7. Reference protection
 
 Policy dependencies are not cascade-deleted.
 
-Deletion of a referenced Object, Object Group, AI Principal, Client Group, or other durable policy entity fails and lists references.
+Deletion of a referenced Network Object/Group, Service Object/Group, Permission Object/Group, AI Identity, Managed Host, or other durable policy entity fails and lists references.
 
-A removed Client's referenced Managed Endpoint may remain Orphaned rather than silently rebinding to a new client.
+A removed Managed Host reference must not silently rebind to a different Agent/machine identity.
 
 ## 8. Optimistic concurrency
 
@@ -116,34 +116,34 @@ SQLite writer serialization alone is not considered sufficient protection agains
 
 ## 9. Remote Access boundary
 
-Remote Access authorization and Published Service reachability are both required.
+Remote Service reachability and Remote Access authorization are separate requirements.
 
 ```text
-rule ALLOW
-+
-enabled Published Service
+enabled Remote Service
 +
 reachable connector/target
++
+Remote Access policy permits the flow
+(or no policy is configured)
 =
 effective access
 ```
 
-A network Object match alone does not expose arbitrary hosts or ports.
-
-SELF Published Services use the Managed Endpoint as effective destination even if the local socket target is loopback.
-
-ROUTED Published Services use the explicit routed target as effective destination.
+A Network Object match alone does not create or expose connectivity. A Remote Service is owned by an Agent Host, binds one destination and one Service Object, and may use the Agent Host as a Relay Host when forwarding to another destination.
 
 ## 10. Remote Access rule semantics
 
 ```text
-ordered top-down
-first complete match wins
-ALLOW / DENY
-implicit final DENY
+Mode        BLACKLIST | WHITELIST
+Enforcement ENABLED | DISABLED
+Rules       enabled / disabled
 ```
 
-No hidden specificity algorithm overrides rule order.
+BLACKLIST: matching enabled Rule → DENY; no match → ALLOW.
+WHITELIST: matching enabled Rule → ALLOW; no match → DENY.
+No Policy / No Rules → effective ALLOW.
+Rules are not ordered and do not carry per-rule ALLOW/DENY actions.
+Disabling enforcement preserves Mode/Rules but makes policy effective ALLOW ALL.
 
 Policy changes apply immediately to new connections. Established connections are not implicitly terminated by a policy edit.
 
@@ -154,10 +154,10 @@ Internet Access must never operate as an open proxy.
 Required controls:
 
 ```text
-explicit source authorization
-explicit destination authorization
+source authorization according to policy mode
+destination authorization according to policy mode
 explicit protocol/port
-default deny
+fail-closed unsafe-destination checks
 server-side DNS where applicable
 FQDN canonicalization
 DNS rebinding resistance
@@ -189,12 +189,13 @@ Security changes are not limited to Rule edits.
 Impact analysis covers:
 
 ```text
-Object value changes
-Object Group membership
-Rule content/order/enablement/action
-Published Service target/mode
-Managed Endpoint address membership changes
-AI target/capability/path/exec constraints
+Network/Service/Permission Object value changes
+Group membership
+Rule content/enablement
+Policy Mode / Enforcement changes
+Remote Service destination/Service Object changes
+Managed Host address membership changes
+AI target/permission/path/exec constraints
 ```
 
 At minimum calculate access broadened/narrowed, affected active rules, shadowing changes, and effective-action changes.
@@ -255,13 +256,13 @@ Remote MCP calls terminate at a Data Relay Link server-side bridge. Internal end
 MCP host
 → authenticated HTTPS https://<control-host>/mcp
 → loopback MCP Bridge 127.0.0.1:6103
-→ AI Principal (Static Bearer or OAuth)
+→ AI Identity (OAuth-bound or supported authenticated credential)
 → AI Access authorization
 → managed client control path
 → target OS boundary
 ```
 
-The bridge does not bypass client identity, AI Access policy, or target OS permissions. Authorized operations are dispatched through a dedicated authenticated Data Relay Link client management/RPC path; Published Services and exposed SSH are not prerequisites for MCP operation.
+The bridge does not bypass Managed Host/Agent identity, AI Access policy, or target OS permissions. Authorized operations are dispatched through a dedicated authenticated Data Relay Link Agent management/RPC path; Remote Services and exposed SSH are not prerequisites for MCP operation.
 
 ## 17. MCP protocol baseline
 
@@ -271,9 +272,9 @@ At the September 2026 architecture freeze, the modern remote direction is HTTP-n
 
 Exact authorization/transport mechanics are re-verified immediately before implementation and Real E2E.
 
-## 18. AI Principal authentication
+## 18. AI Identity authentication
 
-Every privileged MCP operation has an authenticated AI Principal.
+Every privileged MCP operation has an authenticated AI Identity.
 
 Requirements:
 
@@ -306,7 +307,7 @@ download_file
 
 Unknown or ungranted tools are denied.
 
-Each tool invocation is authorized using the current ordered AI Access policy. Evaluation is top-down first complete match with explicit ALLOW/DENY and implicit final DENY.
+Each tool invocation is authorized using the current AI Access policy. Authentication remains mandatory; policy evaluation follows BLACKLIST / WHITELIST Mode and Enforcement semantics with no rule ordering and no per-rule ALLOW/DENY action.
 
 ## 20. Read-only AI semantics
 
@@ -485,7 +486,7 @@ context-invalid group assignment
 unsafe DNS answer
 runtime generation cannot be verified
 MCP auth failure
-unknown AI Principal
+unknown AI Identity
 unknown capability
 path-scope violation
 malformed tool request

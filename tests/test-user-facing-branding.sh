@@ -40,7 +40,7 @@ USER_DOCS=(
 )
 for doc in "${USER_DOCS[@]}"; do
   [[ -f "$doc" ]] || continue
-  assert_not_contains "$doc" 'FRP Auto Deploy|FRP Auto-Deploy|frpctl>|sudo frpctl|frp>'
+  assert_not_contains "$doc" 'FRP Auto Deploy|FRP Auto-Deploy|frpctl>|sudo frpctl|frp>|User-facing.*frpctl|User-facing.*frp-client'
 done
 
 # Runtime surfaces that operators see.
@@ -66,6 +66,8 @@ done
 # Product unit names must be drlink-*; legacy names must not be the installed sources.
 [[ -f "$ROOT/server/drlink-server.service" ]] || fail "missing drlink-server.service"
 [[ -f "$ROOT/client/drlink-client.service" ]] || fail "missing drlink-client.service"
+[[ ! -e "$ROOT/client/frpc.service" ]] || fail "legacy client/frpc.service source remains"
+[[ ! -e "$ROOT/client/com.datarelay.frp-auto-deploy.frpc.plist" ]] || fail "legacy macOS plist duplicate remains"
 [[ -f "$ROOT/server/drlink-egress.service" ]] || fail "missing drlink-egress.service"
 grep -q 'Description=Data Relay Link Server' "$ROOT/server/drlink-server.service" || fail "server unit description"
 grep -q 'Description=Data Relay Link Client' "$ROOT/client/drlink-client.service" || fail "client unit description"
@@ -153,6 +155,32 @@ fi
 if grep -nE 'FRP_GITHUB_REPO=.*frp-auto-deploy|DRLINK_GITHUB_REPO=.*frp-auto-deploy|:-frp-auto-deploy' "$ROOT/lib/frp-common.sh"; then
   fail "frp-common still defaults GitHub repo to frp-auto-deploy"
 fi
+
+# Tracked product paths and developer-path fallbacks must use the canonical name.
+if git -C "$ROOT" ls-files | grep -Eq '(^|/)frp-auto-deploy([^/]*)(/|$)'; then
+  fail "tracked path still uses the former frp-auto-deploy product name"
+fi
+if git -C "$ROOT" grep -nF '/home/aella/frp-auto-deploy-dev' -- . ':!tests/test-user-facing-branding.sh' >/dev/null 2>&1; then
+  fail "tracked source still hard-codes the former developer checkout path"
+fi
+
+# Current operator/release docs must not present the superseded intermediate nouns.
+CURRENT_MODEL_DOCS=(
+  "$ROOT/README.md"
+  "$ROOT/docs/SECURITY.md"
+  "$ROOT/docs/RELEASE_CHECKLIST.md"
+  "$ROOT/docs/RELEASE_VALIDATION.md"
+  "$ROOT/docs/DATA_RELAY_ROADMAP.md"
+  "$ROOT/docs/CONFIGURATION_BUNDLE.md"
+  "$ROOT/docs/CONTROLLED_EGRESS.md"
+  "$ROOT/docs/DEPLOYMENT_MODES.md"
+  "$ROOT/docs/V2_4_0_RICK_MANUAL_E2E.md"
+  "$ROOT/docs/MACOS_CLIENT.md"
+  "$ROOT/docs/OCI_ACCEPTANCE.md"
+)
+for doc in "${CURRENT_MODEL_DOCS[@]}"; do
+  assert_not_contains "$doc" 'Managed Endpoint|Published Service|AI Principal|Service Preset'
+done
 
 echo "USER_FACING_BRANDING_TEST=PASS"
 echo "USER_FACING_LEGACY_PRODUCT_REFERENCES=0"
