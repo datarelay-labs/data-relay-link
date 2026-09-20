@@ -276,7 +276,7 @@ grep -q 'SSH username is optional connection-example metadata.' \
   "$WORKDIR/prompt.out" || fail "missing optional SSH username help"
 grep -qF 'SSH username [optional]:' "$WORKDIR/prompt.out" || fail "missing optional username prompt"
 grep -qF 'SSH port [22]:' "$WORKDIR/prompt.out" || fail "missing port prompt"
-grep -q 'Client configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
+grep -q 'Managed Host configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
 grep -q 'Managed Host name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation Managed Host name"
 grep -qE 'SSH user[[:space:]]*:[[:space:]]*<username>|SSH user[[:space:]]*:[[:space:]]*-' \
   "$WORKDIR/prompt.out" || fail "blank username should show placeholder"
