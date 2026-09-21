@@ -48,6 +48,20 @@ root = Path(sys.argv[1])
 PY
 
 export FRP_DEPLOY_TEST_ROOT="$TREE"
+export DRLINK_SKIP_ACTIVATION=1
+# Canonical control DB is required for supported v2.4 DR archives.
+PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+import drlink_v24 as v24
+plane = ControlPlane('$TREE')
+try:
+    v24.ensure_v2_schema(plane.conn)
+    plane.conn.commit()
+finally:
+    plane.close()
+"
 export FRP_ENROLLMENT_PURGE_YES=yes
 CREATE="$ROOT/tools/frp-create-client"
 REVOKE="$ROOT/tools/frp-enrollment-revoke"
