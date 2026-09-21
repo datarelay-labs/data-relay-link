@@ -2370,6 +2370,17 @@ class ControlPlane:
                 return True
         return False
 
+    def _legacy_unmigrated(self, family: str) -> bool:
+        """True when restrictive legacy policy is still unprojected (fail closed)."""
+        try:
+            from drlink_upgrade_reconcile import legacy_restrictive_unmigrated
+        except Exception:
+            return False
+        try:
+            return bool(legacy_restrictive_unmigrated(self, family))
+        except Exception:
+            return True
+
     def matching_objects_for_ip(self, ip: str, *, role: str) -> list[str]:
         names = []
         for obj in self.conn.execute("SELECT * FROM objects"):
@@ -2404,6 +2415,26 @@ class ControlPlane:
         if dest_obj and dest_obj["name"] not in dst_matches:
             dst_matches.append(dest_obj["name"])
         pol = get_access_policy(self, "remote")
+        if pol["mode"] is None and self._legacy_unmigrated("remote"):
+            reason = "Legacy v2.3 Remote Access policy is not migrated (fail closed)"
+            return {
+                "source_ip": source_ip,
+                "destination": dest_ip,
+                "protocol": proto,
+                "port": int(port),
+                "source_matches": src_matches,
+                "destination_matches": dst_matches,
+                "traces": [],
+                "winner": None,
+                "matched_rules": [],
+                "mode": None,
+                "enforcement": pol["enforcement"],
+                "action": "DENY",
+                "implicit": True,
+                "published": None,
+                "reason": reason,
+                "effective": "DENY",
+            }
         traces = []
         matched = []
         for rule_row in self.conn.execute(
@@ -2563,6 +2594,25 @@ class ControlPlane:
         src_matches = self.matching_objects_for_ip(source_ip, role="source")
         dst_matches = self.matching_objects_for_host(destination)
         pol = get_access_policy(self, "internet")
+        if pol["mode"] is None and self._legacy_unmigrated("internet"):
+            reason = "Legacy v2.3 Internet Access policy is not migrated (fail closed)"
+            return {
+                "source_ip": source_ip,
+                "destination": destination,
+                "port": int(port),
+                "protocol": proto,
+                "source_matches": src_matches,
+                "destination_matches": dst_matches,
+                "traces": [],
+                "winner": None,
+                "matched_rules": [],
+                "mode": None,
+                "enforcement": pol["enforcement"],
+                "action": "DENY",
+                "implicit": True,
+                "reason": reason,
+                "effective": "DENY",
+            }
         traces = []
         matched = []
         for rule_row in self.conn.execute(

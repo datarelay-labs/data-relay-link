@@ -11,11 +11,19 @@ reservations that disagree with registry ownership.
 
 It is idempotent: a second run with equivalent state performs no duplicate
 creates and does not reallocate healthy endpoints.
+
+Restrictive v2.3 Remote Access allowlists and enabled Internet egress
+profiles are projected into canonical whitelist policy in the same
+transaction. Legacy JSON is not left as the live allow authority.
+Unsupported constructs fail the reconcile closed.
 """
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,6 +33,8 @@ from drlink_control_plane import ControlPlane
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 THIS_HOST = {"this-host", "this_host", "self"}
 V24_PREFIX = "rs-"
+# Tests may assign a callable(stage: str). Production leaves this unset.
+_MIGRATION_CHECKPOINT = None
 
 
 def _truthy(value: Any) -> bool:
@@ -601,6 +611,505 @@ def _apply_health(plane: ControlPlane, pub, meta, status: str, reason: str) -> N
     )
 
 
+def _checkpoint(stage: str) -> None:
+    hook = _MIGRATION_CHECKPOINT
+    if hook is not None:
+        hook(stage)
+
+
+def _legacy_policy_error(detail: str) -> ControlPlaneError:
+    return ControlPlaneError(
+        "Upgrade cannot preserve v2.3 restrictive policy safely.\n\n"
+        "%s\n\n"
+        "Canonical Remote/Internet Access was not changed.\n"
+        "Correct or remove the unsupported legacy construct, then retry the upgrade."
+        % detail
+    )
+
+
+def _legacy_state_path(plane: ControlPlane, filename: str) -> Path:
+    root = str(getattr(plane, "root", None) or "").strip()
+    if root:
+        return Path(root) / "var" / "lib" / "drlink" / filename
+    return Path("/var/lib/drlink") / filename
+
+
+def _token(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
+
+
+def _read_json_object(path: Path, label: str) -> Optional[dict]:
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise _legacy_policy_error("%s is unreadable or corrupt (%s)." % (label, path.name)) from exc
+    if not isinstance(raw, dict):
+        raise _legacy_policy_error("%s must be a JSON object." % label)
+    return raw
+
+
+def _parse_expiry(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _active_cidrs(entries: Any, *, label: str) -> list[str]:
+    if not isinstance(entries, list):
+        raise _legacy_policy_error("%s entries are not a list." % label)
+    now = datetime.now(timezone.utc)
+    cidrs = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise _legacy_policy_error("%s contains a non-object entry." % label)
+        if entry.get("expires_at") not in (None, ""):
+            exp = _parse_expiry(entry.get("expires_at"))
+            if exp is None or exp > now:
+                raise _legacy_policy_error(
+                    "%s entry uses a TTL expiry. v2.4 Network Objects cannot preserve it "
+                    "without later broadening access." % label
+                )
+            continue
+        raw = str(entry.get("cidr") or "").strip()
+        try:
+            net = ipaddress.ip_network(raw, strict=False)
+        except ValueError as exc:
+            raise _legacy_policy_error("%s has an invalid CIDR %r." % (label, raw)) from exc
+        cidrs.append(str(net))
+    return cidrs
+
+
+def _service_port(svc: dict) -> Optional[int]:
+    raw = svc.get("local_port")
+    if raw is None:
+        raw = svc.get("target_port")
+    if raw is None:
+        return None
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if port < 1 or port > 65535:
+        return None
+    return port
+
+
+def _load_access_state(plane: ControlPlane) -> Optional[dict]:
+    path = _legacy_state_path(plane, "access-control.json")
+    raw = _read_json_object(path, "access-control.json")
+    if raw is None:
+        return None
+    try:
+        import frp_access_control as acl
+
+        return acl.require_access_state(path=path)
+    except Exception as exc:
+        raise _legacy_policy_error("access-control.json is not a supported v2.3 access policy.") from exc
+
+
+def _load_egress_state(plane: ControlPlane) -> Optional[dict]:
+    path = _legacy_state_path(plane, "egress-control.json")
+    if not path.is_file():
+        return None
+    try:
+        import frp_egress_control as eg
+
+        return eg.load_egress_state(path, persist_migration=False)
+    except Exception as exc:
+        raise _legacy_policy_error("egress-control.json is not a supported v2.3 egress policy.") from exc
+
+
+def _cidr_object_name(cidr: str) -> str:
+    return "v23c" + _token(cidr)
+
+
+def _fqdn_object_name(host: str) -> str:
+    return "v23f" + _token(host)
+
+
+def _service_object_name(port: int) -> str:
+    return "v23s" + _token("tcp:%s" % int(port))
+
+
+def _remote_rule_name(client_id: str, service_id: str, *, public: bool) -> str:
+    prefix = "v23p" if public else "v23r"
+    return prefix + _token("%s\n%s" % (client_id, service_id))
+
+
+def _internet_rule_name(profile_id: str, dest_key: str) -> str:
+    return "v23i" + _token("%s\n%s" % (profile_id, dest_key))
+
+
+def _plan_legacy_policy(plane: ControlPlane, registry: dict) -> dict:
+    """Describe the canonical projection. Raises when it cannot be exact and safe."""
+    access = _load_access_state(plane)
+    egress = _load_egress_state(plane)
+    clients = registry.get("clients") if isinstance(registry.get("clients"), dict) else {}
+    remote_rules = []
+    remote_restrictive = False
+    if access is not None:
+        lists = access.get("access_lists") or {}
+        bindings = access.get("service_access") or {}
+        restricted = {}
+        for mid, services in bindings.items():
+            if not isinstance(services, dict):
+                raise _legacy_policy_error("service_access[%s] is not an object." % mid)
+            for sid, binding in services.items():
+                if not isinstance(binding, dict):
+                    raise _legacy_policy_error("service binding %s/%s is not an object." % (mid, sid))
+                mode = str(binding.get("access_mode") or "PUBLIC").upper()
+                if mode == "PUBLIC":
+                    continue
+                if mode != "ALLOWLIST":
+                    raise _legacy_policy_error(
+                        "service %s/%s uses unsupported access mode %s." % (mid, sid, mode)
+                    )
+                remote_restrictive = True
+                list_id = binding.get("access_list_id")
+                lst = lists.get(list_id) if list_id else None
+                if not isinstance(lst, dict):
+                    restricted[(str(mid), str(sid).strip().lower())] = []
+                    continue
+                restricted[(str(mid), str(sid).strip().lower())] = _active_cidrs(
+                    lst.get("entries") or [],
+                    label="access list %s" % (lst.get("name") or list_id),
+                )
+        if remote_restrictive:
+            for cid, rec in clients.items():
+                if not isinstance(rec, dict):
+                    continue
+                cid_s = str(cid)
+                dest = managed_host_policy_name(plane, cid_s) or _client_public_name(rec, cid_s)
+                if not dest:
+                    raise _legacy_policy_error(
+                        "Managed Host for client %s has no policy name to bind Remote Access." % cid_s
+                    )
+                services = rec.get("services") if isinstance(rec.get("services"), dict) else {}
+                for sid, svc in services.items():
+                    if not isinstance(svc, dict):
+                        continue
+                    sid_raw = str(sid).strip().lower()
+                    sid_s = sid_raw
+                    if is_v24_runtime_projection(sid_raw, svc, plane=plane, client_id=cid_s):
+                        canonical = str(svc.get("name") or "").strip().lower()
+                        if canonical:
+                            sid_s = canonical
+                    port = _service_port(svc)
+                    if port is None:
+                        raise _legacy_policy_error(
+                            "published service %s/%s has no local port, so its access policy "
+                            "cannot be mapped without guessing." % (cid_s, sid)
+                        )
+                    stype = str(svc.get("type") or svc.get("service_type") or svc.get("preset") or "tcp").lower()
+                    if stype == "udp":
+                        raise _legacy_policy_error(
+                            "published service %s/%s is UDP. Remote Access cannot represent it "
+                            "without changing the frozen v2.4 policy model." % (cid_s, sid)
+                        )
+                    cidrs = restricted.get((cid_s, sid_raw))
+                    if cidrs is None and sid_s != sid_raw:
+                        cidrs = restricted.get((cid_s, sid_s))
+                    public = cidrs is None
+                    if not public and not cidrs:
+                        continue
+                    sources = ["v23any4", "v23any6"] if public else [_cidr_object_name(c) for c in cidrs]
+                    remote_rules.append(
+                        {
+                            "plane": "remote",
+                            "name": _remote_rule_name(cid_s, sid_raw, public=public),
+                            "sources": sources,
+                            "source_values": ["0.0.0.0/0", "::/0"] if public else list(cidrs),
+                            "destination": dest,
+                            "service": _service_object_name(port),
+                            "port": port,
+                        }
+                    )
+            restricted_ports = {
+                (rule["destination"], rule["port"])
+                for rule in remote_rules
+                if str(rule["name"]).startswith("v23r")
+            }
+            remote_rules = [
+                rule
+                for rule in remote_rules
+                if not str(rule["name"]).startswith("v23p")
+                or (rule["destination"], rule["port"]) not in restricted_ports
+            ]
+    internet_rules = []
+    internet_restrictive = False
+    if egress is not None:
+        profiles = egress.get("egress_profiles") or {}
+        if not isinstance(profiles, dict):
+            raise _legacy_policy_error("egress_profiles is not an object.")
+        for pid, profile in profiles.items():
+            if not isinstance(profile, dict) or not profile.get("enabled"):
+                continue
+            internet_restrictive = True
+            sources = _active_cidrs(
+                profile.get("sources") or [],
+                label="egress profile %s sources" % (profile.get("name") or pid),
+            )
+            destinations = profile.get("destinations") or []
+            if not isinstance(destinations, list):
+                raise _legacy_policy_error(
+                    "egress profile %s destinations are not a list." % (profile.get("name") or pid)
+                )
+            for dest in destinations:
+                if not isinstance(dest, dict):
+                    raise _legacy_policy_error("egress profile %s has a non-object destination." % pid)
+                match = str(dest.get("match") or "exact").lower()
+                host = str(dest.get("host") or "").strip().rstrip(".").lower()
+                if match != "exact":
+                    raise _legacy_policy_error(
+                        "egress profile %s destination %s uses match=%s. "
+                        "v2.4 FQDN objects are exact-only, so this cannot be migrated "
+                        "without broadening or narrowing access."
+                        % (profile.get("name") or pid, host or dest.get("id"), match)
+                    )
+                try:
+                    ipaddress.ip_address(host)
+                    continue
+                except ValueError:
+                    pass
+                proto = str(dest.get("protocol") or "").strip().lower()
+                if proto not in ("http", "https", "tcp"):
+                    raise _legacy_policy_error(
+                        "egress profile %s destination uses unsupported protocol %s."
+                        % (profile.get("name") or pid, proto or "(missing)")
+                    )
+                try:
+                    port = int(dest.get("port"))
+                except (TypeError, ValueError):
+                    port = 0
+                if port < 1 or port > 65535:
+                    raise _legacy_policy_error(
+                        "egress profile %s destination has an invalid port." % (profile.get("name") or pid)
+                    )
+                if not host:
+                    raise _legacy_policy_error(
+                        "egress profile %s destination is missing a hostname." % (profile.get("name") or pid)
+                    )
+                dest_key = str(dest.get("id") or "%s:%s:%s" % (host, port, proto))
+                if not sources:
+                    continue
+                internet_rules.append(
+                    {
+                        "plane": "internet",
+                        "name": _internet_rule_name(str(pid), dest_key),
+                        "sources": [_cidr_object_name(c) for c in sources],
+                        "source_values": list(sources),
+                        "destination": _fqdn_object_name(host),
+                        "destination_value": host,
+                        "service": _service_object_name(port),
+                        "port": port,
+                    }
+                )
+    return {
+        "remote_restrictive": remote_restrictive,
+        "internet_restrictive": internet_restrictive,
+        "remote_rules": remote_rules,
+        "internet_rules": internet_rules,
+    }
+
+
+def _rule_ref_names(plane: ControlPlane, rule_id: str, table: str) -> set[str]:
+    names = set()
+    for row in plane.conn.execute(
+        "SELECT ref_kind, ref_id FROM %s WHERE rule_id = ?" % table, (rule_id,)
+    ):
+        if row["ref_kind"] == "object":
+            obj = plane.conn.execute("SELECT name FROM objects WHERE id = ?", (row["ref_id"],)).fetchone()
+            if obj:
+                names.add(obj["name"])
+        else:
+            grp = plane.conn.execute(
+                "SELECT name FROM object_groups WHERE id = ?", (row["ref_id"],)
+            ).fetchone()
+            if grp:
+                names.add(grp["name"])
+    return names
+
+
+def _rule_service_name(plane: ControlPlane, rule_id: str) -> str:
+    row = plane.conn.execute(
+        "SELECT ref_id FROM rule_service_refs WHERE rule_id = ? AND ref_kind = 'service_object'",
+        (rule_id,),
+    ).fetchone()
+    if row is None:
+        return ""
+    sobj = plane.conn.execute("SELECT name FROM service_objects WHERE id = ?", (row["ref_id"],)).fetchone()
+    return str(sobj["name"]) if sobj else ""
+
+
+def _projection_satisfied(plane: ControlPlane, family: str, rules: list[dict], *, restrictive: bool) -> bool:
+    if not restrictive:
+        return True
+    import drlink_v24 as v24
+
+    pol = v24.get_access_policy(plane, family)
+    if pol.get("mode") != "whitelist":
+        return False
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        return False
+    existing = {
+        str(row["name"])
+        for row in plane.conn.execute("SELECT name FROM policy_rules WHERE plane = ?", (family,))
+    }
+    wanted = {rule["name"] for rule in rules}
+    if existing != wanted:
+        return False
+    for rule in rules:
+        row = plane._get_rule(family, rule["name"])
+        if row is None or not row["enabled"]:
+            return False
+        if _rule_ref_names(plane, row["id"], "rule_sources") != set(rule["sources"]):
+            return False
+        if _rule_ref_names(plane, row["id"], "rule_destinations") != {rule["destination"]}:
+            return False
+        if _rule_service_name(plane, row["id"]) != rule["service"]:
+            return False
+    return True
+
+
+def legacy_policy_pending(plane: ControlPlane, registry: dict) -> bool:
+    """True when restrictive legacy policy is not yet the canonical projection."""
+    plan = _plan_legacy_policy(plane, registry)
+    if not plan["remote_restrictive"] and not plan["internet_restrictive"]:
+        return False
+    remote_ok = _projection_satisfied(
+        plane, "remote", plan["remote_rules"], restrictive=plan["remote_restrictive"]
+    )
+    internet_ok = _projection_satisfied(
+        plane, "internet", plan["internet_rules"], restrictive=plan["internet_restrictive"]
+    )
+    return not (remote_ok and internet_ok)
+
+
+def legacy_restrictive_unmigrated(plane: ControlPlane, family: str) -> bool:
+    """Fail-closed latch: restrictive legacy state exists and this plane has no canonical mode.
+
+    Corrupt or unsupported legacy files are treated as unmigrated so evaluation
+    cannot fall open to No Policy ALLOW. After a successful projection the plane
+    mode is whitelist and this latch is not consulted.
+    """
+    try:
+        if family == "remote":
+            access = _load_access_state(plane)
+            if access is None:
+                return False
+            bindings = access.get("service_access") or {}
+            for services in bindings.values():
+                if not isinstance(services, dict):
+                    return True
+                for binding in services.values():
+                    if isinstance(binding, dict) and str(binding.get("access_mode") or "").upper() == "ALLOWLIST":
+                        return True
+            return False
+        if family == "internet":
+            egress = _load_egress_state(plane)
+            if egress is None:
+                return False
+            profiles = egress.get("egress_profiles") or {}
+            if not isinstance(profiles, dict):
+                return True
+            return any(isinstance(p, dict) and p.get("enabled") for p in profiles.values())
+    except ControlPlaneError:
+        return True
+    except Exception:
+        return True
+    return False
+
+
+def _ensure_network(plane: ControlPlane, name: str, kind: str, value: str) -> None:
+    import drlink_v24 as v24
+
+    v24.set_network_object(plane, name, type=kind, value=value, oneshot=True)
+
+
+def _ensure_service(plane: ControlPlane, name: str, port: int) -> None:
+    import drlink_v24 as v24
+
+    v24.set_service_object(plane, name, type="tcp", port=int(port), oneshot=True)
+
+
+def _apply_rule_set(plane: ControlPlane, family: str, rules: list[dict], *, restrictive: bool) -> None:
+    if not restrictive:
+        return
+    import drlink_v24 as v24
+
+    pol = v24.get_access_policy(plane, family)
+    if pol.get("mode") not in (None, "whitelist"):
+        title = "Remote Access" if family == "remote" else "Internet Access"
+        raise _legacy_policy_error(
+            "%s is already %s. Reset it before upgrading restrictive v2.3 policy into whitelist."
+            % (title, str(pol.get("mode")).upper())
+        )
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        title = "Remote Access" if family == "remote" else "Internet Access"
+        raise _legacy_policy_error(
+            "%s enforcement is disabled. Re-enable it before upgrading, otherwise "
+            "the migrated rules would not be enforced." % title
+        )
+    existing = {
+        str(row["name"])
+        for row in plane.conn.execute("SELECT name FROM policy_rules WHERE plane = ?", (family,))
+    }
+    wanted = {rule["name"] for rule in rules}
+    extra = existing - wanted
+    if extra:
+        title = "Remote Access" if family == "remote" else "Internet Access"
+        raise _legacy_policy_error(
+            "%s already has rules that are not the v2.3 migration projection (%s)."
+            % (title, ", ".join(sorted(extra)))
+        )
+    if not rules:
+        v24.ensure_policy_mode(plane, family, "whitelist", oneshot=True)
+        return
+    for rule in rules:
+        for name, value in zip(rule["sources"], rule["source_values"]):
+            _ensure_network(plane, name, "cidr", value)
+        if rule["plane"] == "internet":
+            _ensure_network(plane, rule["destination"], "fqdn", rule["destination_value"])
+        _ensure_service(plane, rule["service"], rule["port"])
+        v24.set_access_rule(
+            plane,
+            family,
+            rule["name"],
+            mode="whitelist",
+            source=rule["sources"][0],
+            destination=rule["destination"],
+            service=rule["service"],
+            enabled=True,
+            oneshot=True,
+        )
+        for extra_source in rule["sources"][1:]:
+            plane.set_rule_source(family, rule["name"], extra_source)
+        _checkpoint("legacy-policy-rule")
+
+
+def _apply_legacy_policy(plane: ControlPlane, registry: dict) -> None:
+    plan = _plan_legacy_policy(plane, registry)
+    if _projection_satisfied(
+        plane, "remote", plan["remote_rules"], restrictive=plan["remote_restrictive"]
+    ) and _projection_satisfied(
+        plane, "internet", plan["internet_rules"], restrictive=plan["internet_restrictive"]
+    ):
+        return
+    _apply_rule_set(plane, "remote", plan["remote_rules"], restrictive=plan["remote_restrictive"])
+    _apply_rule_set(plane, "internet", plan["internet_rules"], restrictive=plan["internet_restrictive"])
+
+
 def apply_upgrade_reconciliation(
     plane: ControlPlane,
     registry: dict,
@@ -614,7 +1123,8 @@ def apply_upgrade_reconciliation(
     if not isinstance(registry, dict) or not isinstance(registry.get("clients"), dict):
         raise ControlPlaneError("upgrade reconcile: registry is missing a clients object")
     plan = preview_upgrade_reconciliation(plane, registry)
-    if not plan["has_work"]:
+    policy_pending = legacy_policy_pending(plane, registry)
+    if not plan["has_work"] and not policy_pending:
         return {"ok": True, "applied": False, "skipped": True, "plan": plan}
 
     def write():
@@ -790,6 +1300,7 @@ def apply_upgrade_reconciliation(
 
             from drlink_runtime_policy import build_proxy_map
 
+            _apply_legacy_policy(plane, registry)
             build_proxy_map(plane)
             return {
                 "entity": {"type": "upgrade-reconcile", "id": "control-plane", "name": "control-plane"},

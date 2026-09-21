@@ -252,7 +252,7 @@ profiles[profile_id] = {
     "id": profile_id,
     "name": "upgrade-seed",
     "description": "seeded profile for upgrade",
-    "enabled": False,
+    "enabled": True,
     "sources": [
         {
             "id": source_id,
@@ -275,10 +275,35 @@ profiles[profile_id] = {
 eg_path.write_text(json.dumps(eg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 os.chmod(eg_path, 0o600)
 
-if not acl_path.is_file():
-    acl = {"schema_version": 1, "lists": {}, "bindings": {}}
-    acl_path.write_text(json.dumps(acl, indent=2) + "\n", encoding="utf-8")
-    os.chmod(acl_path, 0o600)
+list_id = "acl_001122334455"
+entry_id = "ace_001122334455"
+acl = {
+    "schema_version": 1,
+    "access_lists": {
+        list_id: {
+            "id": list_id,
+            "name": "upgrade-allow",
+            "description": "restrictive remote allowlist for upgrade qualification",
+            "entries": [
+                {
+                    "id": entry_id,
+                    "name": "office-host",
+                    "cidr": "198.51.100.10/32",
+                }
+            ],
+        }
+    },
+    "service_access": {
+        machine_id: {
+            service_id: {
+                "access_mode": "ALLOWLIST",
+                "access_list_id": list_id,
+            }
+        }
+    },
+}
+acl_path.write_text(json.dumps(acl, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.chmod(acl_path, 0o600)
 
 # Prove allocator accepts seeded registry before upgrade.
 import subprocess
@@ -346,7 +371,7 @@ for mid, c in (reg.get("clients") or {}).items():
 doc = {
     "registry_schema": reg.get("schema_version"),
     "egress_schema": eg.get("schema_version"),
-    "access_lists": sorted((acl.get("lists") or {}).keys()),
+    "access_lists": sorted((acl.get("access_lists") or acl.get("lists") or {}).keys()),
     "clients": clients,
     "egress_profiles": sorted((eg.get("egress_profiles") or {}).keys()),
     "tcp_relays": sorted((eg.get("tcp_relays") or {}).keys()),
@@ -438,7 +463,7 @@ for rid, r in (eg.get("tcp_relays") or {}).items():
 doc = {
     "registry_schema": reg.get("schema_version"),
     "egress_schema": eg.get("schema_version"),
-    "access_lists": sorted((acl.get("lists") or {}).keys()),
+    "access_lists": sorted((acl.get("access_lists") or acl.get("lists") or {}).keys()),
     "clients": clients,
     "egress_profiles": sorted((eg.get("egress_profiles") or {}).keys()),
     "tcp_relays": relays,
@@ -498,6 +523,57 @@ print("COMPARE_OK=%s" % ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
 PY
 up_cmp=$?
+
+# Effective authorization must survive, not only legacy file identity.
+pq_ssh "$SERVER" 'sudo python3 -' >"$OUT/policy-preservation.log" 2>&1 <<'PY'
+import sys
+sys.path.insert(0, "/usr/local/lib/drlink")
+from drlink_control_plane import ControlPlane
+import drlink_v24 as v24
+
+plane = ControlPlane(None)
+host = "v231-upgrade-seed"
+remote_allow = plane.evaluate_remote_access("198.51.100.10", host, "tcp", 22)
+remote_deny = plane.evaluate_remote_access("203.0.113.99", host, "tcp", 22)
+inet_allow = plane.evaluate_internet_access("10.20.30.5", "example.com", 443, "https")
+inet_src = plane.evaluate_internet_access("203.0.113.9", "example.com", 443, "https")
+inet_dst = plane.evaluate_internet_access("10.20.30.5", "other.example", 443, "https")
+remote_rules = plane.conn.execute(
+    "SELECT COUNT(*) FROM policy_rules WHERE plane = 'remote'"
+).fetchone()[0]
+internet_rules = plane.conn.execute(
+    "SELECT COUNT(*) FROM policy_rules WHERE plane = 'internet'"
+).fetchone()[0]
+print("REMOTE_ALLOW=%s" % remote_allow.get("action"))
+print("REMOTE_DENY=%s" % remote_deny.get("action"))
+print("REMOTE_DENY_REASON=%s" % remote_deny.get("reason"))
+print("INET_ALLOW=%s" % inet_allow.get("action"))
+print("INET_WRONG_SRC=%s" % inet_src.get("action"))
+print("INET_WRONG_DST=%s" % inet_dst.get("action"))
+print("REMOTE_RULES=%s" % remote_rules)
+print("INTERNET_RULES=%s" % internet_rules)
+print("REMOTE_MODE=%s" % v24.get_access_policy(plane, "remote").get("mode"))
+print("INTERNET_MODE=%s" % v24.get_access_policy(plane, "internet").get("mode"))
+ok = (
+    remote_allow.get("action") == "ALLOW"
+    and remote_deny.get("action") == "DENY"
+    and "No Policy (ALLOW)" not in str(remote_deny.get("reason"))
+    and inet_allow.get("action") == "ALLOW"
+    and inet_src.get("action") == "DENY"
+    and inet_dst.get("action") == "DENY"
+    and int(remote_rules) > 0
+    and int(internet_rules) > 0
+)
+print("POLICY_PRESERVED=%s" % ("PASS" if ok else "FAIL"))
+raise SystemExit(0 if ok else 1)
+PY
+if grep -q 'POLICY_PRESERVED=PASS' "$OUT/policy-preservation.log"; then
+  pq_gate UPGRADE_RESTRICTIVE_POLICY_PRESERVED PASS
+else
+  pq_gate UPGRADE_RESTRICTIVE_POLICY_PRESERVED FAIL
+  cat "$OUT/policy-preservation.log" | tee -a "$PROD_QUAL_SUMMARY" || true
+  up_cmp=1
+fi
 
 # Runtime health after upgrade
 set +e
