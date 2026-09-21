@@ -82,7 +82,7 @@ A legacy client on an older updater may require the documented **one-time verifi
 
 The next-generation v2.4.0 control-plane redesign is developed separately on:
 
-[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/data-relay-link/tree/feature/v2.4.0-final-product-closure)
+[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)
 
 Do not treat development-branch v2.4.0 target behavior as a stable v2.3.0 capability until it is integrated and qualified on an immutable exact HEAD.
 
@@ -256,7 +256,7 @@ The v2.3.0 line is intended for approximately **1–50 clients**.
 | Topic | Link |
 |---|---|
 | Product website | **https://link.datarelay.run/** |
-| v2.4.0 development branch | [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/data-relay-link/tree/feature/v2.4.0-final-product-closure) |
+| v2.4.0 development branch | [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure) |
 | v2.3.0 legacy documentation | https://frp.xdr.ooo |
 | CLI Reference | [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
 | Deployment modes | [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md) |
