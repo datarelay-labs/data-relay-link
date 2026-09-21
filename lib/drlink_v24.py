@@ -935,6 +935,63 @@ def blacklist_last_rule_impact(
     }
 
 
+def whitelist_last_rule_impact(
+    plane_db,
+    family: str,
+    rule_name: str,
+    *,
+    disabling: bool = False,
+) -> Optional[dict]:
+    """Return outage/narrowing impact when this clears the last WHITELIST allow.
+
+    Applies to delete or disable of the final enabled WHITELIST rule while
+    enforcement is enabled. Effective result becomes DENY ALL; this is not
+    access broadening and must not be labeled as such.
+    """
+    plane = _plane_key(family)
+    pol = get_access_policy(plane_db, plane)
+    if str(pol.get("mode") or "").lower() != "whitelist":
+        return None
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        return None
+    if not _rule_is_enabled(plane_db, plane, rule_name):
+        return None
+    enabled = _count_blocking_rules(plane_db, plane)
+    if enabled != 1:
+        return None
+    title = _access_family_title(plane)
+    action = "disabling" if disabling else "removing"
+    return {
+        "access_broadened": False,
+        "access_narrowed": True,
+        "requires_confirmation": True,
+        "warning": (
+            "This change narrows %s by %s the last enabled WHITELIST Rule; "
+            "effective result becomes DENY ALL."
+        )
+        % (title, action),
+        "affected_rules": [rule_name],
+        "before": "WHITELIST / Enforcement ENABLED / Effective enabled rules: 1",
+        "after": "WHITELIST / last enabled Rule %s / Effective result: DENY ALL"
+        % ("disabled" if disabling else "removed"),
+    }
+
+
+def last_enabled_rule_mutation_impact(
+    plane_db,
+    family: str,
+    rule_name: str,
+    *,
+    disabling: bool = False,
+) -> Optional[dict]:
+    """BLACKLIST broadening or WHITELIST DENY ALL outage impact for rule mutation."""
+    return blacklist_last_rule_impact(
+        plane_db, family, rule_name, disabling=disabling
+    ) or whitelist_last_rule_impact(
+        plane_db, family, rule_name, disabling=disabling
+    )
+
+
 def reset_access_policy(plane_db, family: str, *, confirm: Optional[bool] = None) -> dict:
     plane = _plane_key(family)
     title = {
@@ -2246,7 +2303,9 @@ def set_access_rule(
         and existing is not None
         and bool(existing["enabled"])
     ):
-        impact = blacklist_last_rule_impact(plane_db, plane, name, disabling=True)
+        impact = last_enabled_rule_mutation_impact(
+            plane_db, plane, name, disabling=True
+        )
 
     return plane_db._mutate(
         "set %s-access %s" % (plane, name),
@@ -2708,7 +2767,9 @@ def set_ai_access_rule(
         and existing is not None
         and bool(existing["enabled"])
     ):
-        impact = blacklist_last_rule_impact(plane_db, "ai", name, disabling=True)
+        impact = last_enabled_rule_mutation_impact(
+            plane_db, "ai", name, disabling=True
+        )
 
     return plane_db._mutate(
         "set ai-access %s" % name,
@@ -2736,7 +2797,9 @@ def unset_ai_access_rule(
             "operation": "delete",
         }
 
-    impact = blacklist_last_rule_impact(plane_db, "ai", name, disabling=False)
+    impact = last_enabled_rule_mutation_impact(
+        plane_db, "ai", name, disabling=False
+    )
     return plane_db._mutate(
         "unset ai-access %s" % name,
         "delete ai access rule",

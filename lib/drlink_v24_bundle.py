@@ -482,7 +482,8 @@ def _security_impact_for_plan(plane: ControlPlane, context: str, body: dict, cha
                     section.get("enforcement") or pol.get("enforcement")
                 ).lower() != "disabled":
                     impact.append(
-                        "WARNING: %s WHITELIST with zero enabled Rules → DENY ALL." % title
+                        "WARNING: This change narrows %s; WHITELIST with zero "
+                        "enabled Rules → DENY ALL." % title
                     )
 
     # Indirect broadening: deleting Permission Object/Group still referenced by
@@ -1027,9 +1028,19 @@ def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False)
         or str((__import__("os").environ.get("DRLINK_CONFIRM") or "")).strip().lower()
         in ("yes", "y", "1", "true")
     ):
+        texts = list(plan.security_impact or [])
+        access_narrowed = any("DENY ALL" in str(t) for t in texts)
+        access_broadened = any(
+            "broadens" in str(t).lower() or "this change resets" in str(t).lower()
+            for t in texts
+        )
         raise ConfirmationRequired(
             format_v24_plan(plan) + "\nApply these changes? [y/N]",
-            {"access_broadened": True},
+            {
+                "access_broadened": bool(access_broadened),
+                "access_narrowed": bool(access_narrowed),
+                "requires_confirmation": True,
+            },
         )
 
     order = {

@@ -485,7 +485,9 @@ class ControlPlane:
     ) -> Any:
         if impact and not _confirm_requested(confirm):
             needs_confirm = bool(
-                impact.get("access_broadened") or impact.get("requires_confirmation")
+                impact.get("access_broadened")
+                or impact.get("access_narrowed")
+                or impact.get("requires_confirmation")
             )
             if needs_confirm and not self._batch_mode:
                 raise ConfirmationRequired(self._format_impact(impact), impact)
@@ -623,6 +625,9 @@ class ControlPlane:
             "Policy behavior will change",
             "",
         ]
+        if impact.get("warning"):
+            lines.append(str(impact["warning"]))
+            lines.append("")
         if impact.get("adding"):
             lines.append("Adding:")
             for item in impact["adding"]:
@@ -2148,7 +2153,9 @@ class ControlPlane:
         if not enabled and bool(rule["enabled"]):
             import drlink_v24 as v24
 
-            impact = v24.blacklist_last_rule_impact(self, plane, name, disabling=True)
+            impact = v24.last_enabled_rule_mutation_impact(
+                self, plane, name, disabling=True
+            )
 
         return self._mutate(
             "set %s-access enabled" % plane,
@@ -2232,7 +2239,9 @@ class ControlPlane:
         if bool(rule["enabled"]):
             import drlink_v24 as v24
 
-            impact = v24.blacklist_last_rule_impact(self, plane, name, disabling=False)
+            impact = v24.last_enabled_rule_mutation_impact(
+                self, plane, name, disabling=False
+            )
 
         return self._mutate(
             "unset %s-access %s" % (plane, name),
