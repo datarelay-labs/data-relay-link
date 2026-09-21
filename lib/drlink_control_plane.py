@@ -1079,6 +1079,34 @@ class ControlPlane:
                         "display": "AI Access: %s" % row["name"],
                     }
                 )
+            # Cross-host Remote Services bound by immutable Managed Host client_id.
+            link = self.conn.execute(
+                "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+                (obj["id"],),
+            ).fetchone()
+            bound_cid = link["client_id"] if link and link["client_id"] else None
+            if bound_cid:
+                for row in self.conn.execute(
+                    "SELECT s.name AS service_name, c.label AS owner_label, c.hostname AS owner_hostname, "
+                    "c.id AS owner_id "
+                    "FROM remote_service_meta m "
+                    "JOIN published_services s ON s.id = m.service_id "
+                    "JOIN clients c ON c.id = s.client_id "
+                    "WHERE m.destination_client_id = ? AND IFNULL(s.released, 0) = 0 "
+                    "ORDER BY s.name",
+                    (bound_cid,),
+                ):
+                    owner = row["owner_label"] or row["owner_hostname"] or row["owner_id"][:8]
+                    refs.append(
+                        {
+                            "kind": "remote-service",
+                            "name": row["service_name"],
+                            "owner": owner,
+                            "section": "Remote Services",
+                            "display": "Remote Service: %s (Agent %s)"
+                            % (row["service_name"], owner),
+                        }
+                    )
         return refs
 
     def unset_object(self, name: str) -> dict:

@@ -401,6 +401,7 @@ def upsert_remote_service_on_server(
     target_mode: str,
     preserve_endpoint_port: Optional[int] = None,
     runtime_verified: bool = False,
+    destination_client_id: Optional[str] = None,
 ) -> dict:
     base = resolve_mgmt_base_url(root)
     if not base:
@@ -419,6 +420,8 @@ def upsert_remote_service_on_server(
         "target_mode": target_mode,
         "runtime_verified": bool(runtime_verified),
     }
+    if destination_client_id:
+        body["destination_client_id"] = str(destination_client_id)
     if preserve_endpoint_port is not None:
         body["preserve_endpoint_port"] = int(preserve_endpoint_port)
     return _request_json("POST", base + "/v1/remote-services", body, root=root)
@@ -666,16 +669,38 @@ def build_catalog_payload(plane) -> dict:
         if obj["type"] not in ("host", "network", "fqdn", "managed_endpoint"):
             continue
         values = plane._object_values(obj["id"])
-        network_objects.append(
-            {
-                "name": obj["name"],
-                "type": obj["type"],
-                "values": values,
-                "origin": obj.get("origin"),
-                "generation": int(obj.get("row_version") or obj.get("generation") or 1),
-                "id": obj["id"],
-            }
-        )
+        entry = {
+            "name": obj["name"],
+            "type": obj["type"],
+            "values": values,
+            "origin": obj.get("origin"),
+            "generation": int(obj.get("row_version") or obj.get("generation") or 1),
+            "id": obj["id"],
+        }
+        if obj["type"] == "managed_endpoint":
+            cid = obj.get("client_id")
+            if not cid:
+                link = plane.conn.execute(
+                    "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+                    (obj["id"],),
+                ).fetchone()
+                cid = link["client_id"] if link else None
+            if cid:
+                entry["client_id"] = cid
+            addrs = []
+            try:
+                addrs = [
+                    str(a.get("address") or a)
+                    for a in (plane.endpoint_addresses(obj["name"]) or [])
+                    if (a.get("address") if isinstance(a, dict) else a)
+                ]
+            except Exception:
+                addrs = []
+            if addrs:
+                entry["addresses"] = addrs
+                if not entry["values"]:
+                    entry["values"] = list(addrs)
+        network_objects.append(entry)
     service_objects = []
     for sobj in plane.conn.execute(
         "SELECT id, name, type, port, row_version FROM service_objects ORDER BY name"
@@ -697,15 +722,33 @@ def build_catalog_payload(plane) -> dict:
         )
     managed_hosts = []
     for row in plane.conn.execute(
-        "SELECT id, label, hostname, status, connected FROM clients ORDER BY COALESCE(label, hostname, id)"
+        "SELECT id, label, hostname, status, connected, trust_status FROM clients "
+        "ORDER BY COALESCE(label, hostname, id)"
     ):
+        ep = plane.conn.execute(
+            "SELECT o.name FROM objects o JOIN managed_endpoints e ON e.object_id = o.id "
+            "WHERE e.client_id = ?",
+            (row["id"],),
+        ).fetchone()
+        addresses = []
+        if ep is not None:
+            try:
+                addresses = [
+                    str(a.get("address") or a)
+                    for a in (plane.endpoint_addresses(ep["name"]) or [])
+                    if (a.get("address") if isinstance(a, dict) else a)
+                ]
+            except Exception:
+                addresses = []
         managed_hosts.append(
             {
                 "id": row["id"],
-                "name": row["label"] or row["hostname"] or row["id"],
+                "name": (ep["name"] if ep else None) or row["label"] or row["hostname"] or row["id"],
                 "hostname": row["hostname"],
                 "status": row["status"],
                 "connected": bool(row["connected"]),
+                "trust_status": row["trust_status"],
+                "addresses": addresses,
             }
         )
     return {
@@ -724,17 +767,19 @@ def apply_catalog_to_agent(plane_db, catalog: dict) -> int:
     for obj in catalog.get("networkObjects") or []:
         if not isinstance(obj, dict) or not obj.get("name"):
             continue
-        payload = json.dumps(
-            {
-                "name": obj["name"],
-                "type": obj.get("type"),
-                "values": obj.get("values") or [],
-                "origin": obj.get("origin"),
-                "generation": obj.get("generation"),
-                "id": obj.get("id"),
-            },
-            sort_keys=True,
-        )
+        entry = {
+            "name": obj["name"],
+            "type": obj.get("type"),
+            "values": obj.get("values") or [],
+            "origin": obj.get("origin"),
+            "generation": obj.get("generation"),
+            "id": obj.get("id"),
+        }
+        if obj.get("client_id"):
+            entry["client_id"] = obj.get("client_id")
+        if obj.get("addresses"):
+            entry["addresses"] = obj.get("addresses")
+        payload = json.dumps(entry, sort_keys=True)
         plane_db.conn.execute(
             "INSERT OR REPLACE INTO agent_object_catalog(kind, name, payload, synced_at) VALUES (?, ?, ?, ?)",
             ("network-object", obj["name"], payload, now),
@@ -780,6 +825,7 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     machine_id = auth.machine_id
     name = str(body.get("name") or "").strip()
     destination = str(body.get("destination") or "").strip()
+    destination_client_id = str(body.get("destination_client_id") or "").strip() or None
     service = str(body.get("service") or "").strip()
     enabled = bool(body.get("enabled", True))
     pool_class = str(body.get("pool_class") or "normal").strip().lower()
@@ -807,7 +853,7 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     host_label = client["label"] or client["hostname"] or machine_id
 
     existing = plane.conn.execute(
-        "SELECT s.id, s.public_port, m.pool_class, m.status FROM published_services s "
+        "SELECT s.id, s.public_port, m.pool_class, m.status, m.destination_client_id FROM published_services s "
         "LEFT JOIN remote_service_meta m ON m.service_id = s.id "
         "WHERE s.client_id = ? AND s.name = ? COLLATE NOCASE AND s.released = 0",
         (client["id"], name),
@@ -817,6 +863,11 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
             "The Service type cannot be changed between standard TCP and Fixed TCP "
             "for an existing Remote Service. Delete and recreate the Remote Service."
         )
+    # Preserve prior immutable bind when Agent omits destination_client_id.
+    if not destination_client_id and existing is not None:
+        prior = existing["destination_client_id"] if "destination_client_id" in existing.keys() else None
+        if prior:
+            destination_client_id = str(prior)
 
     endpoint_port = None
     proxy_id = None
@@ -865,7 +916,10 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
             from drlink_upgrade_reconcile import server_destination_reason
 
             dest_reason = server_destination_reason(
-                plane, destination, owner_client_id=client["id"]
+                plane,
+                destination,
+                owner_client_id=client["id"],
+                destination_client_id=destination_client_id,
             )
         except Exception:
             dest_reason = None
@@ -902,14 +956,16 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
             ).fetchone()
             plane.conn.execute(
                 "INSERT OR REPLACE INTO remote_service_meta"
-                "(service_id, status, pool_class, service_object_id, destination_name, pending_allocation, delete_pending, reason) "
-                "VALUES (?, ?, ?, ?, ?, 0, 0, ?)",
+                "(service_id, status, pool_class, service_object_id, destination_name, "
+                "destination_client_id, pending_allocation, delete_pending, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)",
                 (
                     pub["id"],
                     status,
                     pool_class,
                     sobj["id"],
                     destination,
+                    destination_client_id,
                     reason,
                 ),
             )
@@ -946,6 +1002,7 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     return {
         "name": name,
         "destination": destination,
+        "destination_client_id": destination_client_id,
         "service": service,
         "enabled": enabled,
         "status": status,

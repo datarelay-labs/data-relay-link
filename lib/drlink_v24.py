@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS remote_service_meta (
   pool_class TEXT NOT NULL DEFAULT 'normal',
   service_object_id TEXT,
   destination_name TEXT,
+  destination_client_id TEXT,
   pending_allocation INTEGER NOT NULL DEFAULT 0,
   delete_pending INTEGER NOT NULL DEFAULT 0,
   reason TEXT NOT NULL DEFAULT '',
@@ -195,6 +196,7 @@ CREATE TABLE IF NOT EXISTS remote_service_meta (
 CREATE TABLE IF NOT EXISTS agent_remote_services (
   name TEXT PRIMARY KEY,
   destination TEXT NOT NULL,
+  destination_client_id TEXT,
   service_object TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'DEGRADED',
@@ -239,6 +241,13 @@ def validate_public_name(value: str, kind: str = "Name") -> str:
 
 def ensure_v2_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(V2_SCHEMA_SQL)
+    # Additive identity column for Managed Host Remote Service destinations.
+    meta_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(remote_service_meta)")}
+    if "destination_client_id" not in meta_cols:
+        conn.execute("ALTER TABLE remote_service_meta ADD COLUMN destination_client_id TEXT")
+    agent_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(agent_remote_services)")}
+    if "destination_client_id" not in agent_cols:
+        conn.execute("ALTER TABLE agent_remote_services ADD COLUMN destination_client_id TEXT")
     now = utc_now_iso()
     for plane in POLICY_PLANES:
         row = conn.execute("SELECT plane FROM access_policies WHERE plane = ?", (plane,)).fetchone()
@@ -318,6 +327,7 @@ def _agent_remote_service_mgmt_snapshot(
     """Capture Server-restorable fields from a local Agent Remote Service row."""
     name = str(row["name"])
     destination = str(row["destination"] or "")
+    destination_client_id = str(_row_get(row, "destination_client_id") or "").strip() or None
     service = str(row["service_object"] or "")
     enabled = bool(row["enabled"])
     pool_class = str(row["pool_class"] or "normal")
@@ -333,31 +343,61 @@ def _agent_remote_service_mgmt_snapshot(
     else:
         target_mode = "routed"
         target_host = destination
-        obj = None
-        try:
-            obj = plane_db.get_object(destination) if hasattr(plane_db, "get_object") else None
-        except Exception:
-            obj = None
-        if obj and obj.get("type") in ("host", "fqdn"):
-            vals = plane_db._object_values(obj["id"]) if hasattr(plane_db, "_object_values") else []
-            if vals:
-                target_host = vals[0]
-        elif obj and obj.get("type") == "managed_endpoint":
-            target_host = "127.0.0.1"
-            target_mode = "self"
+        if destination_client_id:
+            inventory = _managed_host_inventory_by_client_id(plane_db, destination_client_id)
+            if inventory:
+                resolved, _reason = _runtime_target_for_managed_host(inventory)
+                if resolved:
+                    target_host = resolved
+                destination = str(inventory.get("name") or destination)
+                identity = load_agent_identity(root or getattr(plane_db, "root", None))
+                self_id = str(identity.get("machine_id") or "").strip()
+                if self_id and self_id == destination_client_id:
+                    target_mode = "self"
+                    target_host = "127.0.0.1"
         else:
-            catalog = plane_db.conn.execute(
-                "SELECT payload FROM agent_object_catalog WHERE kind = 'network-object' AND name = ? COLLATE NOCASE",
-                (destination,),
-            ).fetchone()
-            if catalog:
-                try:
-                    payload = json.loads(catalog["payload"] or "{}")
-                except (TypeError, ValueError):
-                    payload = {}
-                vals = [str(v) for v in (payload.get("values") or []) if v not in (None, "")]
+            obj = None
+            try:
+                obj = plane_db.get_object(destination) if hasattr(plane_db, "get_object") else None
+            except Exception:
+                obj = None
+            if obj and obj.get("type") in ("host", "fqdn"):
+                vals = plane_db._object_values(obj["id"]) if hasattr(plane_db, "_object_values") else []
                 if vals:
                     target_host = vals[0]
+            elif obj and obj.get("type") == "managed_endpoint":
+                cid = obj.get("client_id") or _managed_host_client_id_from_name(plane_db, destination)
+                destination_client_id = str(cid) if cid else None
+                inventory = (
+                    _managed_host_inventory_by_client_id(plane_db, destination_client_id)
+                    if destination_client_id
+                    else None
+                )
+                identity = load_agent_identity(root or getattr(plane_db, "root", None))
+                self_id = str(identity.get("machine_id") or "").strip()
+                if destination_client_id and self_id and destination_client_id == self_id:
+                    target_mode = "self"
+                    target_host = "127.0.0.1"
+                elif inventory:
+                    resolved, _reason = _runtime_target_for_managed_host(inventory)
+                    target_host = resolved or destination
+                else:
+                    target_host = destination
+            else:
+                catalog = plane_db.conn.execute(
+                    "SELECT payload FROM agent_object_catalog WHERE kind = 'network-object' AND name = ? COLLATE NOCASE",
+                    (destination,),
+                ).fetchone()
+                if catalog:
+                    try:
+                        payload = json.loads(catalog["payload"] or "{}")
+                    except (TypeError, ValueError):
+                        payload = {}
+                    vals = [str(v) for v in (payload.get("values") or []) if v not in (None, "")]
+                    if vals:
+                        target_host = vals[0]
+                    if str(payload.get("type") or "").lower() == "managed_endpoint" and payload.get("client_id"):
+                        destination_client_id = str(payload["client_id"])
     sobj = get_service_object(plane_db, service)
     target_port = int(sobj["port"]) if sobj else 0
     if not sobj:
@@ -375,6 +415,7 @@ def _agent_remote_service_mgmt_snapshot(
         "name": name,
         "root": root,
         "destination": destination,
+        "destination_client_id": destination_client_id,
         "service": service,
         "enabled": enabled,
         "pool_class": pool_class,
@@ -401,6 +442,7 @@ def _compensate_agent_mgmt_effect(mgmt, item: dict, *, root: Optional[str] = Non
             root=effect_root,
             name=name,
             destination=str(item.get("destination") or name),
+            destination_client_id=item.get("destination_client_id"),
             service=str(item.get("service") or ""),
             enabled=bool(item.get("enabled", True)),
             pool_class=str(item.get("pool_class") or "normal"),
@@ -3026,17 +3068,25 @@ def sync_agent_catalog_from_server(plane_db, server_plane=None, *, root: Optiona
         if obj["type"] not in ("host", "network", "fqdn", "managed_endpoint"):
             continue
         values = server_plane._object_values(obj["id"])
-        payload = json.dumps(
-            {
-                "name": obj["name"],
-                "type": obj["type"],
-                "values": values,
-                "origin": obj.get("origin"),
-                "generation": int(obj.get("row_version") or 1),
-                "id": obj["id"],
-            },
-            sort_keys=True,
-        )
+        payload_obj = {
+            "name": obj["name"],
+            "type": obj["type"],
+            "values": values,
+            "origin": obj.get("origin"),
+            "generation": int(obj.get("row_version") or 1),
+            "id": obj["id"],
+        }
+        if obj["type"] == "managed_endpoint":
+            cid = obj.get("client_id")
+            if not cid:
+                link = server_plane.conn.execute(
+                    "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+                    (obj["id"],),
+                ).fetchone()
+                cid = link["client_id"] if link else None
+            if cid:
+                payload_obj["client_id"] = cid
+        payload = json.dumps(payload_obj, sort_keys=True)
         plane_db.conn.execute(
             "INSERT OR REPLACE INTO agent_object_catalog(kind, name, payload, synced_at) VALUES (?, ?, ?, ?)",
             ("network-object", obj["name"], payload, now),
@@ -3077,8 +3127,165 @@ def _catalog_payload(plane_db, kind: str, name: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _destination_dependency_status(plane_db, destination: str, *, root: Optional[str] = None) -> Optional[str]:
+def _row_get(row, key: str, default=None):
+    if row is None:
+        return default
+    try:
+        keys = row.keys()
+    except Exception:
+        keys = ()
+    if key in keys:
+        val = row[key]
+        return default if val is None else val
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return default
+
+
+def _managed_host_client_id_from_name(plane_db, name: str) -> Optional[str]:
+    """Resolve a public Managed Host name/label to immutable client_id once."""
+    token = str(name or "").strip()
+    if not token:
+        return None
+    obj = plane_db.get_object(token) if hasattr(plane_db, "get_object") else None
+    if obj and obj.get("type") == "managed_endpoint":
+        cid = obj.get("client_id")
+        if cid:
+            return str(cid)
+        try:
+            link = plane_db.conn.execute(
+                "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+                (obj["id"],),
+            ).fetchone()
+        except sqlite3.Error:
+            link = None
+        if link and link["client_id"]:
+            return str(link["client_id"])
+    catalog = _catalog_payload(plane_db, "network-object", token)
+    if catalog and str(catalog.get("type") or "").lower() == "managed_endpoint":
+        cid = catalog.get("client_id")
+        if cid:
+            return str(cid)
+    host_catalog = _catalog_payload(plane_db, "managed-host", token)
+    if host_catalog and host_catalog.get("id"):
+        return str(host_catalog["id"])
+    # Catalog may be keyed by current label while we only have client rows locally.
+    try:
+        client = plane_db.get_client(token) if hasattr(plane_db, "get_client") else None
+    except Exception:
+        client = None
+    if client is not None:
+        return str(client["id"])
+    return None
+
+
+def _managed_host_inventory_by_client_id(plane_db, client_id: str) -> Optional[dict]:
+    """Authoritative or catalog inventory for a bound Managed Host client_id."""
+    cid = str(client_id or "").strip()
+    if not cid:
+        return None
+    # Prefer live Server/Agent control-plane inventory.
+    try:
+        row = plane_db.conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is not None:
+        ep = plane_db.conn.execute(
+            "SELECT o.name, o.id AS object_id FROM objects o "
+            "JOIN managed_endpoints e ON e.object_id = o.id WHERE e.client_id = ?",
+            (cid,),
+        ).fetchone()
+        addresses: list[str] = []
+        if ep is not None and hasattr(plane_db, "endpoint_addresses"):
+            try:
+                addresses = [
+                    str(a.get("address") or a)
+                    for a in (plane_db.endpoint_addresses(ep["name"]) or [])
+                    if (a.get("address") if isinstance(a, dict) else a)
+                ]
+            except Exception:
+                addresses = []
+        if not addresses and ep is not None:
+            addresses = [str(v) for v in plane_db._object_values(ep["object_id"]) if v]
+        return {
+            "id": cid,
+            "name": (ep["name"] if ep else None) or row["label"] or row["hostname"] or cid,
+            "hostname": row["hostname"] or "",
+            "label": row["label"] or "",
+            "status": row["status"],
+            "connected": bool(row["connected"]),
+            "trust_status": row["trust_status"] if "trust_status" in row.keys() else None,
+            "addresses": addresses,
+            "source": "inventory",
+        }
+    # Fall back to synchronized Agent catalog keyed by client id or public name.
+    for kind in ("managed-host", "network-object"):
+        for crow in plane_db.conn.execute(
+            "SELECT name, payload FROM agent_object_catalog WHERE kind = ?", (kind,)
+        ):
+            try:
+                payload = json.loads(crow["payload"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("id") or "").strip() != cid and str(payload.get("client_id") or "").strip() != cid:
+                continue
+            values = [str(v) for v in (payload.get("values") or payload.get("addresses") or []) if v not in (None, "")]
+            return {
+                "id": cid,
+                "name": payload.get("name") or crow["name"],
+                "hostname": payload.get("hostname") or (values[0] if values else ""),
+                "label": payload.get("name") or crow["name"],
+                "status": payload.get("status"),
+                "connected": bool(payload.get("connected")) if payload.get("connected") is not None else True,
+                "trust_status": payload.get("trust_status"),
+                "addresses": values,
+                "source": "catalog",
+            }
+    return None
+
+
+def _runtime_target_for_managed_host(inventory: dict) -> tuple[Optional[str], Optional[str]]:
+    """Return (target_host, degraded_reason) from bound Managed Host inventory."""
+    if not inventory:
+        return None, "Bound Managed Host destination is missing or invalid."
+    trust = str(inventory.get("trust_status") or "").lower()
+    if trust in ("revoked", "untrusted", "denied"):
+        return None, "Bound Managed Host destination is revoked or untrusted."
+    status = str(inventory.get("status") or "").lower()
+    if status in ("retired", "removed", "deleted"):
+        return None, "Bound Managed Host destination is retired."
+    addresses = [str(a).strip() for a in (inventory.get("addresses") or []) if str(a or "").strip()]
+    hostname = str(inventory.get("hostname") or "").strip()
+    if addresses:
+        return addresses[0], None
+    if hostname:
+        return hostname, None
+    return None, (
+        "Bound Managed Host '%s' has no usable hostname or address."
+        % (inventory.get("name") or inventory.get("id") or "destination")
+    )
+
+
+def _destination_dependency_status(
+    plane_db,
+    destination: str,
+    *,
+    root: Optional[str] = None,
+    destination_client_id: Optional[str] = None,
+) -> Optional[str]:
     """Return a DEGRADED reason if destination dependency is missing/changed; else None."""
+    bound = str(destination_client_id or "").strip()
+    if bound:
+        inventory = _managed_host_inventory_by_client_id(plane_db, bound)
+        if inventory is None:
+            return (
+                "Bound Managed Host destination (client_id=%s) is missing or invalid after reconnect."
+                % bound[:12]
+            )
+        _target, reason = _runtime_target_for_managed_host(inventory)
+        return reason
     dest = str(destination or "").strip()
     if not dest:
         return "Remote Service destination is missing after reconnect."
@@ -3329,7 +3536,12 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
             plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
         ):
             svc_name = row["service_object"]
-            dest_reason = _destination_dependency_status(plane_db, row["destination"], root=root)
+            dest_reason = _destination_dependency_status(
+                plane_db,
+                row["destination"],
+                root=root,
+                destination_client_id=_row_get(row, "destination_client_id"),
+            )
             svc_reason = _service_dependency_status(plane_db, svc_name)
             reason = dest_reason or svc_reason
             if reason:
@@ -3546,17 +3758,55 @@ def set_remote_service_agent(
     if dest is None or svc_name is None:
         raise ControlPlaneError("Interactive Remote Service wizard requires a TTY session")
 
+    # Refresh synchronized Managed Host inventory before binding/resolving so
+    # runtime targets follow current hostname/address for a stable client_id.
+    if server_reachable:
+        try:
+            import drlink_mgmt_sync as mgmt
+
+            if mgmt.use_live_mgmt_path(root):
+                sync_agent_catalog_from_server(plane_db, root=root)
+        except Exception:
+            pass
+
     # Resolve destination single-target
     dest_token = str(dest).strip()
+    destination_client_id = None
+    existing_dest_client_id = str(_row_get(existing, "destination_client_id") or "").strip() or None
+    existing_dest_name = str(existing["destination"] if existing else "") 
+    self_machine_id = str(identity.get("machine_id") or "").strip() or None
+    bound_inventory = None
+    destination_identity_reason = None
+
     if dest_token.lower() in ("this-host", "this_host", "self"):
         dest_token = host_name
         relay = False
         target_mode = "self"
         target_host = "127.0.0.1"
+        destination_client_id = self_machine_id
     else:
-        relay = dest_token.lower() != host_name.lower()
-        target_mode = "self" if not relay else "routed"
-        # Validate single target
+        # Preserve an existing immutable Managed Host bind unless the operator
+        # explicitly changes the destination token to a different value.
+        explicit_retarget = (
+            destination is not None
+            and existing is not None
+            and existing_dest_client_id
+            and dest_token.lower() != existing_dest_name.lower()
+        )
+        if existing_dest_client_id and not explicit_retarget:
+            destination_client_id = existing_dest_client_id
+            bound_inventory = _managed_host_inventory_by_client_id(plane_db, destination_client_id)
+            if bound_inventory:
+                dest_token = str(bound_inventory.get("name") or dest_token)
+            else:
+                destination_identity_reason = (
+                    "Bound Managed Host destination (client_id=%s) is missing or invalid."
+                    % destination_client_id[:12]
+                )
+        relay = True
+        target_mode = "routed"
+        target_host = dest_token
+        # Validate single target (groups / CIDR / ordinary objects)
         grp = plane_db.get_object_group(dest_token) if hasattr(plane_db, "get_object_group") else None
         if grp is None:
             try:
@@ -3565,7 +3815,7 @@ def set_remote_service_agent(
                 ).fetchone()
             except sqlite3.Error:
                 grp = None
-        if grp:
+        if grp and destination_client_id is None:
             members = plane_db._expand_group_members(grp["id"], set())
             if len(members) != 1:
                 raise ControlPlaneError(
@@ -3574,22 +3824,71 @@ def set_remote_service_agent(
                     "No changes were applied." % dest_token
                 )
             dest_token = members[0]["name"]
-        obj = plane_db.get_object(dest_token)
-        if obj and obj["type"] == "network":
+        obj = plane_db.get_object(dest_token) if hasattr(plane_db, "get_object") else None
+        if obj and obj["type"] == "network" and destination_client_id is None:
             raise ControlPlaneError(
                 "ERROR:\nRemote Service destination must resolve to a single target.\n\n"
                 "CIDR Network Object '%s' is not allowed.\n\n"
                 "No changes were applied." % dest_token
             )
-        if obj and obj["type"] == "host":
+        if destination_client_id is None:
+            # Fresh bind / explicit retarget: resolve Managed Host by public name once.
+            if obj and obj["type"] == "managed_endpoint":
+                destination_client_id = _managed_host_client_id_from_name(plane_db, dest_token)
+            else:
+                catalog = _catalog_payload(plane_db, "network-object", dest_token)
+                if catalog and str(catalog.get("type") or "").lower() == "managed_endpoint":
+                    destination_client_id = (
+                        str(catalog["client_id"]) if catalog.get("client_id") else None
+                    )
+                elif _catalog_payload(plane_db, "managed-host", dest_token):
+                    destination_client_id = _managed_host_client_id_from_name(plane_db, dest_token)
+            if destination_client_id:
+                bound_inventory = _managed_host_inventory_by_client_id(
+                    plane_db, destination_client_id
+                )
+                if bound_inventory:
+                    dest_token = str(bound_inventory.get("name") or dest_token)
+
+        if destination_client_id:
+            if bound_inventory is None:
+                bound_inventory = _managed_host_inventory_by_client_id(
+                    plane_db, destination_client_id
+                )
+            if self_machine_id and destination_client_id == self_machine_id:
+                relay = False
+                target_mode = "self"
+                target_host = "127.0.0.1"
+            elif bound_inventory is None:
+                relay = True
+                target_mode = "routed"
+                target_host = dest_token
+                destination_identity_reason = destination_identity_reason or (
+                    "Bound Managed Host destination (client_id=%s) is missing or invalid."
+                    % destination_client_id[:12]
+                )
+            else:
+                resolved, deg = _runtime_target_for_managed_host(bound_inventory)
+                relay = True
+                target_mode = "routed"
+                if resolved:
+                    target_host = resolved
+                else:
+                    target_host = dest_token
+                    destination_identity_reason = destination_identity_reason or deg
+                dest_token = str(bound_inventory.get("name") or dest_token)
+        elif obj and obj["type"] == "host":
             vals = plane_db._object_values(obj["id"])
             target_host = vals[0] if vals else dest_token
+            relay = dest_token.lower() != host_name.lower()
+            target_mode = "self" if not relay else "routed"
+            if not relay:
+                target_host = "127.0.0.1"
         elif obj and obj["type"] == "fqdn":
             vals = plane_db._object_values(obj["id"])
             target_host = vals[0] if vals else dest_token
-        elif obj and obj["type"] == "managed_endpoint":
-            target_host = "127.0.0.1" if not relay else dest_token
-            target_mode = "self" if not relay else "routed"
+            relay = True
+            target_mode = "routed"
         else:
             # Allow literal hostname / IP when catalog has the object synchronized
             catalog = plane_db.conn.execute(
@@ -3597,22 +3896,36 @@ def set_remote_service_agent(
                 (dest_token,),
             ).fetchone()
             catalog_vals = []
+            catalog_type = ""
             if catalog:
                 try:
                     payload = json.loads(catalog["payload"] or "{}")
                 except (TypeError, ValueError):
                     payload = {}
                 catalog_vals = [str(v) for v in (payload.get("values") or []) if v not in (None, "")]
+                catalog_type = str(payload.get("type") or "").lower()
+            if catalog_type == "managed_endpoint":
+                # Name matched a Managed Host in catalog but client_id was missing —
+                # fail closed rather than routing by mutable label.
+                raise ControlPlaneError(
+                    "ERROR:\nManaged Host destination '%s' has no immutable client identity.\n\n"
+                    "Synchronize the Managed Host catalog and retry.\n\n"
+                    "No changes were applied." % dest_token
+                )
             if catalog_vals:
-                # Probe the Network Object value (IP/FQDN), never the object name.
                 target_host = catalog_vals[0]
+                relay = True
+                target_mode = "routed"
             elif not obj and dest_token.lower() != host_name.lower():
-                # Still allow IP/FQDN literals for relay destinations
                 try:
                     target_host = str(ipaddress.ip_address(dest_token))
                 except ValueError:
                     target_host = dest_token
+                relay = True
+                target_mode = "routed"
             else:
+                relay = dest_token.lower() != host_name.lower()
+                target_mode = "self" if not relay else "routed"
                 target_host = dest_token if relay else "127.0.0.1"
 
     sobj = get_service_object(plane_db, svc_name)
@@ -3650,12 +3963,20 @@ def set_remote_service_agent(
             "Delete and recreate the Remote Service.\n\n"
             "No changes were applied."
         )
-    # Duplicate destination+service check
-    dup = plane_db.conn.execute(
-        "SELECT name FROM agent_remote_services WHERE destination = ? COLLATE NOCASE "
-        "AND service_object = ? COLLATE NOCASE AND name != ? COLLATE NOCASE",
-        (dest_token, svc_name, name),
-    ).fetchone()
+    # Duplicate destination+service check (identity-safe for Managed Host binds)
+    if destination_client_id:
+        dup = plane_db.conn.execute(
+            "SELECT name FROM agent_remote_services WHERE destination_client_id = ? "
+            "AND service_object = ? COLLATE NOCASE AND name != ? COLLATE NOCASE",
+            (destination_client_id, svc_name, name),
+        ).fetchone()
+    else:
+        dup = plane_db.conn.execute(
+            "SELECT name FROM agent_remote_services WHERE destination = ? COLLATE NOCASE "
+            "AND service_object = ? COLLATE NOCASE AND name != ? COLLATE NOCASE "
+            "AND (destination_client_id IS NULL OR destination_client_id = '')",
+            (dest_token, svc_name, name),
+        ).fetchone()
     if dup:
         raise ControlPlaneError(
             "ERROR:\nA Remote Service already exists for:\n\n"
@@ -3687,16 +4008,20 @@ def set_remote_service_agent(
     if not en:
         status = "DISABLED"
         reason = DISABLED_OPERATOR_REASON
-    elif not server_reachable:
-        pending = 1 if endpoint_port is None else 0
-        status = "DEGRADED"
-        reason = "DRLink Server is currently unreachable."
+
+    if not server_reachable:
+        if en:
+            pending = 1 if endpoint_port is None else 0
+            status = "DEGRADED"
+            reason = "DRLink Server is currently unreachable."
     else:
         import drlink_mgmt_sync as mgmt
 
         live_mgmt = mgmt.use_live_mgmt_path(root)
         if live_mgmt:
             # Authoritative Server allocator — Agent must not mint online reservations.
+            # Disabled services still upsert so immutable destination references remain
+            # visible to Server retirement / dependency checks.
             try:
                 # Refresh catalog so dependency generations stay current.
                 try:
@@ -3712,6 +4037,7 @@ def set_remote_service_agent(
                     root=root,
                     name=name,
                     destination=dest_token,
+                    destination_client_id=destination_client_id,
                     service=svc_name,
                     enabled=en,
                     pool_class=pool_class,
@@ -3730,11 +4056,15 @@ def set_remote_service_agent(
                 endpoint_host = remote.get("endpoint_host") or endpoint_host
                 endpoint_port = remote.get("endpoint_port")
                 pending = int(remote.get("pending_allocation") or 0)
-                status = remote.get("status") or "DEGRADED"
-                reason = remote.get("reason") or "Runtime activation pending."
-                if pending:
-                    status = "DEGRADED"
-                    reason = reason or "Endpoint allocation is pending on the Server."
+                if en:
+                    status = remote.get("status") or "DEGRADED"
+                    reason = remote.get("reason") or "Runtime activation pending."
+                    if pending:
+                        status = "DEGRADED"
+                        reason = reason or "Endpoint allocation is pending on the Server."
+                else:
+                    status = "DISABLED"
+                    reason = DISABLED_OPERATOR_REASON
             except ControlPlaneError:
                 raise
             except Exception as exc:
@@ -3778,7 +4108,10 @@ def set_remote_service_agent(
                     reason = "No endpoint port is currently available"
 
     # Routed destination reachability is independent of proxy registration.
-    if en and target_mode == "routed" and endpoint_port is not None and pending == 0:
+    if destination_identity_reason and en:
+        status = "DEGRADED"
+        reason = destination_identity_reason
+    elif en and target_mode == "routed" and endpoint_port is not None and pending == 0:
         if not _probe_tcp(target_host, sport):
             destination_unreachable = True
             status = "DEGRADED"
@@ -3817,26 +4150,30 @@ def set_remote_service_agent(
                 sobj_row = get_service_object(plane_db, svc_name)
                 plane_db.conn.execute(
                     "INSERT OR REPLACE INTO remote_service_meta"
-                    "(service_id, status, pool_class, service_object_id, destination_name, pending_allocation, delete_pending, reason) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                    "(service_id, status, pool_class, service_object_id, destination_name, "
+                    "destination_client_id, pending_allocation, delete_pending, reason) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
                     (
                         pub["id"],
                         status if en else "DISABLED",
                         pool_class,
                         sobj_row["id"] if sobj_row else None,
                         dest_token,
+                        destination_client_id,
                         pending,
                         reason,
                     ),
                 )
             plane_db.conn.execute(
                 "INSERT OR REPLACE INTO agent_remote_services"
-                "(name, destination, service_object, enabled, status, endpoint_host, endpoint_port, "
-                "pending_allocation, delete_pending, pool_class, reason, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                "(name, destination, destination_client_id, service_object, enabled, status, "
+                "endpoint_host, endpoint_port, pending_allocation, delete_pending, pool_class, "
+                "reason, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
                 (
                     name,
                     dest_token,
+                    destination_client_id,
                     svc_name,
                     1 if en else 0,
                     status if en else "DISABLED",
@@ -3909,7 +4246,13 @@ def set_remote_service_agent(
     # Runtime activation: desired DB alone must never imply HEALTHY.
     runtime_ok = False
     runtime_error = ""
-    if en and endpoint_port is not None and pending == 0 and server_reachable:
+    if (
+        en
+        and endpoint_port is not None
+        and pending == 0
+        and server_reachable
+        and not destination_identity_reason
+    ):
         try:
             import drlink_v24_runtime as runtime
 
@@ -3941,6 +4284,7 @@ def set_remote_service_agent(
                         root=root,
                         name=name,
                         destination=dest_token,
+                        destination_client_id=destination_client_id,
                         service=svc_name,
                         enabled=en,
                         pool_class=pool_class,
@@ -4002,6 +4346,11 @@ def set_remote_service_agent(
                 _clear_agent_mgmt_side_effects(plane_db)
             else:
                 _clear_agent_mgmt_side_effects(plane_db)
+    elif destination_identity_reason and en:
+        _persist_status(status, reason or destination_identity_reason)
+        if live_mgmt:
+            _push_agent_remote_service_status(plane_db, root=root, names=[name])
+        _clear_agent_mgmt_side_effects(plane_db)
     elif not en:
         # Disabled: ensure runtime proxy removed.
         try:
@@ -4107,12 +4456,14 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
             # Queue deletion intent: keep a tombstone marker via insert with delete_pending
             plane_db.conn.execute(
                 "INSERT OR REPLACE INTO agent_remote_services"
-                "(name, destination, service_object, enabled, status, endpoint_host, endpoint_port, "
-                "pending_allocation, delete_pending, pool_class, reason, updated_at) "
-                "VALUES (?, ?, ?, 0, 'DISABLED', ?, ?, 0, 1, ?, 'delete pending sync', ?)",
+                "(name, destination, destination_client_id, service_object, enabled, status, "
+                "endpoint_host, endpoint_port, pending_allocation, delete_pending, pool_class, "
+                "reason, updated_at) "
+                "VALUES (?, ?, ?, ?, 0, 'DISABLED', ?, ?, 0, 1, ?, 'delete pending sync', ?)",
                 (
                     name,
                     existing["destination"],
+                    _row_get(existing, "destination_client_id"),
                     existing["service_object"],
                     existing["endpoint_host"],
                     existing["endpoint_port"],

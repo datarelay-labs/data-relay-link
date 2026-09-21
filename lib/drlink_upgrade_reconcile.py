@@ -275,7 +275,42 @@ def server_destination_reason(
     destination: str,
     *,
     owner_client_id: Optional[str] = None,
+    destination_client_id: Optional[str] = None,
 ) -> Optional[str]:
+    bound = str(destination_client_id or "").strip()
+    if bound:
+        row = plane.conn.execute("SELECT * FROM clients WHERE id = ?", (bound,)).fetchone()
+        if row is None:
+            return (
+                "Bound Managed Host destination (client_id=%s) is missing or invalid."
+                % bound[:12]
+            )
+        trust = str(row["trust_status"] or "").lower()
+        if trust in ("revoked", "untrusted", "denied"):
+            return "Bound Managed Host destination is revoked or untrusted."
+        status = str(row["status"] or "").lower()
+        if status in ("retired", "removed", "deleted"):
+            return "Bound Managed Host destination is retired."
+        ep = _managed_host_row(plane, bound)
+        hostname = str(row["hostname"] or "").strip()
+        has_addr = False
+        if ep is not None:
+            try:
+                addrs = plane.endpoint_addresses(ep["name"]) or []
+                has_addr = any(
+                    (a.get("address") if isinstance(a, dict) else a) for a in addrs
+                )
+            except Exception:
+                has_addr = False
+            if not has_addr:
+                vals = plane._object_values(ep["id"])
+                has_addr = bool(vals)
+        if not hostname and not has_addr:
+            return (
+                "Bound Managed Host '%s' has no usable hostname or address."
+                % ((ep["name"] if ep else None) or row["label"] or bound[:12])
+            )
+        return None
     dest = str(destination or "").strip()
     if not dest:
         return "Remote Service destination is missing."
@@ -348,8 +383,17 @@ def effective_remote_service_status(
     if not pub["enabled"]:
         return "DISABLED", "", False
     dest = str(meta["destination_name"] if meta else "") or ""
+    dest_cid = None
+    if meta is not None:
+        try:
+            dest_cid = meta["destination_client_id"]
+        except (KeyError, IndexError, TypeError):
+            dest_cid = None
     dest_reason = server_destination_reason(
-        plane, dest, owner_client_id=pub["client_id"] if pub else None
+        plane,
+        dest,
+        owner_client_id=pub["client_id"] if pub else None,
+        destination_client_id=dest_cid,
     )
     svc_reason = server_service_reason(plane, meta)
     stale_port = False
