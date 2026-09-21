@@ -195,13 +195,15 @@ assert status == doctor.FAIL
 assert any('nonexistent group' in issue for issue in issues)
 PY
 
-# F30: the same invariant fails closed in the allocator load path, the restore
-# staged preflight, and the group tooling (one shared implementation).
-python3 - "$ROOT" "$REG" "$WORKDIR" <<'PY'
-import importlib.util, json, sys, types
+# F30: dangling group references fail closed in the allocator load path and
+# shared group tooling (legacy registry helpers). Production restore preflight
+# does not treat ignored forensic registry.json as authority; that DB-centric
+# contract is covered by tests/test-restore-preflight.py.
+python3 - "$ROOT" "$REG" <<'PY'
+import importlib.util, json, sys
 from pathlib import Path
 
-repo, reg, workdir = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+repo, reg = Path(sys.argv[1]), Path(sys.argv[2])
 state = json.loads(reg.read_text())
 
 
@@ -228,26 +230,6 @@ except creg.GroupInvariantError as exc:
 else:
     raise AssertionError('registry helper accepted a dangling group reference')
 
-# Restore staged preflight uses the same invariant.
-restore_path = repo / 'tools' / 'frp-restore'
-mod = types.ModuleType('frp_restore')
-mod.__file__ = str(restore_path)
-sys.modules['frp_restore'] = mod
-exec(compile(restore_path.read_text(encoding='utf-8'), str(restore_path), 'exec'), mod.__dict__)
-staged = workdir / 'staged'
-payload = staged / 'payload'
-(payload / 'etc/drlink').mkdir(parents=True, exist_ok=True)
-(payload / 'var/lib/drlink').mkdir(parents=True, exist_ok=True)
-(payload / 'etc/drlink/config.json').write_text(json.dumps({'port_start': 6000, 'port_end': 6100}))
-(payload / 'var/lib/drlink/registry.json').write_text(json.dumps(state))
-for name in ('access-control.json', 'egress-control.json', 'service-profiles.json'):
-    (payload / 'var/lib/drlink' / name).write_text('{}')
-try:
-    mod.validate_staged_control_payload(staged)
-except mod.RestoreError as exc:
-    assert 'nonexistent group' in str(exc), exc
-else:
-    raise AssertionError('restore preflight accepted a dangling group reference')
 print('f30-ok')
 PY
 
