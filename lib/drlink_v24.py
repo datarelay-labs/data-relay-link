@@ -15,7 +15,7 @@ import socket
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from drlink_control_db import ControlPlaneError, utc_now_iso
 
@@ -2076,6 +2076,23 @@ def set_access_rule(
                     "Remote Access supports TCP and Fixed TCP Remote Services only.\n\n"
                     "No changes were applied." % service
                 )
+        if plane == "internet":
+            has_udp, udp_name = service_ref_has_udp(plane_db, service)
+            if has_udp:
+                grp = get_service_group(plane_db, service)
+                if grp:
+                    raise ControlPlaneError(
+                        "ERROR:\nService Group '%s' contains UDP Service Object '%s'.\n\n"
+                        "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only;\n"
+                        "UDP Service Objects cannot be selected.\n\n"
+                        "No changes were applied." % (service, udp_name)
+                    )
+                raise ControlPlaneError(
+                    "ERROR:\nService Object '%s' uses UDP.\n\n"
+                    "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only;\n"
+                    "UDP Service Objects cannot be selected.\n\n"
+                    "No changes were applied." % service
+                )
 
     def write():
         ensure_policy_mode(plane_db, plane, mode, oneshot=oneshot and existing is None)
@@ -2274,11 +2291,15 @@ def evaluate_selector_policy(
     source_name: Optional[str] = None,
     destination_name: Optional[str] = None,
     service_name: Optional[str] = None,
+    resolve_fn: Optional[Callable[[str], list[str]]] = None,
 ) -> dict:
     """Evaluate Remote/Internet Access using runtime-equivalent semantics.
 
     Named Object selectors are resolved to canonical values (IP/FQDN/protocol/port)
     so Object identity alone never decides the match — matching the datapath.
+
+    For Internet Access hostname destinations, ``resolve_fn`` (default: getaddrinfo)
+    supplies the same validated candidate set the gateway uses for IP/CIDR matching.
     """
     plane = _plane_key(family)
 
@@ -2301,11 +2322,51 @@ def evaluate_selector_policy(
                     expected="  source\n  destination\n  service",
                 )
             )
+        if plane == "internet" and str(proto).lower() == "udp":
+            raise ControlPlaneError(
+                cli_error(
+                    "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only; "
+                    "UDP Service Objects cannot be selected."
+                )
+            )
         if plane == "remote":
             evaluation = plane_db.evaluate_remote_access(str(src), str(dest), str(proto), int(prt))
         else:
+            candidate_ips = None
+            dest_s = str(dest)
+            try:
+                candidate_ips = [ipaddress.ip_address(dest_s).compressed]
+            except ValueError:
+                resolver = resolve_fn
+                if resolver is None:
+                    import socket as _socket
+
+                    def _default_resolve(hostname: str) -> list[str]:
+                        results = _socket.getaddrinfo(hostname, None, type=_socket.SOCK_STREAM)
+                        seen = set()
+                        out = []
+                        for _family, _type, _proto, _canon, sockaddr in results:
+                            ip = sockaddr[0]
+                            if ip in seen:
+                                continue
+                            seen.add(ip)
+                            out.append(ip)
+                        return out
+
+                    resolver = _default_resolve
+                try:
+                    import frp_egress_control as EG
+
+                    candidate_ips = EG.validate_resolved_addresses(list(resolver(dest_s)))
+                except Exception as exc:
+                    raise ControlPlaneError(
+                        cli_error(
+                            "Internet Access test could not resolve destination '%s': %s"
+                            % (dest_s, exc)
+                        )
+                    ) from exc
             evaluation = plane_db.evaluate_internet_access(
-                str(src), str(dest), int(prt), str(proto)
+                str(src), dest_s, int(prt), str(proto), candidate_ips=candidate_ips
             )
         action = str(evaluation.get("effective") or evaluation.get("action") or "DENY").upper()
         return {
@@ -2314,6 +2375,8 @@ def evaluate_selector_policy(
             "matched_rules": list(evaluation.get("matched_rules") or []),
             "result": action,
             "plane": plane,
+            "authorized_candidates": list(evaluation.get("authorized_candidates") or []),
+            "candidate_ips": list(evaluation.get("candidate_ips") or []),
         }
 
     # Direct IP/protocol/port path (internal / legacy callers).

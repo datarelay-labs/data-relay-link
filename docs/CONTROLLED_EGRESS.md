@@ -68,6 +68,28 @@ FQDN remains the preferred mode for services whose addresses change through DNS/
 
 A public IP/CIDR rule is explicit policy, not a bypass around FQDN security.
 
+Runtime security order for Internet Access:
+
+```text
+parse request
+→ canonicalize authority (hostname or IP literal)
+→ resolve once if hostname
+→ validate candidate IP safety (any unsafe ⇒ deny all)
+→ evaluate canonical Internet Access policy using hostname + candidate IPs
+→ connect only to the authorized candidate set (no re-resolve)
+```
+
+A CIDR/IP destination rule may authorize a hostname when a validated resolved
+address falls inside that selector. Authorization of one candidate never widens
+authorization to other candidates outside the allowed IP/CIDR scope.
+
+FQDN rules continue to authorize the requested hostname's validated address set.
+FQDN rules never authorize a direct IP literal merely because DNS for that FQDN
+could produce the address.
+
+Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only. UDP Service
+Objects cannot be selected by Internet Access.
+
 ## 5. Source types
 
 Internet Access Source accepts context-valid Host/Network Objects and compatible Object Groups.
@@ -182,6 +204,9 @@ Ambiguity fails closed.
 Direct IP literals are allowed only through explicit Host/public Network policy and corresponding safety checks.
 
 An IP literal does not inherit an FQDN allow merely because DNS could map that FQDN to the IP.
+
+Loopback, private, link-local, metadata, multicast, reserved, and other unsafe
+literals remain denied regardless of policy.
 
 ## 15. Protocol and port
 

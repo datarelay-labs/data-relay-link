@@ -240,8 +240,10 @@ class EgressPolicyTests(unittest.TestCase):
         EG.mutate_egress_state(lambda s: EG.add_source(s, pid, "0.0.0.0/0"), cfg=self.cfg)
         with self.assertRaises(EG.EgressError):
             EG.mutate_egress_state(lambda s: EG.add_destination(s, pid, "1.2.3.4", 443, protocol="https"), cfg=self.cfg)
-        with self.assertRaises(EG.EgressError):
-            EG.parse_authority_host_port("1.2.3.4:443")
+        # Legacy egress-profile destinations still reject IP literals; authority
+        # parsing itself accepts them for canonical Internet Access runtime.
+        host, port = EG.parse_authority_host_port("1.2.3.4:443")
+        self.assertEqual((host, port), ("1.2.3.4", 443))
 
     def test_ssrf_ranges(self):
         blocked = [
@@ -275,6 +277,10 @@ class EgressPolicyTests(unittest.TestCase):
     def test_connect_parser_hardening(self):
         host, port = EG.parse_authority_host_port("security.ubuntu.com:443")
         self.assertEqual((host, port), ("security.ubuntu.com", 443))
+        host, port = EG.parse_authority_host_port("1.2.3.4:443")
+        self.assertEqual((host, port), ("1.2.3.4", 443))
+        host, port = EG.parse_authority_host_port("[2001:db8::1]:443")
+        self.assertEqual((host, port), ("2001:db8::1", 443))
         for bad in (
             "host",
             "host:0",
@@ -283,12 +289,13 @@ class EgressPolicyTests(unittest.TestCase):
             "user@host:443",
             "host:443 ",
             "host\r\n:443",
-            "[::1]:443",
-            "1.2.3.4:443",
             "host:abc",
         ):
             with self.assertRaises(EG.EgressError, msg=bad):
                 EG.parse_authority_host_port(bad)
+        # Loopback literal parses; safety/policy layers deny it.
+        host, port = EG.parse_authority_host_port("[::1]:443")
+        self.assertEqual((host, port), ("::1", 443))
 
     def test_duplicate_create(self):
         self._profile("dup")

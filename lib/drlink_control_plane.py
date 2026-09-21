@@ -2412,6 +2412,52 @@ class ControlPlane:
             )
         return False
 
+    def _object_matches_internet_destination(
+        self,
+        obj: sqlite3.Row,
+        host: str,
+        *,
+        is_ip_literal: bool,
+        candidate_ip: Optional[str] = None,
+    ) -> bool:
+        """Match an Internet Access destination selector against host and/or one candidate IP.
+
+        FQDN selectors match the requested hostname only and never authorize an IP literal.
+        Host/CIDR selectors match the candidate IP (or the literal itself).
+        """
+        if obj["type"] == "fqdn":
+            if is_ip_literal:
+                return False
+            host_n = str(host).rstrip(".").lower()
+            return any(str(v).rstrip(".").lower() == host_n for v in self._object_values(obj["id"]))
+        ip_target = candidate_ip
+        if ip_target is None:
+            try:
+                ip_target = ipaddress.ip_address(str(host).strip()).compressed
+            except ValueError:
+                return False
+        try:
+            addr = ipaddress.ip_address(str(ip_target).strip())
+        except ValueError:
+            return False
+        if obj["type"] == "host":
+            for val in self._object_values(obj["id"]):
+                try:
+                    if ipaddress.ip_address(str(val).strip()) == addr:
+                        return True
+                except ValueError:
+                    continue
+            return False
+        if obj["type"] == "network":
+            for val in self._object_values(obj["id"]):
+                try:
+                    if addr in ipaddress.ip_network(str(val).strip(), strict=False):
+                        return True
+                except ValueError:
+                    continue
+            return False
+        return False
+
     def _ref_matches_ip(self, kind: str, ref_id: str, ip: str, *, role: str) -> bool:
         if kind == "object":
             obj = self.conn.execute("SELECT * FROM objects WHERE id = ?", (ref_id,)).fetchone()
@@ -2433,6 +2479,30 @@ class ControlPlane:
             return False
         for obj in self._expand_group_members(grp["id"], set()):
             if self._object_matches_host(obj, host):
+                return True
+        return False
+
+    def _ref_matches_internet_destination(
+        self,
+        kind: str,
+        ref_id: str,
+        host: str,
+        *,
+        is_ip_literal: bool,
+        candidate_ip: Optional[str] = None,
+    ) -> bool:
+        if kind == "object":
+            obj = self.conn.execute("SELECT * FROM objects WHERE id = ?", (ref_id,)).fetchone()
+            return bool(obj) and self._object_matches_internet_destination(
+                obj, host, is_ip_literal=is_ip_literal, candidate_ip=candidate_ip
+            )
+        grp = self.conn.execute("SELECT * FROM object_groups WHERE id = ?", (ref_id,)).fetchone()
+        if not grp:
+            return False
+        for obj in self._expand_group_members(grp["id"], set()):
+            if self._object_matches_internet_destination(
+                obj, host, is_ip_literal=is_ip_literal, candidate_ip=candidate_ip
+            ):
                 return True
         return False
 
@@ -2653,20 +2723,60 @@ class ControlPlane:
         )
         return "\n".join(lines) + "\n"
 
-    def evaluate_internet_access(self, source_ip: str, destination: str, port: int, protocol: str) -> dict:
+    def evaluate_internet_access(
+        self,
+        source_ip: str,
+        destination: str,
+        port: int,
+        protocol: str,
+        *,
+        candidate_ips: Optional[list[str]] = None,
+    ) -> dict:
         from drlink_v24 import effective_policy_result, get_access_policy, rule_matches_service
 
         proto = str(protocol).lower()
+        dest_raw = str(destination or "").strip()
+        is_ip_literal = False
+        try:
+            dest = ipaddress.ip_address(dest_raw).compressed
+            is_ip_literal = True
+        except ValueError:
+            dest = dest_raw.rstrip(".").lower()
+
+        normalized_candidates: Optional[list[str]] = None
+        if candidate_ips is not None:
+            normalized_candidates = []
+            for item in candidate_ips:
+                try:
+                    normalized_candidates.append(ipaddress.ip_address(str(item).strip()).compressed)
+                except ValueError as exc:
+                    raise ControlPlaneError("invalid candidate address: %s" % item) from exc
+        elif is_ip_literal:
+            normalized_candidates = [dest]
+
         src_matches = self.matching_objects_for_ip(source_ip, role="source")
-        dst_matches = self.matching_objects_for_host(destination)
+        if is_ip_literal:
+            dst_matches = self.matching_objects_for_ip(dest, role="destination")
+        else:
+            dst_matches = self.matching_objects_for_host(dest)
+            if normalized_candidates:
+                for cand in normalized_candidates:
+                    for name in self.matching_objects_for_ip(cand, role="destination"):
+                        if name not in dst_matches:
+                            dst_matches.append(name)
+
         pol = get_access_policy(self, "internet")
         if pol["mode"] is None and self._legacy_unmigrated("internet"):
             reason = "Legacy v2.3 Internet Access policy is not migrated (fail closed)"
             return {
                 "source_ip": source_ip,
-                "destination": destination,
+                "destination": dest,
                 "port": int(port),
                 "protocol": proto,
+                "is_ip_literal": is_ip_literal,
+                "candidate_ips": list(normalized_candidates or []),
+                "authorized_candidates": [],
+                "candidate_results": [],
                 "source_matches": src_matches,
                 "destination_matches": dst_matches,
                 "traces": [],
@@ -2679,31 +2789,106 @@ class ControlPlane:
                 "reason": reason,
                 "effective": "DENY",
             }
-        traces = []
-        matched = []
+
+        # Build rule views once.
+        rule_rows = []
         for rule_row in self.conn.execute(
             "SELECT * FROM policy_rules WHERE plane = 'internet' ORDER BY name"
         ):
             if not rule_row["enabled"]:
                 continue
+            rule_rows.append(rule_row)
+
+        def _rule_src_svc(rule_row):
             view = self._rule_view(rule_row)
             src_ok = False
-            for s in self.conn.execute("SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ?", (rule_row["id"],)):
+            for s in self.conn.execute(
+                "SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ?", (rule_row["id"],)
+            ):
                 if self._ref_matches_ip(s["ref_kind"], s["ref_id"], source_ip, role="source"):
                     src_ok = True
                     break
-            dst_ok = False
-            for s in self.conn.execute("SELECT ref_kind, ref_id FROM rule_destinations WHERE rule_id = ?", (rule_row["id"],)):
-                if self._ref_matches_host(s["ref_kind"], s["ref_id"], destination):
-                    dst_ok = True
-                    break
-            # http/https normalize to tcp inside rule_matches_service (live Service Object/Group).
             svc_ok = rule_matches_service(self, rule_row["id"], proto, port)
+            return view, src_ok, svc_ok
+
+        def _dest_ok(rule_row, cand_ip: Optional[str]) -> bool:
+            for s in self.conn.execute(
+                "SELECT ref_kind, ref_id FROM rule_destinations WHERE rule_id = ?", (rule_row["id"],)
+            ):
+                if self._ref_matches_internet_destination(
+                    s["ref_kind"],
+                    s["ref_id"],
+                    dest,
+                    is_ip_literal=is_ip_literal,
+                    candidate_ip=cand_ip,
+                ):
+                    return True
+            return False
+
+        # Aggregate traces use hostname-level destination match (any candidate).
+        traces = []
+        matched = []
+        for rule_row in rule_rows:
+            view, src_ok, svc_ok = _rule_src_svc(rule_row)
+            if normalized_candidates is None:
+                dst_ok = _dest_ok(rule_row, None)
+            else:
+                dst_ok = False
+                for cand in normalized_candidates:
+                    if _dest_ok(rule_row, cand):
+                        dst_ok = True
+                        break
+                # FQDN selectors match hostname without needing a candidate IP.
+                if not dst_ok and not is_ip_literal:
+                    dst_ok = _dest_ok(rule_row, None)
             hit = bool(src_ok and dst_ok and svc_ok)
-            traces.append({"rule": view, "evaluated": True, "source": src_ok, "dest": dst_ok, "service": svc_ok, "match": hit})
+            traces.append(
+                {
+                    "rule": view,
+                    "evaluated": True,
+                    "source": src_ok,
+                    "dest": dst_ok,
+                    "service": svc_ok,
+                    "match": hit,
+                }
+            )
             if hit:
                 matched.append(view)
-        action = effective_policy_result(pol["mode"], pol["enforcement"], bool(matched))
+
+        candidate_results = []
+        authorized_candidates: list[str] = []
+        if normalized_candidates is not None:
+            for cand in normalized_candidates:
+                cand_matched = []
+                for rule_row in rule_rows:
+                    view, src_ok, svc_ok = _rule_src_svc(rule_row)
+                    # Per-candidate: Host/CIDR vs cand, or FQDN vs hostname (non-literal).
+                    dst_ok = _dest_ok(rule_row, cand)
+                    if not dst_ok and not is_ip_literal:
+                        dst_ok = _dest_ok(rule_row, None)
+                    if src_ok and dst_ok and svc_ok:
+                        cand_matched.append(view)
+                cand_action = effective_policy_result(
+                    pol["mode"], pol["enforcement"], bool(cand_matched)
+                )
+                candidate_results.append(
+                    {
+                        "ip": cand,
+                        "action": cand_action,
+                        "matched_rules": [m["name"] for m in cand_matched],
+                    }
+                )
+                if cand_action == "ALLOW":
+                    authorized_candidates.append(cand)
+            if pol["mode"] is None or str(pol["enforcement"]).lower() == "disabled":
+                action = "ALLOW"
+            elif authorized_candidates:
+                action = "ALLOW"
+            else:
+                action = "DENY"
+        else:
+            action = effective_policy_result(pol["mode"], pol["enforcement"], bool(matched))
+
         winner = matched[0] if matched else None
         if pol["mode"] is None:
             reason = "No Policy (ALLOW)"
@@ -2717,9 +2902,13 @@ class ControlPlane:
             )
         return {
             "source_ip": source_ip,
-            "destination": destination,
+            "destination": dest,
             "port": int(port),
             "protocol": proto,
+            "is_ip_literal": is_ip_literal,
+            "candidate_ips": list(normalized_candidates or []),
+            "authorized_candidates": list(authorized_candidates),
+            "candidate_results": candidate_results,
             "source_matches": src_matches,
             "destination_matches": dst_matches,
             "traces": traces,
@@ -2730,6 +2919,7 @@ class ControlPlane:
             "action": action,
             "implicit": winner is None,
             "reason": reason,
+            "effective": action,
         }
 
     def format_internet_explain(self, result: dict, *, dns: Optional[dict] = None) -> str:

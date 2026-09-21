@@ -15,6 +15,7 @@ v1 model (intentionally small/strict):
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -434,7 +435,7 @@ def _absolute_uri_authority(target: str, headers: dict[str, str]) -> tuple[str, 
             uri_port = parts.port if parts.port is not None else default_port
         except ValueError as exc:
             raise EG.EgressError("malformed URI port") from exc
-        uri_host, _ = EG.canonicalize_hostname(parts.hostname, allow_wildcard=False)
+        uri_host = EG.normalize_authority_host(parts.hostname)
         uri_port = EG.validate_port(uri_port)
 
         if ":" in host_header and not host_header.startswith("["):
@@ -442,7 +443,7 @@ def _absolute_uri_authority(target: str, headers: dict[str, str]) -> tuple[str, 
         elif host_header.startswith("["):
             hdr_host, hdr_port = EG.parse_authority_host_port(host_header, default_port=uri_port)
         else:
-            hdr_host, _ = EG.canonicalize_hostname(host_header, allow_wildcard=False)
+            hdr_host = EG.normalize_authority_host(host_header)
             hdr_port = uri_port
 
         if hdr_host != uri_host or int(hdr_port) != int(uri_port):
@@ -652,6 +653,7 @@ def _authorize_policy_only(
     method: str,
     protocol: str,
     connection_id: Optional[str] = None,
+    candidate_ips: Optional[list[str]] = None,
 ) -> tuple[dict, Optional[dict]]:
     """Authorize against canonical Internet Access policy without DNS/connect I/O."""
     _plane, load_error, cfg, _snap = gw.cache.snapshot()
@@ -660,6 +662,8 @@ def _authorize_policy_only(
             "decision": EG.DECISION_DENY,
             "reason": "CONTROL_PLANE_UNAVAILABLE",
             "detail": load_error or "SQLite control plane authorize unavailable",
+            "authorized_candidates": [],
+            "candidate_ips": list(candidate_ips or []),
         }
     else:
         decision = gw.cache.authorize(
@@ -668,6 +672,7 @@ def _authorize_policy_only(
             port=port,
             protocol=protocol,
             method=method,
+            candidate_ips=candidate_ips,
         )
     decision["method"] = method
     decision["timestamp"] = EG.utc_now_iso()
@@ -686,20 +691,156 @@ def _authorize_and_connect(
     protocol: str,
     connection_id: Optional[str] = None,
 ) -> tuple[Optional[socket.socket], dict]:
+    """Resolve once (if needed) → policy with candidates → connect only authorized set."""
+    _plane, load_error, cfg, _snap = gw.cache.snapshot()
+    del _plane, load_error, _snap
+
+    is_literal = False
+    try:
+        lit = ipaddress.ip_address(str(hostname).strip())
+        is_literal = True
+        host_token = lit.compressed
+    except ValueError:
+        host_token = hostname
+
+    if is_literal:
+        try:
+            if EG.is_unsafe_destination_ip(ipaddress.ip_address(host_token)):
+                decision = {
+                    "decision": EG.DECISION_DENY,
+                    "reason": EG.REASON_UNSAFE_DESTINATION,
+                    "outcome": EG.AUDIT_DNS_UNSAFE,
+                    "hostname": host_token,
+                    "port": port,
+                    "method": method,
+                    "timestamp": EG.utc_now_iso(),
+                    "authorized_candidates": [],
+                    "candidate_ips": [],
+                }
+                if connection_id:
+                    decision["connection_id"] = connection_id
+                EG.emit_conn_log(decision, cfg=cfg)
+                return None, decision
+            validated = EG.validate_resolved_addresses([host_token])
+        except EG.EgressError:
+            decision = {
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_UNSAFE_DESTINATION,
+                "outcome": EG.AUDIT_DNS_UNSAFE,
+                "hostname": host_token,
+                "port": port,
+                "method": method,
+                "timestamp": EG.utc_now_iso(),
+                "authorized_candidates": [],
+                "candidate_ips": [],
+            }
+            if connection_id:
+                decision["connection_id"] = connection_id
+            EG.emit_conn_log(decision, cfg=cfg)
+            return None, decision
+    else:
+        try:
+            validated = gw.dns.resolve_validated(host_token)
+        except EG.EgressError as exc:
+            decision = {
+                "decision": EG.DECISION_DENY,
+                "hostname": host_token,
+                "port": port,
+                "method": method,
+                "timestamp": EG.utc_now_iso(),
+                "authorized_candidates": [],
+                "candidate_ips": [],
+            }
+            if connection_id:
+                decision["connection_id"] = connection_id
+            msg = str(exc).lower()
+            if "pending limit" in msg:
+                decision["reason"] = EG.REASON_RESOURCE_LIMIT
+                decision["outcome"] = EG.AUDIT_RESOURCE_LIMIT
+            elif "unsafe" in msg:
+                decision["reason"] = EG.REASON_DNS_UNSAFE
+                decision["outcome"] = EG.AUDIT_DNS_UNSAFE
+            elif "dns" in msg or "resolution" in msg or "no addresses" in msg or "timeout" in msg:
+                decision["reason"] = EG.REASON_DNS_FAILURE
+                decision["outcome"] = EG.AUDIT_DNS_FAILURE
+            else:
+                decision["reason"] = EG.REASON_UNSAFE_DESTINATION
+                decision["outcome"] = EG.AUDIT_DNS_UNSAFE
+            EG.emit_conn_log(decision, cfg=cfg)
+            return None, decision
+        except OSError:
+            decision = {
+                "decision": EG.DECISION_DENY,
+                "reason": EG.REASON_DNS_FAILURE,
+                "outcome": EG.AUDIT_DNS_FAILURE,
+                "hostname": host_token,
+                "port": port,
+                "method": method,
+                "timestamp": EG.utc_now_iso(),
+                "authorized_candidates": [],
+                "candidate_ips": [],
+            }
+            if connection_id:
+                decision["connection_id"] = connection_id
+            EG.emit_conn_log(decision, cfg=cfg)
+            return None, decision
+
     decision, cfg = _authorize_policy_only(
         gw,
         source_ip=source_ip,
-        hostname=hostname,
+        hostname=host_token,
         port=port,
         method=method,
         protocol=protocol,
         connection_id=connection_id,
+        candidate_ips=validated,
     )
     if decision.get("decision") != EG.DECISION_ALLOW:
         decision["outcome"] = EG.AUDIT_POLICY_DENY
         EG.emit_conn_log(decision, cfg=cfg)
         return None, decision
-    return _connect_after_authorize(gw, decision, hostname=hostname, port=port, cfg=cfg)
+
+    connect_ips = list(decision.get("authorized_candidates") or [])
+    if not connect_ips:
+        decision = dict(decision)
+        decision["decision"] = EG.DECISION_DENY
+        decision["reason"] = EG.REASON_DESTINATION_NOT_ALLOWED
+        decision["outcome"] = EG.AUDIT_POLICY_DENY
+        decision["timestamp"] = EG.utc_now_iso()
+        EG.emit_conn_log(decision, cfg=cfg)
+        return None, decision
+
+    # DNS rebinding resistance: connect only the policy-validated candidate set.
+    decision["candidate_ips"] = list(validated)
+    decision["authorized_candidates"] = connect_ips
+    return _connect_authorized(gw, decision, hostname=host_token, port=port, connect_ips=connect_ips, cfg=cfg)
+
+
+def _connect_authorized(
+    gw: GatewayState,
+    decision: dict,
+    *,
+    hostname: str,
+    port: int,
+    connect_ips: list[str],
+    cfg: Optional[dict] = None,
+) -> tuple[Optional[socket.socket], dict]:
+    """Connect only to already-authorized candidate IPs (no re-resolve)."""
+    try:
+        sock = happy_eyeballs_connect(
+            gw.connect_fn, connect_ips, port, hostname, total_timeout=CONNECT_TIMEOUT
+        )
+        decision["outcome"] = EG.AUDIT_CONNECTED
+        EG.emit_conn_log(decision, cfg=cfg)
+        return sock, decision
+    except OSError:
+        decision = dict(decision)
+        decision["decision"] = EG.DECISION_DENY
+        decision["reason"] = EG.REASON_CONNECT_FAILURE
+        decision["outcome"] = EG.AUDIT_CONNECT_FAILURE
+        decision["timestamp"] = EG.utc_now_iso()
+        EG.emit_conn_log(decision, cfg=cfg)
+        return None, decision
 
 
 def _connect_after_authorize(
@@ -710,7 +851,12 @@ def _connect_after_authorize(
     port: int,
     cfg: Optional[dict] = None,
 ) -> tuple[Optional[socket.socket], dict]:
-    """DNS + connect for an already-ALLOW policy decision."""
+    """Compatibility wrapper: resolve then filter by authorized candidates if present."""
+    authorized = list(decision.get("authorized_candidates") or [])
+    if authorized:
+        return _connect_authorized(
+            gw, decision, hostname=hostname, port=port, connect_ips=authorized, cfg=cfg
+        )
     try:
         validated = gw.dns.resolve_validated(hostname)
     except EG.EgressError as exc:
@@ -741,21 +887,9 @@ def _connect_after_authorize(
         EG.emit_conn_log(decision, cfg=cfg)
         return None, decision
 
-    try:
-        sock = happy_eyeballs_connect(
-            gw.connect_fn, validated, port, hostname, total_timeout=CONNECT_TIMEOUT
-        )
-        decision["outcome"] = EG.AUDIT_CONNECTED
-        EG.emit_conn_log(decision, cfg=cfg)
-        return sock, decision
-    except OSError:
-        decision = dict(decision)
-        decision["decision"] = EG.DECISION_DENY
-        decision["reason"] = EG.REASON_CONNECT_FAILURE
-        decision["outcome"] = EG.AUDIT_CONNECT_FAILURE
-        decision["timestamp"] = EG.utc_now_iso()
-        EG.emit_conn_log(decision, cfg=cfg)
-        return None, decision
+    return _connect_authorized(
+        gw, decision, hostname=hostname, port=port, connect_ips=validated, cfg=cfg
+    )
 
 
 def _parse_tls_client_hello_sni(buf: bytes) -> tuple[str, Optional[str]]:
@@ -897,6 +1031,24 @@ def _read_and_validate_client_hello(
         status, detail = _parse_tls_client_hello_sni(bytes(buf))
         if status == "ok":
             sni = detail
+            expected_is_ip = False
+            try:
+                expected_ip = ipaddress.ip_address(str(expected_hostname).strip())
+                expected_is_ip = True
+            except ValueError:
+                expected_ip = None
+            if expected_is_ip:
+                # IP-literal CONNECT: SNI may be absent or equal the same IP.
+                # Do not require FQDN canonicalization (FQDN SNI binding stays unchanged).
+                if not sni:
+                    return bytes(buf), None, None
+                try:
+                    observed_ip = ipaddress.ip_address(str(sni).strip())
+                except ValueError:
+                    return None, sni, "SNI mismatch"
+                if observed_ip != expected_ip:
+                    return None, sni, "SNI mismatch"
+                return bytes(buf), observed_ip.compressed, None
             if not sni:
                 return None, None, "missing SNI"
             try:
@@ -935,12 +1087,19 @@ def _session_still_authorized(gw: GatewayState, session: dict) -> bool:
         port=int(session["port"]),
         protocol=session["protocol"],
         method=session.get("method") or "CONNECT",
+        candidate_ips=session.get("authorized_candidates") or session.get("candidate_ips"),
     )
     if decision.get("decision") == EG.DECISION_ALLOW:
+        prev = list(session.get("authorized_candidates") or [])
+        now = list(decision.get("authorized_candidates") or [])
+        if prev and not set(prev).intersection(now):
+            return False
         gen = decision.get("policy_generation")
         if gen is not None:
             gw.update_session_generation(session["session_id"], int(gen))
             session["policy_generation"] = int(gen)
+        if now:
+            session["authorized_candidates"] = now
         return True
     return False
 
@@ -1242,6 +1401,8 @@ def _handle_client_inner(gw: GatewayState, request: socket.socket, client_addres
             "method": "CONNECT",
             "profile_id": decision.get("profile_id"),
             "policy_generation": int(decision.get("policy_generation") or 0),
+            "candidate_ips": list(decision.get("candidate_ips") or []),
+            "authorized_candidates": list(decision.get("authorized_candidates") or []),
             "start_time": time.time(),
         }
         gw.register_session(session)

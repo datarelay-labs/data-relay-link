@@ -174,6 +174,10 @@ SSH, HTTP, HTTPS, RDP, Custom TCP, Fixed TCP
 
 UDP is not offered in that Wizard. Remote Service remains TCP / Fixed TCP only.
 
+Internet Access v2.4 uses a TCP/HTTP/HTTPS CONNECT datapath only. UDP Service
+Objects (and Service Groups containing UDP) cannot be selected by Internet Access
+rules; mutation paths reject them fail-closed.
+
 Service Groups are flat reusable collections.
 
 Fixed TCP is not a separate policy hierarchy. It is a Service Object subtype.

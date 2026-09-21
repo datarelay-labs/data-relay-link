@@ -297,8 +297,14 @@ def authorize_internet(
     hostname: str,
     port: int,
     protocol: str,
+    candidate_ips: Optional[list[str]] = None,
 ) -> dict:
-    """Authorize outbound Internet Access using canonical ordered rules."""
+    """Authorize outbound Internet Access using canonical ordered rules.
+
+    When ``candidate_ips`` is provided (runtime path), policy is evaluated at
+    candidate granularity and only authorized candidates may be connected.
+    Direct IP literals must be authorized by explicit Host/CIDR selectors.
+    """
     gen = generation_status(plane, "internet")
     base = {
         "source_ip": source_ip,
@@ -309,6 +315,10 @@ def authorize_internet(
         "reason": REASON_AUTHORIZATION_ERROR,
         "policy_generation": gen.get("generation"),
         "db_revision": gen.get("revision"),
+        "is_ip_literal": False,
+        "candidate_ips": [],
+        "authorized_candidates": [],
+        "candidate_results": [],
     }
     if not gen["healthy"]:
         base["reason"] = REASON_GENERATION_MISMATCH if gen["mismatch"] else REASON_DB_UNAVAILABLE
@@ -321,11 +331,32 @@ def authorize_internet(
         except Exception:
             base["reason"] = REASON_AUTHORIZATION_ERROR
             return base
-    evaluation = plane.evaluate_internet_access(src, hostname, int(port), protocol)
+    evaluation = plane.evaluate_internet_access(
+        src,
+        hostname,
+        int(port),
+        protocol,
+        candidate_ips=candidate_ips,
+    )
     action = str(evaluation.get("action") or DECISION_DENY).upper()
     base["source_ip"] = src
+    base["hostname"] = evaluation.get("destination") or hostname
+    base["is_ip_literal"] = bool(evaluation.get("is_ip_literal"))
+    base["candidate_ips"] = list(evaluation.get("candidate_ips") or [])
+    base["authorized_candidates"] = list(evaluation.get("authorized_candidates") or [])
+    base["candidate_results"] = list(evaluation.get("candidate_results") or [])
+    # Hostname-only evaluation (no candidates): preserve prior ALLOW/DENY.
+    # Candidate evaluation: ALLOW only when authorized_candidates is non-empty
+    # (or mode/enforcement already yielded ALLOW with empty list for no-policy).
+    if candidate_ips is not None or evaluation.get("is_ip_literal"):
+        if action == DECISION_ALLOW and not base["authorized_candidates"]:
+            # No-policy / enforcement-disabled authorize all provided candidates.
+            if evaluation.get("mode") is None or str(evaluation.get("enforcement") or "").lower() == "disabled":
+                base["authorized_candidates"] = list(base["candidate_ips"])
+            else:
+                action = DECISION_DENY
     base["decision"] = DECISION_ALLOW if action == DECISION_ALLOW else DECISION_DENY
-    if evaluation.get("implicit"):
+    if evaluation.get("implicit") and action != DECISION_ALLOW:
         base["reason"] = REASON_IMPLICIT_DENY
     elif action == DECISION_ALLOW:
         base["reason"] = evaluation.get("reason") or "INTERNET_ACCESS_ALLOW"

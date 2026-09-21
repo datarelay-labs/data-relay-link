@@ -1391,6 +1391,20 @@ def _plan_policy_rule(plane: ControlPlane, plan: ChangePlan, family: str, plane_
     if not isinstance(sources, list) or not isinstance(destinations, list) or not isinstance(services, list):
         raise BundleError("%s sources/destinations/services must be lists" % family)
     parsed_services = [_parse_service_token(s) for s in services]
+    if plane_name == "internet":
+        for proto, _port in parsed_services:
+            if proto == "udp":
+                raise BundleError(
+                    "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only; "
+                    "UDP Service Objects cannot be selected (rule %r)." % name
+                )
+    if plane_name == "remote":
+        for proto, _port in parsed_services:
+            if proto == "udp":
+                raise BundleError(
+                    "Remote Access supports TCP and Fixed TCP only; "
+                    "UDP cannot be selected (rule %r)." % name
+                )
 
     # Impact: enabling ALLOW or expanding sources/dests is broadening.
     security = "unchanged"

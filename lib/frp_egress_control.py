@@ -934,16 +934,27 @@ def parse_authority_host_port(authority: str, *, default_port: Optional[int] = N
             port = int(port_text)
     if port < 1 or port > 65535:
         raise EgressError("port out of range")
-    # Reject IP literals for destination policy path by default.
+    # IP literals are parseable; canonical Internet Access policy + safety checks
+    # decide whether a literal may proceed (never via implicit FQDN inheritance).
     try:
-        ipaddress.ip_address(host)
-        raise EgressError("IP literal destinations are denied by default")
+        return ipaddress.ip_address(host).compressed, port
     except ValueError:
         pass
-    except EgressError:
-        raise
     canon, _ = canonicalize_hostname(host, allow_wildcard=False)
     return canon, port
+
+
+def normalize_authority_host(host: str) -> str:
+    """Return compressed IP or canonical ASCII hostname for an authority host token."""
+    text = str(host or "").strip()
+    if not text:
+        raise EgressError("missing hostname")
+    try:
+        return ipaddress.ip_address(text).compressed
+    except ValueError:
+        pass
+    canon, _ = canonicalize_hostname(text, allow_wildcard=False)
+    return canon
 
 
 def migrate_egress_state_v1_to_v2(raw: dict) -> dict:

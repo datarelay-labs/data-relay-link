@@ -431,6 +431,7 @@ class PolicyCache:
         port: int,
         protocol: str,
         method=None,
+        candidate_ips=None,
     ) -> dict:
         plane, load_error, _cfg, snap = self.snapshot()
         if plane is None or self._RP is None:
@@ -439,6 +440,8 @@ class PolicyCache:
                 "reason": EG.REASON_POLICY_UNHEALTHY if hasattr(EG, "REASON_POLICY_UNHEALTHY") else "POLICY_UNHEALTHY",
                 "load_error": load_error,
                 "policy_generation": snap.generation if snap else None,
+                "authorized_candidates": [],
+                "candidate_ips": list(candidate_ips or []),
             }
         decision = self._RP.authorize_internet(
             plane,
@@ -446,6 +449,7 @@ class PolicyCache:
             hostname=hostname,
             port=int(port),
             protocol=protocol,
+            candidate_ips=candidate_ips,
         )
         # Normalize to egress decision constants.
         if decision.get("decision") == self._RP.DECISION_ALLOW:
@@ -472,13 +476,21 @@ def session_still_authorized(
         port=int(session["port"]),
         protocol=session["protocol"],
         method=session.get("method"),
+        candidate_ips=session.get("authorized_candidates") or session.get("candidate_ips"),
     )
     if decision.get("decision") == EG.DECISION_ALLOW:
+        # Mid-session: require the previously authorized set to remain eligible.
+        prev = list(session.get("authorized_candidates") or [])
+        now = list(decision.get("authorized_candidates") or [])
+        if prev and not set(prev).intersection(now):
+            return False
         gen = decision.get("policy_generation")
         if gen is not None:
             if update_generation is not None:
                 update_generation(session["session_id"], int(gen))
             session["policy_generation"] = int(gen)
+        if now:
+            session["authorized_candidates"] = now
         return True
     return False
 
