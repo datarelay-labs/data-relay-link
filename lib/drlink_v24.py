@@ -169,6 +169,17 @@ CREATE TABLE IF NOT EXISTS ai_policy_rules (
   updated_at TEXT NOT NULL
 );
 
+-- Internal canonical path constraints for AI file capabilities.
+-- Frozen v2.4 public CLI/AI Master has no path-scope grammar; scopes are bound
+-- here (tests, Bundle internals, or exact legacy translation) and enforced by
+-- authorize_ai_capability_v24. Missing scopes fail closed for file capabilities.
+CREATE TABLE IF NOT EXISTS ai_policy_path_scopes (
+  rule_id TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  PRIMARY KEY (rule_id, pattern),
+  FOREIGN KEY (rule_id) REFERENCES ai_policy_rules(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS remote_service_meta (
   service_id TEXT PRIMARY KEY,
   status TEXT NOT NULL DEFAULT 'HEALTHY',
@@ -2660,6 +2671,239 @@ def evaluate_ai_access_v24(
         "plane": "ai",
         "auth": "VERIFIED",
     }
+
+
+def list_ai_policy_path_scopes(plane_db, rule_name: str) -> list[str]:
+    row = plane_db.conn.execute(
+        "SELECT id FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rule_name,)
+    ).fetchone()
+    if not row:
+        return []
+    return [
+        r["pattern"]
+        for r in plane_db.conn.execute(
+            "SELECT pattern FROM ai_policy_path_scopes WHERE rule_id = ? ORDER BY pattern COLLATE NOCASE",
+            (row["id"],),
+        )
+    ]
+
+
+def set_ai_policy_path_scopes(plane_db, rule_name: str, patterns: list[str]) -> list[str]:
+    """Bind canonical path scopes to an AI Access rule (internal; no public CLI).
+
+    Frozen v2.4 public grammar cannot express path scopes. Callers (tests, exact
+    legacy translation, Bundle internals) may bind scopes here. MCP file
+    capabilities fail closed when no scopes are bound.
+    """
+    ensure_v2_schema(plane_db.conn)
+    row = plane_db.conn.execute(
+        "SELECT id FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rule_name,)
+    ).fetchone()
+    if not row:
+        raise ControlPlaneError(cli_error("Rule '%s' was not found." % rule_name))
+    cleaned: list[str] = []
+    seen = set()
+    for raw in patterns or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+    plane_db.conn.execute("DELETE FROM ai_policy_path_scopes WHERE rule_id = ?", (row["id"],))
+    for pattern in cleaned:
+        plane_db.conn.execute(
+            "INSERT INTO ai_policy_path_scopes(rule_id, pattern) VALUES (?, ?)",
+            (row["id"], pattern),
+        )
+    _commit_if_autonomous(plane_db)
+    return cleaned
+
+
+def _matched_ai_rule_rows(plane_db, matched_names: list[str]) -> list:
+    rows = []
+    for name in matched_names:
+        row = plane_db.conn.execute(
+            "SELECT * FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _path_scopes_for_rules(plane_db, rule_rows) -> list[str]:
+    patterns: list[str] = []
+    seen = set()
+    for row in rule_rows:
+        for item in plane_db.conn.execute(
+            "SELECT pattern FROM ai_policy_path_scopes WHERE rule_id = ? ORDER BY pattern COLLATE NOCASE",
+            (row["id"],),
+        ):
+            text = str(item["pattern"] or "").strip()
+            key = text.lower()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            patterns.append(text)
+    return patterns
+
+
+def authorize_ai_capability_v24(
+    plane_db,
+    *,
+    identity: str,
+    destination: str,
+    capability: str,
+    operand: Optional[str] = None,
+) -> dict:
+    """Single canonical AI authorization decision for MCP / execution / audit.
+
+    Uses the same evaluate_ai_access_v24() semantics as public ``test ai-access``,
+    then applies fail-closed canonical path-scope checks for file capabilities.
+    Legacy ``ai_access_rules`` / ``ai_path_scopes`` are never consulted.
+    """
+    from drlink_control_plane import AI_CAPABILITIES, FILE_CAPABILITIES, path_allowed
+
+    cap = str(capability or "").strip()
+    principal = plane_db.get_principal(identity)
+    endpoint = plane_db.get_object(destination) if destination else None
+
+    def _decision(
+        *,
+        action: str,
+        evaluation: dict,
+        reason: str,
+        winner=None,
+        patterns: Optional[list[str]] = None,
+        path_ok: bool = True,
+        permission: Optional[str] = None,
+    ) -> dict:
+        return {
+            "principal": identity,
+            "identity": identity,
+            "endpoint": destination,
+            "destination": destination,
+            "capability": cap,
+            "permission": permission,
+            "operand": operand,
+            "action": action,
+            "result": action,
+            "mode": evaluation.get("mode"),
+            "enforcement": evaluation.get("enforcement"),
+            "matched_rules": list(evaluation.get("matched_rules") or []),
+            "winner": winner,
+            "patterns": list(patterns or []),
+            "reason": reason,
+            "plane": "ai",
+            "auth": evaluation.get("auth"),
+            "principal_row": principal,
+            "endpoint_row": endpoint,
+            "exec_timeout": None,
+            "path_ok": path_ok,
+            "implicit": winner is None and action == "DENY",
+            "evaluation": evaluation,
+        }
+
+    if cap not in AI_CAPABILITIES:
+        empty = {
+            "mode": None,
+            "enforcement": "enabled",
+            "matched_rules": [],
+            "result": "DENY",
+            "plane": "ai",
+            "auth": "UNAUTHENTICATED",
+        }
+        return _decision(
+            action="DENY",
+            evaluation=empty,
+            reason="unknown capability",
+            path_ok=False,
+        )
+
+    permission = CAP_TO_PERMISSION.get(cap)
+    if not permission:
+        empty = {
+            "mode": None,
+            "enforcement": "enabled",
+            "matched_rules": [],
+            "result": "DENY",
+            "plane": "ai",
+            "auth": "UNAUTHENTICATED",
+        }
+        return _decision(
+            action="DENY",
+            evaluation=empty,
+            reason="unknown capability",
+            path_ok=False,
+        )
+
+    evaluation = evaluate_ai_access_v24(
+        plane_db,
+        identity=identity,
+        destination=destination,
+        permission=permission,
+    )
+    matched_rows = _matched_ai_rule_rows(plane_db, evaluation.get("matched_rules") or [])
+    patterns = _path_scopes_for_rules(plane_db, matched_rows)
+    winner = None
+    if matched_rows:
+        row = matched_rows[0]
+        winner = {
+            "id": row["id"],
+            "name": row["name"],
+            "paths": list(patterns),
+            "action": evaluation["result"],
+        }
+
+    action = str(evaluation.get("result") or "DENY").upper()
+    if evaluation.get("auth") == "UNAUTHENTICATED":
+        reason = "unknown, disabled or unverified AI Identity"
+    elif action == "ALLOW" and matched_rows:
+        reason = "AI Access rule %s" % matched_rows[0]["name"]
+    elif action == "ALLOW":
+        mode = evaluation.get("mode")
+        if mode is None:
+            reason = "No AI Access policy configured"
+        elif str(evaluation.get("enforcement") or "").lower() == "disabled":
+            reason = "AI Access enforcement disabled"
+        else:
+            reason = "AI Access policy ALLOW"
+    elif matched_rows:
+        reason = "AI Access rule %s" % matched_rows[0]["name"]
+    else:
+        reason = "implicit DENY"
+
+    path_ok = True
+    if action == "ALLOW" and cap in FILE_CAPABILITIES:
+        # Bounded gap: frozen public CLI cannot express path scopes. File
+        # capabilities must not become unrestricted filesystem access.
+        if not patterns:
+            action = "DENY"
+            path_ok = False
+            reason = "file capability has no canonical path scope"
+            if winner is not None:
+                winner = dict(winner)
+                winner["action"] = "DENY"
+        elif not operand:
+            action = "DENY"
+            path_ok = False
+            reason = "file capability requires a path operand"
+        elif not path_allowed(str(operand), patterns):
+            action = "DENY"
+            path_ok = False
+            reason = "path is outside allowed scope"
+
+    return _decision(
+        action=action,
+        evaluation=evaluation,
+        reason=reason,
+        winner=winner,
+        patterns=patterns if action == "ALLOW" else [],
+        path_ok=path_ok,
+        permission=permission,
+    )
 
 
 # ---------------------------------------------------------------------------

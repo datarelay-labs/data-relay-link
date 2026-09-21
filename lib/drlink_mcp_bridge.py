@@ -7,7 +7,9 @@ Authentication modes:
   OAuth         — built-in OAuth 2.1 authorization server (authorization_code+PKCE
                   S256 and client_credentials) issuing distinct expiring tokens
 Protected Resource Metadata: RFC 9728
-Authorization is a separate ordered AI Access rulebase evaluated on every tools/call.
+Authorization uses the canonical v2.4 AI Access model (ai_policy_rules /
+authorize_ai_capability_v24) on every tools/call — the same semantics as
+public ``test ai-access``. Legacy ai_access_rules are not an authority.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from drlink_ai_agent import AgentLoop, execute_local
 from drlink_control_db import ControlPlaneError, resolve_root
 from drlink_control_plane import AI_CAPABILITIES, ControlPlane, MCP_AUTH_MODEL
+import drlink_v24 as v24
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
 MCP_TRANSPORT = "streamable-http"
@@ -396,6 +399,22 @@ class MCPBridge:
                 return 200, _jsonrpc_error(req_id, -32603, "internal error")
         return 404, _jsonrpc_error(req_id, -32601, "Method not found")
 
+    def _authorize(self, principal, endpoint: str, capability: str, operand=None) -> dict:
+        return v24.authorize_ai_capability_v24(
+            self.plane,
+            identity=principal["name"],
+            destination=endpoint,
+            capability=capability,
+            operand=operand,
+        )
+
+    @staticmethod
+    def _rule_name(decision: dict):
+        winner = decision.get("winner") if decision else None
+        if isinstance(winner, dict):
+            return winner.get("name")
+        return None
+
     def call_tool(self, principal, name: str, arguments: dict) -> dict:
         if name not in AI_CAPABILITIES:
             self.plane.record_ai_activity(
@@ -414,7 +433,7 @@ class MCPBridge:
                     continue
                 allowed = False
                 for cap in ("list_hosts", "get_host", "get_system_info"):
-                    decision = self.plane.evaluate_ai_access(principal["name"], obj["name"], cap)
+                    decision = self._authorize(principal, obj["name"], cap)
                     if decision["action"] == "ALLOW":
                         allowed = True
                         break
@@ -431,7 +450,7 @@ class MCPBridge:
                 endpoint="*",
                 capability="list_hosts",
                 result="ALLOW" if hosts else "DENY",
-                rule=(decision["winner"]["name"] if decision and decision.get("winner") else None),
+                rule=self._rule_name(decision),
             )
             return _text_result(json.dumps(hosts, indent=2))
         endpoint = str(arguments.get("endpoint") or arguments.get("host") or "")
@@ -439,14 +458,14 @@ class MCPBridge:
             raise ControlPlaneError("endpoint is required")
         operand = arguments.get("path") or arguments.get("command") or arguments.get("operand")
         start = time.monotonic()
-        decision = self.plane.evaluate_ai_access(principal["name"], endpoint, name, operand)
+        decision = self._authorize(principal, endpoint, name, operand)
         if decision["action"] != "ALLOW":
             self.plane.record_ai_activity(
                 principal=principal["name"],
                 endpoint=endpoint,
                 capability=name,
                 result="DENY",
-                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                rule=self._rule_name(decision),
                 operand=operand,
                 duration_ms=int((time.monotonic() - start) * 1000),
             )
@@ -458,7 +477,7 @@ class MCPBridge:
                 endpoint=endpoint,
                 capability=name,
                 result="UNAVAILABLE",
-                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                rule=self._rule_name(decision),
                 operand=operand,
             )
             return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable", is_error=True)
@@ -468,7 +487,7 @@ class MCPBridge:
                 endpoint=endpoint,
                 capability=name,
                 result="UNAVAILABLE",
-                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                rule=self._rule_name(decision),
                 operand=operand,
             )
             return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable (orphaned)", is_error=True)
@@ -479,7 +498,7 @@ class MCPBridge:
                 endpoint=endpoint,
                 capability=name,
                 result="UNAVAILABLE",
-                rule=decision["winner"]["name"] if decision.get("winner") else None,
+                rule=self._rule_name(decision),
                 operand=operand,
             )
             return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable", is_error=True)
@@ -495,11 +514,13 @@ class MCPBridge:
                 endpoint=endpoint,
                 capability=name,
                 result="ALLOW",
-                rule=decision["winner"]["name"],
+                rule=self._rule_name(decision),
                 duration_ms=int((time.monotonic() - start) * 1000),
             )
             return _text_result(json.dumps(view, indent=2))
-        patterns = decision["winner"].get("paths") or []
+        patterns = list(decision.get("patterns") or [])
+        if decision.get("winner") and not patterns:
+            patterns = list(decision["winner"].get("paths") or [])
         timeout = decision.get("exec_timeout") or 30
         payload = self._dispatch_endpoint(
             principal=principal,
@@ -517,7 +538,7 @@ class MCPBridge:
             endpoint=endpoint,
             capability=name,
             result=op_result,
-            rule=decision["winner"]["name"],
+            rule=self._rule_name(decision),
             operand=operand,
             duration_ms=duration_ms,
         )

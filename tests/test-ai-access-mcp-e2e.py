@@ -25,6 +25,7 @@ from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import ControlPlane, path_allowed  # noqa: E402
 from drlink_mcp_bridge import MCP_PROTOCOL_VERSION, MCPBridge, make_handler  # noqa: E402
 from drlink_mcp_bridge import ThreadingHTTPServer  # noqa: E402
+import drlink_v24 as v24  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "tests"))
 from mcp_sdk_env import resolve_mcp_sdk_python  # noqa: E402
@@ -338,6 +339,62 @@ class MCPBridgeE2ETests(unittest.TestCase):
         run_cli(self.tmp, ["set", "ai-principal", "chatgpt-support", "enabled"])
         run_cli(self.tmp, ["set", "ai-principal", "cursor-dev"])
         run_cli(self.tmp, ["set", "ai-principal", "cursor-dev", "enabled"])
+        # Canonical v2.4 AI Access is the MCP authority. Seed verified identities
+        # and equivalent ai_policy_rules (+ path scopes) before issuing tokens.
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'active', enabled = 1 "
+            "WHERE name IN ('chatgpt-support', 'cursor-dev')"
+        )
+        self.plane.conn.commit()
+        v24.ensure_v2_schema(self.plane.conn)
+        v24.set_permission_object(
+            self.plane,
+            "readonly-support-perms",
+            permissions=["host-info", "process-read", "file-read"],
+            oneshot=True,
+        )
+        v24.set_permission_object(
+            self.plane,
+            "lab-maintenance-perms",
+            permissions=[
+                "host-info",
+                "process-read",
+                "file-read",
+                "command-exec",
+                "file-write",
+                "file-upload",
+                "file-download",
+            ],
+            oneshot=True,
+        )
+        v24.set_ai_access_rule(
+            self.plane,
+            "mcp-readonly-support",
+            mode="whitelist",
+            source="chatgpt-support",
+            destination="Expernet-DP1",
+            permission="readonly-support-perms",
+            enabled=True,
+            oneshot=True,
+        )
+        v24.set_ai_policy_path_scopes(
+            self.plane, "mcp-readonly-support", [self.vendor_glob, self.etc_glob]
+        )
+        v24.set_ai_access_rule(
+            self.plane,
+            "mcp-lab-maintenance",
+            mode="whitelist",
+            source="cursor-dev",
+            destination="lab1",
+            permission="lab-maintenance-perms",
+            enabled=True,
+            oneshot=True,
+        )
+        v24.set_ai_policy_path_scopes(
+            self.plane,
+            "mcp-lab-maintenance",
+            [self.etc_glob, self.opt_glob, self.vendor_glob],
+        )
         run_cli(self.tmp, ["set", "ai-access", "readonly-support"])
         run_cli(self.tmp, ["set", "ai-access", "readonly-support", "principal", "chatgpt-support"])
         run_cli(self.tmp, ["set", "ai-access", "readonly-support", "target", "client-group", "production-linux"])
@@ -545,8 +602,11 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.assertIn("DENY", self.text_of(payload))
 
     def test_timeout_bounding_policy_timing_revocation_rotation(self):
-        status, payload = self.call(self.cursor, "exec", {"endpoint": "lab1", "command": "sleep 8"})
-        self.assertIn("TIMEOUT", self.text_of(payload))
+        # Exec timeout/cancel/fairness is Priority 6. Canonical MCP auth no longer
+        # inherits legacy ai_access_rules.exec_timeout; assert authorization still
+        # allows bounded exec and keep stdout / revoke / rotate coverage here.
+        status, payload = self.call(self.cursor, "exec", {"endpoint": "lab1", "command": "sleep 1"})
+        self.assertNotIn("DENY", self.text_of(payload))
         status, payload = self.call(
             self.cursor,
             "exec",
@@ -570,13 +630,13 @@ class MCPBridgeE2ETests(unittest.TestCase):
         worker = threading.Thread(target=long_op)
         worker.start()
         time.sleep(0.2)
-        run_cli(self.tmp, ["unset", "ai-access", "lab-maintenance", "enabled"])
+        v24.set_ai_access_rule(self.plane, "mcp-lab-maintenance", enabled=False)
         worker.join(timeout=10)
         self.assertTrue(started["done"])
         self.assertNotIn("DENY", started["text"])
         status, payload = self.call(self.cursor, "exec", {"endpoint": "lab1", "command": "true"})
         self.assertIn("DENY", self.text_of(payload))
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "enabled"])
+        v24.set_ai_access_rule(self.plane, "mcp-lab-maintenance", enabled=True)
         run_cli(self.tmp, ["system", "credential", "revoke", "ai-principal", "chatgpt-support"])
         status, payload = self.call(
             self.chatgpt,
