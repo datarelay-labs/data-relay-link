@@ -228,6 +228,8 @@ The published stable line remains **v2.3.0** on `main`. Field installs of the st
 FRP_RELEASE_CHANNEL=dev
 ```
 
+A legacy client on an older updater can use a one-time verified bridge; it cannot replace current upgrade policy.
+
 ## Quick start (candidate branch)
 
 Until `v2.4.0` is tagged, install from this branch's exact candidate HEAD / artifacts only as directed by the release checklist and owner-gated manual E2E — do not invent a stable-tag URL.
@@ -239,6 +241,26 @@ sudo drlink system diagnostics
 ```
 
 Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, DNS-provider records, SSH accounts, or application certificates.
+
+## Zero-Touch enrollment
+
+After a Managed Host enrolls and a Remote Service is enabled, operators connect with the reserved public endpoint:
+
+```text
+ssh -p <public-port> user@<public-hostname>
+```
+
+Connect a client with zero-touch:
+
+```text
+set client --one-line --ssh-user ubuntu
+```
+
+Interactive create-client still prompts `Client SSH user`. There is no default username.
+
+Zero-touch `--one-line` does **not**:
+- join entire networks
+- skip enrollment authentication
 
 ## Policy safety
 
