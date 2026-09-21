@@ -1458,11 +1458,19 @@ class ControlPlane:
                     "UPDATE clients SET trust_status = 'revoked', connected = 0, updated_at = ? WHERE id = ?",
                     (utc_now_iso(), client["id"]),
                 )
+                self.conn.execute(
+                    "DELETE FROM system_meta WHERE key = ?",
+                    (self._ai_agent_credential_key(client["id"]),),
+                )
                 return {"entity": {"type": "client", "id": client["id"]}, "operation": "revoke"}
             refs = []
             if ep:
                 refs = self.object_references(ep["name"])
             self._retire_client_owned_state(client["id"])
+            self.conn.execute(
+                "DELETE FROM system_meta WHERE key = ?",
+                (self._ai_agent_credential_key(client["id"]),),
+            )
             if ep and refs:
                 self.conn.execute(
                     "UPDATE objects SET status = 'orphaned', orphan_reason = 'Client removed', updated_at = ? WHERE id = ?",
@@ -3470,8 +3478,31 @@ class ControlPlane:
             self._touch_principal(row["id"])
         return row
 
+    def _ai_agent_credential_key(self, client_id: str) -> str:
+        return "ai_agent_hash:%s" % client_id
+
+    def _ai_job_spool_dir(self) -> Path:
+        base = Path(self.root) if self.root else Path("/")
+        return base / "var" / "lib" / "drlink" / "runtime" / "ai-jobs"
+
+    def _ai_job_spool_path(self, job_id: str) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(job_id or ""))
+        return self._ai_job_spool_dir() / ("%s.json" % safe)
+
     def issue_agent_credential(self, client_id: str, *, rotate: bool = False) -> Optional[str]:
-        key = "ai_agent_hash:%s" % client_id
+        """Issue a one-time plaintext AI agent bearer token (hash stored server-side).
+
+        Production Managed Host workers should prefer enrolled management identity
+        claim/complete over long-lived bearer tokens. This bearer path remains for
+        hermetic tests and optional bridge-local agent loops behind an explicit
+        test seam.
+        """
+        client = self.conn.execute(
+            "SELECT id, trust_status FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if client is None or str(client["trust_status"] or "") != "trusted":
+            return None
+        key = self._ai_agent_credential_key(client_id)
         existing = self.conn.execute("SELECT value FROM system_meta WHERE key = ?", (key,)).fetchone()
         if existing and not rotate:
             return None
@@ -3481,7 +3512,15 @@ class ControlPlane:
             "INSERT OR REPLACE INTO system_meta(key, value) VALUES (?, ?)",
             (key, digest),
         )
+        self.commit_if_autonomous()
         return token
+
+    def revoke_agent_credential(self, client_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM system_meta WHERE key = ?",
+            (self._ai_agent_credential_key(client_id),),
+        )
+        self.commit_if_autonomous()
 
     def authenticate_agent(self, token: str) -> Optional[str]:
         digest = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
@@ -3491,7 +3530,25 @@ class ControlPlane:
         ).fetchone()
         if row is None:
             return None
-        return str(row["key"]).split(":", 1)[1]
+        client_id = str(row["key"]).split(":", 1)[1]
+        client = self.conn.execute(
+            "SELECT trust_status FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if client is None or str(client["trust_status"] or "") != "trusted":
+            return None
+        return client_id
+
+    def assert_ai_job_claimant(self, client_id: str) -> None:
+        """Fail closed when a Managed Host is missing, revoked, or retired."""
+        row = self.conn.execute(
+            "SELECT id, trust_status, status FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if row is None:
+            raise ControlPlaneError("unknown Managed Host")
+        if str(row["trust_status"] or "") != "trusted":
+            raise ControlPlaneError("Managed Host is not trusted")
+        if str(row["status"] or "").lower() in ("retired", "removed", "deleted"):
+            raise ControlPlaneError("Managed Host is retired")
 
     def enqueue_ai_job(
         self,
@@ -3530,15 +3587,18 @@ class ControlPlane:
         return job_id
 
     def claim_ai_jobs(self, client_id: str, limit: int = 4) -> list[dict]:
+        self.assert_ai_job_claimant(client_id)
         rows = list(
             self.conn.execute(
                 "SELECT * FROM ai_jobs WHERE status = 'queued' ORDER BY created_at LIMIT ?",
-                (max(1, int(limit)),),
+                (max(1, int(limit) * 8),),
             )
         )
         claimed = []
         now = utc_now_iso()
         for row in rows:
+            if len(claimed) >= max(1, int(limit)):
+                break
             payload = json.loads(row["payload_json"] or "{}")
             if payload.get("client_id") != client_id:
                 continue
@@ -3556,16 +3616,54 @@ class ControlPlane:
                         "timeout": payload.get("timeout") or row["timeout_seconds"],
                     }
                 )
+        self.commit_if_autonomous()
         return claimed
 
+    def _store_ai_job_result_blob(self, job_id: str, result: dict) -> None:
+        """Persist the full in-memory result so MCP Bridge can return file bytes."""
+        spool_dir = self._ai_job_spool_dir()
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        path = self._ai_job_spool_path(job_id)
+        tmp = path.with_suffix(".tmp")
+        raw = json.dumps(result or {}, sort_keys=True).encode("utf-8")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, raw)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(str(tmp), str(path))
+
+    def consume_ai_job_result(self, job_id: str) -> Optional[dict]:
+        """Return and delete the full AI job result (spool first, then SQLite summary)."""
+        path = self._ai_job_spool_path(job_id)
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            if isinstance(data, dict):
+                return data
+        job = self.get_ai_job(job_id)
+        if job and isinstance(job.get("result"), dict):
+            return dict(job["result"])
+        return None
+
     def complete_ai_job(self, job_id: str, client_id: str, result: dict) -> None:
+        self.assert_ai_job_claimant(client_id)
         row = self.conn.execute("SELECT payload_json, status FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise ControlPlaneError("AI job not found")
         payload = json.loads(row["payload_json"] or "{}")
         if payload.get("client_id") != client_id:
             raise ControlPlaneError("AI job does not belong to this client")
-        safe = dict(result or {})
+        full = dict(result or {})
+        self._store_ai_job_result_blob(job_id, full)
+        safe = dict(full)
         # Never persist file contents or unbounded streams in SQLite.
         safe.pop("content_b64", None)
         stdout = str(safe.get("stdout") or "")
@@ -3580,6 +3678,7 @@ class ControlPlane:
             "UPDATE ai_jobs SET status = 'done', result_json = ?, updated_at = ? WHERE id = ?",
             (json.dumps(safe, sort_keys=True)[:8000], utc_now_iso(), job_id),
         )
+        self.commit_if_autonomous()
 
     def get_ai_job(self, job_id: str) -> Optional[dict]:
         row = self.conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()

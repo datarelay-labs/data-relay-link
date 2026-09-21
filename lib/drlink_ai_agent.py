@@ -219,16 +219,51 @@ def _agent_post(url: str, token: str, body: dict, timeout: float = 10) -> dict:
 
 
 class AgentLoop:
-    """Poll the MCP Bridge for authorized jobs and execute them locally."""
+    """Poll the Server for authorized jobs and execute them locally on this host.
 
-    def __init__(self, base_url: str, token: str, stop_event: Optional[threading.Event] = None):
-        self.base_url = base_url.rstrip("/")
-        self.token = token
+    Production transport uses enrolled management identity against the Server
+    management URL (``/v1/ai-jobs/claim|complete``). Bearer token + MCP Bridge
+    ``/agent/v1/*`` remains available for hermetic tests.
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        token: Optional[str] = None,
+        stop_event: Optional[threading.Event] = None,
+        *,
+        agent_root: Optional[str] = None,
+    ):
+        self.base_url = (base_url or "").rstrip("/")
+        self.token = token or ""
+        self.agent_root = agent_root
         self.stop_event = stop_event or threading.Event()
+        if not self.token and not self.agent_root:
+            raise ValueError("AgentLoop requires bearer token or agent_root")
+
+    def _claim(self) -> list:
+        if self.agent_root:
+            import drlink_mgmt_sync as mgmt
+
+            payload = mgmt.claim_ai_jobs_on_server(root=self.agent_root, limit=4)
+            return list(payload.get("jobs") or [])
+        payload = _agent_post(self.base_url + "/agent/v1/claim", self.token, {"limit": 4})
+        return list(payload.get("jobs") or [])
+
+    def _complete(self, job_id: str, result: dict) -> None:
+        if self.agent_root:
+            import drlink_mgmt_sync as mgmt
+
+            mgmt.complete_ai_job_on_server(root=self.agent_root, job_id=job_id, result=result)
+            return
+        _agent_post(
+            self.base_url + "/agent/v1/complete",
+            self.token,
+            {"id": job_id, "result": result},
+        )
 
     def run_once(self) -> int:
-        payload = _agent_post(self.base_url + "/agent/v1/claim", self.token, {"limit": 4})
-        jobs = payload.get("jobs") or []
+        jobs = self._claim()
         for job in jobs:
             try:
                 result = execute_local(
@@ -241,11 +276,11 @@ class AgentLoop:
                 result = {"result": "DENY", "error": str(exc)}
             except Exception as exc:
                 result = {"result": "ERROR", "error": str(exc)}
-            _agent_post(
-                self.base_url + "/agent/v1/complete",
-                self.token,
-                {"id": job.get("id"), "result": result},
-            )
+            try:
+                self._complete(job.get("id"), result)
+            except Exception:
+                # Keep polling; Server-side job remains running until timeout/retry policy.
+                pass
         return len(jobs)
 
     def run(self) -> None:
@@ -261,15 +296,34 @@ def main(argv=None):
     import argparse
 
     parser = argparse.ArgumentParser(description="Data Relay Link AI agent (not an MCP server)")
-    parser.add_argument("--url", default=os.environ.get("DRLINK_MCP_URL", "http://127.0.0.1:6103"))
-    parser.add_argument("--token-file", default=os.environ.get("DRLINK_AI_AGENT_TOKEN_FILE", "/etc/drlink/ai-agent.token"))
+    parser.add_argument(
+        "--url",
+        default=os.environ.get("DRLINK_MCP_URL", ""),
+        help="Optional MCP Bridge base URL for bearer-token test mode",
+    )
+    parser.add_argument(
+        "--token-file",
+        default=os.environ.get("DRLINK_AI_AGENT_TOKEN_FILE", "/etc/drlink/ai-agent.token"),
+    )
+    parser.add_argument(
+        "--agent-root",
+        default=os.environ.get("DRLINK_AGENT_ROOT", ""),
+        help="Agent filesystem root; when set, uses enrolled management identity",
+    )
     args = parser.parse_args(argv)
+    agent_root = str(args.agent_root or "").strip() or None
     token = os.environ.get("DRLINK_AI_AGENT_TOKEN") or ""
     if not token and args.token_file and os.path.isfile(args.token_file):
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
+    # Production default: management identity on the enrolled Agent root.
     if not token:
-        raise SystemExit("ERROR: missing AI agent token")
-    AgentLoop(args.url, token).run()
+        if agent_root is None:
+            agent_root = "/"
+        AgentLoop(agent_root=agent_root).run()
+        return
+    if not args.url:
+        raise SystemExit("ERROR: bearer-token mode requires --url / DRLINK_MCP_URL")
+    AgentLoop(args.url, token, agent_root=None).run()
 
 
 if __name__ == "__main__":

@@ -226,6 +226,10 @@ def _canonical_operation(method: str, path: str) -> Optional[tuple[str, str]]:
         if not name or "/" in name:
             return None
         return MGMT.MGMT_OP_REMOTE_SERVICE_DELETE, parsed
+    if method_u == "POST" and parsed == "/v1/ai-jobs/claim":
+        return MGMT.MGMT_OP_AI_JOB_CLAIM, parsed
+    if method_u == "POST" and parsed == "/v1/ai-jobs/complete":
+        return MGMT.MGMT_OP_AI_JOB_COMPLETE, parsed
     return None
 
 
@@ -449,6 +453,43 @@ def delete_remote_service_on_server(*, root: Optional[str] = None, name: str) ->
     )
 
 
+def claim_ai_jobs_on_server(*, root: Optional[str] = None, limit: int = 4) -> dict:
+    """Claim queued AI jobs for this enrolled Managed Host via management auth."""
+    base = resolve_mgmt_base_url(root)
+    if not base:
+        raise MgmtSyncError(
+            "ERROR:\nNo Server management URL is configured for AI job claim.\n\n"
+            "No changes were applied."
+        )
+    return _request_json(
+        "POST",
+        base + "/v1/ai-jobs/claim",
+        {"limit": int(limit)},
+        root=root,
+    )
+
+
+def complete_ai_job_on_server(
+    *,
+    root: Optional[str] = None,
+    job_id: str,
+    result: dict,
+) -> dict:
+    """Complete an AI job for this enrolled Managed Host via management auth."""
+    base = resolve_mgmt_base_url(root)
+    if not base:
+        raise MgmtSyncError(
+            "ERROR:\nNo Server management URL is configured for AI job completion.\n\n"
+            "No changes were applied."
+        )
+    return _request_json(
+        "POST",
+        base + "/v1/ai-jobs/complete",
+        {"id": str(job_id), "result": dict(result or {})},
+        root=root,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Server-side identity verification
 # ---------------------------------------------------------------------------
@@ -603,6 +644,12 @@ def _require_managed_host(plane, machine_id: str):
     ).fetchone()
     if row is None:
         raise MgmtAuthError("unknown Managed Host")
+    trust = str(row["trust_status"] or "")
+    if trust and trust != "trusted":
+        raise MgmtAuthError("Managed Host is not trusted")
+    status = str(row["status"] or "").lower()
+    if status in ("retired", "removed", "deleted"):
+        raise MgmtAuthError("Managed Host is retired")
     return row
 
 
@@ -950,6 +997,29 @@ def server_delete_remote_service(plane, auth: MgmtAuthContext, name: str) -> dic
     return {"status": "DELETED", "name": name, "released_port": pub["public_port"]}
 
 
+def server_claim_ai_jobs(plane, auth: MgmtAuthContext, body: dict) -> dict:
+    """Claim queued AI jobs for the authenticated Managed Host identity only."""
+    machine_id = auth.machine_id
+    _require_managed_host(plane, machine_id)
+    limit = int((body or {}).get("limit") or 4)
+    jobs = plane.claim_ai_jobs(machine_id, limit)
+    return {"jobs": jobs}
+
+
+def server_complete_ai_job(plane, auth: MgmtAuthContext, body: dict) -> dict:
+    """Complete an AI job belonging to the authenticated Managed Host."""
+    machine_id = auth.machine_id
+    _require_managed_host(plane, machine_id)
+    job_id = str((body or {}).get("id") or "").strip()
+    if not job_id:
+        raise MgmtSyncError("AI job id is required")
+    result = (body or {}).get("result") or {}
+    if not isinstance(result, dict):
+        raise MgmtSyncError("AI job result must be an object")
+    plane.complete_ai_job(job_id, machine_id, result)
+    return {"ok": True}
+
+
 def _allocator_registry_state(auth: MgmtAuthContext):
     allocator = getattr(auth, "allocator", None)
     if allocator is None:
@@ -1252,7 +1322,21 @@ def handle_allocator_http(
             name = unquote(parsed[len("/v1/remote-services/") :])
             result = server_delete_remote_service(plane, auth, name)
             return 200, _with_response_mac(result, auth)
+        if method.upper() == "POST" and parsed == "/v1/ai-jobs/claim":
+            data = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+            if not isinstance(data, dict):
+                return 400, {"error": "invalid JSON"}
+            result = server_claim_ai_jobs(plane, auth, data)
+            return 200, _with_response_mac(result, auth)
+        if method.upper() == "POST" and parsed == "/v1/ai-jobs/complete":
+            data = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+            if not isinstance(data, dict):
+                return 400, {"error": "invalid JSON"}
+            result = server_complete_ai_job(plane, auth, data)
+            return 200, _with_response_mac(result, auth)
     except MgmtAuthError as exc:
+        return 403, _public_auth_error(str(exc))
+    except ControlPlaneError as exc:
         return 403, _public_auth_error(str(exc))
     except MgmtSyncError as exc:
         msg = str(exc)

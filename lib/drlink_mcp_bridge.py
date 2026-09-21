@@ -114,7 +114,7 @@ def _decode_mcp_header(value: str) -> str:
 
 
 class MCPBridge:
-    def __init__(self, root: Optional[str] = None, plane: Optional[ControlPlane] = None, *, auto_agents: bool = True):
+    def __init__(self, root: Optional[str] = None, plane: Optional[ControlPlane] = None, *, auto_agents: bool = False):
         self.root = root or resolve_root()
         self.plane = plane or ControlPlane(self.root)
         self.running_ops = {}
@@ -124,6 +124,8 @@ class MCPBridge:
         self._job_results = {}
         self.listen_host = DEFAULT_LISTEN
         self.listen_port = DEFAULT_PORT
+        # Production default is False: Managed Host workers claim jobs themselves.
+        # auto_agents is a hermetic test seam only (see refresh_local_agents).
         self.auto_agents = auto_agents
 
     def canonical_public_base(self) -> str:
@@ -152,14 +154,24 @@ class MCPBridge:
         self._agents.clear()
 
     def refresh_local_agents(self, base_url: Optional[str] = None) -> None:
+        """Test-only: start in-process AgentLoop threads for connected clients.
+
+        Production MCP Bridge must never impersonate Managed Hosts. This method
+        requires both auto_agents=True and DRLINK_AI_TEST_LOCAL_AGENTS=1.
+        """
         if not self.auto_agents:
             return
+        if os.environ.get("DRLINK_AI_TEST_LOCAL_AGENTS") != "1":
+            raise RuntimeError(
+                "refresh_local_agents is a hermetic test seam only; "
+                "set DRLINK_AI_TEST_LOCAL_AGENTS=1 or run a real Managed Host worker"
+            )
         url = base_url or ("http://127.0.0.1:%s" % self.listen_port)
         for client in self.plane.connected_clients():
             cid = client["id"]
             if cid in self._agents:
                 continue
-            token = self.plane.issue_agent_credential(cid)
+            token = self.plane.issue_agent_credential(cid, rotate=True)
             if not token:
                 continue
             stop = threading.Event()
@@ -562,24 +574,37 @@ class MCPBridge:
             )
         if client_id in self._agents:
             wait_for = max(2.0, float(timeout) + 2.0)
-        elif os.environ.get("DRLINK_TEST_ROOT") or os.environ.get("DRLINK_AI_LOCAL_EXEC") == "1":
-            wait_for = 0.25
         else:
             wait_for = max(2.0, float(timeout) + 5.0)
+            # Hermetic tests without in-process agents: keep a bounded wait so
+            # real mgmt/bearer workers can claim, without a 30s+ hang on TIMEOUT.
+            if os.environ.get("DRLINK_TEST_ROOT") and os.environ.get("DRLINK_AI_TEST_LOCAL_EXEC") != "1":
+                wait_for = min(wait_for, max(3.0, float(timeout or 0) + 1.0))
         deadline = time.monotonic() + wait_for
         while time.monotonic() < deadline:
             with self._lock:
                 if job_id in self._job_results:
                     return self._job_results.pop(job_id)
             job = self.plane.get_ai_job(job_id)
-            if job and job.get("status") == "done" and job_id in self._job_results:
+            if job and job.get("status") == "done":
                 with self._lock:
-                    return self._job_results.pop(job_id)
+                    if job_id in self._job_results:
+                        return self._job_results.pop(job_id)
+                consumed = self.plane.consume_ai_job_result(job_id)
+                if consumed is not None:
+                    return consumed
             time.sleep(0.05)
         with self._lock:
             if job_id in self._job_results:
                 return self._job_results.pop(job_id)
-        if os.environ.get("DRLINK_TEST_ROOT") or os.environ.get("DRLINK_AI_LOCAL_EXEC") == "1":
+        job = self.plane.get_ai_job(job_id)
+        if job and job.get("status") == "done":
+            consumed = self.plane.consume_ai_job_result(job_id)
+            if consumed is not None:
+                return consumed
+        # Unmistakable hermetic-test seam only. Production service config must
+        # never set both DRLINK_AI_TEST_LOCAL_EXEC=1 and DRLINK_TEST_ROOT.
+        if os.environ.get("DRLINK_AI_TEST_LOCAL_EXEC") == "1" and os.environ.get("DRLINK_TEST_ROOT"):
             try:
                 payload = execute_local(capability, arguments, patterns=patterns, timeout=timeout)
             except ControlPlaneError as exc:
@@ -866,17 +891,21 @@ def make_handler(bridge: MCPBridge):
                 except Exception:
                     self._send(400, {"error": "parse error"})
                     return
-                if parsed.path.endswith("/claim"):
+                try:
+                    if parsed.path.endswith("/claim"):
+                        with bridge._lock:
+                            jobs = bridge.plane.claim_ai_jobs(client_id, int(body.get("limit") or 4))
+                        self._send(200, {"jobs": jobs})
+                        return
+                    full = body.get("result") or {}
                     with bridge._lock:
-                        jobs = bridge.plane.claim_ai_jobs(client_id, int(body.get("limit") or 4))
-                    self._send(200, {"jobs": jobs})
+                        bridge._job_results[str(body.get("id") or "")] = full
+                        bridge.plane.complete_ai_job(str(body.get("id") or ""), client_id, full)
+                    self._send(200, {"ok": True})
                     return
-                full = body.get("result") or {}
-                with bridge._lock:
-                    bridge._job_results[str(body.get("id") or "")] = full
-                    bridge.plane.complete_ai_job(str(body.get("id") or ""), client_id, full)
-                self._send(200, {"ok": True})
-                return
+                except ControlPlaneError as exc:
+                    self._send(403, {"error": str(exc)})
+                    return
             if parsed.path != "/mcp":
                 self._send(404, {"error": "not found"})
                 return
@@ -908,11 +937,11 @@ def make_handler(bridge: MCPBridge):
 
 
 def serve(host=DEFAULT_LISTEN, port=DEFAULT_PORT, root=None):
-    bridge = MCPBridge(root=root)
+    # Production bridge never starts Server-local Managed Host impersonation loops.
+    bridge = MCPBridge(root=root, auto_agents=False)
     bridge.listen_host = host
     bridge.listen_port = int(port)
     httpd = ThreadingHTTPServer((host, int(port)), make_handler(bridge))
-    bridge.refresh_local_agents("http://%s:%s" % (host, port))
     httpd.serve_forever()
 
 

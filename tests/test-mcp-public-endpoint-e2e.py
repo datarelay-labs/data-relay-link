@@ -23,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
+from drlink_ai_agent import AgentLoop  # noqa: E402
 from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import ControlPlane  # noqa: E402
 from drlink_mcp_bridge import (  # noqa: E402
@@ -38,6 +39,22 @@ from drlink_mcp_bridge import (  # noqa: E402
     ThreadingHTTPServer,
 )
 import frp_frontend  # noqa: E402
+
+
+def start_endpoint_workers(bridge: MCPBridge, base_url: str):
+    stops = []
+    threads = []
+    for client in bridge.plane.connected_clients():
+        token = bridge.plane.issue_agent_credential(client["id"], rotate=True)
+        if not token:
+            continue
+        stop = threading.Event()
+        loop = AgentLoop(base_url, token, stop_event=stop)
+        thread = threading.Thread(target=loop.run, daemon=True)
+        thread.start()
+        stops.append(stop)
+        threads.append(thread)
+    return stops, threads
 import frp_pki  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "tests"))
@@ -132,15 +149,15 @@ class PublicMcpEndpointTests(unittest.TestCase):
         _capture()
         self.token = [ln.split(" ", 1)[1].strip() for ln in out[0].splitlines() if ln.startswith("Token: ")][0]
         self.mcp_port = free_port()
-        self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=True)
+        self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.mcp_port), make_handler(self.bridge))
         self.httpd_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.httpd_thread.start()
         self.bridge.listen_host = "127.0.0.1"
         self.bridge.listen_port = self.mcp_port
-        self.bridge.refresh_local_agents("http://127.0.0.1:%s" % self.mcp_port)
         self.loopback = "http://127.0.0.1:%s" % self.mcp_port
         self.url = self.loopback + "/mcp"
+        self._agent_stops, self._agent_threads = start_endpoint_workers(self.bridge, self.loopback)
         self.nginx = None
         self.frontend_port = None
         self.ca = None
@@ -203,6 +220,8 @@ class PublicMcpEndpointTests(unittest.TestCase):
                 self.fail("nginx /mcp not ready: %s" % last)
 
     def tearDown(self):
+        for stop in getattr(self, "_agent_stops", []):
+            stop.set()
         if self.nginx is not None:
             if self.nginx.poll() is None:
                 self.nginx.terminate()

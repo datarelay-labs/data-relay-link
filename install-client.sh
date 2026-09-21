@@ -360,6 +360,9 @@ PY
 frp_client_install_service_definition() {
   if frp_is_darwin; then
     frp_macos_launchd_install
+    # macOS durable AI worker lifecycle is not claimed in this packet; Linux is
+    # the mandatory Managed Host AI executor path. macOS remains fail-closed
+    # (no local AI worker) until a later platform-support packet.
     return
   fi
   # Retire product-owned legacy frpc.service before enabling the canonical unit.
@@ -385,6 +388,26 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF2
   fi
+  local ai_unit_src="${_FRP_INSTALL_CLIENT_DIR}/client/drlink-ai-agent.service"
+  if [[ -f "$ai_unit_src" ]]; then
+    frp_write_compatible_systemd_unit "$ai_unit_src" /etc/systemd/system/drlink-ai-agent.service
+  else
+    cat >/etc/systemd/system/drlink-ai-agent.service <<'EOF3'
+[Unit]
+Description=Data Relay Link AI Agent Worker
+After=network-online.target drlink-client.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/drlink_ai_agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF3
+  fi
 }
 
 frp_client_service_reload() {
@@ -399,6 +422,12 @@ frp_client_service_start() {
   else
     frp_retire_legacy_client_unit || return 1
     systemctl enable drlink-client >/dev/null && systemctl restart drlink-client
+    # Durable AI worker: start with the Agent. Failures here are non-fatal for
+    # connectivity-only installs, but logged; Doctor/MCP will surface TIMEOUT.
+    if [[ -f /etc/systemd/system/drlink-ai-agent.service ]]; then
+      systemctl enable drlink-ai-agent >/dev/null 2>&1 || true
+      systemctl restart drlink-ai-agent >/dev/null 2>&1 || true
+    fi
   fi
 }
 

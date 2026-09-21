@@ -3170,7 +3170,9 @@ def make_handler(allocator):
                 path = self._request_path()
                 try:
                     length = int(self.headers.get('Content-Length', '0'))
-                    if length <= 0 or length > 65536:
+                    # AI job completion may carry bounded file payloads (content_b64).
+                    max_len = 1200 * 1024 if path == '/v1/ai-jobs/complete' else 65536
+                    if length <= 0 or length > max_len:
                         self.send_json(
                             400, {'error': 'invalid request body length'}
                         )
@@ -3202,7 +3204,12 @@ def make_handler(allocator):
                         code, result = allocator.redeem_bootstrap(body)
                         self.send_json(code, result)
                         return
-                    if path in ('/v1/remote-services', '/v1/remote-services-status') and MGMT_SYNC is not None:
+                    if path in (
+                        '/v1/remote-services',
+                        '/v1/remote-services-status',
+                        '/v1/ai-jobs/claim',
+                        '/v1/ai-jobs/complete',
+                    ) and MGMT_SYNC is not None:
                         plane = _open_control_plane(allocator.cfg)
                         if plane is None:
                             self.send_json(

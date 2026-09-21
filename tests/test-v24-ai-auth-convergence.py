@@ -65,7 +65,7 @@ class AiAuthConvergence(unittest.TestCase):
         os.environ["FRP_DEPLOY_TEST_ROOT"] = self.tmp
         os.environ["DRLINK_TEST_ROOT"] = self.tmp
         os.environ["DRLINK_CONFIRM"] = "yes"
-        os.environ["DRLINK_AI_LOCAL_EXEC"] = "1"
+        os.environ["DRLINK_AI_TEST_LOCAL_EXEC"] = "1"
         self.plane = ControlPlane(self.tmp)
         v24.ensure_v2_schema(self.plane.conn)
         self.vendor = Path(self.tmp) / "var" / "log" / "vendor"
@@ -115,7 +115,7 @@ class AiAuthConvergence(unittest.TestCase):
             "FRP_DEPLOY_TEST_ROOT",
             "DRLINK_TEST_ROOT",
             "DRLINK_CONFIRM",
-            "DRLINK_AI_LOCAL_EXEC",
+            "DRLINK_AI_TEST_LOCAL_EXEC",
         ):
             os.environ.pop(key, None)
 

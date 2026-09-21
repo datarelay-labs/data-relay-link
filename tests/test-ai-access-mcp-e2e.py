@@ -20,12 +20,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
-from drlink_ai_agent import MAX_STDOUT_BYTES, execute_local  # noqa: E402
+from drlink_ai_agent import MAX_STDOUT_BYTES, AgentLoop, execute_local  # noqa: E402
 from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import ControlPlane, path_allowed  # noqa: E402
 from drlink_mcp_bridge import MCP_PROTOCOL_VERSION, MCPBridge, make_handler  # noqa: E402
 from drlink_mcp_bridge import ThreadingHTTPServer  # noqa: E402
 import drlink_v24 as v24  # noqa: E402
+
+
+def start_endpoint_workers(bridge: MCPBridge, base_url: str):
+    """Start real AgentLoop workers against the bridge (not Server-local impersonation)."""
+    stops = []
+    threads = []
+    for client in bridge.plane.connected_clients():
+        token = bridge.plane.issue_agent_credential(client["id"], rotate=True)
+        if not token:
+            continue
+        stop = threading.Event()
+        loop = AgentLoop(base_url, token, stop_event=stop)
+        thread = threading.Thread(target=loop.run, daemon=True, name="test-ai-agent-%s" % client["id"][:8])
+        thread.start()
+        stops.append(stop)
+        threads.append(thread)
+    return stops, threads
 
 sys.path.insert(0, str(ROOT / "tests"))
 from mcp_sdk_env import resolve_mcp_sdk_python  # noqa: E402
@@ -426,7 +443,7 @@ class MCPBridgeE2ETests(unittest.TestCase):
         run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "enabled"])
         self.chatgpt = self._token("chatgpt-support")
         self.cursor = self._token("cursor-dev")
-        self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=True)
+        self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.bridge))
         self.port = self.httpd.server_address[1]
         self.bridge.listen_host = "127.0.0.1"
@@ -435,9 +452,11 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.base = "http://127.0.0.1:%s" % self.port
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
-        self.bridge.refresh_local_agents(self.base)
+        self._agent_stops, self._agent_threads = start_endpoint_workers(self.bridge, self.base)
 
     def tearDown(self):
+        for stop in getattr(self, "_agent_stops", []):
+            stop.set()
         self.bridge.close()
         self.httpd.shutdown()
         self.httpd.server_close()
