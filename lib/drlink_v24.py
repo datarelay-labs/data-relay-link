@@ -3773,7 +3773,7 @@ def set_remote_service_agent(
     dest_token = str(dest).strip()
     destination_client_id = None
     existing_dest_client_id = str(_row_get(existing, "destination_client_id") or "").strip() or None
-    existing_dest_name = str(existing["destination"] if existing else "") 
+    existing_dest_name = str(existing["destination"] if existing else "")
     self_machine_id = str(identity.get("machine_id") or "").strip() or None
     bound_inventory = None
     destination_identity_reason = None
