@@ -126,44 +126,70 @@ grep -qi 'missing\|authoritative\|ERROR' "$WORKDIR/group.err" || {
 [[ ! -f "$WORKDIR/var/lib/drlink/registry.json" ]] || fail "group-set recreated registry"
 pass "group-set missing registry"
 
-# Backup must fail without ACL
+# Backup must fail closed when canonical required Server DR state is missing.
+# REQUIRED is DB-centric (backup_required_files + TRUST_REQUIRED); legacy
+# access-control.json / service-profiles.json are not authoritative inputs.
 cp "$WORKDIR/registry.bak" "$WORKDIR/var/lib/drlink/registry.json"
-# Minimal required tree for backup path check via collect semantics
-ROOT="$ROOT" python3 - <<'PY' || fail "backup missing ACL"
-import os, sys, types
+CONTROL_DB_REL="var/lib/drlink/drlink.db"
+ROOT="$ROOT" CONTROL_DB_REL="$CONTROL_DB_REL" python3 - <<'PY' || fail "backup missing required state"
+import contextlib, io, os, sys, types
 from pathlib import Path
 repo = Path(os.environ["ROOT"])
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
+control_db_rel = os.environ["CONTROL_DB_REL"]
 path = repo / "tools" / "frp-backup"
 mod = types.ModuleType("frp_backup")
 mod.__file__ = str(path)
 sys.modules["frp_backup"] = mod
 code = compile(path.read_text(encoding="utf-8"), str(path), "exec")
 exec(code, mod.__dict__)
+assert control_db_rel in mod.REQUIRED, "canonical control DB must be REQUIRED"
+assert not any(
+    rel.endswith("access-control.json") or rel.endswith("service-profiles.json")
+    for rel in mod.REQUIRED
+), "legacy ACL/profile JSON must not be REQUIRED under DB-centric Server DR"
+# Seed every REQUIRED path except the control DB.
 for rel in mod.REQUIRED:
-    if rel.endswith("access-control.json") or rel.endswith("service-profiles.json"):
+    if rel == control_db_rel:
         continue
     dest = root / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not dest.exists():
         if rel.endswith(".json"):
-            dest.write_text('{}\n')
+            dest.write_text("{}\n")
         else:
-            dest.write_text('x\n')
+            dest.write_text("x\n")
 (root / "var/lib/drlink/registry.json").write_text(
     '{"schema_version":2,"reserved":[],"clients":{}}\n'
 )
+# Legacy ACL/profile absence must not be the fail reason (and must stay absent).
+for legacy in (
+    "var/lib/drlink/access-control.json",
+    "var/lib/drlink/service-profiles.json",
+):
+    assert not (root / legacy).exists(), legacy
 failed = False
+stderr_buf = io.StringIO()
 try:
-    mod.collect_files(root)
+    with contextlib.redirect_stderr(stderr_buf):
+        mod.collect_files(root)
 except SystemExit:
     failed = True
 if not failed:
-    raise SystemExit("backup should fail without ACL")
-assert not (root / "var/lib/drlink/access-control.json").exists()
+    raise SystemExit("backup should fail without canonical control DB")
+err = stderr_buf.getvalue()
+assert control_db_rel in err or "drlink.db" in err, err
+assert not (root / control_db_rel).exists(), "must not recreate missing required DB"
+# With the canonical DB present, collect must succeed even if ACL/profiles are absent.
+(root / control_db_rel).write_text("x\n")
+files = mod.collect_files(root)
+rels = {rel for rel, _src in files}
+assert control_db_rel in rels
+assert "var/lib/drlink/access-control.json" not in rels
+assert "var/lib/drlink/service-profiles.json" not in rels
 print("backup-ok")
 PY
-pass "backup missing ACL"
+pass "backup missing required control DB"
 
 # Restore original ACL path after rename
 mv "$WORKDIR/var/lib/drlink/access-control.json.bak" \
