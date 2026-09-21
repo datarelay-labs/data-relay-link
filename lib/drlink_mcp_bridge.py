@@ -579,7 +579,7 @@ class MCPBridge:
             # Hermetic tests without in-process agents: keep a bounded wait so
             # real mgmt/bearer workers can claim, without a 30s+ hang on TIMEOUT.
             if os.environ.get("DRLINK_TEST_ROOT") and os.environ.get("DRLINK_AI_TEST_LOCAL_EXEC") != "1":
-                wait_for = min(wait_for, max(3.0, float(timeout or 0) + 1.0))
+                wait_for = min(wait_for, 5.0)
         deadline = time.monotonic() + wait_for
         while time.monotonic() < deadline:
             with self._lock:
@@ -593,6 +593,17 @@ class MCPBridge:
                 consumed = self.plane.consume_ai_job_result(job_id)
                 if consumed is not None:
                     return consumed
+            if job and job.get("status") in (
+                "timeout",
+                "cancelled",
+                "expired",
+                "recovery_required",
+            ):
+                result = (job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
+                return {
+                    "result": str(job.get("status") or "TIMEOUT").upper(),
+                    "error": result.get("error") or "agent did not complete the job",
+                }
             time.sleep(0.05)
         with self._lock:
             if job_id in self._job_results:
@@ -606,16 +617,31 @@ class MCPBridge:
         # never set both DRLINK_AI_TEST_LOCAL_EXEC=1 and DRLINK_TEST_ROOT.
         if os.environ.get("DRLINK_AI_TEST_LOCAL_EXEC") == "1" and os.environ.get("DRLINK_TEST_ROOT"):
             try:
+                claimed = self.plane.claim_ai_jobs(client_id, limit=64)
+            except ControlPlaneError:
+                claimed = []
+            match = next((item for item in claimed if item.get("id") == job_id), None)
+            if match is None:
+                self.plane.terminalize_ai_job(job_id, "timeout")
+                return {"result": "TIMEOUT", "error": "agent did not complete the job"}
+            try:
                 payload = execute_local(capability, arguments, patterns=patterns, timeout=timeout)
             except ControlPlaneError as exc:
                 payload = {"result": "DENY", "error": str(exc)}
             with self._lock:
                 self._job_results[job_id] = payload
                 try:
-                    self.plane.complete_ai_job(job_id, client_id, payload)
+                    self.plane.complete_ai_job(
+                        job_id,
+                        client_id,
+                        payload,
+                        claim_token=match.get("claim_token"),
+                        attempt_id=match.get("attempt_id"),
+                    )
                 except ControlPlaneError:
                     pass
             return payload
+        self.plane.terminalize_ai_job(job_id, "timeout")
         return {"result": "TIMEOUT", "error": "agent did not complete the job"}
 
 
@@ -900,7 +926,13 @@ def make_handler(bridge: MCPBridge):
                     full = body.get("result") or {}
                     with bridge._lock:
                         bridge._job_results[str(body.get("id") or "")] = full
-                        bridge.plane.complete_ai_job(str(body.get("id") or ""), client_id, full)
+                        bridge.plane.complete_ai_job(
+                            str(body.get("id") or ""),
+                            client_id,
+                            full,
+                            claim_token=body.get("claim_token"),
+                            attempt_id=body.get("attempt_id"),
+                        )
                     self._send(200, {"ok": True})
                     return
                 except ControlPlaneError as exc:

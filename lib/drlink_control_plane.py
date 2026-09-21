@@ -28,6 +28,7 @@ from drlink_control_db import (
     DatabaseCorruptError,
     SchemaTooNewError,
     db_path,
+    ensure_ai_jobs_safety_schema,
     integrity_check,
     open_control_db,
     pragma_snapshot,
@@ -66,6 +67,13 @@ AI_CAPABILITIES = (
     "list_processes",
 )
 FILE_CAPABILITIES = frozenset({"read_file", "write_file", "upload_file", "download_file"})
+AI_MUTATING_CAPABILITIES = frozenset({"exec", "write_file", "upload_file"})
+AI_TERMINAL_JOB_STATUSES = frozenset(
+    {"done", "timeout", "cancelled", "expired", "recovery_required"}
+)
+AI_ACTIVE_JOB_STATUSES = frozenset({"queued", "running"})
+# Absolute claim/completion deadline includes MCP wait slack past the exec timeout.
+AI_JOB_DISPATCH_GRACE_SECONDS = 10
 MCP_AUTH_MODEL = "static-bearer+built-in-oauth2.1-as/rs+rfc9728"
 OBJECT_TYPES = ("host", "network", "fqdn")
 PLANES = ("remote", "internet")
@@ -91,6 +99,38 @@ class ConcurrencyError(ControlPlaneError):
 
 def _new_id(prefix: str) -> str:
     return "%s_%s" % (prefix, secrets.token_hex(8))
+
+
+def _parse_ai_job_ts(value: Optional[str]) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _ai_job_deadline_iso(now_iso: str, timeout_seconds: int) -> str:
+    base = _parse_ai_job_ts(now_iso) or datetime.now(timezone.utc)
+    delta = timedelta(seconds=max(0, int(timeout_seconds)))
+    return (base + delta).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _ai_job_deadline_passed(deadline_at: Optional[str], *, now_iso: Optional[str] = None) -> bool:
+    deadline = _parse_ai_job_ts(deadline_at)
+    if deadline is None:
+        return False
+    now = _parse_ai_job_ts(now_iso) if now_iso else datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now >= deadline
 
 
 def _validate_name(value: str, kind: str = "name") -> str:
@@ -3561,18 +3601,25 @@ class ControlPlane:
         patterns: list[str],
         timeout: Optional[int],
     ) -> str:
+        ensure_ai_jobs_safety_schema(self.conn)
         job_id = _new_id("job")
         now = utc_now_iso()
+        timeout_seconds = int(timeout or 30)
+        deadline_at = _ai_job_deadline_iso(
+            now, timeout_seconds + AI_JOB_DISPATCH_GRACE_SECONDS
+        )
         payload = {
             "client_id": client_id,
             "arguments": arguments,
             "patterns": list(patterns or []),
-            "timeout": timeout,
+            "timeout": timeout_seconds,
+            "deadline_at": deadline_at,
         }
         self.conn.execute(
             "INSERT INTO ai_jobs(id, principal_id, endpoint_object_id, capability, payload_json, "
-            "status, result_json, created_at, updated_at, timeout_seconds) "
-            "VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?)",
+            "status, result_json, created_at, updated_at, timeout_seconds, client_id, deadline_at, "
+            "claim_token, attempt_id, claimed_at) "
+            "VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
             (
                 job_id,
                 principal_id,
@@ -3581,30 +3628,69 @@ class ControlPlane:
                 json.dumps(payload, sort_keys=True),
                 now,
                 now,
-                int(timeout or 30),
+                timeout_seconds,
+                client_id,
+                deadline_at,
             ),
         )
         return job_id
 
-    def claim_ai_jobs(self, client_id: str, limit: int = 4) -> list[dict]:
-        self.assert_ai_job_claimant(client_id)
+    def _terminalize_expired_queued_ai_jobs(self, *, client_id: str, now: str) -> None:
+        self.conn.execute(
+            "UPDATE ai_jobs SET status = 'expired', updated_at = ? "
+            "WHERE status = 'queued' AND client_id = ? "
+            "AND deadline_at IS NOT NULL AND deadline_at <= ?",
+            (now, client_id, now),
+        )
+
+    def _fail_closed_stale_running_ai_jobs(self, *, client_id: str, now: str) -> None:
         rows = list(
             self.conn.execute(
-                "SELECT * FROM ai_jobs WHERE status = 'queued' ORDER BY created_at LIMIT ?",
-                (max(1, int(limit) * 8),),
+                "SELECT id, capability FROM ai_jobs WHERE status = 'running' AND client_id = ? "
+                "AND deadline_at IS NOT NULL AND deadline_at <= ?",
+                (client_id, now),
+            )
+        )
+        for row in rows:
+            capability = str(row["capability"] or "")
+            terminal = (
+                "recovery_required"
+                if capability in AI_MUTATING_CAPABILITIES
+                else "expired"
+            )
+            self.conn.execute(
+                "UPDATE ai_jobs SET status = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'running'",
+                (terminal, now, row["id"]),
+            )
+
+    def claim_ai_jobs(self, client_id: str, limit: int = 4) -> list[dict]:
+        ensure_ai_jobs_safety_schema(self.conn)
+        self.assert_ai_job_claimant(client_id)
+        now = utc_now_iso()
+        self._terminalize_expired_queued_ai_jobs(client_id=client_id, now=now)
+        self._fail_closed_stale_running_ai_jobs(client_id=client_id, now=now)
+        # Filter by target host before LIMIT so one busy host cannot starve another.
+        take = max(1, int(limit))
+        rows = list(
+            self.conn.execute(
+                "SELECT * FROM ai_jobs WHERE status = 'queued' AND client_id = ? "
+                "AND (deadline_at IS NULL OR deadline_at > ?) "
+                "ORDER BY created_at LIMIT ?",
+                (client_id, now, take),
             )
         )
         claimed = []
-        now = utc_now_iso()
         for row in rows:
-            if len(claimed) >= max(1, int(limit)):
+            if len(claimed) >= take:
                 break
             payload = json.loads(row["payload_json"] or "{}")
-            if payload.get("client_id") != client_id:
-                continue
+            claim_token = "atk_" + secrets.token_urlsafe(24)
+            attempt_id = _new_id("att")
             self.conn.execute(
-                "UPDATE ai_jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
-                (now, row["id"]),
+                "UPDATE ai_jobs SET status = 'running', claim_token = ?, attempt_id = ?, "
+                "claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+                (claim_token, attempt_id, now, now, row["id"]),
             )
             if self.conn.execute("SELECT changes()").fetchone()[0]:
                 claimed.append(
@@ -3614,6 +3700,9 @@ class ControlPlane:
                         "arguments": payload.get("arguments") or {},
                         "patterns": payload.get("patterns") or [],
                         "timeout": payload.get("timeout") or row["timeout_seconds"],
+                        "deadline_at": row["deadline_at"] or payload.get("deadline_at"),
+                        "claim_token": claim_token,
+                        "attempt_id": attempt_id,
                     }
                 )
         self.commit_if_autonomous()
@@ -3653,14 +3742,54 @@ class ControlPlane:
             return dict(job["result"])
         return None
 
-    def complete_ai_job(self, job_id: str, client_id: str, result: dict) -> None:
+    def terminalize_ai_job(self, job_id: str, status: str = "timeout") -> dict:
+        """Move a non-terminal job to a fail-closed terminal status."""
+        ensure_ai_jobs_safety_schema(self.conn)
+        terminal = str(status or "timeout").strip().lower()
+        if terminal not in ("timeout", "cancelled", "expired", "recovery_required"):
+            raise ControlPlaneError("invalid AI job terminal status")
+        now = utc_now_iso()
+        self.conn.execute(
+            "UPDATE ai_jobs SET status = ?, updated_at = ? "
+            "WHERE id = ? AND status IN ('queued', 'running')",
+            (terminal, now, job_id),
+        )
+        self.commit_if_autonomous()
+        job = self.get_ai_job(job_id) or {"id": job_id, "status": terminal}
+        return job
+
+    def complete_ai_job(
+        self,
+        job_id: str,
+        client_id: str,
+        result: dict,
+        *,
+        claim_token: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+    ) -> None:
+        ensure_ai_jobs_safety_schema(self.conn)
         self.assert_ai_job_claimant(client_id)
-        row = self.conn.execute("SELECT payload_json, status FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+        row = self.conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise ControlPlaneError("AI job not found")
+        status = str(row["status"] or "")
+        if status in AI_TERMINAL_JOB_STATUSES:
+            raise ControlPlaneError("AI job is already terminal (%s)" % status)
+        if status != "running":
+            raise ControlPlaneError("AI job is not open for completion")
         payload = json.loads(row["payload_json"] or "{}")
-        if payload.get("client_id") != client_id:
+        owner = row["client_id"] or payload.get("client_id")
+        if owner != client_id:
             raise ControlPlaneError("AI job does not belong to this client")
+        expected_token = str(row["claim_token"] or "")
+        provided_token = str(claim_token or "")
+        if not expected_token or provided_token != expected_token:
+            raise ControlPlaneError("AI job claim token mismatch")
+        expected_attempt = str(row["attempt_id"] or "")
+        if attempt_id is not None:
+            provided_attempt = str(attempt_id or "")
+            if expected_attempt and provided_attempt != expected_attempt:
+                raise ControlPlaneError("AI job attempt mismatch")
         full = dict(result or {})
         self._store_ai_job_result_blob(job_id, full)
         safe = dict(full)
@@ -3674,10 +3803,14 @@ class ControlPlane:
         if len(stderr) > 256:
             safe["stderr"] = stderr[:256]
             safe["stderr_truncated"] = True
+        now = utc_now_iso()
         self.conn.execute(
-            "UPDATE ai_jobs SET status = 'done', result_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(safe, sort_keys=True)[:8000], utc_now_iso(), job_id),
+            "UPDATE ai_jobs SET status = 'done', result_json = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'running' AND claim_token = ?",
+            (json.dumps(safe, sort_keys=True)[:8000], now, job_id, expected_token),
         )
+        if not self.conn.execute("SELECT changes()").fetchone()[0]:
+            raise ControlPlaneError("AI job completion lost the claim race")
         self.commit_if_autonomous()
 
     def get_ai_job(self, job_id: str) -> Optional[dict]:
@@ -3698,15 +3831,10 @@ class ControlPlane:
             job = self.get_ai_job(job_id)
             if job and job.get("status") == "done":
                 return job
+            if job and job.get("status") in AI_TERMINAL_JOB_STATUSES:
+                return job
             time.sleep(0.05)
-        job = self.get_ai_job(job_id) or {"id": job_id, "status": "timeout"}
-        if job.get("status") != "done":
-            self.conn.execute(
-                "UPDATE ai_jobs SET status = 'timeout', updated_at = ? WHERE id = ? AND status != 'done'",
-                (utc_now_iso(), job_id),
-            )
-            job["status"] = "timeout"
-        return job
+        return self.terminalize_ai_job(job_id, "timeout")
 
     def connected_clients(self) -> list[dict]:
         return [

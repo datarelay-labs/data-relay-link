@@ -18,7 +18,25 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from datetime import datetime, timezone
+
 from drlink_control_plane import ControlPlaneError, path_allowed, validate_safe_path
+
+
+def _deadline_passed(deadline_at: Optional[str]) -> bool:
+    text = str(deadline_at or "").strip()
+    if not text:
+        return False
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        deadline = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    now = datetime.now(timezone.utc)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return now >= deadline
 
 MAX_STDOUT_BYTES = 64 * 1024
 MAX_STDERR_BYTES = 16 * 1024
@@ -250,21 +268,57 @@ class AgentLoop:
         payload = _agent_post(self.base_url + "/agent/v1/claim", self.token, {"limit": 4})
         return list(payload.get("jobs") or [])
 
-    def _complete(self, job_id: str, result: dict) -> None:
+    def _complete(
+        self,
+        job_id: str,
+        result: dict,
+        *,
+        claim_token: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+    ) -> None:
         if self.agent_root:
             import drlink_mgmt_sync as mgmt
 
-            mgmt.complete_ai_job_on_server(root=self.agent_root, job_id=job_id, result=result)
+            mgmt.complete_ai_job_on_server(
+                root=self.agent_root,
+                job_id=job_id,
+                result=result,
+                claim_token=claim_token,
+                attempt_id=attempt_id,
+            )
             return
+        body = {"id": job_id, "result": result}
+        if claim_token is not None:
+            body["claim_token"] = claim_token
+        if attempt_id is not None:
+            body["attempt_id"] = attempt_id
         _agent_post(
             self.base_url + "/agent/v1/complete",
             self.token,
-            {"id": job_id, "result": result},
+            body,
         )
 
     def run_once(self) -> int:
         jobs = self._claim()
         for job in jobs:
+            job_id = job.get("id")
+            claim_token = job.get("claim_token")
+            attempt_id = job.get("attempt_id")
+            if _deadline_passed(job.get("deadline_at")):
+                result = {
+                    "result": "DENY",
+                    "error": "job deadline expired before execution",
+                }
+                try:
+                    self._complete(
+                        job_id,
+                        result,
+                        claim_token=claim_token,
+                        attempt_id=attempt_id,
+                    )
+                except Exception:
+                    pass
+                continue
             try:
                 result = execute_local(
                     job.get("capability") or "",
@@ -277,7 +331,12 @@ class AgentLoop:
             except Exception as exc:
                 result = {"result": "ERROR", "error": str(exc)}
             try:
-                self._complete(job.get("id"), result)
+                self._complete(
+                    job_id,
+                    result,
+                    claim_token=claim_token,
+                    attempt_id=attempt_id,
+                )
             except Exception:
                 # Keep polling; Server-side job remains running until timeout/retry policy.
                 pass

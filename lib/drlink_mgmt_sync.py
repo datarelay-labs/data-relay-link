@@ -474,6 +474,8 @@ def complete_ai_job_on_server(
     root: Optional[str] = None,
     job_id: str,
     result: dict,
+    claim_token: Optional[str] = None,
+    attempt_id: Optional[str] = None,
 ) -> dict:
     """Complete an AI job for this enrolled Managed Host via management auth."""
     base = resolve_mgmt_base_url(root)
@@ -482,10 +484,15 @@ def complete_ai_job_on_server(
             "ERROR:\nNo Server management URL is configured for AI job completion.\n\n"
             "No changes were applied."
         )
+    body = {"id": str(job_id), "result": dict(result or {})}
+    if claim_token is not None:
+        body["claim_token"] = str(claim_token)
+    if attempt_id is not None:
+        body["attempt_id"] = str(attempt_id)
     return _request_json(
         "POST",
         base + "/v1/ai-jobs/complete",
-        {"id": str(job_id), "result": dict(result or {})},
+        body,
         root=root,
     )
 
@@ -1016,7 +1023,15 @@ def server_complete_ai_job(plane, auth: MgmtAuthContext, body: dict) -> dict:
     result = (body or {}).get("result") or {}
     if not isinstance(result, dict):
         raise MgmtSyncError("AI job result must be an object")
-    plane.complete_ai_job(job_id, machine_id, result)
+    claim_token = (body or {}).get("claim_token")
+    attempt_id = (body or {}).get("attempt_id")
+    plane.complete_ai_job(
+        job_id,
+        machine_id,
+        result,
+        claim_token=claim_token,
+        attempt_id=attempt_id,
+    )
     return {"ok": True}
 
 

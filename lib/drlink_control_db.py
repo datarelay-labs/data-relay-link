@@ -523,8 +523,16 @@ CREATE TABLE ai_jobs (
   result_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  timeout_seconds INTEGER
+  timeout_seconds INTEGER,
+  client_id TEXT,
+  deadline_at TEXT,
+  claim_token TEXT,
+  attempt_id TEXT,
+  claimed_at TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_claim
+  ON ai_jobs(status, client_id, created_at);
 
 CREATE INDEX idx_objects_type ON objects(type);
 CREATE INDEX idx_policy_plane_pos ON policy_rules(plane, position);
@@ -645,6 +653,32 @@ CREATE TABLE IF NOT EXISTS ai_oauth_dcr_clients (
 """
 
 
+def ensure_ai_jobs_safety_schema(conn: sqlite3.Connection) -> None:
+    """Additive AI job fairness/attempt columns without bumping SCHEMA_VERSION."""
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_jobs)")}
+    if not cols:
+        return
+    for name, ddl in (
+        ("client_id", "ALTER TABLE ai_jobs ADD COLUMN client_id TEXT"),
+        ("deadline_at", "ALTER TABLE ai_jobs ADD COLUMN deadline_at TEXT"),
+        ("claim_token", "ALTER TABLE ai_jobs ADD COLUMN claim_token TEXT"),
+        ("attempt_id", "ALTER TABLE ai_jobs ADD COLUMN attempt_id TEXT"),
+        ("claimed_at", "ALTER TABLE ai_jobs ADD COLUMN claimed_at TEXT"),
+    ):
+        if name not in cols:
+            conn.execute(ddl)
+    # Backfill target host from legacy payload JSON so claim can filter in SQL.
+    conn.execute(
+        "UPDATE ai_jobs SET client_id = json_extract(payload_json, '$.client_id') "
+        "WHERE (client_id IS NULL OR client_id = '') "
+        "AND json_extract(payload_json, '$.client_id') IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_jobs_claim "
+        "ON ai_jobs(status, client_id, created_at)"
+    )
+
+
 def ensure_ai_auth_schema(conn: sqlite3.Connection) -> None:
     """Additive AI auth tables/columns without bumping SCHEMA_VERSION."""
     cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_principals)")}
@@ -663,6 +697,7 @@ def ensure_ai_auth_schema(conn: sqlite3.Connection) -> None:
     if tok_cols and "rotated_from" not in tok_cols:
         conn.execute("ALTER TABLE ai_oauth_tokens ADD COLUMN rotated_from TEXT")
     ensure_enrollment_plans_schema(conn)
+    ensure_ai_jobs_safety_schema(conn)
 
 
 ENROLLMENT_PLANS_SQL = """
