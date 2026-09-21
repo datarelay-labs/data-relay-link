@@ -1098,8 +1098,25 @@ def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False)
         )
         if is_agent:
             _finalize_agent_bundle_runtime(plane, plan, checkpoint)
-    except Exception:
-        v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+    except Exception as exc:
+        msg = str(exc)
+        if is_agent and getattr(plane, "_agent_mgmt_side_effects", None):
+            if "Previous configuration was restored" in msg or "PARTIAL:" in msg or "RECOVERY_REQUIRED" in msg:
+                # finalize already reconciled / raised a truthful error
+                raise
+            report = v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+            if not report.get("ok"):
+                details = "\n".join("  %s" % f for f in (report.get("failures") or [])) or "  unknown"
+                raise ControlPlaneError(
+                    "ERROR:\nConfigurationBundle apply failed after Server mutation.\n\n"
+                    "PARTIAL: Server Remote Service state could not be fully restored.\n"
+                    "RECOVERY_REQUIRED\n\n"
+                    "Compensation failures:\n%s\n\n"
+                    "Original error:\n%s\n\n"
+                    "Run:\n  system diagnostics" % (details, msg)
+                ) from exc
+        else:
+            v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
         raise
     finally:
         plane._cleanup_activation_checkpoint(checkpoint)
@@ -1117,21 +1134,29 @@ def _finalize_agent_bundle_runtime(plane: ControlPlane, plan: V24Plan, checkpoin
         v24._push_agent_remote_service_status(plane, root=plane.root)
         plane._agent_mgmt_side_effects = []
         return
+    local_restored = False
     if checkpoint:
         try:
             plane._rollback_activation(checkpoint)
-        except Exception:
-            v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+            local_restored = True
+        except Exception as exc:
+            report = v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
+            if report.get("ok"):
+                raise ControlPlaneError(
+                    "ERROR:\nApply failed and automatic rollback was not fully successful.\n\n"
+                    "The current runtime state may require operator attention.\n\n"
+                    "Run:\n  system diagnostics"
+                ) from exc
+            details = "\n".join("  %s" % f for f in (report.get("failures") or [])) or "  unknown"
             raise ControlPlaneError(
                 "ERROR:\nApply failed and automatic rollback was not fully successful.\n\n"
-                "The current runtime state may require operator attention.\n\n"
-                "Run:\n  system diagnostics"
-            ) from None
-    v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
-    raise ControlPlaneError(
-        "ERROR:\nRuntime activation failed.\n\n"
-        "Previous configuration was restored.\n"
-        "No configuration changes remain active."
+                "PARTIAL: Server Remote Service state could not be fully restored.\n"
+                "RECOVERY_REQUIRED\n\n"
+                "Compensation failures:\n%s\n\n"
+                "Run:\n  system diagnostics" % details
+            ) from exc
+    v24.raise_agent_mgmt_activation_failure(
+        plane, root=plane.root, local_restored=local_restored
     )
 
 

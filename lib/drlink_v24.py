@@ -274,35 +274,199 @@ def _commit_if_autonomous(plane_db) -> None:
         pass
 
 
-def _record_agent_mgmt_create(plane_db, name: str, *, root: Optional[str] = None) -> None:
+def _agent_mgmt_effects(plane_db) -> list:
     effects = getattr(plane_db, "_agent_mgmt_side_effects", None)
     if effects is None:
         plane_db._agent_mgmt_side_effects = []
         effects = plane_db._agent_mgmt_side_effects
-    effects.append({"op": "create-rs", "name": name, "root": root})
+    return effects
 
 
-def reconcile_agent_mgmt_side_effects(plane_db, *, root: Optional[str] = None, keep_names: Optional[list] = None) -> None:
-    """Best-effort reverse of Server Remote Service creates after local rollback."""
+def _record_agent_mgmt_effect(plane_db, effect: dict) -> None:
+    item = dict(effect or {})
+    if not item.get("op") or not item.get("name"):
+        return
+    _agent_mgmt_effects(plane_db).append(item)
+
+
+def _record_agent_mgmt_create(plane_db, name: str, *, root: Optional[str] = None) -> None:
+    _record_agent_mgmt_effect(plane_db, {"op": "create-rs", "name": name, "root": root})
+
+
+def _clear_agent_mgmt_side_effects(plane_db) -> None:
+    plane_db._agent_mgmt_side_effects = []
+
+
+def _agent_remote_service_mgmt_snapshot(
+    plane_db,
+    row,
+    *,
+    root: Optional[str] = None,
+    host_name: str = "",
+) -> dict:
+    """Capture Server-restorable fields from a local Agent Remote Service row."""
+    name = str(row["name"])
+    destination = str(row["destination"] or "")
+    service = str(row["service_object"] or "")
+    enabled = bool(row["enabled"])
+    pool_class = str(row["pool_class"] or "normal")
+    endpoint_port = row["endpoint_port"]
+    status = str(row["status"] or "").upper()
+    host = str(host_name or "").strip()
+    dest_l = destination.lower()
+    host_l = host.lower()
+    if dest_l in ("this-host", "this_host", "self") or (host_l and dest_l == host_l):
+        target_mode = "self"
+        target_host = "127.0.0.1"
+        destination = host or destination
+    else:
+        target_mode = "routed"
+        target_host = destination
+        obj = None
+        try:
+            obj = plane_db.get_object(destination) if hasattr(plane_db, "get_object") else None
+        except Exception:
+            obj = None
+        if obj and obj.get("type") in ("host", "fqdn"):
+            vals = plane_db._object_values(obj["id"]) if hasattr(plane_db, "_object_values") else []
+            if vals:
+                target_host = vals[0]
+        elif obj and obj.get("type") == "managed_endpoint":
+            target_host = "127.0.0.1"
+            target_mode = "self"
+        else:
+            catalog = plane_db.conn.execute(
+                "SELECT payload FROM agent_object_catalog WHERE kind = 'network-object' AND name = ? COLLATE NOCASE",
+                (destination,),
+            ).fetchone()
+            if catalog:
+                try:
+                    payload = json.loads(catalog["payload"] or "{}")
+                except (TypeError, ValueError):
+                    payload = {}
+                vals = [str(v) for v in (payload.get("values") or []) if v not in (None, "")]
+                if vals:
+                    target_host = vals[0]
+    sobj = get_service_object(plane_db, service)
+    target_port = int(sobj["port"]) if sobj else 0
+    if not sobj:
+        catalog = plane_db.conn.execute(
+            "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
+            (service,),
+        ).fetchone()
+        if catalog:
+            try:
+                payload = json.loads(catalog["payload"] or "{}")
+                target_port = int(payload.get("port") or 0)
+            except (TypeError, ValueError):
+                target_port = 0
+    return {
+        "name": name,
+        "root": root,
+        "destination": destination,
+        "service": service,
+        "enabled": enabled,
+        "pool_class": pool_class,
+        "target_host": target_host,
+        "target_port": target_port,
+        "target_mode": target_mode,
+        "endpoint_port": endpoint_port,
+        "runtime_verified": status == "HEALTHY",
+    }
+
+
+def _compensate_agent_mgmt_effect(mgmt, item: dict, *, root: Optional[str] = None) -> None:
+    name = str(item.get("name") or "").strip()
+    if not name:
+        return
+    op = str(item.get("op") or "")
+    effect_root = item.get("root") or root
+    if op == "create-rs":
+        mgmt.delete_remote_service_on_server(root=effect_root, name=name)
+        return
+    if op in ("update-rs", "delete-rs"):
+        endpoint_port = item.get("endpoint_port")
+        mgmt.upsert_remote_service_on_server(
+            root=effect_root,
+            name=name,
+            destination=str(item.get("destination") or name),
+            service=str(item.get("service") or ""),
+            enabled=bool(item.get("enabled", True)),
+            pool_class=str(item.get("pool_class") or "normal"),
+            target_host=str(item.get("target_host") or "127.0.0.1"),
+            target_port=int(item.get("target_port") or 0),
+            target_mode=str(item.get("target_mode") or "self"),
+            preserve_endpoint_port=int(endpoint_port) if endpoint_port is not None else None,
+            runtime_verified=bool(item.get("runtime_verified", False)),
+        )
+        return
+
+
+def reconcile_agent_mgmt_side_effects(
+    plane_db, *, root: Optional[str] = None, keep_names: Optional[list] = None
+) -> dict:
+    """Reverse Server Remote Service side effects after local rollback.
+
+    Returns {"ok": bool, "compensated": [names], "failures": [messages]}.
+    """
     effects = list(getattr(plane_db, "_agent_mgmt_side_effects", None) or [])
     plane_db._agent_mgmt_side_effects = []
     keep = {str(n).lower() for n in (keep_names or []) if n}
+    report = {"ok": True, "compensated": [], "failures": []}
     if not effects:
-        return
+        return report
     try:
         import drlink_mgmt_sync as mgmt
-    except Exception:
-        return
-    for item in effects:
+    except Exception as exc:
+        report["ok"] = False
+        report["failures"].append("management sync unavailable: %s" % exc)
+        return report
+    # Compensate newest effects first so UPDATE then CREATE of same name is safe.
+    for item in reversed(effects):
         name = str(item.get("name") or "").strip()
         if not name or name.lower() in keep:
             continue
-        if item.get("op") != "create-rs":
+        op = str(item.get("op") or "")
+        if op not in ("create-rs", "update-rs", "delete-rs"):
             continue
         try:
-            mgmt.delete_remote_service_on_server(root=item.get("root") or root, name=name)
-        except Exception:
-            pass
+            _compensate_agent_mgmt_effect(mgmt, item, root=root)
+            report["compensated"].append("%s:%s" % (op, name))
+        except Exception as exc:
+            report["ok"] = False
+            report["failures"].append("%s %s: %s" % (op, name, exc))
+    return report
+
+
+def raise_agent_mgmt_activation_failure(
+    plane_db,
+    *,
+    root: Optional[str] = None,
+    cause: Optional[BaseException] = None,
+    local_restored: bool = True,
+) -> None:
+    """Raise a truthful activation failure after attempting Server compensation."""
+    report = reconcile_agent_mgmt_side_effects(plane_db, root=root)
+    if report.get("ok"):
+        if local_restored:
+            raise ControlPlaneError(
+                "ERROR:\nRuntime activation failed.\n\n"
+                "Previous configuration was restored.\n"
+                "No configuration changes remain active."
+            ) from cause
+        raise ControlPlaneError(
+            "ERROR:\nRuntime activation failed.\n\n"
+            "Server Remote Service compensation completed, but local runtime "
+            "activation did not succeed."
+        ) from cause
+    details = "\n".join("  %s" % f for f in (report.get("failures") or []) ) or "  unknown"
+    raise ControlPlaneError(
+        "ERROR:\nRuntime activation failed.\n\n"
+        "PARTIAL: Server Remote Service state could not be fully restored.\n"
+        "RECOVERY_REQUIRED\n\n"
+        "Compensation failures:\n%s\n\n"
+        "Run:\n  system diagnostics" % details
+    ) from cause
 
 
 def cli_error(what: str, expected: str = "", next_step: str = "", applied: bool = False) -> str:
@@ -3175,6 +3339,11 @@ def set_remote_service_agent(
                     sync_agent_catalog_from_server(plane_db, root=root)
                 except Exception:
                     pass
+                prev_mgmt = None
+                if existing is not None:
+                    prev_mgmt = _agent_remote_service_mgmt_snapshot(
+                        plane_db, existing, root=root, host_name=host_name
+                    )
                 remote = mgmt.upsert_remote_service_on_server(
                     root=root,
                     name=name,
@@ -3188,8 +3357,12 @@ def set_remote_service_agent(
                     preserve_endpoint_port=endpoint_port,
                     runtime_verified=False,
                 )
-                if existing is None:
+                if prev_mgmt is None:
                     _record_agent_mgmt_create(plane_db, name, root=root)
+                else:
+                    effect = dict(prev_mgmt)
+                    effect["op"] = "update-rs"
+                    _record_agent_mgmt_effect(plane_db, effect)
                 endpoint_host = remote.get("endpoint_host") or endpoint_host
                 endpoint_port = remote.get("endpoint_port")
                 pending = int(remote.get("pending_allocation") or 0)
@@ -3315,7 +3488,31 @@ def set_remote_service_agent(
         finally:
             plane_db._batch_mode = nested_prev
 
-    result = plane_db._mutate("set remote-service %s" % name, "set remote service", write_all)
+    try:
+        result = plane_db._mutate("set remote-service %s" % name, "set remote service", write_all)
+    except Exception as exc:
+        # Server mutation already happened on the live path; compensate before re-raising.
+        if live_mgmt and getattr(plane_db, "_agent_mgmt_side_effects", None):
+            msg = str(exc)
+            if "Previous configuration was restored" in msg or "rollback was not fully successful" in msg:
+                raise_agent_mgmt_activation_failure(
+                    plane_db,
+                    root=root,
+                    cause=exc,
+                    local_restored="Previous configuration was restored" in msg,
+                )
+            report = reconcile_agent_mgmt_side_effects(plane_db, root=root)
+            if not report.get("ok"):
+                details = "\n".join("  %s" % f for f in (report.get("failures") or [])) or "  unknown"
+                raise ControlPlaneError(
+                    "ERROR:\nRemote Service change failed after Server mutation.\n\n"
+                    "PARTIAL: Server Remote Service state could not be fully restored.\n"
+                    "RECOVERY_REQUIRED\n\n"
+                    "Compensation failures:\n%s\n\n"
+                    "Original error:\n%s\n\n"
+                    "Run:\n  system diagnostics" % (details, msg)
+                ) from exc
+        raise
 
     def _persist_status(next_status: str, next_reason: str) -> None:
         plane_db.conn.execute(
@@ -3368,6 +3565,7 @@ def set_remote_service_agent(
             _persist_status(status, reason)
             if live_mgmt:
                 _push_agent_remote_service_status(plane_db, root=root, names=[name])
+            _clear_agent_mgmt_side_effects(plane_db)
         elif runtime_ok:
             status = "HEALTHY"
             reason = ""
@@ -3404,16 +3602,16 @@ def set_remote_service_agent(
             _persist_status(status, reason)
             if live_mgmt and status != "HEALTHY":
                 _push_agent_remote_service_status(plane_db, root=root, names=[name])
+            # Local desired state is the new definition; do not compensate Server.
+            _clear_agent_mgmt_side_effects(plane_db)
         else:
             status = "DEGRADED"
             reason = runtime_error or "Runtime activation pending."
             _persist_status(status, reason)
             # New service whose runtime failed: release Server reservation when safe.
             if existing is None and live_mgmt:
-                try:
-                    import drlink_mgmt_sync as mgmt
-
-                    mgmt.delete_remote_service_on_server(root=root, name=name)
+                report = reconcile_agent_mgmt_side_effects(plane_db, root=root)
+                if report.get("ok"):
                     plane_db.conn.execute(
                         "UPDATE agent_remote_services SET endpoint_port = NULL, pending_allocation = 1, "
                         "status = 'DEGRADED', reason = ?, updated_at = ? WHERE name = ?",
@@ -3422,10 +3620,24 @@ def set_remote_service_agent(
                     _commit_if_autonomous(plane_db)
                     endpoint_port = None
                     pending = 1
-                except Exception:
-                    pass
+                else:
+                    details = (
+                        "\n".join("  %s" % f for f in (report.get("failures") or []))
+                        or "  unknown"
+                    )
+                    raise ControlPlaneError(
+                        "ERROR:\nRuntime activation failed.\n\n"
+                        "PARTIAL: Server Remote Service state could not be fully restored.\n"
+                        "RECOVERY_REQUIRED\n\n"
+                        "Compensation failures:\n%s\n\n"
+                        "Run:\n  system diagnostics" % details
+                    )
             elif live_mgmt:
+                # UPDATE kept local+Server on the new definition (DEGRADED), not rolled back.
                 _push_agent_remote_service_status(plane_db, root=root, names=[name])
+                _clear_agent_mgmt_side_effects(plane_db)
+            else:
+                _clear_agent_mgmt_side_effects(plane_db)
     elif not en:
         # Disabled: ensure runtime proxy removed.
         try:
@@ -3439,6 +3651,9 @@ def set_remote_service_agent(
         _persist_status(status, reason)
         if live_mgmt:
             _push_agent_remote_service_status(plane_db, root=root, names=[name])
+        _clear_agent_mgmt_side_effects(plane_db)
+    else:
+        _clear_agent_mgmt_side_effects(plane_db)
 
     result["view"] = {
         "name": name,
@@ -3482,11 +3697,15 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
     if not existing:
         raise ControlPlaneError(cli_error("Remote Service '%s' was not found." % name))
     identity = load_agent_identity(root)
+    host_name = identity.get("hostname") or identity.get("label") or "this-host"
 
     import drlink_mgmt_sync as mgmt
 
     live_mgmt = bool(server_reachable and mgmt.use_live_mgmt_path(root))
     if live_mgmt:
+        prev_mgmt = _agent_remote_service_mgmt_snapshot(
+            plane_db, existing, root=root, host_name=host_name
+        )
         try:
             mgmt.delete_remote_service_on_server(root=root, name=name)
         except ControlPlaneError:
@@ -3495,6 +3714,9 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
             raise ControlPlaneError(
                 "ERROR:\nServer Remote Service delete failed.\n\n%s\n\nNo changes were applied." % exc
             ) from exc
+        effect = dict(prev_mgmt)
+        effect["op"] = "delete-rs"
+        _record_agent_mgmt_effect(plane_db, effect)
 
     def write():
         plane_db.conn.execute("DELETE FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,))
@@ -3536,7 +3758,30 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
             )
         return {"entity": {"type": "remote-service", "id": name, "name": name}, "operation": "delete"}
 
-    result = plane_db._mutate("unset remote-service %s" % name, "delete remote service", write)
+    try:
+        result = plane_db._mutate("unset remote-service %s" % name, "delete remote service", write)
+    except Exception as exc:
+        if live_mgmt and getattr(plane_db, "_agent_mgmt_side_effects", None):
+            msg = str(exc)
+            if "Previous configuration was restored" in msg or "rollback was not fully successful" in msg:
+                raise_agent_mgmt_activation_failure(
+                    plane_db,
+                    root=root,
+                    cause=exc,
+                    local_restored="Previous configuration was restored" in msg,
+                )
+            report = reconcile_agent_mgmt_side_effects(plane_db, root=root)
+            if not report.get("ok"):
+                details = "\n".join("  %s" % f for f in (report.get("failures") or [])) or "  unknown"
+                raise ControlPlaneError(
+                    "ERROR:\nRemote Service delete failed after Server mutation.\n\n"
+                    "PARTIAL: Server Remote Service state could not be fully restored.\n"
+                    "RECOVERY_REQUIRED\n\n"
+                    "Compensation failures:\n%s\n\n"
+                    "Original error:\n%s\n\n"
+                    "Run:\n  system diagnostics" % (details, msg)
+                ) from exc
+        raise
     # Nested synchronize / Bundle Apply defers runtime to one final apply.
     if getattr(plane_db, "_batch_mode", False):
         return result
@@ -3547,6 +3792,7 @@ def unset_remote_service_agent(plane_db, name: str, *, root: Optional[str] = Non
         runtime.apply_agent_runtime(plane_db, root=root)
     except Exception:
         pass
+    _clear_agent_mgmt_side_effects(plane_db)
     return result
 
 
