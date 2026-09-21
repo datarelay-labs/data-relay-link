@@ -335,6 +335,14 @@ frp_u_retire_canonical_client_unit() {
   frp_u_retire_unit_fail_closed "$unit" "$unit_file" "product-owned drlink-client.service" "CLIENT_UNIT"
 }
 
+frp_u_retire_ai_agent_unit() {
+  local unit unit_file
+  unit=drlink-ai-agent.service
+  unit_file="$(frp_u_path /etc/systemd/system/drlink-ai-agent.service)"
+  [[ -f "$unit_file" ]] || return 0
+  frp_u_retire_unit_fail_closed "$unit" "$unit_file" "product-owned drlink-ai-agent.service" "AI_AGENT_UNIT"
+}
+
 frp_u_retire_legacy_client_unit() {
   local unit unit_file
   unit=frpc.service
@@ -359,6 +367,10 @@ if [[ "$SKIP_SYSTEMD" != "1" ]]; then
 fi
 # Canonical supervisor must stop fail-closed before binary/config removal.
 if ! frp_u_retire_canonical_client_unit; then
+  exit 1
+fi
+# Product-owned AI worker must not survive uninstall and respawn on reboot.
+if ! frp_u_retire_ai_agent_unit; then
   exit 1
 fi
 # Historical product supervisor must not survive uninstall and respawn on reboot.
