@@ -425,6 +425,7 @@ cc92e05f18a2f079951e05f95e1a8ff3e3bb84c6a38c2959ff19b6c9d301be1b  tests/test-v24
 11633b80ad3492c1565d4a29ba036c222599c511755bbe4b5b3145055bd964eb  tests/test-v24-upgrade-policy-preservation.py
 97edf2e7c1b35cdb81876bd21919b4cf305e9df0883c23837e91a05243095cd3  tests/test-v24-upgrade-reconcile.py
 d1ec268508d25345e08d02093b60c079be9fc6da264b9071ae8287320685206d  tests/test-v24-user-lifecycle-ux.py
+029b67851c5389592ef1895a443efd68c38911924c473e0cfdd5b2535f07a275  tests/test-v24-whitelist-last-rule-outage-safety.py
 97c77ccacbb26fdfd1faf884ef55c55e30e546ccc5a8d08250b0eec7bd0776b7  tests/test-verb-first-cli-ux.sh
 e525c0dcbd435bd4a6ca80afbfb5da3b61d50d241630ac4bee11ca9da9c17e7c  tests/test-version-governance.sh
 0916e820114dc3db464c010d5abdddd8dd018cdb9c8f6ede7e0cf27ed6aca1c5  tests/test-workflow-cli-ux-closure.py
