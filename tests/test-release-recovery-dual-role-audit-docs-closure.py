@@ -118,8 +118,10 @@ class ReleaseRecoveryDualRoleAuditDocsClosure(unittest.TestCase):
             "server",
         )
         self.assertEqual(result.get("status"), "ok")
-        self.assertEqual(result.get("action"), "control_plane")
-        self.assertEqual((result.get("tokens") or [])[:2], ["system", "restore"])
+        # Unified Server DR: system restore dispatches restore_backup, not control_plane.
+        self.assertEqual(result.get("action"), "restore_backup")
+        self.assertEqual(result.get("path"), "/var/lib/drlink/backups/b.tar.gz")
+        self.assertEqual(result.get("passthrough") or [], ["--yes"])
 
     def test_restore_help_states_same_version(self):
         help_txt = CATALOG.command_help(CATALOG.find(("system", "restore")))
