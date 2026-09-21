@@ -24,9 +24,12 @@ if [[ -f "${_FRP_COMMON_DIR}/../VERSION" ]]; then
   . "${_FRP_COMMON_DIR}/../VERSION"
 fi
 
-# Canonical Data Relay Link repository identity (product/project, not upstream FRP).
+# Canonical Data Relay Link GitHub repository identity (not upstream FRP).
+# Product/package identifiers may still use the hyphenated data-relay-link slug.
 DRLINK_GITHUB_OWNER="${DRLINK_GITHUB_OWNER:-datarelay-labs}"
-DRLINK_GITHUB_REPO="${DRLINK_GITHUB_REPO:-data-relay-link}"
+DRLINK_GITHUB_REPO="${DRLINK_GITHUB_REPO:-datarelay-link}"
+# Pre-rename repository slug; retained only for provenance/source-ref inference.
+DRLINK_GITHUB_REPO_FORMER="${DRLINK_GITHUB_REPO_FORMER:-data-relay-link}"
 DRLINK_GITHUB_RAW_HOST="${DRLINK_GITHUB_RAW_HOST:-raw.githubusercontent.com}"
 # Internal aliases: prefer DRLINK_*; accept explicit FRP_GITHUB_* overrides for tests/tools.
 FRP_GITHUB_OWNER="${FRP_GITHUB_OWNER:-$DRLINK_GITHUB_OWNER}"
@@ -364,13 +367,19 @@ PY
 
 frp_source_ref_from_github_raw_url() {
   # Extract owner/repo/<ref>/... from an official GitHub raw URL.
+  # Accepts the current canonical repo and the pre-rename former slug.
   # Prints the ref on success; returns non-zero when the URL is not official.
   local url="${1:-}"
-  python3 - "$url" "$FRP_GITHUB_RAW_HOST" "$FRP_GITHUB_OWNER" "$FRP_GITHUB_REPO" <<'PY'
+  python3 - "$url" "$FRP_GITHUB_RAW_HOST" "$FRP_GITHUB_OWNER" "$FRP_GITHUB_REPO" \
+    "${DRLINK_GITHUB_REPO_FORMER:-data-relay-link}" <<'PY'
 import sys
 from urllib.parse import unquote, urlsplit
 
 url, host, owner, repo = sys.argv[1:5]
+former = sys.argv[5] if len(sys.argv) > 5 else ""
+allowed = {repo}
+if former:
+    allowed.add(former)
 try:
     parsed = urlsplit(url)
 except ValueError:
@@ -378,7 +387,7 @@ except ValueError:
 if parsed.scheme != "https" or parsed.hostname != host:
     raise SystemExit(1)
 parts = [unquote(part) for part in parsed.path.split("/") if part]
-if len(parts) < 3 or parts[0] != owner or parts[1] != repo:
+if len(parts) < 3 or parts[0] != owner or parts[1] not in allowed:
     raise SystemExit(1)
 ref = parts[2]
 if not ref or ref in (".", "..") or "/" in ref:

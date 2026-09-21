@@ -140,8 +140,21 @@ assert_not_contains "$ROOT/tools/frp-create-client" "FRP Server:"
 for f in "$ROOT/README.md" "$ROOT/GITHUB_SETUP.md" "$ROOT/release-manifest.json" "$ROOT/lib/frp-common.sh"; do
   [[ -f "$f" ]] || fail "missing identity file: $f"
   grep -q 'datarelay-labs' "$f" || fail "$f missing datarelay-labs"
-  grep -q 'data-relay-link' "$f" || fail "$f missing data-relay-link"
+  grep -q 'datarelay-link' "$f" || fail "$f missing datarelay-link"
 done
+# Active defaults must use the renamed repository slug, not the pre-rename hyphenated form.
+if grep -nE 'DRLINK_GITHUB_REPO="\$\{DRLINK_GITHUB_REPO:-data-relay-link\}"|FRP_GITHUB_REPO="\$\{FRP_GITHUB_REPO:-data-relay-link\}"' \
+  "$ROOT/lib/frp-common.sh"; then
+  fail "frp-common still defaults GitHub repo to pre-rename data-relay-link"
+fi
+if grep -nE '"repo": "data-relay-link"|https_raw_base".*data-relay-link' "$ROOT/release-manifest.json"; then
+  fail "release-manifest still uses pre-rename repository identity as canonical"
+fi
+# Stale active docs must not present the pre-rename GitHub path as the live repository.
+if grep -nE 'github\.com/datarelay-labs/data-relay-link|raw\.githubusercontent\.com/datarelay-labs/data-relay-link' \
+  "$ROOT/README.md" "$ROOT/GITHUB_SETUP.md"; then
+  fail "docs still advertise pre-rename repository identity as canonical"
+fi
 grep -q 'Data Relay Link' "$ROOT/README.md" || fail "README missing Data Relay Link"
 grep -q 'drlink' "$ROOT/README.md" || fail "README missing drlink"
 grep -q 'link.datarelay.run' "$ROOT/README.md" || fail "README missing public docs URL"
@@ -184,4 +197,4 @@ done
 
 echo "USER_FACING_BRANDING_TEST=PASS"
 echo "USER_FACING_LEGACY_PRODUCT_REFERENCES=0"
-echo "REPOSITORY_IDENTITY=datarelay-labs/data-relay-link"
+echo "REPOSITORY_IDENTITY=datarelay-labs/datarelay-link"

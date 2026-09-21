@@ -226,7 +226,7 @@ class CreateClientWorkflowTests(unittest.TestCase):
             "allocator_public_url": alloc,
             "client_installer_url": (
                 "https://raw.githubusercontent.com/datarelay-labs/"
-                "data-relay-link/v2.4.0/dist/bootstrap-client.sh"
+                "datarelay-link/v2.4.0/dist/bootstrap-client.sh"
             ),
         }
         url = CREATE.resolve_configured_installer_url(cfg, windows=False)
@@ -242,7 +242,7 @@ class CreateClientWorkflowTests(unittest.TestCase):
                     {
                         "client_installer_url": (
                             "https://raw.githubusercontent.com/datarelay-labs/"
-                            "data-relay-link/v2.4.0/dist/bootstrap-client.sh"
+                            "datarelay-link/v2.4.0/dist/bootstrap-client.sh"
                         )
                     },
                     windows=False,

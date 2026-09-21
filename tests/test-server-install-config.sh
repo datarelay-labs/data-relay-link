@@ -262,7 +262,7 @@ LEGACY_INSTALLER_URL="https://raw.githubusercontent.com/${legacy_owner}/${legacy
 # Stable managed-host install source is the DRLink Server artifact tree.
 CANONICAL_INSTALLER_URL="https://203.0.113.10:6099/artifacts/agent/bootstrap-client.sh"
 CANONICAL_WINDOWS_URL="https://203.0.113.10:6099/artifacts/agent/bootstrap-client.ps1"
-OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh'
+OFFICIAL_MAIN_INSTALLER_URL='https://raw.githubusercontent.com/datarelay-labs/datarelay-link/main/dist/bootstrap-client.sh'
 
 # Known obsolete project installer URL is migrated on a safe installer rerun.
 EXISTING_LEGACY="$WORKDIR/legacy-installer-url.json"

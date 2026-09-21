@@ -73,7 +73,7 @@ Server는 Linux 기반입니다. macOS와 Windows는 release validation에 따�
 
 차세대 v2.4.0 control-plane redesign은 별도 branch에서 개발 중입니다.
 
-[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/data-relay-link/tree/feature/v2.4.0-final-product-closure)
+[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)
 
 v2.4.0 development branch의 target behavior는 stable branch에 통합되고 immutable exact HEAD에서 qualification되기 전까지 stable v2.3.0 기능으로 간주하지 않습니다.
 
@@ -83,7 +83,7 @@ v2.3.0 stable line에서 현재 README contract가 사용하는 immutable releas
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.3.0/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/datarelay-link/v2.3.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
@@ -227,7 +227,7 @@ v2.3.0 line의 target scale은 약 **1–50 clients**입니다.
 | 주제 | 링크 |
 |---|---|
 | 제품 웹사이트 | **https://link.datarelay.run/** |
-| v2.4.0 개발 branch | [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/data-relay-link/tree/feature/v2.4.0-final-product-closure) |
+| v2.4.0 개발 branch | [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure) |
 | v2.3.0 / public product docs | **https://link.datarelay.run/** |
 | CLI Reference | [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
 | Deployment Modes | [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md) |

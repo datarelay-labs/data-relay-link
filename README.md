@@ -219,8 +219,8 @@ There is no stable `v2.4.0` tag until exact-HEAD qualification is complete.
 
 Pre-tag installers/bootstrap must use an immutable exact SHA or immutable candidate artifact, never a future nonexistent stable tag.
 
-Repository: [`datarelay-labs/data-relay-link`](https://github.com/datarelay-labs/data-relay-link)  
-Branch: [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/data-relay-link/tree/feature/v2.4.0-final-product-closure)
+Repository: [`datarelay-labs/datarelay-link`](https://github.com/datarelay-labs/datarelay-link)  
+Branch: [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)
 
 The published stable line remains **v2.3.0** on `main`. Field installs of the stable line should follow the immutable release identity rather than mutable `main`. Following mutable `main` is explicit opt-in only:
 

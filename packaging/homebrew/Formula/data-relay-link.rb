@@ -3,8 +3,8 @@
 # Fill sha256 from the immutable v2.3.1 release tarball when that tag is final.
 class DataRelayLink < Formula
   desc "Data Relay Link client for Apple Silicon macOS"
-  homepage "https://github.com/datarelay-labs/data-relay-link"
-  url "https://github.com/datarelay-labs/data-relay-link/archive/refs/tags/v2.3.1.tar.gz"
+  homepage "https://github.com/datarelay-labs/datarelay-link"
+  url "https://github.com/datarelay-labs/datarelay-link/archive/refs/tags/v2.3.1.tar.gz"
   version "2.3.1"
   sha256 "REPLACE_AT_TAG_TIME_WITH_RELEASE_TARBALL_SHA256"
   license "MIT"

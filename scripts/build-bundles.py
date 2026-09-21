@@ -156,7 +156,8 @@ SERVER_BOOTSTRAP_REF_SNIPPET = r'''if [[ -z "${FRP_EXPECTED_SOURCE_REF:-}" ]]; t
 import sys
 from urllib.parse import unquote, urlsplit
 url = sys.argv[1]
-host, owner, repo = sys.argv[2:5]
+host, owner = sys.argv[2:4]
+allowed = set(sys.argv[4:])
 try:
     p = urlsplit(url)
 except ValueError:
@@ -164,16 +165,17 @@ except ValueError:
 if p.scheme != "https" or p.hostname != host:
     raise SystemExit(0)
 parts = [unquote(x) for x in p.path.split("/") if x]
-if len(parts) >= 3 and parts[0] == owner and parts[1] == repo:
+if len(parts) >= 3 and parts[0] == owner and parts[1] in allowed:
     print(parts[2])
-' "$FRP_BOOTSTRAP_URL" raw.githubusercontent.com datarelay-labs data-relay-link 2>/dev/null || true)"
+' "$FRP_BOOTSTRAP_URL" raw.githubusercontent.com datarelay-labs datarelay-link data-relay-link 2>/dev/null || true)"
   fi
   if [[ -z "$_frp_bootstrap_ref" && -d /proc ]]; then
     _frp_bootstrap_ref="$(python3 - <<'PY' 2>/dev/null || true
 import os, re
 from urllib.parse import unquote, urlsplit
 pat = re.compile(
-    r"https://raw\\.githubusercontent\\.com/datarelay-labs/data-relay-link/"
+    r"https://raw\\.githubusercontent\\.com/datarelay-labs/"
+    r"(?:datarelay-link|data-relay-link)/"
     r"([^/\\s\"']+)/dist/bootstrap-server\\.sh"
 )
 pgid = os.getpgid(0)

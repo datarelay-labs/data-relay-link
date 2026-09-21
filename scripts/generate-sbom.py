@@ -237,7 +237,7 @@ def build_sbom(root: Path, source_commit: str | None = None) -> dict:
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": doc_name,
         "documentNamespace": (
-            "https://github.com/datarelay-labs/data-relay-link/sbom/%s/%s"
+            "https://github.com/datarelay-labs/datarelay-link/sbom/%s/%s"
             % (project_version, head[:12])
         ),
         "creationInfo": {

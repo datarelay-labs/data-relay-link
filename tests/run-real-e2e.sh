@@ -52,7 +52,7 @@ resolve_installer_sha() {
   local sha url code
   for sha in "${candidates[@]}"; do
     [[ -n "$sha" && "$sha" != "unknown" ]] || continue
-    url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${sha}/dist/bootstrap-client.sh"
+    url="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${sha}/dist/bootstrap-client.sh"
     code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo 000)"
     if [[ "$code" == "200" ]]; then
       INSTALLER_SHA="$sha"
@@ -427,7 +427,7 @@ server_install_env() {
     "FRP_PORT_START=6000"
     "FRP_PORT_END=6098"
     "FRP_ALLOCATOR_PUBLIC_URL=https://$SERVER_IP:6099/enroll"
-    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
+    "FRP_CLIENT_INSTALLER_URL=https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
   )
   if [[ -n "$PUBLIC_HOSTNAME" ]]; then
     env+=("FRP_PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME")
@@ -580,13 +580,13 @@ discover_client_identity_macos() {
 
 pin_linux_installer_urls() {
   # Untagged RC: pin exact-commit installer URLs through the canonical CLI.
-  local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
-  local win="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
+  local url="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.sh"
+  local win="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
   run_server pin-installer-urls "sudo /usr/local/bin/drlink set installer-url '$url' && sudo /usr/local/bin/drlink set windows-installer-url '$win' && sudo systemctl restart drlink-allocator && sleep 1 && systemctl is-active drlink-allocator && echo '$url' && echo '$win'"
 }
 
 pin_windows_installer_url() {
-  local url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
+  local url="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${INSTALLER_SHA:-$HEAD_SHA}/dist/bootstrap-client.ps1"
   run_server win-pin-installer "sudo /usr/local/bin/drlink set windows-installer-url '$url' && sudo systemctl restart drlink-allocator && sleep 1 && systemctl is-active drlink-allocator && echo '$url'"
 }
 

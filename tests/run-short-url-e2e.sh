@@ -25,7 +25,7 @@ if [[ -z "${FRP_E2E_INSTALLER_SHA:-}" ]]; then
   fi
   for sha in "${candidates[@]}"; do
     [[ -n "$sha" ]] || continue
-    url="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${sha}/dist/bootstrap-client.sh"
+    url="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${sha}/dist/bootstrap-client.sh"
     code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo 000)"
     if [[ "$code" == "200" ]]; then
       INSTALLER_SHA="$sha"
@@ -33,7 +33,7 @@ if [[ -z "${FRP_E2E_INSTALLER_SHA:-}" ]]; then
     fi
   done
 fi
-INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${INSTALLER_SHA}/dist/bootstrap-client.sh"
+INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${INSTALLER_SHA}/dist/bootstrap-client.sh"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.txt"
 : >"$SUMMARY"

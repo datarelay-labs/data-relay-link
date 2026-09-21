@@ -106,7 +106,7 @@ The official bootstrap URL is unchanged:
 
 ```bash
 curl -fsSL \
-https://raw.githubusercontent.com/datarelay-labs/data-relay-link/v2.1.2/dist/bootstrap-server.sh \
+https://raw.githubusercontent.com/datarelay-labs/datarelay-link/v2.1.2/dist/bootstrap-server.sh \
 | sudo bash
 ```
 

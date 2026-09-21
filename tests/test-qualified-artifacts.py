@@ -41,6 +41,10 @@ def test_urls():
     assert qa.agent_installer_url(alloc, "windows").endswith("/artifacts/agent/bootstrap-client.ps1")
     assert "fatedier" not in qa.frp_archive_url(alloc, "linux", "amd64")
     assert qa.is_forbidden_public_installer_url(
+        "https://raw.githubusercontent.com/datarelay-labs/datarelay-link/main/dist/bootstrap-client.sh"
+    )
+    # Pre-rename repository identity remains recognizable as a forbidden public installer.
+    assert qa.is_forbidden_public_installer_url(
         "https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh"
     )
     assert qa.is_forbidden_public_installer_url(
@@ -325,7 +329,7 @@ def test_create_client_installer_resolution():
     pass_("NO_FATEDIER_INSTALLER_FALLBACK")
 
     datarelay = (
-        "https://github.com/datarelay-labs/data-relay-link/raw/main/"
+        "https://github.com/datarelay-labs/datarelay-link/raw/main/"
         "dist/bootstrap-client.sh"
     )
     linux = create.resolve_configured_installer_url(

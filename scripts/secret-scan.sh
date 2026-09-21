@@ -39,7 +39,7 @@ fi
 if git grep -nF 'github.com/RickLee-kr/frp-auto-deploy' -- ':!scripts/secret-scan.sh' >/dev/null; then
   fail "stale github.com/RickLee-kr/frp-auto-deploy URL is tracked"
 fi
-# Former product repository identity (pre datarelay-labs/data-relay-link rename).
+# Former product repository identity (pre datarelay-labs/datarelay-link rename).
 # Tests may mention the stale string only when asserting it must be absent.
 if git grep -nF 'xdr-labs/frp-auto-deploy' \
   -- ':!scripts/secret-scan.sh' ':!CHANGELOG.md' \

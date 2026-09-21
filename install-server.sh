@@ -103,10 +103,10 @@ DEFAULT_WINDOWS_CLIENT_INSTALLER_URL="$(frp_default_windows_client_installer_url
 # Historical owner/repo, concatenated only to recognize obsolete project URLs.
 LEGACY_CLIENT_INSTALLER_OWNER='RickLee-kr'
 LEGACY_CLIENT_INSTALLER_REPO='frp-auto-deploy'
-# Former GitHub product identity before datarelay-labs/data-relay-link.
+# Former GitHub product identity before datarelay-labs/datarelay-link.
 FORMER_CLIENT_INSTALLER_OWNER='xdr-labs'
 FORMER_CLIENT_INSTALLER_REPO='frp-auto-deploy'
-# Renamed product repository under the current org (pre data-relay-link).
+# Renamed product repository under the current org (pre datarelay-link).
 RENAMED_CLIENT_INSTALLER_OWNER='datarelay-labs'
 RENAMED_CLIENT_INSTALLER_REPO='frp-auto-deploy'
 

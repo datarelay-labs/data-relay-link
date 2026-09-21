@@ -69,16 +69,23 @@ pass "PERSISTED_SOURCE_REF_DRIVES_DEFAULTS"
 
 # --- infer from bootstrap / installer URL ---
 reset_provenance_env
-export FRP_BOOTSTRAP_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${FAKE_SHA}/dist/bootstrap-server.sh"
+export FRP_BOOTSTRAP_URL="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${FAKE_SHA}/dist/bootstrap-server.sh"
 frp_infer_expected_source_ref
 [[ "${FRP_EXPECTED_SOURCE_REF:-}" == "$FAKE_SHA" ]] || fail "infer from FRP_BOOTSTRAP_URL"
 pass "INFER_FROM_BOOTSTRAP_URL"
 
 reset_provenance_env
-export FRP_CLIENT_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${FAKE_SHA}/dist/bootstrap-client.sh"
+export FRP_CLIENT_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${FAKE_SHA}/dist/bootstrap-client.sh"
 frp_infer_expected_source_ref
 [[ "${FRP_EXPECTED_SOURCE_REF:-}" == "$FAKE_SHA" ]] || fail "infer from client installer URL"
 pass "INFER_FROM_CLIENT_INSTALLER_URL"
+
+# Pre-rename raw repository URLs must still yield SOURCE_REF for upgrade/provenance.
+reset_provenance_env
+export FRP_BOOTSTRAP_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${FAKE_SHA}/dist/bootstrap-server.sh"
+frp_infer_expected_source_ref
+[[ "${FRP_EXPECTED_SOURCE_REF:-}" == "$FAKE_SHA" ]] || fail "infer from pre-rename FRP_BOOTSTRAP_URL"
+pass "INFER_FROM_FORMER_BOOTSTRAP_URL"
 
 # --- install-server resolve uses exact SHA defaults ---
 reset_provenance_env
@@ -87,7 +94,7 @@ export FRP_SERVER_TEST_ROOT="$WORKDIR/install-root"
 mkdir -p "$FRP_SERVER_TEST_ROOT/etc/drlink"
 export FRP_PUBLIC_HOST='203.0.113.50'
 export FRP_SERVER_CONFIG="$WORKDIR/missing-config.json"
-export FRP_CLIENT_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/data-relay-link/${FAKE_SHA}/dist/bootstrap-client.sh"
+export FRP_CLIENT_INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${FAKE_SHA}/dist/bootstrap-client.sh"
 # shellcheck source=../install-server.sh
 . "$ROOT/install-server.sh"
 load_existing_server_config

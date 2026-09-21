@@ -145,7 +145,7 @@ if ssh_client "curl -fsS --max-time 8 -o /dev/null -w '%{http_code}' https://git
 fi
 pass "E2E-B_FATEDIER_BLOCKED"
 
-if ssh_client "curl -fsS --max-time 8 -o /dev/null -w '%{http_code}' https://raw.githubusercontent.com/datarelay-labs/data-relay-link/main/dist/bootstrap-client.sh" \
+if ssh_client "curl -fsS --max-time 8 -o /dev/null -w '%{http_code}' https://raw.githubusercontent.com/datarelay-labs/datarelay-link/main/dist/bootstrap-client.sh" \
     >"$OUT_DIR/e2e-c-public.log" 2>&1; then
   if grep -qx '200' "$OUT_DIR/e2e-c-public.log"; then
     fail "E2E-C public DataRelay artifacts still reachable"
