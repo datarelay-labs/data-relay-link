@@ -6,6 +6,7 @@ Runtime JSON is derived state only.
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -653,6 +654,29 @@ CREATE TABLE IF NOT EXISTS ai_oauth_dcr_clients (
 """
 
 
+def _ai_job_client_id_from_payload(payload_json: object) -> Optional[str]:
+    """Extract a bindable client_id from legacy ai_jobs.payload_json.
+
+    Returns a non-empty string only. Missing, malformed, or non-string values
+    yield None so claim filtering cannot silently bind the wrong host.
+    Does not use SQLite JSON1 (unavailable on Amazon Linux 2 Python builds).
+    """
+    if payload_json is None:
+        return None
+    try:
+        raw = payload_json if isinstance(payload_json, str) else str(payload_json)
+        doc = json.loads(raw)
+    except (TypeError, ValueError, UnicodeError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    value = doc.get("client_id")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
 def ensure_ai_jobs_safety_schema(conn: sqlite3.Connection) -> None:
     """Additive AI job fairness/attempt columns without bumping SCHEMA_VERSION."""
     cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_jobs)")}
@@ -668,11 +692,24 @@ def ensure_ai_jobs_safety_schema(conn: sqlite3.Connection) -> None:
         if name not in cols:
             conn.execute(ddl)
     # Backfill target host from legacy payload JSON so claim can filter in SQL.
-    conn.execute(
-        "UPDATE ai_jobs SET client_id = json_extract(payload_json, '$.client_id') "
-        "WHERE (client_id IS NULL OR client_id = '') "
-        "AND json_extract(payload_json, '$.client_id') IS NOT NULL"
+    # Use Python JSON parsing — Amazon Linux 2's Python sqlite3 build lacks the
+    # SQLite JSON1 SQL functions, and Server init must not depend on them.
+    rows = list(
+        conn.execute(
+            "SELECT id, payload_json FROM ai_jobs "
+            "WHERE client_id IS NULL OR client_id = ''"
+        )
     )
+    for row in rows:
+        job_id = row[0]
+        client_id = _ai_job_client_id_from_payload(row[1])
+        if client_id is None:
+            continue
+        conn.execute(
+            "UPDATE ai_jobs SET client_id = ? WHERE id = ? "
+            "AND (client_id IS NULL OR client_id = '')",
+            (client_id, job_id),
+        )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ai_jobs_claim "
         "ON ai_jobs(status, client_id, created_at)"
