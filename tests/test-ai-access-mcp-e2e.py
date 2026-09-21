@@ -44,6 +44,18 @@ def start_endpoint_workers(bridge: MCPBridge, base_url: str):
         threads.append(thread)
     return stops, threads
 
+
+def stop_endpoint_workers(stops, threads, *, join_timeout=5.0):
+    """Signal AgentLoop workers, then join them before closing shared ControlPlane state."""
+    for stop in stops or []:
+        stop.set()
+    alive = []
+    for thread in threads or []:
+        thread.join(timeout=join_timeout)
+        if thread.is_alive():
+            alive.append(thread.name or "unnamed-agent-worker")
+    return alive
+
 sys.path.insert(0, str(ROOT / "tests"))
 from mcp_sdk_env import resolve_mcp_sdk_python  # noqa: E402
 
@@ -185,108 +197,243 @@ class ControlPlaneAITests(unittest.TestCase):
         self.assertIn("Control DB", st)
         self.assertIn("Data Relay Link", st)
 
+    def _verify_ai_identity(self, name: str) -> str:
+        """Issue a credential so the AI Identity is VERIFIED/active for AI Access."""
+        return self.token_for(name)
+
     def test_ai1_readonly_support(self):
-        self.cli("set", "client-group", "production-linux")
-        self.cli("set", "client-group", "production-linux", "member", "Expernet-DP1")
         self.cli("set", "ai-principal", "chatgpt-support")
         self.cli("set", "ai-principal", "chatgpt-support", "description", "ChatGPT production support")
         self.cli("set", "ai-principal", "chatgpt-support", "enabled")
-        self.cli("set", "ai-access", "readonly-support")
-        self.cli("set", "ai-access", "readonly-support", "principal", "chatgpt-support")
-        self.cli("set", "ai-access", "readonly-support", "target", "client-group", "production-linux")
-        for cap in ("get_system_info", "read_file", "list_processes"):
-            self.cli("set", "ai-access", "readonly-support", "capability", cap)
-        self.cli("set", "ai-access", "readonly-support", "path", self.vendor_glob)
-        self.cli("set", "ai-access", "readonly-support", "path", self.etc_glob)
-        self.cli("set", "ai-access", "readonly-support", "action", "allow")
-        self.cli("set", "ai-access", "readonly-support", "enabled")
+        self._verify_ai_identity("chatgpt-support")
+        self.cli(
+            "set",
+            "permission-object",
+            "readonly-support-perms",
+            "permissions",
+            "host-info,process-read,file-read",
+        )
+        self.cli(
+            "set",
+            "ai-access",
+            "readonly-support",
+            "mode",
+            "whitelist",
+            "source",
+            "chatgpt-support",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "readonly-support-perms",
+            "enabled",
+        )
+        v24.set_ai_policy_path_scopes(
+            self.plane, "readonly-support", [self.vendor_glob, self.etc_glob]
+        )
         allow = self.cli(
             "test",
             "ai-access",
+            "source",
             "chatgpt-support",
+            "destination",
             "Expernet-DP1",
-            "read_file",
-            str(self.vendor / "app.log"),
+            "permission",
+            "file-read",
         )
         self.assertIn("ALLOW", allow)
+        self.assertIn("readonly-support", allow)
         self.assertNotIn("log-ok", allow)
-        deny = self.cli("test", "ai-access", "chatgpt-support", "Expernet-DP1", "exec", "id")
-        self.assertIn("implicit DENY", deny)
-        self.assertNotIn("uid=", deny)
+        deny = self.cli(
+            "test",
+            "ai-access",
+            "source",
+            "chatgpt-support",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "command-exec",
+        )
+        self.assertIn("DENY", deny)
+        self.assertIn("(none)", deny)
+        auth = v24.authorize_ai_capability_v24(
+            self.plane,
+            identity="chatgpt-support",
+            destination="Expernet-DP1",
+            capability="exec",
+            operand="id",
+        )
+        self.assertEqual(auth["action"], "DENY")
+        self.assertNotIn("uid=", str(auth))
 
     def test_ai2_lab_and_target_isolation(self):
-        self.cli("set", "client-group", "lab-linux")
-        self.cli("set", "client-group", "lab-linux", "member", "lab1")
         self.cli("set", "ai-principal", "cursor-dev")
         self.cli("set", "ai-principal", "cursor-dev", "enabled")
-        self.cli("set", "ai-access", "lab-maintenance")
-        self.cli("set", "ai-access", "lab-maintenance", "principal", "cursor-dev")
-        self.cli("set", "ai-access", "lab-maintenance", "target", "client-group", "lab-linux")
-        for cap in (
-            "exec",
-            "read_file",
-            "write_file",
-            "upload_file",
-            "download_file",
-            "get_system_info",
-        ):
-            self.cli("set", "ai-access", "lab-maintenance", "capability", cap)
-        for pattern in (self.etc_glob, self.opt_glob, self.vendor_glob):
-            self.cli("set", "ai-access", "lab-maintenance", "path", pattern)
-        self.cli("set", "ai-access", "lab-maintenance", "exec-timeout", "300")
-        self.cli("set", "ai-access", "lab-maintenance", "action", "allow")
-        self.cli("set", "ai-access", "lab-maintenance", "enabled")
+        self._verify_ai_identity("cursor-dev")
+        self.cli(
+            "set",
+            "permission-object",
+            "lab-maintenance-perms",
+            "permissions",
+            "host-info,process-read,file-read,command-exec,file-write,file-upload,file-download",
+        )
+        self.cli(
+            "set",
+            "ai-access",
+            "lab-maintenance",
+            "mode",
+            "whitelist",
+            "source",
+            "cursor-dev",
+            "destination",
+            "lab1",
+            "permission",
+            "lab-maintenance-perms",
+            "enabled",
+        )
+        v24.set_ai_policy_path_scopes(
+            self.plane,
+            "lab-maintenance",
+            [self.etc_glob, self.opt_glob, self.vendor_glob],
+        )
         shown = self.cli("show", "ai-access", "lab-maintenance")
-        self.assertIn("exec", shown)
-        self.cli("set", "ai-access", "exec-only")
-        self.cli("set", "ai-access", "exec-only", "principal", "cursor-dev")
-        self.cli("set", "ai-access", "exec-only", "target", "client-group", "lab-linux")
-        self.cli("set", "ai-access", "exec-only", "capability", "exec")
-        warning = self.cli("show", "ai-access", "exec-only")
-        self.assertIn("exec can modify the target", warning)
-        self.assertIn("true read-only AI role requires exec disabled", warning)
-        for cap, operand in (
-            ("get_system_info", None),
-            ("read_file", str(self.etc_vendor / "config.yaml")),
-            ("write_file", str(self.etc_vendor / "test-file")),
-            ("upload_file", str(self.opt_vendor / "test.bin")),
-            ("download_file", str(self.vendor / "app.log")),
-            ("exec", "true"),
+        self.assertIn("lab-maintenance-perms", shown)
+        self.assertIn("lab1", shown)
+        perm_shown = self.cli("show", "permission-object", "lab-maintenance-perms")
+        self.assertIn("command-exec", perm_shown)
+        self.cli(
+            "set",
+            "permission-object",
+            "exec-only",
+            "permissions",
+            "command-exec",
+        )
+        exec_only = self.cli("show", "permission-object", "exec-only")
+        self.assertIn("command-exec", exec_only)
+        for permission in (
+            "host-info",
+            "file-read",
+            "file-write",
+            "file-upload",
+            "file-download",
+            "command-exec",
         ):
-            tokens = ["test", "ai-access", "cursor-dev", "lab1", cap]
-            if operand:
-                tokens.append(operand)
-            out = self.cli(*tokens)
+            out = self.cli(
+                "test",
+                "ai-access",
+                "source",
+                "cursor-dev",
+                "destination",
+                "lab1",
+                "permission",
+                permission,
+            )
             self.assertIn("ALLOW", out, out)
-        prod = self.cli("test", "ai-access", "cursor-dev", "Expernet-DP1", "exec", "id")
+        prod = self.cli(
+            "test",
+            "ai-access",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "command-exec",
+        )
         self.assertIn("DENY", prod)
 
     def test_ai3_explicit_deny_order(self):
-        self.cli("set", "client-group", "production-linux")
-        self.cli("set", "client-group", "production-linux", "member", "Expernet-DP1")
         self.cli("set", "ai-principal", "cursor-dev")
         self.cli("set", "ai-principal", "cursor-dev", "enabled")
-        self.cli("set", "ai-access", "support-read")
-        self.cli("set", "ai-access", "support-read", "principal", "cursor-dev")
-        self.cli("set", "ai-access", "support-read", "target", "client-group", "production-linux")
-        self.cli("set", "ai-access", "support-read", "capability", "exec")
-        self.cli("set", "ai-access", "support-read", "action", "allow")
-        self.cli("set", "ai-access", "support-read", "enabled")
-        self.cli("set", "ai-access", "deny-prod-exec")
-        self.cli("set", "ai-access", "deny-prod-exec", "principal", "cursor-dev")
-        self.cli("set", "ai-access", "deny-prod-exec", "target", "client-group", "production-linux")
-        self.cli("set", "ai-access", "deny-prod-exec", "capability", "exec")
-        self.cli("set", "ai-access", "deny-prod-exec", "action", "deny")
-        self.cli("set", "ai-access", "deny-prod-exec", "enabled")
-        self.cli("set", "ai-access", "deny-prod-exec", "before", "support-read")
+        self._verify_ai_identity("cursor-dev")
+        self.cli(
+            "set",
+            "permission-object",
+            "exec-only",
+            "permissions",
+            "command-exec",
+        )
+        # WHITELIST allow proves the permission can be granted on this destination.
+        self.cli(
+            "set",
+            "ai-access",
+            "support-read",
+            "mode",
+            "whitelist",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "exec-only",
+            "enabled",
+        )
+        allow = self.cli(
+            "test",
+            "ai-access",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "command-exec",
+        )
+        self.assertIn("ALLOW", allow)
+        self.assertIn("support-read", allow)
+        # Reset and switch to BLACKLIST so a matching rule is an explicit DENY.
+        self.cli("unset", "ai-access", "policy")
+        self.cli(
+            "set",
+            "ai-access",
+            "deny-prod-exec",
+            "mode",
+            "blacklist",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "exec-only",
+            "enabled",
+        )
+        self.cli(
+            "set",
+            "ai-access",
+            "zzz-later-deny",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "exec-only",
+            "enabled",
+        )
         listed = self.cli("show", "ai-access")
         deny_pos = listed.find("deny-prod-exec")
-        allow_pos = listed.find("support-read")
-        self.assertLess(deny_pos, allow_pos)
-        out = self.cli("test", "ai-access", "cursor-dev", "Expernet-DP1", "exec", "id")
+        later_pos = listed.find("zzz-later-deny")
+        self.assertLess(deny_pos, later_pos)
+        out = self.cli(
+            "test",
+            "ai-access",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "command-exec",
+        )
         self.assertIn("DENY", out)
         self.assertIn("deny-prod-exec", out)
-        self.assertIn("FIRST COMPLETE MATCH", out)
+        # Unmatched blacklist permission remains ALLOW under current v2.4 model.
+        other = self.cli(
+            "test",
+            "ai-access",
+            "source",
+            "cursor-dev",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "file-read",
+        )
+        self.assertIn("ALLOW", other)
 
     def test_path_traversal_and_symlink(self):
         self.assertFalse(path_allowed("/var/log/vendor/../../etc/shadow", ["/var/log/vendor/**"]))
@@ -412,35 +559,6 @@ class MCPBridgeE2ETests(unittest.TestCase):
             "mcp-lab-maintenance",
             [self.etc_glob, self.opt_glob, self.vendor_glob],
         )
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support"])
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support", "principal", "chatgpt-support"])
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support", "target", "client-group", "production-linux"])
-        for cap in ("get_system_info", "read_file", "list_processes", "get_host"):
-            run_cli(self.tmp, ["set", "ai-access", "readonly-support", "capability", cap])
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support", "path", self.vendor_glob])
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support", "path", self.etc_glob])
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support", "action", "allow"])
-        run_cli(self.tmp, ["set", "ai-access", "readonly-support", "enabled"])
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance"])
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "principal", "cursor-dev"])
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "target", "client-group", "lab-linux"])
-        for cap in (
-            "exec",
-            "read_file",
-            "write_file",
-            "upload_file",
-            "download_file",
-            "get_system_info",
-            "get_host",
-            "list_hosts",
-            "list_processes",
-        ):
-            run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "capability", cap])
-        for pattern in (self.etc_glob, self.opt_glob, self.vendor_glob):
-            run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "path", pattern])
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "exec-timeout", "2"])
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "action", "allow"])
-        run_cli(self.tmp, ["set", "ai-access", "lab-maintenance", "enabled"])
         self.chatgpt = self._token("chatgpt-support")
         self.cursor = self._token("cursor-dev")
         self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
@@ -455,13 +573,45 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self._agent_stops, self._agent_threads = start_endpoint_workers(self.bridge, self.base)
 
     def tearDown(self):
-        for stop in getattr(self, "_agent_stops", []):
-            stop.set()
-        self.bridge.close()
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        self.plane.close()
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        failures = []
+        alive = stop_endpoint_workers(
+            getattr(self, "_agent_stops", []),
+            getattr(self, "_agent_threads", []),
+            join_timeout=5.0,
+        )
+        if alive:
+            failures.append("AgentLoop workers still alive after stop: %s" % ", ".join(alive))
+        # Shut down HTTP server while ControlPlane is still valid, then join its thread.
+        httpd = getattr(self, "httpd", None)
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception as exc:
+                failures.append("httpd.shutdown failed: %s" % exc)
+            try:
+                httpd.server_close()
+            except Exception as exc:
+                failures.append("httpd.server_close failed: %s" % exc)
+        http_thread = getattr(self, "thread", None)
+        if http_thread is not None:
+            http_thread.join(timeout=5.0)
+            if http_thread.is_alive():
+                failures.append("HTTP server thread still alive after shutdown")
+        bridge = getattr(self, "bridge", None)
+        if bridge is not None:
+            try:
+                bridge.close()
+            except Exception as exc:
+                failures.append("bridge.close failed: %s" % exc)
+        plane = getattr(self, "plane", None)
+        if plane is not None:
+            try:
+                plane.close()
+            except Exception as exc:
+                failures.append("plane.close failed: %s" % exc)
+        shutil.rmtree(getattr(self, "tmp", None) or "", ignore_errors=True)
+        if failures:
+            self.fail("; ".join(failures))
 
     def _token(self, principal):
         rc, out, err = run_cli(self.tmp, ["system", "credential", "rotate", "ai-principal", principal])
@@ -689,10 +839,7 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.assertIn("Authorization: ALLOW", text)
         self.assertIn("endpoint unavailable", text)
         self.plane.upsert_client("client-prod-aaaaaaaa", label="Expernet-DP1", connected=True)
-        run_cli(
-            self.tmp,
-            ["set", "ai-access", "readonly-support", "target", "endpoint", "Expernet-DP1"],
-        )
+        # Canonical destination binding already points at Expernet-DP1 via mcp-readonly-support.
         self.plane.remove_client("client-prod-aaaaaaaa")
         obj = self.plane.get_object("Expernet-DP1")
         self.assertEqual(obj["status"], "orphaned")
@@ -868,13 +1015,50 @@ class MCPBridgeE2ETests(unittest.TestCase):
         cases = [
             ["set", "ai-principal", "chatgpt-support"],
             ["set", "ai-principal", "chatgpt-support", "enabled"],
-            ["set", "ai-access", "readonly-support", "capability", "read_file"],
-            ["set", "ai-access", "readonly-support", "path", "/var/log/vendor/**"],
-            ["test", "ai-access", "chatgpt-support", "Expernet-DP1", "read_file", "/var/log/vendor/app.log"],
-            ["show", "ai-access", "readonly-support", "impact"],
+            [
+                "set",
+                "permission-object",
+                "readonly-support-perms",
+                "permissions",
+                "host-info,process-read,file-read",
+            ],
+            [
+                "set",
+                "ai-access",
+                "readonly-support",
+                "mode",
+                "whitelist",
+                "source",
+                "chatgpt-support",
+                "destination",
+                "Expernet-DP1",
+                "permission",
+                "readonly-support-perms",
+                "enabled",
+            ],
+            [
+                "test",
+                "ai-access",
+                "source",
+                "chatgpt-support",
+                "destination",
+                "Expernet-DP1",
+                "permission",
+                "file-read",
+            ],
+            ["show", "ai-access"],
+            ["show", "ai-access", "readonly-support"],
             ["show", "ai-activity", "principal", "chatgpt-support"],
             ["system", "credential", "rotate", "ai-principal", "chatgpt-support"],
-            ["system", "credential", "configure", "ai-principal", "chatgpt-support", "authentication", "static-bearer"],
+            [
+                "system",
+                "credential",
+                "configure",
+                "ai-principal",
+                "chatgpt-support",
+                "authentication",
+                "static-bearer",
+            ],
             ["system", "diagnostics", "mcp"],
         ]
         for tokens in cases:
