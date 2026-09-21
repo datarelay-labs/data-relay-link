@@ -999,6 +999,8 @@ def display_network_type(store_type: str) -> str:
 
 
 def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value: Optional[str] = None, oneshot: bool = False) -> dict:
+    from drlink_control_plane import normalize_object_value
+
     name = validate_public_name(name, "Network Object name")
     existing = plane_db.get_object(name)
     if existing and existing["origin"] == "managed":
@@ -1025,16 +1027,45 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
         if public not in NETWORK_PUBLIC_TYPES:
             raise ControlPlaneError("Network Object type must be ip, cidr, or fqdn")
         store = NETWORK_STORE[public]
+        # Validate value before any authoritative mutation so failed one-shots
+        # leave existence/revision/policy unchanged.
+        normalized = normalize_object_value(store, value)
         if existing:
             if existing["type"] != store:
                 raise ControlPlaneError(
                     cli_error("Cannot change Network Object type after creation.")
                 )
-            plane_db.replace_object_value(name, value)
-            return {"operation": "update", "name": name}
-        plane_db.set_object_type(name, store)
-        plane_db.set_object_value(name, value)
-        return {"operation": "create", "name": name}
+            result = plane_db.replace_object_value(name, value)
+            out = {"operation": "update", "name": name}
+            if isinstance(result, dict) and "revision" in result:
+                out["revision"] = result["revision"]
+            return out
+
+        def write_create():
+            oid = _new_id("obj")
+            now = utc_now_iso()
+            plane_db.conn.execute(
+                "INSERT INTO objects(id, name, type, origin, description, status, row_version, "
+                "created_at, updated_at) VALUES (?, ?, ?, 'static', '', 'active', 1, ?, ?)",
+                (oid, name, store, now, now),
+            )
+            plane_db.conn.execute(
+                "INSERT INTO object_values(object_id, value, normalized) VALUES (?, ?, ?)",
+                (oid, value.strip(), normalized),
+            )
+            return {
+                "entity": {"type": "object", "id": oid, "name": name},
+                "operation": "create",
+                "after": normalized,
+            }
+
+        result = plane_db._mutate(
+            "set network-object %s" % name, "create network object", write_create
+        )
+        out = {"operation": "create", "name": name}
+        if isinstance(result, dict) and "revision" in result:
+            out["revision"] = result["revision"]
+        return out
     if type and value is not None:
         return set_network_object(plane_db, name, type=type, value=value, oneshot=True)
     raise ControlPlaneError("Interactive Network Object wizard requires a TTY session")
@@ -1088,28 +1119,54 @@ def set_network_group(plane_db, name: str, *, members: Optional[list[str]] = Non
             raise ControlPlaneError(
                 cli_error("Network Group is incomplete.", expected="  members")
             )
-        plane_db.set_object_group(name)
-        existing = plane_db.get_object_group(name)
-        current = {
-            m["member_id"]
-            for m in plane_db.conn.execute(
-                "SELECT member_id FROM object_group_members WHERE group_id = ?",
-                (existing["id"],),
-            )
-        }
-        desired_ids = set()
-        for mem in members:
-            kind, ref = plane_db.resolve_ref(mem)
-            if kind != "object":
-                raise ControlPlaneError("Network Group members must be Network Objects")
-            desired_ids.add(ref["id"])
-            plane_db.set_object_group_member(name, mem)
-        # exact list: remove extras
-        for mid in current - desired_ids:
-            obj = plane_db.conn.execute("SELECT name FROM objects WHERE id = ?", (mid,)).fetchone()
-            if obj:
-                plane_db.unset_object_group_member(name, obj["name"])
-        return {"operation": "set", "name": name}
+        member_list = list(members)
+
+        def write():
+            # Validate all member refs before any authoritative mutation so a
+            # failed edit cannot broaden WHITELIST via partial membership.
+            desired = []
+            for mem in member_list:
+                kind, ref = plane_db.resolve_ref(mem)
+                if kind != "object":
+                    raise ControlPlaneError("Network Group members must be Network Objects")
+                desired.append((kind, ref["id"], mem))
+
+            existing = plane_db.get_object_group(name)
+            now = utc_now_iso()
+            if existing:
+                gid = existing["id"]
+                plane_db.conn.execute(
+                    "DELETE FROM object_group_members WHERE group_id = ?", (gid,)
+                )
+                plane_db.conn.execute(
+                    "UPDATE object_groups SET row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                    (now, gid),
+                )
+                op = "update"
+            else:
+                gid = _new_id("ogp")
+                plane_db.conn.execute(
+                    "INSERT INTO object_groups(id, name, description, row_version, created_at, updated_at) "
+                    "VALUES (?, ?, '', 1, ?, ?)",
+                    (gid, name, now, now),
+                )
+                op = "create"
+            for kind, member_id, _mem in desired:
+                plane_db.conn.execute(
+                    "INSERT OR IGNORE INTO object_group_members(group_id, member_kind, member_id) "
+                    "VALUES (?, ?, ?)",
+                    (gid, kind, member_id),
+                )
+            return {
+                "entity": {"type": "object-group", "id": gid, "name": name},
+                "operation": op,
+            }
+
+        result = plane_db._mutate("set network-group %s" % name, "set network group", write)
+        out = {"operation": "set", "name": name}
+        if isinstance(result, dict) and "revision" in result:
+            out["revision"] = result["revision"]
+        return out
     raise ControlPlaneError("Interactive Network Group wizard requires a TTY session")
 
 
