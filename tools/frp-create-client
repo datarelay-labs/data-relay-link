@@ -495,9 +495,9 @@ def fail(message, code=2):
 TTL_DURATION_RE = re.compile(r'^(\d+)([smhd])$', re.I)
 
 # An enrollment credential is a short-lived hand-off, not long-term access.
-# Zero-Touch tickets: default 1h, maximum 24h (server-enforced in allocator).
+# Zero-Touch tickets: default 1h, maximum 24h (must match server allocator).
 ZERO_TOUCH_DEFAULT_TTL = '1h'
-ZERO_TOUCH_MAX_TTL_SEC = 24 * 86400
+ZERO_TOUCH_MAX_TTL_SEC = 24 * 3600
 ZERO_TOUCH_MAX_TTL_TEXT = '24h'
 # Manual Enrollment Codes retain a longer operational ceiling (30d).
 MAX_ENROLLMENT_TTL_SEC = 30 * 86400

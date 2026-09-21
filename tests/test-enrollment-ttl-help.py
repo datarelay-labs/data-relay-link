@@ -262,12 +262,71 @@ class EnrollmentTtlUpperBoundTests(unittest.TestCase):
             tickets = list((root / "var/lib/drlink/bootstrap").glob("*.json"))
             self.assertEqual(len(tickets), 1)
             record = json.loads(tickets[0].read_text(encoding="utf-8"))
-            self.assertLessEqual(int(record["expires_at"]) - int(time.time()), 24 * 86400)
+            remaining = int(record["expires_at"]) - int(time.time())
+            self.assertLessEqual(remaining, CREATE.ZERO_TOUCH_MAX_TTL_SEC)
+            self.assertGreater(remaining, CREATE.ZERO_TOUCH_MAX_TTL_SEC - 30)
             enrollment = json.loads(
                 (root / "var/lib/drlink/enrollments" / (record["enrollment_id"] + ".json"))
                 .read_text(encoding="utf-8")
             )
             self.assertEqual(int(enrollment["expires_at"]), int(record["expires_at"]))
+
+
+class ZeroTouchTtlParityTests(unittest.TestCase):
+    """Priority 8D: CLI Zero-Touch TTL ceiling matches Server (24h)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.alloc = load("frp_port_allocator", "server/frp-port-allocator.py")
+
+    def test_cli_and_server_share_24h_ceiling(self):
+        self.assertEqual(CREATE.ZERO_TOUCH_MAX_TTL_SEC, 86400)
+        self.assertEqual(CREATE.ZERO_TOUCH_MAX_TTL_TEXT, "24h")
+        self.assertEqual(self.alloc.ZERO_TOUCH_MAX_TTL_SEC, 86400)
+        self.assertEqual(CREATE.ZERO_TOUCH_MAX_TTL_SEC, self.alloc.ZERO_TOUCH_MAX_TTL_SEC)
+
+    def test_recommended_default_and_exact_24h_accepted(self):
+        self.assertEqual(CREATE.parse_enrollment_ttl("1h", zero_touch=True), 3600)
+        self.assertEqual(CREATE.parse_enrollment_ttl("24h", zero_touch=True), 86400)
+        self.assertEqual(CREATE.parse_enrollment_ttl("86400", zero_touch=True), 86400)
+        self.assertEqual(CREATE.parse_enrollment_ttl("1d", zero_touch=True), 86400)
+        self.assertEqual(self.alloc.normalize_zero_touch_ttl(3600), 3600)
+        self.assertEqual(self.alloc.normalize_zero_touch_ttl(86400), 86400)
+        self.assertEqual(self.alloc.normalize_zero_touch_ttl(None), 3600)
+
+    def test_over_24h_rejected_locally_including_day_forms(self):
+        for raw in ("2d", "24d", "25h", "86401", "48h"):
+            with self.assertRaises(ValueError, msg=raw) as ctx:
+                CREATE.parse_enrollment_ttl(raw, zero_touch=True)
+            err = str(ctx.exception)
+            self.assertIn("24h", err, raw)
+            self.assertIn("86400", err, raw)
+        with self.assertRaises(ValueError):
+            self.alloc.normalize_zero_touch_ttl(86401)
+        with self.assertRaises(ValueError):
+            self.alloc.normalize_zero_touch_ttl(0)
+        with self.assertRaises(ValueError):
+            self.alloc.normalize_zero_touch_ttl(-1)
+
+    def test_rejected_ttl_leaves_no_enrollment_or_ticket(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            seed_server_tree(root)
+            for raw in ("2d", "24d", "25h"):
+                result = run_tool(
+                    root,
+                    "frp-create-client",
+                    ["--one-line", "--ttl", raw, "--client-name", "zt-over-%s" % raw],
+                )
+                self.assertNotEqual(result.returncode, 0, raw)
+                self.assertIn("24h", result.stderr, raw)
+                self.assertIn("86400", result.stderr, raw)
+            self.assertEqual(
+                list((root / "var/lib/drlink/enrollments").glob("*.json")), []
+            )
+            self.assertEqual(
+                list((root / "var/lib/drlink/bootstrap").glob("*.json")), []
+            )
 
 
 if __name__ == "__main__":
