@@ -264,7 +264,7 @@
     "roles": "server",
     "category": "Policy",
     "summary": "Show recent authorization decisions",
-    "detail": "Requires a client and service. Guided menu: Recent access decisions → select client → select service.",
+    "detail": "Requires a client and service. Guided menu: Recent access decisions \u2192 select client \u2192 select service.",
     "examples": [
       "show access-log dp1 ssh"
     ],
@@ -1214,7 +1214,7 @@
     "roles": "server",
     "category": "Inventory",
     "summary": "Remove client metadata, trust, a service reservation, group membership, or the client",
-    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> — require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag …\nGroup membership: unset client <CLIENT> group <GROUP>",
+    "detail": "unset client <CLIENT-ID> trust\n  Block management trust / credential use.\n  Identity/trust: management blocked\n  Public ports: reserved (kept)\n  Confirmation follows revoke semantics\n\nunset client <CLIENT-ID> service <SERVICE-ID>\n  Release one published service reservation only.\n  Client identity: kept\n  Selected service port: released\n  Confirmation: type RELEASE\n\nunset client <CLIENT-ID>\n  Remove the client record/management identity and release ALL service ports.\n  WHAT WILL BE REMOVED\n    client registry record\n    management identity\n    ALL service reservations\n    ALL public ports\n  WHAT WILL NOT HAPPEN\n    no remote host deletion\n    no local software uninstall\n  Confirmation: type RELEASE\n\nDo not use unset client <CLIENT> <SERVICE> \u2014 require the explicit 'service' keyword.\nMetadata forms: unset client <CLIENT> label|note|tag \u2026\nGroup membership: unset client <CLIENT> group <GROUP>",
     "examples": [
       "unset client 24cd7856 label",
       "unset client 24cd7856 trust",
@@ -1742,8 +1742,8 @@
     ],
     "roles": "server",
     "category": "System",
-    "summary": "Create a server backup",
-    "detail": "",
+    "summary": "Create a server disaster-recovery backup",
+    "detail": "Creates the supported v2.4 Server DR archive (identity/PKI/config + canonical drlink.db).",
     "examples": [
       "system backup",
       "system backup /var/lib/drlink/backups/b.tar.gz"
@@ -1753,6 +1753,36 @@
         "name": "<path>",
         "complete": "path",
         "required": false
+      }
+    ],
+    "tail": "flags",
+    "internal": null,
+    "aliases": [],
+    "destructive": false,
+    "hidden": false,
+    "risk": "none",
+    "confirmation": "none",
+    "surface": "",
+    "flags": []
+  },
+  {
+    "path": [
+      "system",
+      "backup",
+      "validate"
+    ],
+    "roles": "server",
+    "category": "System",
+    "summary": "Validate a server disaster-recovery backup",
+    "detail": "Validates archive format, checksums, release/version compatibility, and required canonical control DB without mutating live state.",
+    "examples": [
+      "system backup validate /var/lib/drlink/backups/b.tar.gz"
+    ],
+    "args": [
+      {
+        "name": "<path>",
+        "complete": "path",
+        "required": true
       }
     ],
     "tail": "flags",

@@ -90,6 +90,18 @@ def seed_tree(root: Path) -> dict:
     (root / "var/lib/drlink/service-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {}}) + "\n", encoding="utf-8"
     )
+    os.environ["FRP_DEPLOY_TEST_ROOT"] = str(root)
+    os.environ.setdefault("DRLINK_SKIP_ACTIVATION", "1")
+    sys.path.insert(0, str(ROOT / "lib"))
+    from drlink_control_plane import ControlPlane
+    import drlink_v24 as v24
+
+    plane = ControlPlane(str(root))
+    try:
+        v24.ensure_v2_schema(plane.conn)
+        plane.conn.commit()
+    finally:
+        plane.close()
     return cfg
 
 

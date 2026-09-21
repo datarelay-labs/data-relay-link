@@ -29,12 +29,13 @@ class StatePathSpec:
 # Canonical relative paths (from filesystem root / test root).
 # Enrollment inventory is a non-authoritative derived/runtime projection of
 # SQLite client + published-service state used by the allocator transport.
+# Disaster-recovery restores must not re-apply it as authority; rebuild from DB.
 CLIENT_INVENTORY = StatePathSpec(
     path="var/lib/drlink/runtime/client-inventory.json",
     legacy_paths=("var/lib/drlink/registry.json",),
     type="state",
     backup_policy="optional",
-    restore_policy="optional",
+    restore_policy="ignore",
     sensitivity="critical",
 )
 # Back-compat alias name used by older callers.
@@ -71,11 +72,12 @@ CONTROL_DB = StatePathSpec(
     restore_policy="required",
     sensitivity="critical",
 )
+# Runtime projections are regenerated from restored drlink.db after cutover.
 RUNTIME_TREE = StatePathSpec(
     path="var/lib/drlink/runtime",
     type="tree",
     backup_policy="tree",
-    restore_policy="tree",
+    restore_policy="ignore",
     sensitivity="standard",
 )
 ENROLLMENTS_TREE = StatePathSpec(
@@ -197,11 +199,57 @@ def backup_optional_files() -> tuple[str, ...]:
     return tuple(out)
 
 
+def backup_required_files() -> tuple[str, ...]:
+    return tuple(
+        spec.path for spec in STATE_PATHS if spec.backup_policy == "required"
+    )
+
+
+def restore_required_files() -> frozenset[str]:
+    return frozenset(
+        spec.path for spec in STATE_PATHS if spec.restore_policy == "required"
+    )
+
+
+def restore_ignore_files() -> frozenset[str]:
+    ignored: set[str] = set()
+    for spec in STATE_PATHS:
+        if spec.restore_policy != "ignore":
+            continue
+        ignored.add(spec.path)
+        ignored.update(spec.legacy_paths)
+    return frozenset(ignored)
+
+
+def backup_forensic_optional_files() -> tuple[str, ...]:
+    """Non-authoritative state retained in archives when present (forensics/migration)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for spec in STATE_PATHS:
+        if spec.restore_policy != "ignore" or spec.type not in {"state", "tree"}:
+            continue
+        if spec.type == "tree":
+            continue
+        for rel in (spec.path, *spec.legacy_paths):
+            if rel not in seen:
+                seen.add(rel)
+                out.append(rel)
+    return tuple(out)
+
+
 def backup_tree_roots() -> tuple[str, ...]:
     return tuple(
         spec.path
         for spec in STATE_PATHS
         if spec.backup_policy == "tree" and spec.type == "tree"
+    )
+
+
+def restore_tree_roots() -> tuple[str, ...]:
+    return tuple(
+        spec.path
+        for spec in STATE_PATHS
+        if spec.restore_policy == "tree" and spec.type == "tree"
     )
 
 

@@ -81,10 +81,30 @@ def seed_valid_tree(root: Path, marker: str) -> None:
         "frp_infrastructure_ports.py",
         "frp_audit.py",
         "frp_state_paths.py",
+        "drlink_control_db.py",
+        "drlink_control_plane.py",
+        "drlink_v24.py",
     ):
         src = ROOT / "lib" / name
         if src.is_file():
             shutil.copy2(src, root / "usr/local/lib/drlink" / name)
+    os.environ["FRP_DEPLOY_TEST_ROOT"] = str(root)
+    os.environ.setdefault("DRLINK_SKIP_ACTIVATION", "1")
+    sys.path.insert(0, str(ROOT / "lib"))
+    from drlink_control_plane import ControlPlane
+    import drlink_v24 as v24
+
+    plane = ControlPlane(str(root))
+    try:
+        v24.ensure_v2_schema(plane.conn)
+        plane.conn.execute(
+            "INSERT OR REPLACE INTO clients(id, label, hostname, created_at, updated_at) "
+            "VALUES (?, ?, 'host', datetime('now'), datetime('now'))",
+            ("client-" + marker, marker),
+        )
+        plane.conn.commit()
+    finally:
+        plane.close()
 
 
 class CorruptCurrentRestoreTests(unittest.TestCase):
@@ -122,32 +142,47 @@ class CorruptCurrentRestoreTests(unittest.TestCase):
         self.assertTrue(archive.is_file())
         return archive
 
+    def _client_label(self) -> str:
+        sys.path.insert(0, str(ROOT / "lib"))
+        from drlink_control_plane import ControlPlane
+
+        plane = ControlPlane(str(self.root))
+        try:
+            row = plane.conn.execute(
+                "SELECT label FROM clients WHERE id LIKE 'client-%' ORDER BY id LIMIT 1"
+            ).fetchone()
+            return str(row[0]) if row else ""
+        finally:
+            plane.close()
+
     def test_valid_backup_valid_current(self):
         archive = self._make_valid_backup()
+        # Mutate live DB after backup.
+        sys.path.insert(0, str(ROOT / "lib"))
+        from drlink_control_plane import ControlPlane
+
+        plane = ControlPlane(str(self.root))
+        try:
+            plane.conn.execute("UPDATE clients SET label='mutated'")
+            plane.conn.commit()
+        finally:
+            plane.close()
         (self.root / "var/lib/drlink/registry.json").write_text(
             json.dumps({"schema_version": 2, "clients": {}, "reserved": [], "marker": "mutated"})
             + "\n",
             encoding="utf-8",
         )
-        with mock.patch.object(self.mod, "restart_services"), mock.patch.object(
-            self.mod, "verify_restored_control_state"
-        ), mock.patch.object(self.mod, "_reapply_egress_permissions_after_restore"):
-            # Drive restore.main with patched module path by exec via subprocess
-            # against the real tool (uses classify_rollback on live tree).
-            pass
         proc = subprocess.run(
             [sys.executable, str(self.restore_tool), str(archive)],
             env=self.env,
             capture_output=True,
             text=True,
         )
-        # Restart/verify may fail in fixture; accept apply success via registry marker.
-        registry = json.loads((self.root / "var/lib/drlink/registry.json").read_text(encoding="utf-8"))
-        if proc.returncode != 0:
-            # If health/restart hooks fail, still prove we didn't abort on rollback validate.
-            self.assertNotIn("staged registry failed invariant", proc.stderr + proc.stdout)
-        else:
-            self.assertEqual(registry.get("marker"), "good")
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("staged registry failed invariant", combined)
+        if proc.returncode == 0:
+            self.assertEqual(self._client_label(), "good")
+            self.assertFalse((self.root / "var/lib/drlink/registry.json").exists())
 
     def test_valid_backup_corrupted_registry(self):
         archive = self._make_valid_backup()
@@ -160,20 +195,16 @@ class CorruptCurrentRestoreTests(unittest.TestCase):
         )
         combined = proc.stdout + proc.stderr
         self.assertNotIn("staged registry failed invariant", combined)
-        # Either restore completed or failed later for restart/health — but must
-        # have progressed past corrupt-current rollback validation.
         self.assertNotRegex(combined, r"staged registry failed")
-        registry_text = (self.root / "var/lib/drlink/registry.json").read_text(encoding="utf-8")
-        # Candidate must have been applied (valid JSON with marker good).
-        registry = json.loads(registry_text)
-        self.assertEqual(registry.get("marker"), "good")
-        # Raw snapshot preserved under backups.
+        # Candidate DB applied; legacy registry purged.
+        self.assertEqual(self._client_label(), "good")
+        self.assertFalse((self.root / "var/lib/drlink/registry.json").exists())
         snaps = list((self.root / "var/lib/drlink/backups").glob("pre-restore-*.tar.gz"))
-        self.assertTrue(snaps, "expected RAW_CORRUPT pre-restore snapshot")
+        self.assertTrue(snaps, "expected pre-restore snapshot")
 
     def test_valid_backup_missing_registry(self):
         archive = self._make_valid_backup()
-        (self.root / "var/lib/drlink/registry.json").unlink()
+        (self.root / "var/lib/drlink/registry.json").unlink(missing_ok=True)
         proc = subprocess.run(
             [sys.executable, str(self.restore_tool), str(archive)],
             env=self.env,
@@ -182,12 +213,12 @@ class CorruptCurrentRestoreTests(unittest.TestCase):
         )
         combined = proc.stdout + proc.stderr
         self.assertNotIn("staged registry failed invariant", combined)
-        registry = json.loads((self.root / "var/lib/drlink/registry.json").read_text(encoding="utf-8"))
-        self.assertEqual(registry.get("marker"), "good")
+        self.assertEqual(self._client_label(), "good")
 
     def test_invalid_backup_rejected(self):
         bad = Path(self.tmp.name) / "bad.tar.gz"
         bad.write_text("not a tar\n", encoding="utf-8")
+        before = self._client_label()
         proc = subprocess.run(
             [sys.executable, str(self.restore_tool), str(bad)],
             env=self.env,
@@ -195,48 +226,27 @@ class CorruptCurrentRestoreTests(unittest.TestCase):
             text=True,
         )
         self.assertNotEqual(proc.returncode, 0)
-        registry = json.loads((self.root / "var/lib/drlink/registry.json").read_text(encoding="utf-8"))
-        self.assertEqual(registry.get("marker"), "good")
+        self.assertEqual(self._client_label(), before)
 
     def test_classify_rollback_raw_corrupt(self):
         archive = self._make_valid_backup()
-        # Build a corrupt-current snapshot by hand: backup then corrupt registry inside archive.
-        # Simpler: call classify on a backup of corrupt tree.
-        (self.root / "var/lib/drlink/registry.json").write_text("{broken", encoding="utf-8")
+        # Corrupt live DB so raw pre-restore snapshot cannot pass semantic validation.
+        (self.root / "var/lib/drlink/drlink.db").write_bytes(b"not-a-sqlite-db")
         snap = Path(self.tmp.name) / "snap.tar.gz"
+        env = dict(self.env)
+        env["FRP_BACKUP_RAW_SNAPSHOT"] = "1"
+        env["FRP_BACKUP_ALREADY_LOCKED"] = "1"
         proc = subprocess.run(
             [sys.executable, str(self.backup_tool), str(snap)],
-            env=self.env,
+            env=env,
             capture_output=True,
             text=True,
         )
-        # Backup may fail if required files must be valid JSON — if so, skip classify via raw tar.
-        if proc.returncode != 0:
-            # Construct raw tarball with corrupt registry matching backup format.
-            staging = Path(self.tmp.name) / "staging"
-            payload = staging / "payload"
-            seed_valid_tree(payload, "raw")
-            (payload / "var/lib/drlink/registry.json").write_text("{broken", encoding="utf-8")
-            (staging / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "format": "frp-auto-deploy-server-backup",
-                        "schema_version": 1,
-                        "project_version": "1.0.0",
-                        "files": [],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            with tarfile.open(snap, "w:gz") as tar:
-                tar.add(staging / "manifest.json", arcname="manifest.json")
-                tar.add(payload, arcname="payload")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         kind, temp, extracted = self.mod.classify_rollback_snapshot(snap)
         self.assertEqual(kind, "RAW_CORRUPT")
         self.assertIsNone(temp)
         self.assertIsNone(extracted)
-        # Restore original good tree marker for other tests in class — setUp recreates each time.
         del archive
 
 

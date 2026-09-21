@@ -4710,6 +4710,40 @@ class ControlPlane:
             lines.append("Generation mismatch is visible. Affected authorization fails closed.")
         return "\n".join(lines) + "\n"
 
+    def reconcile_ai_jobs_after_disaster_recovery(self) -> dict:
+        """Fail-closed reconciliation of nonterminal AI jobs after Server DR restore.
+
+        Restored queued/running jobs must not execute or replay after recovery.
+        Mutating in-flight work becomes recovery_required; other nonterminal work
+        becomes expired.
+        """
+        ensure_ai_jobs_safety_schema(self.conn)
+        now = utc_now_iso()
+        rows = list(
+            self.conn.execute(
+                "SELECT id, capability, status FROM ai_jobs WHERE status IN ('queued', 'running')"
+            )
+        )
+        expired = 0
+        recovery = 0
+        for row in rows:
+            capability = str(row["capability"] or "")
+            status = str(row["status"] or "")
+            if status == "running" and capability in AI_MUTATING_CAPABILITIES:
+                terminal = "recovery_required"
+                recovery += 1
+            else:
+                terminal = "expired"
+                expired += 1
+            self.conn.execute(
+                "UPDATE ai_jobs SET status = ?, updated_at = ?, "
+                "claim_token = NULL, attempt_id = NULL "
+                "WHERE id = ? AND status IN ('queued', 'running')",
+                (terminal, now, row["id"]),
+            )
+        self.conn.commit()
+        return {"expired": expired, "recovery_required": recovery, "total": len(rows)}
+
     # --- backup / restore -------------------------------------------------
     def backup(self, dest: str) -> str:
         dest_path = Path(dest)

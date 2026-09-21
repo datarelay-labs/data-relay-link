@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 import types
 from importlib.machinery import SourceFileLoader
@@ -51,6 +52,22 @@ def seed_tree(root: Path) -> None:
     (root / "etc/frp/frps.toml").write_text('bindPort = 443\n', encoding="utf-8")
     (root / "etc/frp/server_token").write_text("token\n", encoding="utf-8")
     (root / "etc/drlink/pki/ca.crt").write_text("ca\n", encoding="utf-8")
+    (root / "etc/drlink/pki/ca.key").write_text("key\n", encoding="utf-8")
+    (root / "etc/drlink/pki/server.key").write_text("key\n", encoding="utf-8")
+    (root / "etc/drlink/pki/server.crt").write_text("crt\n", encoding="utf-8")
+    (root / "etc/drlink/version").write_text("PROJECT_VERSION=2.4.0\n", encoding="utf-8")
+    os.environ["FRP_DEPLOY_TEST_ROOT"] = str(root)
+    os.environ.setdefault("DRLINK_SKIP_ACTIVATION", "1")
+    sys.path.insert(0, str(ROOT / "lib"))
+    from drlink_control_plane import ControlPlane
+    import drlink_v24 as v24
+
+    plane = ControlPlane(str(root))
+    try:
+        v24.ensure_v2_schema(plane.conn)
+        plane.conn.commit()
+    finally:
+        plane.close()
 
 
 def _restore_env():

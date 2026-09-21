@@ -215,6 +215,56 @@ def _confirm_from_stdin(message: str) -> bool:
     return str(line or "").strip().lower() in ("y", "yes")
 
 
+def _server_dr_tool_path(name: str):
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parent.parent / "tools" / name,
+        Path("/usr/local/sbin") / name,
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise SystemExit("ERROR: %s is not installed." % name)
+
+
+def _server_dr_backup(path: str = "") -> int:
+    """Public system backup → unified Server DR archive (frp-backup)."""
+    import subprocess
+
+    cmd = [sys.executable, str(_server_dr_tool_path("frp-backup"))]
+    if path:
+        cmd.append(path)
+    return int(subprocess.run(cmd, check=False).returncode or 0)
+
+
+def _server_dr_validate(path: str) -> int:
+    """Public system backup validate → same DR archive contract as restore."""
+    import subprocess
+
+    return int(
+        subprocess.run(
+            [sys.executable, str(_server_dr_tool_path("frp-restore")), "--validate", path],
+            check=False,
+        ).returncode
+        or 0
+    )
+
+
+def _server_dr_restore(path: str) -> int:
+    """Public system restore → unified Server DR archive (frp-restore)."""
+    import subprocess
+
+    return int(
+        subprocess.run(
+            [sys.executable, str(_server_dr_tool_path("frp-restore")), path],
+            check=False,
+        ).returncode
+        or 0
+    )
+
+
 def _run(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
@@ -1074,17 +1124,15 @@ def _system(plane: ControlPlane, rest):
         return 0
     if rest[0] == "backup":
         if len(rest) >= 2 and rest[1] == "validate":
-            plane.backup_validate(rest[2])
-            sys.stdout.write("Backup valid.\n")
-            return 0
-        path = rest[1] if len(rest) > 1 else "/tmp/drlink-backup.tar"
-        plane.backup(path)
-        sys.stdout.write("Backup written: %s\n" % path)
-        return 0
+            if len(rest) < 3:
+                raise SystemExit("Usage: system backup validate <PATH>")
+            return _server_dr_validate(rest[2])
+        path = rest[1] if len(rest) > 1 else ""
+        return _server_dr_backup(path)
     if rest[0] == "restore":
-        plane.restore(rest[1])
-        sys.stdout.write("Restore complete.\n")
-        return 0
+        if len(rest) < 2:
+            raise SystemExit("Usage: system restore <PATH>")
+        return _server_dr_restore(rest[1])
     if rest[0] == "revisions":
         for row in plane.list_revisions():
             sys.stdout.write("%s %s %s\n" % (row["revision"], row["created_at"], row["command"]))

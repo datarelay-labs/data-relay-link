@@ -63,6 +63,26 @@ EOF
   find "$tree/etc/drlink" "$tree/etc/frp" "$tree/var/lib/drlink" \
     "$tree/var/log/drlink" \
     -type f -exec chmod 600 {} +
+  # Canonical control DB is required for supported v2.4 DR archives.
+  FRP_DEPLOY_TEST_ROOT="$tree" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+import drlink_v24 as v24
+plane = ControlPlane('$tree')
+try:
+    v24.ensure_v2_schema(plane.conn)
+    plane.conn.execute(
+        \"INSERT OR REPLACE INTO clients(id, label, hostname, created_at, updated_at) \"
+        \"VALUES ('client-a', ?, 'host-a', datetime('now'), datetime('now'))\",
+        ('$marker',),
+    )
+    plane.conn.commit()
+finally:
+    plane.close()
+"
 }
 
 mode_of() {
@@ -161,8 +181,18 @@ grep -q '"public_hostname":"frp-backup.example.com"' "$TREE/etc/drlink/config.js
 grep -q '"bootstrap_hostname":"bootstrap-backup.example.com"' "$TREE/etc/drlink/config.json" \
   || fail "bootstrap_hostname restore"
 grep -q '"public_ip":"203.0.113.10"' "$TREE/etc/drlink/config.json" || fail "public_ip restore"
-grep -q '"label":"original"' "$TREE/var/lib/drlink/registry.json" || fail "registry restore"
-grep -q '6002' "$TREE/var/lib/drlink/registry.json" || fail "reservation restore"
+FRP_DEPLOY_TEST_ROOT="$TREE" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+plane = ControlPlane('$TREE')
+try:
+    row = plane.conn.execute(\"SELECT label FROM clients WHERE id='client-a'\").fetchone()
+    assert row and row[0] == 'original', row
+finally:
+    plane.close()
+" || fail "control DB client restore"
 grep -q 'token-original-super-secret' "$TREE/etc/frp/server_token" || fail "token restore"
 grep -q 'ca-key-original' "$TREE/etc/drlink/pki/ca.key" || fail "CA restore"
 grep -q 'serial-original' "$TREE/etc/drlink/pki/ca.srl" || fail "PKI serial restore"
@@ -211,13 +241,34 @@ pass "CROSS_VERSION_RESTORE_FAIL_CLOSED"
 seed_state "$TREE" rollback-source
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 ROLLBACK_BEFORE="$WORKDIR/rollback.before"
-cp "$TREE/var/lib/drlink/registry.json" "$ROLLBACK_BEFORE"
+FRP_DEPLOY_TEST_ROOT="$TREE" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+plane = ControlPlane('$TREE')
+try:
+    row = plane.conn.execute(\"SELECT label FROM clients WHERE id='client-a'\").fetchone()
+    open('$ROLLBACK_BEFORE','w').write(row[0] if row else '')
+finally:
+    plane.close()
+"
 if FRP_RESTORE_HOOK_FAIL_AFTER=4 \
   python3 "$ROOT/tools/frp-restore" "$BACKUP" >/dev/null 2>"$WORKDIR/rollback.stderr"; then
   fail "injected restore failure unexpectedly succeeded"
 fi
-cmp -s "$TREE/var/lib/drlink/registry.json" "$ROLLBACK_BEFORE" \
-  || fail "registry was not rolled back"
+FRP_DEPLOY_TEST_ROOT="$TREE" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+plane = ControlPlane('$TREE')
+try:
+    row = plane.conn.execute(\"SELECT label FROM clients WHERE id='client-a'\").fetchone()
+    assert row and row[0] == open('$ROLLBACK_BEFORE').read(), row
+finally:
+    plane.close()
+" || fail "control DB was not rolled back"
 grep -q 'token-rollback-source-super-secret' "$TREE/etc/frp/server_token" \
   || fail "token was not rolled back"
 grep -q 'ca-key-rollback-source' "$TREE/etc/drlink/pki/ca.key" \
@@ -225,7 +276,7 @@ grep -q 'ca-key-rollback-source' "$TREE/etc/drlink/pki/ca.key" \
 grep -q 'previous state was restored' "$WORKDIR/rollback.stderr" || fail "rollback diagnostic"
 pass "RESTORE_FAILURE_ROLLBACK"
 
-# Concurrent registry mutation cannot interleave with a locked backup copy.
+# Concurrent control-state mutation cannot interleave with a locked backup copy.
 CONC="$WORKDIR/conc"
 seed_state "$CONC" concurrent
 export FRP_DEPLOY_TEST_ROOT="$CONC"
@@ -242,11 +293,9 @@ for _ in $(seq 1 80); do
 done
 [[ -f "$READY" ]] || { kill "$BACK_PID" 2>/dev/null || true; fail "backup lock hook"; }
 python3 - "$CONC" "$WORKDIR/writer.started" "$WORKDIR/writer.done" <<'PY' &
-import json, os, sys, time
+import os, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
-sys.path.insert(0, str(Path(os.environ.get("FRP_TEST_LOCKS_LIB", ""))))
-# Non-blocking attempt: writer must not observe a half-copied registry.
 lock = root / "var/lib/drlink/runtime/registry.lock"
 import fcntl
 fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
@@ -261,9 +310,15 @@ while time.time() < deadline:
     except BlockingIOError:
         time.sleep(0.05)
 if got:
-    path = root / "var/lib/drlink/registry.json"
-    json.loads(path.read_text())
-    path.write_text(json.dumps({"schema_version":2,"clients":{"mutated":{}},"reserved":[]}) + "\n")
+    # Attempt a live DB mutation while backup holds control locks.
+    import sqlite3
+    db = root / "var/lib/drlink/drlink.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("UPDATE clients SET label='mutated' WHERE id='client-a'")
+        conn.commit()
+    finally:
+        conn.close()
     fcntl.flock(fd, fcntl.LOCK_UN)
 Path(sys.argv[3]).write_text("got=%s\n" % got)
 os.close(fd)
@@ -271,18 +326,22 @@ PY
 sleep 0.2
 touch "$GO"
 wait "$BACK_PID" || fail "concurrent backup"
-python3 - "$CONC_BACKUP" <<'PY'
-import json, tarfile, sys, tempfile
+python3 - "$CONC_BACKUP" "$ROOT" <<'PY'
+import sqlite3, sys, tarfile, tempfile
 from pathlib import Path
 with tempfile.TemporaryDirectory() as name:
     dest = Path(name)
     with tarfile.open(sys.argv[1], "r:gz") as archive:
         archive.extractall(dest)
-    data = json.loads((dest / "payload/var/lib/drlink/registry.json").read_text())
-    assert data.get("schema_version") == 2
-    assert "client-a" in data.get("clients", {})
-    assert data["clients"]["client-a"]["label"] == "concurrent"
-print("BACKUP_JSON_OK")
+    db = dest / "payload/var/lib/drlink/drlink.db"
+    assert db.is_file(), db
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute("SELECT label FROM clients WHERE id='client-a'").fetchone()
+        assert row and row[0] == "concurrent", row
+    finally:
+        conn.close()
+print("BACKUP_DB_OK")
 PY
 pass "BACKUP_CONCURRENT_REGISTRY_MUTATION"
 pass "BACKUP_CONSISTENCY"

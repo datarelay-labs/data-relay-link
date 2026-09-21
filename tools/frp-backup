@@ -17,8 +17,9 @@ from pathlib import Path
 
 FORMAT = "data-relay-link-server-backup"
 SCHEMA_VERSION = 1
-REQUIRED = (
-    "etc/drlink/config.json",
+# Trust/config identity that is always required for a supported Server DR archive.
+# Canonical DB + config.json come from frp_state_paths SSOT (backup_policy=required).
+TRUST_REQUIRED = (
     "etc/drlink/version",
     "etc/drlink/pki/ca.key",
     "etc/drlink/pki/ca.crt",
@@ -26,10 +27,6 @@ REQUIRED = (
     "etc/drlink/pki/server.crt",
     "etc/frp/frps.toml",
     "etc/frp/server_token",
-    "var/lib/drlink/registry.json",
-    "var/lib/drlink/access-control.json",
-    "var/lib/drlink/egress-control.json",
-    "var/lib/drlink/service-profiles.json",
 )
 def _load_state_paths():
     candidates = []
@@ -55,16 +52,21 @@ def _load_state_paths():
 
 
 _STATE_PATHS = _load_state_paths()
+REQUIRED = tuple(
+    dict.fromkeys((*_STATE_PATHS.backup_required_files(), *TRUST_REQUIRED))
+)
 OPTIONAL_FILES = (
     "etc/drlink/frontend.conf",
     "var/lib/drlink/mgmt-nonces.json",
     "var/lib/drlink/nginx-ownership",
     *_STATE_PATHS.backup_optional_files(),
+    *_STATE_PATHS.backup_forensic_optional_files(),
 )
 OPTIONAL_TREES = (
     "etc/drlink/pki",
     *_STATE_PATHS.backup_tree_roots(),
 )
+CONTROL_DB_REL = "var/lib/drlink/drlink.db"
 
 
 def fail(message: str) -> "NoReturn":
@@ -78,6 +80,67 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def snapshot_sqlite(source: Path, target: Path) -> None:
+    """Capture a consistent SQLite snapshot (includes WAL state via backup API)."""
+    import sqlite3
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        dest = sqlite3.connect(str(target))
+        try:
+            src.backup(dest)
+            # Flatten to a single-file DB so -wal/-shm are not archived.
+            dest.execute("PRAGMA journal_mode=DELETE")
+            dest.commit()
+        finally:
+            dest.close()
+    finally:
+        src.close()
+    for suffix in ("-wal", "-shm"):
+        companion = Path(str(target) + suffix)
+        try:
+            companion.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def control_db_manifest_fields(db_path: Path) -> dict:
+    """Bind canonical DB schema/revision into the DR manifest when readable."""
+    import sqlite3
+
+    info: dict = {"path": CONTROL_DB_REL}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return info
+    try:
+        try:
+            schema = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error:
+            schema = 0
+        try:
+            revision = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM config_revisions"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error:
+            revision = 0
+        if schema > 0:
+            info["schema_version"] = schema
+        info["revision"] = revision
+    finally:
+        conn.close()
+    return info
 
 
 def read_identity(path: Path) -> dict[str, str]:
@@ -270,12 +333,27 @@ def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]], *, se
         for rel, source in files:
             target = payload / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            mode = stat.S_IMODE(source.stat().st_mode)
+            if rel == CONTROL_DB_REL:
+                try:
+                    snapshot_sqlite(source, target)
+                except Exception:
+                    if os.environ.get("FRP_BACKUP_RAW_SNAPSHOT") == "1":
+                        # Pre-restore evidence may include a damaged DB file.
+                        shutil.copyfile(source, target)
+                    else:
+                        raise
+                mode = 0o600
+            else:
+                shutil.copyfile(source, target)
+                mode = stat.S_IMODE(source.stat().st_mode)
             os.chmod(target, mode)
             entries.append({"path": rel, "sha256": sha256(target), "mode": mode})
 
         identity = read_identity(root / "etc/drlink/version")
+        control_db = None
+        db_staged = payload / CONTROL_DB_REL
+        if db_staged.is_file():
+            control_db = control_db_manifest_fields(db_staged)
         manifest = {
             "format": FORMAT,
             "schema_version": SCHEMA_VERSION,
@@ -288,6 +366,7 @@ def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]], *, se
                 for key, value in identity.items()
                 if key in {"source_ref", "bundle_sha256"}
             },
+            "control_db": control_db,
             "files": entries,
         }
         manifest_path = stage / "manifest.json"

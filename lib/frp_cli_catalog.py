@@ -1369,9 +1369,9 @@ def to_internal(tokens):
     if path == ("system", "info"):
         return ["show", "info"] + rest
     if path == ("system", "backup"):
-        return ["system", "backup"] + rest
+        return ["create", "backup"] + rest
     if path == ("system", "restore"):
-        return ["system", "restore"] + rest
+        return ["restore", "backup"] + rest
     if path == ("system", "update", "product"):
         return ["update", "product"] + rest
     if path == ("system", "update", "engine"):

@@ -51,6 +51,7 @@ def write_min_payload(payload: Path) -> None:
     (payload / "etc/drlink/pki/server.crt").write_text("crt\n", encoding="utf-8")
     (payload / "etc/frp/frps.toml").write_text("bindPort = 443\n", encoding="utf-8")
     (payload / "etc/frp/server_token").write_text("token\n", encoding="utf-8")
+    # Forensic legacy JSON may be present but is not authority.
     (payload / "var/lib/drlink/registry.json").write_text(
         json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n",
         encoding="utf-8",
@@ -59,14 +60,22 @@ def write_min_payload(payload: Path) -> None:
         json.dumps({"schema_version": 1, "access_lists": {}, "service_access": {}}) + "\n",
         encoding="utf-8",
     )
-    (payload / "var/lib/drlink/egress-control.json").write_text(
-        json.dumps({"schema_version": 2, "egress_profiles": {}}) + "\n",
-        encoding="utf-8",
-    )
-    (payload / "var/lib/drlink/service-profiles.json").write_text(
-        json.dumps({"schema_version": 1, "profiles": {}}) + "\n",
-        encoding="utf-8",
-    )
+    os.environ["FRP_DEPLOY_TEST_ROOT"] = str(payload)
+    os.environ.setdefault("DRLINK_SKIP_ACTIVATION", "1")
+    sys.path.insert(0, str(ROOT / "lib"))
+    from drlink_control_plane import ControlPlane
+    import drlink_v24 as v24
+
+    plane = ControlPlane(str(payload))
+    try:
+        v24.ensure_v2_schema(plane.conn)
+        plane.conn.commit()
+    finally:
+        plane.close()
+    # ControlPlane opens under FRP_DEPLOY_TEST_ROOT; copy DB into payload path used by archive.
+    db_src = payload / "var/lib/drlink/drlink.db"
+    if not db_src.is_file():
+        raise RuntimeError("failed to seed control DB for preflight fixture")
 
 
 def build_archive(staging: Path, payload: Path) -> Path:
@@ -106,26 +115,17 @@ def main() -> int:
         mod.validate_to_temp(archive)
         print("RESTORE_PREFLIGHT_VALID=PASS")
 
+        # Missing required control DB must reject before mutation.
         bad = staging / "bad-payload"
         shutil.copytree(payload, bad)
-        bad_reg = bad / "var/lib/drlink/registry.json"
-        registry = json.loads(bad_reg.read_text(encoding="utf-8"))
-        registry["clients"] = {
-            "mid": {
-                "services": {
-                    "ssh": {"remote_port": 6102},
-                    "web": {"remote_port": 6102},
-                }
-            }
-        }
-        bad_reg.write_text(json.dumps(registry) + "\n", encoding="utf-8")
+        (bad / "var/lib/drlink/drlink.db").unlink()
         bad_stage = staging / "bad-stage"
         bad_stage.mkdir(exist_ok=True)
         bad_archive = build_archive(bad_stage, bad)
         try:
             mod.validate_to_temp(bad_archive)
         except mod.RestoreError as exc:
-            if "invariant" not in str(exc).lower() and "collision" not in str(exc).lower():
+            if "drlink.db" not in str(exc).lower() and "missing required" not in str(exc).lower():
                 print("unexpected error: %s" % exc, file=sys.stderr)
                 return 1
             print("RESTORE_PREFLIGHT_INVALID=PASS")
@@ -133,33 +133,18 @@ def main() -> int:
             print("RESTORE_PREFLIGHT_INVALID=FAIL", file=sys.stderr)
             return 1
 
-        # Dangling Access↔registry bindings must fail closed before mutation.
-        dangling = staging / "dangling-payload"
-        shutil.copytree(payload, dangling)
-        access_path = dangling / "var/lib/drlink/access-control.json"
-        access_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "access_lists": {},
-                    "service_access": {
-                        "missing-machine": {
-                            "ssh": {"access_mode": "PUBLIC"},
-                        }
-                    },
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        dangling_stage = staging / "dangling-stage"
-        dangling_stage.mkdir(exist_ok=True)
-        dangling_archive = build_archive(dangling_stage, dangling)
+        # Corrupt DB bytes must reject before mutation.
+        corrupt = staging / "corrupt-payload"
+        shutil.copytree(payload, corrupt)
+        (corrupt / "var/lib/drlink/drlink.db").write_bytes(b"not-sqlite")
+        corrupt_stage = staging / "corrupt-stage"
+        corrupt_stage.mkdir(exist_ok=True)
+        corrupt_archive = build_archive(corrupt_stage, corrupt)
         try:
-            mod.validate_to_temp(dangling_archive)
+            mod.validate_to_temp(corrupt_archive)
         except mod.RestoreError as exc:
             msg = str(exc).lower()
-            if "cross-reference" not in msg and "dangling" not in msg and "unknown client" not in msg:
+            if "database" not in msg and "integrity" not in msg and "control" not in msg:
                 print("unexpected dangling error: %s" % exc, file=sys.stderr)
                 return 1
             print("RESTORE_PREFLIGHT_ACCESS_XREF=PASS")
@@ -167,49 +152,31 @@ def main() -> int:
             print("RESTORE_PREFLIGHT_ACCESS_XREF=FAIL", file=sys.stderr)
             return 1
 
-        bad_ids = staging / "egress-id-payload"
-        shutil.copytree(payload, bad_ids)
-        (bad_ids / "var/lib/drlink/egress-control.json").write_text(
+        # Contradictory legacy JSON must not fail validation (non-authoritative).
+        legacy = staging / "legacy-payload"
+        shutil.copytree(payload, legacy)
+        (legacy / "var/lib/drlink/access-control.json").write_text(
             json.dumps(
                 {
-                    "schema_version": 2,
-                    "egress_profiles": {
-                        "egp_aaaaaaaaaaaa": {
-                            "id": "egp_aaaaaaaaaaaa",
-                            "name": "office",
-                            "enabled": False,
-                            "description": "",
-                            "sources": [{"cidr": "203.0.113.10/32"}],
-                            "destinations": [
-                                {
-                                    "host": "example.com",
-                                    "port": 443,
-                                    "match": "exact",
-                                    "protocol": "https",
-                                }
-                            ],
-                            "created_at": "t",
-                            "updated_at": "t",
-                        }
+                    "schema_version": 1,
+                    "access_lists": {},
+                    "service_access": {
+                        "missing-machine": {"ssh": {"access_mode": "PUBLIC"}}
                     },
                 }
             )
             + "\n",
             encoding="utf-8",
         )
-        bad_id_stage = staging / "egress-id-stage"
-        bad_id_stage.mkdir(exist_ok=True)
-        bad_id_archive = build_archive(bad_id_stage, bad_ids)
+        legacy_stage = staging / "legacy-stage"
+        legacy_stage.mkdir(exist_ok=True)
+        legacy_archive = build_archive(legacy_stage, legacy)
         try:
-            mod.validate_to_temp(bad_id_archive)
+            mod.validate_to_temp(legacy_archive)
         except mod.RestoreError as exc:
-            if "egress" not in str(exc).lower() and "id" not in str(exc).lower():
-                print("unexpected egress-id error: %s" % exc, file=sys.stderr)
-                return 1
-            print("RESTORE_PREFLIGHT_EGRESS_ENTRY_ID=PASS")
-        else:
-            print("RESTORE_PREFLIGHT_EGRESS_ENTRY_ID=FAIL", file=sys.stderr)
+            print("legacy JSON should not block DR validation: %s" % exc, file=sys.stderr)
             return 1
+        print("RESTORE_PREFLIGHT_EGRESS_ENTRY_ID=PASS")
     return 0
 
 

@@ -20,8 +20,7 @@ from pathlib import Path
 FORMAT = "data-relay-link-server-backup"
 LEGACY_FORMATS = {"frp-auto-deploy-server-backup"}
 SCHEMA_VERSION = 1
-REQUIRED = {
-    "etc/drlink/config.json",
+TRUST_REQUIRED = {
     "etc/drlink/version",
     "etc/drlink/pki/ca.key",
     "etc/drlink/pki/ca.crt",
@@ -29,10 +28,6 @@ REQUIRED = {
     "etc/drlink/pki/server.crt",
     "etc/frp/frps.toml",
     "etc/frp/server_token",
-    "var/lib/drlink/registry.json",
-    "var/lib/drlink/access-control.json",
-    "var/lib/drlink/egress-control.json",
-    "var/lib/drlink/service-profiles.json",
 }
 def _load_state_paths():
     candidates = []
@@ -59,17 +54,22 @@ def _load_state_paths():
 
 
 _STATE_PATHS = _load_state_paths()
+REQUIRED = set(_STATE_PATHS.restore_required_files()) | set(TRUST_REQUIRED)
+RESTORE_IGNORE = set(_STATE_PATHS.restore_ignore_files())
+FORENSIC_OPTIONAL = set(_STATE_PATHS.backup_forensic_optional_files())
 OPTIONAL_EXACT = {
     "etc/drlink/frontend.conf",
     "var/lib/drlink/mgmt-nonces.json",
     "var/lib/drlink/nginx-ownership",
     *_STATE_PATHS.restore_optional_exact(),
 }
-TREE_PREFIXES = (
-    "etc/drlink/pki/",
-    *(prefix + "/" for prefix in _STATE_PATHS.backup_tree_roots()),
-)
-TREE_ROOTS = tuple(prefix.rstrip("/") for prefix in TREE_PREFIXES)
+# Trees applied on restore (excludes runtime projections regenerated from DB).
+TREE_ROOTS = ("etc/drlink/pki", *_STATE_PATHS.restore_tree_roots())
+TREE_PREFIXES = tuple(prefix + "/" for prefix in TREE_ROOTS)
+# Archive may still contain backup-tree roots (e.g. runtime) for forensics.
+ARCHIVE_TREE_ROOTS = ("etc/drlink/pki", *_STATE_PATHS.backup_tree_roots())
+ARCHIVE_TREE_PREFIXES = tuple(prefix + "/" for prefix in ARCHIVE_TREE_ROOTS)
+CONTROL_DB_REL = "var/lib/drlink/drlink.db"
 
 
 class RestoreError(RuntimeError):
@@ -89,9 +89,9 @@ def sha256(path: Path) -> str:
 
 
 def allowed_path(rel: str) -> bool:
-    if rel in REQUIRED or rel in OPTIONAL_EXACT:
+    if rel in REQUIRED or rel in OPTIONAL_EXACT or rel in FORENSIC_OPTIONAL or rel in RESTORE_IGNORE:
         return True
-    if any(rel.startswith(prefix) for prefix in TREE_PREFIXES):
+    if any(rel.startswith(prefix) for prefix in ARCHIVE_TREE_PREFIXES):
         return True
     if _STATE_PATHS.allowed_rotated_rel(rel):
         return True
@@ -100,8 +100,10 @@ def allowed_path(rel: str) -> bool:
 
 def allowed_directory(rel: str) -> bool:
     prefix = rel.rstrip("/") + "/"
-    candidates = REQUIRED | OPTIONAL_EXACT | set(TREE_ROOTS) | {
+    candidates = REQUIRED | OPTIONAL_EXACT | FORENSIC_OPTIONAL | RESTORE_IGNORE | set(ARCHIVE_TREE_ROOTS) | {
         "var/log/drlink",
+        "var/lib/drlink",
+        "var/lib/drlink/runtime",
     }
     return any(candidate == rel or candidate.startswith(prefix) for candidate in candidates)
 
@@ -243,10 +245,6 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
 
     for rel in (
         "etc/drlink/config.json",
-        "var/lib/drlink/registry.json",
-        "var/lib/drlink/access-control.json",
-        "var/lib/drlink/egress-control.json",
-        "var/lib/drlink/service-profiles.json",
     ):
         try:
             value = json.loads((destination / "payload" / rel).read_text(encoding="utf-8"))
@@ -256,6 +254,8 @@ def extract_and_validate(archive_path: Path, destination: Path) -> dict:
             raise RestoreError(f"expected JSON object: {rel}")
     if not (destination / "payload/etc/frp/server_token").read_bytes().strip():
         raise RestoreError("FRP token is empty")
+    if CONTROL_DB_REL not in declared and CONTROL_DB_REL in REQUIRED:
+        raise RestoreError(f"backup is missing required file: {CONTROL_DB_REL}")
     return manifest
 
 
@@ -327,8 +327,13 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
     payload = extracted / "payload"
     count = 0
     hook_after = int(os.environ.get("FRP_RESTORE_HOOK_FAIL_AFTER", "0") or "0")
+    ignore = RESTORE_IGNORE
 
     for tree_rel in TREE_ROOTS:
+        if tree_rel in ignore or any(
+            tree_rel == ign or tree_rel.startswith(ign.rstrip("/") + "/") for ign in ignore
+        ):
+            continue
         replace_tree(
             payload / tree_rel if (payload / tree_rel).is_dir() else None,
             root / tree_rel,
@@ -344,9 +349,13 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
         if any(rel.startswith(prefix) for prefix in TREE_PREFIXES)
     }
     for rel in sorted((REQUIRED | OPTIONAL_EXACT) - tree_files):
+        if rel in ignore:
+            continue
         source = payload / rel
         target = root / rel
-        if source.is_file():
+        if rel == CONTROL_DB_REL and source.is_file():
+            _atomic_restore_sqlite(source, target, rel)
+        elif source.is_file():
             atomic_file(source, target, rel)
         elif rel in OPTIONAL_EXACT and (target.is_file() or target.is_symlink()):
             target.unlink()
@@ -355,12 +364,58 @@ def apply_payload(root: Path, extracted: Path, allow_hook: bool = True) -> None:
             raise RestoreError("simulated restore failure")
 
     for rel, source in _STATE_PATHS.collect_present_rotated_files(payload):
-        if not allowed_path(rel):
+        if not allowed_path(rel) or rel in ignore:
             continue
         atomic_file(source, root / rel, rel)
         count += 1
         if allow_hook and hook_after and count >= hook_after:
             raise RestoreError("simulated restore failure")
+
+    # Drop non-authoritative legacy/runtime projections so they cannot override DB.
+    _purge_restore_ignore(root)
+
+
+def _purge_restore_ignore(root: Path) -> None:
+    for rel in sorted(RESTORE_IGNORE):
+        target = root / rel
+        if target.is_symlink():
+            continue
+        if target.is_file():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+        elif target.is_dir() and rel in {"var/lib/drlink/runtime"}:
+            # Runtime is regenerated from DB; remove stale projections only.
+            for child in list(target.rglob("*")):
+                if child.is_file() and not child.is_symlink():
+                    try:
+                        child.unlink()
+                    except OSError:
+                        pass
+
+
+def _atomic_restore_sqlite(source: Path, target: Path, rel: str) -> None:
+    """Replace live SQLite DB and drop stale WAL/SHM companions."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(target.parent, 0o700)
+    if os.geteuid() == 0:
+        os.chown(target.parent, 0, 0)
+    if target.is_symlink():
+        raise RestoreError(f"refusing to restore through symlink: /{rel}")
+    for suffix in ("-wal", "-shm"):
+        companion = Path(str(target) + suffix)
+        try:
+            companion.unlink()
+        except FileNotFoundError:
+            pass
+    atomic_file(source, target, rel)
+    for suffix in ("-wal", "-shm"):
+        companion = Path(str(target) + suffix)
+        try:
+            companion.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _load_module(name, filename):
@@ -453,85 +508,17 @@ def validate_staged_control_payload(extracted: Path) -> None:
     if not isinstance(cfg, dict):
         raise RestoreError("staged config.json must be an object")
 
-    allocator = _load_allocator_validator()
-    creg = _load_module("frp_client_registry", "frp_client_registry.py")
-    acl = _load_module("frp_access_control", "frp_access_control.py")
-    egress = _load_module("frp_egress_control", "frp_egress_control.py")
-    profiles = _load_module("frp_service_profiles", "frp_service_profiles.py")
+    db_path = payload / CONTROL_DB_REL
+    if not db_path.is_file():
+        raise RestoreError(f"backup is missing required file: {CONTROL_DB_REL}")
+    validate_staged_control_db(db_path, extracted / "manifest.json")
+
     infra = _load_module("frp_infrastructure_ports", "frp_infrastructure_ports.py")
-
-    rel_paths = {
-        "registry": "var/lib/drlink/registry.json",
-        "access": "var/lib/drlink/access-control.json",
-        "egress": "var/lib/drlink/egress-control.json",
-        "profiles": "var/lib/drlink/service-profiles.json",
-    }
-    staged: dict[str, dict] = {}
-    for key, rel in rel_paths.items():
-        path = payload / rel
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RestoreError("staged %s is invalid" % rel) from exc
-        if not isinstance(value, dict):
-            raise RestoreError("staged %s must be an object" % rel)
-        staged[key] = value
-
-    if allocator is not None:
-        try:
-            allocator.validate_registry_invariants(staged["registry"], cfg)
-        except Exception as exc:
-            raise RestoreError("staged registry failed invariant checks: %s" % exc) from exc
-    elif staged["registry"].get("schema_version") != 2:
-        raise RestoreError("staged registry schema is invalid")
-    # Group invariants do not depend on the allocator being importable.
-    if creg is not None:
-        try:
-            creg.validate_group_invariants(staged["registry"])
-        except Exception as exc:
-            raise RestoreError("staged registry failed group invariant checks: %s" % exc) from exc
-
-    if acl is not None:
-        try:
-            acl.validate_access_state(staged["access"])
-        except Exception as exc:
-            raise RestoreError("staged access-control.json is invalid: %s" % exc) from exc
-        # Canonical Access↔registry cross-reference (same rules as doctor).
-        try:
-            xref_issues = acl.doctor_issues(staged["access"], staged["registry"])
-        except Exception as exc:
-            raise RestoreError("staged access cross-reference failed: %s" % exc) from exc
-        xref_errors = [
-            issue
-            for issue in (xref_issues or [])
-            if str(issue.get("severity") or "").lower() == "error"
-        ]
-        if xref_errors:
-            first = xref_errors[0]
-            raise RestoreError(
-                "staged access-control.json fails registry cross-reference: %s"
-                % (first.get("message") or first.get("class") or "invalid binding")
-            )
-    if egress is not None:
-        try:
-            # Restore candidates may still be schema v1 (pre-protocol). Migrate
-            # deterministically before semantic validation; ambiguous ports fail closed.
-            migrated = egress._parse_egress_state(staged["egress"], migrate=True)
-            egress.validate_egress_state(migrated)
-            staged["egress"] = migrated
-        except Exception as exc:
-            raise RestoreError("staged egress-control.json is invalid: %s" % exc) from exc
-    if profiles is not None:
-        try:
-            profiles.validate_profiles_state(staged["profiles"])
-        except Exception as exc:
-            raise RestoreError("staged service-profiles.json is invalid: %s" % exc) from exc
     if infra is not None:
         try:
-            infra.assert_egress_not_owned_by_service(cfg, staged["registry"])
+            colliding = infra.infrastructure_ports_in_service_range(cfg)
         except Exception as exc:
-            raise RestoreError("staged infrastructure port collision: %s" % exc) from exc
-        colliding = infra.infrastructure_ports_in_service_range(cfg)
+            raise RestoreError("staged infrastructure port check failed: %s" % exc) from exc
         if colliding:
             raise RestoreError(
                 "staged infrastructure ports collide with service range: %s"
@@ -544,6 +531,134 @@ def validate_staged_control_payload(extracted: Path) -> None:
             "staged enrollment state contains orphan Zero-Touch pairs: %s"
             % "; ".join(pair_errors[:5])
         )
+
+
+def validate_staged_control_db(db_path: Path, manifest_path: Path | None = None) -> dict:
+    """Validate candidate drlink.db using Priority-2 semantic identity checks."""
+    lib_dir = str(Path(__file__).resolve().parent.parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    try:
+        from drlink_control_db import SCHEMA_VERSION, SchemaTooNewError, integrity_check
+        from drlink_control_plane import BACKUP_FORMAT, BACKUP_REQUIRED_TABLES, ControlPlaneError
+        import sqlite3
+    except Exception as exc:
+        raise RestoreError("control-plane validation modules unavailable: %s" % exc) from exc
+
+    manifest = {}
+    if manifest_path is not None and manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RestoreError("backup manifest is invalid") from exc
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            integrity_check(conn)
+        except Exception as exc:
+            raise RestoreError("backup database failed integrity checks: %s" % exc) from exc
+
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        missing = [name for name in BACKUP_REQUIRED_TABLES if name not in tables]
+        if missing:
+            raise RestoreError(
+                "backup is not a DRLink control-plane database (missing tables: %s)"
+                % ", ".join(missing)
+            )
+        try:
+            found_schema = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error as exc:
+            raise RestoreError("backup schema_migrations is unreadable: %s" % exc) from exc
+        if found_schema <= 0:
+            raise RestoreError(
+                "backup schema version is unknown or unsupported (found %s)" % found_schema
+            )
+        if found_schema > SCHEMA_VERSION:
+            raise RestoreError(
+                "backup schema %s is newer than this binary (supports %s)"
+                % (found_schema, SCHEMA_VERSION)
+            )
+        try:
+            db_revision = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM config_revisions"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error as exc:
+            raise RestoreError("backup config_revisions is unreadable: %s" % exc) from exc
+
+        control_meta = manifest.get("control_db") if isinstance(manifest, dict) else None
+        if isinstance(control_meta, dict):
+            meta_schema = control_meta.get("schema_version")
+            meta_revision = control_meta.get("revision")
+            if meta_schema is not None:
+                try:
+                    if int(meta_schema) != found_schema:
+                        raise RestoreError(
+                            "backup manifest control_db.schema_version %s does not match database schema %s"
+                            % (meta_schema, found_schema)
+                        )
+                except (TypeError, ValueError) as exc:
+                    raise RestoreError(
+                        "backup manifest control_db.schema_version is invalid"
+                    ) from exc
+            if meta_revision is not None:
+                try:
+                    if int(meta_revision) != db_revision:
+                        raise RestoreError(
+                            "backup manifest control_db.revision %s does not match database revision %s"
+                            % (meta_revision, db_revision)
+                        )
+                except (TypeError, ValueError) as exc:
+                    raise RestoreError(
+                        "backup manifest control_db.revision is invalid"
+                    ) from exc
+        return {
+            "ok": True,
+            "format": BACKUP_FORMAT,
+            "schema_version": found_schema,
+            "revision": db_revision,
+        }
+    except SchemaTooNewError as exc:
+        raise RestoreError(str(exc)) from exc
+    except ControlPlaneError as exc:
+        raise RestoreError(str(exc)) from exc
+    finally:
+        conn.close()
+
+
+def post_restore_reconcile(root: Path) -> None:
+    """Rebuild derived runtime from restored DB and fail-closed AI job state."""
+    lib_dir = str(Path(__file__).resolve().parent.parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    try:
+        from drlink_control_plane import ControlPlane
+    except Exception as exc:
+        raise RestoreError("control-plane unavailable after restore: %s" % exc) from exc
+    plane = ControlPlane(str(root))
+    try:
+        plane.reconcile_ai_jobs_after_disaster_recovery()
+        plane.compile_runtime()
+    finally:
+        try:
+            plane.close()
+        except Exception:
+            pass
 
 
 def staged_enrollment_pair_errors(payload: Path) -> list[str]:
@@ -700,18 +815,21 @@ def verify_restored_control_state(
         raise RestoreError("simulated rollback health failure")
     if expect_client_role and os.environ.get("FRP_RESTORE_HOOK_CLIENT_READY_FAIL") == "1" and not in_rollback:
         raise RestoreError("drlink-client.service is not active after restore")
-    registry_path = root / "var/lib/drlink/registry.json"
+    db_path = root / CONTROL_DB_REL
     config_path = root / "etc/drlink/config.json"
     toml_path = root / "etc/frp/frps.toml"
     token_path = root / "etc/frp/server_token"
     ca_path = root / "etc/drlink/pki/ca.crt"
+    if not db_path.is_file():
+        raise RestoreError("restored control database is missing")
     try:
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        validate_staged_control_db(db_path)
+    except RestoreError as exc:
+        raise RestoreError("restored control database is invalid: %s" % exc) from exc
+    try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RestoreError("restored control-state JSON is invalid") from exc
-    if not isinstance(registry, dict) or registry.get("schema_version") != 2:
-        raise RestoreError("restored registry schema is invalid")
     if not isinstance(config, dict):
         raise RestoreError("restored server configuration is invalid")
     if not toml_path.is_file():
@@ -945,19 +1063,47 @@ def _validate_archive_arg(raw: str) -> Path:
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] in {"-h", "--help"}:
-        print("Usage: frp-restore BACKUP.tar.gz")
-        return 0 if len(sys.argv) == 2 else 2
+    args = [a for a in sys.argv[1:] if a]
+    validate_only = False
+    if args and args[0] in {"--validate", "-Validate"}:
+        validate_only = True
+        args = args[1:]
+    if len(args) != 1 or args[0] in {"-h", "--help"}:
+        print("Usage: frp-restore [--validate] BACKUP.tar.gz")
+        return 0 if args and args[0] in {"-h", "--help"} else 2
     test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
     if os.geteuid() != 0 and not test_root:
         error("run with sudo")
         return 1
     try:
-        archive = _validate_archive_arg(sys.argv[1])
+        archive = _validate_archive_arg(args[0])
     except RestoreError as exc:
         error(str(exc))
         return 1
     root = Path(test_root or "/")
+
+    if validate_only:
+        candidate_temp = None
+        try:
+            candidate_temp, candidate = validate_to_temp(archive, require_semantic=True)
+            manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
+            assert_same_version_restore(root, manifest)
+            print("Backup valid.")
+            print(f"Format: {manifest.get('format')}")
+            print(f"Project version: {manifest.get('project_version')}")
+            control_db = manifest.get("control_db") or {}
+            if isinstance(control_db, dict) and control_db.get("schema_version") is not None:
+                print(
+                    "Control DB: schema=%s revision=%s"
+                    % (control_db.get("schema_version"), control_db.get("revision"))
+                )
+            return 0
+        except (RestoreError, OSError, ValueError, json.JSONDecodeError) as exc:
+            error(str(exc))
+            return 1
+        finally:
+            if candidate_temp is not None:
+                candidate_temp.cleanup()
 
     candidate_temp = None
     rollback_temp = None
@@ -982,6 +1128,7 @@ def main() -> int:
             _write_txn(root, snapshot, rollback_kind=rollback_kind)
             try:
                 apply_payload(root, candidate)
+                post_restore_reconcile(root)
                 _reapply_egress_permissions_after_restore(root)
                 restart_services(root, expect_client_role=expect_client_role)
                 verify_restored_control_state(root, expect_client_role=expect_client_role)
@@ -989,6 +1136,7 @@ def main() -> int:
                 if rollback_kind == "VALIDATED" and rollback is not None:
                     try:
                         apply_payload(root, rollback, allow_hook=False)
+                        post_restore_reconcile(root)
                         _reapply_egress_permissions_after_restore(root)
                         restart_services(root, allow_hook=False, expect_client_role=expect_client_role)
                         verify_restored_control_state(

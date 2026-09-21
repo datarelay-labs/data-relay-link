@@ -56,6 +56,19 @@ def seed_required(tree: Path, marker: str = "test") -> None:
         "var/lib/drlink/service-profiles.json",
     ):
         (tree / rel).write_text("{}\n", encoding="utf-8")
+    # Canonical control DB is required for supported v2.4 DR archives.
+    os.environ["FRP_DEPLOY_TEST_ROOT"] = str(tree)
+    os.environ.setdefault("DRLINK_SKIP_ACTIVATION", "1")
+    sys.path.insert(0, str(ROOT / "lib"))
+    from drlink_control_plane import ControlPlane
+    import drlink_v24 as v24
+
+    plane = ControlPlane(str(tree))
+    try:
+        v24.ensure_v2_schema(plane.conn)
+        plane.conn.commit()
+    finally:
+        plane.close()
 
 
 class StatePathContractTests(unittest.TestCase):
