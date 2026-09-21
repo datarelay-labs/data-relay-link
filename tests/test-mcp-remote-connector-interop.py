@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import ControlPlane, OAUTH_UNBOUND_PRINCIPAL  # noqa: E402
+import drlink_v24 as v24  # noqa: E402
 from drlink_mcp_bridge import (  # noqa: E402
     MCP_PROTOCOL_VERSION,
     MCPBridge,
@@ -84,28 +85,14 @@ class RemoteConnectorInteropTests(unittest.TestCase):
         (self.vendor / "app.log").write_text("ok\n", encoding="utf-8")
         self.plane.upsert_client("client-a-aaaaaaaaaaaa", label="Host-A")
         self.plane.upsert_client("client-b-bbbbbbbbbbbb", label="Host-B")
-        dispatch(["set", "client-group", "group-a"], root=self.tmp)
-        dispatch(["set", "client-group", "group-a", "member", "Host-A"], root=self.tmp)
+        dispatch(["set", "network-group", "group-a", "members", "Host-A"], root=self.tmp)
         dispatch(["set", "ai-principal", "ro-agent"], root=self.tmp)
         dispatch(["set", "ai-principal", "ro-agent", "enabled"], root=self.tmp)
         dispatch(["set", "ai-principal", "rw-agent"], root=self.tmp)
         dispatch(["set", "ai-principal", "rw-agent", "enabled"], root=self.tmp)
-        dispatch(["set", "ai-access", "ro-rule"], root=self.tmp)
-        dispatch(["set", "ai-access", "ro-rule", "principal", "ro-agent"], root=self.tmp)
-        dispatch(["set", "ai-access", "ro-rule", "target", "client-group", "group-a"], root=self.tmp)
-        for cap in ("list_hosts", "get_host", "get_system_info", "read_file", "list_processes"):
-            dispatch(["set", "ai-access", "ro-rule", "capability", cap], root=self.tmp)
-        dispatch(["set", "ai-access", "ro-rule", "path", str(self.vendor) + "/**"], root=self.tmp)
-        dispatch(["set", "ai-access", "ro-rule", "action", "allow"], root=self.tmp)
-        dispatch(["set", "ai-access", "ro-rule", "enabled"], root=self.tmp)
-        dispatch(["set", "ai-access", "rw-rule"], root=self.tmp)
-        dispatch(["set", "ai-access", "rw-rule", "principal", "rw-agent"], root=self.tmp)
-        dispatch(["set", "ai-access", "rw-rule", "target", "endpoint", "Host-A"], root=self.tmp)
-        for cap in ("list_hosts", "get_host", "get_system_info", "exec", "write_file", "read_file"):
-            dispatch(["set", "ai-access", "rw-rule", "capability", cap], root=self.tmp)
-        dispatch(["set", "ai-access", "rw-rule", "path", str(self.vendor) + "/**"], root=self.tmp)
-        dispatch(["set", "ai-access", "rw-rule", "action", "allow"], root=self.tmp)
-        dispatch(["set", "ai-access", "rw-rule", "enabled"], root=self.tmp)
+        # Canonical v2.4 AI Access: verify identities first, then Permission Objects +
+        # mode/source/destination/permission/enabled. Path scopes are internal-only.
+        # Do not use superseded principal/target/capability/path/action grammar.
         import contextlib
         import io
 
@@ -131,6 +118,63 @@ class RemoteConnectorInteropTests(unittest.TestCase):
                 ],
                 root=self.tmp,
             )
+        dispatch(
+            [
+                "set",
+                "permission-object",
+                "ro-perms",
+                "permissions",
+                "host-info,process-read,file-read",
+            ],
+            root=self.tmp,
+        )
+        dispatch(
+            [
+                "set",
+                "permission-object",
+                "rw-perms",
+                "permissions",
+                "host-info,file-read,command-exec,file-write",
+            ],
+            root=self.tmp,
+        )
+        dispatch(
+            [
+                "set",
+                "ai-access",
+                "ro-rule",
+                "mode",
+                "whitelist",
+                "source",
+                "ro-agent",
+                "destination",
+                "group-a",
+                "permission",
+                "ro-perms",
+                "enabled",
+            ],
+            root=self.tmp,
+        )
+        dispatch(
+            [
+                "set",
+                "ai-access",
+                "rw-rule",
+                "mode",
+                "whitelist",
+                "source",
+                "rw-agent",
+                "destination",
+                "Host-A",
+                "permission",
+                "rw-perms",
+                "enabled",
+            ],
+            root=self.tmp,
+        )
+        vendor_glob = str(self.vendor) + "/**"
+        v24.set_ai_policy_path_scopes(self.plane, "ro-rule", [vendor_glob])
+        v24.set_ai_policy_path_scopes(self.plane, "rw-rule", [vendor_glob])
         self.port = free_port()
         self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), make_handler(self.bridge))
@@ -461,7 +505,7 @@ class RemoteConnectorInteropTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertNotIn("DENY", json.dumps(payload))
-        dispatch(["unset", "ai-access", "rw-rule", "enabled"], root=self.tmp)
+        dispatch(["set", "ai-access", "rw-rule", "disabled"], root=self.tmp)
         status, payload, _ = rpc(
             self.url,
             {
@@ -478,7 +522,7 @@ class RemoteConnectorInteropTests(unittest.TestCase):
         print("NEW_INVOCATION_REEVALUATES_POLICY=PASS")
 
         # Group reevaluation
-        dispatch(["unset", "client-group", "group-a", "member", "Host-A"], root=self.tmp)
+        dispatch(["set", "network-group", "group-a", "members", ""], root=self.tmp)
         status, payload, _ = rpc(
             self.url,
             {
