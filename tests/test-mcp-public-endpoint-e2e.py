@@ -38,7 +38,9 @@ from drlink_mcp_bridge import (  # noqa: E402
     make_handler,
     ThreadingHTTPServer,
 )
+import drlink_v24 as v24  # noqa: E402
 import frp_frontend  # noqa: E402
+import frp_pki  # noqa: E402
 
 
 def start_endpoint_workers(bridge: MCPBridge, base_url: str):
@@ -50,12 +52,28 @@ def start_endpoint_workers(bridge: MCPBridge, base_url: str):
             continue
         stop = threading.Event()
         loop = AgentLoop(base_url, token, stop_event=stop)
-        thread = threading.Thread(target=loop.run, daemon=True)
+        thread = threading.Thread(
+            target=loop.run,
+            daemon=True,
+            name="test-pub-mcp-agent-%s" % client["id"][:8],
+        )
         thread.start()
         stops.append(stop)
         threads.append(thread)
     return stops, threads
-import frp_pki  # noqa: E402
+
+
+def stop_endpoint_workers(stops, threads, *, join_timeout=5.0):
+    """Signal AgentLoop workers, then join them before closing shared ControlPlane state."""
+    for stop in stops or []:
+        stop.set()
+    alive = []
+    for thread in threads or []:
+        thread.join(timeout=join_timeout)
+        if thread.is_alive():
+            alive.append(thread.name or "unnamed-agent-worker")
+    return alive
+
 
 sys.path.insert(0, str(ROOT / "tests"))
 from mcp_sdk_env import resolve_mcp_sdk_python  # noqa: E402
@@ -118,8 +136,12 @@ class PublicMcpEndpointTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="drlink-mcp-pub-")
         os.environ["DRLINK_TEST_ROOT"] = self.tmp
+        os.environ["FRP_DEPLOY_TEST_ROOT"] = self.tmp
+        os.environ["FRP_BACKUP_ALREADY_LOCKED"] = "1"
+        os.environ["DRLINK_SKIP_ACTIVATION"] = "1"
         os.environ["DRLINK_CONFIRM"] = "yes"
         os.environ["DRLINK_OAUTH_AUTO_APPROVE"] = "1"
+        self._seed_server_dr_trust_state()
         self.plane = ControlPlane(self.tmp)
         self.vendor = Path(self.tmp) / "var" / "log" / "vendor"
         self.vendor.mkdir(parents=True, exist_ok=True)
@@ -129,14 +151,8 @@ class PublicMcpEndpointTests(unittest.TestCase):
         dispatch(["set", "client-group", "production-linux", "member", "Expernet-DP1"], root=self.tmp)
         dispatch(["set", "ai-principal", "chatgpt-support"], root=self.tmp)
         dispatch(["set", "ai-principal", "chatgpt-support", "enabled"], root=self.tmp)
-        dispatch(["set", "ai-access", "readonly-support"], root=self.tmp)
-        dispatch(["set", "ai-access", "readonly-support", "principal", "chatgpt-support"], root=self.tmp)
-        dispatch(["set", "ai-access", "readonly-support", "target", "client-group", "production-linux"], root=self.tmp)
-        for cap in ("get_system_info", "read_file", "list_processes", "list_hosts", "get_host"):
-            dispatch(["set", "ai-access", "readonly-support", "capability", cap], root=self.tmp)
-        dispatch(["set", "ai-access", "readonly-support", "path", str(self.vendor) + "/**"], root=self.tmp)
-        dispatch(["set", "ai-access", "readonly-support", "action", "allow"], root=self.tmp)
-        dispatch(["set", "ai-access", "readonly-support", "enabled"], root=self.tmp)
+        # Canonical v2.4 AI Access: Permission Object + rule fields + internal path scopes.
+        # Do not use superseded principal/target/capability/path/action grammar.
         out = []
 
         def _capture():
@@ -148,6 +164,36 @@ class PublicMcpEndpointTests(unittest.TestCase):
 
         _capture()
         self.token = [ln.split(" ", 1)[1].strip() for ln in out[0].splitlines() if ln.startswith("Token: ")][0]
+        dispatch(
+            [
+                "set",
+                "permission-object",
+                "readonly-support-perms",
+                "permissions",
+                "host-info,process-read,file-read",
+            ],
+            root=self.tmp,
+        )
+        dispatch(
+            [
+                "set",
+                "ai-access",
+                "readonly-support",
+                "mode",
+                "whitelist",
+                "source",
+                "chatgpt-support",
+                "destination",
+                "Expernet-DP1",
+                "permission",
+                "readonly-support-perms",
+                "enabled",
+            ],
+            root=self.tmp,
+        )
+        v24.set_ai_policy_path_scopes(
+            self.plane, "readonly-support", [str(self.vendor) + "/**"]
+        )
         self.mcp_port = free_port()
         self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.mcp_port), make_handler(self.bridge))
@@ -220,8 +266,14 @@ class PublicMcpEndpointTests(unittest.TestCase):
                 self.fail("nginx /mcp not ready: %s" % last)
 
     def tearDown(self):
-        for stop in getattr(self, "_agent_stops", []):
-            stop.set()
+        failures = []
+        alive = stop_endpoint_workers(
+            getattr(self, "_agent_stops", []),
+            getattr(self, "_agent_threads", []),
+            join_timeout=5.0,
+        )
+        if alive:
+            failures.append("AgentLoop workers still alive after stop: %s" % ", ".join(alive))
         if self.nginx is not None:
             if self.nginx.poll() is None:
                 self.nginx.terminate()
@@ -230,17 +282,68 @@ class PublicMcpEndpointTests(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     self.nginx.kill()
                     self.nginx.wait(timeout=2)
-        try:
-            self.httpd.shutdown()
-        except Exception:
-            pass
-        try:
-            self.httpd.server_close()
-        except Exception:
-            pass
-        self.bridge.close()
-        self.plane.close()
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        # Shut down HTTP server while ControlPlane is still valid, then join its thread.
+        httpd = getattr(self, "httpd", None)
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception as exc:
+                failures.append("httpd.shutdown failed: %s" % exc)
+            try:
+                httpd.server_close()
+            except Exception as exc:
+                failures.append("httpd.server_close failed: %s" % exc)
+        http_thread = getattr(self, "httpd_thread", None)
+        if http_thread is not None:
+            http_thread.join(timeout=5.0)
+            if http_thread.is_alive():
+                failures.append("HTTP server thread still alive after shutdown")
+        bridge = getattr(self, "bridge", None)
+        if bridge is not None:
+            try:
+                bridge.close()
+            except Exception as exc:
+                failures.append("bridge.close failed: %s" % exc)
+        plane = getattr(self, "plane", None)
+        if plane is not None:
+            try:
+                plane.close()
+            except Exception as exc:
+                failures.append("plane.close failed: %s" % exc)
+        shutil.rmtree(getattr(self, "tmp", None) or "", ignore_errors=True)
+        for key in (
+            "DRLINK_TEST_ROOT",
+            "FRP_DEPLOY_TEST_ROOT",
+            "FRP_BACKUP_ALREADY_LOCKED",
+            "DRLINK_SKIP_ACTIVATION",
+            "DRLINK_CONFIRM",
+            "DRLINK_OAUTH_AUTO_APPROVE",
+        ):
+            os.environ.pop(key, None)
+        if failures:
+            self.fail("; ".join(failures))
+
+    def _seed_server_dr_trust_state(self):
+        """Minimal Server DR trust/config so public system backup/restore works under test root."""
+        root = Path(self.tmp)
+        for rel in (
+            "etc/drlink/pki",
+            "etc/frp",
+            "var/lib/drlink/enrollments",
+            "var/lib/drlink/bootstrap",
+            "var/lib/drlink/backups",
+            "var/log/drlink",
+        ):
+            (root / rel).mkdir(parents=True, exist_ok=True)
+        (root / "etc/drlink/version").write_text(
+            "PROJECT_VERSION=2.4.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=test\n",
+            encoding="utf-8",
+        )
+        for name in ("ca.key", "ca.crt", "server.key", "server.crt"):
+            (root / "etc/drlink/pki" / name).write_text("%s\n" % name, encoding="utf-8")
+        (root / "etc/frp/frps.toml").write_text("bindPort = 443\n", encoding="utf-8")
+        (root / "etc/frp/server_token").write_text("token-test\n", encoding="utf-8")
+        (root / "var/log/drlink/audit.jsonl").write_text("{}\n", encoding="utf-8")
 
     def test_backend_loopback_and_public_path_isolation(self):
         sock = socket.socket()
@@ -470,10 +573,11 @@ class PublicMcpEndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         status, _payload = rpc(target, {"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}}, self.token, method="tools/list", ca=ca)
         self.assertEqual(status, 401)
-        bak = str(Path(self.tmp) / "mcp-backup.tar")
-        dispatch(["system", "backup", bak], root=self.tmp)
+        bak = str(Path(self.tmp) / "mcp-backup.tar.gz")
+        self.assertEqual(dispatch(["system", "backup", bak], root=self.tmp), 0)
+        self.assertTrue(Path(bak).is_file())
         dispatch(["system", "credential", "revoke", "ai-principal", "chatgpt-support"], root=self.tmp)
-        dispatch(["system", "restore", bak], root=self.tmp)
+        self.assertEqual(dispatch(["system", "restore", bak], root=self.tmp), 0)
         status, _payload = rpc(target, {"jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {}}, new_token, method="tools/list", ca=ca)
         self.assertEqual(status, 200)
         shown = io.StringIO()
@@ -492,6 +596,7 @@ class PublicMcpEndpointTests(unittest.TestCase):
         self.assertIn("Backend Bind", diag_text)
         self.assertIn("127.0.0.1:6103", diag_text)
         self.assertIn(MCP_AUTH_MODEL, text + diag_text)
+        self.plane._ensure_live_conn()
         hashed = self.plane.conn.execute("SELECT credential_hash FROM ai_principals WHERE name = ?", ("chatgpt-support",)).fetchone()
         self.assertTrue(hashed and hashed[0] and hashed[0] != new_token)
         self.assertFalse(any(new_token in (row["after_summary"] or "") for row in self.plane.list_audit()))
