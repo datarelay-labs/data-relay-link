@@ -1898,7 +1898,10 @@ class EgressHardeningFeatureTests(unittest.TestCase):
             plane = ControlPlane(str(self.root))
             try:
                 for name in ("allow-http", "allow-https", "allow-https-alt", "allow-dual-https"):
-                    v24.set_access_rule(plane, "internet", name, enabled=False)
+                    # Last enabled Internet WHITELIST disable → DENY ALL requires confirm.
+                    v24.set_access_rule(
+                        plane, "internet", name, enabled=False, confirm=True
+                    )
                 plane.compile_runtime()
             finally:
                 plane.close()
