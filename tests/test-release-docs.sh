@@ -45,9 +45,11 @@ fi
 pass "NO_FIXED_443_DOCS"
 
 grep -q 'ssh -p <public-port>' README.md || fail "README missing public SSH example"
-grep -q '\-\-one-line' README.md || fail "README missing zero-touch"
-grep -q 'Client SSH user' README.md || fail "README interactive SSH user prompt"
-grep -q '\-\-ssh-user' README.md || fail "README explicit --ssh-user"
+grep -qF 'set enrollment zero-touch' README.md || fail "README missing current zero-touch vocabulary"
+# Stale v2.3 client/one-line grammar must not reappear as the public Zero-Touch contract.
+if grep -nE 'set client --one-line|create zero-touch|create enrollment[[:space:]]+\\|--one-line|--ssh-user|Client SSH user' README.md README.ko.md; then
+  fail "README still advertises superseded Zero-Touch / client grammar"
+fi
 grep -q 'no default username' README.md || fail "README missing no-default-username"
 grep -qF 'does **not**:' README.md || fail "README missing zero-touch negatives"
 pass "ZERO_TOUCH_DOCS"
@@ -118,15 +120,16 @@ fi
 pass "NO_TLS_VERIFY_DISABLE"
 pass "NO_CURL_K_PRODUCTION_FLOW"
 
-# During release closure, docs may describe the candidate as prepared
-# until the immutable tag is created. Do not require premature
-# "current stable release" wording, and do not ban preparation language.
-if grep -qF 'FINAL AUDIT CLOSURE' README.md || grep -qF 'current stable release' README.md \
-  || grep -qF "Current release — v${PROJECT_VERSION}" README.md \
-  || grep -qF "Prepared release — v${PROJECT_VERSION}" README.md; then
+# Development-channel trees must state truthful development/target status.
+# Do not invent a current stable-line badge from a historical tag alone, and
+# do not require candidate/RC wording unless RELEASE_CHANNEL is actually preview.
+if grep -qiE "development target|RELEASE_CHANNEL=development|channel-development|v${PROJECT_VERSION} development" README.md; then
   :
 else
-  fail "README missing release closure, prepared release, or current stable release wording"
+  fail "README missing truthful development-channel / development-target wording"
+fi
+if grep -nE 'stable%20line|badge/stable|Stable line v|published stable line|current stable line|candidate-v|Candidate v|badge/candidate|Prepared release —' README.md README.ko.md; then
+  fail "README invents stable-line or candidate/RC designation inconsistent with development channel"
 fi
 # Pre-tag safety: if the immutable tag URL is advertised as the install command,
 # README must also warn that the tag may not exist yet (avoid silent 404 hazard).

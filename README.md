@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/candidate-v2.4.0-F59E0B?style=flat-square" alt="Candidate v2.4.0">
-  <img src="https://img.shields.io/badge/stable%20line-v2.3.0-16A34A?style=flat-square" alt="Stable line v2.3.0">
+  <img src="https://img.shields.io/badge/development-v2.4.0-F59E0B?style=flat-square" alt="Development target v2.4.0">
+  <img src="https://img.shields.io/badge/channel-development-64748B?style=flat-square" alt="Release channel development">
   <img src="https://img.shields.io/badge/FRP-v0.71.0-2563EB?style=flat-square" alt="FRP v0.71.0">
   <img src="https://img.shields.io/badge/license-Source%20Available-111827?style=flat-square" alt="Source Available">
   <img src="https://img.shields.io/badge/management-CLI--first-7C3AED?style=flat-square" alt="CLI-first">
@@ -28,78 +28,27 @@
 
 > **License — Source Available:** Data Relay Link is free for personal use and for an organization's own internal commercial operations. Internal source modifications are allowed. Resale, commercial redistribution, OEM/white-label use, competing or derivative commercial products, and SaaS/hosted/managed-service offerings require a separate written commercial license. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
 
-## Connect only what is needed
+## What Data Relay Link is
 
 Data Relay Link is a lightweight, CLI-first secure connectivity layer built on the official pinned [`fatedier/frp`](https://github.com/fatedier/frp).
 
-It lets systems behind NAT, firewalls, and restricted networks initiate outbound connectivity to a server you control, then exposes only the specific services you intentionally publish.
+Systems behind NAT, firewalls, and restricted networks initiate outbound connectivity to a Server you control. Data Relay Link then relays only the specific services and access paths you intentionally authorize.
+
+Core principle:
+
+> **Do not connect entire networks. Relay only the connections that are actually needed.**
 
 It is designed to avoid the operational overhead of a full VPN, network overlay, RMM platform, or custom FRP fork.
 
+## Three connectivity / access planes
+
 ```text
-Remote Access     outside → inside
-Internet Access   inside → approved Internet destinations
+Remote Access     outside → approved internal Remote Service
+Internet Access   managed/protected source → approved outside destination
 AI Access         authenticated AI Identity → approved target permissions
 ```
 
-> **Branch status:** This repository tree is the **v2.4.0 final-product-closure** candidate. The canonical target architecture is documented and implemented on this branch, but there is no stable `v2.4.0` tag until exact-HEAD qualification completes. Do not treat this branch as a stable release. The published stable line remains **v2.3.0**.
-
-Current project version: **2.4.0**  
-Current pinned FRP version: **v0.71.0**  
-Prepared release — v2.4.0 (tag pending). A `v2.4.0/dist/bootstrap-server.sh` URL would 404 until the immutable tag exists.
-
-## What it does
-
-| Capability | What Data Relay Link provides |
-|---|---|
-| **Zero-Touch enrollment** | Fast Managed Host onboarding with short-lived enrollment credentials |
-| **Stable identity** | Immutable Managed Host identity and persistent Remote Service identity |
-| **Stable endpoints** | Public-port reservations preserved across normal lifecycle operations |
-| **Remote Services** | SSH, HTTP, HTTPS passthrough, Custom TCP, and Fixed TCP Service Objects |
-| **LAN reachability** | Publish on the local Managed Host or another reachable internal-LAN host |
-| **Access Policy** | BLACKLIST / WHITELIST Remote, Internet, and AI Access |
-| **AI Access / MCP** | Verified AI Identity → approved target permissions |
-| **Health & operations** | Doctor, support bundles, lifecycle commands, backup/restore |
-| **Cross-platform clients** | Linux, macOS, and Windows according to the validated platform matrix |
-| **Single operator interface** | `sudo drlink` for normal management |
-
-## Architecture
-
-```mermaid
-flowchart LR
-    O["Operator / Approved Client"] --> P["Data Relay Link Server<br/>Public Endpoint"]
-
-    A["Managed Host A<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
-    B["Managed Host B<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
-    C["Managed Host C<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
-
-    P --> S1["Remote Service SSH"]
-    P --> S2["Remote Service HTTP / HTTPS"]
-    P --> S3["Remote Service Custom / Fixed TCP"]
-```
-
-v2.4.0 control-plane target:
-
-```text
-                    Data Relay Link
-                          │
-                 Embedded SQLite SSOT
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-   Remote Access    Internet Access      AI Access
-   inbound relay    controlled egress    MCP Bridge
-```
-
-Control-plane state:
-
-```text
-/var/lib/drlink/drlink.db
-```
-
-No external database service is required. The server remains Linux-based. macOS and Windows are supported client platforms according to release validation.
-
-## Key model
+## Current v2.4 public model
 
 ```text
 Managed Host / DRLink Agent
@@ -116,16 +65,118 @@ Internet Access
 AI Access
 
 BLACKLIST / WHITELIST
+
+ConfigurationBundle
 ```
 
 Initial policy state is No Policy / No Rules with effective access ALLOW.
 When a policy is created, BLACKLIST means matching enabled Rules deny and
 WHITELIST means matching enabled Rules allow. Rules are not ordered and do not
-carry per-rule ALLOW/DENY actions.
+carry per-rule ALLOW/DENY actions. A policy Rule authorizes or denies access;
+it never creates connectivity.
 
-## Remote Access
+## Architecture summary
 
-Remote Access uses official pinned `fatedier/frp` as its relay engine. Data Relay Link does not fork FRP.
+```mermaid
+flowchart LR
+    O["Operator / Approved Client"] --> P["Data Relay Link Server<br/>Public Endpoint"]
+
+    A["Managed Host A<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
+    B["Managed Host B<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
+    C["Managed Host C<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
+
+    P --> S1["Remote Service SSH"]
+    P --> S2["Remote Service HTTP / HTTPS"]
+    P --> S3["Remote Service Custom / Fixed TCP"]
+```
+
+```text
+                    Data Relay Link
+                          │
+           Embedded SQLite control plane
+                  /var/lib/drlink/drlink.db
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+   Remote Access    Internet Access      AI Access
+   inbound relay    controlled egress    MCP Bridge
+```
+
+No external database service is required. The Server remains Linux-based. macOS and Windows are supported Agent Host platforms according to the validated platform matrix.
+
+Docker Server deployment is not part of the v2.4 target; it is roadmap work for a later release line.
+
+## Key capabilities
+
+| Capability | What Data Relay Link provides |
+|---|---|
+| **Zero-Touch enrollment** | Fast Managed Host onboarding with short-lived enrollment credentials |
+| **Stable identity** | Immutable Managed Host identity and persistent Remote Service identity |
+| **Stable endpoints** | Public-port reservations preserved across normal lifecycle operations |
+| **Remote Services** | Agent-owned TCP and Fixed TCP connectivity (UDP Remote Service is rejected) |
+| **LAN reachability** | Publish on the local Managed Host or another reachable internal-LAN host |
+| **Access Policy** | BLACKLIST / WHITELIST for Remote, Internet, and AI Access |
+| **AI Access / MCP** | Verified AI Identity → approved target permissions via MCP Bridge |
+| **ConfigurationBundle** | Multi-resource AI/operator change sets with Server/Agent atomicity |
+| **Health & operations** | Doctor, support bundles, lifecycle commands, backup/restore |
+| **Single operator interface** | `sudo drlink` for normal management |
+
+## Server vs Agent Host CLI contexts
+
+Primary operator interface:
+
+```bash
+sudo drlink
+```
+
+| Context | Owns |
+|---|---|
+| **Server** | Managed Hosts, Network/Service/Permission Objects and Groups, Access Policies, Internet Access, AI Access / AI Identity, Server ConfigurationBundle |
+| **Agent Host** | Local Agent lifecycle and Remote Services owned by that Agent Host, Agent ConfigurationBundle |
+
+Remote Service mutation is local to the Agent Host that owns it. Server inspection of Remote Service configuration is read-only. When a Remote Service destination is another host, the current Agent Host is the Relay Host.
+
+## Safe quick start / discovery
+
+Until an immutable `v2.4.0` tag exists, install only from an exact SHA or owner-directed candidate artifact. A future-looking tag URL such as `v2.4.0/dist/bootstrap-server.sh` would 404 until that tag is created.
+
+After install, prefer discovery commands that do not mutate state:
+
+```bash
+sudo drlink show version
+sudo drlink show status
+sudo drlink system diagnostics
+```
+
+Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, DNS-provider records, SSH accounts, or application certificates.
+
+## Zero-Touch enrollment
+
+On the Server, issue enrollment through current vocabulary:
+
+```text
+set enrollment zero-touch
+```
+
+(or Guided menu → Managed Hosts → Connect a Managed Host)
+
+The operator-facing install command is a short HTTPS launcher that preserves private-CA fingerprint verification and one-time ticket semantics inside the maintained bootstrap artifact.
+
+After a Managed Host enrolls and a Remote Service is enabled, operators connect with the reserved public endpoint:
+
+```text
+ssh -p <public-port> <username>@<public-hostname>
+```
+
+SSH connection-example usernames are optional hint metadata only. Prefer a verified local account, or show `<username>`. There is **no default username**.
+
+Zero-Touch does **not**:
+
+- join entire networks
+- skip enrollment authentication
+- create OS users, set passwords, install SSH servers, or rewrite `sshd_config`
+
+## Remote Service lifecycle
 
 A Remote Service represents real connectivity owned by an Agent Host:
 
@@ -137,8 +188,7 @@ Agent Host
 → stable DRLink endpoint
 ```
 
-Remote Service supports TCP and Fixed TCP Service Objects. When the destination
-is another host, the current Agent Host is the Relay Host.
+Remote Service supports TCP and Fixed TCP Service Objects. UDP Remote Service is not supported.
 
 Effective inbound access requires:
 
@@ -151,10 +201,11 @@ Remote Access policy permits the flow
 (or no policy is configured)
 ```
 
-A policy Rule authorizes or denies access according to BLACKLIST/WHITELIST mode;
-it never creates connectivity.
+Normal lifecycle operations are designed to preserve identity and public-port reservations. Disable/enable, revoke, uninstall, and release are distinct operations with different identity/port semantics — see the Product Master and CLI/AI Master for the exact matrix.
 
-## Internet Access
+## Internet Access and AI Access
+
+### Internet Access
 
 Protected hosts can use standard HTTP/HTTPS proxy settings. The gateway allows only explicitly authorized destinations/protocols/ports.
 
@@ -173,9 +224,9 @@ Fixed TCP through the same authority
 
 Technical capability name: **Controlled Egress**. Normal CLI/resource name: **Internet Access**.
 
-## AI Access / MCP
+### AI Access / MCP
 
-MCP is included in the v2.4.0 architecture.
+MCP Bridge is included in the v2.4.0 **target** and must be qualified before any stable release. It is not an already released stable capability.
 
 ```text
 AI Host / tool
@@ -193,21 +244,22 @@ Managed Host / private target
 
 AI Access source is a verified **AI Identity**. Capability and path permissions are granted through Permission Objects / Permission Groups. MCP is an integration layer, not a separate public identity model.
 
-## CLI
+## ConfigurationBundle / AI-assisted configuration
 
-Primary operator interface:
+Use direct CLI for one independent resource.
 
-```bash
-sudo drlink
+Use ConfigurationBundle for multiple dependent resources. Human Wizard, AI one-shot CLI, and ConfigurationBundle share one Change Plan / mutation engine.
+
+Atomicity is scoped to the current CLI context:
+
+```text
+Server ConfigurationBundle  → atomic on the Server
+Agent ConfigurationBundle   → atomic on that Agent Host
 ```
 
-v2.4 guided and direct surfaces use the public nouns above. See:
+There is no single distributed Server+multi-Agent transaction. Bundle omission means unchanged; `state: absent` means explicit deletion/reset.
 
-- [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md)
-- [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)
-- [`docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`](docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md)
-
-## Release status
+## Release / development status
 
 ```text
 PROJECT_VERSION=2.4.0
@@ -215,14 +267,34 @@ RELEASE_CHANNEL=development
 FRP_VERSION=0.71.0
 ```
 
-There is no stable `v2.4.0` tag until exact-HEAD qualification is complete.
+Current project version: **2.4.0**  
+Current pinned FRP version: **v0.71.0**
 
-Pre-tag installers/bootstrap must use an immutable exact SHA or immutable candidate artifact, never a future nonexistent stable tag.
+This repository tree is the **v2.4.0 development target** on branch
+[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure).
+There is no stable `v2.4.0` tag until exact-HEAD qualification completes. Do not treat this branch as a stable, RC, or preview release unless repository metadata actually changes to that channel.
 
-Repository: [`datarelay-labs/datarelay-link`](https://github.com/datarelay-labs/datarelay-link)  
-Branch: [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)
+Version policy distinguishes:
 
-The published stable line remains **v2.3.0** on `main`. Field installs of the stable line should follow the immutable release identity rather than mutable `main`. Following mutable `main` is explicit opt-in only:
+```text
+Documented stable baseline     historical documented baseline
+Historical immutable tags      including v2.3.0 where present
+Current development target     2.4.0 / development channel
+```
+
+Do not invent a current stable designation from a historical tag alone.
+
+Pre-tag installers/bootstrap must use an immutable exact SHA or immutable candidate artifact, never a future nonexistent stable tag. Intended post-tag form:
+
+```text
+.../datarelay-labs/datarelay-link/v2.4.0/dist/bootstrap-server.sh
+```
+
+That path would 404 until the immutable tag exists.
+
+Repository: [`datarelay-labs/datarelay-link`](https://github.com/datarelay-labs/datarelay-link)
+
+Following mutable `main` is explicit opt-in only:
 
 ```text
 FRP_RELEASE_CHANNEL=dev
@@ -230,52 +302,7 @@ FRP_RELEASE_CHANNEL=dev
 
 A legacy client on an older updater can use a one-time verified bridge; it cannot replace current upgrade policy.
 
-## Quick start (candidate branch)
-
-Until `v2.4.0` is tagged, install from this branch's exact candidate HEAD / artifacts only as directed by the release checklist and owner-gated manual E2E — do not invent a stable-tag URL.
-
-```bash
-sudo drlink show version
-sudo drlink show status
-sudo drlink system diagnostics
-```
-
-Data Relay Link does **not** automatically modify external firewall/NAT rules, cloud security groups, DNS-provider records, SSH accounts, or application certificates.
-
-## Zero-Touch enrollment
-
-After a Managed Host enrolls and a Remote Service is enabled, operators connect with the reserved public endpoint:
-
-```text
-ssh -p <public-port> user@<public-hostname>
-```
-
-Connect a client with zero-touch:
-
-```text
-set client --one-line --ssh-user ubuntu
-```
-
-Interactive create-client still prompts `Client SSH user`. There is no default username.
-
-Zero-touch `--one-line` does **not**:
-- join entire networks
-- skip enrollment authentication
-
-## Policy safety
-
-```text
-fail closed on unsafe destinations
-no silent cascade deletes of referenced resources
-access-broadening confirmation where required
-ConfigurationBundle dry-run / apply with impact reporting
-```
-
-## Backup and restore
-
-The control DB uses SQLite WAL mode. A live DB is backed up with SQLite Online Backup/equivalent consistent snapshot, not a naive file copy.
-
-Restore validates schema/integrity and recompiles runtime policy from the DB.
+Stable release requires two complete Real E2E passes on the same final exact HEAD, including the three access planes and applicable lifecycle/platform gates. Any code/dependency change resets the pass counter.
 
 ## Documentation
 
@@ -283,15 +310,16 @@ Public docs: https://link.datarelay.run
 
 Start here:
 
-- [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — product-level decisions.
-- [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — internal architecture/history; public semantics remain governed by the Product Master and CLI/AI Master.
-- [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX.
-- [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar.
-- [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative configuration, AI copy/paste, and bounded Zero-Touch contract.
-- [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access behavior.
-- [`docs/SECURITY.md`](docs/SECURITY.md) — security boundaries.
-- [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release rules.
-- [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) — final stable gate.
+- [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — product-level decisions
+- [`docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`](docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — CLI/AI SSOT
+- [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar
+- [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
+- [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
+- [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access behavior
+- [`docs/SECURITY.md`](docs/SECURITY.md) — security boundaries
+- [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release rules
+- [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) — final stable gate
+- [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — internal architecture/history
 
 ## Non-goals
 
@@ -299,18 +327,19 @@ v2.4.0 does not require:
 
 ```text
 Web UI
+Docker Server deployment
 external database server
 central SaaS control plane
 HA database cluster
-hundreds/thousands-client orchestration
-VPN/full network overlay
-SASE/SWG/CASB/DLP
+hundreds/thousands-host orchestration
+VPN / full network overlay
+SASE / SWG / CASB / DLP
 TLS inspection
-automatic firewall/DNS management
+automatic firewall / DNS management
 ```
 
-## Release rule
+## Source Available license
 
-Stable release requires two complete Real E2E passes on the same final exact HEAD, including the three access planes and applicable lifecycle/platform gates.
+**Data Relay Link is source available, not open source.**
 
-Any code/dependency change resets the pass counter.
+See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md) for the controlling terms and plain-language summary.
