@@ -78,7 +78,7 @@ Rule별 ALLOW/DENY action을 갖지 않습니다. Policy Rule은 접근을 허�
 
 ```mermaid
 flowchart LR
-    O["Operator / Approved Client"] --> P["Data Relay Link Server<br/>Public Endpoint"]
+    O["Operator / Approved User"] --> P["Data Relay Link Server<br/>Public Endpoint"]
 
     A["Managed Host A<br/>NAT / Firewall"] -->|Outbound DRLink secure relay| P
     B["Managed Host B<br/>NAT / Firewall"] -->|Outbound DRLink secure relay| P
@@ -265,10 +265,12 @@ PROJECT_VERSION=2.4.0
 RELEASE_CHANNEL=development
 ```
 
-현재 project version: **2.4.0**  
-이 저장소 트리는 branch
-[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)
-위의 **v2.4.0 development target**입니다. exact-HEAD qualification이 끝나기 전에는 stable `v2.4.0` 태그가 없습니다. repository metadata가 실제로 해당 channel로 바뀌지 않는 한 이 branch를 stable, RC, preview로 취급하지 마십시오.
+현재 development target: **2.4.0**  
+Release channel: **development**
+
+현재 v2.4.0 구현 및 qualification 작업은
+[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)에서 진행 중입니다.
+default `main` branch는 v2.4.0 qualification이 완료될 때까지 repository landing branch로 유지됩니다. 이 README는 현재 Data Relay Link 제품 모델과 public CLI를 설명합니다. exact-HEAD qualification이 끝나기 전에는 stable `v2.4.0` 태그가 없으며, repository metadata가 실제 변경되기 전에는 v2.4.0을 stable, RC, preview release로 취급하지 마십시오.
 
 Version policy는 다음을 구분합니다:
 
@@ -298,16 +300,15 @@ Stable release는 동일 final exact HEAD에서 세 access plane과 해당 lifec
 
 시작 지점:
 
-- [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — 제품 수준 결정
-- [`docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`](docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — CLI/AI SSOT
-- [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar
-- [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
-- [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
-- [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access 동작
-- [`docs/SECURITY.md`](docs/SECURITY.md) — 보안 경계
-- [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release 규칙
-- [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) — final stable gate
-- [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — 내부 architecture/history
+- [Product Master](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/PRODUCT_MASTER.md) — 현재 제품 수준 결정
+- [CLI / AI Master](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — 현재 CLI/AI SSOT
+- [CLI Reference](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/CLI_REFERENCE.md) — 현재 direct grammar
+- [CLI Information Architecture](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
+- [ConfigurationBundle](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
+- [Internet Access](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/CONTROLLED_EGRESS.md) — controlled egress 동작
+- [Security](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/SECURITY.md) — 현재 보안 경계
+- [Version Policy](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/VERSION_POLICY.md) — version/release 규칙
+- [Release Checklist](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/RELEASE_CHECKLIST.md) — final stable gate
 
 ## Non-goals
 
