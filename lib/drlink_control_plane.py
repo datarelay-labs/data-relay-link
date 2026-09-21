@@ -37,6 +37,16 @@ from drlink_control_db import (
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,63}$")
 TAG_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+BACKUP_FORMAT = "drlink-control-backup"
+BACKUP_REQUIRED_TABLES = (
+    "schema_migrations",
+    "system_meta",
+    "config_revisions",
+    "runtime_generations",
+    "clients",
+    "objects",
+    "published_services",
+)
 OAUTH_UNBOUND_PRINCIPAL = "__oauth_unbound__"
 OAUTH_ACCESS_TTL = 3600
 OAUTH_REFRESH_TTL = 30 * 24 * 3600
@@ -384,6 +394,14 @@ class ControlPlane:
 
     def _forced_activation_failure(self) -> bool:
         return str(os.environ.get("DRLINK_FAULT_ACTIVATION") or "").strip().lower() in (
+            "1",
+            "yes",
+            "y",
+            "true",
+        )
+
+    def _forced_restore_failure(self) -> bool:
+        return str(os.environ.get("DRLINK_FAULT_RESTORE") or "").strip().lower() in (
             "1",
             "yes",
             "y",
@@ -4488,62 +4506,184 @@ class ControlPlane:
         os.chmod(dest_path, 0o600)
         return str(dest_path)
 
-    def backup_validate(self, src: str) -> dict:
-        with tarfile.open(src, "r") as tar:
-            names = tar.getnames()
+    def _read_backup_archive(self, src: str) -> tuple[bytes, dict]:
+        """Extract drlink.db bytes and parsed backup-meta.json without mutating live state."""
+        try:
+            tar = tarfile.open(src, "r")
+        except (OSError, tarfile.TarError) as exc:
+            raise ControlPlaneError("backup archive unreadable: %s" % exc) from exc
+        with tar:
+            names = set(tar.getnames())
             if "drlink.db" not in names:
                 raise ControlPlaneError("backup is missing drlink.db")
+            if "backup-meta.json" not in names:
+                raise ControlPlaneError("backup is missing backup-meta.json")
             db_member = tar.extractfile("drlink.db")
             if db_member is None:
                 raise ControlPlaneError("backup drlink.db unreadable")
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as fh:
-                fh.write(db_member.read())
-                tmp = fh.name
-        try:
-            conn = sqlite3.connect(tmp)
-            conn.execute("PRAGMA foreign_keys = ON")
-            row = conn.execute("PRAGMA integrity_check").fetchone()
-            if not row or str(row[0]).lower() != "ok":
-                raise ControlPlaneError("backup SQLite integrity failed")
-            fk = conn.execute("PRAGMA foreign_key_check").fetchall()
-            if fk:
-                raise ControlPlaneError("backup foreign keys invalid")
-            conn.close()
-        finally:
-            os.unlink(tmp)
-        return {"ok": True, "path": src}
-
-    def restore(self, src: str) -> dict:
-        self.backup_validate(src)
-        with tarfile.open(src, "r") as tar:
-            db_member = tar.extractfile("drlink.db")
+            meta_member = tar.extractfile("backup-meta.json")
+            if meta_member is None:
+                raise ControlPlaneError("backup backup-meta.json unreadable")
             payload = db_member.read()
-        fd, tmp = tempfile.mkstemp(prefix="drlink-restore-", suffix=".db")
-        os.close(fd)
-        try:
-            Path(tmp).write_bytes(payload)
-            src_conn = sqlite3.connect(tmp)
             try:
-                if self.conn is None:
-                    self.conn = open_control_db(self.root)
-                src_conn.backup(self.conn)
-            finally:
-                src_conn.close()
+                meta = json.loads(meta_member.read().decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ControlPlaneError("backup-meta.json is not valid JSON") from exc
+            if not isinstance(meta, dict):
+                raise ControlPlaneError("backup-meta.json must be a JSON object")
+        return payload, meta
+
+    def _validate_backup_candidate(self, db_path_str: str, meta: dict) -> dict:
+        """Validate a candidate DB file + metadata without initialize/migrate."""
+        fmt = str(meta.get("format") or "").strip()
+        if fmt != BACKUP_FORMAT:
+            raise ControlPlaneError(
+                "backup format %r is unsupported (expected %s)" % (fmt or "<missing>", BACKUP_FORMAT)
+            )
+        try:
+            meta_schema = int(meta.get("schema_version"))
+        except (TypeError, ValueError):
+            raise ControlPlaneError("backup-meta.json schema_version is missing or invalid")
+        try:
+            meta_revision = int(meta.get("revision"))
+        except (TypeError, ValueError):
+            raise ControlPlaneError("backup-meta.json revision is missing or invalid")
+        if meta_revision < 0:
+            raise ControlPlaneError("backup-meta.json revision is invalid")
+
+        conn = sqlite3.connect(db_path_str)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            try:
+                integrity_check(conn)
+            except DatabaseCorruptError as exc:
+                raise ControlPlaneError("backup database failed integrity checks: %s" % exc) from exc
+
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            missing = [name for name in BACKUP_REQUIRED_TABLES if name not in tables]
+            if missing:
+                raise ControlPlaneError(
+                    "backup is not a DRLink control-plane database (missing tables: %s)"
+                    % ", ".join(missing)
+                )
+
+            try:
+                found_schema = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                    ).fetchone()[0]
+                    or 0
+                )
+            except sqlite3.Error as exc:
+                raise ControlPlaneError(
+                    "backup schema_migrations is unreadable: %s" % exc
+                ) from exc
+            if found_schema <= 0:
+                raise ControlPlaneError(
+                    "backup schema version is unknown or unsupported (found %s)" % found_schema
+                )
+            if found_schema > SCHEMA_VERSION:
+                raise SchemaTooNewError(found_schema, SCHEMA_VERSION)
+            if meta_schema != found_schema:
+                raise ControlPlaneError(
+                    "backup metadata schema_version %s does not match database schema %s"
+                    % (meta_schema, found_schema)
+                )
+
+            meta_row = conn.execute(
+                "SELECT value FROM system_meta WHERE key = 'schema_version'"
+            ).fetchone()
+            if meta_row is not None:
+                try:
+                    sys_schema = int(meta_row[0])
+                except (TypeError, ValueError):
+                    raise ControlPlaneError("backup system_meta schema_version is invalid")
+                if sys_schema != found_schema:
+                    raise ControlPlaneError(
+                        "backup system_meta schema_version %s does not match schema_migrations %s"
+                        % (sys_schema, found_schema)
+                    )
+
+            try:
+                db_revision = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(revision), 0) FROM config_revisions"
+                    ).fetchone()[0]
+                    or 0
+                )
+            except sqlite3.Error as exc:
+                raise ControlPlaneError(
+                    "backup config_revisions is unreadable: %s" % exc
+                ) from exc
+            if meta_revision != db_revision:
+                raise ControlPlaneError(
+                    "backup metadata revision %s does not match database revision %s"
+                    % (meta_revision, db_revision)
+                )
+            return {
+                "ok": True,
+                "format": BACKUP_FORMAT,
+                "schema_version": found_schema,
+                "revision": db_revision,
+            }
+        finally:
+            conn.close()
+
+    def backup_validate(self, src: str) -> dict:
+        """Prove a candidate is a supported DRLink control backup without live mutation."""
+        payload, meta = self._read_backup_archive(src)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as fh:
+            fh.write(payload)
+            tmp = fh.name
+        try:
+            info = self._validate_backup_candidate(tmp, meta)
         finally:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
             for suffix in ("-wal", "-shm"):
-                extra = Path(tmp + suffix)
                 try:
-                    extra.unlink()
+                    Path(tmp + suffix).unlink()
                 except FileNotFoundError:
                     pass
-        self._db_ident = self._db_file_ident()
-        self.compile_runtime()
-        st = self.status()
-        return {"ok": True, "revision": st["revision"]}
+        info["path"] = src
+        return info
+
+    def restore(self, src: str) -> dict:
+        """Atomically restore a validated candidate; roll back live DB/runtime on failure."""
+        # Full candidate validation before any live checkpoint or cutover.
+        self.backup_validate(src)
+        previous_revision = self.current_revision()
+        checkpoint = self._pre_activation_checkpoint()
+        try:
+            self._restore_db_only(src)
+            if self._forced_restore_failure():
+                raise ControlPlaneError("simulated restore activation failure")
+            self.compile_runtime()
+            st = self.status()
+            self._cleanup_activation_checkpoint(checkpoint)
+            return {"ok": True, "revision": st["revision"]}
+        except Exception as exc:
+            try:
+                self._rollback_activation(checkpoint)
+            except Exception as rollback_exc:
+                self._cleanup_activation_checkpoint(checkpoint)
+                raise ControlPlaneError(
+                    "restore failed and previous state could not be restored: %s "
+                    "(rollback error: %s)" % (exc, rollback_exc)
+                ) from exc
+            self._cleanup_activation_checkpoint(checkpoint)
+            raise ControlPlaneError(
+                "restore failed; previous control-plane state was restored "
+                "(revision %s): %s" % (previous_revision, exc)
+            ) from exc
 
     def list_revisions(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM config_revisions ORDER BY revision DESC LIMIT 200")]
