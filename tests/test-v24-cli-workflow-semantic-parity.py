@@ -358,7 +358,7 @@ class AIAccessDetail(_Base):
         self.assertIn("read-only", out)
         self.assertIn("Enabled", out)
 
-    def test_partial_edit_error_is_actionable(self):
+    def test_partial_edit_enable_disable_updates_only_enabled(self):
         self.plane.set_ai_principal("chatgpt-support", enabled=True)
         self.plane.conn.execute(
             "UPDATE ai_principals SET credential_status = 'verified' WHERE name = 'chatgpt-support'"
@@ -376,10 +376,20 @@ class AIAccessDetail(_Base):
             enabled=True,
             oneshot=True,
         )
-        rc_bad, _out_bad, err_bad = self._run("set", "ai-access", "support-read", "disabled")
-        self.assertEqual(rc_bad, 1)
-        self.assertIn("does not support partial enable/disable", err_bad)
-        self.assertNotIn("was not found", err_bad.lower())
+        before = self.plane.conn.execute(
+            "SELECT enabled, source_identity_id, destination_ref_id, permission_ref_id "
+            "FROM ai_policy_rules WHERE name = 'support-read'"
+        ).fetchone()
+        rc, _out, err = self._run("set", "ai-access", "support-read", "disabled")
+        self.assertEqual(rc, 0, err)
+        after = self.plane.conn.execute(
+            "SELECT enabled, source_identity_id, destination_ref_id, permission_ref_id "
+            "FROM ai_policy_rules WHERE name = 'support-read'"
+        ).fetchone()
+        self.assertEqual(int(after["enabled"]), 0)
+        self.assertEqual(after["source_identity_id"], before["source_identity_id"])
+        self.assertEqual(after["destination_ref_id"], before["destination_ref_id"])
+        self.assertEqual(after["permission_ref_id"], before["permission_ref_id"])
 
 
 class BundleSecurityImpact(_Base):

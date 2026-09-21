@@ -1064,6 +1064,37 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
             )
         )
     if oneshot:
+        if existing:
+            # Existing-resource partial edit: omitted type keeps current type;
+            # value is required for a mutation; type may be restated only when
+            # it matches the existing store type.
+            if value is None:
+                raise ControlPlaneError(
+                    cli_error(
+                        "Network Object is incomplete.",
+                        expected="  value",
+                    )
+                )
+            if type:
+                public = str(type).strip().lower()
+                if public not in NETWORK_PUBLIC_TYPES:
+                    raise ControlPlaneError("Network Object type must be ip, cidr, or fqdn")
+                store = NETWORK_STORE[public]
+                if existing["type"] != store:
+                    raise ControlPlaneError(
+                        cli_error("Cannot change Network Object type after creation.")
+                    )
+            else:
+                store = existing["type"]
+            # Validate value before any authoritative mutation so failed one-shots
+            # leave existence/revision/policy unchanged.
+            normalize_object_value(store, value)
+            result = plane_db.replace_object_value(name, value)
+            out = {"operation": "update", "name": name}
+            if isinstance(result, dict) and "revision" in result:
+                out["revision"] = result["revision"]
+            return out
+
         if not type or value is None:
             missing = []
             if not type:
@@ -1083,16 +1114,6 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
         # Validate value before any authoritative mutation so failed one-shots
         # leave existence/revision/policy unchanged.
         normalized = normalize_object_value(store, value)
-        if existing:
-            if existing["type"] != store:
-                raise ControlPlaneError(
-                    cli_error("Cannot change Network Object type after creation.")
-                )
-            result = plane_db.replace_object_value(name, value)
-            out = {"operation": "update", "name": name}
-            if isinstance(result, dict) and "revision" in result:
-                out["revision"] = result["revision"]
-            return out
 
         def write_create():
             oid = _new_id("obj")
@@ -1250,19 +1271,36 @@ def set_service_object(
 ) -> dict:
     name = validate_public_name(name, "Service Object name")
     existing = get_service_object(plane_db, name)
-    if oneshot or (type and port is not None):
-        if not type or port is None:
-            missing = []
-            if not type:
-                missing.append("type")
+    if oneshot or (type and port is not None) or (existing and port is not None):
+        if existing:
+            # Existing-resource partial edit: omitted type keeps current type;
+            # port is required for a mutation.
             if port is None:
-                missing.append("port")
-            raise ControlPlaneError(
-                cli_error("Service Object is incomplete.", expected="\n".join("  %s" % m for m in missing))
-            )
-        stype = str(type).strip().lower()
-        if stype not in SERVICE_TYPES:
-            raise ControlPlaneError("Service Object type must be tcp, udp, or fixed-tcp")
+                raise ControlPlaneError(
+                    cli_error("Service Object is incomplete.", expected="  port")
+                )
+            if type:
+                stype = str(type).strip().lower()
+                if stype not in SERVICE_TYPES:
+                    raise ControlPlaneError("Service Object type must be tcp, udp, or fixed-tcp")
+            else:
+                stype = str(existing["type"])
+        else:
+            if not type or port is None:
+                missing = []
+                if not type:
+                    missing.append("type")
+                if port is None:
+                    missing.append("port")
+                raise ControlPlaneError(
+                    cli_error(
+                        "Service Object is incomplete.",
+                        expected="\n".join("  %s" % m for m in missing),
+                    )
+                )
+            stype = str(type).strip().lower()
+            if stype not in SERVICE_TYPES:
+                raise ControlPlaneError("Service Object type must be tcp, udp, or fixed-tcp")
         port = int(port)
         if port < 1 or port > 65535:
             raise ControlPlaneError("Invalid port: %s" % port)
@@ -4850,19 +4888,57 @@ def format_show_agent(root: Optional[str] = None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def parse_kv_tokens(tokens: list[str]) -> dict[str, str]:
-    """Parse `key value` pairs from a token list."""
+def parse_kv_tokens(
+    tokens: list[str],
+    *,
+    allowed: Optional[set[str] | frozenset[str] | tuple[str, ...]] = None,
+    resource: str = "",
+    allowed_hint: str = "",
+) -> dict[str, str]:
+    """Parse `key value` pairs with strict duplicate / unknown / flag rules.
+
+    Public one-shot setters must pass ``allowed`` so typos cannot silently
+    drop fields. Duplicate keys and contradictory enabled/disabled flags are
+    always rejected before any authoritative mutation.
+    """
     out: dict[str, str] = {}
     i = 0
     flags = {"enabled", "disabled"}
+    seen_enabled_flag = False
+    allowed_set = set(allowed) if allowed is not None else None
+    title = str(resource or "Command").strip() or "Command"
     while i < len(tokens):
         key = str(tokens[i]).strip().lower()
         if key in flags:
+            if seen_enabled_flag or "enabled" in out:
+                raise ControlPlaneError(
+                    "ERROR:\nContradictory or duplicate enabled/disabled flags.\n\n"
+                    "No changes were applied."
+                )
+            if allowed_set is not None and "enabled" not in allowed_set:
+                hint = allowed_hint or ", ".join(sorted(allowed_set))
+                raise ControlPlaneError(
+                    "ERROR:\n%s does not accept '%s'.\n\nUse: %s\n\nNo changes were applied."
+                    % (title, key, hint)
+                )
             out["enabled"] = "yes" if key == "enabled" else "no"
+            seen_enabled_flag = True
             i += 1
             continue
         if i + 1 >= len(tokens):
-            raise ControlPlaneError(cli_error("Incomplete argument: %s" % key))
+            raise ControlPlaneError(
+                cli_error("Incomplete argument: %s" % key)
+            )
+        if key in out:
+            raise ControlPlaneError(
+                "ERROR:\nDuplicate field '%s'.\n\nNo changes were applied." % key
+            )
+        if allowed_set is not None and key not in allowed_set:
+            hint = allowed_hint or ", ".join(sorted(allowed_set))
+            raise ControlPlaneError(
+                "ERROR:\n%s does not accept '%s'.\n\nUse: %s\n\nNo changes were applied."
+                % (title, key, hint)
+            )
         out[key] = tokens[i + 1]
         i += 2
     return out

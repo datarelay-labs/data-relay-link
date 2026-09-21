@@ -728,7 +728,12 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "network-object", name)
-        kv = v24.parse_kv_tokens(rest[2:])
+        kv = v24.parse_kv_tokens(
+            rest[2:],
+            allowed={"type", "value"},
+            resource="Network Object",
+            allowed_hint="type, value",
+        )
         result = v24.set_network_object(
             plane, name, type=kv.get("type"), value=kv.get("value"), oneshot=True
         )
@@ -739,7 +744,16 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set network-group <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        kv = (
+            v24.parse_kv_tokens(
+                rest[2:],
+                allowed={"members"},
+                resource="Network Group",
+                allowed_hint="members",
+            )
+            if len(rest) > 2
+            else {}
+        )
         if "members" not in kv:
             from drlink_v24_wizard import run_wizard
 
@@ -756,7 +770,12 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "service-object", name)
-        kv = v24.parse_kv_tokens(rest[2:])
+        kv = v24.parse_kv_tokens(
+            rest[2:],
+            allowed={"type", "port"},
+            resource="Service Object",
+            allowed_hint="type, port",
+        )
         port = int(kv["port"]) if "port" in kv else None
         v24.set_service_object(plane, name, type=kv.get("type"), port=port, oneshot=True)
         sys.stdout.write("Service Object set: %s\n" % name)
@@ -766,7 +785,16 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set service-group <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        kv = (
+            v24.parse_kv_tokens(
+                rest[2:],
+                allowed={"members"},
+                resource="Service Group",
+                allowed_hint="members",
+            )
+            if len(rest) > 2
+            else {}
+        )
         if "members" not in kv:
             from drlink_v24_wizard import run_wizard
 
@@ -779,7 +807,16 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set permission-object <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        kv = (
+            v24.parse_kv_tokens(
+                rest[2:],
+                allowed={"permissions"},
+                resource="Permission Object",
+                allowed_hint="permissions",
+            )
+            if len(rest) > 2
+            else {}
+        )
         if "permissions" not in kv:
             from drlink_v24_wizard import run_wizard
 
@@ -794,7 +831,16 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set permission-group <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
+        kv = (
+            v24.parse_kv_tokens(
+                rest[2:],
+                allowed={"members"},
+                resource="Permission Group",
+                allowed_hint="members",
+            )
+            if len(rest) > 2
+            else {}
+        )
         if "members" not in kv:
             from drlink_v24_wizard import run_wizard
 
@@ -814,17 +860,13 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, res, name)
-        kv = v24.parse_kv_tokens(extra)
-        allowed = {"mode", "source", "destination", "service", "enabled"}
-        unknown = [k for k in kv if k not in allowed]
-        if unknown:
-            title = "Remote Access" if res == "remote-access" else "Internet Access"
-            raise ControlPlaneError(
-                "ERROR:\n%s does not accept '%s'.\n\n"
-                "Use: source, destination, service, mode, enabled|disabled\n\n"
-                "No changes were applied."
-                % (title, unknown[0])
-            )
+        title = "Remote Access" if res == "remote-access" else "Internet Access"
+        kv = v24.parse_kv_tokens(
+            extra,
+            allowed={"mode", "source", "destination", "service", "enabled"},
+            resource=title,
+            allowed_hint="source, destination, service, mode, enabled|disabled",
+        )
         enabled = None
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
@@ -858,22 +900,12 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "ai-access", name)
-        extra_l = [str(t).strip().lower() for t in extra]
-        if "mode" not in extra_l and "permission" not in extra_l:
-            if len(extra) == 1 and extra_l[0] in ("enabled", "disabled"):
-                existing = plane.conn.execute(
-                    "SELECT id FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (name,)
-                ).fetchone()
-                if existing:
-                    raise ControlPlaneError(
-                        "ERROR:\nAI Access does not support partial enable/disable via:\n"
-                        "  set ai-access <RULE> enabled|disabled\n\n"
-                        "Re-set the Rule with source, destination, permission, and enabled|disabled,\n"
-                        "or apply a ConfigurationBundle.\n\n"
-                        "No changes were applied."
-                    )
-            return None
-        kv = v24.parse_kv_tokens(extra)
+        kv = v24.parse_kv_tokens(
+            extra,
+            allowed={"mode", "source", "destination", "permission", "enabled"},
+            resource="AI Access",
+            allowed_hint="source, destination, permission, mode, enabled|disabled",
+        )
         enabled = None
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
@@ -907,14 +939,19 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if len(rest) < 2:
             raise ControlPlaneError("Usage: set remote-service <NAME> ...")
         name = rest[1]
-        kv = v24.parse_kv_tokens(rest[2:]) if len(rest) > 2 else {}
-        enabled = None
-        if "enabled" in kv:
-            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         if not rest[2:]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "remote-service", name)
+        kv = v24.parse_kv_tokens(
+            rest[2:],
+            allowed={"destination", "service", "enabled"},
+            resource="Remote Service",
+            allowed_hint="destination, service, enabled|disabled",
+        )
+        enabled = None
+        if "enabled" in kv:
+            enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         reachable = v24.detect_server_reachable(plane, plane.root)
         result = v24.set_remote_service_agent(
             plane,

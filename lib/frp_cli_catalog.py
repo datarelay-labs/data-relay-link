@@ -1659,6 +1659,7 @@ def domain_help(topic, role):
             "  show network-object <NAME>\n"
             "  show network-object <NAME> references\n"
             "  set network-object <NAME> type <ip|cidr|fqdn> value <VALUE>\n"
+            "  set network-object <NAME> value <VALUE>\n"
             "  set network-group <NAME> members a,b,c\n"
             "  show network-group <NAME> references\n"
             "  unset network-object <NAME>\n"
@@ -1678,6 +1679,7 @@ def domain_help(topic, role):
             "  show service-object <NAME>\n"
             "  show service-object <NAME> references\n"
             "  set service-object <NAME> type <tcp|udp|fixed-tcp> port <PORT>\n"
+            "  set service-object <NAME> port <PORT>\n"
             "  set service-group <NAME> members a,b\n"
             "  show service-group <NAME> references\n"
         )
@@ -1753,6 +1755,7 @@ def domain_help(topic, role):
             "  set permission-group <NAME> members <PO>[,PO...]\n"
             "  set ai-access <RULE> mode <blacklist|whitelist> source <IDENTITY> \\\n"
             "      destination <DEST> permission <PERM|GROUP> enabled\n"
+            "  set ai-access <RULE> enabled|disabled\n"
             "  test ai-access source <IDENTITY> destination <DEST> permission <PERM>\n"
             "  show ai-access\n"
             "  show ai-access-log\n"
