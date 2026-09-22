@@ -708,10 +708,17 @@ class ControlPlane:
     def resolve_ref(self, token: str) -> tuple[str, sqlite3.Row]:
         text = str(token or "").strip()
         obj = self.get_object(text)
-        if obj:
-            return "object", obj
         grp = self.get_object_group(text)
-        if grp:
+        if obj is not None and grp is not None:
+            raise ControlPlaneError(
+                "ERROR:\nPublic name '%s' is ambiguous because both a Network Object "
+                "and a Network Group exist.\n\n"
+                "Rename or remove one of them so the selector is unique.\n\n"
+                "No changes were applied." % text
+            )
+        if obj is not None:
+            return "object", obj
+        if grp is not None:
             return "group", grp
         raise ControlPlaneError("Object or Object Group not found: %s" % token)
 
@@ -824,6 +831,13 @@ class ControlPlane:
                     (obj_type, utc_now_iso(), self._next_revision(), existing["id"]),
                 )
                 return {"entity": {"type": "object", "id": existing["id"], "name": name}, "operation": "set-type", "after": obj_type}
+            if self.get_object_group(name):
+                raise ControlPlaneError(
+                    "ERROR:\nPublic name '%s' is already used by a Network Group.\n\n"
+                    "Network Object and Network Group names must be unique across that "
+                    "selector namespace.\n\n"
+                    "No changes were applied." % name
+                )
             oid = _new_id("obj")
             now = utc_now_iso()
             self.conn.execute(
@@ -1192,6 +1206,13 @@ class ControlPlane:
                         (description, now, existing["id"]),
                     )
                 return {"entity": {"type": "object-group", "id": existing["id"], "name": name}, "operation": "update"}
+            if self.get_object(name):
+                raise ControlPlaneError(
+                    "ERROR:\nPublic name '%s' is already used by a Network Object.\n\n"
+                    "Network Object and Network Group names must be unique across that "
+                    "selector namespace.\n\n"
+                    "No changes were applied." % name
+                )
             gid = _new_id("ogp")
             self.conn.execute(
                 "INSERT INTO object_groups(id, name, description, row_version, created_at, updated_at) "
@@ -1380,6 +1401,13 @@ class ControlPlane:
                     other_client = bool(link and link["client_id"] and link["client_id"] != client_id)
                     if existing_named["status"] == "orphaned" or other_client:
                         name = client_id[:8] if client_id[:8] != endpoint_name else ("ep-" + client_id[:10])
+                if self.get_object_group(name):
+                    raise ControlPlaneError(
+                        "ERROR:\nPublic name '%s' is already used by a Network Group.\n\n"
+                        "Managed Hosts participate in the Network Object namespace and must "
+                        "not collide with Network Group names.\n\n"
+                        "No changes were applied." % name
+                    )
                 oid = _new_id("obj")
                 self.conn.execute(
                     "INSERT INTO objects(id, name, type, origin, description, status, row_version, created_at, updated_at) "

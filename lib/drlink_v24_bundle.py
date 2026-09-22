@@ -16,7 +16,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from drlink_control_db import ControlPlaneError, utc_now_iso
 from drlink_control_plane import (
@@ -334,6 +334,41 @@ def _validate_access_section(section: Any, *, key: str, family: str) -> dict:
 
 def _desired_name_set(items: list[dict]) -> set[str]:
     return {str(i.get("name") or "").lower() for i in items if i.get("state") != "absent" and i.get("name")}
+
+
+def _effective_public_name_set(db_names: Iterable[str], items: list[dict]) -> set[str]:
+    """Post-apply public-name set after Bundle creates/updates/absent deletes."""
+    names = {str(n or "").lower() for n in db_names if n}
+    for item in items:
+        key = str(item.get("name") or "").lower()
+        if not key:
+            continue
+        if item.get("state") == "absent":
+            names.discard(key)
+        else:
+            names.add(key)
+    return names
+
+
+def _reject_cross_kind_public_name_overlap(
+    object_names: set[str],
+    group_names: set[str],
+    *,
+    object_kind: str,
+    group_kind: str,
+) -> None:
+    overlap = sorted(object_names & group_names)
+    if not overlap:
+        return
+    name = overlap[0]
+    extra = ""
+    if len(overlap) > 1:
+        extra = "\nAdditional ambiguous names: %s." % ", ".join(overlap[1:])
+    _bundle_error(
+        "Public name '%s' is ambiguous because both a %s and a %s would exist.%s\n\n"
+        "%s and %s names must be unique across that selector namespace."
+        % (name, object_kind, group_kind, extra, object_kind, group_kind)
+    )
 
 
 def _ref_exists_in_bundle_or_db(
@@ -795,6 +830,45 @@ def prepare_v24_plan(plane: ControlPlane, raw_text: str, *, role: Optional[str] 
             r["name"].lower()
             for r in plane.conn.execute("SELECT name FROM permission_groups")
         }
+
+        # Fail closed on Object/Group public-name collisions that Bundle would create
+        # or retain after apply (case-insensitive).
+        _reject_cross_kind_public_name_overlap(
+            _effective_public_name_set(
+                (r["name"] for r in plane.conn.execute("SELECT name FROM objects")),
+                nos,
+            ),
+            _effective_public_name_set(
+                (r["name"] for r in plane.conn.execute("SELECT name FROM object_groups")),
+                ngs,
+            ),
+            object_kind="Network Object",
+            group_kind="Network Group",
+        )
+        _reject_cross_kind_public_name_overlap(
+            _effective_public_name_set(
+                (r["name"] for r in plane.conn.execute("SELECT name FROM service_objects")),
+                sos,
+            ),
+            _effective_public_name_set(
+                (r["name"] for r in plane.conn.execute("SELECT name FROM service_groups")),
+                sgs,
+            ),
+            object_kind="Service Object",
+            group_kind="Service Group",
+        )
+        _reject_cross_kind_public_name_overlap(
+            _effective_public_name_set(
+                (r["name"] for r in plane.conn.execute("SELECT name FROM permission_objects")),
+                pos,
+            ),
+            _effective_public_name_set(
+                (r["name"] for r in plane.conn.execute("SELECT name FROM permission_groups")),
+                pgs,
+            ),
+            object_kind="Permission Object",
+            group_kind="Permission Group",
+        )
 
         for item in nos:
             name = item["name"]

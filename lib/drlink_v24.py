@@ -242,6 +242,108 @@ def validate_public_name(value: str, kind: str = "Name") -> str:
     return text
 
 
+def _cross_kind_name_taken_error(name: str, creating_kind: str, conflicting_kind: str) -> str:
+    return (
+        "ERROR:\nPublic name '%s' is already used by a %s.\n\n"
+        "%s and %s names must be unique across that selector namespace.\n\n"
+        "No changes were applied."
+        % (name, conflicting_kind, creating_kind, conflicting_kind)
+    )
+
+
+def _ambiguous_public_name_error(name: str, object_kind: str, group_kind: str) -> str:
+    return (
+        "ERROR:\nPublic name '%s' is ambiguous because both a %s and a %s exist.\n\n"
+        "Rename or remove one of them so the selector is unique.\n\n"
+        "No changes were applied."
+        % (name, object_kind, group_kind)
+    )
+
+
+def assert_network_public_name_available(plane_db, name: str, *, creating: str) -> None:
+    """Reject create when the paired Network Object/Group namespace already owns ``name``."""
+    if creating == "object":
+        if plane_db.get_object_group(name):
+            raise ControlPlaneError(
+                _cross_kind_name_taken_error(name, "Network Object", "Network Group")
+            )
+    elif creating == "group":
+        if plane_db.get_object(name):
+            raise ControlPlaneError(
+                _cross_kind_name_taken_error(name, "Network Group", "Network Object")
+            )
+    else:
+        raise ValueError("creating must be 'object' or 'group'")
+
+
+def assert_service_public_name_available(plane_db, name: str, *, creating: str) -> None:
+    if creating == "object":
+        if get_service_group(plane_db, name):
+            raise ControlPlaneError(
+                _cross_kind_name_taken_error(name, "Service Object", "Service Group")
+            )
+    elif creating == "group":
+        if get_service_object(plane_db, name):
+            raise ControlPlaneError(
+                _cross_kind_name_taken_error(name, "Service Group", "Service Object")
+            )
+    else:
+        raise ValueError("creating must be 'object' or 'group'")
+
+
+def assert_permission_public_name_available(plane_db, name: str, *, creating: str) -> None:
+    if creating == "object":
+        if get_permission_group(plane_db, name):
+            raise ControlPlaneError(
+                _cross_kind_name_taken_error(name, "Permission Object", "Permission Group")
+            )
+    elif creating == "group":
+        if get_permission_object(plane_db, name):
+            raise ControlPlaneError(
+                _cross_kind_name_taken_error(name, "Permission Group", "Permission Object")
+            )
+    else:
+        raise ValueError("creating must be 'object' or 'group'")
+
+
+def resolve_service_ref(plane_db, token: str) -> tuple[str, sqlite3.Row]:
+    """Resolve a Service public selector; fail closed on Object/Group ambiguity."""
+    text = str(token or "").strip()
+    sobj = get_service_object(plane_db, text)
+    sgrp = get_service_group(plane_db, text)
+    if sobj is not None and sgrp is not None:
+        raise ControlPlaneError(
+            _ambiguous_public_name_error(text, "Service Object", "Service Group")
+        )
+    if sobj is not None:
+        return "service_object", sobj
+    if sgrp is not None:
+        return "service_group", sgrp
+    raise ControlPlaneError(
+        cli_error(
+            "Service '%s' was not found." % token,
+            expected="  Service Object\n  Service Group",
+            next_step="Use:\n  show service-objects\n  show service-groups",
+        )
+    )
+
+
+def resolve_permission_ref(plane_db, token: str) -> tuple[str, sqlite3.Row]:
+    """Resolve a Permission public selector; fail closed on Object/Group ambiguity."""
+    text = str(token or "").strip()
+    pobj = get_permission_object(plane_db, text)
+    pgrp = get_permission_group(plane_db, text)
+    if pobj is not None and pgrp is not None:
+        raise ControlPlaneError(
+            _ambiguous_public_name_error(text, "Permission Object", "Permission Group")
+        )
+    if pobj is not None:
+        return "permission_object", pobj
+    if pgrp is not None:
+        return "permission_group", pgrp
+    raise ControlPlaneError(cli_error("Permission '%s' was not found." % token))
+
+
 def ensure_v2_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(V2_SCHEMA_SQL)
     # Additive identity column for Managed Host Remote Service destinations.
@@ -1176,6 +1278,7 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
         # Validate value before any authoritative mutation so failed one-shots
         # leave existence/revision/policy unchanged.
         normalized = normalize_object_value(store, value)
+        assert_network_public_name_available(plane_db, name, creating="object")
 
         def write_create():
             oid = _new_id("obj")
@@ -1280,6 +1383,7 @@ def set_network_group(plane_db, name: str, *, members: Optional[list[str]] = Non
                 )
                 op = "update"
             else:
+                assert_network_public_name_available(plane_db, name, creating="group")
                 gid = _new_id("ogp")
                 plane_db.conn.execute(
                     "INSERT INTO object_groups(id, name, description, row_version, created_at, updated_at) "
@@ -1413,6 +1517,8 @@ def set_service_object(
                 return {"entity": {"type": "service-object", "id": existing["id"], "name": name}, "operation": "update"}
 
             return plane_db._mutate("set service-object %s" % name, "set service object", write)
+
+        assert_service_public_name_available(plane_db, name, creating="object")
 
         def write_create():
             oid = _new_id("sobj")
@@ -1766,6 +1872,7 @@ def set_service_group(plane_db, name: str, *, members: Optional[list[str]] = Non
             )
             op = "update"
         else:
+            assert_service_public_name_available(plane_db, name, creating="group")
             gid = _new_id("sgrp")
             plane_db.conn.execute(
                 "INSERT INTO service_groups(id, name, description, row_version, created_at, updated_at) "
@@ -1812,24 +1919,15 @@ def unset_service_group(plane_db, name: str) -> dict:
 
 
 def expand_service_ref(plane_db, token: str) -> list[sqlite3.Row]:
-    sobj = get_service_object(plane_db, token)
-    if sobj:
-        return [sobj]
-    grp = get_service_group(plane_db, token)
-    if not grp:
-        raise ControlPlaneError(
-            cli_error(
-                "Service '%s' was not found." % token,
-                expected="  Service Object\n  Service Group",
-                next_step="Use:\n  show service-objects\n  show service-groups",
-            )
-        )
+    kind, ref = resolve_service_ref(plane_db, token)
+    if kind == "service_object":
+        return [ref]
     return [
         r
         for r in plane_db.conn.execute(
             "SELECT s.* FROM service_group_members m JOIN service_objects s ON s.id = m.service_object_id "
             "WHERE m.group_id = ? ORDER BY s.name COLLATE NOCASE",
-            (grp["id"],),
+            (ref["id"],),
         )
     ]
 
@@ -2015,6 +2113,7 @@ def set_permission_object(plane_db, name: str, *, permissions: Optional[list[str
             )
             op = "update"
         else:
+            assert_permission_public_name_available(plane_db, name, creating="object")
             pid = _new_id("perm")
             plane_db.conn.execute(
                 "INSERT INTO permission_objects(id, name, description, row_version, created_at, updated_at) "
@@ -2045,6 +2144,7 @@ def set_permission_group(plane_db, name: str, *, members: Optional[list[str]] = 
             plane_db.conn.execute("DELETE FROM permission_group_members WHERE group_id = ?", (gid,))
             op = "update"
         else:
+            assert_permission_public_name_available(plane_db, name, creating="group")
             gid = _new_id("pgrp")
             plane_db.conn.execute(
                 "INSERT INTO permission_groups(id, name, description, row_version, created_at, updated_at) "
@@ -2072,24 +2172,21 @@ def set_permission_group(plane_db, name: str, *, members: Optional[list[str]] = 
 
 
 def expand_permissions(plane_db, token: str) -> set[str]:
-    pobj = get_permission_object(plane_db, token)
-    if pobj:
+    kind, ref = resolve_permission_ref(plane_db, token)
+    if kind == "permission_object":
         return {
             r["permission"]
             for r in plane_db.conn.execute(
                 "SELECT permission FROM permission_object_members "
                 "WHERE permission_object_id = ? ORDER BY permission COLLATE NOCASE",
-                (pobj["id"],),
+                (ref["id"],),
             )
         }
-    grp = get_permission_group(plane_db, token)
-    if not grp:
-        raise ControlPlaneError(cli_error("Permission '%s' was not found." % token))
     out: set[str] = set()
     for mid in plane_db.conn.execute(
         "SELECT permission_object_id FROM permission_group_members "
         "WHERE group_id = ? ORDER BY permission_object_id",
-        (grp["id"],),
+        (ref["id"],),
     ):
         for r in plane_db.conn.execute(
             "SELECT permission FROM permission_object_members "
@@ -2186,7 +2283,9 @@ def set_access_rule(
     if source is not None:
         try:
             plane_db.resolve_ref(source)
-        except ControlPlaneError:
+        except ControlPlaneError as exc:
+            if "ambiguous" in str(exc).lower():
+                raise
             raise ControlPlaneError(
                 "ERROR:\nRequired Network Object '%s' does not exist.\n\n"
                 "No changes were applied.\n\n"
@@ -2197,7 +2296,9 @@ def set_access_rule(
     if destination is not None:
         try:
             plane_db.resolve_ref(destination)
-        except ControlPlaneError:
+        except ControlPlaneError as exc:
+            if "ambiguous" in str(exc).lower():
+                raise
             raise ControlPlaneError(
                 "ERROR:\nRequired Network Object '%s' does not exist.\n\n"
                 "No changes were applied.\n\n"
@@ -2210,6 +2311,8 @@ def set_access_rule(
             expand_service_ref(plane_db, service)
         except ControlPlaneError as exc:
             msg = str(exc)
+            if "ambiguous" in msg.lower():
+                raise
             if "was not found" in msg:
                 raise ControlPlaneError(
                     "ERROR:\nRequired Service Object '%s' does not exist.\n\n"
@@ -2222,8 +2325,8 @@ def set_access_rule(
         if plane == "remote":
             has_udp, udp_name = service_ref_has_udp(plane_db, service)
             if has_udp:
-                grp = get_service_group(plane_db, service)
-                if grp:
+                kind, _ref = resolve_service_ref(plane_db, service)
+                if kind == "service_group":
                     raise ControlPlaneError(
                         "ERROR:\nService Group '%s' contains UDP Service Object '%s'.\n\n"
                         "Remote Access supports TCP and Fixed TCP Remote Services only.\n\n"
@@ -2237,8 +2340,8 @@ def set_access_rule(
         if plane == "internet":
             has_udp, udp_name = service_ref_has_udp(plane_db, service)
             if has_udp:
-                grp = get_service_group(plane_db, service)
-                if grp:
+                kind, _ref = resolve_service_ref(plane_db, service)
+                if kind == "service_group":
                     raise ControlPlaneError(
                         "ERROR:\nService Group '%s' contains UDP Service Object '%s'.\n\n"
                         "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only;\n"
@@ -2291,24 +2394,23 @@ def set_access_rule(
                 (rule_id, kind, ref["id"]),
             )
         if service is not None:
-            sobj = get_service_object(plane_db, service)
-            sgrp = get_service_group(plane_db, service)
+            kind, ref = resolve_service_ref(plane_db, service)
             plane_db.conn.execute("DELETE FROM rule_service_refs WHERE rule_id = ?", (rule_id,))
             plane_db.conn.execute("DELETE FROM rule_services WHERE rule_id = ?", (rule_id,))
-            if sobj:
+            if kind == "service_object":
                 plane_db.conn.execute(
                     "INSERT INTO rule_service_refs(rule_id, ref_kind, ref_id) VALUES (?, 'service_object', ?)",
-                    (rule_id, sobj["id"]),
+                    (rule_id, ref["id"]),
                 )
-                proto = "tcp" if sobj["type"] in ("tcp", "fixed-tcp") else "udp"
+                proto = "tcp" if ref["type"] in ("tcp", "fixed-tcp") else "udp"
                 plane_db.conn.execute(
                     "INSERT INTO rule_services(rule_id, protocol, port) VALUES (?, ?, ?)",
-                    (rule_id, proto, int(sobj["port"])),
+                    (rule_id, proto, int(ref["port"])),
                 )
             else:
                 plane_db.conn.execute(
                     "INSERT INTO rule_service_refs(rule_id, ref_kind, ref_id) VALUES (?, 'service_group', ?)",
-                    (rule_id, sgrp["id"]),
+                    (rule_id, ref["id"]),
                 )
                 for member in expand_service_ref(plane_db, service):
                     proto = "tcp" if member["type"] in ("tcp", "fixed-tcp") else "udp"
@@ -2438,9 +2540,13 @@ def _resolve_test_service(plane_db, service_name: str) -> tuple[str, int]:
 def _network_test_leaves(plane_db, selector: str, *, role: str) -> tuple[bool, list[str]]:
     """Expand a Network Object/Group selector to deterministic leaf Object names."""
     obj = plane_db.get_object(selector)
+    grp = plane_db.get_object_group(selector)
+    if obj is not None and grp is not None:
+        raise ControlPlaneError(
+            _ambiguous_public_name_error(selector, "Network Object", "Network Group")
+        )
     if obj is not None:
         return False, [str(obj["name"])]
-    grp = plane_db.get_object_group(selector)
     if grp is not None:
         members = plane_db._expand_group_members(grp["id"], set())
         if not members:
@@ -2465,19 +2571,19 @@ def _network_test_leaves(plane_db, selector: str, *, role: str) -> tuple[bool, l
 
 def _service_test_leaves(plane_db, selector: str) -> tuple[bool, list[str]]:
     """Expand a Service Object/Group selector to deterministic leaf Service Object names."""
-    sobj = get_service_object(plane_db, selector)
-    if sobj is not None:
-        return False, [str(sobj["name"])]
-    grp = get_service_group(plane_db, selector)
-    if grp is None:
-        raise ControlPlaneError(
-            cli_error(
-                "Service '%s' was not found." % selector,
-                expected="  Service Object\n  Service Group",
-                next_step="Use:\n  show service-objects\n  show service-groups",
-            )
+    kind, ref = resolve_service_ref(plane_db, selector)
+    if kind == "service_object":
+        return False, [str(ref["name"])]
+    grp = ref
+    members = [
+        r
+        for r in plane_db.conn.execute(
+            "SELECT s.name AS name FROM service_group_members m "
+            "JOIN service_objects s ON s.id = m.service_object_id "
+            "WHERE m.group_id = ? ORDER BY s.name COLLATE NOCASE",
+            (grp["id"],),
         )
-    members = expand_service_ref(plane_db, selector)
+    ]
     if not members:
         raise ControlPlaneError(cli_error("Service Group '%s' has no members." % selector))
     names = []
@@ -2950,20 +3056,12 @@ def set_ai_access_rule(
                 (kind, ref["id"], now, rule_id),
             )
         if permission is not None:
-            pobj = get_permission_object(plane_db, permission)
-            if pobj:
-                plane_db.conn.execute(
-                    "UPDATE ai_policy_rules SET permission_ref_kind = 'permission_object', "
-                    "permission_ref_id = ?, updated_at = ? WHERE id = ?",
-                    (pobj["id"], now, rule_id),
-                )
-            else:
-                pgrp = get_permission_group(plane_db, permission)
-                plane_db.conn.execute(
-                    "UPDATE ai_policy_rules SET permission_ref_kind = 'permission_group', "
-                    "permission_ref_id = ?, updated_at = ? WHERE id = ?",
-                    (pgrp["id"], now, rule_id),
-                )
+            kind, pref = resolve_permission_ref(plane_db, permission)
+            plane_db.conn.execute(
+                "UPDATE ai_policy_rules SET permission_ref_kind = ?, "
+                "permission_ref_id = ?, updated_at = ? WHERE id = ?",
+                (kind, pref["id"], now, rule_id),
+            )
         # Omitted paths preserve existing scopes on edit; explicit list (including
         # empty) replaces. Create with omit leaves scopes empty (fail-closed).
         if paths is not None:
@@ -3246,7 +3344,13 @@ def test_ai_access_v24(
     top-level ALLOW only when every atomic member allows. File members retain
     Finding-AA path-aware fail-closed behavior.
     """
-    if get_permission_group(plane_db, permission):
+    pobj = get_permission_object(plane_db, permission)
+    pgrp = get_permission_group(plane_db, permission)
+    if pobj is not None and pgrp is not None:
+        raise ControlPlaneError(
+            _ambiguous_public_name_error(permission, "Permission Object", "Permission Group")
+        )
+    if pgrp is not None:
         atoms = expand_permissions_ordered(plane_db, permission)
         if not atoms:
             raise ControlPlaneError(
