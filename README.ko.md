@@ -294,13 +294,9 @@ Current development target     2.4.0 / development channel
 
 Repository: [`datarelay-labs/datarelay-link`](https://github.com/datarelay-labs/datarelay-link)
 
-가변 `main`을 따르는 것은 명시적 opt-in만 허용됩니다:
+가변 `main`은 정상 설치/업데이트 경로가 아닙니다. 개발 및 사전 릴리즈 검증은 exact immutable source SHA 또는 명시적으로 qualification 된 candidate artifact를 사용합니다.
 
-```text
-FRP_RELEASE_CHANNEL=dev
-```
-
-구 updater의 legacy client는 one-time verified bridge를 사용할 수 있지만, 현재 upgrade policy를 대체하지는 않습니다.
+구 updater의 legacy client는 one-time verified compatibility bridge가 필요할 수 있지만, 이 호환 경로가 현재 immutable-source update policy를 대체하지 않습니다.
 
 Stable release는 동일 final exact HEAD에서 세 access plane과 해당 lifecycle/platform gate를 포함한 Real E2E 2회 통과가 필요합니다. code/dependency 변경 시 pass counter가 초기화됩니다.
 
