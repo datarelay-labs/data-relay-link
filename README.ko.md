@@ -306,11 +306,17 @@ Stable release는 동일 final exact HEAD에서 세 access plane과 해당 lifec
 
 시작 지점:
 
+- [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md) — 문서 권위/상태 인덱스
 - [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — 제품 수준 결정
 - [`docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`](docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — CLI/AI SSOT
 - [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar
 - [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
 - [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
+- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) — Server/Agent 설치 및 enrollment
+- [`docs/UPGRADE.md`](docs/UPGRADE.md) — 업그레이드 채널, migration, rollback
+- [`docs/REMOTE_ACCESS.md`](docs/REMOTE_ACCESS.md) — Remote Service와 Remote Access 운영
+- [`docs/AI_ACCESS_MCP.md`](docs/AI_ACCESS_MCP.md) — AI Identity, permission, AI Access, MCP
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — 진단 및 복구 가이드
 - [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access 동작
 - [`docs/SECURITY.md`](docs/SECURITY.md) — 보안 경계
 - [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release 규칙
