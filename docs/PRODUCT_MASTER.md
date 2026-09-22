@@ -510,6 +510,21 @@ generic open proxy
 transparent full-network bridge
 ```
 
+## 26.1 Operator documentation set
+
+The repository maintains task-oriented operator guides derived from the canonical specifications:
+
+```text
+DOCUMENTATION_INDEX.md
+INSTALLATION.md
+UPGRADE.md
+REMOTE_ACCESS.md
+AI_ACCESS_MCP.md
+TROUBLESHOOTING.md
+```
+
+These guides make existing normative behavior easier to find. They do not override the Product Master, CLI/AI Master, Version Policy, Security specification, or exact release qualification evidence.
+
 ## 27. Documentation ownership
 
 ```text
