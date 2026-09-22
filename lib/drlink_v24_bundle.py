@@ -11,12 +11,19 @@ and rejects malformed Markdown/prose pastes atomically.
 from __future__ import annotations
 
 import io
+import json
+import os
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from drlink_control_db import ControlPlaneError, utc_now_iso
-from drlink_control_plane import ConfirmationRequired, ControlPlane
+from drlink_control_plane import (
+    ConcurrencyError,
+    ConfirmationRequired,
+    ControlPlane,
+)
 from drlink_configuration_bundle import BundleError
 import drlink_v24 as v24
 
@@ -574,6 +581,8 @@ class V24Plan:
     no_change: bool = False
     security_impact: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
+    base_revision: Optional[int] = None
+    source_text: str = ""
 
     @property
     def mutating_changes(self) -> list[dict]:
@@ -1028,6 +1037,8 @@ def prepare_v24_plan(plane: ControlPlane, raw_text: str, *, role: Optional[str] 
         no_change=not mutating,
         security_impact=impact,
         raw=validated_body,
+        base_revision=int(plane.current_revision()),
+        source_text=str(raw_text or ""),
     )
 
 
@@ -1046,29 +1057,60 @@ def format_v24_plan(plan: V24Plan) -> str:
     return "\n".join(lines) + "\n"
 
 
-def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False) -> dict:
-    if plan.no_change:
-        return {"status": "NO_CHANGE", "revision": plane.current_revision()}
-    if plan.security_impact and not (
-        confirm is True
-        or str((__import__("os").environ.get("DRLINK_CONFIRM") or "")).strip().lower()
-        in ("yes", "y", "1", "true")
-    ):
-        texts = list(plan.security_impact or [])
-        access_narrowed = any("DENY ALL" in str(t) for t in texts)
-        access_broadened = any(
-            "broadens" in str(t).lower() or "this change resets" in str(t).lower()
-            for t in texts
-        )
-        raise ConfirmationRequired(
-            format_v24_plan(plan) + "\nApply these changes? [y/N]",
-            {
-                "access_broadened": bool(access_broadened),
-                "access_narrowed": bool(access_narrowed),
-                "requires_confirmation": True,
-            },
-        )
+def _confirm_requested(confirm: bool) -> bool:
+    return confirm is True or str(os.environ.get("DRLINK_CONFIRM") or "").strip().lower() in (
+        "yes",
+        "y",
+        "1",
+        "true",
+    )
 
+
+def _raise_plan_confirmation(plan: V24Plan) -> None:
+    texts = list(plan.security_impact or [])
+    access_narrowed = any("DENY ALL" in str(t) for t in texts)
+    access_broadened = any(
+        "broadens" in str(t).lower() or "this change resets" in str(t).lower()
+        for t in texts
+    )
+    raise ConfirmationRequired(
+        format_v24_plan(plan) + "\nApply these changes? [y/N]",
+        {
+            "access_broadened": bool(access_broadened),
+            "access_narrowed": bool(access_narrowed),
+            "requires_confirmation": True,
+        },
+    )
+
+
+def _resolve_plan_for_apply(plane: ControlPlane, plan: V24Plan) -> V24Plan:
+    """Re-diff against authoritative state, or fail closed on stale base revision."""
+    source = str(getattr(plan, "source_text", "") or "")
+    if source.strip():
+        return prepare_v24_plan(plane, source)
+    base = getattr(plan, "base_revision", None)
+    if base is not None and int(plane.current_revision()) != int(base):
+        raise ConcurrencyError(
+            "REVISION_CONFLICT\n"
+            "Base revision: %s\n"
+            "Current revision: %s\n"
+            "No changes were applied.\n"
+            "Re-run diff/test against current state."
+            % (base, plane.current_revision())
+        )
+    return plan
+
+
+def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False) -> dict:
+    """Apply a prepared plan against *current* authoritative state.
+
+    Canonical contract:
+      read current state -> recalculate diff/security impact -> confirm -> mutate
+
+    Decisions are made under BEGIN IMMEDIATE so concurrent writers cannot change
+    relevant state between the final security-impact decision and mutation.
+    """
+    confirmed = _confirm_requested(confirm)
     order = {
         "network-object": 10,
         "network-group": 20,
@@ -1100,46 +1142,120 @@ def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False)
         "network-group": 80,
         "network-object": 90,
     }
-    delete_first = [c for c in plan.mutating_changes if c["op"] in ("DELETE", "RESET")]
-    delete_first.sort(key=lambda c: delete_order.get(c["kind"], 100))
-    others = [c for c in plan.mutating_changes if c["op"] not in ("DELETE", "RESET")]
-    others.sort(key=lambda c: order.get(c["kind"], 100))
 
-    def write_all():
-        prev = plane._batch_mode
-        plane._batch_mode = True
-        plane._batch_results = []
-        try:
-            for c in delete_first + others:
-                _apply_one(plane, c)
-        finally:
-            plane._batch_mode = prev
-            plane._batch_results = []
-        return {
-            "entity": {"type": "configuration-bundle", "id": "bundle", "name": plan.context},
-            "operation": "apply",
-        }
-
+    is_agent = str(plan.context or "").lower() == "agent"
+    compile_runtime = not is_agent
     plane._agent_mgmt_side_effects = []
     checkpoint = None
-    is_agent = str(plan.context or "").lower() == "agent"
+    fresh: V24Plan = plan
+    rev: Optional[int] = None
     try:
-        if is_agent and plane._activation_should_run():
+        if (is_agent or compile_runtime) and plane._activation_should_run():
             checkpoint = plane._pre_activation_checkpoint()
-        plane._mutate(
-            "system apply configuration",
-            "apply configuration bundle",
-            write_all,
-            confirm=True,
-            compile_runtime=not is_agent,
-        )
+
+        plane.conn.execute("BEGIN IMMEDIATE")
+        try:
+            fresh = _resolve_plan_for_apply(plane, plan)
+            if fresh.no_change:
+                rev = int(plane.current_revision())
+                plane._rollback_open_transaction()
+                return {"status": "NO_CHANGE", "revision": rev}
+
+            if fresh.security_impact and not confirmed:
+                plane._rollback_open_transaction()
+                _raise_plan_confirmation(fresh)
+
+            delete_first = [c for c in fresh.mutating_changes if c["op"] in ("DELETE", "RESET")]
+            delete_first.sort(key=lambda c: delete_order.get(c["kind"], 100))
+            others = [c for c in fresh.mutating_changes if c["op"] not in ("DELETE", "RESET")]
+            others.sort(key=lambda c: order.get(c["kind"], 100))
+
+            prev_batch = plane._batch_mode
+            plane._batch_mode = True
+            plane._batch_results = []
+            try:
+                for c in delete_first + others:
+                    _apply_one(plane, c)
+            finally:
+                plane._batch_mode = prev_batch
+                plane._batch_results = []
+
+            rev = plane._write_revision(
+                "system apply configuration",
+                "apply configuration bundle",
+                snapshot={"summary": "apply configuration bundle"},
+            )
+            plane._audit(
+                revision=int(rev),
+                action="system apply configuration",
+                entity_type="configuration-bundle",
+                entity_id=str(fresh.context or "bundle"),
+                operation="apply",
+                after="apply configuration bundle",
+                impact=json.dumps(
+                    {
+                        "base_revision": getattr(plan, "base_revision", None),
+                        "resolved_revision": getattr(fresh, "base_revision", None),
+                        "security_impact": list(fresh.security_impact or [])[:20],
+                    },
+                    sort_keys=True,
+                )[:2000],
+            )
+            plane._commit_open_transaction()
+        except ConfirmationRequired:
+            plane._rollback_open_transaction()
+            raise
+        except ConcurrencyError:
+            plane._rollback_open_transaction()
+            raise
+        except ControlPlaneError:
+            plane._rollback_open_transaction()
+            raise
+        except Exception as exc:
+            plane._rollback_open_transaction()
+            if isinstance(exc, sqlite3.IntegrityError) and "foreign key" in str(exc).lower():
+                raise ControlPlaneError(
+                    "ERROR:\nCannot apply this change because a referenced dependency still exists.\n\n"
+                    "No changes were applied.\n\n"
+                    "Remove dependent Rules or Groups first, or include them in the same "
+                    "ConfigurationBundle with dependency-aware delete ordering."
+                ) from exc
+            raise ControlPlaneError("No changes were applied. %s" % exc) from exc
+
+        if compile_runtime and plane._activation_should_run():
+            try:
+                if plane._forced_activation_failure():
+                    raise ControlPlaneError("simulated activation failure")
+                plane.compile_runtime()
+            except Exception:
+                try:
+                    plane._rollback_activation(checkpoint or {})
+                except Exception:
+                    plane._mark_generation_failed("activation failed; rollback incomplete")
+                    plane._cleanup_activation_checkpoint(checkpoint)
+                    raise ControlPlaneError(
+                        "ERROR:\nApply failed and automatic rollback was not fully successful.\n\n"
+                        "The current runtime state may require operator attention.\n\n"
+                        "Run:\n  system diagnostics"
+                    ) from None
+                plane._cleanup_activation_checkpoint(checkpoint)
+                raise ControlPlaneError(
+                    "ERROR:\nRuntime activation failed.\n\n"
+                    "Previous configuration was restored.\n"
+                    "No configuration changes remain active."
+                ) from None
+            plane._cleanup_activation_checkpoint(checkpoint)
+            checkpoint = None
+
         if is_agent:
-            _finalize_agent_bundle_runtime(plane, plan, checkpoint)
+            _finalize_agent_bundle_runtime(plane, fresh, checkpoint)
+            checkpoint = None
+    except (ConfirmationRequired, ConcurrencyError):
+        raise
     except Exception as exc:
         msg = str(exc)
         if is_agent and getattr(plane, "_agent_mgmt_side_effects", None):
             if "Previous configuration was restored" in msg or "PARTIAL:" in msg or "RECOVERY_REQUIRED" in msg:
-                # finalize already reconciled / raised a truthful error
                 raise
             report = v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
             if not report.get("ok"):
@@ -1152,14 +1268,13 @@ def apply_v24_plan(plane: ControlPlane, plan: V24Plan, *, confirm: bool = False)
                     "Original error:\n%s\n\n"
                     "Run:\n  system diagnostics" % (details, msg)
                 ) from exc
-        else:
+        elif is_agent:
             v24.reconcile_agent_mgmt_side_effects(plane, root=plane.root)
         raise
     finally:
         plane._cleanup_activation_checkpoint(checkpoint)
         plane._agent_mgmt_side_effects = []
-    return {"status": "APPLIED", "revision": plane.current_revision()}
-
+    return {"status": "APPLIED", "revision": int(rev if rev is not None else plane.current_revision())}
 
 def _finalize_agent_bundle_runtime(plane: ControlPlane, plan: V24Plan, checkpoint) -> None:
     """Activate Agent runtime after the desired-state transaction commits."""

@@ -217,6 +217,7 @@ python3 tests/test-v24-ai-path-scope-public-parity.py
 python3 tests/test-v24-group-policy-test-false-assurance.py
 python3 tests/test-v24-service-policy-consistency.py
 python3 tests/test-v24-access-broadening-bundle-order.py
+python3 tests/test-v24-bundle-stale-plan-safety.py
 python3 tests/test-v24-managed-host-retirement.py
 python3 tests/test-v24-user-lifecycle-ux.py
 python3 tests/test-v24-ai-auth-convergence.py
