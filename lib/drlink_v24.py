@@ -1442,8 +1442,175 @@ def _ref_public_name(conn: sqlite3.Connection, kind: str, ref_id: str) -> str:
     return str(row["name"] if isinstance(row, sqlite3.Row) else row[0])
 
 
+def _unresolvable_semantic(kind: str, ref_id: str, reason: str = "missing") -> str:
+    """Fail-closed marker when referenced semantics cannot be expanded."""
+    return "UNRESOLVABLE:%s:%s:%s" % (kind or "?", ref_id or "?", reason)
+
+
+def _object_value_semantics(conn: sqlite3.Connection, object_id: str) -> list[str]:
+    """Canonical leaf semantics for one Network Object (type + normalized values)."""
+    obj = conn.execute(
+        "SELECT id, type FROM objects WHERE id = ?", (object_id,)
+    ).fetchone()
+    if obj is None:
+        return [_unresolvable_semantic("object", object_id)]
+    otype = str(obj["type"] or "").strip().lower() or "?"
+    if otype == "managed_endpoint":
+        addrs = [
+            str(r["address"])
+            for r in conn.execute(
+                "SELECT address FROM endpoint_addresses "
+                "WHERE endpoint_object_id = ? ORDER BY address COLLATE NOCASE",
+                (object_id,),
+            )
+        ]
+        if not addrs:
+            ep = conn.execute(
+                "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+                (object_id,),
+            ).fetchone()
+            client = str(ep["client_id"]) if ep and ep["client_id"] else "-"
+            return ["managed_endpoint:client=%s" % client]
+        return ["managed_endpoint:%s" % a for a in addrs]
+    vals = [
+        str(r["normalized"] if r["normalized"] is not None else r["value"])
+        for r in conn.execute(
+            "SELECT value, normalized FROM object_values "
+            "WHERE object_id = ? ORDER BY COALESCE(normalized, value) COLLATE NOCASE",
+            (object_id,),
+        )
+    ]
+    if not vals:
+        return ["%s:<empty>" % otype]
+    return ["%s:%s" % (otype, v) for v in vals]
+
+
+def _expand_network_group_semantics(
+    conn: sqlite3.Connection, group_id: str, seen: Optional[set] = None
+) -> list[str]:
+    seen = set() if seen is None else seen
+    if group_id in seen:
+        return [_unresolvable_semantic("group", group_id, "cycle")]
+    seen.add(group_id)
+    grp = conn.execute(
+        "SELECT id FROM object_groups WHERE id = ?", (group_id,)
+    ).fetchone()
+    if grp is None:
+        return [_unresolvable_semantic("group", group_id)]
+    out: list[str] = []
+    for mem in conn.execute(
+        "SELECT member_kind, member_id FROM object_group_members "
+        "WHERE group_id = ? ORDER BY member_kind, member_id",
+        (group_id,),
+    ):
+        kind = str(mem["member_kind"] or "").lower()
+        mid = mem["member_id"]
+        if kind == "object":
+            out.extend(_object_value_semantics(conn, mid))
+        elif kind == "group":
+            out.extend(_expand_network_group_semantics(conn, mid, seen))
+        else:
+            out.append(_unresolvable_semantic(kind or "member", mid, "unknown-kind"))
+    return sorted(set(out), key=lambda s: s.lower())
+
+
+def _semantic_network_ref(conn: sqlite3.Connection, kind: str, ref_id: str) -> str:
+    kind_l = str(kind or "").lower()
+    if kind_l == "object":
+        leaves = _object_value_semantics(conn, ref_id)
+        return "{%s}" % ",".join(leaves)
+    if kind_l == "group":
+        leaves = _expand_network_group_semantics(conn, ref_id, set())
+        return "{%s}" % ",".join(leaves)
+    return _unresolvable_semantic(kind_l, ref_id, "unknown-kind")
+
+
+def _service_object_semantics(conn: sqlite3.Connection, object_id: str) -> list[str]:
+    sobj = conn.execute(
+        "SELECT type, port FROM service_objects WHERE id = ?", (object_id,)
+    ).fetchone()
+    if sobj is None:
+        return [_unresolvable_semantic("service_object", object_id)]
+    return ["%s:%s" % (str(sobj["type"]).lower(), int(sobj["port"]))]
+
+
+def _expand_service_group_semantics(conn: sqlite3.Connection, group_id: str) -> list[str]:
+    grp = conn.execute(
+        "SELECT id FROM service_groups WHERE id = ?", (group_id,)
+    ).fetchone()
+    if grp is None:
+        return [_unresolvable_semantic("service_group", group_id)]
+    out: list[str] = []
+    for member in conn.execute(
+        "SELECT s.id AS id FROM service_group_members m "
+        "JOIN service_objects s ON s.id = m.service_object_id "
+        "WHERE m.group_id = ? ORDER BY s.name COLLATE NOCASE",
+        (group_id,),
+    ):
+        out.extend(_service_object_semantics(conn, member["id"]))
+    return sorted(set(out), key=lambda s: s.lower())
+
+
+def _semantic_service_ref(conn: sqlite3.Connection, kind: str, ref_id: str) -> str:
+    kind_l = str(kind or "").lower()
+    if kind_l == "service_object":
+        return "{%s}" % ",".join(_service_object_semantics(conn, ref_id))
+    if kind_l == "service_group":
+        return "{%s}" % ",".join(_expand_service_group_semantics(conn, ref_id))
+    return _unresolvable_semantic(kind_l, ref_id, "unknown-kind")
+
+
+def _permission_object_semantics(conn: sqlite3.Connection, object_id: str) -> list[str]:
+    obj = conn.execute(
+        "SELECT id FROM permission_objects WHERE id = ?", (object_id,)
+    ).fetchone()
+    if obj is None:
+        return [_unresolvable_semantic("permission_object", object_id)]
+    perms = [
+        str(r["permission"]).lower()
+        for r in conn.execute(
+            "SELECT permission FROM permission_object_members "
+            "WHERE permission_object_id = ? ORDER BY permission COLLATE NOCASE",
+            (object_id,),
+        )
+    ]
+    if not perms:
+        return ["permission:<empty>"]
+    return perms
+
+
+def _expand_permission_group_semantics(conn: sqlite3.Connection, group_id: str) -> list[str]:
+    grp = conn.execute(
+        "SELECT id FROM permission_groups WHERE id = ?", (group_id,)
+    ).fetchone()
+    if grp is None:
+        return [_unresolvable_semantic("permission_group", group_id)]
+    out: list[str] = []
+    for member in conn.execute(
+        "SELECT permission_object_id FROM permission_group_members "
+        "WHERE group_id = ? ORDER BY permission_object_id",
+        (group_id,),
+    ):
+        out.extend(_permission_object_semantics(conn, member["permission_object_id"]))
+    return sorted(set(out), key=lambda s: s.lower())
+
+
+def _semantic_permission_ref(conn: sqlite3.Connection, kind: str, ref_id: str) -> str:
+    kind_l = str(kind or "").lower()
+    if kind_l == "permission_object":
+        return "{%s}" % ",".join(_permission_object_semantics(conn, ref_id))
+    if kind_l == "permission_group":
+        return "{%s}" % ",".join(_expand_permission_group_semantics(conn, ref_id))
+    return _unresolvable_semantic(kind_l, ref_id, "unknown-kind")
+
+
 def _enabled_rule_fingerprints(conn: sqlite3.Connection, plane: str) -> set[str]:
-    """Stable fingerprints of enabled Rules for restore before/after comparison."""
+    """Effective-semantics fingerprints of enabled Rules for restore comparison.
+
+    Public reference names alone are insufficient: same-name Object/Group/Service
+    mutations change effective match sets and must not evade confirmation.
+    Unresolvable refs fingerprint as UNRESOLVABLE markers (fail closed).
+    """
     out: set[str] = set()
     if plane == "ai":
         rows = conn.execute(
@@ -1459,12 +1626,12 @@ def _enabled_rule_fingerprints(conn: sqlite3.Connection, plane: str) -> set[str]
                 src = str(principal["name"] if principal else row["source_identity_id"])
             dst = "-"
             if row["destination_ref_kind"] and row["destination_ref_id"]:
-                dst = _ref_public_name(
+                dst = _semantic_network_ref(
                     conn, row["destination_ref_kind"], row["destination_ref_id"]
                 )
             perm = "-"
             if row["permission_ref_kind"] and row["permission_ref_id"]:
-                perm = _ref_public_name(
+                perm = _semantic_permission_ref(
                     conn, row["permission_ref_kind"], row["permission_ref_id"]
                 )
             paths = []
@@ -1495,28 +1662,31 @@ def _enabled_rule_fingerprints(conn: sqlite3.Connection, plane: str) -> set[str]
             "ORDER BY ref_kind, ref_id",
             (row["id"],),
         ):
-            sources.append(_ref_public_name(conn, s["ref_kind"], s["ref_id"]))
+            sources.append(_semantic_network_ref(conn, s["ref_kind"], s["ref_id"]))
         destinations = []
         for s in conn.execute(
             "SELECT ref_kind, ref_id FROM rule_destinations WHERE rule_id = ? "
             "ORDER BY ref_kind, ref_id",
             (row["id"],),
         ):
-            destinations.append(_ref_public_name(conn, s["ref_kind"], s["ref_id"]))
+            destinations.append(_semantic_network_ref(conn, s["ref_kind"], s["ref_id"]))
         services = []
-        for s in conn.execute(
-            "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ? "
-            "ORDER BY ref_kind, ref_id",
-            (row["id"],),
-        ):
-            services.append(_ref_public_name(conn, s["ref_kind"], s["ref_id"]))
+        refs = list(
+            conn.execute(
+                "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ? "
+                "ORDER BY ref_kind, ref_id",
+                (row["id"],),
+            )
+        )
+        for s in refs:
+            services.append(_semantic_service_ref(conn, s["ref_kind"], s["ref_id"]))
         if not services:
             for s in conn.execute(
                 "SELECT protocol, port FROM rule_services "
                 "WHERE rule_id = ? ORDER BY protocol, port",
                 (row["id"],),
             ):
-                services.append("%s:%s" % (s["protocol"], s["port"]))
+                services.append("{%s:%s}" % (s["protocol"], s["port"]))
         out.add(
             "%s|%s|src=%s|dst=%s|svc=%s"
             % (

@@ -391,6 +391,148 @@ class RestoreSecurityImpactTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_remote_blacklist_same_network_object_value_change_requires_confirm(self):
+        """Independent FAIL repro: same public name, changed IP — restore must confirm."""
+        self._seed_remote_blacklist()
+        archive = self._backup("selector-semantic")
+        # Candidate blocks .66; live mutates same-name Object to .77.
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.66", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "DENY",
+        )
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.77", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "ALLOW",
+        )
+        v24.set_network_object(
+            self.plane,
+            "bad",
+            type="ip",
+            value="198.51.100.77",
+            oneshot=True,
+            confirm=True,
+        )
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.66", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "ALLOW",
+        )
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.77", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "DENY",
+        )
+        rev_before = self.plane.current_revision()
+        proc = run_tool(RESTORE, str(archive))
+        self.assertNotEqual(proc.returncode, 0)
+        combined = (proc.stdout + proc.stderr).lower()
+        self.assertIn("broaden", combined)
+        self.plane.close()
+        self.plane = ControlPlane(str(self.tree))
+        self.assertEqual(self.plane.current_revision(), rev_before)
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.77", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "DENY",
+        )
+
+        proc = run_tool(RESTORE, "--yes", str(archive))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.plane.close()
+        self.plane = ControlPlane(str(self.tree))
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.66", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "DENY",
+        )
+        self.assertEqual(
+            self.plane.evaluate_remote_access("198.51.100.77", "198.51.100.20", "tcp", 22)[
+                "action"
+            ],
+            "ALLOW",
+        )
+
+    def test_internet_whitelist_same_network_group_membership_change_requires_confirm(self):
+        v24.set_network_object(
+            self.plane, "lan-a", type="ip", value="10.10.10.20", oneshot=True
+        )
+        v24.set_network_object(
+            self.plane, "lan-b", type="ip", value="10.10.10.21", oneshot=True
+        )
+        v24.set_network_object(
+            self.plane, "web", type="fqdn", value="example.com", oneshot=True
+        )
+        v24.set_service_object(self.plane, "https", type="tcp", port=443, oneshot=True)
+        v24.set_network_group(
+            self.plane, "lans", members=["lan-a", "lan-b"], oneshot=True
+        )
+        v24.set_access_rule(
+            self.plane,
+            "internet",
+            "allow-web",
+            mode="whitelist",
+            source="lans",
+            destination="web",
+            service="https",
+            enabled=True,
+            oneshot=True,
+        )
+        archive = self._backup("inet-group")
+        # Shrink live group → restore candidate expands allow set.
+        v24.set_network_group(
+            self.plane, "lans", members=["lan-a"], oneshot=True, confirm=True
+        )
+        proc = run_tool(RESTORE, str(archive))
+        self.assertNotEqual(proc.returncode, 0)
+        combined = (proc.stdout + proc.stderr).lower()
+        self.assertIn("internet", combined)
+        self.assertIn("broaden", combined)
+
+    def test_remote_service_object_port_change_requires_confirm(self):
+        self._seed_remote_blacklist()
+        archive = self._backup("svc-port")
+        v24.set_service_object(
+            self.plane, "svc", type="tcp", port=2222, oneshot=True, confirm=True
+        )
+        proc = run_tool(RESTORE, str(archive))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("broaden", (proc.stdout + proc.stderr).lower())
+
+    def test_ai_same_permission_object_semantics_change_requires_confirm(self):
+        self._seed_ai_whitelist()
+        archive = self._backup("ai-perm")
+        v24.set_permission_object(
+            self.plane,
+            "exec-only",
+            permissions=["command-exec", "host-info"],
+            oneshot=True,
+            confirm=True,
+        )
+        proc = run_tool(RESTORE, str(archive))
+        # Restoring narrower permission set from backup narrows AI Access (DENY ALL risk).
+        self.assertNotEqual(proc.returncode, 0)
+        combined = (proc.stdout + proc.stderr).lower()
+        self.assertIn("ai access", combined)
+        self.assertTrue("broaden" in combined or "narrow" in combined)
+
+    def test_identical_effective_selector_semantics_does_not_prompt(self):
+        self._seed_remote_blacklist()
+        archive = self._backup("same-sem")
+        # Touch unrelated client label only — policy semantics unchanged.
+        self.plane.conn.execute("UPDATE clients SET label='mutated-again'")
+        self.plane.conn.commit()
+        proc = run_tool(RESTORE, str(archive))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Continue? [y/N]", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
