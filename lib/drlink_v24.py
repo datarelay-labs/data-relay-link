@@ -1828,7 +1828,7 @@ def expand_service_ref(plane_db, token: str) -> list[sqlite3.Row]:
         r
         for r in plane_db.conn.execute(
             "SELECT s.* FROM service_group_members m JOIN service_objects s ON s.id = m.service_object_id "
-            "WHERE m.group_id = ?",
+            "WHERE m.group_id = ? ORDER BY s.name COLLATE NOCASE",
             (grp["id"],),
         )
     ]
@@ -2077,7 +2077,8 @@ def expand_permissions(plane_db, token: str) -> set[str]:
         return {
             r["permission"]
             for r in plane_db.conn.execute(
-                "SELECT permission FROM permission_object_members WHERE permission_object_id = ?",
+                "SELECT permission FROM permission_object_members "
+                "WHERE permission_object_id = ? ORDER BY permission COLLATE NOCASE",
                 (pobj["id"],),
             )
         }
@@ -2086,15 +2087,22 @@ def expand_permissions(plane_db, token: str) -> set[str]:
         raise ControlPlaneError(cli_error("Permission '%s' was not found." % token))
     out: set[str] = set()
     for mid in plane_db.conn.execute(
-        "SELECT permission_object_id FROM permission_group_members WHERE group_id = ?",
+        "SELECT permission_object_id FROM permission_group_members "
+        "WHERE group_id = ? ORDER BY permission_object_id",
         (grp["id"],),
     ):
         for r in plane_db.conn.execute(
-            "SELECT permission FROM permission_object_members WHERE permission_object_id = ?",
+            "SELECT permission FROM permission_object_members "
+            "WHERE permission_object_id = ? ORDER BY permission COLLATE NOCASE",
             (mid["permission_object_id"],),
         ):
             out.add(r["permission"])
     return out
+
+
+def expand_permissions_ordered(plane_db, token: str) -> list[str]:
+    """Deterministic atomic permission list for public policy-test expansion."""
+    return sorted(expand_permissions(plane_db, token), key=lambda p: str(p).lower())
 
 
 # ---------------------------------------------------------------------------
@@ -2357,7 +2365,7 @@ def _representative_ip_from_value(value: str) -> str:
 
 
 def _resolve_test_source_ip(plane_db, source_name: str) -> str:
-    """Resolve a Network Object/Group to a runtime-equivalent source IP."""
+    """Resolve a concrete Network Object to a runtime-equivalent source IP."""
     from drlink_control_plane import membership_eligible
 
     obj = plane_db.get_object(source_name)
@@ -2379,17 +2387,11 @@ def _resolve_test_source_ip(plane_db, source_name: str) -> str:
             # FQDN sources are unusual; still allow exact-string evaluation via host match path.
             return str(vals[0])
         return _representative_ip_from_value(vals[0])
-    grp = plane_db.get_object_group(source_name)
-    if grp is not None:
-        members = plane_db._expand_group_members(grp["id"], set())
-        if not members:
-            raise ControlPlaneError(cli_error("Network Group '%s' has no members." % source_name))
-        return _resolve_test_source_ip(plane_db, members[0]["name"])
     raise ControlPlaneError(cli_error("Network Object '%s' was not found." % source_name))
 
 
 def _resolve_test_destination(plane_db, destination_name: str, *, plane: str) -> str:
-    """Resolve a Network Object/Group to a runtime-equivalent destination token."""
+    """Resolve a concrete Network Object to a runtime-equivalent destination token."""
     obj = plane_db.get_object(destination_name)
     if obj is not None:
         if obj["type"] == "managed_endpoint":
@@ -2407,12 +2409,6 @@ def _resolve_test_destination(plane_db, destination_name: str, *, plane: str) ->
         if obj["type"] == "network":
             return _representative_ip_from_value(vals[0])
         return str(vals[0])
-    grp = plane_db.get_object_group(destination_name)
-    if grp is not None:
-        members = plane_db._expand_group_members(grp["id"], set())
-        if not members:
-            raise ControlPlaneError(cli_error("Network Group '%s' has no members." % destination_name))
-        return _resolve_test_destination(plane_db, members[0]["name"], plane=plane)
     # Allow literal IP / hostname tokens for AI/operator convenience.
     try:
         return str(ipaddress.ip_address(str(destination_name).strip()))
@@ -2424,12 +2420,154 @@ def _resolve_test_destination(plane_db, destination_name: str, *, plane: str) ->
 
 
 def _resolve_test_service(plane_db, service_name: str) -> tuple[str, int]:
-    """Resolve a Service Object/Group to protocol + port used by runtime matching."""
-    members = expand_service_ref(plane_db, service_name)
-    sobj = members[0]
+    """Resolve a concrete Service Object to protocol + port used by runtime matching."""
+    sobj = get_service_object(plane_db, service_name)
+    if sobj is None:
+        raise ControlPlaneError(
+            cli_error(
+                "Service Object '%s' was not found." % service_name,
+                expected="  Service Object",
+                next_step="Use:\n  show service-objects",
+            )
+        )
     stype = str(sobj["type"] or "tcp").lower()
     proto = "tcp" if stype in ("tcp", "fixed-tcp", "http", "https") else stype
     return proto, int(sobj["port"])
+
+
+def _network_test_leaves(plane_db, selector: str, *, role: str) -> tuple[bool, list[str]]:
+    """Expand a Network Object/Group selector to deterministic leaf Object names."""
+    obj = plane_db.get_object(selector)
+    if obj is not None:
+        return False, [str(obj["name"])]
+    grp = plane_db.get_object_group(selector)
+    if grp is not None:
+        members = plane_db._expand_group_members(grp["id"], set())
+        if not members:
+            raise ControlPlaneError(
+                cli_error("Network Group '%s' has no members." % selector)
+            )
+        names = []
+        seen = set()
+        for mem in members:
+            name = str(mem["name"])
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(name)
+        return True, names
+    if role == "destination":
+        # Literal tokens are treated as a single concrete leaf.
+        return False, [str(selector)]
+    raise ControlPlaneError(cli_error("Network Object '%s' was not found." % selector))
+
+
+def _service_test_leaves(plane_db, selector: str) -> tuple[bool, list[str]]:
+    """Expand a Service Object/Group selector to deterministic leaf Service Object names."""
+    sobj = get_service_object(plane_db, selector)
+    if sobj is not None:
+        return False, [str(sobj["name"])]
+    grp = get_service_group(plane_db, selector)
+    if grp is None:
+        raise ControlPlaneError(
+            cli_error(
+                "Service '%s' was not found." % selector,
+                expected="  Service Object\n  Service Group",
+                next_step="Use:\n  show service-objects\n  show service-groups",
+            )
+        )
+    members = expand_service_ref(plane_db, selector)
+    if not members:
+        raise ControlPlaneError(cli_error("Service Group '%s' has no members." % selector))
+    names = []
+    seen = set()
+    for mem in members:
+        name = str(mem["name"])
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return True, names
+
+
+def _aggregate_group_test_result(member_results: list[dict]) -> tuple[str, bool]:
+    """ALLOW only when every concrete member/combination is ALLOW; else DENY."""
+    outcomes = [str(item.get("result") or "DENY").upper() for item in member_results]
+    if outcomes and all(item == "ALLOW" for item in outcomes):
+        return "ALLOW", False
+    mixed = len(set(outcomes)) > 1
+    return "DENY", mixed
+
+
+def _evaluate_resolved_access(
+    plane_db,
+    plane: str,
+    *,
+    src: str,
+    dest: str,
+    proto: str,
+    prt: int,
+    resolve_fn: Optional[Callable[[str], list[str]]] = None,
+) -> dict:
+    """Run one concrete Remote/Internet evaluation through runtime-equivalent APIs."""
+    if plane == "internet" and str(proto).lower() == "udp":
+        raise ControlPlaneError(
+            cli_error(
+                "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only; "
+                "UDP Service Objects cannot be selected."
+            )
+        )
+    if plane == "remote":
+        evaluation = plane_db.evaluate_remote_access(str(src), str(dest), str(proto), int(prt))
+    else:
+        candidate_ips = None
+        dest_s = str(dest)
+        try:
+            candidate_ips = [ipaddress.ip_address(dest_s).compressed]
+        except ValueError:
+            resolver = resolve_fn
+            if resolver is None:
+                import socket as _socket
+
+                def _default_resolve(hostname: str) -> list[str]:
+                    results = _socket.getaddrinfo(hostname, None, type=_socket.SOCK_STREAM)
+                    seen = set()
+                    out = []
+                    for _family, _type, _proto, _canon, sockaddr in results:
+                        ip = sockaddr[0]
+                        if ip in seen:
+                            continue
+                        seen.add(ip)
+                        out.append(ip)
+                    return out
+
+                resolver = _default_resolve
+            try:
+                import frp_egress_control as EG
+
+                candidate_ips = EG.validate_resolved_addresses(list(resolver(dest_s)))
+            except Exception as exc:
+                raise ControlPlaneError(
+                    cli_error(
+                        "Internet Access test could not resolve destination '%s': %s"
+                        % (dest_s, exc)
+                    )
+                ) from exc
+        evaluation = plane_db.evaluate_internet_access(
+            str(src), dest_s, int(prt), str(proto), candidate_ips=candidate_ips
+        )
+    action = str(evaluation.get("effective") or evaluation.get("action") or "DENY").upper()
+    return {
+        "mode": evaluation.get("mode"),
+        "enforcement": evaluation.get("enforcement"),
+        "matched_rules": list(evaluation.get("matched_rules") or []),
+        "result": action,
+        "plane": plane,
+        "authorized_candidates": list(evaluation.get("authorized_candidates") or []),
+        "candidate_ips": list(evaluation.get("candidate_ips") or []),
+    }
 
 
 def evaluate_selector_policy(
@@ -2450,6 +2588,10 @@ def evaluate_selector_policy(
     Named Object selectors are resolved to canonical values (IP/FQDN/protocol/port)
     so Object identity alone never decides the match — matching the datapath.
 
+    When a public test selector is a Network/Service Group, every leaf member
+    combination is evaluated. Top-level ALLOW requires unanimous ALLOW; mixed
+    outcomes aggregate to DENY with explicit member/combination detail.
+
     For Internet Access hostname destinations, ``resolve_fn`` (default: getaddrinfo)
     supplies the same validated candidate set the gateway uses for IP/CIDR matching.
     """
@@ -2457,79 +2599,94 @@ def evaluate_selector_policy(
 
     # Public CLI path: named selectors → resolve → same evaluators as runtime.
     if source_name is not None or destination_name is not None or service_name is not None:
-        src = source_ip
-        dest = destination
-        proto = protocol
-        prt = port
-        if source_name is not None:
-            src = _resolve_test_source_ip(plane_db, source_name)
-        if destination_name is not None:
-            dest = _resolve_test_destination(plane_db, destination_name, plane=plane)
-        if service_name is not None:
-            proto, prt = _resolve_test_service(plane_db, service_name)
-        if src is None or dest is None or proto is None or prt is None:
+        if source_name is None or destination_name is None or service_name is None:
             raise ControlPlaneError(
                 cli_error(
                     "Policy test requires source, destination, and service.",
                     expected="  source\n  destination\n  service",
                 )
             )
-        if plane == "internet" and str(proto).lower() == "udp":
-            raise ControlPlaneError(
-                cli_error(
-                    "Internet Access v2.4 has a TCP/HTTP/HTTPS CONNECT datapath only; "
-                    "UDP Service Objects cannot be selected."
-                )
+        src_is_group, src_leaves = _network_test_leaves(
+            plane_db, source_name, role="source"
+        )
+        dst_is_group, dst_leaves = _network_test_leaves(
+            plane_db, destination_name, role="destination"
+        )
+        svc_is_group, svc_leaves = _service_test_leaves(plane_db, service_name)
+        group_test = src_is_group or dst_is_group or svc_is_group
+
+        if not group_test:
+            src = _resolve_test_source_ip(plane_db, src_leaves[0])
+            dest = _resolve_test_destination(plane_db, dst_leaves[0], plane=plane)
+            proto, prt = _resolve_test_service(plane_db, svc_leaves[0])
+            return _evaluate_resolved_access(
+                plane_db,
+                plane,
+                src=src,
+                dest=dest,
+                proto=proto,
+                prt=prt,
+                resolve_fn=resolve_fn,
             )
-        if plane == "remote":
-            evaluation = plane_db.evaluate_remote_access(str(src), str(dest), str(proto), int(prt))
-        else:
-            candidate_ips = None
-            dest_s = str(dest)
-            try:
-                candidate_ips = [ipaddress.ip_address(dest_s).compressed]
-            except ValueError:
-                resolver = resolve_fn
-                if resolver is None:
-                    import socket as _socket
 
-                    def _default_resolve(hostname: str) -> list[str]:
-                        results = _socket.getaddrinfo(hostname, None, type=_socket.SOCK_STREAM)
-                        seen = set()
-                        out = []
-                        for _family, _type, _proto, _canon, sockaddr in results:
-                            ip = sockaddr[0]
-                            if ip in seen:
-                                continue
-                            seen.add(ip)
-                            out.append(ip)
-                        return out
-
-                    resolver = _default_resolve
-                try:
-                    import frp_egress_control as EG
-
-                    candidate_ips = EG.validate_resolved_addresses(list(resolver(dest_s)))
-                except Exception as exc:
-                    raise ControlPlaneError(
-                        cli_error(
-                            "Internet Access test could not resolve destination '%s': %s"
-                            % (dest_s, exc)
-                        )
-                    ) from exc
-            evaluation = plane_db.evaluate_internet_access(
-                str(src), dest_s, int(prt), str(proto), candidate_ips=candidate_ips
-            )
-        action = str(evaluation.get("effective") or evaluation.get("action") or "DENY").upper()
-        return {
-            "mode": evaluation.get("mode"),
-            "enforcement": evaluation.get("enforcement"),
-            "matched_rules": list(evaluation.get("matched_rules") or []),
-            "result": action,
+        member_results: list[dict] = []
+        matched_union: list[str] = []
+        matched_seen = set()
+        mode = None
+        enforcement = None
+        for src_leaf in src_leaves:
+            for dst_leaf in dst_leaves:
+                for svc_leaf in svc_leaves:
+                    src = _resolve_test_source_ip(plane_db, src_leaf)
+                    dest = _resolve_test_destination(plane_db, dst_leaf, plane=plane)
+                    proto, prt = _resolve_test_service(plane_db, svc_leaf)
+                    one = _evaluate_resolved_access(
+                        plane_db,
+                        plane,
+                        src=src,
+                        dest=dest,
+                        proto=proto,
+                        prt=prt,
+                        resolve_fn=resolve_fn,
+                    )
+                    if mode is None:
+                        mode = one.get("mode")
+                        enforcement = one.get("enforcement")
+                    rules = list(one.get("matched_rules") or [])
+                    for rule in rules:
+                        key = str(rule).lower()
+                        if key in matched_seen:
+                            continue
+                        matched_seen.add(key)
+                        matched_union.append(rule)
+                    member_results.append(
+                        {
+                            "source": src_leaf,
+                            "destination": dst_leaf,
+                            "service": svc_leaf,
+                            "result": one["result"],
+                            "matched_rules": rules,
+                        }
+                    )
+        aggregate, mixed = _aggregate_group_test_result(member_results)
+        out = {
+            "mode": mode,
+            "enforcement": enforcement,
+            "matched_rules": matched_union,
+            "result": aggregate,
             "plane": plane,
-            "authorized_candidates": list(evaluation.get("authorized_candidates") or []),
-            "candidate_ips": list(evaluation.get("candidate_ips") or []),
+            "member_results": member_results,
+            "group_test": True,
+            "mixed": mixed,
+            "authorized_candidates": [],
+            "candidate_ips": [],
         }
+        if mixed:
+            out["reason"] = (
+                "mixed group member outcomes; aggregate DENY "
+                "(ALLOW only when every member combination allows)"
+            )
+        return out
 
     # Direct IP/protocol/port path (internal / legacy callers).
     pol = get_access_policy(plane_db, plane)
@@ -2637,6 +2794,28 @@ def format_policy_test(family: str, evaluation: dict, selectors: dict, remote_se
     reason = evaluation.get("reason")
     if reason:
         lines.extend(["", "Reason:", "  %s" % reason])
+    member_results = evaluation.get("member_results") or []
+    if member_results:
+        lines.extend(["", "Member Results:"])
+        for item in member_results:
+            rules = list(item.get("matched_rules") or [])
+            rule_suffix = (" [%s]" % ", ".join(rules)) if rules else ""
+            if "permission" in item:
+                lines.append(
+                    "  permission=%s => %s%s"
+                    % (item.get("permission"), item.get("result"), rule_suffix)
+                )
+            else:
+                lines.append(
+                    "  source=%s destination=%s service=%s => %s%s"
+                    % (
+                        item.get("source"),
+                        item.get("destination"),
+                        item.get("service"),
+                        item.get("result"),
+                        rule_suffix,
+                    )
+                )
     if evaluation.get("path_required"):
         lines.extend(
             [
@@ -2992,7 +3171,7 @@ def permission_includes_file_capability(plane_db, permission: str) -> bool:
     return bool(wanted & FILE_PERMISSIONS)
 
 
-def test_ai_access_v24(
+def _test_ai_access_atomic_v24(
     plane_db,
     *,
     identity: str,
@@ -3000,13 +3179,7 @@ def test_ai_access_v24(
     permission: str,
     path: Optional[str] = None,
 ) -> dict:
-    """Public ``test ai-access`` decision, path-aware for file permissions.
-
-    Permission-level matching uses evaluate_ai_access_v24(). When the tested
-    permission includes file capabilities, an omitted path must not report
-    unconditional ALLOW (runtime would DENY without a matching path scope).
-    A concrete path uses authorize_ai_capability_v24 so test == MCP runtime.
-    """
+    """Public AI Access test for one Permission Object or atomic permission."""
     evaluation = evaluate_ai_access_v24(
         plane_db,
         identity=identity,
@@ -3056,6 +3229,103 @@ def test_ai_access_v24(
     evaluation["patterns"] = list(auth.get("patterns") or [])
     evaluation["auth"] = auth.get("auth") or evaluation.get("auth")
     return evaluation
+
+
+def test_ai_access_v24(
+    plane_db,
+    *,
+    identity: str,
+    destination: str,
+    permission: str,
+    path: Optional[str] = None,
+) -> dict:
+    """Public ``test ai-access`` decision, path-aware for file permissions.
+
+    Permission Objects and atomic permissions keep evaluate_ai_access_v24()
+    semantics. Permission Groups expand to atomic permissions and aggregate:
+    top-level ALLOW only when every atomic member allows. File members retain
+    Finding-AA path-aware fail-closed behavior.
+    """
+    if get_permission_group(plane_db, permission):
+        atoms = expand_permissions_ordered(plane_db, permission)
+        if not atoms:
+            raise ControlPlaneError(
+                cli_error("Permission Group '%s' has no members." % permission)
+            )
+        member_results: list[dict] = []
+        matched_union: list[str] = []
+        matched_seen = set()
+        mode = None
+        enforcement = None
+        auth = None
+        path_required_any = False
+        patterns: list[str] = []
+        for atom in atoms:
+            one = _test_ai_access_atomic_v24(
+                plane_db,
+                identity=identity,
+                destination=destination,
+                permission=atom,
+                path=path,
+            )
+            if mode is None:
+                mode = one.get("mode")
+                enforcement = one.get("enforcement")
+                auth = one.get("auth")
+            if one.get("path_required"):
+                path_required_any = True
+            for rule in list(one.get("matched_rules") or []):
+                key = str(rule).lower()
+                if key in matched_seen:
+                    continue
+                matched_seen.add(key)
+                matched_union.append(rule)
+            for pattern in list(one.get("patterns") or []):
+                if pattern not in patterns:
+                    patterns.append(pattern)
+            member_results.append(
+                {
+                    "permission": atom,
+                    "result": one.get("result"),
+                    "matched_rules": list(one.get("matched_rules") or []),
+                    "path_required": bool(one.get("path_required")),
+                    "reason": one.get("reason"),
+                }
+            )
+        aggregate, mixed = _aggregate_group_test_result(member_results)
+        out = {
+            "mode": mode,
+            "enforcement": enforcement,
+            "matched_rules": matched_union,
+            "result": aggregate,
+            "plane": "ai",
+            "auth": auth,
+            "path": path,
+            "path_required": path_required_any and aggregate != "ALLOW",
+            "member_results": member_results,
+            "group_test": True,
+            "mixed": mixed,
+            "patterns": patterns,
+        }
+        if mixed:
+            out["reason"] = (
+                "mixed permission group member outcomes; aggregate DENY "
+                "(ALLOW only when every atomic permission allows)"
+            )
+        elif path_required_any and aggregate == "DENY":
+            out["reason"] = (
+                "file permission requires path context; "
+                "runtime DENYs without a concrete in-scope path"
+            )
+        return out
+
+    return _test_ai_access_atomic_v24(
+        plane_db,
+        identity=identity,
+        destination=destination,
+        permission=permission,
+        path=path,
+    )
 
 
 def _matched_ai_rule_rows(plane_db, matched_names: list[str]) -> list:

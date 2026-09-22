@@ -214,6 +214,7 @@ python3 tests/test-v24-manual-e2e-findings.py
 python3 tests/test-v24-cli-workflow-semantic-parity.py
 python3 tests/test-v24-ai-access-reference-integrity.py
 python3 tests/test-v24-ai-path-scope-public-parity.py
+python3 tests/test-v24-group-policy-test-false-assurance.py
 python3 tests/test-v24-service-policy-consistency.py
 python3 tests/test-v24-access-broadening-bundle-order.py
 python3 tests/test-v24-managed-host-retirement.py

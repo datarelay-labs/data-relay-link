@@ -772,7 +772,9 @@ class ControlPlane:
         seen.add(group_id)
         out = []
         for mem in self.conn.execute(
-            "SELECT * FROM object_group_members WHERE group_id = ?", (group_id,)
+            "SELECT * FROM object_group_members WHERE group_id = ? "
+            "ORDER BY member_kind, member_id",
+            (group_id,),
         ):
             if mem["member_kind"] == "object":
                 obj = self.conn.execute(
@@ -782,6 +784,8 @@ class ControlPlane:
                     out.append(obj)
             else:
                 out.extend(self._expand_group_members(mem["member_id"], seen))
+        # Stable leaf order for public policy-test expansion (Finding Y).
+        out.sort(key=lambda row: str(row["name"] or "").lower())
         return out
 
     def group_valid_for(self, group: sqlite3.Row, plane: str, field: str) -> tuple[bool, str]:

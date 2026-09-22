@@ -256,7 +256,9 @@ test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMIS
 
 Output includes Mode, Enforcement, selectors, matched Rules, and Effective Result. Where relevant, Remote Service runtime state is shown separately from policy authorization.
 
-For file permissions, omit `path` and `test ai-access` will not claim unconditional ALLOW (runtime requires an in-scope path). Provide `path <PATH>` to evaluate the same fail-closed path-scope contract used by MCP.
+When a selector is a Network Group, Service Group, or Permission Group, the public test expands every leaf member (stable sorted order), evaluates each concrete combination with the same atomic/runtime evaluators used for single Objects, and reports member/combination detail. Top-level Effective Result is ALLOW only when every expanded member/combination is ALLOW; mixed outcomes aggregate to DENY. Single Object / Service / Permission Object / atomic permission behavior is unchanged.
+
+For file permissions, omit `path` and `test ai-access` will not claim unconditional ALLOW (runtime requires an in-scope path). Provide `path <PATH>` to evaluate the same fail-closed path-scope contract used by MCP. Permission Groups that include file permissions apply that fail-closed rule per file member before aggregation.
 
 ## 8. Server system commands
 

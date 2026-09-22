@@ -2205,6 +2205,14 @@ Connectivity Result:
 
 This distinguishes policy authorization from runtime reachability.
 
+When a public test selector is a Network Group, Service Group, or Permission Group,
+the test expands every leaf member in stable sorted order and evaluates each concrete
+combination with the same atomic/runtime evaluators used for single Objects. Top-level
+Effective Result is ALLOW only when every expanded member/combination is ALLOW; mixed
+outcomes aggregate to DENY and list Member Results so the mixed outcome is visible.
+Single Object / Service / Permission Object / atomic permission tests keep the previous
+scalar output shape.
+
 ---
 
 # 45. Object and identity reference-safe deletion
