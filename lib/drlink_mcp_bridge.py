@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Data Relay Link MCP Bridge (MCP 2026-07-28 Streamable HTTP).
+"""Data Relay Link MCP Bridge (MCP Streamable HTTP).
 
-Transport: Streamable HTTP POST /mcp (stateless). Legacy HTTP+SSE is not used.
+Transport: Streamable HTTP POST /mcp (stateless for 2026-07-28; classic
+initialize handshake supported for OpenAI Plugin / older MCP hosts).
 Authentication modes:
   Static Bearer — operator-issued drk_ tokens bound to an AI Identity
   OAuth         — built-in OAuth 2.1 authorization server (authorization_code+PKCE
@@ -28,10 +29,20 @@ from drlink_control_plane import AI_CAPABILITIES, ControlPlane, MCP_AUTH_MODEL
 import drlink_v24 as v24
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
+# Handshake-era versions accepted via classic initialize (OpenAI Plugin / older MCP hosts).
+HANDSHAKE_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
+LATEST_HANDSHAKE_VERSION = "2025-11-25"
 MCP_TRANSPORT = "streamable-http"
 MCP_SERVER_NAME = "data-relay-link"
 MCP_SERVER_VERSION = "2.4.0"
+MCP_SERVER_TITLE = "Data Relay Link"
+MCP_INSTRUCTIONS = (
+    "Data Relay Link MCP Bridge. Tools operate on Managed Hosts authorized by "
+    "AI Access policy. Authenticated does not mean authorized. Every tool requires "
+    "OAuth; DRLink re-evaluates AI Identity and AI Access on each tools/call."
+)
 SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+WWW_AUTHENTICATE_META = "mcp/www_authenticate"
 DEFAULT_LISTEN = "127.0.0.1"
 DEFAULT_PORT = 6103
 HEADER_MISMATCH = -32020
@@ -41,17 +52,73 @@ LOCAL_ORIGINS = ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "h
 PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion"
 CLIENT_CAPS_META = "io.modelcontextprotocol/clientCapabilities"
 NAME_BEARING = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
+OAUTH_TOOL_SECURITY_SCHEMES = ({"type": "oauth2", "scopes": ["drlink.ai"]},)
 
+# name, title, description, props, annotations
 TOOL_DEFS = (
-    ("list_hosts", "List Managed Hosts this identity may target", {}),
-    ("get_host", "Get one Managed Host", {"endpoint": "string"}),
-    ("get_system_info", "Read uname/system identity from a Managed Host", {"endpoint": "string"}),
-    ("exec", "Run a shell command on a Managed Host", {"endpoint": "string", "command": "string"}),
-    ("read_file", "Read a file within allowed path scopes", {"endpoint": "string", "path": "string"}),
-    ("write_file", "Write a file within allowed path scopes", {"endpoint": "string", "path": "string", "content": "string"}),
-    ("upload_file", "Upload bytes to an allowed path", {"endpoint": "string", "path": "string", "content": "string"}),
-    ("download_file", "Download a file from an allowed path", {"endpoint": "string", "path": "string"}),
-    ("list_processes", "List processes on a Managed Host", {"endpoint": "string"}),
+    (
+        "list_hosts",
+        "List Managed Hosts",
+        "List Managed Hosts this identity may target",
+        {},
+        {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True},
+    ),
+    (
+        "get_host",
+        "Get Managed Host",
+        "Get one Managed Host",
+        {"endpoint": "string"},
+        {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True},
+    ),
+    (
+        "get_system_info",
+        "Get system info",
+        "Read uname/system identity from a Managed Host",
+        {"endpoint": "string"},
+        {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True},
+    ),
+    (
+        "exec",
+        "Execute command",
+        "Run a shell command on a Managed Host",
+        {"endpoint": "string", "command": "string"},
+        {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    ),
+    (
+        "read_file",
+        "Read file",
+        "Read a file within allowed path scopes",
+        {"endpoint": "string", "path": "string"},
+        {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True},
+    ),
+    (
+        "write_file",
+        "Write file",
+        "Write a file within allowed path scopes",
+        {"endpoint": "string", "path": "string", "content": "string"},
+        {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    ),
+    (
+        "upload_file",
+        "Upload file",
+        "Upload bytes to an allowed path",
+        {"endpoint": "string", "path": "string", "content": "string"},
+        {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    ),
+    (
+        "download_file",
+        "Download file",
+        "Download a file from an allowed path",
+        {"endpoint": "string", "path": "string"},
+        {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True},
+    ),
+    (
+        "list_processes",
+        "List processes",
+        "List processes on a Managed Host",
+        {"endpoint": "string"},
+        {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True},
+    ),
 )
 
 ENDPOINT_TOOLS = frozenset(
@@ -68,7 +135,11 @@ ENDPOINT_TOOLS = frozenset(
 
 
 def _server_info():
-    return {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION}
+    return {
+        "name": MCP_SERVER_NAME,
+        "title": MCP_SERVER_TITLE,
+        "version": MCP_SERVER_VERSION,
+    }
 
 
 def _with_server_meta(result):
@@ -97,6 +168,37 @@ def _text_result(text: str, *, is_error: bool = False) -> dict:
     return out
 
 
+def _structured_result(data, *, text: Optional[str] = None, is_error: bool = False) -> dict:
+    """Return text content plus structuredContent for hosts that prefer typed results."""
+    if text is None:
+        text = json.dumps(data, indent=2)
+    structured = data if isinstance(data, dict) else {"value": data}
+    out = {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured,
+        "resultType": "complete",
+    }
+    if is_error:
+        out["isError"] = True
+    return out
+
+
+def _tool_descriptor(name: str, title: str, desc: str, props: dict, annotations: dict) -> dict:
+    schema_props = {k: {"type": v} for k, v in props.items()}
+    required = list(props.keys())
+    input_schema = {"type": "object", "properties": schema_props}
+    if required:
+        input_schema["required"] = required
+    return {
+        "name": name,
+        "title": title,
+        "description": desc,
+        "inputSchema": input_schema,
+        "annotations": dict(annotations),
+        "securitySchemes": [dict(s) for s in OAUTH_TOOL_SECURITY_SCHEMES],
+    }
+
+
 def _header(headers, name: str) -> str:
     return headers.get(name) or headers.get(name.lower()) or headers.get(name.title()) or ""
 
@@ -112,6 +214,37 @@ def _decode_mcp_header(value: str) -> str:
             return text
     return text
 
+
+def _requested_protocol(body: dict, headers) -> Optional[str]:
+    """Best-effort protocol version from classic initialize params, _meta, or HTTP header."""
+    params = body.get("params") if isinstance(body.get("params"), dict) else None
+    if isinstance(params, dict):
+        classic = params.get("protocolVersion")
+        if isinstance(classic, str) and classic.strip():
+            return classic.strip()
+        meta = params.get("_meta")
+        if isinstance(meta, dict):
+            modern = meta.get(PROTOCOL_VERSION_META)
+            if isinstance(modern, str) and modern.strip():
+                return modern.strip()
+    hdr = _header(headers, "MCP-Protocol-Version")
+    return hdr.strip() if hdr else None
+
+
+def _is_handshake_version(version: Optional[str]) -> bool:
+    return isinstance(version, str) and version in HANDSHAKE_PROTOCOL_VERSIONS
+
+
+def _is_modern_version(version: Optional[str]) -> bool:
+    return isinstance(version, str) and version == MCP_PROTOCOL_VERSION
+
+
+def _negotiate_handshake_version(requested: Optional[str]) -> Optional[str]:
+    if not requested:
+        return LATEST_HANDSHAKE_VERSION
+    if requested in HANDSHAKE_PROTOCOL_VERSIONS:
+        return requested
+    return None
 
 class MCPBridge:
     def __init__(self, root: Optional[str] = None, plane: Optional[ControlPlane] = None, *, auto_agents: bool = False):
@@ -286,10 +419,128 @@ class MCPBridge:
             return None
         return origin
 
+    def www_authenticate_value(self) -> str:
+        base = self.canonical_public_base()
+        return (
+            'Bearer realm="drlink-mcp", '
+            'resource_metadata="%s/.well-known/oauth-protected-resource", '
+            'scope="drlink.ai", '
+            'error="invalid_token", '
+            'error_description="Authentication required"'
+        ) % base
+
+    def www_authenticate_meta(self) -> dict:
+        return {WWW_AUTHENTICATE_META: [self.www_authenticate_value()]}
+
     def validate_headers(self, body: dict, headers) -> Optional[tuple]:
         req_id = body.get("id")
-        method = body.get("method")
+        method = str(body.get("method") or "")
         params = body.get("params") if isinstance(body.get("params"), dict) else None
+        requested = _requested_protocol(body, headers)
+        mcp_method = _header(headers, "Mcp-Method")
+
+        # Classic initialize / initialized / ping may omit the 2026 _meta envelope.
+        if method == "initialize":
+            if mcp_method and mcp_method != method:
+                return 400, _jsonrpc_error(
+                    req_id,
+                    HEADER_MISMATCH,
+                    "Mcp-Method header does not match the request body's method",
+                    {"name": "HeaderMismatch"},
+                )
+            # Only classic params.protocolVersion selects the handshake version.
+            # Modern MCP-Protocol-Version / _meta stamps are ignored here so hosts
+            # that probe initialize before discover still negotiate handshake-era.
+            classic = None
+            if isinstance(params, dict) and isinstance(params.get("protocolVersion"), str):
+                classic = params.get("protocolVersion").strip() or None
+            if _is_modern_version(classic):
+                return 400, _jsonrpc_error(
+                    req_id,
+                    UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version for initialize; use server/discover for %s"
+                    % MCP_PROTOCOL_VERSION,
+                    {
+                        "supported": [LATEST_HANDSHAKE_VERSION],
+                        "modern": [MCP_PROTOCOL_VERSION],
+                        "requested": classic,
+                    },
+                )
+            if classic and not _is_handshake_version(classic):
+                return 400, _jsonrpc_error(
+                    req_id,
+                    UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version",
+                    {
+                        "supported": list(HANDSHAKE_PROTOCOL_VERSIONS),
+                        "modern": [MCP_PROTOCOL_VERSION],
+                        "requested": classic,
+                    },
+                )
+            return None
+
+        if method in ("notifications/initialized", "ping"):
+            if mcp_method and mcp_method != method:
+                return 400, _jsonrpc_error(
+                    req_id,
+                    HEADER_MISMATCH,
+                    "Mcp-Method header does not match the request body's method",
+                    {"name": "HeaderMismatch"},
+                )
+            # ping is allowed on both eras; notifications/initialized is handshake-only.
+            if method == "notifications/initialized" and _is_modern_version(requested):
+                return 400, _jsonrpc_error(
+                    req_id,
+                    UNSUPPORTED_PROTOCOL_VERSION,
+                    "notifications/initialized is not used on %s; protocol is stateless"
+                    % MCP_PROTOCOL_VERSION,
+                    {"supported": list(HANDSHAKE_PROTOCOL_VERSIONS), "requested": requested},
+                )
+            if requested and not (_is_handshake_version(requested) or _is_modern_version(requested)):
+                return 400, _jsonrpc_error(
+                    req_id,
+                    UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version",
+                    {
+                        "supported": list(HANDSHAKE_PROTOCOL_VERSIONS) + [MCP_PROTOCOL_VERSION],
+                        "requested": requested,
+                    },
+                )
+            return None
+
+        # Handshake-era operational requests: header-based, no 2026 _meta envelope required.
+        if _is_handshake_version(requested) or (
+            not requested and isinstance(params, dict) and not isinstance(params.get("_meta"), dict)
+        ):
+            proto = _header(headers, "MCP-Protocol-Version")
+            if proto and not _is_handshake_version(proto):
+                return 400, _jsonrpc_error(
+                    req_id,
+                    UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version",
+                    {"supported": list(HANDSHAKE_PROTOCOL_VERSIONS), "requested": proto},
+                )
+            if mcp_method and mcp_method != method:
+                return 400, _jsonrpc_error(
+                    req_id,
+                    HEADER_MISMATCH,
+                    "Mcp-Method header does not match the request body's method",
+                    {"name": "HeaderMismatch"},
+                )
+            name_key = NAME_BEARING.get(method)
+            if name_key is not None:
+                body_value = params.get(name_key) if isinstance(params, dict) else None
+                hdr_name = _decode_mcp_header(_header(headers, "Mcp-Name"))
+                if body_value is not None and hdr_name and hdr_name != body_value:
+                    return 400, _jsonrpc_error(
+                        req_id,
+                        HEADER_MISMATCH,
+                        "Mcp-Name header does not match the request body's %r parameter" % name_key,
+                        {"name": "HeaderMismatch"},
+                    )
+            return None
+
+        # Modern 2026-07-28 streamable-http: require _meta envelope + header parity.
         meta = params.get("_meta") if isinstance(params, dict) else None
         if not isinstance(meta, dict):
             return 400, _jsonrpc_error(
@@ -307,7 +558,6 @@ class MCPBridge:
             )
         proto_meta = meta.get(PROTOCOL_VERSION_META)
         proto = _header(headers, "MCP-Protocol-Version")
-        mcp_method = _header(headers, "Mcp-Method")
         if not proto or proto != proto_meta:
             return 400, _jsonrpc_error(
                 req_id,
@@ -356,6 +606,39 @@ class MCPBridge:
         req_id = body.get("id")
         method = str(body.get("method") or "")
         params = body.get("params") or {}
+        if method == "initialize":
+            requested = None
+            if isinstance(params, dict):
+                requested = params.get("protocolVersion")
+            negotiated = _negotiate_handshake_version(requested if isinstance(requested, str) else None)
+            if negotiated is None:
+                return 400, _jsonrpc_error(
+                    req_id,
+                    UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version",
+                    {
+                        "supported": list(HANDSHAKE_PROTOCOL_VERSIONS),
+                        "modern": [MCP_PROTOCOL_VERSION],
+                        "requested": requested,
+                    },
+                )
+            return 200, _jsonrpc_result(
+                req_id,
+                {
+                    "protocolVersion": negotiated,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": _server_info(),
+                    "instructions": MCP_INSTRUCTIONS,
+                },
+            )
+        if method == "notifications/initialized":
+            # JSON-RPC notification: acknowledge without a result body.
+            return 202, {}
+        if method == "ping":
+            # Compatible empty ping result for both eras.
+            if req_id is None:
+                return 202, {}
+            return 200, _jsonrpc_result(req_id, {"resultType": "complete"})
         if method == "server/discover":
             return 200, _jsonrpc_result(
                 req_id,
@@ -365,31 +648,11 @@ class MCPBridge:
                     "ttlMs": 5000,
                     "cacheScope": "private",
                     "resultType": "complete",
-                    "instructions": (
-                        "Data Relay Link MCP Bridge. Tools operate on Managed Hosts "
-                        "authorized by AI Access policy. Authenticated does not mean authorized."
-                    ),
+                    "instructions": MCP_INSTRUCTIONS,
                 },
             )
-        if method in ("initialize", "notifications/initialized", "ping"):
-            return 404, _jsonrpc_error(
-                req_id,
-                -32601,
-                "Method not found: 2026-07-28 is stateless; initialize/ping are not part of this revision",
-            )
         if method == "tools/list":
-            tools = []
-            for name, desc, props in TOOL_DEFS:
-                tools.append(
-                    {
-                        "name": name,
-                        "description": desc,
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {k: {"type": v} for k, v in props.items()},
-                        },
-                    }
-                )
+            tools = [_tool_descriptor(*entry) for entry in TOOL_DEFS]
             return 200, _jsonrpc_result(
                 req_id,
                 {
@@ -464,7 +727,7 @@ class MCPBridge:
                 result="ALLOW" if hosts else "DENY",
                 rule=self._rule_name(decision),
             )
-            return _text_result(json.dumps(hosts, indent=2))
+            return _structured_result({"hosts": hosts}, text=json.dumps(hosts, indent=2))
         endpoint = str(arguments.get("endpoint") or arguments.get("host") or "")
         if not endpoint:
             raise ControlPlaneError("endpoint is required")
@@ -529,7 +792,7 @@ class MCPBridge:
                 rule=self._rule_name(decision),
                 duration_ms=int((time.monotonic() - start) * 1000),
             )
-            return _text_result(json.dumps(view, indent=2))
+            return _structured_result(view, text=json.dumps(view, indent=2))
         patterns = list(decision.get("patterns") or [])
         if decision.get("winner") and not patterns:
             patterns = list(decision["winner"].get("paths") or [])
@@ -558,6 +821,9 @@ class MCPBridge:
         if name not in ("read_file", "download_file"):
             safe.pop("content_b64", None)
         is_error = op_result not in ("ALLOW",)
+        # Prefer structuredContent for coherent object payloads; never embed secrets.
+        if name in ("get_system_info", "list_processes", "read_file", "download_file") and not is_error:
+            return _structured_result(safe, text=json.dumps(safe, indent=2), is_error=is_error)
         return _text_result(json.dumps(safe, indent=2), is_error=is_error)
 
     def _dispatch_endpoint(self, *, principal, client_id, endpoint_object_id, capability, arguments, patterns, timeout):
@@ -710,8 +976,7 @@ def make_handler(bridge: MCPBridge):
             return False
 
         def _www_auth(self):
-            base = bridge.canonical_public_base()
-            return 'Bearer realm="drlink-mcp", resource_metadata="%s/.well-known/oauth-protected-resource", scope="drlink.ai"' % base
+            return bridge.www_authenticate_value()
 
         def do_GET(self):
             if self._origin_denied():
@@ -951,7 +1216,10 @@ def make_handler(bridge: MCPBridge):
                 if self._rate_limited("authfail", limit=30, window_s=60):
                     self._send(429, {"error": "rate_limited"})
                     return
-                payload = json.dumps(_jsonrpc_error(body.get("id"), -32001, "unauthorized")).encode("utf-8")
+                err = _jsonrpc_error(body.get("id"), -32001, "unauthorized")
+                err["error"]["data"] = {"_meta": bridge.www_authenticate_meta()}
+                err["_meta"] = bridge.www_authenticate_meta()
+                payload = json.dumps(err).encode("utf-8")
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", self._www_auth())
                 self.send_header("Content-Type", "application/json")

@@ -371,7 +371,7 @@ class PublicMcpEndpointTests(unittest.TestCase):
         print("MCP_BACKEND_LOOPBACK_ONLY=PASS")
         print("MCP_RAW_6103_PUBLIC=NO")
 
-    def test_modern_headers_and_no_initialize(self):
+    def test_modern_headers_and_initialize(self):
         target = self.https_url or self.url
         ca = self.ca if self.https_url else None
         status, payload = rpc(target, {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}}, self.token, method="server/discover", ca=ca)
@@ -379,16 +379,59 @@ class PublicMcpEndpointTests(unittest.TestCase):
         self.assertEqual(payload["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
         self.assertEqual(
             payload["result"]["_meta"][SERVER_INFO_META],
-            {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION},
+            {"name": MCP_SERVER_NAME, "title": "Data Relay Link", "version": MCP_SERVER_VERSION},
         )
-        status, payload = rpc(target, {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}}, self.token, method="initialize", ca=ca)
-        self.assertEqual(status, 404)
-        self.assertEqual(payload["error"]["code"], -32601)
+        status, payload = rpc(
+            target,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}},
+            },
+            self.token,
+            method="initialize",
+            ca=ca,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["result"]["protocolVersion"], "2025-11-25")
+        self.assertEqual(payload["result"]["serverInfo"]["name"], MCP_SERVER_NAME)
+        self.assertIn("AI Access", payload["result"]["instructions"])
+        status, payload = rpc(
+            target,
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "initialize",
+                "params": {"protocolVersion": "2099-01-01", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}},
+            },
+            self.token,
+            method="initialize",
+            ca=ca,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], UNSUPPORTED_PROTOCOL_VERSION)
         status, payload = rpc(target, {"jsonrpc": "2.0", "id": 99, "method": "ping", "params": {}}, self.token, method="ping", ca=ca)
-        self.assertEqual(status, 404)
-        self.assertEqual(payload["error"]["code"], -32601)
-        print("MCP_2026_PING_REMOVED=PASS")
-        print("MCP_2026_NO_INITIALIZE=PASS")
+        self.assertEqual(status, 200)
+        # Handshake-era initialized notification (no 2026 _meta envelope).
+        init_headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer %s" % self.token,
+            "MCP-Protocol-Version": "2025-11-25",
+            "Mcp-Method": "notifications/initialized",
+        }
+        init_req = urllib.request.Request(
+            target,
+            data=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}).encode("utf-8"),
+            headers=init_headers,
+            method="POST",
+        )
+        ctx = ssl.create_default_context(cafile=ca) if ca else None
+        with urllib.request.urlopen(init_req, context=ctx, timeout=10) as resp:
+            self.assertEqual(resp.status, 202)
+        print("MCP_INITIALIZE=PASS")
+        print("MCP_PING=PASS")
+        print("MCP_INITIALIZED_NOTIFICATION=PASS")
         body = {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}
         headers = {
             "Content-Type": "application/json",
@@ -437,6 +480,23 @@ class PublicMcpEndpointTests(unittest.TestCase):
         status, listed = rpc(target, {"jsonrpc": "2.0", "id": 61, "method": "tools/list", "params": {}}, self.token, method="tools/list", ca=ca)
         self.assertEqual(status, 200)
         self.assertEqual(listed["result"]["cacheScope"], "private")
+        tools = listed["result"]["tools"]
+        self.assertTrue(tools)
+        for tool in tools:
+            self.assertTrue(tool.get("title"))
+            ann = tool.get("annotations") or {}
+            for key in ("readOnlyHint", "destructiveHint", "openWorldHint"):
+                self.assertIn(key, ann)
+            schemes = tool.get("securitySchemes") or []
+            self.assertTrue(any(s.get("type") == "oauth2" for s in schemes))
+        by_name = {t["name"]: t for t in tools}
+        self.assertFalse(by_name["exec"]["annotations"]["readOnlyHint"])
+        self.assertTrue(by_name["exec"]["annotations"]["destructiveHint"])
+        self.assertTrue(by_name["list_hosts"]["annotations"]["readOnlyHint"])
+        self.assertFalse(by_name["write_file"]["annotations"]["readOnlyHint"])
+        self.assertFalse(by_name["upload_file"]["annotations"]["readOnlyHint"])
+        print("MCP_TOOL_ANNOTATIONS=PASS")
+        print("MCP_TOOL_SECURITY_SCHEMES=PASS")
         self.assertEqual(listed["result"]["_meta"][SERVER_INFO_META]["version"], MCP_SERVER_VERSION)
         status, payload = rpc(
             target,

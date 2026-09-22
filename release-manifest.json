@@ -76,7 +76,7 @@
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "46160424a15982cd90897fb4b411921f6ae37fe6b40ab108e711069924eed038"
+      "sha256": "827307dfbef3e26f4df7212072474cf15b75334563272901af585f78a95705aa"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",

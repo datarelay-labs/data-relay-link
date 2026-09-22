@@ -676,20 +676,47 @@ class MCPBridgeE2ETests(unittest.TestCase):
         self.assertEqual(payload["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "data-relay-link")
         status, payload = rpc(
             self.url,
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "ai-access-e2e", "version": "0"},
+                },
+            },
             self.chatgpt,
             method="initialize",
         )
-        self.assertEqual(status, 404)
-        self.assertEqual(payload.get("error", {}).get("code"), -32601)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["result"]["protocolVersion"], "2025-11-25")
+        self.assertEqual(payload["result"]["serverInfo"]["name"], "data-relay-link")
+        self.assertTrue(payload["result"].get("instructions"))
+        status, payload = rpc(
+            self.url,
+            {
+                "jsonrpc": "2.0",
+                "id": 18,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2099-01-01",
+                    "capabilities": {},
+                    "clientInfo": {"name": "ai-access-e2e", "version": "0"},
+                },
+            },
+            self.chatgpt,
+            method="initialize",
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload.get("error", {}).get("code"), -32022)
         status, payload = rpc(
             self.url,
             {"jsonrpc": "2.0", "id": 19, "method": "ping", "params": {}},
             self.chatgpt,
             method="ping",
         )
-        self.assertEqual(status, 404)
-        self.assertEqual(payload.get("error", {}).get("code"), -32601)
+        self.assertEqual(status, 200)
         status, payload = rpc(
             self.url,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
@@ -709,6 +736,15 @@ class MCPBridgeE2ETests(unittest.TestCase):
             "list_processes",
         ):
             self.assertIn(required, names)
+        for tool in payload["result"]["tools"]:
+            self.assertTrue(tool.get("title"))
+            ann = tool.get("annotations") or {}
+            for key in ("readOnlyHint", "destructiveHint", "openWorldHint"):
+                self.assertIn(key, ann)
+            self.assertTrue(any(s.get("type") == "oauth2" for s in (tool.get("securitySchemes") or [])))
+        by_name = {t["name"]: t for t in payload["result"]["tools"]}
+        self.assertFalse(by_name["exec"]["annotations"]["readOnlyHint"])
+        self.assertTrue(by_name["read_file"]["annotations"]["readOnlyHint"])
         status, _payload = rpc(
             self.url,
             {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}},
@@ -716,6 +752,8 @@ class MCPBridgeE2ETests(unittest.TestCase):
             method="tools/list",
         )
         self.assertEqual(status, 401)
+        challenge = _payload.get("_meta") or ((_payload.get("error") or {}).get("data") or {}).get("_meta") or {}
+        self.assertIn("mcp/www_authenticate", challenge)
 
     def test_readonly_real_tools(self):
         status, payload = self.call(self.chatgpt, "list_hosts", {})
@@ -1007,6 +1045,8 @@ class MCPBridgeE2ETests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         payload = json.loads(proc.stdout.splitlines()[-1])
+        self.assertEqual(payload.get("initialize_protocol"), "2025-11-25")
+        self.assertEqual((payload.get("initialize_server") or {}).get("name"), "data-relay-link")
         self.assertEqual(payload.get("protocol"), MCP_PROTOCOL_VERSION)
         for required in (
             "list_hosts",
@@ -1020,6 +1060,11 @@ class MCPBridgeE2ETests(unittest.TestCase):
             "list_processes",
         ):
             self.assertIn(required, payload.get("tools") or [])
+        meta_by_name = {t["name"]: t for t in (payload.get("tool_meta") or [])}
+        self.assertTrue(meta_by_name.get("list_hosts", {}).get("title"))
+        self.assertTrue(meta_by_name.get("list_hosts", {}).get("readOnlyHint"))
+        self.assertFalse(meta_by_name.get("exec", {}).get("readOnlyHint"))
+        self.assertTrue(meta_by_name.get("exec", {}).get("destructiveHint"))
         self.assertIn("Expernet-DP1", payload.get("list_hosts") or "")
         self.assertIn("sysname", payload.get("system") or "")
         read_text = payload.get("read") or ""
