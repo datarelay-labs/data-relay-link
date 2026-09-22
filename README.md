@@ -294,13 +294,9 @@ That path would 404 until the immutable tag exists.
 
 Repository: [`datarelay-labs/datarelay-link`](https://github.com/datarelay-labs/datarelay-link)
 
-Following mutable `main` is explicit opt-in only:
+Following mutable `main` is not a normal install or update path. Development and pre-release validation use an exact immutable source SHA or an explicitly qualified candidate artifact.
 
-```text
-FRP_RELEASE_CHANNEL=dev
-```
-
-A legacy client on an older updater can use a one-time verified bridge; it cannot replace current upgrade policy.
+A legacy client on an older updater may require a one-time verified compatibility bridge; that compatibility mechanism does not replace the current immutable-source update policy.
 
 Stable release requires two complete Real E2E passes on the same final exact HEAD, including the three access planes and applicable lifecycle/platform gates. Any code/dependency change resets the pass counter.
 
