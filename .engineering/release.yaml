@@ -16,7 +16,7 @@ operational_e2e_command: "bash tests/run-real-e2e-matrix.sh"
 full_e2e_passes: 1
 public_smoke_required: true
 public_smoke_command: >-
-  bash -lc 'out=$(bash tests/live-distro-smoke.sh); rc=$?; printf "%s\n" "$out"; test "$rc" -eq 0 && ! grep -q "^FAIL" <<<"$out"'
+  bash -lc 'out=$(bash tests/live-distro-smoke.sh); rc=$?; printf "%s\n" "$out"; test "$rc" -eq 0 && ! grep -q "^FAIL" <<<"$out" && ! grep -q "^HOST_ROLE=uninstalled$" <<<"$out"'
 
 blockers:
   p0: true
