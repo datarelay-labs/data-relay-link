@@ -503,7 +503,7 @@ HTTP       → TCP/80
 HTTPS      → TCP/443
 RDP        → TCP/3389
 Custom TCP → TCP/<user port>   (normal published-service port pool)
-Fixed TCP  → Fixed TCP/<user port>  (stable public port equals service port)
+Fixed TCP  → Fixed TCP/<destination port>  (public endpoint port is allocated separately from the Fixed TCP endpoint pool)
 ```
 
 UDP is not offered in the normal public Service Object Wizard. v2.4 Remote Service
@@ -5233,7 +5233,6 @@ AI uses complete one-shot CLI for one Resource.
 AI uses ConfigurationBundle for multiple dependent Resources.
 
 Server and Agent configuration remain separate atomic contexts.
-Agent Remote Service create/edit remains valid during temporary Server disconnect when local dependency validation succeeds; runtime endpoint allocation/activation may remain DEGRADED until reconnect.
 Agent Remote Service create/edit remains valid during temporary Server disconnect when local dependency validation succeeds; runtime endpoint allocation/activation may remain DEGRADED until reconnect.
 
 All paths converge on the same validation, security-impact, transaction,
