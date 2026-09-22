@@ -12,10 +12,21 @@ artifact_hash_command: ""
 provenance_command: ""
 sbom_command: ""
 operational_e2e_required: true
-operational_e2e_command: "bash tests/run-real-e2e.sh"
+operational_e2e_command: "bash tests/run-real-e2e-matrix.sh"
 full_e2e_passes: 1
 public_smoke_required: true
-public_smoke_command: "bash tests/live-distro-smoke.sh"
+public_smoke_command: >-
+  out="$(mktemp)";
+  trap 'rm -f "$out"' EXIT;
+  bash tests/live-distro-smoke.sh | tee "$out";
+  ! grep -q '^FAIL ' "$out";
+  ! grep -q '^HOST_ROLE=uninstalled
+
+blockers:
+  p0: true
+  p1: true
+  user_blocking_p2: true
+ "$out"
 
 blockers:
   p0: true
