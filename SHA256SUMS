@@ -431,6 +431,7 @@ f3dd656ffc628a32c06f4777a3e788cf2aab7dcee7cc4225576445f57e85f8f5  tests/test-v24
 730815ad7b48f445778ff6d83da1d6062df72d15bf0ae5ed1c2c6f83d030e1b6  tests/test-v24-real-managed-host-executor.py
 dd82cdcb1f30d3323ccf3fe5cc241219dee717b721315d1cdf76573b429ef522  tests/test-v24-remote-service-distributed-atomicity.py
 2edfa53ddc44803c40b4cac52331398a7d6e707855831bef3e4b8223915f0613  tests/test-v24-restore-atomic-cutover.py
+d3f617df0e8c66daefc1cc0fa6e194aa30f58a7b36925dcdacafa2fee07e037b  tests/test-v24-rule-mutation-security-impact.py
 8b562996677213ffcb4deff8473201c4bb46317863e6dbdae93c972ee8f26dee  tests/test-v24-runtime-allocator.py
 98fa3b9d95e5bbf8b0d9fd291cc590eee415d98e60e99e4566cdbf7346b1760b  tests/test-v24-service-policy-consistency.py
 e9259a2b7b15042501b5ee249d697fe99155672fb4480e5574b9af1c1d78f241  tests/test-v24-status-parity.py
