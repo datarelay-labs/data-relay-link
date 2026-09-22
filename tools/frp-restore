@@ -1062,14 +1062,143 @@ def _validate_archive_arg(raw: str) -> Path:
     return path
 
 
+def _open_sqlite_readonly(path: Path):
+    import sqlite3
+
+    if not path.is_file():
+        return None
+    uri = "file:%s?mode=ro" % path.resolve().as_posix()
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _confirm_requested_restore(confirm_flag: bool) -> bool:
+    if confirm_flag:
+        return True
+    if str(os.environ.get("FRP_RESTORE_YES") or "").strip() == "1":
+        return True
+    env = str(os.environ.get("DRLINK_CONFIRM") or "").strip().lower()
+    return env in ("yes", "y", "1", "true")
+
+
+def _confirm_restore_from_stdin(message: str) -> bool:
+    print(message.rstrip())
+    sys.stdout.flush()
+    if not sys.stdin or sys.stdin.closed:
+        return False
+    if not sys.stdin.isatty() and not os.environ.get("FRP_CTL_TEST_INPUT"):
+        return False
+    try:
+        line = sys.stdin.readline()
+    except Exception:
+        return False
+    return str(line or "").strip().lower() in ("y", "yes")
+
+
+def calculate_restore_access_security_impact(root: Path, extracted: Path) -> dict | None:
+    """Compare live vs candidate access policy; return impact when confirmation required."""
+    lib_dir = str(Path(__file__).resolve().parent.parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    try:
+        import drlink_v24 as v24
+    except Exception as exc:
+        raise RestoreError(
+            "restore security-impact modules unavailable: %s" % exc
+        ) from exc
+
+    live_path = root / CONTROL_DB_REL
+    candidate_path = extracted / "payload" / CONTROL_DB_REL
+    if not candidate_path.is_file():
+        raise RestoreError(f"backup is missing required file: {CONTROL_DB_REL}")
+
+    live_conn = _open_sqlite_readonly(live_path)
+    candidate_conn = _open_sqlite_readonly(candidate_path)
+    if candidate_conn is None:
+        raise RestoreError(f"backup is missing required file: {CONTROL_DB_REL}")
+    try:
+        if live_conn is None:
+            # Fresh/missing live DB: treat as No Policy (ALLOW) for all families.
+            import sqlite3
+
+            live_conn = sqlite3.connect(":memory:")
+            live_conn.row_factory = sqlite3.Row
+            for plane in ("remote", "internet", "ai"):
+                live_conn.execute(
+                    "CREATE TABLE IF NOT EXISTS access_policies ("
+                    "plane TEXT PRIMARY KEY, mode TEXT, enforcement TEXT)"
+                )
+                live_conn.execute(
+                    "INSERT INTO access_policies(plane, mode, enforcement) "
+                    "VALUES (?, NULL, 'enabled')",
+                    (plane,),
+                )
+                if plane == "ai":
+                    live_conn.execute(
+                        "CREATE TABLE IF NOT EXISTS ai_policy_rules ("
+                        "id TEXT, name TEXT, enabled INTEGER)"
+                    )
+                else:
+                    live_conn.execute(
+                        "CREATE TABLE IF NOT EXISTS policy_rules ("
+                        "id TEXT, plane TEXT, name TEXT, enabled INTEGER)"
+                    )
+        return v24.restore_access_security_impact(live_conn, candidate_conn)
+    finally:
+        try:
+            candidate_conn.close()
+        except Exception:
+            pass
+        try:
+            if live_conn is not None:
+                live_conn.close()
+        except Exception:
+            pass
+
+
+def enforce_restore_access_security_impact(
+    root: Path, extracted: Path, *, confirmed: bool
+) -> str:
+    """Gate restore on access security-impact confirmation.
+
+    Returns:
+      "ok" — proceed
+      "cancelled" — operator declined / missing confirmation (no mutation)
+    """
+    impact = calculate_restore_access_security_impact(root, extracted)
+    if not impact:
+        return "ok"
+    lib_dir = str(Path(__file__).resolve().parent.parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    import drlink_v24 as v24
+
+    message = v24.format_restore_access_security_impact(impact)
+    if _confirm_requested_restore(confirmed):
+        return "ok"
+    if _confirm_restore_from_stdin(message):
+        return "ok"
+    print("Cancelled.\nNo changes were applied.")
+    return "cancelled"
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if a]
     validate_only = False
-    if args and args[0] in {"--validate", "-Validate"}:
-        validate_only = True
-        args = args[1:]
+    confirmed = False
+    filtered: list[str] = []
+    for arg in args:
+        if arg in {"--validate", "-Validate"}:
+            validate_only = True
+            continue
+        if arg in {"--yes", "-Yes"}:
+            confirmed = True
+            continue
+        filtered.append(arg)
+    args = filtered
     if len(args) != 1 or args[0] in {"-h", "--help"}:
-        print("Usage: frp-restore [--validate] BACKUP.tar.gz")
+        print("Usage: frp-restore [--validate] [--yes] BACKUP.tar.gz")
         return 0 if args and args[0] in {"-h", "--help"} else 2
     test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
     if os.geteuid() != 0 and not test_root:
@@ -1088,6 +1217,11 @@ def main() -> int:
             candidate_temp, candidate = validate_to_temp(archive, require_semantic=True)
             manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
             assert_same_version_restore(root, manifest)
+            # Read-only validate: report security impact but never mutate / confirm.
+            try:
+                impact = calculate_restore_access_security_impact(root, candidate)
+            except RestoreError:
+                impact = None
             print("Backup valid.")
             print(f"Format: {manifest.get('format')}")
             print(f"Project version: {manifest.get('project_version')}")
@@ -1096,6 +1230,16 @@ def main() -> int:
                 print(
                     "Control DB: schema=%s revision=%s"
                     % (control_db.get("schema_version"), control_db.get("revision"))
+                )
+            if impact:
+                print("Access security impact: confirmation would be required on restore.")
+                print(
+                    "Access broadened: %s"
+                    % ("YES" if impact.get("access_broadened") else "NO")
+                )
+                print(
+                    "Access narrowed: %s"
+                    % ("YES" if impact.get("access_narrowed") else "NO")
                 )
             return 0
         except (RestoreError, OSError, ValueError, json.JSONDecodeError) as exc:
@@ -1121,6 +1265,13 @@ def main() -> int:
         lock_cm = locks.acquire_control_locks(root, timeout=timeout)
         lock_cm.__enter__()
         try:
+            # Recalculate against live authoritative state immediately before cutover.
+            # Cancel / missing confirmation must not create snapshots or mutate state.
+            gate = enforce_restore_access_security_impact(
+                root, candidate, confirmed=confirmed
+            )
+            if gate == "cancelled":
+                return 1
             snapshot = make_snapshot(root)
             rollback_kind, rollback_temp, rollback = classify_rollback_snapshot(snapshot)
             # Mutation marker only after preflight succeeds (candidate valid;

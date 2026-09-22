@@ -1393,6 +1393,279 @@ def ai_access_rule_update_security_impact(
     return None
 
 
+def _policy_restrictiveness_rank(mode: Optional[str], enforcement: str) -> int:
+    """Higher rank = more restrictive default posture for unmatched traffic."""
+    if mode is None:
+        return 0
+    if str(enforcement or "enabled").lower() == "disabled":
+        return 0
+    mode_l = str(mode).lower()
+    if mode_l == "blacklist":
+        return 1
+    if mode_l == "whitelist":
+        return 2
+    return 0
+
+
+def _policy_effective_label(mode: Optional[str], enforcement: str, enabled_rules: int) -> str:
+    if mode is None:
+        return "No Policy / unmatched ALLOW"
+    enf = str(enforcement or "enabled").lower()
+    mode_u = str(mode).upper()
+    if enf == "disabled":
+        return "%s / Enforcement DISABLED / ALLOW ALL" % mode_u
+    unmatched = "DENY" if mode_u == "WHITELIST" else "ALLOW"
+    return "%s / Enforcement ENABLED / %s enabled Rule(s) / unmatched %s" % (
+        mode_u,
+        enabled_rules,
+        unmatched,
+    )
+
+
+def _ref_public_name(conn: sqlite3.Connection, kind: str, ref_id: str) -> str:
+    kind_l = str(kind or "").lower()
+    table = {
+        "object": "objects",
+        "group": "object_groups",
+        "service_object": "service_objects",
+        "service_group": "service_groups",
+        "permission_object": "permission_objects",
+        "permission_group": "permission_groups",
+    }.get(kind_l)
+    if not table:
+        return "%s:%s" % (kind_l or "?", ref_id)
+    row = conn.execute(
+        "SELECT name FROM %s WHERE id = ?" % table, (ref_id,)
+    ).fetchone()
+    if row is None:
+        return "%s:%s" % (kind_l, ref_id)
+    return str(row["name"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def _enabled_rule_fingerprints(conn: sqlite3.Connection, plane: str) -> set[str]:
+    """Stable fingerprints of enabled Rules for restore before/after comparison."""
+    out: set[str] = set()
+    if plane == "ai":
+        rows = conn.execute(
+            "SELECT * FROM ai_policy_rules WHERE enabled = 1 ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+        for row in rows:
+            src = "-"
+            if row["source_identity_id"]:
+                principal = conn.execute(
+                    "SELECT name FROM ai_principals WHERE id = ?",
+                    (row["source_identity_id"],),
+                ).fetchone()
+                src = str(principal["name"] if principal else row["source_identity_id"])
+            dst = "-"
+            if row["destination_ref_kind"] and row["destination_ref_id"]:
+                dst = _ref_public_name(
+                    conn, row["destination_ref_kind"], row["destination_ref_id"]
+                )
+            perm = "-"
+            if row["permission_ref_kind"] and row["permission_ref_id"]:
+                perm = _ref_public_name(
+                    conn, row["permission_ref_kind"], row["permission_ref_id"]
+                )
+            paths = []
+            try:
+                for prow in conn.execute(
+                    "SELECT pattern FROM ai_policy_path_scopes WHERE rule_id = ? "
+                    "ORDER BY pattern COLLATE NOCASE",
+                    (row["id"],),
+                ):
+                    paths.append(str(prow["pattern"]))
+            except sqlite3.Error:
+                paths = []
+            out.add(
+                "ai|%s|src=%s|dst=%s|perm=%s|paths=%s"
+                % (row["name"], src, dst, perm, ",".join(paths) or "-")
+            )
+        return out
+
+    rows = conn.execute(
+        "SELECT * FROM policy_rules WHERE plane = ? AND enabled = 1 "
+        "ORDER BY name COLLATE NOCASE",
+        (plane,),
+    ).fetchall()
+    for row in rows:
+        sources = []
+        for s in conn.execute(
+            "SELECT ref_kind, ref_id FROM rule_sources WHERE rule_id = ? "
+            "ORDER BY ref_kind, ref_id",
+            (row["id"],),
+        ):
+            sources.append(_ref_public_name(conn, s["ref_kind"], s["ref_id"]))
+        destinations = []
+        for s in conn.execute(
+            "SELECT ref_kind, ref_id FROM rule_destinations WHERE rule_id = ? "
+            "ORDER BY ref_kind, ref_id",
+            (row["id"],),
+        ):
+            destinations.append(_ref_public_name(conn, s["ref_kind"], s["ref_id"]))
+        services = []
+        for s in conn.execute(
+            "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ? "
+            "ORDER BY ref_kind, ref_id",
+            (row["id"],),
+        ):
+            services.append(_ref_public_name(conn, s["ref_kind"], s["ref_id"]))
+        if not services:
+            for s in conn.execute(
+                "SELECT protocol, port FROM rule_services "
+                "WHERE rule_id = ? ORDER BY protocol, port",
+                (row["id"],),
+            ):
+                services.append("%s:%s" % (s["protocol"], s["port"]))
+        out.add(
+            "%s|%s|src=%s|dst=%s|svc=%s"
+            % (
+                plane,
+                row["name"],
+                ",".join(sources) or "-",
+                ",".join(destinations) or "-",
+                ",".join(services) or "-",
+            )
+        )
+    return out
+
+
+def _access_policy_snapshot(conn: sqlite3.Connection, plane: str) -> dict:
+    row = conn.execute(
+        "SELECT mode, enforcement FROM access_policies WHERE plane = ?", (plane,)
+    ).fetchone()
+    mode = None
+    enforcement = "enabled"
+    if row is not None:
+        mode = row["mode"]
+        enforcement = row["enforcement"] or "enabled"
+    rules = _enabled_rule_fingerprints(conn, plane)
+    return {
+        "plane": plane,
+        "mode": mode,
+        "enforcement": enforcement,
+        "rank": _policy_restrictiveness_rank(mode, enforcement),
+        "rules": rules,
+        "label": _policy_effective_label(mode, enforcement, len(rules)),
+    }
+
+
+def restore_access_security_impact(
+    live_conn: sqlite3.Connection,
+    candidate_conn: sqlite3.Connection,
+) -> Optional[dict]:
+    """Security impact for Server DR restore across Remote / Internet / AI Access.
+
+    Requires confirmation when restore broadens access (including restrictive
+    policy → No Policy / enforcement disabled) or when it causes DENY ALL
+    outage-safety narrowing, matching Apply conventions.
+    """
+    broadened_families: list[str] = []
+    narrowed_families: list[str] = []
+    before_lines: list[str] = []
+    after_lines: list[str] = []
+
+    for plane in POLICY_PLANES:
+        title = _access_family_title(plane)
+        live = _access_policy_snapshot(live_conn, plane)
+        cand = _access_policy_snapshot(candidate_conn, plane)
+        before_lines.append("%s: %s" % (title, live["label"]))
+        after_lines.append("%s: %s" % (title, cand["label"]))
+
+        live_rules: set[str] = live["rules"]
+        cand_rules: set[str] = cand["rules"]
+        family_broaden = False
+        family_narrow = False
+
+        if cand["rank"] < live["rank"]:
+            family_broaden = True
+        elif cand["rank"] > live["rank"]:
+            family_narrow = True
+        elif live["rank"] == 0 and cand["rank"] == 0:
+            # Both permissive (No Policy or enforcement disabled): no confirm.
+            pass
+        elif live["mode"] == "blacklist" and cand["mode"] == "blacklist":
+            # Fewer / weaker blocks broaden; added blocks narrow.
+            if not live_rules.issubset(cand_rules):
+                family_broaden = True
+            if not cand_rules.issubset(live_rules):
+                family_narrow = True
+        elif live["mode"] == "whitelist" and cand["mode"] == "whitelist":
+            # Expanded allow set broadens; shrunk allow set narrows (DENY ALL risk).
+            if not cand_rules.issubset(live_rules):
+                family_broaden = True
+            if not live_rules.issubset(cand_rules):
+                family_narrow = True
+        elif live_rules != cand_rules or live["mode"] != cand["mode"]:
+            # Fail closed on ambiguous mode/rule transitions.
+            family_broaden = True
+            family_narrow = True
+
+        # WHITELIST with zero enabled rules is DENY ALL outage.
+        if (
+            cand["mode"] == "whitelist"
+            and str(cand["enforcement"]).lower() == "enabled"
+            and not cand_rules
+            and (
+                live["mode"] != "whitelist"
+                or live_rules
+                or str(live["enforcement"]).lower() != "enabled"
+            )
+        ):
+            family_narrow = True
+
+        if family_broaden:
+            broadened_families.append(title)
+        if family_narrow:
+            narrowed_families.append(title)
+
+    if not broadened_families and not narrowed_families:
+        return None
+
+    warning_bits = []
+    if broadened_families:
+        warning_bits.append(
+            "This restore broadens %s." % (", ".join(broadened_families))
+        )
+    if narrowed_families:
+        warning_bits.append(
+            "This restore narrows %s (may cause DENY ALL / outage)."
+            % (", ".join(narrowed_families))
+        )
+
+    return {
+        "access_broadened": bool(broadened_families),
+        "access_narrowed": bool(narrowed_families),
+        "requires_confirmation": True,
+        "warning": " ".join(warning_bits),
+        "families_broadened": broadened_families,
+        "families_narrowed": narrowed_families,
+        "before": "\n  ".join(before_lines),
+        "after": "\n  ".join(after_lines),
+        "kind": "restore-access",
+    }
+
+
+def format_restore_access_security_impact(impact: dict) -> str:
+    """Public-safe restore security-impact confirmation text."""
+    lines = [
+        "WARNING:",
+        str(impact.get("warning") or "This restore changes access policy posture."),
+        "",
+        "Access broadened: %s" % ("YES" if impact.get("access_broadened") else "NO"),
+        "Access narrowed: %s" % ("YES" if impact.get("access_narrowed") else "NO"),
+        "",
+        "Before:",
+        "  %s" % (impact.get("before") or "-"),
+        "",
+        "After:",
+        "  %s" % (impact.get("after") or "-"),
+        "",
+        "Continue? [y/N]:",
+    ]
+    return "\n".join(lines)
+
+
 def _policy_mode_if_enforced(plane_db, family: str) -> Optional[str]:
     pol = get_access_policy(plane_db, family)
     if str(pol.get("enforcement") or "enabled").lower() != "enabled":

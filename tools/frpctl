@@ -2883,12 +2883,13 @@ frpctl_restore_backup_dir() {
 frpctl_restore_preflight() {
   local archive="$1"
   local root="${FRP_DEPLOY_TEST_ROOT:-${FRP_CTL_TEST_ROOT:-}}"
-  python3 - "$archive" "$root" <<'PY'
-import json, sys, tarfile
+  python3 - "$archive" "$root" "${_FRPCTL_DIR}" <<'PY'
+import json, sys, tarfile, importlib.util, os
 from pathlib import Path
 
 archive = Path(sys.argv[1])
 root = Path(sys.argv[2] or "/")
+tools_dir = Path(sys.argv[3] or ".")
 if not archive.is_file():
     print("ERROR: backup archive not found: %s" % archive, file=sys.stderr)
     raise SystemExit(1)
@@ -2963,6 +2964,64 @@ print("Current server state will be replaced.")
 print("A pre-restore snapshot will be created automatically.")
 print("Services will restart.")
 print()
+
+def _load_restore_mod():
+    candidates = [
+        tools_dir / "frp-restore",
+        tools_dir.parent / "tools" / "frp-restore",
+        Path("/usr/local/sbin/frp-restore"),
+    ]
+    env_root = os.environ.get("FRP_SOURCE_ROOT") or os.environ.get("ROOT") or ""
+    if env_root:
+        candidates.insert(0, Path(env_root) / "tools" / "frp-restore")
+    seen = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not path.is_file():
+            continue
+        lib = path.resolve().parent.parent / "lib"
+        if lib.is_dir() and str(lib) not in sys.path:
+            sys.path.insert(0, str(lib))
+        spec = importlib.util.spec_from_file_location("frp_restore_preflight", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+        return mod
+    return None
+
+restore_mod = _load_restore_mod()
+if restore_mod is not None:
+    tmp = None
+    try:
+        tmp, extracted = restore_mod.validate_to_temp(archive, require_semantic=True)
+        impact = restore_mod.calculate_restore_access_security_impact(root, extracted)
+        if impact:
+            print("Access security impact")
+            print("----------------------")
+            print(str(impact.get("warning") or "Access policy posture will change."))
+            print()
+            print("Access broadened: %s" % ("YES" if impact.get("access_broadened") else "NO"))
+            print("Access narrowed: %s" % ("YES" if impact.get("access_narrowed") else "NO"))
+            print()
+            print("Before:")
+            print("  %s" % (impact.get("before") or "-"))
+            print()
+            print("After:")
+            print("  %s" % (impact.get("after") or "-"))
+            print()
+        else:
+            print("Access security impact: no broadening or DENY ALL outage detected.")
+            print()
+    except Exception as exc:
+        # Preflight impact is advisory here; frp-restore re-checks authoritatively.
+        print("Access security impact: unavailable (%s)" % exc)
+        print()
+    finally:
+        if tmp is not None:
+            tmp.cleanup()
 PY
 }
 
@@ -4221,7 +4280,10 @@ frpctl_dispatch_canonical() {
         _FRP_CTL_RC="$_restore_rc"
         return 0
       fi
-      frpctl_run frp-restore "$_restore_path"
+      # Product-owned confirmation already completed (or --yes). Pass --yes so
+      # frp-restore's authoritative security-impact gate does not double-prompt;
+      # it still recalculates against live state immediately before cutover.
+      frpctl_run frp-restore --yes "$_restore_path"
       ;;
     doctor)
       if ! type frp_doctor_main >/dev/null 2>&1; then
