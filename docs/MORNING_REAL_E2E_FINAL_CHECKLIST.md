@@ -62,7 +62,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=8 -p 6000 -i ~/.ssh/lab_ed25519 \
 - [ ] Amazon Linux 2023 identity preservation
 - [ ] Amazon Linux 2: container/CI portability only unless a real host exists
 - [ ] macOS: FRP version, launchd, doctor, public SSH, reboot
-- [ ] macOS: `frpctl` Tab completion under real PTY (`statu` → `status`)
+- [ ] macOS: `drlink` Tab completion under real PTY (`statu` → `status`)
 - [ ] Windows PS5.1: task, doctor, public SSH, reboot
 - [ ] Windows PS7: CI required; same-host PS7 only if `pwsh` exists
 - [ ] `public_hostname` set / unset / IP fallback without identity change
