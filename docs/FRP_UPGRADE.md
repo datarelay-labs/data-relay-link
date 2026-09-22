@@ -1,5 +1,7 @@
 # Future upstream FRP upgrades
 
+> **Scope:** Internal Relay Engine qualification and compatibility guide. Public Data Relay Link operators use the `drlink` update commands documented in `UPGRADE.md`. Legacy `FRP_*` environment variables or `frp-*` helper names in this file are engineering/compatibility mechanisms, not canonical public CLI vocabulary.
+
 Data Relay Link pins a **tested** FRP version. It never installs GitHub
 `latest` automatically.
 
