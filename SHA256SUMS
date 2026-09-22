@@ -407,6 +407,7 @@ cce3023b94f2b4a7a902d50992ba8a924906b975f2700849c9902075f1ede118  tests/test-use
 b2c382d46fae82b1ca5d0065c01356cc4c010533ad496a98b7ade7eb7919117d  tests/test-v24-ai-auth-convergence.py
 edb7ee57cd514ca9549c466c7a3d452b29fd91c87d297576f679dcd14b467da0  tests/test-v24-ai-job-safety.py
 b9ad5d29ed988b0c9f5f62c4fa567d7114f3ce064149b94a264c51131fe2597d  tests/test-v24-ai-jobs-json1-independence.py
+4f37a2468140b25cce43ae0be2dd652ec657dd52adc7b0be7aa771f45c6d77c0  tests/test-v24-ai-path-scope-public-parity.py
 226d09213b78353459e058f1d46bf3929ff70861ad9a8dec4d9c05835f9af70b  tests/test-v24-ai-policy-cli-parity.py
 10aa04b3031fb5a32300ba7dc9c6e2a0db2111359d2cf7a7b6252e720c41ec8d  tests/test-v24-authoritative-connectivity-convergence.py
 4e5ce1950ef5a9b98b59d1462d98ef86e3c323a79169f6a71144af120c088d89  tests/test-v24-cli-ai-master-closure.py
