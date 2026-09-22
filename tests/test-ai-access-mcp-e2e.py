@@ -230,6 +230,19 @@ class ControlPlaneAITests(unittest.TestCase):
         v24.set_ai_policy_path_scopes(
             self.plane, "readonly-support", [self.vendor_glob, self.etc_glob]
         )
+        # Pathless file-read must fail-closed (no unconditional ALLOW).
+        pathless = self.cli(
+            "test",
+            "ai-access",
+            "source",
+            "chatgpt-support",
+            "destination",
+            "Expernet-DP1",
+            "permission",
+            "file-read",
+        )
+        self.assertIn("DENY", pathless)
+        self.assertIn("path context", pathless.lower())
         allow = self.cli(
             "test",
             "ai-access",
@@ -239,6 +252,8 @@ class ControlPlaneAITests(unittest.TestCase):
             "Expernet-DP1",
             "permission",
             "file-read",
+            "path",
+            str(self.vendor / "app.log"),
         )
         self.assertIn("ALLOW", allow)
         self.assertIn("readonly-support", allow)
@@ -309,6 +324,7 @@ class ControlPlaneAITests(unittest.TestCase):
         )
         exec_only = self.cli("show", "permission-object", "exec-only")
         self.assertIn("command-exec", exec_only)
+        in_scope = str(self.vendor / "app.log")
         for permission in (
             "host-info",
             "file-read",
@@ -317,7 +333,7 @@ class ControlPlaneAITests(unittest.TestCase):
             "file-download",
             "command-exec",
         ):
-            out = self.cli(
+            tokens = [
                 "test",
                 "ai-access",
                 "source",
@@ -326,7 +342,11 @@ class ControlPlaneAITests(unittest.TestCase):
                 "lab1",
                 "permission",
                 permission,
-            )
+            ]
+            # File permissions require a concrete in-scope path for ALLOW.
+            if permission.startswith("file-"):
+                tokens.extend(["path", in_scope])
+            out = self.cli(*tokens)
             self.assertIn("ALLOW", out, out)
         prod = self.cli(
             "test",
@@ -423,6 +443,8 @@ class ControlPlaneAITests(unittest.TestCase):
         self.assertIn("DENY", out)
         self.assertIn("deny-prod-exec", out)
         # Unmatched blacklist permission remains ALLOW under current v2.4 model.
+        # Use a non-file permission so the check is not conflated with path-scope
+        # fail-closed (file ops DENY without path / without canonical scopes).
         other = self.cli(
             "test",
             "ai-access",
@@ -431,7 +453,7 @@ class ControlPlaneAITests(unittest.TestCase):
             "destination",
             "Expernet-DP1",
             "permission",
-            "file-read",
+            "host-info",
         )
         self.assertIn("ALLOW", other)
 
