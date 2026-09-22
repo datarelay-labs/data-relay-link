@@ -219,6 +219,20 @@ python3 tests/test-v24-service-policy-consistency.py
 python3 tests/test-v24-access-broadening-bundle-order.py
 python3 tests/test-v24-managed-host-retirement.py
 python3 tests/test-v24-user-lifecycle-ux.py
+python3 tests/test-v24-ai-auth-convergence.py
+python3 tests/test-v24-ai-job-safety.py
+python3 tests/test-v24-ai-jobs-json1-independence.py
+python3 tests/test-v24-authoritative-connectivity-convergence.py
+python3 tests/test-v24-internet-runtime-parity.py
+python3 tests/test-v24-managed-host-reference-safety.py
+python3 tests/test-v24-network-mutation-atomicity.py
+python3 tests/test-v24-oneshot-strict-partial-edit.py
+python3 tests/test-v24-real-managed-host-executor.py
+python3 tests/test-v24-remote-service-distributed-atomicity.py
+python3 tests/test-v24-restore-atomic-cutover.py
+python3 tests/test-v24-unified-disaster-recovery.py
+python3 tests/test-v24-upgrade-policy-preservation.py
+python3 tests/test-v24-whitelist-last-rule-outage-safety.py
 python3 tests/test-human-ux-framework-unit.py
 ./tests/test-agent-runtime-payload.sh
 ./tests/test-orphan-suite-coverage.sh
