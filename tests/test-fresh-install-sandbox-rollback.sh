@@ -44,9 +44,9 @@ except KeyError:
     group = str(st.st_gid)
 if mode == 0o700:
     raise SystemExit(0)
-if mode == 0o710 and group == "drlink-egress":
+if mode in (0o710, 0o711) and group == "drlink-egress":
     raise SystemExit(0)
-if mode == 0o710:
+if mode in (0o710, 0o711):
     try:
         out = subprocess.check_output(
             ["getfacl", "-p", "--absolute-names", path],
@@ -58,7 +58,11 @@ if mode == 0o710:
     for line in out.splitlines():
         if line.startswith("user:drlink-egress:") and "x" in line.split("#", 1)[0]:
             raise SystemExit(0)
-print(f"wanted 0o700, 0o710:drlink-egress, or ACL user:drlink-egress:x; got {oct(mode)} group={group}", file=sys.stderr)
+print(
+    f"wanted 0o700, 0o710/0o711:drlink-egress, or ACL user:drlink-egress:x; "
+    f"got {oct(mode)} group={group}",
+    file=sys.stderr,
+)
 raise SystemExit(1)
 PY
 }

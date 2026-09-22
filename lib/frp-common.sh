@@ -1791,10 +1791,12 @@ frp_package_for_command() {
 frp_packages_for_missing() {
   local pm="$1" cmd pkg existing existing_pkg
   PACKAGES=(ca-certificates)
-  for cmd in "${MISSING_COMMANDS[@]}"; do
+  # Bash 4.2 + set -u: empty "${arr[@]}" is unbound; use ${arr[@]:-}.
+  for cmd in "${MISSING_COMMANDS[@]:-}"; do
+    [[ -n "$cmd" ]] || continue
     pkg="$(frp_package_for_command "$cmd" "$pm")"
     existing=0
-    for existing_pkg in "${PACKAGES[@]}"; do
+    for existing_pkg in "${PACKAGES[@]:-}"; do
       if [[ "$existing_pkg" == "$pkg" ]]; then
         existing=1
         break
@@ -1808,7 +1810,7 @@ frp_packages_for_missing() {
   for pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
     [[ -n "$pkg" ]] || continue
     existing=0
-    for existing_pkg in "${PACKAGES[@]}"; do
+    for existing_pkg in "${PACKAGES[@]:-}"; do
       if [[ "$existing_pkg" == "$pkg" ]]; then
         existing=1
         break
@@ -1871,6 +1873,13 @@ frp_collect_missing_python_packages() {
   done
 }
 
+frp_is_optional_acme_python_package() {
+  case "$1" in
+    python3-acme|python3-cryptography) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 frp_print_missing_python_packages_error() {
   local pkg
   echo "ERROR: required server Python packages are missing:" >&2
@@ -1881,6 +1890,61 @@ frp_print_missing_python_packages_error() {
   echo "AUTO_ACME / MCP public TLS requires distro package python3-acme" >&2
   echo "(Ubuntu 24.04: 2.9.x; EL8 EPEL: 1.22.x+) plus python3-cryptography." >&2
   echo "Install the packages manually and run the installer again." >&2
+}
+
+frp_print_optional_acme_python_warning() {
+  local pkg
+  echo "WARNING: optional AUTO_ACME Python packages are unavailable on this distro:" >&2
+  for pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
+    echo "  ${pkg}" >&2
+  done
+  echo "Server install continues; AUTO_ACME configure will fail closed until" >&2
+  echo "python3-acme (+ cryptography) is installed (Ubuntu universe / EL EPEL)." >&2
+}
+
+# Enable EPEL (or Amazon Linux extras EPEL) when AUTO_ACME packages need it.
+# Best-effort only; callers still soft-fail if packages remain unavailable.
+frp_ensure_rpm_acme_package_repos() {
+  local pm="${PACKAGE_MANAGER:-}" bin id
+  id="$(printf '%s' "${DISTRO_ID:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$id" in
+    rhel|centos|rocky|almalinux|ol|oracle|eurolinux|scientific)
+      ;;
+    amzn|amazon|amazonlinux|amazonlinux2)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  case "$pm" in
+    dnf|yum) ;;
+    *) return 0 ;;
+  esac
+  bin="$(frp_package_manager_bin "$pm")" || return 0
+  if [[ "$id" == amzn || "$id" == amazon || "$id" == amazonlinux || "$id" == amazonlinux2 ]]; then
+    if frp_command_exists amazon-linux-extras; then
+      frp_invoke amazon-linux-extras enable epel >/dev/null 2>&1 || true
+      frp_invoke amazon-linux-extras install -y epel >/dev/null 2>&1 || true
+    fi
+  fi
+  if ! rpm -q epel-release >/dev/null 2>&1; then
+    "$bin" install -y epel-release >/dev/null 2>&1 || true
+  fi
+}
+
+frp_partition_packages_for_install() {
+  # Uses PACKAGES[]; fills REQUIRED_PACKAGES and OPTIONAL_ACME_PACKAGES.
+  local pkg
+  REQUIRED_PACKAGES=()
+  OPTIONAL_ACME_PACKAGES=()
+  for pkg in "${PACKAGES[@]:-}"; do
+    [[ -n "$pkg" ]] || continue
+    if frp_is_optional_acme_python_package "$pkg"; then
+      OPTIONAL_ACME_PACKAGES+=("$pkg")
+    else
+      REQUIRED_PACKAGES+=("$pkg")
+    fi
+  done
 }
 
 install_dependencies_apt() {
@@ -1903,10 +1967,28 @@ install_dependencies_yum() {
   "$bin" install -y "$@"
 }
 
+frp_install_package_list() {
+  local pm="$1"
+  shift
+  if (($# == 0)); then
+    return 0
+  fi
+  case "$pm" in
+    apt) install_dependencies_apt "$@" ;;
+    dnf) install_dependencies_dnf "$@" ;;
+    yum) install_dependencies_yum "$@" ;;
+    *)
+      echo "ERROR: unsupported package manager: ${pm}" >&2
+      return 1
+      ;;
+  esac
+}
+
 frp_print_missing_tools_error() {
   local cmd
   echo "ERROR: required tools are missing:" >&2
-  for cmd in "${MISSING_COMMANDS[@]}"; do
+  for cmd in "${MISSING_COMMANDS[@]:-}"; do
+    [[ -n "$cmd" ]] || continue
     echo "  ${cmd}" >&2
   done
   echo >&2
@@ -1915,6 +1997,9 @@ frp_print_missing_tools_error() {
 }
 
 ensure_dependencies() {
+  local REQUIRED_PACKAGES=() OPTIONAL_ACME_PACKAGES=()
+  local pkg cmd
+  MISSING_COMMANDS=()
   MISSING_PYTHON_PACKAGES=()
   frp_collect_missing_commands
   frp_collect_missing_python_packages
@@ -1928,42 +2013,50 @@ ensure_dependencies() {
   if [[ -z "${PACKAGE_MANAGER:-}" ]]; then
     if ((${#MISSING_COMMANDS[@]} > 0)); then
       frp_print_missing_tools_error
+      return 1
     fi
     if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
-      frp_print_missing_python_packages_error
+      # AUTO_ACME runtime is optional at install time; configure fails closed later.
+      frp_print_optional_acme_python_warning
+      frp_prefer_newer_python || true
+      return 0
     fi
-    return 1
+    return 0
   fi
   frp_packages_for_missing "$PACKAGE_MANAGER"
-  case "$PACKAGE_MANAGER" in
-    apt) install_dependencies_apt "${PACKAGES[@]}" ;;
-    dnf) install_dependencies_dnf "${PACKAGES[@]}" ;;
-    yum) install_dependencies_yum "${PACKAGES[@]}" ;;
-    *)
-      echo "ERROR: unsupported package manager: ${PACKAGE_MANAGER}" >&2
-      return 1
-      ;;
-  esac
+  frp_partition_packages_for_install
+  if ((${#OPTIONAL_ACME_PACKAGES[@]} > 0)); then
+    frp_ensure_rpm_acme_package_repos || true
+  fi
+  # Required OS tools first so a missing EPEL ACME package cannot abort install.
+  if ((${#REQUIRED_PACKAGES[@]} > 0)); then
+    frp_install_package_list "$PACKAGE_MANAGER" "${REQUIRED_PACKAGES[@]}" || return 1
+  fi
+  if ((${#OPTIONAL_ACME_PACKAGES[@]} > 0)); then
+    # Best-effort: EL needs EPEL; Amazon Linux 2 may have no python3-acme at all.
+    if ! frp_install_package_list "$PACKAGE_MANAGER" "${OPTIONAL_ACME_PACKAGES[@]}" >/dev/null 2>&1; then
+      # Retry one-by-one so cryptography can still land when acme is absent.
+      for pkg in "${OPTIONAL_ACME_PACKAGES[@]:-}"; do
+        [[ -n "$pkg" ]] || continue
+        frp_install_package_list "$PACKAGE_MANAGER" "$pkg" >/dev/null 2>&1 || true
+      done
+    fi
+  fi
   frp_prefer_newer_python || true
   frp_collect_missing_commands
   frp_collect_missing_python_packages
   if ((${#MISSING_COMMANDS[@]} > 0)); then
     echo "ERROR: missing required command after dependency installation:" >&2
-    local cmd
-    for cmd in "${MISSING_COMMANDS[@]}"; do
+    for cmd in "${MISSING_COMMANDS[@]:-}"; do
+      [[ -n "$cmd" ]] || continue
       echo "  ${cmd}" >&2
     done
     return 1
   fi
   if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
-    echo "ERROR: missing required Python packages after dependency installation:" >&2
-    local pkg
-    for pkg in "${MISSING_PYTHON_PACKAGES[@]}"; do
-      echo "  ${pkg}" >&2
-    done
-    echo "AUTO_ACME cannot be advertised as ready without python3-acme." >&2
-    return 1
+    frp_print_optional_acme_python_warning
   fi
+  return 0
 }
 
 frp_detect_internal_ip() {

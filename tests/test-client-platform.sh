@@ -373,6 +373,37 @@ frp_packages_for_missing apt
 printf '%s\n' "${PACKAGES[@]}" | grep -qx python3-acme || fail "server PACKAGES includes python3-acme"
 pass "package name mapping"
 
+# Optional AUTO_ACME packages must not abort server install when unavailable.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-acme-soft"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-acme-soft"
+FRP_DEPENDENCY_ROLE=server
+make_required_cmds "$FRP_TEST_CMD_PATH"
+mkdir -p "$FRP_TEST_PM_PATH"
+ACME_SOFT_LOG="$WORKDIR/acme-soft.log"
+: >"$ACME_SOFT_LOG"
+cat >"$FRP_TEST_PM_PATH/dnf" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>$(printf '%q' "$ACME_SOFT_LOG")
+for arg in "\$@"; do
+  if [ "\$arg" = python3-acme ]; then
+    echo "No match for argument: python3-acme" >&2
+    exit 1
+  fi
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+frp_detect_package_manager
+DISTRO_ID=rocky
+frp_python_module_importable() { return 1; }
+if ! ensure_dependencies 2>"$WORKDIR/acme-soft.err"; then
+  fail "missing optional AUTO_ACME packages must not fail server ensure_dependencies"
+fi
+grep -q 'optional AUTO_ACME' "$WORKDIR/acme-soft.err" || fail "soft-fail warning for unavailable ACME packages"
+grep -q 'python3-acme' "$ACME_SOFT_LOG" || fail "dnf should still attempt python3-acme"
+pass "deps: optional AUTO_ACME soft-fail"
+
 # Host isolation: tests must not have invoked real apt-get/dnf/yum via the helpers
 # with an unset FRP_TEST_PM_PATH during install. Detection-only tests always set it.
 pass "host package manager not used"

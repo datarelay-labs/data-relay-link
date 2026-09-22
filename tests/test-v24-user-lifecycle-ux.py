@@ -113,7 +113,8 @@ class UserLifecycleUxCoverage(unittest.TestCase):
     def test_mcp_bridge_user_facing_terms(self):
         import drlink_mcp_bridge as mcp
 
-        blob = " ".join(desc for _n, desc, _p in mcp.TOOL_DEFS)
+        # TOOL_DEFS entries are (name, title, description, props, annotations).
+        blob = " ".join(desc for _n, _t, desc, _p, _a in mcp.TOOL_DEFS)
         self.assertIn("Managed Host", blob)
         self.assertNotIn("Managed Endpoint", blob)
         self.assertNotIn("principal may target", blob)
