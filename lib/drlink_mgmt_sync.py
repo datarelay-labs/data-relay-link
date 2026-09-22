@@ -853,29 +853,19 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     from drlink_upgrade_reconcile import resolve_authoritative_remote_target
 
     try:
+        # Rename continuity may use prior_client_id only: that value is
+        # Server-owned evidence for an existing Remote Service. Agent-supplied
+        # destination_client_id alone never establishes a new unresolved bind.
         authoritative = resolve_authoritative_remote_target(
             plane,
             destination=destination,
             owner_client_id=client["id"],
             service_name=service,
             destination_client_id=agent_supplied_client_id,
+            server_bound_client_id=prior_client_id,
         )
     except ControlPlaneError as first_exc:
-        # Immutable bind fallback: when Agent omits destination_client_id but a
-        # prior Server bind exists (e.g. destination label drift), retry once.
-        if agent_supplied_client_id is None and prior_client_id:
-            try:
-                authoritative = resolve_authoritative_remote_target(
-                    plane,
-                    destination=destination,
-                    owner_client_id=client["id"],
-                    service_name=service,
-                    destination_client_id=prior_client_id,
-                )
-            except ControlPlaneError as exc:
-                raise MgmtSyncError(str(exc)) from exc
-        else:
-            raise MgmtSyncError(str(first_exc)) from first_exc
+        raise MgmtSyncError(str(first_exc)) from first_exc
 
     sobj = authoritative["service_object"]
     target_host = str(authoritative["target_host"])

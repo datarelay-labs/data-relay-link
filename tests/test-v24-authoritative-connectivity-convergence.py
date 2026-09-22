@@ -582,6 +582,146 @@ class AuthoritativeConnectivityConvergence(unittest.TestCase):
         )
         self.assertEqual(after["decision"], RP.DECISION_DENY)
 
+    def test_new_service_rejects_unresolved_destination_with_arbitrary_managed_host_id(self):
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        with self.assertRaises(mgmt.MgmtSyncError) as ctx:
+            mgmt.server_upsert_remote_service(
+                self.plane,
+                _auth(),
+                {
+                    "name": "svc-stale-alias",
+                    "destination": "old-db-label",
+                    "destination_client_id": DEST_MH,
+                    "service": "ssh",
+                    "enabled": True,
+                    "runtime_verified": True,
+                },
+            )
+        self.assertIn("missing or invalid", str(ctx.exception).lower())
+        pub = self.plane.conn.execute(
+            "SELECT id FROM published_services WHERE name='svc-stale-alias' AND released=0"
+        ).fetchone()
+        self.assertIsNone(pub)
+
+    def test_new_service_rejects_stale_label_even_with_current_managed_host_id(self):
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        with self.assertRaises(mgmt.MgmtSyncError) as ctx:
+            mgmt.server_upsert_remote_service(
+                self.plane,
+                _auth(),
+                {
+                    "name": "svc-new-stale",
+                    "destination": "db-host-old-label",
+                    "destination_client_id": DEST_MH,
+                    "service": "ssh",
+                    "enabled": True,
+                    "runtime_verified": True,
+                },
+            )
+        self.assertIn("missing or invalid", str(ctx.exception).lower())
+        pub = self.plane.conn.execute(
+            "SELECT id FROM published_services WHERE name='svc-new-stale' AND released=0"
+        ).fetchone()
+        self.assertIsNone(pub)
+
+    def test_existing_service_rename_continuity_requires_server_prior_bind(self):
+        other = "cccccccccccccccccccccccccccccccc"
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        self.plane.upsert_client(
+            other,
+            label="other-host",
+            hostname="other-host",
+            addresses=[{"address": "10.0.0.30", "active": True}],
+        )
+        created = mgmt.server_upsert_remote_service(
+            self.plane,
+            _auth(),
+            {
+                "name": "svc-rename",
+                "destination": "db-host",
+                "destination_client_id": DEST_MH,
+                "service": "ssh",
+                "enabled": True,
+                "runtime_verified": True,
+            },
+        )
+        self.assertEqual(created["status"], "HEALTHY")
+        before_port = created["endpoint_port"]
+        self.plane.set_client_label(DEST_MH, "database-prod-renamed")
+
+        # Stale Agent label + Server-proven prior bind remains operable.
+        continued = mgmt.server_upsert_remote_service(
+            self.plane,
+            _auth(),
+            {
+                "name": "svc-rename",
+                "destination": "db-host",
+                "destination_client_id": DEST_MH,
+                "service": "ssh",
+                "enabled": True,
+                "runtime_verified": True,
+            },
+        )
+        self.assertEqual(continued["destination_client_id"], DEST_MH)
+        self.assertEqual(continued["endpoint_port"], before_port)
+        self.assertEqual(continued["target_host"], "10.0.0.20")
+        self.assertEqual(continued["status"], "HEALTHY")
+
+        # Omitting Agent destination_client_id still uses Server prior bind.
+        omitted = mgmt.server_upsert_remote_service(
+            self.plane,
+            _auth(),
+            {
+                "name": "svc-rename",
+                "destination": "db-host",
+                "service": "ssh",
+                "enabled": True,
+                "runtime_verified": True,
+            },
+        )
+        self.assertEqual(omitted["destination_client_id"], DEST_MH)
+        self.assertEqual(omitted["endpoint_port"], before_port)
+
+        # Different Agent-supplied client ID must not hijack Server prior bind.
+        with self.assertRaises(mgmt.MgmtSyncError) as ctx:
+            mgmt.server_upsert_remote_service(
+                self.plane,
+                _auth(),
+                {
+                    "name": "svc-rename",
+                    "destination": "db-host",
+                    "destination_client_id": other,
+                    "service": "ssh",
+                    "enabled": True,
+                    "runtime_verified": True,
+                },
+            )
+        self.assertIn("does not match", str(ctx.exception).lower())
+        meta = self.plane.conn.execute(
+            "SELECT m.destination_client_id, s.public_port, s.target_host "
+            "FROM published_services s "
+            "JOIN remote_service_meta m ON m.service_id = s.id "
+            "WHERE s.name='svc-rename' AND s.released=0"
+        ).fetchone()
+        self.assertEqual(meta["destination_client_id"], DEST_MH)
+        self.assertEqual(meta["public_port"], before_port)
+        self.assertEqual(meta["target_host"], "10.0.0.20")
+
 
 class AgentCatalogServiceAuthority(unittest.TestCase):
     def setUp(self):

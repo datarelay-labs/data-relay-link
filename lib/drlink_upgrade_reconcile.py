@@ -418,12 +418,18 @@ def resolve_authoritative_remote_target(
     owner_client_id: str,
     service_name: str,
     destination_client_id: Optional[str] = None,
+    server_bound_client_id: Optional[str] = None,
 ) -> dict:
     """Derive Server-authoritative target_host/target_port for a Remote Service.
 
     Named Service Object / Network Object / Managed Host references are the
     source of truth. Agent-supplied target snapshots and destination_client_id
     bindings are not trusted when they contradict the named destination.
+
+    Rename/label-drift continuity may use an immutable Managed Host binding only
+    when ``server_bound_client_id`` proves a Server-owned prior bind for an
+    existing Remote Service. Agent-supplied destination_client_id alone must
+    never establish a new binding for an unresolved destination name.
     """
     service = str(service_name or "").strip()
     if not service:
@@ -447,6 +453,7 @@ def resolve_authoritative_remote_target(
         raise ControlPlaneError("Remote Service destination is required")
     owner = str(owner_client_id or "").strip()
     supplied = str(destination_client_id or "").strip() or None
+    server_bound = str(server_bound_client_id or "").strip() or None
     target_mode = "routed"
     target_host = dest
     bound: Optional[str] = None
@@ -531,17 +538,23 @@ def resolve_authoritative_remote_target(
                 bound = None
                 target_mode = "routed"
                 target_host = vals[0]
-        elif supplied:
-            # Immutable Managed Host bind when the destination label drifted (rename)
-            # but the named destination no longer resolves as an object.
-            if owner and supplied == owner:
+        elif server_bound:
+            # Rename/label drift continuity is allowed only from Server-owned prior bind.
+            if supplied and supplied != server_bound:
+                raise ControlPlaneError(
+                    "destination_client_id does not match Server-bound destination identity "
+                    "for unresolved destination '%s'." % dest
+                )
+            if owner and server_bound == owner:
                 raise ControlPlaneError(
                     "Required Network Object / Managed Host destination '%s' is missing or invalid."
                     % dest
                 )
-            bound = supplied
+            bound = server_bound
             target_mode, target_host = _routed_from_bound(bound)
         else:
+            # Unresolved named dependency: Agent-supplied destination_client_id must
+            # never establish a new binding for a new or unproven Remote Service.
             raise ControlPlaneError(
                 "Required Network Object / Managed Host destination '%s' is missing or invalid."
                 % dest
@@ -575,12 +588,14 @@ def server_target_projection_reason(plane: ControlPlane, pub, meta) -> Optional[
     if not service_name:
         return "Required Service Object is missing or invalid."
     try:
+        stored_bind = str(dest_cid or "").strip() or None
         expected = resolve_authoritative_remote_target(
             plane,
             destination=dest,
             owner_client_id=str(pub["client_id"] or ""),
             service_name=service_name,
-            destination_client_id=str(dest_cid or "").strip() or None,
+            destination_client_id=stored_bind,
+            server_bound_client_id=stored_bind,
         )
     except ControlPlaneError as exc:
         return str(exc)
@@ -683,6 +698,7 @@ def _resolve_published_authoritative_target(plane: ControlPlane, row) -> dict:
             owner_client_id=owner,
             service_name=sobj["name"],
             destination_client_id=stored,
+            server_bound_client_id=stored,
         )
     except ControlPlaneError:
         # Contradictory stored bind: re-derive from destination name alone.
@@ -692,6 +708,7 @@ def _resolve_published_authoritative_target(plane: ControlPlane, row) -> dict:
             owner_client_id=owner,
             service_name=sobj["name"],
             destination_client_id=None,
+            server_bound_client_id=None,
         )
 
 
