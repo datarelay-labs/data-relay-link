@@ -31,22 +31,23 @@ PY
   [[ "$mode" == "$expected" ]] || fail "mode $path wanted $expected got $mode"
 }
 
-assert_project_state_dir_mode() {
+# Only /var/lib/drlink may be 0711:drlink-egress (HTTP-01); etc/log stay stricter.
+# Usage: assert_project_state_dir_mode <path> [allow_0711=0|1]
+project_state_dir_mode_ok() {
   local path="$1"
-  python3 - "$path" <<'PY' || fail "project/state dir mode $path"
+  local allow_0711="${2:-0}"
+  python3 - "$path" "$allow_0711" <<'PY'
 import grp, os, stat, subprocess, sys
 path = sys.argv[1]
+allow_0711 = sys.argv[2] == "1"
 st = os.stat(path)
 mode = stat.S_IMODE(st.st_mode)
 try:
     group = grp.getgrgid(st.st_gid).gr_name
 except KeyError:
     group = str(st.st_gid)
-if mode == 0o700:
-    raise SystemExit(0)
-if mode in (0o710, 0o711) and group == "drlink-egress":
-    raise SystemExit(0)
-if mode in (0o710, 0o711):
+
+def has_egress_acl_x() -> bool:
     try:
         out = subprocess.check_output(
             ["getfacl", "-p", "--absolute-names", path],
@@ -54,17 +55,60 @@ if mode in (0o710, 0o711):
             stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.CalledProcessError):
-        out = ""
+        return False
     for line in out.splitlines():
         if line.startswith("user:drlink-egress:") and "x" in line.split("#", 1)[0]:
-            raise SystemExit(0)
-print(
-    f"wanted 0o700, 0o710/0o711:drlink-egress, or ACL user:drlink-egress:x; "
-    f"got {oct(mode)} group={group}",
-    file=sys.stderr,
-)
+            return True
+    return False
+
+if mode == 0o700:
+    raise SystemExit(0)
+if mode == 0o710 and group == "drlink-egress":
+    raise SystemExit(0)
+if mode == 0o711 and allow_0711 and group == "drlink-egress":
+    raise SystemExit(0)
+if mode == 0o710 and has_egress_acl_x():
+    raise SystemExit(0)
+if mode == 0o711 and allow_0711 and has_egress_acl_x():
+    raise SystemExit(0)
+wanted = "0o700, 0o710:drlink-egress, or ACL user:drlink-egress:x"
+if allow_0711:
+    wanted += ", or 0o711:drlink-egress (HTTP-01 var/lib only)"
+print(f"wanted {wanted}; got {oct(mode)} group={group}", file=sys.stderr)
 raise SystemExit(1)
 PY
+}
+
+assert_project_state_dir_mode() {
+  local path="$1"
+  local allow_0711="${2:-0}"
+  project_state_dir_mode_ok "$path" "$allow_0711" || fail "project/state dir mode $path"
+}
+
+assert_rejects_0711_outside_var_lib() {
+  local root="$1"
+  local probe
+  for probe in "$root/etc/drlink" "$root/var/log/drlink"; do
+    mkdir -p "$probe"
+    chmod 0711 "$probe" || fail "chmod 0711 $probe"
+    if project_state_dir_mode_ok "$probe" 0 2>/dev/null; then
+      fail "0711 must be rejected for $probe"
+    fi
+    pass "0711 rejected for $probe"
+  done
+  mkdir -p "$root/var/lib/drlink"
+  chmod 0711 "$root/var/lib/drlink" || fail "chmod 0711 var/lib"
+  if getent group drlink-egress >/dev/null 2>&1; then
+    chown root:drlink-egress "$root/var/lib/drlink" 2>/dev/null || true
+    if [[ "$(stat -c '%G' "$root/var/lib/drlink" 2>/dev/null || true)" == "drlink-egress" ]]; then
+      project_state_dir_mode_ok "$root/var/lib/drlink" 1 || fail "0711 should pass for var/lib with allow_0711=1"
+      pass "0711 accepted for var/lib/drlink with allow_0711=1"
+      if project_state_dir_mode_ok "$root/var/lib/drlink" 0 2>/dev/null; then
+        fail "0711 on var/lib must still require allow_0711=1"
+      fi
+      pass "0711 on var/lib rejected without allow_0711"
+    fi
+  fi
 }
 
 write_dummy_frps() {
@@ -235,9 +279,10 @@ fi
 [[ -d "$TREE/etc/drlink" ]] || fail "etc project dir missing"
 [[ -d "$TREE/etc/frp" ]] || fail "etc/frp missing"
 assert_project_state_dir_mode "$TREE/var/log/drlink"
-assert_project_state_dir_mode "$TREE/var/lib/drlink"
+assert_project_state_dir_mode "$TREE/var/lib/drlink" 1
 assert_project_state_dir_mode "$TREE/etc/drlink"
 assert_mode "$TREE/etc/frp" "0o700"
+assert_rejects_0711_outside_var_lib "$WORKDIR/mode-contract"
 if [[ ${EUID} -eq 0 ]]; then
   owner="$(stat -c '%U:%G' "$TREE/var/log/drlink")"
   case "$owner" in
