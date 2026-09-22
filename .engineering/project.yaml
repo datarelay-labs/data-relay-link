@@ -1,37 +1,33 @@
 engineering_system:
-  version: "1.6.1"
+  version: 1.6.2
   mode: adopted
-  baseline: "fe0c05d0508564512b3eaae96e35a84699d4c728"
-  ci_mode: "native"
+  baseline: d505e2813cfc0d2ac58d063ec3e4eb4828734885
+  ci_mode: native
   native_ci_workflows:
-    - ".github/workflows/lint.yml"
-    - ".github/workflows/macos-client.yml"
-    - ".github/workflows/windows-client.yml"
-  merge_gate_status: "advisory"
-
+  - .github/workflows/lint.yml
+  - .github/workflows/macos-client.yml
+  - .github/workflows/windows-client.yml
+  merge_gate_status: advisory
 project:
-  name: "datarelay-link"
-  type: "generic"
-  maturity: "production"
-
+  name: datarelay-link
+  type: generic
+  maturity: production
 domains:
-  - "server"
-  - "client"
-  - "shared"
-
+- server
+- client
+- shared
 platforms:
-  - "linux"
-
+- linux
 operations:
   production_oriented: true
   runbook_required: true
   incident_response_required: true
   persistent_state: true
   runbook_paths:
-    - "docs/FRP_UPGRADE.md"
-    - "docs/RELEASE_VALIDATION.md"
-  health_command: "python3 lib/frp_health_check.py"
-  backup_command: "tools/frp-backup"
-  restore_test_command: "bash tests/test-backup-restore.sh"
-  upgrade_command: ""
-  rollback_command: ""
+  - docs/FRP_UPGRADE.md
+  - docs/RELEASE_VALIDATION.md
+  health_command: python3 lib/frp_health_check.py
+  backup_command: tools/frp-backup
+  restore_test_command: bash tests/test-backup-restore.sh
+  upgrade_command: ''
+  rollback_command: ''

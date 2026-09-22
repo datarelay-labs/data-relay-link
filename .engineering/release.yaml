@@ -1,23 +1,22 @@
 version: 1
-
 exact_head_required: true
 artifact_hash_required: false
 provenance_required: false
 sbom_required: false
-setup_command: ""
+setup_command: ''
 preflight_required: false
-preflight_command: ""
-qualification_command: ""
-artifact_hash_command: ""
-provenance_command: ""
-sbom_command: ""
+preflight_command: ''
+qualification_command: ''
+artifact_hash_command: ''
+provenance_command: ''
+sbom_command: ''
 operational_e2e_required: true
-operational_e2e_command: "bash tests/run-real-e2e-matrix.sh"
+operational_e2e_command: bash tests/run-real-e2e-matrix.sh
 full_e2e_passes: 1
 public_smoke_required: true
-public_smoke_command: >-
-  bash -lc 'out=$(bash tests/live-distro-smoke.sh); rc=$?; printf "%s\n" "$out"; test "$rc" -eq 0 && ! grep -q "^FAIL" <<<"$out" && ! grep -q "^HOST_ROLE=uninstalled$" <<<"$out"'
-
+public_smoke_command: bash -lc 'out=$(bash tests/live-distro-smoke.sh); rc=$?; printf
+  "%s\n" "$out"; test "$rc" -eq 0 && ! grep -q "^FAIL" <<<"$out" && ! grep -q "^HOST_ROLE=uninstalled$"
+  <<<"$out"'
 blockers:
   p0: true
   p1: true
