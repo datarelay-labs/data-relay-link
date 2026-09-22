@@ -374,7 +374,12 @@ def _request_json(
             "ERROR:\nServer management response was malformed.\n\nNo changes were applied."
         )
     if data.get("error"):
-        _raise_http_auth_error(403, str(data.get("error")))
+        # A 2xx body with an error field is operational, not auth-class.
+        # Only HTTP 401/403 (handled above) map to auth/re-enroll guidance.
+        raise MgmtSyncError(
+            "ERROR:\nServer management request failed.\n\n%s\n\nNo changes were applied."
+            % str(data.get("error")).strip()
+        )
     return _verify_response_mac(data, root=root)
 
 
@@ -1426,13 +1431,16 @@ def handle_allocator_http(
             return 200, _with_response_mac(result, auth)
     except MgmtAuthError as exc:
         return 403, _public_auth_error(str(exc))
-    except ControlPlaneError as exc:
-        return 403, _public_auth_error(str(exc))
     except MgmtSyncError as exc:
+        # Must precede ControlPlaneError: MgmtSyncError subclasses it.
         msg = str(exc)
         if msg.startswith("ERROR:\n"):
             msg = msg[7:].split("\n\n")[0]
         return 400, {"error": msg}
+    except ControlPlaneError as exc:
+        # Operational ControlPlane failures are not auth/re-enroll.
+        # Preserve full actionable text (multi-paragraph messages included).
+        return 400, {"error": str(exc)}
     except json.JSONDecodeError:
         return 400, {"error": "invalid JSON"}
     except Exception as exc:

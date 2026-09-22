@@ -657,6 +657,280 @@ class MgmtTlsTests(unittest.TestCase):
         self.assertIn("management TLS certificate verification is disabled", buf.getvalue())
 
 
+class MgmtApiErrorClassificationTests(unittest.TestCase):
+    """P1: MgmtAuthError stays auth-class; MgmtSyncError/ControlPlaneError stay operational."""
+
+    def setUp(self):
+        self.server_tmp = tempfile.mkdtemp(prefix="drlink-mgmt-err-srv-")
+        self.agent_tmp = tempfile.mkdtemp(prefix="drlink-mgmt-err-agt-")
+        Path(self.server_tmp, "etc/drlink").mkdir(parents=True, exist_ok=True)
+        Path(self.server_tmp, "etc/drlink/config.json").write_text(
+            '{"role":"server"}\n', encoding="utf-8"
+        )
+        os.environ["DRLINK_SKIP_ACTIVATION"] = "1"
+        os.environ["DRLINK_CONFIRM"] = "yes"
+        os.environ.pop("DRLINK_MGMT_TOKEN", None)
+        os.environ.pop("DRLINK_MGMT_INSECURE", None)
+        os.environ.pop("DRLINK_FAULT_ACTIVATION", None)
+        self.server = ControlPlane(self.server_tmp)
+        v24.ensure_v2_schema(self.server.conn)
+        v24.set_service_object(self.server, "ssh", type="tcp", port=22, oneshot=True)
+        self.key, self.pub, self.mac = _write_identity(
+            Path(self.agent_tmp), MACHINE_A, "agent-a"
+        )
+        self.server.upsert_client(MACHINE_A, label="agent-a", hostname="agent-a")
+        self.verifier = mgmt.InMemoryMgmtVerifier()
+        self.verifier.enroll(MACHINE_A, self.pub, mac_key=self.mac, hostname="agent-a")
+        self.httpd, self.base, _ = mgmt.start_mgmt_server(
+            self.server, verifier=self.verifier
+        )
+        os.environ["DRLINK_MGMT_URL"] = self.base
+        Path(self.agent_tmp, "etc/frp/server-endpoint.json").write_text(
+            '{"mgmt_url":"%s"}\n' % self.base, encoding="utf-8"
+        )
+
+    def tearDown(self):
+        mgmt.stop_mgmt_server(self.httpd)
+        self.server.close()
+        for k in (
+            "DRLINK_SKIP_ACTIVATION",
+            "DRLINK_CONFIRM",
+            "DRLINK_MGMT_URL",
+            "DRLINK_MGMT_TOKEN",
+            "DRLINK_MGMT_INSECURE",
+            "DRLINK_FAULT_ACTIVATION",
+        ):
+            os.environ.pop(k, None)
+
+    def _http(self, method, path, headers=None, body=b"", timeout=3):
+        req = urllib.request.Request(
+            self.base + path,
+            data=body if method != "GET" else None,
+            headers=headers or {},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+                return resp.status, json.loads(raw.decode("utf-8") or "{}")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                payload = {"error": raw.decode("utf-8", errors="replace")}
+            return exc.code, payload
+
+    def _assert_agent_non_auth(self, exc):
+        msg = str(exc)
+        self.assertNotEqual(msg, mgmt.AUTH_REJECTED)
+        self.assertNotIn("re-enrolled", msg.lower())
+        self.assertNotIn("management identity has been revoked", msg.lower())
+
+    def test_auth_error_http_remains_auth_class(self):
+        body = b"{}"
+        headers, *_ = _signed_headers(
+            self.key,
+            MACHINE_A,
+            body,
+            MGMT.MGMT_OP_REMOTE_SERVICE_SET,
+            "POST",
+            "/v1/remote-services",
+        )
+        headers["X-Mgmt-Signature"] = "not-a-signature"
+        code, payload = self._http("POST", "/v1/remote-services", headers=headers, body=body)
+        self.assertEqual(code, 403)
+        self.assertEqual(payload.get("error_class"), "AUTH_FAILED")
+
+    def test_revoked_identity_agent_maps_to_auth_guidance(self):
+        self.verifier.revoke(MACHINE_A)
+        with self.assertRaises(mgmt.MgmtSyncError) as raised:
+            mgmt.fetch_server_catalog(root=self.agent_tmp)
+        msg = str(raised.exception)
+        self.assertIn("revoked", msg.lower())
+        self.assertEqual(msg, mgmt.AUTH_REVOKED)
+
+    def test_missing_remote_service_fields_are_non_auth(self):
+        body = json.dumps({"name": "only-name"}, separators=(",", ":")).encode("utf-8")
+        headers, *_ = _signed_headers(
+            self.key,
+            MACHINE_A,
+            body,
+            MGMT.MGMT_OP_REMOTE_SERVICE_SET,
+            "POST",
+            "/v1/remote-services",
+        )
+        code, payload = self._http("POST", "/v1/remote-services", headers=headers, body=body)
+        self.assertEqual(code, 400, payload)
+        self.assertNotEqual(payload.get("error_class"), "AUTH_FAILED")
+        err = str(payload.get("error") or "").lower()
+        self.assertIn("required", err)
+        self.assertNotIn("re-enroll", err)
+
+    def test_missing_service_object_is_non_auth(self):
+        with self.assertRaises(mgmt.MgmtSyncError) as raised:
+            mgmt.upsert_remote_service_on_server(
+                root=self.agent_tmp,
+                name="svc",
+                destination="this-host",
+                service="no-such-service",
+                enabled=True,
+                pool_class="normal",
+                target_host="127.0.0.1",
+                target_port=22,
+                target_mode="self",
+            )
+        self._assert_agent_non_auth(raised.exception)
+        self.assertIn("does not exist", str(raised.exception).lower())
+
+    def test_invalid_service_object_port_is_non_auth(self):
+        self.server.conn.execute(
+            "UPDATE service_objects SET port = 0 WHERE name = 'ssh'"
+        )
+        self.server.conn.commit()
+        with self.assertRaises(mgmt.MgmtSyncError) as raised:
+            mgmt.upsert_remote_service_on_server(
+                root=self.agent_tmp,
+                name="svc",
+                destination="this-host",
+                service="ssh",
+                enabled=True,
+                pool_class="normal",
+                target_host="127.0.0.1",
+                target_port=22,
+                target_mode="self",
+            )
+        self._assert_agent_non_auth(raised.exception)
+        self.assertIn("invalid port", str(raised.exception).lower())
+
+    def test_udp_unsupported_is_non_auth(self):
+        v24.set_service_object(self.server, "dns", type="udp", port=53, oneshot=True)
+        with self.assertRaises(mgmt.MgmtSyncError) as raised:
+            mgmt.upsert_remote_service_on_server(
+                root=self.agent_tmp,
+                name="udp-svc",
+                destination="this-host",
+                service="dns",
+                enabled=True,
+                pool_class="normal",
+                target_host="127.0.0.1",
+                target_port=53,
+                target_mode="self",
+            )
+        self._assert_agent_non_auth(raised.exception)
+        self.assertIn("tcp", str(raised.exception).lower())
+
+    def test_pool_class_mismatch_is_non_auth(self):
+        with self.assertRaises(mgmt.MgmtSyncError) as raised:
+            mgmt.upsert_remote_service_on_server(
+                root=self.agent_tmp,
+                name="svc",
+                destination="this-host",
+                service="ssh",
+                enabled=True,
+                pool_class="fixed-tcp",
+                target_host="127.0.0.1",
+                target_port=22,
+                target_mode="self",
+            )
+        self._assert_agent_non_auth(raised.exception)
+        self.assertIn("pool_class", str(raised.exception).lower())
+
+    def test_allocator_mgmt_sync_error_http_is_non_auth(self):
+        class _FailAllocator:
+            def reserve_remote_service_endpoint(self, *a, **k):
+                raise RuntimeError("pool exhausted")
+
+        body = json.dumps(
+            {
+                "name": "svc",
+                "destination": "this-host",
+                "service": "ssh",
+                "enabled": True,
+                "pool_class": "normal",
+                "target_host": "127.0.0.1",
+                "target_port": 22,
+                "target_mode": "self",
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        headers, *_ = _signed_headers(
+            self.key,
+            MACHINE_A,
+            body,
+            MGMT.MGMT_OP_REMOTE_SERVICE_SET,
+            "POST",
+            "/v1/remote-services",
+        )
+        real_upsert = mgmt.server_upsert_remote_service
+
+        def boom_upsert(plane_arg, auth_arg, data):
+            auth_arg.allocator = _FailAllocator()
+            return real_upsert(plane_arg, auth_arg, data)
+
+        mgmt.server_upsert_remote_service = boom_upsert
+        try:
+            code, payload = mgmt.handle_allocator_http(
+                self.server,
+                "POST",
+                "/v1/remote-services",
+                headers,
+                body,
+                verifier=self.verifier,
+            )
+        finally:
+            mgmt.server_upsert_remote_service = real_upsert
+        self.assertEqual(code, 400, payload)
+        self.assertNotEqual(payload.get("error_class"), "AUTH_FAILED")
+        self.assertIn("allocation failed", str(payload.get("error") or "").lower())
+
+    def test_control_plane_error_is_non_auth_not_re_enroll(self):
+        os.environ.pop("DRLINK_SKIP_ACTIVATION", None)
+        os.environ["DRLINK_FAULT_ACTIVATION"] = "1"
+        with self.assertRaises(mgmt.MgmtSyncError) as raised:
+            mgmt.upsert_remote_service_on_server(
+                root=self.agent_tmp,
+                name="svc",
+                destination="this-host",
+                service="ssh",
+                enabled=True,
+                pool_class="normal",
+                target_host="127.0.0.1",
+                target_port=22,
+                target_mode="self",
+            )
+        self._assert_agent_non_auth(raised.exception)
+        self.assertIn("Previous configuration was restored", str(raised.exception))
+
+    def test_success_path_unchanged(self):
+        result = mgmt.upsert_remote_service_on_server(
+            root=self.agent_tmp,
+            name="ok-svc",
+            destination="this-host",
+            service="ssh",
+            enabled=True,
+            pool_class="normal",
+            target_host="127.0.0.1",
+            target_port=22,
+            target_mode="self",
+        )
+        self.assertEqual(result.get("name"), "ok-svc")
+        self.assertGreater(int(result.get("endpoint_port") or 0), 0)
+        catalog = mgmt.fetch_server_catalog(root=self.agent_tmp)
+        names = [s.get("name") for s in (catalog.get("serviceObjects") or [])]
+        self.assertIn("ssh", names)
+
+    def test_exception_order_mgmt_sync_before_control_plane(self):
+        src = Path(mgmt.__file__).read_text(encoding="utf-8")
+        # Restrict to the HTTP dispatch handler region.
+        region = src[src.index("def handle_allocator_http") :]
+        auth_i = region.index("except MgmtAuthError")
+        sync_i = region.index("except MgmtSyncError")
+        cp_i = region.index("except ControlPlaneError")
+        self.assertLess(auth_i, sync_i)
+        self.assertLess(sync_i, cp_i)
+
+
 class SourceAudit(unittest.TestCase):
     def test_no_machine_id_only_allow_path(self):
         src = Path(ROOT, "lib/drlink_mgmt_sync.py").read_text(encoding="utf-8")
