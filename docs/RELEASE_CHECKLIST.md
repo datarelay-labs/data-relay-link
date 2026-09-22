@@ -371,14 +371,19 @@ Any change resets the pass counter.
 ## 22. Documentation
 
 - [ ] README matches qualified behavior.
+- [ ] `DOCUMENTATION_INDEX.md` correctly classifies canonical, operator, qualification, historical, and internal documents.
 - [ ] Product Master matches qualified behavior.
-- [ ] Control Plane Architecture matches implementation.
-- [ ] CLI IA and CLI Reference match tested grammar.
+- [ ] Control Plane Architecture matches implementation and contains no current-behavior first-match/per-rule-ALLOW-DENY drift.
+- [ ] CLI/AI Master, CLI IA, and CLI Reference match tested grammar and semantics.
+- [ ] `CONFIGURATION_BUNDLE.md` matches the qualified canonical parser/schema and Server/Agent context boundaries.
+- [ ] Installation and upgrade guides use immutable-source/release references appropriate to the release channel.
+- [ ] Remote Access guide matches Remote Service ownership, endpoint lifecycle, and BLACKLIST/WHITELIST behavior.
 - [ ] Internet Access guide matches tested security behavior.
+- [ ] AI Access/MCP guide matches qualified authentication, permission, and interoperability behavior.
+- [ ] Troubleshooting guide matches tested failure/recovery behavior.
 - [ ] Security doc current.
 - [ ] Version policy current.
 - [ ] Changelog only lists qualified scope.
-- [ ] `CONFIGURATION_BUNDLE.md` matches qualified schema/behavior.
 - [ ] ConfigurationBundle/AI copy-paste examples use canonical public CLI only.
 - [ ] known limits current.
 
