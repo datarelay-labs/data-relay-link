@@ -843,11 +843,12 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         "WHERE s.client_id = ? AND s.name = ? COLLATE NOCASE AND s.released = 0",
         (client["id"], name),
     ).fetchone()
-    # Preserve prior immutable bind when Agent omits destination_client_id.
-    if not destination_client_id and existing is not None:
+    agent_supplied_client_id = destination_client_id
+    prior_client_id = None
+    if existing is not None:
         prior = existing["destination_client_id"] if "destination_client_id" in existing.keys() else None
         if prior:
-            destination_client_id = str(prior)
+            prior_client_id = str(prior)
 
     from drlink_upgrade_reconcile import resolve_authoritative_remote_target
 
@@ -857,16 +858,30 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
             destination=destination,
             owner_client_id=client["id"],
             service_name=service,
-            destination_client_id=destination_client_id,
+            destination_client_id=agent_supplied_client_id,
         )
-    except ControlPlaneError as exc:
-        raise MgmtSyncError(str(exc)) from exc
+    except ControlPlaneError as first_exc:
+        # Immutable bind fallback: when Agent omits destination_client_id but a
+        # prior Server bind exists (e.g. destination label drift), retry once.
+        if agent_supplied_client_id is None and prior_client_id:
+            try:
+                authoritative = resolve_authoritative_remote_target(
+                    plane,
+                    destination=destination,
+                    owner_client_id=client["id"],
+                    service_name=service,
+                    destination_client_id=prior_client_id,
+                )
+            except ControlPlaneError as exc:
+                raise MgmtSyncError(str(exc)) from exc
+        else:
+            raise MgmtSyncError(str(first_exc)) from first_exc
 
     sobj = authoritative["service_object"]
     target_host = str(authoritative["target_host"])
     target_port = int(authoritative["target_port"])
     target_mode = str(authoritative["target_mode"])
-    destination_client_id = authoritative.get("destination_client_id") or destination_client_id
+    destination_client_id = authoritative.get("destination_client_id")
     expected_pool = "fixed-tcp" if sobj["type"] == "fixed-tcp" else "normal"
     if pool_class not in ("normal", "fixed-tcp"):
         pool_class = expected_pool

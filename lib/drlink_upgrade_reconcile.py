@@ -422,7 +422,8 @@ def resolve_authoritative_remote_target(
     """Derive Server-authoritative target_host/target_port for a Remote Service.
 
     Named Service Object / Network Object / Managed Host references are the
-    source of truth. Agent-supplied target snapshots are not trusted.
+    source of truth. Agent-supplied target snapshots and destination_client_id
+    bindings are not trusted when they contradict the named destination.
     """
     service = str(service_name or "").strip()
     if not service:
@@ -445,9 +446,10 @@ def resolve_authoritative_remote_target(
     if not dest:
         raise ControlPlaneError("Remote Service destination is required")
     owner = str(owner_client_id or "").strip()
-    bound = str(destination_client_id or "").strip() or None
+    supplied = str(destination_client_id or "").strip() or None
     target_mode = "routed"
     target_host = dest
+    bound: Optional[str] = None
 
     owner_names = set()
     if owner:
@@ -466,58 +468,84 @@ def resolve_authoritative_remote_target(
             owner_names.add(str(ep["name"]).strip().lower())
     owner_names.discard("")
 
-    if dest.lower() in THIS_HOST or dest.lower() in owner_names or (bound and bound == owner):
-        target_mode = "self"
-        target_host = "127.0.0.1"
-        bound = owner or bound
-    elif bound:
-        resolved, reason = _managed_host_runtime_target(plane, bound)
+    def _routed_from_bound(client_id: str) -> tuple[str, str]:
+        resolved, reason = _managed_host_runtime_target(plane, client_id)
         if reason or not resolved:
             raise ControlPlaneError(reason or "Managed Host destination has no usable target")
-        target_mode = "routed"
-        target_host = resolved
+        return "routed", resolved
+
+    if dest.lower() in THIS_HOST or dest.lower() in owner_names:
+        # Self only when the named destination itself is this host / owner alias.
+        # destination_client_id == owner alone must not force self.
+        if supplied and owner and supplied != owner:
+            raise ControlPlaneError(
+                "destination_client_id does not match authoritative destination '%s'." % dest
+            )
+        target_mode = "self"
+        target_host = "127.0.0.1"
+        bound = owner or None
     else:
         obj = plane.get_object(dest)
-        if obj is None:
+        if obj is not None:
+            otype = str(obj["type"] or "").lower()
+            if otype == "network":
+                raise ControlPlaneError(
+                    "Required destination '%s' is a CIDR Network Object and is not a valid single target."
+                    % dest
+                )
+            if otype == "managed_endpoint":
+                link = plane.conn.execute(
+                    "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+                    (obj["id"],),
+                ).fetchone()
+                derived = str(link["client_id"] if link else "") or None
+                if not derived:
+                    raise ControlPlaneError(
+                        "Managed Host destination '%s' has no immutable client identity." % dest
+                    )
+                if supplied and supplied != derived:
+                    raise ControlPlaneError(
+                        "destination_client_id does not match authoritative Managed Host "
+                        "destination '%s'." % dest
+                    )
+                bound = derived
+                if bound == owner:
+                    target_mode = "self"
+                    target_host = "127.0.0.1"
+                else:
+                    target_mode, target_host = _routed_from_bound(bound)
+            else:
+                # IP/FQDN/host Network Object: never select a Managed Host via Agent binding.
+                if supplied:
+                    raise ControlPlaneError(
+                        "destination_client_id is not valid for Network Object destination '%s'."
+                        % dest
+                    )
+                vals = [
+                    str(v).strip() for v in plane._object_values(obj["id"]) if str(v or "").strip()
+                ]
+                if not vals:
+                    raise ControlPlaneError(
+                        "Required Network Object destination '%s' has no address values." % dest
+                    )
+                bound = None
+                target_mode = "routed"
+                target_host = vals[0]
+        elif supplied:
+            # Immutable Managed Host bind when the destination label drifted (rename)
+            # but the named destination no longer resolves as an object.
+            if owner and supplied == owner:
+                raise ControlPlaneError(
+                    "Required Network Object / Managed Host destination '%s' is missing or invalid."
+                    % dest
+                )
+            bound = supplied
+            target_mode, target_host = _routed_from_bound(bound)
+        else:
             raise ControlPlaneError(
                 "Required Network Object / Managed Host destination '%s' is missing or invalid."
                 % dest
             )
-        otype = str(obj["type"] or "").lower()
-        if otype == "network":
-            raise ControlPlaneError(
-                "Required destination '%s' is a CIDR Network Object and is not a valid single target."
-                % dest
-            )
-        if otype == "managed_endpoint":
-            link = plane.conn.execute(
-                "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
-                (obj["id"],),
-            ).fetchone()
-            bound = str(link["client_id"] if link else "") or None
-            if not bound:
-                raise ControlPlaneError(
-                    "Managed Host destination '%s' has no immutable client identity." % dest
-                )
-            if bound == owner:
-                target_mode = "self"
-                target_host = "127.0.0.1"
-            else:
-                resolved, reason = _managed_host_runtime_target(plane, bound)
-                if reason or not resolved:
-                    raise ControlPlaneError(
-                        reason or "Managed Host destination has no usable target"
-                    )
-                target_mode = "routed"
-                target_host = resolved
-        else:
-            vals = [str(v).strip() for v in plane._object_values(obj["id"]) if str(v or "").strip()]
-            if not vals:
-                raise ControlPlaneError(
-                    "Required Network Object destination '%s' has no address values." % dest
-                )
-            target_mode = "routed"
-            target_host = vals[0]
 
     return {
         "service_object": sobj,
@@ -572,6 +600,22 @@ def server_target_projection_reason(plane: ControlPlane, pub, meta) -> Optional[
             "Published target_host diverges from authoritative destination reference "
             "(%s != %s)." % (actual_host or "(empty)", expect_host or "(empty)")
         )
+    expect_cid = str(expected.get("destination_client_id") or "").strip() or None
+    actual_cid = str(dest_cid or "").strip() or None
+    if actual_cid != expect_cid:
+        # Legacy self destinations may omit destination_client_id while still
+        # projecting to 127.0.0.1/self. That is not a destination-identity bypass.
+        legacy_self_ok = (
+            actual_cid is None
+            and expect_cid is not None
+            and str(expected.get("target_mode") or "").lower() == "self"
+            and actual_host in ("127.0.0.1", "::1")
+            and str(pub["target_mode"] or "").lower() == "self"
+        )
+        if not legacy_self_ok:
+            return (
+                "Published destination_client_id diverges from authoritative destination identity."
+            )
     return None
 
 
@@ -621,6 +665,36 @@ def rematerialize_published_targets_for_service_object(plane: ControlPlane, sobj
     return changed
 
 
+def _resolve_published_authoritative_target(plane: ControlPlane, row) -> dict:
+    """Resolve authoritative target, repairing contradictory stored bindings."""
+    sobj = plane.conn.execute(
+        "SELECT name FROM service_objects WHERE id = ?",
+        (row["service_object_id"],),
+    ).fetchone()
+    if sobj is None:
+        raise ControlPlaneError("Required Service Object is missing or invalid.")
+    stored = str(row["destination_client_id"] or "").strip() or None
+    destination = str(row["destination_name"] or "")
+    owner = str(row["client_id"] or "")
+    try:
+        return resolve_authoritative_remote_target(
+            plane,
+            destination=destination,
+            owner_client_id=owner,
+            service_name=sobj["name"],
+            destination_client_id=stored,
+        )
+    except ControlPlaneError:
+        # Contradictory stored bind: re-derive from destination name alone.
+        return resolve_authoritative_remote_target(
+            plane,
+            destination=destination,
+            owner_client_id=owner,
+            service_name=sobj["name"],
+            destination_client_id=None,
+        )
+
+
 def rematerialize_published_targets_for_destination_name(
     plane: ControlPlane, destination_name: str
 ) -> int:
@@ -636,20 +710,8 @@ def rematerialize_published_targets_for_destination_name(
         "WHERE m.destination_name = ? COLLATE NOCASE AND s.released = 0",
         (dest,),
     ):
-        sobj = plane.conn.execute(
-            "SELECT name FROM service_objects WHERE id = ?",
-            (row["service_object_id"],),
-        ).fetchone()
-        if sobj is None:
-            continue
         try:
-            expected = resolve_authoritative_remote_target(
-                plane,
-                destination=str(row["destination_name"] or ""),
-                owner_client_id=str(row["client_id"] or ""),
-                service_name=sobj["name"],
-                destination_client_id=str(row["destination_client_id"] or "").strip() or None,
-            )
+            expected = _resolve_published_authoritative_target(plane, row)
         except ControlPlaneError:
             plane.conn.execute(
                 "UPDATE remote_service_meta SET status = 'DEGRADED', reason = ? WHERE service_id = ?",
@@ -657,11 +719,17 @@ def rematerialize_published_targets_for_destination_name(
             )
             changed += 1
             continue
-        if (
+        expect_cid = expected.get("destination_client_id")
+        same_target = (
             _normalize_target_host(row["target_host"] or "")
             == _normalize_target_host(expected["target_host"])
             and int(row["target_port"] or 0) == int(expected["target_port"])
-        ):
+            and str(row["target_mode"] or "").lower() == str(expected["target_mode"]).lower()
+        )
+        same_bind = (str(row["destination_client_id"] or "").strip() or None) == (
+            str(expect_cid or "").strip() or None
+        )
+        if same_target and same_bind:
             continue
         plane.conn.execute(
             "UPDATE published_services SET target_host = ?, target_port = ?, target_mode = ?, "
@@ -673,6 +741,10 @@ def rematerialize_published_targets_for_destination_name(
                 utc_now_iso(),
                 row["id"],
             ),
+        )
+        plane.conn.execute(
+            "UPDATE remote_service_meta SET destination_client_id = ? WHERE service_id = ?",
+            (expect_cid, row["id"]),
         )
         changed += 1
     return changed
@@ -693,20 +765,8 @@ def rematerialize_published_targets_for_managed_host(
         "WHERE m.destination_client_id = ? AND s.released = 0",
         (bound,),
     ):
-        sobj = plane.conn.execute(
-            "SELECT name FROM service_objects WHERE id = ?",
-            (row["service_object_id"],),
-        ).fetchone()
-        if sobj is None:
-            continue
         try:
-            expected = resolve_authoritative_remote_target(
-                plane,
-                destination=str(row["destination_name"] or ""),
-                owner_client_id=str(row["client_id"] or ""),
-                service_name=sobj["name"],
-                destination_client_id=bound,
-            )
+            expected = _resolve_published_authoritative_target(plane, row)
         except ControlPlaneError as exc:
             plane.conn.execute(
                 "UPDATE remote_service_meta SET status = 'DEGRADED', reason = ? WHERE service_id = ?",
@@ -714,11 +774,17 @@ def rematerialize_published_targets_for_managed_host(
             )
             changed += 1
             continue
-        if (
+        expect_cid = expected.get("destination_client_id")
+        same_target = (
             _normalize_target_host(row["target_host"] or "")
             == _normalize_target_host(expected["target_host"])
             and int(row["target_port"] or 0) == int(expected["target_port"])
-        ):
+            and str(row["target_mode"] or "").lower() == str(expected["target_mode"]).lower()
+        )
+        same_bind = (str(row["destination_client_id"] or "").strip() or None) == (
+            str(expect_cid or "").strip() or None
+        )
+        if same_target and same_bind:
             continue
         plane.conn.execute(
             "UPDATE published_services SET target_host = ?, target_port = ?, target_mode = ?, "
@@ -730,6 +796,10 @@ def rematerialize_published_targets_for_managed_host(
                 utc_now_iso(),
                 row["id"],
             ),
+        )
+        plane.conn.execute(
+            "UPDATE remote_service_meta SET destination_client_id = ? WHERE service_id = ?",
+            (expect_cid, row["id"]),
         )
         changed += 1
     return changed

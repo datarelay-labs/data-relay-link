@@ -331,6 +331,257 @@ class AuthoritativeConnectivityConvergence(unittest.TestCase):
         self.assertEqual(after["decision"], RP.DECISION_DENY)
         self.assertEqual(after["hostname"], "new.invalid")
 
+    def test_managed_host_destination_rejects_other_host_client_id(self):
+        other = "cccccccccccccccccccccccccccccccc"
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        self.plane.upsert_client(
+            other,
+            label="other-host",
+            hostname="other-host",
+            addresses=[{"address": "10.0.0.30", "active": True}],
+        )
+        v24.set_access_rule(
+            self.plane,
+            "remote",
+            "block-dbhost",
+            mode="blacklist",
+            source="blocked-src",
+            destination="db-host",
+            service="ssh",
+            enabled=True,
+            oneshot=True,
+        )
+        with self.assertRaises(mgmt.MgmtSyncError) as ctx:
+            mgmt.server_upsert_remote_service(
+                self.plane,
+                _auth(),
+                {
+                    "name": "svc-bad-bind",
+                    "destination": "db-host",
+                    "destination_client_id": other,
+                    "service": "ssh",
+                    "enabled": True,
+                    "runtime_verified": True,
+                },
+            )
+        self.assertIn("does not match", str(ctx.exception).lower())
+        pub = self.plane.conn.execute(
+            "SELECT id FROM published_services WHERE name='svc-bad-bind' AND released=0"
+        ).fetchone()
+        self.assertIsNone(pub)
+
+    def test_managed_host_destination_rejects_owner_client_id_self_bypass(self):
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        v24.set_access_rule(
+            self.plane,
+            "remote",
+            "block-dbhost",
+            mode="blacklist",
+            source="blocked-src",
+            destination="db-host",
+            service="ssh",
+            enabled=True,
+            oneshot=True,
+        )
+        with self.assertRaises(mgmt.MgmtSyncError) as ctx:
+            mgmt.server_upsert_remote_service(
+                self.plane,
+                _auth(),
+                {
+                    "name": "svc-owner-bypass",
+                    "destination": "db-host",
+                    "destination_client_id": OWNER,
+                    "service": "ssh",
+                    "enabled": True,
+                    "runtime_verified": True,
+                    "target_host": "127.0.0.1",
+                    "target_mode": "self",
+                },
+            )
+        self.assertIn("does not match", str(ctx.exception).lower())
+
+    def test_contradictory_binding_rows_fail_closed_and_blacklist_stays_deny(self):
+        other = "cccccccccccccccccccccccccccccccc"
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        self.plane.upsert_client(
+            other,
+            label="other-host",
+            hostname="other-host",
+            addresses=[{"address": "10.0.0.30", "active": True}],
+        )
+        v24.set_access_rule(
+            self.plane,
+            "remote",
+            "block-dbhost",
+            mode="blacklist",
+            source="blocked-src",
+            destination="db-host",
+            service="ssh",
+            enabled=True,
+            oneshot=True,
+        )
+        # Seed a contradictory legacy projection that older code would accept.
+        result = mgmt.server_upsert_remote_service(
+            self.plane,
+            _auth(),
+            {
+                "name": "svc-legacy",
+                "destination": "db-host",
+                "destination_client_id": DEST_MH,
+                "service": "ssh",
+                "enabled": True,
+                "runtime_verified": True,
+            },
+        )
+        self.assertEqual(result["status"], "HEALTHY")
+        self.assertEqual(result["target_host"], "10.0.0.20")
+        pub = self.plane.conn.execute(
+            "SELECT * FROM published_services WHERE name='svc-legacy'"
+        ).fetchone()
+        self.plane.conn.execute(
+            "UPDATE published_services SET target_host = '10.0.0.30', target_mode = 'routed' "
+            "WHERE id = ?",
+            (pub["id"],),
+        )
+        self.plane.conn.execute(
+            "UPDATE remote_service_meta SET destination_client_id = ? WHERE service_id = ?",
+            (other, pub["id"]),
+        )
+        self.plane.conn.commit()
+        pub = self.plane.conn.execute(
+            "SELECT * FROM published_services WHERE name='svc-legacy'"
+        ).fetchone()
+        meta = self.plane.conn.execute(
+            "SELECT * FROM remote_service_meta WHERE service_id = ?", (pub["id"],)
+        ).fetchone()
+        status, reason, _ = UR.effective_remote_service_status(
+            self.plane, pub, meta, {}, registry_available=False
+        )
+        self.assertEqual(status, "DEGRADED")
+        self.assertTrue(reason)
+        self._ready()
+        verdict = RP.authorize_remote(
+            self.plane, proxy_name=self._proxy("svc-legacy"), source_ip="198.51.100.9"
+        )
+        self.assertEqual(verdict["decision"], RP.DECISION_DENY)
+        expected_policy = self.plane.evaluate_remote_access(
+            "198.51.100.9", "db-host", "tcp", 22
+        )
+        self.assertEqual(str(expected_policy.get("action") or "").upper(), "DENY")
+
+    def test_network_object_destination_rejects_managed_host_binding(self):
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        v24.set_network_object(
+            self.plane, "db-target", type="fqdn", value="expected.invalid", oneshot=True
+        )
+        with self.assertRaises(mgmt.MgmtSyncError) as ctx:
+            mgmt.server_upsert_remote_service(
+                self.plane,
+                _auth(),
+                {
+                    "name": "svc-fqdn",
+                    "destination": "db-target",
+                    "destination_client_id": DEST_MH,
+                    "service": "ssh",
+                    "enabled": True,
+                    "runtime_verified": True,
+                },
+            )
+        self.assertIn("not valid for network object", str(ctx.exception).lower())
+
+    def test_valid_managed_host_binding_stable_across_label_hostname_address_churn(self):
+        self.plane.upsert_client(
+            DEST_MH,
+            label="db-host",
+            hostname="db-host.internal",
+            addresses=[{"address": "10.0.0.20", "active": True}],
+        )
+        v24.set_access_rule(
+            self.plane,
+            "remote",
+            "block-dbhost",
+            mode="blacklist",
+            source="blocked-src",
+            destination="db-host",
+            service="ssh",
+            enabled=True,
+            oneshot=True,
+        )
+        result = mgmt.server_upsert_remote_service(
+            self.plane,
+            _auth(),
+            {
+                "name": "svc-stable",
+                "destination": "db-host",
+                "destination_client_id": DEST_MH,
+                "service": "ssh",
+                "enabled": True,
+                "runtime_verified": True,
+            },
+        )
+        self.assertEqual(result["destination_client_id"], DEST_MH)
+        self.assertEqual(result["target_host"], "10.0.0.20")
+        self.assertEqual(result["status"], "HEALTHY")
+        before_port = result["endpoint_port"]
+
+        self.plane.set_client_label(DEST_MH, "database-prod-renamed")
+        # Stale destination label + correct immutable bind remains accepted.
+        result2 = mgmt.server_upsert_remote_service(
+            self.plane,
+            _auth(),
+            {
+                "name": "svc-stable",
+                "destination": "db-host",
+                "destination_client_id": DEST_MH,
+                "service": "ssh",
+                "enabled": True,
+                "runtime_verified": True,
+            },
+        )
+        self.assertEqual(result2["destination_client_id"], DEST_MH)
+        self.assertEqual(result2["endpoint_port"], before_port)
+
+        self.plane.upsert_client(
+            DEST_MH,
+            label="database-prod-renamed",
+            hostname="db-host-new.internal",
+            addresses=[{"address": "10.0.0.21", "active": True}],
+        )
+        pub = self.plane.conn.execute(
+            "SELECT target_host FROM published_services WHERE name='svc-stable'"
+        ).fetchone()
+        self.assertEqual(pub["target_host"], "10.0.0.21")
+        meta = self.plane.conn.execute(
+            "SELECT m.destination_client_id FROM published_services s "
+            "JOIN remote_service_meta m ON m.service_id = s.id WHERE s.name='svc-stable'"
+        ).fetchone()
+        self.assertEqual(meta["destination_client_id"], DEST_MH)
+        self._ready()
+        after = RP.authorize_remote(
+            self.plane, proxy_name=self._proxy("svc-stable"), source_ip="198.51.100.9"
+        )
+        self.assertEqual(after["decision"], RP.DECISION_DENY)
+
 
 class AgentCatalogServiceAuthority(unittest.TestCase):
     def setUp(self):
