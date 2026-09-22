@@ -362,6 +362,15 @@ fi
 FRP_DEPENDENCY_ROLE=server
 frp_required_commands | grep -qx ss || fail "server requires ss"
 frp_required_commands | grep -qx python3 || fail "server requires python3"
+MISSING_COMMANDS=()
+MISSING_PYTHON_PACKAGES=()
+# Simulate missing AUTO_ACME runtime on a clean server image.
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme || fail "server missing acme maps to python3-acme"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-cryptography || fail "server missing cryptography mapped"
+frp_packages_for_missing apt
+printf '%s\n' "${PACKAGES[@]}" | grep -qx python3-acme || fail "server PACKAGES includes python3-acme"
 pass "package name mapping"
 
 # Host isolation: tests must not have invoked real apt-get/dnf/yum via the helpers

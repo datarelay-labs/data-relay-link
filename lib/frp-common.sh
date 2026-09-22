@@ -1804,6 +1804,83 @@ frp_packages_for_missing() {
       PACKAGES+=("$pkg")
     fi
   done
+  # Server AUTO_ACME / MCP TLS packaged Python deps (not shell commands).
+  for pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
+    [[ -n "$pkg" ]] || continue
+    existing=0
+    for existing_pkg in "${PACKAGES[@]}"; do
+      if [[ "$existing_pkg" == "$pkg" ]]; then
+        existing=1
+        break
+      fi
+    done
+    if (( existing == 0 )); then
+      PACKAGES+=("$pkg")
+    fi
+  done
+}
+
+frp_server_python_package_for_module() {
+  local module="$1" pm="$2"
+  case "$module" in
+    acme|josepy)
+      # Ubuntu 24.04: python3-acme 2.9.0; EL8 EPEL: python3-acme 1.22.x.
+      # josepy is a transitive dependency of python3-acme on supported distros.
+      printf 'python3-acme'
+      ;;
+    cryptography)
+      printf 'python3-cryptography'
+      ;;
+    *)
+      echo "ERROR: no package mapping for python module: ${module}" >&2
+      return 1
+      ;;
+  esac
+}
+
+frp_python_module_importable() {
+  local module="$1"
+  frp_invoke python3 -c "import ${module}" >/dev/null 2>&1
+}
+
+frp_collect_missing_python_packages() {
+  local role="${FRP_DEPENDENCY_ROLE:-client}" module pkg existing existing_pkg
+  MISSING_PYTHON_PACKAGES=()
+  if [[ "$role" != server ]]; then
+    return 0
+  fi
+  if [[ -z "${PACKAGE_MANAGER:-}" ]]; then
+    frp_detect_package_manager || true
+  fi
+  local pm="${PACKAGE_MANAGER:-apt}"
+  for module in acme josepy cryptography; do
+    if frp_python_module_importable "$module"; then
+      continue
+    fi
+    pkg="$(frp_server_python_package_for_module "$module" "$pm")" || return 1
+    existing=0
+    for existing_pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
+      if [[ "$existing_pkg" == "$pkg" ]]; then
+        existing=1
+        break
+      fi
+    done
+    if (( existing == 0 )); then
+      MISSING_PYTHON_PACKAGES+=("$pkg")
+    fi
+  done
+}
+
+frp_print_missing_python_packages_error() {
+  local pkg
+  echo "ERROR: required server Python packages are missing:" >&2
+  for pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
+    echo "  ${pkg}" >&2
+  done
+  echo >&2
+  echo "AUTO_ACME / MCP public TLS requires distro package python3-acme" >&2
+  echo "(Ubuntu 24.04: 2.9.x; EL8 EPEL: 1.22.x+) plus python3-cryptography." >&2
+  echo "Install the packages manually and run the installer again." >&2
 }
 
 install_dependencies_apt() {
@@ -1838,8 +1915,10 @@ frp_print_missing_tools_error() {
 }
 
 ensure_dependencies() {
+  MISSING_PYTHON_PACKAGES=()
   frp_collect_missing_commands
-  if ((${#MISSING_COMMANDS[@]} == 0)); then
+  frp_collect_missing_python_packages
+  if ((${#MISSING_COMMANDS[@]} == 0)) && ((${#MISSING_PYTHON_PACKAGES[@]} == 0)); then
     frp_prefer_newer_python || true
     return 0
   fi
@@ -1847,7 +1926,12 @@ ensure_dependencies() {
     frp_detect_package_manager
   fi
   if [[ -z "${PACKAGE_MANAGER:-}" ]]; then
-    frp_print_missing_tools_error
+    if ((${#MISSING_COMMANDS[@]} > 0)); then
+      frp_print_missing_tools_error
+    fi
+    if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
+      frp_print_missing_python_packages_error
+    fi
     return 1
   fi
   frp_packages_for_missing "$PACKAGE_MANAGER"
@@ -1862,12 +1946,22 @@ ensure_dependencies() {
   esac
   frp_prefer_newer_python || true
   frp_collect_missing_commands
+  frp_collect_missing_python_packages
   if ((${#MISSING_COMMANDS[@]} > 0)); then
     echo "ERROR: missing required command after dependency installation:" >&2
     local cmd
     for cmd in "${MISSING_COMMANDS[@]}"; do
       echo "  ${cmd}" >&2
     done
+    return 1
+  fi
+  if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
+    echo "ERROR: missing required Python packages after dependency installation:" >&2
+    local pkg
+    for pkg in "${MISSING_PYTHON_PACKAGES[@]}"; do
+      echo "  ${pkg}" >&2
+    done
+    echo "AUTO_ACME cannot be advertised as ready without python3-acme." >&2
     return 1
   fi
 }

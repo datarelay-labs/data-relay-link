@@ -55,7 +55,11 @@ LE_STAGING_DIRECTORY = "https://acme-staging-v02.api.letsencrypt.org/directory"
 ACME_CHALLENGE_SUPPORTED = ("HTTP-01",)
 ACME_DEFAULT_CHALLENGE = "HTTP-01"
 ACME_IMPLEMENTATION = "python3-acme"
+# Packaged dependency policy: distro python3-acme (Ubuntu 24.04 = 2.9.0;
+# EL8 EPEL = 1.22.x). Runtime requires the ClientV2 HTTP-01 surface.
 ACME_IMPLEMENTATION_VERSION = "2.9.0"
+ACME_MIN_VERSION = (1, 22)
+ACME_DISTRO_PACKAGE = "python3-acme"
 
 # Renew when fewer than this many days remain (conservative; avoids rate limits).
 RENEWAL_DAYS_BEFORE_EXPIRY = 30
@@ -138,6 +142,8 @@ def challenges_dir(root: Optional[str | Path] = None) -> Path:
 
 def ensure_tree(root: Optional[str | Path] = None) -> Path:
     tree = tls_tree(root)
+    secret_dirs = {active_dir(root), previous_dir(root), staging_dir(root), account_dir(root)}
+    public_dirs = {acme_webroot(root), challenges_dir(root)}
     for path in (
         tree,
         active_dir(root),
@@ -148,12 +154,87 @@ def ensure_tree(root: Optional[str | Path] = None) -> Path:
         challenges_dir(root),
     ):
         path.mkdir(parents=True, exist_ok=True)
-        # acme-www must be traversable by nginx; keep account/active at 0700.
-        if path in (acme_webroot(root), challenges_dir(root)):
+        # Secrets stay 0700. TLS tree + HTTP-01 webroot must be traversable by
+        # the frontend nginx worker (often nobody/www-data) without exposing keys.
+        if path in secret_dirs:
+            os.chmod(path, 0o700)
+        elif path in public_dirs or path == tree:
             os.chmod(path, 0o755)
         else:
             os.chmod(path, 0o700)
+    ensure_http01_publish_permissions(root)
     return tree
+
+
+def _frontend_http_user() -> str:
+    """Best-effort nginx worker user for HTTP-01 webroot traversal ACLs."""
+    for name in ("www-data", "nginx", "nobody"):
+        try:
+            import pwd
+
+            pwd.getpwnam(name)
+            return name
+        except Exception:
+            continue
+    return ""
+
+
+def ensure_http01_publish_permissions(root: Optional[str | Path] = None) -> None:
+    """Ensure frontend can traverse to the HTTP-01 webroot; secrets stay closed."""
+    base = _root(root)
+    webroot = acme_webroot(root)
+    challenges = challenges_dir(root)
+    for path in (webroot, challenges):
+        path.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path, 0o755)
+        except OSError:
+            pass
+    # mcp TLS tree itself must be traversable (account/active remain 0700).
+    try:
+        os.chmod(tls_tree(root), 0o755)
+    except OSError:
+        pass
+    # When operating on the live filesystem root, grant the frontend user
+    # execute-only on ancestor state dirs without world-listing secrets.
+    if str(base) not in ("/", ""):
+        # Test roots: make ancestors traversable under the fake root only.
+        for ancestor in (base / "var" / "lib" / "drlink", base / "var" / "lib" / "drlink" / "tls"):
+            if ancestor.is_dir():
+                try:
+                    os.chmod(ancestor, 0o755)
+                except OSError:
+                    pass
+        return
+    user = _frontend_http_user()
+    ancestors = [
+        Path("/var/lib/drlink"),
+        Path("/var/lib/drlink/tls"),
+        tls_tree(root),
+    ]
+    if user and shutil.which("setfacl"):
+        for ancestor in ancestors:
+            if not ancestor.is_dir():
+                continue
+            try:
+                subprocess.run(
+                    ["setfacl", "-m", "u:%s:--x" % user, str(ancestor)],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                pass
+    else:
+        # Fallback: other-execute only (no read/list) so nginx can traverse.
+        for ancestor in ancestors:
+            if not ancestor.is_dir():
+                continue
+            try:
+                mode = stat.S_IMODE(ancestor.stat().st_mode)
+                os.chmod(ancestor, mode | 0o011)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -707,20 +788,81 @@ def restore_previous_on_failure(root) -> bool:
 # ACME (python3-acme)
 # ---------------------------------------------------------------------------
 
-def _require_acme():
+def _parse_acme_version(raw: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for token in str(raw or "").strip().split("."):
+        digits = ""
+        for ch in token:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def acme_runtime_status() -> dict:
+    """Report whether the supported packaged ACME runtime is importable."""
+    status = {
+        "ok": False,
+        "implementation": ACME_IMPLEMENTATION,
+        "package": ACME_DISTRO_PACKAGE,
+        "min_version": "%d.%d" % ACME_MIN_VERSION,
+        "version": "",
+        "detail": "",
+    }
     try:
+        import acme  # noqa: F401
         from acme import challenges, client, messages  # noqa: F401
         import josepy  # noqa: F401
     except ImportError as exc:
+        status["detail"] = "missing %s (and josepy): %s" % (ACME_DISTRO_PACKAGE, exc)
+        return status
+    version = ""
+    try:
+        from importlib import metadata as importlib_metadata
+
+        version = importlib_metadata.version("acme")
+    except Exception:
+        version = getattr(acme, "__version__", "") or ""
+    status["version"] = str(version or "")
+    parsed = _parse_acme_version(status["version"])
+    if parsed and parsed < ACME_MIN_VERSION:
+        status["detail"] = "python3-acme %s is below supported minimum %s.%s" % (
+            status["version"],
+            ACME_MIN_VERSION[0],
+            ACME_MIN_VERSION[1],
+        )
+        return status
+    status["ok"] = True
+    status["detail"] = "python3-acme %s" % (status["version"] or "unknown")
+    return status
+
+
+def _require_acme():
+    status = acme_runtime_status()
+    if not status.get("ok"):
         raise McpTlsError(
-            "AUTO_ACME requires python3-acme (install the python3-acme package)",
+            "AUTO_ACME requires distro package %s (>= %s.%s); %s"
+            % (
+                ACME_DISTRO_PACKAGE,
+                ACME_MIN_VERSION[0],
+                ACME_MIN_VERSION[1],
+                status.get("detail") or "not installed",
+            ),
             failure_class="DEPENDENCY_MISSING",
-        ) from exc
+        )
     return True
 
 
 def _account_key_path(root) -> Path:
     return account_dir(root) / "account.key"
+
+
+def _account_regr_path(root) -> Path:
+    return account_dir(root) / "regr.json"
 
 
 def _load_or_create_account_key(root):
@@ -745,36 +887,133 @@ def _load_or_create_account_key(root):
     return jose.JWKRSA(key=key)
 
 
+def _persist_account_regr(root, regr) -> None:
+    """Persist non-secret ACME account URI for reuse (never stores private keys)."""
+    ensure_tree(root)
+    uri = getattr(regr, "uri", None) or ""
+    if not uri:
+        return
+    payload = {"uri": str(uri)}
+    path = _account_regr_path(root)
+    _write_public_file(path, json.dumps(payload, indent=2, sort_keys=True) + "\n", 0o644)
+
+
+def _load_account_regr_uri(root) -> str:
+    path = _account_regr_path(root)
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("uri") or "").strip()
+
+
 def _acme_client(root, directory_url: str, account_key):
-    from acme import client, messages
+    from acme import client
 
     net = client.ClientNetwork(account_key, user_agent="DataRelayLink-MCP-TLS/%s" % ACME_IMPLEMENTATION_VERSION)
-    directory = client.ClientV2.get_directory(directory_url, net)
+    try:
+        directory = client.ClientV2.get_directory(directory_url, net)
+    except Exception as exc:
+        raise McpTlsError(
+            "ACME directory is unreachable: %s" % directory_url,
+            failure_class="ACME_UNAVAILABLE",
+        ) from exc
     return client.ClientV2(directory, net)
 
 
-def _ensure_acme_account(acme_client, account_key, email: str):
+def _new_registration_message(email: str):
     from acme import messages
 
+    kwargs = {"terms_of_service_agreed": True}
+    text = (email or "").strip()
+    if text:
+        kwargs["email"] = text
+    return messages.NewRegistration.from_data(**kwargs)
+
+
+def _ensure_acme_account(acme_client, root, email: str):
+    """Register or bind an existing ACME account for the local account key.
+
+    Compatible with packaged python3-acme on Ubuntu 24.04 (2.9.x) and EL8 EPEL
+    (1.22.x): new_account + ConflictError → query_registration(uri).
+    """
+    from acme import errors, messages
+
+    # Fast path: previously persisted account URI.
+    uri = _load_account_regr_uri(root)
+    if uri:
+        try:
+            regr = messages.RegistrationResource(body=messages.Registration(), uri=uri)
+            regr = acme_client.query_registration(regr)
+            _persist_account_regr(root, regr)
+            return regr
+        except Exception:
+            # Fall through to create / conflict recovery.
+            pass
+
+    reg = _new_registration_message(email)
     try:
-        return acme_client.query_registration(
-            messages.NewRegistration.from_data(email=email or None, terms_of_service_agreed=True)
-            if email
-            else messages.NewRegistration.from_data(terms_of_service_agreed=True)
-        )
-    except Exception:
-        reg = messages.NewRegistration.from_data(
-            email=email or None,
-            terms_of_service_agreed=True,
-        )
-        return acme_client.new_account(reg)
+        regr = acme_client.new_account(reg)
+    except errors.ConflictError as exc:
+        location = getattr(exc, "location", None) or ""
+        if not location:
+            raise McpTlsError(
+                "ACME account already exists but registration URL was not returned",
+                failure_class="ACME_ACCOUNT_FAILED",
+            ) from exc
+        regr = messages.RegistrationResource(body=messages.Registration(), uri=location)
+        try:
+            regr = acme_client.query_registration(regr)
+        except Exception as query_exc:
+            raise McpTlsError(
+                "ACME account registration conflict could not be resolved",
+                failure_class="ACME_ACCOUNT_FAILED",
+            ) from query_exc
+    except messages.Error as exc:
+        typ = str(getattr(exc, "typ", "") or getattr(exc, "type", "") or "").lower()
+        detail = str(getattr(exc, "detail", "") or exc)
+        if "invalidcontact" in typ or "invalid contact" in detail.lower():
+            raise McpTlsError(
+                "ACME contact email was rejected by the CA",
+                failure_class="ACME_ACCOUNT_FAILED",
+            ) from exc
+        raise McpTlsError(
+            "ACME account registration failed",
+            failure_class="ACME_ACCOUNT_FAILED",
+        ) from exc
+    except McpTlsError:
+        raise
+    except Exception as exc:
+        raise McpTlsError(
+            "ACME account registration failed",
+            failure_class="ACME_ACCOUNT_FAILED",
+        ) from exc
+    _persist_account_regr(root, regr)
+    return regr
+
+
+def _classify_acme_messages_error(exc, *, default: str) -> str:
+    typ = str(getattr(exc, "typ", "") or getattr(exc, "type", "") or "").lower()
+    detail = str(getattr(exc, "detail", "") or exc).lower()
+    blob = "%s %s" % (typ, detail)
+    if "ratelimit" in blob or "rate limited" in blob:
+        return "ACME_RATE_LIMIT"
+    if "unauthorized" in blob or "rejectedidentifier" in blob or "dns" in blob:
+        return "ACME_AUTHORIZATION_FAILED"
+    if "malformed" in blob:
+        return default
+    return default
 
 
 def _write_http01_challenge(root, token: str, validation: str) -> Path:
     ensure_tree(root)
     # ACME HTTP-01 token path is /.well-known/acme-challenge/<token>
     dest = challenges_dir(root) / token
-    # Challenge responses are not private keys but restrict write perms.
+    # Challenge responses are not private keys but must be world-readable for nginx.
     _write_public_file(dest, validation + "\n", 0o644)
     return dest
 
@@ -802,7 +1041,6 @@ def issue_acme_certificate(
     """Perform ACME issuance using python3-acme (HTTP-01). No long DB txn here."""
     _require_acme()
     from acme import challenges, errors, messages
-    import josepy as jose
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives import serialization
     from cryptography import x509
@@ -812,14 +1050,25 @@ def issue_acme_certificate(
     host = canonicalize_hostname(hostname)
     if is_private_only_hostname(host):
         raise McpTlsError("AUTO_ACME rejects private-only hostnames", failure_class="HOSTNAME_INVALID")
+    ensure_http01_publish_permissions(root)
     account_key = _load_or_create_account_key(root)
     try:
         acme_client = _acme_client(root, directory_url, account_key)
-        _ensure_acme_account(acme_client, account_key, contact_email)
+    except McpTlsError:
+        raise
     except Exception as exc:
         raise McpTlsError(
-            "ACME server unreachable or account registration failed",
+            "ACME directory is unreachable",
             failure_class="ACME_UNAVAILABLE",
+        ) from exc
+    try:
+        _ensure_acme_account(acme_client, root, contact_email)
+    except McpTlsError:
+        raise
+    except Exception as exc:
+        raise McpTlsError(
+            "ACME account registration failed",
+            failure_class="ACME_ACCOUNT_FAILED",
         ) from exc
 
     # CSR
@@ -839,6 +1088,9 @@ def issue_acme_certificate(
 
     try:
         order = acme_client.new_order(csr_pem)
+    except messages.Error as exc:
+        failure = _classify_acme_messages_error(exc, default="ACME_ORDER_FAILED")
+        raise McpTlsError("ACME new order failed", failure_class=failure) from exc
     except Exception as exc:
         msg = str(exc).lower()
         failure = "ACME_ORDER_FAILED"
@@ -868,6 +1120,14 @@ def issue_acme_certificate(
             order = acme_client.poll_and_finalize(order, deadline=deadline)
         except errors.TimeoutError as exc:
             raise McpTlsError("ACME certificate issuance timed out", failure_class="ACME_TIMEOUT") from exc
+        except errors.ValidationError as exc:
+            raise McpTlsError(
+                "ACME HTTP-01 challenge validation failed",
+                failure_class="ACME_AUTHORIZATION_FAILED",
+            ) from exc
+        except messages.Error as exc:
+            failure = _classify_acme_messages_error(exc, default="ACME_AUTHORIZATION_FAILED")
+            raise McpTlsError("ACME challenge or finalize failed", failure_class=failure) from exc
         except Exception as exc:
             msg = str(exc).lower()
             failure = "ACME_AUTHORIZATION_FAILED"
@@ -1022,6 +1282,9 @@ def configure_intent(
     state = load_state(plane)
     if mode is not None:
         state["mode"] = normalize_mode(mode)
+        if state["mode"] == MODE_AUTO_ACME:
+            # Fail closed before advertising AUTO_ACME as configured/ready.
+            _require_acme()
     if hostname is not None:
         text = str(hostname).strip()
         if text:
@@ -1508,6 +1771,25 @@ def doctor_checks(plane, root=None) -> list[dict]:
             "detail": "hostname=%s cloud_compatible=%s" % (view.get("hostname"), view.get("cloud_compatible")),
         }
     )
+    if mode == MODE_AUTO_ACME:
+        acme_status = acme_runtime_status()
+        checks.append(
+            {
+                "id": "mcp_tls_acme_dependency",
+                "status": "PASS" if acme_status.get("ok") else "FAIL",
+                "summary": (
+                    "AUTO_ACME runtime dependency is available"
+                    if acme_status.get("ok")
+                    else "AUTO_ACME runtime dependency is missing"
+                ),
+                "detail": "%s package=%s version=%s"
+                % (
+                    acme_status.get("detail") or "",
+                    acme_status.get("package"),
+                    acme_status.get("version") or "absent",
+                ),
+            }
+        )
     cert_status = view.get("certificate")
     if cert_status == STATUS_VALID:
         st = "PASS"

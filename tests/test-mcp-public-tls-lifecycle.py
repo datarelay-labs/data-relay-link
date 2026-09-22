@@ -81,6 +81,7 @@ class LocalAcmeServer:
         self._thread = None
         self.fail_finalize = False
         self.rate_limit = False
+        self.conflict_on_reregister = False
 
     def directory(self):
         return {
@@ -175,9 +176,38 @@ class LocalAcmeServer:
                     return self._json(429, {"type": "urn:ietf:params:acme:error:rateLimited", "detail": "slow down"})
 
                 if self.path == "/acme/new-account":
+                    # Key fingerprint from JWS protected header is unavailable here;
+                    # use contact+only_return_existing / in-memory single-account map.
+                    only_existing = bool(payload.get("onlyReturnExisting"))
+                    if server.accounts and (only_existing or server.conflict_on_reregister):
+                        kid = next(iter(server.accounts.keys()))
+                        return self._json(
+                            200,
+                            {"status": "valid", "orders": server.base + "/acme/orders"},
+                            {"Location": kid},
+                        )
                     kid = server.base + "/acme/acct/%s" % (len(server.accounts) + 1)
                     server.accounts[kid] = payload
                     return self._json(201, {"status": "valid", "orders": server.base + "/acme/orders"}, {"Location": kid})
+
+                if self.path.startswith("/acme/acct/"):
+                    abs_kid = server.base + self.path
+                    kid = abs_kid if abs_kid in server.accounts else None
+                    if kid is None:
+                        for existing in server.accounts:
+                            if existing.endswith(self.path):
+                                kid = existing
+                                break
+                    if kid is None:
+                        return self._json(
+                            404,
+                            {"type": "urn:ietf:params:acme:error:accountDoesNotExist", "detail": "unknown"},
+                        )
+                    return self._json(
+                        200,
+                        {"status": "valid", "orders": server.base + "/acme/orders"},
+                        {"Location": kid},
+                    )
 
                 if self.path == "/acme/new-order":
                     identifiers = payload.get("identifiers") or []
@@ -672,6 +702,174 @@ spec:
             self.assertNotIn("letsencrypt.org", directory)
         finally:
             acme.stop()
+
+    def test_acme_dependency_missing_fail_closed(self):
+        status = mcp_tls.acme_runtime_status()
+        self.assertTrue(status.get("ok"), status)
+        orig = mcp_tls.acme_runtime_status
+        mcp_tls.acme_runtime_status = lambda: {
+            "ok": False,
+            "implementation": mcp_tls.ACME_IMPLEMENTATION,
+            "package": mcp_tls.ACME_DISTRO_PACKAGE,
+            "min_version": "%d.%d" % mcp_tls.ACME_MIN_VERSION,
+            "version": "",
+            "detail": "missing python3-acme",
+        }
+        try:
+            with self.assertRaises(mcp_tls.McpTlsError) as ctx:
+                mcp_tls._require_acme()
+            self.assertEqual(ctx.exception.failure_class, "DEPENDENCY_MISSING")
+            with self.assertRaises(mcp_tls.McpTlsError) as ctx2:
+                mcp_tls.configure_intent(self.plane, mode=mcp_tls.MODE_AUTO_ACME)
+            self.assertEqual(ctx2.exception.failure_class, "DEPENDENCY_MISSING")
+            with self.assertRaises(SystemExit):
+                dispatch(["set", "mcp-tls", "mode", "auto-acme"], root=self.tmp)
+        finally:
+            mcp_tls.acme_runtime_status = orig
+
+    def test_http01_publish_permissions_keep_secrets_closed(self):
+        mcp_tls.ensure_tree(self.tmp)
+        tree = mcp_tls.tls_tree(self.tmp)
+        self.assertEqual(stat.S_IMODE(tree.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(mcp_tls.acme_webroot(self.tmp).stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(mcp_tls.challenges_dir(self.tmp).stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(mcp_tls.account_dir(self.tmp).stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(mcp_tls.active_dir(self.tmp).stat().st_mode), 0o700)
+        # Parent state dirs under test root are made traversable for HTTP-01.
+        parent = Path(self.tmp) / "var" / "lib" / "drlink"
+        self.assertTrue(parent.is_dir())
+        self.assertTrue(stat.S_IMODE(parent.stat().st_mode) & 0o001)
+
+    def test_acme_account_conflict_reuses_existing_registration(self):
+        host = "mcp.example.test"
+        dispatch(["set", "mcp-tls", "hostname", host], root=self.tmp)
+        dispatch(["set", "mcp-tls", "mode", "auto-acme"], root=self.tmp)
+        dispatch(["set", "mcp-tls", "acme-environment", "staging"], root=self.tmp)
+        acme = LocalAcmeServer()
+        acme.conflict_on_reregister = True
+        directory = acme.start()
+        try:
+            # First registration succeeds and persists URI.
+            key = mcp_tls._load_or_create_account_key(self.tmp)
+            client = mcp_tls._acme_client(self.tmp, directory, key)
+            regr1 = mcp_tls._ensure_acme_account(client, self.tmp, "")
+            self.assertTrue(regr1.uri)
+            self.assertTrue(mcp_tls._account_regr_path(self.tmp).is_file())
+            # Second call must tolerate ConflictError (same key / existing account).
+            client2 = mcp_tls._acme_client(self.tmp, directory, key)
+            # Force conflict path by clearing persisted URI then re-registering.
+            mcp_tls._account_regr_path(self.tmp).unlink()
+            regr2 = mcp_tls._ensure_acme_account(client2, self.tmp, "")
+            self.assertEqual(regr1.uri, regr2.uri)
+            # Full issuance still works after conflict recovery.
+            orig_pre = mcp_tls.preflight_hostname
+            mcp_tls.preflight_hostname = lambda *a, **k: {
+                "hostname": host,
+                "resolves": True,
+                "addresses": ["127.0.0.1"],
+                "private_only": False,
+                "challenge_port_80_open": True,
+                "ok": True,
+                "warnings": [],
+                "errors": [],
+            }
+            try:
+                state = mcp_tls.issue_and_activate(
+                    self.plane,
+                    self.tmp,
+                    reload=False,
+                    directory_url_override=directory,
+                )
+            finally:
+                mcp_tls.preflight_hostname = orig_pre
+            self.assertEqual(state["mode"], mcp_tls.MODE_AUTO_ACME)
+            self.assertTrue(state.get("fingerprint_sha256"))
+        finally:
+            acme.stop()
+
+    def test_acme_directory_unavailable_classification(self):
+        host = "mcp.example.test"
+        dispatch(["set", "mcp-tls", "hostname", host], root=self.tmp)
+        with self.assertRaises(mcp_tls.McpTlsError) as ctx:
+            mcp_tls.issue_acme_certificate(
+                self.tmp,
+                hostname=host,
+                directory_url="https://127.0.0.1:1/directory",
+                contact_email="",
+                timeout_sec=2,
+            )
+        self.assertEqual(ctx.exception.failure_class, "ACME_UNAVAILABLE")
+
+    def test_renewal_uses_same_acme_runtime_path(self):
+        host = "mcp.example.test"
+        dispatch(["set", "mcp-tls", "hostname", host], root=self.tmp)
+        dispatch(["set", "mcp-tls", "mode", "auto-acme"], root=self.tmp)
+        dispatch(["set", "mcp-tls", "acme-environment", "staging"], root=self.tmp)
+        called = {"n": 0}
+
+        def fake_issue(*a, **k):
+            called["n"] += 1
+            cert, key = _synth_leaf(host, days=90)
+            meta = mcp_tls.validate_cert_key_pair(cert, key, hostname=host)
+            meta.update({"mode": mcp_tls.MODE_AUTO_ACME, "hostname": host, "fullchain_pem": cert, "key_pem": key})
+            return meta
+
+        # Seed near-expiry cert
+        cert, key = _synth_leaf(host, days=5)
+        meta = mcp_tls.validate_cert_key_pair(cert, key, hostname=host)
+        meta.update({"mode": mcp_tls.MODE_AUTO_ACME, "hostname": host, "fullchain_pem": cert, "key_pem": key})
+        mcp_tls.activate_material(self.plane, self.tmp, meta, reload=False)
+        orig = mcp_tls.issue_acme_certificate
+        orig_pre = mcp_tls.preflight_hostname
+        mcp_tls.issue_acme_certificate = fake_issue
+        mcp_tls.preflight_hostname = lambda *a, **k: {
+            "hostname": host,
+            "resolves": True,
+            "addresses": ["127.0.0.1"],
+            "private_only": False,
+            "challenge_port_80_open": True,
+            "ok": True,
+            "warnings": [],
+            "errors": [],
+        }
+        try:
+            result = mcp_tls.renew_if_due(self.plane, self.tmp, force=True, reload=False)
+        finally:
+            mcp_tls.issue_acme_certificate = orig
+            mcp_tls.preflight_hostname = orig_pre
+        self.assertTrue(result.get("renewed"))
+        self.assertEqual(called["n"], 1)
+
+    def test_user_certificate_and_private_ca_unaffected_by_acme_dep_gate(self):
+        host = "mcp.example.test"
+        # USER_CERTIFICATE must not require python3-acme at configure time.
+        orig = mcp_tls.acme_runtime_status
+        mcp_tls.acme_runtime_status = lambda: {
+            "ok": False,
+            "implementation": mcp_tls.ACME_IMPLEMENTATION,
+            "package": mcp_tls.ACME_DISTRO_PACKAGE,
+            "min_version": "%d.%d" % mcp_tls.ACME_MIN_VERSION,
+            "version": "",
+            "detail": "missing python3-acme",
+        }
+        try:
+            dispatch(["set", "mcp-tls", "hostname", host], root=self.tmp)
+            dispatch(["set", "mcp-tls", "mode", "user-certificate"], root=self.tmp)
+            cert, key = _synth_leaf(host, days=60)
+            c1 = Path(self.tmp) / "u.crt"
+            k1 = Path(self.tmp) / "u.key"
+            c1.write_bytes(cert)
+            k1.write_bytes(key)
+            os.chmod(k1, 0o600)
+            mcp_tls.import_user_certificate(
+                self.plane, self.tmp, cert_path=str(c1), key_path=str(k1), reload=False
+            )
+            self.assertEqual(mcp_tls.load_state(self.plane)["mode"], mcp_tls.MODE_USER_CERTIFICATE)
+            dispatch(["set", "mcp-tls", "mode", "private-ca"], root=self.tmp)
+            mcp_tls.issue_and_activate(self.plane, self.tmp, reload=False)
+            self.assertEqual(mcp_tls.load_state(self.plane)["mode"], mcp_tls.MODE_PRIVATE_CA)
+        finally:
+            mcp_tls.acme_runtime_status = orig
 
     def test_secret_scan_no_private_keys_in_status_export(self):
         host = "mcp.example.test"

@@ -2087,6 +2087,14 @@ frp_server_ensure_sandbox_dirs() {
           touch "$var_log/egress/connections.jsonl" 2>/dev/null || true
           setfacl -m u:drlink-egress:rw- "$var_log/egress/connections.jsonl" 2>/dev/null || true
           touch "$var_log/access/connections.jsonl" 2>/dev/null || true
+          # HTTP-01: frontend nginx worker must traverse /var/lib/drlink → tls → mcp/acme-www.
+          # Prefer named-user execute ACL (nobody/www-data/nginx) without world-listing secrets.
+          for nginx_user in www-data nginx nobody; do
+            if getent passwd "$nginx_user" >/dev/null 2>&1; then
+              setfacl -m "u:${nginx_user}:--x" "$var_lib" 2>/dev/null || true
+              break
+            fi
+          done
         fi
       fi
       if [[ "$acl_ok" -ne 1 ]] && getent group drlink-egress >/dev/null 2>&1; then
@@ -2095,6 +2103,9 @@ frp_server_ensure_sandbox_dirs() {
         # group-execute on root:root directories.
         if chown root:drlink-egress "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null; then
           chmod 710 "$etc_proj" "$var_lib" "$var_log" "$run_dir" 2>/dev/null || true
+          # Other-execute so unprivileged nginx workers can reach HTTP-01 webroot.
+          # Listing remains denied; secret leaf dirs stay 0700.
+          chmod 711 "$var_lib" 2>/dev/null || true
           chown root:drlink-egress "$var_log/egress" 2>/dev/null || true
           chmod 770 "$var_log/egress" 2>/dev/null || true
           if [[ -f "$etc_proj/config.json" ]]; then
