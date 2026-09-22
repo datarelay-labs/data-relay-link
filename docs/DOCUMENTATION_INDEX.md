@@ -85,6 +85,18 @@ ConfigurationBundle
 
 Public command examples should use `drlink`, not internal `frp-*` helpers.
 
+## Engineering development standard
+
+Software-development process, AI-agent workflow, testing strategy, change lifecycle, and release workflow are governed by the canonical Engineering System:
+
+```text
+https://github.com/datarelay-labs/engineering-system
+```
+
+Product specifications in this repository define **what Data Relay Link must do**. The Engineering System defines **how product changes are designed, implemented, tested, reviewed, released, and operated**.
+
+Engineering System managed-adoption files such as `AGENTS.md` and `.engineering/*` are lifecycle/governance surfaces, not substitutes for the product specifications above. Their adoption or version upgrade must follow the Engineering System adoption workflow rather than being hand-copied as part of a documentation-only change.
+
 ## Documentation maintenance rule
 
 A product behavior change is incomplete until the affected canonical document is updated.
