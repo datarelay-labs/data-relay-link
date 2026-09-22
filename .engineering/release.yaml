@@ -1,0 +1,23 @@
+version: 1
+
+exact_head_required: true
+artifact_hash_required: false
+provenance_required: false
+sbom_required: false
+setup_command: ""
+preflight_required: false
+preflight_command: ""
+qualification_command: ""
+artifact_hash_command: ""
+provenance_command: ""
+sbom_command: ""
+operational_e2e_required: true
+operational_e2e_command: "bash tests/run-real-e2e.sh"
+full_e2e_passes: 1
+public_smoke_required: true
+public_smoke_command: "bash tests/live-distro-smoke.sh"
+
+blockers:
+  p0: true
+  p1: true
+  user_blocking_p2: true

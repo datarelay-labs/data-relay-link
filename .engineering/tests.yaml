@@ -1,0 +1,52 @@
+version: 1
+
+setup_command: ""
+
+paths:
+  "server/**":
+    domains:
+      - "server"
+  "client/**":
+    domains:
+      - "client"
+  "lib/**":
+    domains:
+      - "shared"
+  "tests/**":
+    domains:
+      - "shared"
+
+scenarios:
+  - id: ADOPTED-TEST-001
+    name: Project-native affected tests
+    level: integration
+    domains:
+      - "server"
+      - "client"
+      - "shared"
+    triggers:
+      - affected
+    platforms:
+      - "linux"
+    command: "bash tests/run-all.sh"
+    invariants:
+      - "project-native tests remain green for affected changes"
+    release_gate: true
+
+  - id: ADOPTED-STATIC-001
+    name: Git whitespace validation
+    level: static
+    domains:
+      - "server"
+      - "client"
+      - "shared"
+    triggers:
+      - pr
+      - preflight
+      - release
+    platforms:
+      - "linux"
+    command: "git diff --check"
+    invariants:
+      - "repository diff has no whitespace errors"
+    release_gate: true
