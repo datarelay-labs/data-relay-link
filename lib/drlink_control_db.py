@@ -495,6 +495,12 @@ CREATE TABLE ai_oauth_pending (
   resource TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
+  completion_token TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TEXT NOT NULL DEFAULT '',
+  decision_at TEXT NOT NULL DEFAULT '',
+  consumed_at TEXT NOT NULL DEFAULT '',
+  code_plain TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
 );
 
@@ -640,6 +646,12 @@ CREATE TABLE IF NOT EXISTS ai_oauth_pending (
   resource TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
+  completion_token TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TEXT NOT NULL DEFAULT '',
+  decision_at TEXT NOT NULL DEFAULT '',
+  consumed_at TEXT NOT NULL DEFAULT '',
+  code_plain TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
 );
 CREATE TABLE IF NOT EXISTS ai_oauth_dcr_clients (
@@ -733,8 +745,30 @@ def ensure_ai_auth_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE ai_oauth_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'access'")
     if tok_cols and "rotated_from" not in tok_cols:
         conn.execute("ALTER TABLE ai_oauth_tokens ADD COLUMN rotated_from TEXT")
+    ensure_oauth_pending_completion_schema(conn)
     ensure_enrollment_plans_schema(conn)
     ensure_ai_jobs_safety_schema(conn)
+
+
+def ensure_oauth_pending_completion_schema(conn: sqlite3.Connection) -> None:
+    """Additive OAuth pending browser-completion columns without SCHEMA_VERSION bump."""
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_oauth_pending)")}
+    if not cols:
+        return
+    for name, ddl in (
+        ("completion_token", "ALTER TABLE ai_oauth_pending ADD COLUMN completion_token TEXT NOT NULL DEFAULT ''"),
+        ("status", "ALTER TABLE ai_oauth_pending ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"),
+        ("expires_at", "ALTER TABLE ai_oauth_pending ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''"),
+        ("decision_at", "ALTER TABLE ai_oauth_pending ADD COLUMN decision_at TEXT NOT NULL DEFAULT ''"),
+        ("consumed_at", "ALTER TABLE ai_oauth_pending ADD COLUMN consumed_at TEXT NOT NULL DEFAULT ''"),
+        ("code_plain", "ALTER TABLE ai_oauth_pending ADD COLUMN code_plain TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in cols:
+            conn.execute(ddl)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_oauth_pending_completion_token "
+        "ON ai_oauth_pending(completion_token)"
+    )
 
 
 ENROLLMENT_PLANS_SQL = """

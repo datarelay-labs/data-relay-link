@@ -1802,6 +1802,7 @@ def domain_help(topic, role):
                     "  system credential configure ai-identity <NAME> authentication static-bearer",
                     "  system credential configure ai-identity <NAME> authentication oauth",
                     "  system credential approve-oauth <PENDING-ID> [AI-IDENTITY]",
+                    "  system credential deny-oauth <PENDING-ID>",
                     "  system diagnostics mcp",
                     "  show mcp-tls",
                     "  set mcp-tls hostname <fqdn>",

@@ -1020,7 +1020,9 @@ def make_handler(bridge: MCPBridge):
                     "::1",
                 )
                 if auto and not pending.get("unbound"):
-                    approved = bridge.plane.approve_oauth_pending(pending["id"])
+                    approved = bridge.plane.approve_oauth_pending(
+                        pending["id"], retain_for_browser=False
+                    )
                     loc = approved["redirect_uri"]
                     sep = "&" if "?" in loc else "?"
                     query = {"code": approved["code"], "iss": bridge.canonical_public_base()}
@@ -1038,18 +1040,86 @@ def make_handler(bridge: MCPBridge):
                     )
                 else:
                     hint = "system credential approve-oauth %s" % pending["id"]
+                continue_path = "/oauth/continue?%s" % urlencode({"t": pending["completion_token"]})
                 page = (
-                    "<!doctype html><html><body><p>Approve this MCP OAuth request as operator:</p>"
+                    "<!doctype html><html><head><meta charset='utf-8'>"
+                    "<meta http-equiv='refresh' content='2;url=%s'>"
+                    "<title>MCP OAuth consent</title></head><body>"
+                    "<p>Approve this MCP OAuth request as operator:</p>"
                     "<pre>%s</pre>"
-                    "<p>This is a consent page, not a management UI.</p></body></html>"
-                    % hint
+                    "<p>After approval this browser continues automatically to the registered redirect.</p>"
+                    "<p><a href='%s'>Continue after approval</a></p>"
+                    "<p>This is a consent page, not a management UI.</p>"
+                    "<script>setTimeout(function(){location.replace(%s);},2000);</script>"
+                    "</body></html>"
+                ) % (
+                    continue_path,
+                    hint,
+                    continue_path,
+                    json.dumps(continue_path),
                 )
                 raw = page.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
+                return
+            if parsed.path == "/oauth/continue":
+                qs = parse_qs(parsed.query)
+                token = (qs.get("t") or [""])[0]
+                try:
+                    result = bridge.plane.complete_oauth_pending_browser(token)
+                except ControlPlaneError as exc:
+                    self._send(400, {"error": "invalid_request", "error_description": str(exc)})
+                    return
+                status = result.get("status")
+                if status == "pending":
+                    continue_path = "/oauth/continue?%s" % urlencode({"t": token})
+                    page = (
+                        "<!doctype html><html><head><meta charset='utf-8'>"
+                        "<meta http-equiv='refresh' content='2;url=%s'>"
+                        "<title>Waiting for approval</title></head><body>"
+                        "<p>Waiting for operator approval…</p>"
+                        "<p><a href='%s'>Retry</a></p>"
+                        "<script>setTimeout(function(){location.replace(%s);},2000);</script>"
+                        "</body></html>"
+                    ) % (continue_path, continue_path, json.dumps(continue_path))
+                    raw = page.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                loc = str(result.get("redirect_uri") or "")
+                if not loc:
+                    self._send(400, {"error": "invalid_request", "error_description": "missing redirect_uri"})
+                    return
+                sep = "&" if "?" in loc else "?"
+                if status == "denied":
+                    query = {
+                        "error": result.get("error") or "access_denied",
+                        "error_description": result.get("error_description") or "denied",
+                        "iss": bridge.canonical_public_base(),
+                    }
+                    if result.get("state"):
+                        query["state"] = result["state"]
+                elif status == "approved":
+                    query = {"code": result["code"], "iss": bridge.canonical_public_base()}
+                    if result.get("state"):
+                        query["state"] = result["state"]
+                else:
+                    self._send(400, {"error": "invalid_request", "error_description": "unexpected status"})
+                    return
+                loc = "%s%s%s" % (loc, sep, urlencode(query))
+                self.send_response(302)
+                self.send_header("Location", loc)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
             self._send(404, {"error": "not found"})
 

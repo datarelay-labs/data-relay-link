@@ -1176,7 +1176,7 @@ def _system(plane: ControlPlane, rest):
     if rest[0] == "credential":
         if len(rest) < 2:
             raise SystemExit(
-                "usage: system credential rotate|revoke|configure|approve-oauth ..."
+                "usage: system credential rotate|revoke|configure|approve-oauth|deny-oauth ..."
             )
         if rest[1] == "approve-oauth":
             # system credential approve-oauth <PENDING-ID> [AI-IDENTITY]
@@ -1192,8 +1192,25 @@ def _system(plane: ControlPlane, rest):
             pending_id = args[0]
             principal = args[1] if len(args) > 1 else None
             result = _run(plane.approve_oauth_pending, pending_id, principal)
-            sys.stdout.write("Authorization code issued. It is shown once.\n")
-            sys.stdout.write("code=%s\n" % result.get("code"))
+            sys.stdout.write(
+                "Authorization approved. The browser continues via /oauth/continue to the registered redirect.\n"
+            )
+            sys.stdout.write(
+                "code=%s (also delivered to the browser on continue; shown here for operator recovery)\n"
+                % result.get("code")
+            )
+            return 0
+        if rest[1] == "deny-oauth":
+            args = rest[2:]
+            if args and args[0] in ("ai-principal", "ai-identity"):
+                args = args[1:]
+            if not args:
+                raise SystemExit("usage: system credential deny-oauth <PENDING-ID>")
+            pending_id = args[0]
+            _run(plane.deny_oauth_pending, pending_id)
+            sys.stdout.write(
+                "Authorization denied. The browser continues via /oauth/continue with access_denied.\n"
+            )
             return 0
         if len(rest) < 4:
             raise SystemExit(
