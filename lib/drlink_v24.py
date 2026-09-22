@@ -3777,8 +3777,15 @@ def _destination_dependency_status(
     destination_client_id: Optional[str] = None,
 ) -> Optional[str]:
     """Return a DEGRADED reason if destination dependency is missing/changed; else None."""
+    identity = load_agent_identity(root or getattr(plane_db, "root", None))
+    self_id = str(identity.get("machine_id") or "").strip()
     bound = str(destination_client_id or "").strip()
     if bound:
+        # Offline-created this-host/self persists the local Agent machine_id as
+        # destination_client_id. That is a valid self destination and must not
+        # require external Managed Host inventory before reconnect can allocate.
+        if self_id and bound == self_id:
+            return None
         inventory = _managed_host_inventory_by_client_id(plane_db, bound)
         if inventory is None:
             return (
@@ -3792,7 +3799,6 @@ def _destination_dependency_status(
         return "Remote Service destination is missing after reconnect."
     if dest.lower() in ("this-host", "this_host", "self"):
         return None
-    identity = load_agent_identity(root or getattr(plane_db, "root", None))
     host_name = identity.get("hostname") or identity.get("label") or ""
     if host_name and dest.lower() == host_name.lower():
         return None
@@ -4299,7 +4305,10 @@ def set_remote_service_agent(
             bound_inventory = _managed_host_inventory_by_client_id(plane_db, destination_client_id)
             if bound_inventory:
                 dest_token = str(bound_inventory.get("name") or dest_token)
-            else:
+            elif not (self_machine_id and destination_client_id == self_machine_id):
+                # External Managed Host bind with missing inventory remains fail-closed.
+                # Self binds (destination_client_id == local machine_id) are valid without
+                # a clients/catalog inventory row — e.g. offline-created this-host.
                 destination_identity_reason = (
                     "Bound Managed Host destination (client_id=%s) is missing or invalid."
                     % destination_client_id[:12]
@@ -4360,6 +4369,7 @@ def set_remote_service_agent(
                 relay = False
                 target_mode = "self"
                 target_host = "127.0.0.1"
+                destination_identity_reason = None
             elif bound_inventory is None:
                 relay = True
                 target_mode = "routed"

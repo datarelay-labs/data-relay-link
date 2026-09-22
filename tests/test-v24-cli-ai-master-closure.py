@@ -479,6 +479,29 @@ class AgentBundleOfflineLifecycle(unittest.TestCase):
         self.assertEqual(row2["status"], "HEALTHY")
         self.assertIsNotNone(row2["endpoint_port"])
 
+    def test_D3b_self_machine_id_bypass_not_external_inventory(self):
+        """Self destination_client_id == local machine_id is valid without MH inventory;
+        any other bound client_id still requires inventory (fail-closed)."""
+        self_id = "aabbccddeeff00112233445566778899"
+        external_id = "00112233445566778899aabbccddeeff"
+        self.assertIsNone(
+            v24._destination_dependency_status(
+                self.plane,
+                "this-host",
+                root=self.tmp,
+                destination_client_id=self_id,
+            )
+        )
+        reason = v24._destination_dependency_status(
+            self.plane,
+            "database-prod",
+            root=self.tmp,
+            destination_client_id=external_id,
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("missing or invalid after reconnect", reason)
+        self.assertIn(external_id[:12], reason)
+
     def test_D4_offline_delete(self):
         self._apply_bundle(
             """configurationBundle:
