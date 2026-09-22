@@ -270,9 +270,7 @@ FRP_VERSION=0.71.0
 현재 project version: **2.4.0**  
 현재 pinned FRP version: **v0.71.0**
 
-이 저장소 트리는 branch
-[`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure)
-위의 **v2.4.0 development target**입니다. exact-HEAD qualification이 끝나기 전에는 stable `v2.4.0` 태그가 없습니다. repository metadata가 실제로 해당 channel로 바뀌지 않는 한 이 branch를 stable, RC, preview로 취급하지 마십시오.
+이 저장소의 문서는 **v2.4.0 development target**을 설명합니다. 구현이 통합되고 exact-HEAD qualification이 완료되기 전에는 stable `v2.4.0` 태그가 없습니다. development-target 문서를 stable, RC 또는 preview release claim으로 취급하지 마십시오.
 
 Version policy는 다음을 구분합니다:
 
