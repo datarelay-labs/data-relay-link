@@ -646,6 +646,11 @@ def _show_ai_policy(plane: ControlPlane, rest: list[str]) -> int:
         "Source      : %s" % (principal["name"] if principal else "-"),
         "Destination : %s" % dest_label,
         "Permission  : %s" % perm_label,
+        "Paths       : %s"
+        % (
+            ", ".join(v24.list_ai_policy_path_scopes(plane, row["name"]))
+            or "-"
+        ),
         "Enabled     : %s" % ("YES" if row["enabled"] else "NO"),
     ]
     if pol.get("mode"):
@@ -902,15 +907,18 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             return run_wizard(plane, "ai-access", name)
         kv = v24.parse_kv_tokens(
             extra,
-            allowed={"mode", "source", "destination", "permission", "enabled"},
+            allowed={"mode", "source", "destination", "permission", "paths", "enabled"},
             resource="AI Access",
-            allowed_hint="source, destination, permission, mode, enabled|disabled",
+            allowed_hint="source, destination, permission, paths, mode, enabled|disabled",
         )
         enabled = None
         if "enabled" in kv:
             enabled = str(kv["enabled"]).lower() in ("yes", "true", "1", "enabled")
         from drlink_control_cli import _run
 
+        paths = None
+        if "paths" in kv:
+            paths = v24.parse_ai_paths_field(kv.get("paths"))
         result = _run(
             v24.set_ai_access_rule,
             plane,
@@ -919,6 +927,7 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             source=kv.get("source"),
             destination=kv.get("destination"),
             permission=kv.get("permission"),
+            paths=paths,
             enabled=enabled,
             oneshot=True,
         )
@@ -1160,25 +1169,32 @@ def handle_test(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         return 0
     if res == "ai-access":
         _require_server(plane, "AI Access policy")
-        kv = v24.parse_kv_tokens(rest[1:])
+        kv = v24.parse_kv_tokens(
+            rest[1:],
+            allowed={"source", "destination", "permission", "path"},
+            resource="AI Access test",
+            allowed_hint="source, destination, permission, path",
+        )
         for req in ("source", "destination", "permission"):
             if req not in kv:
                 raise ControlPlaneError(
-                    "Usage: test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION>"
+                    "Usage: test ai-access source <AI_IDENTITY> destination <DESTINATION> "
+                    "permission <PERMISSION> [path <PATH>]"
                 )
-        evaluation = v24.evaluate_ai_access_v24(
-            plane, identity=kv["source"], destination=kv["destination"], permission=kv["permission"]
+        evaluation = v24.test_ai_access_v24(
+            plane,
+            identity=kv["source"],
+            destination=kv["destination"],
+            permission=kv["permission"],
+            path=kv.get("path"),
         )
-        sys.stdout.write(
-            v24.format_policy_test(
-                "ai",
-                evaluation,
-                {
-                    "source": kv["source"],
-                    "destination": kv["destination"],
-                    "permission": kv["permission"],
-                },
-            )
-        )
+        selectors = {
+            "source": kv["source"],
+            "destination": kv["destination"],
+            "permission": kv["permission"],
+        }
+        if "path" in kv:
+            selectors["path"] = kv["path"]
+        sys.stdout.write(v24.format_policy_test("ai", evaluation, selectors))
         return 0
     return None

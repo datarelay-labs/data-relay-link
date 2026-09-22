@@ -147,6 +147,8 @@ set service-group web-services members http,https
 
 set permission-object read-only permissions host-info,process-read,file-read
 set permission-group operators members read-only,operator
+
+set ai-access allow-read mode whitelist source automation-ai destination ubuntu-prod permission read-only paths /var/lib/vendor/** enabled
 ```
 
 ## 4. Access Policy commands
@@ -169,7 +171,10 @@ AI Access:
 
 ```text
 set ai-access claude-prod mode whitelist source claude destination production-servers permission read-only enabled
+set ai-access allow-read mode whitelist source automation-ai destination ubuntu-prod permission read-only paths /var/lib/vendor/**,/opt/app/** enabled
 ```
+
+File permissions (`file-read` / `file-write` / `file-upload` / `file-download`) use rule-bound `paths` scopes. Omit `paths` on edit to preserve existing scopes; use `paths -` or `paths none` to clear. Missing scopes remain fail-closed at runtime (no unrestricted filesystem default).
 
 When Policy Mode already exists, `mode` may be omitted. A conflicting requested mode is rejected.
 
@@ -246,10 +251,12 @@ Referenced Objects/Groups/Identities/Managed Hosts are protected from deletion u
 ```text
 test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>
 test internet-access source <SOURCE> destination <DESTINATION> service <SERVICE>
-test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION>
+test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION> [path <PATH>]
 ```
 
 Output includes Mode, Enforcement, selectors, matched Rules, and Effective Result. Where relevant, Remote Service runtime state is shown separately from policy authorization.
+
+For file permissions, omit `path` and `test ai-access` will not claim unconditional ALLOW (runtime requires an in-scope path). Provide `path <PATH>` to evaluate the same fail-closed path-scope contract used by MCP.
 
 ## 8. Server system commands
 

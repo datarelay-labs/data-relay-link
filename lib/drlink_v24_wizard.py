@@ -963,23 +963,41 @@ def run_ai_access_wizard(plane: ControlPlane, name: str) -> int:
                 permission = _inline_permission_group(io, plane, session)
             else:
                 permission = choice
+            paths: list[str] | None = None
+            try:
+                if v24.permission_includes_file_capability(plane, permission):
+                    existing_paths = []
+                    if existing is not None:
+                        existing_paths = v24.list_ai_policy_path_scopes(plane, name)
+                    default_paths = ",".join(existing_paths) if existing_paths else None
+                    raw_paths = _ask_text(
+                        io,
+                        "Path scopes (comma-separated absolute globs; required for file permissions)",
+                        default=default_paths,
+                    )
+                    paths = v24.parse_ai_paths_field(raw_paths)
+            except ControlPlaneError:
+                paths = None
             enabled = _ask_yes_no(io, "Enabled", default=True)
             session.draft = {
                 "Source": source,
                 "Destination": destination,
                 "Permission": permission,
+                "Paths": ", ".join(paths) if paths else "-",
                 "Enabled": "YES" if enabled else "NO",
             }
+            review_lines = [
+                "Name        : %s" % name,
+                "Source      : %s" % source,
+                "Destination : %s" % destination,
+                "Permission  : %s" % permission,
+                "Paths       : %s" % (", ".join(paths) if paths else "-"),
+                "Enabled     : %s" % ("YES" if enabled else "NO"),
+            ]
             action = _review_menu(
                 io,
                 session,
-                [
-                    "Name        : %s" % name,
-                    "Source      : %s" % source,
-                    "Destination : %s" % destination,
-                    "Permission  : %s" % permission,
-                    "Enabled     : %s" % ("YES" if enabled else "NO"),
-                ],
+                review_lines,
             )
             if action == "cancel":
                 sys.stdout.write(_cancel_message())
@@ -995,6 +1013,7 @@ def run_ai_access_wizard(plane: ControlPlane, name: str) -> int:
                     source=source,
                     destination=destination,
                     permission=permission,
+                    paths=paths,
                     enabled=enabled,
                     oneshot=True,
                 )

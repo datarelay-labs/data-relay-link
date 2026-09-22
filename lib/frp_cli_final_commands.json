@@ -3332,7 +3332,8 @@
     "detail": "Create or edit an AI Access rule",
     "examples": [
       "set ai-access",
-      "set ai-access allow-ops mode whitelist source automation-ai destination production-servers permission operations enabled"
+      "set ai-access allow-ops mode whitelist source automation-ai destination production-servers permission operations enabled",
+      "set ai-access allow-read mode whitelist source automation-ai destination ubuntu-prod permission read-only paths /var/lib/vendor/** enabled"
     ],
     "args": [
       {
@@ -3638,7 +3639,8 @@
     "summary": "Explain AI Access authorization",
     "detail": "Explain AI Access authorization",
     "examples": [
-      "test ai-access source automation-ai destination production-servers permission operations"
+      "test ai-access source automation-ai destination production-servers permission operations",
+      "test ai-access source automation-ai destination ubuntu-prod permission read-only path /var/lib/vendor/app.log"
     ],
     "args": [],
     "tail": "any",

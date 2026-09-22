@@ -200,6 +200,7 @@ Network Group.members
 Service Group.members
 Permission Group.members
 Permission Object.permissions
+AI Access Rule.paths
 ```
 
 Example:
@@ -213,9 +214,21 @@ configurationBundle:
       members:
         - office-admin
         - vpn-admin
+
+  aiAccess:
+    mode: whitelist
+    enforcement: enabled
+    rules:
+      - name: allow-read
+        source: automation-ai
+        destination: ubuntu-prod
+        permission: read-only
+        paths:
+          - /var/lib/vendor/**
+        enabled: true
 ```
 
-If an existing group also contains `partner-admin`, applying this change removes `partner-admin` from that group.
+If `paths` is omitted on an existing AI Access rule, existing path scopes are preserved. An explicit empty `paths: []` clears scopes. Missing scopes remain fail-closed for file capabilities.
 
 If `members` is omitted on an existing group, its membership remains unchanged.
 

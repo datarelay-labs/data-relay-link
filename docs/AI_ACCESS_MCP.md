@@ -150,6 +150,16 @@ Every new privileged tool invocation is authorized against current policy.
 
 Direct file operations must enforce configured path scope after safe canonical path resolution.
 
+Public v2.4 configuration binds those scopes on the AI Access rule:
+
+```text
+set ai-access allow-read ... permission read-only paths /var/lib/vendor/** enabled
+```
+
+ConfigurationBundle rules use the same `paths` list. Omit `paths` on edit to preserve existing scopes; export includes configured scopes so same-state reapply is NO CHANGE.
+
+`test ai-access` accepts optional `path <PATH>` so public policy test agrees with MCP runtime authorization for in-scope and out-of-scope file operations. Without a path, file permissions do not report unconditional ALLOW.
+
 Command execution is stronger than direct read/write permissions because a shell may modify system state. Grant `command-exec` only when the target OS identity and privilege boundary are appropriate.
 
 Unknown or ungranted operations are denied.

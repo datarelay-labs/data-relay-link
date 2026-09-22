@@ -53,6 +53,9 @@ PERMISSION_TO_CAPS = {
     "file-upload": ("upload_file",),
     "file-download": ("download_file",),
 }
+FILE_PERMISSIONS = frozenset(
+    {"file-read", "file-write", "file-upload", "file-download"}
+)
 CAP_TO_PERMISSION = {}
 for _perm, _caps in PERMISSION_TO_CAPS.items():
     for _cap in _caps:
@@ -169,10 +172,10 @@ CREATE TABLE IF NOT EXISTS ai_policy_rules (
   updated_at TEXT NOT NULL
 );
 
--- Internal canonical path constraints for AI file capabilities.
--- Frozen v2.4 public CLI/AI Master has no path-scope grammar; scopes are bound
--- here (tests, Bundle internals, or exact legacy translation) and enforced by
--- authorize_ai_capability_v24. Missing scopes fail closed for file capabilities.
+-- Canonical path constraints for AI file capabilities.
+-- Bound through public v2.4 CLI / Wizard / ConfigurationBundle (paths field)
+-- and enforced by authorize_ai_capability_v24. Missing scopes fail closed for
+-- file capabilities (no unrestricted filesystem default).
 CREATE TABLE IF NOT EXISTS ai_policy_path_scopes (
   rule_id TEXT NOT NULL,
   pattern TEXT NOT NULL,
@@ -2619,6 +2622,7 @@ def format_policy_test(family: str, evaluation: dict, selectors: dict, remote_se
         ("destination", "Destination"),
         ("service", "Service"),
         ("permission", "Permission"),
+        ("path", "Path"),
     ):
         if key in selectors and selectors[key] is not None:
             lines.append("%-12s: %s" % (label, selectors[key]))
@@ -2630,6 +2634,17 @@ def format_policy_test(family: str, evaluation: dict, selectors: dict, remote_se
     else:
         lines.append("  (none)")
     lines.extend(["", "Effective Result:", "  %s" % evaluation["result"]])
+    reason = evaluation.get("reason")
+    if reason:
+        lines.extend(["", "Reason:", "  %s" % reason])
+    if evaluation.get("path_required"):
+        lines.extend(
+            [
+                "",
+                "Note:",
+                "  Provide path <PATH> to evaluate file permission against path scopes.",
+            ]
+        )
     if remote_service:
         lines.extend(
             [
@@ -2668,6 +2683,7 @@ def set_ai_access_rule(
     source: Optional[str] = None,
     destination: Optional[str] = None,
     permission: Optional[str] = None,
+    paths: Optional[list[str]] = None,
     enabled: Optional[bool] = None,
     oneshot: bool = False,
     confirm: Optional[bool] = None,
@@ -2769,6 +2785,10 @@ def set_ai_access_rule(
                     "permission_ref_id = ?, updated_at = ? WHERE id = ?",
                     (pgrp["id"], now, rule_id),
                 )
+        # Omitted paths preserve existing scopes on edit; explicit list (including
+        # empty) replaces. Create with omit leaves scopes empty (fail-closed).
+        if paths is not None:
+            _replace_ai_policy_path_scopes(plane_db, rule_id, paths)
         return {"entity": {"type": "ai-access", "id": rule_id, "name": name}, "operation": op}
 
     impact = None
@@ -2904,12 +2924,39 @@ def list_ai_policy_path_scopes(plane_db, rule_name: str) -> list[str]:
     ]
 
 
-def set_ai_policy_path_scopes(plane_db, rule_name: str, patterns: list[str]) -> list[str]:
-    """Bind canonical path scopes to an AI Access rule (internal; no public CLI).
+def _normalize_path_scope_patterns(patterns: Optional[list[str]]) -> list[str]:
+    cleaned: list[str] = []
+    seen = set()
+    for raw in patterns or []:
+        text = str(raw or "").strip()
+        if not text or text in ("-", "none"):
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+    return cleaned
 
-    Frozen v2.4 public grammar cannot express path scopes. Callers (tests, exact
-    legacy translation, Bundle internals) may bind scopes here. MCP file
-    capabilities fail closed when no scopes are bound.
+
+def _replace_ai_policy_path_scopes(plane_db, rule_id: str, patterns: list[str]) -> list[str]:
+    cleaned = _normalize_path_scope_patterns(patterns)
+    plane_db.conn.execute("DELETE FROM ai_policy_path_scopes WHERE rule_id = ?", (rule_id,))
+    for pattern in cleaned:
+        plane_db.conn.execute(
+            "INSERT INTO ai_policy_path_scopes(rule_id, pattern) VALUES (?, ?)",
+            (rule_id, pattern),
+        )
+    return cleaned
+
+
+def set_ai_policy_path_scopes(plane_db, rule_name: str, patterns: list[str]) -> list[str]:
+    """Bind canonical path scopes to an AI Access rule.
+
+    Public v2.4 CLI / Wizard / ConfigurationBundle use the ``paths`` field on
+    ``set ai-access`` / Bundle rules. This helper remains for direct callers
+    (tests, exact translation). MCP file capabilities fail closed when no
+    scopes are bound.
     """
     ensure_v2_schema(plane_db.conn)
     row = plane_db.conn.execute(
@@ -2917,25 +2964,98 @@ def set_ai_policy_path_scopes(plane_db, rule_name: str, patterns: list[str]) -> 
     ).fetchone()
     if not row:
         raise ControlPlaneError(cli_error("Rule '%s' was not found." % rule_name))
-    cleaned: list[str] = []
-    seen = set()
-    for raw in patterns or []:
-        text = str(raw or "").strip()
-        if not text:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(text)
-    plane_db.conn.execute("DELETE FROM ai_policy_path_scopes WHERE rule_id = ?", (row["id"],))
-    for pattern in cleaned:
-        plane_db.conn.execute(
-            "INSERT INTO ai_policy_path_scopes(rule_id, pattern) VALUES (?, ?)",
-            (row["id"], pattern),
-        )
+    cleaned = _replace_ai_policy_path_scopes(plane_db, row["id"], patterns)
     _commit_if_autonomous(plane_db)
     return cleaned
+
+
+def parse_ai_paths_field(raw: Optional[str]) -> list[str]:
+    """Parse public CLI ``paths`` value into a replacement list.
+
+    Empty / ``-`` / ``none`` mean explicit clear (replace with no scopes).
+    """
+    text = str(raw or "").strip()
+    if not text or text.lower() in ("-", "none"):
+        return []
+    return parse_csv_list(text)
+
+
+def permission_includes_file_capability(plane_db, permission: str) -> bool:
+    try:
+        wanted = (
+            expand_permissions(plane_db, permission)
+            if get_permission_object(plane_db, permission) or get_permission_group(plane_db, permission)
+            else {str(permission or "").strip().lower()}
+        )
+    except ControlPlaneError:
+        wanted = {str(permission or "").strip().lower()}
+    return bool(wanted & FILE_PERMISSIONS)
+
+
+def test_ai_access_v24(
+    plane_db,
+    *,
+    identity: str,
+    destination: str,
+    permission: str,
+    path: Optional[str] = None,
+) -> dict:
+    """Public ``test ai-access`` decision, path-aware for file permissions.
+
+    Permission-level matching uses evaluate_ai_access_v24(). When the tested
+    permission includes file capabilities, an omitted path must not report
+    unconditional ALLOW (runtime would DENY without a matching path scope).
+    A concrete path uses authorize_ai_capability_v24 so test == MCP runtime.
+    """
+    evaluation = evaluate_ai_access_v24(
+        plane_db,
+        identity=identity,
+        destination=destination,
+        permission=permission,
+    )
+    evaluation = dict(evaluation)
+    evaluation["path"] = path
+    evaluation["path_required"] = False
+    if not permission_includes_file_capability(plane_db, permission):
+        return evaluation
+    if evaluation.get("result") != "ALLOW":
+        return evaluation
+    if path is None or not str(path).strip():
+        evaluation["result"] = "DENY"
+        evaluation["path_required"] = True
+        evaluation["reason"] = (
+            "file permission requires path context; "
+            "runtime DENYs without a concrete in-scope path"
+        )
+        return evaluation
+    # Map tested permission atoms to a representative file capability.
+    try:
+        wanted = (
+            expand_permissions(plane_db, permission)
+            if get_permission_object(plane_db, permission) or get_permission_group(plane_db, permission)
+            else {str(permission or "").strip().lower()}
+        )
+    except ControlPlaneError:
+        wanted = {str(permission or "").strip().lower()}
+    file_perm = next((p for p in sorted(wanted) if p in FILE_PERMISSIONS), None)
+    if not file_perm:
+        return evaluation
+    caps = PERMISSION_TO_CAPS.get(file_perm) or ()
+    if not caps:
+        return evaluation
+    auth = authorize_ai_capability_v24(
+        plane_db,
+        identity=identity,
+        destination=destination,
+        capability=caps[0],
+        operand=str(path).strip(),
+    )
+    evaluation["result"] = str(auth.get("action") or "DENY").upper()
+    evaluation["reason"] = auth.get("reason")
+    evaluation["matched_rules"] = list(auth.get("matched_rules") or evaluation.get("matched_rules") or [])
+    evaluation["patterns"] = list(auth.get("patterns") or [])
+    evaluation["auth"] = auth.get("auth") or evaluation.get("auth")
+    return evaluation
 
 
 def _matched_ai_rule_rows(plane_db, matched_names: list[str]) -> list:
@@ -3093,8 +3213,8 @@ def authorize_ai_capability_v24(
 
     path_ok = True
     if action == "ALLOW" and cap in FILE_CAPABILITIES:
-        # Bounded gap: frozen public CLI cannot express path scopes. File
-        # capabilities must not become unrestricted filesystem access.
+        # File capabilities must not become unrestricted filesystem access.
+        # Public v2.4 binds scopes via the paths field; missing scopes DENY.
         if not patterns:
             action = "DENY"
             path_ok = False

@@ -53,7 +53,9 @@ PERMISSION_GROUP_KEYS = frozenset({"name", "members", "state"})
 REMOTE_SERVICE_KEYS = frozenset({"name", "destination", "service", "enabled", "state"})
 ACCESS_SECTION_KEYS = frozenset({"mode", "enforcement", "rules", "state"})
 ACCESS_RULE_KEYS = frozenset({"name", "source", "destination", "service", "enabled", "state", "mode"})
-AI_RULE_KEYS = frozenset({"name", "source", "destination", "permission", "enabled", "state", "mode"})
+AI_RULE_KEYS = frozenset(
+    {"name", "source", "destination", "permission", "paths", "enabled", "state", "mode"}
+)
 
 
 def _bundle_error(msg: str) -> None:
@@ -255,6 +257,26 @@ def _validate_access_rule(item: dict, *, family: str) -> dict:
         if not isinstance(perm, str) or not perm.strip():
             _bundle_error("Rule '%s' is missing required field 'permission'." % name)
         out["permission"] = perm.strip()
+        if "paths" in item:
+            raw_paths = item.get("paths")
+            if raw_paths is None:
+                out["paths"] = []
+            elif isinstance(raw_paths, str):
+                out["paths"] = v24.parse_ai_paths_field(raw_paths)
+            elif isinstance(raw_paths, list):
+                cleaned = []
+                for entry in raw_paths:
+                    if not isinstance(entry, str) or not entry.strip():
+                        _bundle_error(
+                            "Rule '%s' paths entries must be non-empty strings." % name
+                        )
+                    cleaned.append(entry.strip())
+                out["paths"] = v24._normalize_path_scope_patterns(cleaned)
+            else:
+                _bundle_error(
+                    "Rule '%s' paths must be a list of strings or a comma-separated string."
+                    % name
+                )
     else:
         svc = item.get("service")
         if not isinstance(svc, str) or not svc.strip():
@@ -347,6 +369,7 @@ def _ai_rule_view(plane: ControlPlane, row) -> dict:
         "enabled": bool(row["enabled"]),
         "destination_kind": kind,
         "permission_kind": pkind,
+        "paths": v24.list_ai_policy_path_scopes(plane, row["name"]),
     }
 
 
@@ -361,6 +384,9 @@ def _rule_matches_desired(plane: ControlPlane, family: str, existing, desired: d
             return False
         if str(view["permission"] or "").lower() != str(desired.get("permission") or "").lower():
             return False
+        if "paths" in desired:
+            if not _group_members_equal(list(view.get("paths") or []), list(desired.get("paths") or [])):
+                return False
         return True
     view = plane._rule_view(existing)
     if bool(view["enabled"]) != bool(desired.get("enabled", True)):
@@ -1248,6 +1274,7 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
                     source=item.get("source"),
                     destination=item.get("destination"),
                     permission=item.get("permission"),
+                    paths=item.get("paths") if "paths" in item else None,
                     enabled=bool(enabled),
                     oneshot=True,
                     confirm=True,
@@ -1408,15 +1435,16 @@ def export_configuration_v24(plane: ControlPlane) -> str:
             rules = []
             for row in plane.conn.execute("SELECT * FROM ai_policy_rules ORDER BY name"):
                 view = _ai_rule_view(plane, row)
-                rules.append(
-                    {
-                        "name": row["name"],
-                        "source": view["source"],
-                        "destination": view["destination"],
-                        "permission": view["permission"],
-                        "enabled": bool(view["enabled"]),
-                    }
-                )
+                rule_doc = {
+                    "name": row["name"],
+                    "source": view["source"],
+                    "destination": view["destination"],
+                    "permission": view["permission"],
+                    "enabled": bool(view["enabled"]),
+                }
+                # Always export path scopes so same-state reapply is NO CHANGE.
+                rule_doc["paths"] = list(view.get("paths") or [])
+                rules.append(rule_doc)
             body["aiAccess"] = {
                 "mode": pol["mode"],
                 "enforcement": pol["enforcement"],
