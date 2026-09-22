@@ -102,6 +102,25 @@ def _parse_bool_field(value: Any, *, field_name: str = "enabled") -> bool:
     raise AssertionError("unreachable")
 
 
+def _materialize_enabled(item: dict, existing_enabled: Optional[bool]) -> bool:
+    """Resolve effective enabled for plan/diff/apply.
+
+    Contract:
+      - explicit enabled true/false → that value
+      - omitted on an existing resource → preserve existing enabled/disabled
+      - omitted on a new resource → default True (current creation semantics)
+    Mutates item['enabled'] to the effective bool so plan NO_CHANGE / security
+    impact / apply all see the same desired value.
+    """
+    if "enabled" in item:
+        return bool(item["enabled"])
+    if existing_enabled is not None:
+        item["enabled"] = bool(existing_enabled)
+        return bool(existing_enabled)
+    item["enabled"] = True
+    return True
+
+
 def _parse_enforcement(value: Any) -> str:
     if value is None:
         return "enabled"
@@ -226,13 +245,14 @@ def _validate_remote_service_item(item: dict) -> dict:
         _bundle_error("Remote Service '%s' is missing required field 'destination'." % name)
     if not isinstance(svc, str) or not svc.strip():
         _bundle_error("Remote Service '%s' is missing required field 'service'." % name)
-    enabled = True if "enabled" not in item else _parse_bool_field(item.get("enabled"))
-    return {
+    out = {
         "name": name,
         "destination": dest.strip(),
         "service": svc.strip(),
-        "enabled": enabled,
     }
+    if "enabled" in item:
+        out["enabled"] = _parse_bool_field(item.get("enabled"))
+    return out
 
 
 def _validate_access_rule(item: dict, *, family: str) -> dict:
@@ -250,13 +270,13 @@ def _validate_access_rule(item: dict, *, family: str) -> dict:
         _bundle_error("Rule '%s' is missing required field 'source'." % name)
     if not isinstance(destination, str) or not destination.strip():
         _bundle_error("Rule '%s' is missing required field 'destination'." % name)
-    enabled = True if "enabled" not in item else _parse_bool_field(item.get("enabled"))
     out = {
         "name": name,
         "source": source.strip(),
         "destination": destination.strip(),
-        "enabled": enabled,
     }
+    if "enabled" in item:
+        out["enabled"] = _parse_bool_field(item.get("enabled"))
     if item.get("mode") is not None:
         out["mode"] = _parse_mode(item.get("mode"))
     if family == "ai":
@@ -383,7 +403,7 @@ def _ai_rule_view(plane: ControlPlane, row) -> dict:
 def _rule_matches_desired(plane: ControlPlane, family: str, existing, desired: dict) -> bool:
     if family == "ai":
         view = _ai_rule_view(plane, existing)
-        if bool(view["enabled"]) != bool(desired.get("enabled", True)):
+        if "enabled" in desired and bool(view["enabled"]) != bool(desired["enabled"]):
             return False
         if str(view["source"] or "").lower() != str(desired.get("source") or "").lower():
             return False
@@ -396,7 +416,7 @@ def _rule_matches_desired(plane: ControlPlane, family: str, existing, desired: d
                 return False
         return True
     view = plane._rule_view(existing)
-    if bool(view["enabled"]) != bool(desired.get("enabled", True)):
+    if "enabled" in desired and bool(view["enabled"]) != bool(desired["enabled"]):
         return False
     src = (view.get("sources") or [None])[0]
     dst = (view.get("destinations") or [None])[0]
@@ -976,6 +996,10 @@ def prepare_v24_plan(plane: ControlPlane, raw_text: str, *, role: Optional[str] 
                             ).fetchone()
                         else:
                             existing_rule = plane._get_rule(family, rule.get("name"))
+                        existing_enabled = (
+                            bool(existing_rule["enabled"]) if existing_rule is not None else None
+                        )
+                        _materialize_enabled(rule, existing_enabled)
                         if existing_rule and _rule_matches_desired(plane, family, existing_rule, rule):
                             changes.append(
                                 {"op": "NO_CHANGE", "kind": "%s-access-rule" % family, "name": rule.get("name")}
@@ -1013,6 +1037,8 @@ def prepare_v24_plan(plane: ControlPlane, raw_text: str, *, role: Optional[str] 
                 "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE AND delete_pending = 0",
                 (name,),
             ).fetchone()
+            existing_enabled = bool(existing["enabled"]) if existing is not None else None
+            _materialize_enabled(item, existing_enabled)
             if existing:
                 dest = item["destination"]
                 if dest.lower() in ("this-host", "this_host", "self"):
@@ -1378,9 +1404,22 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
             else:
                 v24.unset_access_rule(plane, family, name, confirm=True)
         else:
-            enabled = item.get("enabled")
-            if enabled is None:
-                enabled = True
+            # Effective enabled is materialized during prepare/re-diff. Fall back
+            # to existing-state preservation if a caller omitted the key.
+            if "enabled" in item:
+                enabled = bool(item.get("enabled"))
+            else:
+                if family == "ai":
+                    existing_rule = plane.conn.execute(
+                        "SELECT enabled FROM ai_policy_rules WHERE name = ? COLLATE NOCASE",
+                        (name,),
+                    ).fetchone()
+                else:
+                    existing_rule = plane._get_rule(family, name)
+                enabled = _materialize_enabled(
+                    item,
+                    bool(existing_rule["enabled"]) if existing_rule is not None else None,
+                )
             if family == "ai":
                 v24.set_ai_access_rule(
                     plane,
@@ -1414,12 +1453,21 @@ def _apply_one(plane: ControlPlane, change: dict) -> None:
                 plane, name, root=plane.root, server_reachable=reachable
             )
         else:
+            if "enabled" not in item:
+                existing = plane.conn.execute(
+                    "SELECT enabled FROM agent_remote_services WHERE name = ? COLLATE NOCASE AND delete_pending = 0",
+                    (name,),
+                ).fetchone()
+                _materialize_enabled(
+                    item,
+                    bool(existing["enabled"]) if existing is not None else None,
+                )
             v24.set_remote_service_agent(
                 plane,
                 name,
                 destination=item.get("destination"),
                 service=item.get("service"),
-                enabled=bool(item.get("enabled", True)),
+                enabled=bool(item["enabled"]),
                 oneshot=True,
                 root=plane.root,
                 server_reachable=reachable,
