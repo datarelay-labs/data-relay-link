@@ -221,6 +221,7 @@ python3 tests/test-v24-bundle-stale-plan-safety.py
 python3 tests/test-v24-bundle-omitted-enabled-preservation.py
 python3 tests/test-v24-public-name-namespace-ambiguity.py
 python3 tests/test-v24-rule-mutation-security-impact.py
+python3 tests/test-v24-referenced-selector-mutation-security-impact.py
 python3 tests/test-v24-managed-host-retirement.py
 python3 tests/test-v24-user-lifecycle-ux.py
 python3 tests/test-v24-ai-auth-convergence.py

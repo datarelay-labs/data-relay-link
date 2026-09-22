@@ -608,6 +608,66 @@ def _security_impact_for_plan(plane: ControlPlane, context: str, body: dict, cha
                 if text not in impact:
                     impact.append(text)
 
+    # Referenced reusable selector mutations (Object/Group value or membership)
+    # can broaden enabled BLACKLIST / WHITELIST policies without changing Rules.
+    for c in changes:
+        op = c.get("op")
+        kind = c.get("kind")
+        name = str(c.get("name") or "").strip()
+        item = c.get("item") or {}
+        if not name or op in ("NO_CHANGE", "DELETE"):
+            continue
+        hit = None
+        if kind == "network-object" and op in ("UPDATE", "SET"):
+            hit = v24.referenced_selector_mutation_security_impact(
+                plane,
+                kind="network-object",
+                name=name,
+                value=item.get("value"),
+                type=item.get("type"),
+            )
+        elif kind == "network-group" and op == "SET":
+            hit = v24.referenced_selector_mutation_security_impact(
+                plane,
+                kind="network-group",
+                name=name,
+                members=list(item.get("members") or []),
+            )
+        elif kind == "service-object" and op in ("UPDATE", "SET"):
+            port = item.get("port")
+            hit = v24.referenced_selector_mutation_security_impact(
+                plane,
+                kind="service-object",
+                name=name,
+                type=item.get("type"),
+                port=int(port) if port is not None else None,
+            )
+        elif kind == "service-group" and op == "SET":
+            hit = v24.referenced_selector_mutation_security_impact(
+                plane,
+                kind="service-group",
+                name=name,
+                members=list(item.get("members") or []),
+            )
+        elif kind == "permission-object" and op == "SET":
+            hit = v24.referenced_selector_mutation_security_impact(
+                plane,
+                kind="permission-object",
+                name=name,
+                permissions=list(item.get("permissions") or []),
+            )
+        elif kind == "permission-group" and op == "SET":
+            hit = v24.referenced_selector_mutation_security_impact(
+                plane,
+                kind="permission-group",
+                name=name,
+                members=list(item.get("members") or []),
+            )
+        if hit and hit.get("warning"):
+            text = "WARNING: %s" % hit["warning"]
+            if text not in impact:
+                impact.append(text)
+
     # Indirect broadening: deleting Permission Object/Group still referenced by
     # enabled AI BLACKLIST rules (and those rules are not deleted in this plan).
     deleting_ai_rules = {

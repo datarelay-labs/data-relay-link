@@ -903,6 +903,7 @@ class ControlPlane:
         *,
         confirm: Optional[bool] = None,
         expected_row_version: Optional[int] = None,
+        impact: Optional[dict] = None,
     ) -> dict:
         """Public v2.4 Network Object edit: one object → one canonical value.
 
@@ -926,7 +927,20 @@ class ControlPlane:
                 "operation": "noop",
                 "after": normalized,
             }
-        impact = self._value_add_impact(obj, normalized)
+        if impact is None:
+            try:
+                import drlink_v24 as v24
+
+                impact = v24.referenced_selector_mutation_security_impact(
+                    self,
+                    kind="network-object",
+                    name=name,
+                    value=value,
+                )
+            except Exception:
+                impact = self._value_add_impact(obj, normalized)
+            if impact is None:
+                impact = self._value_add_impact(obj, normalized)
 
         def write():
             cur = self.conn.execute("SELECT * FROM objects WHERE id = ?", (obj["id"],)).fetchone()

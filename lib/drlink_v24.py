@@ -1393,6 +1393,434 @@ def ai_access_rule_update_security_impact(
     return None
 
 
+def _policy_mode_if_enforced(plane_db, family: str) -> Optional[str]:
+    pol = get_access_policy(plane_db, family)
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        return None
+    mode = str(pol.get("mode") or "").lower()
+    return mode if mode in ("blacklist", "whitelist") else None
+
+
+def _append_unique_rule_ref(
+    out: list[dict], *, plane: str, name: str, mode: str
+) -> None:
+    key = (plane, str(name).lower())
+    if any((r["plane"], str(r["name"]).lower()) == key for r in out):
+        return
+    out.append(
+        {
+            "plane": plane,
+            "name": name,
+            "mode": mode,
+            "title": _access_family_title(plane),
+        }
+    )
+
+
+def _enabled_rules_referencing_network_object(plane_db, name: str) -> list[dict]:
+    """Enabled Remote/Internet/AI rules that resolve through this Network Object."""
+    obj = plane_db.get_object(name)
+    if obj is None:
+        return []
+    out: list[dict] = []
+    for table in ("rule_sources", "rule_destinations"):
+        for row in plane_db.conn.execute(
+            "SELECT r.plane, r.name FROM %s s "
+            "JOIN policy_rules r ON r.id = s.rule_id "
+            "WHERE s.ref_kind = 'object' AND s.ref_id = ? AND r.enabled = 1" % table,
+            (obj["id"],),
+        ):
+            mode = _policy_mode_if_enforced(plane_db, row["plane"])
+            if mode:
+                _append_unique_rule_ref(
+                    out, plane=row["plane"], name=row["name"], mode=mode
+                )
+    # Via Network Groups that contain this object (direct membership).
+    for grp in plane_db.conn.execute(
+        "SELECT g.name FROM object_group_members m "
+        "JOIN object_groups g ON g.id = m.group_id "
+        "WHERE m.member_kind = 'object' AND m.member_id = ?",
+        (obj["id"],),
+    ):
+        for ref in _enabled_rules_referencing_network_group(plane_db, grp["name"]):
+            _append_unique_rule_ref(
+                out, plane=ref["plane"], name=ref["name"], mode=ref["mode"]
+            )
+    # AI destination object refs (any origin).
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules "
+        "WHERE enabled = 1 AND destination_ref_kind = 'object' "
+        "AND destination_ref_id = ?",
+        (obj["id"],),
+    ):
+        mode = _policy_mode_if_enforced(plane_db, "ai")
+        if mode:
+            _append_unique_rule_ref(out, plane="ai", name=row["name"], mode=mode)
+    return out
+
+
+def _enabled_rules_referencing_network_group(
+    plane_db, name: str, *, _seen: Optional[set] = None
+) -> list[dict]:
+    key = str(name).strip().lower()
+    seen = _seen if _seen is not None else set()
+    if key in seen:
+        return []
+    seen.add(key)
+    grp = plane_db.get_object_group(name)
+    if grp is None:
+        return []
+    out: list[dict] = []
+    for table in ("rule_sources", "rule_destinations"):
+        for row in plane_db.conn.execute(
+            "SELECT r.plane, r.name FROM %s s "
+            "JOIN policy_rules r ON r.id = s.rule_id "
+            "WHERE s.ref_kind = 'group' AND s.ref_id = ? AND r.enabled = 1" % table,
+            (grp["id"],),
+        ):
+            mode = _policy_mode_if_enforced(plane_db, row["plane"])
+            if mode:
+                _append_unique_rule_ref(
+                    out, plane=row["plane"], name=row["name"], mode=mode
+                )
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules "
+        "WHERE enabled = 1 AND destination_ref_kind = 'group' "
+        "AND destination_ref_id = ?",
+        (grp["id"],),
+    ):
+        mode = _policy_mode_if_enforced(plane_db, "ai")
+        if mode:
+            _append_unique_rule_ref(out, plane="ai", name=row["name"], mode=mode)
+    # Parent groups that include this group as a member.
+    for parent in plane_db.conn.execute(
+        "SELECT g.name FROM object_group_members m "
+        "JOIN object_groups g ON g.id = m.group_id "
+        "WHERE m.member_kind = 'group' AND m.member_id = ?",
+        (grp["id"],),
+    ):
+        for ref in _enabled_rules_referencing_network_group(
+            plane_db, parent["name"], _seen=seen
+        ):
+            _append_unique_rule_ref(
+                out, plane=ref["plane"], name=ref["name"], mode=ref["mode"]
+            )
+    return out
+
+
+def _enabled_rules_referencing_service_object(plane_db, name: str) -> list[dict]:
+    obj = get_service_object(plane_db, name)
+    if obj is None:
+        return []
+    out: list[dict] = []
+    for row in plane_db.conn.execute(
+        "SELECT r.plane, r.name FROM rule_service_refs x "
+        "JOIN policy_rules r ON r.id = x.rule_id "
+        "WHERE x.ref_kind = 'service_object' AND x.ref_id = ? AND r.enabled = 1",
+        (obj["id"],),
+    ):
+        mode = _policy_mode_if_enforced(plane_db, row["plane"])
+        if mode:
+            _append_unique_rule_ref(
+                out, plane=row["plane"], name=row["name"], mode=mode
+            )
+    for grp in plane_db.conn.execute(
+        "SELECT g.name FROM service_group_members m "
+        "JOIN service_groups g ON g.id = m.group_id "
+        "WHERE m.service_object_id = ?",
+        (obj["id"],),
+    ):
+        for ref in _enabled_rules_referencing_service_group(plane_db, grp["name"]):
+            _append_unique_rule_ref(
+                out, plane=ref["plane"], name=ref["name"], mode=ref["mode"]
+            )
+    return out
+
+
+def _enabled_rules_referencing_service_group(plane_db, name: str) -> list[dict]:
+    grp = get_service_group(plane_db, name)
+    if grp is None:
+        return []
+    out: list[dict] = []
+    for row in plane_db.conn.execute(
+        "SELECT r.plane, r.name FROM rule_service_refs x "
+        "JOIN policy_rules r ON r.id = x.rule_id "
+        "WHERE x.ref_kind = 'service_group' AND x.ref_id = ? AND r.enabled = 1",
+        (grp["id"],),
+    ):
+        mode = _policy_mode_if_enforced(plane_db, row["plane"])
+        if mode:
+            _append_unique_rule_ref(
+                out, plane=row["plane"], name=row["name"], mode=mode
+            )
+    return out
+
+
+def _enabled_rules_referencing_permission_object(plane_db, name: str) -> list[dict]:
+    obj = get_permission_object(plane_db, name)
+    if obj is None:
+        return []
+    out: list[dict] = []
+    mode = _policy_mode_if_enforced(plane_db, "ai")
+    if not mode:
+        return out
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules "
+        "WHERE enabled = 1 AND permission_ref_kind = 'permission_object' "
+        "AND permission_ref_id = ?",
+        (obj["id"],),
+    ):
+        _append_unique_rule_ref(out, plane="ai", name=row["name"], mode=mode)
+    for grp in plane_db.conn.execute(
+        "SELECT g.name FROM permission_group_members m "
+        "JOIN permission_groups g ON g.id = m.group_id "
+        "WHERE m.permission_object_id = ?",
+        (obj["id"],),
+    ):
+        for ref in _enabled_rules_referencing_permission_group(plane_db, grp["name"]):
+            _append_unique_rule_ref(
+                out, plane=ref["plane"], name=ref["name"], mode=ref["mode"]
+            )
+    return out
+
+
+def _enabled_rules_referencing_permission_group(plane_db, name: str) -> list[dict]:
+    grp = get_permission_group(plane_db, name)
+    if grp is None:
+        return []
+    out: list[dict] = []
+    mode = _policy_mode_if_enforced(plane_db, "ai")
+    if not mode:
+        return out
+    for row in plane_db.conn.execute(
+        "SELECT name FROM ai_policy_rules "
+        "WHERE enabled = 1 AND permission_ref_kind = 'permission_group' "
+        "AND permission_ref_id = ?",
+        (grp["id"],),
+    ):
+        _append_unique_rule_ref(out, plane="ai", name=row["name"], mode=mode)
+    return out
+
+
+def _member_sets_equal(before: list[str], after: list[str]) -> bool:
+    return {str(x).strip().lower() for x in before} == {
+        str(x).strip().lower() for x in after
+    }
+
+
+def _member_set_expanded(before: list[str], after: list[str]) -> bool:
+    b = {str(x).strip().lower() for x in before}
+    a = {str(x).strip().lower() for x in after}
+    return not a.issubset(b)
+
+
+def _member_set_shrunk(before: list[str], after: list[str]) -> bool:
+    b = {str(x).strip().lower() for x in before}
+    a = {str(x).strip().lower() for x in after}
+    return not b.issubset(a)
+
+
+def _referenced_selector_impact_from_rules(
+    refs: list[dict],
+    *,
+    resource_label: str,
+    resource_name: str,
+    blacklist_broadens: bool,
+    whitelist_broadens: bool,
+) -> Optional[dict]:
+    if not refs:
+        return None
+    if not blacklist_broadens and not whitelist_broadens:
+        return None
+    affected = []
+    families = []
+    for ref in refs:
+        mode = ref["mode"]
+        if mode == "blacklist" and blacklist_broadens:
+            affected.append("%s:%s" % (ref["plane"], ref["name"]))
+            families.append(ref["title"])
+        elif mode == "whitelist" and whitelist_broadens:
+            affected.append("%s:%s" % (ref["plane"], ref["name"]))
+            families.append(ref["title"])
+    if not affected:
+        return None
+    family_text = ", ".join(sorted(set(families)))
+    return {
+        "access_broadened": True,
+        "access_narrowed": False,
+        "requires_confirmation": True,
+        "warning": (
+            "This change may broaden %s by mutating referenced %s '%s' "
+            "used by enabled Access Rule(s)."
+            % (family_text, resource_label, resource_name)
+        ),
+        "affected_rules": affected,
+        "before": "enabled Rule(s) reference current selector definition",
+        "after": "mutated selector definition / previously denied flows may ALLOW",
+    }
+
+
+def referenced_selector_mutation_security_impact(
+    plane_db,
+    *,
+    kind: str,
+    name: str,
+    value: Optional[str] = None,
+    members: Optional[list[str]] = None,
+    type: Optional[str] = None,
+    port: Optional[int] = None,
+    permissions: Optional[list[str]] = None,
+) -> Optional[dict]:
+    """Security impact when mutating reusable selectors referenced by enabled Rules.
+
+    BLACKLIST: any semantic shrink/replace of a referenced selector requires
+    confirmation (conservative when exact subset proof is impractical).
+    WHITELIST: confirmation only when the effective match set expands.
+    Semantic NO CHANGE returns None.
+    """
+    kind = str(kind or "").strip().lower()
+    name = str(name or "").strip()
+    if not name:
+        return None
+
+    if kind == "network-object":
+        existing = plane_db.get_object(name)
+        if existing is None or value is None:
+            return None
+        from drlink_control_plane import normalize_object_value
+
+        current_vals = plane_db._object_values(existing["id"])
+        try:
+            desired = normalize_object_value(existing["type"], value)
+        except ControlPlaneError:
+            return None
+        if current_vals[:1] == [desired]:
+            return None
+        refs = _enabled_rules_referencing_network_object(plane_db, name)
+        # Value replace changes the concrete match leaf for both modes.
+        return _referenced_selector_impact_from_rules(
+            refs,
+            resource_label="Network Object",
+            resource_name=name,
+            blacklist_broadens=True,
+            whitelist_broadens=True,
+        )
+
+    if kind == "network-group":
+        existing = plane_db.get_object_group(name)
+        if existing is None or members is None:
+            return None
+        current = [
+            str(m["name"])
+            for m in plane_db._expand_group_members(existing["id"], set())
+        ]
+        desired = [str(m) for m in members]
+        if _member_sets_equal(current, desired):
+            return None
+        refs = _enabled_rules_referencing_network_group(plane_db, name)
+        return _referenced_selector_impact_from_rules(
+            refs,
+            resource_label="Network Group",
+            resource_name=name,
+            # Conservative: any membership change on enabled BLACKLIST selectors.
+            blacklist_broadens=True,
+            whitelist_broadens=_member_set_expanded(current, desired),
+        )
+
+    if kind == "service-object":
+        existing = get_service_object(plane_db, name)
+        if existing is None or port is None:
+            return None
+        stype = str(type or existing["type"]).strip().lower()
+        if str(existing["type"]) == stype and int(existing["port"]) == int(port):
+            return None
+        refs = _enabled_rules_referencing_service_object(plane_db, name)
+        return _referenced_selector_impact_from_rules(
+            refs,
+            resource_label="Service Object",
+            resource_name=name,
+            blacklist_broadens=True,
+            whitelist_broadens=True,
+        )
+
+    if kind == "service-group":
+        existing = get_service_group(plane_db, name)
+        if existing is None or members is None:
+            return None
+        current = [
+            r["name"]
+            for r in plane_db.conn.execute(
+                "SELECT s.name FROM service_group_members m "
+                "JOIN service_objects s ON s.id = m.service_object_id "
+                "WHERE m.group_id = ?",
+                (existing["id"],),
+            )
+        ]
+        desired = [str(m) for m in members]
+        if _member_sets_equal(current, desired):
+            return None
+        refs = _enabled_rules_referencing_service_group(plane_db, name)
+        return _referenced_selector_impact_from_rules(
+            refs,
+            resource_label="Service Group",
+            resource_name=name,
+            blacklist_broadens=True,
+            whitelist_broadens=_member_set_expanded(current, desired),
+        )
+
+    if kind == "permission-object":
+        existing = get_permission_object(plane_db, name)
+        if existing is None or permissions is None:
+            return None
+        current = [
+            r["permission"]
+            for r in plane_db.conn.execute(
+                "SELECT permission FROM permission_object_members "
+                "WHERE permission_object_id = ?",
+                (existing["id"],),
+            )
+        ]
+        desired = [str(p).strip().lower() for p in permissions]
+        if _member_sets_equal(current, desired):
+            return None
+        refs = _enabled_rules_referencing_permission_object(plane_db, name)
+        return _referenced_selector_impact_from_rules(
+            refs,
+            resource_label="Permission Object",
+            resource_name=name,
+            # Conservative: any permission-list change on enabled BLACKLIST selectors.
+            blacklist_broadens=True,
+            whitelist_broadens=_member_set_expanded(current, desired),
+        )
+
+    if kind == "permission-group":
+        existing = get_permission_group(plane_db, name)
+        if existing is None or members is None:
+            return None
+        current = [
+            r["name"]
+            for r in plane_db.conn.execute(
+                "SELECT p.name FROM permission_group_members m "
+                "JOIN permission_objects p ON p.id = m.permission_object_id "
+                "WHERE m.group_id = ?",
+                (existing["id"],),
+            )
+        ]
+        desired = [str(m) for m in members]
+        if _member_sets_equal(current, desired):
+            return None
+        refs = _enabled_rules_referencing_permission_group(plane_db, name)
+        return _referenced_selector_impact_from_rules(
+            refs,
+            resource_label="Permission Group",
+            resource_name=name,
+            blacklist_broadens=True,
+            whitelist_broadens=_member_set_expanded(current, desired),
+        )
+
+    return None
+
+
 def reset_access_policy(plane_db, family: str, *, confirm: Optional[bool] = None) -> dict:
     plane = _plane_key(family)
     title = {
@@ -1509,7 +1937,15 @@ def display_network_type(store_type: str) -> str:
     return NETWORK_DISPLAY.get(str(store_type), str(store_type))
 
 
-def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value: Optional[str] = None, oneshot: bool = False) -> dict:
+def set_network_object(
+    plane_db,
+    name: str,
+    *,
+    type: Optional[str] = None,
+    value: Optional[str] = None,
+    oneshot: bool = False,
+    confirm: Optional[bool] = None,
+) -> dict:
     from drlink_control_plane import normalize_object_value
 
     name = validate_public_name(name, "Network Object name")
@@ -1547,7 +1983,12 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
             # Validate value before any authoritative mutation so failed one-shots
             # leave existence/revision/policy unchanged.
             normalize_object_value(store, value)
-            result = plane_db.replace_object_value(name, value)
+            impact = referenced_selector_mutation_security_impact(
+                plane_db, kind="network-object", name=name, value=value
+            )
+            result = plane_db.replace_object_value(
+                name, value, confirm=confirm, impact=impact
+            )
             out = {"operation": "update", "name": name}
             if isinstance(result, dict) and "revision" in result:
                 out["revision"] = result["revision"]
@@ -1600,7 +2041,9 @@ def set_network_object(plane_db, name: str, *, type: Optional[str] = None, value
             out["revision"] = result["revision"]
         return out
     if type and value is not None:
-        return set_network_object(plane_db, name, type=type, value=value, oneshot=True)
+        return set_network_object(
+            plane_db, name, type=type, value=value, oneshot=True, confirm=confirm
+        )
     raise ControlPlaneError("Interactive Network Object wizard requires a TTY session")
 
 
@@ -1645,7 +2088,14 @@ def list_network_objects(plane_db) -> list[dict]:
     return rows
 
 
-def set_network_group(plane_db, name: str, *, members: Optional[list[str]] = None, oneshot: bool = False) -> dict:
+def set_network_group(
+    plane_db,
+    name: str,
+    *,
+    members: Optional[list[str]] = None,
+    oneshot: bool = False,
+    confirm: Optional[bool] = None,
+) -> dict:
     name = validate_public_name(name, "Network Group name")
     if oneshot or members is not None:
         if members is None:
@@ -1653,6 +2103,17 @@ def set_network_group(plane_db, name: str, *, members: Optional[list[str]] = Non
                 cli_error("Network Group is incomplete.", expected="  members")
             )
         member_list = list(members)
+        impact = referenced_selector_mutation_security_impact(
+            plane_db, kind="network-group", name=name, members=member_list
+        )
+        existing_pre = plane_db.get_object_group(name)
+        if existing_pre is not None:
+            current_members = [
+                str(m["name"])
+                for m in plane_db._expand_group_members(existing_pre["id"], set())
+            ]
+            if _member_sets_equal(current_members, member_list):
+                return {"operation": "noop", "name": name}
 
         def write():
             # Validate all member refs before any authoritative mutation so a
@@ -1696,7 +2157,13 @@ def set_network_group(plane_db, name: str, *, members: Optional[list[str]] = Non
                 "operation": op,
             }
 
-        result = plane_db._mutate("set network-group %s" % name, "set network group", write)
+        result = plane_db._mutate(
+            "set network-group %s" % name,
+            "set network group",
+            write,
+            impact=impact,
+            confirm=confirm,
+        )
         out = {"operation": "set", "name": name}
         if isinstance(result, dict) and "revision" in result:
             out["revision"] = result["revision"]
@@ -1728,6 +2195,7 @@ def set_service_object(
     type: Optional[str] = None,
     port: Optional[int] = None,
     oneshot: bool = False,
+    confirm: Optional[bool] = None,
 ) -> dict:
     name = validate_public_name(name, "Service Object name")
     existing = get_service_object(plane_db, name)
@@ -1790,6 +2258,16 @@ def set_service_object(
                         )
                     )
 
+            impact = referenced_selector_mutation_security_impact(
+                plane_db,
+                kind="service-object",
+                name=name,
+                type=stype,
+                port=port,
+            )
+            if impact is None and str(existing["type"]) == stype and int(existing["port"]) == int(port):
+                return {"operation": "noop", "name": name}
+
             def write():
                 plane_db.conn.execute(
                     "UPDATE service_objects SET type = ?, port = ?, row_version = row_version + 1, "
@@ -1810,7 +2288,13 @@ def set_service_object(
                     pass
                 return {"entity": {"type": "service-object", "id": existing["id"], "name": name}, "operation": "update"}
 
-            return plane_db._mutate("set service-object %s" % name, "set service object", write)
+            return plane_db._mutate(
+                "set service-object %s" % name,
+                "set service object",
+                write,
+                impact=impact,
+                confirm=confirm,
+            )
 
         assert_service_public_name_available(plane_db, name, creating="object")
 
@@ -2147,12 +2631,36 @@ def unset_service_object(plane_db, name: str) -> dict:
     return plane_db._mutate("unset service-object %s" % name, "delete service object", write)
 
 
-def set_service_group(plane_db, name: str, *, members: Optional[list[str]] = None, oneshot: bool = False) -> dict:
+def set_service_group(
+    plane_db,
+    name: str,
+    *,
+    members: Optional[list[str]] = None,
+    oneshot: bool = False,
+    confirm: Optional[bool] = None,
+) -> dict:
     name = validate_public_name(name, "Service Group name")
     if not (oneshot or members is not None):
         raise ControlPlaneError("Interactive Service Group wizard requires a TTY session")
     if members is None:
         raise ControlPlaneError(cli_error("Service Group is incomplete.", expected="  members"))
+
+    impact = referenced_selector_mutation_security_impact(
+        plane_db, kind="service-group", name=name, members=list(members)
+    )
+    existing_pre = get_service_group(plane_db, name)
+    if existing_pre is not None:
+        current_members = [
+            r["name"]
+            for r in plane_db.conn.execute(
+                "SELECT s.name FROM service_group_members m "
+                "JOIN service_objects s ON s.id = m.service_object_id "
+                "WHERE m.group_id = ?",
+                (existing_pre["id"],),
+            )
+        ]
+        if _member_sets_equal(current_members, list(members)):
+            return {"operation": "noop", "name": name}
 
     def write():
         existing = get_service_group(plane_db, name)
@@ -2188,7 +2696,13 @@ def set_service_group(plane_db, name: str, *, members: Optional[list[str]] = Non
         rematerialize_dependent_rules_for_service_group(plane_db, gid)
         return {"entity": {"type": "service-group", "id": gid, "name": name}, "operation": op}
 
-    return plane_db._mutate("set service-group %s" % name, "set service group", write)
+    return plane_db._mutate(
+        "set service-group %s" % name,
+        "set service group",
+        write,
+        impact=impact,
+        confirm=confirm,
+    )
 
 
 def unset_service_group(plane_db, name: str) -> dict:
@@ -2380,7 +2894,14 @@ def unset_permission_group(plane_db, name: str) -> dict:
     return plane_db._mutate("unset permission-group %s" % name, "delete permission group", write)
 
 
-def set_permission_object(plane_db, name: str, *, permissions: Optional[list[str]] = None, oneshot: bool = False) -> dict:
+def set_permission_object(
+    plane_db,
+    name: str,
+    *,
+    permissions: Optional[list[str]] = None,
+    oneshot: bool = False,
+    confirm: Optional[bool] = None,
+) -> dict:
     name = validate_public_name(name, "Permission Object name")
     if not (oneshot or permissions is not None):
         raise ControlPlaneError("Interactive Permission Object wizard requires a TTY session")
@@ -2392,6 +2913,22 @@ def set_permission_object(plane_db, name: str, *, permissions: Optional[list[str
         if perm not in PERMISSIONS:
             raise ControlPlaneError("Unknown permission: %s" % p)
         cleaned.append(perm)
+
+    impact = referenced_selector_mutation_security_impact(
+        plane_db, kind="permission-object", name=name, permissions=cleaned
+    )
+    existing_pre = get_permission_object(plane_db, name)
+    if existing_pre is not None:
+        current_perms = [
+            r["permission"]
+            for r in plane_db.conn.execute(
+                "SELECT permission FROM permission_object_members "
+                "WHERE permission_object_id = ?",
+                (existing_pre["id"],),
+            )
+        ]
+        if _member_sets_equal(current_perms, cleaned):
+            return {"operation": "noop", "name": name}
 
     def write():
         existing = get_permission_object(plane_db, name)
@@ -2422,13 +2959,43 @@ def set_permission_object(plane_db, name: str, *, permissions: Optional[list[str
             )
         return {"entity": {"type": "permission-object", "id": pid, "name": name}, "operation": op}
 
-    return plane_db._mutate("set permission-object %s" % name, "set permission object", write)
+    return plane_db._mutate(
+        "set permission-object %s" % name,
+        "set permission object",
+        write,
+        impact=impact,
+        confirm=confirm,
+    )
 
 
-def set_permission_group(plane_db, name: str, *, members: Optional[list[str]] = None, oneshot: bool = False) -> dict:
+def set_permission_group(
+    plane_db,
+    name: str,
+    *,
+    members: Optional[list[str]] = None,
+    oneshot: bool = False,
+    confirm: Optional[bool] = None,
+) -> dict:
     name = validate_public_name(name, "Permission Group name")
     if members is None:
         raise ControlPlaneError(cli_error("Permission Group is incomplete.", expected="  members"))
+
+    impact = referenced_selector_mutation_security_impact(
+        plane_db, kind="permission-group", name=name, members=list(members)
+    )
+    existing_pre = get_permission_group(plane_db, name)
+    if existing_pre is not None:
+        current_members = [
+            r["name"]
+            for r in plane_db.conn.execute(
+                "SELECT p.name FROM permission_group_members m "
+                "JOIN permission_objects p ON p.id = m.permission_object_id "
+                "WHERE m.group_id = ?",
+                (existing_pre["id"],),
+            )
+        ]
+        if _member_sets_equal(current_members, list(members)):
+            return {"operation": "noop", "name": name}
 
     def write():
         existing = get_permission_group(plane_db, name)
@@ -2462,7 +3029,13 @@ def set_permission_group(plane_db, name: str, *, members: Optional[list[str]] = 
         ) if existing else None
         return {"entity": {"type": "permission-group", "id": gid, "name": name}, "operation": op}
 
-    return plane_db._mutate("set permission-group %s" % name, "set permission group", write)
+    return plane_db._mutate(
+        "set permission-group %s" % name,
+        "set permission group",
+        write,
+        impact=impact,
+        confirm=confirm,
+    )
 
 
 def expand_permissions(plane_db, token: str) -> set[str]:

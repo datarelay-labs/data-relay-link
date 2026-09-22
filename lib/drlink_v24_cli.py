@@ -739,9 +739,18 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             resource="Network Object",
             allowed_hint="type, value",
         )
-        result = v24.set_network_object(
-            plane, name, type=kv.get("type"), value=kv.get("value"), oneshot=True
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_network_object,
+            plane,
+            name,
+            type=kv.get("type"),
+            value=kv.get("value"),
+            oneshot=True,
         )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Network Object %s: %s\n" % (result["operation"], name))
         return 0
     if res == "network-group":
@@ -763,7 +772,17 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "network-group", name)
-        v24.set_network_group(plane, name, members=v24.parse_csv_list(kv["members"]), oneshot=True)
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_network_group,
+            plane,
+            name,
+            members=v24.parse_csv_list(kv["members"]),
+            oneshot=True,
+        )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Network Group set: %s\n" % name)
         return 0
     if res == "service-object":
@@ -782,7 +801,18 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             allowed_hint="type, port",
         )
         port = int(kv["port"]) if "port" in kv else None
-        v24.set_service_object(plane, name, type=kv.get("type"), port=port, oneshot=True)
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_service_object,
+            plane,
+            name,
+            type=kv.get("type"),
+            port=port,
+            oneshot=True,
+        )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Service Object set: %s\n" % name)
         return 0
     if res == "service-group":
@@ -804,7 +834,17 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "service-group", name)
-        v24.set_service_group(plane, name, members=v24.parse_csv_list(kv.get("members", "")), oneshot=True)
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_service_group,
+            plane,
+            name,
+            members=v24.parse_csv_list(kv.get("members", "")),
+            oneshot=True,
+        )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Service Group set: %s\n" % name)
         return 0
     if res == "permission-object":
@@ -826,9 +866,17 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "permission-object", name)
-        v24.set_permission_object(
-            plane, name, permissions=v24.parse_csv_list(kv.get("permissions", "")), oneshot=True
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_permission_object,
+            plane,
+            name,
+            permissions=v24.parse_csv_list(kv.get("permissions", "")),
+            oneshot=True,
         )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Permission Object set: %s\n" % name)
         return 0
     if res == "permission-group":
@@ -850,7 +898,17 @@ def handle_set(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             from drlink_v24_wizard import run_wizard
 
             return run_wizard(plane, "permission-group", name)
-        v24.set_permission_group(plane, name, members=v24.parse_csv_list(kv.get("members", "")), oneshot=True)
+        from drlink_control_cli import _run
+
+        result = _run(
+            v24.set_permission_group,
+            plane,
+            name,
+            members=v24.parse_csv_list(kv.get("members", "")),
+            oneshot=True,
+        )
+        if isinstance(result, dict) and result.get("cancelled"):
+            return 0
         sys.stdout.write("Permission Group set: %s\n" % name)
         return 0
     if res in ("remote-access", "internet-access"):
