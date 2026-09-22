@@ -1191,13 +1191,12 @@ def _system(plane: ControlPlane, rest):
                 )
             pending_id = args[0]
             principal = args[1] if len(args) > 1 else None
-            result = _run(plane.approve_oauth_pending, pending_id, principal)
+            _run(plane.approve_oauth_pending, pending_id, principal)
             sys.stdout.write(
                 "Authorization approved. The browser continues via /oauth/continue to the registered redirect.\n"
             )
             sys.stdout.write(
-                "code=%s (also delivered to the browser on continue; shown here for operator recovery)\n"
-                % result.get("code")
+                "The authorization code is delivered only through the one-time browser continuation redirect.\n"
             )
             return 0
         if rest[1] == "deny-oauth":

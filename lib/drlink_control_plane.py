@@ -3599,6 +3599,17 @@ class ControlPlane:
             return True
         return datetime.now(timezone.utc) >= exp
 
+    def _expire_oauth_pending_row(self, row) -> None:
+        """Drop an expired pending/approved/denied transaction and any unused code."""
+        code_plain = str(row["code_plain"] or "").strip()
+        if code_plain:
+            digest = hashlib.sha256(code_plain.encode("utf-8")).hexdigest()
+            self.conn.execute(
+                "DELETE FROM ai_oauth_codes WHERE code_hash = ? AND used_at IS NULL",
+                (digest,),
+            )
+        self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (row["id"],))
+
     def approve_oauth_pending(
         self, pending_id: str, principal_name: Optional[str] = None, *, retain_for_browser: bool = True
     ) -> dict:
@@ -3610,19 +3621,22 @@ class ControlPlane:
             raise ControlPlaneError("OAuth request already completed")
         if status == "denied":
             raise ControlPlaneError("OAuth request was denied")
-        if status == "approved" and str(row["code_plain"] or "").strip():
-            # Idempotent operator re-print while browser has not continued yet.
-            return {
-                "code": row["code_plain"],
+        if self._oauth_pending_expired(row):
+            self._expire_oauth_pending_row(row)
+            raise ControlPlaneError("OAuth request expired")
+        if status == "approved":
+            # Idempotent confirmation while browser has not continued yet.
+            # Do not re-emit the authorization code; browser /oauth/continue delivers it once.
+            out = {
                 "redirect_uri": row["redirect_uri"],
                 "state": row["state"],
                 "resource": row["resource"],
                 "completion_token": row["completion_token"],
                 "status": "approved",
             }
-        if self._oauth_pending_expired(row):
-            self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (pending_id,))
-            raise ControlPlaneError("OAuth request expired")
+            if not retain_for_browser and str(row["code_plain"] or "").strip():
+                out["code"] = row["code_plain"]
+            return out
         if status != "pending":
             raise ControlPlaneError("OAuth request is not pending")
         principal = self.conn.execute(
@@ -3682,9 +3696,16 @@ class ControlPlane:
                 "WHERE id = ?",
                 (now, code, principal_id, pending_id),
             )
-        else:
-            # Auto-approve / direct redirect: code is delivered immediately; drop pending.
-            self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (pending_id,))
+            # Browser /oauth/continue is the sole production delivery boundary for the raw code.
+            return {
+                "redirect_uri": row["redirect_uri"],
+                "state": row["state"],
+                "resource": row["resource"],
+                "completion_token": row["completion_token"],
+                "status": "approved",
+            }
+        # Auto-approve / direct redirect: code is delivered immediately; drop pending.
+        self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (pending_id,))
         return {
             "code": code,
             "redirect_uri": row["redirect_uri"],
@@ -3711,7 +3732,7 @@ class ControlPlane:
         if status == "approved":
             raise ControlPlaneError("OAuth request already approved")
         if self._oauth_pending_expired(row):
-            self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (pending_id,))
+            self._expire_oauth_pending_row(row)
             raise ControlPlaneError("OAuth request expired")
         now = utc_now_iso()
         self.conn.execute(
@@ -3737,8 +3758,9 @@ class ControlPlane:
             raise ControlPlaneError("OAuth continuation not found")
         if str(row["consumed_at"] or "").strip():
             raise ControlPlaneError("OAuth continuation already used")
-        if self._oauth_pending_expired(row) and str(row["status"] or "pending") == "pending":
-            self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (row["id"],))
+        # Expiry bounds the whole transaction, including post-approval continuation.
+        if self._oauth_pending_expired(row):
+            self._expire_oauth_pending_row(row)
             raise ControlPlaneError("OAuth request expired")
         status = str(row["status"] or "pending")
         if status == "pending":
@@ -3755,6 +3777,7 @@ class ControlPlane:
         changed = self.conn.execute("SELECT changes()").fetchone()[0]
         if not changed:
             raise ControlPlaneError("OAuth continuation already used")
+        code_plain = str(row["code_plain"] or "").strip()
         # Drop the pending row after consumption so tokens cannot be replayed.
         self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (row["id"],))
         if status == "denied":
@@ -3765,13 +3788,13 @@ class ControlPlane:
                 "error": "access_denied",
                 "error_description": "The resource owner denied the request",
             }
-        if status != "approved" or not str(row["code_plain"] or "").strip():
+        if status != "approved" or not code_plain:
             raise ControlPlaneError("OAuth request is not completable")
         return {
             "status": "approved",
             "redirect_uri": row["redirect_uri"],
             "state": row["state"],
-            "code": row["code_plain"],
+            "code": code_plain,
         }
 
     def issue_oauth_access_token(

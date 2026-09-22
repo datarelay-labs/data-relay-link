@@ -168,7 +168,12 @@ class AIIdentityOAuth(unittest.TestCase):
 
     def _external_approve(self, session: dict, principal_name: str = "claude") -> str:
         """TEST-only external authorization-server actor."""
-        approved = self.plane.approve_oauth_pending(session["pending_id"], principal_name=principal_name)
+        # Immediate code delivery (not the production browser-continue path).
+        approved = self.plane.approve_oauth_pending(
+            session["pending_id"],
+            principal_name=principal_name,
+            retain_for_browser=False,
+        )
         return approved["code"]
 
     def test_authorization_code_without_external_approval_not_verified(self):
@@ -348,7 +353,9 @@ class AIIdentityOAuth(unittest.TestCase):
                     row = self.plane.conn.execute(
                         "SELECT id FROM ai_oauth_pending ORDER BY created_at DESC"
                     ).fetchone()
-                    approved = self.plane.approve_oauth_pending(row["id"], principal_name=self.name)
+                    approved = self.plane.approve_oauth_pending(
+                        row["id"], principal_name=self.name, retain_for_browser=False
+                    )
                     return approved["code"]
                 return super().ask(prompt)
 

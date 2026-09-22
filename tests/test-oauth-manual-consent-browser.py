@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -179,10 +181,15 @@ class ManualConsentBrowserTests(unittest.TestCase):
         self.assertEqual(wait.status, 200)
         self.assertIn("Waiting for operator approval", wait.read().decode("utf-8"))
         # Public CLI approval path only (no DB / plane helper).
-        dispatch(
-            ["system", "credential", "approve-oauth", auth["pending_id"]],
-            root=self.tmp,
-        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            dispatch(
+                ["system", "credential", "approve-oauth", auth["pending_id"]],
+                root=self.tmp,
+            )
+        cli_out = buf.getvalue()
+        self.assertNotIn("drc_", cli_out)
+        self.assertNotRegex(cli_out, r"(?i)\bcode=")
         exc = open_no_redirect(self.base + auth["continue_path"])
         self.assertEqual(exc.code, 302)
         loc = exc.headers.get("Location") or ""
@@ -225,6 +232,41 @@ class ManualConsentBrowserTests(unittest.TestCase):
         body = json.loads(exc.read().decode("utf-8"))
         self.assertIn("expired", (body.get("error_description") or "").lower())
         print("MANUAL_CONSENT_EXPIRED=PASS")
+
+    def test_approve_then_expire_continue_fail_closed(self):
+        """Finding A: expiry must bound post-approval browser continuation."""
+        _, challenge = self._pkce()
+        auth = self._authorize(challenge=challenge, state="ttl-after-approve")
+        dispatch(
+            ["system", "credential", "approve-oauth", auth["pending_id"]],
+            root=self.tmp,
+        )
+        row = self.plane.conn.execute(
+            "SELECT status, code_plain FROM ai_oauth_pending WHERE id = ?",
+            (auth["pending_id"],),
+        ).fetchone()
+        self.assertEqual(row["status"], "approved")
+        self.assertTrue(str(row["code_plain"] or "").startswith("drc_"))
+        code_digest = hashlib.sha256(row["code_plain"].encode("utf-8")).hexdigest()
+        past = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
+        self.plane.conn.execute(
+            "UPDATE ai_oauth_pending SET expires_at = ? WHERE id = ?",
+            (past, auth["pending_id"]),
+        )
+        exc = open_no_redirect(self.base + auth["continue_path"])
+        self.assertEqual(exc.code, 400)
+        body = json.loads(exc.read().decode("utf-8"))
+        self.assertIn("expired", (body.get("error_description") or "").lower())
+        gone = self.plane.conn.execute(
+            "SELECT id FROM ai_oauth_pending WHERE id = ?", (auth["pending_id"],)
+        ).fetchone()
+        self.assertIsNone(gone)
+        leftover = self.plane.conn.execute(
+            "SELECT code_hash FROM ai_oauth_codes WHERE code_hash = ? AND used_at IS NULL",
+            (code_digest,),
+        ).fetchone()
+        self.assertIsNone(leftover)
+        print("MANUAL_CONSENT_APPROVED_EXPIRED=PASS")
 
     def test_replay_and_wrong_token_fail_closed(self):
         verifier, challenge = self._pkce()

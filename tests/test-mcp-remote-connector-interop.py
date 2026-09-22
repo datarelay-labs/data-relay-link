@@ -393,7 +393,9 @@ class RemoteConnectorInteropTests(unittest.TestCase):
             "SELECT id FROM ai_oauth_pending WHERE client_id = ?", (reg["client_id"],)
         ).fetchone()
         self.assertIsNotNone(pending)
-        approved = self.plane.approve_oauth_pending(pending["id"], "ro-agent")
+        approved = self.plane.approve_oauth_pending(
+            pending["id"], "ro-agent", retain_for_browser=False
+        )
         token_body = urllib.parse.urlencode(
             {
                 "grant_type": "authorization_code",
