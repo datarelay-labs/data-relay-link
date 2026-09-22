@@ -15,6 +15,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/development-v2.4.0-F59E0B?style=flat-square" alt="Development target v2.4.0">
   <img src="https://img.shields.io/badge/channel-development-64748B?style=flat-square" alt="Release channel development">
+  <img src="https://img.shields.io/badge/FRP-v0.71.0-2563EB?style=flat-square" alt="FRP v0.71.0">
   <img src="https://img.shields.io/badge/license-Source%20Available-111827?style=flat-square" alt="Source Available">
   <img src="https://img.shields.io/badge/management-CLI--first-7C3AED?style=flat-square" alt="CLI-first">
 </p>
@@ -29,7 +30,7 @@
 
 ## What Data Relay Link is
 
-Data Relay Link is a lightweight, CLI-first secure connectivity layer for isolated and restricted networks.
+Data Relay Link is a lightweight, CLI-first secure connectivity layer built on the official pinned [`fatedier/frp`](https://github.com/fatedier/frp).
 
 Systems behind NAT, firewalls, and restricted networks initiate outbound connectivity to a Server you control. Data Relay Link then relays only the specific services and access paths you intentionally authorize.
 
@@ -37,7 +38,7 @@ Core principle:
 
 > **Do not connect entire networks. Relay only the connections that are actually needed.**
 
-It is designed to avoid the operational overhead of a full VPN, network overlay, RMM platform, or custom relay stack.
+It is designed to avoid the operational overhead of a full VPN, network overlay, RMM platform, or custom FRP fork.
 
 ## Three connectivity / access planes
 
@@ -78,11 +79,11 @@ it never creates connectivity.
 
 ```mermaid
 flowchart LR
-    O["Operator / Approved User"] --> P["Data Relay Link Server<br/>Public Endpoint"]
+    O["Operator / Approved Client"] --> P["Data Relay Link Server<br/>Public Endpoint"]
 
-    A["Managed Host A<br/>NAT / Firewall"] -->|Outbound DRLink secure relay| P
-    B["Managed Host B<br/>NAT / Firewall"] -->|Outbound DRLink secure relay| P
-    C["Managed Host C<br/>NAT / Firewall"] -->|Outbound DRLink secure relay| P
+    A["Managed Host A<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
+    B["Managed Host B<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
+    C["Managed Host C<br/>NAT / Firewall"] -->|Outbound FRP tunnel| P
 
     P --> S1["Remote Service SSH"]
     P --> S2["Remote Service HTTP / HTTPS"]
@@ -263,14 +264,15 @@ There is no single distributed Server+multi-Agent transaction. Bundle omission m
 ```text
 PROJECT_VERSION=2.4.0
 RELEASE_CHANNEL=development
+FRP_VERSION=0.71.0
 ```
 
-Active development target: **2.4.0**  
-Release channel: **development**
+Current project version: **2.4.0**  
+Current pinned FRP version: **v0.71.0**
 
-The current v2.4.0 implementation and qualification work is on
+This repository tree is the **v2.4.0 development target** on branch
 [`feature/v2.4.0-final-product-closure`](https://github.com/datarelay-labs/datarelay-link/tree/feature/v2.4.0-final-product-closure).
-The default `main` branch remains the repository landing branch while v2.4.0 is being qualified. This README presents the current Data Relay Link product model and public CLI. There is no stable `v2.4.0` tag until exact-HEAD qualification completes; do not treat v2.4.0 as stable, RC, or preview unless repository metadata actually changes to that channel.
+There is no stable `v2.4.0` tag until exact-HEAD qualification completes. Do not treat this branch as a stable, RC, or preview release unless repository metadata actually changes to that channel.
 
 Version policy distinguishes:
 
@@ -292,6 +294,10 @@ That path would 404 until the immutable tag exists.
 
 Repository: [`datarelay-labs/datarelay-link`](https://github.com/datarelay-labs/datarelay-link)
 
+Following mutable `main` is not a normal install or update path. Development and pre-release validation use an exact immutable source SHA or an explicitly qualified candidate artifact.
+
+A legacy client on an older updater may require a one-time verified compatibility bridge; that compatibility mechanism does not replace the current immutable-source update policy.
+
 Stable release requires two complete Real E2E passes on the same final exact HEAD, including the three access planes and applicable lifecycle/platform gates. Any code/dependency change resets the pass counter.
 
 ## Documentation
@@ -300,15 +306,22 @@ Public docs: https://link.datarelay.run
 
 Start here:
 
-- [Product Master](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/PRODUCT_MASTER.md) — current product-level decisions
-- [CLI / AI Master](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — current CLI/AI SSOT
-- [CLI Reference](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/CLI_REFERENCE.md) — current direct grammar
-- [CLI Information Architecture](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
-- [ConfigurationBundle](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
-- [Internet Access](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/CONTROLLED_EGRESS.md) — controlled egress behavior
-- [Security](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/SECURITY.md) — current security boundaries
-- [Version Policy](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/VERSION_POLICY.md) — version/release rules
-- [Release Checklist](https://github.com/datarelay-labs/datarelay-link/blob/feature/v2.4.0-final-product-closure/docs/RELEASE_CHECKLIST.md) — final stable gate
+- [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md) — authoritative documentation map and status
+- [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — product-level decisions
+- [`docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`](docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — CLI/AI SSOT
+- [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar
+- [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
+- [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
+- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) — Server/Agent installation and enrollment
+- [`docs/UPGRADE.md`](docs/UPGRADE.md) — upgrade channels, migration, and rollback
+- [`docs/REMOTE_ACCESS.md`](docs/REMOTE_ACCESS.md) — Remote Service and Remote Access operation
+- [`docs/AI_ACCESS_MCP.md`](docs/AI_ACCESS_MCP.md) — AI Identity, permissions, AI Access, and MCP
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — diagnosis and recovery guidance
+- [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access behavior
+- [`docs/SECURITY.md`](docs/SECURITY.md) — security boundaries
+- [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release rules
+- [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) — final stable gate
+- [`docs/CONTROL_PLANE_ARCHITECTURE.md`](docs/CONTROL_PLANE_ARCHITECTURE.md) — internal architecture/history
 
 ## Non-goals
 

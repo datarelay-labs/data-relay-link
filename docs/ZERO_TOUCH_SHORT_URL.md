@@ -24,7 +24,7 @@ Operator reverse proxy (Caddy / nginx / LB)
    |
    | private / loopback upstream
    v
-FRP Auto Deploy allocator
+Data Relay Link allocator
    |
    +-- GET  /i/<opaque>          generic bootstrap script (no ticket consume)
    +-- GET  /ca.crt              Private CA certificate (existing)
@@ -35,20 +35,20 @@ after enrollment:
 
 Client
    |
-   | existing FRP Auto Deploy Private CA
+   | existing Data Relay Link Private CA
    v
 Management plane
 ```
 
-FRP Auto Deploy does **not** issue, renew, or store the public bootstrap
+Data Relay Link does **not** issue, renew, or store the public bootstrap
 certificate. The operator owns DNS, public TLS, and the reverse proxy.
 
 ## Configuration
 
 ```bash
-sudo frpctl set server bootstrap-hostname bootstrap.example.com
-sudo frpctl unset server bootstrap-hostname
-sudo frpctl show server
+sudo drlink server set bootstrap-hostname bootstrap.example.com
+sudo drlink server unset bootstrap-hostname
+sudo drlink server status
 ```
 
 `bootstrap_hostname` is separate from `public_hostname`:
@@ -68,7 +68,7 @@ ports, configure NAT, invoke ACME, or restart FRP services.
 3. Renew the public certificate
 4. Proxy only the required allocator paths (see below)
 
-## FRP Auto Deploy responsibilities
+## Data Relay Link responsibilities
 
 1. Serve `GET /i/<opaque-ticket>`
 2. Validate tickets without consuming them on GET
@@ -163,7 +163,7 @@ server {
 
 If the operator enables Caddy access logging, `/i/<ticket>` **must** be excluded
 or redacted. The complete short URL is a short-lived credential; raw URI logging
-at the operator edge defeats allocator-side redaction. FRP Auto Deploy does not
+at the operator edge defeats allocator-side redaction. Data Relay Link does not
 manage the reverse proxy — access-log policy remains an operator responsibility.
 
 ```caddy
@@ -198,10 +198,36 @@ public bootstrap hostname. Do not put `curl -k` in client bootstrap commands.
 ```text
 GET /i/<ticket>          → no consume, no machine bind
 POST /bootstrap/redeem   → first-machine bind
-POST /enroll success     → completed_at (single-use)
+POST /enroll success     → atomic consume / completed_at (single-use)
 ```
 
 Treat `/i/<opaque-ticket>` as sensitive until used, expired, or revoked.
+
+### v2.4 stable bounded issuance contract
+
+Configuration/deployment intent and ticket issuance are separate. Applying a `ConfigurationBundle` may create enrollment plans but creates **zero** raw Zero-Touch tickets.
+
+Server-enforced limits:
+
+```text
+max tickets per issuance request = 10
+max active unused tickets        = 10
+use count per ticket              = 1
+default TTL                       = 1 hour
+maximum TTL                       = 24 hours
+```
+
+If 3 valid unused tickets already exist, the next issuance may create at most 7.
+
+Each ticket is unique and bound to one intended enrollment context. A reusable shared credential with a count of 10 is not allowed.
+
+Raw ticket/install URL is shown once at issuance. Persistent server state stores the verifier/hash and non-secret lifecycle metadata, not a redisplayable raw ticket.
+
+Successful enrollment atomically consumes the credential so concurrent double-use cannot create two Clients. Expired/revoked tickets leave the active-unused count. Ticket expiry/revocation never disconnects a Client that has already completed enrollment.
+
+Reinstall/recovery never reuses a consumed ticket; use the supported recovery/re-enrollment flow.
+
+YAML fields, hidden CLI flags, or APIs cannot raise these server-side ceilings.
 
 ## v2.1.3 Real E2E evidence
 
