@@ -1,452 +1,592 @@
 # Data Relay Link v2.4.0 — ConfigurationBundle and AI-Assisted Configuration
 
-> **Document role:** Canonical design contract for declarative configuration and AI-generated operator input before v2.4.0 stable
-> **Authority:** `PRODUCT_MASTER.md` and `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md` define public behavior; this document defines the configuration-ingestion surface that must reuse the same control-plane engine.
+> **Document role:** Canonical operator/developer reference for ConfigurationBundle ingestion  
+> **Status:** v2.4 active  
+> **Authority:** `PRODUCT_MASTER.md` and `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md` define public behavior. This document must not redefine those semantics.  
+> **Implementation:** `lib/drlink_v24_bundle.py`
 
-## 1. Release decision
+## 1. Purpose
 
-ConfigurationBundle support is part of the v2.4.0 stable target. It is not deferred to v2.5.0.
+ConfigurationBundle is the multi-resource configuration input for Data Relay Link.
 
-The feature exists to support two operator workflows without creating a second configuration engine:
-
-```text
-simple request
-  → AI or human emits one canonical public drlink command
-
-multi-resource request
-  → AI or human emits one ConfigurationBundle
-  → validate / test / diff / confirm / atomic apply
-```
-
-Both paths MUST converge on the same control-plane mutation, policy-impact, revision, audit, compile, and activation logic.
-
-## 2. Non-negotiable invariants
+Use it when several dependent resources must be validated and applied together.
 
 ```text
-CONFIGURATION_SSOT=server SQLite state
-CONFIGURATION_FILE_IS_SSOT=NO
-SEPARATE_YAML_POLICY_ENGINE=NO
-SEPARATE_AI_POLICY_ENGINE=NO
-DIRECT_DB_MUTATION_FROM_BUNDLE=NO
-DIRECT_RUNTIME_JSON_MUTATION_FROM_BUNDLE=NO
-ATOMIC_MULTI_RESOURCE_APPLY=YES
-IDEMPOTENT_REAPPLY=YES
-EXPLICIT_DELETE_ONLY=YES
-REDACTED_EXPORT=YES
-REVISION_CONFLICT_FAILS=YES
-SECURITY_BROADENING_CONFIRMATION=YES
-SECRETS_IN_EXPORT=NO
-ZERO_TOUCH_SECRET_IN_BUNDLE=NO
+one independent resource
+→ canonical public drlink command
+
+multiple dependent resources
+→ ConfigurationBundle
+→ test / diff / apply
 ```
 
-A ConfigurationBundle is an idempotent change set against current server state. It does not take ownership of every resource on the server.
+ConfigurationBundle is not a second configuration database or policy engine. It converges on the same Data Relay Link control-plane semantics as Human Guided Wizards and complete AI one-shot CLI.
 
-Objects omitted from a bundle remain unchanged. Deletion requires an explicit absent state.
+## 2. Canonical document shape
+
+The canonical v2.4 schema starts with:
+
+```yaml
+configurationBundle:
+  context: server
+```
+
+or:
+
+```yaml
+configurationBundle:
+  context: agent
+```
+
+The legacy development form:
+
+```yaml
+apiVersion: ...
+kind: ConfigurationBundle
+```
+
+is not the canonical v2.4 input contract and must not be documented as the normal format.
 
 ## 3. Canonical CLI surface
 
-The stable direct roots remain:
+From the `drlink>` prompt:
 
 ```text
-show
-set
-unset
-test
-system
-menu
-help
-exit
+test configuration <FILE|->
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+system export configuration <FILE>
 ```
 
-Do not reintroduce a top-level `apply` root.
+From a shell, prefix the same command with `drlink` or `sudo drlink` as appropriate.
 
-Configuration operations live under existing roots:
+There is no top-level public `apply` command.
+
+Each of `test`, `diff`, and `apply` independently parses and validates the supplied document. A previous successful test or diff is never an authorization token for a later apply.
+
+## 4. Server ConfigurationBundle
+
+A Server bundle may contain any subset of these canonical sections:
 
 ```text
-system export configuration drlink.yaml
-test configuration drlink.yaml
-system diff configuration drlink.yaml
-system apply configuration drlink.yaml
+networkObjects
+networkGroups
+serviceObjects
+serviceGroups
+permissionObjects
+permissionGroups
+remoteAccess
+internetAccess
+aiAccess
 ```
 
-Standard input is supported for AI copy/paste workflows:
+Example:
 
-```bash
-sudo drlink system apply configuration - <<'DRLINK_CONFIG'
+```yaml
 configurationBundle:
   context: server
 
   networkObjects:
-    - name: hq-admin
+    - name: office-admin
       type: ip
       value: 203.0.113.10
 
-  serviceObjects:
-    - name: ssh
-      type: tcp
-      port: 22
+    - name: github
+      type: fqdn
+      value: github.com
 
-  remoteAccess:
+  serviceObjects:
+    - name: https
+      type: tcp
+      port: 443
+
+  internetAccess:
     mode: whitelist
     enforcement: enabled
     rules:
-      - name: hq-admin-ssh
-        source: hq-admin
-        destination: ubuntu-prod
-        service: ssh
+      - name: github-https
+        source: office-admin
+        destination: github
+        service: https
         enabled: true
-DRLINK_CONFIG
 ```
 
-`system apply configuration` MUST internally perform validation, embedded policy tests, diff, security-impact analysis, and confirmation before commit. Default confirmation is No.
+Managed Hosts and verified AI Identities may be referenced by public name where the selected policy field permits them. They are not created merely by declaring a name in a Server ConfigurationBundle.
 
-## 4. AI output contract
+Enrollment and AI authentication remain lifecycle workflows.
 
-An AI assistant should choose the smallest safe form.
+## 5. Agent ConfigurationBundle
 
-Use one canonical CLI command when the requested change is simple and independently atomic, for example:
+An Agent bundle manages Remote Services owned by the current Agent Host.
+
+Canonical section:
 
 ```text
-one Object value change
-one Group membership change
-one rule enable/disable
-one Zero-Touch ticket request
+remoteServices
 ```
 
-Use a ConfigurationBundle when several resources depend on each other or must succeed/fail together, for example:
+Example:
 
-```text
-Objects + Groups + policies
-multiple policy rules
-initial branch deployment intent
-large policy revision
-review/change/reapply of exported configuration
+```yaml
+configurationBundle:
+  context: agent
+
+  remoteServices:
+    - name: ssh-access
+      destination: this-host
+      service: ssh
+      enabled: true
+
+    - name: internal-db-postgres
+      destination: internal-db
+      service: postgres
+      enabled: true
 ```
 
-AI-generated output MUST NOT use internal helpers, direct SQLite, authoritative/runtime JSON edits, hidden compatibility commands, secrets, private keys, or pre-generated enrollment URLs.
+The current Agent Host is the implicit owner. When destination is not `this-host`, the current Agent Host acts as the Relay Host.
 
-## 5. Change Plan engine
+A Server bundle cannot contain `remoteServices`.
 
-All mutating inputs converge on one Change Plan abstraction:
+An Agent bundle cannot contain Server-owned Object, Group, Permission, or Access Policy sections.
+
+Context mismatch is rejected before authoritative mutation.
+
+## 6. Resource semantics
+
+General rules:
 
 ```text
-direct public CLI ─┐
-AI-generated CLI  ─┼→ Change Plan → validate → resolve references
-ConfigurationBundle┘               → policy tests
-                                    → diff
-                                    → impact analysis
-                                    → confirmation
-                                    → optimistic-concurrency check
-                                    → one authoritative transaction
-                                    → revision + audit
-                                    → compile / activate / verify
+resource omitted
+→ UNCHANGED
+
+field omitted on an existing resource
+→ UNCHANGED
+
+state omitted
+→ present/create-or-update semantics
+
+state: absent
+→ explicit deletion/reset request
+
+same desired state
+→ NO CHANGE
 ```
 
-A bundle implementation that writes tables or runtime files through a separate code path violates this architecture.
+A ConfigurationBundle is a patch/desired-change document. It does not take ownership of every Data Relay Link resource.
 
-The Change Plan contains at least:
+A resource with `state: absent` cannot also describe desired present-state fields.
 
-```text
-base revision
-dependency-aware mutations
-dependent references
-before/after representation
-policy-impact result
-embedded test result
-confirmation requirement
-expected post-commit revision
+Invalid example:
+
+```yaml
+configurationBundle:
+  context: server
+
+  networkObjects:
+    - name: old-network
+      state: absent
+      type: cidr
+      value: 10.0.0.0/8
 ```
 
-## 6. Bundle semantics
+This fails validation and applies no change.
 
-Initial schema identifier:
+## 7. Exact-list fields
+
+When these list fields are supplied, they represent the exact desired list for that resource:
 
 ```text
-apiVersion: drlink.datarelay.run/v1alpha1
-kind: ConfigurationBundle
+Network Group.members
+Service Group.members
+Permission Group.members
+Permission Object.permissions
 ```
 
-Supported server-owned resource families SHOULD include the canonical v2.4 model rather than legacy nouns:
+Example:
 
-```text
-objects
-objectGroups
-clientGroups
-servicePresets
-publishedServices where server-side mutation is actually supported
-remoteAccess
-internetAccess
-fixedTcp
-aiAccess references that do not contain credentials
-enrollmentPlans
+```yaml
+configurationBundle:
+  context: server
+
+  networkGroups:
+    - name: approved-admins
+      members:
+        - office-admin
+        - vpn-admin
 ```
 
-The schema MUST NOT expose `acl`, `serviceProfiles`, or `internetProfiles` as current resource families.
+If an existing group also contains `partner-admin`, applying this change removes `partner-admin` from that group.
 
-Resource identity and references use canonical immutable IDs internally and stable human-readable selectors at the input boundary.
+If `members` is omitted on an existing group, its membership remains unchanged.
 
-## 7. Idempotency and ownership
+## 8. Access Policy semantics
 
-Applying the same bundle twice against unchanged effective state MUST produce:
+ConfigurationBundle uses the same Remote Access, Internet Access, and AI Access model as the canonical CLI.
 
 ```text
+Mode:
+  BLACKLIST
+  WHITELIST
+
+Enforcement:
+  ENABLED
+  DISABLED
+```
+
+There is no rule ordering and no per-rule ALLOW/DENY action.
+
+For an unconfigured policy, creation of the first rule requires `mode`.
+
+For an already configured policy:
+
+```text
+mode omitted
+→ existing mode retained
+
+enforcement omitted
+→ existing enforcement retained
+
+rules omitted
+→ existing rules retained
+
+rule omitted from rules[]
+→ existing rule retained
+
+rule with state: absent
+→ that rule is deleted
+```
+
+A conflicting mode is rejected.
+
+Whole-policy reset is explicit:
+
+```yaml
+configurationBundle:
+  context: server
+
+  remoteAccess:
+    state: absent
+```
+
+Equivalent reset semantics apply to `internetAccess` and `aiAccess`.
+
+## 9. Reference and context validation
+
+The whole document is parsed before mutation.
+
+```text
+parse complete document
+→ validate schema and fields
+→ resolve references
+→ validate context-specific selectors
+→ build Change Plan
+→ calculate diff and security impact
+```
+
+Declaration order does not control dependency resolution.
+
+A rule may reference an Object created elsewhere in the same bundle.
+
+A missing reference, duplicate public selector, invalid group member, unsupported transport, or wrong CLI context rejects the complete change set.
+
+## 10. Internet Access selector rules
+
+Internet Access source may use:
+
+```text
+IP
+CIDR
+FQDN
+Managed Host
+Network Group containing valid source members
+```
+
+Internet Access destination may use:
+
+```text
+IP
+CIDR
+FQDN
+Network Group containing only valid destination Network Objects
+```
+
+Managed Host is not a valid Internet Access destination, directly or through a destination Network Group.
+
+Internet Access v2.4 is TCP/HTTP/HTTPS-oriented. Unsupported UDP selections fail validation.
+
+## 11. Remote Service rules
+
+Agent `remoteServices` use exactly one Service Object.
+
+Supported:
+
+```text
+TCP
+Fixed TCP
+```
+
+Rejected:
+
+```text
+UDP
+Service Group
+CIDR or multi-target Network Group destination
+```
+
+Fixed TCP defines the destination TCP port in the Service Object. The public endpoint port is allocated separately from the Fixed TCP endpoint pool.
+
+An existing Remote Service cannot be edited in-place between normal TCP and Fixed TCP endpoint-pool classes.
+
+## 12. Agent operation while the Server is unavailable
+
+Temporary Agent-to-Server disconnection does not automatically invalidate a locally valid Remote Service change when required synchronized metadata is available.
+
+Existing Remote Service:
+
+```text
+edit locally
+→ preserve existing endpoint reservation
+→ DEGRADED while synchronization/runtime activation is unavailable
+→ reconnect
+→ synchronize
+→ HEALTHY when runtime conditions recover
+```
+
+New Remote Service:
+
+```text
+valid local configuration
+→ save
+→ DEGRADED
+→ Endpoint: Pending allocation
+→ reconnect
+→ allocate endpoint
+→ activate
+```
+
+If a required dependency cannot be resolved from synchronized metadata, validation fails and no change is saved.
+
+## 13. Test
+
+`test configuration` is read-only.
+
+It validates at least:
+
+```text
+YAML structure
+configurationBundle.context
+known section names
+required fields
+public-name validity
+resource field validity
+reference resolution
+group membership
+policy semantics
+Server/Agent context
+Remote Service transport/destination constraints
+Internet Access selector constraints
+explicit deletion/reference protection
+```
+
+Success does not mutate authoritative state.
+
+## 14. Diff
+
+`system diff configuration` is read-only.
+
+It reports the current-state comparison using operations such as:
+
+```text
+CREATE
+UPDATE
+DELETE
 NO CHANGE
 ```
 
-A bundle is patch-like, not authoritative desired-state ownership of the whole server.
+It also reports security impact where applicable.
 
-Therefore:
+The diff is advisory evidence for that invocation only. Apply re-reads the current authoritative state.
+
+## 15. Apply
+
+`system apply configuration` performs the complete safety pipeline again:
 
 ```text
-missing from bundle  → preserve existing resource
-state: present       → create/update idempotently
-state: absent        → explicit delete request
+parse
+→ validate
+→ resolve
+→ calculate Change Plan
+→ recalculate current-state diff
+→ calculate security impact
+→ confirmation when required
+→ authoritative transaction
+→ runtime generation
+→ activation
+→ verification
 ```
 
-Delete remains subject to reference protection and destructive confirmation.
+Critical runtime activation or verification failure restores the previous authoritative/runtime state when rollback succeeds.
 
-## 8. Export
+If rollback itself is incomplete, Data Relay Link must state that operator attention is required; it must not falsely say that no change occurred.
 
-`system export configuration` produces a redacted, reviewable representation of server-owned configuration suitable for AI review and later re-application.
+A valid-but-unreachable Remote Service is an operational `DEGRADED` state, not a configuration-transaction failure.
 
-Export excludes:
+## 16. Concurrency
+
+Apply evaluates the authoritative state that exists at execution time.
+
+If state changed after an earlier test or diff, apply recalculates references, diff, and security impact.
+
+The implementation must not blindly commit a stale previously displayed plan.
+
+## 17. Idempotency
+
+Applying the same desired state again produces:
 
 ```text
-raw enrollment/Zero-Touch tickets
-installation URLs containing credentials
-OAuth/static bearer secrets
+NO CHANGE
+Configuration already matches the requested state.
+```
+
+A no-change reapply must not recreate resources, reallocate Remote Service/Fixed TCP endpoints, or restart runtime components unnecessarily.
+
+## 18. Standard-input copy/paste
+
+Use `-` for stdin:
+
+```text
+test configuration -
+system diff configuration -
+system apply configuration -
+```
+
+Interactive paste mode announces:
+
+```text
+Paste ConfigurationBundle YAML below.
+Finish with a line containing only:
+:end
+```
+
+`:end` is the CLI terminator and is not part of YAML.
+
+AI output intended for direct paste should contain raw YAML only.
+
+Markdown fences or explanatory prose inside the pasted input must fail safely rather than causing partial application.
+
+## 19. Export and secrets
+
+`system export configuration <FILE>` emits the canonical schema for the current CLI context:
+
+```text
+Server CLI
+→ context: server
+
+Agent CLI
+→ context: agent
+```
+
+Export contains desired configuration, not transient health/reachability state.
+
+Export must not disclose:
+
+```text
+OAuth tokens
+Bearer tokens
+Enrollment/Zero-Touch raw tickets
 private keys
-client identity private material
-stored secret values
-unbounded audit payloads
+credentials
+other protected secret material
 ```
 
-References to protected secrets may be exported only as non-secret identifiers/metadata where required.
+Omitted secret material leaves existing secrets unchanged when a configuration is re-applied.
 
-Export SHOULD include the source revision so later diff/apply can detect intervening mutation.
+A display placeholder such as `REDACTED` is never interpreted as a new secret.
 
-## 9. Validation and embedded tests
+## 20. Zero-Touch boundary
 
-`test configuration` is non-mutating.
+Zero-Touch enrollment is a lifecycle workflow, not a canonical ConfigurationBundle section in v2.4.
 
-Validation includes at least:
+Use the Server CLI enrollment workflow:
 
 ```text
-YAML/schema validation
-apiVersion/kind validation
-canonical resource names
-object type/context validation
-reference resolution
-cycle detection
-policy Mode / Enforcement / Rule validity
-duplicate/overlap diagnostics
-Internet Access destination security validation
-AI capability/path-scope validation
-Fixed TCP destination validation
-explicit delete/reference protection preflight
-Zero-Touch plan constraints
+set enrollment zero-touch
+set enrollment manual
+set enrollment bulk
 ```
 
-A bundle may contain non-mutating expected-policy tests. All required tests must pass before apply can proceed.
-
-A failed test rejects the complete change set.
-
-## 10. Diff and confirmation
-
-Before mutation, show a bounded human-readable Change Plan such as:
+Enrollment ticket rules remain server-enforced:
 
 ```text
-Configuration validation: PASS
-Policy tests:             2/2 PASS
-Base revision:            42
-Current revision:         42
-
-Planned changes:
-  + 2 Objects
-  ~ 1 Remote Access rule
-  - 0 Resources
-
-Security impact:
-  Public access added: NO
-  Resources deleted:   NO
-  Access widened:      NO
-
-Apply these changes? [y/N]
+maximum per issuance request     10
+maximum active unused tickets   10
+default TTL                     1 hour
+maximum TTL                     24 hours
+use count                       1
+raw ticket                      displayed only at issuance
+persistent credential           verifier/hash only
 ```
 
-Any security widening, public exposure, destructive deletion, credential lifecycle change, or other existing impact-confirmation condition remains governed by the same safety engine used by direct CLI.
+ConfigurationBundle must not be used as a channel for raw enrollment secrets.
 
-## 11. Concurrency
+## 21. AI-assisted configuration contract
 
-A plan is built against a specific current revision.
+AI is a configuration assistant, not a separate control plane.
 
-If authoritative state changes between planning and commit:
+For one resource, prefer a complete canonical one-shot command.
+
+Example:
 
 ```text
-REVISION_CONFLICT
-No changes were applied.
-Re-run diff/test against current state.
+set internet-access github-https mode whitelist source ubuntu-prod destination github service https enabled
 ```
 
-Do not silently rebase a security-relevant bundle onto newer state.
+For several dependent resources, use a ConfigurationBundle.
 
-## 12. Existing client boundary
+AI must use public names and canonical resource nouns. It must not generate direct SQLite edits, internal helper commands, runtime JSON mutations, hidden IDs, or secret-bearing configuration.
 
-The configuration surface MUST NOT claim that the server can remotely rewrite an existing client's local service target when that capability does not exist.
+## 22. Acceptance contract
 
-For existing clients:
+ConfigurationBundle is conformant only when all of the following hold:
 
 ```text
-server-owned policy/group/reservation change
-  → may be applied by server Change Plan
-
-client-local target/service mutation not remotely supported
-  → CLIENT_ACTION_REQUIRED
-  → no false success
+CANONICAL_TOP_LEVEL=configurationBundle
+CONTEXT_REQUIRED=server|agent
+SERVER_AGENT_CONTEXT_SEPARATION=PASS
+SERVER_SECTIONS_MATCH_CANONICAL_V2_4_MODEL=PASS
+AGENT_REMOTE_SERVICES_ONLY=PASS
+EXPLICIT_DELETE_ONLY=PASS
+OMITTED_RESOURCE_UNCHANGED=PASS
+OMITTED_EXISTING_FIELD_UNCHANGED=PASS
+EXACT_LIST_FIELD_SEMANTICS=PASS
+REFERENCE_RESOLUTION_WHOLE_DOCUMENT=PASS
+INVALID_FINAL_RESOURCE_CAUSES_ZERO_PARTIAL_MUTATION=PASS
+TEST_NON_MUTATING=PASS
+DIFF_NON_MUTATING=PASS
+APPLY_REVALIDATES_CURRENT_STATE=PASS
+SECURITY_IMPACT_RECALCULATED=PASS
+IDEMPOTENT_REAPPLY_NO_CHANGE=PASS
+EXPORT_REDACTS_SECRETS=PASS
+STDIN_END_MARKER=:end
+RUNTIME_FAILURE_ROLLBACK=PASS
+TRUTHFUL_INCOMPLETE_ROLLBACK_ERROR=PASS
 ```
 
-New Zero-Touch enrollment may carry explicitly authorized initial-service intent through the existing enrollment path where that path supports it.
+## 23. Non-goals
 
-## 13. Zero-Touch enrollment plans
-
-ConfigurationBundle may declare deployment intent for future clients, but applying the bundle MUST NOT pre-issue installation secrets.
-
-Example intent:
-
-```yaml
-spec:
-  enrollmentPlans:
-    - name: branch-01
-      platform: linux
-      clientGroups: [branch]
-      initialServices:
-        - preset: ssh-admin
-          name: ssh
-```
-
-Result example:
+ConfigurationBundle does not introduce:
 
 ```text
-30 clients planned
-0 Zero-Touch tickets issued
-Next issuable batch: 10
+a second SSOT
+a second policy engine
+cross-Server-and-Agent distributed atomic transactions
+remote mutation of an Agent-local Remote Service from the Server CLI
+automatic enrollment/authentication identity creation
+raw secret distribution
+direct database editing
+direct runtime JSON editing
 ```
 
-A plan is not a Managed Host or DRLink Agent. Managed Host/Agent identity is created only by successful enrollment.
+## 24. Authority rule
 
-## 14. Zero-Touch issuance limits
-
-Stable v2.4 server enforcement:
-
-```text
-MAX_TICKETS_PER_ISSUE_REQUEST=10
-MAX_ACTIVE_UNUSED_TICKETS=10
-TICKET_USE_COUNT=1
-DEFAULT_TTL=1h
-MAX_TTL=24h
-```
-
-If 3 valid unused tickets remain, at most 7 additional tickets may be issued.
-
-Every ticket is unique and bound to one intended enrollment context. Do not issue one reusable credential with a use-count of 10.
-
-The server stores only the verifier/hash needed to validate a ticket. Raw ticket/install URL is shown only at issuance time.
-
-Successful enrollment atomically consumes the ticket so concurrent double-use cannot succeed.
-
-Expired/revoked tickets no longer count toward the active-unused limit. Expiry/revocation of the enrollment ticket does not disconnect an already enrolled client.
-
-Reinstall never reuses an already consumed ticket; use the supported recovery/re-enrollment path.
-
-Neither YAML fields, hidden flags, nor API parameters may increase these server-side limits.
-
-## 15. Zero-Touch batch lifecycle
-
-After a ConfigurationBundle creates enrollment plans, ticket issuance is a separate explicit operator action immediately before installation.
-
-The operator may request the next batch, up to the remaining active-unused capacity.
-
-Required operator capabilities:
-
-```text
-show planned enrollments
-issue next Zero-Touch batch
-show ticket metadata without redisplaying secrets
-revoke one ticket
-revoke remaining tickets in a batch
-show consumed/expired/revoked status
-```
-
-The exact public CLI grammar must remain action-first/canonical and must be discoverable through normal help/menu before stable qualification.
-
-## 16. Audit
-
-Every configuration operation records at least:
-
-```text
-actor
-input path: direct-cli | configuration-file | configuration-stdin
-bundle name where present
-bundle content hash
-base revision
-committed revision
-change summary
-policy-impact summary
-test summary
-result
-```
-
-Do not write raw secrets or complete sensitive bundle content into audit storage.
-
-## 17. Failure and rollback semantics
-
-Validation, reference, test, security, or concurrency failure occurs before authoritative mutation.
-
-If the authoritative transaction fails, no partial resource subset may remain committed.
-
-If DB commit succeeds but runtime compile/activation fails, existing control-plane rules apply: DB remains authoritative, generation mismatch is surfaced, and affected enforcement fails closed where safe enforcement cannot be proven.
-
-## 18. Explicit non-goals
-
-ConfigurationBundle v1alpha1 is not:
-
-```text
-Terraform state
-Ansible replacement
-a second authoritative config database
-continuous file reconciliation
-a secret distribution mechanism
-remote desktop/fleet-management system
-a mechanism to overwrite all server state because a resource is omitted
-```
-
-## 19. Stable-release gates
-
-v2.4.0 stable requires retained exact-HEAD evidence for:
-
-```text
-CONFIGURATION_BUNDLE_SCHEMA=PASS
-CONFIGURATION_FILE_AND_STDIN=PASS
-CONFIGURATION_VALIDATE=PASS
-CONFIGURATION_DIFF=PASS
-CONFIGURATION_IDEMPOTENCY=PASS
-CONFIGURATION_EXPLICIT_DELETE=PASS
-CONFIGURATION_ATOMICITY=PASS
-CONFIGURATION_REVISION_CONFLICT=PASS
-CONFIGURATION_POLICY_TESTS=PASS
-CONFIGURATION_IMPACT_CONFIRMATION=PASS
-CONFIGURATION_REDACTED_EXPORT=PASS
-CONFIGURATION_SECRET_EXCLUSION=PASS
-DIRECT_CLI_AND_BUNDLE_SEMANTIC_PARITY=PASS
-AI_COPY_PASTE_REAL_E2E=PASS
-EXISTING_CLIENT_BOUNDARY=PASS
-ZERO_TOUCH_BATCH_MAX_10=PASS
-ZERO_TOUCH_ACTIVE_UNUSED_MAX_10=PASS
-ZERO_TOUCH_SINGLE_USE=PASS
-ZERO_TOUCH_DEFAULT_TTL_1H=PASS
-ZERO_TOUCH_MAX_TTL_24H=PASS
-ZERO_TOUCH_SECRET_ONE_TIME_DISPLAY=PASS
-ZERO_TOUCH_DOUBLE_USE_ATOMIC_DENY=PASS
-```
-
-The release is not qualified if the bundle path can create policy/state that the canonical direct CLI/change engine would reject.
+When this document conflicts with the current CLI/AI Master or actual canonical v2.4 parser contract, the conflict must be fixed here. Do not revive legacy development schemas or intermediate public nouns as an alternate supported ConfigurationBundle format.
