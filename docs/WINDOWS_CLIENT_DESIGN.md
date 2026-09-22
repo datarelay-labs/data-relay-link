@@ -51,7 +51,7 @@ Sensitive files: ACL for `SYSTEM` + `Administrators` only.
 
 ## Zero-touch UX
 
-`create zero-touch` → platform menu → Linux (existing) or Windows (RDP-first).
+`set enrollment zero-touch` → platform menu → Linux or Windows (RDP-first).
 
 Windows one-line (no `irm | iex`):
 
