@@ -574,6 +574,40 @@ def _security_impact_for_plan(plane: ControlPlane, context: str, body: dict, cha
                         "enabled Rules → DENY ALL." % title
                     )
 
+        # Rule mutations: WHITELIST enable and BLACKLIST/WHITELIST selector changes
+        # that can turn previously denied flows into ALLOW.
+        for c in changes:
+            if c.get("op") != "SET" or c.get("kind") != ("%s-access-rule" % family):
+                continue
+            rule_name = str(c.get("name") or "").strip()
+            item = c.get("item") or {}
+            if not rule_name:
+                continue
+            if family == "ai":
+                hit = v24.ai_access_rule_update_security_impact(
+                    plane,
+                    rule_name,
+                    source=item.get("source"),
+                    destination=item.get("destination"),
+                    permission=item.get("permission"),
+                    paths=item.get("paths") if "paths" in item else None,
+                    enabled=item.get("enabled"),
+                )
+            else:
+                hit = v24.access_rule_update_security_impact(
+                    plane,
+                    family,
+                    rule_name,
+                    source=item.get("source"),
+                    destination=item.get("destination"),
+                    service=item.get("service"),
+                    enabled=item.get("enabled"),
+                )
+            if hit and hit.get("warning"):
+                text = "WARNING: %s" % hit["warning"]
+                if text not in impact:
+                    impact.append(text)
+
     # Indirect broadening: deleting Permission Object/Group still referenced by
     # enabled AI BLACKLIST rules (and those rules are not deleted in this plan).
     deleting_ai_rules = {

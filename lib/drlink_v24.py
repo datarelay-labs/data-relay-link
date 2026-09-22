@@ -1099,6 +1099,300 @@ def last_enabled_rule_mutation_impact(
     )
 
 
+def _rule_service_public_name(plane_db, rule_id: str) -> Optional[str]:
+    ref = plane_db.conn.execute(
+        "SELECT ref_kind, ref_id FROM rule_service_refs WHERE rule_id = ?",
+        (rule_id,),
+    ).fetchone()
+    if not ref:
+        return None
+    if ref["ref_kind"] == "service_object":
+        row = plane_db.conn.execute(
+            "SELECT name FROM service_objects WHERE id = ?", (ref["ref_id"],)
+        ).fetchone()
+        return row["name"] if row else None
+    if ref["ref_kind"] == "service_group":
+        row = plane_db.conn.execute(
+            "SELECT name FROM service_groups WHERE id = ?", (ref["ref_id"],)
+        ).fetchone()
+        return row["name"] if row else None
+    return None
+
+
+def _selector_token_changed(current: Optional[str], desired: Optional[str]) -> bool:
+    if desired is None:
+        return False
+    return str(current or "").strip().lower() != str(desired).strip().lower()
+
+
+def _paths_changed(current: list[str], desired: Optional[list[str]]) -> bool:
+    if desired is None:
+        return False
+    return {str(p).strip().lower() for p in (current or [])} != {
+        str(p).strip().lower() for p in desired
+    }
+
+
+def access_rule_update_security_impact(
+    plane_db,
+    family: str,
+    rule_name: str,
+    *,
+    source: Optional[str] = None,
+    destination: Optional[str] = None,
+    service: Optional[str] = None,
+    enabled: Optional[bool] = None,
+) -> Optional[dict]:
+    """Security impact for Remote/Internet Rule mutation (enable / selector change).
+
+    Covers DENY→ALLOW broadening from enabling a WHITELIST Rule or changing
+    selectors on an enabled BLACKLIST Rule. Disable/delete last-rule cases remain
+    in last_enabled_rule_mutation_impact().
+    """
+    plane = _plane_key(family)
+    if plane == "ai":
+        return None
+    existing = plane_db._get_rule(plane, rule_name)
+    if existing is None:
+        return None
+    pol = get_access_policy(plane_db, plane)
+    mode = str(pol.get("mode") or "").lower()
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        return None
+    title = _access_family_title(plane)
+    was_enabled = bool(existing["enabled"])
+    will_enable = (enabled is True) and not was_enabled
+    will_disable = (enabled is False) and was_enabled
+    if will_disable:
+        return None
+
+    view = plane_db._rule_view(existing)
+    cur_src = (view.get("sources") or [None])[0]
+    cur_dst = (view.get("destinations") or [None])[0]
+    cur_svc = _rule_service_public_name(plane_db, existing["id"])
+    selector_changed = any(
+        (
+            _selector_token_changed(cur_src, source),
+            _selector_token_changed(cur_dst, destination),
+            _selector_token_changed(cur_svc, service),
+        )
+    )
+    effectively_enabled = was_enabled if enabled is None else bool(enabled)
+
+    if mode == "whitelist" and will_enable:
+        return {
+            "access_broadened": True,
+            "access_narrowed": False,
+            "requires_confirmation": True,
+            "warning": (
+                "This change broadens %s by enabling WHITELIST Rule '%s'."
+                % (title, rule_name)
+            ),
+            "affected_rules": [rule_name],
+            "before": "WHITELIST / Rule disabled / matching flows DENY",
+            "after": "WHITELIST / Rule enabled / matching flows ALLOW",
+        }
+
+    if mode == "blacklist" and effectively_enabled and selector_changed:
+        return {
+            "access_broadened": True,
+            "access_narrowed": False,
+            "requires_confirmation": True,
+            "warning": (
+                "This change may broaden %s by changing selectors on enabled "
+                "BLACKLIST Rule '%s'." % (title, rule_name)
+            ),
+            "affected_rules": [rule_name],
+            "before": "BLACKLIST / enabled Rule selectors block matching flows",
+            "after": (
+                "BLACKLIST / changed selectors / previously blocked flows may ALLOW"
+            ),
+        }
+
+    if mode == "whitelist" and effectively_enabled and selector_changed:
+        # Deterministic broaden when the new source/destination/service leaf set
+        # is not a subset of the previous match set; otherwise stay silent.
+        try:
+            broaden = False
+            if source is not None and _selector_token_changed(cur_src, source):
+                _is_g, before_leaves = _network_test_leaves(
+                    plane_db, str(cur_src), role="source"
+                )
+                _is_g, after_leaves = _network_test_leaves(
+                    plane_db, str(source), role="source"
+                )
+                if not set(x.lower() for x in after_leaves).issubset(
+                    set(x.lower() for x in before_leaves)
+                ):
+                    broaden = True
+            if destination is not None and _selector_token_changed(cur_dst, destination):
+                _is_g, before_leaves = _network_test_leaves(
+                    plane_db, str(cur_dst), role="destination"
+                )
+                _is_g, after_leaves = _network_test_leaves(
+                    plane_db, str(destination), role="destination"
+                )
+                if not set(x.lower() for x in after_leaves).issubset(
+                    set(x.lower() for x in before_leaves)
+                ):
+                    broaden = True
+            if service is not None and _selector_token_changed(cur_svc, service):
+                _is_g, before_leaves = _service_test_leaves(plane_db, str(cur_svc))
+                _is_g, after_leaves = _service_test_leaves(plane_db, str(service))
+                if not set(x.lower() for x in after_leaves).issubset(
+                    set(x.lower() for x in before_leaves)
+                ):
+                    broaden = True
+            if broaden:
+                return {
+                    "access_broadened": True,
+                    "access_narrowed": False,
+                    "requires_confirmation": True,
+                    "warning": (
+                        "This change broadens %s by expanding selectors on "
+                        "enabled WHITELIST Rule '%s'." % (title, rule_name)
+                    ),
+                    "affected_rules": [rule_name],
+                    "before": "WHITELIST / enabled Rule match set",
+                    "after": "WHITELIST / expanded match set / additional flows ALLOW",
+                }
+        except ControlPlaneError:
+            # Fail closed: unknown/ambiguous selector change requires confirmation.
+            return {
+                "access_broadened": True,
+                "access_narrowed": False,
+                "requires_confirmation": True,
+                "warning": (
+                    "This change may broaden %s by changing selectors on "
+                    "enabled WHITELIST Rule '%s'." % (title, rule_name)
+                ),
+                "affected_rules": [rule_name],
+                "before": "WHITELIST / enabled Rule match set",
+                "after": "WHITELIST / changed selectors / additional flows may ALLOW",
+            }
+    return None
+
+
+def ai_access_rule_update_security_impact(
+    plane_db,
+    rule_name: str,
+    *,
+    source: Optional[str] = None,
+    destination: Optional[str] = None,
+    permission: Optional[str] = None,
+    paths: Optional[list[str]] = None,
+    enabled: Optional[bool] = None,
+) -> Optional[dict]:
+    """Security impact for AI Access Rule mutation (enable / selector change)."""
+    existing = plane_db.conn.execute(
+        "SELECT * FROM ai_policy_rules WHERE name = ? COLLATE NOCASE", (rule_name,)
+    ).fetchone()
+    if existing is None:
+        return None
+    pol = get_access_policy(plane_db, "ai")
+    mode = str(pol.get("mode") or "").lower()
+    if str(pol.get("enforcement") or "enabled").lower() != "enabled":
+        return None
+    title = _access_family_title("ai")
+    was_enabled = bool(existing["enabled"])
+    will_enable = (enabled is True) and not was_enabled
+    will_disable = (enabled is False) and was_enabled
+    if will_disable:
+        return None
+
+    # Local import-safe view (mirrors bundle helper fields).
+    principal = None
+    if existing["source_identity_id"]:
+        principal = plane_db.conn.execute(
+            "SELECT name FROM ai_principals WHERE id = ?",
+            (existing["source_identity_id"],),
+        ).fetchone()
+    cur_src = principal["name"] if principal else None
+    cur_dst = None
+    dkind = existing["destination_ref_kind"]
+    if dkind == "object":
+        row = plane_db.conn.execute(
+            "SELECT name FROM objects WHERE id = ?", (existing["destination_ref_id"],)
+        ).fetchone()
+        cur_dst = row["name"] if row else None
+    elif dkind == "group":
+        row = plane_db.conn.execute(
+            "SELECT name FROM object_groups WHERE id = ?",
+            (existing["destination_ref_id"],),
+        ).fetchone()
+        cur_dst = row["name"] if row else None
+    cur_perm = None
+    pkind = existing["permission_ref_kind"]
+    if pkind == "permission_object":
+        row = plane_db.conn.execute(
+            "SELECT name FROM permission_objects WHERE id = ?",
+            (existing["permission_ref_id"],),
+        ).fetchone()
+        cur_perm = row["name"] if row else None
+    elif pkind == "permission_group":
+        row = plane_db.conn.execute(
+            "SELECT name FROM permission_groups WHERE id = ?",
+            (existing["permission_ref_id"],),
+        ).fetchone()
+        cur_perm = row["name"] if row else None
+    cur_paths = list_ai_policy_path_scopes(plane_db, existing["name"])
+
+    selector_changed = any(
+        (
+            _selector_token_changed(cur_src, source),
+            _selector_token_changed(cur_dst, destination),
+            _selector_token_changed(cur_perm, permission),
+            _paths_changed(cur_paths, paths),
+        )
+    )
+    effectively_enabled = was_enabled if enabled is None else bool(enabled)
+
+    if mode == "whitelist" and will_enable:
+        return {
+            "access_broadened": True,
+            "access_narrowed": False,
+            "requires_confirmation": True,
+            "warning": (
+                "This change broadens %s by enabling WHITELIST Rule '%s'."
+                % (title, rule_name)
+            ),
+            "affected_rules": [rule_name],
+            "before": "WHITELIST / Rule disabled / matching operations DENY",
+            "after": "WHITELIST / Rule enabled / matching operations ALLOW",
+        }
+
+    if mode == "blacklist" and effectively_enabled and selector_changed:
+        return {
+            "access_broadened": True,
+            "access_narrowed": False,
+            "requires_confirmation": True,
+            "warning": (
+                "This change may broaden %s by changing selectors on enabled "
+                "BLACKLIST Rule '%s'." % (title, rule_name)
+            ),
+            "affected_rules": [rule_name],
+            "before": "BLACKLIST / enabled Rule selectors block matching operations",
+            "after": (
+                "BLACKLIST / changed selectors / previously denied operations may ALLOW"
+            ),
+        }
+
+    if mode == "whitelist" and effectively_enabled and selector_changed:
+        return {
+            "access_broadened": True,
+            "access_narrowed": False,
+            "requires_confirmation": True,
+            "warning": (
+                "This change may broaden %s by changing selectors on enabled "
+                "WHITELIST Rule '%s'." % (title, rule_name)
+            ),
+            "affected_rules": [rule_name],
+            "before": "WHITELIST / enabled Rule match set",
+            "after": "WHITELIST / changed selectors / additional operations may ALLOW",
+        }
+    return None
+
+
 def reset_access_policy(plane_db, family: str, *, confirm: Optional[bool] = None) -> dict:
     plane = _plane_key(family)
     title = {
@@ -2429,6 +2723,16 @@ def set_access_rule(
         impact = last_enabled_rule_mutation_impact(
             plane_db, plane, name, disabling=True
         )
+    elif existing is not None:
+        impact = access_rule_update_security_impact(
+            plane_db,
+            plane,
+            name,
+            source=source,
+            destination=destination,
+            service=service,
+            enabled=enabled,
+        )
 
     return plane_db._mutate(
         "set %s-access %s" % (plane, name),
@@ -3076,6 +3380,16 @@ def set_ai_access_rule(
     ):
         impact = last_enabled_rule_mutation_impact(
             plane_db, "ai", name, disabling=True
+        )
+    elif existing is not None:
+        impact = ai_access_rule_update_security_impact(
+            plane_db,
+            name,
+            source=source,
+            destination=destination,
+            permission=permission,
+            paths=paths,
+            enabled=enabled,
         )
 
     return plane_db._mutate(
