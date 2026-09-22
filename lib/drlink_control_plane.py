@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
@@ -241,6 +242,8 @@ class ControlPlane:
         self._db_ident = self._db_file_ident()
         self._batch_mode = False
         self._batch_results: list = []
+        # Serialize threaded MCP Bridge access to the shared SQLite connection.
+        self._db_lock = threading.RLock()
         # Agent Bundle / nested Apply: Server-side Remote Service creates to
         # reverse if the local transaction rolls back. Not a distributed txn.
         self._agent_mgmt_side_effects: list = []
@@ -3751,6 +3754,10 @@ class ControlPlane:
         token = str(completion_token or "").strip()
         if not token:
             raise ControlPlaneError("completion token is required")
+        with self._db_lock:
+            return self._complete_oauth_pending_browser_locked(token)
+
+    def _complete_oauth_pending_browser_locked(self, token: str) -> dict:
         row = self.conn.execute(
             "SELECT * FROM ai_oauth_pending WHERE completion_token = ?", (token,)
         ).fetchone()
@@ -3770,21 +3777,28 @@ class ControlPlane:
                 "expires_at": row["expires_at"],
             }
         now = utc_now_iso()
-        self.conn.execute(
-            "UPDATE ai_oauth_pending SET consumed_at = ?, code_plain = '' WHERE id = ? AND consumed_at = ''",
+        # Statement-scoped claim: RETURNING proves this request owns the row.
+        # Do not use connection-global SELECT changes() under threaded handlers.
+        cur = self.conn.execute(
+            "UPDATE ai_oauth_pending SET consumed_at = ? "
+            "WHERE id = ? AND consumed_at = '' "
+            "RETURNING status, redirect_uri, state, code_plain",
             (now, row["id"]),
         )
-        changed = self.conn.execute("SELECT changes()").fetchone()[0]
-        if not changed:
+        claimed = cur.fetchone()
+        if claimed is None:
             raise ControlPlaneError("OAuth continuation already used")
-        code_plain = str(row["code_plain"] or "").strip()
+        status = str(claimed["status"] or "")
+        code_plain = str(claimed["code_plain"] or "").strip()
+        redirect_uri = claimed["redirect_uri"]
+        state = claimed["state"]
         # Drop the pending row after consumption so tokens cannot be replayed.
         self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (row["id"],))
         if status == "denied":
             return {
                 "status": "denied",
-                "redirect_uri": row["redirect_uri"],
-                "state": row["state"],
+                "redirect_uri": redirect_uri,
+                "state": state,
                 "error": "access_denied",
                 "error_description": "The resource owner denied the request",
             }
@@ -3792,8 +3806,8 @@ class ControlPlane:
             raise ControlPlaneError("OAuth request is not completable")
         return {
             "status": "approved",
-            "redirect_uri": row["redirect_uri"],
-            "state": row["state"],
+            "redirect_uri": redirect_uri,
+            "state": state,
             "code": code_plain,
         }
 

@@ -8,14 +8,19 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
+import ssl
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +31,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import ControlPlane  # noqa: E402
 from drlink_mcp_bridge import MCPBridge, ThreadingHTTPServer, make_handler  # noqa: E402
+import frp_frontend  # noqa: E402
+import frp_pki  # noqa: E402
 
 
 def free_port():
@@ -36,13 +43,23 @@ def free_port():
     return port
 
 
+def nginx_bin():
+    for cand in (os.environ.get("FRP_NGINX_BIN"), "/usr/sbin/nginx", shutil.which("nginx")):
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
 
 
-def open_no_redirect(url):
-    opener = urllib.request.build_opener(_NoRedirect)
+def open_no_redirect(url, *, context=None):
+    handlers = [_NoRedirect]
+    if context is not None:
+        handlers.insert(0, urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
     try:
         opener.open(url, timeout=10)
         raise AssertionError("expected HTTPError")
@@ -305,6 +322,146 @@ class ManualConsentBrowserTests(unittest.TestCase):
         )
         self.assertEqual(rc, 1)
         print("MANUAL_CONSENT_DENY_THEN_APPROVE=PASS")
+
+    def test_concurrent_continue_exactly_one_success(self):
+        """Finding D: threaded concurrent /oauth/continue must be single-use."""
+        verifier, challenge = self._pkce()
+        auth = self._authorize(challenge=challenge, state="race")
+        dispatch(
+            ["system", "credential", "approve-oauth", auth["pending_id"]],
+            root=self.tmp,
+        )
+        url = self.base + auth["continue_path"]
+        barrier = threading.Barrier(8)
+
+        def one_continue(_idx):
+            barrier.wait(timeout=10)
+            return open_no_redirect(url)
+
+        results = []
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futs = [pool.submit(one_continue, i) for i in range(8)]
+            for fut in as_completed(futs):
+                results.append(fut.result())
+
+        successes = [r for r in results if r.code == 302]
+        failures = [r for r in results if r.code != 302]
+        self.assertEqual(len(successes), 1, "expected exactly one success, got %s" % [r.code for r in results])
+        self.assertEqual(len(failures), 7)
+        for fail in failures:
+            self.assertEqual(fail.code, 400)
+            body = json.loads(fail.read().decode("utf-8"))
+            self.assertNotIn("code", body)
+        loc = successes[0].headers.get("Location") or ""
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)
+        code = params["code"][0]
+        self.assertTrue(code.startswith("drc_"))
+        # Losers must not have disclosed the same code via Location.
+        for fail in failures:
+            self.assertNotIn(code, fail.headers.get("Location") or "")
+        issued = self._exchange(code=code, verifier=verifier, resource=auth["resource"])
+        self.assertTrue(issued.get("access_token", "").startswith("drauth_"))
+        print("MANUAL_CONSENT_CONCURRENT_CONTINUE=PASS")
+
+    def test_production_frontend_continue_redirect(self):
+        """Finding C: public nginx frontend must proxy exact /oauth/continue."""
+        bin_path = nginx_bin()
+        if bin_path is None:
+            self.skipTest("nginx not available")
+        frontend_port = free_port()
+        pki = frp_pki.ensure_pki(str(Path(self.tmp) / "pki-fe"), "127.0.0.1")
+        temp_root = Path(self.tmp) / "nginx-temp"
+        for name in ("body", "proxy", "fastcgi", "uwsgi", "scgi"):
+            (temp_root / name).mkdir(parents=True, exist_ok=True)
+        dest = Path(self.tmp) / "frontend-oauth.conf"
+        frp_frontend.write_nginx_conf(
+            str(dest),
+            public_host="127.0.0.1",
+            frontend_port=frontend_port,
+            allocator_listen_port=free_port(),
+            control_listen_port=free_port(),
+            ca_cert=pki["ca_crt"],
+            server_cert=pki["server_crt"],
+            server_key=pki["server_key"],
+            pid_path=str(Path(self.tmp) / "nginx-oauth.pid"),
+            error_log=str(Path(self.tmp) / "frontend-oauth.error.log"),
+            temp_root=str(temp_root),
+            mcp_bridge_port=self.port,
+        )
+        conf_text = dest.read_text(encoding="utf-8")
+        self.assertIn("location = /oauth/continue {", conf_text)
+        self.assertNotIn("location ^~ /oauth/", conf_text)
+        nginx = subprocess.Popen(
+            [bin_path, "-c", str(dest)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        ctx = ssl.create_default_context(cafile=pki["ca_crt"])
+        public = "https://127.0.0.1:%s" % frontend_port
+        try:
+            deadline = time.time() + 5
+            last = None
+            while time.time() < deadline:
+                try:
+                    bad = open_no_redirect(public + "/oauth/continue?t=not-a-real-token", context=ctx)
+                    # Reaching MCP Bridge yields OAuth JSON 400, not nginx HTML 404.
+                    self.assertEqual(bad.code, 400)
+                    body = json.loads(bad.read().decode("utf-8"))
+                    self.assertEqual(body.get("error"), "invalid_request")
+                    break
+                except Exception as exc:
+                    last = exc
+                    time.sleep(0.05)
+            else:
+                self.fail("frontend /oauth/continue not ready: %s" % last)
+
+            verifier, challenge = self._pkce()
+            # Authorize via public frontend (same exact route set).
+            resource = self.bridge.canonical_resource()
+            qs = urllib.parse.urlencode(
+                {
+                    "response_type": "code",
+                    "client_id": "agent-a",
+                    "redirect_uri": "http://127.0.0.1/callback",
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                    "resource": resource,
+                    "state": "fe-continue",
+                }
+            )
+            page = (
+                urllib.request.urlopen(public + "/oauth/authorize?" + qs, context=ctx, timeout=10)
+                .read()
+                .decode("utf-8")
+            )
+            pending_m = re.search(r"approve-oauth\s+(oap_[A-Za-z0-9_-]+)", page)
+            cont_m = re.search(r"/oauth/continue\?([^\"'\s>]+)", page)
+            self.assertIsNotNone(pending_m, page)
+            self.assertIsNotNone(cont_m, page)
+            pending_id = pending_m.group(1)
+            continue_path = "/oauth/continue?" + cont_m.group(1)
+            dispatch(["system", "credential", "approve-oauth", pending_id], root=self.tmp)
+            exc = open_no_redirect(public + continue_path, context=ctx)
+            self.assertEqual(exc.code, 302)
+            loc = exc.headers.get("Location") or ""
+            parsed = urllib.parse.urlparse(loc)
+            self.assertEqual("%s://%s%s" % (parsed.scheme, parsed.netloc, parsed.path), "http://127.0.0.1/callback")
+            params = urllib.parse.parse_qs(parsed.query)
+            self.assertEqual(params.get("state", [None])[0], "fe-continue")
+            self.assertEqual(params.get("iss", [None])[0], self.bridge.canonical_public_base())
+            code = params["code"][0]
+            self.assertTrue(code.startswith("drc_"))
+            issued = self._exchange(code=code, verifier=verifier, resource=resource)
+            self.assertTrue(issued.get("access_token", "").startswith("drauth_"))
+            print("MANUAL_CONSENT_FRONTEND_CONTINUE=PASS")
+        finally:
+            if nginx.poll() is None:
+                nginx.terminate()
+                try:
+                    nginx.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    nginx.kill()
+                    nginx.wait(timeout=2)
 
 
 if __name__ == "__main__":

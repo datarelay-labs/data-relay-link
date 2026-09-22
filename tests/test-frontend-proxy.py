@@ -91,6 +91,12 @@ def test_backend_identity_ip_and_dns():
             fail('mcp loopback proxy')
         if 'location = /oauth/token {' not in conf:
             fail('oauth token route')
+        if 'location = /oauth/authorize {' not in conf:
+            fail('oauth authorize route')
+        if 'location = /oauth/continue {' not in conf:
+            fail('oauth continue route')
+        if 'location ^~ /oauth/' in conf or 'location /oauth/' in conf:
+            fail('broad oauth prefix must not be exposed')
         if 'location = /oauth/register {' not in conf:
             fail('oauth register route')
         if 'location = /oauth/revoke {' not in conf:

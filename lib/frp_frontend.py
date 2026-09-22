@@ -153,6 +153,14 @@ def _mcp_location_block(mcp_bridge_port):
             proxy_connect_timeout 10s;
         }
 
+        location = /oauth/continue {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 10s;
+        }
+
         location = /oauth/register {
             proxy_pass http://127.0.0.1:%(port)s;
             proxy_http_version 1.1;
