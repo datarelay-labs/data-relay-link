@@ -971,44 +971,46 @@ Authentication credentials are never stored or displayed as plaintext merely for
 
 ## 38. AI Access rules
 
-AI authorization is a separate policy family because its semantics are capability-oriented rather than packet-oriented. It still uses deterministic ordered policy evaluation.
+AI Access is a policy family over authenticated AI Identities. Its public policy semantics are the same BLACKLIST / WHITELIST + Enforcement model used by the other access-policy families.
 
-Example:
-
-```text
-AI Access Rule: readonly-audit
-Principal: chatgpt-support
-Targets: production-linux
-Capabilities:
-  read_file
-  get_system_info
-Paths:
-  /etc/**
-  /var/log/**
-Action: ALLOW
-Enabled: yes
-```
-
-Canonical evaluation:
+Canonical public rule shape:
 
 ```text
-disabled rules are skipped
-top-down
-first complete match wins
-explicit ALLOW / DENY
-implicit final DENY
+name
+source      → AI Identity
+destination → Network Object / Network Group
+permission  → Permission Object / Permission Group
+enabled / disabled
 ```
 
-A complete AI match means Principal AND Target AND requested Capability AND any applicable path/operation constraints match. Multiple target selectors within one rule are OR; multiple capabilities within one rule are OR. Constraints narrow a match and never grant permission by themselves. New AI rules are created disabled at the bottom and can be moved with before/after semantics.
+Authentication happens before authorization. A display name alone is not an authenticated AI Identity.
 
-Targets:
+Policy evaluation:
 
 ```text
-Managed Host
-Client Group
+No Policy
+→ effective policy ALLOW
+→ authentication is still mandatory
+
+BLACKLIST
+→ any enabled matching Rule DENY
+→ no enabled Rule match ALLOW
+
+WHITELIST
+→ any enabled matching Rule ALLOW
+→ no enabled Rule match DENY
+
+Enforcement DISABLED
+→ effective policy ALLOW ALL
+→ saved Mode/Rules preserved
+→ authentication is still mandatory
 ```
 
-A separate AI Host Group is not introduced.
+AI Access Rules are not ordered and do not carry a per-rule ALLOW/DENY action.
+
+Fine-grained operations such as `exec`, `read_file`, `write_file`, `upload_file`, and `download_file`, including applicable path/operation constraints, are represented by Permission Objects / Permission Groups and are enforced on every new invocation.
+
+Targets are resolved through the canonical Network Object / Network Group model. Managed Hosts may participate through their Network Object projection where the AI Access destination rules permit it.
 
 ## 39. Initial MCP capability surface
 
@@ -1312,18 +1314,18 @@ The final exact HEAD must prove at least:
 CONTROL_PLANE_DB=PASS
 OBJECT_MODEL=PASS
 OBJECT_GROUP_MODEL=PASS
-MANAGED_ENDPOINT_MODEL=PASS
+MANAGED_HOST_MODEL=PASS
 ENDPOINT_ADDRESS_INVENTORY=PASS
-PUBLISHED_SERVICE_SELF_ROUTED=PASS
+REMOTE_SERVICE_MODEL=PASS
 
 REMOTE_ACCESS_RULEBASE=PASS
 INTERNET_ACCESS_RULEBASE=PASS
 AI_ACCESS_RULEBASE=PASS
-FIRST_MATCH_ORDERING=PASS
-ALLOW_DENY=PASS
-IMPLICIT_DEFAULT_DENY=PASS
+BLACKLIST_WHITELIST_SEMANTICS=PASS
+NO_RULE_ORDERING=PASS
+NO_PER_RULE_ACTION=PASS
+INITIAL_NO_POLICY_ALLOW=PASS
 
-SHADOW_DETECTION=PASS
 POLICY_IMPACT_ANALYSIS=PASS
 REFERENCE_PROTECTION=PASS
 CONCURRENT_EDIT_PROTECTION=PASS
