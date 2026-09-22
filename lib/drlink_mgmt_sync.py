@@ -829,25 +829,10 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
     service = str(body.get("service") or "").strip()
     enabled = bool(body.get("enabled", True))
     pool_class = str(body.get("pool_class") or "normal").strip().lower()
-    target_host = str(body.get("target_host") or "127.0.0.1").strip()
-    target_port = int(body.get("target_port") or 0)
-    target_mode = str(body.get("target_mode") or "self").strip()
     preserve = body.get("preserve_endpoint_port")
     runtime_verified = bool(body.get("runtime_verified", False))
     if not name or not destination or not service:
         raise MgmtSyncError("Remote Service name, destination, and service are required")
-    if target_port < 1 or target_port > 65535:
-        raise MgmtSyncError("Invalid target port")
-    sobj = v24.get_service_object(plane, service)
-    if not sobj:
-        raise MgmtSyncError("Service Object '%s' does not exist on the Server" % service)
-    if sobj["type"] == "udp":
-        raise MgmtSyncError("Remote Service supports TCP and Fixed TCP only")
-    expected_pool = "fixed-tcp" if sobj["type"] == "fixed-tcp" else "normal"
-    if pool_class not in ("normal", "fixed-tcp"):
-        pool_class = expected_pool
-    if pool_class != expected_pool:
-        raise MgmtSyncError("pool_class does not match Service Object type")
 
     client = _require_managed_host(plane, machine_id)
     host_label = client["label"] or client["hostname"] or machine_id
@@ -858,16 +843,41 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         "WHERE s.client_id = ? AND s.name = ? COLLATE NOCASE AND s.released = 0",
         (client["id"], name),
     ).fetchone()
-    if existing and existing["pool_class"] and existing["pool_class"] != pool_class:
-        raise MgmtSyncError(
-            "The Service type cannot be changed between standard TCP and Fixed TCP "
-            "for an existing Remote Service. Delete and recreate the Remote Service."
-        )
     # Preserve prior immutable bind when Agent omits destination_client_id.
     if not destination_client_id and existing is not None:
         prior = existing["destination_client_id"] if "destination_client_id" in existing.keys() else None
         if prior:
             destination_client_id = str(prior)
+
+    from drlink_upgrade_reconcile import resolve_authoritative_remote_target
+
+    try:
+        authoritative = resolve_authoritative_remote_target(
+            plane,
+            destination=destination,
+            owner_client_id=client["id"],
+            service_name=service,
+            destination_client_id=destination_client_id,
+        )
+    except ControlPlaneError as exc:
+        raise MgmtSyncError(str(exc)) from exc
+
+    sobj = authoritative["service_object"]
+    target_host = str(authoritative["target_host"])
+    target_port = int(authoritative["target_port"])
+    target_mode = str(authoritative["target_mode"])
+    destination_client_id = authoritative.get("destination_client_id") or destination_client_id
+    expected_pool = "fixed-tcp" if sobj["type"] == "fixed-tcp" else "normal"
+    if pool_class not in ("normal", "fixed-tcp"):
+        pool_class = expected_pool
+    if pool_class != expected_pool:
+        raise MgmtSyncError("pool_class does not match Service Object type")
+
+    if existing and existing["pool_class"] and existing["pool_class"] != pool_class:
+        raise MgmtSyncError(
+            "The Service type cannot be changed between standard TCP and Fixed TCP "
+            "for an existing Remote Service. Delete and recreate the Remote Service."
+        )
 
     endpoint_port = None
     proxy_id = None
@@ -1016,6 +1026,9 @@ def server_upsert_remote_service(plane, auth: MgmtAuthContext, body: dict) -> di
         "proxy_id": proxy_id,
         "generation": 1,
         "runtime_verified": runtime_verified,
+        "target_host": target_host,
+        "target_port": target_port,
+        "target_mode": target_mode,
     }
 
 

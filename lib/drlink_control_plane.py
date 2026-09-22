@@ -927,6 +927,16 @@ class ControlPlane:
                 "UPDATE objects SET row_version = row_version + 1, updated_at = ? WHERE id = ?",
                 (utc_now_iso(), obj["id"]),
             )
+            try:
+                from drlink_upgrade_reconcile import (
+                    rematerialize_fixed_tcp_for_object,
+                    rematerialize_published_targets_for_destination_name,
+                )
+
+                rematerialize_published_targets_for_destination_name(self, obj["name"])
+                rematerialize_fixed_tcp_for_object(self, obj["id"])
+            except Exception:
+                pass
             return {
                 "entity": {"type": "object", "id": obj["id"], "name": obj["name"]},
                 "operation": "replace-value",
@@ -1419,6 +1429,17 @@ class ControlPlane:
                     now,
                 ),
             )
+        link = self.conn.execute(
+            "SELECT client_id FROM managed_endpoints WHERE object_id = ?",
+            (object_id,),
+        ).fetchone()
+        if link and link["client_id"]:
+            try:
+                from drlink_upgrade_reconcile import rematerialize_published_targets_for_managed_host
+
+                rematerialize_published_targets_for_managed_host(self, link["client_id"])
+            except Exception:
+                pass
 
     def set_endpoint_addresses(self, endpoint: str, addresses: list[dict]) -> dict:
         obj = self.require_object(endpoint)
@@ -3010,9 +3031,9 @@ class ControlPlane:
             dest_obj_id = obj["id"]
             vals = self._object_values(obj["id"])
             if obj["type"] == "host" and vals:
-                dest_host = dest_host or vals[0]
+                dest_host = vals[0]
             if obj["type"] == "fqdn" and vals:
-                dest_host = dest_host or vals[0]
+                dest_host = vals[0]
 
         def write():
             existing = self.conn.execute(
@@ -3064,6 +3085,14 @@ class ControlPlane:
         if entry is None:
             raise ControlPlaneError("Fixed TCP entry not found: %s" % name)
         dest = entry["dest_host"] or ""
+        if entry["destination_object_id"]:
+            vals = [
+                str(v).strip()
+                for v in self._object_values(entry["destination_object_id"])
+                if str(v or "").strip()
+            ]
+            if vals:
+                dest = vals[0]
         port = int(entry["dest_port"] or 0)
         policy = self.evaluate_internet_access(source_ip, dest, port, "tcp")
         return {"entry": name, "source_ip": source_ip, "destination": dest, "port": port, "policy": policy}

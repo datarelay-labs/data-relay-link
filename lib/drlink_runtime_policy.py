@@ -28,6 +28,7 @@ from drlink_control_db import (
     db_path,
     resolve_root,
     runtime_dir,
+    utc_now_iso,
 )
 from drlink_control_plane import ControlPlane
 
@@ -146,7 +147,7 @@ def build_proxy_map(plane: ControlPlane) -> dict[str, dict]:
             # services keep their historical id (== published name).
             sid = str(svc["name"]).strip().lower()
             meta = plane.conn.execute(
-                "SELECT 1 FROM remote_service_meta WHERE service_id = ?",
+                "SELECT * FROM remote_service_meta WHERE service_id = ?",
                 (svc["id"],),
             ).fetchone()
             if meta is not None and remote_service_proxy_id is not None:
@@ -164,6 +165,15 @@ def build_proxy_map(plane: ControlPlane) -> dict[str, dict]:
                 "target_port": int(svc["target_port"] or 0),
                 "service_type": svc["service_type"],
                 "protocol": "tcp",
+                "published_id": svc["id"],
+                "destination_name": str(meta["destination_name"] or "") if meta is not None else "",
+                "destination_client_id": (
+                    str(meta["destination_client_id"] or "").strip() or None
+                    if meta is not None
+                    else None
+                ),
+                "service_object_id": meta["service_object_id"] if meta is not None else None,
+                "has_remote_meta": meta is not None,
             }
             if name in mapping or name in collisions:
                 collisions.setdefault(name, [mapping.pop(name, None)]).append(entry)
@@ -268,6 +278,30 @@ def authorize_remote(
     if not mapped.get("enabled", True):
         result["reason"] = REASON_SERVICE_DISABLED
         return result
+
+    # Fail closed when published connectivity diverges from authoritative refs.
+    if mapped.get("has_remote_meta"):
+        try:
+            from drlink_upgrade_reconcile import server_target_projection_reason
+
+            pub = plane.conn.execute(
+                "SELECT * FROM published_services WHERE id = ?",
+                (mapped.get("published_id"),),
+            ).fetchone()
+            meta = plane.conn.execute(
+                "SELECT * FROM remote_service_meta WHERE service_id = ?",
+                (mapped.get("published_id"),),
+            ).fetchone()
+            mismatch = server_target_projection_reason(plane, pub, meta)
+            if mismatch:
+                result["destination"] = mapped.get("target_host") or ""
+                result["reason"] = "AUTHORITATIVE_TARGET_MISMATCH"
+                result["mismatch"] = mismatch
+                return result
+        except Exception:
+            # Authorization must not fail open on projection helper errors.
+            result["reason"] = REASON_AUTHORIZATION_ERROR
+            return result
 
     dest = _destination_for_service(plane, mapped)
     result["destination"] = dest
@@ -420,7 +454,30 @@ def authorize_fixed_tcp(
         return result
     result["relay_id"] = row["id"]
     result["relay_name"] = row["name"]
-    result["hostname"] = row["dest_host"] or ""
+    hostname = row["dest_host"] or ""
+    # Authoritative destination Object wins over the stored snapshot.
+    dest_obj_id = row["destination_object_id"]
+    if dest_obj_id:
+        vals = [
+            str(v).strip()
+            for v in plane._object_values(dest_obj_id)
+            if str(v or "").strip()
+        ]
+        if not vals:
+            result["reason"] = REASON_AUTHORIZATION_ERROR
+            return result
+        hostname = vals[0]
+        if str(row["dest_host"] or "").strip() != hostname:
+            try:
+                plane.conn.execute(
+                    "UPDATE fixed_tcp SET dest_host = ?, row_version = row_version + 1, "
+                    "updated_at = ? WHERE id = ?",
+                    (hostname, utc_now_iso(), row["id"]),
+                )
+                plane.conn.commit()
+            except Exception:
+                pass
+    result["hostname"] = hostname
     result["port"] = int(row["dest_port"] or 0)
     if not row["enabled"]:
         result["reason"] = REASON_RELAY_DISABLED

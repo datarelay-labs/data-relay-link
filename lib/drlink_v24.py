@@ -400,17 +400,19 @@ def _agent_remote_service_mgmt_snapshot(
                         destination_client_id = str(payload["client_id"])
     sobj = get_service_object(plane_db, service)
     target_port = int(sobj["port"]) if sobj else 0
-    if not sobj:
-        catalog = plane_db.conn.execute(
-            "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
-            (service,),
-        ).fetchone()
-        if catalog:
-            try:
-                payload = json.loads(catalog["payload"] or "{}")
-                target_port = int(payload.get("port") or 0)
-            except (TypeError, ValueError):
-                target_port = 0
+    # Prefer synchronized Server catalog over local seeded Service Objects.
+    catalog = plane_db.conn.execute(
+        "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
+        (service,),
+    ).fetchone()
+    if catalog:
+        try:
+            payload = json.loads(catalog["payload"] or "{}")
+            target_port = int(payload.get("port") or target_port or 0)
+        except (TypeError, ValueError):
+            pass
+    elif not sobj:
+        target_port = 0
     return {
         "name": name,
         "root": root,
@@ -1397,6 +1399,14 @@ def set_service_object(
                 # rematerialize every Remote/Internet rule that references this object
                 # (directly or via a Service Group).
                 rematerialize_dependent_rules_for_service_object(plane_db, existing["id"])
+                try:
+                    from drlink_upgrade_reconcile import (
+                        rematerialize_published_targets_for_service_object,
+                    )
+
+                    rematerialize_published_targets_for_service_object(plane_db, existing["id"])
+                except Exception:
+                    pass
                 return {"entity": {"type": "service-object", "id": existing["id"], "name": name}, "operation": "update"}
 
             return plane_db._mutate("set service-object %s" % name, "set service object", write)
@@ -4029,21 +4039,26 @@ def set_remote_service_agent(
                 target_mode = "self" if not relay else "routed"
                 target_host = dest_token if relay else "127.0.0.1"
 
-    sobj = get_service_object(plane_db, svc_name)
+    sobj = None
+    catalog = plane_db.conn.execute(
+        "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
+        (svc_name,),
+    ).fetchone()
+    # After a successful Server catalog sync, Server Service Object definitions
+    # outrank Agent-local seeds (ssh/http/...). Local seeds are fallback only.
+    if catalog:
+        try:
+            sobj = json.loads(catalog["payload"] or "{}")
+        except (TypeError, ValueError):
+            sobj = None
     if not sobj:
-        catalog = plane_db.conn.execute(
-            "SELECT payload FROM agent_object_catalog WHERE kind = 'service-object' AND name = ? COLLATE NOCASE",
-            (svc_name,),
-        ).fetchone()
-        if catalog:
-            payload = json.loads(catalog["payload"])
-            sobj = payload
-        else:
-            raise ControlPlaneError(
-                "ERROR:\nService Object '%s' is not available in the local synchronized catalog.\n\n"
-                "No changes were applied.\n\n"
-                "Create/synchronize the required Service Object and retry." % svc_name
-            )
+        sobj = get_service_object(plane_db, svc_name)
+    if not sobj:
+        raise ControlPlaneError(
+            "ERROR:\nService Object '%s' is not available in the local synchronized catalog.\n\n"
+            "No changes were applied.\n\n"
+            "Create/synchronize the required Service Object and retry." % svc_name
+        )
     stype = sobj["type"] if not isinstance(sobj, dict) else sobj.get("type")
     sport = int(sobj["port"] if not isinstance(sobj, dict) else sobj.get("port"))
     if stype == "udp":
