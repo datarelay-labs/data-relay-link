@@ -306,11 +306,17 @@ Public docs: https://link.datarelay.run
 
 Start here:
 
+- [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md) — authoritative documentation map and status
 - [`docs/PRODUCT_MASTER.md`](docs/PRODUCT_MASTER.md) — product-level decisions
 - [`docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`](docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md) — CLI/AI SSOT
 - [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) — target direct grammar
 - [`docs/Data Relay Link CLI Information Architecture.md`](docs/Data%20Relay%20Link%20CLI%20Information%20Architecture.md) — CLI UX
 - [`docs/CONFIGURATION_BUNDLE.md`](docs/CONFIGURATION_BUNDLE.md) — declarative / AI copy-paste contract
+- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) — Server/Agent installation and enrollment
+- [`docs/UPGRADE.md`](docs/UPGRADE.md) — upgrade channels, migration, and rollback
+- [`docs/REMOTE_ACCESS.md`](docs/REMOTE_ACCESS.md) — Remote Service and Remote Access operation
+- [`docs/AI_ACCESS_MCP.md`](docs/AI_ACCESS_MCP.md) — AI Identity, permissions, AI Access, and MCP
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — diagnosis and recovery guidance
 - [`docs/CONTROLLED_EGRESS.md`](docs/CONTROLLED_EGRESS.md) — Internet Access behavior
 - [`docs/SECURITY.md`](docs/SECURITY.md) — security boundaries
 - [`docs/VERSION_POLICY.md`](docs/VERSION_POLICY.md) — version/release rules
