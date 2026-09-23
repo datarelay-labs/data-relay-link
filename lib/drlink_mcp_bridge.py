@@ -25,7 +25,12 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from drlink_ai_agent import AgentLoop, execute_local
 from drlink_control_db import ControlPlaneError, resolve_root
-from drlink_control_plane import AI_CAPABILITIES, ControlPlane, MCP_AUTH_MODEL
+from drlink_control_plane import (
+    AI_CAPABILITIES,
+    ControlPlane,
+    MCP_AUTH_MODEL,
+    OAuthPendingCapacityError,
+)
 import drlink_v24 as v24
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
@@ -1011,6 +1016,12 @@ def make_handler(bridge: MCPBridge):
                         resource=resource,
                         state=str(fields.get("state") or ""),
                     )
+                except OAuthPendingCapacityError as exc:
+                    self._send(
+                        503,
+                        {"error": exc.oauth_error, "error_description": str(exc)},
+                    )
+                    return
                 except ControlPlaneError as exc:
                     self._send(400, {"error": "invalid_request", "error_description": str(exc)})
                     return

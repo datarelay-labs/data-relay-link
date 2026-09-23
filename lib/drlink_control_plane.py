@@ -37,6 +37,20 @@ from drlink_control_db import (
     utc_now_iso,
 )
 
+class OAuthPendingCapacityError(ControlPlaneError):
+    """Live pending OAuth transactions are at the admission cap."""
+
+    oauth_error = "temporarily_unavailable"
+
+    def __init__(self, scope: str):
+        if scope not in ("client", "global"):
+            raise ValueError("invalid OAuth pending capacity scope: %s" % scope)
+        self.scope = scope
+        super().__init__(
+            "too many pending OAuth authorizations; retry after existing requests expire or complete"
+        )
+
+
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,63}$")
 TAG_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BACKUP_FORMAT = "drlink-control-backup"
@@ -54,6 +68,9 @@ OAUTH_ACCESS_TTL = 3600
 OAUTH_REFRESH_TTL = 30 * 24 * 3600
 OAUTH_PENDING_TTL = 600
 OAUTH_MAX_REDIRECTS = 16
+# Live (unexpired) authorization transactions. Expired rows are reclaimed on admission.
+OAUTH_PENDING_MAX_PER_CLIENT = 16
+OAUTH_PENDING_MAX_GLOBAL = 128
 CIMD_FETCH_TIMEOUT = 8
 CIMD_FETCH_MAX_BYTES = 5 * 1024  # IETF CIMD draft recommended maximum
 # Extra special-use destinations beyond ipaddress "public" flags (CGNAT, docs, etc.).
@@ -3658,7 +3675,7 @@ class ControlPlane:
             issued["client_secret_expires_at"] = 0
         return {k: v for k, v in issued.items() if v is not None}
 
-    def resolve_oauth_authorize_client(self, client_id: str, redirect_uri: str) -> dict:
+    def resolve_oauth_authorize_client(self, client_id: str, redirect_uri: str, *, _cimd_doc: Optional[dict] = None) -> dict:
         """Resolve static, DCR, or CIMD client for authorization."""
         redirect_uri = self._validate_oauth_redirect_uri(redirect_uri)
         static = self._lookup_oauth_client(client_id)
@@ -3694,7 +3711,7 @@ class ControlPlane:
             }
         # CIMD: HTTPS URL client_id with path
         if str(client_id).startswith("https://"):
-            doc = self._fetch_cimd_document(client_id)
+            doc = _cimd_doc if _cimd_doc is not None else self._fetch_cimd_document(client_id)
             redirects = doc.get("redirect_uris") or []
             if not isinstance(redirects, list):
                 raise ControlPlaneError("CIMD redirect_uris must be a list")
@@ -3794,28 +3811,59 @@ class ControlPlane:
     def create_oauth_pending(self, *, client_id: str, redirect_uri: str, code_challenge: str, resource: str, state: str = "") -> dict:
         if not code_challenge:
             raise ControlPlaneError("code_challenge is required")
-        resolved = self.resolve_oauth_authorize_client(client_id, redirect_uri)
+        # CIMD metadata is fetched before the DB lock so a slow peer cannot stall admission.
+        cimd_doc = None
+        with self._db_lock:
+            static_known = self._lookup_oauth_client(client_id) is not None
+            dcr_known = self._lookup_dcr_client(client_id) is not None
+        if not static_known and not dcr_known and str(client_id).startswith("https://"):
+            cimd_doc = self._fetch_cimd_document(client_id)
         pending_id = _new_id("oap")
         completion_token = secrets.token_urlsafe(32)
         now = utc_now_iso()
         expires_at = self._iso_plus_seconds(OAUTH_PENDING_TTL)
-        self.conn.execute(
-            "INSERT INTO ai_oauth_pending(id, principal_id, client_id, redirect_uri, code_challenge, resource, state, "
-            "created_at, completion_token, status, expires_at, decision_at, consumed_at, code_plain) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '', '', '')",
-            (
-                pending_id,
-                resolved["principal_id"],
-                client_id,
-                resolved["redirect_uri"],
-                code_challenge,
-                resource or "",
-                state or "",
-                now,
-                completion_token,
-                expires_at,
-            ),
-        )
+        with self._db_lock:
+            resolved = self.resolve_oauth_authorize_client(
+                client_id, redirect_uri, _cimd_doc=cimd_doc
+            )
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._sweep_expired_oauth_pending()
+                per_client = int(
+                    self.conn.execute(
+                        "SELECT COUNT(*) AS n FROM ai_oauth_pending WHERE client_id = ?",
+                        (client_id,),
+                    ).fetchone()["n"]
+                )
+                total = int(self.conn.execute("SELECT COUNT(*) AS n FROM ai_oauth_pending").fetchone()["n"])
+                if per_client >= OAUTH_PENDING_MAX_PER_CLIENT or total >= OAUTH_PENDING_MAX_GLOBAL:
+                    # Persist expiry reclamation even when the new row is refused.
+                    self._commit_open_transaction()
+                    scope = "client" if per_client >= OAUTH_PENDING_MAX_PER_CLIENT else "global"
+                    raise OAuthPendingCapacityError(scope)
+                self.conn.execute(
+                    "INSERT INTO ai_oauth_pending(id, principal_id, client_id, redirect_uri, code_challenge, resource, state, "
+                    "created_at, completion_token, status, expires_at, decision_at, consumed_at, code_plain) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '', '', '')",
+                    (
+                        pending_id,
+                        resolved["principal_id"],
+                        client_id,
+                        resolved["redirect_uri"],
+                        code_challenge,
+                        resource or "",
+                        state or "",
+                        now,
+                        completion_token,
+                        expires_at,
+                    ),
+                )
+                self._commit_open_transaction()
+            except OAuthPendingCapacityError:
+                raise
+            except Exception:
+                self._rollback_open_transaction()
+                raise
         return {
             "id": pending_id,
             "principal": resolved["principal_name"],
@@ -3825,6 +3873,13 @@ class ControlPlane:
             "completion_token": completion_token,
             "expires_at": expires_at,
         }
+
+    def _sweep_expired_oauth_pending(self) -> None:
+        """Drop expired pending transactions and any unused authorization codes they hold."""
+        rows = self.conn.execute("SELECT * FROM ai_oauth_pending").fetchall()
+        for row in rows:
+            if self._oauth_pending_expired(row):
+                self._expire_oauth_pending_row(row)
 
     def _oauth_pending_expired(self, row) -> bool:
         expires = str(row["expires_at"] or "").strip()
