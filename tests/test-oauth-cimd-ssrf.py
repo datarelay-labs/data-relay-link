@@ -215,6 +215,40 @@ class OAuthCimdSsrfTests(unittest.TestCase):
             with self.assertRaises(ControlPlaneError, msg=uri):
                 self.plane._fetch_cimd_document(uri)
 
+    def test_rejects_identifier_edge_whitespace_and_controls_without_normalizing(self):
+        base = REQUESTED_CIMD_URL
+        padded = [
+            " " + base,
+            base + " ",
+            "\t" + base,
+            base + "\t",
+            "\r" + base,
+            base + "\r",
+            "\n" + base,
+            base + "\n",
+            "\r\n" + base,
+            base + "\r\n",
+            "\x00" + base,
+            base + "\x7f",
+        ]
+        for uri in padded:
+            with self.assertRaises(ControlPlaneError, msg=repr(uri)) as ctx:
+                self.plane._fetch_cimd_document(uri)
+            self.assertIn("whitespace", str(ctx.exception).lower(), msg=repr(uri))
+        # Trailing whitespace still looks like an https client_id; it must not
+        # be stripped into a stored CIMD cache key.
+        with self.assertRaises(ControlPlaneError):
+            self.plane.resolve_oauth_authorize_client(base + " ", "https://example.com/cb")
+        with self.assertRaises(ControlPlaneError):
+            self.plane.resolve_oauth_authorize_client(base + "\t", "https://example.com/cb")
+        with self.assertRaises(ControlPlaneError):
+            self.plane.resolve_oauth_authorize_client(base + "\r\n", "https://example.com/cb")
+        row = self.plane.conn.execute(
+            "SELECT client_id FROM ai_oauth_dcr_clients WHERE client_id = ? OR client_id = ? OR metadata_url = ?",
+            (base, base + " ", base),
+        ).fetchone()
+        self.assertIsNone(row)
+
     def test_rejects_userinfo_fragment_bad_port_and_dot_segments(self):
         for uri in (
             "https://user:pass@example.com/meta.json",
@@ -334,6 +368,14 @@ class OAuthCimdSsrfTests(unittest.TestCase):
             REQUESTED_CIMD_URL, "https://example.com/cb"
         )
         self.assertEqual(resolved["source"], "cimd")
+        self.assertEqual(resolved["client_id"], REQUESTED_CIMD_URL)
+        cached = self.plane.conn.execute(
+            "SELECT client_id, metadata_url FROM ai_oauth_dcr_clients WHERE client_id = ?",
+            (REQUESTED_CIMD_URL,),
+        ).fetchone()
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached["client_id"], REQUESTED_CIMD_URL)
+        self.assertEqual(cached["metadata_url"], REQUESTED_CIMD_URL)
         print("CIMD_SSRF_LITERAL_BLOCKED=PASS")
         print("CIMD_SSRF_MIXED_DNS_REJECTED=PASS")
         print("CIMD_SSRF_REDIRECT_NO_FOLLOW=PASS")

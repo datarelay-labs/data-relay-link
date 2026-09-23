@@ -3401,11 +3401,32 @@ class ControlPlane:
             "SELECT * FROM ai_oauth_dcr_clients WHERE client_id = ?", (client_id,)
         ).fetchone()
 
+    def _cimd_exact_identifier(self, url: str) -> str:
+        """Return the Client Identifier URL unchanged.
+
+        Leading or trailing whitespace/control characters are rejected. The
+        identifier must not be stripped or rewritten before fetch, metadata
+        comparison, or cache keying (simple string comparison).
+        """
+        requested = "" if url is None else str(url)
+        if not requested:
+            return requested
+
+        def _edge_rejected(ch: str) -> bool:
+            code = ord(ch)
+            return ch.isspace() or code < 32 or code == 127
+
+        if _edge_rejected(requested[0]) or _edge_rejected(requested[-1]):
+            raise ControlPlaneError(
+                "CIMD client_id must not include leading or trailing whitespace or control characters"
+            )
+        return requested
+
     def _cimd_validate_request_url(self, url: str):
         """Structurally validate a CIMD metadata URL (https, path, no unsafe authority)."""
         from urllib.parse import urlparse
 
-        text = str(url or "").strip()
+        text = self._cimd_exact_identifier(url)
         if not text:
             raise ControlPlaneError("CIMD client_id must be an https URL with a path")
         if "#" in text:
@@ -3552,7 +3573,7 @@ class ControlPlane:
 
     def _fetch_cimd_document(self, url: str) -> dict:
         """Fetch CIMD JSON with SSRF-safe destination pinning (no redirect follow)."""
-        requested = str(url or "").strip()
+        requested = self._cimd_exact_identifier(url)
         parsed = self._cimd_validate_request_url(requested)
         peers = self._cimd_resolve_validated_ips(parsed.hostname)
         peer = peers[0]
