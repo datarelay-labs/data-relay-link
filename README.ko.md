@@ -267,7 +267,7 @@ RELEASE_CHANNEL=development
 FRP_VERSION=0.71.0
 ```
 
-현재 project version: **2.4.0**  
+현재 project version: **2.4.0**<br>
 현재 pinned FRP version: **v0.71.0**
 
 이 저장소 트리는 branch

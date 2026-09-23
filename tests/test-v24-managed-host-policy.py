@@ -108,7 +108,7 @@ class ManagedHostPolicyTests(unittest.TestCase):
             service_name="ssh",
         )
         proxy = RP.expected_proxy_name("real-e2e-al2023", MID, "rs-ssh-access")
-        # Enrollment-style published name uses historical id when no meta rs remap... 
+        # Enrollment-style published name uses historical id when no meta rs remap...
         # ssh-access has remote_service_meta so proxy id is rs-ssh-access.
         runtime = RP.authorize_remote(
             self.plane, proxy_name=proxy, source_ip="198.51.100.10:9"

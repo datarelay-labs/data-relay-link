@@ -1,9 +1,9 @@
 # Data Relay Link v2.4 — CLI & AI Configuration Master
 
-**Status:** Canonical Source of Truth — Final Implementation Freeze  
-**Scope:** DRLink CLI, Server/Agent roles, Objects/Groups, Access Policy, Remote Service, Relay Host, Fixed TCP, AI Identity, AI-generated CLI, ConfigurationBundle, validation/error/rollback semantics, and end-to-end operator scenarios  
-**Version line:** v2.4  
-**Last updated:** 2026-09-18  
+**Status:** Canonical Source of Truth — Final Implementation Freeze
+**Scope:** DRLink CLI, Server/Agent roles, Objects/Groups, Access Policy, Remote Service, Relay Host, Fixed TCP, AI Identity, AI-generated CLI, ConfigurationBundle, validation/error/rollback semantics, and end-to-end operator scenarios
+**Version line:** v2.4
+**Last updated:** 2026-09-18
 **Revision:** FINAL — implementation-ready simulation PASS
 
 ---

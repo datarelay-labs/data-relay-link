@@ -243,4 +243,3 @@ pq_matrix_platform_gate() {
   done <"$tsv"
   return "$any_fail"
 }
-

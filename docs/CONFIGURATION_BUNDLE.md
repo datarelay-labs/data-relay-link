@@ -1,8 +1,8 @@
 # Data Relay Link v2.4.0 — ConfigurationBundle and AI-Assisted Configuration
 
-> **Document role:** Canonical operator/developer reference for ConfigurationBundle ingestion  
-> **Status:** v2.4 active  
-> **Authority:** `PRODUCT_MASTER.md` and `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md` define public behavior. This document must not redefine those semantics.  
+> **Document role:** Canonical operator/developer reference for ConfigurationBundle ingestion
+> **Status:** v2.4 active
+> **Authority:** `PRODUCT_MASTER.md` and `DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md` define public behavior. This document must not redefine those semantics.
 > **Implementation:** `lib/drlink_v24_bundle.py`
 
 ## 1. Purpose

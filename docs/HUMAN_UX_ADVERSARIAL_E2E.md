@@ -34,11 +34,11 @@ final human smoke validation.
 
 ## Architecture (five layers)
 
-1. **Normal workflow** — lifecycle state machine + happy-path scenarios  
-2. **Adversarial / misuse** — wrong role, typos, duplicates, paste, cancel  
-3. **PTY human input** — Backspace/Enter/Ctrl+C/EOF on real PTYs  
-4. **Cross-output consistency** — extractors + validators across commands  
-5. **First-time user review** — optional LLM over sanitized transcripts  
+1. **Normal workflow** — lifecycle state machine + happy-path scenarios
+2. **Adversarial / misuse** — wrong role, typos, duplicates, paste, cancel
+3. **PTY human input** — Backspace/Enter/Ctrl+C/EOF on real PTYs
+4. **Cross-output consistency** — extractors + validators across commands
+5. **First-time user review** — optional LLM over sanitized transcripts
 
 Layout:
 
@@ -103,10 +103,10 @@ Finding classes: `FUNCTIONAL_FAILURE`, `SECURITY_FAILURE`, `CONTRACT_MISMATCH`,
 
 ## How to add scenarios
 
-1. Choose a stable `HUX-…` ID and domain module under `scenarios/`.  
-2. Use `ScenarioEnv` fixtures (`ensure_server` / `ensure_agent` / `ensure_dual`).  
-3. Assert with `framework.assertions` (classified findings).  
-4. For product-emitted commands, run `command_validator.validate_*`.  
+1. Choose a stable `HUX-…` ID and domain module under `scenarios/`.
+2. Use `ScenarioEnv` fixtures (`ensure_server` / `ensure_agent` / `ensure_dual`).
+3. Assert with `framework.assertions` (classified findings).
+4. For product-emitted commands, run `command_validator.validate_*`.
 5. Re-run `./tests/run-human-ux-e2e.sh --scenario HUX-…`.
 
 ## Deterministic vs LLM review
