@@ -3312,6 +3312,18 @@ class ControlPlane:
         )
         return pid
 
+    def _oauth_loopback_http_host(self, host: str) -> bool:
+        """True only for actual loopback hostnames/addresses (not prefix lookalikes)."""
+        name = str(host or "").strip().lower().rstrip(".")
+        if not name:
+            return False
+        if name == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(name).is_loopback
+        except ValueError:
+            return False
+
     def _validate_oauth_redirect_uri(self, uri: str) -> str:
         text = str(uri or "").strip()
         if not text:
@@ -3321,9 +3333,27 @@ class ControlPlane:
         lower = text.lower()
         if lower.startswith("javascript:") or lower.startswith("data:") or lower.startswith("file:"):
             raise ControlPlaneError("redirect_uri scheme is not allowed")
-        if text.startswith("https://"):
+        from urllib.parse import urlparse
+
+        try:
+            parsed = urlparse(text)
+        except ValueError as exc:
+            raise ControlPlaneError("redirect_uri is malformed") from exc
+        scheme = str(parsed.scheme or "").lower()
+        if scheme == "https":
+            if not parsed.hostname:
+                raise ControlPlaneError("redirect_uri host is required")
+            if parsed.username is not None or parsed.password is not None:
+                raise ControlPlaneError("redirect_uri userinfo is not allowed")
             return text
-        if text.startswith("http://127.0.0.1") or text.startswith("http://localhost") or text.startswith("http://[::1]"):
+        if scheme == "http":
+            host = parsed.hostname
+            if host is None:
+                raise ControlPlaneError("redirect_uri host is required")
+            if parsed.username is not None or parsed.password is not None:
+                raise ControlPlaneError("redirect_uri userinfo is not allowed")
+            if not self._oauth_loopback_http_host(host):
+                raise ControlPlaneError("OAuth redirect URI must be https or loopback http")
             return text
         raise ControlPlaneError("OAuth redirect URI must be https or loopback http")
 
