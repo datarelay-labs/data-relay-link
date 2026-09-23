@@ -54,6 +54,29 @@ OAUTH_ACCESS_TTL = 3600
 OAUTH_REFRESH_TTL = 30 * 24 * 3600
 OAUTH_PENDING_TTL = 600
 OAUTH_MAX_REDIRECTS = 16
+CIMD_FETCH_TIMEOUT = 8
+CIMD_FETCH_MAX_BYTES = 65536
+CIMD_FETCH_MAX_REDIRECTS = 3
+# Extra special-use destinations beyond ipaddress "public" flags (CGNAT, docs, etc.).
+_CIMD_BLOCKED_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "0.0.0.0/8",
+        "100.64.0.0/10",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "240.0.0.0/4",
+        "::ffff:0:0/96",
+        "64:ff9b::/96",
+        "100::/64",
+        "2001::/32",
+        "2001:db8::/32",
+        "2002::/16",
+    )
+)
 FQDN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
 )
@@ -3379,31 +3402,180 @@ class ControlPlane:
             "SELECT * FROM ai_oauth_dcr_clients WHERE client_id = ?", (client_id,)
         ).fetchone()
 
-    def _fetch_cimd_document(self, url: str) -> dict:
-        import urllib.error
-        import urllib.request
+    def _cimd_validate_request_url(self, url: str):
+        """Structurally validate a CIMD metadata URL (https, path, no unsafe authority)."""
+        from urllib.parse import urlparse
 
         text = str(url or "").strip()
-        parsed = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(text)
-        if parsed.scheme != "https" or parsed.path in ("", "/"):
+        if not text:
             raise ControlPlaneError("CIMD client_id must be an https URL with a path")
-        req = urllib.request.Request(
-            text,
-            headers={"Accept": "application/json", "User-Agent": "DataRelayLink-MCP/2.4"},
-            method="GET",
-        )
+        if "#" in text:
+            raise ControlPlaneError("CIMD URL fragment is not allowed")
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                raw = resp.read(65536)
-        except Exception as exc:
+            parsed = urlparse(text)
+        except ValueError as exc:
+            raise ControlPlaneError("CIMD URL is malformed") from exc
+        if str(parsed.scheme or "").lower() != "https":
+            raise ControlPlaneError("CIMD client_id must be an https URL with a path")
+        if parsed.username is not None or parsed.password is not None:
+            raise ControlPlaneError("CIMD URL userinfo is not allowed")
+        if not parsed.hostname:
+            raise ControlPlaneError("CIMD URL host is required")
+        if parsed.path in ("", "/"):
+            raise ControlPlaneError("CIMD client_id must be an https URL with a path")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ControlPlaneError("CIMD URL port is malformed") from exc
+        if port is not None and not (1 <= int(port) <= 65535):
+            raise ControlPlaneError("CIMD URL port is out of range")
+        return parsed
+
+    def _cimd_ip_blocked(self, ip: ipaddress._BaseAddress) -> bool:
+        """Fail closed for loopback/private/link-local/multicast/reserved/special-use."""
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            return self._cimd_ip_blocked(ip.ipv4_mapped)
+        if not is_public_ip(ip.compressed):
+            return True
+        for net in _CIMD_BLOCKED_NETWORKS:
+            if ip in net:
+                return True
+        return False
+
+    def _cimd_resolve_validated_ips(self, hostname: str) -> list[str]:
+        """Resolve hostname and return only destinations safe for outbound CIMD fetch."""
+        import socket
+
+        host = str(hostname or "").strip()
+        if not host:
+            raise ControlPlaneError("CIMD URL host is required")
+        try:
+            literal = ipaddress.ip_address(host)
+        except ValueError:
+            literal = None
+        if literal is not None:
+            if self._cimd_ip_blocked(literal):
+                raise ControlPlaneError("CIMD destination is not allowed")
+            return [literal.compressed]
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except OSError as exc:
             raise ControlPlaneError("CIMD metadata fetch failed") from exc
+        allowed: list[str] = []
+        seen: set[str] = set()
+        for info in infos:
+            addr = info[4][0]
+            try:
+                ip = ipaddress.ip_address(addr)
+            except ValueError:
+                continue
+            if self._cimd_ip_blocked(ip):
+                continue
+            key = ip.compressed
+            if key in seen:
+                continue
+            seen.add(key)
+            allowed.append(key)
+        if not allowed:
+            raise ControlPlaneError("CIMD destination is not allowed")
+        return allowed
+
+    def _cimd_ssl_context(self):
+        import ssl
+
+        return ssl.create_default_context()
+
+    def _cimd_https_get_pinned(self, parsed, peer_ip: str) -> tuple[int, dict[str, str], bytes]:
+        """HTTPS GET connecting only to a previously validated peer IP (anti-rebinding)."""
+        import http.client
+        import socket
+
+        host = str(parsed.hostname or "")
+        port = int(parsed.port or 443)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = "%s?%s" % (path, parsed.query)
+        peer = str(peer_ip or "").strip()
         try:
-            doc = json.loads(raw.decode("utf-8"))
-        except Exception as exc:
-            raise ControlPlaneError("CIMD metadata is not valid JSON") from exc
-        if not isinstance(doc, dict):
-            raise ControlPlaneError("CIMD metadata must be a JSON object")
-        return doc
+            peer_obj = ipaddress.ip_address(peer)
+        except ValueError as exc:
+            raise ControlPlaneError("CIMD destination is not allowed") from exc
+        if self._cimd_ip_blocked(peer_obj):
+            raise ControlPlaneError("CIMD destination is not allowed")
+
+        context = self._cimd_ssl_context()
+        sock = socket.create_connection((peer, port), timeout=CIMD_FETCH_TIMEOUT)
+        try:
+            ssock = context.wrap_socket(sock, server_hostname=host)
+        except Exception:
+            sock.close()
+            raise
+        conn = http.client.HTTPSConnection(host, port, timeout=CIMD_FETCH_TIMEOUT, context=context)
+        conn.sock = ssock
+        try:
+            host_header = host if port == 443 else "%s:%s" % (host, port)
+            conn.request(
+                "GET",
+                path,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "DataRelayLink-MCP/2.4",
+                    "Host": host_header,
+                },
+            )
+            resp = conn.getresponse()
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > CIMD_FETCH_MAX_BYTES:
+                    raise ControlPlaneError("CIMD metadata response too large")
+                chunks.append(chunk)
+            headers = {str(k).lower(): str(v) for k, v in resp.getheaders()}
+            return int(resp.status), headers, b"".join(chunks)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _fetch_cimd_document(self, url: str) -> dict:
+        """Fetch CIMD JSON with SSRF-safe destination pinning and redirect revalidation."""
+        from urllib.parse import urljoin
+
+        current = str(url or "").strip()
+        for _hop in range(CIMD_FETCH_MAX_REDIRECTS + 1):
+            parsed = self._cimd_validate_request_url(current)
+            peers = self._cimd_resolve_validated_ips(parsed.hostname)
+            peer = peers[0]
+            try:
+                status, headers, raw = self._cimd_https_get_pinned(parsed, peer)
+            except ControlPlaneError:
+                raise
+            except Exception as exc:
+                raise ControlPlaneError("CIMD metadata fetch failed") from exc
+            if status in (301, 302, 303, 307, 308):
+                location = headers.get("location")
+                if not location:
+                    raise ControlPlaneError("CIMD metadata fetch failed")
+                current = urljoin(current, location)
+                continue
+            if status != 200:
+                raise ControlPlaneError("CIMD metadata fetch failed")
+            ctype = (headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/json":
+                raise ControlPlaneError("CIMD metadata content-type is not allowed")
+            try:
+                doc = json.loads(raw.decode("utf-8"))
+            except Exception as exc:
+                raise ControlPlaneError("CIMD metadata is not valid JSON") from exc
+            if not isinstance(doc, dict):
+                raise ControlPlaneError("CIMD metadata must be a JSON object")
+            return doc
+        raise ControlPlaneError("CIMD metadata redirect limit exceeded")
 
     def register_oauth_client(self, metadata: dict) -> dict:
         """RFC 7591 Dynamic Client Registration (public clients)."""
