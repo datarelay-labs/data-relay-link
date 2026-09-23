@@ -7,6 +7,19 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 . (Join-Path $PSScriptRoot '_import.ps1')
 
+function Assert-FrpEnrollServicesOmitLocalRdp {
+    param($Services, [string]$Message)
+    foreach ($svc in @($Services)) {
+        if ($null -eq $svc) { continue }
+        foreach ($field in @('id', 'name', 'preset')) {
+            $value = [string]$svc.$field
+            if ($value.Equals('rdp', [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "ASSERT: $Message (services.$field=$value)"
+            }
+        }
+    }
+}
+
 function Install-FrpTestPinnedCa {
     $ecdsa = [System.Security.Cryptography.ECDsa]::Create([System.Security.Cryptography.ECCurve]::CreateFromFriendlyName('nistP256'))
     $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
@@ -72,7 +85,9 @@ try {
     Assert-FrpTrue ($null -ne $script:EnrollBody) '/enroll was called'
     $sent = $script:EnrollBody | ConvertFrom-Json
     Assert-FrpEqual 0 @($sent.services).Count 'empty ticket does not expand services at /enroll'
-    Assert-FrpTrue (-not ($script:EnrollBody -match '(?i)rdp')) 'local service input never reaches the enroll request'
+    # Parsed services only. The enroll body also carries a fresh mgmt_pubkey,
+    # whose Base64 can contain the letters "rdp" without any RDP service.
+    Assert-FrpEnrollServicesOmitLocalRdp $sent.services 'local service input never reaches the enroll request'
 
     $state = Read-FrpClientState
     Assert-FrpTrue ($state.management_only -eq $true) 'client stays management-only'
@@ -99,7 +114,7 @@ try {
     $sent2 = $script:EnrollBody | ConvertFrom-Json
     Assert-FrpEqual 1 @($sent2.services).Count 'ticket service count preserved'
     Assert-FrpEqual 'ssh' ([string]@($sent2.services)[0].id) 'ticket service id preserved'
-    Assert-FrpTrue (-not ($script:EnrollBody -match '(?i)rdp')) 'local service input never appended to ticket scope'
+    Assert-FrpEnrollServicesOmitLocalRdp $sent2.services 'local service input never appended to ticket scope'
 
     # F12: an absent services field is a malformed redeem response; an empty
     # list is a valid management-only ticket.
