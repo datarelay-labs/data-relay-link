@@ -100,6 +100,7 @@ python3 tests/test-oauth-manual-consent-browser.py
 python3 tests/test-oauth-redirect-uri-validation.py
 python3 tests/test-oauth-cimd-ssrf.py
 python3 tests/test-oauth-pending-bounds.py
+python3 tests/test-oauth-trusted-proxy-rate.py
 python3 tests/test-public-cli-grammar-parity.py
 python3 tests/test-public-cli-runtime-matrix.py
 python3 tests/test-lifecycle-cli-ux.py

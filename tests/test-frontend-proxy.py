@@ -103,6 +103,30 @@ def test_backend_identity_ip_and_dns():
             fail('oauth revoke route')
         if 'location = /.well-known/oauth-protected-resource {' not in conf:
             fail('prm route')
+        if '$proxy_add_x_forwarded_for' in conf:
+            fail('forwarded source must be overwritten from $remote_addr')
+        rated = (
+            'location = /mcp {',
+            'location = /.well-known/oauth-protected-resource {',
+            'location = /.well-known/oauth-protected-resource/mcp {',
+            'location = /.well-known/oauth-authorization-server {',
+            'location = /oauth/token {',
+            'location = /oauth/authorize {',
+            'location = /oauth/continue {',
+            'location = /oauth/register {',
+            'location = /register {',
+            'location = /oauth/revoke {',
+        )
+        for marker in rated:
+            start = conf.find(marker)
+            if start < 0:
+                fail('missing location', marker)
+            block = conf[start:conf.find('\n        }', start)]
+            if 'proxy_set_header X-Forwarded-For $remote_addr;' not in block:
+                fail('location missing trusted X-Forwarded-For', marker)
+            if 'proxy_set_header X-Real-IP $remote_addr;' not in block:
+                fail('location missing trusted X-Real-IP', marker)
+        pass_('NGINX_OAUTH_TRUSTED_SOURCE_HEADERS')
         pass_('NGINX_BACKEND_DNS_IDENTITY')
         pass_('NGINX_NO_PUBLIC_IP_PROXY_SSL_NAME')
         pass_('NGINX_BACKEND_VERIFY_ON')

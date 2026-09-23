@@ -59,10 +59,11 @@ PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion"
 CLIENT_CAPS_META = "io.modelcontextprotocol/clientCapabilities"
 NAME_BEARING = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 OAUTH_TOOL_SECURITY_SCHEMES = ({"type": "oauth2", "scopes": ["drlink.ai"]},)
-# Public GET /oauth/authorize creates pending state. Bound creation rate per trusted
-# source. Peer address is the source unless the TCP peer is loopback, in which case
-# the local reverse proxy's X-Forwarded-For / X-Real-IP is accepted. Forwarded
-# headers from any other peer are ignored.
+# Public MCP/OAuth rate limits and authorize admission key on a trusted source.
+# Peer address is the source unless the TCP peer is loopback, in which case the
+# local reverse proxy's X-Forwarded-For / X-Real-IP is accepted. Those headers
+# must be overwritten by nginx from $remote_addr. Forwarded headers from any
+# other peer are ignored.
 OAUTH_AUTHORIZE_RATE_LIMIT = 12
 OAUTH_AUTHORIZE_RATE_WINDOW_S = 60
 
@@ -74,6 +75,19 @@ def trusted_oauth_source(peer: str, headers) -> str:
     TCP peer is loopback. Any other peer is the source itself.
     """
     return str(request_source_ip(peer, headers) or "")
+
+
+def public_rate_source(peer: str, headers) -> str:
+    """Rate-limit identity for public MCP/OAuth surfaces.
+
+    Same trusted-peer rule as authorize admission. An empty identity falls back
+    to the socket peer so the bucket stays finite.
+    """
+    source = trusted_oauth_source(peer, headers)
+    if source:
+        return source
+    text = str(peer or "").strip()
+    return text or "unknown"
 
 # name, title, description, props, annotations
 TOOL_DEFS = (
@@ -980,7 +994,9 @@ def make_handler(bridge: MCPBridge):
         def _rate_limited(
             self, bucket: str, *, limit: int = 60, window_s: int = 60, source: Optional[str] = None
         ) -> bool:
-            key = "%s:%s" % (bucket, self._client_addr() if source is None else source)
+            if source is None:
+                source = public_rate_source(self._client_addr(), self.headers)
+            key = "%s:%s" % (bucket, source)
             now = time.time()
             with bridge._lock:
                 hits = getattr(bridge, "_rate_hits", None)
