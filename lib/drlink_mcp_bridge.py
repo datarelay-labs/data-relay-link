@@ -31,6 +31,7 @@ from drlink_control_plane import (
     MCP_AUTH_MODEL,
     OAuthPendingCapacityError,
 )
+from frp_client_registry import request_source_ip
 import drlink_v24 as v24
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
@@ -58,6 +59,21 @@ PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion"
 CLIENT_CAPS_META = "io.modelcontextprotocol/clientCapabilities"
 NAME_BEARING = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 OAUTH_TOOL_SECURITY_SCHEMES = ({"type": "oauth2", "scopes": ["drlink.ai"]},)
+# Public GET /oauth/authorize creates pending state. Bound creation rate per trusted
+# source. Peer address is the source unless the TCP peer is loopback, in which case
+# the local reverse proxy's X-Forwarded-For / X-Real-IP is accepted. Forwarded
+# headers from any other peer are ignored.
+OAUTH_AUTHORIZE_RATE_LIMIT = 12
+OAUTH_AUTHORIZE_RATE_WINDOW_S = 60
+
+
+def trusted_oauth_source(peer: str, headers) -> str:
+    """Admission source for public OAuth authorize.
+
+    Uses the repository trusted-peer rule: forwarded headers count only when the
+    TCP peer is loopback. Any other peer is the source itself.
+    """
+    return str(request_source_ip(peer, headers) or "")
 
 # name, title, description, props, annotations
 TOOL_DEFS = (
@@ -958,8 +974,13 @@ def make_handler(bridge: MCPBridge):
             except Exception:
                 return "unknown"
 
-        def _rate_limited(self, bucket: str, *, limit: int = 60, window_s: int = 60) -> bool:
-            key = "%s:%s" % (bucket, self._client_addr())
+        def _trusted_oauth_source(self) -> str:
+            return trusted_oauth_source(self._client_addr(), self.headers)
+
+        def _rate_limited(
+            self, bucket: str, *, limit: int = 60, window_s: int = 60, source: Optional[str] = None
+        ) -> bool:
+            key = "%s:%s" % (bucket, self._client_addr() if source is None else source)
             now = time.time()
             with bridge._lock:
                 hits = getattr(bridge, "_rate_hits", None)
@@ -1002,6 +1023,30 @@ def make_handler(bridge: MCPBridge):
                 self._send(200, bridge.as_metadata(self.headers), extra_headers=self._public_cors())
                 return
             if parsed.path == "/oauth/authorize":
+                source = self._trusted_oauth_source()
+                if not source:
+                    self._send(
+                        503,
+                        {
+                            "error": "temporarily_unavailable",
+                            "error_description": "authorization source unavailable",
+                        },
+                    )
+                    return
+                if self._rate_limited(
+                    "authorize",
+                    limit=OAUTH_AUTHORIZE_RATE_LIMIT,
+                    window_s=OAUTH_AUTHORIZE_RATE_WINDOW_S,
+                    source=source,
+                ):
+                    self._send(
+                        429,
+                        {
+                            "error": "temporarily_unavailable",
+                            "error_description": "authorization rate limit exceeded; retry later",
+                        },
+                    )
+                    return
                 qs = parse_qs(parsed.query)
                 fields = {k: (v[0] if v else "") for k, v in qs.items()}
                 if str(fields.get("code_challenge_method") or "S256") != "S256":
@@ -1015,6 +1060,7 @@ def make_handler(bridge: MCPBridge):
                         code_challenge=str(fields.get("code_challenge") or ""),
                         resource=resource,
                         state=str(fields.get("state") or ""),
+                        source=source,
                     )
                 except OAuthPendingCapacityError as exc:
                     self._send(

@@ -43,7 +43,7 @@ class OAuthPendingCapacityError(ControlPlaneError):
     oauth_error = "temporarily_unavailable"
 
     def __init__(self, scope: str):
-        if scope not in ("client", "global"):
+        if scope not in ("client", "source", "global"):
             raise ValueError("invalid OAuth pending capacity scope: %s" % scope)
         self.scope = scope
         super().__init__(
@@ -70,6 +70,8 @@ OAUTH_PENDING_TTL = 600
 OAUTH_MAX_REDIRECTS = 16
 # Live (unexpired) authorization transactions. Expired rows are reclaimed on admission.
 OAUTH_PENDING_MAX_PER_CLIENT = 16
+# One trusted admission source cannot consume the global pool by rotating clients.
+OAUTH_PENDING_MAX_PER_SOURCE = 32
 OAUTH_PENDING_MAX_GLOBAL = 128
 CIMD_FETCH_TIMEOUT = 8
 CIMD_FETCH_MAX_BYTES = 5 * 1024  # IETF CIMD draft recommended maximum
@@ -3808,7 +3810,16 @@ class ControlPlane:
 
         return self._mutate("system credential configure ai-principal %s oauth-redirect" % name, "configure credential", write)
 
-    def create_oauth_pending(self, *, client_id: str, redirect_uri: str, code_challenge: str, resource: str, state: str = "") -> dict:
+    def create_oauth_pending(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        code_challenge: str,
+        resource: str,
+        state: str = "",
+        source: str = "",
+    ) -> dict:
         if not code_challenge:
             raise ControlPlaneError("code_challenge is required")
         # CIMD metadata is fetched before the DB lock so a slow peer cannot stall admission.
@@ -3822,6 +3833,9 @@ class ControlPlane:
         completion_token = secrets.token_urlsafe(32)
         now = utc_now_iso()
         expires_at = self._iso_plus_seconds(OAUTH_PENDING_TTL)
+        # Public authorize passes the trusted request source. Empty means a non-HTTP
+        # caller; those admissions stay under the per-client and global caps only.
+        admission_source = str(source or "").strip()
         with self._db_lock:
             resolved = self.resolve_oauth_authorize_client(
                 client_id, redirect_uri, _cimd_doc=cimd_doc
@@ -3835,16 +3849,33 @@ class ControlPlane:
                         (client_id,),
                     ).fetchone()["n"]
                 )
+                per_source = 0
+                if admission_source:
+                    per_source = int(
+                        self.conn.execute(
+                            "SELECT COUNT(*) AS n FROM ai_oauth_pending WHERE source_addr = ?",
+                            (admission_source,),
+                        ).fetchone()["n"]
+                    )
                 total = int(self.conn.execute("SELECT COUNT(*) AS n FROM ai_oauth_pending").fetchone()["n"])
-                if per_client >= OAUTH_PENDING_MAX_PER_CLIENT or total >= OAUTH_PENDING_MAX_GLOBAL:
+                if (
+                    per_client >= OAUTH_PENDING_MAX_PER_CLIENT
+                    or (admission_source and per_source >= OAUTH_PENDING_MAX_PER_SOURCE)
+                    or total >= OAUTH_PENDING_MAX_GLOBAL
+                ):
                     # Persist expiry reclamation even when the new row is refused.
                     self._commit_open_transaction()
-                    scope = "client" if per_client >= OAUTH_PENDING_MAX_PER_CLIENT else "global"
+                    if per_client >= OAUTH_PENDING_MAX_PER_CLIENT:
+                        scope = "client"
+                    elif admission_source and per_source >= OAUTH_PENDING_MAX_PER_SOURCE:
+                        scope = "source"
+                    else:
+                        scope = "global"
                     raise OAuthPendingCapacityError(scope)
                 self.conn.execute(
                     "INSERT INTO ai_oauth_pending(id, principal_id, client_id, redirect_uri, code_challenge, resource, state, "
-                    "created_at, completion_token, status, expires_at, decision_at, consumed_at, code_plain) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '', '', '')",
+                    "created_at, completion_token, status, expires_at, decision_at, consumed_at, code_plain, source_addr) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '', '', '', ?)",
                     (
                         pending_id,
                         resolved["principal_id"],
@@ -3856,6 +3887,7 @@ class ControlPlane:
                         now,
                         completion_token,
                         expires_at,
+                        admission_source,
                     ),
                 )
                 self._commit_open_transaction()

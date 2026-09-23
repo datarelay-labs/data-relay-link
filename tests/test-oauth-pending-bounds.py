@@ -24,11 +24,18 @@ from drlink_control_cli import dispatch  # noqa: E402
 from drlink_control_plane import (  # noqa: E402
     OAUTH_PENDING_MAX_GLOBAL,
     OAUTH_PENDING_MAX_PER_CLIENT,
+    OAUTH_PENDING_MAX_PER_SOURCE,
     OAUTH_PENDING_TTL,
     ControlPlane,
     OAuthPendingCapacityError,
 )
-from drlink_mcp_bridge import MCPBridge, make_handler  # noqa: E402
+from drlink_mcp_bridge import (  # noqa: E402
+    OAUTH_AUTHORIZE_RATE_LIMIT,
+    OAUTH_AUTHORIZE_RATE_WINDOW_S,
+    MCPBridge,
+    make_handler,
+    trusted_oauth_source,
+)
 
 REDIRECT = "http://127.0.0.1/callback"
 CHALLENGE = "pending-bounds-challenge"
@@ -85,13 +92,14 @@ class OAuthPendingBoundsTests(unittest.TestCase):
             root=self.tmp,
         )
 
-    def _create(self, client: str, state: str = "s") -> dict:
+    def _create(self, client: str, state: str = "s", source: str = "") -> dict:
         return self.plane.create_oauth_pending(
             client_id=client,
             redirect_uri=REDIRECT,
             code_challenge=CHALLENGE,
             resource=RESOURCE,
             state=state,
+            source=source,
         )
 
     def _live_ids(self, client: str | None = None) -> list[str]:
@@ -106,6 +114,19 @@ class OAuthPendingBoundsTests(unittest.TestCase):
 
     def _fill(self, client: str, n: int) -> list[dict]:
         return [self._create(client, state="fill-%s-%s" % (client, i)) for i in range(n)]
+
+    def _fill_source(self, client: str, source: str, n: int) -> list[dict]:
+        return [
+            self._create(client, state="src-%s-%s-%s" % (source, client, i), source=source)
+            for i in range(n)
+        ]
+
+    def _live_ids_for_source(self, source: str) -> list[str]:
+        rows = self.plane.conn.execute(
+            "SELECT id, expires_at FROM ai_oauth_pending WHERE source_addr = ?",
+            (source,),
+        ).fetchall()
+        return [row["id"] for row in rows if not self.plane._oauth_pending_expired(row)]
 
     def _insert_raw(self, *, client: str, principal_id: str, expires_at: str, status: str = "pending", code_plain: str = "", pending_id: str | None = None) -> str:
         pending_id = pending_id or ("oap_raw_%s" % secrets_token())
@@ -333,6 +354,107 @@ class OAuthPendingBoundsTests(unittest.TestCase):
         self.assertEqual(len(scopes2), racers - room)
         self.assertTrue(all(scope == "global" for scope in scopes2))
         self.assertEqual(len(self._live_ids()), OAUTH_PENDING_MAX_GLOBAL)
+
+    def test_source_cap_across_clients_recovers_after_expiry(self):
+        self._stage("agent-b")
+        self._stage("agent-c")
+        source = "198.51.100.9"
+        other = "198.51.100.10"
+        self._fill_source("agent-a", source, OAUTH_PENDING_MAX_PER_CLIENT)
+        filled_b = self._fill_source("agent-b", source, OAUTH_PENDING_MAX_PER_CLIENT)
+        self.assertEqual(OAUTH_PENDING_MAX_PER_CLIENT * 2, OAUTH_PENDING_MAX_PER_SOURCE)
+        with self.assertRaises(OAuthPendingCapacityError) as ctx:
+            self._create("agent-c", state="same-source-over", source=source)
+        self.assertEqual(ctx.exception.scope, "source")
+        self.assertEqual(ctx.exception.oauth_error, "temporarily_unavailable")
+        admitted = self._create("agent-c", state="other-source", source=other)
+        self.assertTrue(admitted["id"])
+        self.assertEqual(
+            len(self._live_ids_for_source(source)),
+            OAUTH_PENDING_MAX_PER_SOURCE,
+        )
+        self.plane.conn.execute(
+            "UPDATE ai_oauth_pending SET expires_at = ? WHERE id = ?",
+            (_past(), filled_b[0]["id"]),
+        )
+        recovered = self._create("agent-c", state="after-source-expiry", source=source)
+        self.assertIn(recovered["id"], self._live_ids_for_source(source))
+        self.assertEqual(
+            len(self._live_ids_for_source(source)),
+            OAUTH_PENDING_MAX_PER_SOURCE,
+        )
+        stored = self.plane.conn.execute(
+            "SELECT source_addr FROM ai_oauth_pending WHERE id = ?",
+            (recovered["id"],),
+        ).fetchone()["source_addr"]
+        self.assertEqual(stored, source)
+
+    def test_forwarded_headers_do_not_retarget_non_loopback_source(self):
+        spoofed = {"X-Forwarded-For": "198.51.100.9", "X-Real-IP": "198.51.100.8"}
+        self.assertEqual(trusted_oauth_source("203.0.113.10", spoofed), "203.0.113.10")
+        self.assertEqual(trusted_oauth_source("127.0.0.1", spoofed), "198.51.100.9")
+        self.assertEqual(
+            trusted_oauth_source("127.0.0.1", {"X-Forwarded-For": "not-an-ip"}),
+            "127.0.0.1",
+        )
+        self.assertEqual(trusted_oauth_source("::1", {"X-Real-IP": "2001:db8::1"}), "2001:db8::1")
+
+    def test_authorize_http_rate_limit_same_source_distinct_source_recovers(self):
+        self._stage("agent-b")
+        port = free_port()
+        bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(bridge))
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        bridge.listen_host = "127.0.0.1"
+        bridge.listen_port = port
+
+        def authorize(client: str, state: str, forwarded: str | None = None) -> int:
+            query = urllib.parse.urlencode(
+                {
+                    "client_id": client,
+                    "redirect_uri": REDIRECT,
+                    "code_challenge": CHALLENGE,
+                    "code_challenge_method": "S256",
+                    "resource": bridge.canonical_resource(),
+                    "state": state,
+                }
+            )
+            url = "http://127.0.0.1:%s/oauth/authorize?%s" % (port, query)
+            headers = {}
+            if forwarded:
+                headers["X-Forwarded-For"] = forwarded
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return resp.status
+            except urllib.error.HTTPError as exc:
+                body = json.loads(exc.read().decode("utf-8"))
+                self.assertEqual(body["error"], "temporarily_unavailable")
+                return exc.code
+
+        try:
+            codes = [
+                authorize("agent-a", "burst-%s" % i)
+                for i in range(OAUTH_AUTHORIZE_RATE_LIMIT)
+            ]
+            self.assertTrue(all(code == 200 for code in codes))
+            self.assertEqual(authorize("agent-b", "same-source-next"), 429)
+            self.assertEqual(len(self._live_ids()), OAUTH_AUTHORIZE_RATE_LIMIT)
+            self.assertEqual(len(self._live_ids("agent-b")), 0)
+            distinct = authorize("agent-b", "other-source", forwarded="198.51.100.20")
+            self.assertEqual(distinct, 200)
+            self.assertEqual(len(self._live_ids("agent-b")), 1)
+            key = "authorize:127.0.0.1"
+            self.assertIn(key, bridge._rate_hits)
+            bridge._rate_hits[key][0] = 0
+            self.assertGreater(OAUTH_AUTHORIZE_RATE_WINDOW_S, 0)
+            recovered = authorize("agent-b", "after-window")
+            self.assertEqual(recovered, 200)
+            self.assertEqual(len(self._live_ids_for_source("127.0.0.1")), OAUTH_AUTHORIZE_RATE_LIMIT + 1)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
     def test_authorize_http_returns_stable_capacity_error(self):
         self._fill("agent-a", OAUTH_PENDING_MAX_PER_CLIENT)

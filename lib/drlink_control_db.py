@@ -501,6 +501,7 @@ CREATE TABLE ai_oauth_pending (
   decision_at TEXT NOT NULL DEFAULT '',
   consumed_at TEXT NOT NULL DEFAULT '',
   code_plain TEXT NOT NULL DEFAULT '',
+  source_addr TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
 );
 
@@ -652,6 +653,7 @@ CREATE TABLE IF NOT EXISTS ai_oauth_pending (
   decision_at TEXT NOT NULL DEFAULT '',
   consumed_at TEXT NOT NULL DEFAULT '',
   code_plain TEXT NOT NULL DEFAULT '',
+  source_addr TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (principal_id) REFERENCES ai_principals(id)
 );
 CREATE TABLE IF NOT EXISTS ai_oauth_dcr_clients (
@@ -762,12 +764,17 @@ def ensure_oauth_pending_completion_schema(conn: sqlite3.Connection) -> None:
         ("decision_at", "ALTER TABLE ai_oauth_pending ADD COLUMN decision_at TEXT NOT NULL DEFAULT ''"),
         ("consumed_at", "ALTER TABLE ai_oauth_pending ADD COLUMN consumed_at TEXT NOT NULL DEFAULT ''"),
         ("code_plain", "ALTER TABLE ai_oauth_pending ADD COLUMN code_plain TEXT NOT NULL DEFAULT ''"),
+        ("source_addr", "ALTER TABLE ai_oauth_pending ADD COLUMN source_addr TEXT NOT NULL DEFAULT ''"),
     ):
         if name not in cols:
             conn.execute(ddl)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ai_oauth_pending_completion_token "
         "ON ai_oauth_pending(completion_token)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_oauth_pending_source_addr "
+        "ON ai_oauth_pending(source_addr)"
     )
 
 
