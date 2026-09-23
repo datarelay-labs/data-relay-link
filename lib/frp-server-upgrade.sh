@@ -213,6 +213,33 @@ print(h.hexdigest())
 PY
 }
 
+frp_server_local_source_tree_digest() {
+  # Local --source build identity only. Hash staged content and paths relative
+  # to the staging root so a new temporary directory does not change identity.
+  # Protected-state comparisons keep frp_server_upgrade_tree_digest().
+  python3 - "$@" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+h = hashlib.sha256()
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    if not path.is_dir():
+        raise SystemExit("local-source digest requires a staging directory")
+    h.update(b"D")
+    files = sorted(
+        (p for p in path.rglob("*") if p.is_file()),
+        key=lambda p: p.relative_to(path).as_posix(),
+    )
+    for child in files:
+        rel = child.relative_to(path).as_posix()
+        h.update((rel + "\0").encode())
+        h.update(child.read_bytes())
+print(h.hexdigest())
+PY
+}
+
 frp_server_upgrade_preserved_digest() {
   # Include every manifest "protected" path under /var/lib/drlink plus
   # runtime binaries/config that must survive project-update. Deriving the
@@ -312,7 +339,7 @@ frp_server_target_build_identity() {
   fi
   # Local --source (tests/development): staged project-tree digest is
   # build identity only. It is not a substitute for SHA256SUMS verification.
-  frp_server_upgrade_tree_digest "$staged"
+  frp_server_local_source_tree_digest "$staged"
 }
 
 frp_server_report_identity() {

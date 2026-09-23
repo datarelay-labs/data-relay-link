@@ -938,4 +938,110 @@ grep -q 'Client re-enroll: NOT REQUIRED' "$WORKDIR/rb-oauth.out" &&
   fail "failed update reported re-enroll success"
 pass "PROJECT_UPDATE_MCP_FRONTEND_ROLLBACK_RUNTIME"
 
+# Local-source identity is a separate helper. Generic/protected digests stay
+# path-qualified so preserved-state comparisons are unchanged.
+# shellcheck disable=SC1091
+. "$ROOT/lib/frp-server-upgrade.sh"
+python3 - "$ROOT/lib/frp-server-upgrade.sh" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+preserved = text.split("frp_server_upgrade_preserved_digest()", 1)[1].split(
+    "frp_server_upgrade_allocator_port()", 1
+)[0]
+if "frp_server_upgrade_tree_digest" not in preserved:
+    raise SystemExit("preserved digest no longer uses generic tree digest")
+if "frp_server_local_source_tree_digest" in preserved:
+    raise SystemExit("preserved digest uses local-source identity helper")
+identity = text.split("frp_server_target_build_identity()", 1)[1].split(
+    "frp_server_report_identity()", 1
+)[0]
+if "frp_server_verified_bundle_sha256" not in identity:
+    raise SystemExit("target identity dropped verified bundle SHA")
+if "frp_server_local_source_tree_digest" not in identity:
+    raise SystemExit("local-source fallback is not the scoped helper")
+if "frp_server_upgrade_tree_digest" in identity:
+    raise SystemExit("local-source fallback still uses generic tree digest")
+PY
+STAGE_A="$(mktemp -d "$WORKDIR/stage-a.XXXXXX")"
+STAGE_B="$(mktemp -d "$WORKDIR/stage-b.XXXXXX")"
+mkdir -p "$STAGE_A/usr/local/lib/drlink" "$STAGE_B/usr/local/lib/drlink"
+printf 'same-bytes\n' >"$STAGE_A/usr/local/lib/drlink/marker.txt"
+printf 'same-bytes\n' >"$STAGE_B/usr/local/lib/drlink/marker.txt"
+GENERIC_A="$(frp_server_upgrade_tree_digest "$STAGE_A")"
+GENERIC_B="$(frp_server_upgrade_tree_digest "$STAGE_B")"
+[[ "$GENERIC_A" != "$GENERIC_B" ]] || fail "generic digest ignored distinct staging paths"
+LOCAL_A="$(frp_server_local_source_tree_digest "$STAGE_A")"
+LOCAL_B="$(frp_server_local_source_tree_digest "$STAGE_B")"
+[[ "$LOCAL_A" == "$LOCAL_B" ]] || fail "local-source digest changed with staging root"
+[[ "$LOCAL_A" != "$GENERIC_A" ]] || fail "local-source digest collapsed to generic path digest"
+unset FRP_BUNDLE_SHA256
+[[ "$(frp_server_target_build_identity "$STAGE_A")" == "$LOCAL_A" ]] ||
+  fail "local fallback did not use scoped digest"
+[[ "$(frp_server_target_build_identity "$STAGE_B")" == "$LOCAL_A" ]] ||
+  fail "local fallback identity drifted across staging roots"
+printf 'different-bytes\n' >"$STAGE_B/usr/local/lib/drlink/marker.txt"
+[[ "$(frp_server_local_source_tree_digest "$STAGE_B")" != "$LOCAL_A" ]] ||
+  fail "content change did not change local-source digest"
+PROD_DIRECT_SHA="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+PROD_DIRECT_GOT="$(FRP_BUNDLE_SHA256="$PROD_DIRECT_SHA" frp_server_target_build_identity "$STAGE_A")"
+[[ "$PROD_DIRECT_GOT" == "$PROD_DIRECT_SHA" ]] ||
+  fail "FRP_BUNDLE_SHA256 did not override local-source digest"
+pass "LOCAL_SOURCE_TREE_DIGEST_STAGING_ROOT_INDEPENDENT"
+pass "GENERIC_TREE_DIGEST_PATH_SEMANTICS_PRESERVED"
+
+bundle_field() {
+  sed -n "s/^$1 *: *//p" "$2" | head -n 1
+}
+
+IDENT="$WORKDIR/local-source-identity"
+setup_tree "$IDENT"
+IDENT_STATE="$(state_digest "$IDENT")"
+env -u FRP_BUNDLE_SHA256 FRP_SERVER_TEST_ROOT="$IDENT" FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  "$UPDATE" --source "$ROOT" --check >"$WORKDIR/local-id-check.out" || fail "local-source identity --check"
+CHECK_BUNDLE="$(bundle_field 'Target bundle SHA256' "$WORKDIR/local-id-check.out")"
+[[ "$CHECK_BUNDLE" =~ ^[0-9a-f]{64}$ ]] || fail "local-source check bundle missing"
+env -u FRP_BUNDLE_SHA256 FRP_SERVER_TEST_ROOT="$IDENT" FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  "$UPDATE" --source "$ROOT" >"$WORKDIR/local-id-apply.out" || fail "local-source identity apply"
+APPLY_BUNDLE="$(bundle_field 'Bundle SHA256' "$WORKDIR/local-id-apply.out")"
+INSTALLED_BUNDLE="$(sed -n 's/^BUNDLE_SHA256=//p' "$IDENT/etc/drlink/version" | head -n 1)"
+[[ "$APPLY_BUNDLE" == "$CHECK_BUNDLE" ]] || fail "check/apply bundle identity mismatch"
+[[ "$INSTALLED_BUNDLE" == "$CHECK_BUNDLE" ]] || fail "installed bundle identity mismatch"
+[[ "$(state_digest "$IDENT")" == "$IDENT_STATE" ]] || fail "local-source identity apply changed protected state"
+grep -q 'Client re-enroll: NOT REQUIRED' "$WORKDIR/local-id-apply.out" || fail "local-source identity re-enroll"
+pass "LOCAL_SOURCE_CHECK_APPLY_IDENTITY_PARITY"
+
+IDENT_VER="$(sha "$IDENT/etc/drlink/version")"
+IDENT_BACKUPS="$(find "$IDENT/var/lib/drlink/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+env -u FRP_BUNDLE_SHA256 FRP_SERVER_TEST_ROOT="$IDENT" FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  "$UPDATE" --source "$ROOT" --check >"$WORKDIR/local-id-check2.out" || fail "second local-source --check"
+grep -q 'Update                    : not needed' "$WORKDIR/local-id-check2.out" || fail "second local-source check needed"
+grep -q 'State mutation             : NO' "$WORKDIR/local-id-check2.out" || fail "second local-source check mutation"
+[[ "$(bundle_field 'Target bundle SHA256' "$WORKDIR/local-id-check2.out")" == "$CHECK_BUNDLE" ]] ||
+  fail "second local-source check bundle drifted"
+env -u FRP_BUNDLE_SHA256 FRP_SERVER_TEST_ROOT="$IDENT" FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  "$UPDATE" --source "$ROOT" >"$WORKDIR/local-id-apply2.out" || fail "second local-source apply"
+grep -q 'Update                    : not needed' "$WORKDIR/local-id-apply2.out" || fail "second local-source apply needed"
+grep -q 'State mutation             : NO' "$WORKDIR/local-id-apply2.out" || fail "second local-source apply mutation"
+if grep -q 'Server project update completed successfully' "$WORKDIR/local-id-apply2.out"; then
+  fail "second local-source apply mutated"
+fi
+[[ "$(sha "$IDENT/etc/drlink/version")" == "$IDENT_VER" ]] || fail "second local-source apply rewrote version"
+[[ "$(find "$IDENT/var/lib/drlink/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" == "$IDENT_BACKUPS" ]] ||
+  fail "second local-source apply created snapshot"
+[[ ! -f "$IDENT/var/lib/drlink/server-update-pending.json" ]] || fail "second local-source apply left txn marker"
+[[ "$(state_digest "$IDENT")" == "$IDENT_STATE" ]] || fail "second local-source apply changed protected state"
+pass "LOCAL_SOURCE_SAME_BUILD_NO_MUTATION"
+
+# Production remote identity stays the verified SHA256SUMS digest.
+PROD_SHA="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+PROD="$WORKDIR/prod-sha-identity"
+setup_tree "$PROD"
+env FRP_SERVER_TEST_ROOT="$PROD" FRP_BUNDLE_SHA256="$PROD_SHA" FRP_RELEASE_CHANNEL="$TREE_CHANNEL" \
+  "$UPDATE" --source "$ROOT" --check >"$WORKDIR/prod-sha-check.out" || fail "verified sha --check"
+[[ "$(bundle_field 'Target bundle SHA256' "$WORKDIR/prod-sha-check.out")" == "$PROD_SHA" ]] ||
+  fail "verified SHA256SUMS identity was replaced by tree digest"
+[[ "$PROD_SHA" != "$CHECK_BUNDLE" ]] || fail "fixture SHA collided with local tree digest"
+pass "PRODUCTION_BUNDLE_SHA256_IDENTITY_UNCHANGED"
+
 echo "SERVER_PROJECT_UPDATE_TESTS=PASS"
