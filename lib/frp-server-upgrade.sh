@@ -18,6 +18,26 @@ FRP_ALLOCATOR_RUNTIME_HELPERS=(
   drlink_upgrade_reconcile.py
   drlink_qualified_artifacts.py
 )
+# Long-running drlink-mcp-bridge import closure. A project update must restart
+# the bridge when any of these files change; the process keeps them in memory.
+# Launcher server/drlink-mcp-bridge.py loads lib/drlink_mcp_bridge.py, which
+# imports drlink_ai_agent, drlink_control_db, drlink_control_plane,
+# frp_client_registry, and drlink_v24. OAuth/MCP request paths in those modules
+# also import drlink_mcp_tls, frp_server_config, drlink_mgmt_sync, and
+# drlink_upgrade_reconcile.
+FRP_MCP_BRIDGE_RUNTIME_HELPERS=(
+  drlink_mcp_bridge.py
+  drlink-mcp-bridge.py
+  drlink_ai_agent.py
+  drlink_control_db.py
+  drlink_control_plane.py
+  frp_client_registry.py
+  drlink_v24.py
+  drlink_mcp_tls.py
+  frp_server_config.py
+  drlink_mgmt_sync.py
+  drlink_upgrade_reconcile.py
+)
 _FRP_UPGRADE_MUTATION_STARTED=0
 _FRP_UPGRADE_ROLLBACK_DONE=0
 _FRP_UPGRADE_ROLLBACK_RC=0
@@ -349,6 +369,64 @@ frp_server_upgrade_changed() {
      "$(frp_file_sha256 "$(frp_server_fs "/${rel}")")" ]]
 }
 
+# True when the unit has not loaded the current file bytes.
+# A missing stamp means a process started before generation tracking, which
+# is the stale public runtime this update must replace. Matching bytes are
+# current even when the install rewrote the file and refreshed its mtime.
+frp_server_unit_runtime_stale() {
+  local unit="$1" file="$2" stamp got want
+  [[ -f "$file" ]] || return 1
+  if ! frp_server_skip_systemd && ! frp_server_test_mode; then
+    if ! frp_server_systemctl is-active --quiet "$unit"; then
+      return 0
+    fi
+  fi
+  stamp="$(frp_server_fs "/var/lib/drlink/runtime-active/${unit}.sha")"
+  [[ -f "$stamp" ]] || return 0
+  got="$(tr -d '[:space:]' <"$stamp")"
+  want="$(frp_file_sha256 "$file")"
+  [[ -n "$got" && "$got" == "$want" ]] && return 1
+  return 0
+}
+
+# Regenerate the project-owned single-443 frontend from the current generator.
+# Activate only after validation. Identical output does not reload nginx unless
+# the running frontend is older than the config it should be serving.
+frp_server_upgrade_converge_frontend() {
+  local live candidate
+  frp_server_upgrade_is_single443 || return 0
+  if ! declare -F write_frontend_config >/dev/null 2>&1; then
+    echo "ERROR: frontend generator is not available" >&2
+    return 1
+  fi
+  live="$(frp_server_fs /etc/drlink/frontend.conf)"
+  candidate="$(mktemp)"
+  if ! write_frontend_config "$candidate"; then
+    rm -f "$candidate"
+    echo "ERROR: frontend configuration could not be generated" >&2
+    return 1
+  fi
+  if [[ -f "$live" ]] && cmp -s "$candidate" "$live"; then
+    rm -f "$candidate"
+    if frp_server_unit_runtime_stale drlink-frontend "$live"; then
+      restart_frontend=1
+    fi
+    return 0
+  fi
+  if ! frp_frontend_validate_config "$candidate"; then
+    rm -f "$candidate"
+    echo "ERROR: generated frontend configuration is invalid; it was not activated" >&2
+    return 1
+  fi
+  frp_atomic_install "$candidate" "$live" 0600 || {
+    rm -f "$candidate"
+    return 1
+  }
+  rm -f "$candidate"
+  restart_frontend=1
+  return 0
+}
+
 frp_server_upgrade_post_mutation_guard() {
   [[ "${FRP_SERVER_UPGRADE_HOOK_FAIL:-}" == "unbound-after-install" ]] || return 0
   echo "ERROR: simulated unexpected post-mutation abort" >&2
@@ -406,6 +484,9 @@ frp_server_upgrade_verify_rollback_health() {
   frp_server_health_frps || return 1
   frp_server_health_allocator "$(frp_server_upgrade_allocator_port)" || return 1
   frp_server_health_access || return 1
+  if [[ -f "$(frp_server_fs /etc/systemd/system/drlink-mcp-bridge.service)" ]]; then
+    frp_server_health_mcp_bridge || return 1
+  fi
   if declare -F frp_server_health_egress >/dev/null 2>&1; then
     frp_server_health_egress || return 1
   fi
@@ -449,12 +530,12 @@ frp_server_upgrade_restore_snapshot_files() {
     py="$(frp_server_fs /usr/local/lib/drlink/frp_install_txn.py)"
   fi
   python3 "$py" restore --root "$(frp_server_snapshot_root)" --dest "$dest" || return 1
-  if frp_server_skip_systemd || frp_server_test_mode; then
-    return 0
+  if ! frp_server_skip_systemd && ! frp_server_test_mode; then
+    frp_server_systemctl daemon-reload || true
   fi
-  frp_server_systemctl daemon-reload || true
   # Restart every project-owned runtime that may already be running post-cutover
   # code, so disk restore cannot leave old files with new in-memory processes.
+  # Test mode records the restart and refreshes the runtime generation stamp.
   frp_server_restart_unit drlink-access || return 1
   frp_server_restart_unit drlink-egress || return 1
   if [[ -f "$(frp_server_fs /etc/systemd/system/drlink-tcp-egress.service)" ]]; then
@@ -462,6 +543,9 @@ frp_server_upgrade_restore_snapshot_files() {
   fi
   frp_server_restart_unit drlink-server || return 1
   frp_server_restart_unit drlink-allocator || return 1
+  if [[ -f "$(frp_server_fs /etc/systemd/system/drlink-mcp-bridge.service)" ]]; then
+    frp_server_restart_unit drlink-mcp-bridge || return 1
+  fi
   if frp_server_upgrade_is_single443; then
     frp_server_restart_unit drlink-frontend || return 1
   fi
@@ -824,7 +908,7 @@ PY
 frp_server_apply_project_upgrade() {
   local source="$1" check_only="${2:-0}"
   local version_file previous target staged snapshot backups preserved_before
-  local restart_frps=0 restart_alloc=0 restart_access=0 restart_egress=0 restart_tcp_egress=0 restart_frontend=0 rel
+  local restart_frps=0 restart_alloc=0 restart_access=0 restart_egress=0 restart_tcp_egress=0 restart_frontend=0 restart_mcp=0 rel
   local resolved_channel resolved_ref
   local candidate_meta target_channel target_ref
   local installed_channel installed_ref installed_bundle target_bundle
@@ -983,6 +1067,10 @@ frp_server_apply_project_upgrade() {
   if frp_server_upgrade_is_single443; then
     frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-frontend.service && restart_frontend=1
   fi
+  frp_server_upgrade_changed "$staged" etc/systemd/system/drlink-mcp-bridge.service && restart_mcp=1
+  for rel in "${FRP_MCP_BRIDGE_RUNTIME_HELPERS[@]}"; do
+    frp_server_upgrade_changed "$staged" "usr/local/lib/drlink/${rel}" && restart_mcp=1
+  done
 
   if [[ "$-" == *E* ]]; then
     _FRP_UPGRADE_ERRTRACE_WAS=1
@@ -1059,8 +1147,19 @@ frp_server_apply_project_upgrade() {
     frp_emit_failure_class STATE_PRESERVATION_FAILED
     return 1
   fi
+  # Generated frontend is not a staged project file. Rebuild it from the
+  # installed generator and runtime inputs, then activate only if it validates.
+  if ! frp_server_upgrade_converge_frontend; then
+    frp_server_upgrade_rollback "$snapshot"
+    frp_emit_failure_class FILE_COMMIT_FAILED
+    return 1
+  fi
+  if frp_server_unit_runtime_stale drlink-mcp-bridge \
+      "$(frp_server_fs /usr/local/lib/drlink/drlink_mcp_bridge.py)"; then
+    restart_mcp=1
+  fi
 
-  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_egress" == "1" || "$restart_tcp_egress" == "1" || "$restart_frontend" == "1" ]]; then
+  if [[ "$restart_frps" == "1" || "$restart_alloc" == "1" || "$restart_access" == "1" || "$restart_egress" == "1" || "$restart_tcp_egress" == "1" || "$restart_frontend" == "1" || "$restart_mcp" == "1" ]]; then
     if ! frp_server_skip_systemd; then
       frp_server_systemctl daemon-reload || {
         frp_server_upgrade_rollback "$snapshot"; return 1;
@@ -1095,6 +1194,10 @@ frp_server_apply_project_upgrade() {
     frp_server_health_allocator "$(frp_server_upgrade_allocator_port)" ||
       { frp_server_upgrade_rollback "$snapshot"; return 1; }
   fi
+  if [[ "$restart_mcp" == "1" ]]; then
+    frp_server_restart_unit drlink-mcp-bridge || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+    frp_server_health_mcp_bridge || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
   if [[ "$restart_frontend" == "1" ]]; then
     frp_server_restart_unit drlink-frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }
     frp_server_health_frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }
@@ -1114,6 +1217,15 @@ frp_server_apply_project_upgrade() {
   fi
   if frp_server_upgrade_is_single443 && [[ "$restart_frontend" != "1" ]]; then
     frp_server_health_frontend || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
+  if [[ -f "$(frp_server_fs /etc/systemd/system/drlink-mcp-bridge.service)" && "$restart_mcp" != "1" ]]; then
+    frp_server_health_mcp_bridge || { frp_server_upgrade_rollback "$snapshot"; return 1; }
+  fi
+  if [[ "${FRP_SERVER_UPGRADE_HOOK_FAIL:-}" == "runtime-converged" ]]; then
+    echo "ERROR: simulated runtime convergence failure" >&2
+    frp_server_upgrade_rollback "$snapshot"
+    frp_emit_failure_class HEALTH_CHECK_FAILED
+    return 1
   fi
 
   if ! FRP_RELEASE_CHANNEL="$target_channel" \

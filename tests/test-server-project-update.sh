@@ -259,6 +259,8 @@ rm -f "$DIRECT/etc/systemd/system/drlink-frontend.service" \
 run_local "$DIRECT" >"$WORKDIR/direct.out"
 [[ ! -f "$DIRECT/etc/systemd/system/drlink-frontend.service" ]] ||
   fail "direct mode gained frontend unit"
+[[ ! -f "$DIRECT/etc/drlink/frontend.conf" ]] ||
+  fail "direct mode wrote frontend.conf"
 grep -q '"deployment_mode": "direct"' "$DIRECT/etc/drlink/config.json" ||
   fail "direct mode changed"
 pass "DEPLOYMENT_MODE_PRESERVED"
@@ -806,15 +808,134 @@ text = Path(sys.argv[1]).read_text(encoding="utf-8")
 # Locate restore_snapshot_files body.
 start = text.index("frp_server_upgrade_restore_snapshot_files()")
 chunk = text[start:start + 2500]
-for unit in ("drlink-egress", "drlink-tcp-egress", "drlink-access", "drlink-server", "drlink-allocator"):
+for unit in ("drlink-egress", "drlink-tcp-egress", "drlink-access", "drlink-server", "drlink-allocator", "drlink-mcp-bridge"):
     if f"frp_server_restart_unit {unit}" not in chunk:
         raise SystemExit("restore_snapshot_files missing restart: %s" % unit)
 health = text[text.index("frp_server_upgrade_verify_rollback_health()"):]
 health = health[:1800]
 if "tcp-egress" not in health:
     raise SystemExit("verify_rollback_health missing tcp-egress")
+if "frp_server_health_mcp_bridge" not in health:
+    raise SystemExit("verify_rollback_health missing mcp bridge")
+txn = Path(sys.argv[1]).with_name("frp_install_txn.py").read_text(encoding="utf-8")
+start = txn.index("UNIT_NAMES = (")
+end = txn.index(")", start)
+if "drlink-mcp-bridge.service" not in txn[start:end]:
+    raise SystemExit("UNIT_NAMES missing drlink-mcp-bridge")
 print("ok")
 PY
 pass "PROJECT_UPDATE_ROLLBACK_EGRESS_TCP_RUNTIME"
+
+# Stale MCP bridge process and generated frontend must converge on project update.
+seed_stale_oauth_runtime() {
+  local tree="$1" bridge conf
+  bridge="$tree/usr/local/lib/drlink/drlink_mcp_bridge.py"
+  conf="$tree/etc/drlink/frontend.conf"
+  printf 'OLD_MCP_BRIDGE_NO_OAUTH_CONTINUE\n' >"$bridge"
+  chmod 0644 "$bridge"
+  cat >"$conf" <<'EOF'
+events {}
+http {
+  server {
+    listen 443 ssl;
+    location = /oauth/authorize {
+      proxy_pass http://127.0.0.1:6103;
+    }
+  }
+}
+EOF
+  chmod 0600 "$conf"
+  printf '[Unit]\nDescription=old mcp bridge\n' >"$tree/etc/systemd/system/drlink-mcp-bridge.service"
+  mkdir -p "$tree/var/lib/drlink/runtime-active"
+  sha256sum "$bridge" | awk '{print $1}' >"$tree/var/lib/drlink/runtime-active/drlink-mcp-bridge.sha"
+  sha256sum "$conf" | awk '{print $1}' >"$tree/var/lib/drlink/runtime-active/drlink-frontend.sha"
+}
+
+assert_oauth_continue_live() {
+  local conf="$1"
+  python3 - "$conf" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = text.find("location = /oauth/continue {")
+if start < 0:
+    raise SystemExit("missing /oauth/continue location")
+end = text.find("\n        location ", start + 10)
+block = text[start:end if end > start else None]
+for needle in (
+    "proxy_pass http://127.0.0.1:6103;",
+    "proxy_set_header X-Forwarded-For $remote_addr;",
+    "proxy_set_header X-Real-IP $remote_addr;",
+):
+    if needle not in block:
+        raise SystemExit("oauth/continue missing %s" % needle)
+print("ok")
+PY
+}
+
+assert_runtime_matches_disk() {
+  local tree="$1" unit file stamp got want
+  unit="$2"
+  file="$3"
+  stamp="$tree/var/lib/drlink/runtime-active/${unit}.sha"
+  [[ -f "$stamp" ]] || fail "missing runtime generation for ${unit}"
+  got="$(tr -d '[:space:]' <"$stamp")"
+  want="$(sha "$file")"
+  [[ "$got" == "$want" ]] || fail "${unit} in-memory generation does not match ${file}"
+}
+
+OAUTH="$WORKDIR/oauth-runtime"
+setup_tree "$OAUTH"
+seed_stale_oauth_runtime "$OAUTH"
+OAUTH_STATE="$(state_digest "$OAUTH")"
+cp "$OAUTH/usr/local/lib/drlink/drlink_mcp_bridge.py" "$WORKDIR/old-mcp-bridge.py"
+cp "$OAUTH/etc/drlink/frontend.conf" "$WORKDIR/old-frontend.conf"
+rm -f "$OAUTH/var/lib/drlink/install-actions.log"
+run_local "$OAUTH" >"$WORKDIR/oauth-runtime.out" || fail "oauth runtime update"
+grep -q 'Server project update completed successfully' "$WORKDIR/oauth-runtime.out" || fail "oauth runtime success"
+grep -q 'Client re-enroll: NOT REQUIRED' "$WORKDIR/oauth-runtime.out" || fail "oauth runtime re-enroll"
+[[ "$(state_digest "$OAUTH")" == "$OAUTH_STATE" ]] || fail "oauth runtime changed protected state"
+cmp "$ROOT/lib/drlink_mcp_bridge.py" "$OAUTH/usr/local/lib/drlink/drlink_mcp_bridge.py" >/dev/null ||
+  fail "mcp bridge file was not updated"
+grep -q 'restart drlink-mcp-bridge' "$OAUTH/var/lib/drlink/install-actions.log" ||
+  fail "mcp bridge was not restarted"
+grep -q 'restart drlink-frontend' "$OAUTH/var/lib/drlink/install-actions.log" ||
+  fail "frontend was not restarted"
+assert_oauth_continue_live "$OAUTH/etc/drlink/frontend.conf" || fail "oauth/continue not live in frontend.conf"
+assert_runtime_matches_disk "$OAUTH" drlink-mcp-bridge \
+  "$OAUTH/usr/local/lib/drlink/drlink_mcp_bridge.py"
+assert_runtime_matches_disk "$OAUTH" drlink-frontend \
+  "$OAUTH/etc/drlink/frontend.conf"
+grep -q "PROJECT_VERSION=${PROJECT_VERSION}" "$OAUTH/etc/drlink/version" ||
+  fail "version written before runtime convergence"
+pass "PROJECT_UPDATE_MCP_FRONTEND_RUNTIME_CONVERGENCE"
+
+RB_OAUTH="$WORKDIR/oauth-runtime-rollback"
+setup_tree "$RB_OAUTH"
+seed_stale_oauth_runtime "$RB_OAUTH"
+RB_VERSION="$(sha "$RB_OAUTH/etc/drlink/version")"
+if env FRP_RELEASE_CHANNEL="$TREE_CHANNEL" FRP_SERVER_TEST_ROOT="$RB_OAUTH" \
+  FRP_SERVER_UPGRADE_HOOK_FAIL=runtime-converged \
+  "$UPDATE" --source "$ROOT" >"$WORKDIR/rb-oauth.out" 2>"$WORKDIR/rb-oauth.err"; then
+  fail "oauth runtime rollback fixture should fail"
+fi
+grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/rb-oauth.out" "$WORKDIR/rb-oauth.err" ||
+  fail "oauth runtime rollback marker"
+[[ "$(sha "$RB_OAUTH/etc/drlink/version")" == "$RB_VERSION" ]] ||
+  fail "version committed before runtime convergence"
+cmp "$RB_OAUTH/usr/local/lib/drlink/drlink_mcp_bridge.py" "$WORKDIR/old-mcp-bridge.py" >/dev/null ||
+  fail "mcp bridge file not restored"
+cmp "$RB_OAUTH/etc/drlink/frontend.conf" "$WORKDIR/old-frontend.conf" >/dev/null ||
+  fail "frontend.conf not restored"
+if grep -q 'location = /oauth/continue' "$RB_OAUTH/etc/drlink/frontend.conf"; then
+  fail "rollback left /oauth/continue in frontend.conf"
+fi
+assert_runtime_matches_disk "$RB_OAUTH" drlink-mcp-bridge \
+  "$RB_OAUTH/usr/local/lib/drlink/drlink_mcp_bridge.py"
+assert_runtime_matches_disk "$RB_OAUTH" drlink-frontend \
+  "$RB_OAUTH/etc/drlink/frontend.conf"
+grep -q 'Client re-enroll: NOT REQUIRED' "$WORKDIR/rb-oauth.out" &&
+  fail "failed update reported re-enroll success"
+pass "PROJECT_UPDATE_MCP_FRONTEND_ROLLBACK_RUNTIME"
 
 echo "SERVER_PROJECT_UPDATE_TESTS=PASS"

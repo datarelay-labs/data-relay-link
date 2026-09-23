@@ -1682,8 +1682,10 @@ PY
 }
 
 frp_frontend_validate_config() {
-  local conf bin check port py
-  conf="$(frp_server_fs /etc/drlink/frontend.conf)"
+  local conf="${1:-}" bin check port py
+  if [[ -z "$conf" ]]; then
+    conf="$(frp_server_fs /etc/drlink/frontend.conf)"
+  fi
   if [[ ! -f "$conf" ]]; then
     echo "ERROR: nginx frontend configuration is missing" >&2
     return 1
@@ -2163,6 +2165,27 @@ frp_server_enable_units() {
   frp_server_systemctl enable --now drlink-mcp-tls-renew.timer >/dev/null 2>&1 || true
 }
 
+frp_server_note_runtime_generation() {
+  # Record the bytes the restarted process loaded. Later updates compare this
+  # stamp to the file on disk so a rewrite with the same content is not stale.
+  local unit="$1" src stamp
+  case "$unit" in
+    drlink-mcp-bridge)
+      src="$(frp_server_fs /usr/local/lib/drlink/drlink_mcp_bridge.py)"
+      ;;
+    drlink-frontend)
+      src="$(frp_server_fs /etc/drlink/frontend.conf)"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  [[ -f "$src" ]] || return 0
+  stamp="$(frp_server_fs "/var/lib/drlink/runtime-active/${unit}.sha")"
+  mkdir -p "$(dirname "$stamp")"
+  frp_file_sha256 "$src" >"$stamp"
+}
+
 frp_server_restart_unit() {
   local unit="$1"
   if frp_server_skip_systemd; then
@@ -2171,9 +2194,11 @@ frp_server_restart_unit() {
       echo "ERROR: simulated systemd start failure" >&2
       return 1
     fi
+    frp_server_note_runtime_generation "$unit"
     return 0
   fi
-  frp_server_systemctl restart "$unit"
+  frp_server_systemctl restart "$unit" || return 1
+  frp_server_note_runtime_generation "$unit"
 }
 
 frp_server_health_frps() {
@@ -2197,6 +2222,34 @@ frp_server_health_allocator() {
     return 0
   fi
   frp_wait_allocator_ready "$port"
+}
+
+frp_server_health_mcp_bridge() {
+  # MCP bridge readiness: unit active AND GET /healthz == 200.
+  local url code attempt
+  if [[ "${FRP_INSTALL_HOOK_HEALTH_FAIL:-}" == "1" ]]; then
+    echo "ERROR: simulated health check failure" >&2
+    return 1
+  fi
+  if [[ "${FRP_INSTALL_HOOK_MCP_HEALTH_FAIL:-}" == "1" ]]; then
+    echo "ERROR: simulated MCP bridge health check failure" >&2
+    return 1
+  fi
+  if frp_server_skip_systemd; then
+    return 0
+  fi
+  frp_wait_unit_active drlink-mcp-bridge || return 1
+  url="http://127.0.0.1:6103/healthz"
+  code="000"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$url" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "ERROR: MCP bridge /healthz returned ${code} (expected 200)" >&2
+  return 1
 }
 
 frp_server_health_access() {

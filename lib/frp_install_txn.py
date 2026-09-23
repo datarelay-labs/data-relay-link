@@ -30,6 +30,7 @@ UNIT_NAMES = (
     'drlink-egress.service',
     'drlink-tcp-egress.service',
     'drlink-frontend.service',
+    'drlink-mcp-bridge.service',
 )
 
 
