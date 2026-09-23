@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P1-OAUTH-3: CIMD outbound fetch SSRF / redirect / rebinding boundary."""
+"""P1-OAUTH-3: CIMD outbound fetch SSRF / draft alignment / rebinding boundary."""
 from __future__ import annotations
 
 import json
@@ -22,6 +22,8 @@ from drlink_control_plane import (  # noqa: E402
     ControlPlaneError,
 )
 
+REQUESTED_CIMD_URL = "https://cimd.test/client.json"
+
 
 def free_port() -> int:
     import socket
@@ -35,37 +37,74 @@ def free_port() -> int:
 
 class _CimdHandler(BaseHTTPRequestHandler):
     behavior = "ok"
+    request_count = 0
 
     def log_message(self, fmt, *args):  # noqa: A003
         return
 
     def do_GET(self):  # noqa: N802
+        type(self).request_count += 1
         mode = type(self).behavior
-        if mode == "redirect_http":
+        if mode.startswith("redirect"):
             self.send_response(302)
-            self.send_header("Location", "http://127.0.0.1/meta.json")
-            self.end_headers()
-            return
-        if mode == "redirect_loopback":
-            self.send_response(302)
-            self.send_header("Location", "https://127.0.0.1/meta.json")
-            self.end_headers()
-            return
-        if mode == "redirect_chain":
-            self.send_response(302)
-            self.send_header("Location", "https://cimd.test/next.json")
+            self.send_header("Location", "https://cimd.test/other.json")
             self.end_headers()
             return
         if mode == "bad_ctype":
-            body = b'{"redirect_uris":["https://example.com/cb"]}'
+            body = json.dumps(
+                {"client_id": REQUESTED_CIMD_URL, "redirect_uris": ["https://example.com/cb"]}
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
+        if mode == "plus_json":
+            body = json.dumps(
+                {
+                    "client_id": REQUESTED_CIMD_URL,
+                    "redirect_uris": ["https://example.com/cb"],
+                    "client_name": "plus-json",
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.oai.openapi+json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if mode == "too_large":
-            body = b"{" + (b"a" * (CIMD_FETCH_MAX_BYTES + 64)) + b"}"
+            # Keep valid JSON object shape while exceeding the 5 KiB cap.
+            pad = "x" * (CIMD_FETCH_MAX_BYTES)
+            body = json.dumps(
+                {
+                    "client_id": REQUESTED_CIMD_URL,
+                    "redirect_uris": ["https://example.com/cb"],
+                    "pad": pad,
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if mode == "missing_client_id":
+            body = json.dumps({"redirect_uris": ["https://example.com/cb"]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if mode == "mismatched_client_id":
+            body = json.dumps(
+                {
+                    "client_id": "https://cimd.test/other.json",
+                    "redirect_uris": ["https://example.com/cb"],
+                }
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -74,7 +113,7 @@ class _CimdHandler(BaseHTTPRequestHandler):
             return
         body = json.dumps(
             {
-                "client_id": "https://cimd.test/client.json",
+                "client_id": REQUESTED_CIMD_URL,
                 "redirect_uris": ["https://example.com/cb"],
                 "client_name": "ok-cimd",
             }
@@ -92,8 +131,8 @@ class OAuthCimdSsrfTests(unittest.TestCase):
         os.environ["DRLINK_TEST_ROOT"] = self.tmp
         os.environ["DRLINK_CONFIRM"] = "yes"
         self.plane = ControlPlane(self.tmp)
-        self._tls = None
         self._httpd = None
+        self._handler_cls = None
 
     def tearDown(self):
         if self._httpd is not None:
@@ -105,8 +144,6 @@ class OAuthCimdSsrfTests(unittest.TestCase):
 
     def _start_https(self, behavior: str) -> int:
         port = free_port()
-        # Self-signed cert for hermetic TLS; production path still uses default verify,
-        # tests override _cimd_ssl_context to trust this cert.
         import subprocess
 
         key = Path(self.tmp) / "key.pem"
@@ -133,13 +170,13 @@ class OAuthCimdSsrfTests(unittest.TestCase):
         )
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(str(cert), str(key))
-        handler = type("H", (_CimdHandler,), {"behavior": behavior})
+        handler = type("H", (_CimdHandler,), {"behavior": behavior, "request_count": 0})
         httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
         httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self._httpd = httpd
-        self._cert = cert
+        self._handler_cls = handler
 
         def _ctx():
             c = ssl.create_default_context()
@@ -151,16 +188,13 @@ class OAuthCimdSsrfTests(unittest.TestCase):
         return port
 
     def _pin_local(self, port: int, peer_ip: str = "1.1.1.1"):
-        """Resolve to a public peer IP but connect to the local hermetic HTTPS port."""
         import socket
 
         self.plane._cimd_resolve_validated_ips = lambda host: [peer_ip]  # type: ignore
-
         real_cc = socket.create_connection
 
         def _cc(address, timeout=None, source_address=None):
-            host, p = address[0], address[1]
-            if host == peer_ip:
+            if address[0] == peer_ip:
                 return real_cc(("127.0.0.1", port), timeout=timeout, source_address=source_address)
             return real_cc(address, timeout=timeout, source_address=source_address)
 
@@ -181,7 +215,7 @@ class OAuthCimdSsrfTests(unittest.TestCase):
             with self.assertRaises(ControlPlaneError, msg=uri):
                 self.plane._fetch_cimd_document(uri)
 
-    def test_rejects_userinfo_fragment_and_bad_port(self):
+    def test_rejects_userinfo_fragment_bad_port_and_dot_segments(self):
         for uri in (
             "https://user:pass@example.com/meta.json",
             "https://example.com/meta.json#frag",
@@ -189,36 +223,46 @@ class OAuthCimdSsrfTests(unittest.TestCase):
             "https://example.com:65536/meta.json",
             "http://example.com/meta.json",
             "https://example.com/",
+            "https://example.com/./meta.json",
+            "https://example.com/foo/../meta.json",
+            "https://example.com/../meta.json",
         ):
             with self.assertRaises(ControlPlaneError, msg=uri):
                 self.plane._fetch_cimd_document(uri)
+
+    def test_rejects_mixed_public_and_private_dns_answers(self):
+        import socket
+
+        real_gai = socket.getaddrinfo
+
+        def _mixed(host, port, *args, **kwargs):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.9", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 0)),
+            ]
+
+        socket.getaddrinfo = _mixed  # type: ignore
+        self.addCleanup(lambda: setattr(socket, "getaddrinfo", real_gai))
+        with self.assertRaises(ControlPlaneError) as ctx:
+            self.plane._cimd_resolve_validated_ips("cimd.test")
+        self.assertIn("not allowed", str(ctx.exception).lower())
+        # Must not return the filtered public-only subset.
+        with self.assertRaises(ControlPlaneError):
+            self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
 
     def test_rejects_resolved_private_or_special_addresses(self):
         for peer in ("127.0.0.1", "10.1.2.3", "169.254.169.254", "::1", "fe80::2", "100.64.1.1"):
             self.plane._cimd_resolve_validated_ips = lambda host, p=peer: [p]  # type: ignore
             with self.assertRaises(ControlPlaneError, msg=peer):
-                # resolve returns blocked; fetch must fail closed before/at pin check
-                self.plane._fetch_cimd_document("https://cimd.test/client.json")
+                self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
 
-    def test_rejects_http_downgrade_redirect(self):
-        port = self._start_https("redirect_http")
+    def test_rejects_3xx_without_following_redirect(self):
+        port = self._start_https("redirect")
         self._pin_local(port)
         with self.assertRaises(ControlPlaneError) as ctx:
-            self.plane._fetch_cimd_document("https://cimd.test/client.json")
-        self.assertIn("https", str(ctx.exception).lower())
-
-    def test_rejects_redirect_to_loopback(self):
-        port = self._start_https("redirect_loopback")
-        self._pin_local(port)
-        with self.assertRaises(ControlPlaneError):
-            self.plane._fetch_cimd_document("https://cimd.test/client.json")
-
-    def test_rejects_excessive_redirect_chain(self):
-        port = self._start_https("redirect_chain")
-        self._pin_local(port)
-        with self.assertRaises(ControlPlaneError) as ctx:
-            self.plane._fetch_cimd_document("https://cimd.test/client.json")
+            self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
         self.assertIn("redirect", str(ctx.exception).lower())
+        self.assertEqual(self._handler_cls.request_count, 1)
 
     def test_connects_only_to_validated_peer_not_rebinding_lookup(self):
         port = self._start_https("ok")
@@ -227,7 +271,6 @@ class OAuthCimdSsrfTests(unittest.TestCase):
 
         def _resolve(host):
             calls["resolve"] += 1
-            # First validated peer is public; a rebinding lookup would yield loopback.
             return ["1.1.1.1"]
 
         self.plane._cimd_resolve_validated_ips = _resolve  # type: ignore
@@ -241,40 +284,64 @@ class OAuthCimdSsrfTests(unittest.TestCase):
 
         socket.create_connection = _cc  # type: ignore
         self.addCleanup(lambda: setattr(socket, "create_connection", real_cc))
-        doc = self.plane._fetch_cimd_document("https://cimd.test/client.json")
+        doc = self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
         self.assertEqual(doc["client_name"], "ok-cimd")
         self.assertEqual(calls["connect_hosts"], ["1.1.1.1"])
-        self.assertGreaterEqual(calls["resolve"], 1)
+        self.assertEqual(calls["resolve"], 1)
 
     def test_rejects_bad_content_type(self):
         port = self._start_https("bad_ctype")
         self._pin_local(port)
         with self.assertRaises(ControlPlaneError) as ctx:
-            self.plane._fetch_cimd_document("https://cimd.test/client.json")
+            self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
         self.assertIn("content-type", str(ctx.exception).lower())
 
+    def test_accepts_application_plus_json(self):
+        port = self._start_https("plus_json")
+        self._pin_local(port)
+        doc = self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
+        self.assertEqual(doc["client_name"], "plus-json")
+
     def test_rejects_oversized_body(self):
+        self.assertEqual(CIMD_FETCH_MAX_BYTES, 5 * 1024)
         port = self._start_https("too_large")
         self._pin_local(port)
         with self.assertRaises(ControlPlaneError) as ctx:
-            self.plane._fetch_cimd_document("https://cimd.test/client.json")
+            self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
         self.assertIn("too large", str(ctx.exception).lower())
+
+    def test_rejects_missing_metadata_client_id(self):
+        port = self._start_https("missing_client_id")
+        self._pin_local(port)
+        with self.assertRaises(ControlPlaneError) as ctx:
+            self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
+        self.assertIn("client_id", str(ctx.exception).lower())
+
+    def test_rejects_mismatched_metadata_client_id(self):
+        port = self._start_https("mismatched_client_id")
+        self._pin_local(port)
+        with self.assertRaises(ControlPlaneError) as ctx:
+            self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
+        self.assertIn("client_id", str(ctx.exception).lower())
 
     def test_valid_public_https_cimd_success(self):
         port = self._start_https("ok")
         self._pin_local(port)
-        doc = self.plane._fetch_cimd_document("https://cimd.test/client.json")
+        doc = self.plane._fetch_cimd_document(REQUESTED_CIMD_URL)
+        self.assertEqual(doc["client_id"], REQUESTED_CIMD_URL)
         self.assertEqual(doc["redirect_uris"], ["https://example.com/cb"])
         resolved = self.plane.resolve_oauth_authorize_client(
-            "https://cimd.test/client.json", "https://example.com/cb"
+            REQUESTED_CIMD_URL, "https://example.com/cb"
         )
         self.assertEqual(resolved["source"], "cimd")
         print("CIMD_SSRF_LITERAL_BLOCKED=PASS")
-        print("CIMD_SSRF_REDIRECT_HTTP_DOWNGRADE=PASS")
-        print("CIMD_SSRF_REDIRECT_LOOPBACK=PASS")
-        print("CIMD_SSRF_REDIRECT_LIMIT=PASS")
+        print("CIMD_SSRF_MIXED_DNS_REJECTED=PASS")
+        print("CIMD_SSRF_REDIRECT_NO_FOLLOW=PASS")
+        print("CIMD_SSRF_DOT_SEGMENTS_REJECTED=PASS")
         print("CIMD_SSRF_DNS_REBIND_PINNED_PEER=PASS")
-        print("CIMD_SSRF_CONTENT_BOUNDS=PASS")
+        print("CIMD_SSRF_CONTENT_BOUNDS_5KIB=PASS")
+        print("CIMD_SSRF_PLUS_JSON_ACCEPTED=PASS")
+        print("CIMD_SSRF_CLIENT_ID_BINDING=PASS")
         print("CIMD_SSRF_VALID_PUBLIC_SUCCESS=PASS")
 
 
