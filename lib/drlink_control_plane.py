@@ -3330,6 +3330,9 @@ class ControlPlane:
             raise ControlPlaneError("redirect_uri is required")
         if "*" in text:
             raise ControlPlaneError("wildcard redirect_uri is not allowed")
+        # OAuth 2.0 §3.1.2: redirection endpoint URI MUST NOT include a fragment.
+        if "#" in text:
+            raise ControlPlaneError("redirect_uri fragment is not allowed")
         lower = text.lower()
         if lower.startswith("javascript:") or lower.startswith("data:") or lower.startswith("file:"):
             raise ControlPlaneError("redirect_uri scheme is not allowed")
@@ -3339,6 +3342,12 @@ class ControlPlane:
             parsed = urlparse(text)
         except ValueError as exc:
             raise ControlPlaneError("redirect_uri is malformed") from exc
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ControlPlaneError("redirect_uri port is malformed") from exc
+        if port is not None and not (1 <= int(port) <= 65535):
+            raise ControlPlaneError("redirect_uri port is out of range")
         scheme = str(parsed.scheme or "").lower()
         if scheme == "https":
             if not parsed.hostname:

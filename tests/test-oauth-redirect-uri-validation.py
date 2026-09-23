@@ -78,6 +78,45 @@ class OAuthRedirectUriValidationTests(unittest.TestCase):
             with self.assertRaises(ControlPlaneError, msg=uri):
                 self.plane._validate_oauth_redirect_uri(uri)
 
+    def test_rejects_fragment_component(self):
+        rejected = [
+            "https://example.com/cb#frag",
+            "http://127.0.0.1/cb#frag",
+            "http://localhost:8080/cb#x",
+            "https://chatgpt.com/aip/g/callback#token",
+            "https://example.com/cb#",
+        ]
+        for uri in rejected:
+            with self.assertRaises(ControlPlaneError, msg=uri) as ctx:
+                self.plane._validate_oauth_redirect_uri(uri)
+            self.assertIn("fragment", str(ctx.exception).lower(), uri)
+
+    def test_rejects_malformed_and_out_of_range_ports(self):
+        rejected = [
+            "https://example.com:abc/cb",
+            "http://127.0.0.1:abc/cb",
+            "https://example.com:65536/cb",
+            "http://127.0.0.1:65536/cb",
+            "https://example.com:0/cb",
+            "http://localhost:0/cb",
+            "http://[::1]:99999/cb",
+        ]
+        for uri in rejected:
+            with self.assertRaises(ControlPlaneError, msg=uri):
+                self.plane._validate_oauth_redirect_uri(uri)
+
+    def test_accepts_valid_explicit_ports(self):
+        accepted = [
+            "https://example.com:443/cb",
+            "https://example.com:8443/path",
+            "http://127.0.0.1:1/cb",
+            "http://127.0.0.1:65535/cb",
+            "http://localhost:8080/callback",
+            "http://[::1]:4242/callback",
+        ]
+        for uri in accepted:
+            self.assertEqual(self.plane._validate_oauth_redirect_uri(uri), uri, uri)
+
     def test_dcr_rejects_deceptive_loopback_lookalikes(self):
         for uri in (
             "http://localhost.evil.example/callback",
@@ -89,6 +128,22 @@ class OAuthRedirectUriValidationTests(unittest.TestCase):
                         "redirect_uris": [uri],
                         "token_endpoint_auth_method": "none",
                         "client_name": "evil",
+                    }
+                )
+
+    def test_dcr_rejects_fragment_and_bad_port(self):
+        for uri in (
+            "https://example.com/cb#frag",
+            "http://127.0.0.1/cb#frag",
+            "https://example.com:abc/cb",
+            "http://127.0.0.1:65536/cb",
+        ):
+            with self.assertRaises(ControlPlaneError, msg=uri):
+                self.plane.register_oauth_client(
+                    {
+                        "redirect_uris": [uri],
+                        "token_endpoint_auth_method": "none",
+                        "client_name": "bad-grammar",
                     }
                 )
 
@@ -128,6 +183,9 @@ class OAuthRedirectUriValidationTests(unittest.TestCase):
             for bad in (
                 "http://localhost.evil.example/callback",
                 "http://127.0.0.1.evil.example/callback",
+                "http://127.0.0.1/callback#frag",
+                "https://example.com/cb#frag",
+                "http://127.0.0.1:abc/callback",
             ):
                 qs = urllib.parse.urlencode(
                     {
@@ -141,7 +199,7 @@ class OAuthRedirectUriValidationTests(unittest.TestCase):
                 )
                 try:
                     urllib.request.urlopen(base + "/oauth/authorize?" + qs, timeout=10)
-                    self.fail("deceptive redirect_uri must not authorize: %s" % bad)
+                    self.fail("invalid redirect_uri must not authorize: %s" % bad)
                 except urllib.error.HTTPError as exc:
                     self.assertEqual(exc.code, 400, bad)
 
