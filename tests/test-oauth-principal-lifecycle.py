@@ -282,12 +282,75 @@ class OAuthPrincipalLifecycleTests(unittest.TestCase):
             client_id="ceremony-ai",
         )
         self.assertTrue(str(issued.get("access_token") or "").startswith("drauth_"))
+        self.assertEqual(str(self.plane.get_principal("ceremony-ai")["credential_status"]).lower(), "pending")
+        self.assertIsNone(
+            self.plane.authenticate_oauth_token(issued["access_token"], resource=session["resource"])
+        )
+        self.assertIsNone(
+            self.plane.exchange_refresh_token(
+                refresh_token=issued["refresh_token"],
+                client_id="ceremony-ai",
+                resource=session["resource"],
+            )
+        )
+        pending_status, pending_payload = self._mcp(issued["access_token"])
+        self.assertEqual(pending_status, 401, pending_payload)
         marked = ai_id._mark_verified(self.plane, "ceremony-ai", subject="ceremony-ai", grant="authorization_code")
         self.assertIn("VERIFIED", marked["after"])
         self.assertEqual(str(self.plane.get_principal("ceremony-ai")["credential_status"]).lower(), "verified")
         authed = self.plane.authenticate_oauth_token(issued["access_token"], resource=session["resource"])
         self.assertIsNotNone(authed)
         self.assertEqual(authed["name"], "ceremony-ai")
+        status, payload = self._mcp(issued["access_token"])
+        self.assertEqual(status, 200, payload)
+        refreshed = self.plane.exchange_refresh_token(
+            refresh_token=issued["refresh_token"],
+            client_id="ceremony-ai",
+            resource=session["resource"],
+        )
+        self.assertIsNotNone(refreshed)
+        self.assertIsNotNone(
+            self.plane.authenticate_oauth_token(refreshed["access_token"], resource=session["resource"])
+        )
+
+    def test_none_tokens_cannot_authenticate_or_refresh(self):
+        """Legacy rows with credential_status none must not use or rotate OAuth tokens."""
+        client_id, verifier, pending_id = self._dcr_pending("legacy-none")
+        approved = self.plane.approve_oauth_pending(
+            pending_id, "verified-ai", retain_for_browser=False
+        )
+        issued = self.plane.exchange_authorization_code(
+            code=approved["code"],
+            verifier=verifier,
+            redirect_uri=REDIRECT,
+            resource=self.resource,
+            client_id=client_id,
+        )
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'none' WHERE name = 'verified-ai'"
+        )
+        self.plane.conn.commit()
+        self.assertIsNone(self.plane.authenticate_oauth_token(issued["access_token"], resource=self.resource))
+        self.assertIsNone(
+            self.plane.exchange_refresh_token(
+                refresh_token=issued["refresh_token"],
+                client_id=client_id,
+                resource=self.resource,
+            )
+        )
+        status, payload = self._mcp(issued["access_token"])
+        self.assertEqual(status, 401, payload)
+        self.assertIsNone(self.plane.authenticate_oauth_token(issued["access_token"], resource=self.resource))
+
+    def test_client_credentials_active_token_authenticates(self):
+        rotated = self.plane.rotate_ai_credential("plain-ai")
+        self.assertEqual(str(self.plane.get_principal("plain-ai")["credential_status"]).lower(), "active")
+        issued = self.plane.client_credentials_token("plain-ai", rotated["token"], self.resource)
+        self.assertTrue(str(issued.get("access_token") or "").startswith("drauth_"))
+        authed = self.plane.authenticate_oauth_token(issued["access_token"], resource=self.resource)
+        self.assertIsNotNone(authed)
+        self.assertEqual(authed["name"], "plain-ai")
+        self.assertEqual(str(authed["credential_status"]).lower(), "active")
 
     def test_bound_revoked_identity_is_not_resurrected_by_staging_or_approval(self):
         session = ai_id.begin_authorization_code(self.plane, "revoked-ai", redirect_uri=REDIRECT, resource=self.resource)

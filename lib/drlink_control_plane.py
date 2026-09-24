@@ -4273,7 +4273,8 @@ class ControlPlane:
             "SELECT t.* FROM ai_oauth_tokens t "
             "JOIN ai_principals p ON p.id = t.principal_id "
             "WHERE t.token_hash = ? AND t.kind = 'refresh' AND t.revoked_at IS NULL "
-            "AND t.expires_at > ? AND p.enabled = 1 AND p.credential_status != 'revoked'",
+            "AND t.expires_at > ? AND p.enabled = 1 "
+            "AND lower(p.credential_status) IN ('verified', 'active')",
             (digest, now),
         ).fetchone()
         if row is None:
@@ -4327,7 +4328,7 @@ class ControlPlane:
             "SELECT t.* FROM ai_oauth_tokens t "
             "JOIN ai_principals p ON p.id = t.principal_id "
             "WHERE t.token_hash = ? AND t.kind = 'access' AND t.revoked_at IS NULL AND t.expires_at > ? "
-            "AND p.enabled = 1 AND p.credential_status != 'revoked' AND p.name != ?",
+            "AND p.enabled = 1 AND lower(p.credential_status) IN ('verified', 'active') AND p.name != ?",
             (digest, now, OAUTH_UNBOUND_PRINCIPAL),
         ).fetchone()
         if row is None:

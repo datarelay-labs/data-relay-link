@@ -41,6 +41,10 @@ class OAuthRevokeFormTests(unittest.TestCase):
         os.environ["DRLINK_CONFIRM"] = "yes"
         self.plane = ControlPlane(self.tmp)
         self.plane.set_ai_principal("revoke-agent", enabled=True)
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'verified' WHERE name = 'revoke-agent'"
+        )
+        self.plane.conn.commit()
         self.port = free_port()
         self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
         self.bridge.listen_host = "127.0.0.1"

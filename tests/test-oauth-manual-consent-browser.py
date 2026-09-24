@@ -93,10 +93,10 @@ class ManualConsentBrowserTests(unittest.TestCase):
             ],
             root=self.tmp,
         )
-        # configure oauth binds a client but does not verify. Browser success
-        # paths use the verification-ceremony pending state, not credential none.
+        # Browser success is a trusted runtime identity. pending is only the
+        # in-progress verification ceremony and must not authenticate after token exchange.
         self.plane.conn.execute(
-            "UPDATE ai_principals SET credential_status = 'pending' WHERE name = 'agent-a'"
+            "UPDATE ai_principals SET credential_status = 'verified' WHERE name = 'agent-a'"
         )
         self.plane.conn.commit()
         self.port = free_port()
