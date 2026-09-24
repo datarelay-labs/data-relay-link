@@ -26,6 +26,21 @@ class StrictCliParsingTests(unittest.TestCase):
     def test_status_alone_ok(self):
         self.assertIsNone(self.cat.strict_error(["show", "status"]))
 
+    def test_approve_oauth_optional_identity_arity(self):
+        one = ["system", "credential", "approve-oauth", "oap_fixture"]
+        two = one + ["plugin-qual"]
+        three = two + ["extra"]
+        self.assertIsNone(self.cat.strict_error(one))
+        self.assertIsNone(self.cat.strict_error(two))
+        err = self.cat.strict_error(three)
+        self.assertIsNotNone(err)
+        self.assertIn("unexpected argument: extra", err)
+        cmd = self.cat.find(one)
+        self.assertEqual(
+            self.cat.usage_line(cmd),
+            "system credential approve-oauth <PENDING-ID> [AI-IDENTITY]",
+        )
+
     def test_guided_menu_categories(self):
         text = self.cat.render_guided_menu("server")
         self.assertIn("Managed Hosts", text)

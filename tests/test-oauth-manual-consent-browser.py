@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 from drlink_control_cli import dispatch  # noqa: E402
+from frp_ctl_grammar import match  # noqa: E402
 from drlink_control_plane import ControlPlane  # noqa: E402
 from drlink_mcp_bridge import MCPBridge, ThreadingHTTPServer, make_handler  # noqa: E402
 import frp_frontend  # noqa: E402
@@ -193,6 +194,11 @@ class ManualConsentBrowserTests(unittest.TestCase):
     def test_browser_flow_cli_approve_continue_pkce(self):
         verifier, challenge = self._pkce()
         auth = self._authorize(challenge=challenge, state="browser-ok")
+        grammar = self._public_grammar(
+            ["system", "credential", "approve-oauth", auth["pending_id"]]
+        )
+        self.assertEqual(grammar.get("status"), "ok")
+        self.assertEqual(grammar.get("action"), "control_plane")
         # Wait page while still pending.
         wait = urllib.request.urlopen(self.base + auth["continue_path"], timeout=10)
         self.assertEqual(wait.status, 200)
@@ -462,6 +468,92 @@ class ManualConsentBrowserTests(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     nginx.kill()
                     nginx.wait(timeout=2)
+
+
+    def _public_grammar(self, tokens):
+        return match(tokens, "server")
+
+    def test_dcr_unbound_public_cli_identity_approval(self):
+        dispatch(["set", "ai-principal", "agent-dcr"], root=self.tmp)
+        dispatch(["set", "ai-principal", "agent-dcr", "enabled"], root=self.tmp)
+        dispatch(["set", "ai-principal", "agent-off"], root=self.tmp)
+        reg = json.loads(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    self.base + "/oauth/register",
+                    data=json.dumps(
+                        {
+                            "redirect_uris": ["http://127.0.0.1/cb-dcr"],
+                            "token_endpoint_auth_method": "none",
+                            "grant_types": ["authorization_code", "refresh_token"],
+                            "client_name": "manual-dcr",
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                ),
+                timeout=10,
+            )
+            .read()
+            .decode("utf-8")
+        )
+        verifier, challenge = self._pkce()
+        auth = self._authorize(
+            challenge=challenge,
+            state="dcr-bind",
+            client_id=reg["client_id"],
+            redirect="http://127.0.0.1/cb-dcr",
+        )
+        self.assertIn("AI-IDENTITY", auth["page"])
+        pending = auth["pending_id"]
+        one = ["system", "credential", "approve-oauth", pending]
+        two = one + ["agent-dcr"]
+        three = two + ["extra"]
+        self.assertEqual(self._public_grammar(one).get("status"), "ok")
+        self.assertEqual(self._public_grammar(two).get("action"), "control_plane")
+        rejected = self._public_grammar(three)
+        self.assertEqual(rejected.get("status"), "error")
+        self.assertIn("unexpected argument: extra", rejected.get("message", ""))
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = dispatch(one, root=self.tmp)
+        self.assertEqual(rc, 1)
+        self.assertIn("AI Principal", err.getvalue())
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = dispatch(one + ["missing-principal"], root=self.tmp)
+        self.assertEqual(rc, 1)
+        self.assertIn("not found or disabled", err.getvalue())
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = dispatch(one + ["agent-off"], root=self.tmp)
+        self.assertEqual(rc, 1)
+        self.assertIn("not found or disabled", err.getvalue())
+        try:
+            dispatch(three, root=self.tmp)
+        except SystemExit as exc:
+            self.assertIn("unexpected argument: extra", str(exc))
+        else:
+            self.fail("third approve-oauth argument reached the handler")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = dispatch(two, root=self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("drc_", buf.getvalue())
+        exc = open_no_redirect(self.base + auth["continue_path"])
+        self.assertEqual(exc.code, 302)
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(exc.headers.get("Location") or "").query)
+        self.assertEqual(params.get("state", [None])[0], "dcr-bind")
+        code = params["code"][0]
+        issued = self._exchange(
+            code=code,
+            verifier=verifier,
+            resource=auth["resource"],
+            client_id=reg["client_id"],
+            redirect="http://127.0.0.1/cb-dcr",
+        )
+        self.assertTrue(issued.get("access_token", "").startswith("drauth_"))
+        print("DCR_PUBLIC_CLI_IDENTITY_APPROVAL=PASS")
 
 
 if __name__ == "__main__":

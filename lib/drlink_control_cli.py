@@ -1189,6 +1189,11 @@ def _system(plane: ControlPlane, rest):
                     "usage: system credential approve-oauth <PENDING-ID> [AI-IDENTITY]\n"
                     "DCR/CIMD requests require AI-IDENTITY."
                 )
+            if len(args) > 2:
+                raise SystemExit(
+                    "unexpected argument: %s\n"
+                    "usage: system credential approve-oauth <PENDING-ID> [AI-IDENTITY]" % args[2]
+                )
             pending_id = args[0]
             principal = args[1] if len(args) > 1 else None
             _run(plane.approve_oauth_pending, pending_id, principal)

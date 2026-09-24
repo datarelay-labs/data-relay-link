@@ -3790,15 +3790,21 @@
     "roles": "server",
     "category": "AI Access",
     "summary": "Approve a pending OAuth authorization request",
-    "detail": "Operator consent for the built-in authorization server. Issues a one-time authorization code. Does not display access or refresh tokens.",
+    "detail": "Operator consent for the built-in authorization server. Issues a one-time authorization code. Does not display access or refresh tokens. Unbound DCR/CIMD requests require AI-IDENTITY. Already-bound requests accept the pending ID alone.",
     "examples": [
-      "system credential approve-oauth <PENDING-ID>"
+      "system credential approve-oauth <PENDING-ID>",
+      "system credential approve-oauth <PENDING-ID> <AI-IDENTITY>"
     ],
     "args": [
       {
         "name": "<PENDING-ID>",
         "complete": null,
         "required": true
+      },
+      {
+        "name": "AI-IDENTITY",
+        "complete": "ai-principals",
+        "required": false
       }
     ],
     "tail": null,
