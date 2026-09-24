@@ -244,6 +244,8 @@ Enrollment / Lifecycle
 
 `policy_rules.position` is an internal insertion column. It is not a public rule order. `policy_rules.action` is stored as `match` and is not a public ALLOW/DENY action. Older AI rule tables such as `ai_access_rules` remain in the schema history; current AI Access rules are `ai_policy_rules`.
 
+`clients`, `client_groups`, and `client_group_members` are internal operational tables. They are not public policy selectors.
+
 `service_presets` remains a storage table for wizard convenience. It is not a public resource.
 
 Exact DDL belongs to implementation. Identity, foreign-key, revision, and fail-closed semantics in the current sections of this document follow the Product Master.
@@ -264,11 +266,11 @@ created_at
 updated_at
 ```
 
-Renaming a Network Object, Rule, Client Group, or other display entity must not break references.
+Renaming a Network Object, Network Group, Rule, or other display entity must not break references.
 
 Interactive workflows read the current `row_version` and must reject a commit if another writer changed that entity in the meantime.
 
-Example failure:
+Example failure text emitted by the current concurrency check:
 
 ```text
 Object changed while you were editing it.
@@ -394,15 +396,15 @@ That matrix is intermediate history. Current selector rules are in section 7.1 a
 
 ## 12. Managed Host
 
-Public noun: **Managed Host**. Storage remains `managed_endpoints`.
+Public noun: **Managed Host**. The software on that host is the **DRLink Agent**. Storage remains `managed_endpoints` and `clients`.
 
-A connected/enrolled Data Relay Link Client is represented by a Managed Host Network Object.
+A connected/enrolled DRLink Agent is represented by a Managed Host and by that host's Network Object projection.
 
 Example:
 
 ```text
 Managed Host: dp1
-Client ID: facc9a57
+DRLink Agent: enrolled
 Status: Connected
 ```
 
@@ -412,22 +414,22 @@ Attempting to remove one through Network Object commands must fail and direct th
 
 ## 13. Orphaned Managed Hosts
 
-If a Client is removed while policy still references its Managed Host identity, Data Relay Link must not silently reinterpret the reference or bind it to a new machine with the same label.
+If a Managed Host is removed while policy still references its Network Object identity, Data Relay Link must not silently reinterpret the reference or bind it to a new machine with the same label.
 
-A referenced endpoint may remain as an orphaned identity:
+A referenced Managed Host identity may remain orphaned:
 
 ```text
 Status: Orphaned
 Reason: Client removed
 ```
 
-A newly enrolled machine receives its own immutable identity. Label reuse never implies identity reuse.
+`Client removed` is the stored `orphan_reason` value. A newly enrolled Managed Host receives its own immutable identity. Label reuse never implies identity reuse.
 
 ## 14. Endpoint address inventory
 
 A server-observed source address can be a NAT/public address and is not sufficient to determine internal Network membership.
 
-Clients therefore report an inventory of local addresses through enrollment, heartbeat, or management synchronization.
+The DRLink Agent therefore reports an inventory of local addresses through enrollment, heartbeat, or management synchronization.
 
 Conceptual table:
 
@@ -445,21 +447,13 @@ endpoint_addresses
 
 Policy membership uses eligible active routable addresses. Loopback, link-local, multicast, and other inappropriate special addresses are excluded from internal membership calculations.
 
-## 15. Client Group vs Network Group
+## 15. Internal client groups and public Network Group
 
-These are separate concepts:
+`client_groups` and `client_group_members` are internal operational/schema history. They are not a public policy selector and they are not a public CLI resource.
 
-```text
-Client Group
-  operational organization of clients/endpoints
+The public reusable policy collection is a Network Group: a flat collection of Network Objects.
 
-Network Group
-  flat reusable collection of Network Objects
-```
-
-The old generic public `group` name is `client-group` where the operational client collection is meant.
-
-AI Access targets may reference Managed Hosts and Client Groups. A third AI-specific host group is unnecessary.
+AI Access destination is a Network Object or Network Group. A Managed Host participates only through its Network Object projection where that destination context allows it.
 
 ## 16. Remote Service
 
@@ -525,7 +519,7 @@ web1
   Port             : 443
 ```
 
-The routed target does not require its own Data Relay Link agent.
+The routed target does not require its own DRLink Agent.
 
 ## 18. Effective Remote Access
 
@@ -543,7 +537,7 @@ Reachable Connector / target
 Effective Remote Access
 ```
 
-A broad destination Object therefore does not automatically publish every address or port in that Object.
+A broad destination Network Object therefore does not automatically publish every address or port in that Network Object.
 
 ## 19. Service Object wizard presets
 
@@ -667,7 +661,7 @@ Affected rules
 Effective decision changes under the current mode
 ```
 
-It does not explain an earlier rule shadowing a later ALLOW/DENY action. That shadow model belongs to sections 20–21.
+Ordered first-match explanations belong only in sections 20–21.
 
 ## 26. Policy impact analysis
 
@@ -679,9 +673,9 @@ Before committing security-relevant changes, analyze at least:
 Access broadened
 Access narrowed
 Affected active rules
-New shadowing
-Removed shadowing
-Effective action changes
+Added matches
+Removed matches
+Effective decision changes under the current mode
 ```
 
 Broadening requires explicit confirmation in interactive workflows.
@@ -694,7 +688,7 @@ Impact analysis applies to:
 - Access Policy mode and enforcement.
 - Remote Service target or mode.
 - Managed Host address inventory changes when they alter policy membership.
-- AI target, permission, and path-scope changes.
+- AI destination, permission, and path-scope changes.
 
 ## 27. Reference protection
 
@@ -843,9 +837,9 @@ A Change Plan is revision-bound. If state changes after planning, commit fails w
 
 The bundle path cannot write authoritative tables, generated runtime JSON, or legacy state through an alternate implementation. It must invoke the same domain mutations and safety checks as canonical public CLI.
 
-Export is redacted and never emits enrollment tickets, install URLs containing credentials, OAuth/static bearer secrets, private keys, or client identity private material.
+Export is redacted and never emits enrollment tickets, install URLs containing credentials, OAuth/static bearer secrets, private keys, or Agent identity private material.
 
-Existing-client local target/service mutations that are not remotely supported return `CLIENT_ACTION_REQUIRED`; the server must never report false success.
+Existing Agent Host local target/service mutations that are not remotely supported return `CLIENT_ACTION_REQUIRED`; the server must never report false success.
 
 Full schema/CLI/audit semantics are defined by `CONFIGURATION_BUNDLE.md`.
 
@@ -853,7 +847,7 @@ Full schema/CLI/audit semantics are defined by `CONFIGURATION_BUNDLE.md`.
 
 Configuration intent and enrollment secret issuance are separate operations.
 
-A ConfigurationBundle may create enrollment plans, but applying it creates zero raw tickets. Client and Managed Host identity continue to materialize only after successful enrollment.
+A ConfigurationBundle may create enrollment plans, but applying it creates zero raw tickets. A DRLink Agent and its Managed Host identity continue to materialize only after successful enrollment.
 
 Server-enforced ticket rules:
 
@@ -869,7 +863,7 @@ stored server credential    = verifier/hash only
 successful consume          = atomic
 ```
 
-If 3 active unused tickets remain, the next issuance can create at most 7. Expired/revoked tickets leave the active-unused count; consuming/expiring an enrollment ticket never disconnects an already enrolled Client.
+If 3 active unused tickets remain, the next issuance can create at most 7. Expired/revoked tickets leave the active-unused count; consuming/expiring an enrollment ticket never disconnects an already enrolled Managed Host.
 
 Neither configuration fields nor hidden/public CLI flags may raise these server-side ceilings.
 
