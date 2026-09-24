@@ -114,6 +114,39 @@ class LegacyOriginTests(unittest.TestCase):
             self.assertEqual((root / "etc/frp/server-endpoint.json").read_text(encoding="utf-8"), endpoint_text)
             self.assertTrue(mgmt.legacy_single443_mgmt_origin_drift(str(root)))
 
+    def test_tcp_on_public_443_repairs_origin_and_direct_port_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "tcp443"
+            _write(
+                legacy / "etc/frp/client-state.json",
+                json.dumps(_state("https://129.225.184.60:6099/enroll", "tcp", 443), indent=2) + "\n",
+            )
+            before_services = _state("https://129.225.184.60:6099/enroll", "tcp", 443)["services"]
+            self.assertTrue(mgmt.migrate_legacy_single443_agent_origin(str(legacy)))
+            migrated = json.loads((legacy / "etc/frp/client-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(migrated["allocator_url"], "https://129.225.184.60/enroll")
+            self.assertEqual(migrated["frp_transport"], "tcp")
+            self.assertEqual(migrated["services"], before_services)
+            self.assertFalse(mgmt.migrate_legacy_single443_agent_origin(str(legacy)))
+            unlabeled = root / "unlabeled"
+            _write(
+                unlabeled / "etc/frp/client-state.json",
+                json.dumps(
+                    {
+                        "allocator_url": "https://203.0.113.10:6099/enroll",
+                        "frp_server": "203.0.113.10",
+                        "frp_server_port": 443,
+                        "machine_id": "aabbccddeeff00112233445566778899",
+                    },
+                    indent=2,
+                )
+                + "\n",
+            )
+            unlabeled_before = (unlabeled / "etc/frp/client-state.json").read_bytes()
+            self.assertFalse(mgmt.migrate_legacy_single443_agent_origin(str(unlabeled)))
+            self.assertEqual((unlabeled / "etc/frp/client-state.json").read_bytes(), unlabeled_before)
+
 
 def _install_fixture(root: Path, state: dict) -> None:
     _write(root / "usr/local/bin/frpc", "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'frpc version 0.71.0'; exit 0; fi\nexit 0\n", 0o755)

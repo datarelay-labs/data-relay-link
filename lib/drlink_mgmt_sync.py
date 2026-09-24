@@ -162,15 +162,24 @@ def rewrite_legacy_backend_url(url: str, public_port: int) -> Optional[str]:
 
 
 def _public_port_for_wss_state(state: dict) -> Optional[int]:
-    if str(state.get("frp_transport") or "").strip().lower() != "wss":
-        return None
+    """Public single-443 port, or None for Direct mode and unlabeled state.
+
+    WSS uses whatever public port is stored. Older single-443 Agents kept the
+    default tcp label while frp_server_port was already 443. Missing transport
+    and any other tcp control port stay on the private allocator port.
+    """
+    transport = str(state.get("frp_transport") or "").strip().lower()
     try:
         port = int(state.get("frp_server_port"))
     except (TypeError, ValueError):
         return None
-    if port < 1 or port > 65535:
+    if port < 1 or port > 65535 or port == LEGACY_ALLOCATOR_BACKEND_PORT:
         return None
-    return port
+    if transport == "wss":
+        return port
+    if transport == "tcp" and port == 443:
+        return port
+    return None
 
 
 def _rewrite_url_fields(data: dict, public_port: int, keys: tuple[str, ...]) -> bool:
@@ -347,11 +356,12 @@ def _commit_json_files(writes: list[tuple[Path, dict]]) -> None:
 
 
 def migrate_legacy_single443_agent_origin(root: Optional[str] = None) -> bool:
-    """Point an existing WSS Agent at the single-443 public origin.
+    """Point an existing single-443 Agent at the public management origin.
 
-    Direct-mode state is not rewritten. Management identity, services, and
-    enrollment fields other than the legacy :6099 URL are preserved. All
-    rewritten files commit together. A second call is a no-op.
+    Direct-mode state and unlabeled state are not rewritten. Management
+    identity, services, transport, and enrollment fields other than the
+    legacy :6099 URL are preserved. All rewritten files commit together.
+    A second call is a no-op.
     """
     writes = plan_legacy_single443_mgmt_origin(root)
     if not writes:
