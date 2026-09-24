@@ -210,6 +210,14 @@ class RealManagedHostExecutorTests(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertEqual(self.server_marker.read_text(encoding="utf-8"), "SERVER_ONLY\n")
 
+    def test_mgmt_worker_get_system_info_delivers(self):
+        self._start_mgmt_worker(self.agent_a_tmp)
+        text = self._text(self._call("get_system_info"))
+        self.assertNotIn("endpoint unavailable", text)
+        self.assertNotIn("TIMEOUT", text)
+        self.assertIn("sysname", text)
+        self.assertIn(os.uname().sysname, text)
+
     def test_mgmt_worker_reads_agent_marker_not_server(self):
         self._start_mgmt_worker(self.agent_a_tmp)
         text = self._text(

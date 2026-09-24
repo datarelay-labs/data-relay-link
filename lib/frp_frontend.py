@@ -365,23 +365,8 @@ http {
         # Allocator backend is always loopback HTTPS. Verify DNS:localhost
         # (present on every project leaf) because nginx proxy_ssl_verify does
         # not reliably match iPAddress SANs such as the public IP.
-        location ~ ^/(ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+|artifacts(?:/.*)?)$ {
-            proxy_pass https://127.0.0.1:%s;
-            proxy_http_version 1.1;
-            proxy_ssl_trusted_certificate %s;
-            proxy_ssl_verify on;
-            proxy_ssl_verify_depth 2;
-            proxy_ssl_name %s;
-            proxy_ssl_server_name on;
-            proxy_set_header Host $host;
-            proxy_set_header X-Forwarded-Proto https;
-            proxy_set_header X-Forwarded-For $remote_addr;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_read_timeout 180s;
-            proxy_send_timeout 180s;
-            proxy_connect_timeout 10s;
-            proxy_buffering off;
-        }
+        # Management routes are a second anchored allowlist, not /v1/.
+%s
 %s
         location / {
             return 404;
@@ -404,11 +389,60 @@ http {
         server_key,
         websocket_path,
         control_listen_port,
+        allocator_proxy_locations(allocator_listen_port, ca_cert),
+        control_mcp,
+        public_mcp_server,
+    )
+
+
+def _allocator_https_proxy_location(directive, allocator_listen_port, ca_cert):
+    """Loopback HTTPS proxy with the same TLS and trusted-source headers.
+
+    directive is a full nginx location matcher, for example
+    'location = /v1/catalog' or a regex location. proxy_pass has no URI
+    replacement, so method, path, body, and management-auth headers reach
+    the allocator unchanged.
+    """
+    return '''
+        %s {
+            proxy_pass https://127.0.0.1:%s;
+            proxy_http_version 1.1;
+            proxy_ssl_trusted_certificate %s;
+            proxy_ssl_verify on;
+            proxy_ssl_verify_depth 2;
+            proxy_ssl_name %s;
+            proxy_ssl_server_name on;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 180s;
+            proxy_send_timeout 180s;
+            proxy_connect_timeout 10s;
+            proxy_buffering off;
+        }''' % (
+        directive,
         allocator_listen_port,
         ca_cert,
         ALLOCATOR_BACKEND_TLS_NAME,
-        control_mcp,
-        public_mcp_server,
+    )
+
+
+def allocator_proxy_locations(allocator_listen_port, ca_cert):
+    """Anchored public allocator routes. Unrelated /v1/* paths stay closed."""
+    # remote-services/<name> is one path segment. Exact routes are listed
+    # separately so /v1/profiles and other allocator internals do not match.
+    management = (
+        'location ~ ^/v1/(?:catalog|remote-services-status|remote-services|'
+        'ai-jobs/claim|ai-jobs/complete|remote-services/[^/]+)$'
+    )
+    return (
+        _allocator_https_proxy_location(
+            'location ~ ^/(ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+|artifacts(?:/.*)?)$',
+            allocator_listen_port,
+            ca_cert,
+        )
+        + _allocator_https_proxy_location(management, allocator_listen_port, ca_cert)
     )
 
 

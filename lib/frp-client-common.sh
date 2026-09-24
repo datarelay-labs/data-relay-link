@@ -5071,6 +5071,65 @@ frp_client_upgrade_destinations() {
 }
 
 
+frp_client_mgmt_origin_root() {
+  if [[ -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    printf '%s' "${FRP_CLIENT_TEST_ROOT}"
+  else
+    printf '%s' "/"
+  fi
+}
+
+frp_client_mgmt_origin_invoke() {
+  # Usage: frp_client_mgmt_origin_invoke migrate|drift|snapshot|restore|verify [dest]
+  local cmd="$1" dest="${2:-}" root lib_dir
+  root="$(frp_client_mgmt_origin_root)"
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  python3 - "$lib_dir/drlink_mgmt_sync.py" "$root" "$cmd" "$dest" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+path, root, cmd, dest = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, str(Path(path).resolve().parent))
+spec = importlib.util.spec_from_file_location("drlink_mgmt_sync_migrate", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+if cmd == "migrate":
+    print("CHANGED" if mod.migrate_legacy_single443_agent_origin(root) else "UNCHANGED")
+elif cmd == "drift":
+    print("DRIFT" if mod.legacy_single443_mgmt_origin_drift(root) else "CLEAN")
+elif cmd == "snapshot":
+    mod.snapshot_mgmt_origin_state(root, dest)
+elif cmd == "restore":
+    mod.restore_mgmt_origin_state(root, dest)
+elif cmd == "verify":
+    if not mod.mgmt_origin_state_matches(root, dest):
+        raise SystemExit(1)
+else:
+    raise SystemExit("unknown management-origin command")
+PY
+}
+
+frp_client_migrate_legacy_single443_mgmt_origin() {
+  # Existing WSS Agents enrolled against the private allocator port keep that
+  # origin in client-state. Converge it to the public single-443 port without
+  # touching management identity, services, or Direct-mode state.
+  frp_client_mgmt_origin_invoke migrate
+}
+
+frp_client_legacy_single443_mgmt_origin_drift() {
+  local result
+  result="$(frp_client_mgmt_origin_invoke drift)" || return 2
+  if [[ "$result" == "DRIFT" ]]; then
+    return 0
+  fi
+  if [[ "$result" == "CLEAN" ]]; then
+    return 1
+  fi
+  echo "ERROR: unexpected management-origin drift result: ${result}" >&2
+  return 2
+}
+
 frp_client_upgrade_validate_existing() {
   local state toml ident
   state="$(frp_client_state_path)"
@@ -5230,6 +5289,7 @@ frp_client_upgrade_backup_tools() {
     printf 'absent version\n' >>"${dest}/manifest"
   fi
   frp_client_capture_ai_agent_service_state "$dest"
+  frp_client_mgmt_origin_invoke snapshot "${dest}/mgmt-origin-state" || return 1
   python3 - "$(frp_client_upgrade_backup_root)" "$FRP_CLIENT_UPGRADE_BACKUP_KEEP" <<'PY'
 import shutil, sys
 from pathlib import Path
@@ -5274,6 +5334,7 @@ frp_client_upgrade_restore_tools() {
   else
     rm -f "$live"
   fi
+  frp_client_mgmt_origin_invoke restore "${backup}/mgmt-origin-state" || return 1
   return 0
 }
 
@@ -5312,6 +5373,7 @@ frp_client_upgrade_verify_restored() {
       return 1
       ;;
   esac
+  frp_client_mgmt_origin_invoke verify "${backup}/mgmt-origin-state" || return 1
 }
 
 frp_client_upgrade_post_mutation_guard() {
@@ -5593,6 +5655,19 @@ frp_client_apply_upgrade() {
       update_needed=1
     fi
   fi
+  # Same-bundle convergence must still repair a legacy :6099 management origin.
+  # Direct mode and an already-public origin stay on the early return.
+  if [[ "$update_needed" == "0" ]]; then
+    local origin_drift_rc=0
+    frp_client_legacy_single443_mgmt_origin_drift || origin_drift_rc=$?
+    if [[ "$origin_drift_rc" -eq 2 ]]; then
+      echo "ERROR: could not inspect the management origin." >&2
+      return 1
+    fi
+    if [[ "$origin_drift_rc" -eq 0 ]]; then
+      update_needed=1
+    fi
+  fi
 
   if [[ "$check_only" == "1" ]]; then
     if [[ "$update_needed" == "0" ]]; then
@@ -5734,6 +5809,28 @@ frp_client_apply_upgrade() {
   fi
   if [[ -n "$mac_before" && "$(frp_client_digest "$(frp_client_identity_mac_path)")" != "$mac_before" ]]; then
     echo "ERROR: management identity MAC changed during software upgrade; restoring tools." >&2
+    frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
+    return 1
+  fi
+
+  local mgmt_origin_result
+  if ! mgmt_origin_result="$(frp_client_migrate_legacy_single443_mgmt_origin)"; then
+    echo "ERROR: failed to converge single-443 management origin; restoring tools." >&2
+    frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
+    return 1
+  fi
+  if [[ "$mgmt_origin_result" == "CHANGED" ]]; then
+    echo "Management origin        : converged to single-443 public port"
+  else
+    echo "Management origin        : unchanged"
+  fi
+  if [[ "${FRP_CLIENT_UPGRADE_HOOK_FAIL:-}" == "after-mgmt-origin" ]]; then
+    echo "ERROR: simulated failure after management-origin migration" >&2
+    frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
+    return 1
+  fi
+  if [[ -n "$key_before" && "$(frp_client_digest "$(frp_client_identity_key_path)")" != "$key_before" ]]; then
+    echo "ERROR: management identity changed while converging management origin; restoring tools." >&2
     frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
     return 1
   fi

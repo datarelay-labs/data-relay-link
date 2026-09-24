@@ -27,6 +27,7 @@ import os
 import socketserver
 import ssl
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -34,7 +35,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from drlink_control_db import ControlPlaneError, utc_now_iso
 import drlink_v24 as v24
@@ -126,6 +127,289 @@ def _origin_from_url(url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return url.rstrip("/")
     return "%s://%s" % (parsed.scheme, parsed.netloc)
+
+
+LEGACY_ALLOCATOR_BACKEND_PORT = 6099
+
+
+def rewrite_legacy_backend_url(url: str, public_port: int) -> Optional[str]:
+    """Return url with the private allocator port replaced by the public port.
+
+    None means the URL is not a legacy backend origin and must be left alone.
+    Port 443 is omitted so the result matches allocator_public_url.
+    """
+    text = str(url or "").strip()
+    parsed = urlparse(text)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return None
+    try:
+        current = parsed.port
+    except ValueError:
+        return None
+    if current != LEGACY_ALLOCATOR_BACKEND_PORT:
+        return None
+    try:
+        public = int(public_port)
+    except (TypeError, ValueError):
+        return None
+    if public < 1 or public > 65535 or public == LEGACY_ALLOCATOR_BACKEND_PORT:
+        return None
+    host = parsed.hostname
+    if ":" in host:
+        host = "[%s]" % host
+    netloc = host if public == 443 else "%s:%s" % (host, public)
+    return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+
+def _public_port_for_wss_state(state: dict) -> Optional[int]:
+    if str(state.get("frp_transport") or "").strip().lower() != "wss":
+        return None
+    try:
+        port = int(state.get("frp_server_port"))
+    except (TypeError, ValueError):
+        return None
+    if port < 1 or port > 65535:
+        return None
+    return port
+
+
+def _rewrite_url_fields(data: dict, public_port: int, keys: tuple[str, ...]) -> bool:
+    changed = False
+    for key in keys:
+        current = data.get(key)
+        if not isinstance(current, str) or not current.strip():
+            continue
+        updated = rewrite_legacy_backend_url(current, public_port)
+        if updated and updated != current:
+            data[key] = updated
+            changed = True
+    return changed
+
+
+def _agent_root(root: Optional[str]) -> Path:
+    return Path(root) if root else Path("/")
+
+
+def _load_json_dict(path: Path) -> Optional[dict]:
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen = set()
+    unique = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _client_state_path(root: Optional[str]) -> Optional[Path]:
+    base = _agent_root(root)
+    for path in v24._agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", str(base) if root else None
+    ):
+        if _load_json_dict(path) is not None:
+            return path
+    return None
+
+
+def _server_endpoint_paths(root: Optional[str]) -> list[Path]:
+    base = _agent_root(root)
+    paths = [
+        base / "etc/frp/server-endpoint.json",
+        base / "var/lib/drlink/server-endpoint.json",
+        base / "etc/drlink/server-endpoint.json",
+    ]
+    paths.extend(
+        v24._agent_state_file_candidates(
+            "etc/frp/server-endpoint.json", "server-endpoint.json", str(base) if root else None
+        )
+    )
+    return [path for path in _unique_paths(paths) if path.is_file()]
+
+
+def mgmt_origin_state_files(root: Optional[str] = None) -> list[Path]:
+    """Files the single-443 origin migration may rewrite."""
+    files = []
+    state_path = _client_state_path(root)
+    if state_path is not None:
+        files.append(state_path)
+    files.extend(_server_endpoint_paths(root))
+    return _unique_paths(files)
+
+
+def plan_legacy_single443_mgmt_origin(root: Optional[str] = None) -> list[tuple[Path, dict]]:
+    """Planned JSON rewrites. Empty for Direct mode and already-public origins."""
+    state_path = _client_state_path(root)
+    if state_path is None:
+        return []
+    state = _load_json_dict(state_path)
+    if state is None:
+        return []
+    public_port = _public_port_for_wss_state(state)
+    if public_port is None:
+        return []
+    writes: list[tuple[Path, dict]] = []
+    if _rewrite_url_fields(
+        state,
+        public_port,
+        ("allocator_url", "allocator_public_url", "mgmt_url", "management_url"),
+    ):
+        writes.append((state_path, state))
+    for path in _server_endpoint_paths(root):
+        loaded = _load_json_dict(path)
+        if loaded is None:
+            continue
+        if _rewrite_url_fields(
+            loaded,
+            public_port,
+            ("mgmt_url", "management_url", "allocator_url", "url"),
+        ):
+            writes.append((path, loaded))
+    return writes
+
+
+def legacy_single443_mgmt_origin_drift(root: Optional[str] = None) -> bool:
+    return bool(plan_legacy_single443_mgmt_origin(root))
+
+
+def _restore_bytes(path: Path, raw: Optional[bytes], mode: int) -> None:
+    if raw is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".restore", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode & 0o777)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _commit_json_files(writes: list[tuple[Path, dict]]) -> None:
+    """Replace every planned file, or restore the originals if any replace fails."""
+    saved: list[tuple[Path, Optional[bytes], int]] = []
+    temps: list[str] = []
+    replaced: list[Path] = []
+    try:
+        for path, data in writes:
+            raw = path.read_bytes() if path.is_file() else None
+            mode = path.stat().st_mode if path.is_file() else 0o600
+            saved.append((path, raw, mode))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+            temps.append(tmp)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(tmp, 0o600)
+        for index, (path, _data) in enumerate(writes):
+            os.replace(temps[index], path)
+            replaced.append(path)
+            if (
+                os.environ.get("DRLINK_MGMT_ORIGIN_MIGRATE_FAIL_AFTER") == "1"
+                and index == 0
+            ):
+                raise OSError("injected management-origin migration failure")
+    except Exception:
+        for path, raw, mode in saved:
+            if path in replaced or path.is_file():
+                _restore_bytes(path, raw, mode)
+        raise
+    finally:
+        for tmp in temps:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+
+
+def migrate_legacy_single443_agent_origin(root: Optional[str] = None) -> bool:
+    """Point an existing WSS Agent at the single-443 public origin.
+
+    Direct-mode state is not rewritten. Management identity, services, and
+    enrollment fields other than the legacy :6099 URL are preserved. All
+    rewritten files commit together. A second call is a no-op.
+    """
+    writes = plan_legacy_single443_mgmt_origin(root)
+    if not writes:
+        return False
+    _commit_json_files(writes)
+    return True
+
+
+def snapshot_mgmt_origin_state(root: Optional[str], dest_dir: str) -> None:
+    """Copy the exact bytes of every file the origin migration may rewrite."""
+    base = _agent_root(root).resolve()
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for path in mgmt_origin_state_files(root):
+        rel = path.resolve().relative_to(base).as_posix()
+        blob = dest / rel
+        blob.parent.mkdir(parents=True, exist_ok=True)
+        blob.write_bytes(path.read_bytes())
+        lines.append("%o %s\n" % (path.stat().st_mode & 0o777, rel))
+    (dest / "manifest").write_text("".join(lines), encoding="utf-8")
+
+
+def mgmt_origin_state_matches(root: Optional[str], dest_dir: str) -> bool:
+    dest = Path(dest_dir)
+    manifest = dest / "manifest"
+    if not manifest.is_file():
+        return True
+    base = _agent_root(root).resolve()
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        _mode_text, rel = line.split(" ", 1)
+        target = base / rel
+        blob = dest / rel
+        if not target.is_file() or not blob.is_file():
+            return False
+        if target.read_bytes() != blob.read_bytes():
+            return False
+    return True
+
+
+def restore_mgmt_origin_state(root: Optional[str], dest_dir: str) -> None:
+    """Restore a management-origin snapshot. Missing snapshots are left alone."""
+    dest = Path(dest_dir)
+    manifest = dest / "manifest"
+    if not manifest.is_file():
+        return
+    base = _agent_root(root).resolve()
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        mode_text, rel = line.split(" ", 1)
+        target = base / rel
+        blob = dest / rel
+        if not blob.is_file():
+            raise OSError("management-origin snapshot is missing %s" % rel)
+        _restore_bytes(target, blob.read_bytes(), int(mode_text, 8))
 
 
 def use_live_mgmt_path(root: Optional[str] = None) -> bool:
