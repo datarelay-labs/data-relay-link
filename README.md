@@ -92,7 +92,7 @@ For the v2.3.0 stable line, the current README contract uses the immutable relea
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.3.0/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/datarelay-link/v2.3.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
