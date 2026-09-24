@@ -30,6 +30,8 @@ OLD_HEAD="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 STABLE_HEAD="cccccccccccccccccccccccccccccccccccccccc"
 PREVIEW_HEAD="dddddddddddddddddddddddddddddddddddddddd"
 MAIN_HEAD="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+STALE_MANIFEST_HEAD="1111111111111111111111111111111111111111"
+EXACT_CANDIDATE_SHA="2222222222222222222222222222222222222222"
 
 kv() {
   awk -F= -v k="$1" '$1==k {print substr($0, index($0,"=")+1); exit}' "$2"
@@ -217,6 +219,51 @@ pass "PROVENANCE_ROLLBACK_RESTORES_PRIOR_IDENTITY"
 
 SRC="$WORKDIR/src"
 frp_test_copy_repo_tree "$ROOT" "$SRC"
+
+# Exact expected SHA must win over a stale development manifest. git_ref=main
+# and source_head are both different from the candidate that was validated.
+[[ "$EXACT_CANDIDATE_SHA" != "$STALE_MANIFEST_HEAD" ]] || fail "mismatch fixture collapsed"
+rewrite_manifest "$SRC" development main "$STALE_MANIFEST_HEAD"
+MISMATCH="$WORKDIR/mismatch"
+write_client_fixture "$MISMATCH" development "$OLD_REF" "$OLD_HEAD" "$SRC"
+run_upgrade "$MISMATCH" "$SRC" --check \
+  FRP_EXPECTED_RELEASE_CHANNEL=development \
+  FRP_EXPECTED_SOURCE_REF="$EXACT_CANDIDATE_SHA" \
+  >"$WORKDIR/mismatch-check.out"
+grep -q 'Update                    : available' "$WORKDIR/mismatch-check.out" || fail "mismatch check"
+[[ "$(kv SOURCE_REF "$MISMATCH/etc/drlink/version")" == "$OLD_REF" ]] || fail "mismatch check changed ref"
+run_upgrade "$MISMATCH" "$SRC" "" \
+  FRP_EXPECTED_RELEASE_CHANNEL=development \
+  FRP_EXPECTED_SOURCE_REF="$EXACT_CANDIDATE_SHA" \
+  >"$WORKDIR/mismatch-apply.out"
+grep -q 'Upgrade complete.' "$WORKDIR/mismatch-apply.out" || fail "mismatch apply"
+assert_healed "$MISMATCH" development "$EXACT_CANDIDATE_SHA" "$EXACT_CANDIDATE_SHA"
+[[ "$(kv SOURCE_HEAD "$MISMATCH/etc/drlink/version")" != "$STALE_MANIFEST_HEAD" ]] || fail "stale manifest head persisted"
+assert_idempotent "$MISMATCH" "$SRC" mismatch \
+  FRP_EXPECTED_RELEASE_CHANNEL=development \
+  FRP_EXPECTED_SOURCE_REF="$EXACT_CANDIDATE_SHA"
+pass "EXACT_SHA_PRECEDES_STALE_MANIFEST_SOURCE_HEAD"
+pass "EXACT_SHA_MISMATCH_SECOND_RUN_IDEMPOTENT"
+
+MISMATCH_ROLL="$WORKDIR/mismatch-rollback"
+write_client_fixture "$MISMATCH_ROLL" development "$OLD_REF" "$OLD_HEAD" "$SRC"
+if env -u FRP_CLIENT_UPDATE_SOURCE \
+  -u FRP_EXPECTED_SOURCE_HEAD -u FRP_RELEASE_CHANNEL \
+  FRP_CLIENT_TEST_ROOT="$MISMATCH_ROLL" \
+  FRP_SKIP_SYSTEMD=1 FRP_SKIP_DOWNLOAD=1 \
+  FRP_BUNDLE_SHA256="$BUNDLE" \
+  FRP_EXPECTED_RELEASE_CHANNEL=development \
+  FRP_EXPECTED_SOURCE_REF="$EXACT_CANDIDATE_SHA" \
+  FRP_CLIENT_UPGRADE_HOOK_FAIL=after-mgmt-origin \
+  bash "$SRC/install-client.sh" --upgrade \
+  >"$WORKDIR/mismatch-rollback.out" 2>"$WORKDIR/mismatch-rollback.err"; then
+  fail "mismatch post-version failure should roll back"
+fi
+grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/mismatch-rollback.out" "$WORKDIR/mismatch-rollback.err" || fail "mismatch rollback marker"
+[[ "$(kv SOURCE_REF "$MISMATCH_ROLL/etc/drlink/version")" == "$OLD_REF" ]] || fail "mismatch rollback lost source ref"
+[[ "$(kv SOURCE_HEAD "$MISMATCH_ROLL/etc/drlink/version")" == "$OLD_HEAD" ]] || fail "mismatch rollback lost source head"
+assert_state_preserved "$MISMATCH_ROLL"
+pass "EXACT_SHA_MISMATCH_ROLLBACK_RESTORES_PRIOR_IDENTITY"
 
 rewrite_manifest "$SRC" stable "v${PROJECT_VERSION}" "$STABLE_HEAD"
 STABLE="$WORKDIR/stable"

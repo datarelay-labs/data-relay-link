@@ -674,10 +674,15 @@ frp_client_provenance_token_equal() {
   [[ "$left" == "$right" ]]
 }
 
-# Validated candidate commit. Manifest source_head wins; an exact SHA ref is
-# the head when the manifest does not carry one.
+# Exact validated candidate SHA is the applied commit. A checked-in development
+# manifest source_head intentionally lags that SHA, so it must not win.
+# Tag and RC refs take SOURCE_HEAD only from the artifact manifest.
 frp_client_candidate_source_head() {
   local source="$1" candidate_ref="$2" head=""
+  if [[ "$candidate_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s' "$candidate_ref" | tr '[:upper:]' '[:lower:]'
+    return 0
+  fi
   if [[ -f "${source}/release-manifest.json" ]]; then
     head="$(python3 - "${source}/release-manifest.json" <<'PY'
 import json, re, sys
@@ -690,9 +695,6 @@ if re.fullmatch(r"[0-9a-fA-F]{40}", head):
     sys.stdout.write(head.lower())
 PY
 )" || head=""
-  fi
-  if [[ -z "$head" && "$candidate_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    head="$(printf '%s' "$candidate_ref" | tr '[:upper:]' '[:lower:]')"
   fi
   printf '%s' "$head"
 }
