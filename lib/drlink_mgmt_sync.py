@@ -1399,6 +1399,8 @@ def handle_allocator_http(
         )
         _require_managed_host(plane, auth.machine_id)
         _commit_auth_nonce(verifier, auth)
+        if hasattr(plane, "refresh_managed_host_liveness"):
+            plane.refresh_managed_host_liveness(auth.machine_id)
         if method.upper() == "GET" and parsed == "/v1/catalog":
             return 200, _with_response_mac(build_catalog_payload(plane), auth)
         if method.upper() == "POST" and parsed == "/v1/remote-services":

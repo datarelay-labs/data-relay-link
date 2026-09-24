@@ -117,6 +117,9 @@ AI_TERMINAL_JOB_STATUSES = frozenset(
 AI_ACTIVE_JOB_STATUSES = frozenset({"queued", "running"})
 # Absolute claim/completion deadline includes MCP wait slack past the exec timeout.
 AI_JOB_DISPATCH_GRACE_SECONDS = 10
+# Enrollment-time connected=1 must not stay live without fresh runtime or
+# signed management evidence. Agent claim polls are well under this bound.
+MANAGED_HOST_LIVENESS_SECONDS = 120
 MCP_AUTH_MODEL = "static-bearer+built-in-oauth2.1-as/rs+rfc9728"
 OBJECT_TYPES = ("host", "network", "fqdn")
 PLANES = ("remote", "internet")
@@ -174,6 +177,22 @@ def _ai_job_deadline_passed(deadline_at: Optional[str], *, now_iso: Optional[str
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return now >= deadline
+
+
+def managed_host_liveness_fresh(last_seen: Optional[str], *, now_iso: Optional[str] = None) -> bool:
+    """True when last_seen is within the Managed Host liveness bound."""
+    seen = _parse_ai_job_ts(last_seen)
+    if seen is None:
+        return False
+    now = _parse_ai_job_ts(now_iso) if now_iso else datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    age = (now - seen).total_seconds()
+    return 0 <= age <= MANAGED_HOST_LIVENESS_SECONDS
 
 
 def _validate_name(value: str, kind: str = "name") -> str:
@@ -1421,23 +1440,26 @@ class ControlPlane:
         existing = self.conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
         endpoint_name = (label or (existing["label"] if existing else None) or client_id[:8]).strip()
 
+        presence = "connected" if connected else "disconnected"
+
         def write():
             if existing:
                 self.conn.execute(
                     "UPDATE clients SET label = COALESCE(?, label), description = COALESCE(?, description), "
-                    "hostname = COALESCE(?, hostname), status = 'connected', connected = ?, last_seen = ?, "
+                    "hostname = COALESCE(?, hostname), status = ?, connected = ?, last_seen = ?, "
                     "row_version = row_version + 1, updated_at = ? WHERE id = ?",
-                    (label, description, hostname, 1 if connected else 0, now, now, client_id),
+                    (label, description, hostname, presence, 1 if connected else 0, now, now, client_id),
                 )
             else:
                 self.conn.execute(
                     "INSERT INTO clients(id, label, description, hostname, status, trust_status, connected, "
-                    "last_seen, row_version, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', 'trusted', ?, ?, 1, ?, ?)",
+                    "last_seen, row_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'trusted', ?, ?, 1, ?, ?)",
                     (
                         client_id,
                         label or "",
                         description or "",
                         hostname or "",
+                        presence,
                         1 if connected else 0,
                         now,
                         now,
@@ -1576,7 +1598,7 @@ class ControlPlane:
         if ep and ep["client_id"]:
             client = self.conn.execute("SELECT * FROM clients WHERE id = ?", (ep["client_id"],)).fetchone()
         status = "Orphaned" if obj["status"] == "orphaned" else (
-            "Connected" if client and client["connected"] else "Disconnected"
+            "Connected" if self.client_effectively_connected(client) else "Disconnected"
         )
         lines = [
             "Managed Host: %s" % obj["name"],
@@ -4454,9 +4476,60 @@ class ControlPlane:
                 (terminal, now, row["id"]),
             )
 
+    def client_effectively_connected(self, client) -> bool:
+        """Time-bounded online truth shared by CLI and MCP.
+
+        A persisted connected flag or status='connected' is not enough. The
+        host must still be trusted, not retired, and have last_seen inside
+        MANAGED_HOST_LIVENESS_SECONDS.
+        """
+        if client is None:
+            return False
+        try:
+            connected = int(client["connected"] or 0)
+        except (KeyError, TypeError, ValueError):
+            connected = 0
+        if not connected:
+            return False
+        trust = str(client["trust_status"] or "") if "trust_status" in client.keys() else ""
+        if trust and trust != "trusted":
+            return False
+        status = str(client["status"] or "").lower() if "status" in client.keys() else ""
+        if status in ("retired", "removed", "deleted"):
+            return False
+        last_seen = client["last_seen"] if "last_seen" in client.keys() else None
+        return managed_host_liveness_fresh(last_seen)
+
+    def managed_host_connectivity(self, client) -> str:
+        return "connected" if self.client_effectively_connected(client) else "disconnected"
+
+    def refresh_managed_host_liveness(self, client_id: str) -> bool:
+        """Record signed management activity as fresh liveness.
+
+        Revoked and retired hosts are not revived.
+        """
+        row = self.conn.execute(
+            "SELECT trust_status, status FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        if str(row["trust_status"] or "") != "trusted":
+            return False
+        if str(row["status"] or "").lower() in ("retired", "removed", "deleted"):
+            return False
+        now = utc_now_iso()
+        self.conn.execute(
+            "UPDATE clients SET connected = 1, status = 'connected', last_seen = ?, "
+            "row_version = row_version + 1, updated_at = ? WHERE id = ?",
+            (now, now, client_id),
+        )
+        self.commit_if_autonomous()
+        return True
+
     def claim_ai_jobs(self, client_id: str, limit: int = 4) -> list[dict]:
         ensure_ai_jobs_safety_schema(self.conn)
         self.assert_ai_job_claimant(client_id)
+        self.refresh_managed_host_liveness(client_id)
         now = utc_now_iso()
         self._terminalize_expired_queued_ai_jobs(client_id=client_id, now=now)
         self._fail_closed_stale_running_ai_jobs(client_id=client_id, now=now)
@@ -4559,6 +4632,7 @@ class ControlPlane:
     ) -> None:
         ensure_ai_jobs_safety_schema(self.conn)
         self.assert_ai_job_claimant(client_id)
+        self.refresh_managed_host_liveness(client_id)
         row = self.conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise ControlPlaneError("AI job not found")
@@ -4630,8 +4704,9 @@ class ControlPlane:
         return [
             dict(r)
             for r in self.conn.execute(
-                "SELECT id, label, connected, status FROM clients WHERE connected = 1 AND trust_status = 'trusted'"
+                "SELECT * FROM clients WHERE connected = 1 AND trust_status = 'trusted'"
             )
+            if self.client_effectively_connected(r)
         ]
 
     def client_for_endpoint(self, endpoint_obj_id: str) -> Optional[sqlite3.Row]:

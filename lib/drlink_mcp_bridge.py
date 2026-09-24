@@ -748,11 +748,17 @@ class MCPBridge:
                         allowed = True
                         break
                 if allowed:
+                    client = None
+                    if obj.get("client_id"):
+                        client = self.plane.conn.execute(
+                            "SELECT * FROM clients WHERE id = ?", (obj["client_id"],)
+                        ).fetchone()
                     hosts.append(
                         {
                             "name": obj["name"],
                             "status": obj.get("status"),
                             "client_id": obj.get("client_id"),
+                            "connectivity": self.plane.managed_host_connectivity(client),
                         }
                     )
             self.plane.record_ai_activity(
@@ -802,7 +808,7 @@ class MCPBridge:
             )
             return _text_result("Authorization: ALLOW\nDelivery: endpoint unavailable (orphaned)", is_error=True)
         client = self.plane.client_for_endpoint(ep["id"])
-        if client is None or not int(client["connected"] or 0):
+        if client is None or not self.plane.client_effectively_connected(client):
             self.plane.record_ai_activity(
                 principal=principal["name"],
                 endpoint=endpoint,

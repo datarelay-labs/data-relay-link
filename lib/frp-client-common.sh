@@ -4357,6 +4357,72 @@ frp_client_stop() {
   return 0
 }
 
+frp_client_install_ai_agent_unit() {
+  local source="${1:-}"
+  local dest src
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  dest="$(frp_client_path /etc/systemd/system/drlink-ai-agent.service)"
+  mkdir -p "$(dirname "$dest")"
+  src=""
+  if [[ -n "$source" && -f "$source/client/drlink-ai-agent.service" ]]; then
+    src="$source/client/drlink-ai-agent.service"
+  elif [[ -n "${_FRP_INSTALL_CLIENT_DIR:-}" && -f "${_FRP_INSTALL_CLIENT_DIR}/client/drlink-ai-agent.service" ]]; then
+    src="${_FRP_INSTALL_CLIENT_DIR}/client/drlink-ai-agent.service"
+  fi
+  if [[ -n "$src" ]]; then
+    if declare -F frp_write_compatible_systemd_unit >/dev/null 2>&1; then
+      frp_write_compatible_systemd_unit "$src" "$dest" || return 1
+    else
+      install -m 0644 "$src" "$dest" || return 1
+    fi
+    return 0
+  fi
+  cat >"$dest" <<'EOF'
+[Unit]
+Description=Data Relay Link AI Agent Worker
+After=network-online.target drlink-client.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/drlink_ai_agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$dest" || return 1
+  return 0
+}
+
+frp_client_converge_ai_agent_unit() {
+  local source="${1:-}"
+  local ctl log
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  frp_client_install_ai_agent_unit "$source" || return 1
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" ]]; then
+    return 0
+  fi
+  ctl="${FRP_SYSTEMCTL_BIN:-}"
+  if [[ -z "$ctl" && -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    log="$(frp_client_path /var/lib/drlink/ai-agent-systemd.actions)"
+    mkdir -p "$(dirname "$log")"
+    printf '%s\n' "enable drlink-ai-agent" "restart drlink-ai-agent" >>"$log"
+    return 0
+  fi
+  if [[ -z "$ctl" ]]; then
+    ctl="systemctl"
+  fi
+  "$ctl" enable drlink-ai-agent >/dev/null || return 1
+  "$ctl" restart drlink-ai-agent >/dev/null || return 1
+  return 0
+}
+
 frp_client_restart() {
   frp_client_hook_log restart
   if [[ "${FRP_CLIENT_HOOK_RESTART_FAIL:-}" == "1" ]]; then
@@ -5456,6 +5522,16 @@ frp_client_apply_upgrade() {
     return 1
   fi
 
+  _ai_agent_converged=0
+  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+    if ! frp_client_converge_ai_agent_unit "$source"; then
+      echo "ERROR: failed to install and restart drlink-ai-agent.service; restoring previous management files." >&2
+      frp_client_upgrade_rollback "$backup" HEALTH_CHECK_FAILED || return 2
+      return 1
+    fi
+    _ai_agent_converged=1
+  fi
+
   ident_after="$(frp_identity_label)"
   frp_after="${FRP_VERSION}"
   _FRP_CLIENT_UPGRADE_MUTATION_STARTED=0
@@ -5484,6 +5560,9 @@ frp_client_apply_upgrade() {
   echo "Client state    : preserved"
   echo "Management ID   : ${ident_after}"
   echo "frpc restarted  : NO"
+  if [[ "${_ai_agent_converged:-0}" == "1" ]]; then
+    echo "AI agent service : converged"
+  fi
   echo "Enrollment Code : NOT REQUIRED"
   return 0
 }

@@ -422,12 +422,9 @@ frp_client_service_start() {
   else
     frp_retire_legacy_client_unit || return 1
     systemctl enable drlink-client >/dev/null && systemctl restart drlink-client
-    # Durable AI worker: start with the Agent. Failures here are non-fatal for
-    # connectivity-only installs, but logged; Doctor/MCP will surface TIMEOUT.
-    if [[ -f /etc/systemd/system/drlink-ai-agent.service ]]; then
-      systemctl enable drlink-ai-agent >/dev/null 2>&1 || true
-      systemctl restart drlink-ai-agent >/dev/null 2>&1 || true
-    fi
+    # Durable AI worker. Connectivity install still proceeds if the worker
+    # cannot start; product update fails closed when the same converge fails.
+    frp_client_converge_ai_agent_unit "${_FRP_INSTALL_CLIENT_DIR:-}" || true
   fi
 }
 

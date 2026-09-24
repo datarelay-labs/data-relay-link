@@ -189,7 +189,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             hostname = client["hostname"] if client else "-"
             status = (
                 "Connected"
-                if client and client["connected"]
+                if client and plane.client_effectively_connected(client)
                 else ("Disconnected" if client else "Managed Host")
             )
             sys.stdout.write(
@@ -330,11 +330,16 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
     if res in ("managed-hosts",):
         _require_server(plane, "Managed Hosts")
         for row in plane.conn.execute(
-            "SELECT id, label, hostname, status FROM clients ORDER BY COALESCE(label, hostname, id)"
+            "SELECT id, label, hostname, status, connected, trust_status, last_seen "
+            "FROM clients ORDER BY COALESCE(label, hostname, id)"
         ):
             sys.stdout.write(
                 "%s %s %s\n"
-                % (row["label"] or row["hostname"] or row["id"][:8], row["hostname"] or "-", row["status"])
+                % (
+                    row["label"] or row["hostname"] or row["id"][:8],
+                    row["hostname"] or "-",
+                    plane.managed_host_connectivity(row),
+                )
             )
         return 0
     if res == "managed-host":
@@ -379,12 +384,13 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             return 0
         if view == "agent":
             host_label = client["label"] or client["hostname"] or client["id"][:8]
-            connection = "Connected" if client["connected"] else "Disconnected"
+            connectivity = plane.managed_host_connectivity(client)
+            connection = "Connected" if connectivity == "connected" else "Disconnected"
             last_seen = client["last_seen"] or "Never"
             lines = [
                 "Managed Host Agent: %s" % host_label,
                 "Connection   : %s" % connection,
-                "Host status  : %s" % (client["status"] or "-"),
+                "Host status  : %s" % connectivity,
                 "Last seen    : %s" % last_seen,
                 "Agent version: Not reported to Server",
                 "Source HEAD  : Not reported to Server",
@@ -428,13 +434,14 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                     expected="  remote-services\n  agent\n  addresses",
                 )
             )
+        connectivity = plane.managed_host_connectivity(client)
         sys.stdout.write(
             "Managed Host: %s\nHostname: %s\nStatus: %s\nAgent: %s\n"
             % (
                 client["label"] or client["hostname"] or client["id"][:8],
                 client["hostname"] or "-",
-                client["status"],
-                "Connected" if client["connected"] else "Disconnected",
+                connectivity,
+                "Connected" if connectivity == "connected" else "Disconnected",
             )
         )
         return 0

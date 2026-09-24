@@ -109,6 +109,7 @@ python3 tests/test-release-recovery-dual-role-audit-docs-closure.py
 python3 tests/test-repl-live-inventory.py
 ./tests/test-real-e2e-canonical-cli.sh
 ./tests/test-client-upgrade.sh
+./tests/test-ai-agent-unit-lifecycle.sh
 ./tests/test-safe-repo-copy.sh
 bash ./tests/test-installed-client-update.sh
 ./tests/test-legacy-client-secure-bridge.sh
@@ -232,6 +233,7 @@ python3 tests/test-v24-managed-host-retirement.py
 python3 tests/test-v24-user-lifecycle-ux.py
 python3 tests/test-v24-ai-auth-convergence.py
 python3 tests/test-v24-ai-job-safety.py
+python3 tests/test-v24-managed-host-liveness.py
 python3 tests/test-v24-ai-jobs-json1-independence.py
 python3 tests/test-v24-authoritative-connectivity-convergence.py
 python3 tests/test-v24-internet-runtime-parity.py
