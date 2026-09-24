@@ -4035,7 +4035,9 @@ class ControlPlane:
         else:
             if principal is None or not int(principal["enabled"] or 0):
                 raise ControlPlaneError("AI Principal disabled or missing")
-            if str(principal["credential_status"] or "").lower() == "revoked":
+            # pending: in-progress verification ceremony (stage_ai_identity_oauth).
+            # verified/active: already trusted. none and other untrusted states are not.
+            if str(principal["credential_status"] or "").lower() not in ("pending", "verified", "active"):
                 raise self._oauth_approval_lifecycle_error(principal["name"])
             if principal_name and str(principal["name"]).lower() != str(principal_name).lower():
                 raise ControlPlaneError("pending OAuth request is bound to a different AI Principal")

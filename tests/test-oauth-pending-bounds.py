@@ -91,6 +91,11 @@ class OAuthPendingBoundsTests(unittest.TestCase):
             ],
             root=self.tmp,
         )
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'pending' WHERE name = ?",
+            (name,),
+        )
+        self.plane.conn.commit()
 
     def _create(self, client: str, state: str = "s", source: str = "") -> dict:
         return self.plane.create_oauth_pending(

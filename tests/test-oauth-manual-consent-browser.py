@@ -93,6 +93,12 @@ class ManualConsentBrowserTests(unittest.TestCase):
             ],
             root=self.tmp,
         )
+        # configure oauth binds a client but does not verify. Browser success
+        # paths use the verification-ceremony pending state, not credential none.
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'pending' WHERE name = 'agent-a'"
+        )
+        self.plane.conn.commit()
         self.port = free_port()
         self.bridge = MCPBridge(root=self.tmp, plane=self.plane, auto_agents=False)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), make_handler(self.bridge))

@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -231,6 +232,62 @@ class OAuthPrincipalLifecycleTests(unittest.TestCase):
         )
         self.assertIsNone(self.plane.authenticate_static_bearer(bearer))
         self.assertIsNone(self.plane.get_principal("plain-ai")["credential_hash"])
+
+    def test_bound_none_configure_cannot_approve_pending_ceremony_can(self):
+        self.plane.set_ai_principal("bound-plain", enabled=True)
+        self.assertEqual(str(self.plane.get_principal("bound-plain")["credential_status"]).lower(), "none")
+        self.plane.configure_ai_auth("bound-plain", "oauth")
+        self.plane.add_oauth_redirect("bound-plain", REDIRECT)
+        client = self.plane.conn.execute(
+            "SELECT principal_id FROM ai_oauth_clients WHERE client_id = ?",
+            ("bound-plain",),
+        ).fetchone()
+        self.assertEqual(client["principal_id"], self.plane.get_principal("bound-plain")["id"])
+        verifier, challenge = _pkce()
+        qs = urllib.parse.urlencode(
+            {
+                "response_type": "code",
+                "client_id": "bound-plain",
+                "redirect_uri": REDIRECT,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "resource": self.resource,
+                "state": "bound-none",
+            }
+        )
+        page = urllib.request.urlopen(self.base + "/oauth/authorize?" + qs, timeout=10).read().decode("utf-8")
+        self.assertIn("approve-oauth", page)
+        pending = self.plane.conn.execute(
+            "SELECT id, principal_id FROM ai_oauth_pending WHERE state = ?",
+            ("bound-none",),
+        ).fetchone()
+        self.assertEqual(pending["principal_id"], self.plane.get_principal("bound-plain")["id"])
+        with self.assertRaises(ControlPlaneError) as ctx:
+            self.plane.approve_oauth_pending(pending["id"], retain_for_browser=False)
+        self.assertIn("revoked or not VERIFIED", str(ctx.exception))
+        self.assertEqual(str(self.plane.get_principal("bound-plain")["credential_status"]).lower(), "none")
+        self.assertEqual(self._codes_for("bound-plain"), 0)
+        self.assertIsNone(self.plane.authenticate_oauth_token("drauth_not-issued", resource=self.resource))
+
+        session = ai_id.begin_authorization_code(
+            self.plane, "ceremony-ai", redirect_uri=REDIRECT, resource=self.resource
+        )
+        self.assertEqual(str(self.plane.get_principal("ceremony-ai")["credential_status"]).lower(), "pending")
+        approved = self.plane.approve_oauth_pending(session["pending_id"], retain_for_browser=False)
+        issued = self.plane.exchange_authorization_code(
+            code=approved["code"],
+            verifier=session["verifier"],
+            redirect_uri=session["redirect_uri"],
+            resource=session["resource"],
+            client_id="ceremony-ai",
+        )
+        self.assertTrue(str(issued.get("access_token") or "").startswith("drauth_"))
+        marked = ai_id._mark_verified(self.plane, "ceremony-ai", subject="ceremony-ai", grant="authorization_code")
+        self.assertIn("VERIFIED", marked["after"])
+        self.assertEqual(str(self.plane.get_principal("ceremony-ai")["credential_status"]).lower(), "verified")
+        authed = self.plane.authenticate_oauth_token(issued["access_token"], resource=session["resource"])
+        self.assertIsNotNone(authed)
+        self.assertEqual(authed["name"], "ceremony-ai")
 
     def test_bound_revoked_identity_is_not_resurrected_by_staging_or_approval(self):
         session = ai_id.begin_authorization_code(self.plane, "revoked-ai", redirect_uri=REDIRECT, resource=self.resource)
