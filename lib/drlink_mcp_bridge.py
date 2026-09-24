@@ -1286,8 +1286,6 @@ def make_handler(bridge: MCPBridge):
                         self._send(400, {"error": "invalid_request"})
                         return
                 else:
-                    from urllib.parse import parse_qs
-
                     qs = parse_qs(raw.decode("utf-8"))
                     fields = {k: (v[0] if v else "") for k, v in qs.items()}
                 auth = _header(self.headers, "Authorization")
