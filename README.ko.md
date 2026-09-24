@@ -80,7 +80,7 @@ v2.3.0 stable line에서 현재 README contract가 사용하는 immutable releas
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.3.0/dist/bootstrap-server.sh \
+  https://raw.githubusercontent.com/datarelay-labs/datarelay-link/v2.3.0/dist/bootstrap-server.sh \
   | sudo bash
 ```
 
