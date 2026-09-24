@@ -64,7 +64,7 @@ SECRET_RE = re.compile(
     r'(BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY|'
     r'auth\.token\s*=\s*\S+|'
     r'mgmt_mac_key|'
-    r'FRP_BOOTSTRAP_TICKET=|'
+    r'FRP_BOOTSTRAP_TICKET\s*=\s*\S+|'
     r'bt1\.[0-9a-f]{16}\.[0-9a-f]{32,}|'
     r'zt1\.[A-Za-z0-9_-]{16,}|'
     r'Enrollment Code:\s*\S+)',

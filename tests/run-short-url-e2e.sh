@@ -279,7 +279,11 @@ CMD="$(python3 - "$CREATE_OUT" <<'PY'
 import re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"^curl -fsSL 'https://[^']+/i/bt1\.[0-9a-f]+\.[0-9a-f]+' \| sudo bash$", text, re.M)
+m = re.search(
+    r"^curl -fsSL (?:'https://[^']+/i/(?:bt1\.[0-9a-f]+\.[0-9a-f]+|[A-Za-z0-9_-]{22})' \| sudo bash|https://[^ ']+/i/(?:bt1\.[0-9a-f]+\.[0-9a-f]+|[A-Za-z0-9_-]{22})\|sudo bash)$",
+    text,
+    re.M,
+)
 if not m:
     raise SystemExit('missing short URL command in:\n' + text)
 print(m.group(0))
@@ -287,14 +291,14 @@ PY
 )"
 note "SHORT_URL_COMMAND_HOST=$BOOTSTRAP_HOST"
 # Do not log the opaque ticket. Keep only the command shape.
-note "SHORT_URL_COMMAND=curl -fsSL https://${BOOTSTRAP_HOST}/i/<redacted> | sudo bash"
+note "SHORT_URL_COMMAND=curl -fsSL https://${BOOTSTRAP_HOST}/i/<redacted>|sudo bash"
 [[ "$CMD" == *"$BOOTSTRAP_HOST"* ]] || fail "command host mismatch"
 if [[ "$CMD" == *zt1.* ]]; then
   fail "short URL path unexpectedly used zt1"
 fi
 # Only inspect curl argv before the URL. Substring "-k" inside a hostname
 # (e.g. trycloudflare "...-keyboard...") must not trip this gate.
-curl_argv="${CMD%%\'https://*}"
+curl_argv="${CMD%%https://*}"
 if [[ "$curl_argv" == *'--insecure'* || "$curl_argv" == *' -k '* || "$curl_argv" == *' -k'* || "$curl_argv" == curl\ -k* || "$curl_argv" == curl\ -*k* ]]; then
   fail "insecure TLS in printed command"
 fi

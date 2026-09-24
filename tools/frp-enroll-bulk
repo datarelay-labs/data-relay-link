@@ -175,6 +175,8 @@ def main(argv=None):
         for index, (ticket, enroll_record, ticket_record) in enumerate(issued_pairs):
             label, ssh_user, note, services = validated[index]
             ticket_id = str(ticket_record.get('id') or '')
+            if isinstance(ticket_record, dict):
+                ticket_record.pop('_short_handle', None)
             try:
                 package = create.encode_zero_touch_package(allocator_url, ca_fp, ticket)
                 command = 'curl -fsSL %s | sudo bash -s -- %s' % (

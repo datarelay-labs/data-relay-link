@@ -4,6 +4,7 @@ if sys.version_info < (3, 7):
     sys.stderr.write('ERROR: python 3.7 or newer is required\n')
     raise SystemExit(1)
 import argparse
+import base64
 import fcntl
 import hashlib
 import hmac
@@ -40,6 +41,9 @@ BOOTSTRAP_TICKET_PREFIX = 'bt1'
 BOOTSTRAP_ID_HEX_LEN = 16
 BOOTSTRAP_SECRET_HEX_LEN = 64
 BOOTSTRAP_TICKET_MAX_LEN = 160
+COMPACT_CREDENTIAL_BYTES = 16
+COMPACT_CREDENTIAL_RE = re.compile(r'^[A-Za-z0-9_-]{22}$')
+BOOTSTRAP_ALLOCATE_ATTEMPTS = 8
 BOOTSTRAP_DUMMY_HASH = '0' * 64
 HEX_RE = re.compile(r'^[0-9a-f]+$')
 MACHINE_ID_MAX_LEN = 128
@@ -589,6 +593,110 @@ def hash_bootstrap_secret(secret):
     return hashlib.sha256(secret.encode('ascii')).hexdigest()
 
 
+class BootstrapPathExists(Exception):
+    """Derived ticket or enrollment path is already occupied."""
+
+
+def generate_compact_bootstrap_credential():
+    """128-bit CSPRNG capability, unpadded base64url (22 chars)."""
+    token = base64.urlsafe_b64encode(
+        secrets.token_bytes(COMPACT_CREDENTIAL_BYTES)
+    ).decode('ascii').rstrip('=')
+    if not COMPACT_CREDENTIAL_RE.fullmatch(token):
+        raise RuntimeError('compact bootstrap credential encoding failed')
+    return token
+
+
+def compact_bootstrap_record_id(credential):
+    return hash_bootstrap_secret(credential)[:BOOTSTRAP_ID_HEX_LEN]
+
+
+def short_handle_index_path(bootstrap_dir, handle_id):
+    text = str(handle_id or '').lower()
+    if len(text) != BOOTSTRAP_ID_HEX_LEN or not HEX_RE.fullmatch(text):
+        return None
+    return Path(bootstrap_dir) / 'handles' / (text + '.json')
+
+
+def windows_renderer_inputs_from_cfg(cfg):
+    """Non-secret Windows stage-1 inputs. None when the host cannot render yet."""
+    if not isinstance(cfg, dict) or ZT is None or PKI is None:
+        return None
+    allocator = str(cfg.get('allocator_public_url') or '').strip()
+    installer = str(cfg.get('windows_client_installer_url') or '').strip()
+    ca_path = str(cfg.get('tls_ca_cert') or '').strip()
+    if not allocator.lower().startswith('https://') or not installer.lower().startswith('https://'):
+        return None
+    try:
+        if not ca_path or not Path(ca_path).is_file():
+            return None
+        ca_fp = PKI.fingerprint_from_cert_file(ca_path)
+    except OSError:
+        return None
+    except Exception:
+        return None
+    if not ca_fp or len(str(ca_fp)) != 64:
+        return None
+    return {
+        'allocator_url': allocator,
+        'allocator_ca_sha256': str(ca_fp).strip().lower(),
+        'installer_url': installer,
+    }
+
+
+def load_presented_bootstrap(bootstrap_dir, raw, read_record):
+    """Resolve a presented bt1 secret or short-URL handle.
+
+    Returns (ticket_id, record, path, matched). The short handle is an
+    additional verifier for /i/; it does not replace the bt1 secret_hash.
+    """
+    text = raw.strip() if isinstance(raw, str) else ''
+    parsed = parse_bootstrap_ticket(text)
+    if parsed:
+        ticket_id, secret = parsed
+        provided = hash_bootstrap_secret(secret)
+        record, path = read_record(ticket_id)
+        stored = BOOTSTRAP_DUMMY_HASH
+        if isinstance(record, dict):
+            candidate = str(record.get('secret_hash') or '')
+            if HEX_RE.fullmatch(candidate) and len(candidate) == 64:
+                stored = candidate
+        matched = bool(isinstance(record, dict) and hmac.compare_digest(provided, stored))
+        return ticket_id, record if matched else None, path, matched
+    if COMPACT_CREDENTIAL_RE.fullmatch(text):
+        provided = hash_bootstrap_secret(text)
+        stored = BOOTSTRAP_DUMMY_HASH
+        ticket_id = ''
+        index_path = short_handle_index_path(bootstrap_dir, provided[:BOOTSTRAP_ID_HEX_LEN])
+        index = None
+        if index_path is not None and index_path.is_file():
+            try:
+                index = load_json(index_path)
+            except Exception:
+                index = None
+        if isinstance(index, dict):
+            candidate = str(index.get('handle_hash') or '')
+            if HEX_RE.fullmatch(candidate) and len(candidate) == 64:
+                stored = candidate
+            ticket_id = str(index.get('ticket_id') or '')
+        handle_ok = hmac.compare_digest(provided, stored)
+        record, path = (None, None)
+        if handle_ok and ticket_id:
+            record, path = read_record(ticket_id)
+        record_hash = ''
+        if isinstance(record, dict):
+            record_hash = str(record.get('short_handle_hash') or '')
+        record_ok = bool(
+            HEX_RE.fullmatch(record_hash)
+            and len(record_hash) == 64
+            and hmac.compare_digest(provided, record_hash)
+        )
+        matched = bool(handle_ok and record_ok)
+        return ticket_id, record if matched else None, path, matched
+    hmac.compare_digest(BOOTSTRAP_DUMMY_HASH, BOOTSTRAP_DUMMY_HASH)
+    return '', None, None, False
+
+
 class ZeroTouchCapacityError(RuntimeError):
     """Raised when Zero-Touch issuance would exceed server-side ceilings."""
 
@@ -724,7 +832,11 @@ def revoke_bootstrap_tickets_by_batch(bootstrap_dir, batch_id, now_iso=None):
 
 
 def parse_bootstrap_ticket(raw):
-    """Return (ticket_id, secret) or None. Never raises on malformed input."""
+    """Return (ticket_id, secret) for a bt1 credential, or None.
+
+    The 22-char short-URL handle is not a bt1 secret. Resolve it with
+    load_presented_bootstrap. Never raises on malformed input.
+    """
     if raw is None:
         return None
     if not isinstance(raw, str):
@@ -816,8 +928,14 @@ def enrollment_state_dir(enrollments_dir, cfg=None):
     return Path(enrollments_dir).resolve().parent
 
 
-def _prepare_bootstrap_ticket_pair(services, ttl, note='', label='', batch_id=''):
-    """Build enrollment+ticket records and raw secret (not persisted)."""
+def _prepare_bootstrap_ticket_pair(
+    services, ttl, note='', label='', batch_id='', windows_inputs=None
+):
+    """Build enrollment+ticket records, bt1 secret, and display-once short handle.
+
+    The persisted ticket keeps the 256-bit bt1 verifier. The 22-char handle is
+    short-URL-only and is not written except as a hash plus a non-secret index.
+    """
     services = normalize_services(services)
     ttl = normalize_zero_touch_ttl(ttl)
     note = str(note or '')
@@ -827,6 +945,8 @@ def _prepare_bootstrap_ticket_pair(services, ttl, note='', label='', batch_id=''
     enroll_secret = secrets.token_hex(32)
     ticket_id = secrets.token_hex(8)
     ticket_secret = secrets.token_hex(32)
+    raw_ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
+    short_handle = generate_compact_bootstrap_credential()
     now = int(time.time())
     expires_at = now + ttl
     enroll_record = {
@@ -847,6 +967,8 @@ def _prepare_bootstrap_ticket_pair(services, ttl, note='', label='', batch_id=''
         'schema': 1,
         'id': ticket_id,
         'secret_hash': hash_bootstrap_secret(ticket_secret),
+        'short_handle_hash': hash_bootstrap_secret(short_handle),
+        '_short_handle': short_handle,
         'enrollment_id': enrollment_id,
         'created_at': utc_now_iso(),
         'expires_at': expires_at,
@@ -859,16 +981,45 @@ def _prepare_bootstrap_ticket_pair(services, ttl, note='', label='', batch_id=''
     }
     if batch_id:
         ticket_record['batch_id'] = batch_id
-    raw_ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
+    if windows_inputs and ZT is not None:
+        script = ZT.render_short_url_windows_bootstrap_script(
+            windows_inputs['allocator_url'],
+            windows_inputs['allocator_ca_sha256'],
+            short_handle,
+            windows_inputs['installer_url'],
+        )
+        ticket_record['windows_renderer'] = {
+            'version': 1,
+            'allocator_url': windows_inputs['allocator_url'],
+            'allocator_ca_sha256': windows_inputs['allocator_ca_sha256'],
+            'installer_url': windows_inputs['installer_url'],
+            'stage1_sha256': hashlib.sha256(script.encode('utf-8')).hexdigest(),
+        }
     return raw_ticket, enroll_record, ticket_record
 
 
 def _persist_bootstrap_ticket_pair(enrollments_dir, bootstrap_dir, enroll_record, ticket_record):
     """Write enrollment+ticket pair. Caller must hold control locks."""
+    public_ticket = {
+        key: value
+        for key, value in ticket_record.items()
+        if not str(key).startswith('_')
+    }
     enroll_path = enrollment_file_path(enrollments_dir, enroll_record['id'])
-    ticket_path = bootstrap_file_path(bootstrap_dir, ticket_record['id'])
-    if enroll_path is None or ticket_path is None:
+    ticket_path = bootstrap_file_path(bootstrap_dir, public_ticket['id'])
+    handle_hash = str(public_ticket.get('short_handle_hash') or '')
+    index_path = None
+    if HEX_RE.fullmatch(handle_hash) and len(handle_hash) == 64:
+        index_path = short_handle_index_path(bootstrap_dir, handle_hash[:BOOTSTRAP_ID_HEX_LEN])
+    if enroll_path is None or ticket_path is None or index_path is None:
         raise RuntimeError('failed to allocate bootstrap ticket paths')
+    if enroll_path.exists() or ticket_path.exists() or index_path.exists():
+        raise BootstrapPathExists('bootstrap ticket path already exists')
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(str(index_path.parent), 0o700)
+    except OSError:
+        pass
     try:
         atomic_write_json(enroll_path, enroll_record, mode=0o600)
         try:
@@ -876,16 +1027,54 @@ def _persist_bootstrap_ticket_pair(enrollments_dir, bootstrap_dir, enroll_record
         except OSError:
             pass
         _pair_write_pause_hook()
-        atomic_write_json(ticket_path, ticket_record, mode=0o600)
+        atomic_write_json(ticket_path, public_ticket, mode=0o600)
         try:
             os.chmod(str(ticket_path), 0o600)
         except OSError:
             pass
+        atomic_write_json(
+            index_path,
+            {'ticket_id': public_ticket['id'], 'handle_hash': handle_hash},
+            mode=0o600,
+        )
     except Exception:
+        unlink_quiet(index_path)
         unlink_quiet(ticket_path)
         unlink_quiet(enroll_path)
         raise
     return enroll_path, ticket_path
+
+
+def _allocate_and_persist_bootstrap_ticket_pair(
+    enrollments_dir,
+    bootstrap_dir,
+    services,
+    ttl,
+    note='',
+    label='',
+    batch_id='',
+    windows_inputs=None,
+):
+    """Persist one pair, retrying when the ticket or handle path already exists."""
+    last = None
+    for _attempt in range(BOOTSTRAP_ALLOCATE_ATTEMPTS):
+        raw_ticket, enroll_record, ticket_record = _prepare_bootstrap_ticket_pair(
+            services,
+            ttl,
+            note=note,
+            label=label,
+            batch_id=batch_id,
+            windows_inputs=windows_inputs,
+        )
+        try:
+            _persist_bootstrap_ticket_pair(
+                enrollments_dir, bootstrap_dir, enroll_record, ticket_record
+            )
+            return raw_ticket, enroll_record, ticket_record
+        except BootstrapPathExists as exc:
+            last = exc
+            continue
+    raise RuntimeError('failed to allocate a unique bootstrap ticket') from last
 
 
 def issue_bootstrap_ticket(
@@ -918,9 +1107,6 @@ def issue_bootstrap_ticket(
     Capacity ceilings (max 10/issue, max 10 active unused) are enforced under
     the same locks so concurrent issuers cannot bypass them.
     """
-    raw_ticket, enroll_record, ticket_record = _prepare_bootstrap_ticket_pair(
-        services, ttl, note=note, label=label, batch_id=batch_id
-    )
     enrollments_dir = Path(enrollments_dir)
     bootstrap_dir = ensure_secret_dir(bootstrap_dir, 0o700)
     try:
@@ -942,6 +1128,7 @@ def issue_bootstrap_ticket(
         or CLOCKS.DEFAULT_TIMEOUT_SEC
     )
     now = int(time.time())
+    windows_inputs = windows_renderer_inputs_from_cfg(cfg)
     with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
         cleanup_expired_bootstrap_tickets(
             bootstrap_dir, now, cfg=cleanup_cfg, force=True, already_locked=True
@@ -949,10 +1136,16 @@ def issue_bootstrap_ticket(
         assert_zero_touch_issuance_capacity(
             bootstrap_dir, int(requested_count or 1), now=now
         )
-        _persist_bootstrap_ticket_pair(
-            enrollments_dir, bootstrap_dir, enroll_record, ticket_record
+        return _allocate_and_persist_bootstrap_ticket_pair(
+            enrollments_dir,
+            bootstrap_dir,
+            services,
+            ttl,
+            note=note,
+            label=label,
+            batch_id=batch_id,
+            windows_inputs=windows_inputs,
         )
-    return raw_ticket, enroll_record, ticket_record
 
 
 def issue_bootstrap_ticket_batch(
@@ -992,16 +1185,7 @@ def issue_bootstrap_ticket_batch(
         or CLOCKS.DEFAULT_TIMEOUT_SEC
     )
     now = int(time.time())
-    prepared = [
-        _prepare_bootstrap_ticket_pair(
-            row.get('services') or [],
-            ttl,
-            note=row.get('note') or '',
-            label=row.get('label') or '',
-            batch_id=batch_id,
-        )
-        for row in rows
-    ]
+    windows_inputs = windows_renderer_inputs_from_cfg(cfg)
     issued = []
     created_paths = []
     with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
@@ -1010,14 +1194,30 @@ def issue_bootstrap_ticket_batch(
         )
         assert_zero_touch_issuance_capacity(bootstrap_dir, count, now=now)
         try:
-            for raw_ticket, enroll_record, ticket_record in prepared:
-                enroll_path, ticket_path = _persist_bootstrap_ticket_pair(
-                    enrollments_dir, bootstrap_dir, enroll_record, ticket_record
+            for row in rows:
+                raw_ticket, enroll_record, ticket_record = (
+                    _allocate_and_persist_bootstrap_ticket_pair(
+                        enrollments_dir,
+                        bootstrap_dir,
+                        row.get('services') or [],
+                        ttl,
+                        note=row.get('note') or '',
+                        label=row.get('label') or '',
+                        batch_id=batch_id,
+                        windows_inputs=windows_inputs,
+                    )
                 )
-                created_paths.append((enroll_path, ticket_path))
+                enroll_path = enrollment_file_path(enrollments_dir, enroll_record['id'])
+                ticket_path = bootstrap_file_path(bootstrap_dir, ticket_record['id'])
+                handle_hash = str(ticket_record.get('short_handle_hash') or '')
+                index_path = short_handle_index_path(
+                    bootstrap_dir, handle_hash[:BOOTSTRAP_ID_HEX_LEN]
+                )
+                created_paths.append((enroll_path, ticket_path, index_path))
                 issued.append((raw_ticket, enroll_record, ticket_record))
         except Exception:
-            for enroll_path, ticket_path in created_paths:
+            for enroll_path, ticket_path, index_path in created_paths:
+                unlink_quiet(index_path)
                 unlink_quiet(ticket_path)
                 unlink_quiet(enroll_path)
             raise
@@ -1865,20 +2065,12 @@ class Allocator:
         Read-only: never binds machine ID, never sets completed_at, never
         mutates enrollment/bootstrap records.
         """
-        parsed = parse_bootstrap_ticket(raw_ticket if isinstance(raw_ticket, str) else '')
-        if not parsed:
-            return False
-        ticket_id, ticket_secret = parsed
-        provided_hash = hash_bootstrap_secret(ticket_secret)
-        record, _path = self.load_bootstrap(ticket_id)
-        if not record or not isinstance(record, dict):
-            return False
-        stored_hash = str(record.get('secret_hash') or '')
-        if not (
-            HEX_RE.fullmatch(stored_hash)
-            and len(stored_hash) == 64
-            and hmac.compare_digest(provided_hash, stored_hash)
-        ):
+        _ticket_id, record, _path, matched = load_presented_bootstrap(
+            self.bootstrap_dir,
+            raw_ticket if isinstance(raw_ticket, str) else '',
+            self.load_bootstrap,
+        )
+        if not matched or not isinstance(record, dict):
             return False
         now = int(time.time())
         try:
@@ -1895,6 +2087,10 @@ class Allocator:
         """Build the generic short-URL bootstrap script, or None on failure."""
         if ZT is None or PKI is None:
             return None
+        if platform == 'windows':
+            frozen = self._frozen_windows_stage1(raw_ticket)
+            if frozen is not False:
+                return frozen
         self.reload_cfg_if_changed()
         allocator = str(self.cfg.get('allocator_public_url') or '').strip()
         if platform == 'windows':
@@ -1927,6 +2123,43 @@ class Allocator:
         except ValueError:
             return None
 
+    def _frozen_windows_stage1(self, raw_ticket):
+        """Replay a frozen Windows stage-1 script.
+
+        Returns the verified script, None to fail closed, or False when the
+        record has no frozen renderer and the dynamic path may be used.
+        """
+        _ticket_id, record, _path, matched = load_presented_bootstrap(
+            self.bootstrap_dir,
+            raw_ticket if isinstance(raw_ticket, str) else '',
+            self.load_bootstrap,
+        )
+        if not matched or not isinstance(record, dict):
+            return None
+        renderer = record.get('windows_renderer')
+        if not isinstance(renderer, dict):
+            return False
+        try:
+            version = int(renderer.get('version') or 0)
+        except (TypeError, ValueError):
+            return None
+        if version != 1 or ZT is None:
+            return None
+        try:
+            script = ZT.render_short_url_windows_bootstrap_script(
+                str(renderer.get('allocator_url') or ''),
+                str(renderer.get('allocator_ca_sha256') or ''),
+                raw_ticket,
+                str(renderer.get('installer_url') or ''),
+            )
+        except ValueError:
+            return None
+        digest = hashlib.sha256(script.encode('utf-8')).hexdigest()
+        stored = str(renderer.get('stage1_sha256') or '')
+        if len(stored) != 64 or not hmac.compare_digest(digest, stored.lower()):
+            return None
+        return script
+
     def redeem_bootstrap(self, body):
         """Bind a bootstrap ticket to the first machine and return enrollment data."""
         try:
@@ -1939,7 +2172,7 @@ class Allocator:
         raw_ticket = payload.get('ticket')
         if raw_ticket is None:
             raw_ticket = payload.get('bootstrap_ticket')
-        parsed = parse_bootstrap_ticket(raw_ticket if isinstance(raw_ticket, str) else '')
+        presented = raw_ticket if isinstance(raw_ticket, str) else ''
         machine_id = str(payload.get('machine_id', '') or '').strip()
         hostname = str(payload.get('hostname', '') or '').strip()
         if MID is not None:
@@ -1958,31 +2191,20 @@ class Allocator:
         except ValueError:
             return 400, api_error('invalid hostname', 'ZERO_TOUCH_INPUT_INVALID')
 
-        provided_hash = BOOTSTRAP_DUMMY_HASH
-        ticket_id = ''
-        ticket_secret = ''
-        if parsed:
-            ticket_id, ticket_secret = parsed
-            provided_hash = hash_bootstrap_secret(ticket_secret)
-
         try:
             with LOCK:
                 with self.registry_lock():
+                    ticket_id, _record, _path, _matched = load_presented_bootstrap(
+                        self.bootstrap_dir, presented, self.load_bootstrap
+                    )
                     # Retention must not reacquire registry.lock (nested flock deadlock).
                     self.cleanup_expired_bootstrap_tickets(
                         keep_id=ticket_id, force=True, already_locked=True
                     )
-                    record = None
-                    path = None
-                    stored_hash = BOOTSTRAP_DUMMY_HASH
-                    if parsed:
-                        record, path = self.load_bootstrap(ticket_id)
-                        if record and isinstance(record, dict):
-                            candidate = str(record.get('secret_hash') or '')
-                            if HEX_RE.fullmatch(candidate) and len(candidate) == 64:
-                                stored_hash = candidate
-                    match = hmac.compare_digest(provided_hash, stored_hash)
-                    if not parsed or record is None or not match:
+                    ticket_id, record, path, matched = load_presented_bootstrap(
+                        self.bootstrap_dir, presented, self.load_bootstrap
+                    )
+                    if not matched or record is None:
                         return self._invalid_ticket_response()
 
                     now = int(time.time())

@@ -17,6 +17,7 @@ $tests = @(
     'test-persistence.ps1',
     'test-process-control.ps1',
     'test-zero-touch-command.ps1',
+    'test-windows-strict-launcher.ps1',
     'test-frpclient-entrypoint.ps1',
     'test-rdp-service.ps1',
     'test-zero-service.ps1',

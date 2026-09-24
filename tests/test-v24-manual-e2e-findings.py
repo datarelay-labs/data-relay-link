@@ -85,7 +85,7 @@ class ZeroTouchCommandSecurityTests(unittest.TestCase):
     def test_short_url_preserves_ticket_and_https(self):
         ticket = "bt1." + ("a" * 16) + "." + ("b" * 64)
         cmd = zt.short_url_command("remote.xdr.ooo", ticket)
-        self.assertEqual(cmd, "curl -fsSL 'https://remote.xdr.ooo/i/%s' | sudo bash" % ticket)
+        self.assertEqual(cmd, "curl -fsSL https://remote.xdr.ooo/i/%s|sudo bash" % ticket)
         self.assertNotIn("mktemp", cmd)
         self.assertNotIn("--insecure", cmd)
 

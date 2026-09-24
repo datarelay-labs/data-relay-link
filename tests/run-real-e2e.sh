@@ -198,7 +198,7 @@ patterns = [
     (re.compile(r'(token(?:_ciphertext)?\s*[:=]\s*)\S+', re.I), r'\1[REDACTED]'),
     (re.compile(r'(mgmt_mac_key\s*[:=]\s*)\S+', re.I), r'\1[REDACTED]'),
     (re.compile(r'(FRP_ENROLLMENT_CODE=)\S+'), r'\1[REDACTED]'),
-    (re.compile(r'(FRP_BOOTSTRAP_TICKET=)\S+'), r'\1[REDACTED]'),
+    (re.compile(r'(FRP_BOOTSTRAP_TICKET\s*=\s*)\S+', re.I), r'\1[REDACTED]'),
     (re.compile(r'bt1\.[0-9a-f]{16}\.[0-9a-f]{32,}', re.I), 'bt1.<redacted>'),
     (re.compile(r'zt1\.[A-Za-z0-9_-]{16,}', re.I), 'zt1.<redacted>'),
     (re.compile(r'(/i/)[^/?\s#]+', re.I), r'\1<redacted>'),
@@ -461,7 +461,11 @@ import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 # Short URL: curl ... | sudo bash
 # zt1 fallback: curl ... | sudo bash -s -- 'zt1....'
-cmd = re.search(r"^curl -fsSL .*\| sudo bash(?: -s -- 'zt1\.[^']+')?$", text, re.M)
+cmd = re.search(
+    r"^curl -fsSL .*(?:\|sudo bash|\| sudo bash(?: -s -- 'zt1\.[^']+')?)$",
+    text,
+    re.M,
+)
 if not cmd:
     raise SystemExit("missing one-line command")
 open(sys.argv[2], "w", encoding="utf-8").write(cmd.group(0) + "\n")

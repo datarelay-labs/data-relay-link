@@ -24,7 +24,7 @@ TICKET="$(python3 - "$WORK/create.out" <<'PY'
 import base64, json, re, sys
 t = open(sys.argv[1]).read()
 # Prefer short-URL ticket (/i/bt1.id.secret), then zt1 package, then env form.
-m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", t)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", t)
 if m:
     print(m.group(1))
     raise SystemExit(0)
@@ -48,7 +48,21 @@ if not m:
 print(m.group(1))
 PY
 )"
-ID="${TICKET#bt1.}"; ID="${ID%%.*}"; SECRET="${TICKET##*.}"
+ID="$(python3 -c 'import hashlib,json,sys
+from pathlib import Path
+t=sys.argv[1].strip(); root=Path(sys.argv[2])
+if t.lower().startswith("bt1.") and t.count(".")==2:
+    print(t.split(".")[1].lower())
+else:
+    digest=hashlib.sha256(t.encode("ascii")).hexdigest()
+    data=json.loads((root/"handles"/(digest[:16]+".json")).read_text())
+    assert data.get("handle_hash")==digest
+    print(data["ticket_id"])' "$TICKET" "$TREE/var/lib/drlink/bootstrap")"
+if [[ "$TICKET" == bt1.* ]]; then
+  SECRET="${TICKET##*.}"
+else
+  SECRET="$TICKET"
+fi
 python3 "$ROOT/tools/frp-enrollments" >"$WORK/list.out"
 grep -q 'ID.*TYPE.*LABEL.*CREATED.*EXPIRES.*STATE' "$WORK/list.out"
 grep -qE "${ID}[[:space:]]+zero-touch[[:space:]]+pending-a.*pending" "$WORK/list.out"

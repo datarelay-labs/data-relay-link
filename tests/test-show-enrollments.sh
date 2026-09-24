@@ -132,7 +132,7 @@ ZT_ID="$(awk '/^Enrollment ID:/{print $3; exit}' "$WORK/zt.out")"
 ZT_TICKET="$(python3 - "$WORK/zt.out" <<'PY'
 import base64, json, re, sys
 t = open(sys.argv[1]).read()
-m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", t)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", t)
 if m:
     print(m.group(1))
     raise SystemExit(0)
@@ -156,11 +156,22 @@ if not m:
 print(m.group(1))
 PY
 )"
-ZT_SECRET="${ZT_TICKET##*.}"
+if [[ "$ZT_TICKET" == bt1.* ]]; then
+  ZT_SECRET="${ZT_TICKET##*.}"
+else
+  ZT_SECRET="$ZT_TICKET"
+fi
 [[ -n "$ZT_ID" && ${#ZT_ID} -eq 16 ]] || fail "zero-touch tracking id"
-[[ "$ZT_ID" == "${ZT_TICKET#bt1.}" || "$ZT_ID" == "${ZT_TICKET#bt1.}"* ]] || true
-# ticket form bt1.id.secret
-ZT_TICKET_ID="${ZT_TICKET#bt1.}"; ZT_TICKET_ID="${ZT_TICKET_ID%%.*}"
+ZT_TICKET_ID="$(python3 -c 'import hashlib,json,sys
+from pathlib import Path
+t=sys.argv[1].strip(); root=Path(sys.argv[2])
+if t.lower().startswith("bt1.") and t.count(".")==2:
+    print(t.split(".")[1].lower())
+else:
+    digest=hashlib.sha256(t.encode("ascii")).hexdigest()
+    data=json.loads((root/"handles"/(digest[:16]+".json")).read_text())
+    assert data.get("handle_hash")==digest
+    print(data["ticket_id"])' "$ZT_TICKET" "$TREE/var/lib/drlink/bootstrap")"
 [[ "$ZT_ID" == "$ZT_TICKET_ID" ]] || fail "zero-touch Enrollment ID != ticket id"
 
 python3 "$ENROLL" >"$WORK/zt-list.out"

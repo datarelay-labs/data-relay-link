@@ -13,12 +13,25 @@ frp_test_arm_cleanup
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
+bootstrap_record_id() {
+  python3 -c 'import hashlib,sys
+t=sys.argv[1].strip()
+if t.lower().startswith("bt1.") and t.count(".")==2:
+    print(t.split(".")[1].lower())
+else:
+    print(hashlib.sha256(t.encode("ascii")).hexdigest()[:16])' "$1"
+}
+
 extract_bootstrap_ticket() {
-  # Extract bt1 ticket from short zt1 package output or legacy env one-liner.
+  # Extract compact or legacy ticket from short URL, zt1 package, or env one-liner.
   python3 - "$1" <<'PY'
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
+if m:
+    print(m.group(1))
+    raise SystemExit(0)
 m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 if m:
     parts = m.group(0).split('.', 1)
@@ -363,10 +376,14 @@ payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('ut
 print(payload['t'])
 PY
 )"
-[[ "$TICKET" == bt1.* ]] || fail "ticket format $TICKET"
-TID="${TICKET#bt1.}"
-TID="${TID%%.*}"
-TSECRET="${TICKET##*.}"
+if [[ "$TICKET" == bt1.* ]]; then
+  TSECRET="${TICKET##*.}"
+else
+  python3 -c 'import re,sys; raise SystemExit(0 if re.fullmatch(r"[A-Za-z0-9_-]{22}", sys.argv[1]) else 1)' "$TICKET" \
+    || fail "ticket format $TICKET"
+  TSECRET="$TICKET"
+fi
+TID="$(bootstrap_record_id "$TICKET")"
 REC="$TREE/var/lib/drlink/bootstrap/${TID}.json"
 [[ -f "$REC" ]] || fail "ticket record missing"
 python3 - "$REC" "$TSECRET" <<'PY' || fail "record hash only"
@@ -406,7 +423,8 @@ parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 ticket = payload['t']
-tid = ticket.split('.')[1]
+import hashlib
+tid = ticket.split('.')[1].lower() if ticket.lower().startswith('bt1.') and ticket.count('.') == 2 else hashlib.sha256(ticket.encode('ascii')).hexdigest()[:16]
 record = json.loads((Path(sys.argv[2]) / (tid + '.json')).read_text())
 services = record.get('services') or []
 if isinstance(services, dict):
@@ -493,7 +511,9 @@ assert m
 parts = m.group(0).split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
-tid = payload['t'].split('.')[1]
+import hashlib
+_ticket = payload['t']
+tid = _ticket.split('.')[1].lower() if _ticket.lower().startswith('bt1.') and _ticket.count('.') == 2 else hashlib.sha256(_ticket.encode('ascii')).hexdigest()[:16]
 record = json.loads((Path(sys.argv[2]) / (tid + '.json')).read_text())
 services = record.get('services') or []
 if isinstance(services, dict):
@@ -895,8 +915,7 @@ grep -q 'SSH_USER_NOT_FOUND' "$WORKDIR/missuser.out" "$WORKDIR/missuser.err" || 
 if grep -q bootstrap_redeem "$WORKDIR/missuser.hook"; then
   fail "missing user redeemed ticket"
 fi
-MU_ID="${MU_TICKET#bt1.}"
-MU_ID="${MU_ID%%.*}"
+MU_ID="$(bootstrap_record_id "$MU_TICKET")"
 python3 - "$ALLOC_ROOT/bootstrap/${MU_ID}.json" <<'PY' || fail "missing user bound ticket"
 import json, sys
 from pathlib import Path
@@ -955,8 +974,7 @@ set -e
 if grep -q bootstrap_redeem "$WORKDIR/badca.hook"; then
   fail "wrong CA redeemed ticket"
 fi
-BC_ID="${BC_TICKET#bt1.}"
-BC_ID="${BC_ID%%.*}"
+BC_ID="$(bootstrap_record_id "$BC_TICKET")"
 python3 - "$ALLOC_ROOT/bootstrap/${BC_ID}.json" <<'PY' || fail "wrong CA bound ticket"
 import json, sys
 from pathlib import Path
@@ -1079,8 +1097,7 @@ pass "DP1_PARTIAL_INSTALL_REPAIR"
 EXP="$WORKDIR/client-exp"
 issue_ticket >"$WORKDIR/exp-create.out"
 EXP_TICKET="$(extract_bootstrap_ticket "$WORKDIR/exp-create.out")"
-EXP_ID="${EXP_TICKET#bt1.}"
-EXP_ID="${EXP_ID%%.*}"
+EXP_ID="$(bootstrap_record_id "$EXP_TICKET")"
 python3 - "$ALLOC_ROOT/bootstrap/${EXP_ID}.json" "$ALLOC_ROOT/enrollments" <<'PY'
 import json, sys, time
 from pathlib import Path

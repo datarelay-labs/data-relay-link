@@ -7,6 +7,7 @@ enrollment path. It does not replace Private CA management trust.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import shlex
@@ -17,10 +18,40 @@ BOOTSTRAP_TICKET_RE = re.compile(
     r'^bt1\.[0-9a-f]{16}\.[0-9a-f]{64}$',
     re.IGNORECASE,
 )
+# 128-bit CSPRNG capability, unpadded base64url. Must match allocator parsing.
+COMPACT_CREDENTIAL_RE = re.compile(r'^[A-Za-z0-9_-]{22}$')
+DNS_HOSTNAME_RE = re.compile(
+    r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$'
+)
+# Characters that are safe unquoted in POSIX sh for this URL shape.
+SHELL_UNSAFE_URL_RE = re.compile(r'[^A-Za-z0-9:/._-]')
 # Redact opaque tickets in /i/<ticket> request paths and URLs.
 SHORT_URL_PATH_RE = re.compile(r'(/i/)([^/?\s#]+)', re.IGNORECASE)
 ZT1_TOKEN_RE = re.compile(r'zt1\.[A-Za-z0-9_-]{16,}', re.IGNORECASE)
 BT1_TOKEN_RE = re.compile(r'bt1\.[0-9a-f]{16}\.[0-9a-f]{32,}', re.IGNORECASE)
+BOOTSTRAP_ENV_RE = re.compile(r'(FRP_BOOTSTRAP_TICKET\s*=\s*)\S+', re.IGNORECASE)
+
+
+def accepted_bootstrap_credential(ticket):
+    text = str(ticket or '').strip()
+    return bool(
+        BOOTSTRAP_TICKET_RE.fullmatch(text) or COMPACT_CREDENTIAL_RE.fullmatch(text)
+    )
+
+
+def bootstrap_record_id(ticket):
+    """Internal ticket-file id for a public credential.
+
+    Legacy bt1 uses the explicit id. Compact credentials use the first 16 hex
+    chars of SHA-256 over the exact ASCII credential (same derivation as the
+    allocator). Returns '' when the credential is not an accepted form.
+    """
+    text = str(ticket or '').strip()
+    if BOOTSTRAP_TICKET_RE.fullmatch(text):
+        return text.split('.')[1].lower()
+    if COMPACT_CREDENTIAL_RE.fullmatch(text):
+        return hashlib.sha256(text.encode('ascii')).hexdigest()[:16]
+    return ''
 
 
 def shell_quote(value):
@@ -83,13 +114,21 @@ def short_url_for_ticket(hostname, ticket):
     ticket = str(ticket or '').strip()
     if not host or not ticket:
         raise ValueError('bootstrap hostname and ticket are required')
-    if not BOOTSTRAP_TICKET_RE.fullmatch(ticket):
+    if not accepted_bootstrap_credential(ticket):
         raise ValueError('invalid bootstrap ticket for short URL')
     return 'https://%s/i/%s' % (host, ticket)
 
 
 def short_url_command(hostname, ticket):
     url = short_url_for_ticket(hostname, ticket)
+    host = str(hostname or '').strip().lower().rstrip('.')
+    cred = str(ticket or '').strip()
+    if (
+        DNS_HOSTNAME_RE.fullmatch(host)
+        and accepted_bootstrap_credential(cred)
+        and SHELL_UNSAFE_URL_RE.search(url) is None
+    ):
+        return 'curl -fsSL %s|sudo bash' % url
     return 'curl -fsSL %s | sudo bash' % shell_quote(url)
 
 
@@ -225,6 +264,26 @@ def powershell_quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def windows_strict_launcher(hostname, credential, stage1_sha256):
+    """Direct elevated PowerShell launcher. Hash-before-execute, no outer -Command.
+
+    Baseline for remote.xdr.ooo + 22-char credential + 64-hex digest is 420 chars.
+    """
+    digest = str(stage1_sha256 or '').strip().lower()
+    if len(digest) != 64 or any(ch not in '0123456789abcdef' for ch in digest):
+        raise ValueError('invalid stage-1 SHA256')
+    url = short_url_for_ticket(hostname, credential) + '?platform=windows'
+    if re.search(r'[^A-Za-z0-9:/._?=-]', url):
+        raise ValueError('windows short URL is not command-safe')
+    return (
+        "$h='%s';$p=\"$env:TEMP\\d-$([guid]::NewGuid()).ps1\";"
+        "try{curl.exe -fsSLo $p %s;if($LASTEXITCODE){exit $LASTEXITCODE};"
+        "if((Get-FileHash $p).Hash -ne $h){exit 90};"
+        "&powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p;exit $LASTEXITCODE}"
+        "finally{Remove-Item $p -Force -ErrorAction SilentlyContinue}"
+    ) % (digest, url)
+
+
 def short_url_windows_command(hostname, ticket):
     """Download the short bootstrap and execute it with PowerShell -File."""
     url = short_url_for_ticket(hostname, ticket) + '?platform=windows'
@@ -298,7 +357,7 @@ def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installe
         '# Not a cryptographic signature — same-origin HTTPS checksum only.',
         'set -euo pipefail',
         'if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then',
-        '  echo "ERROR: re-run as: curl -fsSL <bootstrap-url> | sudo bash" >&2',
+        '  echo "ERROR: re-run as: curl -fsSL <bootstrap-url>|sudo bash" >&2',
         '  exit 1',
         'fi',
         'INSTALLER_URL=%s' % shell_quote(installer),
@@ -340,7 +399,7 @@ def render_short_url_windows_bootstrap_script(
         raise ValueError('allocator URL must be HTTPS')
     if len(ca) != 64 or any(ch not in '0123456789abcdef' for ch in ca):
         raise ValueError('invalid CA fingerprint')
-    if not BOOTSTRAP_TICKET_RE.fullmatch(ticket):
+    if not accepted_bootstrap_credential(ticket):
         raise ValueError('invalid bootstrap ticket')
     if not installer.lower().startswith('https://'):
         raise ValueError('installer URL must be HTTPS')
@@ -391,6 +450,7 @@ def redact_text(text):
         return ''
     out = str(text)
     out = SHORT_URL_PATH_RE.sub(r'\1<redacted>', out)
+    out = BOOTSTRAP_ENV_RE.sub(r'\1<redacted>', out)
     out = BT1_TOKEN_RE.sub('bt1.<redacted>', out)
     out = ZT1_TOKEN_RE.sub('zt1.<redacted>', out)
     return out

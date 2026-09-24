@@ -34,7 +34,13 @@ SECRET_VALUE_RE = re.compile(
 
 
 def _redact_short_url_paths(text):
-    return re.sub(r'(/i/)[^/?\s#]+', r'\1<redacted>', str(text), flags=re.IGNORECASE)
+    text = re.sub(r'(/i/)[^/?\s#]+', r'\1<redacted>', str(text), flags=re.IGNORECASE)
+    return re.sub(
+        r'(FRP_BOOTSTRAP_TICKET\s*=\s*)\S+',
+        r'\1<redacted>',
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 class AuditError(Exception):

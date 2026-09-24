@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Bootstrap ticket issue/redeem tests. Isolated fixtures only."""
+import base64
 import hashlib
 import hmac
 import json
+import re
+import shlex
+import subprocess
 import os
 import sys
 import tempfile
@@ -24,6 +28,13 @@ MOD = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(MOD)
 
 FAILED = 0
+
+
+def record_id(ticket):
+    parsed = MOD.parse_bootstrap_ticket(ticket)
+    if not parsed:
+        raise AssertionError('unparsed ticket %r' % (ticket,))
+    return parsed[0]
 
 
 def pass_(name):
@@ -113,21 +124,40 @@ def test_issue_hashed_and_entropy():
     env = Env()
     try:
         ticket, enroll, record = env.issue()
-        parts = ticket.split('.')
-        if len(parts) != 3 or parts[0] != 'bt1':
+        parsed = MOD.parse_bootstrap_ticket(ticket)
+        if not parsed:
             fail('ticket format', ticket)
             return
-        if len(parts[1]) != 16 or len(parts[2]) != 64:
-            fail('ticket entropy', 'id=%s secret_len=%s' % (len(parts[1]), len(parts[2])))
+        ticket_id, secret = parsed
+        if len(secret) != 64:
+            fail('ticket entropy', len(secret))
             return
-        path = env.allocator.bootstrap_path(parts[1])
+        handle = str(record.get('_short_handle') or '')
+        if not MOD.COMPACT_CREDENTIAL_RE.fullmatch(handle):
+            fail('short handle format', handle)
+            return
+        try:
+            raw_entropy = base64.urlsafe_b64decode(handle + '==')
+        except Exception as exc:
+            fail('short handle encoding', exc)
+            return
+        if len(raw_entropy) != 16:
+            fail('short handle entropy', len(raw_entropy))
+            return
+        path = env.allocator.bootstrap_path(ticket_id)
         stored = json.loads(path.read_text())
         raw = json.dumps(stored)
-        if parts[2] in raw or ticket in raw:
-            fail('raw ticket stored', raw)
+        if ticket in raw or secret in raw or handle in raw or '_short_handle' in stored:
+            fail('raw credential stored', raw)
             return
-        if stored.get('secret_hash') != MOD.hash_bootstrap_secret(parts[2]):
+        if stored.get('id') != ticket_id:
+            fail('ticket id mismatch')
+            return
+        if stored.get('secret_hash') != MOD.hash_bootstrap_secret(secret):
             fail('secret hash mismatch')
+            return
+        if stored.get('short_handle_hash') != MOD.hash_bootstrap_secret(handle):
+            fail('short handle hash mismatch')
             return
         if 'secret' in stored:
             fail('secret field in ticket record')
@@ -169,7 +199,7 @@ def test_redeem_bind_and_retry():
         if not result.get('services'):
             fail('services missing')
             return
-        bound = json.loads(env.allocator.bootstrap_path(ticket.split('.')[1]).read_text())
+        bound = json.loads(env.allocator.bootstrap_path(record_id(ticket)).read_text())
         if bound.get('bound_machine_id') != 'machine-a':
             fail('not bound', bound)
             return
@@ -195,7 +225,7 @@ def test_expired_and_invalid():
     env = Env()
     try:
         ticket, _enroll, _record = env.issue(ttl=1)
-        path = env.allocator.bootstrap_path(ticket.split('.')[1])
+        path = env.allocator.bootstrap_path(record_id(ticket))
         rec = json.loads(path.read_text())
         rec['expires_at'] = int(time.time()) - 5
         path.write_text(json.dumps(rec, indent=2) + '\n')
@@ -221,9 +251,13 @@ def test_expired_and_invalid():
             'bt1.' + ('a' * 16) + '.' + ('b' * 63),
             'bt1.' + ('a' * 16) + '.' + ('b' * 65),
             'bt1.' + ('z' * 16) + '.' + ('0' * 64),
-            'bt1.' + good.split('.')[1] + '.' + ('0' * 64),
+            'bt1.' + record_id(good) + '.' + ('0' * 64),
             'x' * 200,
             '',
+            'A' * 21,
+            'A' * 23,
+            'A' * 21 + '=',
+            'abcd+efghijklmnopqr',
         ]
         for raw in cases:
             code, result = env.redeem(raw)
@@ -245,7 +279,7 @@ def test_malformed_json_no_bind():
         if code != 400:
             fail('malformed json code', result)
             return
-        record = json.loads(env.allocator.bootstrap_path(ticket.split('.')[1]).read_text())
+        record = json.loads(env.allocator.bootstrap_path(record_id(ticket)).read_text())
         if record.get('bound_machine_id'):
             fail('malformed json bound ticket')
             return
@@ -268,7 +302,7 @@ def test_machine_id_rejected():
             if code != 400:
                 fail('machine_id %r' % mid, '%s %s' % (code, result))
                 return
-        record = json.loads(env.allocator.bootstrap_path(ticket.split('.')[1]).read_text())
+        record = json.loads(env.allocator.bootstrap_path(record_id(ticket)).read_text())
         if record.get('bound_machine_id'):
             fail('bad machine_id bound ticket')
             return
@@ -309,7 +343,7 @@ def test_bind_race():
             if bad[0][0] != 409 or bad[0][1].get('error_class') != 'BOOTSTRAP_TICKET_BOUND':
                 fail('bind race reject', bad[0])
                 return
-            bound = json.loads(env.allocator.bootstrap_path(ticket.split('.')[1]).read_text())
+            bound = json.loads(env.allocator.bootstrap_path(record_id(ticket)).read_text())
             winner = bound.get('bound_machine_id')
             if winner in wins:
                 wins[winner.split('-')[-1] if False else ('a' if winner == 'machine-a' else 'b' if winner == 'machine-b' else 'other')] += 1
@@ -353,12 +387,12 @@ def test_cleanup_expired():
     env = Env()
     try:
         ticket, _e, _r = env.issue(ttl=1)
-        path = env.allocator.bootstrap_path(ticket.split('.')[1])
+        path = env.allocator.bootstrap_path(record_id(ticket))
         rec = json.loads(path.read_text())
         rec['expires_at'] = int(time.time()) - 5
         path.write_text(json.dumps(rec, indent=2) + '\n')
         env.allocator.cleanup_expired_bootstrap_tickets()
-        path = env.allocator.bootstrap_path(ticket.split('.')[1])
+        path = env.allocator.bootstrap_path(record_id(ticket))
         if not path.exists():
             fail('expired ticket metadata removed')
             return
@@ -453,7 +487,7 @@ def test_redeem_retry_before_and_after_enroll():
         if ecode != 200:
             fail('enroll for ticket completion', eresult)
             return
-        path = env.allocator.bootstrap_path(ticket.split('.')[1])
+        path = env.allocator.bootstrap_path(record_id(ticket))
         stored = json.loads(path.read_text())
         if not stored.get('completed_at'):
             fail('ticket not marked completed', stored)
@@ -670,8 +704,384 @@ def test_manual_enrollment_without_scope_unrestricted():
         env.cleanup()
 
 
+def test_legacy_bt1_still_redeems():
+    env = Env()
+    try:
+        ticket_id = 'abcdef0123456789'
+        secret = 'ab' * 32
+        raw = 'bt1.%s.%s' % (ticket_id, secret)
+        enrollment_id = '0123456789abcdef'
+        now = int(time.time())
+        enroll = {
+            'id': enrollment_id,
+            'secret': 'cd' * 32,
+            'created_at': MOD.utc_now_iso(),
+            'expires_at': now + 600,
+            'bound_machine_id': None,
+            'used_at': None,
+            'note': 'legacy',
+            'label': '',
+            'authorized_services': env.ssh_services(),
+        }
+        record = {
+            'schema': 1,
+            'id': ticket_id,
+            'secret_hash': MOD.hash_bootstrap_secret(secret),
+            'enrollment_id': enrollment_id,
+            'created_at': MOD.utc_now_iso(),
+            'expires_at': now + 600,
+            'bound_machine_id': None,
+            'completed_at': None,
+            'note': 'legacy',
+            'label': '',
+            'services': env.ssh_services(),
+            'use_count_max': 1,
+        }
+        env.allocator.save_enrollment(env.allocator.enrollment_path(enrollment_id), enroll)
+        env.allocator.save_bootstrap(env.allocator.bootstrap_path(ticket_id), record)
+        if not env.allocator.short_url_bootstrap_available(raw):
+            fail('legacy short url unavailable')
+            return
+        code, result = env.redeem(raw, 'machine-legacy')
+        if code != 200 or 'enrollment_code' not in result:
+            fail('legacy redeem', '%s %s' % (code, result))
+            return
+        pass_('LEGACY_BT1_STILL_REDEEMS')
+    finally:
+        env.cleanup()
+
+
+def test_compact_collision_does_not_overwrite():
+    env = Env()
+    original = MOD.generate_compact_bootstrap_credential
+    forced = 'A' * 22
+    calls = {'n': 0}
+
+    def generator():
+        calls['n'] += 1
+        if calls['n'] == 1:
+            return forced
+        return original()
+
+    MOD.generate_compact_bootstrap_credential = generator
+    try:
+        occupied = MOD.compact_bootstrap_record_id(forced)
+        path = MOD.short_handle_index_path(env.allocator.bootstrap_dir, occupied)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"ticket_id":"%s","handle_hash":"%s","keep":true}\n' % (
+            occupied, MOD.hash_bootstrap_secret(forced),
+        ))
+        before = path.read_text()
+        ticket, _enroll, record = env.issue()
+        handle = str(record.get('_short_handle') or '')
+        if handle == forced or ticket == forced:
+            fail('collision reused forced credential', handle)
+            return
+        if path.read_text() != before:
+            fail('collision overwrote existing handle index')
+            return
+        if not path.exists() or not env.allocator.bootstrap_path(record['id']).is_file():
+            fail('collision missing new ticket file')
+            return
+        pass_('COMPACT_ID_COLLISION_DOES_NOT_OVERWRITE')
+    finally:
+        MOD.generate_compact_bootstrap_credential = original
+        env.cleanup()
+
+
+def test_get_does_not_consume_compact():
+    env = Env()
+    try:
+        ticket, _enroll, record = env.issue()
+        handle = str(record.get('_short_handle') or '')
+        path = env.allocator.bootstrap_path(record['id'])
+        before = path.read_text()
+        if not env.allocator.short_url_bootstrap_available(ticket):
+            fail('bt1 get unavailable')
+            return
+        if not env.allocator.short_url_bootstrap_available(handle):
+            fail('compact get unavailable')
+            return
+        after = json.loads(path.read_text())
+        if path.read_text() != before:
+            fail('get mutated ticket')
+            return
+        if after.get('bound_machine_id') or after.get('completed_at'):
+            fail('get bound or consumed ticket', after)
+            return
+        if env.allocator.short_url_bootstrap_available('B' * 22):
+            fail('unknown compact accepted')
+            return
+        code, result = env.redeem('B' * 22)
+        if code != 403:
+            fail('unknown compact redeem', '%s %s' % (code, result))
+            return
+        code_bt1, _result_bt1 = env.redeem(ticket, 'machine-handle')
+        if code_bt1 != 200:
+            fail('bt1 redeem after handle get', code_bt1)
+            return
+        mismatch = 'C' * 22
+        mismatch_id = MOD.compact_bootstrap_record_id(mismatch)
+        index = MOD.short_handle_index_path(env.allocator.bootstrap_dir, mismatch_id)
+        index.parent.mkdir(parents=True, exist_ok=True)
+        index.write_text(json.dumps({
+            'ticket_id': record['id'],
+            'handle_hash': '0' * 64,
+        }) + '\n')
+        if env.allocator.short_url_bootstrap_available(mismatch):
+            fail('verifier mismatch accepted')
+            return
+        pass_('COMPACT_GET_DOES_NOT_CONSUME')
+        pass_('COMPACT_UNKNOWN_AND_MISMATCH_FAIL_CLOSED')
+    finally:
+        env.cleanup()
+
+
+def test_compact_redaction_and_command_length():
+    spec = importlib.util.spec_from_file_location('frp_zero_touch', ROOT / 'lib' / 'frp_zero_touch.py')
+    zt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(zt)
+    doctor_spec = importlib.util.spec_from_file_location('frp_doctor', ROOT / 'lib' / 'frp_doctor.py')
+    doctor = importlib.util.module_from_spec(doctor_spec)
+    doctor_spec.loader.exec_module(doctor)
+    audit_spec = importlib.util.spec_from_file_location('frp_audit', ROOT / 'lib' / 'frp_audit.py')
+    audit = importlib.util.module_from_spec(audit_spec)
+    audit_spec.loader.exec_module(audit)
+    compact = 'AbcdEFghij1234_-KLMNOP'
+    if len(compact) != 22:
+        fail('fixture length', len(compact))
+        return
+    url = zt.short_url_for_ticket('remote.xdr.ooo', compact)
+    cmd = zt.short_url_command('remote.xdr.ooo', compact)
+    if len(url) != 47 or cmd != 'curl -fsSL %s|sudo bash' % url:
+        fail('compact command shape', '%s %s' % (len(url), cmd))
+        return
+    if len(cmd) != 68:
+        fail('compact command length', len(cmd))
+        return
+    quoted = zt.short_url_command('bad host.example', compact)
+    if compact not in quoted or not quoted.startswith("curl -fsSL '"):
+        fail('unsafe host not quoted', quoted)
+        return
+    sb_spec = importlib.util.spec_from_file_location(
+        'frp_support_bundle', ROOT / 'lib' / 'frp_support_bundle.py'
+    )
+    support = importlib.util.module_from_spec(sb_spec)
+    sb_spec.loader.exec_module(support)
+    win_script = zt.render_short_url_windows_bootstrap_script(
+        'https://203.0.113.10/enroll',
+        'ab' * 32,
+        compact,
+        'https://example.test/artifacts/agent/bootstrap-client.ps1',
+    )
+    samples = [
+        doctor.redact('FRP_BOOTSTRAP_TICKET=%s' % compact),
+        doctor.redact("FRP_BOOTSTRAP_TICKET='%s'" % compact),
+        doctor.redact('$env:FRP_BOOTSTRAP_TICKET = \'%s\'' % compact),
+        doctor.redact('GET /i/%s HTTP/1.1' % compact),
+        zt.redact_text('FRP_BOOTSTRAP_TICKET=%s' % compact),
+        zt.redact_text('$env:FRP_BOOTSTRAP_TICKET = \'%s\'' % compact),
+        zt.redact_text('https://remote.xdr.ooo/i/%s' % compact),
+        zt.redact_text(win_script),
+        support.redact_text('FRP_BOOTSTRAP_TICKET=%s' % compact),
+        support.redact_text('GET /i/%s HTTP/1.1' % compact),
+        json.dumps(support.sanitize_json_value({
+            'bootstrap_ticket': compact,
+            'message': 'GET /i/%s done' % compact,
+            'label': 'web01',
+        })),
+        json.dumps(audit._redact({'ticket': compact, 'bootstrap': compact, 'note': 'ok'})),
+        json.dumps(audit._redact({'message': 'GET /i/%s done' % compact})),
+        json.dumps(audit._redact({'message': 'FRP_BOOTSTRAP_TICKET=%s' % compact})),
+        json.dumps(audit._redact({'message': "$env:FRP_BOOTSTRAP_TICKET = '%s'" % compact})),
+    ]
+    for sample in samples:
+        if compact in sample:
+            fail('compact leaked', sample)
+            return
+    plain = audit._redact({'note': 'status ok', 'label': 'web01'})
+    if plain.get('note') != 'status ok' or plain.get('label') != 'web01':
+        fail('non-secret field rewritten', plain)
+        return
+    issue_env = Env()
+    try:
+        ticket, _enroll, record = issue_env.issue(note='customer-note')
+        stored = json.loads(issue_env.allocator.bootstrap_path(record['id']).read_text())
+        handle = str(record.get('_short_handle') or '')
+        if handle and handle in json.dumps(stored):
+            fail('raw short handle persisted')
+            return
+        if ticket in json.dumps(stored):
+            fail('raw bt1 persisted')
+            return
+    finally:
+        issue_env.cleanup()
+    emitted = {
+        'label': record.get('label'),
+        'note': record.get('note'),
+        'ticket_id': record.get('id'),
+        'message': 'enrollment created',
+    }
+    if ticket in json.dumps(record) or ticket in json.dumps(emitted):
+        fail('naked credential emitted in non-secret record', emitted)
+        return
+    redacted = audit._redact(emitted)
+    if ticket in json.dumps(redacted):
+        fail('naked credential survived audit redact', redacted)
+        return
+    if redacted.get('note') != 'customer-note' or redacted.get('message') != 'enrollment created':
+        fail('generic message rewritten', redacted)
+        return
+    if redacted.get('ticket_id') != '[REDACTED]':
+        fail('ticket key not redacted', redacted)
+        return
+    pass_('COMPACT_REDACTION_AND_COMMAND_LENGTH')
+
+
+def _pipeline_tokens(command):
+    lexer = shlex.shlex(command, posix=True, punctuation_chars='|')
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
+def test_shell_safety_floor():
+    alphabet = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-')
+    unsafe = set(" \t\n;|&$`'\"\\<>()*?[]{}~!")
+    for _ in range(10000):
+        token = MOD.generate_compact_bootstrap_credential()
+        if len(token) != 22 or (set(token) - alphabet):
+            fail('credential alphabet', token)
+            return
+        if len(base64.urlsafe_b64decode(token + '==')) != 16:
+            fail('credential entropy bytes', token)
+            return
+    spec = importlib.util.spec_from_file_location('frp_zero_touch', ROOT / 'lib' / 'frp_zero_touch.py')
+    zt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(zt)
+    compact = 'A' * 22
+    cmd = zt.short_url_command('remote.xdr.ooo', compact)
+    url = 'https://remote.xdr.ooo/i/%s' % compact
+    if cmd != 'curl -fsSL %s|sudo bash' % url or len(cmd) != 68:
+        fail('68-char target', '%s %s' % (len(cmd), cmd))
+        return
+    if not cmd.startswith('curl -fsSL https://') or '/i/' not in cmd or not cmd.endswith('|sudo bash'):
+        fail('safety model flags removed', cmd)
+        return
+    if set(url) & unsafe:
+        fail('url metacharacter', url)
+        return
+    tokens = _pipeline_tokens(cmd)
+    if tokens != ['curl', '-fsSL', url, '|', 'sudo', 'bash']:
+        fail('shell tokens', tokens)
+        return
+    sample = MOD.generate_compact_bootstrap_credential()
+    sample_cmd = zt.short_url_command('remote.xdr.ooo', sample)
+    sample_url = 'https://remote.xdr.ooo/i/%s' % sample
+    if _pipeline_tokens(sample_cmd) != ['curl', '-fsSL', sample_url, '|', 'sudo', 'bash']:
+        fail('random credential tokens', sample_cmd)
+        return
+    quoted = zt.short_url_command('bad host.example', compact)
+    quoted_tokens = _pipeline_tokens(quoted)
+    if '|' not in quoted_tokens or any('bad' in part and 'host' in part and ' ' not in part for part in quoted_tokens):
+        fail('unsafe host split', quoted_tokens)
+        return
+    if not any('bad host.example' in part for part in quoted_tokens):
+        fail('unsafe host not kept as one word', quoted_tokens)
+        return
+    proc = subprocess.run(
+        ['bash', '-c', 'set -f; left=${1%%|*}; right=${1#*|}; set -- $left; printf "%s\\n" "$#" "$@"; set -- $right; printf "%s\\n" "$#" "$@"', 'bash', cmd],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        fail('bash tokenize', proc.stderr)
+        return
+    lines = proc.stdout.splitlines()
+    if lines != ['3', 'curl', '-fsSL', url, '2', 'sudo', 'bash']:
+        fail('bash pipeline split', lines)
+        return
+    pass_('SHELL_SAFETY_68_CHAR_FLOOR')
+
+
+def test_windows_renderer_frozen_and_launcher():
+    env = Env()
+    inputs = {
+        'allocator_url': 'https://remote.xdr.ooo/enroll',
+        'allocator_ca_sha256': 'ab' * 32,
+        'installer_url': 'https://remote.xdr.ooo/bootstrap-client.ps1',
+    }
+    original = MOD.windows_renderer_inputs_from_cfg
+    MOD.windows_renderer_inputs_from_cfg = lambda cfg: dict(inputs)
+    try:
+        ticket, _enroll, record = env.issue()
+        handle = str(record.get('_short_handle') or '')
+        path = env.allocator.bootstrap_path(record['id'])
+        stored = json.loads(path.read_text())
+        renderer = stored.get('windows_renderer') or {}
+        if renderer.get('version') != 1:
+            fail('renderer version', renderer)
+            return
+        if handle in json.dumps(stored) or ticket in json.dumps(stored):
+            fail('raw credential in frozen record')
+            return
+        script = env.allocator.build_short_url_script(handle, 'windows')
+        if not script:
+            fail('frozen stage1 missing')
+            return
+        digest = hashlib.sha256(script.encode('utf-8')).hexdigest()
+        if digest != renderer.get('stage1_sha256'):
+            fail('stage1 digest mismatch', digest)
+            return
+        env.allocator.cfg['allocator_public_url'] = 'https://evil.example/enroll'
+        env.allocator.cfg['windows_client_installer_url'] = 'https://evil.example/x.ps1'
+        again = env.allocator.build_short_url_script(handle, 'windows')
+        if again != script:
+            fail('config mutation changed stage1')
+            return
+        stored['windows_renderer']['version'] = 99
+        path.write_text(json.dumps(stored, indent=2) + '\n')
+        if env.allocator.build_short_url_script(handle, 'windows') is not None:
+            fail('unknown renderer version served a script')
+            return
+        zt_spec = importlib.util.spec_from_file_location(
+            'frp_zero_touch_launcher', ROOT / 'lib' / 'frp_zero_touch.py'
+        )
+        zt = importlib.util.module_from_spec(zt_spec)
+        zt_spec.loader.exec_module(zt)
+        command = zt.windows_strict_launcher('remote.xdr.ooo', 'A' * 22, digest)
+        if len(command) != 420:
+            fail('windows launcher length', len(command))
+            return
+        if 'curl.exe' not in command or 'Get-FileHash' not in command:
+            fail('launcher missing curl or hash', command)
+            return
+        if 'powershell.exe -Command' in command or 'Invoke-Expression' in command:
+            fail('launcher uses outer command or iex', command)
+            return
+        if re.search(r'(^|[^A-Za-z0-9])(irm|iex)([^A-Za-z0-9]|$)', command):
+            fail('launcher uses irm or iex', command)
+            return
+        code, result = env.redeem(handle, 'machine-win')
+        if code != 200:
+            fail('handle redeem', '%s %s' % (code, result))
+            return
+        code2, result2 = env.redeem(ticket, 'machine-other')
+        if code2 != 409:
+            fail('bt1 second machine after handle redeem', '%s %s' % (code2, result2))
+            return
+        pass_('WINDOWS_RENDERER_FROZEN_420')
+    finally:
+        MOD.windows_renderer_inputs_from_cfg = original
+        env.cleanup()
+
+
 def main():
     test_issue_hashed_and_entropy()
+    test_legacy_bt1_still_redeems()
+    test_compact_collision_does_not_overwrite()
+    test_get_does_not_consume_compact()
+    test_compact_redaction_and_command_length()
+    test_shell_safety_floor()
+    test_windows_renderer_frozen_and_launcher()
     test_redeem_bind_and_retry()
     test_expired_and_invalid()
     test_malformed_json_no_bind()

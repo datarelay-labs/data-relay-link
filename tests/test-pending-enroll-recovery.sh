@@ -28,7 +28,7 @@ extract_bootstrap_ticket() {
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
 if m:
     print(m.group(1))
     raise SystemExit(0)
@@ -202,7 +202,9 @@ pending_path() { printf '%s' "$1/etc/frp/enroll-pending.json"; }
 # ---------------------------------------------------------------------------
 issue_ticket customer-redeemed >"$WORKDIR/t1-create.out"
 T1_TICKET="$(extract_bootstrap_ticket "$WORKDIR/t1-create.out")"
-T1_ID="${T1_TICKET#bt1.}"; T1_ID="${T1_ID%%.*}"
+T1_ID="$(python3 -c 'import hashlib,sys
+t=sys.argv[1].strip()
+print(t.split(".")[1].lower() if t.lower().startswith("bt1.") and t.count(".")==2 else hashlib.sha256(t.encode("ascii")).hexdigest()[:16])' "$T1_TICKET")"
 T1_TREE="$WORKDIR/client-redeemed"
 T1_MACHINE='11112222333344445555666677778888'
 

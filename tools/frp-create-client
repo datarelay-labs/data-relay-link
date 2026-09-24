@@ -1030,16 +1030,19 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
 def print_one_line_windows(
     ticket, ttl, note, public_host, control_public, allocator, ca_fp,
     installer, rdp_port=None, client_name='', management_only=False,
-    ticket_id='', bootstrap_hostname='', public_hostname='', cfg=None
+    ticket_id='', bootstrap_hostname='', public_hostname='', cfg=None,
+    short_handle='', stage1_sha256=''
 ):
     zt = _zt()
     command = ''
     bootstrap_host = short_url_host_for_cfg(
         cfg, bootstrap_hostname=bootstrap_hostname, public_hostname=public_hostname
     )
-    if bootstrap_host and zt is not None:
+    if bootstrap_host and zt is not None and short_handle and stage1_sha256:
         try:
-            command = zt.short_url_windows_command(bootstrap_host, ticket)
+            command = zt.windows_strict_launcher(
+                bootstrap_host, short_handle, stage1_sha256
+            )
         except ValueError:
             command = ''
 
@@ -1120,8 +1123,12 @@ def print_one_line_windows(
         print('Bootstrap host: %s' % bootstrap_host)
     print()
     print('Run this single line in an elevated Windows PowerShell window.')
-    print('It downloads a PS1, verifies bootstrap-client.ps1 against SHA256SUMS,')
-    print('then executes the verified installer with powershell -File.')
+    if 'curl.exe' in command:
+        print('It downloads the stage-1 script with curl.exe, verifies its SHA256,')
+        print('then executes that file with powershell.exe -File.')
+    else:
+        print('It downloads a PS1, verifies bootstrap-client.ps1 against SHA256SUMS,')
+        print('then executes the verified installer with powershell -File.')
     if management_only:
         print('This enrolls management identity only; no service or public port is created.')
     print()
@@ -1135,12 +1142,12 @@ def print_one_line_windows(
     print()
 
 
-def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname='', public_hostname='', cfg=None):
+def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname='', public_hostname='', cfg=None, short_handle=''):
     tracking_id = str(ticket_id or '').strip()
     if not tracking_id and ticket:
-        parts = str(ticket).split('.')
-        if len(parts) >= 2:
-            tracking_id = parts[1]
+        zt_id = _zt()
+        if zt_id is not None:
+            tracking_id = zt_id.bootstrap_record_id(ticket)
 
     # Prefer short URL when install-time public_url_host is DNS (or advanced
     # bootstrap_hostname override). Do not require a second bootstrap hostname
@@ -1155,7 +1162,7 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
             zt = _zt()
             if zt is None:
                 raise ValueError('zero-touch helper is unavailable')
-            command = zt.short_url_command(bootstrap_host, ticket)
+            command = zt.short_url_command(bootstrap_host, short_handle or ticket)
         except ValueError:
             command = ''
 
@@ -1411,6 +1418,13 @@ def main(argv=None):
         fail('failed to issue bootstrap ticket: %s' % exc)
 
     ticket_id = str((ticket_record or {}).get('id') or '')
+    short_handle = ''
+    stage1_sha256 = ''
+    if isinstance(ticket_record, dict):
+        short_handle = str(ticket_record.pop('_short_handle', '') or '')
+        renderer = ticket_record.get('windows_renderer') or {}
+        if isinstance(renderer, dict):
+            stage1_sha256 = str(renderer.get('stage1_sha256') or '')
     bootstrap_hostname = str(cfg.get('bootstrap_hostname') or '').strip()
     public_hostname = str(cfg.get('public_hostname') or '').strip()
     if platform == 'windows':
@@ -1430,6 +1444,8 @@ def main(argv=None):
             bootstrap_hostname=bootstrap_hostname,
             public_hostname=public_hostname,
             cfg=cfg,
+            short_handle=short_handle,
+            stage1_sha256=stage1_sha256,
         )
     else:
         print_one_line(
@@ -1449,6 +1465,7 @@ def main(argv=None):
             bootstrap_hostname=bootstrap_hostname,
             public_hostname=public_hostname,
             cfg=cfg,
+            short_handle=short_handle,
         )
     try:
         here = Path(__file__).resolve()

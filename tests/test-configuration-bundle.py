@@ -75,6 +75,34 @@ class ConfigurationBundleTests(unittest.TestCase):
         # note field itself is not prohibited key; value containing bt1. is scanned
         with self.assertRaises(BundleError):
             parse_bundle(raw)
+        accepted = parse_bundle(
+            _bundle(
+                objects=[
+                    {
+                        "name": "x",
+                        "type": "Host",
+                        "values": ["198.51.100.1"],
+                        "note": "AbcdEFghij1234_-KLMNOP",
+                    }
+                ]
+            )
+        )
+        self.assertEqual(
+            accepted["spec"]["objects"][0]["note"],
+            "AbcdEFghij1234_-KLMNOP",
+        )
+        url = _bundle(
+            objects=[
+                {
+                    "name": "x",
+                    "type": "Host",
+                    "values": ["198.51.100.1"],
+                    "note": "https://remote.xdr.ooo/i/AbcdEFghij1234_-KLMNOP",
+                }
+            ]
+        )
+        with self.assertRaises(BundleError):
+            parse_bundle(url)
 
     def test_unknown_family_rejected(self):
         raw = _bundle(acl=[{"name": "legacy"}])

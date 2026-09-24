@@ -4,8 +4,22 @@ Additive Zero-Touch UX after v2.1.2. When an operator configures a publicly
 trusted bootstrap hostname and reverse proxy, enrollment can use:
 
 ```bash
-curl -fsSL https://bootstrap.example.com/i/<opaque-ticket> | sudo bash
+curl -fsSL https://bootstrap.example.com/i/<22-char-token>|sudo bash
 ```
+
+The value in `/i/<22-char-token>` is a short-URL handle only. Issuance still
+creates the internal `bt1.<id>.<secret>` credential (256-bit secret, hashed at
+rest). The handle is an additional verifier for `GET /i/` and redeem; it does
+not replace that secret. Existing `bt1` links remain accepted until they expire.
+The command omits shell quotes only when the hostname and credential are
+limited to shell-safe URL characters. `-fsSL`, HTTPS, `/i/`, and `sudo bash`
+stay in the command. On `remote.xdr.ooo` that form is 68 characters.
+
+The Windows one-line is a direct elevated PowerShell command. It downloads
+`/i/<handle>?platform=windows` with explicit `curl.exe`, checks the exact
+stage-1 SHA256, then runs `powershell.exe -File`. It does not use `irm | iex`.
+On `remote.xdr.ooo` that launcher is 420 characters. The expected digest is
+frozen with the non-secret renderer inputs at issuance.
 
 When `bootstrap_hostname` is unset, the v2.1.2 transitional command remains:
 

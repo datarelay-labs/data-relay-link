@@ -32,8 +32,14 @@ For non-Windows test hosts (pwsh on Linux CI), set `FRP_WINDOWS_ROOT` (default `
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-client.ps1 -ZeroTouch `
   -AllocatorUrl https://YOUR_PUBLIC_HOST/enroll `
   -CaSha256 <allocator-ca-DER-SHA256> `
-  -BootstrapTicket 'bt1.<id>.<secret>'
+  -BootstrapTicket '<bt1-credential>'
 ```
+
+The manual `-BootstrapTicket` value is the internal `bt1.<id>.<secret>`
+credential. The 22-character short-URL handle is only for `https://<host>/i/<handle>`.
+Both redeem the same ticket. The copy-paste Windows one-line uses explicit
+`curl.exe`, verifies the stage-1 SHA256, then `powershell.exe -File`. Do not
+replace it with `irm | iex`.
 
 Environment equivalents: `FRP_ALLOCATOR_URL`, `FRP_ALLOCATOR_CA_SHA256`, `FRP_BOOTSTRAP_TICKET`.
 

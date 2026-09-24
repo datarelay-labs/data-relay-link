@@ -7,6 +7,8 @@ from typing import List
 
 # One-time tickets, bootstrap packages, hex digests that look like secrets.
 _SECRET_PATTERNS = [
+    (re.compile(r"(/i/)[^/?\s#]+", re.I), r"\1<REDACTED>"),
+    (re.compile(r"(FRP_BOOTSTRAP_TICKET\s*=\s*)\S+", re.I), r"\1<REDACTED>"),
     (re.compile(r"\bbt1\.[A-Za-z0-9._-]{8,}\b"), "bt1.<REDACTED>"),
     (re.compile(r"\bzt1\.[A-Za-z0-9._-]{8,}\b"), "zt1.<REDACTED>"),
     (re.compile(r"\bBearer\s+[A-Za-z0-9._\-+=/]{8,}\b", re.I), "Bearer <REDACTED>"),

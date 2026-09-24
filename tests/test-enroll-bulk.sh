@@ -41,7 +41,7 @@ for name in sys.argv[1:3]:
 assert len(rows)==5
 tickets=[]
 for row in rows:
-    m=re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", row['bootstrap_command'])
+    m=re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", row['bootstrap_command'])
     if m:
         tickets.append(m.group(1))
         continue

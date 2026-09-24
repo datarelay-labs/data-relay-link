@@ -6,6 +6,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
+bootstrap_record_id() {
+  python3 -c 'import hashlib,json,sys
+from pathlib import Path
+t=sys.argv[1].strip()
+root=Path(sys.argv[2])
+if t.lower().startswith("bt1.") and t.count(".")==2:
+    print(t.split(".")[1].lower())
+else:
+    digest=hashlib.sha256(t.encode("ascii")).hexdigest()
+    data=json.loads((root/"handles"/(digest[:16]+".json")).read_text())
+    if data.get("handle_hash")!=digest:
+        raise SystemExit("handle hash mismatch")
+    print(data["ticket_id"])' "$1" "$TREE/var/lib/drlink/bootstrap"
+}
+
 WORKDIR="$(mktemp -d)"
 ALLOC_PID=""
 # shellcheck source=lib/frp-test-procs.sh
@@ -128,7 +143,7 @@ PY
 OUT_DOMAIN="$WORKDIR/domain-short.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --client-name domain-short --note 'dns' \
   >"$OUT_DOMAIN" || fail "one-line with public_url_host domain"
-grep -E -q "curl -fsSL 'https://remote\.xdr\.ooo/i/bt1\.[0-9a-f]+\.[0-9a-f]+' \| sudo bash$" \
+grep -E -q "curl -fsSL https://remote\\.xdr\\.ooo/i/[A-Za-z0-9_-]{22}\\|sudo bash$" \
   "$OUT_DOMAIN" || { cat "$OUT_DOMAIN"; fail "domain public_url_host short URL shape"; }
 if grep -q 'zt1\.' "$OUT_DOMAIN"; then
   fail "domain short URL still printed zt1"
@@ -164,7 +179,7 @@ python3 "$ROOT/tools/frp-server-set" bootstrap-hostname bootstrap.example.com >/
 OUT_MGMT="$WORKDIR/mgmt.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --client-name short-mgmt --note 'mgmt' \
   >"$OUT_MGMT" || fail "mgmt short url"
-grep -E -q "curl -fsSL 'https://bootstrap\.example\.com/i/bt1\.[0-9a-f]+\.[0-9a-f]+' \| sudo bash$" \
+grep -E -q "curl -fsSL https://bootstrap\\.example\\.com/i/[A-Za-z0-9_-]{22}\\|sudo bash$" \
   "$OUT_MGMT" || { cat "$OUT_MGMT"; fail "mgmt short URL shape"; }
 if grep -q 'zt1\.' "$OUT_MGMT"; then
   fail "mgmt short URL still printed zt1"
@@ -174,7 +189,7 @@ pass "MANAGEMENT_ONLY_SHORT_URL"
 OUT_SSH="$WORKDIR/ssh.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --ssh --ssh-user aella \
   --client-name short-ssh --note 'ssh' >"$OUT_SSH" || fail "ssh short url"
-grep -E -q "curl -fsSL 'https://bootstrap\.example\.com/i/bt1\." "$OUT_SSH" \
+grep -E -q "curl -fsSL https://bootstrap\\.example\\.com/i/[A-Za-z0-9_-]{22}\\|sudo bash" "$OUT_SSH" \
   || { cat "$OUT_SSH"; fail "ssh short URL shape"; }
 pass "SSH_ONLY_SHORT_URL"
 
@@ -186,7 +201,7 @@ JSON
 OUT_MULTI="$WORKDIR/multi.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --services-file "$SERVICES" \
   --client-name short-multi --note 'multi' >"$OUT_MULTI" || fail "multi short url"
-grep -E -q "curl -fsSL 'https://bootstrap\.example\.com/i/bt1\." "$OUT_MULTI" \
+grep -E -q "curl -fsSL https://bootstrap\\.example\\.com/i/[A-Za-z0-9_-]{22}\\|sudo bash" "$OUT_MULTI" \
   || { cat "$OUT_MULTI"; fail "multi short URL shape"; }
 pass "MULTI_SERVICE_SHORT_URL"
 
@@ -194,8 +209,15 @@ OUT_WINDOWS="$WORKDIR/windows.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --platform windows --rdp \
   --client-name short-rdp --note 'rdp' >"$OUT_WINDOWS" \
   || fail "Windows short URL command"
-grep -q 'powershell.exe .* -Command' "$OUT_WINDOWS" \
-  || fail "Windows one-line missing PowerShell command"
+grep -q 'curl.exe -fsSLo' "$OUT_WINDOWS" \
+  || fail "Windows one-line missing explicit curl.exe"
+grep -q 'Get-FileHash' "$OUT_WINDOWS" \
+  || fail "Windows one-line missing stage-1 hash check"
+grep -q 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File' "$OUT_WINDOWS" \
+  || fail "Windows one-line missing file execution"
+if grep -q 'powershell.exe .* -Command' "$OUT_WINDOWS"; then
+  fail "Windows one-line still wraps an outer -Command"
+fi
 grep -q '?platform=windows' "$OUT_WINDOWS" \
   || fail "Windows one-line missing platform dispatch"
 grep -q 'RDP local target: 127.0.0.1:3389' "$OUT_WINDOWS" \
@@ -211,12 +233,12 @@ import re
 import sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
 assert m, text
 print(m.group(1))
 PY
 )"
-TICKET_ID="$(printf '%s' "$TICKET" | cut -d. -f2)"
+TICKET_ID="$(bootstrap_record_id "$TICKET")"
 TICKET_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET_ID}.json"
 [[ -f "$TICKET_FILE" ]] || fail "ticket file missing"
 
@@ -389,12 +411,12 @@ import re
 import sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
 assert m, text
 print(m.group(1))
 PY
 )"
-TICKET2_ID="$(printf '%s' "$TICKET2" | cut -d. -f2)"
+TICKET2_ID="$(bootstrap_record_id "$TICKET2")"
 TICKET2_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET2_ID}.json"
 python3 - "$TICKET2_FILE" <<'PY'
 import json
@@ -418,12 +440,12 @@ import re
 import sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"/i/(bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
 assert m, text
 print(m.group(1))
 PY
 )"
-TICKET3_ID="$(printf '%s' "$TICKET3" | cut -d. -f2)"
+TICKET3_ID="$(bootstrap_record_id "$TICKET3")"
 TICKET3_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET3_ID}.json"
 python3 - "$TICKET3" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "complete redeem"
 import json
@@ -520,7 +542,7 @@ PY
 # Need a fresh unused ticket for GET (previous ticket was completed).
 TICKET2="$(python3 "$ROOT/tools/frp-create-client" --one-line --ssh --ssh-user testuser \
   --client-name short-url-reload --note reload-cfg 2>"$WORKDIR/create-reload.err" \
-  | python3 -c "import re,sys; t=sys.stdin.read(); m=re.search(r\"/i/(bt1\\.[0-9a-f]+\\.[0-9a-f]+)\", t); print(m.group(1) if m else '')")"
+  | python3 -c "import re,sys; t=sys.stdin.read(); m=re.search(r\"/i/([A-Za-z0-9_-]{22}|bt1\\.[0-9a-f]+\\.[0-9a-f]+)\", t); print(m.group(1) if m else '')")"
 [[ -n "$TICKET2" ]] || { cat "$WORKDIR/create-reload.err"; fail "create reload ticket"; }
 SCRIPT_RELOAD="$WORKDIR/script-reload.sh"
 curl -fsSk "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET2}" -o "$SCRIPT_RELOAD" \

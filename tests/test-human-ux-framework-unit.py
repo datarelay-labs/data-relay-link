@@ -64,6 +64,15 @@ class SanitizeTests(unittest.TestCase):
         self.assertNotIn(ticket, out)
         self.assertIn("bt1.<REDACTED>", out)
 
+    def test_compact_credential_redacted_in_context(self):
+        compact = "AbcdEFghij1234_-KLMNOP"
+        url_out = sanitize("curl -fsSL https://remote.xdr.ooo/i/%s|sudo bash" % compact)
+        env_out = sanitize("$env:FRP_BOOTSTRAP_TICKET = '%s'" % compact)
+        self.assertNotIn(compact, url_out)
+        self.assertNotIn(compact, env_out)
+        self.assertIn("/i/<REDACTED>", url_out)
+        self.assertIn("FRP_BOOTSTRAP_TICKET", env_out)
+
 
 if __name__ == "__main__":
     unittest.main()
