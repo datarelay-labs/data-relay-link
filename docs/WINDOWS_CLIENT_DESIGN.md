@@ -10,7 +10,7 @@ Windows does **not** fork enrollment. It reuses:
 
 | Area | Contract |
 | --- | --- |
-| Bootstrap | `POST /bootstrap/redeem` — internal `bt1.<id>.<secret>` plus a short-URL-only 22-character handle; both verifiers share one ticket lifecycle |
+| Bootstrap | `POST /bootstrap/redeem` accepts internal `bt1.<id>.<secret>` only. The 22-character handle is `/i/` lookup; served stage-1 carries the internal `bt1` |
 | Enroll | `POST /enroll` — enrollment HMAC or mgmt ECDSA |
 | CA | `GET /ca.crt` — DER SHA-256 pin via `FRP_ALLOCATOR_CA_SHA256` |
 | Token | OpenSSL `Salted__` + PBKDF2-HMAC-SHA256 (200000) + AES-256-CBC |

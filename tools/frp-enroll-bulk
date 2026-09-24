@@ -217,10 +217,17 @@ def main(argv=None):
             if str(rec.get('batch_id') or '') != str(batch_id):
                 continue
             enroll_id = str(rec.get('enrollment_id') or rec.get('id') or '')
+            handle_hash = str(rec.get('short_handle_hash') or '')
+            index_path = allocator.short_handle_index_path(bootstrap, handle_hash[:16])
             try:
                 path.unlink()
             except OSError:
                 pass
+            if index_path is not None:
+                try:
+                    index_path.unlink()
+                except OSError:
+                    pass
             if enroll_id:
                 try:
                     (enrollments / (enroll_id + '.json')).unlink()

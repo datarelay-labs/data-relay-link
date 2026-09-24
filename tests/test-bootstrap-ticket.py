@@ -159,6 +159,17 @@ def test_issue_hashed_and_entropy():
         if stored.get('short_handle_hash') != MOD.hash_bootstrap_secret(handle):
             fail('short handle hash mismatch')
             return
+        wrapped = stored.get('bt1_wrapped')
+        if not isinstance(wrapped, dict) or wrapped.get('v') != 1:
+            fail('missing bt1 wrap', wrapped)
+            return
+        recovered = MOD.unwrap_bootstrap_ticket(wrapped, env.token.read_text().strip())
+        if recovered != ticket or not MOD.bootstrap_wrap_matches_record(recovered, stored):
+            fail('bt1 wrap did not recover')
+            return
+        if MOD.count_active_unused_bootstrap_tickets(env.allocator.bootstrap_dir) != 1:
+            fail('handle index changed active ticket count')
+            return
         if 'secret' in stored:
             fail('secret field in ticket record')
             return
@@ -1060,17 +1071,99 @@ def test_windows_renderer_frozen_and_launcher():
         if re.search(r'(^|[^A-Za-z0-9])(irm|iex)([^A-Za-z0-9]|$)', command):
             fail('launcher uses irm or iex', command)
             return
+        if handle in script or ticket not in script:
+            fail('windows stage1 credential', 'handle leaked' if handle in script else 'bt1 missing')
+            return
+        ca = env.root / 'ca.crt'
+        ca.write_text('not-a-cert\n')
+        env.allocator.cfg['tls_ca_cert'] = str(ca)
+        env.allocator.cfg['allocator_public_url'] = inputs['allocator_url']
+        env.allocator.cfg['client_installer_url'] = 'https://remote.xdr.ooo/bootstrap-client.sh'
+        original_fp = MOD.PKI.fingerprint_from_cert_file
+        MOD.PKI.fingerprint_from_cert_file = lambda path: 'cd' * 32
+        try:
+            linux = env.allocator.build_short_url_script(handle, 'linux')
+        finally:
+            MOD.PKI.fingerprint_from_cert_file = original_fp
+        package = re.search(r'zt1\.[A-Za-z0-9_-]+', linux or '')
+        if not package:
+            fail('linux stage1 missing zt1')
+            return
+        encoded = package.group(0).split('.', 1)[1]
+        encoded += '=' * ((4 - len(encoded) % 4) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded.encode('ascii')).decode('utf-8'))
+        if payload.get('t') != ticket:
+            fail('linux stage1 credential', payload.get('t'))
+            return
         code, result = env.redeem(handle, 'machine-win')
-        if code != 200:
-            fail('handle redeem', '%s %s' % (code, result))
+        if code != 403:
+            fail('handle redeem must reject', '%s %s' % (code, result))
+            return
+        code_bt1, result_bt1 = env.redeem(ticket, 'machine-win')
+        if code_bt1 != 200:
+            fail('internal bt1 redeem', '%s %s' % (code_bt1, result_bt1))
             return
         code2, result2 = env.redeem(ticket, 'machine-other')
         if code2 != 409:
-            fail('bt1 second machine after handle redeem', '%s %s' % (code2, result2))
+            fail('bt1 second machine', '%s %s' % (code2, result2))
+            return
+        stored['bt1_wrapped']['ct'] = 'AAAA'
+        path.write_text(json.dumps(stored, indent=2) + '\n')
+        if env.allocator.build_short_url_script(handle, 'windows') is not None:
+            fail('corrupt wrap served a script')
+            return
+        if env.allocator.build_short_url_script(handle, 'linux') is not None:
+            fail('corrupt wrap served linux stage1')
             return
         pass_('WINDOWS_RENDERER_FROZEN_420')
     finally:
         MOD.windows_renderer_inputs_from_cfg = original
+        env.cleanup()
+
+
+def test_handle_index_removed_with_retention():
+    env = Env()
+    try:
+        _ticket, enroll, record = env.issue()
+        handle = str(record.get('_short_handle') or '')
+        index = MOD.short_handle_index_path(
+            env.allocator.bootstrap_dir,
+            MOD.hash_bootstrap_secret(handle)[:16],
+        )
+        if index is None or not index.is_file():
+            fail('handle index missing before purge')
+            return
+        if MOD.count_active_unused_bootstrap_tickets(env.allocator.bootstrap_dir) != 1:
+            fail('handle index double-counted')
+            return
+        revoked_at = int(time.time()) - (3 * 86400)
+        for path in (
+            env.allocator.bootstrap_path(record['id']),
+            env.allocator.enrollment_path(enroll['id']),
+        ):
+            rec = json.loads(path.read_text())
+            rec['revoked_at'] = revoked_at
+            path.write_text(json.dumps(rec) + '\n')
+        elc_spec = importlib.util.spec_from_file_location(
+            'frp_enrollment_lifecycle', ROOT / 'lib' / 'frp_enrollment_lifecycle.py'
+        )
+        elc = importlib.util.module_from_spec(elc_spec)
+        elc_spec.loader.exec_module(elc)
+        elc.run_retention_cleanup_locked(
+            env.allocator.enrollments_dir,
+            env.allocator.bootstrap_dir,
+            env.allocator.registry_file,
+            1,
+            now=int(time.time()),
+        )
+        if index.exists() or env.allocator.bootstrap_path(record['id']).exists():
+            fail('retention left ticket or handle index')
+            return
+        if env.allocator.enrollment_path(enroll['id']).exists():
+            fail('retention left enrollment')
+            return
+        pass_('HANDLE_INDEX_RETENTION_PURGE')
+    finally:
         env.cleanup()
 
 
@@ -1082,6 +1175,7 @@ def main():
     test_compact_redaction_and_command_length()
     test_shell_safety_floor()
     test_windows_renderer_frozen_and_launcher()
+    test_handle_index_removed_with_retention()
     test_redeem_bind_and_retry()
     test_expired_and_invalid()
     test_malformed_json_no_bind()

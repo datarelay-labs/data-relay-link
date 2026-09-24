@@ -618,6 +618,120 @@ def short_handle_index_path(bootstrap_dir, handle_id):
     return Path(bootstrap_dir) / 'handles' / (text + '.json')
 
 
+def _b64url_encode(raw):
+    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+
+
+def _b64url_decode(text):
+    raw = str(text or '')
+    pad = '=' * ((4 - (len(raw) % 4)) % 4)
+    return base64.urlsafe_b64decode(raw + pad)
+
+
+def _bootstrap_wrap_key(secret):
+    """Key for recoverable bt1 ciphertext. Derived from the server token."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    material = str(secret or '').encode('utf-8')
+    if not material:
+        raise ValueError('bootstrap wrap secret is unavailable')
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b'drlink-bootstrap-bt1-v1',
+        info=b'bt1-wrap',
+    ).derive(material)
+
+
+def wrap_bootstrap_ticket(raw_ticket, secret):
+    """Encrypt a raw bt1 credential. The JSON value is not the plaintext ticket."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    key = _bootstrap_wrap_key(secret)
+    nonce = secrets.token_bytes(12)
+    ciphertext = AESGCM(key).encrypt(
+        nonce, str(raw_ticket).encode('utf-8'), b'bt1-wrap-v1'
+    )
+    return {
+        'v': 1,
+        'nonce': _b64url_encode(nonce),
+        'ct': _b64url_encode(ciphertext),
+    }
+
+
+def unwrap_bootstrap_ticket(blob, secret):
+    """Return the raw bt1 credential, or None when the wrap is unusable."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if not isinstance(blob, dict) or int(blob.get('v') or 0) != 1:
+        return None
+    try:
+        nonce = _b64url_decode(blob.get('nonce'))
+        ciphertext = _b64url_decode(blob.get('ct'))
+        if len(nonce) != 12 or not ciphertext:
+            return None
+        key = _bootstrap_wrap_key(secret)
+        return AESGCM(key).decrypt(nonce, ciphertext, b'bt1-wrap-v1').decode('utf-8')
+    except Exception:
+        return None
+
+
+def bootstrap_wrap_matches_record(raw_ticket, record):
+    parsed = parse_bootstrap_ticket(raw_ticket)
+    if not parsed or not isinstance(record, dict):
+        return False
+    ticket_id, secret = parsed
+    if ticket_id != str(record.get('id') or '').strip().lower():
+        return False
+    stored = str(record.get('secret_hash') or '')
+    if len(stored) != 64 or not HEX_RE.fullmatch(stored):
+        return False
+    return hmac.compare_digest(hash_bootstrap_secret(secret), stored)
+
+
+def _read_text_secret(path):
+    try:
+        return Path(path).read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
+def bootstrap_wrap_secret(cfg=None, bootstrap_dir=None, create=False):
+    """Secret used to encrypt recoverable bt1 material.
+
+    Prefer the server token. When a caller has no token, use a 0600 key file
+    outside the ticket JSON so issuance can still recover the credential.
+    """
+    if isinstance(cfg, dict):
+        token_path = str(cfg.get('token_file') or '').strip()
+        if token_path:
+            secret = _read_text_secret(token_path)
+            if secret:
+                return secret
+    if bootstrap_dir is None and isinstance(cfg, dict):
+        bootstrap_dir = cfg.get('bootstrap_dir')
+    if not bootstrap_dir:
+        return ''
+    key_path = Path(bootstrap_dir) / '.bt1-wrap-key'
+    secret = _read_text_secret(key_path)
+    if secret or not create:
+        return secret
+    secret = secrets.token_hex(32)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        fd = os.open(str(key_path), flags, 0o600)
+    except FileExistsError:
+        return _read_text_secret(key_path)
+    try:
+        os.write(fd, (secret + '\n').encode('utf-8'))
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(str(key_path), 0o600)
+    except OSError:
+        pass
+    return secret
+
+
 def windows_renderer_inputs_from_cfg(cfg):
     """Non-secret Windows stage-1 inputs. None when the host cannot render yet."""
     if not isinstance(cfg, dict) or ZT is None or PKI is None:
@@ -645,10 +759,10 @@ def windows_renderer_inputs_from_cfg(cfg):
 
 
 def load_presented_bootstrap(bootstrap_dir, raw, read_record):
-    """Resolve a presented bt1 secret or short-URL handle.
+    """Resolve a presented bt1 secret or a short-URL handle for GET /i/.
 
-    Returns (ticket_id, record, path, matched). The short handle is an
-    additional verifier for /i/; it does not replace the bt1 secret_hash.
+    Returns (ticket_id, record, path, matched). A 22-char handle is lookup
+    only. /bootstrap/redeem must not treat it as the bt1 secret.
     """
     text = raw.strip() if isinstance(raw, str) else ''
     parsed = parse_bootstrap_ticket(text)
@@ -929,7 +1043,7 @@ def enrollment_state_dir(enrollments_dir, cfg=None):
 
 
 def _prepare_bootstrap_ticket_pair(
-    services, ttl, note='', label='', batch_id='', windows_inputs=None
+    services, ttl, note='', label='', batch_id='', windows_inputs=None, wrap_secret=''
 ):
     """Build enrollment+ticket records, bt1 secret, and display-once short handle.
 
@@ -947,6 +1061,8 @@ def _prepare_bootstrap_ticket_pair(
     ticket_secret = secrets.token_hex(32)
     raw_ticket = '%s.%s.%s' % (BOOTSTRAP_TICKET_PREFIX, ticket_id, ticket_secret)
     short_handle = generate_compact_bootstrap_credential()
+    if not str(wrap_secret or '').strip():
+        raise RuntimeError('bootstrap ticket wrap secret is unavailable')
     now = int(time.time())
     expires_at = now + ttl
     enroll_record = {
@@ -968,6 +1084,7 @@ def _prepare_bootstrap_ticket_pair(
         'id': ticket_id,
         'secret_hash': hash_bootstrap_secret(ticket_secret),
         'short_handle_hash': hash_bootstrap_secret(short_handle),
+        'bt1_wrapped': wrap_bootstrap_ticket(raw_ticket, wrap_secret),
         '_short_handle': short_handle,
         'enrollment_id': enrollment_id,
         'created_at': utc_now_iso(),
@@ -985,7 +1102,7 @@ def _prepare_bootstrap_ticket_pair(
         script = ZT.render_short_url_windows_bootstrap_script(
             windows_inputs['allocator_url'],
             windows_inputs['allocator_ca_sha256'],
-            short_handle,
+            raw_ticket,
             windows_inputs['installer_url'],
         )
         ticket_record['windows_renderer'] = {
@@ -1054,6 +1171,7 @@ def _allocate_and_persist_bootstrap_ticket_pair(
     label='',
     batch_id='',
     windows_inputs=None,
+    wrap_secret='',
 ):
     """Persist one pair, retrying when the ticket or handle path already exists."""
     last = None
@@ -1065,6 +1183,7 @@ def _allocate_and_persist_bootstrap_ticket_pair(
             label=label,
             batch_id=batch_id,
             windows_inputs=windows_inputs,
+            wrap_secret=wrap_secret,
         )
         try:
             _persist_bootstrap_ticket_pair(
@@ -1129,6 +1248,7 @@ def issue_bootstrap_ticket(
     )
     now = int(time.time())
     windows_inputs = windows_renderer_inputs_from_cfg(cfg)
+    wrap_secret = bootstrap_wrap_secret(cfg, bootstrap_dir, create=True)
     with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
         cleanup_expired_bootstrap_tickets(
             bootstrap_dir, now, cfg=cleanup_cfg, force=True, already_locked=True
@@ -1145,6 +1265,7 @@ def issue_bootstrap_ticket(
             label=label,
             batch_id=batch_id,
             windows_inputs=windows_inputs,
+            wrap_secret=wrap_secret,
         )
 
 
@@ -1186,6 +1307,7 @@ def issue_bootstrap_ticket_batch(
     )
     now = int(time.time())
     windows_inputs = windows_renderer_inputs_from_cfg(cfg)
+    wrap_secret = bootstrap_wrap_secret(cfg, bootstrap_dir, create=True)
     issued = []
     created_paths = []
     with CLOCKS.acquire_state_dir_control_locks(state_dir, timeout=lock_timeout):
@@ -1205,6 +1327,7 @@ def issue_bootstrap_ticket_batch(
                         label=row.get('label') or '',
                         batch_id=batch_id,
                         windows_inputs=windows_inputs,
+                        wrap_secret=wrap_secret,
                     )
                 )
                 enroll_path = enrollment_file_path(enrollments_dir, enroll_record['id'])
@@ -2083,12 +2206,45 @@ class Allocator:
             return False
         return True
 
+    def _credential_for_stage1(self, presented):
+        """Internal bt1 embedded in a served stage-1 script.
+
+        New records recover it from bt1_wrapped. Legacy records use the
+        presented bt1. A short handle is never the stage-1 credential.
+        """
+        _ticket_id, record, _path, matched = load_presented_bootstrap(
+            self.bootstrap_dir,
+            presented if isinstance(presented, str) else '',
+            self.load_bootstrap,
+        )
+        if not matched or not isinstance(record, dict):
+            return None
+        if isinstance(record.get('bt1_wrapped'), dict):
+            raw = unwrap_bootstrap_ticket(
+                record.get('bt1_wrapped'),
+                bootstrap_wrap_secret(
+                    {'token_file': getattr(self, 'token_file', '')},
+                    self.bootstrap_dir,
+                    create=False,
+                ),
+            )
+            if not bootstrap_wrap_matches_record(raw, record):
+                return None
+            return raw
+        parsed = parse_bootstrap_ticket(presented if isinstance(presented, str) else '')
+        if parsed and parsed[0] == str(record.get('id') or '').strip().lower():
+            return presented.strip()
+        return None
+
     def build_short_url_script(self, raw_ticket, platform='linux'):
         """Build the generic short-URL bootstrap script, or None on failure."""
         if ZT is None or PKI is None:
             return None
+        credential = self._credential_for_stage1(raw_ticket)
+        if not credential:
+            return None
         if platform == 'windows':
-            frozen = self._frozen_windows_stage1(raw_ticket)
+            frozen = self._frozen_windows_stage1(raw_ticket, credential)
             if frozen is not False:
                 return frozen
         self.reload_cfg_if_changed()
@@ -2115,19 +2271,20 @@ class Allocator:
         try:
             if platform == 'windows':
                 return ZT.render_short_url_windows_bootstrap_script(
-                    allocator, ca_fp, raw_ticket, installer
+                    allocator, ca_fp, credential, installer
                 )
             return ZT.render_short_url_bootstrap_script(
-                allocator, ca_fp, raw_ticket, installer
+                allocator, ca_fp, credential, installer
             )
         except ValueError:
             return None
 
-    def _frozen_windows_stage1(self, raw_ticket):
+    def _frozen_windows_stage1(self, raw_ticket, credential):
         """Replay a frozen Windows stage-1 script.
 
         Returns the verified script, None to fail closed, or False when the
         record has no frozen renderer and the dynamic path may be used.
+        The script embeds the recovered internal bt1, not the short handle.
         """
         _ticket_id, record, _path, matched = load_presented_bootstrap(
             self.bootstrap_dir,
@@ -2143,13 +2300,13 @@ class Allocator:
             version = int(renderer.get('version') or 0)
         except (TypeError, ValueError):
             return None
-        if version != 1 or ZT is None:
+        if version != 1 or ZT is None or not credential:
             return None
         try:
             script = ZT.render_short_url_windows_bootstrap_script(
                 str(renderer.get('allocator_url') or ''),
                 str(renderer.get('allocator_ca_sha256') or ''),
-                raw_ticket,
+                credential,
                 str(renderer.get('installer_url') or ''),
             )
         except ValueError:
@@ -2191,20 +2348,32 @@ class Allocator:
         except ValueError:
             return 400, api_error('invalid hostname', 'ZERO_TOUCH_INPUT_INVALID')
 
+        parsed = parse_bootstrap_ticket(presented)
+        if not parsed:
+            hmac.compare_digest(BOOTSTRAP_DUMMY_HASH, BOOTSTRAP_DUMMY_HASH)
         try:
             with LOCK:
                 with self.registry_lock():
-                    ticket_id, _record, _path, _matched = load_presented_bootstrap(
-                        self.bootstrap_dir, presented, self.load_bootstrap
-                    )
+                    ticket_id = parsed[0] if parsed else ''
                     # Retention must not reacquire registry.lock (nested flock deadlock).
                     self.cleanup_expired_bootstrap_tickets(
                         keep_id=ticket_id, force=True, already_locked=True
                     )
-                    ticket_id, record, path, matched = load_presented_bootstrap(
-                        self.bootstrap_dir, presented, self.load_bootstrap
-                    )
-                    if not matched or record is None:
+                    record = None
+                    path = None
+                    stored_hash = BOOTSTRAP_DUMMY_HASH
+                    provided_hash = BOOTSTRAP_DUMMY_HASH
+                    if parsed:
+                        ticket_id, ticket_secret = parsed
+                        provided_hash = hash_bootstrap_secret(ticket_secret)
+                        record, path = self.load_bootstrap(ticket_id)
+                        if isinstance(record, dict):
+                            candidate = str(record.get('secret_hash') or '')
+                            if HEX_RE.fullmatch(candidate) and len(candidate) == 64:
+                                stored_hash = candidate
+                    if not parsed or not hmac.compare_digest(provided_hash, stored_hash):
+                        return self._invalid_ticket_response()
+                    if not isinstance(record, dict):
                         return self._invalid_ticket_response()
 
                     now = int(time.time())

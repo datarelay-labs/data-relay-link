@@ -101,6 +101,17 @@ if FRP_ENROLL_BULK_HOOK_FAIL_AFTER=1 \
 fi
 AFTER_MID="$(ls "$TREE/var/lib/drlink/bootstrap"/*.json | wc -l)"
 [[ "$AFTER_MID" -eq "$EXISTING" ]] || { echo "FAIL mid-batch left tickets" >&2; exit 1; }
+python3 - "$TREE/var/lib/drlink/bootstrap" <<'PY' || { echo "FAIL orphan handle index" >&2; exit 1; }
+import json
+from pathlib import Path
+root = Path(__import__('sys').argv[1])
+indexes = list((root / 'handles').glob('*.json')) if (root / 'handles').is_dir() else []
+live = {json.loads(p.read_text()).get('short_handle_hash', '')[:16] for p in root.glob('*.json')}
+for index in indexes:
+    if index.stem not in live:
+        raise SystemExit('orphan %s' % index.name)
+print('ok')
+PY
 echo "PASS BULK_MID_FAILURE_ROLLBACK"
 echo "PASS BULK_EXISTING_RECORDS_PRESERVED"
 echo "PASS BULK_ATOMICITY_TEST"

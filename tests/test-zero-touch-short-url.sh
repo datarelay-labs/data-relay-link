@@ -348,20 +348,39 @@ grep -E 'GET /i/<redacted>|/i/<redacted>' "$ALLOC_LOG" \
   || { cat "$ALLOC_LOG"; fail "allocator log missing redacted /i/ path"; }
 pass "URL_LOG_REDACTION"
 
-python3 - "$TICKET" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "redeem binding semantics"
+BT1="$(python3 - "$SCRIPT1" <<'PY'
+import base64, json, re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
+if not m:
+    raise SystemExit('linux stage1 missing zt1')
+enc = m.group(0).split('.', 1)[1]
+enc += '=' * ((4 - len(enc) % 4) % 4)
+payload = json.loads(base64.urlsafe_b64decode(enc.encode('ascii')).decode('utf-8'))
+ticket = payload.get('t') or ''
+if not ticket.startswith('bt1.'):
+    raise SystemExit('stage1 credential is not internal bt1')
+print(ticket)
+PY
+)" || fail "served stage1 missing internal bt1"
+[[ "$BT1" != "$TICKET" ]] || fail "served stage1 reused the short handle"
+
+python3 - "$TICKET" "$BT1" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "redeem binding semantics"
 import json
 import ssl
 import sys
 import urllib.error
 import urllib.request
 
-ticket = sys.argv[1]
-port = sys.argv[2]
+handle = sys.argv[1]
+ticket = sys.argv[2]
+port = sys.argv[3]
 ctx = ssl._create_unverified_context()
 
-def redeem(machine_id):
+def redeem(presented, machine_id):
     body = json.dumps({
-        'ticket': ticket,
+        'ticket': presented,
         'machine_id': machine_id,
         'hostname': 'host-' + machine_id[:8],
     }).encode()
@@ -377,11 +396,13 @@ def redeem(machine_id):
     except urllib.error.HTTPError as exc:
         return exc.code, json.load(exc)
 
-code, data = redeem('machine-aaaa')
+code, data = redeem(handle, 'machine-aaaa')
+assert code == 403, (code, data)
+code, data = redeem(ticket, 'machine-aaaa')
 assert code == 200, (code, data)
-code2, data2 = redeem('machine-aaaa')
+code2, data2 = redeem(ticket, 'machine-aaaa')
 assert code2 == 200, (code2, data2)
-code3, data3 = redeem('machine-bbbb')
+code3, data3 = redeem(ticket, 'machine-bbbb')
 assert code3 == 409, (code3, data3)
 print('ok')
 PY
@@ -447,7 +468,25 @@ PY
 )"
 TICKET3_ID="$(bootstrap_record_id "$TICKET3")"
 TICKET3_FILE="$TREE/var/lib/drlink/bootstrap/${TICKET3_ID}.json"
-python3 - "$TICKET3" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "complete redeem"
+curl -fsSk "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET3}" -o "$WORKDIR/script3.sh" \
+  || fail "GET done ticket"
+BT1_DONE="$(python3 - "$WORKDIR/script3.sh" <<'PY'
+import base64, json, re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
+if not m:
+    raise SystemExit('done stage1 missing zt1')
+enc = m.group(0).split('.', 1)[1]
+enc += '=' * ((4 - len(enc) % 4) % 4)
+payload = json.loads(base64.urlsafe_b64decode(enc.encode('ascii')).decode('utf-8'))
+ticket = payload.get('t') or ''
+if not ticket.startswith('bt1.'):
+    raise SystemExit('done stage1 credential is not internal bt1')
+print(ticket)
+PY
+)" || fail "done stage1 missing internal bt1"
+python3 - "$BT1_DONE" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "complete redeem"
 import json
 import ssl
 import sys
@@ -482,7 +521,7 @@ PY
 curl -sSk -o /dev/null -w '%{http_code}' \
   "https://127.0.0.1:${FRP_TEST_ALLOC_PORT}/i/${TICKET3}" | grep -qx '404' \
   || fail "completed ticket GET should be unavailable"
-python3 - "$TICKET3" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "completed redeem should fail"
+python3 - "$BT1_DONE" "$FRP_TEST_ALLOC_PORT" <<'PY' || fail "completed redeem should fail"
 import json
 import ssl
 import sys

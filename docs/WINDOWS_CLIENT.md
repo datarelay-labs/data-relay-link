@@ -37,7 +37,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-client.ps1 -Ze
 
 The manual `-BootstrapTicket` value is the internal `bt1.<id>.<secret>`
 credential. The 22-character short-URL handle is only for `https://<host>/i/<handle>`.
-Both redeem the same ticket. The copy-paste Windows one-line uses explicit
+That download's stage-1 script carries the internal `bt1`, which is what redeem
+accepts. The copy-paste Windows one-line uses explicit
 `curl.exe`, verifies the stage-1 SHA256, then `powershell.exe -File`. Do not
 replace it with `irm | iex`.
 
