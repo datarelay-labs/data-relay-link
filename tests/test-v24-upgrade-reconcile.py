@@ -392,6 +392,34 @@ class UpgradeReconcileTests(unittest.TestCase):
         self.assertEqual(ssh["status"], "HEALTHY")
         self.assertEqual(ssh["destination_name"], "ip-10-0-19-146")
 
+    def test_UPGRADE_RECONCILE_PRESERVES_STALE_LAST_SEEN(self):
+        stale = "2026-09-19T08:29:50Z"
+        self.plane.conn.execute(
+            "UPDATE clients SET last_seen = ?, connected = 1, status = 'connected', "
+            "trust_status = 'trusted' WHERE id = ?",
+            (stale, IDS["al2023"]),
+        )
+        self.plane.conn.commit()
+        before = self.plane.conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (IDS["al2023"],)
+        ).fetchone()
+        self.assertEqual(before["last_seen"], stale)
+        self.assertFalse(self.plane.ai_executor_ready(before))
+        self._apply()
+        after = self.plane.conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (IDS["al2023"],)
+        ).fetchone()
+        self.assertEqual(after["last_seen"], stale)
+        self.assertEqual(after["last_seen"], before["last_seen"])
+        self.assertEqual(int(after["connected"]), 1)
+        self.assertFalse(self.plane.ai_executor_ready(after))
+        self.assertIsNotNone(self.plane.get_object("real-e2e-al2023"))
+        fresh = self.plane.conn.execute(
+            "SELECT last_seen FROM clients WHERE id = ?", (IDS["macos"],)
+        ).fetchone()
+        self.assertTrue(fresh["last_seen"])
+        self.assertNotEqual(fresh["last_seen"], stale)
+
     def test_corrupt_registry_does_not_mutate(self):
         bad = {"not": "clients"}
         before = self.plane.current_revision()

@@ -5651,9 +5651,13 @@ frp_client_apply_upgrade() {
     _FRP_CLIENT_UPGRADE_SET_E=1
   fi
 
+  # A missing or stale client unit restarts the relay only when a systemd
+  # manager can apply it. Filesystem-only updates still install the unit
+  # and must not report a relay restart.
   _restart_client_unit=0
   if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
-    if frp_client_unit_file_needs_converge "$source" "drlink-client.service"; then
+    if frp_client_systemd_state_queryable \
+      && frp_client_unit_file_needs_converge "$source" "drlink-client.service"; then
       _restart_client_unit=1
     fi
   fi

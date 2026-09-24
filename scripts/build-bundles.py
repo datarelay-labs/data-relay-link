@@ -218,6 +218,7 @@ client_files=[
  'tools/frp-update',
  'client/com.datarelay.drlink.frpc.plist',
  'client/drlink-client.service',
+ 'client/drlink-ai-agent.service',
 ]
 client_lines=[
  '#!/usr/bin/env bash',

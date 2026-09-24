@@ -1238,6 +1238,9 @@ if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/up170.out" 2>"$
 fi
 grep -q "1.7.0 -> ${PROJECT_VERSION}" "$WORKDIR/up170.out" || fail "version transition 1.7.0"
 grep -q 'Enrollment Code : NOT REQUIRED' "$WORKDIR/up170.out" || fail "no enrollment"
+# No systemd manager in this fixture: unit files may be installed, but the
+# relay must not be reported restarted. Manager-backed migration restart is
+# covered by tests/test-ai-agent-unit-lifecycle.sh.
 grep -q 'frpc restarted  : NO' "$WORKDIR/up170.out" || fail "no frpc restart"
 [[ "$(frp_file_sha256 "$UP/etc/frp/client-state.json")" == "$STATE_BEFORE" ]] || fail "state changed"
 [[ "$(frp_file_sha256 "$UP/etc/drlink/allocator-ca.crt")" == "$CA_BEFORE" ]] || fail "client CA changed"
