@@ -110,6 +110,7 @@ python3 tests/test-release-recovery-dual-role-audit-docs-closure.py
 python3 tests/test-repl-live-inventory.py
 ./tests/test-real-e2e-canonical-cli.sh
 ./tests/test-client-upgrade.sh
+./tests/test-client-upgrade-provenance.sh
 ./tests/test-ai-agent-unit-lifecycle.sh
 ./tests/test-safe-repo-copy.sh
 bash ./tests/test-installed-client-update.sh

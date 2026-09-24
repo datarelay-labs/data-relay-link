@@ -665,6 +665,50 @@ frp_client_installed_source_ref() {
   printf '%s' "$v"
 }
 
+frp_client_provenance_token_equal() {
+  local left="$1" right="$2"
+  if [[ "$left" =~ ^[0-9a-fA-F]{40}$ && "$right" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    [[ "$(printf '%s' "$left" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$right" | tr '[:upper:]' '[:lower:]')" ]]
+    return
+  fi
+  [[ "$left" == "$right" ]]
+}
+
+# Validated candidate commit. Manifest source_head wins; an exact SHA ref is
+# the head when the manifest does not carry one.
+frp_client_candidate_source_head() {
+  local source="$1" candidate_ref="$2" head=""
+  if [[ -f "${source}/release-manifest.json" ]]; then
+    head="$(python3 - "${source}/release-manifest.json" <<'PY'
+import json, re, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+head = str(data.get("source_head") or "").strip()
+if re.fullmatch(r"[0-9a-fA-F]{40}", head):
+    sys.stdout.write(head.lower())
+PY
+)" || head=""
+  fi
+  if [[ -z "$head" && "$candidate_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    head="$(printf '%s' "$candidate_ref" | tr '[:upper:]' '[:lower:]')"
+  fi
+  printf '%s' "$head"
+}
+
+# 0 when persisted SOURCE_REF/SOURCE_HEAD already match the validated candidate.
+frp_client_provenance_identity_matches() {
+  local installed_ref="$1" candidate_ref="$2" candidate_head="$3"
+  local installed_head=""
+  installed_head="$(frp_client_read_kv "$(frp_client_version_file)" SOURCE_HEAD)"
+  frp_client_provenance_token_equal "$installed_ref" "$candidate_ref" || return 1
+  if [[ "$candidate_head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    frp_client_provenance_token_equal "$installed_head" "$candidate_head" || return 1
+  fi
+  return 0
+}
+
 frp_client_installed_bundle_sha256() {
   local v
   v="$(frp_client_read_kv "$(frp_client_version_file)" BUNDLE_SHA256)"
@@ -5513,6 +5557,7 @@ frp_client_apply_upgrade() {
 
   local kind="${_FRP_CLIENT_UPDATE_KIND:-bundle}"
   local candidate_meta candidate_channel="unknown" candidate_ref="unknown"
+  local candidate_head=""
   local installed_channel installed_ref expected_channel="" expected_ref=""
   local target_channel_out target_ref_out target_bundle_out
 
@@ -5613,6 +5658,7 @@ frp_client_apply_upgrade() {
   target="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $1}')"
   candidate_channel="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $2}')"
   candidate_ref="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $3}')"
+  candidate_head="$(frp_client_candidate_source_head "$source" "$candidate_ref")"
   PROJECT_VERSION="$target"
   frp_client_upgrade_source_version "$source"
   PROJECT_VERSION="$target"
@@ -5667,6 +5713,12 @@ frp_client_apply_upgrade() {
     if [[ "$origin_drift_rc" -eq 0 ]]; then
       update_needed=1
     fi
+  fi
+  # A matching bundle SHA must still repair stale SOURCE_REF/SOURCE_HEAD.
+  # The next check is not-needed only after that identity matches.
+  if [[ "$update_needed" == "0" ]] && ! frp_client_provenance_identity_matches \
+      "$installed_ref" "$candidate_ref" "$candidate_head"; then
+    update_needed=1
   fi
 
   if [[ "$check_only" == "1" ]]; then
@@ -5773,6 +5825,8 @@ frp_client_apply_upgrade() {
     return 1
   fi
   if ! FRP_RELEASE_CHANNEL="$candidate_channel" \
+      FRP_EXPECTED_SOURCE_REF="$candidate_ref" \
+      FRP_EXPECTED_SOURCE_HEAD="$candidate_head" \
       FRP_BUNDLE_SHA256="${target_bundle:-}" \
       FRP_VERSION_REQUIRE_VERIFIED_BUNDLE=1 \
       PROJECT_VERSION="$target" \
