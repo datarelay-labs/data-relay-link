@@ -4520,23 +4520,26 @@ class ControlPlane:
         return self.ai_executor_ready(client)
 
     def managed_host_connectivity(self, client) -> str:
-        """Public transport projection: connected, stale, or disconnected.
+        """Public FRP/transport projection.
 
-        Stale means the persisted flag is still up but there is no fresh
-        platform-neutral heartbeat. That is not a claim that FRP is down.
+        This follows the persisted connected flag and trust. It does not
+        consult AI-worker claim freshness. A macOS host with no durable AI
+        worker stays connected while that flag is up.
         """
-        if not self._managed_host_admitted(client):
-            return "disconnected"
-        last_seen = client["last_seen"] if client is not None and "last_seen" in client.keys() else None
-        if managed_host_liveness_fresh(last_seen):
+        if self._managed_host_admitted(client):
             return "connected"
-        return "stale"
+        return "disconnected"
+
+    def ai_executor_status(self, client) -> str:
+        return "ready" if self.ai_executor_ready(client) else "not_ready"
 
     def refresh_managed_host_liveness(self, client_id: str) -> bool:
-        """Record signed management activity as fresh AI-executor liveness.
+        """Record signed management activity on the AI-executor clock only.
 
-        Revoked and retired hosts are not revived. Repeated calls inside
+        Does not change the transport connected flag. Revoked and retired
+        hosts are not revived. Repeated calls inside
         MANAGED_HOST_LIVENESS_REFRESH_SECONDS do not rewrite the row.
+        Registry nonce commit is not this clock.
         """
         row = self.conn.execute(
             "SELECT trust_status, status, last_seen FROM clients WHERE id = ?", (client_id,)
@@ -4557,8 +4560,7 @@ class ControlPlane:
                 return True
         now = utc_now_iso()
         self.conn.execute(
-            "UPDATE clients SET connected = 1, status = 'connected', last_seen = ?, "
-            "row_version = row_version + 1, updated_at = ? WHERE id = ?",
+            "UPDATE clients SET last_seen = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
             (now, now, client_id),
         )
         self.commit_if_autonomous()

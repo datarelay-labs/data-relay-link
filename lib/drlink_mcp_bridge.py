@@ -759,6 +759,7 @@ class MCPBridge:
                             "status": obj.get("status"),
                             "client_id": obj.get("client_id"),
                             "connectivity": self.plane.managed_host_connectivity(client),
+                            "ai_executor": self.plane.ai_executor_status(client),
                         }
                     )
             self.plane.record_ai_activity(

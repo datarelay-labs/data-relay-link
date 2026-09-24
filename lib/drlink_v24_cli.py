@@ -395,6 +395,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 "Managed Host Agent: %s" % host_label,
                 "Connection   : %s" % connection,
                 "Host status  : %s" % connectivity,
+                "AI executor  : %s" % plane.ai_executor_status(client),
                 "Last seen    : %s" % last_seen,
                 "Agent version: Not reported to Server",
                 "Source HEAD  : Not reported to Server",
@@ -440,12 +441,13 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
             )
         connectivity = plane.managed_host_connectivity(client)
         sys.stdout.write(
-            "Managed Host: %s\nHostname: %s\nStatus: %s\nAgent: %s\n"
+            "Managed Host: %s\nHostname: %s\nStatus: %s\nAgent: %s\nAI executor: %s\n"
             % (
                 client["label"] or client["hostname"] or client["id"][:8],
                 client["hostname"] or "-",
                 connectivity,
                 _presence_word(connectivity),
+                plane.ai_executor_status(client),
             )
         )
         return 0
