@@ -115,16 +115,19 @@ if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/update.out" 2>"
   cat "$WORKDIR/update.out" "$WORKDIR/update.err" >&2
   fail "product update"
 fi
-grep -q 'frpc restarted  : NO' "$WORKDIR/update.out" || fail "frpc restart contract"
+grep -q 'frpc restarted  : YES' "$WORKDIR/update.out" || fail "missing client unit should restart relay"
 grep -q 'AI agent service : converged' "$WORKDIR/update.out" || fail "update converge line"
-[[ -f "$TREE/etc/systemd/system/drlink-ai-agent.service" ]] || fail "update did not install unit"
-grep -q 'drlink_ai_agent.py' "$TREE/etc/systemd/system/drlink-ai-agent.service" || fail "update unit exec"
-grep -qx 'daemon-reload' "$LOG" || fail "update daemon-reload"
-grep -qx 'enable drlink-ai-agent' "$LOG" || fail "update enable"
-grep -qx 'restart drlink-ai-agent' "$LOG" || fail "update restart"
+[[ -f "$TREE/etc/systemd/system/drlink-ai-agent.service" ]] || fail "update did not install AI unit"
+[[ -f "$TREE/etc/systemd/system/drlink-client.service" ]] || fail "update did not install client unit"
 cmp -s "$ROOT/client/drlink-ai-agent.service" "$TREE/etc/systemd/system/drlink-ai-agent.service" \
-  || fail "update unit is not the canonical source file"
-if grep -q 'drlink-client' "$LOG"; then fail "update restarted frpc"; fi
+  || fail "update AI unit is not the canonical source file"
+cmp -s "$ROOT/client/drlink-client.service" "$TREE/etc/systemd/system/drlink-client.service" \
+  || fail "update client unit is not the canonical source file"
+grep -qx 'daemon-reload' "$LOG" || fail "update daemon-reload"
+grep -qx 'enable drlink-ai-agent' "$LOG" || fail "update AI enable"
+grep -qx 'restart drlink-ai-agent' "$LOG" || fail "update AI restart"
+grep -qx 'enable drlink-client' "$LOG" || fail "update client enable"
+grep -qx 'restart drlink-client' "$LOG" || fail "update client restart"
 STATE_AFTER="$(python3 - "$TREE/etc/frp/client-state.json" <<'PY'
 import hashlib, sys
 from pathlib import Path
@@ -132,15 +135,17 @@ print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 )"
 [[ "$STATE_BEFORE" == "$STATE_AFTER" ]] || fail "update changed client state"
-pass "PRODUCT_UPDATE_CONVERGES_AI_AGENT_WITHOUT_FRPC_RESTART"
+pass "PRODUCT_UPDATE_CONVERGES_MISSING_LINUX_UNITS"
 
 (
   # shellcheck disable=SC1091
   . "$ROOT/lib/frp-client-common.sh"
   frp_client_upgrade_destinations | grep -qx \
     'etc/systemd/system/drlink-ai-agent.service:0644:client/drlink-ai-agent.service'
-) || fail "AI worker unit missing from upgrade destinations"
-pass "UPGRADE_DESTINATIONS_INCLUDE_AI_AGENT_UNIT"
+  frp_client_upgrade_destinations | grep -qx \
+    'etc/systemd/system/drlink-client.service:0644:client/drlink-client.service'
+) || fail "Linux units missing from upgrade destinations"
+pass "UPGRADE_DESTINATIONS_INCLUDE_LINUX_UNITS"
 
 file_sha() {
   python3 - "$1" <<'PY'
@@ -164,12 +169,15 @@ fi
 unset FRP_CLIENT_UPGRADE_HOOK_FAIL
 grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/rollback.out" "$WORKDIR/rollback.err" || fail "rollback marker"
 [[ ! -e "$ROLL/etc/systemd/system/drlink-ai-agent.service" ]] || fail "rollback left a new AI unit"
+[[ ! -e "$ROLL/etc/systemd/system/drlink-client.service" ]] || fail "rollback left a new client unit"
 python3 - "$LOG" <<'PY'
 import sys
 from pathlib import Path
 lines = [ln.strip() for ln in Path(sys.argv[1]).read_text().splitlines() if ln.strip()]
 need = ["daemon-reload", "enable drlink-ai-agent", "restart drlink-ai-agent",
-        "daemon-reload", "disable drlink-ai-agent", "stop drlink-ai-agent"]
+        "enable drlink-client", "restart drlink-client",
+        "daemon-reload", "disable drlink-client", "stop drlink-client",
+        "disable drlink-ai-agent", "stop drlink-ai-agent"]
 pos = 0
 for item in need:
     while pos < len(lines) and lines[pos] != item:
@@ -178,7 +186,6 @@ for item in need:
         raise SystemExit("missing rollback action " + item + " in " + repr(lines))
     pos += 1
 PY
-if grep -q 'drlink-client' "$LOG"; then fail "rollback restarted frpc"; fi
 [[ "$(file_sha "$ROLL/etc/frp/client-identity.key")" == "$KEY_BEFORE" ]] || fail "rollback rotated identity"
 [[ "$(file_sha "$ROLL/etc/frp/client-state.json")" == "$STATE_BEFORE" ]] || fail "rollback changed client state"
 pass "PRODUCT_UPDATE_ROLLBACK_RESTORES_ABSENT_AI_UNIT"
@@ -197,14 +204,17 @@ if "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/rollback-prior.ou
 fi
 unset FRP_CLIENT_UPGRADE_HOOK_FAIL
 grep -q 'UPGRADE_ROLLBACK=PASS' "$WORKDIR/rollback-prior.out" "$WORKDIR/rollback-prior.err" || fail "prior-unit rollback marker"
-[[ "$(file_sha "$PRIOR/etc/systemd/system/drlink-ai-agent.service")" == "$PRIOR_SHA" ]] || fail "rollback replaced prior unit content"
+[[ "$(file_sha "$PRIOR/etc/systemd/system/drlink-ai-agent.service")" == "$PRIOR_SHA" ]] || fail "rollback replaced prior AI unit content"
+[[ ! -e "$PRIOR/etc/systemd/system/drlink-client.service" ]] || fail "rollback left a new client unit"
 python3 - "$LOG" <<'PY'
 import sys
 from pathlib import Path
 lines = [ln.strip() for ln in Path(sys.argv[1]).read_text().splitlines() if ln.strip()]
 need = ["is-enabled drlink-ai-agent", "is-active drlink-ai-agent",
         "daemon-reload", "enable drlink-ai-agent", "restart drlink-ai-agent",
-        "daemon-reload", "enable drlink-ai-agent", "restart drlink-ai-agent"]
+        "enable drlink-client", "restart drlink-client",
+        "daemon-reload", "disable drlink-client", "stop drlink-client",
+        "enable drlink-ai-agent", "restart drlink-ai-agent"]
 pos = 0
 for item in need:
     while pos < len(lines) and lines[pos] != item:
@@ -213,7 +223,7 @@ for item in need:
         raise SystemExit("missing prior-state action " + item + " in " + repr(lines))
     pos += 1
 if "disable drlink-ai-agent" in lines or "stop drlink-ai-agent" in lines:
-    raise SystemExit("rollback disabled a unit that was enabled and active")
+    raise SystemExit("rollback disabled an AI unit that was enabled and active")
 PY
 pass "PRODUCT_UPDATE_ROLLBACK_RESTORES_PRIOR_AI_UNIT_STATE"
 
@@ -246,7 +256,10 @@ cmp -s "$ROOT/client/drlink-ai-agent.service" "$SAME/etc/systemd/system/drlink-a
 grep -qx 'daemon-reload' "$LOG" || fail "same-version daemon-reload"
 grep -qx 'enable drlink-ai-agent' "$LOG" || fail "same-version enable"
 grep -qx 'restart drlink-ai-agent' "$LOG" || fail "same-version restart"
-grep -q 'frpc restarted  : NO' "$WORKDIR/same-missing.out" || fail "same-version frpc restart contract"
+cmp -s "$ROOT/client/drlink-client.service" "$SAME/etc/systemd/system/drlink-client.service" \
+  || fail "same-version refresh did not install client unit"
+grep -qx 'restart drlink-client' "$LOG" || fail "same-version client restart"
+grep -q 'frpc restarted  : YES' "$WORKDIR/same-missing.out" || fail "missing client unit should restart relay"
 [[ "$(file_sha "$SAME/etc/frp/client-identity.key")" == "$KEY_BEFORE" ]] || fail "same-version rotated identity"
 [[ "$(file_sha "$SAME/etc/frp/client-state.json")" == "$STATE_BEFORE" ]] || fail "same-version changed client state"
 : >"$LOG"
@@ -289,4 +302,69 @@ grep -q 'State mutation           : NO' "$WORKDIR/check.out" || fail "check-only
 [[ ! -e "$CHECK/etc/systemd/system/drlink-ai-agent.service" ]] || fail "check-only wrote the AI unit"
 [[ ! -s "$LOG" ]] || fail "check-only called systemctl"
 pass "CHECK_ONLY_DOES_NOT_MUTATE_AI_UNIT"
+
+plant_units() {
+  local tree="$1"
+  mkdir -p "$tree/etc/systemd/system"
+  install -m 0644 "$ROOT/client/drlink-client.service" "$tree/etc/systemd/system/drlink-client.service"
+  install -m 0644 "$ROOT/client/drlink-ai-agent.service" "$tree/etc/systemd/system/drlink-ai-agent.service"
+}
+
+KEEP="$WORKDIR/keep-client"
+install_tree "$KEEP"
+plant_units "$KEEP"
+: >"$LOG"
+export FRP_CLIENT_TEST_ROOT="$KEEP"
+unset FRP_BUNDLE_SHA256
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/keep-client.out" 2>"$WORKDIR/keep-client.err"; then
+  cat "$WORKDIR/keep-client.out" "$WORKDIR/keep-client.err" >&2
+  fail "current-unit product update"
+fi
+grep -q 'frpc restarted  : NO' "$WORKDIR/keep-client.out" || fail "current client unit was restarted"
+grep -qx 'restart drlink-ai-agent' "$LOG" || fail "AI worker was not restarted"
+if grep -qx 'restart drlink-client' "$LOG"; then fail "current client unit was restarted"; fi
+if grep -qx 'enable drlink-client' "$LOG"; then fail "current client unit was re-enabled"; fi
+pass "CURRENT_CLIENT_UNIT_IS_NOT_RESTARTED"
+
+STALE_CLIENT="$WORKDIR/stale-client"
+install_tree "$STALE_CLIENT"
+write_current "$STALE_CLIENT"
+plant_units "$STALE_CLIENT"
+printf 'STALE CLIENT UNIT\n' >"$STALE_CLIENT/etc/systemd/system/drlink-client.service"
+: >"$LOG"
+export FRP_CLIENT_TEST_ROOT="$STALE_CLIENT"
+export FRP_BUNDLE_SHA256="$BUNDLE"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/stale-client.out" 2>"$WORKDIR/stale-client.err"; then
+  cat "$WORKDIR/stale-client.out" "$WORKDIR/stale-client.err" >&2
+  fail "same-bundle stale client unit update"
+fi
+cmp -s "$ROOT/client/drlink-client.service" "$STALE_CLIENT/etc/systemd/system/drlink-client.service" \
+  || fail "stale client unit was not replaced"
+grep -q 'frpc restarted  : YES' "$WORKDIR/stale-client.out" || fail "stale client unit should restart relay"
+grep -qx 'restart drlink-client' "$LOG" || fail "stale client unit restart"
+: >"$LOG"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/stale-client-again.out" 2>"$WORKDIR/stale-client-again.err"; then
+  cat "$WORKDIR/stale-client-again.out" "$WORKDIR/stale-client-again.err" >&2
+  fail "converged client unit refresh"
+fi
+grep -q 'Update                    : not needed' "$WORKDIR/stale-client-again.out" || fail "converged client unit still needed"
+[[ ! -s "$LOG" ]] || fail "converged client refresh called systemctl"
+pass "SAME_BUNDLE_REPAIRS_STALE_CLIENT_UNIT_THEN_IDLE"
+
+CHECK_CLIENT="$WORKDIR/check-client"
+install_tree "$CHECK_CLIENT"
+write_current "$CHECK_CLIENT"
+mkdir -p "$CHECK_CLIENT/etc/systemd/system"
+install -m 0644 "$ROOT/client/drlink-ai-agent.service" "$CHECK_CLIENT/etc/systemd/system/drlink-ai-agent.service"
+: >"$LOG"
+export FRP_CLIENT_TEST_ROOT="$CHECK_CLIENT"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" --check >"$WORKDIR/check-client.out" 2>"$WORKDIR/check-client.err"; then
+  cat "$WORKDIR/check-client.out" "$WORKDIR/check-client.err" >&2
+  fail "check-only missing client unit"
+fi
+grep -q 'Update                    : available' "$WORKDIR/check-client.out" || fail "check-only missed client unit drift"
+grep -q 'State mutation           : NO' "$WORKDIR/check-client.out" || fail "check-only client mutation flag"
+[[ ! -e "$CHECK_CLIENT/etc/systemd/system/drlink-client.service" ]] || fail "check-only wrote the client unit"
+[[ ! -s "$LOG" ]] || fail "check-only client called systemctl"
+pass "CHECK_ONLY_DOES_NOT_MUTATE_CLIENT_UNIT"
 unset FRP_BUNDLE_SHA256
