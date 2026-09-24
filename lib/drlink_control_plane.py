@@ -3964,6 +3964,15 @@ class ControlPlane:
             )
         self.conn.execute("DELETE FROM ai_oauth_pending WHERE id = ?", (row["id"],))
 
+    def _oauth_approval_lifecycle_error(self, name: str) -> ControlPlaneError:
+        """Revoked and unverified identities stay fail-closed. Approval does not revive them."""
+        return ControlPlaneError(
+            "ERROR:\nAI Identity '%s' is revoked or not VERIFIED.\n\n"
+            "Verify or reactivate the AI Identity explicitly before OAuth approval.\n"
+            "Approval leaves a revoked identity revoked.\n\n"
+            "No changes were applied." % name
+        )
+
     def approve_oauth_pending(
         self, pending_id: str, principal_name: Optional[str] = None, *, retain_for_browser: bool = True
     ) -> dict:
@@ -4006,6 +4015,8 @@ class ControlPlane:
             target = self.get_principal(principal_name)
             if target is None or not int(target["enabled"] or 0):
                 raise ControlPlaneError("AI Principal not found or disabled: %s" % principal_name)
+            if str(target["credential_status"] or "").lower() not in ("verified", "active"):
+                raise self._oauth_approval_lifecycle_error(target["name"])
             # Bind DCR/CIMD client to the approved principal for future static lookups.
             now = utc_now_iso()
             dcr = self._lookup_dcr_client(row["client_id"])
@@ -4024,6 +4035,8 @@ class ControlPlane:
         else:
             if principal is None or not int(principal["enabled"] or 0):
                 raise ControlPlaneError("AI Principal disabled or missing")
+            if str(principal["credential_status"] or "").lower() == "revoked":
+                raise self._oauth_approval_lifecycle_error(principal["name"])
             if principal_name and str(principal["name"]).lower() != str(principal_name).lower():
                 raise ControlPlaneError("pending OAuth request is bound to a different AI Principal")
             principal_id = principal["id"]

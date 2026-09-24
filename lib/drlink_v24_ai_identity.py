@@ -107,7 +107,7 @@ def stage_ai_identity_oauth(
         principal_id = existing["id"]
         plane.conn.execute(
             "UPDATE ai_principals SET auth_mode = 'oauth', credential_status = CASE "
-            "WHEN lower(COALESCE(credential_status,'')) IN ('verified','active') THEN credential_status "
+            "WHEN lower(COALESCE(credential_status,'')) IN ('verified','active','revoked') THEN credential_status "
             "ELSE 'pending' END, updated_at = ? WHERE id = ?",
             (now, principal_id),
         )

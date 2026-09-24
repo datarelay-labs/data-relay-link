@@ -1100,9 +1100,13 @@ def make_handler(bridge: MCPBridge):
                     "::1",
                 )
                 if auto and not pending.get("unbound"):
-                    approved = bridge.plane.approve_oauth_pending(
-                        pending["id"], retain_for_browser=False
-                    )
+                    try:
+                        approved = bridge.plane.approve_oauth_pending(
+                            pending["id"], retain_for_browser=False
+                        )
+                    except ControlPlaneError as exc:
+                        self._send(400, {"error": "access_denied", "error_description": str(exc)})
+                        return
                     loc = approved["redirect_uri"]
                     sep = "&" if "?" in loc else "?"
                     query = {"code": approved["code"], "iss": bridge.canonical_public_base()}

@@ -97,6 +97,7 @@ python3 tests/test-mcp-public-endpoint-e2e.py
 python3 tests/test-mcp-public-tls-lifecycle.py
 python3 tests/test-mcp-remote-connector-interop.py
 python3 tests/test-oauth-manual-consent-browser.py
+python3 tests/test-oauth-principal-lifecycle.py
 python3 tests/test-oauth-redirect-uri-validation.py
 python3 tests/test-oauth-cimd-ssrf.py
 python3 tests/test-oauth-pending-bounds.py

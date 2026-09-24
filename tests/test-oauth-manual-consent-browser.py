@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 from drlink_control_cli import dispatch  # noqa: E402
 from frp_ctl_grammar import match  # noqa: E402
 from drlink_control_plane import ControlPlane  # noqa: E402
-from drlink_mcp_bridge import MCPBridge, ThreadingHTTPServer, make_handler  # noqa: E402
+from drlink_mcp_bridge import MCPBridge, MCP_PROTOCOL_VERSION, ThreadingHTTPServer, make_handler  # noqa: E402
 import frp_frontend  # noqa: E402
 import frp_pki  # noqa: E402
 
@@ -166,6 +166,43 @@ class ManualConsentBrowserTests(unittest.TestCase):
             "client_id": client_id,
         }
 
+    def _mcp(self, token):
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            },
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "Authorization": "Bearer %s" % token,
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+            "Mcp-Method": "tools/list",
+        }
+        req = urllib.request.Request(
+            self.base + "/mcp",
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode("utf-8")
+                return resp.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = {"raw": raw}
+            return exc.code, parsed
+
     def _exchange(self, *, code, verifier, resource, client_id="agent-a", redirect="http://127.0.0.1/callback"):
         body = urllib.parse.urlencode(
             {
@@ -225,7 +262,11 @@ class ManualConsentBrowserTests(unittest.TestCase):
         self.assertTrue(code.startswith("drc_"))
         issued = self._exchange(code=code, verifier=verifier, resource=auth["resource"])
         self.assertTrue(issued.get("access_token", "").startswith("drauth_"))
+        status, payload = self._mcp(issued["access_token"])
+        self.assertEqual(status, 200, payload)
+        self.assertIn("tools", json.dumps(payload))
         print("MANUAL_CONSENT_BROWSER_FLOW=PASS")
+        print("MANUAL_CONSENT_MCP_AUTH_AFTER_EXCHANGE=PASS")
 
     def test_deny_redirects_access_denied(self):
         _, challenge = self._pkce()
@@ -535,11 +576,39 @@ class ManualConsentBrowserTests(unittest.TestCase):
             self.assertIn("unexpected argument: extra", str(exc))
         else:
             self.fail("third approve-oauth argument reached the handler")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = dispatch(two, root=self.tmp)
+        self.assertEqual(rc, 1)
+        self.assertIn("not VERIFIED", err.getvalue())
+        self.assertEqual(
+            str(self.plane.get_principal("agent-dcr")["credential_status"]).lower(),
+            "none",
+        )
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'revoked' WHERE name = 'agent-dcr'"
+        )
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = dispatch(two, root=self.tmp)
+        self.assertEqual(rc, 1)
+        self.assertIn("revoked", err.getvalue())
+        self.assertEqual(
+            str(self.plane.get_principal("agent-dcr")["credential_status"]).lower(),
+            "revoked",
+        )
+        self.plane.conn.execute(
+            "UPDATE ai_principals SET credential_status = 'verified' WHERE name = 'agent-dcr'"
+        )
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = dispatch(two, root=self.tmp)
         self.assertEqual(rc, 0)
         self.assertNotIn("drc_", buf.getvalue())
+        self.assertEqual(
+            str(self.plane.get_principal("agent-dcr")["credential_status"]).lower(),
+            "verified",
+        )
         exc = open_no_redirect(self.base + auth["continue_path"])
         self.assertEqual(exc.code, 302)
         params = urllib.parse.parse_qs(urllib.parse.urlparse(exc.headers.get("Location") or "").query)
@@ -553,7 +622,11 @@ class ManualConsentBrowserTests(unittest.TestCase):
             redirect="http://127.0.0.1/cb-dcr",
         )
         self.assertTrue(issued.get("access_token", "").startswith("drauth_"))
+        status, payload = self._mcp(issued["access_token"])
+        self.assertEqual(status, 200, payload)
+        self.assertIn("tools", json.dumps(payload))
         print("DCR_PUBLIC_CLI_IDENTITY_APPROVAL=PASS")
+        print("DCR_APPROVE_PKCE_MCP_AUTH=PASS")
 
 
 if __name__ == "__main__":
