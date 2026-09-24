@@ -1202,17 +1202,32 @@ def _canonical_relay_id(value) -> str:
 
 
 def _validate_listen_addr(addr: str) -> str:
+    """Accept only addresses RelayServer can bind.
+
+    The Fixed TCP runtime is IPv4 (AF_INET). IPv6 literals, ``::``, and ``*``
+    are rejected before policy mutation. There is no v2.4 contract for an
+    IPv6 or symbolic wildcard listener.
+    """
     text = str(addr or "").strip()
     if not text:
         raise EgressError("listen_addr is required")
     if _has_control_chars(text) or any(ch.isspace() for ch in text):
         raise EgressError("invalid listen_addr")
-    if text in ("0.0.0.0", "::", "*"):
-        return text
+    if text == "0.0.0.0":
+        return "0.0.0.0"
     try:
-        return ipaddress.ip_address(text).compressed
+        parsed = ipaddress.ip_address(text)
     except ValueError as exc:
-        raise EgressError("invalid listen_addr: %s" % addr) from exc
+        raise EgressError(
+            "unsupported listen_addr: %s (Fixed TCP accepts an IPv4 address or 0.0.0.0)"
+            % addr
+        ) from exc
+    if not isinstance(parsed, ipaddress.IPv4Address):
+        raise EgressError(
+            "unsupported listen_addr: %s (Fixed TCP accepts an IPv4 address or 0.0.0.0)"
+            % addr
+        )
+    return parsed.compressed
 
 
 def _validate_tcp_relays(state: dict) -> None:

@@ -183,6 +183,60 @@ class FixedTcpSchemaTests(unittest.TestCase):
         with self.assertRaises(EG.EgressError):
             EG.mutate_egress_state(protected, cfg=self.cfg)
 
+    def test_listen_addr_matches_ipv4_runtime(self):
+        def seed(state):
+            EG.create_profile(state, "p1", enabled=False)
+            EG.add_source(state, "p1", "10.0.0.0/8")
+            EG.add_destination(state, "p1", "a.example.com", 443, protocol="tcp")
+
+        EG.mutate_egress_state(seed, cfg=self.cfg)
+        before = self.path.read_bytes()
+
+        def reject(addr, label):
+            def mut(state):
+                EG.create_tcp_relay(
+                    state,
+                    label,
+                    profile_selector="p1",
+                    destination_selector="a.example.com:443",
+                    listen_addr=addr,
+                    listen_port=6211,
+                )
+
+            with self.assertRaises(EG.EgressError) as ctx:
+                EG.mutate_egress_state(mut, cfg=self.cfg)
+            self.assertIn("unsupported listen_addr", str(ctx.exception))
+            self.assertEqual(self.path.read_bytes(), before)
+
+        for addr, label in (
+            ("*", "bad-star"),
+            ("::", "bad-v6wild"),
+            ("::1", "bad-v6loop"),
+            ("2001:db8::1", "bad-v6lit"),
+        ):
+            reject(addr, label)
+
+        def accept(addr, port):
+            def mut(state):
+                return EG.create_tcp_relay(
+                    state,
+                    "ok-%s" % port,
+                    profile_selector="p1",
+                    destination_selector="a.example.com:443",
+                    listen_addr=addr,
+                    listen_port=port,
+                )
+
+            _rid, relay = EG.mutate_egress_state(mut, cfg=self.cfg)
+            self.assertEqual(relay["listen_addr"], addr)
+            self.assertFalse(relay["enabled"])
+
+        accept("0.0.0.0", 6212)
+        accept("127.0.0.1", 6213)
+        saved = EG.load_egress_state(cfg=self.cfg)
+        stored = {r["listen_addr"] for r in saved["tcp_relays"].values()}
+        self.assertEqual(stored, {"0.0.0.0", "127.0.0.1"})
+
     def test_tcp_wildcard_destination_rejected(self):
         def mut(state):
             EG.create_profile(state, "wild", enabled=False)

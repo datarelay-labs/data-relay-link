@@ -202,5 +202,74 @@ grep -q "TCP relays enabled : 1" "$OUT_TCP" || fail "missing enabled relay count
 grep -q "TCP relays bound   : 1" "$OUT_TCP" || fail "missing bound relay count"
 pass "status Fixed TCP visibility"
 
+# Restore schema v2 so later --check cases are not failed by the v1 registry.
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  "schema_version": 2,
+  "reserved": [6000],
+  "clients": {},
+}) + "\n")
+PY
+
+status_check() {
+  env \
+    FRP_UPDATE_TEST_HARNESS=1 \
+    FRP_UPDATE_TEST_MARKER="$MARKER" \
+    FRP_DEPLOY_TEST_ROOT="$TREE" \
+    FRP_UPDATE_ROOT="$TREE" \
+    FRP_UPDATE_HOOK_SKIP_SYSTEMD=1 \
+    FRP_STATUS_SKIP_UPSTREAM=1 \
+    "$@" \
+    "$STATUS" --check
+}
+
+if ! status_check \
+  FRP_STATUS_TCP_EGRESS_STATE=inactive \
+  FRP_STATUS_TCP_EGRESS_HEALTH=inactive \
+  FRP_STATUS_TCP_EGRESS_POLICY=missing \
+  FRP_STATUS_TCP_EGRESS_ENABLED=0 \
+  FRP_STATUS_TCP_EGRESS_BOUND=0 \
+  >"$WORKDIR/check-tcp-unused.out" 2>"$WORKDIR/check-tcp-unused.err"; then
+  fail "unused Fixed TCP plane should not fail --check"
+fi
+pass "status --check unused Fixed TCP"
+
+if status_check \
+  FRP_STATUS_TCP_EGRESS_STATE=inactive \
+  FRP_STATUS_TCP_EGRESS_HEALTH="unhealthy(not-running)" \
+  FRP_STATUS_TCP_EGRESS_POLICY=healthy \
+  FRP_STATUS_TCP_EGRESS_ENABLED=1 \
+  FRP_STATUS_TCP_EGRESS_BOUND=0 \
+  >"$WORKDIR/check-tcp-down.out" 2>"$WORKDIR/check-tcp-down.err"; then
+  fail "enabled Fixed TCP with stopped runtime should fail --check"
+fi
+grep -q "Fixed TCP is not ready" "$WORKDIR/check-tcp-down.err" || fail "missing Fixed TCP readiness error"
+pass "status --check enabled Fixed TCP not running"
+
+if status_check \
+  FRP_STATUS_TCP_EGRESS_STATE=active \
+  FRP_STATUS_TCP_EGRESS_HEALTH="degraded(configured-not-listening)" \
+  FRP_STATUS_TCP_EGRESS_POLICY=healthy \
+  FRP_STATUS_TCP_EGRESS_ENABLED=1 \
+  FRP_STATUS_TCP_EGRESS_BOUND=0 \
+  >"$WORKDIR/check-tcp-degraded.out" 2>"$WORKDIR/check-tcp-degraded.err"; then
+  fail "enabled Fixed TCP that is not listening should fail --check"
+fi
+grep -q "Fixed TCP is not ready" "$WORKDIR/check-tcp-degraded.err" || fail "missing listener readiness error"
+pass "status --check enabled Fixed TCP not listening"
+
+if ! status_check \
+  FRP_STATUS_TCP_EGRESS_STATE=active \
+  FRP_STATUS_TCP_EGRESS_HEALTH=ok \
+  FRP_STATUS_TCP_EGRESS_POLICY=healthy \
+  FRP_STATUS_TCP_EGRESS_ENABLED=1 \
+  FRP_STATUS_TCP_EGRESS_BOUND=1 \
+  >"$WORKDIR/check-tcp-ready.out" 2>"$WORKDIR/check-tcp-ready.err"; then
+  fail "healthy enabled Fixed TCP should pass --check"
+fi
+pass "status --check enabled Fixed TCP ready"
+
 echo
 echo "FRP_STATUS_ENHANCED=PASS"

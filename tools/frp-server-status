@@ -804,6 +804,13 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
       exit 1
     fi
   fi
+  # Enabled Fixed TCP must be servable. An unused plane stays optional.
+  if (( tcp_enabled_count > 0 )); then
+    if [[ "${tcp_egress_health}" != "ok" ]] || (( tcp_bound_count < tcp_enabled_count )); then
+      echo "ERROR: Fixed TCP is not ready (${tcp_egress_health}; policy=${tcp_egress_policy:-unknown}; enabled=${tcp_enabled_count}; listening=${tcp_bound_count})" >&2
+      exit 1
+    fi
+  fi
   exit 0
 fi
 exit 0
