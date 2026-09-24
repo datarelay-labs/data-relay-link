@@ -14,6 +14,11 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
+assert_readonly_systemd_log() {
+  local leftover
+  leftover="$(grep -Ev '^(is-enabled|is-active) ' "$LOG" || true)"
+  [[ -z "$leftover" ]] || fail "$1 mutated systemd: ${leftover}"
+}
 
 grep -q 'frp_client_converge_ai_agent_unit' "$ROOT/install-client.sh" || fail "install path missing AI agent converge"
 grep -q 'systemctl enable drlink-client' "$ROOT/install-client.sh" || fail "client unit enable missing"
@@ -268,7 +273,7 @@ if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/same-again.out"
   fail "converged same-version refresh"
 fi
 grep -q 'Update                    : not needed' "$WORKDIR/same-again.out" || fail "converged host still reported update needed"
-[[ ! -s "$LOG" ]] || fail "converged refresh called systemctl"
+assert_readonly_systemd_log "converged refresh"
 pass "SAME_VERSION_REFRESH_INSTALLS_MISSING_AI_UNIT"
 
 STALE="$WORKDIR/same-stale"
@@ -348,7 +353,7 @@ if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/stale-client-ag
   fail "converged client unit refresh"
 fi
 grep -q 'Update                    : not needed' "$WORKDIR/stale-client-again.out" || fail "converged client unit still needed"
-[[ ! -s "$LOG" ]] || fail "converged client refresh called systemctl"
+assert_readonly_systemd_log "converged client refresh"
 pass "SAME_BUNDLE_REPAIRS_STALE_CLIENT_UNIT_THEN_IDLE"
 
 CHECK_CLIENT="$WORKDIR/check-client"
@@ -367,4 +372,82 @@ grep -q 'State mutation           : NO' "$WORKDIR/check-client.out" || fail "che
 [[ ! -e "$CHECK_CLIENT/etc/systemd/system/drlink-client.service" ]] || fail "check-only wrote the client unit"
 [[ ! -s "$LOG" ]] || fail "check-only client called systemctl"
 pass "CHECK_ONLY_DOES_NOT_MUTATE_CLIENT_UNIT"
+
+DRIFT="$WORKDIR/service-drift"
+install_tree "$DRIFT"
+write_current "$DRIFT"
+plant_units "$DRIFT"
+AI_BYTES="$(file_sha "$DRIFT/etc/systemd/system/drlink-ai-agent.service")"
+CLIENT_BYTES="$(file_sha "$DRIFT/etc/systemd/system/drlink-client.service")"
+STATE_BYTES="$(file_sha "$DRIFT/etc/frp/client-state.json")"
+DRIFT_MODE="$WORKDIR/service-drift.mode"
+printf '%s\n' disabled >"$DRIFT_MODE"
+DRIFT_MOCK="$WORKDIR/systemctl-drift"
+cat >"$DRIFT_MOCK" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$LOG"
+mode=\$(cat "$DRIFT_MODE")
+case "\$1" in
+  is-enabled)
+    if [ "\$mode" = disabled ]; then printf '%s\n' disabled; else printf '%s\n' enabled; fi
+    ;;
+  is-active)
+    if [ "\$mode" = repair ]; then printf '%s\n' active; else printf '%s\n' inactive; fi
+    ;;
+  restart)
+    if [ "\$2" = drlink-ai-agent ]; then printf '%s\n' repair >"$DRIFT_MODE"; fi
+    ;;
+esac
+exit 0
+EOF
+chmod 0755 "$DRIFT_MOCK"
+export FRP_CLIENT_TEST_ROOT="$DRIFT"
+export FRP_SYSTEMCTL_BIN="$DRIFT_MOCK"
+export FRP_BUNDLE_SHA256="$BUNDLE"
+: >"$LOG"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" --check >"$WORKDIR/drift-disabled.out" 2>"$WORKDIR/drift-disabled.err"; then
+  cat "$WORKDIR/drift-disabled.out" "$WORKDIR/drift-disabled.err" >&2
+  fail "check-only disabled AI worker"
+fi
+grep -q 'Update                    : available' "$WORKDIR/drift-disabled.out" || fail "disabled AI worker was not-needed"
+grep -q 'State mutation           : NO' "$WORKDIR/drift-disabled.out" || fail "disabled check-only mutated"
+grep -qx 'is-enabled drlink-ai-agent' "$LOG" || fail "disabled check-only skipped is-enabled"
+grep -qx 'is-active drlink-ai-agent' "$LOG" || fail "disabled check-only skipped is-active"
+assert_readonly_systemd_log "disabled check-only"
+[[ "$(file_sha "$DRIFT/etc/systemd/system/drlink-ai-agent.service")" == "$AI_BYTES" ]] || fail "disabled check-only changed AI unit"
+printf '%s\n' stopped >"$DRIFT_MODE"
+: >"$LOG"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" --check >"$WORKDIR/drift-stopped.out" 2>"$WORKDIR/drift-stopped.err"; then
+  cat "$WORKDIR/drift-stopped.out" "$WORKDIR/drift-stopped.err" >&2
+  fail "check-only stopped AI worker"
+fi
+grep -q 'Update                    : available' "$WORKDIR/drift-stopped.out" || fail "stopped AI worker was not-needed"
+grep -q 'State mutation           : NO' "$WORKDIR/drift-stopped.out" || fail "stopped check-only mutated"
+grep -qx 'is-active drlink-ai-agent' "$LOG" || fail "stopped check-only skipped is-active"
+assert_readonly_systemd_log "stopped check-only"
+[[ "$(file_sha "$DRIFT/etc/systemd/system/drlink-ai-agent.service")" == "$AI_BYTES" ]] || fail "stopped check-only changed AI unit"
+pass "CHECK_ONLY_REPORTS_DISABLED_OR_STOPPED_AI_WORKER"
+: >"$LOG"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/drift-repair.out" 2>"$WORKDIR/drift-repair.err"; then
+  cat "$WORKDIR/drift-repair.out" "$WORKDIR/drift-repair.err" >&2
+  fail "repair stopped AI worker"
+fi
+grep -q 'AI agent service : converged' "$WORKDIR/drift-repair.out" || fail "repair did not converge AI worker"
+grep -q 'frpc restarted  : NO' "$WORKDIR/drift-repair.out" || fail "service repair restarted frpc"
+grep -qx 'daemon-reload' "$LOG" || fail "service repair skipped daemon-reload"
+grep -qx 'enable drlink-ai-agent' "$LOG" || fail "service repair did not enable AI worker"
+grep -qx 'restart drlink-ai-agent' "$LOG" || fail "service repair did not restart AI worker"
+if grep -qx 'restart drlink-client' "$LOG"; then fail "service repair restarted the relay"; fi
+[[ "$(file_sha "$DRIFT/etc/systemd/system/drlink-ai-agent.service")" == "$AI_BYTES" ]] || fail "repair rewrote canonical AI unit"
+[[ "$(file_sha "$DRIFT/etc/systemd/system/drlink-client.service")" == "$CLIENT_BYTES" ]] || fail "repair rewrote client unit"
+[[ "$(file_sha "$DRIFT/etc/frp/client-state.json")" == "$STATE_BYTES" ]] || fail "repair changed client state"
+[[ "$(cat "$DRIFT_MODE")" == "repair" ]] || fail "repair did not restart the AI worker"
+: >"$LOG"
+if ! "$ROOT/tools/frp-client" update --source "$ROOT" >"$WORKDIR/drift-again.out" 2>"$WORKDIR/drift-again.err"; then
+  cat "$WORKDIR/drift-again.out" "$WORKDIR/drift-again.err" >&2
+  fail "repaired AI worker refresh"
+fi
+grep -q 'Update                    : not needed' "$WORKDIR/drift-again.out" || fail "repaired AI worker still needed"
+assert_readonly_systemd_log "repaired refresh"
+pass "APPLY_REPAIRS_STOPPED_AI_WORKER_WITHOUT_FRPC_RESTART"
 unset FRP_BUNDLE_SHA256

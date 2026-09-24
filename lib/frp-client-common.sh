@@ -4436,8 +4436,41 @@ frp_client_unit_file_needs_converge() {
   return 0
 }
 
+frp_client_systemd_state_queryable() {
+  if frp_client_ai_agent_systemd_skipped; then
+    return 1
+  fi
+  if [[ -n "${FRP_SYSTEMCTL_BIN:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+frp_client_ai_agent_service_needs_converge() {
+  local ctl enabled active
+  if ! frp_client_systemd_state_queryable; then
+    return 1
+  fi
+  [[ -f "$(frp_client_path /etc/systemd/system/drlink-ai-agent.service)" ]] || return 1
+  ctl="${FRP_SYSTEMCTL_BIN:-systemctl}"
+  enabled="$("$ctl" is-enabled drlink-ai-agent 2>/dev/null || true)"
+  active="$("$ctl" is-active drlink-ai-agent 2>/dev/null || true)"
+  case "$enabled" in
+    enabled|static|indirect|alias) ;;
+    *) return 0 ;;
+  esac
+  [[ "$active" == "active" ]] || return 0
+  return 1
+}
+
 frp_client_ai_agent_unit_needs_converge() {
-  frp_client_unit_file_needs_converge "${1:-}" "drlink-ai-agent.service"
+  local source="${1:-}"
+  frp_client_unit_file_needs_converge "$source" "drlink-ai-agent.service" && return 0
+  frp_client_ai_agent_service_needs_converge && return 0
+  return 1
 }
 
 frp_client_linux_units_need_converge() {
@@ -4446,7 +4479,7 @@ frp_client_linux_units_need_converge() {
     return 1
   fi
   frp_client_unit_file_needs_converge "$source" "drlink-client.service" && return 0
-  frp_client_unit_file_needs_converge "$source" "drlink-ai-agent.service" && return 0
+  frp_client_ai_agent_unit_needs_converge "$source" && return 0
   return 1
 }
 
