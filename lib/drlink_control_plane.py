@@ -117,9 +117,13 @@ AI_TERMINAL_JOB_STATUSES = frozenset(
 AI_ACTIVE_JOB_STATUSES = frozenset({"queued", "running"})
 # Absolute claim/completion deadline includes MCP wait slack past the exec timeout.
 AI_JOB_DISPATCH_GRACE_SECONDS = 10
-# Enrollment-time connected=1 must not stay live without fresh runtime or
-# signed management evidence. Agent claim polls are well under this bound.
+# AI-executor freshness. This is not transport connectivity: a host can stay
+# FRP-connected without a durable AI worker (macOS has no such worker in this
+# release). Absence of AI polls must not be reported as Disconnected.
 MANAGED_HOST_LIVENESS_SECONDS = 120
+# Persist liveness well inside the TTL so claim polls do not rewrite the row
+# on every poll. 30s is safely inside the 120s freshness bound.
+MANAGED_HOST_LIVENESS_REFRESH_SECONDS = 30
 MCP_AUTH_MODEL = "static-bearer+built-in-oauth2.1-as/rs+rfc9728"
 OBJECT_TYPES = ("host", "network", "fqdn")
 PLANES = ("remote", "internet")
@@ -1444,11 +1448,13 @@ class ControlPlane:
 
         def write():
             if existing:
+                # Metadata reconcile must not refresh last_seen. Only authenticated
+                # management activity and AI job claim/complete move liveness.
                 self.conn.execute(
                     "UPDATE clients SET label = COALESCE(?, label), description = COALESCE(?, description), "
-                    "hostname = COALESCE(?, hostname), status = ?, connected = ?, last_seen = ?, "
+                    "hostname = COALESCE(?, hostname), status = ?, connected = ?, "
                     "row_version = row_version + 1, updated_at = ? WHERE id = ?",
-                    (label, description, hostname, presence, 1 if connected else 0, now, now, client_id),
+                    (label, description, hostname, presence, 1 if connected else 0, now, client_id),
                 )
             else:
                 self.conn.execute(
@@ -1597,9 +1603,11 @@ class ControlPlane:
         client = None
         if ep and ep["client_id"]:
             client = self.conn.execute("SELECT * FROM clients WHERE id = ?", (ep["client_id"],)).fetchone()
-        status = "Orphaned" if obj["status"] == "orphaned" else (
-            "Connected" if self.client_effectively_connected(client) else "Disconnected"
-        )
+        if obj["status"] == "orphaned":
+            status = "Orphaned"
+        else:
+            presence = self.managed_host_connectivity(client)
+            status = {"connected": "Connected", "stale": "Stale"}.get(presence, "Disconnected")
         lines = [
             "Managed Host: %s" % obj["name"],
             "Client ID       : %s" % ((client["id"][:8] if client else (ep["client_id"][:8] if ep and ep["client_id"] else "-"))),
@@ -4476,12 +4484,10 @@ class ControlPlane:
                 (terminal, now, row["id"]),
             )
 
-    def client_effectively_connected(self, client) -> bool:
-        """Time-bounded online truth shared by CLI and MCP.
+    def _managed_host_admitted(self, client) -> bool:
+        """Trusted, not retired, and the persisted transport flag is up.
 
-        A persisted connected flag or status='connected' is not enough. The
-        host must still be trusted, not retired, and have last_seen inside
-        MANAGED_HOST_LIVENESS_SECONDS.
+        This is not AI-executor freshness. A quiet AI worker does not clear it.
         """
         if client is None:
             return False
@@ -4497,19 +4503,43 @@ class ControlPlane:
         status = str(client["status"] or "").lower() if "status" in client.keys() else ""
         if status in ("retired", "removed", "deleted"):
             return False
+        return True
+
+    def ai_executor_ready(self, client) -> bool:
+        """True when this host can accept an AI job now.
+
+        Requires admission plus last_seen inside MANAGED_HOST_LIVENESS_SECONDS.
+        """
+        if not self._managed_host_admitted(client):
+            return False
         last_seen = client["last_seen"] if "last_seen" in client.keys() else None
         return managed_host_liveness_fresh(last_seen)
 
+    def client_effectively_connected(self, client) -> bool:
+        """AI-executor readiness. Dispatch uses this; public connectivity does not."""
+        return self.ai_executor_ready(client)
+
     def managed_host_connectivity(self, client) -> str:
-        return "connected" if self.client_effectively_connected(client) else "disconnected"
+        """Public transport projection: connected, stale, or disconnected.
+
+        Stale means the persisted flag is still up but there is no fresh
+        platform-neutral heartbeat. That is not a claim that FRP is down.
+        """
+        if not self._managed_host_admitted(client):
+            return "disconnected"
+        last_seen = client["last_seen"] if client is not None and "last_seen" in client.keys() else None
+        if managed_host_liveness_fresh(last_seen):
+            return "connected"
+        return "stale"
 
     def refresh_managed_host_liveness(self, client_id: str) -> bool:
-        """Record signed management activity as fresh liveness.
+        """Record signed management activity as fresh AI-executor liveness.
 
-        Revoked and retired hosts are not revived.
+        Revoked and retired hosts are not revived. Repeated calls inside
+        MANAGED_HOST_LIVENESS_REFRESH_SECONDS do not rewrite the row.
         """
         row = self.conn.execute(
-            "SELECT trust_status, status FROM clients WHERE id = ?", (client_id,)
+            "SELECT trust_status, status, last_seen FROM clients WHERE id = ?", (client_id,)
         ).fetchone()
         if row is None:
             return False
@@ -4517,6 +4547,14 @@ class ControlPlane:
             return False
         if str(row["status"] or "").lower() in ("retired", "removed", "deleted"):
             return False
+        seen = _parse_ai_job_ts(row["last_seen"])
+        now_dt = datetime.now(timezone.utc)
+        if seen is not None:
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
+            age = (now_dt - seen).total_seconds()
+            if 0 <= age < MANAGED_HOST_LIVENESS_REFRESH_SECONDS:
+                return True
         now = utc_now_iso()
         self.conn.execute(
             "UPDATE clients SET connected = 1, status = 'connected', last_seen = ?, "

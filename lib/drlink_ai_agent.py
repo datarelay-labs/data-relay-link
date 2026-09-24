@@ -236,6 +236,12 @@ def _agent_post(url: str, token: str, body: dict, timeout: float = 10) -> dict:
             raise ControlPlaneError("agent RPC HTTP %s" % exc.code) from exc
 
 
+# Idle claim polls must not run at interactive rate. A busy poll stays short
+# so a queued job is still picked up inside the MCP wait.
+AI_AGENT_IDLE_POLL_SECONDS = 2.0
+AI_AGENT_BUSY_POLL_SECONDS = 0.05
+
+
 class AgentLoop:
     """Poll the Server for authorized jobs and execute them locally on this host.
 
@@ -344,11 +350,13 @@ class AgentLoop:
 
     def run(self) -> None:
         while not self.stop_event.is_set():
+            found = 0
             try:
-                self.run_once()
+                found = int(self.run_once() or 0)
             except Exception:
-                pass
-            self.stop_event.wait(0.05)
+                found = 0
+            delay = AI_AGENT_BUSY_POLL_SECONDS if found else AI_AGENT_IDLE_POLL_SECONDS
+            self.stop_event.wait(delay)
 
 
 def main(argv=None):

@@ -15,7 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 from drlink_control_db import utc_now_iso  # noqa: E402
+from drlink_ai_agent import (  # noqa: E402
+    AI_AGENT_BUSY_POLL_SECONDS,
+    AI_AGENT_IDLE_POLL_SECONDS,
+)
 from drlink_control_plane import (  # noqa: E402
+    MANAGED_HOST_LIVENESS_REFRESH_SECONDS,
     MANAGED_HOST_LIVENESS_SECONDS,
     ControlPlane,
     ControlPlaneError,
@@ -103,18 +108,23 @@ class ManagedHostLivenessTests(unittest.TestCase):
         self.assertEqual(row["status"], "connected")
         self.assertEqual(row["last_seen"], STALE_SEEN)
         self.assertFalse(self.plane.client_effectively_connected(row))
+        self.assertFalse(self.plane.ai_executor_ready(row))
+        self.assertEqual(self.plane.managed_host_connectivity(row), "stale")
         listed = self._show("managed-hosts")
-        self.assertIn("%s expernet-dp1 disconnected" % HOST, listed)
+        self.assertIn("%s expernet-dp1 stale" % HOST, listed)
+        self.assertNotIn("%s expernet-dp1 disconnected" % HOST, listed)
+        self.assertNotIn("%s expernet-dp1 connected" % HOST, listed)
         overview = self._show("managed-host", HOST)
-        self.assertIn("Status: disconnected", overview)
-        self.assertIn("Agent: Disconnected", overview)
+        self.assertIn("Status: stale", overview)
+        self.assertIn("Agent: Stale", overview)
         agent = self._show("managed-host", HOST, "agent")
-        self.assertIn("Connection   : Disconnected", agent)
-        self.assertIn("Host status  : disconnected", agent)
+        self.assertIn("Connection   : Stale", agent)
+        self.assertIn("Host status  : stale", agent)
         listed_hosts = self.bridge.call_tool(self.principal, "list_hosts", {})
         text = listed_hosts["content"][0]["text"]
         self.assertIn(HOST, text)
-        self.assertIn('"connectivity": "disconnected"', text)
+        self.assertIn('"connectivity": "stale"', text)
+        self.assertNotIn('"connectivity": "disconnected"', text)
         fresh = self._client(OTHER)
         self.assertTrue(self.plane.client_effectively_connected(fresh))
         self.assertIn("other-host other connected", listed)
@@ -183,6 +193,36 @@ class ManagedHostLivenessTests(unittest.TestCase):
                 claim_token=match["claim_token"],
                 attempt_id=match["attempt_id"],
             )
+
+    def test_metadata_upsert_does_not_revive_stale_liveness(self):
+        before = self._client(MACHINE)
+        self.plane.upsert_client(
+            MACHINE, label=HOST, hostname="expernet-dp1", connected=True
+        )
+        after = self._client(MACHINE)
+        self.assertEqual(after["last_seen"], STALE_SEEN)
+        self.assertEqual(after["last_seen"], before["last_seen"])
+        self.assertFalse(self.plane.ai_executor_ready(after))
+        self.assertEqual(self.plane.managed_host_connectivity(after), "stale")
+
+    def test_repeated_claim_polls_do_not_rewrite_liveness(self):
+        self.plane.claim_ai_jobs(MACHINE, limit=1)
+        first = self._client(MACHINE)
+        self.plane.claim_ai_jobs(MACHINE, limit=1)
+        self.plane.refresh_managed_host_liveness(MACHINE)
+        second = self._client(MACHINE)
+        self.assertEqual(second["last_seen"], first["last_seen"])
+        self.assertEqual(int(second["row_version"]), int(first["row_version"]))
+        self.assertLess(MANAGED_HOST_LIVENESS_REFRESH_SECONDS, MANAGED_HOST_LIVENESS_SECONDS)
+        self.assertGreaterEqual(AI_AGENT_IDLE_POLL_SECONDS, 1.0)
+        self.assertLess(AI_AGENT_IDLE_POLL_SECONDS, MANAGED_HOST_LIVENESS_SECONDS)
+        self.assertLessEqual(AI_AGENT_BUSY_POLL_SECONDS, 0.2)
+
+    def test_explicit_disconnect_is_not_reported_as_stale(self):
+        self._age(MACHINE, utc_now_iso(), connected=0, status="disconnected", trust="trusted")
+        row = self._client(MACHINE)
+        self.assertEqual(self.plane.managed_host_connectivity(row), "disconnected")
+        self.assertFalse(self.plane.ai_executor_ready(row))
 
     def test_fresh_upsert_stays_inside_liveness_bound(self):
         seen = self._client(OTHER)["last_seen"]

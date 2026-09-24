@@ -4398,28 +4398,120 @@ EOF
   return 0
 }
 
-frp_client_converge_ai_agent_unit() {
-  local source="${1:-}"
+frp_client_ai_agent_systemd_skipped() {
+  [[ "${FRP_SKIP_SYSTEMD:-}" == "1" ]]
+}
+
+frp_client_systemctl() {
   local ctl log
-  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
-    return 0
-  fi
-  frp_client_install_ai_agent_unit "$source" || return 1
-  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" ]]; then
+  if frp_client_ai_agent_systemd_skipped; then
     return 0
   fi
   ctl="${FRP_SYSTEMCTL_BIN:-}"
   if [[ -z "$ctl" && -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     log="$(frp_client_path /var/lib/drlink/ai-agent-systemd.actions)"
     mkdir -p "$(dirname "$log")"
-    printf '%s\n' "enable drlink-ai-agent" "restart drlink-ai-agent" >>"$log"
+    printf '%s\n' "$*" >>"$log"
     return 0
   fi
   if [[ -z "$ctl" ]]; then
     ctl="systemctl"
   fi
-  "$ctl" enable drlink-ai-agent >/dev/null || return 1
-  "$ctl" restart drlink-ai-agent >/dev/null || return 1
+  "$ctl" "$@" >/dev/null
+}
+
+frp_client_ai_agent_unit_needs_converge() {
+  local source="${1:-}" live src
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 1
+  fi
+  src=""
+  if [[ -n "$source" && -f "$source/client/drlink-ai-agent.service" ]]; then
+    src="$source/client/drlink-ai-agent.service"
+  fi
+  [[ -n "$src" ]] || return 1
+  live="$(frp_client_path /etc/systemd/system/drlink-ai-agent.service)"
+  [[ -f "$live" ]] || return 0
+  [[ "$(frp_client_digest "$live")" == "$(frp_client_digest "$src")" ]] && return 1
+  return 0
+}
+
+frp_client_capture_ai_agent_service_state() {
+  local dest="$1" live presence="absent" enabled="disabled" active="inactive" mode="live" ctl
+  live="$(frp_client_path /etc/systemd/system/drlink-ai-agent.service)"
+  if [[ -f "$live" ]]; then
+    presence="present"
+  fi
+  if frp_client_ai_agent_systemd_skipped; then
+    mode="skipped"
+  elif [[ "$presence" == "present" ]]; then
+    ctl="${FRP_SYSTEMCTL_BIN:-systemctl}"
+    if [[ -z "${FRP_SYSTEMCTL_BIN:-}" && -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+      mode="recorded"
+    else
+      enabled="$("$ctl" is-enabled drlink-ai-agent 2>/dev/null || true)"
+      active="$("$ctl" is-active drlink-ai-agent 2>/dev/null || true)"
+      case "$enabled" in
+        enabled|static|indirect|alias) enabled="enabled" ;;
+        *) enabled="disabled" ;;
+      esac
+      [[ "$active" == "active" ]] || active="inactive"
+    fi
+  fi
+  cat >"${dest}/ai-agent-systemd.state" <<EOF
+presence=${presence}
+enabled=${enabled}
+active=${active}
+systemd=${mode}
+EOF
+}
+
+frp_client_activate_ai_agent_unit() {
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  if frp_client_ai_agent_systemd_skipped; then
+    return 0
+  fi
+  frp_client_systemctl daemon-reload || return 1
+  frp_client_systemctl enable drlink-ai-agent || return 1
+  frp_client_systemctl restart drlink-ai-agent || return 1
+  return 0
+}
+
+frp_client_restore_ai_agent_service_state() {
+  local backup="$1" state presence enabled active mode
+  state="${backup}/ai-agent-systemd.state"
+  [[ -f "$state" ]] || return 0
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  presence="$(awk -F= '$1=="presence"{print $2}' "$state")"
+  enabled="$(awk -F= '$1=="enabled"{print $2}' "$state")"
+  active="$(awk -F= '$1=="active"{print $2}' "$state")"
+  mode="$(awk -F= '$1=="systemd"{print $2}' "$state")"
+  [[ "$mode" == "skipped" ]] && return 0
+  frp_client_systemctl daemon-reload || return 1
+  if [[ "$presence" != "present" || "$enabled" != "enabled" ]]; then
+    frp_client_systemctl disable drlink-ai-agent || return 1
+  else
+    frp_client_systemctl enable drlink-ai-agent || return 1
+  fi
+  if [[ "$presence" == "present" && "$active" == "active" ]]; then
+    frp_client_systemctl restart drlink-ai-agent || return 1
+  else
+    frp_client_systemctl stop drlink-ai-agent || return 1
+  fi
+  return 0
+}
+
+frp_client_converge_ai_agent_unit() {
+  local source="${1:-}"
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  frp_client_install_ai_agent_unit "$source" || return 1
+  frp_client_activate_ai_agent_unit || return 1
   return 0
 }
 
@@ -4881,7 +4973,9 @@ frp_client_upgrade_destinations() {
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
   if ! frp_is_darwin; then
-    printf '%s\n' "usr/bin/drlink:0755:tools/drlink"
+    printf '%s\n' \
+      "usr/bin/drlink:0755:tools/drlink" \
+      "etc/systemd/system/drlink-ai-agent.service:0644:client/drlink-ai-agent.service"
   fi
 }
 
@@ -5044,6 +5138,7 @@ frp_client_upgrade_backup_tools() {
   else
     printf 'absent version\n' >>"${dest}/manifest"
   fi
+  frp_client_capture_ai_agent_service_state "$dest"
   python3 - "$(frp_client_upgrade_backup_root)" "$FRP_CLIENT_UPGRADE_BACKUP_KEEP" <<'PY'
 import shutil, sys
 from pathlib import Path
@@ -5155,7 +5250,8 @@ frp_client_upgrade_rollback() {
   fi
   _FRP_CLIENT_UPGRADE_IN_ROLLBACK=1
   if frp_client_upgrade_restore_tools "$backup" \
-    && frp_client_upgrade_verify_restored "$backup"; then
+    && frp_client_upgrade_verify_restored "$backup" \
+    && frp_client_restore_ai_agent_service_state "$backup"; then
     echo "UPGRADE_ROLLBACK=PASS"
     frp_emit_failure_class "$failure_class"
     frp_txn_clear client
@@ -5314,7 +5410,9 @@ frp_client_apply_upgrade() {
         frp_emit_failure_class RECOVERY_REQUIRED
         return 1
       fi
-      if ! frp_client_upgrade_restore_tools "$recovered" || ! frp_client_upgrade_verify_restored "$recovered"; then
+      if ! frp_client_upgrade_restore_tools "$recovered" \
+        || ! frp_client_upgrade_verify_restored "$recovered" \
+        || ! frp_client_restore_ai_agent_service_state "$recovered"; then
         echo "ERROR: interrupted update could not be rolled back automatically." >&2
         frp_emit_failure_class RECOVERY_REQUIRED
         return 1
@@ -5399,6 +5497,12 @@ frp_client_apply_upgrade() {
     fi
   fi
 
+  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+    if [[ "$update_needed" == "0" ]] && frp_client_ai_agent_unit_needs_converge "$source"; then
+      update_needed=1
+    fi
+  fi
+
   if [[ "$check_only" == "1" ]]; then
     if [[ "$update_needed" == "0" ]]; then
       echo "Update                    : not needed"
@@ -5462,6 +5566,15 @@ frp_client_apply_upgrade() {
     frp_client_upgrade_rollback "$backup" FILE_COMMIT_FAILED || return 2
     return 1
   fi
+  _ai_agent_converged=0
+  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+    if ! frp_client_activate_ai_agent_unit; then
+      echo "ERROR: failed to enable and restart drlink-ai-agent.service; restoring previous management files." >&2
+      frp_client_upgrade_rollback "$backup" HEALTH_CHECK_FAILED || return 2
+      return 1
+    fi
+    _ai_agent_converged=1
+  fi
   if ! frp_client_upgrade_post_mutation_guard; then
     echo "ERROR: unexpected post-mutation failure; restoring previous management files." >&2
     frp_client_upgrade_rollback "$backup" FILE_COMMIT_FAILED || return 2
@@ -5520,16 +5633,6 @@ frp_client_apply_upgrade() {
     echo "ERROR: management identity MAC changed during software upgrade; restoring tools." >&2
     frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
     return 1
-  fi
-
-  _ai_agent_converged=0
-  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
-    if ! frp_client_converge_ai_agent_unit "$source"; then
-      echo "ERROR: failed to install and restart drlink-ai-agent.service; restoring previous management files." >&2
-      frp_client_upgrade_rollback "$backup" HEALTH_CHECK_FAILED || return 2
-      return 1
-    fi
-    _ai_agent_converged=1
   fi
 
   ident_after="$(frp_identity_label)"

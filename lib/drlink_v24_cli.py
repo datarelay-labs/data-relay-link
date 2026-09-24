@@ -15,6 +15,10 @@ except ImportError:  # pragma: no cover
     _scfg = None
 
 
+def _presence_word(connectivity: str) -> str:
+    return {"connected": "Connected", "stale": "Stale"}.get(connectivity, "Disconnected")
+
+
 def _public_endpoint_host(plane: ControlPlane, stored: str = "") -> str:
     stored = str(stored or "").strip()
     if stored and stored not in ("drlink.local", "localhost"):
@@ -188,9 +192,9 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 client = None
             hostname = client["hostname"] if client else "-"
             status = (
-                "Connected"
-                if client and plane.client_effectively_connected(client)
-                else ("Disconnected" if client else "Managed Host")
+                _presence_word(plane.managed_host_connectivity(client))
+                if client
+                else "Managed Host"
             )
             sys.stdout.write(
                 "Network Object: %s\nType : Managed Host\nOrigin: Managed Host\nHostname: %s\nStatus: %s\n"
@@ -385,7 +389,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         if view == "agent":
             host_label = client["label"] or client["hostname"] or client["id"][:8]
             connectivity = plane.managed_host_connectivity(client)
-            connection = "Connected" if connectivity == "connected" else "Disconnected"
+            connection = _presence_word(connectivity)
             last_seen = client["last_seen"] or "Never"
             lines = [
                 "Managed Host Agent: %s" % host_label,
@@ -441,7 +445,7 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
                 client["label"] or client["hostname"] or client["id"][:8],
                 client["hostname"] or "-",
                 connectivity,
-                "Connected" if connectivity == "connected" else "Disconnected",
+                _presence_word(connectivity),
             )
         )
         return 0
