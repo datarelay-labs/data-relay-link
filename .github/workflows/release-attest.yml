@@ -2,12 +2,11 @@ name: release-attest
 # Build, integrity-check, SBOM, and GitHub Artifact Attestation for a release
 # candidate ref. Does NOT publish a GitHub Release, and never moves a tag.
 #
-# Dispatch this workflow *from the immutable release tag itself*, not from a
-# branch. The attestation certificate binds to github.ref / github.sha (the ref
-# the workflow runs on), so dispatching from a branch would attest a commit that
-# nobody verified. The "Bind release ref to commit" step below enforces the full
-# chain: expected tag -> expected commit -> checked-out HEAD -> attested
-# subjects. A ref that merely looks like a tag is not accepted.
+# Dispatch this workflow on the provenance commit being attested. Stable and
+# RC use the tag; development uses that commit's full SHA. The attestation
+# certificate binds to github.sha. Manifest source_head names the parent
+# content commit, not the provenance commit itself.
+# scripts/check-release-attest-binding.py enforces the binding.
 on:
   workflow_dispatch:
     inputs:
@@ -64,89 +63,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          PROJECT_VERSION="$(awk -F= '/^PROJECT_VERSION=/{print $2}' VERSION)"
-          FRP_VERSION="$(awk -F= '/^FRP_VERSION=/{print $2}' VERSION)"
-          MANIFEST_VERSION="$(python3 -c 'import json;print(json.load(open("release-manifest.json"))["project_version"])')"
-          CHANNEL="$(python3 -c 'import json;print(json.load(open("release-manifest.json"))["channel"])')"
-          GIT_REF="$(python3 -c 'import json;print(json.load(open("release-manifest.json"))["git_ref"])')"
-          HEAD="$(git rev-parse HEAD)"
-          EXPECTED_TAG="v${PROJECT_VERSION}"
-
-          echo "PROJECT_VERSION=$PROJECT_VERSION"
-          echo "FRP_VERSION=$FRP_VERSION"
-          echo "CHANNEL=$CHANNEL"
-          echo "MANIFEST_GIT_REF=$GIT_REF"
-          echo "EXPECTED_TAG=$EXPECTED_TAG"
-          echo "HEAD=$HEAD"
-          echo "WORKFLOW_REF=$WORKFLOW_REF"
-          echo "WORKFLOW_SHA=$WORKFLOW_SHA"
-
-          test "$PROJECT_VERSION" = "$MANIFEST_VERSION"
-          test "$CHANNEL" = "stable" -o "$CHANNEL" = "development" -o "$CHANNEL" = "preview"
-
-          if [[ "$CHANNEL" == "stable" ]]; then
-            # 1. release-manifest must name the expected immutable tag.
-            if [[ "$GIT_REF" != "$EXPECTED_TAG" ]]; then
-              echo "ERROR: stable release-manifest git_ref '$GIT_REF' != '$EXPECTED_TAG'" >&2
-              exit 1
-            fi
-            # 2. That tag must exist and must resolve to the checked-out HEAD.
-            if ! TAG_COMMIT="$(git rev-list -n 1 "refs/tags/${EXPECTED_TAG}" 2>/dev/null)"; then
-              echo "ERROR: tag ${EXPECTED_TAG} does not exist in this repository" >&2
-              exit 1
-            fi
-            if [[ "$TAG_COMMIT" != "$HEAD" ]]; then
-              echo "ERROR: ${EXPECTED_TAG} resolves to ${TAG_COMMIT}, not checked-out HEAD ${HEAD}" >&2
-              exit 1
-            fi
-            # 3. The dispatch input must name that same tag or that same commit.
-            if [[ "$INPUT_REF" != "$EXPECTED_TAG" && "$INPUT_REF" != "$HEAD" ]]; then
-              echo "ERROR: ref '$INPUT_REF' is neither ${EXPECTED_TAG} nor ${HEAD}" >&2
-              exit 1
-            fi
-            # 4. Provenance is signed over github.ref/github.sha, so the workflow
-            #    itself must have been dispatched from the tag. Otherwise the
-            #    attestation would describe a commit this job never verified.
-            if [[ "$WORKFLOW_REF" != "refs/tags/${EXPECTED_TAG}" ]]; then
-              echo "ERROR: dispatch this workflow from refs/tags/${EXPECTED_TAG}, not ${WORKFLOW_REF}" >&2
-              echo "       attestation provenance binds to github.ref, not to inputs.ref" >&2
-              exit 1
-            fi
-            if [[ "$WORKFLOW_SHA" != "$HEAD" ]]; then
-              echo "ERROR: github.sha ${WORKFLOW_SHA} != checked-out HEAD ${HEAD}" >&2
-              exit 1
-            fi
-          else
-            # development/preview: require an immutable SHA (or RC tag), never a branch.
-            SOURCE_HEAD="$(python3 -c 'import json;print(json.load(open("release-manifest.json")).get("source_head",""))')"
-            if [[ ! "$GIT_REF" =~ ^[0-9a-f]{40}$ && ! "$GIT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
-              echo "ERROR: ${CHANNEL} git_ref must be a 40-char SHA or RC tag, got '$GIT_REF'" >&2
-              exit 1
-            fi
-            if [[ "$GIT_REF" =~ ^[0-9a-f]{40}$ && "$GIT_REF" != "$HEAD" ]]; then
-              echo "ERROR: ${CHANNEL} git_ref '$GIT_REF' != checked-out HEAD ${HEAD}" >&2
-              exit 1
-            fi
-            if [[ -n "$SOURCE_HEAD" && "$SOURCE_HEAD" != "$HEAD" ]]; then
-              echo "ERROR: source_head '$SOURCE_HEAD' != checked-out HEAD ${HEAD}" >&2
-              exit 1
-            fi
-            if [[ "$INPUT_REF" != "$HEAD" && "$INPUT_REF" != "$GIT_REF" ]]; then
-              echo "ERROR: ${CHANNEL}-channel ref must be the full commit SHA ${HEAD} (or matching RC tag)" >&2
-              exit 1
-            fi
-            if [[ "$WORKFLOW_SHA" != "$HEAD" ]]; then
-              echo "ERROR: github.sha ${WORKFLOW_SHA} != checked-out HEAD ${HEAD}" >&2
-              exit 1
-            fi
-          fi
-
-          {
-            echo "expected_tag=${EXPECTED_TAG}"
-            echo "release_commit=${HEAD}"
-            echo "channel=${CHANNEL}"
-          } >>"$GITHUB_OUTPUT"
-          echo "REF_BINDING=PASS"
+          ./scripts/check-release-attest-binding.py >>"$GITHUB_OUTPUT"
 
       - name: Version consistency
         run: |
@@ -176,6 +93,8 @@ jobs:
 
       - name: Generate SPDX SBOM bound to the release commit
         env:
+          # release_commit is the provenance commit GitHub attests. Manifest
+          # git_ref/source_head remain the qualified content parent.
           RELEASE_COMMIT: ${{ steps.bind.outputs.release_commit }}
         run: |
           set -euo pipefail
@@ -328,6 +247,7 @@ jobs:
             echo "provenance_type=github-artifact-attestation"
             echo "release_tag=${EXPECTED_TAG}"
             echo "release_commit=${RELEASE_COMMIT}"
+            echo "content_commit=${{ steps.bind.outputs.content_commit }}"
             echo "subject_ref=${{ inputs.ref }}"
             echo "attestation_id=${{ steps.attest.outputs.attestation-id }}"
             echo "attestation_url=${{ steps.attest.outputs.attestation-url }}"

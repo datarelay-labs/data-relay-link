@@ -177,6 +177,21 @@ development trees when `source_head != HEAD`, and only fails closed under
 `STRICT_SOURCE_HEAD=1` or stable channel. Do not invent a fake self-referential
 SHA to silence that warning.
 
+`scripts/check-release-attest-binding.py` is the release-attest gate. It binds:
+
+```text
+provenance commit = checked-out HEAD = github.sha
+qualified content HEAD = manifest source_head = first parent of the provenance commit
+immutable release ref = stable or RC tag pointing at the provenance commit,
+  or that commit's full SHA for development
+generated artifacts = the provenance commit differs from its parent only by
+  generated provenance files
+```
+
+Development `git_ref` is the content SHA. Stable and RC `git_ref` is the tag.
+The attest-time SBOM is generated, not committed: `gitCommit` is the provenance
+commit and `gitRef` is manifest `git_ref`.
+
 ## 9. Installer/bootstrap references
 
 Before stable tag:
