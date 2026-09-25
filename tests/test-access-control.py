@@ -546,6 +546,90 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_concurrent_newuserconn_sqlite_isolation(self):
+        """Parallel NewUserConn workers must not share one SQLite connection.
+
+        The pre-fix plugin returned one cached ControlPlane from snapshot()
+        and authorized after releasing the cache lock. Threaded workers then
+        raised sqlite3.InterfaceError / IndexError and fail-closed rejects.
+        """
+        import io
+        from concurrent.futures import ThreadPoolExecutor
+        from contextlib import redirect_stderr
+        from http.client import HTTPConnection
+        from threading import Thread
+
+        import drlink_v24 as v24
+        from drlink_control_plane import ControlPlane
+
+        mode_plane = ControlPlane(str(self.root))
+        try:
+            v24.ensure_policy_mode(mode_plane, "remote", "whitelist", oneshot=True)
+        finally:
+            mode_plane.close()
+        self.cache.reload(force=True)
+
+        handler = self.plugin.make_handler(self.cache, "/access-auth")
+        server = self.plugin.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = server.server_address[1]
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        proxy = self.RP.expected_proxy_name("alpha-host", self.mid, "ssh")
+        allow_addr = "198.51.100.9:%s"
+        deny_addr = "203.0.113.9:%s"
+
+        def one(index):
+            allowed = index % 2 == 0
+            remote = (allow_addr if allowed else deny_addr) % (10000 + index)
+            payload = {
+                "op": "NewUserConn",
+                "content": {"proxy_name": proxy, "remote_addr": remote},
+            }
+            raw = json.dumps(payload).encode()
+            last = b"no response"
+            for _attempt in range(2):
+                conn = HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    conn.request(
+                        "POST",
+                        "/access-auth?op=NewUserConn",
+                        body=raw,
+                        headers={"Content-Type": "application/json", "Content-Length": str(len(raw))},
+                    )
+                    resp = conn.getresponse()
+                    body = resp.read()
+                    return allowed, resp.status, body
+                except Exception as exc:
+                    last = repr(exc).encode()
+                finally:
+                    conn.close()
+            return allowed, 0, last
+
+        stderr = io.StringIO()
+        try:
+            with redirect_stderr(stderr):
+                with ThreadPoolExecutor(max_workers=32) as pool:
+                    results = list(pool.map(one, range(96)))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        log = stderr.getvalue()
+        self.assertNotIn("InterfaceError", log)
+        self.assertNotIn("bad parameter or other API misuse", log)
+        self.assertNotIn("tuple index out of range", log)
+        self.assertNotIn("NoneType", log)
+        for allowed, status, body in results:
+            self.assertEqual(status, 200, "%s\n%s" % (body, log))
+            out = json.loads(body.decode())
+            if allowed:
+                self.assertFalse(out.get("reject"), out)
+            else:
+                self.assertTrue(out.get("reject"), out)
+                reason = str(out.get("reject_reason") or "")
+                self.assertNotIn("authorization unavailable", reason)
+                self.assertNotIn("DB_UNAVAILABLE", reason)
+
 
 
 class AccessTtlBoundsTests(unittest.TestCase):

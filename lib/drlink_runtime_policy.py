@@ -25,6 +25,7 @@ from drlink_control_db import (
     ControlPlaneError,
     DatabaseCorruptError,
     SchemaTooNewError,
+    connect,
     db_path,
     resolve_root,
     runtime_dir,
@@ -650,3 +651,37 @@ class ControlPlaneCache:
         with self.lock:
             self.reload(force=False)
             return self.plane, self.load_error, dict(self.cfg)
+
+    def open_isolated(self) -> tuple[Optional[ControlPlane], Optional[str], dict]:
+        """Open a request-private ControlPlane. The caller must close it.
+
+        The cached connection is used only while self.lock is held. Threaded
+        NewUserConn workers must not share that connection: SQLite raises
+        InterfaceError / IndexError under concurrent use even when
+        check_same_thread is false.
+        """
+        with self.lock:
+            self.reload(force=False)
+            cfg = dict(self.cfg)
+            load_error = self.load_error
+            root = self.plane.root if self.plane is not None else None
+        if load_error is not None or root is None:
+            return None, load_error or "control DB unavailable", cfg
+        conn = None
+        try:
+            conn = connect(root=root, create=False)
+            return ControlPlane(root, conn=conn), None, cfg
+        except (ControlPlaneError, SchemaTooNewError, DatabaseCorruptError) as exc:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return None, str(exc), cfg
+        except Exception as exc:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return None, str(exc), cfg

@@ -94,6 +94,13 @@ class PolicyCache:
         self.load_error = load_error
         return plane, load_error, cfg
 
+    def open_isolated(self):
+        """Request-private control plane. Caller must close the plane."""
+        plane, load_error, cfg = self._inner.open_isolated()
+        self.cfg = dict(cfg)
+        self.load_error = load_error
+        return plane, load_error, cfg
+
 
 def make_handler(cache: PolicyCache, plugin_path: str):
     class Handler(BaseHTTPRequestHandler):
@@ -135,31 +142,43 @@ def make_handler(cache: PolicyCache, plugin_path: str):
             self.end_headers()
             self.wfile.write(body)
 
+        def _close_plane(self, plane):
+            if plane is None:
+                return
+            try:
+                plane.close()
+            except Exception:
+                pass
+
         def do_GET(self):
             def _handle():
                 parsed = urlparse(self.path)
                 if parsed.path in ("/healthz", "/health"):
-                    plane, load_error, _cfg = cache.snapshot()
-                    ok = load_error is None and plane is not None
-                    clients = 0
-                    services = 0
-                    if plane is not None:
-                        try:
-                            st = plane.status()
-                            clients = int(st.get("clients") or 0)
-                            services = int(st.get("services") or 0)
-                        except Exception:
-                            pass
-                    self._send_json(
-                        200 if ok else 503,
-                        {
-                            "ok": ok,
-                            "error": load_error,
-                            "clients": clients,
-                            "published_services": services,
-                            "authority": "sqlite",
-                        },
-                    )
+                    plane, load_error, _cfg = cache.open_isolated()
+                    try:
+                        ok = load_error is None and plane is not None
+                        clients = 0
+                        services = 0
+                        if plane is not None:
+                            try:
+                                st = plane.status()
+                                clients = int(st.get("clients") or 0)
+                                services = int(st.get("services") or 0)
+                            except Exception:
+                                ok = False
+                                load_error = load_error or "control DB unhealthy"
+                        self._send_json(
+                            200 if ok else 503,
+                            {
+                                "ok": ok,
+                                "error": load_error,
+                                "clients": clients,
+                                "published_services": services,
+                                "authority": "sqlite",
+                            },
+                        )
+                    finally:
+                        self._close_plane(plane)
                     return
                 self._send_json(404, {"ok": False, "error": "not found"})
 
@@ -193,53 +212,70 @@ def make_handler(cache: PolicyCache, plugin_path: str):
                     )
                     return
 
-                plane, load_error, cfg = cache.snapshot()
+                plane = None
                 proxy_name = str(content.get("proxy_name") or "")
                 remote_addr = str(content.get("remote_addr") or "")
+                try:
+                    plane, load_error, cfg = cache.open_isolated()
 
-                if load_error is not None or plane is None:
-                    # Fail closed when authoritative SQLite policy cannot be loaded.
-                    event = {
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "proxy_name": proxy_name,
-                        "source_ip": remote_addr,
-                        "decision": RP.DECISION_DENY,
-                        "reason": RP.REASON_DB_UNAVAILABLE,
-                    }
+                    if load_error is not None or plane is None:
+                        # Fail closed when authoritative SQLite policy cannot be loaded.
+                        event = {
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "proxy_name": proxy_name,
+                            "source_ip": remote_addr,
+                            "decision": RP.DECISION_DENY,
+                            "reason": RP.REASON_DB_UNAVAILABLE,
+                        }
+                        if ACL is not None:
+                            try:
+                                ACL.emit_conn_log(event, cfg=cfg)
+                            except Exception:
+                                pass
+                        self._send_json(
+                            200,
+                            {
+                                "reject": True,
+                                "reject_reason": "authorization unavailable",
+                                "unchange": True,
+                            },
+                        )
+                        return
+
+                    try:
+                        verdict = RP.authorize_remote(
+                            plane,
+                            proxy_name=proxy_name,
+                            source_ip=remote_addr,
+                        )
+                    except Exception:
+                        # A DB/API fault must reject this connection, not drop
+                        # the plugin response or fail open.
+                        self._send_json(
+                            200,
+                            {
+                                "reject": True,
+                                "reject_reason": "authorization unavailable",
+                                "unchange": True,
+                            },
+                        )
+                        return
+                    # Logging must not affect allow/deny.
                     if ACL is not None:
                         try:
-                            ACL.emit_conn_log(event, cfg=cfg)
+                            ACL.emit_conn_log(verdict, cfg=cfg)
                         except Exception:
                             pass
-                    self._send_json(
-                        200,
-                        {
-                            "reject": True,
-                            "reject_reason": "authorization unavailable",
-                            "unchange": True,
-                        },
-                    )
-                    return
-
-                verdict = RP.authorize_remote(
-                    plane,
-                    proxy_name=proxy_name,
-                    source_ip=remote_addr,
-                )
-                # Logging must not affect allow/deny.
-                if ACL is not None:
-                    try:
-                        ACL.emit_conn_log(verdict, cfg=cfg)
-                    except Exception:
-                        pass
-                if verdict.get("decision") == RP.DECISION_ALLOW:
-                    self._send_json(200, {"reject": False, "unchange": True})
-                else:
-                    reason = str(verdict.get("reason") or "denied")
-                    self._send_json(
-                        200,
-                        {"reject": True, "reject_reason": reason, "unchange": True},
-                    )
+                    if verdict.get("decision") == RP.DECISION_ALLOW:
+                        self._send_json(200, {"reject": False, "unchange": True})
+                    else:
+                        reason = str(verdict.get("reason") or "denied")
+                        self._send_json(
+                            200,
+                            {"reject": True, "reject_reason": reason, "unchange": True},
+                        )
+                finally:
+                    self._close_plane(plane)
 
             self._with_slot(_handle)
 
