@@ -955,8 +955,13 @@ def test_compact_redaction_and_command_length():
 
 
 def _pipeline_tokens(command):
+    # Python 3.7 shlex absorbs '|' into the current word when
+    # whitespace_split is set, so 'url|sudo' is one token. Later Pythons
+    # keep the pipe. Leave whitespace_split off and treat ':' as a word
+    # character so an unquoted https URL stays one token and the pipe
+    # stays a separate boundary on both.
     lexer = shlex.shlex(command, posix=True, punctuation_chars='|')
-    lexer.whitespace_split = True
+    lexer.wordchars += ':'
     return list(lexer)
 
 
