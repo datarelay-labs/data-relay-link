@@ -1716,7 +1716,11 @@ def _write_effective_config(host: str, port: int, gw: GatewayState) -> None:
             os.chmod(path, 0o600)
         except OSError:
             pass
-    except Exception:
+    except Exception as exc:
+        sys.stderr.write(
+            "[drlink-egress] effective snapshot write failed path=%s error=%s\n"
+            % (EG._rooted("/run/drlink/egress/effective.json"), exc)
+        )
         return
 
 

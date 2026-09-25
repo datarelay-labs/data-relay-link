@@ -2120,6 +2120,27 @@ def check_audit_log(report, paths, facts, cfg):
         )
 
 
+def egress_snapshot_missing_diagnosis(parent):
+    """Explain a missing egress snapshot, including a non-traversable parent."""
+    detail = '/run/drlink/egress/effective.json'
+    remedy = (
+        'Run: sudo drlink system diagnostics\n'
+        'If Data Relay Link remains unhealthy: inspect journalctl -u drlink-egress'
+    )
+    try:
+        if parent.is_dir():
+            mode = stat.S_IMODE(parent.stat().st_mode)
+            if mode & 0o011 == 0:
+                detail = 'parent /run/drlink mode %04o blocks drlink-egress traversal' % mode
+                remedy = (
+                    'Restart drlink-egress so it restores traverse permission on /run/drlink. '
+                    'Sibling RuntimeDirectory=drlink/* units must not leave that parent at 0700.'
+                )
+    except OSError as exc:
+        detail = 'cannot inspect /run/drlink: %s' % exc
+    return detail, remedy
+
+
 def check_egress_control(report, paths, facts, cfg):
     """Validate Controlled Egress policy, unit, and listen configuration (read-only)."""
     import importlib.util
@@ -2629,11 +2650,12 @@ def check_egress_control(report, paths, facts, cfg):
                 'runtime',
             )
     elif unit_active == 'active':
+        detail, remedy = egress_snapshot_missing_diagnosis(paths.p('/run/drlink'))
         report.add(
             'EGRESS_EFFECTIVE_CONFIG', FAIL,
             'egress unit is active but effective policy snapshot is missing',
-            '/run/drlink/egress/effective.json',
-            'Run: sudo drlink system diagnostics\nIf Data Relay Link remains unhealthy: inspect journalctl -u drlink-egress',
+            detail,
+            remedy,
             'runtime',
         )
     else:

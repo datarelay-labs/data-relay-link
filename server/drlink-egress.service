@@ -10,6 +10,11 @@ Type=simple
 # innermost directory (User=drlink-egress vs root).
 RuntimeDirectory=drlink/egress
 RuntimeDirectoryMode=0700
+# Sibling units set /run/drlink to 0700. Restore parent traverse before the
+# unprivileged user writes the effective snapshot. PermissionsStartOnly keeps
+# this chmod as root on systemd 219 and newer.
+PermissionsStartOnly=true
+ExecStartPre=/bin/chmod 0755 /run/drlink
 ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-egress-gateway.py --config /etc/drlink/config.json
 Restart=always
 RestartSec=2

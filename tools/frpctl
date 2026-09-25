@@ -4497,7 +4497,16 @@ frpctl_server_uninstall_flow() {
 }
 
 frpctl_system_uninstall() {
-  local has_client=0 has_server=0 choice
+  local has_client=0 has_server=0 choice pt
+  for pt in "${_frpctl_pt[@]+"${_frpctl_pt[@]}"}"; do
+    if [[ "$pt" == "-h" || "$pt" == "--help" ]]; then
+      echo "Usage: system uninstall"
+      echo
+      echo "Remove Data Relay Link from this host after an explicit confirmation."
+      echo "-h and --help do not uninstall anything."
+      return 0
+    fi
+  done
   frpctl_is_client && has_client=1
   frpctl_is_server && has_server=1
   if [[ "$has_client" != "1" && "$has_server" != "1" ]]; then

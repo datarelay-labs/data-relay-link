@@ -2056,11 +2056,7 @@ def match(tokens, role, names=None, clients=None):
         "resume": lambda toks, role, names=None: {"status": "ok", "action": "client_resume"},
         "restart": lambda toks, role, names=None: {"status": "ok", "action": "client_restart"},
         "autostart": _match_autostart,
-        "uninstall": lambda toks, role, names=None: {
-            "status": "ok",
-            "action": "system_uninstall",
-            "passthrough": list(toks[1:]),
-        },
+        "uninstall": _match_system_uninstall,
         "access": _match_access_root,
         "egress": _match_egress_root,
         "help": lambda toks, role, names=None: {"status": "ok", "action": "help", "passthrough": toks[1:]},
@@ -2378,6 +2374,22 @@ def _match_system(tokens, role, names=None):
         avail,
         tip="Type: system ?",
     )
+
+
+def _match_system_uninstall(tokens, role, names=None):
+    """Help flags must not enter the destructive uninstall flow."""
+    extra = [str(t) for t in tokens[1:]]
+    if any(t in ("-h", "--help") for t in extra):
+        return {
+            "status": "ok",
+            "action": "help",
+            "passthrough": ["system", "uninstall"],
+        }
+    return {
+        "status": "ok",
+        "action": "system_uninstall",
+        "passthrough": extra,
+    }
 
 
 def _match_autostart(tokens, role, names=None):

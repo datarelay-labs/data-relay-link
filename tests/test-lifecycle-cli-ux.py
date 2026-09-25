@@ -62,6 +62,14 @@ class LifecycleCliUx(unittest.TestCase):
         result = grammar.match(["system", "uninstall"], "server")
         self.assertEqual(result.get("action"), "system_uninstall")
 
+    def test_uninstall_help_is_not_destructive(self):
+        for flag in ("--help", "-h"):
+            result = grammar.match(["system", "uninstall", flag], "server")
+            self.assertEqual(result.get("action"), "help", result)
+            self.assertEqual(result.get("passthrough"), ["system", "uninstall"])
+            client = grammar.match(["system", "uninstall", flag], "client")
+            self.assertEqual(client.get("action"), "help", client)
+
     def test_hidden_legacy_start_stop_still_resolve(self):
         self.assertEqual(grammar.match(["stop"], "client").get("action"), "client_pause")
         self.assertEqual(grammar.match(["start"], "client").get("action"), "client_resume")

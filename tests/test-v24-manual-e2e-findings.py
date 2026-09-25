@@ -271,6 +271,9 @@ class SshUsernameOptionalTests(unittest.TestCase):
             }
         )
         self.assertNotIn("ssh_user", got)
+        text = (ROOT / "server" / "frp-port-allocator.py").read_text(encoding="utf-8")
+        self.assertNotIn("if spec['preset'] == 'ssh':", text)
+        self.assertIn("spec.get('ssh_user')", text)
 
     def test_access_info_uses_username_placeholder(self):
         src = (ROOT / "lib" / "frp-client-common.sh").read_text(encoding="utf-8")
@@ -292,6 +295,54 @@ class ZeroTouchActivationContractTests(unittest.TestCase):
         self.assertIn("def activate_enrolled_services_as_remote_services", src)
         self.assertIn("enrolled_port", src)
         self.assertIn("Prefer the enrolled public port", src)
+
+
+class InstalledBackupHelperTests(unittest.TestCase):
+    def test_sibling_lib_dir_is_found_before_sbin(self):
+        import drlink_control_cli as cli
+
+        tmp = Path(tempfile.mkdtemp(prefix="drlink-dr-tool-"))
+        try:
+            lib = tmp / "lib"
+            lib.mkdir()
+            tool = lib / "frp-restore"
+            tool.write_text("#!/bin/sh\n", encoding="utf-8")
+            found = next(
+                path
+                for path in cli._server_dr_tool_candidates(
+                    "frp-restore", lib / "drlink_control_cli.py"
+                )
+                if path.is_file()
+            )
+            self.assertEqual(found, tool)
+        finally:
+            shutil.rmtree(tmp)
+
+
+class EgressSnapshotDiagnosisTests(unittest.TestCase):
+    def test_locked_parent_is_called_out(self):
+        tmp = Path(tempfile.mkdtemp(prefix="drlink-run-"))
+        try:
+            parent = tmp / "run" / "drlink"
+            parent.mkdir(parents=True)
+            os.chmod(parent, 0o700)
+            detail, remedy = doctor.egress_snapshot_missing_diagnosis(parent)
+            self.assertIn("0700", detail)
+            self.assertIn("traversal", detail)
+            self.assertIn("drlink-egress", remedy)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_traversable_parent_keeps_generic_detail(self):
+        tmp = Path(tempfile.mkdtemp(prefix="drlink-run-"))
+        try:
+            parent = tmp / "run" / "drlink"
+            parent.mkdir(parents=True)
+            os.chmod(parent, 0o755)
+            detail, _remedy = doctor.egress_snapshot_missing_diagnosis(parent)
+            self.assertEqual(detail, "/run/drlink/egress/effective.json")
+        finally:
+            shutil.rmtree(tmp)
 
 
 class EnrollmentHostnameContractTests(unittest.TestCase):
