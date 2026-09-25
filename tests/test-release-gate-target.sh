@@ -22,6 +22,9 @@ do
     fail "$rel commits the live release address"
   fi
 done
+if grep -q '129\.225\.184\.60' "$ROOT/tests/lib/require-release-target.sh"; then
+  fail "require-release-target.sh commits the live release address"
+fi
 
 unset FRP_E2E_SERVER_IP FRP_E2E_PUBLIC_HOSTNAME FRP_E2E_SERVER_ALIAS
 if frp_require_release_target >/tmp/release-target.out 2>/tmp/release-target.err; then
@@ -48,8 +51,76 @@ if frp_require_release_target >/tmp/release-target.out 2>/tmp/release-target.err
   fail "historical alias was accepted"
 fi
 
+RESOLVER="$(mktemp -d)"
+cat >"$RESOLVER/getent" <<'EOF'
+#!/bin/sh
+if [ "$1" != "ahostsv4" ]; then
+  exit 2
+fi
+case "$2" in
+  match.example.test) printf '%s\n' "203.0.113.10 STREAM match.example.test" ;;
+  mismatch.example.test) printf '%s\n' "198.51.100.20 STREAM mismatch.example.test" ;;
+  *) exit 2 ;;
+esac
+EOF
+cat >"$RESOLVER/ssh" <<'EOF'
+#!/bin/sh
+alias_name=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-G" ]; then
+    alias_name="$arg"
+  fi
+  prev="$arg"
+done
+case "$alias_name" in
+  frp-release-example) printf '%s\n' "hostname match.example.test" ;;
+  frp-mismatch-alias) printf '%s\n' "hostname 198.51.100.21" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod 755 "$RESOLVER/getent" "$RESOLVER/ssh"
+export PATH="$RESOLVER:$PATH"
+
+export FRP_E2E_SERVER_IP=203.0.113.10
+export FRP_E2E_PUBLIC_HOSTNAME=mismatch.example.test
 export FRP_E2E_SERVER_ALIAS=frp-release-example
-frp_require_release_target || fail "explicit non-historical target rejected"
+if frp_require_release_target >/tmp/release-target.out 2>/tmp/release-target.err; then
+  fail "mismatched hostname/IP was accepted"
+fi
+grep -q 'FRP_E2E_PUBLIC_HOSTNAME' /tmp/release-target.err || fail "hostname mismatch error"
+
+export FRP_E2E_PUBLIC_HOSTNAME=match.example.test
+export FRP_E2E_SERVER_ALIAS=frp-mismatch-alias
+if frp_require_release_target >/tmp/release-target.out 2>/tmp/release-target.err; then
+  fail "mismatched alias/IP was accepted"
+fi
+grep -q 'FRP_E2E_SERVER_ALIAS' /tmp/release-target.err || fail "alias mismatch error"
+
+export FRP_E2E_SERVER_ALIAS=frp-release-example
+frp_require_release_target || fail "matching alias/hostname/IP rejected"
+
+python3 - "$ROOT/tests/run-production-realistic-qualification.sh" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+lines = text.splitlines()
+call = next(
+    (index for index, line in enumerate(lines) if "pq_precheck_hosts" in line and not line.strip().startswith("#")),
+    None,
+)
+if call is None:
+    raise SystemExit("pq_precheck_hosts call missing")
+if "|| true" in lines[call]:
+    raise SystemExit("pq_precheck_hosts is non-fatal")
+window = "\n".join(lines[call:call + 6])
+if "exit 1" not in window:
+    raise SystemExit("pq_precheck_hosts failure does not exit")
+matrix = next(index for index, line in enumerate(lines) if "run-real-e2e" in line)
+if call > matrix:
+    raise SystemExit("precheck runs after a matrix path")
+print("PASS PRECHECK_FAIL_CLOSED")
+PY
 
 if ! grep -q 'PASS1' "$ROOT/tests/run-release-qualification-pass.sh" \
   || ! grep -q 'PASS2' "$ROOT/tests/run-release-qualification-pass.sh"; then

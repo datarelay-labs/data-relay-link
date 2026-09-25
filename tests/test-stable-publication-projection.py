@@ -206,6 +206,18 @@ def main() -> int:
             fail(bound.stderr)
         if "content_commit=%s" % content not in bound.stdout:
             fail(bound.stdout)
+        bound_outputs = dict(
+            line.split("=", 1) for line in bound.stdout.splitlines() if "=" in line
+        )
+        if bound_outputs.get("channel") != "stable":
+            fail(
+                "effective channel %s; verifier would skip sourceRepositoryRef"
+                % bound_outputs.get("channel")
+            )
+        if json.loads((repo / "release-manifest.json").read_text(encoding="utf-8"))["channel"] != "development":
+            fail("committed manifest channel changed")
+        if git(repo, "rev-list", "--count", "HEAD") != count:
+            fail("attest binding created a commit")
         print("PASS RELEASE_ATTEST_TAG_EQUALS_QUALIFIED_HEAD")
 
     contract = (ROOT / ".engineering" / "release.yaml").read_text(encoding="utf-8")

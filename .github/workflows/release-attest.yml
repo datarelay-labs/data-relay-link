@@ -217,6 +217,9 @@ jobs:
           commit = os.environ['RELEASE_COMMIT']
           tag = os.environ['EXPECTED_TAG']
           channel = os.environ['CHANNEL']
+          # Effective publication channel from check-release-attest-binding.py.
+          # A validated stable tag reports stable while the committed manifest
+          # remains development, so this requires sourceRepositoryRef for the tag.
           want_ref = 'refs/tags/%s' % tag if channel == 'stable' else None
           errors = []
 

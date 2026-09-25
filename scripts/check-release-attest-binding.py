@@ -8,6 +8,9 @@ commit GitHub attests is therefore a follow-on provenance commit:
 - qualified content HEAD = manifest source_head = first parent of that commit
 - immutable release ref = a stable or RC tag pointing at the provenance
   commit, or that commit's full SHA on the development channel
+- a validated stable tag keeps the committed development manifest and
+  reports effective publication channel stable, so attestation verification
+  requires sourceRepositoryRef refs/tags/v<project version>
 - generated artifacts = the only paths that differ from the content parent
 
 Development git_ref is the content SHA. Stable and RC git_ref is the tag.
@@ -182,6 +185,11 @@ def _require_qualified_tag_heads(facts: BindingFacts, errors: list[str]) -> None
 
 def evaluate(facts: BindingFacts) -> dict[str, str]:
     errors: list[str] = []
+    # Committed channel stays in the manifest. This is the channel the
+    # post-attestation verifier must use. A validated stable tag publishes
+    # as stable without a follow-on commit.
+    publication_channel = facts.channel
+    validated_stable_tag = False
     if not facts.clean:
         errors.append(
             "worktree is not clean; release-attest requires the committed provenance tree"
@@ -271,6 +279,7 @@ def evaluate(facts: BindingFacts) -> dict[str, str]:
                         % (want_ref, facts.workflow_ref)
                     )
                 _require_qualified_tag_heads(facts, errors)
+                validated_stable_tag = True
             else:
                 errors.append(
                     "%s ref must be the provenance commit SHA %s"
@@ -305,11 +314,13 @@ def evaluate(facts: BindingFacts) -> dict[str, str]:
 
     if errors:
         raise BindingError(errors)
+    if validated_stable_tag:
+        publication_channel = "stable"
     return {
         "expected_tag": expected_tag,
         "release_commit": facts.head,
         "content_commit": facts.source_head,
-        "channel": facts.channel,
+        "channel": publication_channel,
     }
 
 

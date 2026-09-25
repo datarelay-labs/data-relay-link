@@ -97,8 +97,14 @@ def init_repo(repo: Path, channel: str = "development") -> None:
     git(repo, "commit", "-m", "content")
 
 
-def stamp(repo: Path, channel: str, git_ref: str, source_head: str) -> str:
-    write(repo, "release-manifest.json", manifest(channel, git_ref, source_head))
+def stamp(
+    repo: Path,
+    channel: str,
+    git_ref: str,
+    source_head: str,
+    version: str = "1.2.3",
+) -> str:
+    write(repo, "release-manifest.json", manifest(channel, git_ref, source_head, version=version))
     write(repo, "dist/bootstrap-client.sh", "echo bootstrap-%s\n" % source_head[:12])
     git(repo, "add", "-A")
     git(repo, "commit", "-m", "provenance")
@@ -263,6 +269,64 @@ def test_stable_and_rc_tags_point_at_provenance_commit() -> None:
     print("PASS STABLE_AND_RC_BIND_PROVENANCE_COMMIT")
 
 
+def attestation_want_ref(channel: str, tag: str) -> str | None:
+    """Same rule as release-attest.yml post-attestation verification."""
+    return "refs/tags/%s" % tag if channel == "stable" else None
+
+
+def test_validated_stable_tag_exposes_effective_channel() -> None:
+    """Development manifest plus a qualified stable tag publishes as stable.
+
+    Current behavior returns channel=development, so the verifier skips
+    sourceRepositoryRef. This must fail until the effective channel is stable.
+    """
+    workflow = (ROOT / ".github/workflows/release-attest.yml").read_text(encoding="utf-8")
+    if "want_ref = 'refs/tags/%s' % tag if channel == 'stable' else None" not in workflow:
+        fail("post-attestation verifier does not key sourceRepositoryRef off channel")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        init_repo(repo)
+        write(
+            repo,
+            "VERSION",
+            "PROJECT_VERSION=2.4.0\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=development\n",
+        )
+        git(repo, "add", "-A")
+        git(repo, "commit", "-m", "set product version")
+        content = git(repo, "rev-parse", "HEAD")
+        before = git(repo, "rev-list", "--count", "HEAD")
+        provenance = stamp(repo, "development", content, content, version="2.4.0")
+        git(repo, "tag", "v2.4.0", provenance)
+        committed = (repo / "release-manifest.json").read_text(encoding="utf-8")
+        if '"channel": "development"' not in committed:
+            fail("fixture manifest is not development")
+        proc = run_cli(repo, "v2.4.0", "refs/tags/v2.4.0", provenance, provenance)
+        if proc.returncode != 0:
+            fail(proc.stderr)
+        outputs = dict(
+            line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line
+        )
+        if outputs.get("channel") != "stable":
+            fail(
+                "effective channel %s; verifier would skip sourceRepositoryRef refs/tags/v2.4.0"
+                % outputs.get("channel")
+            )
+        if outputs.get("expected_tag") != "v2.4.0":
+            fail("expected_tag %s" % outputs)
+        want_ref = attestation_want_ref(outputs["channel"], outputs["expected_tag"])
+        if want_ref != "refs/tags/v2.4.0":
+            fail("sourceRepositoryRef want %s" % want_ref)
+        if (repo / "release-manifest.json").read_text(encoding="utf-8") != committed:
+            fail("binding rewrote the committed manifest")
+        if json.loads(committed)["channel"] != "development":
+            fail("committed manifest channel is no longer development")
+        if git(repo, "rev-list", "--count", "HEAD") != str(int(before) + 1):
+            fail("binding created a post-qualification commit")
+        if git(repo, "status", "--porcelain"):
+            fail("binding dirtied the worktree")
+    print("PASS EFFECTIVE_STABLE_TAG_CHANNEL")
+
+
 def test_self_reference_is_rejected() -> None:
     head = "a" * 40
     parent = "b" * 40
@@ -298,6 +362,7 @@ def main() -> int:
     test_rejects_product_diff_and_mutable_ref()
     test_rejects_non_parent_and_wrong_dispatch()
     test_stable_and_rc_tags_point_at_provenance_commit()
+    test_validated_stable_tag_exposes_effective_channel()
     test_self_reference_is_rejected()
     print("RELEASE_ATTEST_BINDING_TEST=PASS")
     return 0

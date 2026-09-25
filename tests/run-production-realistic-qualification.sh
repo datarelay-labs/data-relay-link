@@ -41,8 +41,13 @@ echo "FROZEN_HEAD=$FROZEN_HEAD" >>"$PROD_QUAL_GATES"
 echo "${PASS_NAME}_HEAD=$FROZEN_HEAD" >>"$PROD_QUAL_GATES"
 
 # --- Precheck ---
+# Fail closed before the matrix, macOS retry, fleet rebuild, reboot, or any
+# other destructive path. A failed host precheck must not be ignored.
 pq_note "==== INFRA PRECHECK ===="
-pq_precheck_hosts || true
+if ! pq_precheck_hosts; then
+  pq_note "ERROR: host precheck failed; refusing matrix and destructive qualification paths"
+  exit 1
+fi
 # macOS reverse SSH is intermittent; wait before matrix so we do not claim PASS on BLOCKED.
 if ! pq_ssh frp-e2e-macos 'echo ok' >/dev/null 2>&1; then
   # Short wait: Linux matrix profiles run first and give the tunnel more time.
