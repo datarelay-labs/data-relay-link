@@ -205,6 +205,28 @@ grep -qF -- '--note' "$WORKDIR/zt-blank-note.out" \
 pass "MANAGEMENT_ONLY_INITIAL_ONBOARDING_REMOVED"
 pass "ZERO_TOUCH_SINGLE_IDENTIFICATION_PROMPT"
 
+# Blank optional SSH username is collected once, then passed explicitly.
+run_repl "$SERVER" "$WORKDIR/zt-blank-user.out" \
+  "create zero-touch" 1 1 blank-ssh "" 1 "" 22 exit \
+  || fail "blank ssh username guided"
+user_prompts="$(grep -c 'SSH username is optional connection-example metadata.' "$WORKDIR/zt-blank-user.out" || true)"
+[[ "$user_prompts" == "1" ]] || fail "SSH username prompt count expected 1 got $user_prompts"
+python3 - "$WORKDIR/zt-blank-user.out" <<'PY' || fail "blank ssh user not passed explicitly"
+import json, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+lines = [ln for ln in text.splitlines() if ln.startswith("DISPATCH_ARGV\t")]
+if not lines:
+    raise SystemExit("missing DISPATCH_ARGV")
+argv = json.loads(lines[-1].split("\t", 1)[1])
+if "--ssh-user" not in argv:
+    raise SystemExit(argv)
+if argv[argv.index("--ssh-user") + 1] != "":
+    raise SystemExit(argv)
+if "--ssh-port" not in argv:
+    raise SystemExit(argv)
+PY
+pass "SSH_USERNAME_PROMPTED_ONCE"
+
 # --- Guided: multi-service SSH+HTTP ---
 run_repl "$SERVER" "$WORKDIR/zt-multi-http.out" \
   "create zero-touch" 1 1 multi-http "" \

@@ -139,6 +139,57 @@ def https_origin(url):
     return "https://%s" % parsed.netloc
 
 
+def same_https_origin(left, right):
+    """True when two HTTPS URLs share a host and port (443 is the default)."""
+    try:
+        a = urlparse(str(left or "").strip())
+        b = urlparse(str(right or "").strip())
+    except Exception:
+        return False
+    if a.scheme != "https" or b.scheme != "https":
+        return False
+
+    def key(parsed):
+        return ((parsed.hostname or "").lower(), parsed.port or 443)
+
+    return key(a) == key(b)
+
+
+def private_ca_fresh_client_command(hostname, ticket, ca_pem):
+    """One-line Linux/macOS Zero-Touch command for a private-CA enrollment host.
+
+    The operator session already holds the public CA certificate. The command
+    embeds that certificate, verifies the short-URL fetch with ``--cacert``,
+    and exports ``FRP_ALLOCATOR_CA_FILE`` so later same-origin downloads and
+    enrollment pin the same trust anchor. TLS verification stays enabled.
+    """
+    url = short_url_for_ticket(hostname, ticket)
+    pem = str(ca_pem or "")
+    if "PRIVATE KEY" in pem or "BEGIN CERTIFICATE" not in pem:
+        raise ValueError("allocator CA certificate is required")
+    pem = pem.strip() + "\n"
+    try:
+        encoded = base64.b64encode(pem.encode("ascii")).decode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("allocator CA certificate is not ASCII PEM") from exc
+    if not encoded or any(ch.isspace() for ch in encoded):
+        raise ValueError("allocator CA certificate encoding failed")
+    inner = (
+        "set -euo pipefail; "
+        "d=$(mktemp -d); "
+        "trap 'rm -rf \"$d\"' EXIT; "
+        "umask 077; "
+        "python3 -c \"import base64,sys; open(sys.argv[1],'wb').write(base64.b64decode(sys.argv[2]))\" "
+        "\"$d/ca.crt\" %s; "
+        "openssl x509 -in \"$d/ca.crt\" -noout >/dev/null; "
+        "export FRP_ALLOCATOR_CA_FILE=\"$d/ca.crt\"; "
+        "curl -fsSL --proto =https --tlsv1.2 --cacert \"$d/ca.crt\" %s | bash"
+    ) % (shell_quote(encoded), shell_quote(url))
+    if "--insecure" in inner or re.search(r"(^|[ \t])curl -k([ \t]|$)", inner):
+        raise ValueError("refusing insecure fresh-client command")
+    return "sudo bash -c %s" % shell_quote(inner)
+
+
 def ca_crt_url(allocator_url):
     return https_origin(allocator_url) + "/ca.crt"
 
@@ -336,6 +387,23 @@ def linux_installer_sum_names(installer_url):
     return (name,)
 
 
+def _pinned_or_stock_curl_line(url_var, dest_var, pin_private_ca):
+    """Curl one HTTPS URL, pinning the allocator CA when the origin matches.
+
+    ``FRP_ALLOCATOR_CA_FILE`` is set by the fresh-client command. A distinct
+    public installer origin keeps stock OS trust. Neither path uses
+    ``--insecure``.
+    """
+    stock = 'curl -fsSL --proto "=https" --tlsv1.2 "$%s" -o "$%s"' % (url_var, dest_var)
+    if not pin_private_ca:
+        return stock
+    return (
+        'if [[ -n "${FRP_ALLOCATOR_CA_FILE:-}" && -f "$FRP_ALLOCATOR_CA_FILE" ]]; then '
+        'curl -fsSL --proto "=https" --tlsv1.2 --cacert "$FRP_ALLOCATOR_CA_FILE" '
+        '"$%s" -o "$%s"; else %s; fi'
+    ) % (url_var, dest_var, stock)
+
+
 def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installer_url):
     """Return a small generic bootstrap script that reuses the zt1 installer path.
 
@@ -370,8 +438,8 @@ def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installe
         'umask 077',
         'SUMS_FILE="$WORKDIR/SHA256SUMS"',
         'INSTALLER_FILE="$WORKDIR/bootstrap-client.sh"',
-        'curl -fsSL --proto "=https" --tlsv1.2 "$SUMS_URL" -o "$SUMS_FILE"',
-        'curl -fsSL --proto "=https" --tlsv1.2 "$INSTALLER_URL" -o "$INSTALLER_FILE"',
+        _pinned_or_stock_curl_line('SUMS_URL', 'SUMS_FILE', same_https_origin(sums_url, allocator_url)),
+        _pinned_or_stock_curl_line('INSTALLER_URL', 'INSTALLER_FILE', same_https_origin(installer, allocator_url)),
         'WANT="$(awk -v names="$EXPECTED_NAMES" \'BEGIN{split(names,a,","); for(i in a) ok[a[i]]=1; c=0} ($2 in ok){print tolower($1); c++} END{if(c!=1) exit 1}\' "$SUMS_FILE")"',
         'GOT="$(sha256sum "$INSTALLER_FILE" | awk \'{print tolower($1)}\')"',
         'if [[ "$GOT" != "$WANT" ]]; then',
@@ -379,8 +447,9 @@ def render_short_url_bootstrap_script(allocator_url, ca_sha256, ticket, installe
         '  exit 1',
         'fi',
         'chmod 0700 "$INSTALLER_FILE"',
-        '# Stock OS trust for the publicly trusted installer URL only.',
-        '# Allocator/Private-CA trust comes from the opaque package pin.',
+        '# Same-origin artifacts use FRP_ALLOCATOR_CA_FILE when the fresh-client',
+        '# command supplied it. A distinct public installer origin uses stock OS trust.',
+        '# The installer then pins this CA by fingerprint before enrollment.',
         'bash "$INSTALLER_FILE" "$PACKAGE"',
         '',
     ]

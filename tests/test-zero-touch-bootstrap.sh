@@ -329,6 +329,22 @@ grep -q 'zt1\.\|/i/' "$WORKDIR/explicit.out" || fail "explicit command missing i
 [[ "$(ticket_ssh_user)" == "aella" ]] || fail "explicit --ssh-user not stored in profile"
 pass "EXPLICIT_SSH_USER_NONINTERACTIVE"
 
+# Guided wizard already asked. An explicit blank --ssh-user must not ask again.
+# Cancel before issuance so this check does not consume a Zero-Touch slot.
+BEFORE_TICKETS="$(ticket_count)"
+FRP_CREATE_CLIENT_TEST_INPUT=$'n\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+  python3 "$CREATE" --one-line --ssh --ssh-user '' --ssh-port 22 \
+  --client-name seoul-groupware --note '' \
+  >"$WORKDIR/blank-explicit.out" 2>"$WORKDIR/blank-explicit.err"
+if grep -q 'SSH username \[optional\]:' "$WORKDIR/blank-explicit.out" "$WORKDIR/blank-explicit.err"; then
+  fail "explicit blank SSH username prompted again"
+fi
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*<username>' "$WORKDIR/blank-explicit.out" \
+  || fail "blank explicit username should show <username>"
+grep -q 'Cancelled.' "$WORKDIR/blank-explicit.out" || fail "blank explicit username did not reach confirm"
+[[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "cancelled blank username created a ticket"
+pass "EXPLICIT_BLANK_SSH_USER_NOT_REPROMPTED"
+
 # ---------------------------------------------------------------------------
 # One-line command generation
 # ---------------------------------------------------------------------------

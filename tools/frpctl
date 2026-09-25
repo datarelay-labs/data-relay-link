@@ -1654,18 +1654,12 @@ frpctl_zt_run_ssh() {
     frpctl_zt_prompt_client_identification || return 1
   fi
   frpctl_zt_prompt_ssh || return 1
-  if [[ -n "${_FRP_ZT_SSH_USER}" ]]; then
-    frpctl_zt_invoke_create_client \
-      --one-line \
-      --ssh \
-      --ssh-user "$_FRP_ZT_SSH_USER" \
-      --ssh-port "$_FRP_ZT_SSH_PORT"
-  else
-    frpctl_zt_invoke_create_client \
-      --one-line \
-      --ssh \
-      --ssh-port "$_FRP_ZT_SSH_PORT"
-  fi
+  # Always pass --ssh-user, including blank, so the backend does not ask again.
+  frpctl_zt_invoke_create_client \
+    --one-line \
+    --ssh \
+    --ssh-user "$_FRP_ZT_SSH_USER" \
+    --ssh-port "$_FRP_ZT_SSH_PORT"
 }
 
 frpctl_zt_run_rdp() {

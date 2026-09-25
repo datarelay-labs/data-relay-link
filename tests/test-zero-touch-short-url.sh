@@ -143,8 +143,22 @@ PY
 OUT_DOMAIN="$WORKDIR/domain-short.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --client-name domain-short --note 'dns' \
   >"$OUT_DOMAIN" || fail "one-line with public_url_host domain"
-grep -E -q "curl -fsSL https://remote\\.xdr\\.ooo/i/[A-Za-z0-9_-]{22}\\|sudo bash$" \
-  "$OUT_DOMAIN" || { cat "$OUT_DOMAIN"; fail "domain public_url_host short URL shape"; }
+CMD_DOMAIN="$(grep -E 'sudo bash -c ' "$OUT_DOMAIN" | head -n1)"
+[[ -n "$CMD_DOMAIN" ]] || { cat "$OUT_DOMAIN"; fail "domain public_url_host missing fresh-client command"; }
+printf '%s\n' "$CMD_DOMAIN" | grep -q 'https://remote\.xdr\.ooo/i/' \
+  || { cat "$OUT_DOMAIN"; fail "domain command missing short URL"; }
+printf '%s\n' "$CMD_DOMAIN" | grep -q -- '--cacert' \
+  || { cat "$OUT_DOMAIN"; fail "domain command missing CA pin"; }
+printf '%s\n' "$CMD_DOMAIN" | grep -q 'FRP_ALLOCATOR_CA_FILE' \
+  || { cat "$OUT_DOMAIN"; fail "domain command missing CA file export"; }
+if printf '%s\n' "$CMD_DOMAIN" | grep -q -- '--insecure\|curl -k'; then
+  cat "$OUT_DOMAIN"
+  fail "domain fresh-client command disables TLS verification"
+fi
+if printf '%s\n' "$CMD_DOMAIN" | grep -E -q '^curl -fsSL https://remote\.xdr\.ooo/i/'; then
+  cat "$OUT_DOMAIN"
+  fail "stock curl cannot trust the private enrollment CA"
+fi
 if grep -q 'zt1\.' "$OUT_DOMAIN"; then
   fail "domain short URL still printed zt1"
 fi

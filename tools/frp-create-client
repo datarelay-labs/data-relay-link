@@ -11,6 +11,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 def _test_root():
     return (
@@ -638,11 +639,12 @@ def parse_args(argv=None):
     )
     p.add_argument(
         '--ssh-user',
-        default='',
+        default=None,
         metavar='USER',
         help=(
-            'SSH login account that already exists on the client '
-            '(required when stdin is not a TTY; no distro default)'
+            'SSH login account that already exists on the client. '
+            'Optional connection-example metadata. Pass an empty value when '
+            'the guided wizard already collected a blank username.'
         ),
     )
     p.add_argument(
@@ -968,12 +970,52 @@ def print_client_configuration(name, note, services=None, ssh_user='', ssh_port=
         print()
 
 
-def resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit):
+def resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit, user_explicit=False):
     ssh_user = normalize_ssh_user(ssh_user)
-    if ssh_user or not is_interactive_stdin():
-        # Non-interactive: empty ssh_user is allowed (connection examples use <username>).
+    if user_explicit or ssh_user or not is_interactive_stdin():
+        # An explicit --ssh-user, including blank, was already collected.
+        # Non-interactive empty ssh_user stays optional (<username> examples).
         return ssh_user, ssh_port
     return prompt_zero_touch_ssh('', ssh_port, port_explicit)
+
+
+def _allocator_hostname(cfg):
+    if not isinstance(cfg, dict):
+        return ''
+    try:
+        return (urlparse(str(cfg.get('allocator_public_url') or '')).hostname or '').lower().rstrip('.')
+    except Exception:
+        return ''
+
+
+def _short_url_needs_embedded_ca(cfg):
+    """True when the short URL host is this server's private-CA identity.
+
+    A distinct bootstrap_hostname is an operator public-TLS edge and keeps
+    stock curl. The enrollment hostname itself presents the project private CA.
+    """
+    boot = str((cfg or {}).get('bootstrap_hostname') or '').strip().lower().rstrip('.')
+    if not boot:
+        return True
+    alloc_host = _allocator_hostname(cfg)
+    return bool(alloc_host) and boot == alloc_host
+
+
+def _public_ca_pem(cfg):
+    """Return the public allocator CA PEM, never a private key."""
+    if not isinstance(cfg, dict):
+        return ''
+    raw = str(cfg.get('tls_ca_cert') or '').strip()
+    if not raw:
+        return ''
+    path = remap(raw)
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError:
+        return ''
+    if 'PRIVATE KEY' in text or 'BEGIN CERTIFICATE' not in text:
+        return ''
+    return text.strip() + '\n'
 
 
 def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp, installer):
@@ -1149,10 +1191,10 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
         if zt_id is not None:
             tracking_id = zt_id.bootstrap_record_id(ticket)
 
-    # Prefer short URL when install-time public_url_host is DNS (or advanced
-    # bootstrap_hostname override). Do not require a second bootstrap hostname
-    # merely to get the short command. Low-level CA pin mechanics stay inside
-    # the served /i/<ticket> bootstrap artifact or the zt1 package.
+    # DNS public_url_host still uses /i/<ticket>, but that host presents the
+    # project private CA. Embed the public CA in the one-liner and verify TLS.
+    # A distinct bootstrap_hostname is the operator public-TLS edge and keeps
+    # stock curl. Never fall through to curl --insecure for this path.
     command = ''
     bootstrap_host = short_url_host_for_cfg(
         cfg, bootstrap_hostname=bootstrap_hostname, public_hostname=public_hostname
@@ -1162,8 +1204,24 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
             zt = _zt()
             if zt is None:
                 raise ValueError('zero-touch helper is unavailable')
-            command = zt.short_url_command(bootstrap_host, short_handle or ticket)
+            if _short_url_needs_embedded_ca(cfg):
+                pem = _public_ca_pem(cfg)
+                if not pem:
+                    fail(
+                        'allocator CA certificate is not available; '
+                        'cannot generate a fresh-client Zero-Touch command'
+                    )
+                command = zt.private_ca_fresh_client_command(
+                    bootstrap_host, short_handle or ticket, pem
+                )
+            else:
+                command = zt.short_url_command(bootstrap_host, short_handle or ticket)
         except ValueError:
+            if _short_url_needs_embedded_ca(cfg):
+                fail(
+                    'cannot generate a fresh-client Zero-Touch command '
+                    'without disabling TLS verification'
+                )
             command = ''
 
     if not command:
@@ -1270,6 +1328,7 @@ def main(argv=None):
         ssh_port = coerce_port(a.ssh_port)
         if ssh_port is None:
             fail('invalid --ssh-port; must be an integer 1-65535')
+    ssh_user_explicit = a.ssh_user is not None
     ssh_user = normalize_ssh_user(a.ssh_user)
     rdp_port = 3389
     if a.rdp_port is not None:
@@ -1373,7 +1432,9 @@ def main(argv=None):
 
     rdp_local = None
     if a.ssh:
-        ssh_user, ssh_port = resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit)
+        ssh_user, ssh_port = resolve_zero_touch_ssh(
+            ssh_user, ssh_port, port_explicit, user_explicit=ssh_user_explicit
+        )
         if ssh_user:
             reject_control_chars('--ssh-user', ssh_user)
         raw_services = [ssh_service(ssh_user, ssh_port)]

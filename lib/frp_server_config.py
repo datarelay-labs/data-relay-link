@@ -11,10 +11,10 @@ public_hostname is an optional DNS alias for published-service access and may
 also be selected as public_url_host. It must never become the default FRP
 control destination or PKI identity by itself.
 
-bootstrap_hostname is an optional advanced override for the publicly trusted
-Zero-Touch short URL entrypoint only. When unset, a DNS public_url_host is
-used for short URLs — operators must not configure a second hostname merely
-to get the short Zero-Touch command.
+bootstrap_hostname is an optional advanced override for a publicly trusted
+Zero-Touch edge. When unset, a DNS public_url_host is still the short-URL
+host, but that host presents the project private CA. The advertised command
+must carry that CA; stock curl cannot validate it on a fresh client.
 """
 from __future__ import annotations
 
