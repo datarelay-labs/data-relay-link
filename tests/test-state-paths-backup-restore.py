@@ -154,6 +154,38 @@ class BackupRestoreEgressLogTests(unittest.TestCase):
             "var/log/drlink/egress/connections.jsonl",
         )
 
+    def test_nested_archive_directories_restore(self):
+        handle = "var/lib/drlink/bootstrap/handles"
+        active = "var/lib/drlink/tls/mcp/active"
+        self.assertTrue(RESTORE.allowed_directory(handle))
+        self.assertTrue(RESTORE.allowed_directory(active))
+        self.assertTrue(RESTORE.allowed_path(handle + "/ab.json"))
+        self.assertTrue(RESTORE.allowed_path(active + "/fullchain.pem"))
+        for unsafe in (
+            "var/lib/drlink/bootstrap/../etc/frp/server_token",
+            "/etc/passwd",
+            "var/lib/drlink/bootstrap/handles/../../tls",
+        ):
+            with self.assertRaises(RESTORE.RestoreError):
+                RESTORE.validate_rel(unsafe)
+        self._write_log(handle + "/ab.json", '{"ticket_id":"ab"}\n')
+        self._write_log(active + "/fullchain.pem", "pem-marker\n")
+        archive = self.tree / "nested.tar.gz"
+        BACKUP.create_backup(self.tree, archive, secure_parent=False)
+        (self.tree / handle / "ab.json").unlink()
+        (self.tree / active / "fullchain.pem").unlink()
+        extracted = Path(self.tmp.name) / "extracted"
+        RESTORE.extract_and_validate(archive, extracted)
+        RESTORE.apply_payload(self.tree, extracted, allow_hook=False)
+        self.assertEqual(
+            (self.tree / handle / "ab.json").read_text(encoding="utf-8"),
+            '{"ticket_id":"ab"}\n',
+        )
+        self.assertEqual(
+            (self.tree / active / "fullchain.pem").read_text(encoding="utf-8"),
+            "pem-marker\n",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
