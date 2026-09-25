@@ -537,7 +537,7 @@ class HelpAndSync(unittest.TestCase):
             err = io.StringIO()
             with redirect_stdout(out), redirect_stderr(err):
                 rc = cli.dispatch(["system", "synchronize"], root=agent, plane=plane)
-            self.assertEqual(rc, 0, err.getvalue())
+            self.assertEqual(rc, 1, err.getvalue())
             text = out.getvalue()
             self.assertIn("Synchronization DEGRADED.", text)
             self.assertIn("Affected:", text)

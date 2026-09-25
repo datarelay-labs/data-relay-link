@@ -215,15 +215,24 @@ def _confirm_from_stdin(message: str) -> bool:
     return str(line or "").strip().lower() in ("y", "yes")
 
 
+def _server_dr_tool_candidates(name: str, here):
+    """Source-tree tools/ plus the installed /usr/local/lib/drlink layout."""
+    from pathlib import Path
+
+    here = Path(here)
+    return (
+        here.parent.parent / "tools" / name,
+        here.parent / name,
+        Path("/usr/local/lib/drlink") / name,
+        Path("/usr/local/sbin") / name,
+    )
+
+
 def _server_dr_tool_path(name: str):
     from pathlib import Path
 
     here = Path(__file__).resolve()
-    candidates = (
-        here.parent.parent / "tools" / name,
-        Path("/usr/local/sbin") / name,
-    )
-    for path in candidates:
+    for path in _server_dr_tool_candidates(name, here):
         if path.is_file():
             return path
     raise SystemExit("ERROR: %s is not installed." % name)
@@ -1120,6 +1129,9 @@ def _system(plane: ControlPlane, rest):
             )
         result = v24.synchronize_agent_remote_services(plane, root=plane.root)
         sys.stdout.write(v24.format_synchronize_result(result))
+        status = str(result.get("status") or "").upper()
+        if status in ("DEGRADED", "OFFLINE"):
+            return 1
         return 0
     if rest[0] == "diagnostics":
         kind = rest[1] if len(rest) > 1 else "all"

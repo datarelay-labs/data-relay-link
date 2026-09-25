@@ -5447,12 +5447,25 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
     import drlink_mgmt_sync as mgmt
 
     # Always refresh catalog when a live management path exists.
+    # A management failure must not wipe desired state, but it must not
+    # report SYNCHRONIZED either.
+    catalog_error = ""
     try:
         if mgmt.use_live_mgmt_path(root or getattr(plane_db, "root", None)):
             sync_agent_catalog_from_server(plane_db, root=root)
-    except Exception:
-        # Catalog sync failure should not wipe desired state; mark degraded later.
-        pass
+    except Exception as exc:
+        catalog_error = str(exc).strip()
+
+    def _finish(result: dict) -> dict:
+        if not catalog_error:
+            return result
+        out = dict(result)
+        if str(out.get("status") or "").upper() == "SYNCHRONIZED":
+            out["status"] = "DEGRADED"
+        if not str(out.get("runtime_error") or "").strip():
+            out["runtime_error"] = catalog_error
+        return out
+
     updated = 0
     # Defer runtime restarts to a single apply at the end of this synchronize.
     prev_batch = bool(getattr(plane_db, "_batch_mode", False))
@@ -5534,12 +5547,12 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
             )
             _push_agent_remote_service_status(plane_db, root=root)
             affected = _collect_degraded_remote_services(plane_db)
-            return {
+            return _finish({
                 "status": "DEGRADED",
                 "updated": updated,
                 "affected": affected,
                 "runtime_error": applied.get("error") or "Runtime activation failed",
-            }
+            })
         # skipped=True is the DRLINK_SKIP_ACTIVATION unit-test shortcut; treat it
         # as verified the same way set_remote_service_agent does, so reconnect
         # sync can promote runtime-pending rows to HEALTHY.
@@ -5548,19 +5561,19 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
     except Exception as exc:
         _push_agent_remote_service_status(plane_db, root=root)
         affected = _collect_degraded_remote_services(plane_db)
-        return {
+        return _finish({
             "status": "DEGRADED",
             "updated": updated,
             "affected": affected,
             "runtime_error": str(exc),
-        }
+        })
     _push_agent_remote_service_status(plane_db, root=root)
     affected = _collect_degraded_remote_services(plane_db)
-    return {
+    return _finish({
         "status": "DEGRADED" if affected else "SYNCHRONIZED",
         "updated": updated,
         "affected": affected,
-    }
+    })
 
 
 def allocate_endpoint_port(plane_db, client_id: str, service_name: str, pool_class: str) -> int:

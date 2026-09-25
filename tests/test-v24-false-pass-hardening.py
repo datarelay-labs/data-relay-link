@@ -532,6 +532,35 @@ class LifecycleConformanceHardening(unittest.TestCase):
         finally:
             plane.close()
 
+    def test_catalog_sync_failure_stays_degraded_without_reenrollment(self):
+        import drlink_mgmt_sync as mgmt
+
+        agent = tempfile.mkdtemp(prefix="drlink-sync-cat-")
+        plane = ControlPlane(agent)
+        os.environ["DRLINK_SERVER_REACHABLE"] = "1"
+        os.environ["DRLINK_SKIP_ACTIVATION"] = "1"
+        orig_live = mgmt.use_live_mgmt_path
+        orig_sync = v24.sync_agent_catalog_from_server
+        mgmt.use_live_mgmt_path = lambda root=None: True
+
+        def _busy(*_args, **_kwargs):
+            raise mgmt.MgmtSyncError(mgmt.AUTH_NONCE_BUSY)
+
+        v24.sync_agent_catalog_from_server = _busy
+        try:
+            result = v24.synchronize_agent_remote_services(plane, root=agent)
+            self.assertEqual(result.get("status"), "DEGRADED")
+            detail = str(result.get("runtime_error") or "")
+            self.assertIn("temporarily busy", detail)
+            self.assertNotIn("may need to be re-enrolled", detail.lower())
+            self.assertNotEqual(detail.strip(), mgmt.AUTH_REJECTED.strip())
+        finally:
+            mgmt.use_live_mgmt_path = orig_live
+            v24.sync_agent_catalog_from_server = orig_sync
+            os.environ.pop("DRLINK_SERVER_REACHABLE", None)
+            os.environ.pop("DRLINK_SKIP_ACTIVATION", None)
+            plane.close()
+
     def test_role_discovery_agent_omits_server_topics(self):
         import frp_cli_catalog as catalog
         import frp_ctl_grammar as grammar

@@ -58,6 +58,10 @@ AUTH_REVOKED = (
     "ERROR:\nThe Agent management identity has been revoked.\n\n"
     "Re-enroll this Agent before retrying.\n\nNo changes were applied."
 )
+AUTH_NONCE_BUSY = (
+    "ERROR:\nThe DRLink Server management path is temporarily busy.\n\n"
+    "Retry the operation. Do not re-enroll this Agent.\n\nNo changes were applied."
+)
 TLS_INSECURE_WARNING = (
     "WARNING: management TLS certificate verification is disabled.\n"
 )
@@ -600,6 +604,8 @@ def _raise_http_auth_error(code: int, detail: str) -> None:
     text = str(detail or "").lower()
     if code in (401, 403) and "revoked" in text:
         raise MgmtSyncError(AUTH_REVOKED)
+    if code in (401, 403) and ("nonce store full" in text or "nonce_store_full" in text):
+        raise MgmtSyncError(AUTH_NONCE_BUSY)
     if code in (401, 403):
         raise MgmtSyncError(AUTH_REJECTED)
     raise MgmtSyncError(
@@ -815,6 +821,11 @@ def _public_auth_error(internal: str) -> dict:
         return {
             "error": "management request replayed",
             "error_class": "REPLAY_REJECTED",
+        }
+    if "nonce store full" in text:
+        return {
+            "error": "management nonce store full; retry later",
+            "error_class": "NONCE_STORE_FULL",
         }
     if "unknown" in text or "not enrolled" in text or "does not have a management identity" in text:
         return {

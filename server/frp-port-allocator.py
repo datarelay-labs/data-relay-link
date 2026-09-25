@@ -28,7 +28,13 @@ from urllib.parse import parse_qs, urlparse
 LOCK = threading.Lock()
 MAX_CLOCK_SKEW = 300
 MGMT_NONCE_TTL = 900
-MAX_NONCES_PER_CLIENT = 256
+# Idle AI claim polls (AI_AGENT_IDLE_POLL_SECONDS in lib/drlink_ai_agent.py)
+# must fit inside the non-evictable replay horizon (2 * MAX_CLOCK_SKEW)
+# without crowding out operator management requests. Evicting a nonce that
+# is still inside that horizon would re-enable a valid signed replay.
+AI_IDLE_POLL_SECONDS = 2.0
+MGMT_NONCE_RESERVE = 64
+MAX_NONCES_PER_CLIENT = int((2 * MAX_CLOCK_SKEW) / AI_IDLE_POLL_SECONDS) + MGMT_NONCE_RESERVE
 REGISTRY_SCHEMA_VERSION = 2
 SERVICE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9._-]{0,31}$')
 MAX_SERVICES = 32
@@ -442,6 +448,8 @@ def classify_auth_error(error):
         return 'REVOKED'
     if 'replay' in text:
         return 'REPLAY_REJECTED'
+    if 'nonce store full' in text:
+        return 'NONCE_STORE_FULL'
     return 'AUTH_FAILED'
 
 
@@ -3041,7 +3049,7 @@ class Allocator:
                                 'preset': spec['preset'],
                                 'enabled': True,
                             }
-                            if spec['preset'] == 'ssh':
+                            if spec.get('preset') == 'ssh' and spec.get('ssh_user'):
                                 stored['ssh_user'] = spec['ssh_user']
                             if 'health_check' in spec:
                                 stored['health_check'] = spec['health_check']
@@ -3174,7 +3182,7 @@ class Allocator:
                                 'preset': spec['preset'],
                                 'enabled': True,
                             }
-                            if spec['preset'] == 'ssh':
+                            if spec.get('preset') == 'ssh' and spec.get('ssh_user'):
                                 stored['ssh_user'] = spec['ssh_user']
                             if 'health_check' in spec:
                                 stored['health_check'] = spec['health_check']

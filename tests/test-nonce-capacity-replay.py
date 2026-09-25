@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import time
 import unittest
@@ -96,6 +97,37 @@ class NonceCapacityReplayTests(unittest.TestCase):
         # Near skew expiry still blocked.
         near = self.now + MOD.MAX_CLOCK_SKEW - 1
         self.assertEqual(self.allocator.check_nonce(self.mid, nonce, near), "replayed request")
+
+    def test_idle_ai_polling_does_not_starve_management(self):
+        """Idle claim polls across the replay horizon must leave a management slot.
+
+        Nonces younger than 2*MAX_CLOCK_SKEW cannot be evicted. The previous
+        cap of 256 filled during a 2s idle poll and then rejected ordinary
+        management commits.
+        """
+        sys_path = str(ROOT / "lib")
+        if sys_path not in sys.path:
+            sys.path.insert(0, sys_path)
+        import drlink_ai_agent as agent
+
+        interval = float(agent.AI_AGENT_IDLE_POLL_SECONDS)
+        self.assertEqual(interval, MOD.AI_IDLE_POLL_SECONDS)
+        horizon = 2 * MOD.MAX_CLOCK_SKEW
+        polls = int(horizon / interval)
+        self.assertGreater(MOD.MAX_NONCES_PER_CLIENT, polls)
+        for i in range(polls):
+            ts = self.now + int(i * interval)
+            err = self.allocator.commit_nonce(self.mid, "%064x" % i, ts)
+            self.assertIsNone(err, err)
+        end = self.now + int(polls * interval)
+        err = self.allocator.commit_nonce(self.mid, "f" * 64, end)
+        self.assertIsNone(err, err)
+        last = "%064x" % (polls - 1)
+        self.assertEqual(self.allocator.check_nonce(self.mid, last, end), "replayed request")
+        self.assertEqual(
+            MOD.classify_auth_error("nonce store full; retry later"),
+            "NONCE_STORE_FULL",
+        )
 
 
 if __name__ == "__main__":
