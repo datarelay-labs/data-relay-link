@@ -630,51 +630,45 @@ def _b64url_decode(text):
 
 BOOTSTRAP_WRAP_VERSION = 2
 BOOTSTRAP_WRAP_AAD = b'bt1-wrap-v2'
+BOOTSTRAP_WRAP_KDF_DOMAIN = b'drlink-bt1-wrap-v2'
+BOOTSTRAP_WRAP_ENC_INFO = b'bt1-enc'
+BOOTSTRAP_WRAP_MAC_INFO = b'bt1-mac'
 BOOTSTRAP_WRAP_KEY_NAME = 'bt1-wrap.key'
 
 
-def _derive_bootstrap_wrap_keys(secret):
-    """AES and HMAC keys from the wrap secret. Stdlib only; OpenSSL does AES."""
+def _bootstrap_wrap_keys(secret, salt):
+    """Domain-separated AES and HMAC keys. PBKDF2 and HMAC are stdlib; AES is OpenSSL."""
     material = str(secret or '').encode('utf-8')
-    if not material:
+    if not material or not isinstance(salt, (bytes, bytearray)) or len(salt) != 16:
         raise ValueError('bootstrap wrap secret is unavailable')
-    prk = hmac.new(b'drlink-bootstrap-bt1-v2', material, hashlib.sha256).digest()
-    enc_key = hmac.new(prk, b'aes\x01', hashlib.sha256).digest()
-    mac_key = hmac.new(prk, b'mac\x01', hashlib.sha256).digest()
-    return enc_key, mac_key
-
-
-def _openssl_aes256_cbc(data, key, iv, encrypt):
-    """AES-256-CBC through the required openssl CLI. Compatible with OpenSSL 1.0.2."""
-    if len(key) != 32 or len(iv) != 16:
-        raise ValueError('invalid AES key material')
-    args = ['openssl', 'enc', '-aes-256-cbc', '-K', key.hex(), '-iv', iv.hex()]
-    if not encrypt:
-        args.append('-d')
-    proc = subprocess.run(
-        args,
-        input=data,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    prk = hashlib.pbkdf2_hmac(
+        'sha256',
+        material,
+        BOOTSTRAP_WRAP_KDF_DOMAIN + bytes(salt),
+        MGMT.OPENSSL_PBKDF2_ITER,
+        dklen=32,
     )
-    if proc.returncode != 0 or proc.stdout is None:
-        raise RuntimeError('openssl aes-256-cbc failed')
-    return proc.stdout
+    enc_key = hmac.new(prk, BOOTSTRAP_WRAP_ENC_INFO, hashlib.sha256).digest()
+    mac_key = hmac.new(prk, BOOTSTRAP_WRAP_MAC_INFO, hashlib.sha256).digest()
+    return enc_key, mac_key
 
 
 def wrap_bootstrap_ticket(raw_ticket, secret):
     """Encrypt a raw bt1 credential. The JSON value is not the plaintext ticket.
 
-    Authenticity is HMAC-SHA256 over the IV and ciphertext. AES itself is
-    OpenSSL, which every supported server already requires.
+    Encrypt-then-MAC: OpenSSL AES-256-CBC via the management helper, then
+    HMAC-SHA256. The MAC is checked before decrypt.
     """
-    enc_key, mac_key = _derive_bootstrap_wrap_keys(secret)
+    salt = secrets.token_bytes(16)
     iv = secrets.token_bytes(16)
-    ciphertext = _openssl_aes256_cbc(str(raw_ticket).encode('utf-8'), enc_key, iv, True)
-    mac = hmac.new(mac_key, BOOTSTRAP_WRAP_AAD + iv + ciphertext, hashlib.sha256).hexdigest()
+    enc_key, mac_key = _bootstrap_wrap_keys(secret, salt)
+    ciphertext = MGMT._aes256_cbc(str(raw_ticket).encode('utf-8'), enc_key, iv, True)
+    mac = hmac.new(
+        mac_key, BOOTSTRAP_WRAP_AAD + salt + iv + ciphertext, hashlib.sha256
+    ).hexdigest()
     return {
         'v': BOOTSTRAP_WRAP_VERSION,
+        'salt': _b64url_encode(salt),
         'iv': _b64url_encode(iv),
         'ct': _b64url_encode(ciphertext),
         'mac': mac,
@@ -688,18 +682,25 @@ def unwrap_bootstrap_ticket(blob, secret):
     try:
         if int(blob.get('v') or 0) != BOOTSTRAP_WRAP_VERSION:
             return None
+        salt = _b64url_decode(blob.get('salt'))
         iv = _b64url_decode(blob.get('iv'))
         ciphertext = _b64url_decode(blob.get('ct'))
         mac = str(blob.get('mac') or '').strip().lower()
-        if len(iv) != 16 or not ciphertext or len(mac) != 64 or not HEX_RE.fullmatch(mac):
+        if (
+            len(salt) != 16
+            or len(iv) != 16
+            or not ciphertext
+            or len(mac) != 64
+            or not HEX_RE.fullmatch(mac)
+        ):
             return None
-        enc_key, mac_key = _derive_bootstrap_wrap_keys(secret)
+        enc_key, mac_key = _bootstrap_wrap_keys(secret, salt)
         expected = hmac.new(
-            mac_key, BOOTSTRAP_WRAP_AAD + iv + ciphertext, hashlib.sha256
+            mac_key, BOOTSTRAP_WRAP_AAD + salt + iv + ciphertext, hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(expected, mac):
             return None
-        return _openssl_aes256_cbc(ciphertext, enc_key, iv, False).decode('utf-8')
+        return MGMT._aes256_cbc(ciphertext, enc_key, iv, False).decode('utf-8')
     except Exception:
         return None
 

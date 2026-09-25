@@ -160,7 +160,12 @@ def test_issue_hashed_and_entropy():
             fail('short handle hash mismatch')
             return
         wrapped = stored.get('bt1_wrapped')
-        if not isinstance(wrapped, dict) or wrapped.get('v') != 2 or len(str(wrapped.get('mac') or '')) != 64:
+        if (
+            not isinstance(wrapped, dict)
+            or wrapped.get('v') != 2
+            or not wrapped.get('salt')
+            or len(str(wrapped.get('mac') or '')) != 64
+        ):
             fail('missing authenticated bt1 wrap', wrapped)
             return
         recovered = MOD.unwrap_bootstrap_ticket(wrapped, env.token.read_text().strip())
@@ -1209,6 +1214,16 @@ def test_wrap_without_optional_cryptography():
             return
         if MOD.unwrap_bootstrap_ticket(blob, 'wrong-secret') is not None:
             fail('wrong wrap secret accepted')
+            return
+        tampered = dict(blob)
+        tampered['mac'] = '0' * 64
+        if MOD.unwrap_bootstrap_ticket(tampered, secret) is not None:
+            fail('tampered wrap mac accepted')
+            return
+        tampered = dict(blob)
+        tampered['ct'] = 'AAAA'
+        if MOD.unwrap_bootstrap_ticket(tampered, secret) is not None:
+            fail('tampered wrap ciphertext accepted')
             return
         bundle_spec = importlib.util.spec_from_file_location(
             'frp_support_bundle', ROOT / 'lib' / 'frp_support_bundle.py'

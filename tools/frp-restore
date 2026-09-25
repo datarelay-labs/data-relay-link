@@ -99,6 +99,8 @@ def allowed_path(rel: str) -> bool:
 
 
 def allowed_directory(rel: str) -> bool:
+    if any(rel.startswith(prefix) for prefix in ARCHIVE_TREE_PREFIXES):
+        return True
     prefix = rel.rstrip("/") + "/"
     candidates = REQUIRED | OPTIONAL_EXACT | FORENSIC_OPTIONAL | RESTORE_IGNORE | set(ARCHIVE_TREE_ROOTS) | {
         "var/log/drlink",

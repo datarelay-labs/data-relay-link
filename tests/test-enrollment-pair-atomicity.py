@@ -181,7 +181,7 @@ def wait_for_file(path: Path, proc: subprocess.Popen, what: str, timeout=20) -> 
 
 
 def archive_members(archive: Path, rel: str) -> dict[str, dict]:
-    """Payload JSON records under a relative directory, keyed by file name."""
+    """Ticket and enrollment JSON only. Dedicated secret files are not records."""
     prefix = "payload/" + rel + "/"
     out: dict[str, dict] = {}
     with tarfile.open(archive, "r:gz") as tar:
@@ -456,6 +456,89 @@ def test_restore_preflight_pair_rules(tmp: Path) -> None:
     print("F28_RESTORE_ACCEPTS_COMPLETE_PAIR=PASS")
 
 
+def archive_member_names(archive: Path, rel: str) -> set[str]:
+    prefix = "payload/" + rel + "/"
+    names: set[str] = set()
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar.getmembers():
+            if member.isfile() and member.name.startswith(prefix):
+                names.add(member.name[len(prefix):])
+    return names
+
+
+def test_dedicated_wrap_key_backup_restore(tmp: Path) -> None:
+    """A no-token wrap key is backed up, restored at 0600, and is not a ticket."""
+    root = tmp / "wrap-key"
+    seed_tree(root)
+    cfg = json.loads((root / "etc/drlink/config.json").read_text(encoding="utf-8"))
+    cfg["enrollments_dir"] = str(root / ENROLL_REL)
+    cfg["bootstrap_dir"] = str(root / BOOTSTRAP_REL)
+    cfg["registry_file"] = str(root / "var/lib/drlink/registry.json")
+    cfg["token_file"] = str(root / "etc/frp/no-such-token")
+    alloc = load("frp_port_allocator_wrapkey", "server/frp-port-allocator.py")
+    ticket, _enroll, record = alloc.issue_bootstrap_ticket(
+        cfg["enrollments_dir"],
+        cfg["bootstrap_dir"],
+        [],
+        600,
+        "wrap-key",
+        label="wrap-key",
+        cfg=cfg,
+    )
+    key_path = root / BOOTSTRAP_REL / alloc.BOOTSTRAP_WRAP_KEY_NAME
+    if not key_path.is_file() or (key_path.stat().st_mode & 0o777) != 0o600:
+        raise AssertionError("dedicated wrap key missing or not mode 0600")
+    archive = tmp / "wrap-key.tar.gz"
+    _backup(root, archive)
+    names = archive_member_names(archive, BOOTSTRAP_REL)
+    if alloc.BOOTSTRAP_WRAP_KEY_NAME not in names:
+        raise AssertionError("backup omitted the dedicated wrap key")
+    tickets = archive_members(archive, BOOTSTRAP_REL)
+    if alloc.BOOTSTRAP_WRAP_KEY_NAME in tickets:
+        raise AssertionError("pair validation parsed the wrap key as ticket JSON")
+    ticket_name = record["id"] + ".json"
+    if ticket_name not in tickets:
+        raise AssertionError("backup omitted the ticket JSON")
+    with tarfile.open(archive, "r:gz") as tar:
+        manifest = json.loads(tar.extractfile("manifest.json").read().decode("utf-8"))
+    key_rel = BOOTSTRAP_REL + "/" + alloc.BOOTSTRAP_WRAP_KEY_NAME
+    modes = [entry.get("mode") for entry in manifest.get("files", []) if entry.get("path") == key_rel]
+    if modes != [0o600]:
+        raise AssertionError("backup manifest mode for wrap key is %s" % modes)
+
+    dest = tmp / "wrap-key-restored"
+    seed_tree(dest)
+    for child in (dest / BOOTSTRAP_REL).iterdir():
+        if child.is_file():
+            child.unlink()
+    result = _restore(dest, archive)
+    if result.returncode != 0:
+        raise AssertionError(
+            "restore rejected a tree with a wrap key: %s %s" % (result.stdout, result.stderr)
+        )
+    restored_key = dest / BOOTSTRAP_REL / alloc.BOOTSTRAP_WRAP_KEY_NAME
+    if not restored_key.is_file() or (restored_key.stat().st_mode & 0o777) != 0o600:
+        raise AssertionError("restored wrap key missing or not mode 0600")
+    restored = json.loads((dest / BOOTSTRAP_REL / ticket_name).read_text(encoding="utf-8"))
+    recovered = alloc.unwrap_bootstrap_ticket(
+        restored.get("bt1_wrapped"), restored_key.read_text(encoding="utf-8").strip()
+    )
+    if recovered != ticket or not alloc.bootstrap_wrap_matches_record(recovered, restored):
+        raise AssertionError("restored wrap key did not recover bt1")
+    rows = ELC.collect_logical_enrollments(dest / ENROLL_REL, dest / BOOTSTRAP_REL)
+    broken = [row for row in rows if row.get("pair_error")]
+    if broken:
+        raise AssertionError(
+            "restored pair has errors: %s" % [(row.get("id"), row.get("pair_error")) for row in broken]
+        )
+    if any(alloc.BOOTSTRAP_WRAP_KEY_NAME in str(row.get("id") or "") for row in rows):
+        raise AssertionError("pair validation treated the wrap key as a ticket")
+    bundle = load("frp_support_bundle_wrapkey", "lib/frp_support_bundle.py")
+    if not bundle.is_forbidden_source(restored_key):
+        raise AssertionError("support bundle would copy the wrap key")
+    print("F28_WRAP_KEY_BACKUP_RESTORE=PASS")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as name:
         tmp = Path(name)
@@ -463,6 +546,7 @@ def main() -> int:
             test_backup_never_sees_half_pair(tmp)
             test_writer_waits_for_backup(tmp)
             test_restore_preflight_pair_rules(tmp)
+            test_dedicated_wrap_key_backup_restore(tmp)
         finally:
             os.environ.pop("FRP_DEPLOY_TEST_ROOT", None)
     print("F28_ENROLLMENT_PAIR_ATOMICITY=PASS")
