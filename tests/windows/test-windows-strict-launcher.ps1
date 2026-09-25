@@ -59,8 +59,17 @@ public class FrpShim {
   }
 }
 '@ | Set-Content -LiteralPath $src -Encoding ascii
-    Add-Type -OutputAssembly (Join-Path $shim 'curl.exe') -OutputType ConsoleApplication -TypeDefinition (Get-Content -LiteralPath $src -Raw)
-    Copy-Item -LiteralPath (Join-Path $shim 'curl.exe') -Destination (Join-Path $shim 'powershell.exe')
+    # PowerShell 7 rejects Add-Type -OutputType ConsoleApplication and WindowsApplication.
+    # The Framework compiler emits the same console shim on Windows PowerShell 5.1 and PowerShell 7.
+    $curlExe = Join-Path $shim 'curl.exe'
+    $csc = @(
+        (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+        (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    Assert-FrpTrue ([bool]$csc) 'Windows csc.exe available for shim'
+    & $csc /nologo /target:exe "/out:$curlExe" $src
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) "csc.exe exit $LASTEXITCODE"
+    Copy-Item -LiteralPath $curlExe -Destination (Join-Path $shim 'powershell.exe')
 } else {
     @'
 #!/bin/sh
