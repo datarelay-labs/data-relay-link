@@ -129,6 +129,7 @@ jobs:
       - name: Package attestation subject set
         id: subjects
         env:
+          INPUT_REF: ${{ inputs.ref }}
           PASS1: ${{ inputs.qualification_pass1_head }}
           PASS2: ${{ inputs.qualification_pass2_head }}
           FINAL: ${{ inputs.qualification_final_head }}
@@ -141,16 +142,8 @@ jobs:
              release-subjects/
           # A stable tag keeps the qualified Git HEAD. Publication identity is
           # projected here and must not be committed back.
-          if [[ "${{ inputs.ref }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            python3 - <<'PY' > qualification-evidence.json
-import json, os
-print(json.dumps({
-    "status": "PASS",
-    "pass1_head": os.environ["PASS1"],
-    "pass2_head": os.environ["PASS2"],
-    "final_qualified_head": os.environ["FINAL"],
-}))
-PY
+          if [[ "$INPUT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            python3 -c 'import json,os; open("qualification-evidence.json","w").write(json.dumps({"status":"PASS","pass1_head":os.environ["PASS1"],"pass2_head":os.environ["PASS2"],"final_qualified_head":os.environ["FINAL"]})+"\n")'
             python3 ./scripts/project-stable-release.py \
               --evidence qualification-evidence.json \
               --output release-subjects/release-manifest.json
