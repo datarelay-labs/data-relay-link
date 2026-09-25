@@ -6,9 +6,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_ROOT="${FRP_E2E_MATRIX_OUT:-$ROOT/e2e-reports/matrix-$RUN_ID}"
-PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.113.nip.io}"
-SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
-SERVER_ALIAS="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
+# shellcheck source=lib/require-release-target.sh
+source "$ROOT/tests/lib/require-release-target.sh"
+frp_require_release_target || exit 1
+PUBLIC_HOSTNAME="$FRP_E2E_PUBLIC_HOSTNAME"
+SERVER_IP="$FRP_E2E_SERVER_IP"
+SERVER_ALIAS="$FRP_E2E_SERVER_ALIAS"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 SSH_KEY="${FRP_E2E_SSH_KEY:-$HOME/.ssh/frp_e2e_ed25519}"
 TARGETS="${FRP_E2E_MATRIX_TARGETS:-ubuntu-24.04,amazon-linux-2023,rocky-linux-8.10,rocky-linux-9.4,macos-arm64,windows-10}"

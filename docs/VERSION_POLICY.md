@@ -117,7 +117,7 @@ Stable exists only after immutable tag + artifacts + qualification evidence are 
 A stable release requires all of:
 
 1. Immutable `vMAJOR.MINOR.PATCH` tag.
-2. Tag points to the exact fully qualified source HEAD.
+2. Tag points to the exact HEAD that PASS1 and PASS2 qualified. `PASS1_HEAD == PASS2_HEAD == FINAL_QUALIFIED_HEAD == tag commit`. No tracked commit is created after PASS2.
 3. Required automated and Real E2E gates passed on that exact HEAD.
 4. Immutable release artifacts.
 5. SHA256 checksums.
@@ -191,6 +191,16 @@ generated artifacts = the provenance commit differs from its parent only by
 Development `git_ref` is the content SHA. Stable and RC `git_ref` is the tag.
 The attest-time SBOM is generated, not committed: `gitCommit` is the provenance
 commit and `gitRef` is manifest `git_ref`.
+
+Stable publication does not add a Git commit. PASS1 and PASS2 run on the
+provenance commit. The immutable tag is that same commit. `scripts/project-stable-release.py`
+then builds a deterministic publication manifest from that tagged tree plus
+retained PASS1/PASS2 evidence. The projection may change only release
+metadata: `channel=stable`, `git_ref` = the tag, and qualification whose
+`pass1_head`, `pass2_head`, and `final_qualified_head` all equal the tag
+commit. It must not rewrite product or source payload hashes, accept
+`pending` evidence, or move the tag. Committed `source_head` stays the
+content parent of the tagged provenance commit.
 
 ## 9. Installer/bootstrap references
 
@@ -312,14 +322,14 @@ Do not create a permanent develop branch merely for process aesthetics.
 1. Freeze architecture/scope.
 2. Implement the full target.
 3. Run targeted + full automated tests.
-4. Record exact candidate HEAD.
-5. Build and prove source/dist parity.
-6. Run Full Real E2E pass 1 on that HEAD.
-7. Run Full Real E2E pass 2 on the same HEAD.
-8. Verify no code/dependency/generated artifact changed.
-9. Create immutable `v2.4.0` tag on exactly that HEAD.
-10. Publish immutable artifacts, checksums, manifest, notes.
-11. Update stable channel/public release metadata.
+4. Establish the content HEAD.
+5. Stamp provenance with `scripts/build-release-artifacts.sh` and commit only generated provenance outputs. That provenance commit is the qualification HEAD.
+6. Run Full Real E2E pass 1 on that provenance HEAD.
+7. Run Full Real E2E pass 2 on the same provenance HEAD.
+8. Verify no code, dependency, or generated artifact changed and HEAD is still that provenance commit.
+9. Create immutable `v2.4.0` on exactly that HEAD. Do not create another tracked commit to carry stable identity or qualification.
+10. Project the stable publication manifest from the tagged HEAD and retained PASS1/PASS2 evidence (`scripts/project-stable-release.py`). Release-attest must reject the tag unless `PASS1_HEAD == PASS2_HEAD == FINAL_QUALIFIED_HEAD == tag HEAD`.
+11. Publish the projected manifest, checksums, and notes. The Git tag still points at the qualified provenance HEAD.
 
 If final integration creates a new commit, repeat qualification on the new HEAD.
 

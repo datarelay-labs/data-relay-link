@@ -65,6 +65,9 @@ class BindingFacts:
     changed_paths: tuple[str, ...]
     tag_commits: dict[str, str]
     clean: bool = True
+    pass1_head: str = ""
+    pass2_head: str = ""
+    final_qualified_head: str = ""
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -157,7 +160,24 @@ def load_facts(
         changed_paths=changed,
         tag_commits=tags,
         clean=clean,
+        pass1_head=os.environ.get("QUALIFICATION_PASS1_HEAD", "").strip().lower(),
+        pass2_head=os.environ.get("QUALIFICATION_PASS2_HEAD", "").strip().lower(),
+        final_qualified_head=os.environ.get("QUALIFICATION_FINAL_HEAD", "").strip().lower(),
     )
+
+
+def _require_qualified_tag_heads(facts: BindingFacts, errors: list[str]) -> None:
+    """PASS1, PASS2, and the final qualified HEAD are the tagged commit."""
+    heads = (facts.pass1_head, facts.pass2_head, facts.final_qualified_head)
+    if (
+        not all(SHA_RE.fullmatch(item) for item in heads)
+        or len(set(heads)) != 1
+        or facts.final_qualified_head != facts.head
+    ):
+        errors.append(
+            "PASS1_HEAD, PASS2_HEAD, and FINAL_QUALIFIED_HEAD must equal tag HEAD %s"
+            % facts.head
+        )
 
 
 def evaluate(facts: BindingFacts) -> dict[str, str]:
@@ -230,6 +250,7 @@ def evaluate(facts: BindingFacts) -> dict[str, str]:
                 "dispatch this workflow from %s, not %s"
                 % (want_ref, facts.workflow_ref)
             )
+        _require_qualified_tag_heads(facts, errors)
     else:
         git_ref = facts.git_ref
         if SHA_RE.fullmatch(git_ref):
@@ -238,7 +259,19 @@ def evaluate(facts: BindingFacts) -> dict[str, str]:
                     "%s git_ref %s != qualified content source_head %s"
                     % (facts.channel, git_ref, facts.source_head)
                 )
-            if facts.input_ref != facts.head:
+            qualified_tag = "v%s" % facts.project_version
+            tag_at_head = facts.tag_commits.get(qualified_tag) == facts.head
+            if facts.input_ref == facts.head:
+                pass
+            elif facts.input_ref == qualified_tag and tag_at_head:
+                want_ref = "refs/tags/%s" % qualified_tag
+                if facts.workflow_ref != want_ref:
+                    errors.append(
+                        "dispatch this workflow from %s, not %s"
+                        % (want_ref, facts.workflow_ref)
+                    )
+                _require_qualified_tag_heads(facts, errors)
+            else:
                 errors.append(
                     "%s ref must be the provenance commit SHA %s"
                     % (facts.channel, facts.head)

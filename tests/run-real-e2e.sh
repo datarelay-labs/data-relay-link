@@ -6,9 +6,12 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${FRP_E2E_PROFILE:-baseline-linux}"
-SERVER_ALIAS="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
+# shellcheck source=lib/require-release-target.sh
+source "$ROOT/tests/lib/require-release-target.sh"
+frp_require_release_target || exit 1
+SERVER_ALIAS="$FRP_E2E_SERVER_ALIAS"
 CLIENT_ALIAS="${FRP_E2E_CLIENT_ALIAS:-}"
-SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
+SERVER_IP="$FRP_E2E_SERVER_IP"
 PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-}"
 SSH_USER="${FRP_E2E_SSH_USER:-aella}"
 TUNNEL_SSH_USER="${FRP_E2E_TUNNEL_SSH_USER:-}"

@@ -6,6 +6,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/prod-qual-common.sh
 source "$ROOT/tests/lib/prod-qual-common.sh"
 
+# shellcheck source=lib/require-release-target.sh
+source "$ROOT/tests/lib/require-release-target.sh"
+frp_require_release_target || exit 1
+
 PASS_NAME="${1:-PASS1}"
 RUN_ID="${FRP_E2E_QUAL_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT="${FRP_E2E_QUAL_OUT:-$ROOT/e2e-reports/prod-qual-${PASS_NAME,,}-$RUN_ID}"
@@ -19,8 +23,7 @@ PROD_QUAL_FAILS=0
 
 FROZEN_HEAD="$(pq_head_sha)"
 export PROD_QUAL_OUT PROD_QUAL_SUMMARY PROD_QUAL_GATES
-export FRP_E2E_PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.113.nip.io}"
-export FRP_E2E_SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
+export FRP_E2E_PUBLIC_HOSTNAME FRP_E2E_SERVER_IP FRP_E2E_SERVER_ALIAS
 export FRP_E2E_SOAK_SECONDS="${FRP_E2E_SOAK_SECONDS:-1800}"
 export FRP_E2E_CHURN_SECONDS="${FRP_E2E_CHURN_SECONDS:-300}"
 # Matrix already performs a fleet server reboot; extra reboot is optional.
@@ -56,6 +59,7 @@ env \
   FRP_E2E_RUN_ID="${PASS_NAME,,}-matrix-$RUN_ID" \
   FRP_E2E_PUBLIC_HOSTNAME="$FRP_E2E_PUBLIC_HOSTNAME" \
   FRP_E2E_SERVER_IP="$FRP_E2E_SERVER_IP" \
+  FRP_E2E_SERVER_ALIAS="$FRP_E2E_SERVER_ALIAS" \
   FRP_E2E_MATRIX_TARGETS="${FRP_E2E_MATRIX_TARGETS:-ubuntu-24.04,amazon-linux-2023,rocky-linux-8.10,macos-arm64,windows-10}" \
   FRP_E2E_MATRIX_FLEET=1 \
   FRP_E2E_MATRIX_IP_FALLBACK=1 \
@@ -84,6 +88,8 @@ else
         FRP_E2E_OUT_DIR="$OUT/macos-retry" \
         FRP_E2E_RUN_ID="${PASS_NAME,,}-macos-retry-$RUN_ID" \
         FRP_E2E_PUBLIC_HOSTNAME="$FRP_E2E_PUBLIC_HOSTNAME" \
+        FRP_E2E_SERVER_IP="$FRP_E2E_SERVER_IP" \
+        FRP_E2E_SERVER_ALIAS="$FRP_E2E_SERVER_ALIAS" \
         bash "$ROOT/tests/run-real-e2e.sh" | tee "$OUT/macos-retry.log"
       set -uo pipefail
       if [[ -f "$OUT/macos-retry/matrix-row.tsv" ]] && awk -F'\t' 'NR==1{exit !($2=="PASS" && $3=="PASS" && $4=="PASS")}' "$OUT/macos-retry/matrix-row.tsv"; then
@@ -130,6 +136,8 @@ for profile in macos-arm64 windows-10; do
     FRP_E2E_OUT_DIR="$OUT/fleet-keep-$profile" \
     FRP_E2E_RUN_ID="${PASS_NAME,,}-fleetkeep-$profile-$RUN_ID" \
     FRP_E2E_PUBLIC_HOSTNAME="$FRP_E2E_PUBLIC_HOSTNAME" \
+    FRP_E2E_SERVER_IP="$FRP_E2E_SERVER_IP" \
+    FRP_E2E_SERVER_ALIAS="$FRP_E2E_SERVER_ALIAS" \
     bash "$ROOT/tests/run-real-e2e.sh" \
     | tee "$OUT/fleet-keep-$profile.log"
 done

@@ -78,10 +78,13 @@ if [[ "$TAG_EXISTS" -eq 1 ]]; then
   else
     fail "TAG_MATCHES_PRODUCT_VERSION"
   fi
-  if [[ "$TAG_HEAD" == "$MANIFEST_HEAD" && "$TAG_HEAD" == "$HEAD" ]]; then
+  # The tag is the qualified provenance commit. source_head remains its
+  # content parent. A post-PASS2 metadata commit must not become the tag.
+  PARENT="$(git rev-parse --verify HEAD^1 2>/dev/null || true)"
+  if [[ "$TAG_HEAD" == "$HEAD" && -n "$PARENT" && "$MANIFEST_HEAD" == "$PARENT" && "$MANIFEST_HEAD" != "$HEAD" ]]; then
     pass "TAG_HEAD_MATCHES_SOURCE_HEAD"
   else
-    fail "TAG_HEAD_MATCHES_SOURCE_HEAD: tag=$TAG_HEAD manifest=$MANIFEST_HEAD HEAD=$HEAD"
+    fail "TAG_HEAD_MATCHES_SOURCE_HEAD: tag=$TAG_HEAD manifest=$MANIFEST_HEAD parent=${PARENT:-NONE} HEAD=$HEAD"
   fi
 else
   pass "TAG_MATCHES_PRODUCT_VERSION (tag absent; deferred)"

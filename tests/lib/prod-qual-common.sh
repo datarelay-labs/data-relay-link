@@ -6,9 +6,9 @@ set -uo pipefail
 PROD_QUAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROD_QUAL_SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 PROD_QUAL_SSH_KEY="${FRP_E2E_SSH_KEY:-$HOME/.ssh/frp_e2e_ed25519}"
-PROD_QUAL_SERVER="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
-PROD_QUAL_SERVER_IP="${FRP_E2E_SERVER_IP:-221.139.249.113}"
-PROD_QUAL_PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-221.139.249.113.nip.io}"
+PROD_QUAL_SERVER="${FRP_E2E_SERVER_ALIAS:-}"
+PROD_QUAL_SERVER_IP="${FRP_E2E_SERVER_IP:-}"
+PROD_QUAL_PUBLIC_HOSTNAME="${FRP_E2E_PUBLIC_HOSTNAME:-}"
 
 # Real E2E fleet aliases (discoverable; stale .112 must never appear).
 PROD_QUAL_HOSTS=(

@@ -105,7 +105,13 @@ def stamp(repo: Path, channel: str, git_ref: str, source_head: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-def run_cli(repo: Path, input_ref: str, workflow_ref: str, workflow_sha: str) -> subprocess.CompletedProcess[str]:
+def run_cli(
+    repo: Path,
+    input_ref: str,
+    workflow_ref: str,
+    workflow_sha: str,
+    qualified_head: str = "",
+) -> subprocess.CompletedProcess[str]:
     env = GIT_ENV.copy()
     env.update(
         {
@@ -114,6 +120,14 @@ def run_cli(repo: Path, input_ref: str, workflow_ref: str, workflow_sha: str) ->
             "WORKFLOW_SHA": workflow_sha,
         }
     )
+    if qualified_head:
+        env.update(
+            {
+                "QUALIFICATION_PASS1_HEAD": qualified_head,
+                "QUALIFICATION_PASS2_HEAD": qualified_head,
+                "QUALIFICATION_FINAL_HEAD": qualified_head,
+            }
+        )
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--root", str(repo)],
         check=False,
@@ -134,6 +148,10 @@ def test_workflow_uses_checker() -> None:
     text = (ROOT / ".github/workflows/release-attest.yml").read_text(encoding="utf-8")
     if "scripts/check-release-attest-binding.py" not in text:
         fail("release-attest.yml does not call the binding checker")
+    if "scripts/project-stable-release.py" not in text:
+        fail("release-attest.yml does not project the stable manifest")
+    if "QUALIFICATION_FINAL_HEAD" not in text:
+        fail("release-attest.yml does not bind qualification evidence to the tag")
     if "source_head '$SOURCE_HEAD' != checked-out HEAD" in text:
         fail("release-attest.yml still rejects a content source_head")
     print("PASS WORKFLOW_CALLS_BINDING_CHECKER")
@@ -220,6 +238,10 @@ def test_stable_and_rc_tags_point_at_provenance_commit() -> None:
         provenance = stamp(repo, "stable", "v1.2.3", content)
         git(repo, "tag", "v1.2.3", provenance)
         proc = run_cli(repo, "v1.2.3", "refs/tags/v1.2.3", provenance)
+        assert_fail(proc, "FINAL_QUALIFIED_HEAD")
+        proc = run_cli(repo, "v1.2.3", "refs/tags/v1.2.3", provenance, content)
+        assert_fail(proc, "FINAL_QUALIFIED_HEAD")
+        proc = run_cli(repo, "v1.2.3", "refs/tags/v1.2.3", provenance, provenance)
         if proc.returncode != 0:
             fail(proc.stderr)
         git(repo, "tag", "-d", "v1.2.3")

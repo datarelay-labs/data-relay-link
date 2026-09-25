@@ -44,14 +44,64 @@ class ReleaseManifestSchemaTests(unittest.TestCase):
         self.assertEqual(errs, [])
 
     def test_positive_stable(self):
+        qualified = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         data = base_manifest(
             channel="stable",
             git_ref="v2.4.0",
             source_head="0123456789abcdef0123456789abcdef01234567",
+            qualification={
+                "status": "PASS",
+                "pass1_head": qualified,
+                "pass2_head": qualified,
+                "final_qualified_head": qualified,
+            },
+        )
+        errs = validate_manifest_dict(data)
+        self.assertEqual(errs, [], errs)
+
+    def test_negative_stable_pending_placeholder(self):
+        data = base_manifest(
+            channel="stable",
+            git_ref="v2.4.0",
             qualification={"real_e2e": "pending"},
         )
         errs = validate_manifest_dict(data)
-        self.assertEqual(errs, [])
+        self.assertTrue(any("PASS" in e or "qualification" in e for e in errs), errs)
+        try:
+            import jsonschema  # type: ignore
+        except ImportError:
+            return
+        schema = json.loads((ROOT / "RELEASE_MANIFEST.schema.json").read_text(encoding="utf-8"))
+        qualified = "a" * 40
+        pending = base_manifest(
+            channel="stable",
+            git_ref="v2.4.0",
+            source_head="0123456789abcdef0123456789abcdef01234567",
+            qualification={
+                "status": "PASS",
+                "real_e2e": "pending",
+                "pass1_head": qualified,
+                "pass2_head": qualified,
+                "final_qualified_head": qualified,
+            },
+        )
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(instance=pending, schema=schema)
+
+    def test_negative_stable_pass_heads_differ(self):
+        errs = validate_manifest_dict(
+            base_manifest(
+                channel="stable",
+                git_ref="v2.4.0",
+                qualification={
+                    "status": "PASS",
+                    "pass1_head": "a" * 40,
+                    "pass2_head": "b" * 40,
+                    "final_qualified_head": "a" * 40,
+                },
+            )
+        )
+        self.assertTrue(any("must be equal" in e for e in errs), errs)
 
     def test_negative_invalid_semver(self):
         errs = validate_manifest_dict(base_manifest(project_version="2.4"))

@@ -104,6 +104,30 @@
           "git_ref": {
             "type": "string",
             "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "qualification": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["status", "pass1_head", "pass2_head", "final_qualified_head"],
+            "not": {
+              "properties": { "real_e2e": { "const": "pending" } },
+              "required": ["real_e2e"]
+            },
+            "properties": {
+              "status": { "const": "PASS" },
+              "pass1_head": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{40}$"
+              },
+              "pass2_head": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{40}$"
+              },
+              "final_qualified_head": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{40}$"
+              }
+            }
           }
         }
       }

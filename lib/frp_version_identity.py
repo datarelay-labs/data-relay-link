@@ -224,6 +224,29 @@ def validate_manifest_dict(
             errs.append("stable manifest requires source_head")
         if git_ref == "main":
             errs.append("stable release must not use mutable main")
+        qual = data.get("qualification")
+        if not isinstance(qual, Mapping) or not qual:
+            errs.append("stable manifest requires qualification metadata")
+        else:
+            status = str(qual.get("status") or "")
+            if status != "PASS":
+                errs.append("stable qualification status must be PASS")
+            heads = [
+                str(qual.get("pass1_head") or ""),
+                str(qual.get("pass2_head") or ""),
+                str(qual.get("final_qualified_head") or ""),
+            ]
+            if not all(is_full_sha(item) for item in heads):
+                errs.append(
+                    "stable qualification requires pass1_head, pass2_head, "
+                    "and final_qualified_head 40-character SHAs"
+                )
+            elif len(set(item.lower() for item in heads)) != 1:
+                errs.append(
+                    "PASS1_HEAD, PASS2_HEAD, and FINAL_QUALIFIED_HEAD must be equal"
+                )
+            if str(qual.get("real_e2e") or "").lower() == "pending":
+                errs.append("stable qualification must not use real_e2e=pending")
     elif channel == "development":
         if not is_full_sha(git_ref) and git_ref != "main":
             errs.append("development git_ref must be a 40-char SHA (or explicit main tip)")
