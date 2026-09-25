@@ -30,7 +30,7 @@ SCHEMA_VERSION = 1
 # Filenames that must never be copied into a support bundle.
 FORBIDDEN_NAME_RE = re.compile(
     r"(^|[/\\])("
-    r"ca\.key|server\.key|client-identity\.key|"
+    r"ca\.key|server\.key|client-identity\.key|bt1-wrap\.key|"
     r"server_token|.*\.pem|"
     r".*private.*key.*|"
     r"bootstrap.*ticket.*|"

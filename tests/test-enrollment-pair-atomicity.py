@@ -119,6 +119,7 @@ cfg = json.loads((root / 'etc/drlink/config.json').read_text(encoding='utf-8'))
 cfg['enrollments_dir'] = str(root / 'var/lib/drlink/enrollments')
 cfg['bootstrap_dir'] = str(root / 'var/lib/drlink/bootstrap')
 cfg['registry_file'] = str(root / 'var/lib/drlink/registry.json')
+cfg['token_file'] = str(root / 'etc/frp/server_token')
 ticket, enroll, record = alloc.issue_bootstrap_ticket(
     cfg['enrollments_dir'],
     cfg['bootstrap_dir'],
@@ -187,6 +188,8 @@ def archive_members(archive: Path, rel: str) -> dict[str, dict]:
         for member in tar.getmembers():
             if not member.isfile() or not member.name.startswith(prefix):
                 continue
+            if not member.name.endswith(".json"):
+                continue
             handle = tar.extractfile(member)
             assert handle is not None, member.name
             raw = handle.read().decode("utf-8")
@@ -244,6 +247,13 @@ def test_backup_never_sees_half_pair(tmp: Path) -> None:
             % (archived_enroll, archived_ticket)
         )
     print("F28_BACKUP_COHERENT_PAIR_GENERATION=PASS")
+    if archived_ticket:
+        alloc = load("frp_port_allocator_pair", "server/frp-port-allocator.py")
+        token = (root / "etc/frp/server_token").read_text(encoding="utf-8").strip()
+        recovered = alloc.unwrap_bootstrap_ticket(tickets[ticket_name].get("bt1_wrapped"), token)
+        if not alloc.bootstrap_wrap_matches_record(recovered, tickets[ticket_name]):
+            raise AssertionError("archived ticket did not recover with the archived server token")
+        print("F28_ARCHIVED_WRAP_RECOVERS=PASS")
 
     # Whatever the archive captured must be coherent to the lifecycle layer too.
     with tempfile.TemporaryDirectory() as extract_name:

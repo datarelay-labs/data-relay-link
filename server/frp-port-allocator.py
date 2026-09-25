@@ -628,48 +628,78 @@ def _b64url_decode(text):
     return base64.urlsafe_b64decode(raw + pad)
 
 
-def _bootstrap_wrap_key(secret):
-    """Key for recoverable bt1 ciphertext. Derived from the server token."""
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+BOOTSTRAP_WRAP_VERSION = 2
+BOOTSTRAP_WRAP_AAD = b'bt1-wrap-v2'
+BOOTSTRAP_WRAP_KEY_NAME = 'bt1-wrap.key'
+
+
+def _derive_bootstrap_wrap_keys(secret):
+    """AES and HMAC keys from the wrap secret. Stdlib only; OpenSSL does AES."""
     material = str(secret or '').encode('utf-8')
     if not material:
         raise ValueError('bootstrap wrap secret is unavailable')
-    return HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=b'drlink-bootstrap-bt1-v1',
-        info=b'bt1-wrap',
-    ).derive(material)
+    prk = hmac.new(b'drlink-bootstrap-bt1-v2', material, hashlib.sha256).digest()
+    enc_key = hmac.new(prk, b'aes\x01', hashlib.sha256).digest()
+    mac_key = hmac.new(prk, b'mac\x01', hashlib.sha256).digest()
+    return enc_key, mac_key
+
+
+def _openssl_aes256_cbc(data, key, iv, encrypt):
+    """AES-256-CBC through the required openssl CLI. Compatible with OpenSSL 1.0.2."""
+    if len(key) != 32 or len(iv) != 16:
+        raise ValueError('invalid AES key material')
+    args = ['openssl', 'enc', '-aes-256-cbc', '-K', key.hex(), '-iv', iv.hex()]
+    if not encrypt:
+        args.append('-d')
+    proc = subprocess.run(
+        args,
+        input=data,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0 or proc.stdout is None:
+        raise RuntimeError('openssl aes-256-cbc failed')
+    return proc.stdout
 
 
 def wrap_bootstrap_ticket(raw_ticket, secret):
-    """Encrypt a raw bt1 credential. The JSON value is not the plaintext ticket."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    key = _bootstrap_wrap_key(secret)
-    nonce = secrets.token_bytes(12)
-    ciphertext = AESGCM(key).encrypt(
-        nonce, str(raw_ticket).encode('utf-8'), b'bt1-wrap-v1'
-    )
+    """Encrypt a raw bt1 credential. The JSON value is not the plaintext ticket.
+
+    Authenticity is HMAC-SHA256 over the IV and ciphertext. AES itself is
+    OpenSSL, which every supported server already requires.
+    """
+    enc_key, mac_key = _derive_bootstrap_wrap_keys(secret)
+    iv = secrets.token_bytes(16)
+    ciphertext = _openssl_aes256_cbc(str(raw_ticket).encode('utf-8'), enc_key, iv, True)
+    mac = hmac.new(mac_key, BOOTSTRAP_WRAP_AAD + iv + ciphertext, hashlib.sha256).hexdigest()
     return {
-        'v': 1,
-        'nonce': _b64url_encode(nonce),
+        'v': BOOTSTRAP_WRAP_VERSION,
+        'iv': _b64url_encode(iv),
         'ct': _b64url_encode(ciphertext),
+        'mac': mac,
     }
 
 
 def unwrap_bootstrap_ticket(blob, secret):
     """Return the raw bt1 credential, or None when the wrap is unusable."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    if not isinstance(blob, dict) or int(blob.get('v') or 0) != 1:
+    if not isinstance(blob, dict):
         return None
     try:
-        nonce = _b64url_decode(blob.get('nonce'))
-        ciphertext = _b64url_decode(blob.get('ct'))
-        if len(nonce) != 12 or not ciphertext:
+        if int(blob.get('v') or 0) != BOOTSTRAP_WRAP_VERSION:
             return None
-        key = _bootstrap_wrap_key(secret)
-        return AESGCM(key).decrypt(nonce, ciphertext, b'bt1-wrap-v1').decode('utf-8')
+        iv = _b64url_decode(blob.get('iv'))
+        ciphertext = _b64url_decode(blob.get('ct'))
+        mac = str(blob.get('mac') or '').strip().lower()
+        if len(iv) != 16 or not ciphertext or len(mac) != 64 or not HEX_RE.fullmatch(mac):
+            return None
+        enc_key, mac_key = _derive_bootstrap_wrap_keys(secret)
+        expected = hmac.new(
+            mac_key, BOOTSTRAP_WRAP_AAD + iv + ciphertext, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, mac):
+            return None
+        return _openssl_aes256_cbc(ciphertext, enc_key, iv, False).decode('utf-8')
     except Exception:
         return None
 
@@ -710,7 +740,7 @@ def bootstrap_wrap_secret(cfg=None, bootstrap_dir=None, create=False):
         bootstrap_dir = cfg.get('bootstrap_dir')
     if not bootstrap_dir:
         return ''
-    key_path = Path(bootstrap_dir) / '.bt1-wrap-key'
+    key_path = Path(bootstrap_dir) / BOOTSTRAP_WRAP_KEY_NAME
     secret = _read_text_secret(key_path)
     if secret or not create:
         return secret

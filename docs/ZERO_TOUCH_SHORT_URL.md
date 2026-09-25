@@ -11,7 +11,9 @@ The value in `/i/<22-char-token>` is a short-URL lookup handle only. Issuance
 still creates the internal `bt1.<id>.<secret>` credential (256-bit secret,
 hashed at rest). `GET /i/<handle>` serves a stage-1 script that carries that
 internal `bt1`. Direct `/bootstrap/redeem` accepts `bt1` only. The raw `bt1` is
-not stored in plaintext; the server keeps an encrypted recoverable copy. Existing
+not stored in plaintext. The server keeps an OpenSSL AES-256-CBC copy
+authenticated with HMAC-SHA256, recovered from the server token or, when no
+token is configured, from mode-0600 `bootstrap/bt1-wrap.key`. Existing
 `bt1` links remain accepted until they expire.
 The command omits shell quotes only when the hostname and credential are
 limited to shell-safe URL characters. `-fsSL`, HTTPS, `/i/`, and `sudo bash`

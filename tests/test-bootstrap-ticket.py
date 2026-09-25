@@ -160,8 +160,8 @@ def test_issue_hashed_and_entropy():
             fail('short handle hash mismatch')
             return
         wrapped = stored.get('bt1_wrapped')
-        if not isinstance(wrapped, dict) or wrapped.get('v') != 1:
-            fail('missing bt1 wrap', wrapped)
+        if not isinstance(wrapped, dict) or wrapped.get('v') != 2 or len(str(wrapped.get('mac') or '')) != 64:
+            fail('missing authenticated bt1 wrap', wrapped)
             return
         recovered = MOD.unwrap_bootstrap_ticket(wrapped, env.token.read_text().strip())
         if recovered != ticket or not MOD.bootstrap_wrap_matches_record(recovered, stored):
@@ -1167,8 +1167,66 @@ def test_handle_index_removed_with_retention():
         env.cleanup()
 
 
+def test_wrap_without_optional_cryptography():
+    """Issue and recover bt1 when the optional ACME cryptography package is absent."""
+    import builtins
+    real_import = builtins.__import__
+
+    def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+        if str(name).split('.', 1)[0] == 'cryptography':
+            raise ImportError('simulated optional cryptography unavailable')
+        return real_import(name, globals, locals, fromlist, level)
+
+    env = Env()
+    try:
+        builtins.__import__ = guarded
+        ticket, _enroll, _record = env.issue()
+        stored = json.loads(env.allocator.bootstrap_path(record_id(ticket)).read_text())
+        recovered = MOD.unwrap_bootstrap_ticket(
+            stored.get('bt1_wrapped'), env.token.read_text().strip()
+        )
+        if recovered != ticket:
+            fail('openssl wrap without cryptography', recovered)
+            return
+        key_dir = env.root / 'notoken-bootstrap'
+        key_dir.mkdir()
+        secret = MOD.bootstrap_wrap_secret({}, key_dir, create=True)
+        key_path = key_dir / MOD.BOOTSTRAP_WRAP_KEY_NAME
+        if (
+            not secret
+            or not key_path.is_file()
+            or key_path.name.startswith('.')
+            or key_path not in key_dir.rglob('*')
+        ):
+            fail('wrap key missing from backup glob', key_path)
+            return
+        if oct(key_path.stat().st_mode & 0o777) != '0o600':
+            fail('wrap key mode', oct(key_path.stat().st_mode & 0o777))
+            return
+        blob = MOD.wrap_bootstrap_ticket(ticket, secret)
+        if MOD.unwrap_bootstrap_ticket(blob, secret) != ticket:
+            fail('dedicated wrap key roundtrip')
+            return
+        if MOD.unwrap_bootstrap_ticket(blob, 'wrong-secret') is not None:
+            fail('wrong wrap secret accepted')
+            return
+        bundle_spec = importlib.util.spec_from_file_location(
+            'frp_support_bundle', ROOT / 'lib' / 'frp_support_bundle.py'
+        )
+        bundle = importlib.util.module_from_spec(bundle_spec)
+        bundle_spec.loader.exec_module(bundle)
+        if not bundle.is_forbidden_source(key_path):
+            fail('support bundle would copy wrap key', key_path.name)
+            return
+        pass_('OPENSSL_WRAP_WITHOUT_CRYPTOGRAPHY')
+    finally:
+        builtins.__import__ = real_import
+        env.cleanup()
+
+
 def main():
     test_issue_hashed_and_entropy()
+    test_wrap_without_optional_cryptography()
     test_legacy_bt1_still_redeems()
     test_compact_collision_does_not_overwrite()
     test_get_does_not_consume_compact()
