@@ -592,6 +592,10 @@ Execute each scenario with the maximum suitable host/resource count available at
 - C-021: staged failure cascade under traffic: independently fail target -> Agent -> network path -> Server, recover each layer, and measure unrelated-path continuity and final state convergence.
 - C-022: enrollment churn under service load: issue/redeem/revoke/expire tickets and add/remove Agents while unrelated Remote Access/Internet Access traffic remains active.
 - C-023: concurrent direct-CLI and AI-assisted administration on independent resources, proving both paths converge through the same product semantics and do not lose updates or bypass revision protection.
+- C-024: live Object/Group membership mutation: add/remove Network Group, Service Group, and Permission Group members while dependent traffic/calls continue; verify only newly affected connections/calls change according to policy and references remain consistent.
+- C-025: live Service Object / Remote Service edit: change destination/service parameters permitted by contract while existing traffic and unrelated endpoints remain active; verify endpoint continuity for same-pool edits and deterministic rejection for invalid cross-pool edits.
+- C-026: AI credential lifecycle under load: rotate/revoke/expire a credential while concurrent authorized AI/MCP calls are running; verify subsequent calls re-evaluate authentication/authorization and no cached authorization bypass occurs.
+- C-027: diagnostics/audit/support pressure during mutation: generate high event/audit volume while policies and Agents churn, then run diagnostics/audit/support-bundle and verify responsiveness, ordering/attribution, bounded output, and secret safety.
 
 ### 10.3 Parallelism rule
 
@@ -703,6 +707,9 @@ Mandatory performance scenarios:
 - P-026: 30-minute mixed-role operational window combining User traffic, Operator lifecycle work, Administrator policy/Bundle/diagnostic work, and at least one controlled failure/recovery event.
 - P-027: post-churn recovery and leak check: after load and lifecycle churn stop, verify CPU/RSS/FD/disk/log growth stabilizes, endpoints are not leaked, no stale Agents/services remain falsely healthy, and normal traffic resumes.
 - P-028: security-under-load window: continuously attempt representative denied Remote Access, Internet Access, and AI/MCP operations while allowed traffic and configuration churn are active; unauthorized success count must remain zero.
+- P-029: Object/Group mutation under load: measure policy-evaluation latency/error spikes while Network/Service/Permission memberships change and confirm no stale membership authorization.
+- P-030: credential rotation/revocation under AI/MCP load: measure time to effective denial, in-flight behavior, authentication latency, and unauthorized success count.
+- P-031: endpoint continuity during allowed same-pool service edits and deterministic failure/recovery for rejected cross-pool edits while traffic remains active.
 
 Performance traffic must use real public endpoints and real application or load clients. A TCP connect-only probe is insufficient for throughput qualification.
 
