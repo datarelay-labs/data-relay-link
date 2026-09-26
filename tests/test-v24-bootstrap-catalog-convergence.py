@@ -98,7 +98,43 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         self.assertEqual(rc, 0, buf.getvalue())
         return buf.getvalue()
 
+    def _fingerprint(self, root):
+        plane = ControlPlane(root)
+        try:
+            revision = plane.current_revision()
+            rows = [
+                tuple(row)
+                for row in plane.conn.execute(
+                    "SELECT name, destination, service_object, enabled, status, endpoint_host, "
+                    "endpoint_port, pending_allocation, delete_pending, reason "
+                    "FROM agent_remote_services ORDER BY name"
+                )
+            ]
+            return revision, rows
+        finally:
+            plane.close()
+
+    def _read_only_shows(self, root):
+        before = self._fingerprint(root)
+        status = self._show(root, "show", "status")
+        listed = self._show(root, "show", "remote-services")
+        agent_view = self._show(root, "show", "agent")
+        self.assertEqual(self._fingerprint(root), before)
+        self.assertIn("Role: Agent Host", status)
+        self.assertIn("Role: Agent Host", agent_view)
+        self.assertNotIn("Unknown show resource", agent_view)
+        return status, listed, agent_view
+
     def test_bootstrap_ssh_catalog_and_server_liveness(self):
+        cli_src = (ROOT / "lib" / "drlink_v24_cli.py").read_text(encoding="utf-8")
+        plane_src = (ROOT / "lib" / "drlink_control_plane.py").read_text(encoding="utf-8")
+        self.assertNotIn("project_enrolled_services_into_agent_catalog", cli_src)
+        self.assertNotIn("project_enrolled_services_into_agent_catalog", plane_src)
+
+        status, listed, _agent_view = self._read_only_shows(self.agent_tmp)
+        self.assertIn("Remote Services : 0", status)
+        self.assertNotIn("ssh", listed)
+
         results = v24.activate_enrolled_services_as_remote_services(root=self.agent_tmp)
         self.assertEqual(len(results), 1)
         view = results[0]["view"]
@@ -106,25 +142,32 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         self.assertEqual(view["endpoint_port"], 6000)
         self.assertEqual(view["status"], "HEALTHY")
 
+        projected = self._fingerprint(self.agent_tmp)
+        self.assertEqual(projected[1][0][0], "ssh")
+        self.assertEqual(int(projected[1][0][6]), 6000)
+        self.assertEqual(projected[1][0][4], "HEALTHY")
+
+        status, listed, _agent_view = self._read_only_shows(self.agent_tmp)
+        self.assertEqual(self._fingerprint(self.agent_tmp), projected)
+        self.assertIn("Remote Services : 1", status)
+        self.assertIn("ssh", listed)
+        self.assertIn(":6000", listed)
+        self.assertIn("HEALTHY", listed)
+
         agent = ControlPlane(self.agent_tmp)
+        agent.conn.execute("DELETE FROM agent_remote_services")
+        agent.conn.commit()
+        self.assertEqual(self._fingerprint(self.agent_tmp)[1], [])
+        result = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        self.assertEqual(result.get("status"), "OFFLINE")
+        self.assertEqual(result.get("projected"), 1)
         row = agent.conn.execute(
-            "SELECT name, endpoint_port, status, enabled FROM agent_remote_services"
+            "SELECT name, endpoint_port, status FROM agent_remote_services"
         ).fetchone()
         self.assertEqual(row["name"], "ssh")
         self.assertEqual(int(row["endpoint_port"]), 6000)
         self.assertEqual(row["status"], "HEALTHY")
         agent.close()
-
-        status = self._show(self.agent_tmp, "show", "status")
-        self.assertIn("Role: Agent Host", status)
-        self.assertIn("Remote Services : 1", status)
-        listed = self._show(self.agent_tmp, "show", "remote-services")
-        self.assertIn("ssh", listed)
-        self.assertIn(":6000", listed)
-        self.assertIn("HEALTHY", listed)
-        agent_view = self._show(self.agent_tmp, "show", "agent")
-        self.assertIn("Role: Agent Host", agent_view)
-        self.assertNotIn("Unknown show resource", agent_view)
 
         server = ControlPlane(self.server_tmp)
         v24.ensure_v2_schema(server.conn)

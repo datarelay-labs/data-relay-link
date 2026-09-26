@@ -5442,8 +5442,19 @@ def format_synchronize_result(result: dict) -> str:
 
 def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -> dict:
     """Reconnect synchronization: allocate pending endpoints, apply deletes, revalidate deps."""
+    # Enrollment projection is a lifecycle write. show/status must not do it.
+    projected = project_enrolled_services_into_agent_catalog(plane_db, root=root)
+    enrolled_names = {
+        str((item.get("view") or {}).get("name") or "").strip().lower()
+        for item in projected
+        if isinstance(item, dict)
+    }
     if not detect_server_reachable(plane_db, root):
-        return {"status": "OFFLINE", "updated": 0}
+        return {
+            "status": "OFFLINE",
+            "updated": len(projected),
+            "projected": len(projected),
+        }
     import drlink_mgmt_sync as mgmt
 
     # Always refresh catalog when a live management path exists.
@@ -5489,6 +5500,11 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
         for row in list(
             plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
         ):
+            # Bootstrap rows keep the enrolled name, port, and probe status.
+            # v2.4 dependency revalidation must not replace that identity.
+            if str(row["name"] or "").strip().lower() in enrolled_names:
+                updated += 1
+                continue
             svc_name = row["service_object"]
             dest_reason = _destination_dependency_status(
                 plane_db,

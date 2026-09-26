@@ -506,10 +506,6 @@ def handle_show(plane: ControlPlane, rest: list[str]) -> Optional[int]:
         return _show_ai_log(plane, rest[1:])
     if res in ("remote-services",):
         _require_agent(plane)
-        try:
-            v24.project_enrolled_services_into_agent_catalog(plane, root=plane.root)
-        except Exception:
-            pass
         sys.stdout.write("%-18s %-14s %-10s %-24s %s\n" % ("NAME", "DESTINATION", "SERVICE", "ENDPOINT", "STATUS"))
         for row in plane.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0 ORDER BY name"):
             endpoint = (
