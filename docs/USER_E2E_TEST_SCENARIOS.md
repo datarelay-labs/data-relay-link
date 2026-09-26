@@ -38,7 +38,63 @@ A targeted E2E request may run a subset only when the user explicitly names the 
 
 A release-qualification request uses this full suite plus the exact-HEAD double-pass rule in docs/RELEASE_VALIDATION.md.
 
-Historical PASS results, synthetic tests, unit tests, Docker-only results, or results from another Git HEAD do not replace a requested real User E2E run.
+### 1.1 User E2E execution ownership
+
+FULL_USER_E2E is executed and independently evaluated by **ChatGPT**, not by Cursor.
+
+This is a hard ownership rule:
+
+~~~text
+USER_E2E_EXECUTOR=ChatGPT
+USER_E2E_FINAL_AUDITOR=ChatGPT
+CURSOR_MAY_EXECUTE_FULL_USER_E2E=NO
+CURSOR_MAY_DECLARE_USER_E2E_PASS=NO
+~~~
+
+Cursor may be used only after ChatGPT identifies an implementation defect or missing product behavior and the engineering workflow requires code changes.
+
+The required loop is:
+
+~~~text
+ChatGPT
+→ pin exact candidate HEAD/build
+→ execute FULL_USER_E2E
+→ collect evidence
+→ identify/classify failures
+
+If implementation change is required:
+  ChatGPT
+  → create/update the engineering Work Packet
+  → hand the product fix to Cursor
+
+Cursor
+→ implement the requested fix
+→ run implementation-level deterministic tests
+→ report exact branch/HEAD/evidence
+
+ChatGPT
+→ independently verify the Cursor result
+→ rerun every affected User E2E scenario
+→ rerun any invalidated broader/full pass required by this document
+→ make the final E2E PASS/PARTIAL/FAIL determination
+~~~
+
+Cursor-produced test output may be supporting evidence for implementation verification, but it does **not** substitute for ChatGPT's requested User E2E execution.
+
+A Cursor session must never be treated as the executor of an unqualified request such as:
+
+~~~text
+사용자 E2E
+사용자 E2E 테스트
+Full User E2E
+User E2E
+전체 E2E
+전수 사용자 테스트
+~~~
+
+If ChatGPT cannot execute a mandatory scenario because the real environment is unavailable, the result is `BLOCKED_ENVIRONMENT`; the scenario must not be delegated to Cursor merely to obtain PASS.
+
+Historical PASS results, synthetic tests, unit tests, Docker-only results, Cursor-run results, or results from another Git HEAD do not replace a requested real User E2E run by ChatGPT.
 
 If product code, dependencies, generated runtime artifacts, or the tested build changes during a full pass, record the new HEAD/build identity and invalidate the affected pass. For final release qualification, the double-pass counter resets as defined by the release validation policy.
 
@@ -2660,6 +2716,9 @@ A full run must end with a summary at least equivalent to:
 
 ~~~text
 PHASE=FULL_USER_E2E
+EXECUTOR=ChatGPT
+FINAL_AUDITOR=ChatGPT
+CURSOR_EXECUTED_USER_E2E=NO
 FINAL_STATUS=PASS|PARTIAL|FAIL
 
 SOURCE_HEAD=
@@ -2722,6 +2781,7 @@ The invariant for future User E2E requests is:
 
 ~~~text
 USER_E2E_REQUEST
+-> ChatGPT is the executor and final auditor; do not delegate User E2E execution to Cursor
 -> read exact repository state
 -> pin exact candidate HEAD/build
 -> execute this document's FULL_USER_E2E profile unless explicitly scoped
