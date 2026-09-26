@@ -146,6 +146,44 @@ class DoctorPresentationTests(unittest.TestCase):
         info = doctor.detect_role(paths)
         self.assertEqual(info["label"], "Agent Host")
 
+    def test_stale_server_markers_do_not_override_agent_role(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-doc-stale-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        root = Path(tmp)
+        (root / "etc/frp").mkdir(parents=True)
+        (root / "etc/frp/client-state.json").write_text(
+            '{"schema_version":1,"services":{}}\n', encoding="utf-8"
+        )
+        (root / "usr/local/bin").mkdir(parents=True)
+        (root / "usr/local/bin/frps").write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "etc/systemd/system").mkdir(parents=True)
+        (root / "etc/systemd/system/drlink-server.service").write_text("[Unit]\n", encoding="utf-8")
+        (root / "etc/systemd/system/drlink-allocator.service").write_text("[Unit]\n", encoding="utf-8")
+        (root / "etc/systemd/system/drlink-client.service").write_text("[Unit]\n", encoding="utf-8")
+        (root / "usr/local/bin/frpc").write_text("#!/bin/sh\n", encoding="utf-8")
+        paths = doctor.Paths(str(root))
+        info = doctor.detect_role(paths)
+        self.assertEqual(info["role"], "client")
+        self.assertEqual(info["label"], "Agent Host")
+        self.assertNotIn(info["role"], ("dual", "server", "partial_server"))
+
+        (root / "etc/drlink").mkdir(parents=True)
+        (root / "etc/drlink/config.json").write_text('{"role":"server"}\n', encoding="utf-8")
+        (root / "etc/frp/frps.toml").write_text("bindPort = 7000\n", encoding="utf-8")
+        dual = doctor.detect_role(doctor.Paths(str(root)))
+        self.assertEqual(dual["role"], "dual")
+        self.assertEqual(dual["label"], "DRLink Server + Agent Host")
+
+        import frp_support_bundle as support
+
+        (root / "etc/drlink/config.json").unlink()
+        builder = support.BundleBuilder(root)
+        stage = builder.collect()
+        self.addCleanup(shutil.rmtree, stage, ignore_errors=True)
+        meta = json.loads((stage / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["role"], "client")
+        self.assertEqual(meta["role_label"], "Agent Host")
+
     def test_development_display_identity(self):
         d = ident.derive_display_identity(
             project_version="2.4.0",

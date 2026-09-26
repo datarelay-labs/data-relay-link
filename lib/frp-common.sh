@@ -1840,6 +1840,25 @@ frp_server_python_package_for_module() {
   esac
 }
 
+# ConfigurationBundle YAML. apt-family ships PyYAML as python3-yaml.
+# Verified Rocky/EL8 baseos ships it as python3-pyyaml. EL8 still selects
+# python39 for the interpreter; this mapping does not replace that.
+frp_python_package_for_module() {
+  local module="$1" pm="$2"
+  case "$module" in
+    yaml)
+      if [[ "$pm" == apt ]]; then
+        printf 'python3-yaml'
+      else
+        printf 'python3-pyyaml'
+      fi
+      ;;
+    *)
+      frp_server_python_package_for_module "$module" "$pm"
+      ;;
+  esac
+}
+
 frp_python_module_importable() {
   local module="$1"
   frp_invoke python3 -c "import ${module}" >/dev/null 2>&1
@@ -1848,18 +1867,19 @@ frp_python_module_importable() {
 frp_collect_missing_python_packages() {
   local role="${FRP_DEPENDENCY_ROLE:-client}" module pkg existing existing_pkg
   MISSING_PYTHON_PACKAGES=()
-  if [[ "$role" != server ]]; then
-    return 0
-  fi
   if [[ -z "${PACKAGE_MANAGER:-}" ]]; then
     frp_detect_package_manager || true
   fi
   local pm="${PACKAGE_MANAGER:-apt}"
-  for module in acme josepy cryptography; do
+  local modules=(yaml)
+  if [[ "$role" == server ]]; then
+    modules+=(acme josepy cryptography)
+  fi
+  for module in "${modules[@]}"; do
     if frp_python_module_importable "$module"; then
       continue
     fi
-    pkg="$(frp_server_python_package_for_module "$module" "$pm")" || return 1
+    pkg="$(frp_python_package_for_module "$module" "$pm")" || return 1
     existing=0
     for existing_pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
       if [[ "$existing_pkg" == "$pkg" ]]; then
@@ -1878,6 +1898,34 @@ frp_is_optional_acme_python_package() {
     python3-acme|python3-cryptography) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+frp_required_python_package_missing() {
+  local pkg
+  for pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
+    [[ -n "$pkg" ]] || continue
+    if ! frp_is_optional_acme_python_package "$pkg"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+frp_print_missing_required_python_error() {
+  local pkg
+  echo "ERROR: required Python packages are missing:" >&2
+  for pkg in "${MISSING_PYTHON_PACKAGES[@]:-}"; do
+    [[ -n "$pkg" ]] || continue
+    if frp_is_optional_acme_python_package "$pkg"; then
+      continue
+    fi
+    echo "  ${pkg}" >&2
+  done
+  echo >&2
+  echo "ConfigurationBundle requires PyYAML." >&2
+  echo "apt-family package: python3-yaml" >&2
+  echo "Rocky/EL8 package: python3-pyyaml" >&2
+  echo "Install the package manually and run the installer again." >&2
 }
 
 frp_print_missing_python_packages_error() {
@@ -2015,6 +2063,10 @@ ensure_dependencies() {
       frp_print_missing_tools_error
       return 1
     fi
+    if frp_required_python_package_missing; then
+      frp_print_missing_required_python_error
+      return 1
+    fi
     if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
       # AUTO_ACME runtime is optional at install time; configure fails closed later.
       frp_print_optional_acme_python_warning
@@ -2030,7 +2082,12 @@ ensure_dependencies() {
   fi
   # Required OS tools first so a missing EPEL ACME package cannot abort install.
   if ((${#REQUIRED_PACKAGES[@]} > 0)); then
-    frp_install_package_list "$PACKAGE_MANAGER" "${REQUIRED_PACKAGES[@]}" || return 1
+    if ! frp_install_package_list "$PACKAGE_MANAGER" "${REQUIRED_PACKAGES[@]}"; then
+      if frp_required_python_package_missing; then
+        frp_print_missing_required_python_error
+      fi
+      return 1
+    fi
   fi
   if ((${#OPTIONAL_ACME_PACKAGES[@]} > 0)); then
     # Best-effort: EL needs EPEL; Amazon Linux 2 may have no python3-acme at all.
@@ -2051,6 +2108,10 @@ ensure_dependencies() {
       [[ -n "$cmd" ]] || continue
       echo "  ${cmd}" >&2
     done
+    return 1
+  fi
+  if frp_required_python_package_missing; then
+    frp_print_missing_required_python_error
     return 1
   fi
   if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then

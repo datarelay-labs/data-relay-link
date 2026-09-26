@@ -538,6 +538,26 @@ run_json "$BOTH" "$WORKDIR/both.json" || rc=$?
 [[ "$(check_status "$WORKDIR/both.json" client_state)" == "PASS" ]] || fail "dual client state"
 pass "DUAL_ROLE"
 
+# Authoritative Agent state must beat stale server binaries and units.
+STALE="$WORKDIR/stale-agent"
+cp -a "$CL" "$STALE"
+mkdir -p "$STALE/usr/local/bin" "$STALE/etc/systemd/system"
+write_dummy_bin "$STALE/usr/local/bin/frps" frps
+printf '%s\n' '[Unit]' >"$STALE/etc/systemd/system/drlink-server.service"
+printf '%s\n' '[Unit]' >"$STALE/etc/systemd/system/drlink-allocator.service"
+test -f "$STALE/etc/frp/client-state.json"
+test ! -f "$STALE/etc/drlink/config.json"
+rc=0
+run_json "$STALE" "$WORKDIR/stale-agent.json" || rc=$?
+[[ "$rc" -eq 0 ]] || { cat "$WORKDIR/stale-agent.json"; fail "stale-agent doctor exit $rc"; }
+[[ "$(json_get "$WORKDIR/stale-agent.json" role)" == "client" ]] || fail "stale-agent role $(json_get "$WORKDIR/stale-agent.json" role)"
+[[ "$(json_get "$WORKDIR/stale-agent.json" role_label)" == "Agent Host" ]] || fail "stale-agent label"
+if grep -q 're-run the server installer' "$WORKDIR/stale-agent.json"; then
+  fail "stale-agent doctor recommended a server reinstall"
+fi
+[[ "$(check_status "$WORKDIR/stale-agent.json" server_token)" == "" ]] || fail "stale-agent ran server token check"
+pass "STALE_SERVER_MARKERS_STAY_AGENT"
+
 # ---------------------------------------------------------------------------
 # Partial client
 # ---------------------------------------------------------------------------

@@ -493,6 +493,23 @@ def detect_role(paths):
     client_hits = [p for p in client_files if paths.exists(p)]
     has_server_config = paths.is_file('/etc/drlink/config.json')
     has_client_state = paths.is_file('/etc/frp/client-state.json')
+    # config.json and client-state.json are the authoritative role evidence.
+    # Leftover frps/server units on an Agent, or leftover frpc bits on a
+    # Server, must not create a false dual/server classification.
+    stale_server_markers = {
+        '/usr/local/bin/frps',
+        '/etc/systemd/system/drlink-server.service',
+        '/etc/systemd/system/drlink-allocator.service',
+    }
+    stale_client_markers = {
+        '/usr/local/bin/frpc',
+        '/usr/local/bin/frp-client',
+        '/etc/systemd/system/drlink-client.service',
+    }
+    if has_client_state and not has_server_config:
+        server_hits = [p for p in server_hits if p not in stale_server_markers]
+    elif has_server_config and not has_client_state:
+        client_hits = [p for p in client_hits if p not in stale_client_markers]
     has_frpc_unit = paths.is_file('/etc/systemd/system/drlink-client.service')
     has_frps_unit = paths.is_file('/etc/systemd/system/drlink-server.service')
     server_n = len(server_hits)

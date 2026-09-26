@@ -2263,24 +2263,22 @@ for item in services:
             lines.append(f'    {host_port(server, remote_port)}')
     lines.append('')
 has_enabled = any(item.get('enabled', True) is not False for item in services)
-# Default inbound exposure is PUBLIC unless Access Control restricts it on the
-# server. Client-side access-info cannot know server allowlists, so only warn
-# when enabled services exist (operators must confirm with show access-service).
+# The Agent cannot see the Server Access Policy. Do not claim a public
+# default. v2.4 allows access only when no Remote Access policy is configured.
 if has_enabled:
     lines.extend([
-        'Public exposure',
-        '===============',
+        'Remote Access',
+        '=============',
         '',
-        'Default exposure for published services is PUBLIC unless an Access List',
-        'is assigned on the Data Relay Link server.',
+        'This Agent does not configure the Server Access Policy.',
+        'When no Remote Access policy is configured, access is allowed by default.',
+        'A Blacklist policy blocks matching rules. A Whitelist policy allows only matching rules.',
         '',
-        'Exposure      : PUBLIC (unless restricted by Access Control on the server)',
-        'Source policy : Any source that can reach a public port may attempt a connection',
         'Target auth   : SSH/application authentication is still required',
         '',
-        'Recommended:',
-        '  Restrict services with an Access List if public access is not intended.',
-        '  On the server: drlink show access-service <client> <service>',
+        'On the server:',
+        '  drlink show status',
+        '  drlink show remote-access',
         '',
     ])
 path = Path(dest)

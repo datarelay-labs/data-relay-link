@@ -366,12 +366,62 @@ MISSING_COMMANDS=()
 MISSING_PYTHON_PACKAGES=()
 # Simulate missing AUTO_ACME runtime on a clean server image.
 frp_python_module_importable() { return 1; }
+PACKAGE_MANAGER=apt
 frp_collect_missing_python_packages
 printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme || fail "server missing acme maps to python3-acme"
 printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-cryptography || fail "server missing cryptography mapped"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-yaml || fail "server missing yaml maps to python3-yaml"
 frp_packages_for_missing apt
 printf '%s\n' "${PACKAGES[@]}" | grep -qx python3-acme || fail "server PACKAGES includes python3-acme"
 pass "package name mapping"
+
+# Agent installs must pull PyYAML. apt-family is python3-yaml; Rocky/EL8 is python3-pyyaml.
+reset_pm_isolation
+FRP_DEPENDENCY_ROLE=client
+PACKAGE_MANAGER=apt
+DISTRO_ID=ubuntu
+DISTRO_VERSION=24.04
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-yaml || fail "apt client missing yaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme; then
+  fail "client role must not require AUTO_ACME packages"
+fi
+PACKAGE_MANAGER=dnf
+DISTRO_ID=rocky
+DISTRO_VERSION=8.10
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "rocky client missing pyyaml"
+[[ "$(frp_package_for_command python3 dnf)" == python39 ]] || fail "EL8 python3 package must stay python39"
+pass "client yaml package mapping"
+
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-yaml-fail"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-yaml-fail"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=rocky
+DISTRO_VERSION=8
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+mkdir -p "$FRP_TEST_PM_PATH"
+cat >"$FRP_TEST_PM_PATH/dnf" <<'EOF'
+#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = python3-pyyaml ]; then
+    echo "No match for argument: python3-pyyaml" >&2
+    exit 1
+  fi
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+frp_python_module_importable() { return 1; }
+if ensure_dependencies >"$WORKDIR/yaml-fail.out" 2>"$WORKDIR/yaml-fail.err"; then
+  fail "missing Rocky PyYAML must fail client ensure_dependencies"
+fi
+grep -q 'required Python packages are missing' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name required Python packages"
+grep -q 'python3-pyyaml' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name python3-pyyaml"
+pass "client yaml install failure is deterministic"
 
 # Optional AUTO_ACME packages must not abort server install when unavailable.
 reset_pm_isolation
@@ -396,7 +446,9 @@ EOF
 chmod +x "$FRP_TEST_PM_PATH/dnf"
 frp_detect_package_manager
 DISTRO_ID=rocky
-frp_python_module_importable() { return 1; }
+frp_python_module_importable() {
+  [[ "$1" == yaml ]]
+}
 if ! ensure_dependencies 2>"$WORKDIR/acme-soft.err"; then
   fail "missing optional AUTO_ACME packages must not fail server ensure_dependencies"
 fi
