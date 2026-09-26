@@ -509,36 +509,99 @@ All applicable cases are mandatory and use real product state.
 
 When a failure intentionally damages the current host or state, preserve the evidence and proceed with another independent host/lane where possible. Do not repair the product mid-run.
 
-## 10. Parallel multi-host execution
+## 10. Parallel multi-host and live-change execution
 
-Parallel execution is the default when state dependencies permit it.
+Parallel execution is the default. FULL_USER_E2E should resemble a live environment, not a sequence of isolated laboratory checks.
 
-Use unique run prefixes for resources so independent lanes do not collide unintentionally.
+Use every suitable real test host that is available at run time. Host count is adaptive:
 
-Required parallel scenarios:
+~~~text
+AVAILABLE_HOST_COUNT=N
+PARALLEL_HOST_TARGET=N
+RUN_WITH_AVAILABLE_HOSTS=YES
+MISSING_EXTRA_HOSTS_BLOCK_RUN=NO
+~~~
 
-- C-001: all applicable test hosts online simultaneously.
-- C-002: parallel enrollment across platforms.
+If 2 hosts are available, run the parallel cases with 2. If 6 are available, use 6. If more hosts become available, use more. Do not fabricate 10/30/50 hosts and do not delay the base FULL_USER_E2E merely because a larger fleet is unavailable.
+
+Use unique run prefixes for resources so independent lanes do not collide accidentally. Shared destructive state is coordinated intentionally; unrelated work continues in parallel.
+
+### 10.1 Continuous traffic backbone
+
+Once usable data paths exist, keep representative traffic running while Operator and Administrator scenarios continue.
+
+Maintain as many of the following concurrently as the available topology permits:
+
+- long-lived SSH/TCP sessions;
+- repeated short-connection HTTP/HTTPS or Custom TCP traffic;
+- sustained bulk-transfer or throughput streams;
+- Internet Access request/response traffic;
+- AI/MCP requests when that feature is in scope.
+
+During this traffic, perform real control/lifecycle changes instead of pausing traffic for every administration step.
+
+For every event record:
+
+~~~text
+EVENT=
+EVENT_START_UTC=
+EVENT_END_UTC=
+TRAFFIC_BEFORE=
+TRAFFIC_DURING=
+TRAFFIC_AFTER=
+NEW_CONNECTION_RESULT=
+ESTABLISHED_CONNECTION_RESULT=
+ERROR_SPIKE=
+UNAUTHORIZED_ALLOW_COUNT=
+UNEXPECTED_DENY_COUNT=
+ENDPOINT_CHANGED=YES|NO
+RECOVERY_SECONDS=
+DATA_INTEGRITY_ERRORS=
+~~~
+
+The key invariant is that a change on one host/resource must not corrupt, reroute, authorize, deny, rename, or release an unrelated live path.
+
+### 10.2 Required parallel scenarios
+
+Execute each scenario with the maximum suitable host/resource count available at that moment.
+
+- C-001: all currently available applicable test hosts online simultaneously.
+- C-002: parallel enrollment across the available platforms/hosts.
 - C-003: parallel Remote Service creation and endpoint allocation.
-- C-004: simultaneous real traffic on all hosts.
-- C-005: parallel Internet Access from multiple protected sources.
+- C-004: simultaneous real traffic on all usable hosts.
+- C-005: parallel Internet Access from all suitable protected sources.
 - C-006: parallel AI/MCP identities and calls when applicable.
-- C-007: policy mutation while multi-host traffic is active.
-- C-008: simultaneous Agent restart/reconnect storm.
-- C-009: Server outage with all Agents active.
-- C-010: parallel ConfigurationBundle apply.
-- C-011: concurrent destructive/race cases.
-- C-012: all-host simultaneous reboot recovery.
+- C-007: Remote Access / Internet Access / AI Access policy mutation while live traffic continues.
+- C-008: simultaneous Agent restart/reconnect storm across the available Agent fleet.
+- C-009: Server outage with multiple active Agents and user sessions.
+- C-010: parallel ConfigurationBundle test/diff/apply on independent resources.
+- C-011: concurrent destructive/race cases and stale writers.
+- C-012: simultaneous reboot recovery across all currently available approved Agent hosts.
 - C-013: parallel Agent update/restart convergence.
-- C-014: mixed parallel lifecycle operations.
+- C-014: mixed parallel lifecycle operations on different hosts.
+- C-015: continuous traffic + repeated policy churn: rule add/edit/delete, whitelist/blacklist, enforcement enable/disable, policy reset; measure established-session and new-connection behavior separately.
+- C-016: continuous traffic + fleet join/leave churn: enroll a new Agent, publish service, generate traffic, remove/uninstall another Agent, and verify unaffected hosts continue without endpoint or policy cross-talk.
+- C-017: continuous traffic + Remote Service churn: create/enable/disable/edit/delete services on one Agent while unrelated services on other Agents remain active.
+- C-018: endpoint allocation/reclamation under live traffic: create/delete/recreate services and verify no premature endpoint reuse, duplicate allocation, cross-target routing, or stale HEALTHY state.
+- C-019: real mixed-role window: Users transfer data while Operators change Agent/Remote Service state and Administrators change policy, run diagnostics/audit, test/diff Bundles, and perform supported backup activity.
+- C-020: Managed Host deletion/re-enrollment corner case: delete/revoke a host while its Agent is connected, observe reconnect behavior, then re-enroll through the documented path and verify identity/authorization semantics.
+- C-021: staged failure cascade under traffic: independently fail target -> Agent -> network path -> Server, recover each layer, and measure unrelated-path continuity and final state convergence.
+- C-022: enrollment churn under service load: issue/redeem/revoke/expire tickets and add/remove Agents while unrelated Remote Access/Internet Access traffic remains active.
+- C-023: concurrent direct-CLI and AI-assisted administration on independent resources, proving both paths converge through the same product semantics and do not lose updates or bypass revision protection.
 
-Serial execution is used only when tests intentionally share a single destructive global state, such as one Server restore, Server uninstall, or endpoint-pool exhaustion. Serial does not mean non-destructive.
+### 10.3 Parallelism rule
 
-If a shared-state failure blocks one lane, continue independent lanes rather than stopping the run.
+Run independent scenario lanes concurrently whenever hosts/resources do not require exclusive ownership of the same destructive global state.
 
-## 11. Bidirectional performance contract
+Serial execution is limited to operations that truly require exclusive ownership of one shared global state, for example one Server restore, Server uninstall/reinstall, or deliberate exhaustion of one endpoint pool. Serial does not mean non-destructive.
 
-Performance is mandatory in FULL_USER_E2E.
+Do not serialize merely because parallel execution is harder. Concurrency itself is part of the product test.
+
+If a shared-state failure blocks one lane, continue every independent lane rather than stopping the run.
+
+## 11. Bidirectional performance, churn, and resilience contract
+
+Performance is mandatory in FULL_USER_E2E and must be measured during both steady state and real operational change.
 
 If no approved numeric SLO exists, report measured results without inventing a threshold:
 
@@ -546,17 +609,28 @@ If no approved numeric SLO exists, report measured results without inventing a t
 PERFORMANCE_NUMERIC_QUALIFICATION=MEASURED_NOT_QUALIFIED
 ~~~
 
-Functional, security, data-integrity, crash, state-corruption, and recovery failures under load are still FAIL.
+Functional, security, data-integrity, crash, state-corruption, authorization, and recovery failures under load are always FAIL.
 
 Default durations unless an approved profile overrides them:
 
 ~~~text
 WARMUP=60s
 STEADY_STATE_EACH_CASE=300s
+MIXED_OPERATION_WINDOW=1800s
 SOAK=3600s
 EXTENDED_SOAK=8h_optional
 ENDURANCE_SOAK=24h_optional
 ~~~
+
+Required directions:
+
+~~~text
+FORWARD=external/protected user -> target
+REVERSE=target/Internet response -> user
+FULL_DUPLEX=both directions simultaneously
+~~~
+
+For Internet Access, REVERSE means legitimate response/download traffic belonging to the outbound application flow. Do not invent an unsolicited inbound Internet path that the product does not claim.
 
 Required measurements:
 
@@ -575,15 +649,22 @@ CONNECT_P99_MS=
 REQUEST_P50_MS=
 REQUEST_P95_MS=
 REQUEST_P99_MS=
+CONTROL_COMMAND_P95_MS=
 ERROR_RATE=
 RECONNECT_RATE=
+DROPPED_EXISTING_CONNECTIONS=
+FAILED_NEW_CONNECTIONS=
+UNAUTHORIZED_ALLOW_COUNT=
+UNEXPECTED_DENY_COUNT=
+ENDPOINT_CHANGES=
 SERVER_CPU_AVG_MAX=
 SERVER_RSS_AVG_MAX=
 SERVER_FD_AVG_MAX=
+SERVER_DISK_GROWTH=
 AGENT_CPU_AVG_MAX=
 AGENT_RSS_AVG_MAX=
 AGENT_FD_AVG_MAX=
-DROPPED_CONNECTIONS=
+AGENT_DISK_GROWTH=
 DATA_INTEGRITY_ERRORS=
 RECOVERY_TIME=
 ~~~
@@ -598,30 +679,74 @@ Mandatory performance scenarios:
 - P-006: concurrent active connections.
 - P-007: connect/request latency p50/p95/p99.
 - P-008: mixed SSH/HTTP/HTTPS/Custom TCP/Fixed TCP workload.
-- P-009: multi-host scale at real available tiers; target tiers 1/5/10/30/50 when infrastructure exists.
+- P-009: scale at the maximum real host count available during the run. Measure at 1 host and at all available hosts; add intermediate points when convenient. Missing additional hosts do not block FULL_USER_E2E. Larger 10/30/50-host tests are a separate scale profile only when that scale is explicitly claimed or provisioned.
 - P-010: Internet Access request/upload and response/download performance.
 - P-011: AI/MCP request rate, latency, concurrent sessions, and file transfer where applicable.
-- P-012: connection churn and reconnect storm.
-- P-013: mandatory 1-hour soak.
+- P-012: connection churn and Agent reconnect storm.
+- P-013: mandatory 1-hour mixed-traffic soak using the available fleet.
 - P-014: backup/restart/recovery under active load.
-- P-015: aggregate all-host throughput and fairness.
+- P-015: aggregate all-available-host throughput and fairness.
 - P-016: CPS while sustained throughput and policy load are active.
 - P-017: recovery-time measurements after Agent/Server/target disruption.
 - P-018: public CLI operational responsiveness while traffic is active.
 - P-019: optional 8h/24h endurance.
-- P-020: network impairment when controllable.
+- P-020: controlled latency/loss/jitter/bandwidth/partition characterization when the available test infrastructure can inject it safely.
 - P-021: saturation and post-saturation recovery.
 - P-022: simultaneous control-plane and data-plane pressure.
+- P-023: sustained traffic while policy rules are repeatedly added, edited, disabled, enabled, reset, and removed; measure throughput/latency/error spikes plus existing-session versus new-connection semantics.
+- P-024: sustained traffic while Agents join and leave: Zero-Touch enrollment, new service creation, Agent pause/restart, Managed Host removal, uninstall/reinstall, and re-enrollment on available hosts.
+- P-025: sustained traffic while Remote Services and endpoint allocations churn; measure endpoint reuse delay, failed/incorrect routing, allocation errors, and recovery.
+- P-026: 30-minute mixed-role operational window combining User traffic, Operator lifecycle work, Administrator policy/Bundle/diagnostic work, and at least one controlled failure/recovery event.
+- P-027: post-churn recovery and leak check: after load and lifecycle churn stop, verify CPU/RSS/FD/disk/log growth stabilizes, endpoints are not leaked, no stale Agents/services remain falsely healthy, and normal traffic resumes.
+- P-028: security-under-load window: continuously attempt representative denied Remote Access, Internet Access, and AI/MCP operations while allowed traffic and configuration churn are active; unauthorized success count must remain zero.
 
 Performance traffic must use real public endpoints and real application or load clients. A TCP connect-only probe is insufficient for throughput qualification.
 
 Use checksums or application-level integrity verification for file/stream transfers when applicable.
 
-## 12. Platform and topology coverage
+Measure before, during, and after every disruptive event. A single final average must not hide a short authorization bypass, connection-loss spike, endpoint cross-talk, or slow recovery.
 
-Exercise every platform and topology currently claimed by the candidate.
+## 12. Platform, topology, and execution feasibility
 
-Current platform matrix:
+Use the real test environment that exists at run time. The base FULL_USER_E2E is adaptive to available hosts; it does not require provisioning an arbitrary fixed host count before testing can begin.
+
+### 12.1 Pre-run feasibility inventory
+
+Inventory all reachable test assets and classify each planned scenario:
+
+~~~text
+EXECUTABLE_NOW
+EXECUTABLE_WITH_NORMAL_TEST_SETUP
+COVERAGE_LIMITATION
+CONDITIONAL_FEATURE
+NOT_APPLICABLE
+~~~
+
+Normal test setup includes installing a load generator, starting a disposable target service, creating test data, or enabling supported OS/network test facilities. It must not patch DRLink product code or mutate private DRLink state.
+
+A scenario is not considered impossible merely because it is destructive, long-running, or requires coordination.
+
+### 12.2 Available-host rule
+
+~~~text
+USE_ALL_SUITABLE_AVAILABLE_HOSTS=YES
+MINIMUM_FIXED_AGENT_COUNT=NONE
+MISSING_HOST_COUNT_IS_PRODUCT_FAILURE=NO
+MISSING_HOST_COUNT_BLOCKS_BASE_E2E=NO
+~~~
+
+Examples:
+
+- 2 suitable Agents available -> execute parallel/fleet scenarios with 2.
+- 6 suitable Agents available -> execute them with 6.
+- 12 suitable Agents available -> execute them with 12.
+- one supported OS is temporarily unavailable -> continue on all other hosts and record the platform coverage limitation.
+
+Do not simulate extra hosts merely to satisfy a number unless simulation/container scale is itself the selected test profile. Do not report unavailable hosts as product failures.
+
+### 12.3 Platform coverage
+
+Current candidate platform claims include:
 
 - Ubuntu 24;
 - Rocky Linux 8;
@@ -630,20 +755,20 @@ Current platform matrix:
 - Windows 10;
 - macOS Apple Silicon.
 
-For each platform classify evidence as:
+For each platform record:
 
 ~~~text
 PASS_REAL
-PASS_SYSTEM_SERVICE
-PASS_CONTAINER_ONLY
-FAIL
-BLOCKED_ENVIRONMENT
+FAIL_PRODUCT
+COVERAGE_LIMITATION_ENVIRONMENT
 NOT_APPLICABLE
 ~~~
 
-Container/userspace evidence may not be upgraded into a real host PASS.
+A temporarily unavailable platform does not stop the rest of FULL_USER_E2E. If release policy separately requires evidence for every claimed platform before publication, that is a release-qualification coverage gap, not a reason to stop the active test run.
 
-Topology coverage includes, when claimed by the candidate:
+### 12.4 Topology coverage
+
+Exercise every currently available/claimed topology that can be reached from the test environment:
 
 - public IP;
 - public DNS hostname;
@@ -655,7 +780,21 @@ Topology coverage includes, when claimed by the candidate:
 - Fixed TCP;
 - AI/MCP public endpoint.
 
-At least one full run must bring the available platform matrix online concurrently and exercise the parallel C-* gates.
+Unavailable topology is recorded as COVERAGE_LIMITATION with the exact missing prerequisite. Continue the remaining topology tests.
+
+### 12.5 Inherently conditional scenarios
+
+The following are conditional on external capability and should not make the base run impossible:
+
+- ChatGPT Plugin/relay: run when that integration is in acceptance scope and the real account/connector surface is available.
+- public DNS/TLS/ACME: run when the candidate claims that path and DNS/ports are available.
+- prior-stable upgrade: run when the release claims upgrade support and the prior stable artifact is available.
+- controlled network impairment: run when the available host/network can safely inject it.
+- 8h/24h endurance: optional unless explicitly selected; the 1-hour soak remains the base requirement.
+- direct-path performance baseline: if a comparable bypass is physically unavailable, record BASELINE_UNAVAILABLE with topology evidence.
+- large-fleet 10/30/50 scale: separate scale qualification when explicitly selected; never a prerequisite for the adaptive available-host base E2E.
+
+At least one run window should bring all currently available suitable hosts online concurrently and exercise the C-* mixed-operation gates.
 
 ## 13. Public CLI coverage checklist
 
@@ -932,7 +1071,7 @@ Every scenario result is one of:
 PASS
 FAIL
 BLOCKED_BY_PRIOR_FAILURE
-BLOCKED_ENVIRONMENT
+COVERAGE_LIMITATION
 NOT_APPLICABLE
 NOT_RUN_BY_SCOPE
 ~~~
@@ -942,10 +1081,12 @@ Rules:
 - PASS requires current-run evidence.
 - release-qualifying PASS requires the exact candidate build.
 - BLOCKED_BY_PRIOR_FAILURE is used when a recorded product failure prevents the scenario from executing.
-- BLOCKED_ENVIRONMENT is used only when required external infrastructure is genuinely unavailable.
-- NOT_APPLICABLE requires an explicit product/platform reason.
+- COVERAGE_LIMITATION means a platform, topology, external integration, or larger scale tier was unavailable in the current environment. It is not a product FAIL and does not stop the base FULL_USER_E2E run.
+- NOT_APPLICABLE requires an explicit product/feature reason.
 - NOT_RUN_BY_SCOPE is allowed only for an explicitly narrowed request.
-- FULL_USER_E2E cannot be PASS while any mandatory applicable scenario is FAIL, blocked, or not run.
+- FULL_USER_E2E functional PASS is invalid when an executable mandatory scenario FAILs or is blocked by a product failure.
+- Missing additional host count alone never changes PASS to FAIL/BLOCKED; report AVAILABLE_HOST_COUNT and MAX_PARALLEL_HOSTS_USED.
+- Release publication may still require closing specific platform/topology coverage limitations defined by release policy.
 - numeric performance remains MEASURED_NOT_QUALIFIED when no approved numeric SLO exists.
 - an earlier failure does not justify stopping unrelated tests.
 
@@ -1023,6 +1164,10 @@ SECURITY_FAILURE=
 MULTI_PLATFORM=
 TOPOLOGY_MATRIX=
 PARALLEL_MULTI_HOST=
+AVAILABLE_HOST_COUNT=
+MAX_PARALLEL_HOSTS_USED=
+PLATFORM_COVERAGE_LIMITATIONS=
+TOPOLOGY_COVERAGE_LIMITATIONS=
 
 PUBLIC_CLI_COMMAND_COVERAGE=
 PUBLIC_CLI_SURFACE_COVERAGE=
@@ -1059,7 +1204,7 @@ UX_COUNT=
 DOC_COUNT=
 PERF_COUNT=
 BLOCKED_BY_PRIOR_FAILURE_COUNT=
-BLOCKED_ENVIRONMENT_COUNT=
+COVERAGE_LIMITATION_COUNT=
 FINDINGS=
 BLOCKERS=
 EVIDENCE_ROOT=
@@ -1100,7 +1245,9 @@ FULL_USER_E2E
 -> PASS 2: repeat applicable workflows with AI assistance and execute the generated CLI/Bundle
 -> PASS 3: run forward, reverse, and full-duplex performance/resilience
 -> act as User, Operator, and Administrator through the full product lifecycle
+-> use every suitable host available at run time; never block the base run for lack of an arbitrary host count
 -> run independent hosts/scenarios in parallel
+-> keep representative traffic active while policies, Agents, Remote Services, Bundles, and lifecycle state change
 -> break Server/Agent/target/network state where scenarios require it
 -> record defects, blockers, ambiguity, confusion, and improvements immediately
 -> never fix product defects during the active run
