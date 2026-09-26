@@ -140,19 +140,21 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         view = results[0]["view"]
         self.assertEqual(view["name"], "ssh")
         self.assertEqual(view["endpoint_port"], 6000)
-        self.assertEqual(view["status"], "HEALTHY")
+        self.assertEqual(view["status"], "DEGRADED")
+        self.assertIn("activation", view["reason"].lower())
 
         projected = self._fingerprint(self.agent_tmp)
         self.assertEqual(projected[1][0][0], "ssh")
         self.assertEqual(int(projected[1][0][6]), 6000)
-        self.assertEqual(projected[1][0][4], "HEALTHY")
+        self.assertEqual(projected[1][0][4], "DEGRADED")
 
         status, listed, _agent_view = self._read_only_shows(self.agent_tmp)
         self.assertEqual(self._fingerprint(self.agent_tmp), projected)
         self.assertIn("Remote Services : 1", status)
         self.assertIn("ssh", listed)
         self.assertIn(":6000", listed)
-        self.assertIn("HEALTHY", listed)
+        self.assertIn("DEGRADED", listed)
+        self.assertNotIn("HEALTHY", listed)
 
         agent = ControlPlane(self.agent_tmp)
         agent.conn.execute("DELETE FROM agent_remote_services")
@@ -166,7 +168,7 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["name"], "ssh")
         self.assertEqual(int(row["endpoint_port"]), 6000)
-        self.assertEqual(row["status"], "HEALTHY")
+        self.assertEqual(row["status"], "DEGRADED")
         agent.close()
 
     def test_operator_edit_survives_synchronize(self):
@@ -367,4 +369,98 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
             )
         ]
         self.assertEqual(names, ["http", "ssh"])
+        http = agent.conn.execute(
+            "SELECT status, endpoint_port FROM agent_remote_services WHERE name = 'http'"
+        ).fetchone()
+        self.assertEqual(http["status"], "DEGRADED")
+        self.assertEqual(int(http["endpoint_port"]), 6001)
+        agent.close()
+
+    def test_open_local_target_without_relay_verification_stays_degraded(self):
+        self._read_only_shows(self.agent_tmp)
+        agent = ControlPlane(self.agent_tmp)
+        seeded = v24.project_enrolled_services_into_agent_catalog(agent, root=self.agent_tmp)
+        self.assertEqual(len(seeded), 1)
+        view = seeded[0]["view"]
+        self.assertEqual(view["name"], "ssh")
+        self.assertEqual(view["endpoint_port"], 6000)
+        self.assertNotEqual(view["status"], "HEALTHY")
+        self.assertEqual(view["status"], "DEGRADED")
+        self.assertIn("activation", view["reason"].lower())
+
+        row = agent.conn.execute(
+            "SELECT status, reason, endpoint_port FROM agent_remote_services WHERE name = 'ssh'"
+        ).fetchone()
+        self.assertEqual(int(row["endpoint_port"]), 6000)
+        self.assertEqual(row["status"], "DEGRADED")
+        before = self._fingerprint(self.agent_tmp)
+        listed = self._show(self.agent_tmp, "show", "remote-services")
+        self.assertEqual(self._fingerprint(self.agent_tmp), before)
+        self.assertIn(":6000", listed)
+        self.assertIn("DEGRADED", listed)
+        self.assertNotIn("HEALTHY", listed)
+
+        server = ControlPlane(self.server_tmp)
+        v24.ensure_v2_schema(server.conn)
+        RP.sync_enrolled_client(
+            server,
+            client_id=MACHINE,
+            hostname="frp-client",
+            label="real-e2e-ubuntu24",
+            services={
+                "ssh": {
+                    "id": "ssh",
+                    "preset": "ssh",
+                    "local_ip": "127.0.0.1",
+                    "local_port": self.local_port,
+                    "remote_port": 6000,
+                    "enabled": True,
+                }
+            },
+        )
+        reported = mgmt.server_report_remote_service_status(
+            server,
+            mgmt.MgmtAuthContext(MACHINE, {"id": MACHINE}, "nonce", 1, allocator=None),
+            {
+                "services": [
+                    {
+                        "name": "ssh",
+                        "status": row["status"],
+                        "reason": row["reason"],
+                        "runtime_verified": row["status"] == "HEALTHY",
+                        "endpoint_port": int(row["endpoint_port"]),
+                    }
+                ]
+            },
+        )
+        self.assertEqual(reported["count"], 1)
+        self.assertEqual(reported["services"][0]["endpoint_port"], 6000)
+        self.assertNotEqual(reported["services"][0]["status"], "HEALTHY")
+        shown = self._show(self.server_tmp, "show", "managed-host", "real-e2e-ubuntu24", "remote-services")
+        self.assertIn("ssh", shown)
+        self.assertIn(":6000", shown)
+        self.assertIn("DEGRADED", shown)
+        self.assertNotIn("HEALTHY", shown)
+        server.close()
+
+        agent.conn.execute("DELETE FROM agent_remote_services")
+        agent.conn.commit()
+        verified = v24.activate_enrolled_services_as_remote_services(
+            root=self.agent_tmp, runtime_verified=True
+        )
+        self.assertEqual(verified[0]["view"]["status"], "HEALTHY")
+        self.assertEqual(verified[0]["view"]["endpoint_port"], 6000)
+        agent.conn.execute(
+            "UPDATE agent_remote_services SET enabled = 0, status = 'DISABLED', "
+            "reason = 'operator hold', endpoint_port = 6000 WHERE name = 'ssh'"
+        )
+        agent.conn.commit()
+        held = self._ssh_operator_row(agent)
+        self.assertEqual(
+            v24.activate_enrolled_services_as_remote_services(
+                root=self.agent_tmp, runtime_verified=True
+            ),
+            [],
+        )
+        self.assertEqual(self._ssh_operator_row(agent), held)
         agent.close()

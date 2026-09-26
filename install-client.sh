@@ -830,6 +830,7 @@ frp_client_main() {
   # service/proxy failure still leaves a discoverable recovery command.
   frp_client_install_management_files "${_FRP_INSTALL_CLIENT_DIR}"
 
+  FRP_ENROLLED_PROXIES_VERIFIED=0
   if [[ "$(services_count)" != "0" && "${FRP_SKIP_SYSTEMD:-}" != "1" && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     echo "Installing $(frp_service_manager) service ..."
     frp_client_install_service_definition || {
@@ -864,6 +865,8 @@ frp_client_main() {
       frp_emit_failure_class HEALTH_CHECK_FAILED
       exit 1
     fi
+    # wait_for_proxies is the relay evidence. Do not infer HEALTHY from the local target.
+    FRP_ENROLLED_PROXIES_VERIFIED=1
   elif [[ "$(services_count)" == "0" ]]; then
     echo "Management-only mode: frpc is not started until a service is enabled."
     if [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
@@ -909,6 +912,8 @@ frp_client_main() {
   frp_pending_enroll_clear
 
   # Promote enrolled services into v2.4 Remote Services (reuse allocated ports).
+  # Export so the activator can record relay verification without reading the local socket.
+  export FRP_ENROLLED_PROXIES_VERIFIED
   if [[ "$(services_count)" != "0" ]]; then
     python3 -c '
 import os, sys
@@ -928,7 +933,11 @@ try:
     import drlink_v24 as v24
 except Exception:
     raise SystemExit(0)
-results = v24.activate_enrolled_services_as_remote_services(root=root or None)
+verified = os.environ.get("FRP_ENROLLED_PROXIES_VERIFIED") == "1"
+results = v24.activate_enrolled_services_as_remote_services(
+    root=root or None,
+    runtime_verified=verified,
+)
 healthy = False
 degraded = []
 for result in results:

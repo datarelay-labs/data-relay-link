@@ -6723,11 +6723,6 @@ def project_enrolled_services_into_agent_catalog(
                 enrolled_port = int(rec.get("remote_port"))
         except (TypeError, ValueError):
             enrolled_port = None
-        try:
-            local_port = int(rec.get("local_port") or (22 if preset == "ssh" else 0))
-        except (TypeError, ValueError):
-            local_port = 0
-        local_ip = str(rec.get("local_ip") or "127.0.0.1").strip() or "127.0.0.1"
         existing = plane_db.conn.execute(
             "SELECT name FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,)
         ).fetchone()
@@ -6739,14 +6734,14 @@ def project_enrolled_services_into_agent_catalog(
         else:
             endpoint_port = None
             pending = 1
+        # Local target reachability is not relay verification. A new seed
+        # stays runtime-pending until apply/verification promotes it.
         if not enabled:
             status, reason = "DISABLED", ""
         elif endpoint_port is None:
             status, reason = "DEGRADED", "Endpoint allocation is pending."
-        elif local_port > 0 and _probe_tcp(local_ip, local_port):
-            status, reason = "HEALTHY", ""
         else:
-            status, reason = "DEGRADED", "Destination is unreachable."
+            status, reason = "DEGRADED", "Runtime activation pending."
         host = endpoint_host or ""
         plane_db.conn.execute(
             "INSERT INTO agent_remote_services"
@@ -6798,11 +6793,13 @@ def activate_enrolled_services_as_remote_services(
     *,
     root: Optional[str] = None,
     state: Optional[dict] = None,
+    runtime_verified: bool = False,
 ) -> list:
     """Promote enrolled client-state services into Agent Remote Services.
 
     Reuses allocated public ports when present. Returns a list of result
-    dicts (may be empty).
+    dicts (may be empty). ``runtime_verified`` records explicit relay-proxy
+    verification that already succeeded; a local target socket is not enough.
     """
     data = _load_enrolled_client_state(root, state)
     if not isinstance(data, dict):
@@ -6811,6 +6808,29 @@ def activate_enrolled_services_as_remote_services(
 
     plane = ControlPlane(root)
     results = project_enrolled_services_into_agent_catalog(plane, root=root, state=data)
+    if runtime_verified and results:
+        now = utc_now_iso()
+        for item in results:
+            view = item.get("view") or {}
+            name = view.get("name")
+            if not name or not view.get("enabled") or view.get("endpoint_port") is None:
+                continue
+            plane.conn.execute(
+                "UPDATE agent_remote_services SET status = 'HEALTHY', reason = '', updated_at = ? "
+                "WHERE name = ? COLLATE NOCASE AND delete_pending = 0 AND enabled = 1 "
+                "AND endpoint_port IS NOT NULL AND pending_allocation = 0 "
+                "AND (reason = '' OR lower(reason) LIKE '%activation%' OR lower(reason) LIKE 'runtime%') "
+                "AND lower(reason) NOT LIKE '%unreachable%'",
+                (now, name),
+            )
+            row = plane.conn.execute(
+                "SELECT status, reason FROM agent_remote_services WHERE name = ? COLLATE NOCASE",
+                (name,),
+            ).fetchone()
+            if row is not None:
+                view["status"] = row["status"]
+                view["reason"] = row["reason"] or ""
+        _commit_if_autonomous(plane)
     if results and detect_server_reachable(plane, root):
         _push_agent_remote_service_status(plane, root=root)
     return results
