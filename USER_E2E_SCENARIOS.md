@@ -10,6 +10,52 @@
 > **Release checklist:** docs/RELEASE_CHECKLIST.md
 > **Status:** Normative living document
 
+## 0. Execution entry point
+
+This file is an executable test contract, not a prompt template.
+
+A user instruction equivalent to any of the following is sufficient to start the full run:
+
+~~~text
+GitHub의 USER_E2E_SCENARIOS.md 수행해
+USER_E2E_SCENARIOS.md 실행해
+DRLink Full User E2E 시작
+~~~
+
+When invoked this way, the executor must not ask the user to restate this document, copy scenarios into the chat, provide a separate run plan, or manually select hosts unless a fact cannot be discovered from the repository or test environment.
+
+The executor must autonomously:
+
+1. read the latest applicable USER_E2E_SCENARIOS.md from the Data Relay Link candidate workstream;
+2. read only the referenced canonical documents needed to resolve current CLI grammar, release identity, or qualification rules;
+3. determine the current candidate branch/HEAD/build and installed product identity;
+4. inventory the real Server, Agent, client, target, load-generator, platform, and topology resources that are available now;
+5. create a new evidence root and run identity;
+6. map this document's scenarios to the available environment;
+7. start every independent executable lane in parallel, using all suitable available hosts;
+8. keep representative real traffic active while executing live policy, Agent, Remote Service, Object/Group, Bundle, diagnostics, lifecycle, failure, and recovery changes where this document requires it;
+9. execute PASS 1 Direct CLI, PASS 2 AI-assisted, and PASS 3 bidirectional performance/resilience as defined here;
+10. record findings and dependent blockers without fixing product defects during the active run;
+11. continue until every currently executable scenario has been attempted and all coverage limitations are recorded;
+12. produce the final report defined by this document;
+13. only after the run is exhausted, consolidate findings and enter the engineering fix/verify/rerun workflow.
+
+Default behavior is execution, not explanation.
+
+~~~text
+READ_DOCUMENT_AND_EXECUTE=YES
+ASK_USER_TO_RESTATE_RULES=NO
+ASK_FOR_CONFIRMATION_BEFORE_START=NO
+PLAN_ONLY_RESPONSE=NO
+USE_AVAILABLE_REAL_HOSTS=YES
+PARALLEL_BY_DEFAULT=YES
+CONTINUE_AFTER_INDEPENDENT_FAILURES=YES
+FIX_DURING_ACTIVE_RUN=NO
+STOP_WHEN_CURRENTLY_EXECUTABLE_SCENARIOS_EXHAUSTED=YES
+~~~
+
+If the user explicitly narrows the scope, execute only that requested subset. Otherwise the trigger means FULL_USER_E2E.
+
 ## 1. Purpose
 
 FULL_USER_E2E answers one question:
