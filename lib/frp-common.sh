@@ -1707,21 +1707,6 @@ frp_el8_family() {
   esac
 }
 
-# Amazon Linux 2 and 2023 share ID=amzn. VERSION_ID separates their Python ABIs.
-frp_amazon_linux_2() {
-  local id ver
-  id="$(printf '%s' "${DISTRO_ID:-}" | tr '[:upper:]' '[:lower:]')"
-  ver="$(printf '%s' "${DISTRO_VERSION:-}" | cut -d. -f1)"
-  case "$id" in
-    amzn|amazon|amazonlinux|amazonlinux2)
-      [[ "$ver" == "2" ]]
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 frp_prefer_newer_python() {
   # On EL8 the `python3` package is often 3.6. Prefer an installed 3.9+ binary
   # via an early PATH shim without rewriting the distro /usr/bin/python3.
@@ -1881,10 +1866,6 @@ frp_target_python_mm() {
     printf '3.9\n'
     return 0
   fi
-  if frp_amazon_linux_2; then
-    printf '3.7\n'
-    return 0
-  fi
   printf '\n'
 }
 
@@ -1905,21 +1886,18 @@ frp_el8_pyyaml_package() {
   esac
 }
 
-# ConfigurationBundle YAML. The package must match the interpreter that will
-# run, not merely the package manager family.
+# ConfigurationBundle YAML for the supported Agent matrix. The package must
+# match the interpreter that will run.
 # apt: python3-yaml. EL8: versioned AppStream (python39-pyyaml on a clean
-# host). Amazon Linux 2 core: python3-PyYAML for its python3 3.7 ABI.
-# Amazon Linux 2023 and other dnf/yum: python3-pyyaml.
+# host). Amazon Linux 2023 and other non-EL8 dnf/yum: python3-pyyaml.
+# Amazon Linux 2 is container/CI portability only, not a supported Agent
+# target, so it gets no separate PyYAML support package.
 frp_python_package_for_module() {
   local module="$1" pm="$2" mm
   case "$module" in
     yaml)
       if [[ "$pm" == apt ]]; then
         printf 'python3-yaml'
-        return 0
-      fi
-      if frp_amazon_linux_2; then
-        printf 'python3-PyYAML'
         return 0
       fi
       if frp_el8_family; then
@@ -2002,7 +1980,6 @@ frp_print_missing_required_python_error() {
   echo "The package must match the Python interpreter the installer selects." >&2
   echo "apt-family package: python3-yaml" >&2
   echo "Clean EL8 package: python39-pyyaml (with the python39 interpreter)." >&2
-  echo "Amazon Linux 2 package: python3-PyYAML" >&2
   echo "Amazon Linux 2023 package: python3-pyyaml" >&2
   echo "Install the package manually and run the installer again." >&2
 }

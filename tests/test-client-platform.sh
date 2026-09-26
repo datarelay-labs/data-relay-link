@@ -513,55 +513,36 @@ fi
 PATH="$FRP_TEST_CMD_PATH" "$FRP_TEST_CMD_PATH/python3" -c 'import yaml' || fail "selected EL8 python3 cannot import yaml"
 pass "clean EL8 python39 yaml abi"
 
-# Amazon Linux 2 core ships python3-PyYAML for python3 3.7. AL2023 uses python3-pyyaml.
+# Amazon Linux 2 is container/CI portability only, not a supported Agent
+# target (RELEASE_VALIDATION.md matrix, MORNING_REAL_E2E_FINAL_CHECKLIST.md).
+# Do not give it an EL8 ABI package or a separate PyYAML support contract.
 reset_pm_isolation
 export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2-yaml"
-export FRP_TEST_PM_PATH="$WORKDIR/pm-al2-yaml"
-AL2_STATE="$WORKDIR/al2-py-state"
-mkdir -p "$AL2_STATE" "$FRP_TEST_PM_PATH"
 FRP_DEPENDENCY_ROLE=client
 DISTRO_ID=amzn
 DISTRO_VERSION=2
 PACKAGE_MANAGER=yum
 make_required_cmds "$FRP_TEST_CMD_PATH"
-cat >"$FRP_TEST_CMD_PATH/python3" <<EOF
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
 #!/bin/sh
-code="\${2:-}"
-case "\$code" in
-  *'sys.version_info[:2]'*) printf '3.7\\n'; exit 0 ;;
+code="${2:-}"
+case "$code" in
+  *'sys.version_info[:2]'*) printf '3.7\n'; exit 0 ;;
   *version_info*) exit 0 ;;
-  *'import yaml'*)
-    [ -f $(printf '%q' "$AL2_STATE")/yaml ] && exit 0
-    exit 1
-    ;;
 esac
-exit 0
+exit 1
 EOF
 chmod +x "$FRP_TEST_CMD_PATH/python3"
-AL2_LOG="$WORKDIR/al2-yaml.log"
-: >"$AL2_LOG"
-cat >"$FRP_TEST_PM_PATH/yum" <<EOF
-#!/bin/sh
-printf '%s\\n' "\$*" >>$(printf '%q' "$AL2_LOG")
-for arg in "\$@"; do
-  if [ "\$arg" = python3-PyYAML ]; then
-    touch $(printf '%q' "$AL2_STATE")/yaml
-  fi
-done
-exit 0
-EOF
-chmod +x "$FRP_TEST_PM_PATH/yum"
-eval "$(declare -f frp_python_module_importable_real | sed '1s/frp_python_module_importable_real/frp_python_module_importable/')"
-if ! ensure_dependencies >"$WORKDIR/al2-yaml.out" 2>"$WORKDIR/al2-yaml.err"; then
-  cat "$WORKDIR/al2-yaml.err" >&2
-  fail "Amazon Linux 2 ensure_dependencies must install python3-PyYAML"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "AL2 stays on the generic non-EL8 pyyaml name"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
+  fail "AL2 must not use the EL8 python39-pyyaml package"
 fi
-grep -q 'python3-PyYAML' "$AL2_LOG" || fail "Amazon Linux 2 must request python3-PyYAML"
-if grep -q 'python39-pyyaml' "$AL2_LOG"; then
-  fail "Amazon Linux 2 must not use the EL8 python39-pyyaml package"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx 'python3-PyYAML'; then
+  fail "AL2 must not gain a dedicated PyYAML support package"
 fi
-PATH="$FRP_TEST_CMD_PATH" "$FRP_TEST_CMD_PATH/python3" -c 'import yaml' || fail "Amazon Linux 2 python3 cannot import yaml"
-pass "amazon linux 2 pyyaml"
+pass "amazon linux 2 pyyaml not a support contract"
 
 reset_pm_isolation
 export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2023-yaml"
@@ -584,7 +565,7 @@ frp_python_module_importable() { return 1; }
 frp_collect_missing_python_packages
 printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "AL2023 client missing python3-pyyaml"
 if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx 'python3-PyYAML'; then
-  fail "AL2023 must not use the Amazon Linux 2 python3-PyYAML package"
+  fail "AL2023 must stay on python3-pyyaml"
 fi
 if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
   fail "AL2023 must not use the EL8 python39-pyyaml package"
