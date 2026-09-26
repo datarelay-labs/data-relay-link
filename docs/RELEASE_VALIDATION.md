@@ -530,9 +530,9 @@ Nevertheless, lab/test transition migration may be implemented for engineering c
 
 Final supported upgrade claims are based on actual prior stable releases and explicit migration code/evidence.
 
-## 26. Multi-host matrix
+## 26. Multi-host matrix and adaptive environment rule
 
-Final applicable matrix:
+Current platform claim matrix:
 
 ```text
 Ubuntu 24
@@ -543,9 +543,23 @@ Amazon Linux 2023
 macOS Apple Silicon
 ```
 
-Record qualification level honestly:
+FULL_USER_E2E uses every suitable real host available at run time. There is no fixed minimum fleet size for the base run and missing additional hosts do not stop execution.
+
+Record:
 
 ```text
+AVAILABLE_HOST_COUNT=
+MAX_PARALLEL_HOSTS_USED=
+MAX_REAL_SCALE_TESTED=
+PLATFORM_COVERAGE_LIMITATIONS=
+TOPOLOGY_COVERAGE_LIMITATIONS=
+UNTESTED_SCALE_CLAIMS=
+```
+
+Record each platform qualification level honestly:
+
+```text
+not available in current environment
 code-only
 container
 system service
@@ -553,6 +567,10 @@ real VM/physical
 field validated
 stable supported
 ```
+
+A missing platform or larger host tier is a release coverage limitation, not a product failure and not a reason to stop the active E2E run. Before publication, unresolved coverage limitations must be reconciled with the platform/scale claims the release intends to make.
+
+Product Master may describe a 10-50 host target range. The base E2E does not fabricate that fleet. It measures the maximum real host count available; explicit 10/30/50 scale qualification is performed when such infrastructure is provisioned or that scale claim is selected for qualification.
 
 ## 27. Full Real E2E pass 1
 
@@ -563,7 +581,7 @@ FULL_REAL_E2E_PASS_1=PASS|FAIL
 PASS1_HEAD=<40-char SHA>
 ```
 
-It includes Remote Access + Internet Access + AI/MCP + lifecycle + backup/restore + supported platform matrix applicable to the release claim.
+It includes Remote Access + Internet Access + AI/MCP + lifecycle + backup/restore + the full currently available real-host matrix, using maximum safe parallelism. Missing external/platform/scale capacity is recorded separately as release coverage limitation rather than stopping unrelated testing.
 
 ## 28. Full Real E2E pass 2
 
