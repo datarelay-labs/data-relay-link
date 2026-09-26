@@ -315,6 +315,31 @@ Serial execution is allowed only where the test intentionally mutates shared glo
 
 Parallel execution must never weaken evidence isolation. Every command/result must identify the host, role, scenario, and timestamp.
 
+### 6.7 AI and ChatGPT Plugin boundary
+
+AI-assisted CLI is mandatory in core FULL_USER_E2E, but the optional ChatGPT Plus Plugin/relay is a separate repository and integration surface.
+
+Core rule:
+
+~~~text
+AI generates intent/command/Bundle
+→ operator executes through public drlink CLI
+→ drlink remains the only DRLink management/configuration authority used by the E2E
+~~~
+
+The optional repository `datarelay-labs/datarelay-link-plugin` is an experimental ChatGPT Plus / Agent Plugins + MCP relay layer. A real ChatGPT Plugin acceptance test therefore cannot be represented as a pure `drlink` CLI interaction end to end.
+
+If the requested E2E scope includes the Plugin stack:
+
+- pin the exact Plugin repository HEAD separately;
+- keep all DRLink configuration/policy/identity setup through `drlink`;
+- exercise Plugin/relay transport only for its actual data-plane/authentication role;
+- verify the relay does not invent tools, cache authorization decisions, or reinterpret DRLink AI Access;
+- verify DRLink remains the final authorization source on every tool call;
+- report Plugin acceptance separately from core CLI coverage.
+
+A Plugin failure must not be hidden by a passing direct MCP client, and a Plugin PASS must not be used as evidence that the core public CLI commands were exercised.
+
 # 7. User scenarios
 
 ## U-001 — Published SSH service — MANDATORY
@@ -1399,6 +1424,101 @@ Exercise CLI-configured AI/MCP and enrollment credentials with:
 
 No expired/revoked credential may become valid because policy enforcement is disabled.
 
+## S-017 — DNS, TLS, CA, and public-hostname failure cases — MANDATORY
+
+Through supported CLI-generated Enrollment/Zero-Touch/Remote Service paths, exercise:
+
+- DNS NXDOMAIN/unresolvable public hostname;
+- hostname resolving to an unexpected address;
+- certificate hostname mismatch;
+- untrusted/incorrect CA;
+- expired/not-yet-valid certificate where feasible in disposable test infrastructure;
+- configured public hostname removed or changed;
+- bootstrap hostname/public hostname disagreement where both concepts exist.
+
+Expected:
+
+- TLS verification is never silently disabled;
+- enrollment/bootstrap failure is explicit and safe;
+- a hostname failure does not silently rewrite persistent control identity;
+- recovery after restoring correct DNS/TLS does not require unrelated state destruction.
+
+## S-018 — ConfigurationBundle schema/patch corner cases — MANDATORY
+
+Through `test configuration`, `system diff configuration`, and `system apply configuration`, exercise:
+
+- omitted Resource -> unchanged;
+- omitted field on existing Resource -> unchanged;
+- explicitly supplied list -> exact desired list;
+- `state: absent` -> explicit deletion/reset;
+- `state: absent` combined with present-state fields -> reject;
+- wrong `configurationBundle.context` -> reject before mutation;
+- Server Bundle containing Agent-only Remote Services -> reject;
+- Agent Bundle containing Server Objects/Policies -> reject;
+- redaction placeholder such as REDACTED is not accepted as a new real secret;
+- same desired state -> NO CHANGE.
+
+## S-019 — Security-impact confirmation corner cases — MANDATORY
+
+Use public CLI to perform changes that broaden or sharply restrict access.
+
+Required cases include:
+
+- deleting the last BLACKLIST blocking Rule;
+- disabling policy enforcement;
+- resetting a restrictive policy;
+- deleting/removing a blocking condition;
+- removing the last enabled WHITELIST allow Rule;
+- rollback/restore to a state that broadens access.
+
+Verify warning text describes the effective result before Apply and Cancel leaves authoritative state unchanged.
+
+Rollback and restore must not bypass the same validation/security-impact/activation/verification pipeline used by normal Apply.
+
+## S-020 — Boundary and capacity off-by-one cases — MANDATORY
+
+For every user-visible bounded capacity available through CLI, exercise:
+
+~~~text
+0 or empty state where valid
+1
+maximum - 1
+maximum
+maximum + 1
+~~~
+
+At minimum apply this to:
+
+- Zero-Touch batch issuance/active-unused capacity;
+- endpoint-pool remaining capacity;
+- bulk enrollment capacity where bounded;
+- concurrency limits exposed by the current candidate.
+
+Use the current authoritative limits at execution time. Do not hard-code stale historical limits into the harness.
+
+## S-021 — Failure during mutation/activation — MANDATORY on disposable environment
+
+Inject failure at representative phases while the operation is initiated only through public CLI:
+
+- after validation but before authoritative commit;
+- after candidate authoritative transaction but during runtime generation;
+- during activation/verification;
+- during automatic rollback.
+
+Verify truthful error classification, no false SUCCESS, no unexplained partial state, and actionable `system diagnostics` recovery guidance when automatic rollback is incomplete.
+
+## S-022 — Long-lived, half-close, abrupt-close, and idle connection cases — MANDATORY
+
+For representative TCP services, exercise:
+
+- long-lived connection;
+- client FIN/normal close;
+- abrupt RST/kill;
+- one side stops sending while the other continues;
+- idle period followed by resumed traffic where the service contract permits.
+
+Verify cleanup, no endpoint leakage, no cross-session data leakage, and correct new-connection policy evaluation after the old session ends.
+
 # 11. Parallel and simultaneous multi-host scenarios
 
 Parallel multi-host execution is a mandatory part of FULL_USER_E2E, not only a performance optimization.
@@ -1898,6 +2018,46 @@ ENDURANCE_SOAK=24h
 
 Use these for overnight/endurance qualification when requested. Results must remain distinct from the mandatory 1-hour soak so historical shorter evidence is not misrepresented as 8h/24h evidence.
 
+## P-020 — Network impairment characterization — MANDATORY when test infrastructure supports controlled impairment
+
+Characterize representative traffic under controlled:
+
+- added latency;
+- jitter;
+- packet loss;
+- bandwidth restriction;
+- brief network partition.
+
+Measure throughput, latency, error/reconnect rate, endpoint continuity, and recovery time.
+
+This scenario characterizes resilience; do not invent a numeric PASS threshold when no approved network-impairment SLO exists. Security and state-integrity failures remain FAIL.
+
+## P-021 — Saturation and post-saturation recovery — MANDATORY
+
+Increase connection/concurrency/load until the selected profile target is reached or a practical saturation boundary is observed.
+
+Verify:
+
+- failure is bounded and explicit;
+- no authorization bypass under saturation;
+- no duplicate endpoint or state corruption;
+- control CLI remains recoverable;
+- resources return after load;
+- service returns to normal without reinstall/re-enrollment.
+
+## P-022 — Control-plane plus data-plane mixed pressure — MANDATORY
+
+While all-host data-plane load is active, concurrently execute through public CLI:
+
+- show/list inventory;
+- policy test/explain;
+- ConfigurationBundle test/diff;
+- audit reads;
+- support bundle on a designated host;
+- backup on a disposable Server environment.
+
+Measure command latency and verify read-only operations do not mutate state. Any mutating operation must still obey revision/security-impact/atomicity rules under load.
+
 # 13. Platform matrix
 
 For FULL_USER_E2E, test every platform currently claimed by the candidate at its actual qualification level.
@@ -1927,6 +2087,8 @@ FAIL
 Do not upgrade container/userspace evidence into Real E2E PASS.
 
 Where a platform cannot host the Server role, execute its applicable Agent/client scenarios only.
+
+At least one FULL_USER_E2E pass must also prove the entire available matrix concurrently via C-001 through C-012; per-platform serial PASS alone is insufficient for the all-host simultaneous gate.
 
 # 14. Complete CLI coverage list used by E2E
 
@@ -2180,6 +2342,27 @@ NOTES=
 
 Performance scenarios additionally retain raw machine-readable metrics when possible.
 
+The run must also produce explicit coverage inventories:
+
+~~~text
+SCENARIO_TOTAL=
+SCENARIO_PASS=
+SCENARIO_FAIL=
+SCENARIO_BLOCKED=
+SCENARIO_NOT_APPLICABLE=
+PUBLIC_CLI_COMMANDS_TOTAL=
+PUBLIC_CLI_COMMANDS_EXECUTED=
+PUBLIC_CLI_COMMANDS_UNEXERCISED=
+PUBLIC_CLI_SURFACES_TOTAL=
+PUBLIC_CLI_SURFACES_EXECUTED=
+CANONICAL_MASTER_SCENARIOS_TOTAL=
+CANONICAL_MASTER_SCENARIOS_EXECUTED=
+ALL_TEST_HOSTS_EXPECTED=
+ALL_TEST_HOSTS_SIMULTANEOUSLY_ONLINE=
+~~~
+
+Any non-zero unexercised applicable public CLI command or canonical mandatory scenario prevents FULL_USER_E2E PASS.
+
 # 16. Final FULL_USER_E2E report
 
 A full run must end with a summary at least equivalent to:
@@ -2206,6 +2389,9 @@ PUBLIC_CLI_COMMAND_COVERAGE=
 PUBLIC_CLI_SURFACE_COVERAGE=
 DRLINK_CONTROL_PLANE_CLI_ONLY=PASS|FAIL
 AI_ASSISTED_CLI=PASS|PARTIAL|FAIL
+CHATGPT_PLUGIN_INTEGRATION=PASS|PARTIAL|FAIL|NOT_APPLICABLE
+CANONICAL_MASTER_SCENARIO_COVERAGE=
+UNEXERCISED_PUBLIC_COMMANDS=
 
 REMOTE_ACCESS_REAL_TRAFFIC=
 INTERNET_ACCESS_REAL_TRAFFIC=
