@@ -13,9 +13,21 @@ The canonical role-based real-user execution matrix is:
 
 - USER_E2E_SCENARIOS.md
 
-An unqualified request for "User E2E", "사용자 E2E", "Full User E2E", or "전체 E2E" means the FULL_USER_E2E profile in that document: all mandatory User, Operator, Administrator, security/failure, and performance scenarios using the actual public drlink CLI and real traffic. ChatGPT is the executor and final auditor for that profile.
+An unqualified request for "User E2E", "사용자 E2E", "Full User E2E", or "전체 E2E" means the FULL_USER_E2E execution contract in that document.
 
-Appendix A of the same file retains the v2.4 operator manual runbook. It does not replace FULL_USER_E2E and it is not a second canonical document.
+The required execution model is:
+
+~~~text
+PASS 1 = direct public drlink CLI functional/lifecycle testing
+PASS 2 = AI-assisted command and ConfigurationBundle execution through public drlink
+PASS 3 = real forward, reverse, and full-duplex performance/resilience testing
+~~~
+
+All three passes are exercised from real User, Operator, and Administrator perspectives across the product lifecycle. Real designated test servers and clients may be rebooted, interrupted, uninstalled, reinstalled, exhausted, or otherwise made temporarily unusable by the scenarios.
+
+During an active FULL_USER_E2E run, product defects are recorded but not fixed. A failing scenario does not stop unrelated scenarios. Dependent scenarios are marked BLOCKED_BY_PRIOR_FAILURE, all independent work continues, and implementation fixes are consolidated only after the planned run is exhausted.
+
+ChatGPT is the executor and final auditor. Cursor does not execute or declare FULL_USER_E2E PASS.
 
 A targeted subset is valid only when the requested scope is explicitly narrowed. Final release qualification still requires the exact-HEAD double Full Real E2E passes defined later in this document.
 
@@ -518,9 +530,9 @@ Nevertheless, lab/test transition migration may be implemented for engineering c
 
 Final supported upgrade claims are based on actual prior stable releases and explicit migration code/evidence.
 
-## 26. Multi-host matrix
+## 26. Multi-host matrix and adaptive environment rule
 
-Final applicable matrix:
+Current platform claim matrix:
 
 ```text
 Ubuntu 24
@@ -531,9 +543,23 @@ Amazon Linux 2023
 macOS Apple Silicon
 ```
 
-Record qualification level honestly:
+FULL_USER_E2E uses every suitable real host available at run time. There is no fixed minimum fleet size for the base run and missing additional hosts do not stop execution.
+
+Record:
 
 ```text
+AVAILABLE_HOST_COUNT=
+MAX_PARALLEL_HOSTS_USED=
+MAX_REAL_SCALE_TESTED=
+PLATFORM_COVERAGE_LIMITATIONS=
+TOPOLOGY_COVERAGE_LIMITATIONS=
+UNTESTED_SCALE_CLAIMS=
+```
+
+Record each platform qualification level honestly:
+
+```text
+not available in current environment
 code-only
 container
 system service
@@ -541,6 +567,10 @@ real VM/physical
 field validated
 stable supported
 ```
+
+A missing platform or larger host tier is a release coverage limitation, not a product failure and not a reason to stop the active E2E run. Before publication, unresolved coverage limitations must be reconciled with the platform/scale claims the release intends to make.
+
+Product Master may describe a 10-50 host target range. The base E2E does not fabricate that fleet. It measures the maximum real host count available; explicit 10/30/50 scale qualification is performed when such infrastructure is provisioned or that scale claim is selected for qualification.
 
 ## 27. Full Real E2E pass 1
 
@@ -551,7 +581,7 @@ FULL_REAL_E2E_PASS_1=PASS|FAIL
 PASS1_HEAD=<40-char SHA>
 ```
 
-It includes Remote Access + Internet Access + AI/MCP + lifecycle + backup/restore + supported platform matrix applicable to the release claim.
+It includes Remote Access + Internet Access + AI/MCP + lifecycle + backup/restore + the full currently available real-host matrix, using maximum safe parallelism. Missing external/platform/scale capacity is recorded separately as release coverage limitation rather than stopping unrelated testing.
 
 ## 28. Full Real E2E pass 2
 

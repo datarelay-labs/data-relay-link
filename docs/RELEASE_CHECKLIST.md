@@ -322,42 +322,75 @@ MCP_REAL_E2E=
 
 ## 19. Real environment validation
 
-- [ ] fresh server install.
-- [ ] fresh client install.
-- [ ] Zero-Touch.
-- [ ] reboot/autostart.
-- [ ] update/migration.
-- [ ] backup/restore.
-- [ ] uninstall zero-residue where purge requested.
-- [ ] reinstall.
-- [ ] Remote Access SSH/HTTP/HTTPS/TCP as claimed.
-- [ ] ROUTED LAN target.
-- [ ] Internet Access curl/wget/git/apt.
-- [ ] denied Internet traffic cannot escape.
-- [ ] multi-host matrix.
-- [ ] MCP real operation on private/closed target.
+Execute USER_E2E_SCENARIOS.md as the canonical contract. The real-environment run is destructive by design on designated test systems; do not preserve a test host by weakening a lifecycle/failure scenario.
 
-Platform evidence:
+Before the run, discover the DRLink development server, inventory test-host candidates from its `~/.ssh/config`, acquire the E2E run lock, normalize designated mutable hosts to a clean pre-test baseline, create the evidence root/resource prefix, and resolve the exact product candidate identity.
+
+- [ ] PASS 1: all applicable functions exercised directly through the public drlink CLI.
+- [ ] PASS 2: applicable workflows repeated with AI-generated commands and/or ConfigurationBundles, then actually executed through drlink.
+- [ ] PASS 3: real forward, reverse, and simultaneous full-duplex performance/resilience executed.
+- [ ] pre-run clean normalization completed on all designated mutable hosts; stale prior E2E/product state does not contaminate this run.
+- [ ] fresh Server install and first-use discovery.
+- [ ] fresh Agent install on every currently available applicable platform; unavailable claimed platforms recorded as coverage limitations.
+- [ ] Zero-Touch, manual, and bulk enrollment.
+- [ ] User, Operator, and Administrator product lifecycle scenarios.
+- [ ] Remote Access SSH/HTTP/HTTPS/Custom TCP/Fixed TCP as claimed.
+- [ ] Direct Agent and Relay-to-LAN target paths.
+- [ ] Internet Access with real curl/wget/git/apt or applicable applications.
+- [ ] real ALLOW and DENY for every policy family.
+- [ ] AI Identity / Permission / AI Access / MCP behavior when included.
+- [ ] ConfigurationBundle file/stdin test/diff/apply/recovery.
+- [ ] reboot, outage, reconnect, and autostart recovery.
+- [ ] backup -> mutate -> restore -> functional verification.
+- [ ] product update and Relay Engine update separation.
+- [ ] prior-stable upgrade when claimed.
+- [ ] update-failure recovery.
+- [ ] Server and Agent uninstall/reinstall, including preserve/purge semantics.
+- [ ] endpoint-pool exhaustion and recovery.
+- [ ] concurrent writers, races, and parallel multi-host operations.
+- [ ] use every suitable real host available at run time; no arbitrary fixed host count blocks the base E2E.
+- [ ] record AVAILABLE_HOST_COUNT, MAX_PARALLEL_HOSTS_USED, MAX_REAL_SCALE_TESTED, and any untested scale claims.
+- [ ] multi-host simultaneous real traffic.
+- [ ] continuous traffic remains active during rule/policy changes, Object/Group membership changes, Agent join/leave/uninstall/re-enrollment, Remote Service churn, and selected diagnostics/Bundle/backup operations.
+- [ ] throughput forward/reverse/full-duplex, CPS, concurrency, latency, saturation, recovery, and soak.
+- [ ] security-under-load has zero unauthorized successful operations.
+- [ ] post-churn resource/endpoint leak check performed.
+- [ ] blocked/confusing/ambiguous/UX/documentation findings recorded.
+- [ ] no product fix performed during the active E2E run.
+- [ ] failures do not stop unrelated scenarios; dependent scenarios use BLOCKED_BY_PRIOR_FAILURE.
+- [ ] findings consolidated only after the planned run is exhausted.
+
+Platform/environment evidence:
 
 ```text
+AVAILABLE_HOST_COUNT=
+MAX_PARALLEL_HOSTS_USED=
+MAX_REAL_SCALE_TESTED=
+UNTESTED_SCALE_CLAIMS=
 Ubuntu 24=
 Rocky Linux 8=
 Rocky Linux 9=
 Amazon Linux 2023=
 macOS Apple Silicon=
 Windows 10=
+PLATFORM_COVERAGE_LIMITATIONS=
+TOPOLOGY_COVERAGE_LIMITATIONS=
 ```
 
 ## 20. Double Full Real E2E
 
+Each FULL_REAL_E2E pass means the complete three-pass execution contract above, not only a functional smoke pass.
+
 - [ ] `FULL_REAL_E2E_PASS_1=PASS`
+- [ ] PASS1 contains CLI direct + AI-assisted + bidirectional performance evidence.
 - [ ] `FULL_REAL_E2E_PASS_2=PASS`
+- [ ] PASS2 contains CLI direct + AI-assisted + bidirectional performance evidence.
 - [ ] `PASS1_HEAD==PASS2_HEAD`
 - [ ] `PASS1_HEAD==FINAL_QUALIFIED_HEAD`
 - [ ] no product/dependency change between passes.
 - [ ] no tracked commit is created after PASS2; the immutable tag is that same provenance HEAD.
 
-Any change resets the pass counter.
+Any qualifying product/dependency/generated-runtime change resets the pass counter.
 
 ## 21. Artifacts
 
