@@ -1,7 +1,7 @@
 # Data Relay Link — User E2E Test Scenarios
 
 > **Document role:** Canonical role-based User E2E execution matrix
-> **Canonical path:** repository-root `USER_E2E_SCENARIOS.md` (single entry point; do not add a second copy under `docs/`)
+> **Canonical path:** `docs/e2e/USER_E2E_TEST_SCENARIOS.md` (single canonical User E2E document; do not create duplicate copies)
 > **Operator runbook:** Appendix A retains the v2.4 manual operator procedure
 > **Product:** Data Relay Link
 > **Target:** v2.4 and later until superseded

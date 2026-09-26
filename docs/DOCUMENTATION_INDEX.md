@@ -47,7 +47,7 @@ Historical documents and internal storage names never override the public SSOT.
 
 These documents are useful for qualification but do not redefine product semantics:
 
-- [`USER_E2E_SCENARIOS.md`](../USER_E2E_SCENARIOS.md) — canonical FULL_USER_E2E matrix and v2.4 operator manual runbook
+- [`e2e/USER_E2E_TEST_SCENARIOS.md`](e2e/USER_E2E_TEST_SCENARIOS.md) — canonical FULL_USER_E2E matrix and v2.4 operator manual runbook
 - `HUMAN_UX_ADVERSARIAL_E2E.md`
 - `OCI_ACCEPTANCE.md`
 

@@ -11,7 +11,7 @@ Published tags are immutable.
 
 The canonical role-based real-user execution matrix is:
 
-- USER_E2E_SCENARIOS.md
+- docs/e2e/USER_E2E_TEST_SCENARIOS.md
 
 An unqualified request for "User E2E", "사용자 E2E", "Full User E2E", or "전체 E2E" means the FULL_USER_E2E profile in that document: all mandatory User, Operator, Administrator, security/failure, and performance scenarios using the actual public drlink CLI and real traffic. ChatGPT is the executor and final auditor for that profile.
 
