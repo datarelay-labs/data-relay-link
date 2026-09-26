@@ -1951,7 +1951,10 @@ frp_collect_missing_python_packages() {
   if [[ "$role" == server ]]; then
     modules+=(acme josepy cryptography)
   fi
-  for module in "${modules[@]}"; do
+  # Bash 4.2 + set -u: empty "${arr[@]}" is unbound; use ${arr[@]:-}.
+  # AL2 client collection leaves modules empty because YAML is not required.
+  for module in "${modules[@]:-}"; do
+    [[ -n "$module" ]] || continue
     if frp_python_module_importable "$module"; then
       continue
     fi
