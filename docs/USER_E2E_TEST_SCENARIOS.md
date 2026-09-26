@@ -640,7 +640,10 @@ Verify:
 - first machine binding;
 - enrolled Managed Host appears;
 - expiry/revocation semantics;
-- successful enrollment is not disconnected merely because the ticket later expires.
+- successful enrollment is not disconnected merely because the ticket later expires;
+- an initial Remote Service seeded by bootstrap is not reported HEALTHY merely because its local target socket is reachable;
+- before real relay/proxy verification, the seeded service remains truthfully DEGRADED/runtime-pending;
+- after actual relay verification succeeds, the same service/endpoint transitions to HEALTHY without endpoint identity drift.
 
 ## O-003 — Manual and bulk enrollment — MANDATORY
 
@@ -1519,6 +1522,27 @@ For representative TCP services, exercise:
 
 Verify cleanup, no endpoint leakage, no cross-session data leakage, and correct new-connection policy evaluation after the old session ends.
 
+## S-023 — Bootstrap catalog false-HEALTHY prevention — MANDATORY
+
+Use a clean Agent enrollment that declares an initial Remote Service whose local target is already reachable.
+
+Before explicit relay/proxy runtime verification, inspect only through public CLI:
+
+~~~text
+show status
+show remote-services
+show remote-service <NAME>
+~~~
+
+Expected:
+
+- allocated endpoint may be visible;
+- local target reachability alone does not produce HEALTHY;
+- status remains DEGRADED/runtime activation pending until actual relay verification succeeds;
+- Server read-only Remote Service view must not contradict the Agent by reporting false HEALTHY.
+
+Then complete real external traffic/relay verification and verify transition to HEALTHY on the same service identity and endpoint.
+
 # 11. Parallel and simultaneous multi-host scenarios
 
 Parallel multi-host execution is a mandatory part of FULL_USER_E2E, not only a performance optimization.
@@ -2090,6 +2114,32 @@ Where a platform cannot host the Server role, execute its applicable Agent/clien
 
 At least one FULL_USER_E2E pass must also prove the entire available matrix concurrently via C-001 through C-012; per-platform serial PASS alone is insufficient for the all-host simultaneous gate.
 
+## 13.1 Topology matrix
+
+FULL_USER_E2E must qualify every topology currently claimed by the candidate. Record unsupported/unclaimed topology explicitly rather than silently skipping it.
+
+At minimum classify:
+
+~~~text
+DIRECT_PUBLIC_IP=
+PUBLIC_DNS_HOSTNAME=
+ENTERPRISE_SINGLE_443=
+NAT_DNAT_PRIVATE_SERVER=
+RESTRICTED_OUTBOUND_AGENT_NETWORK=
+RELAY_HOST_TO_LAN_TARGET=
+~~~
+
+Use:
+
+~~~text
+PASS_REAL
+NOT_APPLICABLE_NOT_CLAIMED
+BLOCKED_ENVIRONMENT
+FAIL
+~~~
+
+Public DNS and hostname behavior must include U-009/A-018. Enterprise single-443 or NAT/DNAT becomes mandatory whenever the current candidate/release documentation claims it as supported. A historical PASS from another HEAD is not current-run evidence.
+
 # 14. Complete CLI coverage list used by E2E
 
 This section mirrors the public v2.4 CLI/AI Master. It is a coverage checklist, not a second grammar authority.
@@ -2299,7 +2349,102 @@ supported AI/MCP client when applicable
 
 Use only the commands actually applicable to the target OS/application.
 
-# 15. Evidence and result rules
+# 15. Conditional ChatGPT Plus Plugin / MCP relay integration lane
+
+This lane applies when the requested E2E scope includes `datarelay-labs/datarelay-link-plugin` or when a release/acceptance claim includes the ChatGPT Plus Plugin/relay path.
+
+It is intentionally reported separately because the Plugin repository is an optional experimental integration layer. Core DRLink must continue to operate without it.
+
+All DRLink state setup remains CLI-only. Plugin transport/authentication is exercised only through its supported integration surface.
+
+## X-001 — Exact cross-repository identity — CONDITIONAL
+
+Record separately:
+
+~~~text
+DRLINK_CORE_HEAD=
+DRLINK_PLUGIN_HEAD=
+PLUGIN_PACKAGE_VERSION_OR_ID=
+DRLINK_MCP_ENDPOINT=
+RELAY_ENDPOINT=
+~~~
+
+Never reuse Plugin evidence from another Core HEAD or vice versa.
+
+## X-002 — Plugin package and MCP declaration — CONDITIONAL
+
+Verify the actual package declares the intended remote Streamable HTTP MCP endpoint and does not embed literal credentials.
+
+Package/relay metadata must not invent tools or redefine DRLink authorization.
+
+## X-003 — OAuth 2.1 / owner-consent flow — CONDITIONAL
+
+Exercise the currently supported Plugin authentication path, including as applicable:
+
+- protected-resource metadata;
+- authorization-server metadata;
+- Authorization Code;
+- PKCE S256;
+- DCR/public client behavior;
+- owner approval;
+- access token;
+- refresh/reconnect;
+- revoke/disconnect.
+
+Verify public/non-loopback OAuth uses durable protected state according to the Plugin contract and never falls back to unsafe mock authentication.
+
+## X-004 — MCP relay pass-through — CONDITIONAL
+
+Exercise:
+
+~~~text
+initialize
+tools/list
+tools/call
+JSON-RPC error path
+Mcp-Session-Id continuity
+Last-Event-ID where applicable
+Accept / Content-Type protocol behavior
+~~~
+
+Verify the relay preserves upstream tool schemas/annotations/security metadata and does not invent, filter, or reinterpret tools.
+
+## X-005 — DRLink remains final authorization source — CONDITIONAL
+
+Configure AI Identity, Permission, destination, and AI Access only through `drlink`.
+
+Through the Plugin/relay path verify per call:
+
+- DRLink ALLOW succeeds;
+- DRLink DENY remains denied;
+- policy change affects the next call;
+- relay does not cache an earlier ALLOW;
+- one Plugin identity/binding cannot inherit another's authorization.
+
+## X-006 — Relay failure and secret safety — CONDITIONAL
+
+Verify:
+
+- missing/invalid/unreachable upstream fails closed;
+- health output contains no secrets;
+- Authorization headers/tokens are redacted from logs;
+- upstream URL binding does not become a generic open proxy;
+- configured HTTPS upstream retains hostname/SNI/certificate verification;
+- restart/recovery preserves only the state explicitly intended to persist.
+
+## X-007 — Core vs Plugin acceptance separation — CONDITIONAL
+
+Final report must distinguish:
+
+~~~text
+CORE_CLI_E2E=
+DIRECT_MCP_E2E=
+CHATGPT_PLUGIN_RELAY_E2E=
+~~~
+
+A passing direct MCP test cannot substitute for a Plugin path failure. A Plugin path PASS cannot substitute for unexecuted public `drlink` CLI scenarios.
+
+# 16. Evidence and result rules
 
 Every scenario result must be one of:
 
@@ -2363,7 +2508,7 @@ ALL_TEST_HOSTS_SIMULTANEOUSLY_ONLINE=
 
 Any non-zero unexercised applicable public CLI command or canonical mandatory scenario prevents FULL_USER_E2E PASS.
 
-# 16. Final FULL_USER_E2E report
+# 17. Final FULL_USER_E2E report
 
 A full run must end with a summary at least equivalent to:
 
@@ -2383,6 +2528,7 @@ SECURITY_NEGATIVE=PASS|PARTIAL|FAIL
 PERFORMANCE_FUNCTIONAL=PASS|PARTIAL|FAIL
 PERFORMANCE_NUMERIC_QUALIFICATION=PASS|FAIL|MEASURED_NOT_QUALIFIED
 MULTI_PLATFORM=PASS|PARTIAL|FAIL
+TOPOLOGY_MATRIX=PASS|PARTIAL|FAIL
 ALL_TEST_HOSTS_SIMULTANEOUSLY_ONLINE=PASS|PARTIAL|FAIL
 PARALLEL_MULTI_HOST=PASS|PARTIAL|FAIL
 PUBLIC_CLI_COMMAND_COVERAGE=
@@ -2422,7 +2568,7 @@ EVIDENCE_ROOT=
 
 If FINAL_STATUS is not PASS, list the exact failing/blocking scenario IDs.
 
-# 17. Maintenance rule
+# 18. Maintenance rule
 
 Whenever a public CLI command, supported platform, topology, Access Policy semantic, Remote Service lifecycle, Internet Access behavior, AI/MCP capability, enrollment workflow, backup/restore behavior, or release gate changes, this document must be reviewed in the same change.
 
