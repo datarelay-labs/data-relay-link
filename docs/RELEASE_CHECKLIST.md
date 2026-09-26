@@ -328,7 +328,7 @@ Execute USER_E2E_SCENARIOS.md as the canonical contract. The real-environment ru
 - [ ] PASS 2: applicable workflows repeated with AI-generated commands and/or ConfigurationBundles, then actually executed through drlink.
 - [ ] PASS 3: real forward, reverse, and simultaneous full-duplex performance/resilience executed.
 - [ ] fresh Server install and first-use discovery.
-- [ ] fresh Agent install on every applicable platform.
+- [ ] fresh Agent install on every currently available applicable platform; unavailable claimed platforms recorded as coverage limitations.
 - [ ] Zero-Touch, manual, and bulk enrollment.
 - [ ] User, Operator, and Administrator product lifecycle scenarios.
 - [ ] Remote Access SSH/HTTP/HTTPS/Custom TCP/Fixed TCP as claimed.
@@ -345,22 +345,33 @@ Execute USER_E2E_SCENARIOS.md as the canonical contract. The real-environment ru
 - [ ] Server and Agent uninstall/reinstall, including preserve/purge semantics.
 - [ ] endpoint-pool exhaustion and recovery.
 - [ ] concurrent writers, races, and parallel multi-host operations.
+- [ ] use every suitable real host available at run time; no arbitrary fixed host count blocks the base E2E.
+- [ ] record AVAILABLE_HOST_COUNT, MAX_PARALLEL_HOSTS_USED, MAX_REAL_SCALE_TESTED, and any untested scale claims.
 - [ ] multi-host simultaneous real traffic.
+- [ ] continuous traffic remains active during rule/policy changes, Object/Group membership changes, Agent join/leave/uninstall/re-enrollment, Remote Service churn, and selected diagnostics/Bundle/backup operations.
 - [ ] throughput forward/reverse/full-duplex, CPS, concurrency, latency, saturation, recovery, and soak.
+- [ ] security-under-load has zero unauthorized successful operations.
+- [ ] post-churn resource/endpoint leak check performed.
 - [ ] blocked/confusing/ambiguous/UX/documentation findings recorded.
 - [ ] no product fix performed during the active E2E run.
 - [ ] failures do not stop unrelated scenarios; dependent scenarios use BLOCKED_BY_PRIOR_FAILURE.
 - [ ] findings consolidated only after the planned run is exhausted.
 
-Platform evidence:
+Platform/environment evidence:
 
 ```text
+AVAILABLE_HOST_COUNT=
+MAX_PARALLEL_HOSTS_USED=
+MAX_REAL_SCALE_TESTED=
+UNTESTED_SCALE_CLAIMS=
 Ubuntu 24=
 Rocky Linux 8=
 Rocky Linux 9=
 Amazon Linux 2023=
 macOS Apple Silicon=
 Windows 10=
+PLATFORM_COVERAGE_LIMITATIONS=
+TOPOLOGY_COVERAGE_LIMITATIONS=
 ```
 
 ## 20. Double Full Real E2E
