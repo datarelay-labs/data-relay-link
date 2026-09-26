@@ -1663,14 +1663,14 @@
   {
     "path": [
       "system",
-      "server-status"
+      "status"
     ],
     "roles": "server",
     "category": "System",
     "summary": "Show detailed server status",
-    "detail": "",
+    "detail": "Canonical Server status. show status remains the role-aware summary.",
     "examples": [
-      "system server-status"
+      "system status"
     ],
     "args": [],
     "tail": null,
@@ -1678,6 +1678,10 @@
       "server-status"
     ],
     "aliases": [
+      [
+        "system",
+        "server-status"
+      ],
       [
         "show",
         "server-status"

@@ -1363,8 +1363,8 @@ def to_internal(tokens):
 
     if path == ("system", "version"):
         return ["show", "version"] + rest
-    if path == ("system", "server-status"):
-        # Top-level server-status action (detailed server host view).
+    if path == ("system", "status"):
+        # Detailed server host view. system server-status remains a compatibility alias.
         return ["server-status"] + rest
     if path == ("system", "info"):
         return ["show", "info"] + rest

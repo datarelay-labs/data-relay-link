@@ -140,10 +140,36 @@ class OperationalUxClosureTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.get("action"), "control_plane")
 
-    def test_system_server_status_parity(self):
-        result = _match(["system", "server-status"], "server")
-        self.assertEqual(result.get("status"), "ok")
-        self.assertEqual(result.get("action"), "show_server_status")
+    def test_system_status_canonical_and_alias(self):
+        canonical = _match(["system", "status"], "server")
+        self.assertEqual(canonical.get("status"), "ok")
+        self.assertEqual(canonical.get("action"), "show_server_status")
+        alias = _match(["system", "server-status"], "server")
+        self.assertEqual(alias.get("status"), "ok")
+        self.assertEqual(alias.get("action"), "show_server_status")
+        summary = _match(["show", "status"], "server")
+        self.assertEqual(summary.get("status"), "ok")
+        self.assertEqual(summary.get("action"), "control_plane")
+        self.assertNotEqual(summary.get("action"), "show_server_status")
+        bare = _match(["status"], "server")
+        self.assertEqual(bare.get("action"), "control_plane")
+        self.assertNotEqual(bare.get("action"), "show_server_status")
+        client = _match(["system", "status"], "client")
+        self.assertEqual(client.get("status"), "role")
+        self.assertNotEqual(client.get("action"), "show_server_status")
+        children = [name for name, _summary in CATALOG.subcommands("system", "server")]
+        self.assertIn("status", children)
+        self.assertNotIn("server-status", children)
+        completed = GRAMMAR.completion_candidates(
+            "system ",
+            "server",
+            [],
+            [],
+            [],
+            trailing=True,
+        )
+        self.assertIn("status", completed)
+        self.assertNotIn("server-status", completed)
 
     def test_installer_url_set_unset_symmetry(self):
         set_linux = _match(

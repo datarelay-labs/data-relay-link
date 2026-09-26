@@ -2323,6 +2323,14 @@ def _match_system(tokens, role, names=None):
         if len(tokens) > 2:
             return incomplete("Unexpected arguments.", ["system version"])
         return {"status": "ok", "action": "show_version"}
+    if op == "status":
+        # Canonical public spelling. show status stays the summary action.
+        if len(tokens) > 2:
+            return incomplete("Unexpected arguments.", ["system status"])
+        _client, server = _role_parts(role)
+        if not server:
+            return {"status": "role", "need": "server", "command": "system status"}
+        return {"status": "ok", "action": "show_server_status", "passthrough": []}
     if op == "diagnostics":
         if len(tokens) > 2 and tokens[2] not in ("control-plane", "runtime", "mcp"):
             return incomplete(
