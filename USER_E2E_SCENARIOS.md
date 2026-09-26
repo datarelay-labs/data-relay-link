@@ -28,17 +28,22 @@ The executor must autonomously:
 
 1. read the latest applicable USER_E2E_SCENARIOS.md from the Data Relay Link candidate workstream;
 2. read only the referenced canonical documents needed to resolve current CLI grammar, release identity, or qualification rules;
-3. determine the current candidate branch/HEAD/build and installed product identity;
-4. on the DRLink development server, read `~/.ssh/config` and use its concrete SSH Host aliases as the candidate host inventory; probe them and classify every currently reachable host by role, platform, topology, and destructive-test suitability;
-5. create a new evidence root and run identity;
-6. map this document's scenarios to the available environment;
-7. start every independent executable lane in parallel, using all suitable available hosts;
-8. keep representative real traffic active while executing live policy, Agent, Remote Service, Object/Group, Bundle, diagnostics, lifecycle, failure, and recovery changes where this document requires it;
-9. execute PASS 1 Direct CLI, PASS 2 AI-assisted, and PASS 3 bidirectional performance/resilience as defined here;
-10. record findings and dependent blockers without fixing product defects during the active run;
-11. continue until every currently executable scenario has been attempted and all coverage limitations are recorded;
-12. produce the final report defined by this document;
-13. only after the run is exhausted, consolidate findings and enter the engineering fix/verify/rerun workflow.
+3. resolve the exact product candidate branch/HEAD/build using the active release workstream; a documentation-only E2E-contract branch does not silently become the product candidate;
+4. on the DRLink development server, read `~/.ssh/config` and use its concrete SSH Host aliases as the candidate host inventory; probe them and classify every currently reachable host by role, platform, topology, privilege, and destructive-test suitability;
+5. acquire a run lock so another destructive FULL_USER_E2E cannot silently use the same Server/Agent fleet at the same time;
+6. create a new run identity, evidence root, and unique resource prefix;
+7. capture pre-run host/time/network/product-state inventory, then normalize every designated mutable test host to the clean baseline defined in this document;
+8. install any ordinary non-product test utilities needed for traffic generation, metrics, checksums, or network fault injection;
+9. install the exact candidate cleanly and record installed product identity;
+10. map this document's scenarios to the available environment;
+11. start every independent executable lane in parallel, using all suitable available hosts;
+12. keep representative real traffic active while executing live policy, Agent, Remote Service, Object/Group, Bundle, diagnostics, lifecycle, failure, and recovery changes where this document requires it;
+13. execute PASS 1 Direct CLI, PASS 2 AI-assisted, and PASS 3 bidirectional performance/resilience as defined here;
+14. record findings and dependent blockers without fixing product defects during the active run;
+15. continue until every currently executable scenario has been attempted and all coverage limitations are recorded;
+16. produce the final report defined by this document;
+17. release the run lock only after evidence is durable;
+18. only after the run is exhausted, consolidate findings and enter the engineering fix/verify/rerun workflow.
 
 Default behavior is execution, not explanation.
 
@@ -48,6 +53,10 @@ ASK_USER_TO_RESTATE_RULES=NO
 ASK_FOR_CONFIRMATION_BEFORE_START=NO
 PLAN_ONLY_RESPONSE=NO
 USE_AVAILABLE_REAL_HOSTS=YES
+PRE_RUN_CLEAN_NORMALIZATION=YES
+AUTO_INSTALL_TEST_UTILITIES=YES
+RUN_LOCK_REQUIRED=YES
+UNIQUE_RESOURCE_PREFIX_REQUIRED=YES
 PARALLEL_BY_DEFAULT=YES
 CONTINUE_AFTER_INDEPENDENT_FAILURES=YES
 FIX_DURING_ACTIVE_RUN=NO
@@ -134,6 +143,111 @@ The following are normal and required when applicable:
 A test server or client may become unusable as a result of a scenario. That is acceptable on designated test infrastructure and is itself evidence.
 
 Do not weaken, skip, or replace a destructive scenario merely to keep a test machine healthy.
+
+### 2.1.1 Pre-run clean normalization
+
+A new FULL_USER_E2E must not inherit success/failure state from a previous run.
+
+Before installing the exact candidate, every designated mutable Server/Agent/client host must be inspected for stale DRLink test state.
+
+Record a pre-clean snapshot:
+
+~~~text
+HOST=
+REACHABLE=
+SUDO_OR_ADMIN=
+TIME_UTC=
+DRLINK_INSTALLED=
+DRLINK_VERSION=
+DRLINK_SERVICES=
+DRLINK_PROCESSES=
+DRLINK_LISTENERS=
+DRLINK_CONFIG_STATE=
+DRLINK_RUNTIME_STATE=
+PREVIOUS_E2E_RESOURCES=
+CLEANUP_REQUIRED=YES|NO
+~~~
+
+If previous testing left DRLink installed, partially installed, enrolled, running, failed, or carrying prior test configuration/state, normalize the host before the new run.
+
+Preferred cleanup order:
+
+1. use the installed product's documented public uninstall/purge path when it is functional;
+2. verify product-owned services/processes/listeners have stopped;
+3. remove only stale product-owned test state that the documented uninstall/purge contract says should be removable;
+4. if a broken/partial prior installation prevents public uninstall, perform pre-run lab normalization with normal OS/package/service tools, restricted strictly to DRLink-owned packages, units, processes, configuration, state, runtime, logs, and test artifacts;
+5. reboot the designated test host when required to prove that stale processes/mounts/listeners are gone;
+6. verify the clean baseline before candidate installation.
+
+Pre-run lab normalization is environment preparation, not qualification evidence for the uninstall feature. The actual uninstall/reinstall scenarios later in the run must still exercise and grade the public product lifecycle.
+
+Never delete unrelated application, user, operating-system, rescue, or production data merely to make a host clean.
+
+A host is considered clean enough to begin candidate installation when:
+
+~~~text
+NO_PREVIOUS_DRLINK_PROCESS=YES
+NO_PREVIOUS_DRLINK_SERVICE_ACTIVE=YES
+NO_STALE_DRLINK_LISTENER=YES
+NO_PREVIOUS_E2E_CONTROL_STATE=YES
+NO_PREVIOUS_E2E_ENROLLMENT_IDENTITY=YES
+NO_PREVIOUS_E2E_RUNTIME_STATE=YES
+UNRELATED_HOST_STATE_PRESERVED=YES
+~~~
+
+If the host cannot be safely normalized without touching unrelated/production/rescue state, exclude it from destructive use and continue with the remaining hosts.
+
+### 2.1.2 Autonomous preflight defaults
+
+FULL_USER_E2E uses these defaults so execution does not require another prompt:
+
+~~~text
+RUN_ID=drlink-e2e-<UTC_TIMESTAMP>
+RESOURCE_PREFIX=e2e-<RUN_ID>-
+EVIDENCE_ROOT=$HOME/e2e-reports/<RUN_ID>
+RUN_LOCK=$HOME/.cache/drlink-full-user-e2e.lock
+HOST_CLOCK_CHECK=REQUIRED
+SUDO_OR_ADMIN_PROBE=REQUIRED
+TEST_UTILITY_INSTALL=ALLOWED
+TEST_UTILITY_INSTALL_SCOPE=NON_PRODUCT_ONLY
+SECRET_LOGGING=FORBIDDEN
+~~~
+
+Rules:
+
+- create the evidence root before destructive work;
+- record command/action output with host and UTC timestamps;
+- check host clocks well enough to correlate concurrent events; record material skew;
+- probe sudo/administrator capability before assigning destructive scenarios;
+- ordinary load/measurement/fault-injection tools may be installed when absent;
+- installing a test utility must not change DRLink product code or authoritative state;
+- use the unique resource prefix for temporary Objects, Groups, Rules, services, identities, files, and load-test names where the product allows naming;
+- do not run two destructive FULL_USER_E2E executions against the same shared Server/fleet without explicit isolation;
+- never persist reusable credentials, enrollment secrets, OAuth tokens, or private keys in evidence.
+
+### 2.1.3 Product candidate resolution
+
+The E2E contract revision and the product candidate revision may differ.
+
+Resolve and record both:
+
+~~~text
+E2E_CONTRACT_REF=
+E2E_CONTRACT_HEAD=
+PRODUCT_CANDIDATE_BRANCH=
+PRODUCT_CANDIDATE_HEAD=
+PRODUCT_CANDIDATE_BUILD=
+~~~
+
+A documentation-only branch or PR that changes this test contract must not silently change the product bytes being qualified.
+
+Candidate precedence:
+
+1. an exact candidate SHA explicitly pinned by the active release workstream;
+2. otherwise the exact HEAD identified by the active release-closure Work Packet / release-validation state;
+3. otherwise the exact HEAD of the release candidate/base workstream associated with the E2E contract.
+
+If multiple different product HEADs are simultaneously presented as the active release candidate and repository evidence cannot resolve the conflict, record `CANDIDATE_IDENTITY_CONFLICT` before destructive qualification. Do not combine evidence from different product candidates into one qualifying run.
 
 ### 2.2 No mid-run product fixes
 
@@ -309,7 +423,9 @@ FULL_USER_E2E follows the actual product lifecycle instead of treating features 
 
 ### L0 — Environment and clean installation
 
-- verify test host identity, OS, architecture, network, DNS, and topology;
+- discover candidate hosts from the development server's `~/.ssh/config`;
+- verify test host identity, OS, architecture, privilege, network, DNS, clock, and topology;
+- detect and clean previous E2E/DRLink state on designated mutable hosts before the new candidate install;
 - clean Server install from the exact candidate;
 - first launch and public CLI discovery;
 - clean Agent installs on every currently available applicable platform; record unavailable claimed platforms as coverage limitations;
@@ -1148,6 +1264,11 @@ ROLE=
 HOST=
 SOURCE_HEAD=
 PRODUCT_VERSION=
+PRE_RUN_CLEAN_NORMALIZATION=
+CANDIDATE_IDENTITY_RESOLVED=
+RUN_LOCK_USED=
+RESOURCE_PREFIX=
+
 COMMAND_OR_ACTION=
 EXPECTED=
 OBSERVED=
@@ -1222,6 +1343,12 @@ Run-level identity:
 
 ~~~text
 TEST_RUN_ID=
+RESOURCE_PREFIX=
+E2E_CONTRACT_REF=
+E2E_CONTRACT_HEAD=
+PRODUCT_CANDIDATE_BRANCH=
+PRODUCT_CANDIDATE_HEAD=
+RUN_LOCK=
 START_UTC=
 END_UTC=
 REPOSITORY=
