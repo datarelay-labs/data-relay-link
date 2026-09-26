@@ -28,22 +28,23 @@ The executor must autonomously:
 
 1. read the latest applicable USER_E2E_SCENARIOS.md from the Data Relay Link candidate workstream;
 2. read only the referenced canonical documents needed to resolve current CLI grammar, release identity, or qualification rules;
-3. resolve the exact product candidate branch/HEAD/build using the active release workstream; a documentation-only E2E-contract branch does not silently become the product candidate;
-4. on the DRLink development server, read `~/.ssh/config` and use its concrete SSH Host aliases as the candidate host inventory; probe them and classify every currently reachable host by role, platform, topology, privilege, and destructive-test suitability;
-5. acquire a run lock so another destructive FULL_USER_E2E cannot silently use the same Server/Agent fleet at the same time;
-6. create a new run identity, evidence root, and unique resource prefix;
-7. capture pre-run host/time/network/product-state inventory, then normalize every designated mutable test host to the clean baseline defined in this document;
-8. install any ordinary non-product test utilities needed for traffic generation, metrics, checksums, or network fault injection;
-9. install the exact candidate cleanly and record installed product identity;
-10. map this document's scenarios to the available environment;
-11. start every independent executable lane in parallel, using all suitable available hosts;
-12. keep representative real traffic active while executing live policy, Agent, Remote Service, Object/Group, Bundle, diagnostics, lifecycle, failure, and recovery changes where this document requires it;
-13. execute PASS 1 Direct CLI, PASS 2 AI-assisted, and PASS 3 bidirectional performance/resilience as defined here;
-14. record findings and dependent blockers without fixing product defects during the active run;
-15. continue until every currently executable scenario has been attempted and all coverage limitations are recorded;
-16. produce the final report defined by this document;
-17. release the run lock only after evidence is durable;
-18. only after the run is exhausted, consolidate findings and enter the engineering fix/verify/rerun workflow.
+3. identify the DRLink development server as the connected engineering host that contains the Data Relay Link repository/worktree and usable `~/.ssh/config`; if a host/device named `dev-drlink` exists and satisfies those checks, prefer it;
+4. resolve the exact product candidate branch/HEAD/build using the active release workstream; a documentation-only E2E-contract branch does not silently become the product candidate;
+5. on that development server, read `~/.ssh/config` and use its concrete SSH Host aliases as the candidate host inventory; probe them and classify every currently reachable host by role, platform, topology, privilege, and destructive-test suitability;
+6. acquire a run lock so another destructive FULL_USER_E2E cannot silently use the same Server/Agent fleet at the same time;
+7. create a new run identity, evidence root, and unique resource prefix;
+8. capture pre-run host/time/network/product-state inventory, then normalize every designated mutable test host to the clean baseline defined in this document;
+9. install any ordinary non-product test utilities needed for traffic generation, metrics, checksums, or network fault injection;
+10. install the exact candidate cleanly and record installed product identity;
+11. map this document's scenarios to the available environment;
+12. start every independent executable lane in parallel, using all suitable available hosts;
+13. keep representative real traffic active while executing live policy, Agent, Remote Service, Object/Group, Bundle, diagnostics, lifecycle, failure, and recovery changes where this document requires it;
+14. execute PASS 1 Direct CLI, PASS 2 AI-assisted, and PASS 3 bidirectional performance/resilience as defined here;
+15. record findings and dependent blockers without fixing product defects during the active run;
+16. continue until every currently executable scenario has been attempted and all coverage limitations are recorded;
+17. produce the final report defined by this document;
+18. release the run lock only after evidence is durable;
+19. only after the run is exhausted, consolidate findings and enter the engineering fix/verify/rerun workflow.
 
 Default behavior is execution, not explanation.
 
@@ -202,6 +203,8 @@ If the host cannot be safely normalized without touching unrelated/production/re
 FULL_USER_E2E uses these defaults so execution does not require another prompt:
 
 ~~~text
+DEVELOPMENT_SERVER_DISCOVERY=REPO_WORKTREE_PLUS_SSH_CONFIG
+PREFERRED_DEVELOPMENT_SERVER=dev-drlink_if_available
 RUN_ID=drlink-e2e-<UTC_TIMESTAMP>
 RESOURCE_PREFIX=e2e-<RUN_ID>-
 EVIDENCE_ROOT=$HOME/e2e-reports/<RUN_ID>
@@ -885,6 +888,16 @@ Use the real test environment that exists at run time. The base FULL_USER_E2E is
 
 ### 12.1 Pre-run feasibility inventory
 
+The runtime host inventory SSOT is the OpenSSH client configuration on the DRLink development server.
+
+Development-server resolution:
+
+1. inspect connected engineering hosts/devices;
+2. choose the host that has the Data Relay Link repository/worktree for the active candidate and a readable `~/.ssh/config`;
+3. when `dev-drlink` is connected and satisfies those conditions, prefer it;
+4. record the selected development server in run identity;
+5. do not ask the user to manually enumerate test hosts when this discovery succeeds.
+
 The runtime host inventory SSOT is the OpenSSH client configuration on the DRLink development server:
 
 ~~~text
@@ -1343,6 +1356,7 @@ Run-level identity:
 
 ~~~text
 TEST_RUN_ID=
+DEVELOPMENT_SERVER=
 RESOURCE_PREFIX=
 E2E_CONTRACT_REF=
 E2E_CONTRACT_HEAD=
@@ -1387,6 +1401,11 @@ FINAL_AUDITOR=ChatGPT
 CURSOR_EXECUTED_USER_E2E=NO
 FIXES_PERFORMED_DURING_RUN=NO
 
+DEVELOPMENT_SERVER=
+PRE_RUN_CLEAN_NORMALIZATION=
+CANDIDATE_IDENTITY_RESOLVED=
+RUN_LOCK_USED=
+RESOURCE_PREFIX=
 SOURCE_HEAD=
 PRODUCT_VERSION=
 FINAL_STATUS=PASS|PARTIAL|FAIL
