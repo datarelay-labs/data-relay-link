@@ -324,9 +324,12 @@ MCP_REAL_E2E=
 
 Execute USER_E2E_SCENARIOS.md as the canonical contract. The real-environment run is destructive by design on designated test systems; do not preserve a test host by weakening a lifecycle/failure scenario.
 
+Before the run, discover the DRLink development server, inventory test-host candidates from its `~/.ssh/config`, acquire the E2E run lock, normalize designated mutable hosts to a clean pre-test baseline, create the evidence root/resource prefix, and resolve the exact product candidate identity.
+
 - [ ] PASS 1: all applicable functions exercised directly through the public drlink CLI.
 - [ ] PASS 2: applicable workflows repeated with AI-generated commands and/or ConfigurationBundles, then actually executed through drlink.
 - [ ] PASS 3: real forward, reverse, and simultaneous full-duplex performance/resilience executed.
+- [ ] pre-run clean normalization completed on all designated mutable hosts; stale prior E2E/product state does not contaminate this run.
 - [ ] fresh Server install and first-use discovery.
 - [ ] fresh Agent install on every currently available applicable platform; unavailable claimed platforms recorded as coverage limitations.
 - [ ] Zero-Touch, manual, and bulk enrollment.
