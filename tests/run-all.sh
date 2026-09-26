@@ -46,6 +46,7 @@ python3 tests/test-mgmt-identity-first-gen-atomicity.py
 ./tests/test-client-config.sh
 ./tests/test-client-allocator-url.sh
 ./tests/test-client-platform.sh
+./tests/test-install-enrolled-proxy-verification.sh
 for macos_test in ./tests/test-macos-*.sh; do
   "$macos_test"
 done
@@ -217,6 +218,7 @@ python3 tests/test-audit-log.py
 python3 tests/test-release-partial-acl.py
 python3 tests/test-v24-upgrade-reconcile.py
 python3 tests/test-v24-status-parity.py
+python3 tests/test-v24-bootstrap-catalog-convergence.py
 python3 tests/test-v24-managed-host-policy.py
 python3 tests/test-v24-runtime-allocator.py
 python3 tests/test-v24-mgmt-api-auth.py

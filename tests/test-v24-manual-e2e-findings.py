@@ -226,6 +226,23 @@ class DoctorPresentationTests(unittest.TestCase):
         self.assertEqual(via_registry["role"], "server")
         self.assertEqual(via_registry["label"], "DRLink Server")
 
+    def test_token_and_frps_toml_remnants_stay_agent(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-doc-weak-srv-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        root = Path(tmp)
+        (root / "etc/frp").mkdir(parents=True)
+        (root / "etc/systemd/system").mkdir(parents=True)
+        (root / "etc/frp/client-state.json").write_text(
+            '{"schema_version":1,"services":{}}\n', encoding="utf-8"
+        )
+        (root / "etc/systemd/system/drlink-client.service").write_text("[Unit]\n", encoding="utf-8")
+        (root / "etc/frp/server_token").write_text("leftover-token\n", encoding="utf-8")
+        (root / "etc/frp/frps.toml").write_text("bindPort = 7000\n", encoding="utf-8")
+        info = doctor.detect_role(doctor.Paths(str(root)))
+        self.assertEqual(info["role"], "client")
+        self.assertEqual(info["label"], "Agent Host")
+        self.assertNotIn(info["role"], ("dual", "server", "partial_server"))
+
     def test_development_display_identity(self):
         d = ident.derive_display_identity(
             project_version="2.4.0",

@@ -417,7 +417,70 @@ chmod +x "$FRP_TEST_CMD_PATH/python3"
 frp_python_module_importable() { return 1; }
 frp_collect_missing_python_packages
 printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3.11-pyyaml || fail "EL8 python3.11 missing python3.11-pyyaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml; then
+  fail "live Rocky8 python3.11 must not select platform python3-pyyaml"
+fi
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
+  fail "live Rocky8 python3.11 must not select python39-pyyaml"
+fi
 pass "client yaml package mapping"
+
+# Live Rocky 8: active python3 is Python 3.11. python3-pyyaml is the platform
+# 3.6 ABI and must not satisfy import yaml on that interpreter.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-rocky311-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-rocky311-yaml"
+ROCKY311_STATE="$WORKDIR/rocky311-py-state"
+mkdir -p "$ROCKY311_STATE" "$FRP_TEST_PM_PATH"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=rocky
+DISTRO_VERSION=8.10
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<EOF
+#!/bin/sh
+code="\${2:-}"
+case "\$code" in
+  *'sys.version_info[:2]'*) printf '3.11\\n'; exit 0 ;;
+  *version_info*) exit 0 ;;
+  *'import yaml'*)
+    [ -f $(printf '%q' "$ROCKY311_STATE")/yaml311 ] && exit 0
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+ROCKY311_LOG="$WORKDIR/rocky311-yaml.log"
+: >"$ROCKY311_LOG"
+cat >"$FRP_TEST_PM_PATH/dnf" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$ROCKY311_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python3.11-pyyaml) touch $(printf '%q' "$ROCKY311_STATE")/yaml311 ;;
+    python3-pyyaml) touch $(printf '%q' "$ROCKY311_STATE")/yaml36 ;;
+    python39-pyyaml) touch $(printf '%q' "$ROCKY311_STATE")/yaml39 ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+eval "$(declare -f frp_python_module_importable_real | sed '1s/frp_python_module_importable_real/frp_python_module_importable/')"
+if ! ensure_dependencies >"$WORKDIR/rocky311-yaml.out" 2>"$WORKDIR/rocky311-yaml.err"; then
+  cat "$WORKDIR/rocky311-yaml.err" >&2
+  fail "live Rocky8 python3.11 ensure_dependencies must install python3.11-pyyaml"
+fi
+grep -q 'python3.11-pyyaml' "$ROCKY311_LOG" || fail "live Rocky8 must install python3.11-pyyaml"
+if grep -q 'python3-pyyaml' "$ROCKY311_LOG"; then
+  fail "live Rocky8 python3.11 must not install platform python3-pyyaml"
+fi
+if grep -q 'python39-pyyaml' "$ROCKY311_LOG"; then
+  fail "live Rocky8 python3.11 must not install python39-pyyaml"
+fi
+frp_prefer_newer_python || fail "live Rocky8 frp_prefer_newer_python"
+frp_invoke python3 -c 'import yaml' || fail "active Rocky8 python3.11 cannot import yaml after install"
+pass "live rocky8 python3.11 yaml abi"
 
 reset_pm_isolation
 export FRP_TEST_CMD_PATH="$WORKDIR/cmds-yaml-fail"
@@ -511,6 +574,8 @@ if grep -q 'python3-pyyaml' "$EL8_LOG"; then
   fail "clean EL8 must not install platform python3-pyyaml"
 fi
 PATH="$FRP_TEST_CMD_PATH" "$FRP_TEST_CMD_PATH/python3" -c 'import yaml' || fail "selected EL8 python3 cannot import yaml"
+frp_prefer_newer_python || fail "clean EL8 frp_prefer_newer_python"
+frp_invoke python3 -c 'import yaml' || fail "active python3 after prefer_newer_python cannot import yaml"
 pass "clean EL8 python39 yaml abi"
 
 # Amazon Linux 2 is container/CI portability only, not a supported Agent

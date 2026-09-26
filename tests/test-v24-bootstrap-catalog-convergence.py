@@ -479,3 +479,7 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         self.assertEqual(held[4], "DEGRADED")
         self.assertEqual(held[5], "operator edited")
         agent.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
