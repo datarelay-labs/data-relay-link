@@ -2360,7 +2360,7 @@ NAVIGATION_TREE = {
         ("back", "Back", "", "back", None),
     ),
     "server.system": (
-        ("server_sys_status", "Status", "", "command", "show status"),
+        ("server_sys_status", "Status", "", "command", "system status"),
         ("server_sys_settings", "Server Settings", "", "submenu", "server.system.settings"),
         ("server_sys_backup", "Backup & Restore", "", "submenu", "server.system.backup"),
         ("server_sys_updates", "Updates", "", "submenu", "server.system.updates"),
@@ -2459,7 +2459,7 @@ NAVIGATION_TREE["both"] = (
     ("exit", "Exit", "", "exit", None),
 )
 NAVIGATION_TREE["both.system"] = (
-    ("both_sys_status", "Status", "", "command", "show status"),
+    ("both_sys_status", "Status", "", "command", "system status"),
     ("both_sys_settings", "Server Settings", "", "submenu", "server.system.settings"),
     ("both_sys_backup", "Backup & Restore", "", "submenu", "server.system.backup"),
     ("both_sys_pause", "Pause Agent", "", "command", "system pause"),

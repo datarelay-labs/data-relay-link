@@ -19,6 +19,16 @@ def load(name, rel):
 
 CATALOG = load("frp_cli_catalog", "lib/frp_cli_catalog.py")
 
+
+def _command_target(menu_key, entry_id):
+    for entry in CATALOG.NAVIGATION_TREE.get(menu_key, ()):
+        if entry and entry[0] == entry_id:
+            if len(entry) < 5 or entry[3] != "command":
+                raise AssertionError("%s %s is not a command leaf" % (menu_key, entry_id))
+            return entry[4]
+    raise AssertionError("%s missing %s" % (menu_key, entry_id))
+
+
 BANNED_TARGETS = {
     "add service",
     "apply",
@@ -76,6 +86,35 @@ class NavigationTargetParityTests(unittest.TestCase):
                             "%s: role mismatch for %r (role=%s)" % (key, target, role)
                         )
         self.assertFalse(failures, "\n".join(failures))
+
+    def test_system_menu_status_targets(self):
+        """Server-capable System menus run canonical system status.
+
+        Client-only System Status stays the role-aware show status summary.
+        """
+        self.assertEqual(
+            _command_target("server.system", "server_sys_status"),
+            "system status",
+        )
+        self.assertEqual(
+            _command_target("both.system", "both_sys_status"),
+            "system status",
+        )
+        self.assertEqual(
+            _command_target("client.system", "client_sys_status"),
+            "show status",
+        )
+        for menu, entry_id in (
+            ("server.system", "server_sys_status"),
+            ("both.system", "both_sys_status"),
+        ):
+            target = _command_target(menu, entry_id)
+            cmd = CATALOG.find(target.split())
+            self.assertIsNotNone(cmd, target)
+            self.assertEqual(tuple(cmd["path"]), ("system", "status"))
+            self.assertFalse(cmd.get("hidden"))
+            internal = CATALOG.to_internal(target.split())
+            self.assertEqual(internal[:1], ["server-status"])
 
     def test_ai_access_log_in_ai_menu(self):
         found = False
