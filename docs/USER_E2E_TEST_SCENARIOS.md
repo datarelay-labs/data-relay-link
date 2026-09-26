@@ -246,6 +246,75 @@ sudo drlink show managed-hosts
 
 Do not substitute private backend commands, direct SQLite mutation, hidden compatibility commands, or internal FRP helper CLIs for a User E2E PASS.
 
+### 6.4 CLI-only hard gate
+
+All Data Relay Link control-plane, configuration, lifecycle, diagnostics, recovery, and inspection actions in FULL_USER_E2E must be performed through the public `drlink` CLI.
+
+The following may not be used to obtain or repair a PASS:
+
+- direct SQLite/DB access or mutation;
+- direct JSON/state-file mutation;
+- private Python/module entry points;
+- internal FRP helper CLIs;
+- private HTTP/REST management APIs;
+- Web UI management paths;
+- hidden compatibility grammar when a canonical public command exists;
+- editing generated runtime configuration behind DRLink.
+
+Real data-plane clients are still required to prove real behavior. Examples include `ssh`, `scp`, `curl`, `wget`, `git`, `apt`, a real TCP load generator, and a supported MCP client. These clients may generate or consume traffic, but all DRLink state changes and observations used for PASS must remain through `drlink`.
+
+AI may generate commands or ConfigurationBundles, but AI is an input assistant only. The generated result must be executed, tested, diffed, applied, inspected, and recovered through the public `drlink` CLI. AI must never obtain a PASS by directly changing product state.
+
+Required aggregate gate:
+
+~~~text
+DRLINK_CONTROL_PLANE_CLI_ONLY=PASS
+PRIVATE_BACKEND_MUTATION_USED=NO
+DIRECT_DB_MUTATION_USED=NO
+PRIVATE_MANAGEMENT_API_USED=NO
+~~~
+
+### 6.5 CLI surface parity and 100% command execution
+
+FULL_USER_E2E must exercise all applicable public CLI surfaces, not merely list them:
+
+- shell one-shot form;
+- persistent `drlink>` REPL;
+- guided menu;
+- Guided Create/Edit Wizard;
+- `?`;
+- `help` and applicable help topics;
+- Tab completion and non-execution safety;
+- file ConfigurationBundle input;
+- stdin ConfigurationBundle input.
+
+Every public command family listed in section 14 must map to at least one executed scenario and current-run evidence.
+
+Required gate:
+
+~~~text
+PUBLIC_CLI_COMMAND_COVERAGE=100%
+PUBLIC_CLI_SURFACE_COVERAGE=100%
+UNEXERCISED_PUBLIC_COMMANDS=0
+~~~
+
+Commands that are genuinely not applicable to the tested role/platform must be listed individually with a reason; they may not silently disappear from coverage.
+
+### 6.6 Parallel execution rules
+
+Independent scenario lanes should run in parallel when doing so does not destroy shared state needed by another lane. Use unique test prefixes for Objects, Rules, Remote Services, enrollment records, files, and AI identities so parallel tests cannot collide accidentally.
+
+Serial execution is allowed only where the test intentionally mutates shared global state, for example:
+
+- Server-wide policy reset;
+- Server restore/rollback;
+- Server uninstall/reinstall;
+- global endpoint-pool exhaustion;
+- release-wide update;
+- a deliberate concurrency/race test that coordinates multiple writers.
+
+Parallel execution must never weaken evidence isolation. Every command/result must identify the host, role, scenario, and timestamp.
+
 # 7. User scenarios
 
 ## U-001 — Published SSH service — MANDATORY
@@ -472,6 +541,43 @@ With an active Remote Service:
 8. verify the next new connection uses the new policy immediately.
 
 Record endpoint before/after and real traffic result.
+
+## U-009 — Public hostname, public IP fallback, and Zero-Touch URL propagation — MANDATORY
+
+When a public DNS hostname is configured, verify entirely through the public CLI workflow that:
+
+- Enrollment HTTPS output uses the configured public hostname;
+- Zero-Touch bootstrap output uses the configured public hostname;
+- the short launcher remains short and preserves private-CA fingerprint and one-time-ticket security;
+- public IP is shown only as the supported fallback/alternative, not as an unexplained replacement for the configured hostname;
+- Remote Service endpoint presentation uses the configured public hostname where the current product contract says it should;
+- clearing an optional hostname returns to the documented default/fallback behavior.
+
+Execute the generated bootstrap path from a real external test host and verify DNS, TLS, enrollment, and final Remote Service usability end to end.
+
+## U-010 — Guided CLI user journey parity — MANDATORY
+
+Perform at least one complete onboarding/configuration journey through the guided CLI rather than only one-shot commands.
+
+Exercise:
+
+~~~text
+drlink
+menu
+?
+help
+Tab
+Guided Create/Edit Wizard
+Review
+Apply
+Cancel
+Back
+Exit
+~~~
+
+Repeat the same intent using canonical direct CLI and verify equivalent final authoritative state and effective behavior.
+
+The guided flow must not require knowledge of hidden backend commands, must not repeat already-collected identification unnecessarily, and invalid input must keep the user on the correct step with prior valid draft values preserved.
 
 # 8. Operator scenarios
 
@@ -701,6 +807,70 @@ set remote-service bad-context
 ~~~
 
 Expected: clear instruction to run on the owning Agent Host and no mutation.
+
+## O-013 — AI-assisted one-resource CLI loop — MANDATORY
+
+Use an AI assistant to express a real user intent as one complete public CLI command.
+
+Required flow:
+
+~~~text
+user intent
+→ AI generates one canonical drlink command
+→ operator pastes into drlink
+→ CLI validates/reviews/applies
+→ operator verifies through show/test
+→ real traffic verifies behavior
+~~~
+
+Then deliberately provide a missing dependency so the CLI returns a copy-back-safe error. Give that error back to the AI and require a corrected command or a recommendation to use ConfigurationBundle.
+
+Verify:
+
+- the AI does not require hidden database IDs;
+- the AI does not use private backend commands;
+- an incomplete new Resource is rejected atomically;
+- an existing Resource partial edit changes only supplied fields;
+- generated shell metacharacters cannot bypass CLI shell-safety rules.
+
+## O-014 — AI-assisted multi-resource ConfigurationBundle loop — MANDATORY
+
+Use AI to generate a multi-resource ConfigurationBundle.
+
+Required flow:
+
+~~~text
+AI-generated Bundle
+→ test configuration -
+→ :end
+→ system diff configuration -
+→ system apply configuration -
+→ show/test verification
+→ real traffic verification
+~~~
+
+Also execute:
+
+- same Bundle reapply -> NO CHANGE;
+- Test Bundle A, then Apply different Bundle B -> B is independently revalidated;
+- export current configuration -> give redacted export to AI -> AI modifies only requested public state -> test/diff/apply;
+- invalid final Resource -> no earlier Resource remains;
+- cross-context request -> AI returns separate Agent and Server operations, never a fake distributed atomic transaction.
+
+All DRLink mutations remain CLI-only.
+
+## O-015 — Wizard draft/cancel/invalid-input atomicity — MANDATORY
+
+Through the guided CLI:
+
+1. begin creating a Rule;
+2. create a draft inline Object;
+3. enter an invalid value at a later step;
+4. verify the Wizard remains on the same step and preserves earlier valid draft input;
+5. Cancel the parent Wizard;
+6. verify the inline draft Object does not exist.
+
+Also test Back/Cancel from representative Server and Agent workflows. No cancelled draft may allocate an endpoint, create a Resource, increment authoritative configuration unexpectedly, or leave a runtime artifact.
 
 # 9. Administrator scenarios
 
@@ -962,6 +1132,80 @@ Prove:
 - reinstall creates or restores the correct authoritative state;
 - real User E2E traffic is revalidated after recovery.
 
+## A-016 — AI workflow and CLI traceability audit — MANDATORY
+
+At the end of FULL_USER_E2E, produce a machine-readable or clearly auditable mapping:
+
+~~~text
+PUBLIC_CLI_COMMAND -> SCENARIO_ID -> HOST/ROLE -> RESULT -> EVIDENCE
+~~~
+
+Every applicable command in section 14 must have at least one current-run execution record.
+
+Separately map every canonical CLI/AI Master scenario relevant to the current candidate, including:
+
+- first run/no-policy;
+- Zero-Touch + direct SSH;
+- BLACKLIST;
+- WHITELIST reconstruction;
+- policy enforcement disable/re-enable;
+- inline Object creation then Cancel;
+- unreachable Relay destination;
+- Fixed TCP;
+- cross-pool rejection;
+- UDP rejection;
+- Internet Access Managed Host source and invalid Managed Host destination;
+- AI Identity/AI Access;
+- AI one-shot;
+- missing dependency;
+- Server and Agent ConfigurationBundle;
+- cross-context AI request;
+- final-Resource Bundle failure;
+- idempotent reapply;
+- test A/apply B;
+- Export -> AI -> Reapply;
+- referenced Object deletion;
+- last Rule semantics;
+- runtime activation rollback;
+- Server-unreachable Remote Service create;
+- Agent disconnect/reconnect;
+- role mistakes.
+
+No canonical scenario may be omitted merely because a similar scenario passed.
+
+## A-017 — Concurrent administrative writers — MANDATORY
+
+Use multiple public CLI administrator sessions.
+
+Exercise:
+
+- two conflicting edits based on the same prior revision;
+- two non-conflicting changes where the product supports safe serialization;
+- one Bundle apply racing with a direct CLI mutation;
+- one rollback/restore attempt while another mutation is pending, according to supported locking behavior.
+
+Expected:
+
+- stale/current-state conflict is detected or safely serialized;
+- no lost update;
+- no DB/runtime corruption;
+- no partial generation;
+- audit/revision order remains explainable;
+- CLI remains responsive after contention.
+
+## A-018 — Public hostname/bootstrap configuration lifecycle — MANDATORY
+
+Using only public Server CLI, exercise set/change/clear behavior for public/bootstrap hostname configuration supported by the candidate.
+
+After each change, regenerate or inspect:
+
+- Enrollment endpoint;
+- Zero-Touch short URL;
+- Remote Service endpoint presentation where applicable;
+- diagnostics/version/support evidence.
+
+Verify no change to an optional friendly hostname silently changes control/allocator identity unless the current product contract explicitly says so.
+
 # 10. Security and failure scenarios
 
 ## S-001 — Allow and deny are both proven — MANDATORY
@@ -1072,7 +1316,252 @@ Attempt restore using:
 
 Expected: fail closed with explicit reason; no unsafe partially restored runtime.
 
-# 11. Performance test contract
+## S-011 — Stale synchronized Agent catalog — MANDATORY
+
+1. synchronize Agent metadata;
+2. disconnect the Agent from the Server;
+3. create/edit a valid local Remote Service using cached metadata;
+4. while disconnected, change/delete the referenced authoritative Server Object;
+5. reconnect.
+
+Expected:
+
+- synchronization revalidates the reference;
+- invalid dependency remains visible as DEGRADED;
+- runtime activation is not performed with a now-invalid dependency;
+- endpoint identity already assigned is not silently rebound to another target;
+- the reason identifies the invalid/missing dependency.
+
+## S-012 — Offline Remote Service deletion — MANDATORY
+
+Delete an existing Remote Service while Agent-to-Server connectivity is unavailable.
+
+Verify:
+
+- local desired configuration removes the service;
+- Server may temporarily show prior known unavailable/DEGRADED state;
+- the reservation is not reused for another service before delete synchronization is processed;
+- reconnect synchronizes deletion and releases the endpoint;
+- no extra operator action is required.
+
+## S-013 — Endpoint-pool exhaustion and recovery — MANDATORY
+
+Using disposable capacity, exhaust normal and Fixed TCP endpoint pools separately through public CLI operations.
+
+Verify:
+
+- pools never overlap or steal reservations;
+- allocation failure is explicit when Server allocation is available;
+- an offline-created valid service may remain DEGRADED/Pending allocation when capacity cannot be checked until reconnect;
+- when capacity becomes available, pending allocation recovers according to contract;
+- deletion returns capacity;
+- concurrent allocations never receive duplicate endpoints.
+
+## S-014 — Name, reserved-token, duplicate, and selector corner cases — MANDATORY
+
+Through public CLI, test:
+
+- duplicate public names that would be ambiguous;
+- reserved tokens such as enabled, disabled, and policy in conflicting positions;
+- missing Object/Group/Service/Permission references;
+- invalid CIDR/IP/FQDN/port values;
+- ambiguous selector;
+- invalid Managed Host as Internet Access destination;
+- destination Group containing a Managed Host;
+- Remote Service destination resolving to multiple targets;
+- duplicate effective Destination + Service on one Agent.
+
+All invalid cases must fail atomically and produce actionable user-facing errors.
+
+## S-015 — Network interruption during live traffic — MANDATORY
+
+During real SSH/HTTP/HTTPS/Custom TCP/Fixed TCP traffic, separately inject:
+
+- Agent-to-Server interruption;
+- Relay Host-to-target interruption;
+- target process restart;
+- abrupt client disconnect;
+- Server process restart where supported.
+
+Verify truthful HEALTHY/DEGRADED transitions, stable endpoint identity, no cross-session data leakage, and automatic recovery where specified.
+
+## S-016 — Authentication/credential corner cases — MANDATORY when applicable
+
+Exercise CLI-configured AI/MCP and enrollment credentials with:
+
+- valid;
+- invalid;
+- revoked;
+- expired;
+- repeated/replayed use where the protocol defines single use;
+- concurrent double redemption for Zero-Touch;
+- authentication still required while AI Access policy enforcement is disabled.
+
+No expired/revoked credential may become valid because policy enforcement is disabled.
+
+# 11. Parallel and simultaneous multi-host scenarios
+
+Parallel multi-host execution is a mandatory part of FULL_USER_E2E, not only a performance optimization.
+
+## C-001 — All applicable test hosts online simultaneously — MANDATORY
+
+Bring every available supported-platform test host online at the same time.
+
+Target matrix:
+
+~~~text
+Ubuntu 24
+Windows 10
+Rocky Linux 8
+Rocky Linux 9
+Amazon Linux 2023
+macOS Apple Silicon
+~~~
+
+Each applicable host must simultaneously maintain:
+
+- Managed Host identity;
+- Agent connection;
+- at least one Remote Service where the platform supports it;
+- correct Server inventory;
+- independent endpoint identity.
+
+Required gate:
+
+~~~text
+ALL_TEST_HOSTS_SIMULTANEOUSLY_ONLINE=PASS
+HOST_IDENTITY_CROSS_TALK=0
+ENDPOINT_COLLISIONS=0
+~~~
+
+A missing environment is BLOCKED_ENVIRONMENT, not a synthetic PASS.
+
+## C-002 — Parallel enrollment across all hosts — MANDATORY
+
+Issue independent Zero-Touch/manual enrollment material as appropriate and enroll multiple platform hosts concurrently.
+
+Verify:
+
+- identities remain unique;
+- each enrollment binds to the intended host;
+- no ticket crosses hosts;
+- capacity accounting is correct;
+- concurrent same-ticket redemption is denied;
+- all successful hosts appear correctly in Server inventory.
+
+## C-003 — Parallel Remote Service creation and endpoint allocation — MANDATORY
+
+On multiple Agent Hosts at the same time, create normal TCP and Fixed TCP Remote Services.
+
+Verify:
+
+- unique endpoint allocation;
+- correct pool selection;
+- no duplicate/overlapping reservation;
+- no lost service registration;
+- Server/Agent views converge;
+- traffic reaches only the intended target.
+
+## C-004 — Simultaneous real traffic on all hosts — MANDATORY
+
+Generate real user traffic to every available host concurrently.
+
+Include a mix of:
+
+- SSH;
+- HTTP;
+- HTTPS;
+- Custom TCP;
+- Fixed TCP;
+- Relay Host traffic.
+
+Verify per-host correctness and aggregate correctness. One failing host cannot be hidden by aggregate throughput.
+
+## C-005 — Parallel Internet Access from multiple protected sources — MANDATORY
+
+Generate approved and denied outbound traffic concurrently from multiple protected sources/Managed Hosts.
+
+Verify source-specific policy isolation, destination/port enforcement, and absence of cross-source policy leakage.
+
+## C-006 — Parallel AI/MCP identities and calls — MANDATORY when feature included
+
+Use multiple authenticated AI identities/sessions concurrently against different and overlapping target/permission scopes.
+
+Verify:
+
+- per-call authorization is evaluated independently;
+- no cached ALLOW leaks into a later DENY;
+- audit attribution remains correct;
+- one identity cannot inherit another identity's session or permissions.
+
+## C-007 — Policy mutation while all-host traffic is active — MANDATORY
+
+While all-host traffic is active:
+
+1. change Remote Access and/or Internet Access policy through Server CLI;
+2. keep representative existing sessions alive;
+3. start new sessions immediately before/after Apply.
+
+Verify current contract for existing sessions and prove new connections use the new policy immediately without cross-host inconsistency.
+
+## C-008 — Simultaneous Agent restart/reconnect storm — MANDATORY
+
+Restart or disconnect multiple/all Agent Hosts together, then restore connectivity.
+
+Measure:
+
+- reconnect success;
+- time to inventory convergence;
+- endpoint preservation;
+- pending allocation recovery;
+- Server CPU/RSS/FD;
+- no duplicate identities or endpoint reallocations.
+
+## C-009 — Server outage with all Agents active — MANDATORY
+
+With multiple Agents and real traffic active, interrupt Server availability.
+
+On selected Agents, perform supported offline create/edit/delete operations through CLI. Restore Server and verify all Agents converge correctly, including stale-reference revalidation and deferred endpoint release/allocation.
+
+## C-010 — Parallel ConfigurationBundle apply — MANDATORY
+
+Apply independent Agent Bundles on multiple hosts concurrently while a Server Bundle is tested/applied through the Server CLI.
+
+Verify context isolation:
+
+~~~text
+Server Bundle -> Server atomicity only
+Agent Bundle  -> one Agent Host atomicity only
+~~~
+
+No implementation may pretend that the cross-host operation is one distributed atomic transaction.
+
+## C-011 — Concurrent destructive/race cases — MANDATORY
+
+Coordinate deliberate races:
+
+- same Zero-Touch ticket redeemed twice;
+- same endpoint-pool capacity contested by concurrent creates;
+- same referenced Object deleted while another session tries to use it;
+- same policy revision edited by two administrator sessions;
+- service deletion synchronization racing with new allocation.
+
+Expected outcome must be deterministic, fail safe, and leave no duplicate endpoint, orphaned resource, lost update, or authorization bypass.
+
+## C-012 — All-host simultaneous reboot recovery — MANDATORY on disposable/approved hosts
+
+Reboot all applicable Agent test hosts within the same test window.
+
+After recovery, use CLI on every host plus Server CLI inventory to verify:
+
+- autostart;
+- identity continuity;
+- endpoint continuity;
+- policy continuity;
+- real traffic;
+- no host requires manual re-enrollment unless explicitly documented.
+
+# 12. Performance test contract
 
 Performance testing is part of FULL_USER_E2E.
 
@@ -1326,7 +1815,90 @@ With active but disposable workload:
 
 Verify no corrupted authoritative state and that post-recovery traffic/policy matches pre-recovery intent.
 
-# 12. Platform matrix
+## P-015 — Aggregate all-host throughput and fairness — MANDATORY
+
+With C-001/C-004 topology active, run simultaneous throughput from all available test hosts.
+
+Record:
+
+- per-host forward/reverse/full-duplex throughput;
+- aggregate Server throughput;
+- per-host and aggregate error rate;
+- Server and Agent resource usage;
+- latency distribution per host;
+- fairness/starvation symptoms.
+
+A high aggregate number does not pass if one host is starved, misrouted, or silently failing.
+
+## P-016 — CPS while throughput and policy load are active — MANDATORY
+
+Run new-connection CPS load while sustained throughput and representative policy checks are already active.
+
+Verify:
+
+- successful CPS;
+- connect p50/p95/p99;
+- throughput degradation;
+- authorization correctness;
+- diagnostics responsiveness;
+- recovery after load.
+
+## P-017 — Recovery-time performance — MANDATORY
+
+Measure time to recover after:
+
+- Agent restart;
+- all-Agent reconnect storm;
+- Server restart/outage;
+- target-service flap;
+- endpoint capacity becoming available.
+
+Record time to:
+
+~~~text
+Agent connected
+inventory converged
+endpoint active
+Remote Service HEALTHY
+first successful user connection
+~~~
+
+## P-018 — Operational commands under load — MANDATORY
+
+While representative traffic is active, run read-only CLI operations:
+
+~~~text
+show status
+show managed-hosts
+show remote-services
+test remote-access ...
+test internet-access ...
+system diagnostics
+system audit
+~~~
+
+Verify they remain responsive and do not alter traffic.
+
+Run supported backup under activity through:
+
+~~~text
+system backup
+~~~
+
+and verify backup consistency according to the backup contract.
+
+## P-019 — Extended endurance profiles — OPTIONAL unless explicitly selected
+
+In addition to the mandatory 1-hour FULL_USER_E2E soak, support:
+
+~~~text
+EXTENDED_SOAK=8h
+ENDURANCE_SOAK=24h
+~~~
+
+Use these for overnight/endurance qualification when requested. Results must remain distinct from the mandatory 1-hour soak so historical shorter evidence is not misrepresented as 8h/24h evidence.
+
+# 13. Platform matrix
 
 For FULL_USER_E2E, test every platform currently claimed by the candidate at its actual qualification level.
 
@@ -1356,11 +1928,13 @@ Do not upgrade container/userspace evidence into Real E2E PASS.
 
 Where a platform cannot host the Server role, execute its applicable Agent/client scenarios only.
 
-# 13. Complete CLI coverage list used by E2E
+# 14. Complete CLI coverage list used by E2E
 
 This section mirrors the public v2.4 CLI/AI Master. It is a coverage checklist, not a second grammar authority.
 
-## 13.1 Server show
+FULL_USER_E2E requires every applicable entry below to be executed through the public CLI at least once and linked to scenario evidence. Presence in this list alone does not count as coverage.
+
+## 14.1 Server show
 
 ~~~text
 show status
@@ -1414,7 +1988,7 @@ show ai-access-log destination <DESTINATION>
 show ai-access-log permission <PERMISSION>
 ~~~
 
-## 13.2 Server set
+## 14.2 Server set
 
 ~~~text
 set enrollment zero-touch
@@ -1445,7 +2019,7 @@ set ai-access enabled
 set ai-access disabled
 ~~~
 
-## 13.3 Server unset
+## 14.3 Server unset
 
 ~~~text
 unset managed-host <HOST>
@@ -1472,7 +2046,7 @@ unset ai-access <RULE>
 unset ai-access policy
 ~~~
 
-## 13.4 Server test
+## 14.4 Server test
 
 ~~~text
 test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>
@@ -1481,7 +2055,7 @@ test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMIS
 test configuration <FILE|->
 ~~~
 
-## 13.5 Server system
+## 14.5 Server system
 
 ~~~text
 system status
@@ -1507,7 +2081,7 @@ system support-bundle
 system uninstall
 ~~~
 
-## 13.6 Agent Host
+## 14.6 Agent Host
 
 ~~~text
 show status
@@ -1545,7 +2119,7 @@ system uninstall
 
 When an Agent help/diagnostic surface recommends system synchronize, the command must parse and be role-correct.
 
-## 13.7 External user/application commands
+## 14.7 External user/application commands
 
 These are not DRLink grammar, but FULL_USER_E2E must use real clients appropriate to the service:
 
@@ -1563,7 +2137,7 @@ supported AI/MCP client when applicable
 
 Use only the commands actually applicable to the target OS/application.
 
-# 14. Evidence and result rules
+# 15. Evidence and result rules
 
 Every scenario result must be one of:
 
@@ -1606,7 +2180,7 @@ NOTES=
 
 Performance scenarios additionally retain raw machine-readable metrics when possible.
 
-# 15. Final FULL_USER_E2E report
+# 16. Final FULL_USER_E2E report
 
 A full run must end with a summary at least equivalent to:
 
@@ -1626,6 +2200,12 @@ SECURITY_NEGATIVE=PASS|PARTIAL|FAIL
 PERFORMANCE_FUNCTIONAL=PASS|PARTIAL|FAIL
 PERFORMANCE_NUMERIC_QUALIFICATION=PASS|FAIL|MEASURED_NOT_QUALIFIED
 MULTI_PLATFORM=PASS|PARTIAL|FAIL
+ALL_TEST_HOSTS_SIMULTANEOUSLY_ONLINE=PASS|PARTIAL|FAIL
+PARALLEL_MULTI_HOST=PASS|PARTIAL|FAIL
+PUBLIC_CLI_COMMAND_COVERAGE=
+PUBLIC_CLI_SURFACE_COVERAGE=
+DRLINK_CONTROL_PLANE_CLI_ONLY=PASS|FAIL
+AI_ASSISTED_CLI=PASS|PARTIAL|FAIL
 
 REMOTE_ACCESS_REAL_TRAFFIC=
 INTERNET_ACCESS_REAL_TRAFFIC=
@@ -1656,7 +2236,7 @@ EVIDENCE_ROOT=
 
 If FINAL_STATUS is not PASS, list the exact failing/blocking scenario IDs.
 
-# 16. Maintenance rule
+# 17. Maintenance rule
 
 Whenever a public CLI command, supported platform, topology, Access Policy semantic, Remote Service lifecycle, Internet Access behavior, AI/MCP capability, enrollment workflow, backup/restore behavior, or release gate changes, this document must be reviewed in the same change.
 
@@ -1670,6 +2250,10 @@ USER_E2E_REQUEST
 -> use real public CLI and real traffic
 -> exercise ALLOW and DENY
 -> execute performance in every required direction
+-> bring all applicable test hosts online simultaneously and execute parallel multi-host gates
+-> exercise every applicable public CLI command and CLI surface
+-> keep all DRLink control/configuration/lifecycle actions CLI-only
+-> exercise AI one-shot, AI error-correction, AI ConfigurationBundle, Export->AI->Reapply, and cross-context split workflows
 -> retain evidence
 -> report every skipped/blocked scenario honestly
 ~~~
