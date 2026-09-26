@@ -1,0 +1,1675 @@
+# Data Relay Link — User E2E Test Scenarios
+
+> **Document role:** Canonical role-based User E2E execution matrix  
+> **Product:** Data Relay Link  
+> **Target:** v2.4 and later until superseded  
+> **Primary CLI:** drlink  
+> **CLI/AI authority:** docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md  
+> **Release validation:** docs/RELEASE_VALIDATION.md  
+> **Release checklist:** docs/RELEASE_CHECKLIST.md  
+> **Status:** Normative living document
+
+## 1. Purpose and execution trigger
+
+This document defines the exhaustive real-user E2E suite for Data Relay Link.
+
+When the user asks for any of the following without explicitly narrowing scope:
+
+- 사용자 E2E
+- 사용자 E2E 테스트
+- Full User E2E
+- User E2E
+- 전체 E2E
+- 전수 사용자 테스트
+
+the default interpretation is:
+
+~~~text
+PROFILE=FULL_USER_E2E
+RUN_ALL_MANDATORY_ROLE_SCENARIOS=YES
+RUN_ALL_MANDATORY_SECURITY_NEGATIVE_SCENARIOS=YES
+RUN_ALL_MANDATORY_PERFORMANCE_SCENARIOS=YES
+USE_REAL_PUBLIC_PRODUCT_PATHS=YES
+USE_ACTUAL_PUBLIC_DRLINK_CLI=YES
+RETAIN_EVIDENCE=YES
+~~~
+
+A targeted E2E request may run a subset only when the user explicitly names the scope.
+
+A release-qualification request uses this full suite plus the exact-HEAD double-pass rule in docs/RELEASE_VALIDATION.md.
+
+Historical PASS results, synthetic tests, unit tests, Docker-only results, or results from another Git HEAD do not replace a requested real User E2E run.
+
+If product code, dependencies, generated runtime artifacts, or the tested build changes during a full pass, record the new HEAD/build identity and invalidate the affected pass. For final release qualification, the double-pass counter resets as defined by the release validation policy.
+
+## 2. Authority and conflict rules
+
+Use this precedence when a scenario or command conflicts with another source:
+
+1. actual tested behavior on the exact candidate build;
+2. actual repository code and immutable Git state;
+3. docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md;
+4. docs/PRODUCT_MASTER.md;
+5. docs/RELEASE_VALIDATION.md;
+6. this document;
+7. examples, screenshots, historical evidence.
+
+This document defines what must be exercised. It does not redefine CLI grammar. If the CLI/AI Master changes, update this matrix in the same workstream.
+
+## 3. Test roles
+
+| Role | Test perspective | Normal responsibility |
+| --- | --- | --- |
+| User | Consumes a published service, approved Internet path, or approved AI capability | Connect, transfer data, use applications, observe allow/deny behavior |
+| Operator | Operates an Agent Host and Remote Services day to day | Enrollment execution, Remote Service lifecycle, Agent lifecycle, local configuration, diagnostics |
+| Administrator | Operates the Data Relay Link Server and security/control state | Managed Hosts, Objects/Groups, Access Policies, AI Identity/permissions, audit, revision, backup/restore, server lifecycle |
+| External load generator | Performance-only actor | Throughput, CPS, concurrency, latency, full-duplex, churn, soak |
+| Target service | Real destination behind an Agent/Relay Host or on the Internet | SSH/HTTP/HTTPS/Custom TCP/Fixed TCP/application behavior |
+
+The same person may perform more than one role, but evidence must identify which role and host executed each step.
+
+## 4. Test profiles
+
+### 4.1 FULL_USER_E2E
+
+FULL_USER_E2E is the default for an unqualified User E2E request.
+
+It includes:
+
+- all U-* user scenarios marked MANDATORY;
+- all O-* operator scenarios marked MANDATORY;
+- all A-* administrator scenarios marked MANDATORY;
+- all S-* security/failure scenarios marked MANDATORY;
+- all P-* performance scenarios marked MANDATORY;
+- every applicable supported platform in the current release claim;
+- real external clients and real application traffic;
+- allow and deny validation;
+- lifecycle, reboot, update, backup/restore, and recovery;
+- exact command and evidence capture.
+
+### 4.2 TARGETED_USER_E2E
+
+Use only when the user explicitly narrows scope, for example:
+
+~~~text
+SSH만 사용자 E2E
+Internet Access만 E2E
+Windows Agent만 E2E
+성능만 E2E
+~~~
+
+Record omitted scenario IDs as NOT_RUN_BY_SCOPE, never PASS.
+
+### 4.3 RELEASE_QUALIFICATION
+
+Run FULL_USER_E2E twice on the same exact HEAD when the release validation requires double Full Real E2E.
+
+~~~text
+PASS1_HEAD == PASS2_HEAD == FINAL_QUALIFIED_HEAD
+~~~
+
+Any qualifying product/dependency/generated-artifact change resets the release pass counter.
+
+## 5. Required topology and environment
+
+Use disposable or explicitly designated test systems for destructive scenarios.
+
+Minimum full topology:
+
+~~~text
+External User / Load Generator
+        |
+        v
+Public Data Relay Link endpoint
+        |
+        v
+Data Relay Link Server
+        |
+        +------------------------+
+        |                        |
+        v                        v
+Direct Agent Host          Relay Agent Host
+(local target)             (gateway)
+                                 |
+                                 v
+                           LAN target without Agent
+
+Restricted/Protected Host
+        |
+        v
+Internet Access path
+        |
+        v
+Approved public Internet destination
+
+AI client / MCP client, when included in the tested candidate
+        |
+        v
+Data Relay Link AI/MCP frontend
+        |
+        v
+Authorized Managed Host/path
+~~~
+
+Full test evidence must record:
+
+~~~text
+TEST_RUN_ID=
+START_UTC=
+END_UTC=
+REPOSITORY=
+BRANCH=
+SOURCE_HEAD=
+WORKTREE_OR_ARTIFACT=
+PRODUCT_VERSION=
+RELEASE_CHANNEL=
+RELAY_ENGINE_VERSION=
+CONTROL_DB_SCHEMA_VERSION=
+SERVER_OS=
+SERVER_ARCH=
+SERVER_PUBLIC_IP=
+SERVER_PUBLIC_HOSTNAME=
+SERVER_TOPOLOGY=
+AGENT_HOSTS=
+RELAY_HOSTS=
+TARGET_HOSTS=
+EXTERNAL_CLIENTS=
+INTERNET_ACCESS_CLIENTS=
+AI_CLIENTS=
+~~~
+
+Before testing, capture the exact build identity from the installed product, not only from Git.
+
+## 6. Common preflight
+
+### 6.1 Server preflight
+
+Run through the public Server CLI:
+
+~~~text
+show status
+system status
+system version
+system diagnostics
+system audit
+show managed-hosts
+show remote-access
+show internet-access
+show ai-identities
+show ai-access
+~~~
+
+Expected:
+
+- role is DRLink Server;
+- product/source version is the expected candidate;
+- no unexplained DEGRADED or unsafe generation state;
+- diagnostics are read-only;
+- no secrets are emitted.
+
+### 6.2 Agent Host preflight
+
+Run locally on each Agent Host:
+
+~~~text
+show status
+show agent
+show remote-services
+system info
+system version
+system diagnostics
+~~~
+
+Expected:
+
+- role is Agent Host;
+- correct Managed Host identity;
+- expected Server connection state;
+- no unexpected endpoint drift;
+- no secret leakage.
+
+### 6.3 CLI invocation form
+
+Inside the persistent CLI, use commands exactly as documented:
+
+~~~text
+drlink> show status
+drlink> show managed-hosts
+~~~
+
+From a shell, prefix the same public command with the installed executable, normally:
+
+~~~text
+sudo drlink show status
+sudo drlink show managed-hosts
+~~~
+
+Do not substitute private backend commands, direct SQLite mutation, hidden compatibility commands, or internal FRP helper CLIs for a User E2E PASS.
+
+# 7. User scenarios
+
+## U-001 — Published SSH service — MANDATORY
+
+Goal: prove an external user can use a real SSH service through Data Relay Link.
+
+Preparation on Server, if objects are not already present:
+
+~~~text
+set service-object ssh type tcp port 22
+~~~
+
+On the Agent Host:
+
+~~~text
+set remote-service ssh-access destination this-host service ssh enabled
+show remote-service ssh-access
+~~~
+
+On Server:
+
+~~~text
+show managed-host <HOST> remote-services
+test remote-access source <SOURCE> destination <HOST> service ssh
+~~~
+
+From the external user host, connect to the actual Endpoint returned by DRLink:
+
+~~~text
+ssh -p <PUBLIC_PORT> <USER>@<PUBLIC_HOST>
+~~~
+
+Verify:
+
+- successful authentication through the real public endpoint;
+- interactive command execution;
+- upload and download through SSH/SCP/SFTP where available;
+- Remote Service reports HEALTHY;
+- Server and Agent show the same endpoint;
+- no direct private-IP bypass is counted as PASS.
+
+## U-002 — HTTP, HTTPS, and Custom TCP services — MANDATORY
+
+Create/reuse TCP Service Objects and create Agent-owned Remote Services.
+
+Examples:
+
+~~~text
+set service-object http type tcp port 80
+set service-object https type tcp port 443
+set service-object app-tcp type tcp port <TARGET_PORT>
+~~~
+
+Agent Host:
+
+~~~text
+set remote-service http-access destination this-host service http enabled
+set remote-service https-access destination this-host service https enabled
+set remote-service app-access destination this-host service app-tcp enabled
+show remote-services
+~~~
+
+External client verification:
+
+- HTTP request returns expected application content;
+- HTTPS passthrough preserves end-to-end application TLS and certificate behavior;
+- Custom TCP transfers application data in both directions;
+- wrong endpoint/port does not accidentally reach another target.
+
+Use real application clients where practical, not only a TCP connect probe.
+
+## U-003 — Remote Access policy from the user perspective — MANDATORY
+
+Exercise all effective states against a real published service.
+
+No Policy:
+
+~~~text
+unset remote-access policy
+test remote-access source <SOURCE> destination <HOST> service ssh
+~~~
+
+Verify effective ALLOW and successful real connection.
+
+BLACKLIST first rule:
+
+~~~text
+set remote-access block-user mode blacklist source <SOURCE> destination <HOST> service ssh enabled
+test remote-access source <SOURCE> destination <HOST> service ssh
+~~~
+
+Verify matching source is DENY and a non-matching source remains ALLOW.
+
+Reset and WHITELIST first rule:
+
+~~~text
+unset remote-access policy
+set remote-access allow-user mode whitelist source <SOURCE> destination <HOST> service ssh enabled
+test remote-access source <SOURCE> destination <HOST> service ssh
+~~~
+
+Verify matching source is ALLOW and a non-matching source is DENY.
+
+Also verify:
+
+~~~text
+set remote-access disabled
+set remote-access enabled
+~~~
+
+Enforcement disable must preserve Mode/Rules and temporarily yield effective ALLOW ALL according to the canonical policy contract.
+
+## U-004 — Relay Host to another LAN destination — MANDATORY
+
+On a Relay Agent Host, create a Remote Service whose destination is another host.
+
+~~~text
+set remote-service lan-target-service destination <TARGET_OBJECT> service <SERVICE_OBJECT> enabled
+show remote-service lan-target-service
+~~~
+
+Server:
+
+~~~text
+show managed-host <RELAY_HOST> remote-services
+~~~
+
+External user connects to the returned public Endpoint.
+
+Verify:
+
+- current Agent Host is the Relay Host;
+- target host does not require a DRLink Agent;
+- real application traffic succeeds;
+- temporary target outage changes status to DEGRADED without losing the endpoint reservation;
+- recovery returns to HEALTHY without recreation.
+
+## U-005 — Fixed TCP user path — MANDATORY
+
+Server:
+
+~~~text
+set service-object fixed-app type fixed-tcp port <TARGET_PORT>
+~~~
+
+Relay/Agent Host:
+
+~~~text
+set remote-service fixed-app-access destination <DESTINATION> service fixed-app enabled
+show remote-service fixed-app-access
+~~~
+
+Verify real bidirectional application traffic through the allocated Fixed TCP endpoint.
+
+Also prove the Fixed TCP pool is distinct from the normal Remote Service pool.
+
+## U-006 — Internet Access real applications — MANDATORY
+
+Create/reuse Network and Service Objects and an Internet Access WHITELIST rule.
+
+Typical administrative commands:
+
+~~~text
+set network-object approved-site
+set service-object https
+set internet-access approved-https mode whitelist source <SOURCE> destination approved-site service https enabled
+test internet-access source <SOURCE> destination approved-site service https
+~~~
+
+From the protected host, use real applications as applicable:
+
+~~~text
+curl
+wget
+git
+apt
+~~~
+
+Verify:
+
+- approved destination/port works;
+- unapproved destination fails;
+- wrong destination port fails;
+- removing a destination required by an application makes that application fail through policy;
+- broad wildcard expansion is not used just to obtain PASS.
+
+## U-007 — AI/MCP authorized and denied use — MANDATORY when candidate includes AI/MCP
+
+Server creates/binds the AI Identity using the supported authentication workflow, then configures permissions and AI Access.
+
+Representative CLI:
+
+~~~text
+set ai-identity <IDENTITY>
+set permission-object read-only permissions host-info,process-read,file-read
+set ai-access ai-read mode whitelist source <IDENTITY> destination <DESTINATION> permission read-only enabled
+test ai-access source <IDENTITY> destination <DESTINATION> permission read-only
+show ai-access-log identity <IDENTITY>
+~~~
+
+From the supported AI/MCP client, verify:
+
+- valid authenticated identity succeeds only inside policy;
+- invalid/revoked/expired credentials are denied;
+- allowed host-info/process-read/file-read succeeds;
+- disallowed exec/write/upload/download is denied for read-only permission;
+- path-scope traversal and symlink escape attempts are denied where applicable;
+- audit attribution identifies principal, target, tool, result, revision, and safe metadata;
+- no raw credentials or sensitive file contents leak into audit.
+
+If AI/MCP is explicitly excluded from the candidate being tested, record this scenario NOT_APPLICABLE with exact feature evidence. Do not silently skip it.
+
+## U-008 — User continuity across restart and policy change — MANDATORY
+
+With an active Remote Service:
+
+1. record endpoint;
+2. restart Agent;
+3. restart Server as applicable;
+4. verify endpoint reservation is unchanged;
+5. establish a session;
+6. change policy;
+7. verify existing-session semantics match the release contract;
+8. verify the next new connection uses the new policy immediately.
+
+Record endpoint before/after and real traffic result.
+
+# 8. Operator scenarios
+
+## O-001 — First-use discovery and role correctness — MANDATORY
+
+Agent Host:
+
+~~~text
+show status
+show agent
+show remote-services
+system info
+system version
+~~~
+
+Verify role-aware help/menu and that Server-only mutation commands return a clear role error rather than Unknown command.
+
+## O-002 — Zero-Touch enrollment — MANDATORY
+
+Server:
+
+~~~text
+set enrollment zero-touch
+show enrollments
+show enrollment <ENROLLMENT>
+~~~
+
+Run the generated bootstrap command on a clean supported Agent Host exactly as presented.
+
+Verify:
+
+- ticket is displayed according to the current secret-display contract;
+- TLS verification is not weakened;
+- single-use behavior;
+- first machine binding;
+- enrolled Managed Host appears;
+- expiry/revocation semantics;
+- successful enrollment is not disconnected merely because the ticket later expires.
+
+## O-003 — Manual and bulk enrollment — MANDATORY
+
+Server:
+
+~~~text
+set enrollment manual
+set enrollment bulk
+show enrollments
+~~~
+
+Verify issuance limits/capacity, unique per-device material where required, revocation, and terminal-record lifecycle.
+
+Cleanup:
+
+~~~text
+unset enrollment <ENROLLMENT>
+~~~
+
+## O-004 — Remote Service lifecycle — MANDATORY
+
+Agent Host:
+
+~~~text
+show remote-services
+set remote-service <NAME>
+show remote-service <NAME>
+set remote-service <NAME> disabled
+set remote-service <NAME> enabled
+unset remote-service <NAME>
+~~~
+
+Verify:
+
+- create/edit uses one Service Object;
+- UDP is rejected for Remote Service;
+- same effective destination+service duplicate is rejected;
+- disable preserves endpoint;
+- enable reuses endpoint;
+- same-pool destination/service edit preserves endpoint;
+- TCP <-> Fixed TCP in-place cross-pool edit is rejected;
+- delete eventually releases endpoint reservation.
+
+## O-005 — Server outage, offline Agent edit, and synchronization — MANDATORY
+
+With synchronized local metadata, make the Server temporarily unreachable.
+
+Agent Host:
+
+~~~text
+set remote-service offline-created destination this-host service ssh enabled
+show remote-service offline-created
+~~~
+
+Expected for a new service:
+
+~~~text
+Status   : DEGRADED
+Endpoint : Pending allocation
+~~~
+
+Restore Server connectivity and verify synchronization, allocation, activation, and HEALTHY transition without recreating the service.
+
+When diagnostics recommend it, the public recovery command must parse:
+
+~~~text
+system synchronize
+~~~
+
+For an existing service, verify the previously allocated endpoint remains unchanged across the outage.
+
+## O-006 — Agent lifecycle — MANDATORY
+
+~~~text
+system pause
+show status
+system resume
+show status
+system restart
+show status
+system autostart disable
+system autostart enable
+~~~
+
+Verify deliberate pause/disable state is distinguishable from DEGRADED failure state and that state recovers correctly.
+
+## O-007 — Agent ConfigurationBundle file/stdin — MANDATORY
+
+Read-only validation:
+
+~~~text
+test configuration <FILE>
+test configuration -
+~~~
+
+Diff:
+
+~~~text
+system diff configuration <FILE>
+system diff configuration -
+~~~
+
+Apply:
+
+~~~text
+system apply configuration <FILE>
+system apply configuration -
+~~~
+
+Export:
+
+~~~text
+system export configuration <FILE>
+~~~
+
+For stdin, terminate the pasted YAML using the canonical :end workflow.
+
+Verify:
+
+- test and diff do not mutate;
+- apply revalidates current state;
+- invalid last resource leaves no earlier resource behind;
+- same bundle reapply returns NO CHANGE;
+- export excludes real secrets;
+- Agent bundle cannot mutate Server policy.
+
+## O-008 — Diagnostics and support bundle — MANDATORY
+
+~~~text
+system diagnostics
+system support-bundle
+system version
+~~~
+
+Verify support output identifies Agent Host role, includes useful provenance, and does not expose raw credentials, tokens, private keys, or ambiguous unknown digests.
+
+## O-009 — Product update and Relay Engine update separation — MANDATORY
+
+Agent Host:
+
+~~~text
+system update product
+system update engine
+system version
+~~~
+
+Verify product and upstream engine versions remain separate, update does not require ordinary re-enrollment, and endpoint/identity/state are preserved.
+
+## O-010 — Reboot/autostart recovery — MANDATORY
+
+Reboot each applicable Agent Host.
+
+After reboot:
+
+~~~text
+show status
+show agent
+show remote-services
+system diagnostics
+~~~
+
+Verify automatic service start, identity continuity, endpoint continuity, and real external traffic.
+
+## O-011 — Agent uninstall/reinstall behavior — MANDATORY on disposable host
+
+~~~text
+system uninstall
+~~~
+
+Verify interactive CLI exits cleanly after successful removal.
+
+Reinstall according to the supported candidate path and verify the documented preserve/re-enroll semantics. Do not infer server-side release of reservations unless the product explicitly performs it.
+
+## O-012 — Wrong-context commands — MANDATORY
+
+On Agent Host:
+
+~~~text
+set remote-access bad-context
+set internet-access bad-context
+~~~
+
+Expected: clear instruction to run on the DRLink Server and no mutation.
+
+On Server:
+
+~~~text
+set remote-service bad-context
+~~~
+
+Expected: clear instruction to run on the owning Agent Host and no mutation.
+
+# 9. Administrator scenarios
+
+## A-001 — Managed Host inventory and lifecycle — MANDATORY
+
+~~~text
+show managed-hosts
+show managed-host <HOST>
+show managed-host <HOST> agent
+show managed-host <HOST> addresses
+show managed-host <HOST> remote-services
+unset managed-host <HOST>
+~~~
+
+Verify removal is reference-safe and displays impact before destructive cleanup.
+
+## A-002 — Network Objects and Groups — MANDATORY
+
+~~~text
+show network-objects
+show network-object <OBJECT>
+show network-object <OBJECT> references
+show network-groups
+show network-group <GROUP>
+show network-group <GROUP> references
+
+set network-object <OBJECT>
+set network-group <GROUP>
+
+unset network-object <OBJECT>
+unset network-group <GROUP>
+~~~
+
+Exercise IP, CIDR, FQDN, Managed Host selector use, group membership changes, invalid input, ambiguity, and reference-safe deletion.
+
+## A-003 — Service Objects and Groups — MANDATORY
+
+~~~text
+show service-objects
+show service-object <SERVICE>
+show service-object <SERVICE> references
+show service-groups
+show service-group <GROUP>
+show service-group <GROUP> references
+
+set service-object <SERVICE>
+set service-group <GROUP>
+
+unset service-object <SERVICE>
+unset service-group <GROUP>
+~~~
+
+Exercise TCP, UDP, and Fixed TCP object types.
+
+Verify UDP may exist at the object layer but is rejected from Remote Service and Remote Access uses that do not support it.
+
+## A-004 — Remote Access full policy lifecycle — MANDATORY
+
+~~~text
+show remote-access
+show remote-access <RULE>
+set remote-access <RULE>
+set remote-access enabled
+set remote-access disabled
+unset remote-access <RULE>
+unset remote-access policy
+test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>
+~~~
+
+Verify:
+
+- first human rule selects BLACKLIST/WHITELIST;
+- first one-shot rule requires mode;
+- matching and non-matching behavior;
+- disabled Rule does not match;
+- deleting last rule preserves Mode;
+- last WHITELIST rule removal yields DENY ALL;
+- last BLACKLIST rule removal yields ALLOW ALL;
+- policy reset removes Mode and Rules and returns No Policy / ALLOW;
+- direct BLACKLIST <-> WHITELIST conversion is not silently performed.
+
+## A-005 — Internet Access full policy lifecycle and security — MANDATORY
+
+~~~text
+show internet-access
+show internet-access <RULE>
+set internet-access <RULE>
+set internet-access enabled
+set internet-access disabled
+unset internet-access <RULE>
+unset internet-access policy
+test internet-access source <SOURCE> destination <DESTINATION> service <SERVICE>
+~~~
+
+Exercise real traffic plus all mandatory security-negative cases in section 10.
+
+## A-006 — AI Identity, permissions, AI Access, and logs — MANDATORY when feature included
+
+~~~text
+show ai-identities
+show ai-identity <IDENTITY>
+show permission-objects
+show permission-object <PERMISSION>
+show permission-groups
+show permission-group <GROUP>
+show ai-access
+show ai-access <RULE>
+show ai-access-log
+show ai-access-log identity <IDENTITY>
+show ai-access-log destination <DESTINATION>
+show ai-access-log permission <PERMISSION>
+
+set ai-identity <IDENTITY>
+set permission-object <PERMISSION>
+set permission-group <GROUP>
+set ai-access <RULE>
+set ai-access enabled
+set ai-access disabled
+
+unset ai-identity <IDENTITY>
+unset permission-object <PERMISSION>
+unset permission-group <GROUP>
+unset ai-access <RULE>
+unset ai-access policy
+
+test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION>
+~~~
+
+Verify authentication and authorization remain separate, reference-safe deletion works, and disabling AI Access policy enforcement does not bypass AI authentication.
+
+## A-007 — Reference protection — MANDATORY
+
+Attempt to delete referenced Network Object, Network Group, Service Object, Service Group, Permission Object/Group, AI Identity, and referenced Managed Host.
+
+Expected:
+
+- deletion rejected;
+- references listed;
+- no partial mutation;
+- remove/change references first, then deletion succeeds.
+
+## A-008 — Revisions, diff, audit, and rollback — MANDATORY
+
+~~~text
+system revisions
+system revision <REVISION>
+system diff <REVISION_A> <REVISION_B>
+system audit
+system rollback <REVISION>
+~~~
+
+Verify revision history, diff correctness, audit attribution, rollback safety, runtime generation consistency, and real traffic after rollback.
+
+## A-009 — Backup and restore — MANDATORY on disposable environment
+
+~~~text
+system backup
+system restore <FILE>
+system diagnostics
+~~~
+
+Restore into the supported clean/recovery topology.
+
+Verify preservation of:
+
+- trust/PKI;
+- Managed Host identity;
+- Remote Services and endpoint reservations;
+- Objects/Groups;
+- all policy families;
+- AI identity metadata and safe secrets/trust handling;
+- revisions/generation consistency;
+- real Remote Access and Internet Access behavior after restore.
+
+Also execute corrupt/truncated/unsupported restore negatives in S-010.
+
+## A-010 — Server ConfigurationBundle atomicity and parity — MANDATORY
+
+~~~text
+test configuration <FILE|->
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+system export configuration <FILE>
+~~~
+
+Verify:
+
+- direct CLI and equivalent Bundle reach the same authoritative state/effective policy;
+- file and stdin inputs work;
+- invalid final resource causes zero earlier mutations;
+- same Bundle reapply is NO CHANGE;
+- missing resource means unchanged unless state: absent is explicit;
+- export omits authentication secrets;
+- security-impact confirmation is based on the actual Bundle being applied, not on a previously tested different Bundle.
+
+## A-011 — Server system operations — MANDATORY
+
+~~~text
+system status
+system version
+system diagnostics
+system audit
+system certificate
+system update
+system support-bundle
+~~~
+
+Verify stable/preview/development identity and exact Source HEAD are truthful, certificate state is coherent, diagnostics are read-only, update follows candidate/release rules, and support output is secret-safe.
+
+## A-012 — Zero-Touch capacity and credential security — MANDATORY
+
+Verify the current limits and security contracts through real Server CLI workflows, including:
+
+- maximum issuance per request;
+- maximum active unused capacity;
+- remaining-capacity handling;
+- unique per-device ticket;
+- single use;
+- concurrent double redemption denied;
+- default TTL;
+- maximum TTL;
+- expired/revoked ticket releases capacity;
+- secret displayed only according to contract;
+- Server does not retain raw ticket;
+- ConfigurationBundle cannot embed ticket secret or bypass lifecycle;
+- expiry does not disconnect an already enrolled host.
+
+Use the current authoritative limits from the CLI/AI Master and release validation at execution time.
+
+## A-013 — Endpoint pools and allocation lifecycle — MANDATORY
+
+Exercise normal Remote Service and Fixed TCP pools.
+
+Verify:
+
+- pools do not overlap;
+- existing reservation is never stolen;
+- create allocates from correct pool;
+- disable/restart/disconnect preserves reservation;
+- delete releases reservation;
+- cross-pool in-place edit is rejected;
+- configured pool exhaustion returns a truthful error or DEGRADED/Pending allocation according to whether allocation was available at apply time;
+- later available capacity allows expected recovery.
+
+## A-014 — Concurrent/stale administrative change protection — MANDATORY
+
+Using two administrator sessions, attempt conflicting edits to the same authoritative configuration/revision.
+
+Verify stale edit/revision conflict is surfaced, no last-writer corruption occurs, and subsequent state/audit is deterministic.
+
+## A-015 — Fresh Server install / uninstall / reinstall — MANDATORY on disposable server
+
+Prove:
+
+- fresh Server state initializes correctly;
+- no hidden legacy authority is required;
+- uninstall/preserve behavior matches the documented contract;
+- purge/destructive removal, when supported and explicitly selected, removes only product-owned state according to contract;
+- reinstall creates or restores the correct authoritative state;
+- real User E2E traffic is revalidated after recovery.
+
+# 10. Security and failure scenarios
+
+## S-001 — Allow and deny are both proven — MANDATORY
+
+Every policy family tested must include a real ALLOW and real DENY path. A successful allowed flow alone cannot pass security E2E.
+
+## S-002 — Invalid configuration is atomic — MANDATORY
+
+Use invalid/missing Object references, invalid CIDR/FQDN/ports, unsupported UDP Remote Service, wrong Bundle context, incomplete one-shot command, and invalid final Bundle resource.
+
+Expected:
+
+~~~text
+No changes were applied.
+~~~
+
+Verify authoritative state, endpoint allocation, revision, and runtime generation did not partially change.
+
+## S-003 — Internet Access escape/bypass protection — MANDATORY
+
+Exercise and retain results for:
+
+- unapproved source;
+- unapproved FQDN;
+- wrong port;
+- loopback;
+- RFC1918/private target where unsafe;
+- link-local;
+- cloud metadata endpoint;
+- IPv6 local/private where unsafe;
+- IP-literal bypass;
+- wildcard boundary bypass;
+- DNS rebinding-style behavior;
+- malformed CONNECT;
+- CONNECT/SNI mismatch where applicable;
+- unsafe ECH-dependent validation path where applicable;
+- corrupt/missing current policy generation.
+
+All unsafe paths must be denied/fail closed according to the current contract.
+
+## S-004 — Secret leakage — MANDATORY
+
+Inspect:
+
+- normal show output;
+- help/completion;
+- audit;
+- diagnostics;
+- support bundle;
+- ConfigurationBundle export;
+- bootstrap/enrollment logs;
+- server/agent logs used during E2E.
+
+No raw ticket, OAuth secret, private key, transport token, credential, or unrestricted sensitive file content may be exposed outside its explicit one-time/secure contract.
+
+## S-005 — CLI parser and shell safety — MANDATORY
+
+Attempt command substitution, wildcard expansion, pipes, metacharacters, malformed quoting, and ambiguous selectors through the public CLI.
+
+Verify the CLI treats them according to its parser contract and never unexpectedly executes a shell command.
+
+## S-006 — Role boundary — MANDATORY
+
+Repeat O-012 plus Server read-only visibility of Agent-owned Remote Services.
+
+Verify Server inspection does not become unauthorized remote Agent mutation.
+
+## S-007 — Server outage — MANDATORY
+
+With healthy Remote Services:
+
+- make Server temporarily unavailable;
+- observe existing endpoints and Agent state;
+- create/edit an Agent Remote Service from synchronized metadata;
+- restore Server;
+- verify sync and endpoint continuity.
+
+No temporary outage may silently reassign an existing endpoint.
+
+## S-008 — Agent or target outage — MANDATORY
+
+Stop/disconnect Agent and separately stop the target service.
+
+Verify HEALTHY -> DEGRADED transition, truthful reason, preserved reservation, and automatic recovery.
+
+## S-009 — Runtime activation failure and rollback — MANDATORY
+
+Inject a controlled runtime activation failure after validation in a disposable environment.
+
+Expected:
+
+- apply fails;
+- previous authoritative configuration restored;
+- previous runtime restored where rollback succeeds;
+- incomplete rollback is reported truthfully;
+- real previous traffic remains/restores according to contract.
+
+Do not confuse valid-but-unreachable target DEGRADED state with an invalid activation that requires rollback.
+
+## S-010 — Backup/restore negative cases — MANDATORY
+
+Attempt restore using:
+
+- truncated archive;
+- corrupt database;
+- unsupported newer schema;
+- missing required trust material.
+
+Expected: fail closed with explicit reason; no unsafe partially restored runtime.
+
+# 11. Performance test contract
+
+Performance testing is part of FULL_USER_E2E.
+
+The current product documents do not define universal numeric throughput/CPS/latency SLOs for every hardware/network combination. Therefore:
+
+- always measure and retain metrics;
+- always compare against a same-environment direct-path baseline when technically possible;
+- apply numeric PASS thresholds only from an explicitly selected performance profile/SLO;
+- if no numeric thresholds are defined, report PERFORMANCE_NUMERIC_QUALIFICATION=MEASURED_NOT_QUALIFIED rather than inventing a PASS threshold;
+- functional/security failures under load are always FAIL regardless of numeric SLO.
+
+Required performance evidence:
+
+~~~text
+PERF_PROFILE=
+LOAD_GENERATOR_HW=
+SERVER_HW=
+AGENT_HW=
+TARGET_HW=
+NETWORK_RTT_DIRECT_MS=
+NETWORK_RTT_RELAY_MS=
+NIC_SPEED=
+DURATION=
+CONCURRENCY=
+CPS_TARGET=
+PAYLOAD_PROFILE=
+THROUGHPUT_UP_MBIT_S=
+THROUGHPUT_DOWN_MBIT_S=
+THROUGHPUT_BIDIR_UP_MBIT_S=
+THROUGHPUT_BIDIR_DOWN_MBIT_S=
+CONNECT_P50_MS=
+CONNECT_P95_MS=
+CONNECT_P99_MS=
+REQUEST_P50_MS=
+REQUEST_P95_MS=
+REQUEST_P99_MS=
+ERROR_RATE=
+RECONNECT_RATE=
+SERVER_CPU_AVG_MAX=
+SERVER_RSS_AVG_MAX=
+SERVER_FD_AVG_MAX=
+AGENT_CPU_AVG_MAX=
+AGENT_RSS_AVG_MAX=
+AGENT_FD_AVG_MAX=
+DROPPED_CONNECTIONS=
+DATA_INTEGRITY_ERRORS=
+~~~
+
+Default full-run durations unless the selected performance profile overrides them:
+
+~~~text
+WARMUP=60s
+STEADY_STATE_EACH_CASE=300s
+SOAK=3600s
+~~~
+
+Preferred test data profiles:
+
+~~~text
+small request/response
+1 KiB
+64 KiB
+1 MiB
+continuous stream
+large file transfer
+~~~
+
+Use checksums for file-transfer integrity where applicable.
+
+## P-001 — Direct-path baseline — MANDATORY
+
+Measure the same target service without Data Relay Link, from the same load generator and network path where feasible.
+
+Record throughput, connection latency, CPS, CPU, and error rate.
+
+If a comparable direct path is impossible due to the isolated-network design, record BASELINE_UNAVAILABLE with the exact reason; do not fabricate a comparison.
+
+## P-002 — Remote Access one-way throughput: User -> target — MANDATORY
+
+Generate sustained upload/request traffic through a Remote Service public endpoint.
+
+Measure:
+
+- application goodput;
+- server and Agent CPU/RSS;
+- retransmission/error symptoms;
+- data integrity.
+
+Use SSH/SCP, HTTP upload, or an iperf3/custom TCP target through a DRLink TCP Remote Service as appropriate.
+
+## P-003 — Remote Access one-way throughput: target -> User — MANDATORY
+
+Generate sustained download/response traffic through the same public path.
+
+Measure the same metrics independently from P-002.
+
+## P-004 — Remote Access simultaneous full-duplex throughput — MANDATORY
+
+Generate traffic in both directions at the same time.
+
+A suitable TCP test service may use iperf3 bidirectional mode or an equivalent full-duplex harness published through a DRLink Remote Service.
+
+Record independent upstream and downstream goodput plus aggregate resource usage.
+
+## P-005 — Connection establishment rate / CPS — MANDATORY
+
+Measure new successful connections per second through the public endpoint.
+
+Ramp connection rate through the selected performance profile until the configured target or observed saturation/failure boundary.
+
+Record:
+
+- attempted CPS;
+- successful CPS;
+- failed/time-out connections;
+- connect p50/p95/p99;
+- Server/Agent CPU, memory, and FD usage;
+- recovery after the load stops.
+
+Do not convert a saturation point into a product defect unless it violates an approved performance profile or functional safety contract.
+
+## P-006 — Concurrent active connections — MANDATORY
+
+Hold increasing numbers of simultaneous established connections.
+
+At minimum exercise several tiers including low, moderate, and high concurrency relative to the selected target profile.
+
+Verify:
+
+- no endpoint cross-talk;
+- no data corruption;
+- new policy evaluation still works for new connections;
+- process remains responsive;
+- diagnostics and show commands remain usable;
+- cleanup returns resources.
+
+## P-007 — Connect/request latency — MANDATORY
+
+Measure TCP connect and application request latency through:
+
+- direct Remote Service;
+- Relay Host Remote Service;
+- Fixed TCP Remote Service;
+- HTTPS passthrough where applicable.
+
+Record p50/p95/p99, not only averages.
+
+## P-008 — Mixed-service workload — MANDATORY
+
+Run simultaneous traffic across multiple service types, for example:
+
+- SSH interactive/transfer;
+- HTTP;
+- HTTPS;
+- Custom TCP;
+- Fixed TCP.
+
+Verify one hot service does not corrupt endpoint identity or policy behavior of another.
+
+## P-009 — Multi-host scale — MANDATORY
+
+Exercise the product operating range using Managed/Agent Host tiers:
+
+~~~text
+1
+5
+10
+30
+50
+~~~
+
+Where full physical/VM capacity for a tier is unavailable, use the maximum real-host tier available and record the missing tier as BLOCKED_ENVIRONMENT, not PASS.
+
+At each tier measure:
+
+- healthy Agent connectivity;
+- inventory/show response time;
+- Remote Service count;
+- policy evaluation correctness;
+- endpoint allocation;
+- CPU/RSS/FD;
+- reconnect storm behavior.
+
+The goal is to validate the documented few-to-few-dozen operating model, not to claim unsupported fleet scale.
+
+## P-010 — Internet Access throughput and bidirectional application data — MANDATORY
+
+For an approved destination, measure:
+
+- protected host -> Internet upload/request throughput;
+- Internet -> protected host response/download throughput;
+- simultaneous request/response where the application permits;
+- HTTP/HTTPS CONNECT/application latency;
+- policy lookup under load.
+
+Repeat a deny test during load to prove security policy is not bypassed under performance pressure.
+
+## P-011 — AI/MCP performance — MANDATORY when feature included
+
+Measure representative allowed operations:
+
+- host-info/process-read request rate and latency;
+- file read/download throughput;
+- file write/upload throughput if permitted;
+- concurrent AI/MCP sessions;
+- authentication/authorization latency;
+- audit generation under load.
+
+Also verify denied operations remain denied under concurrent load.
+
+If the candidate excludes AI/MCP, record NOT_APPLICABLE with feature evidence.
+
+## P-012 — Connection churn and reconnect storm — MANDATORY
+
+Repeatedly connect/disconnect clients and Remote Service user sessions.
+
+Include:
+
+- external connection churn;
+- Agent reconnect storm after temporary Server outage;
+- target-service flap;
+- enable/disable cycles.
+
+Verify no endpoint reassignment, reservation leak, unbounded FD growth, or stuck DEGRADED state.
+
+## P-013 — Soak / long-duration stability — MANDATORY
+
+Run mixed representative traffic for the configured soak duration; default 3600 seconds.
+
+Collect time-series CPU, RSS, FD, connection count, error count, endpoint state, and policy/audit health.
+
+PASS of functional soak requires:
+
+- no crash/restart loop;
+- no unexplained endpoint change;
+- no authorization bypass;
+- no data-integrity error;
+- no unbounded resource growth indicating a leak;
+- normal recovery after load ends.
+
+Numeric resource ceilings come from the selected performance profile.
+
+## P-014 — Backup/restart/recovery under load — MANDATORY
+
+With active but disposable workload:
+
+- create backup under supported activity;
+- restart/reboot components according to scenario;
+- restore in the designated recovery test;
+- resume load.
+
+Verify no corrupted authoritative state and that post-recovery traffic/policy matches pre-recovery intent.
+
+# 12. Platform matrix
+
+For FULL_USER_E2E, test every platform currently claimed by the candidate at its actual qualification level.
+
+Current release validation includes this matrix:
+
+~~~text
+Ubuntu 24
+Windows 10
+Rocky Linux 8
+Rocky Linux 9
+Amazon Linux 2023
+macOS Apple Silicon
+~~~
+
+For each platform record one of:
+
+~~~text
+PASS_REAL
+PASS_SYSTEM_SERVICE
+PASS_CONTAINER_ONLY
+NOT_APPLICABLE
+BLOCKED_ENVIRONMENT
+FAIL
+~~~
+
+Do not upgrade container/userspace evidence into Real E2E PASS.
+
+Where a platform cannot host the Server role, execute its applicable Agent/client scenarios only.
+
+# 13. Complete CLI coverage list used by E2E
+
+This section mirrors the public v2.4 CLI/AI Master. It is a coverage checklist, not a second grammar authority.
+
+## 13.1 Server show
+
+~~~text
+show status
+
+show managed-hosts
+show managed-host <HOST>
+show managed-host <HOST> agent
+show managed-host <HOST> addresses
+show managed-host <HOST> remote-services
+
+show enrollments
+show enrollment <ENROLLMENT>
+
+show network-objects
+show network-object <OBJECT>
+show network-object <OBJECT> references
+
+show network-groups
+show network-group <GROUP>
+show network-group <GROUP> references
+
+show service-objects
+show service-object <SERVICE>
+show service-object <SERVICE> references
+
+show service-groups
+show service-group <GROUP>
+show service-group <GROUP> references
+
+show remote-access
+show remote-access <RULE>
+
+show internet-access
+show internet-access <RULE>
+
+show ai-identities
+show ai-identity <IDENTITY>
+
+show permission-objects
+show permission-object <PERMISSION>
+
+show permission-groups
+show permission-group <GROUP>
+
+show ai-access
+show ai-access <RULE>
+
+show ai-access-log
+show ai-access-log identity <IDENTITY>
+show ai-access-log destination <DESTINATION>
+show ai-access-log permission <PERMISSION>
+~~~
+
+## 13.2 Server set
+
+~~~text
+set enrollment zero-touch
+set enrollment manual
+set enrollment bulk
+
+set network-object <OBJECT>
+set network-group <GROUP>
+
+set service-object <SERVICE>
+set service-group <GROUP>
+
+set remote-access <RULE>
+set remote-access enabled
+set remote-access disabled
+
+set internet-access <RULE>
+set internet-access enabled
+set internet-access disabled
+
+set ai-identity <IDENTITY>
+
+set permission-object <PERMISSION>
+set permission-group <GROUP>
+
+set ai-access <RULE>
+set ai-access enabled
+set ai-access disabled
+~~~
+
+## 13.3 Server unset
+
+~~~text
+unset managed-host <HOST>
+unset enrollment <ENROLLMENT>
+
+unset network-object <OBJECT>
+unset network-group <GROUP>
+
+unset service-object <SERVICE>
+unset service-group <GROUP>
+
+unset remote-access <RULE>
+unset remote-access policy
+
+unset internet-access <RULE>
+unset internet-access policy
+
+unset ai-identity <IDENTITY>
+
+unset permission-object <PERMISSION>
+unset permission-group <GROUP>
+
+unset ai-access <RULE>
+unset ai-access policy
+~~~
+
+## 13.4 Server test
+
+~~~text
+test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>
+test internet-access source <SOURCE> destination <DESTINATION> service <SERVICE>
+test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION>
+test configuration <FILE|->
+~~~
+
+## 13.5 Server system
+
+~~~text
+system status
+system version
+system diagnostics
+system audit
+
+system revisions
+system revision <REVISION>
+system diff <REVISION_A> <REVISION_B>
+system rollback <REVISION>
+
+system backup
+system restore <FILE>
+
+system export configuration <FILE>
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+
+system certificate
+system update
+system support-bundle
+system uninstall
+~~~
+
+## 13.6 Agent Host
+
+~~~text
+show status
+show agent
+
+show remote-services
+show remote-service <NAME>
+
+set remote-service <NAME>
+unset remote-service <NAME>
+
+system info
+system pause
+system resume
+system restart
+
+system autostart enable
+system autostart disable
+
+system update product
+system update engine
+system synchronize
+
+test configuration <FILE|->
+
+system export configuration <FILE>
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+
+system diagnostics
+system support-bundle
+system version
+system uninstall
+~~~
+
+When an Agent help/diagnostic surface recommends system synchronize, the command must parse and be role-correct.
+
+## 13.7 External user/application commands
+
+These are not DRLink grammar, but FULL_USER_E2E must use real clients appropriate to the service:
+
+~~~text
+ssh / scp / sftp
+curl
+wget
+git
+apt
+real HTTP/HTTPS client
+real Custom TCP client
+performance load generator
+supported AI/MCP client when applicable
+~~~
+
+Use only the commands actually applicable to the target OS/application.
+
+# 14. Evidence and result rules
+
+Every scenario result must be one of:
+
+~~~text
+PASS
+FAIL
+BLOCKED_ENVIRONMENT
+NOT_APPLICABLE
+NOT_RUN_BY_SCOPE
+~~~
+
+Rules:
+
+- PASS requires current-run evidence from the exact candidate build.
+- BLOCKED_ENVIRONMENT is not PASS.
+- NOT_APPLICABLE requires an explicit product/platform reason.
+- NOT_RUN_BY_SCOPE is allowed only for an explicitly narrowed request.
+- A FULL_USER_E2E aggregate PASS is invalid if any mandatory applicable scenario is FAIL, BLOCKED_ENVIRONMENT, or NOT_RUN.
+- A numeric performance PASS is invalid when no approved numeric performance profile/SLO is defined; use MEASURED_NOT_QUALIFIED for the numeric qualification while still reporting functional load-test results.
+- A release PASS additionally follows all exact-HEAD and double-pass requirements in docs/RELEASE_VALIDATION.md.
+
+Per scenario retain:
+
+~~~text
+SCENARIO_ID=
+ROLE=
+HOST=
+START_UTC=
+END_UTC=
+SOURCE_HEAD=
+PRODUCT_VERSION=
+COMMANDS_EXECUTED=
+EXPECTED=
+OBSERVED=
+RESULT=
+FAILURE_CLASS=
+EVIDENCE_PATHS=
+NOTES=
+~~~
+
+Performance scenarios additionally retain raw machine-readable metrics when possible.
+
+# 15. Final FULL_USER_E2E report
+
+A full run must end with a summary at least equivalent to:
+
+~~~text
+PHASE=FULL_USER_E2E
+FINAL_STATUS=PASS|PARTIAL|FAIL
+
+SOURCE_HEAD=
+PRODUCT_VERSION=
+RELEASE_CHANNEL=
+RELAY_ENGINE_VERSION=
+
+USER_SCENARIOS=PASS|PARTIAL|FAIL
+OPERATOR_SCENARIOS=PASS|PARTIAL|FAIL
+ADMIN_SCENARIOS=PASS|PARTIAL|FAIL
+SECURITY_NEGATIVE=PASS|PARTIAL|FAIL
+PERFORMANCE_FUNCTIONAL=PASS|PARTIAL|FAIL
+PERFORMANCE_NUMERIC_QUALIFICATION=PASS|FAIL|MEASURED_NOT_QUALIFIED
+MULTI_PLATFORM=PASS|PARTIAL|FAIL
+
+REMOTE_ACCESS_REAL_TRAFFIC=
+INTERNET_ACCESS_REAL_TRAFFIC=
+AI_MCP_REAL_TRAFFIC=
+ZERO_TOUCH=
+CONFIGURATION_BUNDLE=
+BACKUP_RESTORE=
+REBOOT_RECOVERY=
+UPDATE_RECOVERY=
+ENDPOINT_CONTINUITY=
+
+THROUGHPUT_FORWARD=
+THROUGHPUT_REVERSE=
+THROUGHPUT_BIDIRECTIONAL=
+CPS=
+CONCURRENT_CONNECTIONS=
+CONNECT_P95=
+CONNECT_P99=
+SOAK=
+RESOURCE_STABILITY=
+
+UNRESOLVED_P0=
+UNRESOLVED_P1=
+UNRESOLVED_P2=
+BLOCKERS=
+EVIDENCE_ROOT=
+~~~
+
+If FINAL_STATUS is not PASS, list the exact failing/blocking scenario IDs.
+
+# 16. Maintenance rule
+
+Whenever a public CLI command, supported platform, topology, Access Policy semantic, Remote Service lifecycle, Internet Access behavior, AI/MCP capability, enrollment workflow, backup/restore behavior, or release gate changes, this document must be reviewed in the same change.
+
+The invariant for future User E2E requests is:
+
+~~~text
+USER_E2E_REQUEST
+-> read exact repository state
+-> pin exact candidate HEAD/build
+-> execute this document's FULL_USER_E2E profile unless explicitly scoped
+-> use real public CLI and real traffic
+-> exercise ALLOW and DENY
+-> execute performance in every required direction
+-> retain evidence
+-> report every skipped/blocked scenario honestly
+~~~
