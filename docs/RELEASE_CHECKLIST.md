@@ -322,20 +322,35 @@ MCP_REAL_E2E=
 
 ## 19. Real environment validation
 
-- [ ] fresh server install.
-- [ ] fresh client install.
-- [ ] Zero-Touch.
-- [ ] reboot/autostart.
-- [ ] update/migration.
-- [ ] backup/restore.
-- [ ] uninstall zero-residue where purge requested.
-- [ ] reinstall.
-- [ ] Remote Access SSH/HTTP/HTTPS/TCP as claimed.
-- [ ] ROUTED LAN target.
-- [ ] Internet Access curl/wget/git/apt.
-- [ ] denied Internet traffic cannot escape.
-- [ ] multi-host matrix.
-- [ ] MCP real operation on private/closed target.
+Execute USER_E2E_SCENARIOS.md as the canonical contract. The real-environment run is destructive by design on designated test systems; do not preserve a test host by weakening a lifecycle/failure scenario.
+
+- [ ] PASS 1: all applicable functions exercised directly through the public drlink CLI.
+- [ ] PASS 2: applicable workflows repeated with AI-generated commands and/or ConfigurationBundles, then actually executed through drlink.
+- [ ] PASS 3: real forward, reverse, and simultaneous full-duplex performance/resilience executed.
+- [ ] fresh Server install and first-use discovery.
+- [ ] fresh Agent install on every applicable platform.
+- [ ] Zero-Touch, manual, and bulk enrollment.
+- [ ] User, Operator, and Administrator product lifecycle scenarios.
+- [ ] Remote Access SSH/HTTP/HTTPS/Custom TCP/Fixed TCP as claimed.
+- [ ] Direct Agent and Relay-to-LAN target paths.
+- [ ] Internet Access with real curl/wget/git/apt or applicable applications.
+- [ ] real ALLOW and DENY for every policy family.
+- [ ] AI Identity / Permission / AI Access / MCP behavior when included.
+- [ ] ConfigurationBundle file/stdin test/diff/apply/recovery.
+- [ ] reboot, outage, reconnect, and autostart recovery.
+- [ ] backup -> mutate -> restore -> functional verification.
+- [ ] product update and Relay Engine update separation.
+- [ ] prior-stable upgrade when claimed.
+- [ ] update-failure recovery.
+- [ ] Server and Agent uninstall/reinstall, including preserve/purge semantics.
+- [ ] endpoint-pool exhaustion and recovery.
+- [ ] concurrent writers, races, and parallel multi-host operations.
+- [ ] multi-host simultaneous real traffic.
+- [ ] throughput forward/reverse/full-duplex, CPS, concurrency, latency, saturation, recovery, and soak.
+- [ ] blocked/confusing/ambiguous/UX/documentation findings recorded.
+- [ ] no product fix performed during the active E2E run.
+- [ ] failures do not stop unrelated scenarios; dependent scenarios use BLOCKED_BY_PRIOR_FAILURE.
+- [ ] findings consolidated only after the planned run is exhausted.
 
 Platform evidence:
 
@@ -350,14 +365,18 @@ Windows 10=
 
 ## 20. Double Full Real E2E
 
+Each FULL_REAL_E2E pass means the complete three-pass execution contract above, not only a functional smoke pass.
+
 - [ ] `FULL_REAL_E2E_PASS_1=PASS`
+- [ ] PASS1 contains CLI direct + AI-assisted + bidirectional performance evidence.
 - [ ] `FULL_REAL_E2E_PASS_2=PASS`
+- [ ] PASS2 contains CLI direct + AI-assisted + bidirectional performance evidence.
 - [ ] `PASS1_HEAD==PASS2_HEAD`
 - [ ] `PASS1_HEAD==FINAL_QUALIFIED_HEAD`
 - [ ] no product/dependency change between passes.
 - [ ] no tracked commit is created after PASS2; the immutable tag is that same provenance HEAD.
 
-Any change resets the pass counter.
+Any qualifying product/dependency/generated-runtime change resets the pass counter.
 
 ## 21. Artifacts
 
