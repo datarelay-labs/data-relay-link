@@ -69,7 +69,7 @@ def seed_tree(root: Path) -> dict:
     }
     (root / "etc/drlink/config.json").write_text(json.dumps(cfg) + "\n", encoding="utf-8")
     (root / "etc/drlink/version").write_text(
-        "PROJECT_VERSION=2.3.1\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=test\n",
+        "PROJECT_VERSION=2.4.0\nFRP_VERSION=0.71.0\nRELEASE_CHANNEL=dev\nSOURCE_REF=test\n",
         encoding="utf-8",
     )
     (root / "etc/frp/frps.toml").write_text("bindPort = 443\n", encoding="utf-8")

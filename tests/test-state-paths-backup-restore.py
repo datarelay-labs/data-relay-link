@@ -44,7 +44,7 @@ def seed_required(tree: Path, marker: str = "test") -> None:
         json.dumps({"marker": marker, "public_hostname": "example.test"}) + "\n",
         encoding="utf-8",
     )
-    (tree / "etc/drlink/version").write_text("PROJECT_VERSION=2.3.1\n", encoding="utf-8")
+    (tree / "etc/drlink/version").write_text("PROJECT_VERSION=2.4.0\n", encoding="utf-8")
     for name in ("ca.key", "ca.crt", "server.key", "server.crt"):
         (tree / "etc/drlink/pki" / name).write_text("%s-%s\n" % (name, marker), encoding="utf-8")
     (tree / "etc/frp/frps.toml").write_text("bindPort = 443\n", encoding="utf-8")

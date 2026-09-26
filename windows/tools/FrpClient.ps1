@@ -473,7 +473,7 @@ function Test-FrpIsInstalledProductTree {
 
 function Resolve-FrpProjectSourceRoot {
     # Production installed clients do not ship a downloadable project artifact
-    # pipeline in v2.3.1. Only an explicit source tree (or a distinct repo
+    # pipeline in historical pre-v2.4 installs. Only an explicit source tree (or a distinct repo
     # checkout) may refresh management files; never copy the installed tree onto itself.
     if ($env:FRP_WINDOWS_PROJECT_SRC) {
         if (-not (Test-Path -LiteralPath $env:FRP_WINDOWS_PROJECT_SRC)) {
