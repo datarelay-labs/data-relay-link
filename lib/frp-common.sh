@@ -1707,6 +1707,22 @@ frp_el8_family() {
   esac
 }
 
+# Amazon Linux 2 is container/CI portability only. It is not a supported
+# ConfigurationBundle target, so required PyYAML is not collected there.
+frp_amazon_linux_2() {
+  local id ver
+  id="$(printf '%s' "${DISTRO_ID:-}" | tr '[:upper:]' '[:lower:]')"
+  ver="$(printf '%s' "${DISTRO_VERSION:-}" | cut -d. -f1)"
+  case "$id" in
+    amzn|amazon|amazonlinux|amazonlinux2)
+      [[ "$ver" == "2" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 frp_prefer_newer_python() {
   # On EL8 the `python3` package is often 3.6. Prefer an installed 3.9+ binary
   # via an early PATH shim without rewriting the distro /usr/bin/python3.
@@ -1889,9 +1905,9 @@ frp_el8_pyyaml_package() {
 # ConfigurationBundle YAML for the supported Agent matrix. The package must
 # match the interpreter that will run.
 # apt: python3-yaml. EL8: versioned AppStream (python39-pyyaml on a clean
-# host). Amazon Linux 2023 and other non-EL8 dnf/yum: python3-pyyaml.
-# Amazon Linux 2 is container/CI portability only, not a supported Agent
-# target, so it gets no separate PyYAML support package.
+# host; python3.11-pyyaml when active python3 is 3.11). Amazon Linux 2023
+# and other supported non-EL8 dnf/yum: python3-pyyaml.
+# Amazon Linux 2 does not use this mapping for a required install.
 frp_python_package_for_module() {
   local module="$1" pm="$2" mm
   case "$module" in
@@ -1925,7 +1941,13 @@ frp_collect_missing_python_packages() {
     frp_detect_package_manager || true
   fi
   local pm="${PACKAGE_MANAGER:-apt}"
-  local modules=(yaml)
+  # AL2 portability images do not ship a required PyYAML RPM for this
+  # installer. ConfigurationBundle stays unsupported there. Server ACME
+  # packages remain optional.
+  local modules=()
+  if ! frp_amazon_linux_2; then
+    modules=(yaml)
+  fi
   if [[ "$role" == server ]]; then
     modules+=(acme josepy cryptography)
   fi

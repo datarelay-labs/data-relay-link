@@ -578,11 +578,12 @@ frp_prefer_newer_python || fail "clean EL8 frp_prefer_newer_python"
 frp_invoke python3 -c 'import yaml' || fail "active python3 after prefer_newer_python cannot import yaml"
 pass "clean EL8 python39 yaml abi"
 
-# Amazon Linux 2 is container/CI portability only, not a supported Agent
-# target (RELEASE_VALIDATION.md matrix, MORNING_REAL_E2E_FINAL_CHECKLIST.md).
-# Do not give it an EL8 ABI package or a separate PyYAML support contract.
+# Amazon Linux 2 is container/CI portability only, not a ConfigurationBundle
+# target. Required YAML is not collected for client or server. Optional
+# server ACME packages may still be attempted.
 reset_pm_isolation
 export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-al2-yaml"
 FRP_DEPENDENCY_ROLE=client
 DISTRO_ID=amzn
 DISTRO_VERSION=2
@@ -592,7 +593,6 @@ cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
 #!/bin/sh
 code="${2:-}"
 case "$code" in
-  *'sys.version_info[:2]'*) printf '3.7\n'; exit 0 ;;
   *version_info*) exit 0 ;;
 esac
 exit 1
@@ -600,14 +600,86 @@ EOF
 chmod +x "$FRP_TEST_CMD_PATH/python3"
 frp_python_module_importable() { return 1; }
 frp_collect_missing_python_packages
-printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "AL2 stays on the generic non-EL8 pyyaml name"
-if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
-  fail "AL2 must not use the EL8 python39-pyyaml package"
+if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
+  fail "AL2 client must not require Python packages: ${MISSING_PYTHON_PACKAGES[*]}"
 fi
-if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx 'python3-PyYAML'; then
-  fail "AL2 must not gain a dedicated PyYAML support package"
+mkdir -p "$FRP_TEST_PM_PATH"
+AL2_LOG="$WORKDIR/al2-client-yaml.log"
+: >"$AL2_LOG"
+cat >"$FRP_TEST_PM_PATH/yum" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$AL2_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python3-pyyaml|python3-PyYAML|python39-pyyaml|python3.11-pyyaml)
+      echo "AL2 must not install \$arg" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/yum"
+if ! ensure_dependencies >"$WORKDIR/al2-client.out" 2>"$WORKDIR/al2-client.err"; then
+  cat "$WORKDIR/al2-client.err" >&2
+  fail "AL2 client ensure_dependencies must not require PyYAML"
 fi
-pass "amazon linux 2 pyyaml not a support contract"
+if grep -E -q 'python3-pyyaml|python3-PyYAML|python39-pyyaml|python3\.11-pyyaml' "$AL2_LOG"; then
+  fail "AL2 client yum transaction included a PyYAML package"
+fi
+pass "amazon linux 2 client yaml not required"
+
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2-server-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-al2-server-yaml"
+FRP_DEPENDENCY_ROLE=server
+DISTRO_ID=amzn
+DISTRO_VERSION=2
+PACKAGE_MANAGER=yum
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -E -q 'pyyaml|PyYAML|python3-yaml'; then
+  fail "AL2 server must not collect a required YAML package"
+fi
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme || fail "AL2 server still collects optional python3-acme"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-cryptography || fail "AL2 server still collects optional python3-cryptography"
+mkdir -p "$FRP_TEST_PM_PATH"
+AL2_SERVER_LOG="$WORKDIR/al2-server-yaml.log"
+: >"$AL2_SERVER_LOG"
+cat >"$FRP_TEST_PM_PATH/yum" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$AL2_SERVER_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python3-pyyaml|python3-PyYAML|python39-pyyaml|python3.11-pyyaml)
+      echo "AL2 must not install \$arg" >&2
+      exit 1
+      ;;
+    python3-acme)
+      echo "No match for argument: python3-acme" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/yum"
+if ! ensure_dependencies >"$WORKDIR/al2-server.out" 2>"$WORKDIR/al2-server.err"; then
+  cat "$WORKDIR/al2-server.err" >&2
+  fail "AL2 server ensure_dependencies must not fail for missing PyYAML or ACME"
+fi
+grep -q 'optional AUTO_ACME' "$WORKDIR/al2-server.err" || fail "AL2 server must keep optional ACME soft-fail"
+if grep -E -q 'python3-pyyaml|python3-PyYAML|python39-pyyaml|python3\.11-pyyaml' "$AL2_SERVER_LOG"; then
+  fail "AL2 server yum transaction included a PyYAML package"
+fi
+grep -q 'python3-acme' "$AL2_SERVER_LOG" || fail "AL2 server should still attempt optional python3-acme"
+pass "amazon linux 2 server yaml not required"
 
 reset_pm_isolation
 export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2023-yaml"
