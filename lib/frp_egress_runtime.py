@@ -12,6 +12,7 @@ import json
 import os
 import select
 import socket
+import sys
 import threading
 import time
 from collections import deque
@@ -289,7 +290,9 @@ def happy_eyeballs_connect(
         if stop.is_set():
             return
         sock = None
-        remaining = max(0.05, total_timeout - delay)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or stop.is_set():
+            return
         acquired = sem.acquire(timeout=remaining)
         if not acquired:
             with lock:
@@ -300,7 +303,9 @@ def happy_eyeballs_connect(
         try:
             if stop.is_set():
                 return
-            remaining = max(0.05, total_timeout - delay)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
             sock = connect_fn(ip, port, hostname, remaining)
             with lock:
                 if "sock" not in winner and not stop.is_set():
@@ -327,7 +332,7 @@ def happy_eyeballs_connect(
         threads.append(t)
         t.start()
 
-    end = time.monotonic() + total_timeout
+    end = deadline
     while time.monotonic() < end:
         with lock:
             if "sock" in winner:
@@ -336,8 +341,10 @@ def happy_eyeballs_connect(
             break
         time.sleep(0.01)
     stop.set()
+    # In-flight connects use the same deadline, so a short join releases their
+    # outbound-attempt slots before this request returns.
     for t in threads:
-        t.join(timeout=0.2)
+        t.join(timeout=1.0)
     with lock:
         if "sock" in winner:
             return winner["sock"]
@@ -423,6 +430,21 @@ class PolicyCache:
                 return None, (self.load_error or "policy unhealthy"), dict(self.cfg), snap
             return self.plane, None, dict(self.cfg), snap
 
+    def _deny_unhealthy(self, load_error, snap, candidate_ips, reason=None) -> dict:
+        return {
+            "decision": EG.DECISION_DENY,
+            "reason": reason
+            or (
+                EG.REASON_POLICY_UNHEALTHY
+                if hasattr(EG, "REASON_POLICY_UNHEALTHY")
+                else "POLICY_UNHEALTHY"
+            ),
+            "load_error": load_error,
+            "policy_generation": snap.generation if snap else None,
+            "authorized_candidates": [],
+            "candidate_ips": list(candidate_ips or []),
+        }
+
     def authorize(
         self,
         *,
@@ -433,32 +455,71 @@ class PolicyCache:
         method=None,
         candidate_ips=None,
     ) -> dict:
-        plane, load_error, _cfg, snap = self.snapshot()
-        if plane is None or self._RP is None:
-            return {
-                "decision": EG.DECISION_DENY,
-                "reason": EG.REASON_POLICY_UNHEALTHY if hasattr(EG, "REASON_POLICY_UNHEALTHY") else "POLICY_UNHEALTHY",
-                "load_error": load_error,
-                "policy_generation": snap.generation if snap else None,
-                "authorized_candidates": [],
-                "candidate_ips": list(candidate_ips or []),
-            }
-        decision = self._RP.authorize_internet(
-            plane,
-            source_ip=source_ip,
-            hostname=hostname,
-            port=int(port),
-            protocol=protocol,
-            candidate_ips=candidate_ips,
-        )
-        # Normalize to egress decision constants.
-        if decision.get("decision") == self._RP.DECISION_ALLOW:
-            decision["decision"] = EG.DECISION_ALLOW
-        else:
-            decision["decision"] = EG.DECISION_DENY
-        if method is not None:
-            decision["method"] = method
-        return decision
+        """Authorize on a request-private SQLite connection. Fail closed.
+
+        The cached plane is shared and is only safe while the cache lock is
+        held. authorize_internet runs SQL; using that plane after the lock
+        drops raises InterfaceError under concurrent CONNECT and can wedge
+        later requests. Callers must not see that as a client syntax error.
+        """
+        isolated = None
+        snap = None
+        load_error = None
+        try:
+            with self.lock:
+                self.reload(force=False)
+                load_error = self.load_error
+                snap = self.engine.snapshot()
+                unhealthy = (
+                    self.plane is None
+                    or self._RP is None
+                    or self._cp is None
+                    or load_error
+                    or snap is None
+                    or not snap.healthy
+                )
+            if unhealthy:
+                return self._deny_unhealthy(load_error, snap, candidate_ips)
+            isolated, iso_err, _cfg = self._cp.open_isolated()
+            if isolated is None:
+                return self._deny_unhealthy(
+                    iso_err or load_error or "control DB unavailable",
+                    snap,
+                    candidate_ips,
+                )
+            decision = self._RP.authorize_internet(
+                isolated,
+                source_ip=source_ip,
+                hostname=hostname,
+                port=int(port),
+                protocol=protocol,
+                candidate_ips=candidate_ips,
+            )
+            if decision.get("decision") == self._RP.DECISION_ALLOW:
+                decision["decision"] = EG.DECISION_ALLOW
+            else:
+                decision["decision"] = EG.DECISION_DENY
+            if method is not None:
+                decision["method"] = method
+            return decision
+        except Exception as exc:
+            sys.stderr.write(
+                "[drlink-egress] internet authorize failed; fail-closed: %s\n" % exc
+            )
+            return self._deny_unhealthy(
+                str(exc),
+                snap,
+                candidate_ips,
+                reason=EG.REASON_AUTHORIZATION_ERROR
+                if hasattr(EG, "REASON_AUTHORIZATION_ERROR")
+                else "AUTHORIZATION_ERROR",
+            )
+        finally:
+            if isolated is not None:
+                try:
+                    isolated.close()
+                except Exception:
+                    pass
 
 
 def session_still_authorized(

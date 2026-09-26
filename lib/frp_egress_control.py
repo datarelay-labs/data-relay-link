@@ -295,6 +295,65 @@ def _egress_uid_gid():
     return uid, gid
 
 
+def ensure_service_parent_traverse(paths: Optional[list] = None) -> list[str]:
+    """Grant drlink-egress traverse-only access on shared runtime and log parents.
+
+    Child mode cannot help when the parent is 0700. systemd
+    RuntimeDirectoryMode=0700 also clears ACLs on /run/drlink. Mode 0710 with
+    group drlink-egress is execute/traverse without listing. World execute
+    (0755) is wider than this account needs. No-op unless running as root.
+    """
+    repaired: list[str] = []
+    if os.geteuid() != 0:
+        return repaired
+    uid, gid = _egress_uid_gid()
+    if uid is None or gid is None:
+        return repaired
+    if paths is None:
+        test_root = os.environ.get("FRP_DEPLOY_TEST_ROOT") or os.environ.get("FRP_SERVER_TEST_ROOT") or ""
+        if test_root:
+            root = Path(test_root)
+            parents = [root / "run/drlink", root / "var/log/drlink"]
+        else:
+            parents = [Path("/run/drlink"), Path("/var/log/drlink")]
+    else:
+        parents = [Path(p) for p in paths]
+    for directory in parents:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            os.chown(directory, 0, gid)
+            os.chmod(directory, 0o710)
+            repaired.append(str(directory))
+        except OSError as exc:
+            sys.stderr.write(
+                "[drlink-egress] parent traverse repair failed path=%s error=%s\n"
+                % (directory, exc)
+            )
+            continue
+        parent_name = directory.parent.name
+        if parent_name == "log":
+            child = directory / "egress"
+            try:
+                child.mkdir(parents=True, exist_ok=True)
+                os.chown(child, 0, gid)
+                os.chmod(child, 0o770)
+            except OSError as exc:
+                sys.stderr.write(
+                    "[drlink-egress] log dir repair failed path=%s error=%s\n" % (child, exc)
+                )
+        elif parent_name == "run":
+            child = directory / "egress"
+            try:
+                child.mkdir(parents=True, exist_ok=True)
+                os.chown(child, uid, gid)
+                os.chmod(child, 0o700)
+            except OSError as exc:
+                sys.stderr.write(
+                    "[drlink-egress] runtime dir repair failed path=%s error=%s\n" % (child, exc)
+                )
+    return repaired
+
+
 def _setfacl_user(path: Path, perms: str) -> bool:
     """Apply a named-user ACL for drlink-egress. Returns True on success."""
     try:
@@ -1862,6 +1921,24 @@ def authorize_request(
         return base
 
 
+_AUDIT_FAIL_LOCK = threading.Lock()
+_AUDIT_FAIL_SEEN: set[str] = set()
+
+
+def _note_conn_log_failure(path: Path, detail: str) -> None:
+    """Surface a dropped connection-audit record once per path and cause."""
+    key = "%s\0%s" % (path, detail)
+    with _AUDIT_FAIL_LOCK:
+        if key in _AUDIT_FAIL_SEEN:
+            return
+        if len(_AUDIT_FAIL_SEEN) > 64:
+            _AUDIT_FAIL_SEEN.clear()
+        _AUDIT_FAIL_SEEN.add(key)
+    sys.stderr.write(
+        "[drlink-egress] connection audit unavailable path=%s error=%s\n" % (path, detail)
+    )
+
+
 def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
     """Best-effort connection log. Never raises. Never logs secrets/payloads.
 
@@ -1877,7 +1954,7 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
     replaced underneath it, which silently drops records.
     """
     try:
-        path = path or conn_log_path(cfg)
+        path = Path(path) if path else conn_log_path(cfg)
         # Soft: shared parent mkdir may fail under traverse-only ACL; the
         # service log subdirectory is pre-created at install and is writable.
         try:
@@ -1911,6 +1988,7 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
         line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
         fd, created = _open_conn_log_locked(path)
         if fd is None:
+            _note_conn_log_failure(path, "open failed")
             return
         try:
             if created:
@@ -1927,7 +2005,12 @@ def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] 
             os.write(fd, line.encode("utf-8"))
         finally:
             _unlock_close(fd)
-    except Exception:
+    except Exception as exc:
+        try:
+            failed = path if isinstance(path, Path) else conn_log_path(cfg)
+        except Exception:
+            failed = Path("connections.jsonl")
+        _note_conn_log_failure(failed, str(exc))
         return
 
 

@@ -2127,8 +2127,57 @@ frp_server_ensure_sandbox_dirs() {
           chmod 700 "$var_log/access" "$var_log/egress" 2>/dev/null || true
         fi
       fi
+      # Named-user ACL does not survive chmod 0700 (this function, or systemd
+      # RuntimeDirectoryMode). Child mode is irrelevant when the parent is not
+      # traversable. Prove drlink-egress can traverse the runtime and log
+      # parents; otherwise force group-execute 0710 (not world 0755).
+      if getent group drlink-egress >/dev/null 2>&1; then
+        for d in "$var_log" "$run_dir"; do
+          if ! frp_service_user_can_traverse "$d"; then
+            chown root:drlink-egress "$d" 2>/dev/null || true
+            chmod 0710 "$d" 2>/dev/null || true
+          fi
+        done
+        if [[ -d "$var_log/egress" ]]; then
+          chown root:drlink-egress "$var_log/egress" 2>/dev/null || true
+          chmod 0770 "$var_log/egress" 2>/dev/null || true
+        fi
+        mkdir -p "$run_dir/egress"
+        chown drlink-egress:drlink-egress "$run_dir/egress" 2>/dev/null || true
+        chmod 0700 "$run_dir/egress" 2>/dev/null || true
+      fi
     fi
   fi
+}
+
+frp_service_user_can_traverse() {
+  # Exit 0 only when drlink-egress can execute/traverse the directory.
+  # Missing python or a failed probe is not success: callers then apply 0710.
+  local path="$1"
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 1
+  fi
+  python3 - "$path" <<'PY'
+import os, sys, pwd
+path = sys.argv[1]
+if os.geteuid() != 0:
+    sys.exit(1)
+try:
+    pw = pwd.getpwnam("drlink-egress")
+except KeyError:
+    sys.exit(1)
+if os.fork() == 0:
+    try:
+        os.setgroups([])
+        os.setgid(pw.pw_gid)
+        os.setuid(pw.pw_uid)
+        ok = os.access(path, os.X_OK)
+    except OSError:
+        ok = False
+    os._exit(0 if ok else 1)
+_pid, status = os.wait()
+sys.exit(0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1)
+PY
 }
 
 frp_server_skip_systemd() {

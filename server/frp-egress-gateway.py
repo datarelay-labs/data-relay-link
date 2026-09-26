@@ -24,6 +24,7 @@ import socket
 import socketserver
 import sys
 import tempfile
+import traceback
 import threading
 import time
 from collections import deque
@@ -1294,9 +1295,12 @@ def handle_client(gw: GatewayState, request: socket.socket, client_address) -> N
     try:
         _handle_client_inner(gw, request, client_address)
     except Exception:
-        # Worker must never die from unhandled parse/URI exceptions.
+        # Internal faults are fail-closed. A SQLite/runtime error is not a
+        # client syntax error; swallowing it as HTTP 400 hides the cause.
+        sys.stderr.write("[drlink-egress] internal failure; fail-closed\n")
+        traceback.print_exc(file=sys.stderr)
         try:
-            _send_simple_sock(request, 400, "Bad Request", b"bad request\n")
+            _send_simple_sock(request, 403, "Forbidden", b"authorization unavailable\n")
         except Exception:
             pass
     finally:
