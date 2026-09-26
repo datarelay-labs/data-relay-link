@@ -48,7 +48,16 @@ The executor must autonomously:
 
 Default behavior is execution, not explanation.
 
+When the user triggers FULL_USER_E2E, the first assistant action must begin real execution. Do not spend the first response restating this contract, proposing a plan, asking for confirmation, summarizing intended scenarios, or discussing what could be tested.
+
+A short progress message is allowed only when it accompanies or immediately follows actual execution work already started.
+
 ~~~text
+FIRST_ACTION=EXECUTE
+FIRST_RESPONSE_PLAN_ONLY=FORBIDDEN
+RESTATE_TEST_CONTRACT=NO
+ASK_CONFIRMATION_BEFORE_EXECUTION=NO
+ASK_USER_TO_REPEAT_HOSTS_OR_RULES=NO
 READ_DOCUMENT_AND_EXECUTE=YES
 ASK_USER_TO_RESTATE_RULES=NO
 ASK_FOR_CONFIRMATION_BEFORE_START=NO
