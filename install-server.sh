@@ -1132,7 +1132,7 @@ resolve_server_settings() {
   FRP_PUBLIC_URL_HOST="$FRP_ENROLLMENT_PUBLIC_HOST"
 
   local internal_default="${FRP_INTERNAL_IP:-${detected_internal:-}}"
-  prompt "Internal FRP server IP (display only)" "$internal_default" FRP_INTERNAL_IP
+  prompt "Internal server IP (display only)" "$internal_default" FRP_INTERNAL_IP
 
   existing_mode="$(frp_normalize_deployment_mode "${EXISTING_DEPLOYMENT_MODE:-direct}")" || exit 1
   if [[ "$user_set_mode" != "1" ]]; then
@@ -1198,11 +1198,11 @@ resolve_server_settings() {
   fi
 
   echo
-  echo "FRP Control"
-  echo "-----------"
+  echo "Data Relay Link Control"
+  echo "-----------------------"
   prompt "Public control port" "${FRP_CONTROL_PUBLIC_PORT:-443}" FRP_CONTROL_PUBLIC_PORT
   if frp_mode_is_single443; then
-    prompt "Internal FRP backend port" "${FRP_CONTROL_LISTEN_PORT:-${FRP_SINGLE443_BACKEND_PORT}}" FRP_CONTROL_LISTEN_PORT
+    prompt "Internal Relay Engine backend port" "${FRP_CONTROL_LISTEN_PORT:-${FRP_SINGLE443_BACKEND_PORT}}" FRP_CONTROL_LISTEN_PORT
   else
     prompt "Internal listen port" "${FRP_CONTROL_LISTEN_PORT:-${FRP_CONTROL_PUBLIC_PORT:-443}}" FRP_CONTROL_LISTEN_PORT
   fi
@@ -1399,7 +1399,7 @@ except Exception as exc:
 PY
   if frp_mode_is_single443; then
     if (( 10#$FRP_CONTROL_LISTEN_PORT == 10#$FRP_CONTROL_PUBLIC_PORT )); then
-      echo "ERROR: FRP control backend port cannot be the public frontend port ${FRP_CONTROL_PUBLIC_PORT}" >&2
+      echo "ERROR: Relay Engine control backend port cannot be the public frontend port ${FRP_CONTROL_PUBLIC_PORT}" >&2
       exit 1
     fi
     if (( 10#$FRP_ALLOCATOR_LISTEN_PORT == 10#$FRP_ALLOCATOR_PUBLIC_PORT )); then
@@ -1931,8 +1931,8 @@ frp_print_nat_summary() {
     control_target="${FRP_INTERNAL_IP}:${FRP_CONTROL_LISTEN_PORT}"
     alloc_target="${FRP_INTERNAL_IP}:${FRP_ALLOCATOR_LISTEN_PORT}"
   else
-    control_target="this FRP server (TCP/${FRP_CONTROL_LISTEN_PORT})"
-    alloc_target="this FRP server (TCP/${FRP_ALLOCATOR_LISTEN_PORT})"
+    control_target="this Data Relay Link server (TCP/${FRP_CONTROL_LISTEN_PORT})"
+    alloc_target="this Data Relay Link server (TCP/${FRP_ALLOCATOR_LISTEN_PORT})"
   fi
   if frp_mode_is_single443; then
     cat <<EOF2
@@ -1941,11 +1941,11 @@ Network / firewall requirements (Enterprise single-443)
 =======================================================
 
 Public inbound:
-  TCP/${FRP_CONTROL_PUBLIC_PORT}  HTTPS allocator + FRP control over WSS
+  TCP/${FRP_CONTROL_PUBLIC_PORT}  HTTPS allocator + Relay Engine control over WSS
   TCP/${FRP_PORT_START}-${FRP_PORT_END}  published services (1:1)
 
 Do not expose the allocator backend (TCP/${FRP_ALLOCATOR_LISTEN_PORT}) or
-the FRP control backend (TCP/${FRP_CONTROL_LISTEN_PORT}) on the public interface.
+the Relay Engine control backend (TCP/${FRP_CONTROL_LISTEN_PORT}) on the public interface.
 
 This installer does not change cloud security lists, host iptables, or UFW.
 Open the public ports above on the network path to this server.
@@ -1962,7 +1962,7 @@ EOF2
 Network / NAT Requirements
 ==========================
 
-FRP Control
+Data Relay Link Control
   Public:
     TCP ${FRP_PUBLIC_HOST}:${FRP_CONTROL_PUBLIC_PORT}
 
@@ -2000,18 +2000,18 @@ Published Services
     TCP ${FRP_PORT_START}-${FRP_PORT_END}
 
   Forward to:
-    same TCP port numbers on this FRP server (1:1)
+    same TCP port numbers on this Data Relay Link server (1:1)
 
 EOF2
   if [[ -z "${FRP_INTERNAL_IP:-}" ]]; then
     echo "Local bind address could not be detected automatically."
-    echo "FRP control target listen port: ${FRP_CONTROL_LISTEN_PORT}"
+    echo "Relay Engine control target listen port: ${FRP_CONTROL_LISTEN_PORT}"
     echo "Allocator target listen port: ${FRP_ALLOCATOR_LISTEN_PORT}"
-    echo "Forward those ports to this FRP server."
+    echo "Forward those ports to this Data Relay Link server."
     echo
   fi
   if [[ "$FRP_CONTROL_PUBLIC_PORT" == "$FRP_CONTROL_LISTEN_PORT" && "$FRP_ALLOCATOR_PUBLIC_PORT" == "$FRP_ALLOCATOR_LISTEN_PORT" ]]; then
-    echo "Public and internal ports match; no NAT remapping is required for FRP or the allocator."
+    echo "Public and internal ports match; no NAT remapping is required for the Relay Engine or the allocator."
     echo
   fi
 }

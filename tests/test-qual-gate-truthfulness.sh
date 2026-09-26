@@ -235,16 +235,24 @@ pq_gate SOAK_TEST FAIL
 grep -qx 'SOAK_TEST=FAIL' "$GATES" || fail "soak fail not recorded"
 pass "soak traffic failure fails"
 
-# --- Wrong upgrade version → BLOCKED ---
+# --- Wrong upgrade version → BLOCKED, and that BLOCKED counts as a pass failure ---
 : >"$GATES"
 installed_ver="2.4.0"
-if [[ "$installed_ver" != "2.3.1" ]]; then
-  pq_gate GOLDEN_V231_UPGRADE_BASELINE BLOCKED
+if [[ "$installed_ver" != "2.3.0" ]]; then
+  pq_gate GOLDEN_V230_UPGRADE_BASELINE BLOCKED
 else
-  pq_gate GOLDEN_V231_UPGRADE_BASELINE CREATED
+  pq_gate GOLDEN_V230_UPGRADE_BASELINE CREATED
 fi
-grep -qx 'GOLDEN_V231_UPGRADE_BASELINE=BLOCKED' "$GATES" || fail "wrong version not BLOCKED"
-pass "wrong upgrade version is BLOCKED"
+grep -qx 'GOLDEN_V230_UPGRADE_BASELINE=BLOCKED' "$GATES" || fail "wrong version not BLOCKED"
+if grep -q 'GOLDEN_V230_UPGRADE_BASELINE|UPGRADE_V230_TO_V240' "$ROOT/tests/run-production-realistic-qualification.sh"; then
+  fail "prior-stable upgrade gate is still excluded from FAIL_COUNT"
+fi
+if grep -q 'excluded from FAIL_COUNT' "$ROOT/tests/run-production-realistic-qualification.sh"; then
+  fail "qualification still excludes a gate from FAIL_COUNT"
+fi
+fail_count="$(grep -E '=(FAIL|BLOCKED)$' "$GATES" | wc -l | tr -d ' ')"
+[[ "$fail_count" -eq 1 ]] || fail "BLOCKED prior-stable gate did not count (fail_count=$fail_count)"
+pass "wrong upgrade version is BLOCKED and counts"
 
 # --- Unrelated :2222 ownership ---
 PROD_QUAL_MACOS_SSH_PID=""

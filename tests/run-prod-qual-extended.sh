@@ -1732,8 +1732,8 @@ PY
 # Golden upgrade baseline (sanitized)
 # ---------------------------------------------------------------------------
 phase_golden_baseline() {
-  pq_note "==== GOLDEN V2.3.1 UPGRADE BASELINE ===="
-  local gdir="$OUT/golden/v2.3.1-upgrade-baseline"
+  pq_note "==== GOLDEN V2.3.0 PRIOR-STABLE UPGRADE BASELINE ===="
+  local gdir="$OUT/golden/v2.3.0-upgrade-baseline"
   mkdir -p "$gdir"
   set +e
   pq_ssh "$SERVER" "sudo bash -s" >"$gdir/server-capture.raw" 2>&1 <<'EOF'
@@ -1800,7 +1800,7 @@ ver = installed_version()
 out={
   "release_version": ver,
   "installed_project_version": ver,
-  "expected_golden_version": "2.3.1",
+  "expected_golden_version": "2.3.0",
   "config_fingerprint": sha("/etc/drlink/config.json"),
   "registry_fingerprint": sha("/var/lib/drlink/registry.json"),
   "access_fingerprint": sha("/var/lib/drlink/access-control.json"),
@@ -1810,24 +1810,24 @@ out={
   "clients": clients,
   "sanitized_config_keys": sorted(cfg.keys()),
 }
-Path("/tmp/v231-golden-capture.json").write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+Path("/tmp/v230-golden-capture.json").write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
 print(json.dumps(out, indent=2))
-if ver != "2.3.1":
-    print("GOLDEN_VERSION_MISMATCH installed=%s expected=2.3.1" % ver)
+if ver != "2.3.0":
+    print("GOLDEN_VERSION_MISMATCH installed=%s expected=2.3.0" % ver)
     raise SystemExit(42)
 PY
 # Backup create is authoritative — do not || true.
-sudo drlink backup create /var/lib/drlink/backups/v231-golden-qual.tar.gz
-ls -la /var/lib/drlink/backups/v231-golden-qual.tar.gz
+sudo drlink backup create /var/lib/drlink/backups/v230-golden-qual.tar.gz
+ls -la /var/lib/drlink/backups/v230-golden-qual.tar.gz
 python3 - <<'PY'
 import tarfile, json
 from pathlib import Path
-p=Path("/var/lib/drlink/backups/v231-golden-qual.tar.gz")
+p=Path("/var/lib/drlink/backups/v230-golden-qual.tar.gz")
 if not p.is_file():
     raise SystemExit("BACKUP_MISSING")
 with tarfile.open(p) as t:
     names=sorted(t.getnames())
-Path("/tmp/v231-golden-backup-listing.json").write_text(
+Path("/tmp/v230-golden-backup-listing.json").write_text(
     json.dumps({"members":names,"bytes":p.stat().st_size}, indent=2) + "\n",
     encoding="utf-8",
 )
@@ -1837,9 +1837,9 @@ EOF
   local gold_rc=$?
   set -uo pipefail
   # Prefer structured JSON capture when present.
-  pq_ssh "$SERVER" 'cat /tmp/v231-golden-capture.json 2>/dev/null' >"$gdir/server-capture.json" 2>/dev/null \
+  pq_ssh "$SERVER" 'cat /tmp/v230-golden-capture.json 2>/dev/null' >"$gdir/server-capture.json" 2>/dev/null \
     || cp -f "$gdir/server-capture.raw" "$gdir/server-capture.json" 2>/dev/null || true
-  pq_ssh "$SERVER" 'cat /tmp/v231-golden-backup-listing.json 2>/dev/null || echo {}' >"$gdir/backup-listing.json"
+  pq_ssh "$SERVER" 'cat /tmp/v230-golden-backup-listing.json 2>/dev/null || echo {}' >"$gdir/backup-listing.json"
   local installed_ver=""
   installed_ver="$(python3 - "$gdir/server-capture.json" <<'PY'
 import json,sys
@@ -1852,23 +1852,23 @@ except Exception:
     print("")
 PY
 )"
-  # Also store under repo e2e-reports canonical path (sanitized only) when genuinely 2.3.1.
-  local canon="$ROOT/e2e-reports/v2.3.1-golden-upgrade-baseline"
+  # Also store under repo e2e-reports canonical path (sanitized only) when genuinely v2.3.0.
+  local canon="$ROOT/e2e-reports/v2.3.0-golden-upgrade-baseline"
   echo "GOLDEN_INSTALLED_VERSION=${installed_ver:-unknown}" | tee -a "$PROD_QUAL_GATES"
   echo "GOLDEN_CAPTURE_RC=$gold_rc" | tee -a "$PROD_QUAL_GATES"
-  if [[ "$gold_rc" -eq 42 ]] || [[ -n "$installed_ver" && "$installed_ver" != "2.3.1" ]]; then
-    pq_note "Golden baseline requires installed 2.3.1; got '${installed_ver:-unknown}' (rc=$gold_rc)"
-    pq_gate GOLDEN_V231_UPGRADE_BASELINE BLOCKED
+  if [[ "$gold_rc" -eq 42 ]] || [[ -n "$installed_ver" && "$installed_ver" != "2.3.0" ]]; then
+    pq_note "Golden baseline requires installed prior stable 2.3.0; got '${installed_ver:-unknown}' (rc=$gold_rc)"
+    pq_gate GOLDEN_V230_UPGRADE_BASELINE BLOCKED
   elif [[ "$gold_rc" -ne 0 ]]; then
     pq_note "Golden baseline backup/capture failed rc=$gold_rc"
-    pq_gate GOLDEN_V231_UPGRADE_BASELINE FAIL
+    pq_gate GOLDEN_V230_UPGRADE_BASELINE FAIL
   elif [[ -s "$gdir/server-capture.json" ]]; then
     mkdir -p "$canon"
     cp -a "$gdir/." "$canon/" 2>/dev/null || true
     echo "GOLDEN_BASELINE_PATH=$canon" | tee -a "$PROD_QUAL_GATES"
-    pq_gate GOLDEN_V231_UPGRADE_BASELINE CREATED
+    pq_gate GOLDEN_V230_UPGRADE_BASELINE CREATED
   else
-    pq_gate GOLDEN_V231_UPGRADE_BASELINE FAIL
+    pq_gate GOLDEN_V230_UPGRADE_BASELINE FAIL
   fi
 }
 

@@ -408,16 +408,12 @@ fi
 if grep -q '^MACOS_REAL_E2E=PASS$' "$PROD_QUAL_GATES" && grep -q '^MACOS_SSH=FAIL$' "$PROD_QUAL_GATES"; then
   pq_gate MACOS_SSH PASS
 fi
+# Prior-stable upgrade gates are mandatory when an upgrade path is claimed.
+# BLOCKED and FAIL both count. Do not exclude them and do not invent a pass.
 FAIL_COUNT="$(grep -E '=(FAIL|BLOCKED)$' "$PROD_QUAL_GATES" \
   | grep -Ev '^(UBUNTU|ROCKY|AWS_LINUX|WINDOWS|MACOS|UBUNTU24)_SSH=' \
-  | grep -Ev '^(GOLDEN_V231_UPGRADE_BASELINE|UPGRADE_V231_TO_V240)=' \
   | grep -Ev '=HEADROOM_LIMIT$' \
   | wc -l | tr -d ' ')"
-# Environment-blocked upgrade provenance is reported separately, not a product FAIL.
-if grep -Eq '^(GOLDEN_V231_UPGRADE_BASELINE|UPGRADE_V231_TO_V240)=BLOCKED$' "$PROD_QUAL_GATES"; then
-  pq_note "UPGRADE_V231_TO_V240=BLOCKED (lab not on genuine 2.3.1; excluded from FAIL_COUNT)"
-  echo "UPGRADE_V231_TO_V240=BLOCKED" >>"$PROD_QUAL_GATES"
-fi
 if [[ "${FAIL_COUNT:-0}" -eq 0 ]]; then
   pq_gate "$PASS_NAME" PASS
   pq_note "FINAL_${PASS_NAME}=PASS"

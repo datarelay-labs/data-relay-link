@@ -1487,8 +1487,6 @@ docs/WINDOWS_CLIENT_DESIGN.md
 docs/ZERO_TOUCH_SHORT_URL.md
 docs/OCI_ACCEPTANCE.md
 docs/PRIVILEGE_SEPARATION_DEFERRED.md
-docs/MORNING_E2E_CHECKLIST.md
-docs/MORNING_REAL_E2E_FINAL_CHECKLIST.md
 ```
 
 If implementation changes make commands or state references in those files stale, update or archive them during the implementation/qualification phase. They must not override the canonical documents above.

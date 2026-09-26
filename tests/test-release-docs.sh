@@ -171,6 +171,56 @@ grep -q 'do not pipe' docs/FRP_UPGRADE.md || grep -q 'Do not pipe' docs/FRP_UPGR
   fail "upgrade doc must not recommend piping main"
 pass "IMMUTABLE_RELEASE_URLS_IN_DOCS"
 
+# Current operator/setup/release surfaces must not advertise nonexistent v2.3.1
+# as a project version, installer ref, or Homebrew tarball. Saying the tag was
+# not manufactured is allowed.
+CURRENT_RELEASE_SURFACES=(
+  GITHUB_SETUP.md
+  docs/DEPLOYMENT_MODES.md
+  docs/FRP_UPGRADE.md
+  docs/VERSION_POLICY.md
+  docs/RELEASE_CHECKLIST.md
+  windows/README.md
+  packaging/homebrew/Formula/data-relay-link.rb
+)
+if grep -nE 'v2\.3\.1/|tags/v2\.3\.1|PROJECT_VERSION=2\.3\.1|version "2\.3\.1"|Current release.*2\.3\.1|\*\*2\.3\.1\*\*' \
+  "${CURRENT_RELEASE_SURFACES[@]}"; then
+  fail "current surface still presents v2.3.1 as a release"
+fi
+if grep -nE 'raw\.githubusercontent\.com/.*/v2\.4\.0/|archive/refs/tags/v2\.4\.0|url ".*v2\.4\.0' \
+  GITHUB_SETUP.md packaging/homebrew/Formula/data-relay-link.rb; then
+  fail "setup/packaging advertises a future v2.4.0 tag URL"
+fi
+pass "NO_FABRICATED_V231_RELEASE_SURFACE"
+
+grep -q 'Documented stable baseline             v2.3.0' docs/VERSION_POLICY.md \
+  || fail "VERSION_POLICY prior stable is not v2.3.0"
+grep -q 'Not manufactured                       v2.3.1' docs/VERSION_POLICY.md \
+  || fail "VERSION_POLICY must record that v2.3.1 was not manufactured"
+grep -q 'PRIOR_STABLE_VERSION=2.3.0' tests/run-v230-to-v240-upgrade-e2e.sh \
+  || fail "upgrade harness prior stable is not v2.3.0"
+if grep -nE 'PRIOR_STABLE_VERSION=2\.2\.1|run-v221-to-v240-upgrade-e2e' \
+  tests/run-v230-to-v240-upgrade-e2e.sh tests/run-prod-qual-extended.sh docs/FRP_UPGRADE.md; then
+  fail "prior-stable upgrade lane still targets v2.2.1"
+fi
+if grep -q 'Candidate identity is `2.4.0-rc.N` / `preview` before stable' docs/RELEASE_CHECKLIST.md; then
+  fail "RELEASE_CHECKLIST still makes preview/RC mandatory"
+fi
+grep -q 'Preview/RC is not mandatory' docs/RELEASE_CHECKLIST.md \
+  || fail "RELEASE_CHECKLIST missing optional preview/RC wording"
+grep -q 'no tracked commit is created after PASS2' docs/RELEASE_CHECKLIST.md \
+  || fail "RELEASE_CHECKLIST missing no-commit-after-PASS2 rule"
+for obsolete in \
+  docs/MORNING_E2E_CHECKLIST.md \
+  docs/MORNING_REAL_E2E_FINAL_CHECKLIST.md \
+  docs/V2_4_0_CURSOR_AUTOMATED_E2E_PLAN.md \
+  docs/V2_4_0_RICK_CURSOR_EVIDENCE_MATRIX.md; do
+  if [[ -e "$obsolete" ]]; then
+    fail "obsolete checklist still present: $obsolete"
+  fi
+done
+pass "PRIOR_STABLE_V230_AND_DOC_HYGIENE"
+
 grep -q 'REAL_ENTERPRISE_RESTRICTED_NETWORK_E2E=PASS' docs/RELEASE_VALIDATION.md || fail "missing enterprise-network evidence"
 grep -q 'REAL_SSH_SERVICE_E2E=PASS' docs/RELEASE_VALIDATION.md || fail "missing SSH E2E evidence"
 grep -q 'REAL_END_TO_END_REBOOT_RECOVERY=PASS' docs/RELEASE_VALIDATION.md || fail "missing reboot-recovery evidence"

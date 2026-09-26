@@ -277,8 +277,9 @@ FRP_VERSION=0.71.0
 Version policy는 다음을 구분합니다:
 
 ```text
-Documented stable baseline     문서화된 과거 baseline
-Historical immutable tags      존재하는 경우 v2.3.0 포함
+Documented stable baseline     v2.3.0
+Older published release        v2.2.1
+Not manufactured               v2.3.1
 Current development target     2.4.0 / development channel
 ```
 

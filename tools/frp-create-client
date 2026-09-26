@@ -91,7 +91,10 @@ def load_frp_pki():
 
 
 def installed_project_version():
-    """Authoritative project version for installer URL guidance (never hard-code)."""
+    """Authoritative project version for installer URL guidance.
+
+    Never invent a version. Missing env and version files fail closed.
+    """
     env = str(os.environ.get('PROJECT_VERSION') or '').strip()
     if env:
         return env
@@ -108,7 +111,7 @@ def installed_project_version():
                 value = line.split('=', 1)[1].strip()
                 if value:
                     return value
-    return '2.3.1'
+    raise SystemExit('installed project version unavailable')
 
 
 def installed_release_channel():

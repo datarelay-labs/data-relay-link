@@ -1,8 +1,10 @@
 # Deployment modes
 
 `Data Relay Link` supports two server deployment modes. Direct mode is the
-default and matches 2.0.0. Enterprise single-443 is optional. Project version
-**2.3.1** (v2.3.0 remains historical/untouched).
+default and matches 2.0.0. Enterprise single-443 is optional. The current
+development target is **2.4.0**. The documented stable baseline is **v2.3.0**.
+**v2.2.1** is an older published release. **v2.3.1** was not manufactured.
+The stable **v2.4.0** tag does not exist yet.
 
 Remote Service ports stay **TCP/6000-6098** (1:1) in both modes.
 
@@ -102,11 +104,11 @@ FRP_DEPLOYMENT_MODE=single443 \
 sudo bash install-server.sh
 ```
 
-The official bootstrap URL is unchanged:
+The published prior-stable bootstrap is the immutable `v2.3.0` tag. The v2.4.0 candidate uses an exact 40-character commit SHA until that stable tag exists. Do not install from mutable `main`, and do not use a future `v2.4.0` tag URL before the tag is created.
 
 ```bash
 curl -fsSL \
-https://raw.githubusercontent.com/datarelay-labs/datarelay-link/v2.1.2/dist/bootstrap-server.sh \
+https://raw.githubusercontent.com/datarelay-labs/datarelay-link/v2.3.0/dist/bootstrap-server.sh \
 | sudo bash
 ```
 

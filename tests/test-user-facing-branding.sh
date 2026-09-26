@@ -131,6 +131,7 @@ fi
 assert_not_contains "$ROOT/install-client.sh" 'FRP client setup complete|Your FRP client is running|FRP Installation Complete'
 assert_not_contains "$ROOT/lib/frp-client-common.sh" "FRP Server:"
 assert_not_contains "$ROOT/tools/frp-create-client" "FRP Server:"
+assert_not_contains "$ROOT/install-server.sh" 'FRP Control|Internal FRP backend port|this FRP server|FRP control backend'
 
 
 # Explicit allowlist: internal backend filename and historical migration helpers may mention frpctl.

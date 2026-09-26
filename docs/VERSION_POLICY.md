@@ -28,8 +28,9 @@ Rules:
 ## 2. Current release direction
 
 ```text
-Documented stable baseline             v2.2.1
-Historical immutable tag               v2.3.0
+Documented stable baseline             v2.3.0
+Older published release                v2.2.1
+Not manufactured                       v2.3.1
 Current development target             2.4.0
 Current release channel                development
 Pinned Relay Engine                    FRP 0.71.0
@@ -38,6 +39,8 @@ Stable v2.4.0 tag exists               NO
 ```
 
 Historical tags remain immutable regardless of whether they represented stable, RC, or historical release-line milestones.
+
+The v2.4 prior-stable upgrade lane is immutable `v2.3.0` to `v2.4.0`. `v2.2.1` stays available for historical and rollback evidence. It is not the supported prior-stable baseline. `v2.3.1` was not manufactured.
 
 Do not manufacture missing numbers, move old tags, or recreate them merely to make a sequence look continuous.
 
@@ -319,6 +322,8 @@ Do not create a permanent develop branch merely for process aesthetics.
 
 ## 15. Exact-HEAD release sequence
 
+An exact-SHA development candidate may be qualified directly and then tagged on that same PASS2 provenance HEAD. A preview or release-candidate channel is optional, not mandatory. No tracked commit is created after PASS2.
+
 1. Freeze architecture/scope.
 2. Implement the full target.
 3. Run targeted + full automated tests.
@@ -360,7 +365,7 @@ These practices are never allowed. Published tags are immutable.
 
 ## 18. Adoption gate
 
-Before v2.4.0 RC:
+Before qualifying the v2.4.0 candidate (exact-SHA development, or an optional preview/RC):
 
 ```text
 [ ] architecture docs synchronized

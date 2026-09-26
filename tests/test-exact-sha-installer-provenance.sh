@@ -218,6 +218,42 @@ grep -q "/v${PROJECT_VERSION}/" <<<"$(frp_default_client_installer_url)" && \
   fail "git HEAD path still used premature tag"
 pass "LOCAL_GIT_SOURCE_REF_EXACT_SHA"
 
+# --- missing version provenance must not fabricate a project version ---
+reset_provenance_env
+unset PROJECT_VERSION || true
+FABRICATED="$WORKDIR/no-version-tool"
+mkdir -p "$FABRICATED/tools" "$FABRICATED/empty-root"
+cp "$ROOT/tools/frp-create-client" "$FABRICATED/tools/frp-create-client"
+if PROJECT_VERSION= FRP_DEPLOY_TEST_ROOT="$FABRICATED/empty-root" FRP_CTL_TEST_ROOT="$FABRICATED/empty-root" \
+  python3 - "$FABRICATED/tools/frp-create-client" <<'PY'
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+os.environ.pop("PROJECT_VERSION", None)
+path = sys.argv[1]
+loader = importlib.machinery.SourceFileLoader("frp_create_client_no_version", path)
+spec = importlib.util.spec_from_loader(loader.name, loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+try:
+    value = mod.installed_project_version()
+except SystemExit as exc:
+    message = str(exc)
+    if "2.3.1" in message:
+        raise SystemExit("fabricated version leaked in error: %s" % message)
+    if "unavailable" not in message.lower():
+        raise SystemExit("fail-closed message missing: %s" % message)
+    raise SystemExit(0)
+raise SystemExit("fabricated project version emitted: %r" % value)
+PY
+then
+  pass "NO_FABRICATED_PROJECT_VERSION"
+else
+  fail "installed_project_version fabricated a version or failed closed incorrectly"
+fi
+
 echo "PREMATURE_V240_TAG_SUBSTITUTION=NO"
 echo "SOURCE_REF_PRESERVED=YES"
 echo "EXACT_SHA_INSTALLER_PROVENANCE_TEST=PASS"

@@ -13,7 +13,7 @@ Published tags are immutable. Preparing the 2.4.0 immutable tag is a later quali
 ## 1. Candidate identity
 
 - [ ] `PROJECT_VERSION=2.4.0`.
-- [ ] Candidate identity is `2.4.0-rc.N` / `preview` before stable.
+- [ ] Candidate identity is an exact-SHA development build, or an optional `2.4.0-rc.N` / `preview` build. Preview/RC is not mandatory.
 - [ ] `SOURCE_HEAD` is the exact 40-character SHA.
 - [ ] Branch/worktree recorded.
 - [ ] Worktree clean.
@@ -355,7 +355,7 @@ Windows 10=
 - [ ] `PASS1_HEAD==PASS2_HEAD`
 - [ ] `PASS1_HEAD==FINAL_QUALIFIED_HEAD`
 - [ ] no product/dependency change between passes.
-- [ ] no merge commit changed the qualified HEAD afterward.
+- [ ] no tracked commit is created after PASS2; the immutable tag is that same provenance HEAD.
 
 Any change resets the pass counter.
 

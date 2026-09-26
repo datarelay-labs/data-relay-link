@@ -2925,7 +2925,7 @@ Fill at start of run:
 | frp-e2e-server | Ubuntu 24 server | | | | |
 | frp-e2e-linux114 | Ubuntu 24 client | | | | |
 | frp-e2e-rocky8 | Rocky 8 client | | | | |
-| frp-e2e-rocky9-rescue | Rocky 9 | | | | rescue host; use only if appropriate |
+| frp-e2e-rocky9-rescue | Rocky 9 | | | | rescue host; keep independent of product uninstall |
 | frp-e2e-aws | Amazon Linux 2023 client | | | | |
 | frp-e2e-macos | macOS Apple Silicon client | | | | |
 | frp-e2e-windows | Windows 10 client | | | | |

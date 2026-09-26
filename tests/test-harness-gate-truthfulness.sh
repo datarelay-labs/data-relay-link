@@ -214,7 +214,10 @@ idx = text.find("phase_golden_baseline")
 end = text.find("\nphase_", idx + 10)
 body = text[idx:end if end > 0 else idx + 5000]
 assert "installed_project_version" in body or "/etc/drlink/version" in body
-assert "GOLDEN_V231_UPGRADE_BASELINE BLOCKED" in body
+assert "GOLDEN_V230_UPGRADE_BASELINE BLOCKED" in body
+assert "expected=2.3.0" in body
+assert "2.3.1" not in body
+assert "2.2.1" not in body
 assert "backup create" in body
 assert "|| true" not in body.split("backup create")[1][:80]
 print("ok")

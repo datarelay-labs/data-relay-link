@@ -48,11 +48,7 @@ Historical documents and internal storage names never override the public SSOT.
 These documents are useful for qualification but do not redefine product semantics:
 
 - [`USER_E2E_SCENARIOS.md`](../USER_E2E_SCENARIOS.md) — canonical FULL_USER_E2E matrix and v2.4 operator manual runbook
-- `V2_4_0_CURSOR_AUTOMATED_E2E_PLAN.md`
-- `V2_4_0_RICK_CURSOR_EVIDENCE_MATRIX.md`
 - `HUMAN_UX_ADVERSARIAL_E2E.md`
-- `MORNING_E2E_CHECKLIST.md`
-- `MORNING_REAL_E2E_FINAL_CHECKLIST.md`
 - `OCI_ACCEPTANCE.md`
 
 ## Historical / internal compatibility documents
@@ -60,7 +56,7 @@ These documents are useful for qualification but do not redefine product semanti
 - `SCHEMA_V2_DEPLOYMENT.md` — historical JSON registry schema-v2 deployment material. It is not v2.4 control-plane authority.
 - `FRP_UPGRADE.md` — Relay Engine/upstream compatibility and migration detail. FRP/internal helper names in this file are not public Data Relay Link CLI vocabulary.
 - `WINDOWS_CLIENT_DESIGN.md` — platform design notes; public command behavior remains governed by the CLI/AI Master.
-- `PRIVILEGE_SEPARATION_DEFERRED.md` — explicitly deferred design record.
+- `PRIVILEGE_SEPARATION_DEFERRED.md` — deferred privilege-separation record for the current v2.4 target. v2.3.1 was not manufactured.
 
 ## Current v2.4 public model
 

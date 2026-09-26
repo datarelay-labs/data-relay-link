@@ -192,15 +192,21 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 - Server project tools: use `drlink system update product` rollback / restore from backup (implementation: `frp-project-update`).
 - Disaster recovery: `sudo drlink restore backup <backup>` after a validated backup.
 
-## Future release upgrade suite (from v2.3.1 golden baseline)
+## Future release upgrade suite (from v2.3.0 prior-stable baseline)
+
+The documented stable baseline is immutable tag `v2.3.0`. `v2.2.1` remains an
+older published release for historical and rollback evidence. `v2.3.1` was not
+manufactured and is not an upgrade baseline. Do not exclude a prior-stable
+upgrade gate from a final PASS.
 
 Use the sanitized golden baseline produced by production-realistic
-qualification (`e2e-reports/v2.3.1-golden-upgrade-baseline/`) plus a full
-server backup retained in the lab (not committed).
+qualification (`e2e-reports/v2.3.0-golden-upgrade-baseline/`) plus a full
+server backup retained in the lab (not committed). The live harness is
+`tests/run-v230-to-v240-upgrade-e2e.sh`.
 
 ### Scenarios (EVERY next release)
 
-1. **v2.3.1 → next** server project upgrade, then each OS client upgrade.
+1. **v2.3.0 → next** server project upgrade, then each OS client upgrade.
 2. **Mixed-version rolling**: new server + old clients; upgrade one client at a time.
 3. **Upgrade under traffic**: continuous SSH/HTTP/Egress during server and client upgrades; measure downtime and reconnect.
 4. **Interrupted / bad upgrade**: network loss, download failure, process kill, bad artifact, health-check failure → safe rollback; old version usable; state preserved.

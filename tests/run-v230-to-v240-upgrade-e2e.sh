@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
-# Live v2.3.1 → v2.4.0 candidate upgrade qualification.
+# Live prior-stable v2.3.0 → v2.4.0 candidate upgrade qualification.
+#
+# Published prior stable is immutable tag v2.3.0.
+# v2.2.1 remains an older published release for historical/rollback evidence only.
+# v2.3.1 was not manufactured and is not an upgrade baseline.
 #
 # Requires:
-#   - e2e-reports/v2.3.1-golden-upgrade-baseline/ (evidence of prior golden capture)
-#   - A release-equivalent v2.3.1 tree (default: FRP_V231_TREE or sibling checkout at 796fe55)
+#   - e2e-reports/v2.3.0-golden-upgrade-baseline/ (evidence of prior golden capture)
+#   - The immutable v2.3.0 tree (FRP_V230_TREE, a checkout whose VERSION is
+#     PROJECT_VERSION=2.3.0, or git archive of tag v2.3.0)
 #   - SSH to FRP_E2E_SERVER_ALIAS (default frp-e2e-server)
 #
 # Flow:
-#   1. Install v2.3.1 from the golden-era tree (not merely rename VERSION strings)
+#   1. Install v2.3.0 from that immutable tree (not merely rename VERSION strings)
 #   2. Seed minimal Remote Access + Egress state with stable IDs/ports
 #   3. Upgrade to the current (v2.4 candidate) tree via bootstrap --upgrade
 #   4. Verify identity/port/egress preservation + schema migration + new runtime
+#
+# A missing prior-stable tree or a version mismatch fails closed. Do not
+# report that result as an excluded BLOCKED pass.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/prod-qual-common.sh
 source "$ROOT/tests/lib/prod-qual-common.sh"
 
-OUT="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/v231-to-v240-upgrade-$(date -u +%Y%m%dT%H%M%SZ)}"
+OUT="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/v230-to-v240-upgrade-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
 PROD_QUAL_SUMMARY="$OUT/summary.txt"
 PROD_QUAL_GATES="$OUT/gates.env"
@@ -26,18 +34,25 @@ PROD_QUAL_FAILS=0
 : >"$PROD_QUAL_GATES"
 
 SERVER="${FRP_E2E_SERVER_ALIAS:-frp-e2e-server}"
-GOLDEN="${FRP_E2E_GOLDEN_BASELINE:-$ROOT/e2e-reports/v2.3.1-golden-upgrade-baseline}"
-V231_TREE="${FRP_V231_TREE:-}"
-if [[ -z "$V231_TREE" ]]; then
+PRIOR_STABLE_VERSION=2.3.0
+PRIOR_STABLE_TAG="v${PRIOR_STABLE_VERSION}"
+GOLDEN="${FRP_E2E_GOLDEN_BASELINE:-$ROOT/e2e-reports/${PRIOR_STABLE_TAG}-golden-upgrade-baseline}"
+V230_TREE="${FRP_V230_TREE:-${FRP_PRIOR_STABLE_TREE:-}}"
+if [[ -z "$V230_TREE" ]]; then
   for cand in \
     "/home/aella/datarelay-link-dev" \
     "$(dirname "$ROOT")/datarelay-link-dev" \
-    "$ROOT"; do
-    if [[ -f "$cand/VERSION" ]] && grep -q '^PROJECT_VERSION=2\.3\.1$' "$cand/VERSION" 2>/dev/null; then
-      V231_TREE="$cand"
+    "$(dirname "$ROOT")/datarelay-link"; do
+    if [[ -f "$cand/VERSION" ]] && grep -q "^PROJECT_VERSION=${PRIOR_STABLE_VERSION}$" "$cand/VERSION" 2>/dev/null; then
+      V230_TREE="$cand"
       break
     fi
   done
+fi
+if [[ -z "$V230_TREE" ]] && git -C "$ROOT" rev-parse --verify "refs/tags/${PRIOR_STABLE_TAG}" >/dev/null 2>&1; then
+  V230_TREE="$OUT/prior-stable-${PRIOR_STABLE_TAG}"
+  mkdir -p "$V230_TREE"
+  git -C "$ROOT" archive "$PRIOR_STABLE_TAG" | tar -x -C "$V230_TREE"
 fi
 HEAD="$(pq_head_sha)"
 PROJECT_VERSION="$(awk -F= '/^PROJECT_VERSION=/{print $2}' "$ROOT/VERSION")"
@@ -57,23 +72,23 @@ if channel == "dev":
 print(channel)
 PY
 }
-V231_CHANNEL="$(tree_channel "$V231_TREE")"
-V240_CHANNEL="$(tree_channel "$ROOT")"
-
-pq_note "LIVE_V231_TO_V240_UPGRADE start HEAD=$HEAD PROJECT_VERSION=$PROJECT_VERSION"
-pq_note "OUT=$OUT GOLDEN=$GOLDEN V231_TREE=$V231_TREE"
-pq_note "V231_CHANNEL=$V231_CHANNEL V240_CHANNEL=$V240_CHANNEL"
 
 fail_out() {
-  pq_gate LIVE_V231_TO_V240_UPGRADE FAIL
+  pq_gate LIVE_V230_TO_V240_UPGRADE FAIL
   pq_note "$*"
   exit 1
 }
 
 [[ -d "$GOLDEN" ]] || fail_out "golden baseline missing: $GOLDEN"
-[[ -n "$V231_TREE" && -f "$V231_TREE/dist/bootstrap-server.sh" ]] || fail_out "v2.3.1 tree missing (set FRP_V231_TREE)"
-grep -q '^PROJECT_VERSION=2\.3\.1$' "$V231_TREE/VERSION" || fail_out "FRP_V231_TREE is not PROJECT_VERSION=2.3.1"
+[[ -n "$V230_TREE" && -f "$V230_TREE/dist/bootstrap-server.sh" ]] || fail_out "v2.3.0 tree missing (set FRP_V230_TREE to the immutable v2.3.0 tree)"
+grep -q "^PROJECT_VERSION=${PRIOR_STABLE_VERSION}$" "$V230_TREE/VERSION" || fail_out "prior-stable tree is not PROJECT_VERSION=${PRIOR_STABLE_VERSION}"
 [[ "$PROJECT_VERSION" == "2.4.0" ]] || fail_out "current tree must be PROJECT_VERSION=2.4.0 (got $PROJECT_VERSION)"
+V230_CHANNEL="$(tree_channel "$V230_TREE")"
+V240_CHANNEL="$(tree_channel "$ROOT")"
+
+pq_note "LIVE_V230_TO_V240_UPGRADE start HEAD=$HEAD PROJECT_VERSION=$PROJECT_VERSION"
+pq_note "OUT=$OUT GOLDEN=$GOLDEN V230_TREE=$V230_TREE"
+pq_note "V230_CHANNEL=$V230_CHANNEL V240_CHANNEL=$V240_CHANNEL"
 
 # Record golden evidence into this run
 mkdir -p "$OUT/golden"
@@ -112,8 +127,8 @@ else:
 PY
 pq_gate STALE_LIFECYCLE_LOCK_CLEANUP PASS
 
-# --- 0) Purge existing server so starting side is a real v2.3.1 install ---
-pq_note "Purging existing server install for clean v2.3.1 baseline"
+# --- 0) Purge existing server so starting side is a real v2.3.0 install ---
+pq_note "Purging existing server install for clean v2.3.0 baseline"
 set +e
 pq_ssh "$SERVER" "sudo bash -s -- --purge --yes" \
   <"$ROOT/dist/uninstall-server.sh" >"$OUT/server-purge.log" 2>&1
@@ -130,38 +145,38 @@ if pq_ssh "$SERVER" 'sudo test -f /etc/drlink/config.json'; then
   set -uo pipefail
 fi
 if pq_ssh "$SERVER" 'sudo test -f /etc/drlink/config.json'; then
-  pq_gate V231_PURGE FAIL
+  pq_gate V230_PURGE FAIL
   tail -40 "$OUT/server-purge.log" | tee -a "$PROD_QUAL_SUMMARY" || true
   fail_out "server still installed after purge (rc=$purge_rc)"
 fi
-pq_gate V231_PURGE PASS
+pq_gate V230_PURGE PASS
 
-# --- 1) Fresh v2.3.1 install on server ---
-pq_note "Installing release-equivalent v2.3.1 from $V231_TREE (FRP_RELEASE_CHANNEL=$V231_CHANNEL)"
+# --- 1) Fresh v2.3.0 install on server ---
+pq_note "Installing release-equivalent v2.3.0 from $V230_TREE (FRP_RELEASE_CHANNEL=$V230_CHANNEL)"
 set +e
 pq_ssh "$SERVER" "sudo env \
   FRP_PUBLIC_HOSTNAME='$PUBLIC_HOSTNAME' \
   FRP_PUBLIC_IP='$PUBLIC_IP' \
-  FRP_RELEASE_CHANNEL='$V231_CHANNEL' \
+  FRP_RELEASE_CHANNEL='$V230_CHANNEL' \
   bash -s --" \
-  <"$V231_TREE/dist/bootstrap-server.sh" >"$OUT/v231-install.log" 2>&1
+  <"$V230_TREE/dist/bootstrap-server.sh" >"$OUT/v230-install.log" 2>&1
 inst_rc=$?
 set -uo pipefail
 if [[ "$inst_rc" -ne 0 ]]; then
-  pq_gate V231_INSTALL FAIL
-  tail -80 "$OUT/v231-install.log" | tee -a "$PROD_QUAL_SUMMARY" || true
-  fail_out "v2.3.1 install failed rc=$inst_rc"
+  pq_gate V230_INSTALL FAIL
+  tail -80 "$OUT/v230-install.log" | tee -a "$PROD_QUAL_SUMMARY" || true
+  fail_out "v2.3.0 install failed rc=$inst_rc"
 fi
-pq_gate V231_INSTALL PASS
+pq_gate V230_INSTALL PASS
 
 # Confirm installed version identity
-v231_ver="$(pq_ssh "$SERVER" 'sudo cat /etc/drlink/version 2>/dev/null || true')"
-printf '%s\n' "$v231_ver" >"$OUT/v231-version.txt"
-if ! grep -q '2\.3\.1' <<<"$v231_ver"; then
-  pq_gate V231_VERSION_IDENTITY FAIL
-  fail_out "installed version file missing 2.3.1: $v231_ver"
+v230_ver="$(pq_ssh "$SERVER" 'sudo cat /etc/drlink/version 2>/dev/null || true')"
+printf '%s\n' "$v230_ver" >"$OUT/v230-version.txt"
+if ! grep -q '2\.3\.0' <<<"$v230_ver"; then
+  pq_gate V230_VERSION_IDENTITY FAIL
+  fail_out "installed version file missing 2.3.0: $v230_ver"
 fi
-pq_gate V231_VERSION_IDENTITY PASS
+pq_gate V230_VERSION_IDENTITY PASS
 
 # --- 2) Seed stable Remote Access + Egress state ---
 # IMPORTANT: registry schema must remain v2 (allocator reject schema 1).
@@ -191,7 +206,7 @@ else:
     reg = {"schema_version": 2, "reserved": [], "clients": {}}
 if not isinstance(reg, dict):
     raise SystemExit("registry.json is not an object")
-# Fresh v2.3.1 installs use schema 2. Never seed schema 1.
+# Fresh v2.3.0 installs use schema 2. Never seed schema 1.
 reg["schema_version"] = 2
 reg.setdefault("reserved", [])
 if not isinstance(reg.get("reserved"), list):
@@ -204,9 +219,9 @@ clients[machine_id] = {
     "client_id": client_id,
     "machine_id": machine_id,
     "hostname": "upgrade-e2e-client",
-    "label": "v231-upgrade-seed",
+    "label": "v230-upgrade-seed",
     "labels": {"role": "upgrade-seed"},
-    "tags": {"qual": "v231-to-v240"},
+    "tags": {"qual": "v230-to-v240"},
     "groups": ["upgrade-lab"],
     "notes": "seeded for live upgrade qualification",
     "mgmt_status": "enrolled",
@@ -332,7 +347,7 @@ print(json.dumps({
 }))
 PY
 grep -q SEED_OK "$OUT/seed.log" || fail_out "state seed failed"
-pq_gate V231_STATE_SEED PASS
+pq_gate V230_STATE_SEED PASS
 
 # Pre-upgrade fingerprint
 pq_ssh "$SERVER" 'sudo python3 -' >"$OUT/pre-upgrade-fingerprint.json" <<'PY'
@@ -532,7 +547,7 @@ from drlink_control_plane import ControlPlane
 import drlink_v24 as v24
 
 plane = ControlPlane(None)
-host = "v231-upgrade-seed"
+host = "v230-upgrade-seed"
 remote_allow = plane.evaluate_remote_access("198.51.100.10", host, "tcp", 22)
 remote_deny = plane.evaluate_remote_access("203.0.113.99", host, "tcp", 22)
 inet_allow = plane.evaluate_internet_access("10.20.30.5", "example.com", 443, "https")
@@ -603,8 +618,8 @@ else
 fi
 
 if [[ "$up_cmp" -eq 0 ]] && ! grep -q '=FAIL$' "$PROD_QUAL_GATES"; then
-  pq_gate LIVE_V231_TO_V240_UPGRADE PASS
-  pq_note "LIVE_V231_TO_V240_UPGRADE=PASS"
+  pq_gate LIVE_V230_TO_V240_UPGRADE PASS
+  pq_note "LIVE_V230_TO_V240_UPGRADE=PASS"
   python3 - "$OUT" "$HEAD" <<'PY'
 import json, sys
 from pathlib import Path
@@ -618,7 +633,7 @@ doc = {
     "schema_version": 1,
     "git_head": head,
     "gates": gates,
-    "final_status": gates.get("LIVE_V231_TO_V240_UPGRADE"),
+    "final_status": gates.get("LIVE_V230_TO_V240_UPGRADE"),
     "evidence": {
         "golden": "golden/",
         "pre": "pre-upgrade-fingerprint.json",
@@ -630,6 +645,6 @@ doc = {
 PY
   exit 0
 fi
-pq_gate LIVE_V231_TO_V240_UPGRADE FAIL
-pq_note "LIVE_V231_TO_V240_UPGRADE=FAIL"
+pq_gate LIVE_V230_TO_V240_UPGRADE FAIL
+pq_note "LIVE_V230_TO_V240_UPGRADE=FAIL"
 exit 1

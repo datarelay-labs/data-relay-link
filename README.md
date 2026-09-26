@@ -279,8 +279,9 @@ There is no stable `v2.4.0` tag until exact-HEAD qualification completes. Do not
 Version policy distinguishes:
 
 ```text
-Documented stable baseline     historical documented baseline
-Historical immutable tags      including v2.3.0 where present
+Documented stable baseline     v2.3.0
+Older published release        v2.2.1
+Not manufactured               v2.3.1
 Current development target     2.4.0 / development channel
 ```
 
