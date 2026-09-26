@@ -1,13 +1,36 @@
 {
   "schema_version": 1,
-  "project_version": "2.3.0",
+  "project_version": "2.4.0",
   "frp_version": "0.71.0",
-  "channel": "stable",
-  "git_ref": "v2.3.0",
-  "owner": "xdr-labs",
-  "repo": "frp-auto-deploy",
-  "https_raw_base": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy",
+  "channel": "development",
+  "git_ref": "6babe436335842c0dfd991a7c692e6d5f15c9c2d",
+  "owner": "datarelay-labs",
+  "repo": "datarelay-link",
+  "https_raw_base": "https://raw.githubusercontent.com/datarelay-labs/datarelay-link",
   "signing": false,
+  "integrity": {
+    "sha256": true,
+    "checksum_file": "SHA256SUMS"
+  },
+  "sbom": {
+    "format": "spdx-json",
+    "artifact": "dist/sbom.spdx.json",
+    "generator": "scripts/generate-sbom.py",
+    "verifier": "scripts/verify-sbom.sh",
+    "committed": false,
+    "available": true,
+    "binds_to": "release source commit",
+    "deterministic": true,
+    "note": "Generated at release time from the checked-out release commit and published as an attested workflow artifact; not tracked in git, because a committed file cannot record the hash of the commit containing it. Excluded from SHA256SUMS: its inventory is built from SHA256SUMS, so checksumming it there would be circular. Deterministic for a fixed commit (SOURCE_DATE_EPOCH or HEAD commit time)."
+  },
+  "provenance": {
+    "type": "github-artifact-attestation",
+    "workflow": ".github/workflows/release-attest.yml",
+    "available": false,
+    "workflow_ready": true,
+    "verification": "authoritative",
+    "note": "Attestation is produced by the release-attest workflow, which must be dispatched from the immutable release tag. The workflow binds expected tag -> expected commit -> checked-out HEAD -> attested subjects before attesting, and its gh attestation verify step is authoritative: verification failure fails the release-integrity gate. There is no DEFERRED outcome. available=false until a verified attestation exists for the published candidate; workflow_ready=true means the workflow is present and validated in-tree."
+  },
   "checksum_file": "SHA256SUMS",
   "supported_frp_versions": {
     "0.71.0": {
@@ -19,41 +42,56 @@
       "websocket_path": "/~!frp"
     }
   },
-  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.3.0 project identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference.",
+  "note": "Checksums are integrity hashes from SHA256SUMS, not cryptographic signatures. This manifest describes the v2.4.0 candidate identity with immutable git_ref vPROJECT_VERSION and never mutable main. Dev channel (DRLINK_RELEASE_CHANNEL=dev or FRP_RELEASE_CHANNEL=dev) remains explicit opt-in via main after the tag. Top-level artifacts list official install/uninstall scripts; self-contained bundle manifests are separate and must not self-reference. Integrity (SHA256), SBOM (SPDX JSON), and GitHub Artifact Attestation are distinct evidence classes. Pretags / development trees pin git_ref and source_head to the exact HEAD SHA; never advertise a future stable tag before it exists. features.mcp_included=true after MCP Bridge/AI Access implementation.",
   "supply_chain": {
     "immutable_version_reference": "git tag vPROJECT_VERSION",
+    "tag_policy": "Published tags are immutable and are never moved, deleted, recreated, retargeted, or force-pushed. A wrong tag is superseded by a new version tag.",
     "artifact_integrity": "SHA256SUMS verified by project-update before execution",
-    "recommended_future": [
-      "GitHub tag protection / rulesets",
-      "optional signed checksums",
-      "optional GitHub artifact attestation"
+    "artifact_ordering": "scripts/build-release-artifacts.sh: build bundles -> update SHA256SUMS -> generate SBOM -> verify",
+    "excluded_from_sha256sums": [
+      "SHA256SUMS",
+      "release-manifest.json",
+      "dist/sbom.spdx.json"
+    ],
+    "sbom": "SPDX JSON via scripts/generate-sbom.py, gated by scripts/verify-sbom.sh",
+    "provenance": "GitHub Artifact Attestations via .github/workflows/release-attest.yml (OIDC)",
+    "version_consistency": "scripts/check-version-consistency.sh, derived from VERSION",
+    "distinctions": [
+      "checksum != artifact provenance",
+      "artifact provenance != commit signature",
+      "developer commit signing is not required for this release evidence set"
     ]
   },
   "artifacts": {
     "bootstrap-client.sh": {
       "path": "dist/bootstrap-client.sh",
       "url_path": "dist/bootstrap-client.sh",
-      "sha256": "31b11879bf0c429b2c56abdc8fe996c05c82fda5f84463be9c5fd9a747860faf"
+      "sha256": "e4750ea73fd3ed21b4d0ff7c2dd6aee2a08aa6ceae2c612005e7f7639ee82707"
     },
     "bootstrap-client.ps1": {
       "path": "dist/bootstrap-client.ps1",
       "url_path": "dist/bootstrap-client.ps1",
-      "sha256": "f1f203c289b7b9c326741a49b5992e61f1cab609313f25be9af9f8300ddc9135"
+      "sha256": "f0c0d66d513dc28203b5897b8dea976c23b59c698b9764850246952b8fcebb2b"
     },
     "bootstrap-server.sh": {
       "path": "dist/bootstrap-server.sh",
       "url_path": "dist/bootstrap-server.sh",
-      "sha256": "c067222bd9397cd88c32a90e9d41bb9feab20b1ca3726586de8938decf7d1555"
+      "sha256": "9fee18817db068a1cf302d0754b0afada30c1dae7b545bc1364a0840125e0ca8"
     },
     "uninstall-client.sh": {
       "path": "dist/uninstall-client.sh",
       "url_path": "dist/uninstall-client.sh",
-      "sha256": "d6d27de2a03a018acaed4a54c639ded5bda6a965f1e016c1f88f993f5c477e37"
+      "sha256": "9bcc69b3ea523effc622550bb95d98e80ee55914f8fb66b42a392554e817e69e"
     },
     "uninstall-server.sh": {
       "path": "dist/uninstall-server.sh",
       "url_path": "dist/uninstall-server.sh",
-      "sha256": "2bcbc4a20561e803054160a7cb6767b23a386b54cc87de1cf11eb8e79c169cc3"
+      "sha256": "e49f8fbf55301fb00ce456cb880fb0e3083e216f7e44404f406e9de8362671c7"
     }
-  }
+  },
+  "source_head": "6babe436335842c0dfd991a7c692e6d5f15c9c2d",
+  "features": {
+    "mcp_included": true
+  },
+  "immutable_source_ref": "6babe436335842c0dfd991a7c692e6d5f15c9c2d"
 }

@@ -1,0 +1,27 @@
+[Unit]
+Description=Data Relay Link Access Control Plugin
+After=network-online.target
+Wants=network-online.target
+Before=drlink-server.service
+
+[Service]
+Type=simple
+RuntimeDirectory=drlink/access
+RuntimeDirectoryMode=0700
+# RuntimeDirectoryMode=0700 resets /run/drlink. Restore drlink-egress traverse
+# on the runtime and log parents (0710, not world 0755) after that reset.
+ExecStartPre=/bin/sh -c 'g=drlink-egress; id "$g" >/dev/null 2>&1 || exit 0; getent group "$g" >/dev/null 2>&1 || exit 0; for d in /run/drlink /var/log/drlink; do if [ ! -d "$d" ]; then mkdir -p "$d"; fi; chown root:"$g" "$d"; chmod 0710 "$d"; done; mkdir -p /var/log/drlink/egress /run/drlink/egress; chown root:"$g" /var/log/drlink/egress; chmod 0770 /var/log/drlink/egress; chown "$g":"$g" /run/drlink/egress; chmod 0700 /run/drlink/egress'
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/frp-access-plugin.py --config /etc/drlink/config.json
+Restart=always
+RestartSec=2
+User=root
+Group=root
+# Hardening below requires systemd 232+. The installer strips these lines on
+# older systemd (Amazon Linux 2 is 219) rather than failing unit load.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/drlink /var/log/drlink /etc/drlink /etc/frp
+
+[Install]
+WantedBy=multi-user.target

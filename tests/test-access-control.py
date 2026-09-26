@@ -157,7 +157,12 @@ class AccessControlTests(unittest.TestCase):
         ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
         with self.assertRaises(ACL.AccessError) as ctx:
             ACL.delete_access_list(self.state, lid)
-        self.assertIn("still referenced", str(ctx.exception))
+        msg = str(ctx.exception).lower()
+        self.assertTrue(
+            "still referenced" in msg or "still assigned" in msg,
+            msg,
+        )
+        self.assertIn("unset acl", msg)
 
     def test_empty_allowlist_assign_rejected(self):
         lid, _ = ACL.create_access_list(self.state, "Empty")
@@ -316,55 +321,140 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(loaded["access_lists"], {})
 
 
+    def test_disabled_service_fail_closed_public_and_allowlist(self):
+        """AUDIT-004: disabled registry services must DENY regardless of binding."""
+        self.registry["clients"]["machine-aaa"]["services"]["ssh"]["enabled"] = False
+        # PUBLIC binding path
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            client_id="machine-aaa",
+            service_id="ssh",
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_DENY)
+        self.assertEqual(result["reason"], ACL.REASON_SERVICE_DISABLED)
+
+        # ALLOWLIST binding path
+        lid, _ = ACL.create_access_list(self.state, "DeskNet")
+        ACL.add_source_entry(self.state, lid, "desk", "198.51.100.0/24")
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            client_id="machine-aaa",
+            service_id="ssh",
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_DENY)
+        self.assertEqual(result["reason"], ACL.REASON_SERVICE_DISABLED)
+
+        # Stale proxy NewUserConn path via proxy_name
+        proxy = ACL.expected_proxy_name("alpha-host", "machine-aaa", "ssh")
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=proxy,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_DENY)
+        self.assertEqual(result["reason"], ACL.REASON_SERVICE_DISABLED)
+
+        # Re-enable restores PUBLIC allow
+        self.registry["clients"]["machine-aaa"]["services"]["ssh"]["enabled"] = True
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_PUBLIC, None)
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=proxy,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(result["reason"], ACL.REASON_PUBLIC)
+
+        # Re-enable + matching ALLOWLIST
+        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
+        result = ACL.authorize(
+            self.state,
+            self.registry,
+            proxy_name=proxy,
+            source_ip="198.51.100.9",
+        )
+        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+
+    def test_proxy_name_collision_fail_closed(self):
+        """AUDIT-009: colliding derived proxy names must not last-write-wins."""
+        # Same hostname + same first 8 machine-id chars + same service id
+        self.registry["clients"]["machineaabb01"] = {
+            "label": "one",
+            "hostname": "same-host",
+            "services": {"ssh": {"remote_port": 6011, "enabled": True}},
+        }
+        self.registry["clients"]["machineaabb02"] = {
+            "label": "two",
+            "hostname": "same-host",
+            "services": {"ssh": {"remote_port": 6012, "enabled": True}},
+        }
+        # Prefixes: machineaabb01[:8]=machinea, machineaabb02[:8]=machinea — collision
+        with self.assertRaises(ACL.AccessError) as ctx:
+            ACL.build_proxy_map(self.registry)
+        self.assertIn("collision", str(ctx.exception).lower())
+
+        # Unique names remain usable
+        ok_reg = {
+            "schema_version": 2,
+            "clients": {
+                "aaaaaaaa0001": {
+                    "hostname": "host-a",
+                    "services": {"ssh": {"remote_port": 6001, "enabled": True}},
+                },
+                "bbbbbbbb0002": {
+                    "hostname": "host-b",
+                    "services": {"ssh": {"remote_port": 6002, "enabled": True}},
+                },
+            },
+        }
+        mapping = ACL.build_proxy_map(ok_reg)
+        self.assertEqual(len(mapping), 2)
+
+
+
+
 class PolicyCacheFailClosedTests(unittest.TestCase):
-    """PolicyCache must fail closed when authoritative files disappear."""
+    """PolicyCache must fail closed when SQLite control plane is unavailable."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.etc = self.root / "etc" / "frp-auto-deploy"
-        self.var = self.root / "var" / "lib" / "frp-auto-deploy"
-        self.etc.mkdir(parents=True)
-        self.var.mkdir(parents=True)
-        self.access_path = self.var / "access-control.json"
-        self.registry_path = self.var / "registry.json"
-        self.config_path = self.etc / "config.json"
-        self.state = ACL.empty_access_state()
-        lid, _ = ACL.create_access_list(self.state, "Office")
-        ACL.add_source_entry(self.state, lid, "net", "198.51.100.0/24")
-        ACL.set_service_binding(self.state, "machine-aaa", "ssh", ACL.MODE_ALLOWLIST, lid)
-        ACL.save_access_state(self.state, path=self.access_path)
-        self.registry = {
-            "schema_version": 2,
-            "clients": {
-                "machine-aaa": {
-                    "label": "alpha",
-                    "hostname": "alpha-host",
-                    "services": {"ssh": {"remote_port": 6001, "enabled": True}},
-                }
-            },
-            "reserved": [6001],
-        }
-        self.registry_path.write_text(json.dumps(self.registry) + "\n", encoding="utf-8")
-        self.config_path.write_text(
-            json.dumps(
-                {
-                    "access_control_file": str(self.access_path),
-                    "access_conn_log_file": str(self.var / "access-conn.jsonl"),
-                    "registry_file": str(self.registry_path),
-                }
-            )
-            + "\n",
-            encoding="utf-8",
+        os.environ["FRP_DEPLOY_TEST_ROOT"] = str(self.root)
+        (self.root / "etc" / "drlink").mkdir(parents=True)
+        (self.root / "var" / "lib" / "drlink").mkdir(parents=True)
+        self.config_path = self.root / "etc" / "drlink" / "config.json"
+        self.config_path.write_text(json.dumps({"deployment_mode": "direct"}) + "\n", encoding="utf-8")
+        sys.path.insert(0, str(ROOT / "lib"))
+        from drlink_control_plane import ControlPlane
+        import drlink_runtime_policy as RP
+        self.RP = RP
+        self.plane = ControlPlane(str(self.root))
+        self.mid = "machineaaamachineaaamachineaaa0001"
+        self.plane.set_object_type("office", "network")
+        self.plane.set_object_value("office", "198.51.100.0/24")
+        self.plane.upsert_client(self.mid, label="alpha", hostname="alpha-host",
+                                 addresses=[{"address": "10.0.0.5", "active": True}])
+        self.plane.set_published_service(
+            self.mid, "ssh", service_type="ssh", target_mode="self",
+            target_host="127.0.0.1", target_port=22, enabled=True, public_port=6001,
         )
-        os.environ["FRP_DEPLOY_TEST_ROOT"] = ""
+        self.plane.set_rule("remote", "allow-office")
+        self.plane.set_rule_source("remote", "allow-office", "office")
+        self.plane.set_rule_destination("remote", "allow-office", "alpha")
+        self.plane.set_rule_service("remote", "allow-office", "tcp", 22)
+        self.plane.set_rule_action("remote", "allow-office", "allow")
+        self.plane.set_rule_enabled("remote", "allow-office", True)
+        self.plane.close()
         plugin_path = ROOT / "server" / "frp-access-plugin.py"
-        spec = importlib.util.spec_from_file_location(
-            "frp_access_plugin_test", str(plugin_path)
-        )
+        spec = importlib.util.spec_from_file_location("frp_access_plugin_test", str(plugin_path))
         self.plugin = importlib.util.module_from_spec(spec)
-        # Ensure plugin resolves lib next to repo, not missing install root.
-        sys.modules.pop("frp_access_control", None)
         spec.loader.exec_module(self.plugin)
         self.cache = self.plugin.PolicyCache(self.config_path)
 
@@ -372,70 +462,39 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _authorize_via_cache(self, source_ip="198.51.100.9"):
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
-        if load_error is not None:
+        plane, load_error, _cfg = self.cache.snapshot()
+        if load_error is not None or plane is None:
             return {
-                "decision": ACL.DECISION_DENY,
-                "reason": ACL.REASON_AUTHORIZATION_ERROR,
+                "decision": self.RP.DECISION_DENY,
+                "reason": self.RP.REASON_DB_UNAVAILABLE,
                 "load_error": load_error,
             }
-        proxy = ACL.expected_proxy_name("alpha-host", "machine-aaa", "ssh")
-        return ACL.authorize(
-            access_state, registry, proxy_name=proxy, source_ip=source_ip
-        )
+        proxy = self.RP.expected_proxy_name("alpha-host", self.mid, "ssh")
+        return self.RP.authorize_remote(plane, proxy_name=proxy, source_ip=source_ip)
 
     def test_policy_cache_healthy_allowlist(self):
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
+        plane, load_error, _cfg = self.cache.snapshot()
         self.assertIsNone(load_error)
-        self.assertTrue(self.access_path.exists())
-        self.assertTrue(self.registry_path.exists())
+        self.assertIsNotNone(plane)
         result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(result["decision"], self.RP.DECISION_ALLOW)
 
-    def test_missing_access_policy_fail_closed_and_recovery(self):
+    def test_missing_db_fail_closed(self):
         result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
-        backup = self.access_path.read_bytes()
-        self.access_path.unlink()
-        # Force mtime re-check
-        self.cache.access_mtime = object()
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNotNone(load_error)
-        self.assertIn("missing", load_error)
+        self.assertEqual(result["decision"], self.RP.DECISION_ALLOW)
+        db = self.root / "var" / "lib" / "drlink" / "drlink.db"
+        db.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            (self.root / "var" / "lib" / "drlink" / ("drlink.db" + suffix)).unlink(missing_ok=True)
+        self.cache.reload(force=True)
+        plane, load_error, _cfg = self.cache.snapshot()
+        self.assertTrue(load_error or plane is None)
         denied = self._authorize_via_cache()
-        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
-        self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
-        # Restore
-        self.access_path.write_bytes(backup)
-        self.cache.access_mtime = object()
-        access_state, registry, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNone(load_error)
-        recovered = self._authorize_via_cache()
-        self.assertEqual(recovered["decision"], ACL.DECISION_ALLOW)
-
-    def test_missing_registry_fail_closed_and_recovery(self):
-        result = self._authorize_via_cache()
-        self.assertEqual(result["decision"], ACL.DECISION_ALLOW)
-        backup = self.registry_path.read_bytes()
-        self.registry_path.unlink()
-        self.cache.registry_mtime = object()
-        _a, _r, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNotNone(load_error)
-        self.assertIn("missing", load_error)
-        denied = self._authorize_via_cache()
-        self.assertEqual(denied["decision"], ACL.DECISION_DENY)
-        self.assertEqual(denied["reason"], ACL.REASON_AUTHORIZATION_ERROR)
-        self.registry_path.write_bytes(backup)
-        self.cache.registry_mtime = object()
-        _a, _r, load_error, _cfg = self.cache.snapshot()
-        self.assertIsNone(load_error)
-        recovered = self._authorize_via_cache()
-        self.assertEqual(recovered["decision"], ACL.DECISION_ALLOW)
+        self.assertEqual(denied["decision"], self.RP.DECISION_DENY)
 
     def test_healthz_503_when_policy_missing(self):
         from http.client import HTTPConnection
         from threading import Thread
-        import time
 
         handler = self.plugin.make_handler(self.cache, "/access-auth")
         server = self.plugin.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -449,27 +508,24 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
             self.assertEqual(resp.status, 200)
             body = json.loads(resp.read().decode())
             self.assertTrue(body.get("ok"))
+            self.assertEqual(body.get("authority"), "sqlite")
             conn.close()
 
-            self.access_path.unlink()
-            self.cache.access_mtime = object()
-            time.sleep(0.05)
+            db = self.root / "var" / "lib" / "drlink" / "drlink.db"
+            db.unlink(missing_ok=True)
+            self.cache.reload(force=True)
             conn = HTTPConnection("127.0.0.1", port, timeout=3)
             conn.request("GET", "/healthz")
             resp = conn.getresponse()
             self.assertEqual(resp.status, 503)
             body = json.loads(resp.read().decode())
             self.assertFalse(body.get("ok"))
-            self.assertTrue(body.get("error"))
             conn.close()
 
-            # NewUserConn must reject without PUBLIC fallback
             payload = {
                 "op": "NewUserConn",
                 "content": {
-                    "proxy_name": ACL.expected_proxy_name(
-                        "alpha-host", "machine-aaa", "ssh"
-                    ),
+                    "proxy_name": self.RP.expected_proxy_name("alpha-host", self.mid, "ssh"),
                     "remote_addr": "198.51.100.9:12345",
                 },
             }
@@ -489,6 +545,288 @@ class PolicyCacheFailClosedTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_concurrent_newuserconn_sqlite_isolation(self):
+        """Parallel NewUserConn workers must not share one SQLite connection.
+
+        The pre-fix plugin returned one cached ControlPlane from snapshot()
+        and authorized after releasing the cache lock. Threaded workers then
+        raised sqlite3.InterfaceError / IndexError and fail-closed rejects.
+        """
+        import io
+        from concurrent.futures import ThreadPoolExecutor
+        from contextlib import redirect_stderr
+        from http.client import HTTPConnection
+        from threading import Thread
+
+        import drlink_v24 as v24
+        from drlink_control_plane import ControlPlane
+
+        mode_plane = ControlPlane(str(self.root))
+        try:
+            v24.ensure_policy_mode(mode_plane, "remote", "whitelist", oneshot=True)
+        finally:
+            mode_plane.close()
+        self.cache.reload(force=True)
+
+        handler = self.plugin.make_handler(self.cache, "/access-auth")
+        server = self.plugin.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = server.server_address[1]
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        proxy = self.RP.expected_proxy_name("alpha-host", self.mid, "ssh")
+        allow_addr = "198.51.100.9:%s"
+        deny_addr = "203.0.113.9:%s"
+
+        def one(index):
+            allowed = index % 2 == 0
+            remote = (allow_addr if allowed else deny_addr) % (10000 + index)
+            payload = {
+                "op": "NewUserConn",
+                "content": {"proxy_name": proxy, "remote_addr": remote},
+            }
+            raw = json.dumps(payload).encode()
+            last = b"no response"
+            for _attempt in range(2):
+                conn = HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    conn.request(
+                        "POST",
+                        "/access-auth?op=NewUserConn",
+                        body=raw,
+                        headers={"Content-Type": "application/json", "Content-Length": str(len(raw))},
+                    )
+                    resp = conn.getresponse()
+                    body = resp.read()
+                    return allowed, resp.status, body
+                except Exception as exc:
+                    last = repr(exc).encode()
+                finally:
+                    conn.close()
+            return allowed, 0, last
+
+        stderr = io.StringIO()
+        try:
+            with redirect_stderr(stderr):
+                with ThreadPoolExecutor(max_workers=32) as pool:
+                    results = list(pool.map(one, range(96)))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        log = stderr.getvalue()
+        self.assertNotIn("InterfaceError", log)
+        self.assertNotIn("bad parameter or other API misuse", log)
+        self.assertNotIn("tuple index out of range", log)
+        self.assertNotIn("NoneType", log)
+        for allowed, status, body in results:
+            self.assertEqual(status, 200, "%s\n%s" % (body, log))
+            out = json.loads(body.decode())
+            if allowed:
+                self.assertFalse(out.get("reject"), out)
+            else:
+                self.assertTrue(out.get("reject"), out)
+                reason = str(out.get("reject_reason") or "")
+                self.assertNotIn("authorization unavailable", reason)
+                self.assertNotIn("DB_UNAVAILABLE", reason)
+
+
+
+class AccessTtlBoundsTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_max_ttl_is_accepted(self):
+        exp = ACL.parse_ttl("%dd" % ACL.TTL_MAX_DAYS, now=self.now)
+        self.assertEqual(exp, self.now + timedelta(days=ACL.TTL_MAX_DAYS))
+
+    def test_ttl_above_max_is_rejected(self):
+        for value in ("3651d", "87601h", "5256001m", "315360001s"):
+            with self.assertRaises(ACL.AccessError) as ctx:
+                ACL.parse_ttl(value, now=self.now)
+            self.assertIn("3650d", str(ctx.exception))
+
+    def test_giant_ttl_raises_access_error_not_overflow(self):
+        for value in ("99999999999999d", "9" * 40 + "h", "9" * 6000 + "s"):
+            with self.assertRaises(ACL.AccessError):
+                ACL.parse_ttl(value, now=self.now)
+
+    def test_ttl_near_datetime_limit_is_bounded(self):
+        # A base close to datetime.max must still fail closed with AccessError.
+        near_max = datetime(9999, 12, 30, tzinfo=timezone.utc)
+        with self.assertRaises(ACL.AccessError):
+            ACL.parse_ttl("30d", now=near_max)
+
+    def test_ttl_zero_and_malformed_still_rejected(self):
+        for value in ("0s", "-1d", "", "4x", "d", "1.5h"):
+            with self.assertRaises(ACL.AccessError):
+                ACL.parse_ttl(value, now=self.now)
+
+    def test_add_source_rejects_oversized_ttl(self):
+        state = ACL.empty_access_state()
+        lid, _ = ACL.create_access_list(state, "Bounded")
+        with self.assertRaises(ACL.AccessError):
+            ACL.add_source_entry(state, lid, "forever", "198.51.100.7", ttl="99999999999999d")
+        self.assertEqual(state["access_lists"][lid]["entries"], [])
+
+
+class AccessDescriptionValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.state = ACL.empty_access_state()
+
+    def test_description_is_trimmed_and_kept(self):
+        _lid, record = ACL.create_access_list(self.state, "Office", "  Corp ranges  ")
+        self.assertEqual(record["description"], "Corp ranges")
+
+    def test_description_max_length(self):
+        ok = "a" * ACL.DESCRIPTION_MAX_LEN
+        _lid, record = ACL.create_access_list(self.state, "Long", ok)
+        self.assertEqual(len(record["description"]), ACL.DESCRIPTION_MAX_LEN)
+        with self.assertRaises(ACL.AccessError):
+            ACL.create_access_list(self.state, "TooLong", "a" * (ACL.DESCRIPTION_MAX_LEN + 1))
+
+    def test_create_rejects_control_and_escape_sequences(self):
+        bad = (
+            "line\nbreak",
+            "carriage\rreturn",
+            "null\x00byte",
+            "bell\x07",
+            "tab\tstop",
+            "ansi\x1b[31mred\x1b[0m",
+            "c1\x9bcsi",
+            "del\x7f",
+        )
+        for value in bad:
+            with self.assertRaises(ACL.AccessError):
+                ACL.create_access_list(self.state, "Bad", value)
+        self.assertEqual(self.state["access_lists"], {})
+
+    def test_update_rejects_control_characters_and_keeps_previous_value(self):
+        lid, _ = ACL.create_access_list(self.state, "Office", "clean")
+        with self.assertRaises(ACL.AccessError):
+            ACL.update_access_list_info(self.state, lid, description="evil\x1b[2J")
+        self.assertEqual(self.state["access_lists"][lid]["description"], "clean")
+        self.assertEqual(self.state["access_lists"][lid]["name"], "Office")
+
+    def test_rejected_description_does_not_apply_rename(self):
+        lid, _ = ACL.create_access_list(self.state, "Office", "clean")
+        with self.assertRaises(ACL.AccessError):
+            ACL.update_access_list_info(
+                self.state, lid, name="Renamed", description="bad\x1b[0m"
+            )
+        self.assertEqual(self.state["access_lists"][lid]["name"], "Office")
+
+    def test_validate_access_state_rejects_hostile_description(self):
+        lid, _ = ACL.create_access_list(self.state, "Office", "clean")
+        ACL.validate_access_state(self.state)
+        self.state["access_lists"][lid]["description"] = "spoof\r\nACCESS ALLOW"
+        with self.assertRaises(ACL.AccessError):
+            ACL.validate_access_state(self.state)
+
+    def test_validate_access_state_rejects_oversized_description(self):
+        lid, _ = ACL.create_access_list(self.state, "Office")
+        self.state["access_lists"][lid]["description"] = "a" * (ACL.DESCRIPTION_MAX_LEN + 1)
+        with self.assertRaises(ACL.AccessError):
+            ACL.validate_access_state(self.state)
+
+    def test_non_string_description_rejected(self):
+        with self.assertRaises(ACL.AccessError):
+            ACL.create_access_list(self.state, "Office", {"nested": "object"})
+
+
+class AccessAuditFieldsTests(unittest.TestCase):
+    def test_event_names_cover_documented_mutations(self):
+        self.assertEqual(
+            set(ACL.ACCESS_AUDIT_EVENTS),
+            {
+                "access.list.created",
+                "access.list.updated",
+                "access.list.deleted",
+                "access.source.added",
+                "access.source.updated",
+                "access.source.removed",
+                "access.service.assigned",
+                "access.service.public",
+            },
+        )
+
+    def test_unknown_event_is_rejected(self):
+        with self.assertRaises(ACL.AccessError):
+            ACL.access_audit_fields("access.list.exfiltrated", list_id="acl_1")
+
+    def test_allowed_fields_pass_through(self):
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_SOURCE_ADDED,
+            list_id="acl_abc",
+            list_name="Office",
+            entry_id="ace_def",
+            entry_name="hq",
+            cidr="203.0.113.0/24",
+            details={"expires_at": "2026-01-01T00:00:00Z"},
+        )
+        self.assertEqual(
+            payload,
+            {
+                "list_id": "acl_abc",
+                "list_name": "Office",
+                "entry_id": "ace_def",
+                "entry_name": "hq",
+                "cidr": "203.0.113.0/24",
+                "details": {"expires_at": "2026-01-01T00:00:00Z"},
+            },
+        )
+
+    def test_description_and_secret_fields_are_dropped(self):
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_LIST_CREATED,
+            list_id="acl_abc",
+            list_name="Office",
+            description="bt1.deadbeef.0123456789abcdef",
+            ticket="bt1.deadbeef.0123456789abcdef",
+            server_token="s3cr3t",
+            details={
+                "description": "bt1.deadbeef.0123456789abcdef",
+                "enrollment_code": "zt1.AAAAAAAAAAAAAAAAAA",
+                "description_length": 12,
+            },
+        )
+        self.assertEqual(
+            payload,
+            {
+                "list_id": "acl_abc",
+                "list_name": "Office",
+                "details": {"description_length": 12},
+            },
+        )
+        self.assertNotIn("bt1.", json.dumps(payload))
+
+    def test_none_values_and_empty_details_are_omitted(self):
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_SERVICE_PUBLIC,
+            client_id="machine-aaa",
+            service_id="ssh",
+            public_port=None,
+            details={"previous_mode": None},
+        )
+        self.assertEqual(payload, {"client_id": "machine-aaa", "service_id": "ssh"})
+
+    def test_audit_payload_survives_redaction_unchanged(self):
+        audit_spec = importlib.util.spec_from_file_location(
+            "frp_audit_for_access_test", str(ROOT / "lib" / "frp_audit.py")
+        )
+        audit_mod = importlib.util.module_from_spec(audit_spec)
+        audit_spec.loader.exec_module(audit_mod)
+        payload = ACL.access_audit_fields(
+            ACL.AUDIT_SERVICE_ASSIGNED,
+            client_id="machine-aaa",
+            service_id="ssh",
+            list_id="acl_abc",
+            list_name="Office",
+            public_port=6001,
+            access_mode=ACL.MODE_ALLOWLIST,
+            details={"previous_mode": ACL.MODE_PUBLIC},
+        )
+        self.assertEqual(audit_mod._redact(payload), payload)
 
 
 if __name__ == "__main__":

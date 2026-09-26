@@ -1,18 +1,18 @@
 version: 1
 exact_head_required: true
-artifact_hash_required: false
-provenance_required: false
-sbom_required: false
+artifact_hash_required: true
+provenance_required: true
+sbom_required: true
 setup_command: ''
 preflight_required: false
 preflight_command: ''
-qualification_command: ''
-artifact_hash_command: ''
-provenance_command: ''
-sbom_command: ''
+qualification_command: bash scripts/check-release-governance.sh
+artifact_hash_command: bash scripts/verify-sha256sums.sh
+provenance_command: python3 scripts/sync-release-manifest-provenance.py --check
+sbom_command: bash scripts/verify-sbom.sh
 operational_e2e_required: true
-operational_e2e_command: bash tests/run-real-e2e-matrix.sh
-full_e2e_passes: 1
+operational_e2e_command: bash tests/run-release-qualification-pass.sh
+full_e2e_passes: 2
 public_smoke_required: true
 public_smoke_command: bash -lc 'out=$(bash tests/live-distro-smoke.sh); rc=$?; printf
   "%s\n" "$out"; test "$rc" -eq 0 && ! grep -q "^FAIL" <<<"$out" && ! grep -q "^HOST_ROLE=uninstalled$"

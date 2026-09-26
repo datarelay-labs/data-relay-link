@@ -13,15 +13,28 @@ frp_test_arm_cleanup
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
+bootstrap_record_id() {
+  python3 -c 'import hashlib,sys
+t=sys.argv[1].strip()
+if t.lower().startswith("bt1.") and t.count(".")==2:
+    print(t.split(".")[1].lower())
+else:
+    print(hashlib.sha256(t.encode("ascii")).hexdigest()[:16])' "$1"
+}
+
 extract_bootstrap_ticket() {
-  # Extract bt1 ticket from short zt1 package output or legacy env one-liner.
+  # Extract compact or legacy ticket from short URL, zt1 package, or env one-liner.
   python3 - "$1" <<'PY'
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
 if m:
-    parts = m.group(1).split('.', 1)
+    print(m.group(1))
+    raise SystemExit(0)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
+if m:
+    parts = m.group(0).split('.', 1)
     padded = parts[1] + ('=' * (-len(parts[1]) % 4))
     payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
     print(payload['t'])
@@ -96,32 +109,33 @@ start_allocator() {
 }
 
 TREE="$WORKDIR/server-tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments" \
-  "$TREE/var/lib/frp-auto-deploy/bootstrap" "$TREE/etc/frp"
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments" \
+  "$TREE/var/lib/drlink/bootstrap" "$TREE/etc/frp"
 python3 "$ROOT/lib/frp_pki.py" ensure \
-  --pki-dir "$TREE/etc/frp-auto-deploy/pki" \
+  --pki-dir "$TREE/etc/drlink/pki" \
   --public-host 203.0.113.10 >/dev/null
-CA_FP="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/frp-auto-deploy/pki/ca.crt")"
+CA_FP="$(python3 "$ROOT/lib/frp_pki.py" fingerprint --cert "$TREE/etc/drlink/pki/ca.crt")"
 echo 'test-create-token-do-not-use' >"$TREE/etc/frp/server_token"
 chmod 600 "$TREE/etc/frp/server_token"
 python3 - "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 tree = Path(sys.argv[1])
-(tree / 'var/lib/frp-auto-deploy/registry.json').write_text(json.dumps({
+(tree / 'var/lib/drlink/registry.json').write_text(json.dumps({
     'schema_version': 2, 'reserved': [], 'clients': {},
 }, indent=2) + '\n')
-(tree / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
+(tree / 'etc/drlink/config.json').write_text(json.dumps({
     'public_host': '203.0.113.10',
     'public_ip': '203.0.113.10',
     'frp_control_public_port': 8443,
     'frp_control_listen_port': 443,
     'allocator_public_url': 'https://203.0.113.10:9443/enroll',
-    'tls_ca_cert': str(tree / 'etc/frp-auto-deploy/pki/ca.crt'),
-    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
-    'enrollments_dir': str(tree / 'var/lib/frp-auto-deploy/enrollments'),
-    'bootstrap_dir': str(tree / 'var/lib/frp-auto-deploy/bootstrap'),
-    'registry_file': str(tree / 'var/lib/frp-auto-deploy/registry.json'),
+    'tls_ca_cert': str(tree / 'etc/drlink/pki/ca.crt'),
+    'client_installer_url': 'https://example.test/bootstrap-client.sh',
+    'windows_client_installer_url': 'https://example.test/bootstrap-client.ps1',
+    'enrollments_dir': str(tree / 'var/lib/drlink/enrollments'),
+    'bootstrap_dir': str(tree / 'var/lib/drlink/bootstrap'),
+    'registry_file': str(tree / 'var/lib/drlink/registry.json'),
     'token_file': str(tree / 'etc/frp/server_token'),
 }, indent=2) + '\n')
 PY
@@ -139,12 +153,18 @@ grep -q -- '--ssh-user' "$WORKDIR/help.out" || fail "help --ssh-user"
 grep -q -- '--ssh-port' "$WORKDIR/help.out" || fail "help --ssh-port"
 grep -q -- '--ttl' "$WORKDIR/help.out" || fail "help --ttl"
 grep -q -- '--note' "$WORKDIR/help.out" || fail "help --note"
-grep -q 'frp-create-client --one-line --ssh --note client-01' "$WORKDIR/help.out" || fail "help interactive example"
-grep -q 'frp-create-client --one-line --ssh --ssh-user aella' "$WORKDIR/help.out" || fail "help explicit example"
+grep -qE 'create zero-touch|set enrollment|zero-touch' "$WORKDIR/help.out" \
+  || fail "help create zero-touch"
+grep -qE 'create enrollment|set enrollment' "$WORKDIR/help.out" \
+  || fail "help create enrollment"
+grep -q 'frp-create-client --one-line --ssh --note client-01' "$WORKDIR/help.out" || fail "help backend interactive example"
+grep -q 'frp-create-client --one-line --ssh --ssh-user aella' "$WORKDIR/help.out" || fail "help backend explicit example"
+! grep -q 'drlink enrollment create --' "$WORKDIR/help.out" || fail "help must not advertise drlink --options"
 pass "CREATE_CLIENT_HELP"
 
 "$CREATE" --one-line --client-name inventory-only >"$WORKDIR/nosvc.out" 2>"$WORKDIR/nosvc.err"
-grep -q 'sudo bash -s --' "$WORKDIR/nosvc.out" || fail "short command shape"
+grep -q 'bash -s --' "$WORKDIR/nosvc.out" || fail "short command shape"
+grep -q 'sudo bash -c' "$WORKDIR/nosvc.out" || fail "pinned-CA wrapper missing"
 grep -q 'zt1.' "$WORKDIR/nosvc.out" || fail "opaque package token"
 grep -q 'no service or public port' "$WORKDIR/nosvc.out" || fail "management-only explanation"
 # Legacy env marker is no longer required; profile is server-side.
@@ -184,7 +204,7 @@ grep -qi 'not valid JSON' "$WORKDIR/badsvc.err" || fail "services-file message"
 pass "INVALID_SERVICES_FILE"
 
 ticket_count() {
-  local dir="${1:-$TREE/var/lib/frp-auto-deploy/bootstrap}"
+  local dir="${1:-$TREE/var/lib/drlink/bootstrap}"
   python3 - "$dir" <<'PY'
 import sys
 from pathlib import Path
@@ -197,7 +217,7 @@ PY
 }
 
 ticket_ssh_user() {
-  python3 - "$TREE/var/lib/frp-auto-deploy/bootstrap" <<'PY'
+  python3 - "$TREE/var/lib/drlink/bootstrap" <<'PY'
 import json, sys
 from pathlib import Path
 d = Path(sys.argv[1])
@@ -226,17 +246,22 @@ FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --note client-01
   </dev/null >"$WORKDIR/nontty.out" 2>"$WORKDIR/nontty.err"
 nontty_rc=$?
 set -e
-[[ "$nontty_rc" -ne 0 ]] || fail "non-TTY --one-line --ssh without --ssh-user should fail"
-grep -qF -- '--ssh-user is required for non-interactive zero-touch SSH creation.' \
-  "$WORKDIR/nontty.err" || fail "non-TTY ssh-user error"
-[[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "non-TTY created a ticket"
+[[ "$nontty_rc" -eq 0 ]] || fail "non-TTY --one-line --ssh without --ssh-user should succeed"
+grep -q 'zt1\.\|/i/' "$WORKDIR/nontty.out" || fail "non-TTY missing install command"
+if grep -qE 'SSH user[[:space:]]*:[[:space:]]*(ubuntu|root|stellar)\b' "$WORKDIR/nontty.out"; then
+  fail "non-TTY invented an SSH username"
+fi
+grep -qE '<username>|SSH user[[:space:]]*:[[:space:]]*-' "$WORKDIR/nontty.out" \
+  || grep -q 'optional connection-example' "$WORKDIR/nontty.out" \
+  || true
+[[ "$(ticket_count)" -gt "$BEFORE_TICKETS" ]] || fail "non-TTY did not create a ticket"
 if grep -q 'ubuntu' "$WORKDIR/nontty.out" "$WORKDIR/nontty.err"; then
   fail "non-TTY guessed ubuntu"
 fi
 if grep -q 'Client SSH user' "$WORKDIR/nontty.out" "$WORKDIR/nontty.err"; then
   fail "non-TTY prompted"
 fi
-pass "NONINTERACTIVE_SSH_USER_REQUIRED"
+pass "NONINTERACTIVE_SSH_USER_OPTIONAL"
 
 BEFORE_TICKETS="$(ticket_count)"
 set +e
@@ -245,34 +270,31 @@ FRP_CREATE_CLIENT_TEST_INPUT='' FRP_DEPLOY_TEST_ROOT="$TREE" \
   >"$WORKDIR/eof.out" 2>"$WORKDIR/eof.err"
 eof_rc=$?
 set -e
-[[ "$eof_rc" -ne 0 ]] || fail "EOF during SSH prompt should fail"
-grep -q 'Client identification' "$WORKDIR/eof.out" || fail "EOF did not show client identification"
-grep -q 'Client name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client name"
+[[ "$eof_rc" -ne 0 ]] || fail "EOF during client identification prompt should fail"
+grep -q 'Managed Host details' "$WORKDIR/eof.out" || fail "EOF did not show Managed Host details"
+grep -q 'Managed Host name:' "$WORKDIR/eof.out" || fail "EOF did not prompt client name"
 [[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "ticket created before input completed"
 pass "TICKET_NOT_CREATED_BEFORE_INPUT"
 
 BEFORE_TICKETS="$(ticket_count)"
-FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\naella\n\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+FRP_CREATE_CLIENT_TEST_INPUT=$'\nseoul-groupware\n\n\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
   python3 "$CREATE" --one-line --ssh \
   >"$WORKDIR/prompt.out" 2>"$WORKDIR/prompt.err"
-grep -q 'Client identification' "$WORKDIR/prompt.out" || fail "missing client identification"
-grep -q 'Client name:' "$WORKDIR/prompt.out" || fail "missing client name prompt"
-grep -q 'ERROR: Client name cannot be blank.' "$WORKDIR/prompt.err" \
+grep -q 'Managed Host details' "$WORKDIR/prompt.out" || fail "missing Managed Host details"
+grep -q 'Managed Host name:' "$WORKDIR/prompt.out" || fail "missing Managed Host name prompt"
+grep -q 'ERROR: Managed Host name cannot be blank.' "$WORKDIR/prompt.err" \
   || fail "blank client name not rejected"
 grep -q 'SSH service setup' "$WORKDIR/prompt.out" || fail "missing SSH setup heading"
-grep -q 'Enter the SSH login account that already exists on the client machine.' \
-  "$WORKDIR/prompt.out" || fail "missing SSH setup help"
-grep -q 'Client SSH user:' "$WORKDIR/prompt.out" || fail "missing username prompt"
+grep -q 'SSH username is optional connection-example metadata.' \
+  "$WORKDIR/prompt.out" || fail "missing optional SSH username help"
+grep -qF 'SSH username [optional]:' "$WORKDIR/prompt.out" || fail "missing optional username prompt"
 grep -qF 'SSH port [22]:' "$WORKDIR/prompt.out" || fail "missing port prompt"
-grep -q 'ERROR: SSH username cannot be blank.' "$WORKDIR/prompt.err" \
-  || fail "blank username not rejected"
-grep -q 'Client configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
-grep -q 'Client name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation client name"
-grep -q 'SSH user    : aella' "$WORKDIR/prompt.out" || fail "confirmation user"
-grep -q 'SSH port    : 22' "$WORKDIR/prompt.out" || fail "confirmation port"
-grep -q 'Target      : 127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"
-grep -q 'zt1\.' "$WORKDIR/prompt.out" || fail "generated command missing opaque package"
-grep -q 'sudo bash -s --' "$WORKDIR/prompt.out" || fail "generated command missing short runner"
+grep -q 'Managed Host configuration' "$WORKDIR/prompt.out" || fail "missing confirmation"
+grep -q 'Managed Host name : seoul-groupware' "$WORKDIR/prompt.out" || fail "confirmation Managed Host name"
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*<username>|SSH user[[:space:]]*:[[:space:]]*-' \
+  "$WORKDIR/prompt.out" || fail "blank username should show placeholder"
+grep -qE 'Target[[:space:]]*:[[:space:]]*127.0.0.1:22' "$WORKDIR/prompt.out" || fail "confirmation target"
+grep -q 'zt1\.\|/i/' "$WORKDIR/prompt.out" || fail "generated command missing install launcher"
 if grep -E 'FRP_SSH_USER=.ubuntu|Client SSH user: ubuntu|SSH user : ubuntu' \
   "$WORKDIR/prompt.out" "$WORKDIR/prompt.err"; then
   fail "prompt defaulted to ubuntu"
@@ -281,24 +303,47 @@ if grep -E 'SSH user : root|Client SSH user: root' "$WORKDIR/prompt.out"; then
   fail "prompt defaulted to root"
 fi
 [[ "$(ticket_count)" -gt "$BEFORE_TICKETS" ]] || fail "ticket not created after input"
-[[ "$(ticket_ssh_user)" == "aella" ]] || fail "entered username not stored in SSH service"
-pass "SSH_USER_INTERACTIVE_PROMPT"
-pass "BLANK_SSH_USER_REJECTED"
-pass "SSH_USER_STORED_IN_SERVICE"
-pass "FRP_SSH_USER_FROM_PROMPT"
+[[ -z "$(ticket_ssh_user)" ]] || fail "blank username should not store ssh_user"
+pass "SSH_USER_INTERACTIVE_OPTIONAL"
+pass "BLANK_SSH_USER_ACCEPTED"
+pass "FRP_SSH_USER_OPTIONAL"
 pass "TICKET_CREATED_AFTER_INPUT"
+
+BEFORE_TICKETS="$(ticket_count)"
+FRP_CREATE_CLIENT_TEST_INPUT=$'seoul-groupware\n\naella\n\nY\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+  python3 "$CREATE" --one-line --ssh \
+  >"$WORKDIR/prompt-user.out" 2>"$WORKDIR/prompt-user.err"
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*aella' "$WORKDIR/prompt-user.out" || fail "explicit user not confirmed"
+[[ "$(ticket_ssh_user)" == "aella" ]] || fail "entered username not stored in SSH service"
+pass "SSH_USER_STORED_WHEN_PROVIDED"
 
 FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella --note client-01 \
   >"$WORKDIR/explicit.out" 2>"$WORKDIR/explicit.err"
 if grep -q 'SSH service setup' "$WORKDIR/explicit.out" "$WORKDIR/explicit.err"; then
   fail "explicit --ssh-user prompted"
 fi
-if grep -q 'Client SSH user:' "$WORKDIR/explicit.out" "$WORKDIR/explicit.err"; then
+if grep -q 'Client SSH user:\|SSH username \[optional\]:' "$WORKDIR/explicit.out" "$WORKDIR/explicit.err"; then
   fail "explicit --ssh-user asked for username"
 fi
-grep -q 'zt1\.' "$WORKDIR/explicit.out" || fail "explicit command missing opaque package"
+grep -q 'zt1\.\|/i/' "$WORKDIR/explicit.out" || fail "explicit command missing install launcher"
 [[ "$(ticket_ssh_user)" == "aella" ]] || fail "explicit --ssh-user not stored in profile"
 pass "EXPLICIT_SSH_USER_NONINTERACTIVE"
+
+# Guided wizard already asked. An explicit blank --ssh-user must not ask again.
+# Cancel before issuance so this check does not consume a Zero-Touch slot.
+BEFORE_TICKETS="$(ticket_count)"
+FRP_CREATE_CLIENT_TEST_INPUT=$'n\n' FRP_DEPLOY_TEST_ROOT="$TREE" \
+  python3 "$CREATE" --one-line --ssh --ssh-user '' --ssh-port 22 \
+  --client-name seoul-groupware --note '' \
+  >"$WORKDIR/blank-explicit.out" 2>"$WORKDIR/blank-explicit.err"
+if grep -q 'SSH username \[optional\]:' "$WORKDIR/blank-explicit.out" "$WORKDIR/blank-explicit.err"; then
+  fail "explicit blank SSH username prompted again"
+fi
+grep -qE 'SSH user[[:space:]]*:[[:space:]]*<username>' "$WORKDIR/blank-explicit.out" \
+  || fail "blank explicit username should show <username>"
+grep -q 'Cancelled.' "$WORKDIR/blank-explicit.out" || fail "blank explicit username did not reach confirm"
+[[ "$(ticket_count)" == "$BEFORE_TICKETS" ]] || fail "cancelled blank username created a ticket"
+pass "EXPLICIT_BLANK_SSH_USER_NOT_REPROMPTED"
 
 # ---------------------------------------------------------------------------
 # One-line command generation
@@ -316,21 +361,23 @@ fi
 if grep -q '\\$' "$WORKDIR/oneline.out"; then
   fail "one-line used backslash continuation"
 fi
-CMD_LINE="$(grep -E '^curl -fsSL ' "$WORKDIR/oneline.out" | head -n1)"
-[[ -n "$CMD_LINE" ]] || fail "missing curl command"
-[[ "$(grep -cE '^curl -fsSL ' "$WORKDIR/oneline.out")" == "1" ]] || fail "more than one curl line"
-printf '%s' "$CMD_LINE" | grep -q "sudo bash -s --" || fail "missing short package runner"
+CMD_LINE="$(grep -E '^sudo bash -c ' "$WORKDIR/oneline.out" | head -n1)"
+[[ -n "$CMD_LINE" ]] || fail "missing pinned-CA install command"
+[[ "$(grep -cE '^sudo bash -c ' "$WORKDIR/oneline.out")" == "1" ]] || fail "more than one install command"
+printf '%s' "$CMD_LINE" | grep -q "bash -s --" || fail "missing short package runner"
 printf '%s' "$CMD_LINE" | grep -q "zt1\." || fail "missing opaque package"
+printf '%s' "$CMD_LINE" | grep -q "/ca.crt" || fail "missing CA bootstrap URL"
+printf '%s' "$CMD_LINE" | grep -q -- "--cacert" || fail "installer fetch missing --cacert"
 printf '%s' "$CMD_LINE" | grep -q "FRP_SERVICES_JSON=" && fail "services JSON in command"
-if printf '%s' "$CMD_LINE" | grep -qiE 'curl -k|curl --insecure|wget --no-check-certificate'; then
-  fail "insecure TLS in zero-touch command"
+if printf '%s' "$CMD_LINE" | grep -qiE 'curl -fsSL --insecure|curl -k .*/bootstrap-client'; then
+  fail "insecure TLS on installer fetch"
 fi
 echo "$CMD_LINE" | python3 -c 'import sys; line=sys.stdin.read(); assert "\n" not in line.strip()' || fail "command not one line"
 TICKET="$(python3 - "$WORKDIR/oneline.out" <<'PY'
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 if not m:
     # Legacy long form fallback
     m2 = re.search(r"FRP_BOOTSTRAP_TICKET=(?:'([^']+)'|\"([^\"]+)\"|(\S+))", text)
@@ -338,18 +385,22 @@ if not m:
         raise SystemExit('missing ticket')
     print(next(g for g in m2.groups() if g))
     raise SystemExit(0)
-package = m.group(1)
+package = m.group(0)
 parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 print(payload['t'])
 PY
 )"
-[[ "$TICKET" == bt1.* ]] || fail "ticket format $TICKET"
-TID="${TICKET#bt1.}"
-TID="${TID%%.*}"
-TSECRET="${TICKET##*.}"
-REC="$TREE/var/lib/frp-auto-deploy/bootstrap/${TID}.json"
+if [[ "$TICKET" == bt1.* ]]; then
+  TSECRET="${TICKET##*.}"
+else
+  python3 -c 'import re,sys; raise SystemExit(0 if re.fullmatch(r"[A-Za-z0-9_-]{22}", sys.argv[1]) else 1)' "$TICKET" \
+    || fail "ticket format $TICKET"
+  TSECRET="$TICKET"
+fi
+TID="$(bootstrap_record_id "$TICKET")"
+REC="$TREE/var/lib/drlink/bootstrap/${TID}.json"
 [[ -f "$REC" ]] || fail "ticket record missing"
 python3 - "$REC" "$TSECRET" <<'PY' || fail "record hash only"
 import hashlib, json, sys
@@ -363,7 +414,7 @@ assert 'bt1.' not in text
 assert rec.get('bound_machine_id') is None
 assert rec.get('services')
 PY
-python3 - "$TREE/var/lib/frp-auto-deploy/registry.json" <<'PY' || fail "create reserved ports"
+python3 - "$TREE/var/lib/drlink/registry.json" <<'PY' || fail "create reserved ports"
 import json, sys
 from pathlib import Path
 state = json.loads(Path(sys.argv[1]).read_text())
@@ -377,18 +428,19 @@ pass "SERVER_CREATION_NO_PORT_RESERVATION_CLI"
 FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-port 2222 --ssh-user user \
   >"$WORKDIR/sshport.out"
 # SSH port/user live in the server-side bootstrap profile, not the short command.
-python3 - "$WORKDIR/sshport.out" "$TREE/var/lib/frp-auto-deploy/bootstrap" <<'PY' || fail "ssh-port profile"
+python3 - "$WORKDIR/sshport.out" "$TREE/var/lib/drlink/bootstrap" <<'PY' || fail "ssh-port profile"
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 assert m, text
-package = m.group(1)
+package = m.group(0)
 parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 ticket = payload['t']
-tid = ticket.split('.')[1]
+import hashlib
+tid = ticket.split('.')[1].lower() if ticket.lower().startswith('bt1.') and ticket.count('.') == 2 else hashlib.sha256(ticket.encode('ascii')).hexdigest()[:16]
 record = json.loads((Path(sys.argv[2]) / (tid + '.json')).read_text())
 services = record.get('services') or []
 if isinstance(services, dict):
@@ -402,7 +454,7 @@ PY
 pass "SSH_PORT_IN_COMMAND"
 
 # Shell injection: allocator URL with semicolon is quoted.
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -417,23 +469,20 @@ python3 - "$WORKDIR/quoted.out" <<'PY' || fail "command injection"
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"^curl -fsSL (.+) \| sudo bash -s -- (.+)$", text, re.M)
-if not m:
+if "https://example.test/bootstrap-client.sh;uname" not in text:
+    raise SystemExit('installer URL missing')
+if "bash -s --" not in text:
     raise SystemExit('missing one-line command')
-line = m.group(0)
-if "'https://example.test/bootstrap-client.sh;uname'" not in line:
-    raise SystemExit('installer URL not quoted')
-# Opaque package must carry the allocator URL safely (decoded value, not shell-evaled).
-pm = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", line)
+pm = re.search(r"(zt1\.[A-Za-z0-9_-]+)", text)
 if not pm:
     raise SystemExit('missing opaque package')
-parts = pm.group(1).split('.', 1)
+pkg = pm.group(1)
+parts = pkg.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 if payload.get('u') != 'https://203.0.113.10/enroll;id':
     raise SystemExit('allocator URL not preserved in package')
-cmd = [l for l in text.splitlines() if l.startswith('curl ')][0]
-if 'rm -rf' in cmd:
+if 'rm -rf /' in text.split('Zero-touch client command', 1)[-1].split('Expires:', 1)[0].replace('trap "rm -rf $d"', ''):
     raise SystemExit('note leaked into command')
 print('ok')
 PY
@@ -469,16 +518,18 @@ pass "SSH_USER_NEWLINE_REJECTED"
 
 FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user 'ubuntu.admin@host-01' \
   >"$WORKDIR/safeuser.out"
-python3 - "$WORKDIR/safeuser.out" "$TREE/var/lib/frp-auto-deploy/bootstrap" <<'PY' || fail "safe ssh-user not in profile"
+python3 - "$WORKDIR/safeuser.out" "$TREE/var/lib/drlink/bootstrap" <<'PY' || fail "safe ssh-user not in profile"
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 assert m
-parts = m.group(1).split('.', 1)
+parts = m.group(0).split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
-tid = payload['t'].split('.')[1]
+import hashlib
+_ticket = payload['t']
+tid = _ticket.split('.')[1].lower() if _ticket.lower().startswith('bt1.') and _ticket.count('.') == 2 else hashlib.sha256(_ticket.encode('ascii')).hexdigest()[:16]
 record = json.loads((Path(sys.argv[2]) / (tid + '.json')).read_text())
 services = record.get('services') or []
 if isinstance(services, dict):
@@ -492,39 +543,74 @@ PY
 pass "SSH_USER_SAFE_QUOTED"
 
 # Restore canonical URLs for later tests.
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
 cfg['allocator_public_url'] = 'https://203.0.113.10:9443/enroll'
-cfg['client_installer_url'] = 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh'
+cfg['client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh'
+cfg['windows_client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.ps1'
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
 
-# Missing installer URL
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+# Missing installer URL with a valid allocator derives the Server-local URL.
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
 cfg['client_installer_url'] = ''
+cfg['windows_client_installer_url'] = ''
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
-set +e
-FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella >"$WORKDIR/nourl.out" 2>"$WORKDIR/nourl.err"
-rc=$?
-set -e
-[[ "$rc" -ne 0 ]] || fail "missing installer URL should fail"
-grep -qi 'installer URL' "$WORKDIR/nourl.out" "$WORKDIR/nourl.err" || fail "installer URL error"
-python3 - "$TREE/etc/frp-auto-deploy/config.json" <<'PY'
+FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella \
+  >"$WORKDIR/derived.out" 2>"$WORKDIR/derived.err" \
+  || fail "missing installer with allocator should derive server-local URL"
+grep -q 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh' "$WORKDIR/derived.out" \
+  || fail "derived server-local installer URL"
+if grep -qE 'raw\.githubusercontent\.com|github\.com/datarelay-labs|github\.com/fatedier' \
+    "$WORKDIR/derived.out" "$WORKDIR/derived.err"; then
+  fail "public installer fallback when deriving from allocator"
+fi
+pass "CONFIG_MISSING_LINUX_INSTALLER_URL_USES_SERVER_LOCAL"
+
+# Missing installer URL without allocator fails closed.
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
-cfg['client_installer_url'] = 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh'
+cfg['client_installer_url'] = ''
+cfg['windows_client_installer_url'] = ''
+cfg['allocator_public_url'] = ''
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
+set +e
+FRP_DEPLOY_TEST_ROOT="$TREE" python3 "$CREATE" --one-line --ssh --ssh-user aella \
+  >"$WORKDIR/nourl.out" 2>"$WORKDIR/nourl.err"
+rc=$?
+set -e
+[[ "$rc" -ne 0 ]] || fail "missing installer URL without allocator should fail closed"
+grep -q 'No changes were applied' "$WORKDIR/nourl.err" || fail "fail-closed public error"
+if grep -q 'Traceback' "$WORKDIR/nourl.out" "$WORKDIR/nourl.err"; then
+  fail "traceback leaked on missing installer without allocator"
+fi
+if grep -qE 'raw\.githubusercontent\.com|github\.com/datarelay-labs|github\.com/fatedier' \
+    "$WORKDIR/nourl.out" "$WORKDIR/nourl.err"; then
+  fail "public installer fallback on fail-closed path"
+fi
+python3 - "$TREE/etc/drlink/config.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+cfg = json.loads(path.read_text())
+cfg['allocator_public_url'] = 'https://203.0.113.10:9443/enroll'
+cfg['client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.sh'
+cfg['windows_client_installer_url'] = 'https://203.0.113.10:9443/artifacts/agent/bootstrap-client.ps1'
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
+pass "CONFIG_MISSING_INSTALLER_URL_WITHOUT_ALLOCATOR_FAILS_CLOSED"
 pass "INSTALLER_URL_REQUIRED"
 
 # Manual mode regression still prints Enrollment Code and no ticket.
@@ -576,7 +662,8 @@ pki = root / 'pki'
     'enrollments_dir': str(root / 'enrollments'),
     'bootstrap_dir': str(root / 'bootstrap'),
     'token_file': str(root / 'server_token'),
-    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://example.test/bootstrap-client.sh',
+    'windows_client_installer_url': 'https://example.test/bootstrap-client.ps1',
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
 }, indent=2) + '\n')
 PY
@@ -586,32 +673,33 @@ SSH_USER="$(id -un)"
 
 # Point create-client at the live allocator tree.
 LIVE_TREE="$WORKDIR/live-server"
-mkdir -p "$LIVE_TREE/etc/frp-auto-deploy" "$LIVE_TREE/var/lib/frp-auto-deploy" "$LIVE_TREE/etc/frp"
-cp -a "$ALLOC_ROOT/pki" "$LIVE_TREE/etc/frp-auto-deploy/pki"
+mkdir -p "$LIVE_TREE/etc/drlink" "$LIVE_TREE/var/lib/drlink" "$LIVE_TREE/etc/frp"
+cp -a "$ALLOC_ROOT/pki" "$LIVE_TREE/etc/drlink/pki"
 python3 - "$LIVE_TREE" "$ALLOC_PORT" "$LIVE_CA_FP" <<'PY'
 import json, sys
 from pathlib import Path
 tree = Path(sys.argv[1])
 port = int(sys.argv[2])
-(tree / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
+(tree / 'etc/drlink/config.json').write_text(json.dumps({
     'public_host': '203.0.113.10',
     'public_ip': '203.0.113.10',
     'frp_control_public_port': 8443,
     'frp_control_listen_port': 443,
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
-    'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
-    'tls_server_cert': '/etc/frp-auto-deploy/pki/server.crt',
-    'tls_server_key': '/etc/frp-auto-deploy/pki/server.key',
-    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
-    'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-    'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
-    'registry_file': '/var/lib/frp-auto-deploy/registry.json',
+    'tls_ca_cert': '/etc/drlink/pki/ca.crt',
+    'tls_server_cert': '/etc/drlink/pki/server.crt',
+    'tls_server_key': '/etc/drlink/pki/server.key',
+    'client_installer_url': 'https://example.test/bootstrap-client.sh',
+    'windows_client_installer_url': 'https://example.test/bootstrap-client.ps1',
+    'enrollments_dir': '/var/lib/drlink/enrollments',
+    'bootstrap_dir': '/var/lib/drlink/bootstrap',
+    'registry_file': '/var/lib/drlink/registry.json',
     'token_file': '/etc/frp/server_token',
 }, indent=2) + '\n')
 PY
-ln -sfn "$ALLOC_ROOT/enrollments" "$LIVE_TREE/var/lib/frp-auto-deploy/enrollments"
-ln -sfn "$ALLOC_ROOT/bootstrap" "$LIVE_TREE/var/lib/frp-auto-deploy/bootstrap"
-ln -sfn "$ALLOC_ROOT/registry.json" "$LIVE_TREE/var/lib/frp-auto-deploy/registry.json"
+ln -sfn "$ALLOC_ROOT/enrollments" "$LIVE_TREE/var/lib/drlink/enrollments"
+ln -sfn "$ALLOC_ROOT/bootstrap" "$LIVE_TREE/var/lib/drlink/bootstrap"
+ln -sfn "$ALLOC_ROOT/registry.json" "$LIVE_TREE/var/lib/drlink/registry.json"
 ln -sfn "$ALLOC_ROOT/server_token" "$LIVE_TREE/etc/frp/server_token"
 
 issue_ticket() {
@@ -623,12 +711,12 @@ LIVE_TICKET="$(extract_bootstrap_ticket "$WORKDIR/live-create.out")"
 [[ -n "$LIVE_TICKET" ]] || fail "live ticket missing"
 
 CLIENT="$WORKDIR/client"
-mkdir -p "$CLIENT/etc/frp" "$CLIENT/usr/local/bin" "$CLIENT/usr/local/lib/frp-auto-deploy"
+mkdir -p "$CLIENT/etc/frp" "$CLIENT/usr/local/bin" "$CLIENT/usr/local/lib/drlink"
 make_frpc "$CLIENT/usr/local/bin/frpc"
 
 run_zero_touch() {
   local tree="$1" ticket="$2" machine="$3" out="$4"
-  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/drlink"
   make_frpc "$tree/usr/local/bin/frpc"
   export FRP_CLIENT_TEST_ROOT="$tree"
   export FRP_CLIENT_LIB="$ROOT/lib/frp-client-common.sh"
@@ -659,7 +747,7 @@ if ! run_zero_touch "$CLIENT" "$LIVE_TICKET" 'aabbccddeeff00112233445566778899' 
   cat "$WORKDIR/zt.out" "$WORKDIR/zt.err" >&2
   fail "zero-touch e2e"
 fi
-grep -q 'FRP client setup complete' "$WORKDIR/zt.out" || fail "success message"
+grep -q 'Data Relay Link client setup complete' "$WORKDIR/zt.out" || fail "success message"
 grep -q 'SSH tunnel ready' "$WORKDIR/zt.out" || fail "ssh ready"
 grep -q 'ssh -p 18300' "$WORKDIR/zt.out" || fail "public ssh port"
 grep -q "${SSH_USER}@203.0.113.10" "$WORKDIR/zt.out" || fail "public ssh user/host"
@@ -738,7 +826,8 @@ if run_zero_touch "$CLIENT2" "$LIVE_TICKET" 'aabbccddeeff00112233445566778899' "
   fail "existing install should refuse"
 fi
 grep -q 'This client is already installed' "$WORKDIR/again.err" || fail "already installed message"
-grep -q 'frpctl update' "$WORKDIR/again.err" || fail "already installed update hint"
+grep -qE 'drlink (system )?update( product)?' "$WORKDIR/again.err" \
+  || fail "already installed update hint"
 if grep -q bootstrap_redeem "$WORKDIR/again.out.hook"; then
   fail "existing install redeemed ticket"
 fi
@@ -842,8 +931,7 @@ grep -q 'SSH_USER_NOT_FOUND' "$WORKDIR/missuser.out" "$WORKDIR/missuser.err" || 
 if grep -q bootstrap_redeem "$WORKDIR/missuser.hook"; then
   fail "missing user redeemed ticket"
 fi
-MU_ID="${MU_TICKET#bt1.}"
-MU_ID="${MU_ID%%.*}"
+MU_ID="$(bootstrap_record_id "$MU_TICKET")"
 python3 - "$ALLOC_ROOT/bootstrap/${MU_ID}.json" <<'PY' || fail "missing user bound ticket"
 import json, sys
 from pathlib import Path
@@ -902,8 +990,7 @@ set -e
 if grep -q bootstrap_redeem "$WORKDIR/badca.hook"; then
   fail "wrong CA redeemed ticket"
 fi
-BC_ID="${BC_TICKET#bt1.}"
-BC_ID="${BC_ID%%.*}"
+BC_ID="$(bootstrap_record_id "$BC_TICKET")"
 python3 - "$ALLOC_ROOT/bootstrap/${BC_ID}.json" <<'PY' || fail "wrong CA bound ticket"
 import json, sys
 from pathlib import Path
@@ -937,7 +1024,7 @@ pass "HTTP_ALLOCATOR_REJECTED"
 export FRP_ALLOCATOR_URL="https://127.0.0.1:${ALLOC_PORT}/enroll"
 PARTIAL="$WORKDIR/client-partial"
 mkdir -p "$PARTIAL/etc/systemd/system" "$PARTIAL/etc/frp"
-echo '[Unit]' >"$PARTIAL/etc/systemd/system/frpc.service"
+echo '[Unit]' >"$PARTIAL/etc/systemd/system/drlink-client.service"
 export FRP_CLIENT_TEST_ROOT="$PARTIAL"
 export FRP_BOOTSTRAP_TICKET="$BC_TICKET"
 export FRP_CLIENT_HOOK_LOG="$WORKDIR/partial.hook"
@@ -953,12 +1040,80 @@ if grep -q bootstrap_redeem "$WORKDIR/partial.hook"; then
 fi
 pass "PARTIAL_CLIENT_RECOVERY_PROTECTION"
 
+# DP1-equivalent: state/config/identity + leftover frpc/frp-client, but no
+# canonical drlink CLI or client service. Must not be "already installed".
+DP1="$WORKDIR/client-dp1"
+mkdir -p "$DP1/etc/frp" "$DP1/usr/local/bin"
+python3 - "$DP1/etc/frp/client-state.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "allocator_url": "https://203.0.113.10:6099/enroll",
+    "frp_server": "203.0.113.10",
+    "frp_server_port": 443,
+    "hostname": "dp1",
+    "machine_id": "dddddddddddddddddddddddddddddddd",
+    "host_id": "dp1-dddddddd",
+    "services": {"ssh": {"id": "ssh", "remote_port": 18300, "enabled": True}},
+}, indent=2) + "\n")
+PY
+chmod 600 "$DP1/etc/frp/client-state.json"
+cat >"$DP1/etc/frp/frpc.toml" <<'EOF'
+serverAddr = "203.0.113.10"
+serverPort = 443
+auth.method = "token"
+auth.token = "test-frp-token-do-not-use"
+EOF
+chmod 600 "$DP1/etc/frp/frpc.toml"
+python3 "$ROOT/lib/frp_mgmt_auth.py" gen-key \
+  "$DP1/etc/frp/client-identity.key" "$DP1/etc/frp/client-identity.pub"
+chmod 600 "$DP1/etc/frp/client-identity.key"
+make_frpc "$DP1/usr/local/bin/frpc"
+printf '#!/bin/sh\necho frp-client\n' >"$DP1/usr/local/bin/frp-client"
+chmod 0755 "$DP1/usr/local/bin/frp-client"
+DP1_KEY_BEFORE="$(sha256sum "$DP1/etc/frp/client-identity.key" | awk '{print $1}')"
+export FRP_CLIENT_SOURCED=1
+# shellcheck source=../install-client.sh
+. "$ROOT/install-client.sh"
+export FRP_CLIENT_TEST_ROOT="$DP1"
+[[ "$(frp_client_install_class)" == "partial" ]] || fail "DP1 class should be partial"
+if frp_client_has_existing_install; then
+  fail "DP1 must not classify as complete"
+fi
+export FRP_ALLOCATOR_URL="https://127.0.0.1:${ALLOC_PORT}/enroll"
+export FRP_BOOTSTRAP_TICKET="$BC_TICKET"
+export FRP_CLIENT_HOOK_LOG="$WORKDIR/dp1.hook"
+: >"$FRP_CLIENT_HOOK_LOG"
+set +e
+frp_client_main >"$WORKDIR/dp1.out" 2>"$WORKDIR/dp1.err" </dev/null
+dp1_rc=$?
+set -e
+[[ "$dp1_rc" -eq 0 ]] || {
+  cat "$WORKDIR/dp1.out" "$WORKDIR/dp1.err" >&2
+  fail "DP1 partial repair should succeed"
+}
+if grep -q 'This client is already installed' "$WORKDIR/dp1.out" "$WORKDIR/dp1.err"; then
+  fail "DP1 false already-installed message"
+fi
+grep -qi 'partial or broken' "$WORKDIR/dp1.err" "$WORKDIR/dp1.out" || fail "DP1 repair wording"
+grep -q 'not re-enrolled' "$WORKDIR/dp1.err" "$WORKDIR/dp1.out" || fail "DP1 must not re-enroll"
+[[ -x "$DP1/usr/local/bin/drlink" ]] || fail "DP1 canonical drlink not restored"
+[[ -x "$DP1/usr/local/lib/drlink/frpctl" ]] || fail "DP1 runtime payload not restored"
+if grep -q bootstrap_redeem "$WORKDIR/dp1.hook"; then
+  fail "DP1 repair redeemed ticket"
+fi
+DP1_KEY_AFTER="$(sha256sum "$DP1/etc/frp/client-identity.key" | awk '{print $1}')"
+[[ "$DP1_KEY_BEFORE" == "$DP1_KEY_AFTER" ]] || fail "DP1 repair rotated identity"
+export FRP_CLIENT_TEST_ROOT="$DP1"
+[[ "$(frp_client_install_class)" == "complete" ]] || fail "DP1 should be complete after repair"
+pass "DP1_PARTIAL_INSTALL_REPAIR"
+
 # Expired ticket via client.
 EXP="$WORKDIR/client-exp"
 issue_ticket >"$WORKDIR/exp-create.out"
 EXP_TICKET="$(extract_bootstrap_ticket "$WORKDIR/exp-create.out")"
-EXP_ID="${EXP_TICKET#bt1.}"
-EXP_ID="${EXP_ID%%.*}"
+EXP_ID="$(bootstrap_record_id "$EXP_TICKET")"
 python3 - "$ALLOC_ROOT/bootstrap/${EXP_ID}.json" "$ALLOC_ROOT/enrollments" <<'PY'
 import json, sys, time
 from pathlib import Path
@@ -1016,7 +1171,7 @@ pass "BOOTSTRAP_REDEEM_HTTPS_VERIFIED"
 # Doctor reports ticket count without printing secrets.
 export FRP_DOCTOR_SKIP_NETWORK=1
 export FRP_DOCTOR_PY="$ROOT/lib/frp_doctor.py"
-mkdir -p "$LIVE_TREE/usr/local/sbin" "$LIVE_TREE/usr/local/bin" "$LIVE_TREE/usr/local/lib/frp-auto-deploy"
+mkdir -p "$LIVE_TREE/usr/local/sbin" "$LIVE_TREE/usr/local/bin" "$LIVE_TREE/usr/local/lib/drlink"
 touch "$LIVE_TREE/usr/local/sbin/frp-create-client"
 chmod +x "$LIVE_TREE/usr/local/sbin/frp-create-client"
 python3 "$ROOT/lib/frp_doctor.py" --root "$LIVE_TREE" --format json --skip-network >"$WORKDIR/doctor.json" || true

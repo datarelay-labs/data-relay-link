@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Named Access Lists, TTL entries, and connection authorization for FRP Auto Deploy.
+"""Named Access Lists, TTL entries, and connection authorization for Data Relay Link.
 
-Authoritative state lives in /var/lib/frp-auto-deploy/access-control.json.
+LEGACY/MIGRATION state previously lived in /var/lib/drlink/access-control.json.
 Runtime authorization is evaluated by the NewUserConn plugin using an
 in-memory cache derived from that file plus registry.json proxy mapping.
 
-Backward compatible: missing access metadata means PUBLIC.
+Unbound services (when policy state is loaded) default to PUBLIC.
+Missing or corrupt access-control.json is fail-closed at runtime and must
+never be displayed as PUBLIC in operator CLI — use POLICY UNAVAILABLE /
+ACCESS ERROR / UNKNOWN instead.
 ALLOWLIST failures fail closed (DENY).
 """
 from __future__ import annotations
 
 import fcntl
+import importlib.util
 import ipaddress
 import json
 import os
 import re
 import secrets
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,8 +28,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 ACCESS_SCHEMA_VERSION = 1
-DEFAULT_ACCESS_PATH = "/var/lib/frp-auto-deploy/access-control.json"
-DEFAULT_CONN_LOG_PATH = "/var/log/frp-auto-deploy/access-conn.jsonl"
+DEFAULT_ACCESS_PATH = "/var/lib/drlink/access-control.json"
+DEFAULT_CONN_LOG_PATH = "/var/log/drlink/access/connections.jsonl"
+LEGACY_CONN_LOG_PATH = "/var/log/drlink/access-conn.jsonl"
 DEFAULT_PLUGIN_ADDR = "127.0.0.1:6101"
 DEFAULT_PLUGIN_PATH = "/access-auth"
 ACCESS_LIST_ID_PREFIX = "acl_"
@@ -35,6 +41,11 @@ ENTRY_ID_HEX_LEN = 12
 MODE_PUBLIC = "PUBLIC"
 MODE_ALLOWLIST = "ALLOWLIST"
 VALID_MODES = frozenset({MODE_PUBLIC, MODE_ALLOWLIST})
+
+# Operator-facing display when authoritative policy cannot be read.
+DISPLAY_POLICY_UNAVAILABLE = "POLICY UNAVAILABLE"
+DISPLAY_ACCESS_ERROR = "ACCESS ERROR"
+DISPLAY_UNKNOWN = "UNKNOWN"
 
 DECISION_ALLOW = "ALLOW"
 DECISION_DENY = "DENY"
@@ -48,6 +59,7 @@ REASON_POLICY_INVALID = "POLICY_INVALID"
 REASON_AUTHORIZATION_ERROR = "AUTHORIZATION_ERROR"
 REASON_EMPTY_ALLOWLIST = "EMPTY_ALLOWLIST"
 REASON_UNMAPPED_PROXY = "UNMAPPED_PROXY"
+REASON_SERVICE_DISABLED = "SERVICE_DISABLED"
 
 EMPTY_ALLOWLIST_MESSAGE = (
     "No allowed sources are configured.\n"
@@ -55,9 +67,103 @@ EMPTY_ALLOWLIST_MESSAGE = (
     "Use Disable if you intend to stop publishing the service."
 )
 
+PUBLIC_EXPOSURE_LINES = (
+    "Exposure      : PUBLIC",
+    "Source policy : Any source that can reach this public port may attempt a connection",
+    "Target auth   : SSH/application authentication is still required",
+    "",
+    "Recommended:",
+    "  Restrict this service with an ACL if public access is not intended.",
+    "",
+    "Example:",
+    "  set acl <ACL> service <CLIENT> <SERVICE>",
+)
+
+
+def print_public_exposure_notice(*, service_id=None, heading=False):
+    """Operator-facing PUBLIC exposure summary (no secrets)."""
+    if heading:
+        print()
+        print("Public exposure")
+        print("===============")
+        print()
+    if service_id:
+        print("Service %s is publicly reachable." % service_id)
+        print()
+    for line in PUBLIC_EXPOSURE_LINES:
+        print(line)
+
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 ENTRY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
 TTL_RE = re.compile(r"^(\d+)([smhd])$", re.IGNORECASE)
+
+DESCRIPTION_MAX_LEN = 1024
+
+# Documented upper bound for temporary (TTL) sources. Without it a giant value
+# such as 99999999999999d overflows datetime arithmetic instead of producing a
+# user-facing error.
+TTL_MAX_DAYS = 3650
+TTL_MAX_SECONDS = TTL_MAX_DAYS * 86400
+TTL_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+# Digits beyond this cannot express a TTL within the bound; reject before int().
+_TTL_MAX_DIGITS = 20
+
+# Access Control mutation audit events (parity with egress.*/profile.*).
+AUDIT_LIST_CREATED = "access.list.created"
+AUDIT_LIST_UPDATED = "access.list.updated"
+AUDIT_LIST_DELETED = "access.list.deleted"
+AUDIT_SOURCE_ADDED = "access.source.added"
+AUDIT_SOURCE_UPDATED = "access.source.updated"
+AUDIT_SOURCE_REMOVED = "access.source.removed"
+AUDIT_SERVICE_ASSIGNED = "access.service.assigned"
+AUDIT_SERVICE_PUBLIC = "access.service.public"
+
+ACCESS_AUDIT_EVENTS = frozenset(
+    {
+        AUDIT_LIST_CREATED,
+        AUDIT_LIST_UPDATED,
+        AUDIT_LIST_DELETED,
+        AUDIT_SOURCE_ADDED,
+        AUDIT_SOURCE_UPDATED,
+        AUDIT_SOURCE_REMOVED,
+        AUDIT_SERVICE_ASSIGNED,
+        AUDIT_SERVICE_PUBLIC,
+    }
+)
+
+# Allowlist, not denylist: any field an audit caller has not been explicitly
+# cleared to record is dropped, so operator free text and credentials can never
+# reach audit.jsonl through a new call site.
+AUDIT_ALLOWED_FIELDS = frozenset(
+    {
+        "list_id",
+        "list_name",
+        "entry_id",
+        "entry_name",
+        "cidr",
+        "client_id",
+        "service_id",
+        "public_port",
+        "access_mode",
+        "access_list_id",
+    }
+)
+AUDIT_ALLOWED_DETAIL_KEYS = frozenset(
+    {
+        "fields",
+        "expires_at",
+        "name_changed",
+        "description_changed",
+        "description_length",
+        "previous_mode",
+        "previous_list_id",
+        "previous_list_name",
+        "previous_cidr",
+        "previous_entry_name",
+        "previous_expires_at",
+        "reason",
+    }
+)
 
 CONN_LOG_MAX_BYTES = 5 * 1024 * 1024
 CONN_LOG_KEEP = 5
@@ -125,9 +231,18 @@ def conn_log_path(cfg: Optional[dict] = None) -> Path:
     configured = ""
     if isinstance(cfg, dict):
         configured = str(cfg.get("access_conn_log_file") or "").strip()
-    if not configured:
-        configured = os.environ.get("FRP_ACCESS_CONN_LOG", "") or DEFAULT_CONN_LOG_PATH
-    return _rooted(configured)
+    if configured:
+        return _rooted(configured)
+    env = os.environ.get("FRP_ACCESS_CONN_LOG", "").strip()
+    if env:
+        return _rooted(env)
+    path = _rooted(DEFAULT_CONN_LOG_PATH)
+    # Default path: prefer new layout; fall back to legacy flat file when present.
+    if not path.exists():
+        legacy = _rooted(LEGACY_CONN_LOG_PATH)
+        if legacy.is_file():
+            return legacy
+    return path
 
 
 def registry_path_from_cfg(cfg: dict) -> Path:
@@ -140,6 +255,29 @@ def registry_path_from_cfg(cfg: dict) -> Path:
 
 def access_lock_path(path: Path) -> Path:
     return path.parent / (path.name + ".lock")
+
+
+_LOCKS = None
+
+
+def _locks():
+    global _LOCKS
+    if _LOCKS is None:
+        existing = sys.modules.get("frp_control_locks")
+        if existing is not None:
+            _LOCKS = existing
+        else:
+            path = Path(__file__).resolve().parent / "frp_control_locks.py"
+            spec = importlib.util.spec_from_file_location("frp_control_locks", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["frp_control_locks"] = mod
+            spec.loader.exec_module(mod)
+            _LOCKS = mod
+    return _LOCKS
+
+
+def _control_state_mutation_lock(state_path):
+    return _locks().mutation_lock(state_path=state_path)
 
 
 def empty_access_state() -> dict:
@@ -161,10 +299,9 @@ def atomic_write_json(path: Path, data: dict, mode: int = 0o600) -> None:
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
-        try:
-            os.chmod(path.parent, 0o700)
-        except OSError:
-            pass
+        # Do NOT chmod shared parent (/var/lib/drlink): that clears ACL mask /
+        # group+x needed by drlink-egress. File writers own only their inode.
+        pass
     finally:
         if os.path.exists(tmp):
             try:
@@ -215,7 +352,7 @@ def require_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None
     path = path or access_control_path(cfg)
     if not path.exists():
         raise AccessError(
-            "access-control.json is missing (authoritative Access Control state required)"
+            "access-control.json is missing (legacy access-control.json missing (use SQLite control plane))"
         )
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -234,6 +371,86 @@ def load_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -
     return require_access_state(path=path, cfg=cfg)
 
 
+def try_load_access_state_for_display(
+    path: Optional[Path] = None, cfg: Optional[dict] = None
+) -> tuple[Optional[dict], str]:
+    """Load Access Control for CLI display without inventing PUBLIC.
+
+    Returns ``(state, status)`` where status is:
+      - ``ok`` — state loaded
+      - ``unavailable`` — file missing (POLICY UNAVAILABLE)
+      - ``error`` — unreadable/corrupt/invalid (ACCESS ERROR)
+    """
+    path = path or access_control_path(cfg)
+    if not path.exists():
+        return None, "unavailable"
+    try:
+        return require_access_state(path=path, cfg=cfg), "ok"
+    except AccessError:
+        return None, "error"
+    except Exception:
+        return None, "error"
+
+
+def display_status_label(status: str) -> str:
+    """Map try_load status to a short operator-facing ACCESS column token."""
+    if status == "ok":
+        return MODE_PUBLIC  # caller should not use this alone for summaries
+    if status == "unavailable":
+        return DISPLAY_POLICY_UNAVAILABLE
+    if status == "error":
+        return DISPLAY_ACCESS_ERROR
+    return DISPLAY_UNKNOWN
+
+
+def format_service_access_display(
+    state: Optional[dict],
+    status: str,
+    machine_id: str,
+    service_id: str,
+) -> str:
+    """Per-service ACCESS column. Never returns PUBLIC when policy is unread."""
+    if status == "unavailable":
+        return DISPLAY_POLICY_UNAVAILABLE
+    if status != "ok" or state is None:
+        return DISPLAY_ACCESS_ERROR if status == "error" else DISPLAY_UNKNOWN
+    try:
+        binding = get_service_binding(state, machine_id, service_id)
+    except Exception:
+        return DISPLAY_ACCESS_ERROR
+    if binding.get("access_mode") != MODE_ALLOWLIST:
+        return MODE_PUBLIC
+    list_id = binding.get("access_list_id")
+    lst = (state.get("access_lists") or {}).get(list_id) or {}
+    entries = lst.get("entries") or []
+    active = sum(
+        1 for entry in entries if isinstance(entry, dict) and entry_is_active(entry)
+    )
+    return "ALLOWLIST (%s)" % active
+
+
+def format_client_access_summary(
+    state: Optional[dict],
+    status: str,
+    machine_id: str,
+    service_ids: list,
+) -> str:
+    """Client-list ACCESS summary. Never counts unread policy as PUBLIC."""
+    if status == "unavailable":
+        return DISPLAY_POLICY_UNAVAILABLE
+    if status != "ok" or state is None:
+        return DISPLAY_ACCESS_ERROR if status == "error" else DISPLAY_UNKNOWN
+    public = 0
+    restricted = 0
+    for sid in service_ids:
+        binding = get_service_binding(state, machine_id, sid)
+        if binding.get("access_mode") == MODE_ALLOWLIST:
+            restricted += 1
+        else:
+            public += 1
+    return "%d PUBLIC / %d RESTRICTED" % (public, restricted)
+
+
 def initialize_access_state(path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
     """Explicit install/init: create empty Access Control state when absent."""
     path = path or access_control_path(cfg)
@@ -249,18 +466,28 @@ def save_access_state(state: dict, path: Optional[Path] = None, cfg: Optional[di
     state = dict(state)
     state["schema_version"] = ACCESS_SCHEMA_VERSION
     validate_access_state(state)
-    with FileLock(access_lock_path(path)):
-        atomic_write_json(path, state)
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(access_lock_path(path)):
+                atomic_write_json(path, state)
+    except locks.LockTimeout as exc:
+        raise AccessError("timed out waiting for control-state lock") from exc
 
 
 def mutate_access_state(mutator, path: Optional[Path] = None, cfg: Optional[dict] = None) -> dict:
     path = path or access_control_path(cfg)
-    with FileLock(access_lock_path(path)):
-        state = require_access_state(path=path, cfg=cfg)
-        result = mutator(state)
-        validate_access_state(state)
-        atomic_write_json(path, state)
-        return result if result is not None else state
+    locks = _locks()
+    try:
+        with _control_state_mutation_lock(path):
+            with FileLock(access_lock_path(path)):
+                state = require_access_state(path=path, cfg=cfg)
+                result = mutator(state)
+                validate_access_state(state)
+                atomic_write_json(path, state)
+                return result if result is not None else state
+    except locks.LockTimeout as exc:
+        raise AccessError("timed out waiting for control-state lock") from exc
 
 
 def validate_list_name(name: str) -> str:
@@ -281,6 +508,54 @@ def validate_entry_name(name: str) -> str:
             "starting with alphanumeric"
         )
     return text
+
+
+def validate_description(value: Any) -> str:
+    """Access List descriptions are operator free text rendered in the CLI.
+
+    Control characters (C0/C1, CR/LF) and ANSI escapes are rejected rather than
+    stripped so a pasted payload cannot forge terminal output or log lines.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise AccessError("access list description must be text")
+    if any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+        raise AccessError(
+            "invalid access list description (control characters are not allowed)"
+        )
+    text = value.strip()
+    if len(text) > DESCRIPTION_MAX_LEN:
+        raise AccessError(
+            "access list description too long (max %d)" % DESCRIPTION_MAX_LEN
+        )
+    return text
+
+
+def access_audit_fields(event: str, **fields) -> dict:
+    """Build a secret-free audit payload for one Access Control mutation.
+
+    Unknown fields and unknown ``details`` keys are dropped, so descriptions,
+    tickets, and other operator-supplied text never reach the audit log.
+    """
+    if event not in ACCESS_AUDIT_EVENTS:
+        raise AccessError("unknown access audit event: %s" % event)
+    payload: dict = {}
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key == "details":
+            details = {}
+            if isinstance(value, dict):
+                for dkey, dvalue in value.items():
+                    if dkey in AUDIT_ALLOWED_DETAIL_KEYS and dvalue is not None:
+                        details[dkey] = dvalue
+            if details:
+                payload["details"] = details
+            continue
+        if key in AUDIT_ALLOWED_FIELDS:
+            payload[key] = value
+    return payload
 
 
 def canonicalize_cidr(source: str) -> str:
@@ -306,18 +581,24 @@ def parse_ttl(text: str, now: Optional[datetime] = None) -> datetime:
     match = TTL_RE.match(raw)
     if not match:
         raise AccessError("invalid TTL (use Ns/Nm/Nh/Nd, e.g. 30m, 4h, 1d)")
-    amount = int(match.group(1))
+    digits = match.group(1)
     unit = match.group(2).lower()
+    if len(digits.lstrip("0")) > _TTL_MAX_DIGITS:
+        raise AccessError("TTL too large (maximum %dd)" % TTL_MAX_DAYS)
+    try:
+        amount = int(digits)
+    except ValueError as exc:
+        raise AccessError("invalid TTL (use Ns/Nm/Nh/Nd, e.g. 30m, 4h, 1d)") from exc
     if amount <= 0:
         raise AccessError("TTL must be positive")
-    delta = {
-        "s": timedelta(seconds=amount),
-        "m": timedelta(minutes=amount),
-        "h": timedelta(hours=amount),
-        "d": timedelta(days=amount),
-    }[unit]
+    seconds = amount * TTL_UNIT_SECONDS[unit]
+    if seconds > TTL_MAX_SECONDS:
+        raise AccessError("TTL too large (maximum %dd)" % TTL_MAX_DAYS)
     base = now or utc_now()
-    return (base + delta).replace(microsecond=0)
+    try:
+        return (base + timedelta(seconds=seconds)).replace(microsecond=0)
+    except (OverflowError, ValueError, OSError) as exc:
+        raise AccessError("TTL out of supported range (maximum %dd)" % TTL_MAX_DAYS) from exc
 
 
 def generate_id(prefix: str, hex_len: int, existing: set[str]) -> str:
@@ -359,6 +640,8 @@ def validate_access_state(state: dict) -> None:
         if str(lst.get("id") or "") != str(lid):
             raise AccessError("access list id mismatch for %s" % lid)
         name = validate_list_name(lst.get("name") or "")
+        if lst.get("description") is not None:
+            validate_description(lst.get("description"))
         key = name.lower()
         if key in names:
             raise AccessError("duplicate access list name: %s" % name)
@@ -510,6 +793,7 @@ def clear_client_bindings(state: dict, machine_id: str) -> int:
 
 def create_access_list(state: dict, name: str, description: str = "") -> tuple[str, dict]:
     name = validate_list_name(name)
+    description = validate_description(description)
     if find_list_by_name(state, name):
         raise AccessError("access list name already exists: %s" % name)
     lists = state.setdefault("access_lists", {})
@@ -517,7 +801,7 @@ def create_access_list(state: dict, name: str, description: str = "") -> tuple[s
     record = {
         "id": lid,
         "name": name,
-        "description": str(description or "").strip(),
+        "description": description,
         "entries": [],
         "created_at": utc_now_iso(),
         "updated_at": utc_now_iso(),
@@ -530,14 +814,19 @@ def update_access_list_info(state: dict, list_id: str, name=None, description=No
     lst = (state.get("access_lists") or {}).get(list_id)
     if not isinstance(lst, dict):
         raise AccessError("access list not found")
+    # Validate everything before mutating so a rejected description cannot
+    # leave a half-applied rename behind.
     if name is not None:
         name = validate_list_name(name)
         other = find_list_by_name(state, name, exclude_id=list_id)
         if other:
             raise AccessError("access list name already exists: %s" % name)
+    if description is not None:
+        description = validate_description(description)
+    if name is not None:
         lst["name"] = name
     if description is not None:
-        lst["description"] = str(description).strip()
+        lst["description"] = description
     lst["updated_at"] = utc_now_iso()
     return lst
 
@@ -545,11 +834,21 @@ def update_access_list_info(state: dict, list_id: str, name=None, description=No
 def delete_access_list(state: dict, list_id: str) -> None:
     used = list_services_using(state, list_id)
     if used:
-        lines = ["Cannot delete Access List that is still referenced.", "", "Used by:"]
+        lst = (state.get("access_lists") or {}).get(list_id) or {}
+        acl_name = lst.get("name") or list_id
+        lines = [
+            'Cannot delete ACL "%s" because it is still assigned to:' % acl_name,
+            "",
+        ]
         for mid, sid in used:
-            lines.append("  %s:%s" % (mid[:12], sid))
+            display = mid[:12] if len(str(mid)) > 12 else mid
+            lines.append("  %s:%s" % (display, sid))
         lines.append("")
-        lines.append("Change those services to PUBLIC or another Access List first.")
+        lines.append("Remove the assignment first:")
+        lines.append("")
+        for mid, sid in used:
+            display = mid[:12] if len(str(mid)) > 12 else mid
+            lines.append("  unset acl %s service %s %s" % (acl_name, display, sid))
         raise AccessError("\n".join(lines))
     lists = state.get("access_lists") or {}
     if list_id not in lists:
@@ -770,8 +1069,13 @@ def parse_remote_addr(remote_addr: str) -> str:
 
 
 def build_proxy_map(registry: dict) -> dict[str, dict]:
-    """Map FRP proxy_name -> {client_id, service_id, public_port, client_label, enabled}."""
+    """Map FRP proxy_name -> {client_id, service_id, public_port, client_label, enabled}.
+
+    Duplicate derived proxy names are a security identity collision — fail closed
+    rather than last-write-wins.
+    """
     mapping = {}
+    collisions = {}
     clients = registry.get("clients") or {}
     if not isinstance(clients, dict):
         return mapping
@@ -788,7 +1092,7 @@ def build_proxy_map(registry: dict) -> dict[str, dict]:
                 continue
             sid_s = str(sid).strip().lower()
             name = expected_proxy_name(hostname, mid, sid_s)
-            mapping[name] = {
+            entry = {
                 "client_id": mid,
                 "service_id": sid_s,
                 "public_port": svc.get("remote_port"),
@@ -796,8 +1100,28 @@ def build_proxy_map(registry: dict) -> dict[str, dict]:
                 "enabled": bool(svc.get("enabled", True)),
                 "hostname": hostname,
             }
+            if name in mapping or name in collisions:
+                collisions.setdefault(name, [mapping.pop(name, None)]).append(entry)
+                continue
+            mapping[name] = entry
+    if collisions:
+        owners = []
+        for name, entries in sorted(collisions.items()):
+            parts = []
+            for e in entries:
+                if not e:
+                    continue
+                parts.append("%s/%s" % (e.get("client_id"), e.get("service_id")))
+            owners.append("%s => %s" % (name, ", ".join(parts)))
+        raise AccessError(
+            "derived proxy name collision (fail closed): %s" % "; ".join(owners)
+        )
     return mapping
 
+
+def validate_proxy_name_uniqueness(registry: dict) -> None:
+    """Registry invariant: derived FRP proxy names must be unique."""
+    build_proxy_map(registry)
 
 def evaluate_source_against_list(
     access_list: dict,
@@ -904,6 +1228,14 @@ def authorize(
             service_id = mapped["service_id"]
             result["public_port"] = mapped.get("public_port")
             result["client_label"] = mapped.get("client_label") or None
+            # Authoritative registry enabled=false must deny even if a stale
+            # frpc still presents the proxy (do not rely on client cleanup).
+            if not mapped.get("enabled", True):
+                result["client_id"] = client_id
+                result["service_id"] = str(service_id).strip().lower()
+                result["decision"] = DECISION_DENY
+                result["reason"] = REASON_SERVICE_DISABLED
+                return result
         if not client_id or not service_id:
             result["reason"] = REASON_POLICY_INVALID
             return result
@@ -914,8 +1246,14 @@ def authorize(
         if isinstance(client, dict):
             result["client_label"] = result["client_label"] or client.get("label") or None
             svc = (client.get("services") or {}).get(result["service_id"]) or {}
-            if isinstance(svc, dict) and result["public_port"] is None:
-                result["public_port"] = svc.get("remote_port")
+            if isinstance(svc, dict):
+                if result["public_port"] is None:
+                    result["public_port"] = svc.get("remote_port")
+                # Fail closed when authorizing by client_id/service_id directly.
+                if not bool(svc.get("enabled", True)):
+                    result["decision"] = DECISION_DENY
+                    result["reason"] = REASON_SERVICE_DISABLED
+                    return result
 
         binding = get_service_binding(access_state, client_id, result["service_id"])
         result["access_mode"] = binding["access_mode"]
@@ -982,40 +1320,57 @@ def _rotate_conn_log(path: Path) -> None:
 
 
 def emit_conn_log(event: dict, path: Optional[Path] = None, cfg: Optional[dict] = None) -> None:
-    """Best-effort bounded connection authorization log. Never raises to callers."""
+    """Best-effort bounded connection authorization log. Never raises to callers.
+
+    Flock the log inode (not a sidecar ``*.lock``) so traverse-only log
+    directories remain compatible if the access plugin ever drops privileges.
+    """
     try:
         path = path or conn_log_path(cfg)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lock = path.parent / (path.name + ".lock")
-        with FileLock(lock):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        try:
             _rotate_conn_log(path)
-            record = {
-                "timestamp": event.get("timestamp") or utc_now_iso(),
-                "client_id": event.get("client_id"),
-                "client_label": event.get("client_label"),
-                "service_id": event.get("service_id"),
-                "public_port": event.get("public_port"),
-                "source_ip": event.get("source_ip"),
-                "access_mode": event.get("access_mode"),
-                "access_list_id": event.get("access_list_id"),
-                "access_list_name": event.get("access_list_name"),
-                "matched_entry_id": event.get("matched_entry_id"),
-                "matched_entry_name": event.get("matched_entry_name"),
-                "decision": event.get("decision"),
-                "reason": event.get("reason"),
-                "proxy_name": event.get("proxy_name"),
-            }
-            line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-            if not path.exists():
-                path.touch()
-                os.chmod(path, 0o600)
+        except OSError:
+            pass
+        record = {
+            "timestamp": event.get("timestamp") or utc_now_iso(),
+            "client_id": event.get("client_id"),
+            "client_label": event.get("client_label"),
+            "service_id": event.get("service_id"),
+            "public_port": event.get("public_port"),
+            "source_ip": event.get("source_ip"),
+            "access_mode": event.get("access_mode"),
+            "access_list_id": event.get("access_list_id"),
+            "access_list_name": event.get("access_list_name"),
+            "matched_entry_id": event.get("matched_entry_id"),
+            "matched_entry_name": event.get("matched_entry_name"),
+            "decision": event.get("decision"),
+            "reason": event.get("reason"),
+            "proxy_name": event.get("proxy_name"),
+        }
+        line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        flags = os.O_WRONLY | os.O_APPEND
+        if not path.exists():
+            flags |= os.O_CREAT
+        fd = os.open(str(path), flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if flags & os.O_CREAT:
                 try:
-                    os.chmod(path.parent, 0o700)
+                    os.fchmod(fd, 0o600)
                 except OSError:
                     pass
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
-                handle.flush()
+                # Do NOT chmod shared /var/log/drlink parent — clears egress ACL.
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
     except Exception:
         return
 

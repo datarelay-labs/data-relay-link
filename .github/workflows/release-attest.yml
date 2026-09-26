@@ -1,0 +1,308 @@
+name: release-attest
+# Build, integrity-check, SBOM, and GitHub Artifact Attestation for a release
+# candidate ref. Does NOT publish a GitHub Release, and never moves a tag.
+#
+# Dispatch this workflow on the provenance commit being attested. Stable and
+# RC use the tag; development uses that commit's full SHA. The attestation
+# certificate binds to github.sha. Manifest source_head names the parent
+# content commit, not the provenance commit itself.
+# scripts/check-release-attest-binding.py enforces the binding.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Immutable release ref (release tag, or its full 40-hex commit SHA)
+        required: true
+        type: string
+      publish_artifacts:
+        description: Upload workflow artifacts (not a GitHub Release)
+        required: false
+        type: boolean
+        default: true
+      qualification_pass1_head:
+        description: PASS1_HEAD; required when ref is the stable tag
+        required: false
+        type: string
+        default: ''
+      qualification_pass2_head:
+        description: PASS2_HEAD; required when ref is the stable tag
+        required: false
+        type: string
+        default: ''
+      qualification_final_head:
+        description: FINAL_QUALIFIED_HEAD; must equal the tagged commit
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build-attest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Reject mutable ref input
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          # Shape check only; the authoritative binding happens after checkout.
+          if [[ "$INPUT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ref_kind=tag"
+          elif [[ "$INPUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ref_kind=commit"
+          else
+            echo "ERROR: ref must be a release tag vX.Y.Z or a full 40-hex commit SHA" >&2
+            echo "       got: ${INPUT_REF}" >&2
+            echo "       branches and short SHAs are mutable and are not accepted" >&2
+            exit 1
+          fi
+
+      # actions/checkout@v4.2.2
+      - name: Checkout immutable ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Bind release ref to commit to checked-out HEAD
+        id: bind
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          QUALIFICATION_PASS1_HEAD: ${{ inputs.qualification_pass1_head }}
+          QUALIFICATION_PASS2_HEAD: ${{ inputs.qualification_pass2_head }}
+          QUALIFICATION_FINAL_HEAD: ${{ inputs.qualification_final_head }}
+        run: |
+          set -euo pipefail
+          ./scripts/check-release-attest-binding.py >>"$GITHUB_OUTPUT"
+
+      - name: Version consistency
+        run: |
+          set -euo pipefail
+          ./scripts/check-version-consistency.sh
+
+      - name: Build bundles twice (deterministic parity)
+        run: |
+          set -euo pipefail
+          ./scripts/build-bundles.sh
+          cp -a dist dist-build1
+          ./scripts/build-bundles.sh
+          diff -ru dist-build1 dist
+          rm -rf dist-build1
+
+      - name: Verify SHA256SUMS and release-manifest digests
+        run: |
+          set -euo pipefail
+          ./scripts/verify-sha256sums.sh
+          ./scripts/verify-release-manifest-artifacts.sh
+
+      - name: Secret and public metadata scans
+        run: |
+          set -euo pipefail
+          ./scripts/secret-scan.sh
+          ./scripts/check-public-metadata.sh
+
+      - name: Generate SPDX SBOM bound to the release commit
+        env:
+          # release_commit is the provenance commit GitHub attests. Manifest
+          # git_ref/source_head remain the qualified content parent.
+          RELEASE_COMMIT: ${{ steps.bind.outputs.release_commit }}
+        run: |
+          set -euo pipefail
+          python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json \
+            --source-commit "$RELEASE_COMMIT"
+          # Deterministic for a fixed commit: regenerating must not change bytes.
+          cp dist/sbom.spdx.json sbom-build1.json
+          python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json \
+            --source-commit "$RELEASE_COMMIT"
+          diff -u sbom-build1.json dist/sbom.spdx.json
+          rm -f sbom-build1.json
+          SBOM_EXPECTED_COMMIT="$RELEASE_COMMIT" ./scripts/verify-sbom.sh
+
+      - name: Package attestation subject set
+        id: subjects
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          PASS1: ${{ inputs.qualification_pass1_head }}
+          PASS2: ${{ inputs.qualification_pass2_head }}
+          FINAL: ${{ inputs.qualification_final_head }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-subjects
+          cp dist/bootstrap-client.sh dist/bootstrap-server.sh \
+             dist/bootstrap-client.ps1 dist/uninstall-client.sh dist/uninstall-server.sh \
+             dist/sbom.spdx.json SHA256SUMS release-manifest.json \
+             release-subjects/
+          # A stable tag keeps the qualified Git HEAD. Publication identity is
+          # projected here and must not be committed back.
+          if [[ "$INPUT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            python3 -c 'import json,os; open("qualification-evidence.json","w").write(json.dumps({"status":"PASS","pass1_head":os.environ["PASS1"],"pass2_head":os.environ["PASS2"],"final_qualified_head":os.environ["FINAL"]})+"\n")'
+            python3 ./scripts/project-stable-release.py \
+              --evidence qualification-evidence.json \
+              --output release-subjects/release-manifest.json
+          fi
+          # Subject list for attestation
+          find release-subjects -type f | sort | tee subject-list.txt
+
+      # actions/attest-build-provenance@v2.2.0 (pin by commit SHA)
+      - name: Attest release artifacts
+        id: attest
+        uses: actions/attest-build-provenance@520d128f165991a6c774bcb264f323e3d70747f4
+        with:
+          subject-path: |
+            release-subjects/bootstrap-client.sh
+            release-subjects/bootstrap-server.sh
+            release-subjects/bootstrap-client.ps1
+            release-subjects/uninstall-client.sh
+            release-subjects/uninstall-server.sh
+            release-subjects/sbom.spdx.json
+            release-subjects/SHA256SUMS
+            release-subjects/release-manifest.json
+
+      # Authoritative: a verification failure fails the release-integrity gate.
+      # There is no DEFERRED outcome and no soft-fail path.
+      - name: Verify attestation (authoritative)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          RELEASE_COMMIT: ${{ steps.bind.outputs.release_commit }}
+          EXPECTED_TAG: ${{ steps.bind.outputs.expected_tag }}
+          CHANNEL: ${{ steps.bind.outputs.channel }}
+        run: |
+          set -euo pipefail
+          mkdir -p attestation-evidence
+
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "ERROR: gh is required to verify the attestation" >&2
+            exit 1
+          fi
+          if [[ -z "$BUNDLE_PATH" || ! -s "$BUNDLE_PATH" ]]; then
+            echo "ERROR: attestation bundle missing; nothing to verify" >&2
+            exit 1
+          fi
+
+          # Every attested subject must verify, not just one of them.
+          while IFS= read -r subject; do
+            echo "== verifying ${subject} =="
+            gh attestation verify "$subject" \
+              --repo "${{ github.repository }}" \
+              --bundle "$BUNDLE_PATH" \
+              --format json >"attestation-evidence/$(basename "$subject").json"
+          done <subject-list.txt
+
+          # Bind the signed provenance back to the release commit and tag.
+          RELEASE_COMMIT="$RELEASE_COMMIT" EXPECTED_TAG="$EXPECTED_TAG" \
+          CHANNEL="$CHANNEL" python3 - attestation-evidence/*.json <<'PY'
+          """Bind verified provenance back to the release commit and tag.
+
+          gh has already checked the signature and the subject digests. What is
+          left is to confirm the signed statement describes *this* commit, so a
+          valid attestation over some other commit cannot satisfy the gate.
+
+          Preferred source is the Fulcio certificate summary. Field names there
+          have changed across gh versions, so fall back to scanning every string
+          in the verification result rather than failing on a renamed key.
+          """
+          import json
+          import os
+          import sys
+
+          commit = os.environ['RELEASE_COMMIT']
+          tag = os.environ['EXPECTED_TAG']
+          channel = os.environ['CHANNEL']
+          # Effective publication channel from check-release-attest-binding.py.
+          # A validated stable tag reports stable while the committed manifest
+          # remains development, so this requires sourceRepositoryRef for the tag.
+          want_ref = 'refs/tags/%s' % tag if channel == 'stable' else None
+          errors = []
+
+
+          def strings(node):
+              if isinstance(node, str):
+                  yield node
+              elif isinstance(node, dict):
+                  for value in node.values():
+                      yield from strings(value)
+              elif isinstance(node, list):
+                  for value in node:
+                      yield from strings(value)
+
+
+          for path in sys.argv[1:]:
+              results = json.loads(open(path, encoding='utf-8').read())
+              if not results:
+                  errors.append('%s: empty verification result' % path)
+                  continue
+              for result in results:
+                  cert = ((result.get('verificationResult') or {})
+                          .get('signature', {})
+                          .get('certificate') or {})
+                  digest = str(cert.get('sourceRepositoryDigest') or '')
+                  ref = str(cert.get('sourceRepositoryRef') or '')
+                  found = set(strings(result))
+                  if digest:
+                      if digest != commit:
+                          errors.append(
+                              '%s: provenance commit %s != release commit %s'
+                              % (path, digest, commit)
+                          )
+                  elif commit not in found:
+                      errors.append(
+                          '%s: release commit %s absent from verified provenance'
+                          % (path, commit)
+                      )
+                  if want_ref is None:
+                      continue
+                  if ref:
+                      if ref != want_ref:
+                          errors.append(
+                              '%s: provenance ref %s != %s' % (path, ref, want_ref)
+                          )
+                  elif want_ref not in found:
+                      errors.append(
+                          '%s: %s absent from verified provenance' % (path, want_ref)
+                      )
+
+          for err in errors:
+              print('ERROR: %s' % err, file=sys.stderr)
+          print('PROVENANCE_BINDING=%s' % ('FAIL' if errors else 'PASS'))
+          sys.exit(1 if errors else 0)
+          PY
+
+          {
+            echo "schema_version=1"
+            echo "provenance_type=github-artifact-attestation"
+            echo "release_tag=${EXPECTED_TAG}"
+            echo "release_commit=${RELEASE_COMMIT}"
+            echo "content_commit=${{ steps.bind.outputs.content_commit }}"
+            echo "subject_ref=${{ inputs.ref }}"
+            echo "attestation_id=${{ steps.attest.outputs.attestation-id }}"
+            echo "attestation_url=${{ steps.attest.outputs.attestation-url }}"
+            echo "bundle_path=${BUNDLE_PATH}"
+            echo "ATTESTATION_VERIFY=PASS"
+          } | tee attestation-evidence/provenance.env
+
+      - name: Release integrity gate
+        run: |
+          set -euo pipefail
+          grep -qx 'ATTESTATION_VERIFY=PASS' attestation-evidence/provenance.env
+          echo "RELEASE_INTEGRITY=PASS"
+
+      - name: Upload workflow artifacts
+        if: ${{ inputs.publish_artifacts }}
+        # actions/upload-artifact@v4.6.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: data-relay-link-release-subjects
+          path: |
+            release-subjects/
+            attestation-evidence/
+            subject-list.txt
+          if-no-files-found: error

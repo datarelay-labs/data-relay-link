@@ -14,7 +14,7 @@ python3 - "$out" "$TMP/root$TMP/state" <<'PY'
 import plistlib,sys
 with open(sys.argv[1],"rb") as f: p=plistlib.load(f)
 state=sys.argv[2]
-assert p["Label"] == "com.datarelay.frp-auto-deploy.frpc"
+assert p["Label"] == "com.datarelay.drlink.frpc"
 assert p["ProgramArguments"] == [state+"/bin/frpc", "-c", state+"/frpc.toml"]
 assert p["RunAtLoad"] is True
 assert p["KeepAlive"]["SuccessfulExit"] is False

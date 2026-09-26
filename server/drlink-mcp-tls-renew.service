@@ -1,0 +1,14 @@
+[Unit]
+Description=Data Relay Link MCP TLS certificate renewal
+Documentation=file:///usr/local/lib/drlink/drlink_mcp_tls.py
+After=network-online.target drlink-frontend.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Renew when due; failures retain the current valid certificate.
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/drlink_mcp_tls_renew.py
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

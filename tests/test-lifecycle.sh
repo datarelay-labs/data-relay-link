@@ -111,7 +111,7 @@ SECRET='enroll-secret-abcdef0123456789abcdef0123456789ab'
 write_enrollment "$ALLOC_ROOT/enrollments" "$EID" "$SECRET"
 
 TREE="$WORKDIR/client"
-mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin" "$TREE/usr/local/lib/frp-auto-deploy"
+mkdir -p "$TREE/etc/frp" "$TREE/usr/local/bin" "$TREE/usr/local/lib/drlink"
 make_frpc "$TREE/usr/local/bin/frpc"
 
 export FRP_CLIENT_TEST_ROOT="$TREE"
@@ -246,7 +246,8 @@ fi
 unset FRP_CLIENT_HOOK_AFTER_SERVER_MUTATION
 files_equal "$STATE" "$WORKDIR/state.before" || fail "after-mutation changed state"
 files_equal "$TREE/etc/frp/frpc.toml" "$WORKDIR/toml.before" || fail "after-mutation changed toml"
-grep -q 'FAILURE_CLASS=FAILED_WITH_RESERVATION_PRESERVED' "$WORKDIR/after-mut.out" "$WORKDIR/after-mut.err" || fail "after-mutation class"
+grep -q 'FAILURE_CLASS=FAILED_WITH_RESERVATION_PRESERVED' "$WORKDIR/after-mut.out" "$WORKDIR/after-mut.err" \
+  || fail "after-mutation class (out=$(tr '\n' '|' <"$WORKDIR/after-mut.out"); err=$(tr '\n' '|' <"$WORKDIR/after-mut.err"))"
 python3 - "$ALLOC_ROOT/registry.json" "$STATE" <<'PY' || fail "reservation preserved"
 import json,sys
 from pathlib import Path

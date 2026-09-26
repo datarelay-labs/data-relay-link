@@ -22,10 +22,10 @@ function Get-FrpWindowsRoot {
         return $env:FRP_WINDOWS_ROOT.Trim().TrimEnd('\', '/')
     }
     if (-not (Test-FrpIsWindowsHost)) {
-        $fallback = '/tmp/frp-auto-deploy-windows-test'
+        $fallback = '/tmp/drlink-windows-test'
         return $fallback
     }
-    return (Join-Path $env:ProgramData 'frp-auto-deploy')
+    return (Join-Path $env:ProgramData 'drlink')
 }
 
 function Get-FrpBinDir { Join-Path (Get-FrpWindowsRoot) 'bin' }
@@ -57,6 +57,25 @@ function Get-FrpIdentityMacPath { Join-Path (Get-FrpStateDir) 'client-identity.m
 function Get-FrpAllocatorCaPath { Join-Path (Get-FrpCertsDir) 'allocator-ca.crt' }
 function Get-FrpLogPath { Join-Path (Get-FrpLogsDir) 'frpc.log' }
 function Get-FrpPidPath { Join-Path (Get-FrpLogsDir) 'frpc.pid' }
+
+function Get-FrpLogMaxDays {
+    # frpc rotates its own log daily and keeps this many days.
+    if ($env:FRP_WINDOWS_LOG_MAX_DAYS -match '^[0-9]+$') {
+        $v = [int]$env:FRP_WINDOWS_LOG_MAX_DAYS
+        if ($v -ge 1) { return $v }
+    }
+    return 7
+}
+
+function Get-FrpLogMaxBytes {
+    # Product-side ceiling so a fast-failing frpc cannot fill the disk between
+    # daily rotations. The tail is preserved when the ceiling is exceeded.
+    if ($env:FRP_WINDOWS_LOG_MAX_BYTES -match '^[0-9]+$') {
+        $v = [int64]$env:FRP_WINDOWS_LOG_MAX_BYTES
+        if ($v -ge 4096) { return $v }
+    }
+    return 8388608
+}
 function Get-FrpVersionPath { Join-Path (Get-FrpWindowsRoot) 'version' }
 
 function Get-FrpProjectVersion {
@@ -76,7 +95,7 @@ function Get-FrpProjectVersion {
         }
     } catch { }
     # Packaged fallback must track canonical VERSION (do not hardcode stale releases).
-    return '2.3.0'
+    return '2.4.0'
 }
 
 function Get-FrpUpstreamVersion {
@@ -96,7 +115,62 @@ function Get-FrpWindowsAmd64Sha256 {
 function Get-FrpWindowsAmd64Url {
     $ver = Get-FrpUpstreamVersion
     if ($env:FRP_WINDOWS_DOWNLOAD_URL -and $env:FRP_WINDOWS_DOWNLOAD_URL.Trim().Length -gt 0) {
-        return $env:FRP_WINDOWS_DOWNLOAD_URL.Trim()
+        $url = $env:FRP_WINDOWS_DOWNLOAD_URL.Trim()
+        if ($url -match 'github\.com/fatedier' -or $url -match 'frp/releases/download') {
+            throw @"
+ERROR:
+Required qualified artifact is not available on this DRLink Server.
+
+Required:
+  Data Relay Link Agent 2.4.0
+  FRP $ver
+  windows/amd64
+
+Reinstall or update the DRLink Server package containing
+the required qualified artifacts.
+
+No changes were applied.
+"@
+        }
+        return $url
     }
-    return "https://github.com/fatedier/frp/releases/download/v${ver}/frp_${ver}_windows_amd64.zip"
+    $allocator = ''
+    if ($env:FRP_ALLOCATOR_URL -and $env:FRP_ALLOCATOR_URL.Trim().Length -gt 0) {
+        $allocator = $env:FRP_ALLOCATOR_URL.Trim()
+    }
+    # Enrolled clients persist allocator_url in client-state.json. update -Check
+    # and engine apply must resolve qualified artifacts from that origin without
+    # requiring FRP_ALLOCATOR_URL to be re-exported in the operator shell.
+    if (-not $allocator) {
+        $statePath = Get-FrpStatePath
+        if (Test-Path -LiteralPath $statePath) {
+            try {
+                $raw = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($raw -and $raw.allocator_url) {
+                    $allocator = [string]$raw.allocator_url
+                }
+            } catch {
+                # Ignore unreadable/partial state; fall through to fail-closed.
+            }
+        }
+    }
+    if ($allocator -match '^https://') {
+        $uri = [Uri]$allocator
+        $origin = '{0}://{1}' -f $uri.Scheme, $uri.Authority
+        return "$origin/artifacts/frp/$ver/frp_${ver}_windows_amd64.zip"
+    }
+    throw @"
+ERROR:
+Required qualified artifact is not available on this DRLink Server.
+
+Required:
+  Data Relay Link Agent 2.4.0
+  FRP $ver
+  windows/amd64
+
+Reinstall or update the DRLink Server package containing
+the required qualified artifacts.
+
+No changes were applied.
+"@
 }

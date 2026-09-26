@@ -21,6 +21,7 @@ FRP_WEBSOCKET_PATH = '/~!frp'
 DEFAULT_BACKEND_CONTROL_PORT = 7000
 DEFAULT_ALLOCATOR_LISTEN_PORT = 6099
 DEFAULT_FRONTEND_PORT = 443
+DEFAULT_MCP_BRIDGE_PORT = 6103
 # Internal TLS identity for the loopback allocator backend. nginx
 # proxy_ssl_verify matches DNS names, not iPAddress SANs, so the frontend
 # verifies DNS:localhost rather than the public IP/hostname. This is not a
@@ -29,6 +30,7 @@ ALLOCATOR_BACKEND_TLS_NAME = 'localhost'
 
 _SAFE_HOST = re.compile(r'^[A-Za-z0-9._:\[\]-]+$')
 _LISTEN_SSL_RE = re.compile(r'^(\s*)listen\s+\S+\s+ssl;', re.M)
+_LISTEN_PLAIN_RE = re.compile(r'^(\s*)listen\s+(\S+);', re.M)
 
 
 def normalize_deployment_mode(value):
@@ -87,6 +89,125 @@ def _require_error_log(value):
     return _require_abs_path(text, 'error_log')
 
 
+def _mcp_location_block(mcp_bridge_port):
+    """Shared /mcp + OAuth locations for private-CA and public-MCP server blocks."""
+    return '''
+        location = /mcp {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header MCP-Protocol-Version $http_mcp_protocol_version;
+            proxy_set_header Mcp-Method $http_mcp_method;
+            proxy_set_header Mcp-Name $http_mcp_name;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_connect_timeout 10s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            add_header X-Accel-Buffering no;
+            client_max_body_size 2m;
+        }
+
+        location = /.well-known/oauth-protected-resource {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /.well-known/oauth-protected-resource/mcp {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /.well-known/oauth-authorization-server {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /oauth/token {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /oauth/authorize {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /oauth/continue {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+
+        location = /oauth/register {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+            client_max_body_size 64k;
+        }
+
+        location = /register {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+            client_max_body_size 64k;
+        }
+
+        location = /oauth/revoke {
+            proxy_pass http://127.0.0.1:%(port)s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_connect_timeout 10s;
+        }
+''' % {'port': mcp_bridge_port}
+
+
 def render_nginx_conf(
     public_host,
     frontend_port,
@@ -95,10 +216,16 @@ def render_nginx_conf(
     ca_cert,
     server_cert,
     server_key,
-    pid_path='/run/frp-auto-deploy/nginx.pid',
+    pid_path='/run/drlink/frontend/nginx.pid',
     error_log='stderr',
-    temp_root='/var/lib/frp-auto-deploy/nginx',
+    temp_root='/var/lib/drlink/nginx',
     websocket_path=FRP_WEBSOCKET_PATH,
+    mcp_bridge_port=DEFAULT_MCP_BRIDGE_PORT,
+    mcp_tls_hostname='',
+    mcp_tls_cert='',
+    mcp_tls_key='',
+    acme_webroot='',
+    acme_http_port=80,
 ):
     host = _require_host(public_host, 'public_host')
     frontend_port = _require_port(frontend_port, 'frontend_port')
@@ -110,8 +237,79 @@ def render_nginx_conf(
     pid_path = _require_abs_path(pid_path, 'pid_path')
     error_log = _require_error_log(error_log)
     temp_root = _require_abs_path(temp_root, 'temp_root')
+    mcp_bridge_port = _require_port(mcp_bridge_port, "mcp_bridge_port")
     if websocket_path != FRP_WEBSOCKET_PATH:
         raise ValueError('FRP 0.71.0 WebSocket path is fixed at %s' % FRP_WEBSOCKET_PATH)
+
+    mcp_host = str(mcp_tls_hostname or '').strip()
+    mcp_cert = str(mcp_tls_cert or '').strip()
+    mcp_key = str(mcp_tls_key or '').strip()
+    webroot = str(acme_webroot or '').strip()
+    http_port = int(acme_http_port or 80)
+    if mcp_host:
+        mcp_host = _require_host(mcp_host, 'mcp_tls_hostname')
+    if mcp_cert:
+        mcp_cert = _require_abs_path(mcp_cert, 'mcp_tls_cert')
+    if mcp_key:
+        mcp_key = _require_abs_path(mcp_key, 'mcp_tls_key')
+    if webroot:
+        webroot = _require_abs_path(webroot, 'acme_webroot')
+    public_mcp = bool(mcp_host and mcp_cert and mcp_key)
+
+    mcp_block = _mcp_location_block(mcp_bridge_port)
+
+    # When a dedicated MCP public certificate is active, keep /mcp on the
+    # private-CA server only when the MCP hostname equals the control host
+    # (same SNI). Otherwise FRP/WSS retain the private CA leaf unchanged and
+    # MCP is served from a separate SNI server_name with the public cert.
+    include_mcp_on_control = (not public_mcp) or (mcp_host == host)
+    control_mcp = mcp_block if include_mcp_on_control else ''
+
+    acme_server = ''
+    if webroot:
+        acme_server = '''
+    # HTTP-01 only: no open application endpoint on TCP/80.
+    server {
+        listen %s;
+        server_name %s;
+
+        location ^~ /.well-known/acme-challenge/ {
+            default_type text/plain;
+            root %s;
+            allow all;
+        }
+
+        location / {
+            return 404;
+        }
+    }
+''' % (http_port, mcp_host or host, webroot)
+
+    public_mcp_server = ''
+    if public_mcp and mcp_host != host:
+        public_mcp_server = '''
+    # MCP public TLS (SNI). Does not replace the Private CA leaf used by /~!frp.
+    server {
+        listen %s ssl;
+        server_name %s;
+
+        ssl_certificate %s;
+        ssl_certificate_key %s;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers off;
+%s
+        location / {
+            return 404;
+        }
+    }
+''' % (frontend_port, mcp_host, mcp_cert, mcp_key, mcp_block)
+    elif public_mcp and mcp_host == host:
+        # Same hostname: present the public MCP certificate on the control
+        # server block instead of the private CA leaf for this server_name.
+        # FRP clients that require the private CA must use a distinct control
+        # identity (IP / alternate name) — documented product constraint.
+        server_cert = mcp_cert
+        server_key = mcp_key
 
     # Exact-match FRP WebSocket path. The '!' in /~!frp is not special in nginx
     # prefix/exact locations; quoting still keeps the config unambiguous.
@@ -141,7 +339,7 @@ http {
     access_log off;
     server_tokens off;
     client_max_body_size 1m;
-
+%s
     server {
         listen %s ssl;
         server_name %s;
@@ -167,7 +365,46 @@ http {
         # Allocator backend is always loopback HTTPS. Verify DNS:localhost
         # (present on every project leaf) because nginx proxy_ssl_verify does
         # not reliably match iPAddress SANs such as the public IP.
-        location ~ ^/(ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+)$ {
+        # Management routes are a second anchored allowlist, not /v1/.
+%s
+%s
+        location / {
+            return 404;
+        }
+    }
+%s
+}
+''' % (
+        pid_path,
+        error_log,
+        temp_root,
+        temp_root,
+        temp_root,
+        temp_root,
+        temp_root,
+        acme_server,
+        frontend_port,
+        host,
+        server_cert,
+        server_key,
+        websocket_path,
+        control_listen_port,
+        allocator_proxy_locations(allocator_listen_port, ca_cert),
+        control_mcp,
+        public_mcp_server,
+    )
+
+
+def _allocator_https_proxy_location(directive, allocator_listen_port, ca_cert):
+    """Loopback HTTPS proxy with the same TLS and trusted-source headers.
+
+    directive is a full nginx location matcher, for example
+    'location = /v1/catalog' or a regex location. proxy_pass has no URI
+    replacement, so method, path, body, and management-auth headers reach
+    the allocator unchanged.
+    """
+    return '''
+        %s {
             proxy_pass https://127.0.0.1:%s;
             proxy_http_version 1.1;
             proxy_ssl_trusted_certificate %s;
@@ -179,33 +416,33 @@ http {
             proxy_set_header X-Forwarded-Proto https;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_read_timeout 60s;
-            proxy_send_timeout 60s;
+            proxy_read_timeout 180s;
+            proxy_send_timeout 180s;
             proxy_connect_timeout 10s;
-        }
-
-        location / {
-            return 404;
-        }
-    }
-}
-''' % (
-        pid_path,
-        error_log,
-        temp_root,
-        temp_root,
-        temp_root,
-        temp_root,
-        temp_root,
-        frontend_port,
-        host,
-        server_cert,
-        server_key,
-        websocket_path,
-        control_listen_port,
+            proxy_buffering off;
+        }''' % (
+        directive,
         allocator_listen_port,
         ca_cert,
         ALLOCATOR_BACKEND_TLS_NAME,
+    )
+
+
+def allocator_proxy_locations(allocator_listen_port, ca_cert):
+    """Anchored public allocator routes. Unrelated /v1/* paths stay closed."""
+    # remote-services/<name> is one path segment. Exact routes are listed
+    # separately so /v1/profiles and other allocator internals do not match.
+    management = (
+        'location ~ ^/v1/(?:catalog|remote-services-status|remote-services|'
+        'ai-jobs/claim|ai-jobs/complete|remote-services/[^/]+)$'
+    )
+    return (
+        _allocator_https_proxy_location(
+            'location ~ ^/(ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+|artifacts(?:/.*)?)$',
+            allocator_listen_port,
+            ca_cert,
+        )
+        + _allocator_https_proxy_location(management, allocator_listen_port, ca_cert)
     )
 
 
@@ -218,13 +455,32 @@ def rewrite_listen_for_syntax_check(text, listen_host='127.0.0.1', listen_port=4
     """
     host = _require_host(listen_host, 'syntax_check_listen_host')
     port = _require_port(listen_port, 'syntax_check_listen_port')
-    rewritten, count = _LISTEN_SSL_RE.subn(
-        r'\1listen %s:%s ssl;' % (host, port),
-        text,
-        count=1,
-    )
-    if count != 1:
+    # Rewrite every SSL listen to unique high ports derived from the base.
+    ssl_ports = []
+
+    def _ssl_sub(match):
+        p = port + len(ssl_ports)
+        ssl_ports.append(p)
+        return '%slisten %s:%s ssl;' % (match.group(1), host, p)
+
+    rewritten = _LISTEN_SSL_RE.sub(_ssl_sub, text)
+    if not ssl_ports:
         raise ValueError('frontend config is missing a listen ... ssl directive')
+
+    # Plain HTTP (ACME) listens — bind loopback only for syntax check.
+    http_offset = 0
+
+    def _plain_sub(match):
+        nonlocal http_offset
+        indent, target = match.group(1), match.group(2)
+        # Skip already-rewritten ssl listens (pattern is non-ssl only).
+        if 'ssl' in target:
+            return match.group(0)
+        p = port + 100 + http_offset
+        http_offset += 1
+        return '%slisten %s:%s;' % (indent, host, p)
+
+    rewritten = _LISTEN_PLAIN_RE.sub(_plain_sub, rewritten)
     return rewritten
 
 
@@ -314,9 +570,14 @@ def main(argv=None):
     parser.add_argument('--server-cert', default='')
     parser.add_argument('--server-key', default='')
     parser.add_argument('--expected-fingerprint', default='')
-    parser.add_argument('--pid-path', default='/run/frp-auto-deploy/nginx.pid')
+    parser.add_argument('--pid-path', default='/run/drlink/frontend/nginx.pid')
     parser.add_argument('--error-log', default='stderr')
-    parser.add_argument('--temp-root', default='/var/lib/frp-auto-deploy/nginx')
+    parser.add_argument('--temp-root', default='/var/lib/drlink/nginx')
+    parser.add_argument('--mcp-tls-hostname', default='')
+    parser.add_argument('--mcp-tls-cert', default='')
+    parser.add_argument('--mcp-tls-key', default='')
+    parser.add_argument('--acme-webroot', default='')
+    parser.add_argument('--acme-http-port', type=int, default=80)
     args = parser.parse_args(argv)
     if args.verify_proxy:
         ok, message = verify_frontend_proxy(
@@ -362,6 +623,11 @@ def main(argv=None):
         pid_path=args.pid_path,
         error_log=args.error_log,
         temp_root=args.temp_root,
+        mcp_tls_hostname=args.mcp_tls_hostname,
+        mcp_tls_cert=args.mcp_tls_cert,
+        mcp_tls_key=args.mcp_tls_key,
+        acme_webroot=args.acme_webroot,
+        acme_http_port=args.acme_http_port,
     )
 
 

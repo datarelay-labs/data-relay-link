@@ -10,7 +10,7 @@ Windows does **not** fork enrollment. It reuses:
 
 | Area | Contract |
 | --- | --- |
-| Bootstrap | `POST /bootstrap/redeem` — `bt1.<id>.<secret>` |
+| Bootstrap | `POST /bootstrap/redeem` accepts internal `bt1.<id>.<secret>` only. The 22-character handle is `/i/` lookup; served stage-1 carries the internal `bt1` |
 | Enroll | `POST /enroll` — enrollment HMAC or mgmt ECDSA |
 | CA | `GET /ca.crt` — DER SHA-256 pin via `FRP_ALLOCATOR_CA_SHA256` |
 | Token | OpenSSL `Salted__` + PBKDF2-HMAC-SHA256 (200000) + AES-256-CBC |
@@ -23,7 +23,7 @@ Windows does **not** fork enrollment. It reuses:
 | Concern | Linux | Windows |
 | --- | --- | --- |
 | Installer | `bootstrap-client.sh` | `bootstrap-client.ps1` |
-| Paths | `/etc/frp`, `/etc/frp-auto-deploy` | `C:\ProgramData\frp-auto-deploy\` |
+| Paths | `/etc/frp`, `/etc/drlink` | `C:\ProgramData\drlink\` |
 | Process | systemd | background process + optional autostart later |
 | machine_id | `/etc/machine-id` or random `client-id` | random id persisted under ProgramData |
 | Crypto CLI | OpenSSL | .NET `System.Security.Cryptography` |
@@ -32,7 +32,7 @@ Windows does **not** fork enrollment. It reuses:
 ## Filesystem
 
 ```
-C:\ProgramData\frp-auto-deploy\
+C:\ProgramData\drlink\
   bin\frpc.exe
   config\frpc.toml
   state\client-state.json
@@ -51,7 +51,7 @@ Sensitive files: ACL for `SYSTEM` + `Administrators` only.
 
 ## Zero-touch UX
 
-`create zero-touch` → platform menu → Linux (existing) or Windows (RDP-first).
+`set enrollment zero-touch` → platform menu → Linux or Windows (RDP-first).
 
 Windows one-line (no `irm | iex`):
 
@@ -63,7 +63,7 @@ Windows one-line (no `irm | iex`):
 
 **ENROLL ONCE / RUN MANY TIMES**
 
-- First run: redeem + enroll + write state/config + start frpc
+- First run: redeem + enroll + write state/config + start drlink-client
 - Later: `frp-client start` uses existing identity/config/ports — no ticket, no re-enroll
 
 Autostart (Service / Task Scheduler) is **optional**, not MVP-blocking.

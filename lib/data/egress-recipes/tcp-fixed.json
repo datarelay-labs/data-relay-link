@@ -1,0 +1,20 @@
+{
+  "id": "tcp-fixed",
+  "name": "tcp-fixed",
+  "kind": "tcp_relay",
+  "description": "Fixed TCP Egress template for a single exact FQDN:port. Creates a DISABLED relay.",
+  "profile_name": "tcp-fixed",
+  "sources": [],
+  "destinations": [
+    {
+      "host": "license.example.com",
+      "port": 27000,
+      "protocol": "tcp",
+      "match": "exact"
+    }
+  ],
+  "tcp_relay": {
+    "name": "tcp-fixed-relay",
+    "listen_addr": "0.0.0.0"
+  }
+}

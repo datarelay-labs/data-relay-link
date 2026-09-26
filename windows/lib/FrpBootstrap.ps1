@@ -76,6 +76,23 @@ function Install-FrpWindowsBinary {
     if ($DownloadUrl -notmatch '^https://') {
         throw 'ERROR: FRP download URL must be https://'
     }
+    if ($DownloadUrl -match 'github\.com/fatedier' -or $DownloadUrl -match '/frp/releases/download/') {
+        $ver = Get-FrpUpstreamVersion
+        throw @"
+ERROR:
+Required qualified artifact is not available on this DRLink Server.
+
+Required:
+  Data Relay Link Agent 2.4.0
+  FRP $ver
+  windows/amd64
+
+Reinstall or update the DRLink Server package containing
+the required qualified artifacts.
+
+No changes were applied.
+"@
+    }
 
     $binDir = Get-FrpBinDir
     $dest = Get-FrpFrpcPath
@@ -86,18 +103,7 @@ function Install-FrpWindowsBinary {
     $tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) ("frp-win-" + [guid]::NewGuid().ToString('N') + '.zip')
     try {
         Write-Host 'Downloading FRP Windows amd64 package...'
-        if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-            $p = Start-Process -FilePath 'curl.exe' -ArgumentList @(
-                '--fail', '--silent', '--show-error', '--location', '--proto', '=https',
-                '-o', $tmpZip, $DownloadUrl
-            ) -Wait -PassThru -NoNewWindow
-            if ($p.ExitCode -ne 0) { throw 'ERROR: FRP download failed' }
-        } else {
-            # PS 5.1 / 7 compatible
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            $wc = New-Object System.Net.WebClient
-            try { $wc.DownloadFile($DownloadUrl, $tmpZip) } finally { $wc.Dispose() }
-        }
+        Invoke-FrpHttpsDownload -Url $DownloadUrl -DestinationPath $tmpZip -TimeoutSec 180
         $actual = Get-FrpSha256HexOfFile -Path $tmpZip
         if ($actual -ne $expected) {
             throw 'ERROR: FRP package SHA256 mismatch'
@@ -147,10 +153,11 @@ function Invoke-FrpBootstrapRedeem {
         throw 'ERROR: bootstrap response is missing enrollment data'
     }
     $parts = $code.Split('.', 2)
-    $services = @($data.services)
-    if ($services.Count -lt 0) {
+    if (-not (Test-FrpObjectHasProperty -Object $data -Name 'services') -or $null -eq $data.services) {
         throw 'ERROR: bootstrap response is missing services'
     }
+    # An empty list is valid: it is a management-only ticket.
+    $services = @($data.services)
     return @{
         EnrollmentId     = $parts[0]
         EnrollmentSecret = $parts[1]
@@ -297,12 +304,16 @@ function Complete-FrpZeroTouchPostEnroll {
         Initialize-FrpDirectories
         $srcClient = Join-Path $script:FrpWindowsSrcRoot 'tools/FrpClient.ps1'
         $srcCmd = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-client.cmd'
+        $srcDrlink = Join-Path $script:FrpWindowsSrcRoot 'tools/drlink.cmd'
         $srcAuto = Join-Path $script:FrpWindowsSrcRoot 'tools/frp-autostart.cmd'
         if (Test-Path -LiteralPath $srcClient) {
             Copy-Item -LiteralPath $srcClient -Destination (Join-Path (Get-FrpToolsDir) 'FrpClient.ps1') -Force
         }
         if (Test-Path -LiteralPath $srcCmd) {
             Copy-Item -LiteralPath $srcCmd -Destination (Join-Path (Get-FrpToolsDir) 'frp-client.cmd') -Force
+        }
+        if (Test-Path -LiteralPath $srcDrlink) {
+            Copy-Item -LiteralPath $srcDrlink -Destination (Join-Path (Get-FrpToolsDir) 'drlink.cmd') -Force
         }
         if (Test-Path -LiteralPath $srcAuto) {
             Copy-Item -LiteralPath $srcAuto -Destination (Join-Path (Get-FrpToolsDir) 'frp-autostart.cmd') -Force
@@ -316,11 +327,25 @@ function Complete-FrpZeroTouchPostEnroll {
         }
     }
 
+    # Documented UX is a bare `drlink ...` from any shell, so the installed
+    # tools directory goes on the system PATH. Never fatal: the client is
+    # still fully usable through the explicit launcher path.
+    if ($env:FRP_WINDOWS_SKIP_PATH_SHIM -eq '1') {
+        Write-Host 'Skipping PATH registration (FRP_WINDOWS_SKIP_PATH_SHIM=1)'
+    } else {
+        try {
+            Install-FrpCommandShim | Out-Null
+        } catch {
+            Write-Host ("WARNING: could not put the product CLI on the system PATH: {0}" -f $_.Exception.Message)
+            Write-Host ("Run the client explicitly as: {0}" -f (Get-FrpShimPath))
+        }
+    }
+
     if ($enabledCount -le 0) {
         Write-Host 'Management-only enrollment: no public services; skipping frpc start.'
         Set-FrpInstallStatus -Status 'management_only'
         Write-Host ''
-        Write-Host 'Enrollment complete (management-only). Use frp-client info for details.'
+        Write-Host 'Enrollment complete (management-only). Use drlink show info for details.'
         Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
         return 0
     }
@@ -354,7 +379,7 @@ function Complete-FrpZeroTouchPostEnroll {
 
     Set-FrpInstallStatus -Status 'installed'
     Write-Host ''
-    Write-Host 'Enrollment complete. Use frp-client info for connection details.'
+    Write-Host 'Enrollment complete. Use drlink show info for connection details.'
     Write-Host 'ENROLL ONCE / RUN MANY TIMES: later starts use existing identity and ports.'
     return 0
 }
@@ -511,7 +536,7 @@ function Invoke-FrpClientApplyDraft {
     .SYNOPSIS
       Apply pending draft service changes: identity-auth request to the
       allocator, merge allocated ports, regenerate frpc.toml + client-state.json,
-      restart frpc if it was running. Existing FRP token is reused (identity
+      restart drlink-client if it was running. Existing FRP token is reused (identity
       auth never rotates it). On local activation failure: restore local files
       and compensate the server reservation (Unix-equivalent transaction).
     #>
@@ -545,12 +570,6 @@ function Invoke-FrpClientApplyDraftLocked {
     }
 
     $draftMap = ConvertTo-FrpServiceMap -Services $draftState.services
-    $enabledCount = 0
-    foreach ($sid in $draftMap.Keys) { if ($draftMap[$sid]['enabled'] -ne $false) { $enabledCount++ } }
-    if ($enabledCount -le 0) {
-        Write-Host 'ERROR: at least one enabled service is required.'
-        return 1
-    }
 
     if ($changeClass -eq 'local') {
         return (Invoke-FrpApplyLocalMetadata -Current $current -DraftMap $draftMap)
@@ -660,8 +679,9 @@ function Invoke-FrpClientApplyDraftLocked {
     if (-not $transport) { $transport = 'tcp' }
 
     Initialize-FrpDirectories
-    $backupRoot = Join-Path (Get-FrpBackupDir) ("apply-" + (Get-Date -Format 'yyyyMMddHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    # The snapshot includes frpc.toml, which carries the plaintext FRP token,
+    # so the backup directory and every copy get the product-enforced ACL.
+    $backupRoot = New-FrpBackupRoot -Prefix 'apply'
     $snapshotMap = [ordered]@{
         'frpc.toml'         = (Get-FrpTomlPath)
         'client-state.json' = (Get-FrpStatePath)
@@ -669,7 +689,7 @@ function Invoke-FrpClientApplyDraftLocked {
     foreach ($name in @($snapshotMap.Keys)) {
         $src = $snapshotMap[$name]
         if (Test-Path -LiteralPath $src) {
-            Copy-Item -LiteralPath $src -Destination (Join-Path $backupRoot $name) -Force
+            Copy-FrpProtectedFile -Source $src -Destination (Join-Path $backupRoot $name) | Out-Null
         }
     }
 
@@ -694,7 +714,7 @@ function Invoke-FrpClientApplyDraftLocked {
 
         Save-FrpClientState -AllocatorUrl $allocatorUrl -FrpServer $result.FrpServer -FrpServerPort $result.FrpServerPort `
             -Hostname $hostnameValue -MachineId $machineId -HostId $hostId -Services $draftMap -Transport $transport `
-            -InstallStatus 'installed' @saveHostname | Out-Null
+            -InstallStatus $(if ($enabledAny) { 'installed' } else { 'management_only' }) @saveHostname | Out-Null
 
         if ($enabledAny) {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
@@ -709,6 +729,8 @@ function Invoke-FrpClientApplyDraftLocked {
             }
         } else {
             if ($wasRunning) { Stop-FrpClient | Out-Null }
+            # Zero enabled services: management-only — no reboot autostart.
+            Uninstall-FrpAutostartTask | Out-Null
         }
     } catch {
         Write-Host ("ERROR: failed to activate new configuration: {0}" -f $_.Exception.Message)
@@ -795,7 +817,7 @@ function Invoke-FrpApplyReconcileRuntime {
         Write-Host 'ERROR: simulated service restart failure'
         Write-Host 'FAILURE_CLASS=FRPC_RESTART_FAILED'
         Write-Host 'RECOVERY_REQUIRED=YES'
-        throw 'ERROR: failed to restart frpc after server reconciliation.'
+        throw 'ERROR: failed to restart drlink-client after server reconciliation.'
     }
     $state = Read-FrpClientState
     $map = ConvertTo-FrpServiceMap -Services $state.services
@@ -806,6 +828,7 @@ function Invoke-FrpApplyReconcileRuntime {
     if (-not $enabledAny) {
         Set-FrpInstallStatus -Status 'management_only'
         Stop-FrpClient | Out-Null
+        Uninstall-FrpAutostartTask | Out-Null
         return
     }
     $wasRunning = (Get-FrpClientStatus).Running
@@ -1099,6 +1122,16 @@ function Invoke-FrpZeroTouch {
       pinned to disk and the Bootstrap Ticket must not be re-supplied /
       re-used). Presence is validated explicitly in the body instead, with a
       resume-aware exception for CaSha256/BootstrapTicket.
+
+      Platform / ServicesJson / SshUser are accepted for installer CLI
+      compatibility but do not select services: the Bootstrap Ticket defines
+      the authorized service scope and the allocator enforces it at /enroll.
+
+      The entire mutable transaction runs under the client lifecycle lock,
+      taken before the first identity/state write (the client id) and held
+      through completion, so two concurrent installers cannot interleave and
+      produce a split identity. The lock is re-entrant per process, so the
+      installer may take it first for its own pre-flight.
     #>
     param(
         [string]$AllocatorUrl,
@@ -1109,10 +1142,15 @@ function Invoke-FrpZeroTouch {
         [string]$SshUser,
         [string]$Hostname,
         [switch]$SkipStart,
-        [switch]$SkipDownload,
-        [switch]$UseLocalDefaults
+        [switch]$SkipDownload
     )
 
+    if (-not (Enter-FrpClientLock)) {
+        Write-Host 'ERROR: another Data Relay Link client lifecycle operation is already running on this host.'
+        Write-Host 'FAILURE_CLASS=CLIENT_LOCK_BUSY'
+        Write-Host 'Wait for it to finish, then check status with: drlink status'
+        return 1
+    }
     try {
         if (Test-FrpIsEnrolled) {
             if (Test-FrpCanResumeInstall) {
@@ -1121,13 +1159,13 @@ function Invoke-FrpZeroTouch {
             }
             if (Test-FrpIsInstallComplete) {
                 Write-Host 'ERROR: this machine is already enrolled.'
-                Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: frp-client start'
+                Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: start the Data Relay Link client service'
                 Write-Host 'To replace this install, uninstall locally first (server reservations are preserved).'
                 return 2
             }
             # Legacy enrolled installs without install_status: treat as complete / refuse re-ticket
             Write-Host 'ERROR: this machine is already enrolled.'
-            Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: frp-client start'
+            Write-Host 'ENROLL ONCE: refuse re-ticket path. Use: start the Data Relay Link client service'
             Write-Host 'To replace this install, uninstall locally first (server reservations are preserved).'
             return 2
         }
@@ -1202,15 +1240,15 @@ function Invoke-FrpZeroTouch {
             $redeem = Invoke-FrpBootstrapRedeem -AllocatorUrl $AllocatorUrl -Ticket $BootstrapTicket `
                 -MachineId $machineId -Hostname $Hostname
 
-            # Ticket redeem is authoritative. Empty services = management-only.
-            # Get-FrpDefaultServices is only for explicit local guided UX.
+            # Ticket redeem is authoritative and the allocator enforces that
+            # scope at /enroll. Local input (-ServicesJson / FRP_SERVICES_JSON)
+            # must never widen it, including for a management-only (empty)
+            # ticket. Get-FrpDefaultServices stays for the explicit local
+            # guided UX only.
             $services = @($redeem.Services)
-            if ($UseLocalDefaults) {
-                $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
-            } elseif (-not [string]::IsNullOrWhiteSpace($ServicesJson) -and @($services).Count -eq 0) {
-                $services = Get-FrpDefaultServices -Platform $Platform -ServicesJson $ServicesJson -SshUser $SshUser
+            if (-not [string]::IsNullOrWhiteSpace($ServicesJson)) {
+                Write-Host 'NOTE: local service input is ignored; the setup command defines the authorized services.'
             }
-            # else: keep ticket services as-is (including empty)
 
             Write-Host 'Generating management identity...'
             $id = New-FrpEcdsaIdentity
@@ -1308,5 +1346,6 @@ function Invoke-FrpZeroTouch {
         return (Complete-FrpZeroTouchPostEnroll -SkipStart:$SkipStart -SkipDownload:$SkipDownload -Services $merged)
     } finally {
         Clear-FrpSecretEnv
+        Exit-FrpClientLock
     }
 }

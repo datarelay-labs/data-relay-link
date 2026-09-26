@@ -11,9 +11,18 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
-ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = ROOT + '/etc/frp-auto-deploy/config.json'
+def _test_root():
+    return (
+        os.environ.get('FRP_DEPLOY_TEST_ROOT')
+        or os.environ.get('FRP_CTL_TEST_ROOT')
+        or ''
+    )
+
+
+ROOT = _test_root()
+CONFIG = (_test_root() + '/etc/drlink/config.json') if _test_root() else '/etc/drlink/config.json'
 
 
 def iso(ts):
@@ -22,8 +31,9 @@ def iso(ts):
 
 def remap(path):
     path = Path(path)
-    if ROOT and not str(path).startswith(ROOT):
-        return Path(ROOT + str(path))
+    root = _test_root()
+    if root and not str(path).startswith(root):
+        return Path(root + str(path))
     return path
 
 
@@ -62,7 +72,7 @@ def load_module(name, rel_lib, installed):
         Path(installed),
     ]
     if ROOT:
-        candidates.insert(1, Path(ROOT) / 'usr/local/lib/frp-auto-deploy' / Path(rel_lib).name)
+        candidates.insert(1, Path(ROOT) / 'usr/local/lib/drlink' / Path(rel_lib).name)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location(name, str(path))
@@ -76,15 +86,254 @@ def load_frp_pki():
     return load_module(
         'frp_pki',
         'lib/frp_pki.py',
-        '/usr/local/lib/frp-auto-deploy/frp_pki.py',
+        '/usr/local/lib/drlink/frp_pki.py',
     )
+
+
+def installed_project_version():
+    """Authoritative project version for installer URL guidance.
+
+    Never invent a version. Missing env and version files fail closed.
+    """
+    env = str(os.environ.get('PROJECT_VERSION') or '').strip()
+    if env:
+        return env
+    for candidate in (
+        remap('/etc/drlink/version'),
+        Path(__file__).resolve().parent.parent / 'VERSION',
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('PROJECT_VERSION='):
+                value = line.split('=', 1)[1].strip()
+                if value:
+                    return value
+    raise SystemExit('installed project version unavailable')
+
+
+def installed_release_channel():
+    env = str(os.environ.get('FRP_RELEASE_CHANNEL') or '').strip().lower()
+    if env in ('development', 'dev', 'main'):
+        return 'development'
+    if env in ('preview', 'rc', 'candidate', 'prerelease'):
+        return 'preview'
+    if env == 'stable':
+        return 'stable'
+    for candidate in (
+        remap('/etc/drlink/version'),
+        Path(__file__).resolve().parent.parent / 'VERSION',
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('RELEASE_CHANNEL='):
+                value = line.split('=', 1)[1].strip().lower()
+                if value in ('development', 'dev', 'main'):
+                    return 'development'
+                if value in ('preview', 'rc', 'candidate', 'prerelease'):
+                    return 'preview'
+                if value == 'stable':
+                    return 'stable'
+    return ''
+
+
+def installed_source_ref():
+    """Install provenance ref (commit SHA or release tag), never PROJECT_VERSION."""
+    env = str(os.environ.get('FRP_EXPECTED_SOURCE_REF') or '').strip()
+    if env:
+        return env
+    for candidate in (
+        remap('/etc/drlink/version'),
+    ):
+        try:
+            text = Path(candidate).read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith('SOURCE_REF='):
+                value = line.split('=', 1)[1].strip()
+                if value:
+                    return value
+    return ''
+
+
+def load_qualified_artifacts():
+    return load_module(
+        'drlink_qualified_artifacts',
+        'lib/drlink_qualified_artifacts.py',
+        '/usr/local/lib/drlink/drlink_qualified_artifacts.py',
+    )
+
+
+def _is_forbidden_public_installer_url(url):
+    """Former official DataRelay/fatedier public artifact URLs are forbidden."""
+    qa = load_qualified_artifacts()
+    if qa is not None and hasattr(qa, 'is_forbidden_public_installer_url'):
+        return bool(qa.is_forbidden_public_installer_url(url))
+    text = str(url or '').strip().lower()
+    if not text:
+        return False
+    return (
+        'raw.githubusercontent.com' in text
+        or 'github.com/datarelay-labs' in text
+        or 'github.com/fatedier' in text
+    )
+
+
+def _installer_unavailable_message(platform='linux'):
+    qa = load_qualified_artifacts()
+    plat = 'windows' if str(platform or '').strip().lower() == 'windows' else 'linux'
+    arch = 'amd64' if plat == 'windows' else 'any'
+    if qa is not None:
+        return qa.missing_artifact_error(plat, arch)
+    return (
+        'ERROR:\n'
+        'Required qualified Agent artifact is not available from this DRLink Server.\n'
+        '\n'
+        'Run:\n'
+        '  system diagnostics\n'
+        '\n'
+        'Reinstall or update the DRLink Server package containing\n'
+        'the required qualified artifacts.\n'
+        '\n'
+        'No changes were applied.\n'
+    )
+
+
+def fail_closed_installer(platform='linux'):
+    msg = _installer_unavailable_message(platform)
+    sys.stderr.write(msg if str(msg).endswith('\n') else '%s\n' % msg)
+    raise SystemExit(2)
+
+
+def server_local_installer_url(cfg, *, windows=False):
+    """Derive the canonical Server-local Agent installer URL. Never public."""
+    platform = 'windows' if windows else 'linux'
+    qa = load_qualified_artifacts()
+    if qa is None:
+        fail_closed_installer(platform)
+    allocator = str((cfg or {}).get('allocator_public_url') or '').strip()
+    try:
+        url = qa.agent_installer_url(allocator, platform)
+    except Exception:
+        fail_closed_installer(platform)
+    if not url or _is_forbidden_public_installer_url(url):
+        fail_closed_installer(platform)
+    return url
+
+
+def default_client_installer_url(cfg=None):
+    """Canonical Server-local Linux Agent installer URL, or empty.
+
+    Never returns a public GitHub/DataRelay/fatedier fallback. Callers that
+    must fail closed should use resolve_configured_installer_url().
+    """
+    if not cfg:
+        return ''
+    try:
+        return server_local_installer_url(cfg, windows=False)
+    except SystemExit:
+        return ''
+
+
+def default_windows_client_installer_url(cfg=None):
+    """Canonical Server-local Windows Agent installer URL, or empty."""
+    if not cfg:
+        return ''
+    try:
+        return server_local_installer_url(cfg, windows=True)
+    except SystemExit:
+        return ''
+
+
+def resolve_configured_installer_url(cfg, *, windows=False):
+    """Resolve Managed Host installer URL from Server-local artifacts only.
+
+    Configured Server-local and unrelated administrator URLs are preserved.
+    Missing URLs and former official public DataRelay/fatedier URLs are
+    derived from allocator_public_url. Fail closed if that is impossible.
+    """
+    platform = 'windows' if windows else 'linux'
+    if not isinstance(cfg, dict):
+        fail_closed_installer(platform)
+    key = 'windows_client_installer_url' if windows else 'client_installer_url'
+    configured = str(cfg.get(key, '') or '').strip()
+    if configured and not _is_forbidden_public_installer_url(configured):
+        return configured
+    return server_local_installer_url(cfg, windows=windows)
+
+
+def preflight_installer_url(url, *, label='Client installer'):
+    """Bounded read-only preflight. Confirmed 404 blocks; uncertain does not."""
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    url = str(url or '').strip()
+    if not url:
+        return
+    req = urllib.request.Request(url, method='HEAD')
+    req.add_header('User-Agent', 'DataRelayLink-InstallerPreflight/2.4')
+    ctx = ssl.create_default_context()
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            code = getattr(resp, 'status', None) or resp.getcode()
+            if int(code) == 404:
+                raise SystemExit(
+                    '%s is unavailable:\n\n'
+                    '  %s\n\n'
+                    'HTTP status: 404\n\n'
+                    'Fix:\n'
+                    '  set server installer-url <URL>\n'
+                    '  set server windows-installer-url <URL>\n'
+                    '  set installer-url <URL>\n'
+                    '  set windows-installer-url <URL>\n\n'
+                    'No enrollment ticket was created.' % (label, url)
+                )
+            return
+    except urllib.error.HTTPError as exc:
+        if int(getattr(exc, 'code', 0) or 0) == 404:
+                raise SystemExit(
+                    '%s is unavailable:\n\n'
+                    '  %s\n\n'
+                    'HTTP status: 404\n\n'
+                    'Fix:\n'
+                    '  set server installer-url <URL>\n'
+                    '  set server windows-installer-url <URL>\n'
+                    '  set installer-url <URL>\n'
+                    '  set windows-installer-url <URL>\n\n'
+                    'No enrollment ticket was created.' % (label, url)
+                ) from None
+        # Non-404 HTTP: inconclusive for destroyer semantics.
+        return
+    except Exception:
+        # Network/TLS/timeout: do not block ticket issuance.
+        return
+
+
+def confirm_client_setup():
+    if not is_interactive_stdin():
+        return True
+    entered = read_prompt('Create this client setup? [Y/n]: ')
+    if entered is None:
+        return False
+    text = str(entered).strip().lower()
+    if text in ('', 'y', 'yes'):
+        return True
+    print('Cancelled.')
+    return False
 
 
 def load_allocator():
     return load_module(
         'frp_port_allocator',
         'server/frp-port-allocator.py',
-        '/usr/local/lib/frp-auto-deploy/frp-port-allocator.py',
+        '/usr/local/lib/drlink/frp-port-allocator.py',
     )
 
 
@@ -92,8 +341,51 @@ def load_enrollment_lifecycle():
     return load_module(
         'frp_enrollment_lifecycle',
         'lib/frp_enrollment_lifecycle.py',
-        '/usr/local/lib/frp-auto-deploy/frp_enrollment_lifecycle.py',
+        '/usr/local/lib/drlink/frp_enrollment_lifecycle.py',
     )
+
+
+def remapped_server_cfg(cfg):
+    """Server cfg with state paths remapped into the active tree.
+
+    Returns the whole cfg, never a synthesized subset: retention, lock, and
+    path policy must all come from the administrator's configuration.
+    """
+    require_onboarding_config(cfg)
+    out = dict(cfg)
+    out['enrollments_dir'] = str(remap(cfg['enrollments_dir']))
+    out['bootstrap_dir'] = str(
+        remap(cfg.get('bootstrap_dir') or str(Path(cfg['enrollments_dir']).parent / 'bootstrap'))
+    )
+    out['registry_file'] = str(
+        remap(cfg.get('registry_file') or str(Path(cfg['enrollments_dir']).parent / 'registry.json'))
+    )
+    return out
+
+
+def require_onboarding_config(cfg):
+    """Fail with a product-owned error when enrollment config is incomplete."""
+    if not isinstance(cfg, dict):
+        fail(
+            "Client onboarding cannot continue because the server configuration is incomplete.\n"
+            "\n"
+            "Missing setting:\n"
+            "  enrollments_dir\n"
+            "\n"
+            "Run:\n"
+            "  system diagnostics"
+        )
+    value = cfg.get('enrollments_dir')
+    if value is None or not str(value).strip():
+        fail(
+            "Client onboarding cannot continue because the server configuration is incomplete.\n"
+            "\n"
+            "Missing setting:\n"
+            "  enrollments_dir\n"
+            "\n"
+            "Run:\n"
+            "  system diagnostics"
+        )
 
 
 def run_enrollment_retention_cleanup(cfg):
@@ -101,16 +393,8 @@ def run_enrollment_retention_cleanup(cfg):
     if lifecycle is None:
         return
     try:
-        cleanup_cfg = dict(cfg)
-        cleanup_cfg['enrollments_dir'] = str(remap(cfg['enrollments_dir']))
-        cleanup_cfg['bootstrap_dir'] = str(
-            remap(cfg.get('bootstrap_dir') or str(Path(cfg['enrollments_dir']).parent / 'bootstrap'))
-        )
-        cleanup_cfg['registry_file'] = str(
-            remap(cfg.get('registry_file') or str(Path(cfg['enrollments_dir']).parent / 'registry.json'))
-        )
         lifecycle.maybe_run_retention_cleanup(
-            cleanup_cfg,
+            remapped_server_cfg(cfg),
             force=True,
             audit_emit=lifecycle.load_audit_emit(),
         )
@@ -139,8 +423,35 @@ def load_zero_touch():
     return load_module(
         'frp_zero_touch',
         'lib/frp_zero_touch.py',
-        '/usr/local/lib/frp-auto-deploy/frp_zero_touch.py',
+        '/usr/local/lib/drlink/frp_zero_touch.py',
     )
+
+
+def load_server_config():
+    return load_module(
+        'frp_server_config',
+        'lib/frp_server_config.py',
+        '/usr/local/lib/drlink/frp_server_config.py',
+    )
+
+
+def short_url_host_for_cfg(cfg, bootstrap_hostname='', public_hostname=''):
+    """Resolve Zero-Touch short URL hostname from install-time public identity.
+
+    Prefer frp_server_config.short_url_hostname(cfg): advanced bootstrap_hostname
+    override, else DNS public_url_host. IP-selected public identity does not
+    invent a short URL from a separate public_hostname alias.
+    """
+    scfg = load_server_config()
+    if scfg is not None and isinstance(cfg, dict):
+        try:
+            host = scfg.short_url_hostname(cfg)
+        except Exception:
+            host = ''
+        if host:
+            return str(host).strip().lower()
+        return ''
+    return str(bootstrap_hostname or public_hostname or '').strip().lower()
 
 
 _ZT = None
@@ -183,6 +494,53 @@ def reject_control_chars(label, value):
 def fail(message, code=2):
     sys.stderr.write('ERROR: %s\n' % message)
     raise SystemExit(code)
+
+
+TTL_DURATION_RE = re.compile(r'^(\d+)([smhd])$', re.I)
+
+# An enrollment credential is a short-lived hand-off, not long-term access.
+# Zero-Touch tickets: default 1h, maximum 24h (must match server allocator).
+ZERO_TOUCH_DEFAULT_TTL = '1h'
+ZERO_TOUCH_MAX_TTL_SEC = 24 * 3600
+ZERO_TOUCH_MAX_TTL_TEXT = '24h'
+# Manual Enrollment Codes retain a longer operational ceiling (30d).
+MAX_ENROLLMENT_TTL_SEC = 30 * 86400
+MAX_ENROLLMENT_TTL_TEXT = '30d'
+TTL_TOO_LARGE_ERROR = (
+    'TTL must be at most %s (%s seconds); enrollment credentials are short-lived'
+    % (MAX_ENROLLMENT_TTL_TEXT, MAX_ENROLLMENT_TTL_SEC)
+)
+ZERO_TOUCH_TTL_TOO_LARGE_ERROR = (
+    'Zero-Touch TTL must be at most %s (%s seconds)'
+    % (ZERO_TOUCH_MAX_TTL_TEXT, ZERO_TOUCH_MAX_TTL_SEC)
+)
+
+
+def parse_enrollment_ttl(raw, *, zero_touch=False):
+    text = str(raw or '').strip()
+    if not text:
+        raise ValueError('TTL is required')
+    max_sec = ZERO_TOUCH_MAX_TTL_SEC if zero_touch else MAX_ENROLLMENT_TTL_SEC
+    too_large = ZERO_TOUCH_TTL_TOO_LARGE_ERROR if zero_touch else TTL_TOO_LARGE_ERROR
+    if text.isdigit():
+        seconds = int(text)
+        if seconds <= 0:
+            raise ValueError('TTL must be a positive integer')
+        if seconds > max_sec:
+            raise ValueError(too_large)
+        return seconds
+    match = TTL_DURATION_RE.match(text.lower())
+    if not match:
+        raise ValueError('invalid TTL (use 30m|1h|4h|1d or raw seconds, e.g. 600)')
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    if amount <= 0:
+        raise ValueError('TTL must be positive')
+    multipliers = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
+    seconds = amount * multipliers[unit]
+    if seconds > max_sec:
+        raise ValueError(too_large)
+    return seconds
 
 
 def atomic_write_json(path, data, mode=0o600):
@@ -229,25 +587,40 @@ def write_enrollment(enroll_dir, enrollment_id, secret, ttl, note, label=''):
 
 SSH_USER_RE = re.compile(r'[A-Za-z0-9._@-]{1,32}')
 NONINTERACTIVE_SSH_USER_ERROR = (
-    '--ssh-user is required for non-interactive zero-touch SSH creation.'
+    '--ssh-user may be supplied for connection examples; it is optional for enrollment.'
 )
 _TEST_INPUT_LINES = None
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
-        description='Create a short-lived FRP client enrollment code',
+        description='Create a short-lived Data Relay Link client enrollment code',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             'examples:\n'
-            '  sudo frp-create-client\n'
-            '  sudo frp-create-client --one-line --ssh --note client-01\n'
-            '  sudo frp-create-client --one-line --ssh --ssh-user aella --note customer-01\n'
-            '  sudo frp-create-client --one-line --ssh --client-name seoul-groupware --note "Seoul office"\n'
-            '  sudo frp-create-client --one-line --client-name inventory-only\n'
+            '  # Preferred operator UX (guided, no --options):\n'
+            '  sudo drlink\n'
+            '  set client\n'
+            '  set enrollment\n'
+            '\n'
+            '  # This backend tool still accepts internal flags for scripts:\n'
+            '  frp-create-client --one-line --ssh --note client-01\n'
+            '  frp-create-client --one-line --ssh --ssh-user aella --note customer-01\n'
+            '  frp-create-client --one-line --ssh --client-name seoul-groupware '
+            '--note "Seoul office"\n'
+            '  frp-create-client --one-line --client-name inventory-only\n'
         ),
     )
-    p.add_argument('--ttl', type=int, default=600, help='TTL in seconds (default 600)')
+    p.add_argument(
+        '--ttl',
+        default=None,
+        metavar='DURATION|SECONDS',
+        help=(
+            'Enrollment lifetime: duration (30m|1h|4h|1d) or seconds. '
+            'Zero-Touch default %s (max %s); Manual Enrollment default 600s (max %s).'
+            % (ZERO_TOUCH_DEFAULT_TTL, ZERO_TOUCH_MAX_TTL_TEXT, MAX_ENROLLMENT_TTL_TEXT)
+        ),
+    )
     p.add_argument('--note', default='')
     p.add_argument(
         '--client-name',
@@ -269,11 +642,12 @@ def parse_args(argv=None):
     )
     p.add_argument(
         '--ssh-user',
-        default='',
+        default=None,
         metavar='USER',
         help=(
-            'SSH login account that already exists on the client '
-            '(required when stdin is not a TTY; no distro default)'
+            'SSH login account that already exists on the client. '
+            'Optional connection-example metadata. Pass an empty value when '
+            'the guided wizard already collected a blank username.'
         ),
     )
     p.add_argument(
@@ -309,16 +683,19 @@ def parse_args(argv=None):
 
 
 def ssh_service(ssh_user, ssh_port):
-    return {
+    payload = {
         'id': 'ssh',
         'name': 'SSH',
         'protocol': 'tcp',
         'local_ip': '127.0.0.1',
         'local_port': int(ssh_port),
         'preset': 'ssh',
-        'ssh_user': ssh_user,
         'enabled': True,
     }
+    user = str(ssh_user or '').strip()
+    if user:
+        payload['ssh_user'] = user
+    return payload
 
 
 def rdp_service(rdp_port):
@@ -339,8 +716,16 @@ def ps_single_quote(value):
 
 
 def derive_sha256sums_url(installer_url):
-    suffix = '/dist/bootstrap-client.ps1'
+    zt = load_zero_touch()
+    if zt is not None:
+        try:
+            return zt.sha256sums_url_for_installer(installer_url)
+        except ValueError:
+            return ''
     url = str(installer_url or '').strip()
+    if '/artifacts/' in url:
+        return url.split('/artifacts/', 1)[0] + '/artifacts/SHA256SUMS'
+    suffix = '/dist/bootstrap-client.ps1'
     if url.endswith(suffix):
         return url[:-len(suffix)] + '/SHA256SUMS'
     return ''
@@ -404,6 +789,22 @@ def read_prompt(prompt):
         sys.stdout.flush()
         return value
     try:
+        stderr_tty = sys.stderr.isatty()
+        stdout_tty = sys.stdout.isatty()
+    except Exception:
+        stderr_tty = False
+        stdout_tty = False
+    try:
+        # GNU readline writes input() prompts to stderr. When a parent (the
+        # REPL via frpctl_run) captures stderr for sanitizing, that prompt is
+        # dumped after the child exits and glues onto the next `drlink>` line.
+        # Force the prompt onto the live stdout TTY in that case.
+        if stdout_tty and not stderr_tty:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            return input()
+        # Always pass the prompt to input()/readline so Backspace cannot walk
+        # into a separately written prompt prefix.
         return input(prompt)
     except EOFError:
         fail('required interactive input was not completed')
@@ -429,20 +830,20 @@ def validate_prompt_ssh_user(raw):
 def validate_prompt_label(raw):
     text = '' if raw is None else str(raw).strip()
     if not text:
-        return '', 'Client name cannot be blank.'
+        return '', 'Managed Host name cannot be blank.'
     if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in text):
-        return '', 'Client name must not contain control characters or newlines'
+        return '', 'Managed Host name must not contain control characters or newlines'
     if len(text) > 64:
-        return '', 'Client name must be at most 64 characters'
+        return '', 'Managed Host name must be at most 64 characters'
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,63}', text):
-        return '', 'invalid client name'
+        return '', 'invalid Managed Host name'
     return text, ''
 
 
 def prompt_client_identification(existing_name, existing_note):
     print()
-    print('Client identification')
-    print('=====================')
+    print('Managed Host details')
+    print('====================')
     print()
     print('Enter a name that will help you identify this machine later.')
     print()
@@ -450,21 +851,42 @@ def prompt_client_identification(existing_name, existing_note):
     name = '' if existing_name is None else str(existing_name).strip()
     if not name:
         while True:
-            entered = read_prompt('Client name: ')
+            entered = read_prompt('Managed Host name: ')
             name, err = validate_prompt_label(entered)
             if name:
                 break
             sys.stderr.write('ERROR: %s\n' % err)
 
-    note = '' if existing_note is None else str(existing_note)
-    if not str(existing_note or '').strip():
+    # None means "not collected yet"; empty string means "explicitly blank".
+    if existing_note is None:
         entered = read_prompt('Description [optional]: ')
         note = '' if entered is None else str(entered).strip()
         if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in note):
             fail('Description must not contain control characters or newlines')
         if len(note) > 1024:
             fail('Description must be at most 1024 characters')
+    else:
+        note = str(existing_note)
     return name, note
+
+
+def _enrollment_track_hints(tracking_id=''):
+    """Canonical enrollment guidance; REPL vs shell-aware."""
+    repl = str(os.environ.get('FRP_CTL_REPL') or '').strip() == '1'
+    tid = str(tracking_id or '<ID>').strip() or '<ID>'
+    prefix = '' if repl else 'sudo drlink '
+    lines = [
+        'Enrollment lifecycle:',
+        '  %sshow enrollments' % prefix,
+        '  %sunset enrollment %s' % (prefix, tid),
+        '',
+        'Active enrollment:',
+        '  unset revokes it.',
+        '',
+        'Completed, expired or revoked enrollment:',
+        '  unset removes the retained record.',
+    ]
+    return lines
 
 
 def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
@@ -472,13 +894,18 @@ def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
     print('SSH service setup')
     print('=================')
     print()
-    print('Enter the SSH login account that already exists on the client machine.')
+    print('SSH username is optional connection-example metadata.')
+    print('It is not required for Agent installation or enrollment.')
+    print('Leave blank to show <username> in connection examples.')
     print()
 
     user = normalize_ssh_user(existing_user)
     if not user:
         while True:
-            entered = read_prompt('Client SSH user: ')
+            entered = read_prompt('SSH username [optional]: ')
+            if not str(entered or '').strip():
+                user = ''
+                break
             user, err = validate_prompt_ssh_user(entered)
             if user:
                 break
@@ -498,26 +925,100 @@ def prompt_zero_touch_ssh(existing_user, existing_port, port_explicit):
     return user, port
 
 
-def print_client_configuration(name, note, ssh_user='', ssh_port=None):
+def print_client_configuration(name, note, services=None, ssh_user='', ssh_port=None):
     print()
-    print('Client configuration')
-    print('--------------------')
-    print('Client name : %s' % (name or '(hostname after enrollment)'))
+    print('Managed Host configuration')
+    print('==========================')
+    print()
+    print('Managed Host name : %s' % (name or '(hostname after enrollment)'))
     print('Description : %s' % (note or '-'))
-    if ssh_user:
-        print('SSH user    : %s' % ssh_user)
-        print('SSH port    : %s' % ssh_port)
-        print('Target      : 127.0.0.1:%s' % ssh_port)
     print()
+    print('Services')
+    print('--------')
+    print()
+    rows = list(services or [])
+    if not rows and (ssh_user or ssh_port):
+        rows = [{
+            'preset': 'ssh',
+            'name': 'SSH',
+            'local_ip': '127.0.0.1',
+            'local_port': ssh_port or 22,
+            'ssh_user': ssh_user,
+        }]
+    if not rows:
+        print('(none — management registration only)')
+        print()
+        return
+    for svc in rows:
+        preset = str(svc.get('preset') or '').strip().lower()
+        title = str(svc.get('name') or svc.get('id') or preset or 'Service').strip()
+        if preset == 'ssh' or str(svc.get('id') or '').lower() == 'ssh':
+            title = 'SSH'
+        elif preset == 'https':
+            title = 'HTTPS'
+        elif preset == 'http':
+            title = 'HTTP'
+        elif preset == 'rdp':
+            title = 'RDP'
+        host = svc.get('local_ip') or svc.get('target_host') or '127.0.0.1'
+        port = svc.get('local_port') or svc.get('target_port') or '-'
+        print(title)
+        print('  Target   : %s:%s' % (host, port))
+        user = str(svc.get('ssh_user') or '').strip()
+        if preset == 'ssh' or str(svc.get('id') or '').lower() == 'ssh':
+            if user:
+                print('  SSH user : %s (connection-example metadata; not validated)' % user)
+            else:
+                print('  SSH user : <username> (optional connection-example metadata)')
+        print()
 
 
-def resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit):
+def resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit, user_explicit=False):
     ssh_user = normalize_ssh_user(ssh_user)
-    if ssh_user:
+    if user_explicit or ssh_user or not is_interactive_stdin():
+        # An explicit --ssh-user, including blank, was already collected.
+        # Non-interactive empty ssh_user stays optional (<username> examples).
         return ssh_user, ssh_port
-    if is_interactive_stdin():
-        return prompt_zero_touch_ssh('', ssh_port, port_explicit)
-    fail(NONINTERACTIVE_SSH_USER_ERROR)
+    return prompt_zero_touch_ssh('', ssh_port, port_explicit)
+
+
+def _allocator_hostname(cfg):
+    if not isinstance(cfg, dict):
+        return ''
+    try:
+        return (urlparse(str(cfg.get('allocator_public_url') or '')).hostname or '').lower().rstrip('.')
+    except Exception:
+        return ''
+
+
+def _short_url_needs_embedded_ca(cfg):
+    """True when the short URL host is this server's private-CA identity.
+
+    A distinct bootstrap_hostname is an operator public-TLS edge and keeps
+    stock curl. The enrollment hostname itself presents the project private CA.
+    """
+    boot = str((cfg or {}).get('bootstrap_hostname') or '').strip().lower().rstrip('.')
+    if not boot:
+        return True
+    alloc_host = _allocator_hostname(cfg)
+    return bool(alloc_host) and boot == alloc_host
+
+
+def _public_ca_pem(cfg):
+    """Return the public allocator CA PEM, never a private key."""
+    if not isinstance(cfg, dict):
+        return ''
+    raw = str(cfg.get('tls_ca_cert') or '').strip()
+    if not raw:
+        return ''
+    path = remap(raw)
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError:
+        return ''
+    if 'PRIVATE KEY' in text or 'BEGIN CERTIFICATE' not in text:
+        return ''
+    return text.strip() + '\n'
 
 
 def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp, installer):
@@ -528,14 +1029,13 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
     print()
     print('Expires: %s (%s seconds)' % (record['expires_at_iso'], ttl))
     print()
-    print('Track or revoke with the Enrollment ID (not the secret):')
-    print('  show enrollments')
-    print('  revoke enrollment %s' % record['id'])
+    for line in _enrollment_track_hints(record['id']):
+        print(line)
     print()
     if public_host and control_public:
-        print('FRP Server: %s:%s' % (public_host, control_public))
+        print('Data Relay Link Server: %s:%s' % (public_host, control_public))
     elif public_host:
-        print('FRP Server: %s' % public_host)
+        print('Data Relay Link Server: %s' % public_host)
     if allocator:
         print('Allocator: %s' % allocator)
     if ca_fp:
@@ -561,10 +1061,11 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
         print('Set FRP_ALLOCATOR_URL on the client, or re-run the server installer.')
     else:
         print('Set the client installer URL, then re-run this command:')
-        print(
-            '  sudo frp-set-client-installer-url '
-            'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh'
-        )
+        print('  sudo drlink set installer-url <URL>')
+        suggested = default_client_installer_url(cfg)
+        if suggested and not _is_forbidden_public_installer_url(suggested):
+            print('Example:')
+            print('  sudo drlink set installer-url %s' % suggested)
         if not allocator:
             print()
             print('WARNING: allocator public URL is not configured.')
@@ -574,14 +1075,19 @@ def print_manual(cfg, record, ttl, public_host, control_public, allocator, ca_fp
 def print_one_line_windows(
     ticket, ttl, note, public_host, control_public, allocator, ca_fp,
     installer, rdp_port=None, client_name='', management_only=False,
-    ticket_id='', bootstrap_hostname=''
+    ticket_id='', bootstrap_hostname='', public_hostname='', cfg=None,
+    short_handle='', stage1_sha256=''
 ):
     zt = _zt()
     command = ''
-    bootstrap_host = str(bootstrap_hostname or '').strip().lower()
-    if bootstrap_host and zt is not None:
+    bootstrap_host = short_url_host_for_cfg(
+        cfg, bootstrap_hostname=bootstrap_hostname, public_hostname=public_hostname
+    )
+    if bootstrap_host and zt is not None and short_handle and stage1_sha256:
         try:
-            command = zt.short_url_windows_command(bootstrap_host, ticket)
+            command = zt.windows_strict_launcher(
+                bootstrap_host, short_handle, stage1_sha256
+            )
         except ValueError:
             command = ''
 
@@ -589,46 +1095,52 @@ def print_one_line_windows(
         sums_url = derive_sha256sums_url(installer)
         if not sums_url:
             fail(
-                'cannot derive SHA256SUMS URL from Windows installer URL; '
-                'use an official .../dist/bootstrap-client.ps1 path'
+                'cannot derive SHA256SUMS URL from Windows installer URL.\n'
+                'No changes were applied.'
             )
-        inner = (
-            "$ErrorActionPreference='Stop';"
-            "$ProgressPreference='SilentlyContinue';"
-            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
-            "$d=Join-Path $env:TEMP ('frp-bs-'+[guid]::NewGuid().ToString('N'));"
-            "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
-            "try{"
-            "$m=Join-Path $d 'SHA256SUMS';$p=Join-Path $d 'bootstrap-client.ps1';"
-            "(New-Object Net.WebClient).DownloadFile(__SUMS__,$m);"
-            "(New-Object Net.WebClient).DownloadFile(__INSTALLER__,$p);"
-            "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
-            "if($_ -match '^([0-9a-fA-F]{64})\\s+dist/bootstrap-client\\.ps1\\s*$'){"
-            "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
-            "$w=$Matches[1].ToLowerInvariant()}};"
-            "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"
-            "$g=(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant();"
-            "if($g -ne $w){throw 'bootstrap-client.ps1 SHA256 mismatch'};"
-            "$env:FRP_ALLOCATOR_URL=__ALLOCATOR__;"
-            "$env:FRP_ALLOCATOR_CA_SHA256=__CA__;"
-            "$env:FRP_BOOTSTRAP_TICKET=__TICKET__;"
-            "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
-            "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
-            "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
-            "if($rc -ne 0){exit $rc}"
-            "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"
-        )
-        inner = (
-            inner.replace('__SUMS__', ps_single_quote(sums_url))
-            .replace('__INSTALLER__', ps_single_quote(installer))
-            .replace('__ALLOCATOR__', ps_single_quote(allocator))
-            .replace('__CA__', ps_single_quote(ca_fp))
-            .replace('__TICKET__', ps_single_quote(ticket))
-        )
-        command = (
-            'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
-            + ps_single_quote(inner)
-        )
+        zt_mod = _zt()
+        if zt_mod is not None:
+            command = zt_mod.pinned_ca_windows_command(
+                installer, allocator, ca_fp, ticket, sums_url
+            )
+        else:
+            inner = (
+                "$ErrorActionPreference='Stop';"
+                "$ProgressPreference='SilentlyContinue';"
+                "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+                "$d=Join-Path $env:TEMP ('frp-bs-'+[guid]::NewGuid().ToString('N'));"
+                "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
+                "try{"
+                "$m=Join-Path $d 'SHA256SUMS';$p=Join-Path $d 'bootstrap-client.ps1';"
+                "(New-Object Net.WebClient).DownloadFile(__SUMS__,$m);"
+                "(New-Object Net.WebClient).DownloadFile(__INSTALLER__,$p);"
+                "$w=$null;Get-Content -LiteralPath $m|ForEach-Object{"
+                "if($_ -match '^([0-9a-fA-F]{64})\\s+(?:dist/bootstrap-client\\.ps1|agent/bootstrap-client\\.ps1|bootstrap-client\\.ps1)\\s*$'){"
+                "if($w){throw 'duplicate bootstrap-client.ps1 hash'};"
+                "$w=$Matches[1].ToLowerInvariant()}};"
+                "if(-not $w){throw 'bootstrap-client.ps1 hash missing from SHA256SUMS'};"
+                "$g=(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant();"
+                "if($g -ne $w){throw 'bootstrap-client.ps1 SHA256 mismatch'};"
+                "$env:FRP_ALLOCATOR_URL=__ALLOCATOR__;"
+                "$env:FRP_ALLOCATOR_CA_SHA256=__CA__;"
+                "$env:FRP_BOOTSTRAP_TICKET=__TICKET__;"
+                "$env:FRP_ZERO_TOUCH='1';$env:FRP_PLATFORM='windows';"
+                "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -ZeroTouch;"
+                "$rc=$LASTEXITCODE;Remove-Item Env:FRP_BOOTSTRAP_TICKET -ErrorAction SilentlyContinue;"
+                "if($rc -ne 0){exit $rc}"
+                "}finally{Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue}"
+            )
+            inner = (
+                inner.replace('__SUMS__', ps_single_quote(sums_url))
+                .replace('__INSTALLER__', ps_single_quote(installer))
+                .replace('__ALLOCATOR__', ps_single_quote(allocator))
+                .replace('__CA__', ps_single_quote(ca_fp))
+                .replace('__TICKET__', ps_single_quote(ticket))
+            )
+            command = (
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+                + ps_single_quote(inner)
+            )
 
     tracking_id = str(ticket_id or '').strip()
     print()
@@ -645,59 +1157,89 @@ def print_one_line_windows(
     print()
     print('Expires: %s (%s seconds)' % (iso(int(time.time()) + ttl), ttl))
     if client_name:
-        print('Client name: %s' % client_name)
+        print('Managed Host name: %s' % client_name)
     if note:
         print('Note: %s' % note)
     if public_host and control_public:
-        print('FRP Server: %s:%s' % (public_host, control_public))
+        print('Data Relay Link Server: %s:%s' % (public_host, control_public))
     if rdp_port:
         print('RDP local target: 127.0.0.1:%s' % int(rdp_port))
     if bootstrap_host and '?platform=windows' in command:
         print('Bootstrap host: %s' % bootstrap_host)
     print()
     print('Run this single line in an elevated Windows PowerShell window.')
-    print('It downloads a PS1, verifies bootstrap-client.ps1 against SHA256SUMS,')
-    print('then executes the verified installer with powershell -File.')
+    if 'curl.exe' in command:
+        print('It downloads the stage-1 script with curl.exe, verifies its SHA256,')
+        print('then executes that file with powershell.exe -File.')
+    else:
+        print('It downloads a PS1, verifies bootstrap-client.ps1 against SHA256SUMS,')
+        print('then executes the verified installer with powershell -File.')
     if management_only:
         print('This enrolls management identity only; no service or public port is created.')
     print()
     print('The ticket cannot be reused by another machine once bound.')
-    print('After reboot, run frp-client start; re-enrollment is not required.')
+    print('After reboot, Data Relay Link starts automatically when a service is enabled.')
+    print('If a pending service change remains, apply with:\n  system synchronize')
     if tracking_id:
         print()
-        print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  show enrollments')
-        print('  revoke enrollment %s' % tracking_id)
+        for line in _enrollment_track_hints(tracking_id):
+            print(line)
     print()
 
 
-def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname=''):
+def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca_fp, installer, ssh_user, ssh_port, client_name='', management_only=False, ticket_id='', legacy_env=False, bootstrap_hostname='', public_hostname='', cfg=None, short_handle=''):
     tracking_id = str(ticket_id or '').strip()
     if not tracking_id and ticket:
-        parts = str(ticket).split('.')
-        if len(parts) >= 2:
-            tracking_id = parts[1]
+        zt_id = _zt()
+        if zt_id is not None:
+            tracking_id = zt_id.bootstrap_record_id(ticket)
 
-    # Prefer ideal short URL when bootstrap_hostname is configured (Option B).
-    # Otherwise keep the v2.1.2 zt1 opaque-package transitional command.
+    # DNS public_url_host still uses /i/<ticket>, but that host presents the
+    # project private CA. Embed the public CA in the one-liner and verify TLS.
+    # A distinct bootstrap_hostname is the operator public-TLS edge and keeps
+    # stock curl. Never fall through to curl --insecure for this path.
     command = ''
-    bootstrap_host = str(bootstrap_hostname or '').strip().lower()
+    bootstrap_host = short_url_host_for_cfg(
+        cfg, bootstrap_hostname=bootstrap_hostname, public_hostname=public_hostname
+    )
     if bootstrap_host and not legacy_env:
         try:
             zt = _zt()
             if zt is None:
                 raise ValueError('zero-touch helper is unavailable')
-            command = zt.short_url_command(bootstrap_host, ticket)
+            if _short_url_needs_embedded_ca(cfg):
+                pem = _public_ca_pem(cfg)
+                if not pem:
+                    fail(
+                        'allocator CA certificate is not available; '
+                        'cannot generate a fresh-client Zero-Touch command'
+                    )
+                command = zt.private_ca_fresh_client_command(
+                    bootstrap_host, short_handle or ticket, pem
+                )
+            else:
+                command = zt.short_url_command(bootstrap_host, short_handle or ticket)
         except ValueError:
+            if _short_url_needs_embedded_ca(cfg):
+                fail(
+                    'cannot generate a fresh-client Zero-Touch command '
+                    'without disabling TLS verification'
+                )
             command = ''
 
     if not command:
         try:
             package = encode_zero_touch_package(allocator, ca_fp, ticket)
-            command = 'curl -fsSL %s | sudo bash -s -- %s' % (
-                shell_quote(installer),
-                shell_quote(package),
-            )
+            zt_mod = _zt()
+            if zt_mod is not None:
+                command = zt_mod.pinned_ca_linux_command(
+                    installer, allocator, ca_fp, package
+                )
+            else:
+                command = 'curl -fsSL %s | sudo bash -s -- %s' % (
+                    shell_quote(installer),
+                    shell_quote(package),
+                )
         except ValueError:
             legacy_env = True
 
@@ -725,6 +1267,7 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     print()
     print('This command contains a short-lived one-time bootstrap ticket.')
     print('Treat the command as sensitive until it expires or is used.')
+    print('This credential will not be shown again.')
     print()
     if tracking_id:
         print('Enrollment ID: %s' % tracking_id)
@@ -733,16 +1276,16 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     print()
     print('Expires: %s (%s seconds)' % (iso(int(time.time()) + ttl), ttl))
     if client_name:
-        print('Client name: %s' % client_name)
+        print('Managed Host name: %s' % client_name)
     if note:
         print('Note: %s' % note)
     if public_host and control_public:
-        print('FRP Server: %s:%s' % (public_host, control_public))
+        print('Data Relay Link Server: %s:%s' % (public_host, control_public))
     if bootstrap_host and '/i/' in command:
         print('Bootstrap host: %s' % bootstrap_host)
     print()
     print('Send that single line to the remote user. They paste it and press Enter.')
-    print('No Enrollment Code prompt or FRP configuration is required.')
+    print('No Enrollment Code prompt or extra configuration is required.')
     if management_only:
         print('This enrolls management identity only; no service or public port is created.')
     print()
@@ -750,17 +1293,21 @@ def print_one_line(ticket, ttl, note, public_host, control_public, allocator, ca
     print('It cannot be reused by another machine once bound.')
     if tracking_id:
         print()
-        print('Track or revoke with the Enrollment ID (not the ticket secret):')
-        print('  show enrollments')
-        print('  revoke enrollment %s' % tracking_id)
+        for line in _enrollment_track_hints(tracking_id):
+            print(line)
     print()
 
 
 def main(argv=None):
     a = parse_args(argv)
-    if a.ttl is None or int(a.ttl) <= 0:
-        fail('TTL must be a positive integer')
-    ttl = int(a.ttl)
+    zero_touch = bool(a.one_line)
+    ttl_raw = a.ttl
+    if ttl_raw is None or str(ttl_raw).strip() == '':
+        ttl_raw = ZERO_TOUCH_DEFAULT_TTL if zero_touch else '600'
+    try:
+        ttl = parse_enrollment_ttl(ttl_raw, zero_touch=zero_touch)
+    except ValueError as exc:
+        fail(str(exc))
 
     if a.ssh_user and not a.ssh:
         fail('--ssh-user requires --ssh')
@@ -784,6 +1331,7 @@ def main(argv=None):
         ssh_port = coerce_port(a.ssh_port)
         if ssh_port is None:
             fail('invalid --ssh-port; must be an integer 1-65535')
+    ssh_user_explicit = a.ssh_user is not None
     ssh_user = normalize_ssh_user(a.ssh_user)
     rdp_port = 3389
     if a.rdp_port is not None:
@@ -792,6 +1340,7 @@ def main(argv=None):
             fail('invalid --rdp-port; must be an integer 1-65535')
 
     cfg = json.loads(Path(CONFIG).read_text())
+    require_onboarding_config(cfg)
     enroll_dir = remap(cfg['enrollments_dir'])
     enroll_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -802,13 +1351,13 @@ def main(argv=None):
     public_host = cfg_public_host(cfg)
     control_public = cfg_frp_control_public_port(cfg)
     allocator = str(cfg.get('allocator_public_url', '') or '').strip()
-    ca_path = remap(str(cfg.get('tls_ca_cert') or '/etc/frp-auto-deploy/pki/ca.crt'))
+    ca_path = remap(str(cfg.get('tls_ca_cert') or '/etc/drlink/pki/ca.crt'))
     ca_fp = fingerprint_from_cert(ca_path) if ca_path.is_file() else ''
     if platform == 'windows':
-        installer = str(cfg.get('windows_client_installer_url', '') or '').strip()
+        installer = resolve_configured_installer_url(cfg, windows=True)
         installer_label = 'Windows client installer URL'
     else:
-        installer = str(cfg.get('client_installer_url', '') or '').strip()
+        installer = resolve_configured_installer_url(cfg, windows=False)
         installer_label = 'client installer URL'
 
     reject_control_chars('--note', a.note)
@@ -837,7 +1386,7 @@ def main(argv=None):
             here = Path(__file__).resolve()
             for path in (
                 here.parent.parent / 'lib' / 'frp_audit.py',
-                Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+                Path('/usr/local/lib/drlink/frp_audit.py'),
             ):
                 if path.is_file():
                     spec = importlib.util.spec_from_file_location('frp_audit', str(path))
@@ -853,17 +1402,18 @@ def main(argv=None):
         return 0
 
     if a.ssh and not ssh_user and not is_interactive_stdin():
-        fail(NONINTERACTIVE_SSH_USER_ERROR)
+        # Optional connection-example metadata; enrollment proceeds without it.
+        ssh_user = ''
 
     if not installer:
         if platform == 'windows':
             fail(
                 'Windows client installer URL is not configured; '
-                'set windows_client_installer_url before --one-line --platform windows'
+                'set windows-installer-url <URL> before creating a Windows Zero-Touch client'
             )
         fail(
             'client installer URL is not configured; '
-            'run sudo frp-set-client-installer-url before --one-line'
+            'run: set installer-url <URL>'
         )
     if not allocator:
         fail('allocator public URL is not configured; cannot generate a zero-touch command')
@@ -876,15 +1426,20 @@ def main(argv=None):
     if alloc_mod is None:
         fail('allocator module is missing')
 
-    if is_interactive_stdin() and (not client_name or not str(a.note or '').strip()):
-        client_name, note = prompt_client_identification(client_name, note)
+    # Identification is collected once. When --client-name was already supplied
+    # (guided wrapper), accept a blank --note without a second prompt.
+    if is_interactive_stdin() and not client_name:
+        client_name, note = prompt_client_identification(None, None)
         reject_control_chars('--client-name', client_name)
         reject_control_chars('--note', note)
 
     rdp_local = None
     if a.ssh:
-        ssh_user, ssh_port = resolve_zero_touch_ssh(ssh_user, ssh_port, port_explicit)
-        reject_control_chars('--ssh-user', ssh_user)
+        ssh_user, ssh_port = resolve_zero_touch_ssh(
+            ssh_user, ssh_port, port_explicit, user_explicit=ssh_user_explicit
+        )
+        if ssh_user:
+            reject_control_chars('--ssh-user', ssh_user)
         raw_services = [ssh_service(ssh_user, ssh_port)]
     elif a.rdp:
         raw_services = [rdp_service(rdp_port)]
@@ -898,7 +1453,12 @@ def main(argv=None):
         fail(str(exc))
 
     ssh_user, ssh_pre_port = first_ssh_preflight(services)
-    print_client_configuration(client_name, note, ssh_user, ssh_pre_port)
+    print_client_configuration(client_name, note, services=services, ssh_user=ssh_user, ssh_port=ssh_pre_port)
+    if not confirm_client_setup():
+        return 0
+
+    installer_label = 'Windows client installer' if platform == 'windows' else 'Client installer'
+    preflight_installer_url(installer, label=installer_label)
 
     bootstrap_cfg = str(cfg.get('bootstrap_dir') or '').strip()
     if bootstrap_cfg:
@@ -908,13 +1468,29 @@ def main(argv=None):
 
     try:
         ticket, _enroll_record, ticket_record = alloc_mod.issue_bootstrap_ticket(
-            enroll_dir, bootstrap_dir, services, ttl, note, label=client_name
+            enroll_dir,
+            bootstrap_dir,
+            services,
+            ttl,
+            note,
+            label=client_name,
+            cfg=remapped_server_cfg(cfg),
         )
     except Exception as exc:
+        if type(exc).__name__ == 'ZeroTouchCapacityError' or 'MAX_ISSUABLE' in str(exc):
+            fail(str(exc))
         fail('failed to issue bootstrap ticket: %s' % exc)
 
     ticket_id = str((ticket_record or {}).get('id') or '')
+    short_handle = ''
+    stage1_sha256 = ''
+    if isinstance(ticket_record, dict):
+        short_handle = str(ticket_record.pop('_short_handle', '') or '')
+        renderer = ticket_record.get('windows_renderer') or {}
+        if isinstance(renderer, dict):
+            stage1_sha256 = str(renderer.get('stage1_sha256') or '')
     bootstrap_hostname = str(cfg.get('bootstrap_hostname') or '').strip()
+    public_hostname = str(cfg.get('public_hostname') or '').strip()
     if platform == 'windows':
         print_one_line_windows(
             ticket,
@@ -930,6 +1506,10 @@ def main(argv=None):
             management_only=not services,
             ticket_id=ticket_id,
             bootstrap_hostname=bootstrap_hostname,
+            public_hostname=public_hostname,
+            cfg=cfg,
+            short_handle=short_handle,
+            stage1_sha256=stage1_sha256,
         )
     else:
         print_one_line(
@@ -947,12 +1527,15 @@ def main(argv=None):
             management_only=not services,
             ticket_id=ticket_id,
             bootstrap_hostname=bootstrap_hostname,
+            public_hostname=public_hostname,
+            cfg=cfg,
+            short_handle=short_handle,
         )
     try:
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))

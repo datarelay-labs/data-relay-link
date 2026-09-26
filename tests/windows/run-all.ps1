@@ -17,9 +17,16 @@ $tests = @(
     'test-persistence.ps1',
     'test-process-control.ps1',
     'test-zero-touch-command.ps1',
+    'test-windows-strict-launcher.ps1',
     'test-frpclient-entrypoint.ps1',
     'test-rdp-service.ps1',
     'test-zero-service.ps1',
+    'test-ticket-scope.ps1',
+    'test-backup-acl.ps1',
+    'test-client-id-recovery.ps1',
+    'test-zero-touch-lock.ps1',
+    'test-path-shim.ps1',
+    'test-runtime-log.ps1',
     'test-install-start-failure.ps1',
     'test-partial-resume.ps1',
     'test-pending-enroll-recovery.ps1',
@@ -36,6 +43,7 @@ $tests = @(
     'test-enroll-list-mapping.ps1',
     'test-apply-identity-auth.ps1',
     'test-service-cli.ps1',
+    'test-canonical-cli.ps1',
     'test-reconcile-release.ps1',
     'test-public-hostname.ps1',
     'test-sync-reconcile.ps1',
@@ -58,7 +66,7 @@ function Get-FrpTestHostExe {
 }
 
 $hostExe = Get-FrpTestHostExe
-Write-Host ("=== frp-auto-deploy Windows client tests (host={0} PS={1}) ===" -f $hostExe, $PSVersionTable.PSVersion)
+Write-Host ("=== Data Relay Link Windows client tests (host={0} PS={1}) ===" -f $hostExe, $PSVersionTable.PSVersion)
 foreach ($t in $tests) {
     $path = Join-Path $root $t
     Write-Host ""

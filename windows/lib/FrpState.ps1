@@ -20,38 +20,108 @@ function Initialize-FrpDirectories {
             New-Item -ItemType Directory -Path $d -Force | Out-Null
         }
     }
-    if (Test-FrpIsWindowsHost) {
-        Restrict-FrpDirectoryAcl -Path (Get-FrpStateDir)
-        Restrict-FrpDirectoryAcl -Path (Get-FrpConfigDir)
-        Restrict-FrpDirectoryAcl -Path (Get-FrpCertsDir)
+    # Backups hold copies of frpc.toml, which carries the plaintext FRP token,
+    # so they are restricted exactly like config/state/certs.
+    foreach ($sensitive in @((Get-FrpStateDir), (Get-FrpConfigDir), (Get-FrpCertsDir), (Get-FrpBackupDir))) {
+        Restrict-FrpDirectoryAcl -Path $sensitive
     }
 }
 
 function Restrict-FrpDirectoryAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
-    if (-not (Test-FrpIsWindowsHost)) { return }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     if ($env:FRP_WINDOWS_FAIL_ACL -eq '1') {
         throw 'ERROR: simulated ACL failure (FRP_WINDOWS_FAIL_ACL=1)'
     }
-    try {
-        $acl = Get-Acl -LiteralPath $Path
-        $acl.SetAccessRuleProtection($true, $false)
-        foreach ($rule in @($acl.Access)) {
-            try { [void]$acl.RemoveAccessRule($rule) } catch { }
+    if (Test-FrpIsWindowsHost) {
+        try {
+            $acl = Get-Acl -LiteralPath $Path
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($rule in @($acl.Access)) {
+                try { [void]$acl.RemoveAccessRule($rule) } catch { }
+            }
+            $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+            $prop = [System.Security.AccessControl.PropagationFlags]::None
+            $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+            $type = [System.Security.AccessControl.AccessControlType]::Allow
+            foreach ($id in @('NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators')) {
+                $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($id, $rights, $inherit, $prop, $type)
+                $acl.AddAccessRule($rule)
+            }
+            Set-Acl -LiteralPath $Path -AclObject $acl
+        } catch {
+            throw ("ERROR: failed to restrict directory ACL: {0}" -f $Path)
         }
-        $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        $prop = [System.Security.AccessControl.PropagationFlags]::None
-        $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
-        $type = [System.Security.AccessControl.AccessControlType]::Allow
-        foreach ($id in @('NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators')) {
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($id, $rights, $inherit, $prop, $type)
-            $acl.AddAccessRule($rule)
-        }
-        Set-Acl -LiteralPath $Path -AclObject $acl
-    } catch {
-        throw ("ERROR: failed to restrict directory ACL: {0}" -f $Path)
+        return
     }
+    Set-FrpPosixMode -Path $Path -Mode '700'
+}
+
+function Set-FrpPosixMode {
+    <#
+    .SYNOPSIS
+      Owner-only permissions for the non-Windows test host, where the Windows
+      ACL model does not exist. Prefers the in-process API so the hot paths do
+      not fork chmod on every state write.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ValidateSet('600', '700')][string]$Mode = '600'
+    )
+    $target = $(if ($Mode -eq '700') { 'UserRead,UserWrite,UserExecute' } else { 'UserRead,UserWrite' })
+    try {
+        $desired = [System.IO.UnixFileMode]$target
+        if ([System.IO.File]::GetUnixFileMode($Path) -ne $desired) {
+            [System.IO.File]::SetUnixFileMode($Path, $desired)
+        }
+        return
+    } catch { }
+    try {
+        & chmod $Mode -- $Path 2>$null
+    } catch { }
+}
+
+function New-FrpProtectedDirectory {
+    <#
+    .SYNOPSIS
+      Create a directory and apply the product-enforced restrictive ACL
+      (SYSTEM / Administrators only on Windows, 0700 on a test host).
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+    Restrict-FrpDirectoryAcl -Path $Path
+    return $Path
+}
+
+function Copy-FrpProtectedFile {
+    <#
+    .SYNOPSIS
+      Copy a file that may carry the plaintext FRP token (frpc.toml) or other
+      sensitive state, restricting the copy before returning.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    Restrict-FrpFileAcl -Path $Destination
+    return $Destination
+}
+
+function New-FrpBackupRoot {
+    <#
+    .SYNOPSIS
+      Create a timestamped, ACL-restricted backup directory under backups\.
+      Every caller snapshots frpc.toml, so the directory must never inherit
+      permissive parent ACLs.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Prefix)
+    Initialize-FrpDirectories
+    $null = New-FrpProtectedDirectory -Path (Get-FrpBackupDir)
+    $name = '{0}-{1}-{2}' -f $Prefix, (Get-Date -Format 'yyyyMMddHHmmss'), [guid]::NewGuid().ToString('N').Substring(0, 8)
+    return (New-FrpProtectedDirectory -Path (Join-Path (Get-FrpBackupDir) $name))
 }
 
 function Restrict-FrpFileAcl {
@@ -79,10 +149,7 @@ function Restrict-FrpFileAcl {
         }
         return
     }
-    # Linux / test host: chmod 600 best-effort
-    try {
-        & chmod 600 -- $Path 2>$null
-    } catch { }
+    Set-FrpPosixMode -Path $Path -Mode '600'
 }
 
 function Get-FrpExpectedHostId {
@@ -102,19 +169,112 @@ function Get-FrpExpectedHostId {
     return ('{0}-{1}' -f $safe, $mid)
 }
 
-function Get-FrpOrCreateClientId {
-    Initialize-FrpDirectories
+function Test-FrpClientIdWellFormed {
+    <#
+    .SYNOPSIS
+      Shape check for the immutable client id. New ids are 32 hex characters;
+      the wider charset keeps ids written by older releases usable.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Value)
+    $v = ([string]$Value).Trim()
+    if ($v.Length -lt 16) { return $false }
+    return ($v -match '^[A-Za-z0-9._-]+$')
+}
+
+function Write-FrpClientIdFile {
+    param([Parameter(Mandatory = $true)][string]$ClientId)
     $path = Get-FrpClientIdPath
-    if (Test-Path -LiteralPath $path) {
-        $id = ([System.IO.File]::ReadAllText($path)).Trim()
-        if ($id.Length -ge 16) { return $id }
-    }
-    $id = New-FrpClientId
     $tmp = "$path.tmp"
-    [System.IO.File]::WriteAllText($tmp, $id + "`n")
+    [System.IO.File]::WriteAllText($tmp, $ClientId + "`n")
     Restrict-FrpFileAcl -Path $tmp
     Move-Item -LiteralPath $tmp -Destination $path -Force
     Restrict-FrpFileAcl -Path $path
+    return $path
+}
+
+function Get-FrpCommittedMachineId {
+    <#
+    .SYNOPSIS
+      The machine id this host has already committed to, taken from
+      client-state.json (authoritative) or, before the state file exists, from
+      the crash-safe pending-enrollment record. Returns $null when this host
+      has never committed one. Throws when a record exists but cannot be
+      trusted: silently inventing a new id there would orphan the server-side
+      reservations bound to the old one.
+    #>
+    $stateId = $null
+    $statePath = Get-FrpStatePath
+    if (Test-Path -LiteralPath $statePath) {
+        $state = $null
+        try {
+            $state = Read-FrpClientState
+        } catch {
+            throw 'ERROR: client-state.json is present but unreadable, so this host''s machine id cannot be confirmed. Refusing to generate a new client identity. Restore client-state.json, or uninstall locally and re-enroll.'
+        }
+        $stateId = ([string]$state.machine_id).Trim()
+        if (-not (Test-FrpClientIdWellFormed -Value $stateId)) {
+            throw 'ERROR: client-state.json does not contain a usable machine_id. Refusing to generate a new client identity. Restore client-state.json, or uninstall locally and re-enroll.'
+        }
+    }
+    $pendingId = $null
+    $pending = Get-FrpPendingEnrollRaw
+    if ($null -ne $pending) {
+        $candidate = ([string]$pending.machine_id).Trim()
+        if (Test-FrpClientIdWellFormed -Value $candidate) { $pendingId = $candidate }
+    }
+    if ($stateId -and $pendingId -and $stateId -ne $pendingId) {
+        throw ("ERROR: local records disagree about this host's machine id (client-state.json '{0}' vs enroll-pending.json '{1}'). Refusing to guess. Uninstall locally and re-enroll." -f $stateId, $pendingId)
+    }
+    if ($stateId) { return $stateId }
+    return $pendingId
+}
+
+function Get-FrpOrCreateClientId {
+    <#
+    .SYNOPSIS
+      Return this host's immutable client id, creating one only on a genuinely
+      fresh install. A missing, truncated, or corrupt client-id file is
+      recovered from the committed machine id when that is available, and is
+      otherwise a fail-closed error: a fresh random id would silently orphan
+      the client's server-side identity and port reservations.
+    #>
+    Initialize-FrpDirectories
+    $path = Get-FrpClientIdPath
+    $filePresent = Test-Path -LiteralPath $path
+    $fileId = $null
+    if ($filePresent) {
+        try {
+            $fileId = ([System.IO.File]::ReadAllText($path)).Trim()
+        } catch {
+            throw 'ERROR: the client id file exists but could not be read. Refusing to generate a new client identity. Restore state\client-id, or uninstall locally and re-enroll.'
+        }
+    }
+
+    $committedId = Get-FrpCommittedMachineId
+
+    if (Test-FrpClientIdWellFormed -Value $fileId) {
+        if ($committedId -and $committedId -ne $fileId) {
+            throw ("ERROR: client identity mismatch: state\client-id is '{0}' but this host is enrolled as '{1}'. Refusing to generate a new client identity, which would orphan the server-side reservations. Restore the matching state\client-id, or uninstall locally and re-enroll." -f $fileId, $committedId)
+        }
+        return $fileId
+    }
+
+    if ($committedId) {
+        if ($filePresent) {
+            Write-Host 'WARNING: state\client-id is corrupt; recovering the exact enrolled machine id from local records.'
+        } else {
+            Write-Host 'WARNING: state\client-id is missing; recovering the exact enrolled machine id from local records.'
+        }
+        Write-FrpClientIdFile -ClientId $committedId | Out-Null
+        return $committedId
+    }
+
+    if ($filePresent) {
+        throw 'ERROR: state\client-id is corrupt and no enrolled machine id is recorded locally, so the original client identity cannot be recovered. Refusing to generate a new one. Uninstall locally and re-enroll.'
+    }
+
+    $id = New-FrpClientId
+    Write-FrpClientIdFile -ClientId $id | Out-Null
     return $id
 }
 
@@ -591,7 +751,7 @@ function Save-FrpPendingEnroll {
       response needed to finish the local commit without another network
       round trip.
 
-      Stored under the Windows state directory (ProgramData\frp-auto-deploy\
+      Stored under the Windows state directory (ProgramData\drlink\
       state\enroll-pending.json by default), restricted ACL (SYSTEM /
       Administrators only), atomic replace (temp file + Move-Item). The
       enrollment secret is DPAPI-protected with LocalMachine scope on a real

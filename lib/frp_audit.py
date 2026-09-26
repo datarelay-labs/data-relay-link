@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append-only structured audit log for frp-auto-deploy.
+"""Append-only structured audit log for Data Relay Link.
 
 Audit failures must not corrupt the primary operation. Callers should treat
 write errors as warnings unless they explicitly choose fail-closed.
@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AUDIT_SCHEMA = 1
-DEFAULT_AUDIT_PATH = "/var/log/frp-auto-deploy/audit.jsonl"
+DEFAULT_AUDIT_PATH = "/var/log/drlink/audit.jsonl"
 MAX_RECORD_BYTES = 16_384
 SECRET_KEY_RE = re.compile(
     r"(ticket|secret|token|password|passwd|private.?key|mac_key|enrollment.?code|"
@@ -34,7 +34,13 @@ SECRET_VALUE_RE = re.compile(
 
 
 def _redact_short_url_paths(text):
-    return re.sub(r'(/i/)[^/?\s#]+', r'\1<redacted>', str(text), flags=re.IGNORECASE)
+    text = re.sub(r'(/i/)[^/?\s#]+', r'\1<redacted>', str(text), flags=re.IGNORECASE)
+    return re.sub(
+        r'(FRP_BOOTSTRAP_TICKET\s*=\s*)\S+',
+        r'\1<redacted>',
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 class AuditError(Exception):
@@ -90,7 +96,7 @@ def _atomic_append(path: Path, line: str):
     if not path.exists():
         path.touch()
         os.chmod(path, 0o600)
-        os.chmod(path.parent, 0o700)
+        # Do NOT chmod shared /var/log/drlink parent — clears egress ACL/mask.
     else:
         mode = stat.S_IMODE(path.stat().st_mode)
         if mode & 0o077:
@@ -172,8 +178,8 @@ def discover_audit_path(caller_file=None):
         candidates.append(here.parent.parent / "lib" / "frp-auto-deploy" / "frp_audit.py")
     root = os.environ.get("FRP_DEPLOY_TEST_ROOT", "")
     if root:
-        candidates.append(Path(root) / "usr/local/lib/frp-auto-deploy/frp_audit.py")
-    candidates.append(Path("/usr/local/lib/frp-auto-deploy/frp_audit.py"))
+        candidates.append(Path(root) / "usr/local/lib/drlink/frp_audit.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_audit.py"))
     here = Path(__file__).resolve()
     candidates.append(here)
     for path in candidates:
@@ -228,7 +234,7 @@ def main(argv=None):
     import argparse
     import sys
 
-    parser = argparse.ArgumentParser(description="Append or show frp-auto-deploy audit events")
+    parser = argparse.ArgumentParser(description="Append or show Data Relay Link audit events")
     parser.add_argument("action", nargs="?", default="tail", choices=["emit", "tail"])
     parser.add_argument("--event")
     parser.add_argument("--actor", default="local-root")

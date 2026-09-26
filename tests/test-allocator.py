@@ -690,7 +690,7 @@ def case_unreadable_host_version_fallback():
     real_is_file = Path.is_file
 
     def fake_is_file(self, *args, **kwargs):
-        if str(self) == '/etc/frp-auto-deploy/version':
+        if str(self) == '/etc/drlink/version':
             raise PermissionError(13, 'Permission denied', str(self))
         return real_is_file(self, *args, **kwargs)
 
@@ -699,6 +699,56 @@ def case_unreadable_host_version_fallback():
     if got != expected:
         fail('unreadable host version fallback', got)
     pass_('unreadable 0700 host version falls back')
+
+
+def case_fixed_tcp_pool_port_allowed():
+    env = Env(port_start=6000, port_end=6098)
+    try:
+        env.registry.write_text(json.dumps({
+            'schema_version': 2,
+            'reserved': [6200],
+            'clients': {
+                'aaaaaaaa11111111aaaaaaaa11111111': {
+                    'hostname': 'host-a',
+                    'services': {
+                        'fixed1': {
+                            'remote_port': 6200,
+                            'enabled': True,
+                            'local_ip': '127.0.0.1',
+                            'local_port': 443,
+                        },
+                    },
+                },
+            },
+        }) + '\n')
+        env.allocator.load_registry()
+        pass_('legacy untagged Fixed TCP pool port 6200 allowed')
+        env.registry.write_text(json.dumps({
+            'schema_version': 2,
+            'reserved': [6500],
+            'clients': {
+                'aaaaaaaa11111111aaaaaaaa11111111': {
+                    'hostname': 'host-a',
+                    'services': {
+                        'bad': {
+                            'remote_port': 6500,
+                            'enabled': True,
+                            'local_ip': '127.0.0.1',
+                            'local_port': 80,
+                        },
+                    },
+                },
+            },
+        }) + '\n')
+        try:
+            env.allocator.load_registry()
+            fail('port 6500 should be outside configured ranges')
+        except MOD.RegistrySchemaError as exc:
+            if 'outside configured range' not in str(exc):
+                fail('outside-range message', exc)
+        pass_('port outside service and Fixed TCP pools rejected')
+    finally:
+        env.cleanup()
 
 
 def main():
@@ -719,6 +769,7 @@ def main():
     case_future_schema_rejected()
     case_malformed_registry_rejected()
     case_duplicate_port_rejected()
+    case_fixed_tcp_pool_port_allowed()
     case_registry_write_failure()
     case_lost_response_retry()
     case_range_6000_exhaustion()

@@ -4,6 +4,7 @@
 Immutable identity is machine_id. Hostname is observed from the client.
 label/note/tags/group_ids are server-owned and must survive re-enrollment.
 """
+import importlib.util
 import ipaddress
 import json
 import os
@@ -15,6 +16,20 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def durable_replace(tmp, path):
+    """Shared durable replace (lib/frp_control_locks.py)."""
+    mod = sys.modules.get('frp_control_locks')
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            'frp_control_locks', str(Path(__file__).resolve().parent / 'frp_control_locks.py')
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules['frp_control_locks'] = mod
+        spec.loader.exec_module(mod)
+    return mod.durable_replace(tmp, path)
+
 
 LABEL_MAX_LEN = 64
 NOTE_MAX_LEN = 1024
@@ -201,6 +216,27 @@ def passive_port_state(port, snapshot=None):
     if not known:
         return 'unknown'
     return 'online' if port in ports else 'offline'
+
+
+def inventory_online_status(client, snapshot=None):
+    """Aggregate enabled-service reachability for server client list."""
+    services = enabled_services(client)
+    if not services:
+        return 'MGMT-ONLY'
+    states = [passive_port_state(svc.get('remote_port'), snapshot) for _sid, svc in services]
+    if all(state == 'unknown' for state in states):
+        return 'UNKNOWN'
+    online = sum(1 for state in states if state == 'online')
+    offline = sum(1 for state in states if state == 'offline')
+    if online == len(services) and offline == 0:
+        return 'ONLINE'
+    if offline == len(services) and online == 0:
+        return 'OFFLINE'
+    if online > 0 and offline > 0:
+        return 'PARTIAL'
+    if online > 0:
+        return 'PARTIAL'
+    return 'OFFLINE'
 
 
 def validate_label(value, required=False):
@@ -403,7 +439,7 @@ def resolve_client(state, query):
 
     label_matches = [
         item for item in clients
-        if str(item[1].get('label') or '').strip() == query
+        if str(item[1].get('label') or '').strip().lower() == query.lower()
     ]
     if len(label_matches) == 1:
         return label_matches[0]
@@ -412,7 +448,7 @@ def resolve_client(state, query):
 
     host_matches = [
         item for item in clients
-        if str(item[1].get('hostname') or '').strip() == query
+        if str(item[1].get('hostname') or '').strip().lower() == query.lower()
     ]
     if len(host_matches) == 1:
         return host_matches[0]
@@ -420,6 +456,32 @@ def resolve_client(state, query):
         raise ClientLookupError('multiple clients matched', host_matches)
 
     raise ClientLookupError('client not found')
+
+
+def find_client_id_by_label(state, label, exclude_id=None):
+    """Return client id with the same label (case-insensitive), else None."""
+    wanted = str(label or '').strip().lower()
+    if not wanted:
+        return None
+    for mid, client in sorted_clients(state):
+        if exclude_id and mid == exclude_id:
+            continue
+        if str((client or {}).get('label') or '').strip().lower() == wanted:
+            return mid
+    return None
+
+
+def find_client_id_by_hostname(state, hostname, exclude_id=None):
+    """Return client id with the same hostname (case-insensitive), else None."""
+    wanted = str(hostname or '').strip().lower()
+    if not wanted:
+        return None
+    for mid, client in sorted_clients(state):
+        if exclude_id and mid == exclude_id:
+            continue
+        if str((client or {}).get('hostname') or '').strip().lower() == wanted:
+            return mid
+    return None
 
 
 def resolve_client_or_exit(state, query):
@@ -587,7 +649,10 @@ def resolve_group(state, query):
         return prefixes[0]
     if len(prefixes) > 1:
         raise GroupLookupError('multiple groups matched', prefixes)
-    names = [item for item in groups if str(item[1].get('name') or '').strip() == query]
+    names = [
+        item for item in groups
+        if str(item[1].get('name') or '').strip().lower() == lower
+    ]
     if len(names) == 1:
         return names[0]
     if len(names) > 1:
@@ -617,9 +682,11 @@ def resolve_manual_group_or_exit(state, query):
 
 
 def find_group_id_by_name(state, name, exclude_id=None):
-    wanted = str(name or '').strip()
+    wanted = str(name or '').strip().lower()
+    if not wanted:
+        return None
     for gid, group in sorted_groups(state):
-        if gid != exclude_id and str(group.get('name') or '').strip() == wanted:
+        if gid != exclude_id and str(group.get('name') or '').strip().lower() == wanted:
             return gid
     return None
 
@@ -669,6 +736,103 @@ def client_group_memberships(state, client):
     return out
 
 
+def group_invariant_issues(state):
+    """Canonical group invariants for a registry document.
+
+    Single implementation shared by the allocator load path, doctor,
+    restore staged preflight, and the group tooling so all four agree on
+    what a structurally valid group map is. Returns a list of
+    operator-readable issues; an empty list means the group state is sound.
+    """
+    if not isinstance(state, dict):
+        return ['registry is not an object']
+    groups = state.get('groups')
+    if groups is None:
+        groups = {}
+    if not isinstance(groups, dict):
+        return ['registry groups is not an object']
+    issues = []
+    names = {}
+    valid_group_ids = set()
+    for gid, group in groups.items():
+        if not isinstance(gid, str) or not GROUP_ID_RE.fullmatch(gid):
+            issues.append('invalid group id %s' % sanitize_display(gid, 32))
+            continue
+        valid_group_ids.add(gid)
+        if not isinstance(group, dict):
+            issues.append('group %s record is not an object' % gid)
+            continue
+        name = group.get('name')
+        if not isinstance(name, str):
+            issues.append('group %s has invalid name' % gid)
+            continue
+        if is_reserved_group_name(name):
+            issues.append(
+                'group %s uses reserved name %s' % (gid, sanitize_display(name, 64))
+            )
+            continue
+        try:
+            validate_group_name(name)
+        except ValueError:
+            issues.append('group %s has invalid name' % gid)
+            continue
+        key = name.strip().lower()
+        if key in names:
+            issues.append('duplicate group name %s' % sanitize_display(name, 64))
+        names[key] = gid
+        description = group.get('description')
+        if description is not None:
+            if not isinstance(description, str):
+                issues.append('group %s has invalid description' % gid)
+            else:
+                try:
+                    validate_group_description(description)
+                except ValueError:
+                    issues.append('group %s has invalid description' % gid)
+    clients = state.get('clients')
+    if clients is None:
+        clients = {}
+    if not isinstance(clients, dict):
+        issues.append('registry clients is not an object')
+        return issues
+    for mid, client in clients.items():
+        if not isinstance(client, dict):
+            continue
+        group_ids = client.get('group_ids')
+        if group_ids is None:
+            continue
+        short = sanitize_display(str(mid)[:12], 12)
+        if not isinstance(group_ids, list):
+            issues.append('client %s group_ids must be a list' % short)
+            continue
+        seen = set()
+        for gid in group_ids:
+            if not isinstance(gid, str) or not GROUP_ID_RE.fullmatch(gid):
+                issues.append('client %s has invalid group id' % short)
+            elif gid in seen:
+                issues.append('client %s has duplicate group id %s' % (short, gid))
+            elif gid not in valid_group_ids:
+                issues.append(
+                    'client %s references nonexistent group %s' % (short, gid)
+                )
+            seen.add(gid)
+    return issues
+
+
+class GroupInvariantError(ValueError):
+    def __init__(self, issues):
+        self.issues = list(issues or [])
+        super().__init__('; '.join(self.issues) or 'group invariants failed')
+
+
+def validate_group_invariants(state):
+    """Raise GroupInvariantError when group state is corrupt. Never repairs."""
+    issues = group_invariant_issues(state)
+    if issues:
+        raise GroupInvariantError(issues)
+    return state
+
+
 def apply_observed_fields(client, hostname=None, source_ip=None, seen_at=None):
     if not isinstance(client, dict):
         return client
@@ -696,7 +860,10 @@ def atomic_write_json(path, data, mode=0o600):
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        # The registry is the authority for client identity and port
+        # reservations: losing the rename to a power failure would revive a
+        # superseded document and hand out ports that are already in use.
+        durable_replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             try:
@@ -712,14 +879,14 @@ def atomic_write_json(path, data, mode=0o600):
 def load_server_registry(root=None):
     if root is None:
         root = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-    cfg_path = Path(str(root) + '/etc/frp-auto-deploy/config.json')
+    cfg_path = Path(str(root) + '/etc/drlink/config.json')
     cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
     path = Path(cfg['registry_file'])
     if root and not str(path).startswith(str(root)):
         path = Path(str(root) + str(path))
     if not path.exists():
         raise FileNotFoundError(
-            'registry.json is missing (authoritative registry state required)'
+            'registry.json is missing (legacy registry file missing (migrate to SQLite control plane))'
         )
     state = json.loads(path.read_text(encoding='utf-8'))
     return cfg, path, state

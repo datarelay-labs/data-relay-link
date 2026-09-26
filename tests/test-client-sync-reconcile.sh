@@ -11,19 +11,19 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 TREE="$WORKDIR/client-root"
 mkdir -p \
   "$TREE/etc/frp" \
-  "$TREE/etc/frp-auto-deploy" \
-  "$TREE/usr/local/lib/frp-auto-deploy" \
-  "$TREE/var/lib/frp-auto-deploy"
-cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
-cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-common.sh"
-cp "$ROOT/lib/frp_mgmt_auth.py" "$TREE/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py"
-cp "$ROOT/lib/frp_health_check.py" "$TREE/usr/local/lib/frp-auto-deploy/frp_health_check.py"
+  "$TREE/etc/drlink" \
+  "$TREE/usr/local/lib/drlink" \
+  "$TREE/var/lib/drlink"
+cp "$ROOT/lib/frp-client-common.sh" "$TREE/usr/local/lib/drlink/frp-client-common.sh"
+cp "$ROOT/lib/frp-common.sh" "$TREE/usr/local/lib/drlink/frp-common.sh"
+cp "$ROOT/lib/frp_mgmt_auth.py" "$TREE/usr/local/lib/drlink/frp_mgmt_auth.py"
+cp "$ROOT/lib/frp_health_check.py" "$TREE/usr/local/lib/drlink/frp_health_check.py"
 if [[ -f "$ROOT/lib/frp-macos.sh" ]]; then
-  cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/frp-auto-deploy/frp-macos.sh"
+  cp "$ROOT/lib/frp-macos.sh" "$TREE/usr/local/lib/drlink/frp-macos.sh"
 fi
 
 export FRP_CLIENT_TEST_ROOT="$TREE"
-export FRP_CLIENT_LIB="$TREE/usr/local/lib/frp-auto-deploy/frp-client-common.sh"
+export FRP_CLIENT_LIB="$TREE/usr/local/lib/drlink/frp-client-common.sh"
 export FRP_SKIP_SYSTEMD=1
 export FRP_SKIP_DOWNLOAD=1
 # Do not skip connectivity unless a case opts in; mocks/hooks drive the network.
@@ -264,7 +264,7 @@ pass "SYNC_NO_CHANGE_SUCCESS"
 
 # 13. apply does not continue after required reconcile failure
 write_state ''
-python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/drlink/client-draft.json" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 src, dest = Path(sys.argv[1]), Path(sys.argv[2])
@@ -275,7 +275,7 @@ dest.write_text(json.dumps(d, indent=2, sort_keys=True) + '\n', encoding='utf-8'
 PY
 BEFORE="$(sha256sum "$TREE/etc/frp/client-state.json" | awk '{print $1}')"
 export FRP_CLIENT_HOOK_RECONCILE_UNREACHABLE=1
-export FRP_CLIENT_CANDIDATE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_CANDIDATE="$TREE/var/lib/drlink/client-draft.json"
 export FRP_CLIENT_TOOL_SOURCED=1
 set +e
 bash -c '
@@ -296,7 +296,7 @@ pass "APPLY_ABORTS_AFTER_RECONCILE_FAILURE"
 
 # 14. local-only apply remains local-only
 write_state ''
-python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/drlink/client-draft.json" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 src, dest = Path(sys.argv[1]), Path(sys.argv[2])
@@ -307,7 +307,7 @@ dest.write_text(json.dumps(d, indent=2, sort_keys=True) + '\n', encoding='utf-8'
 PY
 export FRP_SKIP_CONNECTIVITY_CHECK=1
 export FRP_CLIENT_HOOK_RECONCILE_UNREACHABLE=1
-export FRP_CLIENT_CANDIDATE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_CANDIDATE="$TREE/var/lib/drlink/client-draft.json"
 set +e
 bash -c '
   source "$ROOT/tools/frp-client"
@@ -418,7 +418,7 @@ pass "FRESH_INSTALL_OUTPUT_MATCHES_INFO"
 # services that have not been allocated yet. Released committed services
 # must still be dropped from both committed state and the draft.
 write_state ''
-python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/drlink/client-draft.json" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 src, dest = Path(sys.argv[1]), Path(sys.argv[2])
@@ -435,13 +435,13 @@ draft['services']['e2ehttp'] = {
 dest.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 export FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'
-export CANDIDATE_FILE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export CANDIDATE_FILE="$TREE/var/lib/drlink/client-draft.json"
 export FRP_CLIENT_CANDIDATE="$CANDIDATE_FILE"
 run_reconcile
 unset FRP_CLIENT_RECONCILE_REGISTRY_IDS CANDIDATE_FILE FRP_CLIENT_CANDIDATE
 [[ "$RECONCILE_RC" -eq 0 ]] || fail "pending-add reconcile rc=$RECONCILE_RC $(cat "$WORKDIR/reconcile.err")"
 [[ "$(state_json "sorted(state['services'])")" == "['ssh']" ]] || fail "committed gained pending add"
-python3 - "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "pending add stripped from draft"
+python3 - "$TREE/var/lib/drlink/client-draft.json" <<'PY' || fail "pending add stripped from draft"
 import json, sys
 from pathlib import Path
 d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
@@ -452,7 +452,7 @@ PY
 pass "RECONCILE_KEEPS_PENDING_ADD"
 
 write_state ''
-python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/drlink/client-draft.json" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 src, dest = Path(sys.argv[1]), Path(sys.argv[2])
@@ -465,13 +465,13 @@ draft['services']['e2ehttp'] = {
 dest.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 export FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'
-export CANDIDATE_FILE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export CANDIDATE_FILE="$TREE/var/lib/drlink/client-draft.json"
 export FRP_CLIENT_CANDIDATE="$CANDIDATE_FILE"
 run_reconcile
 unset FRP_CLIENT_RECONCILE_REGISTRY_IDS CANDIDATE_FILE FRP_CLIENT_CANDIDATE
 [[ "$RECONCILE_RC" -eq 0 ]] || fail "released+pending reconcile rc=$RECONCILE_RC"
 [[ "$(state_json "sorted(state['services'])")" == "['ssh']" ]] || fail "released web not dropped from committed"
-python3 - "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "draft should drop released web and keep pending http"
+python3 - "$TREE/var/lib/drlink/client-draft.json" <<'PY' || fail "draft should drop released web and keep pending http"
 import json, sys
 from pathlib import Path
 d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
@@ -483,7 +483,7 @@ PY
 pass "RECONCILE_DROPS_RELEASED_KEEPS_PENDING_ADD"
 
 write_state ''
-python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY'
+python3 - "$TREE/etc/frp/client-state.json" "$TREE/var/lib/drlink/client-draft.json" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 src, dest = Path(sys.argv[1]), Path(sys.argv[2])
@@ -499,7 +499,7 @@ draft['services']['e2ehttp'] = {
 dest.write_text(json.dumps(draft, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 export FRP_CLIENT_RECONCILE_REGISTRY_IDS='["ssh"]'
-export FRP_CLIENT_CANDIDATE="$TREE/var/lib/frp-auto-deploy/client-draft.json"
+export FRP_CLIENT_CANDIDATE="$TREE/var/lib/drlink/client-draft.json"
 export FRP_CLIENT_TOOL_SOURCED=1
 set +e
 bash -c '
@@ -510,7 +510,7 @@ bash -c '
 APPLY_ADD_RC=$?
 set -e
 unset FRP_CLIENT_RECONCILE_REGISTRY_IDS FRP_CLIENT_CANDIDATE
-python3 - "$TREE/var/lib/frp-auto-deploy/client-draft.json" <<'PY' || fail "apply reconcile stripped pending add"
+python3 - "$TREE/var/lib/drlink/client-draft.json" <<'PY' || fail "apply reconcile stripped pending add"
 import json, sys
 from pathlib import Path
 d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))

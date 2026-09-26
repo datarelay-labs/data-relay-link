@@ -1,0 +1,16 @@
+{
+  "id": "https-api",
+  "name": "https-api",
+  "kind": "profile",
+  "description": "Generic HTTPS API allowlist template (exact FQDN). Replace host before enable.",
+  "profile_name": "https-api",
+  "sources": [],
+  "destinations": [
+    {
+      "host": "api.example.com",
+      "port": 443,
+      "protocol": "https",
+      "match": "exact"
+    }
+  ]
+}

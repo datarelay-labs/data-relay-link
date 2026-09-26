@@ -13,6 +13,7 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 export FRP_CLIENT_SOURCED=1
 # shellcheck source=../install-client.sh
 . "$ROOT/install-client.sh"
+eval "$(declare -f frp_python_module_importable | sed '1s/frp_python_module_importable/frp_python_module_importable_real/')"
 
 FIXTURES="$ROOT/tests/fixtures/os-release"
 
@@ -362,7 +363,384 @@ fi
 FRP_DEPENDENCY_ROLE=server
 frp_required_commands | grep -qx ss || fail "server requires ss"
 frp_required_commands | grep -qx python3 || fail "server requires python3"
+MISSING_COMMANDS=()
+MISSING_PYTHON_PACKAGES=()
+# Simulate missing AUTO_ACME runtime on a clean server image.
+frp_python_module_importable() { return 1; }
+PACKAGE_MANAGER=apt
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme || fail "server missing acme maps to python3-acme"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-cryptography || fail "server missing cryptography mapped"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-yaml || fail "server missing yaml maps to python3-yaml"
+frp_packages_for_missing apt
+printf '%s\n' "${PACKAGES[@]}" | grep -qx python3-acme || fail "server PACKAGES includes python3-acme"
 pass "package name mapping"
+
+# Agent installs must pull a PyYAML package for the interpreter that will run.
+# apt-family is python3-yaml. Clean EL8 pairs python39 with python39-pyyaml.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-yaml-map"
+FRP_DEPENDENCY_ROLE=client
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+PACKAGE_MANAGER=apt
+DISTRO_ID=ubuntu
+DISTRO_VERSION=24.04
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-yaml || fail "apt client missing yaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme; then
+  fail "client role must not require AUTO_ACME packages"
+fi
+PACKAGE_MANAGER=dnf
+DISTRO_ID=rocky
+DISTRO_VERSION=8.10
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml || fail "clean EL8 client missing python39-pyyaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml; then
+  fail "clean EL8 must not select platform python3-pyyaml"
+fi
+[[ "$(frp_package_for_command python3 dnf)" == python39 ]] || fail "EL8 python3 package must stay python39"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+code="${2:-}"
+case "$code" in
+  *'sys.version_info[:2]'*) printf '3.11\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3.11-pyyaml || fail "EL8 python3.11 missing python3.11-pyyaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml; then
+  fail "live Rocky8 python3.11 must not select platform python3-pyyaml"
+fi
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
+  fail "live Rocky8 python3.11 must not select python39-pyyaml"
+fi
+pass "client yaml package mapping"
+
+# Live Rocky 8: active python3 is Python 3.11. python3-pyyaml is the platform
+# 3.6 ABI and must not satisfy import yaml on that interpreter.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-rocky311-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-rocky311-yaml"
+ROCKY311_STATE="$WORKDIR/rocky311-py-state"
+mkdir -p "$ROCKY311_STATE" "$FRP_TEST_PM_PATH"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=rocky
+DISTRO_VERSION=8.10
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<EOF
+#!/bin/sh
+code="\${2:-}"
+case "\$code" in
+  *'sys.version_info[:2]'*) printf '3.11\\n'; exit 0 ;;
+  *version_info*) exit 0 ;;
+  *'import yaml'*)
+    [ -f $(printf '%q' "$ROCKY311_STATE")/yaml311 ] && exit 0
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+ROCKY311_LOG="$WORKDIR/rocky311-yaml.log"
+: >"$ROCKY311_LOG"
+cat >"$FRP_TEST_PM_PATH/dnf" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$ROCKY311_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python3.11-pyyaml) touch $(printf '%q' "$ROCKY311_STATE")/yaml311 ;;
+    python3-pyyaml) touch $(printf '%q' "$ROCKY311_STATE")/yaml36 ;;
+    python39-pyyaml) touch $(printf '%q' "$ROCKY311_STATE")/yaml39 ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+eval "$(declare -f frp_python_module_importable_real | sed '1s/frp_python_module_importable_real/frp_python_module_importable/')"
+if ! ensure_dependencies >"$WORKDIR/rocky311-yaml.out" 2>"$WORKDIR/rocky311-yaml.err"; then
+  cat "$WORKDIR/rocky311-yaml.err" >&2
+  fail "live Rocky8 python3.11 ensure_dependencies must install python3.11-pyyaml"
+fi
+grep -q 'python3.11-pyyaml' "$ROCKY311_LOG" || fail "live Rocky8 must install python3.11-pyyaml"
+if grep -q 'python3-pyyaml' "$ROCKY311_LOG"; then
+  fail "live Rocky8 python3.11 must not install platform python3-pyyaml"
+fi
+if grep -q 'python39-pyyaml' "$ROCKY311_LOG"; then
+  fail "live Rocky8 python3.11 must not install python39-pyyaml"
+fi
+frp_prefer_newer_python || fail "live Rocky8 frp_prefer_newer_python"
+frp_invoke python3 -c 'import yaml' || fail "active Rocky8 python3.11 cannot import yaml after install"
+pass "live rocky8 python3.11 yaml abi"
+
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-yaml-fail"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-yaml-fail"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=rocky
+DISTRO_VERSION=8
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+mkdir -p "$FRP_TEST_PM_PATH"
+cat >"$FRP_TEST_PM_PATH/dnf" <<'EOF'
+#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = python39-pyyaml ]; then
+    echo "No match for argument: python39-pyyaml" >&2
+    exit 1
+  fi
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+frp_python_module_importable() { return 1; }
+if ensure_dependencies >"$WORKDIR/yaml-fail.out" 2>"$WORKDIR/yaml-fail.err"; then
+  fail "missing Rocky PyYAML must fail client ensure_dependencies"
+fi
+grep -q 'No match for argument: python39-pyyaml' "$WORKDIR/yaml-fail.err" || fail "yaml failure must keep the package manager error"
+grep -q 'required Python packages are missing' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name required Python packages"
+grep -q 'python39-pyyaml' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name python39-pyyaml"
+pass "client yaml install failure is deterministic"
+
+# Clean EL8: platform python3 is too old, installer selects python39, and
+# python3-pyyaml must not count as success for that interpreter.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-el8-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-el8-yaml"
+EL8_STATE="$WORKDIR/el8-py-state"
+mkdir -p "$EL8_STATE" "$FRP_TEST_PM_PATH"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=rocky
+DISTRO_VERSION=8.10
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<EOF
+#!/bin/sh
+code="\${2:-}"
+if [ -f $(printf '%q' "$EL8_STATE")/py39 ]; then
+  case "\$code" in
+    *'sys.version_info[:2]'*) printf '3.9\\n'; exit 0 ;;
+    *version_info*) exit 0 ;;
+    *'import yaml'*)
+      [ -f $(printf '%q' "$EL8_STATE")/yaml39 ] && exit 0
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+case "\$code" in
+  *'sys.version_info[:2]'*) printf '3.6\\n' ;;
+esac
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+EL8_LOG="$WORKDIR/el8-yaml.log"
+: >"$EL8_LOG"
+cat >"$FRP_TEST_PM_PATH/dnf" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$EL8_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python39) touch $(printf '%q' "$EL8_STATE")/py39 ;;
+    python39-pyyaml) touch $(printf '%q' "$EL8_STATE")/yaml39 ;;
+    python3-pyyaml) touch $(printf '%q' "$EL8_STATE")/yaml36 ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+eval "$(declare -f frp_python_module_importable_real | sed '1s/frp_python_module_importable_real/frp_python_module_importable/')"
+if ! ensure_dependencies >"$WORKDIR/el8-yaml.out" 2>"$WORKDIR/el8-yaml.err"; then
+  cat "$WORKDIR/el8-yaml.err" >&2
+  fail "clean EL8 ensure_dependencies must install python39-pyyaml and import yaml"
+fi
+grep -q 'python39' "$EL8_LOG" || fail "clean EL8 must install python39"
+grep -q 'python39-pyyaml' "$EL8_LOG" || fail "clean EL8 must install python39-pyyaml"
+if grep -q 'python3-pyyaml' "$EL8_LOG"; then
+  fail "clean EL8 must not install platform python3-pyyaml"
+fi
+PATH="$FRP_TEST_CMD_PATH" "$FRP_TEST_CMD_PATH/python3" -c 'import yaml' || fail "selected EL8 python3 cannot import yaml"
+frp_prefer_newer_python || fail "clean EL8 frp_prefer_newer_python"
+frp_invoke python3 -c 'import yaml' || fail "active python3 after prefer_newer_python cannot import yaml"
+pass "clean EL8 python39 yaml abi"
+
+# Amazon Linux 2 is container/CI portability only, not a ConfigurationBundle
+# target. Required YAML is not collected for client or server. Optional
+# server ACME packages may still be attempted.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-al2-yaml"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=amzn
+DISTRO_VERSION=2
+PACKAGE_MANAGER=yum
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+code="${2:-}"
+case "$code" in
+  *version_info*) exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+if ((${#MISSING_PYTHON_PACKAGES[@]} > 0)); then
+  fail "AL2 client must not require Python packages: ${MISSING_PYTHON_PACKAGES[*]}"
+fi
+mkdir -p "$FRP_TEST_PM_PATH"
+AL2_LOG="$WORKDIR/al2-client-yaml.log"
+: >"$AL2_LOG"
+cat >"$FRP_TEST_PM_PATH/yum" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$AL2_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python3-pyyaml|python3-PyYAML|python39-pyyaml|python3.11-pyyaml)
+      echo "AL2 must not install \$arg" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/yum"
+if ! ensure_dependencies >"$WORKDIR/al2-client.out" 2>"$WORKDIR/al2-client.err"; then
+  cat "$WORKDIR/al2-client.err" >&2
+  fail "AL2 client ensure_dependencies must not require PyYAML"
+fi
+if grep -E -q 'python3-pyyaml|python3-PyYAML|python39-pyyaml|python3\.11-pyyaml' "$AL2_LOG"; then
+  fail "AL2 client yum transaction included a PyYAML package"
+fi
+pass "amazon linux 2 client yaml not required"
+
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2-server-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-al2-server-yaml"
+FRP_DEPENDENCY_ROLE=server
+DISTRO_ID=amzn
+DISTRO_VERSION=2
+PACKAGE_MANAGER=yum
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -E -q 'pyyaml|PyYAML|python3-yaml'; then
+  fail "AL2 server must not collect a required YAML package"
+fi
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-acme || fail "AL2 server still collects optional python3-acme"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-cryptography || fail "AL2 server still collects optional python3-cryptography"
+mkdir -p "$FRP_TEST_PM_PATH"
+AL2_SERVER_LOG="$WORKDIR/al2-server-yaml.log"
+: >"$AL2_SERVER_LOG"
+cat >"$FRP_TEST_PM_PATH/yum" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$AL2_SERVER_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python3-pyyaml|python3-PyYAML|python39-pyyaml|python3.11-pyyaml)
+      echo "AL2 must not install \$arg" >&2
+      exit 1
+      ;;
+    python3-acme)
+      echo "No match for argument: python3-acme" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/yum"
+if ! ensure_dependencies >"$WORKDIR/al2-server.out" 2>"$WORKDIR/al2-server.err"; then
+  cat "$WORKDIR/al2-server.err" >&2
+  fail "AL2 server ensure_dependencies must not fail for missing PyYAML or ACME"
+fi
+grep -q 'optional AUTO_ACME' "$WORKDIR/al2-server.err" || fail "AL2 server must keep optional ACME soft-fail"
+if grep -E -q 'python3-pyyaml|python3-PyYAML|python39-pyyaml|python3\.11-pyyaml' "$AL2_SERVER_LOG"; then
+  fail "AL2 server yum transaction included a PyYAML package"
+fi
+grep -q 'python3-acme' "$AL2_SERVER_LOG" || fail "AL2 server should still attempt optional python3-acme"
+pass "amazon linux 2 server yaml not required"
+
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2023-yaml"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=amzn
+DISTRO_VERSION=2023
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+code="${2:-}"
+case "$code" in
+  *'sys.version_info[:2]'*) printf '3.9\n'; exit 0 ;;
+  *version_info*) exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "AL2023 client missing python3-pyyaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx 'python3-PyYAML'; then
+  fail "AL2023 must stay on python3-pyyaml"
+fi
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
+  fail "AL2023 must not use the EL8 python39-pyyaml package"
+fi
+pass "amazon linux 2023 pyyaml"
+
+# Optional AUTO_ACME packages must not abort server install when unavailable.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-acme-soft"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-acme-soft"
+FRP_DEPENDENCY_ROLE=server
+make_required_cmds "$FRP_TEST_CMD_PATH"
+mkdir -p "$FRP_TEST_PM_PATH"
+ACME_SOFT_LOG="$WORKDIR/acme-soft.log"
+: >"$ACME_SOFT_LOG"
+cat >"$FRP_TEST_PM_PATH/dnf" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>$(printf '%q' "$ACME_SOFT_LOG")
+for arg in "\$@"; do
+  if [ "\$arg" = python3-acme ]; then
+    echo "No match for argument: python3-acme" >&2
+    exit 1
+  fi
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+frp_detect_package_manager
+DISTRO_ID=rocky
+frp_python_module_importable() {
+  [[ "$1" == yaml ]]
+}
+if ! ensure_dependencies 2>"$WORKDIR/acme-soft.err"; then
+  fail "missing optional AUTO_ACME packages must not fail server ensure_dependencies"
+fi
+grep -q 'optional AUTO_ACME' "$WORKDIR/acme-soft.err" || fail "soft-fail warning for unavailable ACME packages"
+grep -q 'python3-acme' "$ACME_SOFT_LOG" || fail "dnf should still attempt python3-acme"
+pass "deps: optional AUTO_ACME soft-fail"
 
 # Host isolation: tests must not have invoked real apt-get/dnf/yum via the helpers
 # with an unset FRP_TEST_PM_PATH during install. Detection-only tests always set it.

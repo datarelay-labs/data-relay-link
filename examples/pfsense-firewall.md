@@ -10,7 +10,7 @@ Example topology:
 - Internal FRP server: `192.0.2.50`
 - FRP control: public TCP/8443 -> internal listen TCP/443
 - Allocator HTTPS: public TCP/9443 -> internal listen TCP/6099
-- FRP published services: TCP/6000-6098, 1:1 public/internal port numbers
+- Data Relay Link Remote Services: TCP/6000-6098, 1:1 public/internal port numbers
 
 Create three DNAT / Port Forward rules:
 

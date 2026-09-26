@@ -15,36 +15,58 @@ import tempfile
 import time
 from pathlib import Path
 
-FORMAT = "frp-auto-deploy-server-backup"
+FORMAT = "data-relay-link-server-backup"
 SCHEMA_VERSION = 1
-REQUIRED = (
-    "etc/frp-auto-deploy/config.json",
-    "etc/frp-auto-deploy/version",
-    "etc/frp-auto-deploy/pki/ca.key",
-    "etc/frp-auto-deploy/pki/ca.crt",
-    "etc/frp-auto-deploy/pki/server.key",
-    "etc/frp-auto-deploy/pki/server.crt",
+# Trust/config identity that is always required for a supported Server DR archive.
+# Canonical DB + config.json come from frp_state_paths SSOT (backup_policy=required).
+TRUST_REQUIRED = (
+    "etc/drlink/version",
+    "etc/drlink/pki/ca.key",
+    "etc/drlink/pki/ca.crt",
+    "etc/drlink/pki/server.key",
+    "etc/drlink/pki/server.crt",
     "etc/frp/frps.toml",
     "etc/frp/server_token",
-    "var/lib/frp-auto-deploy/registry.json",
-    "var/lib/frp-auto-deploy/access-control.json",
-    "var/lib/frp-auto-deploy/service-profiles.json",
+)
+def _load_state_paths():
+    candidates = []
+    try:
+        here = Path(__file__).resolve()
+        candidates.append(here.parent.parent / "lib" / "frp_state_paths.py")
+    except NameError:
+        # compile()/exec() harnesses may omit __file__.
+        pass
+    env_root = os.environ.get("ROOT") or os.environ.get("FRP_SOURCE_ROOT") or ""
+    if env_root:
+        candidates.append(Path(env_root) / "lib" / "frp_state_paths.py")
+    candidates.append(Path("/usr/local/lib/drlink/frp_state_paths.py"))
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("frp_state_paths", str(path))
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError("frp_state_paths.py is unavailable")
+
+
+_STATE_PATHS = _load_state_paths()
+REQUIRED = tuple(
+    dict.fromkeys((*_STATE_PATHS.backup_required_files(), *TRUST_REQUIRED))
 )
 OPTIONAL_FILES = (
-    "etc/frp-auto-deploy/frontend.conf",
-    "var/lib/frp-auto-deploy/mgmt-nonces.json",
-    "var/lib/frp-auto-deploy/nginx-ownership",
-    "var/log/frp-auto-deploy/audit.jsonl",
-    "var/log/frp-auto-deploy/access-conn.jsonl",
+    "etc/drlink/frontend.conf",
+    "var/lib/drlink/mgmt-nonces.json",
+    "var/lib/drlink/nginx-ownership",
+    *_STATE_PATHS.backup_optional_files(),
+    *_STATE_PATHS.backup_forensic_optional_files(),
 )
 OPTIONAL_TREES = (
-    "etc/frp-auto-deploy/pki",
-    "var/lib/frp-auto-deploy/enrollments",
-    "var/lib/frp-auto-deploy/bootstrap",
+    "etc/drlink/pki",
+    *_STATE_PATHS.backup_tree_roots(),
 )
-# Rotated audit companions (audit.jsonl.1 .. audit.jsonl.N).
-AUDIT_ROTATED_GLOB = "var/log/frp-auto-deploy/audit.jsonl.*"
-ACCESS_CONN_ROTATED_GLOB = "var/log/frp-auto-deploy/access-conn.jsonl.*"
+CONTROL_DB_REL = "var/lib/drlink/drlink.db"
 
 
 def fail(message: str) -> "NoReturn":
@@ -58,6 +80,67 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def snapshot_sqlite(source: Path, target: Path) -> None:
+    """Capture a consistent SQLite snapshot (includes WAL state via backup API)."""
+    import sqlite3
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        dest = sqlite3.connect(str(target))
+        try:
+            src.backup(dest)
+            # Flatten to a single-file DB so -wal/-shm are not archived.
+            dest.execute("PRAGMA journal_mode=DELETE")
+            dest.commit()
+        finally:
+            dest.close()
+    finally:
+        src.close()
+    for suffix in ("-wal", "-shm"):
+        companion = Path(str(target) + suffix)
+        try:
+            companion.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def control_db_manifest_fields(db_path: Path) -> dict:
+    """Bind canonical DB schema/revision into the DR manifest when readable."""
+    import sqlite3
+
+    info: dict = {"path": CONTROL_DB_REL}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return info
+    try:
+        try:
+            schema = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error:
+            schema = 0
+        try:
+            revision = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM config_revisions"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error:
+            revision = 0
+        if schema > 0:
+            info["schema_version"] = schema
+        info["revision"] = revision
+    finally:
+        conn.close()
+    return info
 
 
 def read_identity(path: Path) -> dict[str, str]:
@@ -91,7 +174,7 @@ def _load_locks():
     here = Path(__file__).resolve()
     candidates = (
         here.parent.parent / "lib" / "frp_control_locks.py",
-        Path("/usr/local/lib/frp-auto-deploy/frp_control_locks.py"),
+        Path("/usr/local/lib/drlink/frp_control_locks.py"),
     )
     for path in candidates:
         if path.is_file():
@@ -107,7 +190,7 @@ def _audit_emit(event, **kwargs):
         here = Path(__file__).resolve()
         candidates = (
             here.parent.parent / "lib" / "frp_audit.py",
-            Path("/usr/local/lib/frp-auto-deploy/frp_audit.py"),
+            Path("/usr/local/lib/drlink/frp_audit.py"),
         )
         for path in candidates:
             if path.is_file():
@@ -121,11 +204,14 @@ def _audit_emit(event, **kwargs):
 
 
 def collect_files(root: Path) -> list[tuple[str, Path]]:
+    # Pre-restore raw snapshots must capture whatever is present even when
+    # required control-state files are missing or damaged.
+    raw_snapshot = os.environ.get("FRP_BACKUP_RAW_SNAPSHOT") == "1"
     found: dict[str, Path] = {}
     for rel in REQUIRED:
-        source = safe_source(root, rel, required=True)
-        assert source is not None
-        found[rel] = source
+        source = safe_source(root, rel, required=not raw_snapshot)
+        if source is not None:
+            found[rel] = source
     for rel in OPTIONAL_FILES:
         source = safe_source(root, rel)
         if source is not None:
@@ -146,23 +232,8 @@ def collect_files(root: Path) -> list[tuple[str, Path]]:
                 found[child_rel] = source
             elif not source.is_dir():
                 fail(f"unsupported control-state entry: /{child_rel}")
-    # Include rotated audit logs with secure permissions preserved.
-    audit_dir = root / "var/log/frp-auto-deploy"
-    if audit_dir.is_dir() and not audit_dir.is_symlink():
-        for source in sorted(audit_dir.glob("audit.jsonl.*")):
-            if source.is_symlink() or not source.is_file():
-                continue
-            if source.name.endswith(".lock"):
-                continue
-            child_rel = source.relative_to(root).as_posix()
-            found[child_rel] = source
-        for source in sorted(audit_dir.glob("access-conn.jsonl.*")):
-            if source.is_symlink() or not source.is_file():
-                continue
-            if source.name.endswith(".lock"):
-                continue
-            child_rel = source.relative_to(root).as_posix()
-            found[child_rel] = source
+    for child_rel, source in _STATE_PATHS.collect_present_rotated_files(root):
+        found[child_rel] = source
     return sorted(found.items())
 
 
@@ -262,12 +333,27 @@ def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]], *, se
         for rel, source in files:
             target = payload / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            mode = stat.S_IMODE(source.stat().st_mode)
+            if rel == CONTROL_DB_REL:
+                try:
+                    snapshot_sqlite(source, target)
+                except Exception:
+                    if os.environ.get("FRP_BACKUP_RAW_SNAPSHOT") == "1":
+                        # Pre-restore evidence may include a damaged DB file.
+                        shutil.copyfile(source, target)
+                    else:
+                        raise
+                mode = 0o600
+            else:
+                shutil.copyfile(source, target)
+                mode = stat.S_IMODE(source.stat().st_mode)
             os.chmod(target, mode)
             entries.append({"path": rel, "sha256": sha256(target), "mode": mode})
 
-        identity = read_identity(root / "etc/frp-auto-deploy/version")
+        identity = read_identity(root / "etc/drlink/version")
+        control_db = None
+        db_staged = payload / CONTROL_DB_REL
+        if db_staged.is_file():
+            control_db = control_db_manifest_fields(db_staged)
         manifest = {
             "format": FORMAT,
             "schema_version": SCHEMA_VERSION,
@@ -280,6 +366,7 @@ def _stage_backup(root: Path, output: Path, files: list[tuple[str, Path]], *, se
                 for key, value in identity.items()
                 if key in {"source_ref", "bundle_sha256"}
             },
+            "control_db": control_db,
             "files": entries,
         }
         manifest_path = stage / "manifest.json"
@@ -320,7 +407,7 @@ def main() -> int:
         fail("run with sudo")
     root = Path(test_root or "/")
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    default = root / f"var/lib/frp-auto-deploy/backups/server-backup-{now}.tar.gz"
+    default = root / f"var/lib/drlink/backups/server-backup-{now}.tar.gz"
     if len(sys.argv) == 2:
         output = _validate_user_path(sys.argv[1], what="backup output path")
         parent = output.parent

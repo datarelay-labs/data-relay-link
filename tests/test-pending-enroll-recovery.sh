@@ -28,10 +28,19 @@ extract_bootstrap_ticket() {
 import base64, json, re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
-if not m:
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", text)
+if m:
+    print(m.group(1))
+    raise SystemExit(0)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
+if m:
+    package = m.group(0)
+elif re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text):
+    m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+    package = m.group(1)
+else:
     raise SystemExit('missing ticket')
-parts = m.group(1).split('.', 1)
+parts = package.split('.', 1)
 padded = parts[1] + ('=' * (-len(parts[1]) % 4))
 payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
 print(payload['t'])
@@ -100,7 +109,7 @@ pki = root / 'pki'
     'enrollments_dir': str(root / 'enrollments'),
     'bootstrap_dir': str(root / 'bootstrap'),
     'token_file': str(root / 'server_token'),
-    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
+    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/datarelay-link/main/dist/bootstrap-client.sh',
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
 }, indent=2) + '\n')
 PY
@@ -109,32 +118,32 @@ SSH_USER="$(id -un)"
 
 # Server-side tree used only by frp-create-client to mint tickets.
 LIVE_TREE="$WORKDIR/live-server"
-mkdir -p "$LIVE_TREE/etc/frp-auto-deploy" "$LIVE_TREE/var/lib/frp-auto-deploy" "$LIVE_TREE/etc/frp"
-cp -a "$ALLOC_ROOT/pki" "$LIVE_TREE/etc/frp-auto-deploy/pki"
+mkdir -p "$LIVE_TREE/etc/drlink" "$LIVE_TREE/var/lib/drlink" "$LIVE_TREE/etc/frp"
+cp -a "$ALLOC_ROOT/pki" "$LIVE_TREE/etc/drlink/pki"
 python3 - "$LIVE_TREE" "$ALLOC_PORT" <<'PY'
 import json, sys
 from pathlib import Path
 tree = Path(sys.argv[1])
 port = int(sys.argv[2])
-(tree / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
+(tree / 'etc/drlink/config.json').write_text(json.dumps({
     'public_host': '203.0.113.10',
     'public_ip': '203.0.113.10',
     'frp_control_public_port': 8443,
     'frp_control_listen_port': 443,
     'allocator_public_url': 'https://127.0.0.1:%s/enroll' % port,
-    'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
-    'tls_server_cert': '/etc/frp-auto-deploy/pki/server.crt',
-    'tls_server_key': '/etc/frp-auto-deploy/pki/server.key',
-    'client_installer_url': 'https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/main/dist/bootstrap-client.sh',
-    'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-    'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
-    'registry_file': '/var/lib/frp-auto-deploy/registry.json',
+    'tls_ca_cert': '/etc/drlink/pki/ca.crt',
+    'tls_server_cert': '/etc/drlink/pki/server.crt',
+    'tls_server_key': '/etc/drlink/pki/server.key',
+    'client_installer_url': 'https://raw.githubusercontent.com/datarelay-labs/datarelay-link/main/dist/bootstrap-client.sh',
+    'enrollments_dir': '/var/lib/drlink/enrollments',
+    'bootstrap_dir': '/var/lib/drlink/bootstrap',
+    'registry_file': '/var/lib/drlink/registry.json',
     'token_file': '/etc/frp/server_token',
 }, indent=2) + '\n')
 PY
-ln -sfn "$ALLOC_ROOT/enrollments" "$LIVE_TREE/var/lib/frp-auto-deploy/enrollments"
-ln -sfn "$ALLOC_ROOT/bootstrap" "$LIVE_TREE/var/lib/frp-auto-deploy/bootstrap"
-ln -sfn "$ALLOC_ROOT/registry.json" "$LIVE_TREE/var/lib/frp-auto-deploy/registry.json"
+ln -sfn "$ALLOC_ROOT/enrollments" "$LIVE_TREE/var/lib/drlink/enrollments"
+ln -sfn "$ALLOC_ROOT/bootstrap" "$LIVE_TREE/var/lib/drlink/bootstrap"
+ln -sfn "$ALLOC_ROOT/registry.json" "$LIVE_TREE/var/lib/drlink/registry.json"
 ln -sfn "$ALLOC_ROOT/server_token" "$LIVE_TREE/etc/frp/server_token"
 
 issue_ticket() {
@@ -147,7 +156,7 @@ run_client() {
   # run_client TREE TICKET MACHINE_ID OUT [EXTRA_ENV...]
   local tree="$1" ticket="$2" machine="$3" out="$4"
   shift 4
-  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/frp-auto-deploy"
+  mkdir -p "$tree/etc/frp" "$tree/usr/local/bin" "$tree/usr/local/lib/drlink"
   make_frpc "$tree/usr/local/bin/frpc"
   (
     export FRP_CLIENT_TEST_ROOT="$tree"
@@ -193,7 +202,9 @@ pending_path() { printf '%s' "$1/etc/frp/enroll-pending.json"; }
 # ---------------------------------------------------------------------------
 issue_ticket customer-redeemed >"$WORKDIR/t1-create.out"
 T1_TICKET="$(extract_bootstrap_ticket "$WORKDIR/t1-create.out")"
-T1_ID="${T1_TICKET#bt1.}"; T1_ID="${T1_ID%%.*}"
+T1_ID="$(python3 -c 'import hashlib,sys
+t=sys.argv[1].strip()
+print(t.split(".")[1].lower() if t.lower().startswith("bt1.") and t.count(".")==2 else hashlib.sha256(t.encode("ascii")).hexdigest()[:16])' "$T1_TICKET")"
 T1_TREE="$WORKDIR/client-redeemed"
 T1_MACHINE='11112222333344445555666677778888'
 

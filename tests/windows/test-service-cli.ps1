@@ -32,7 +32,7 @@ try {
 
     $addOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath add-service -Preset custom -Id web -Name Web -TargetHost 10.0.0.5 -TargetPort 8080 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'add-service exits 0'
-    Assert-FrpTrue ($addOut -match 'Pending service web added') 'add-service message'
+    Assert-FrpTrue ($addOut -match 'Pending change saved') 'add-service message'
     Assert-FrpTrue (Test-Path -LiteralPath (Join-Path (Join-Path $tmpRoot 'state') 'client-draft.json')) 'draft file created on disk'
 
     $dupOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath add-service -Preset custom -Id web -TargetPort 9090 2>&1 | Out-String
@@ -41,7 +41,7 @@ try {
 
     $setOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath set-service web target-port 8081 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'set-service exits 0'
-    Assert-FrpTrue ($setOut -match 'updated') 'set-service message'
+    Assert-FrpTrue ($setOut -match 'Pending change saved') 'set-service message'
 
     $disableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath disable-service web 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'disable-service exits 0'
@@ -54,8 +54,8 @@ try {
     & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath disable-service rdp 2>&1 | Out-String | Out-Null
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'disable rdp succeeds while web is still enabled'
     $webDisableOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath disable-service web 2>&1 | Out-String
-    Assert-FrpTrue ($LASTEXITCODE -ne 0) 'cannot disable the last enabled service'
-    Assert-FrpTrue ($webDisableOut -match 'at least one enabled service') 'last-enabled-service guard message'
+    Assert-FrpTrue ($LASTEXITCODE -eq 0) 'last enabled service may be disabled (management-only)'
+    Assert-FrpTrue ($webDisableOut -match 'disabled') 'disable last service message'
 
     $discardOut = & $hostExe -NoProfile -ExecutionPolicy Bypass -File $clientPath discard 2>&1 | Out-String
     Assert-FrpTrue ($LASTEXITCODE -eq 0) 'discard exits 0'

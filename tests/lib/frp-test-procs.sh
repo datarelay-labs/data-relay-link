@@ -84,7 +84,7 @@ frp_test_is_product_allocator() {
     return 1
   fi
   case "$cfg" in
-    /etc/frp-auto-deploy/config.json|*/etc/frp-auto-deploy/config.json)
+    /etc/drlink/config.json|*/etc/drlink/config.json)
       return 0
       ;;
   esac
@@ -219,7 +219,7 @@ if proc.is_dir():
             if arg.startswith('--config='):
                 cfg = arg.split('=', 1)[1]
                 break
-        if cfg and not is_tmp(cfg) and cfg.endswith('/etc/frp-auto-deploy/config.json'):
+        if cfg and not is_tmp(cfg) and cfg.endswith('/etc/drlink/config.json'):
             pids.append(entry.name)
 print('\n'.join(pids))
 PY

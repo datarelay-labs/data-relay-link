@@ -34,8 +34,9 @@ The signature is ECDSA-SHA256 over those canonical bytes (OpenSSL DER), then
 standard Base64 without newlines.
 
 The signed object binds protocol version, algorithm, client/machine identity,
-operation, timestamp, nonce, and payload digest. Do not sign ad-hoc string
-concatenation.
+operation, timestamp, nonce, and payload digest. Optional method/path fields
+bind later management API operations without changing enroll signatures.
+Do not sign ad-hoc string concatenation.
 
 Private keys stay on the client. The server stores the public key PEM, a
 SHA-256 fingerprint of the DER public key, a response MAC key, and status.
@@ -53,12 +54,26 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 MGMT_ALG = 'ecdsa-p256-sha256'
 MGMT_SIGN_SCHEMA = 1
 MGMT_OP_ENROLL = 'enroll'
+MGMT_OP_CATALOG_READ = 'catalog.read'
+MGMT_OP_REMOTE_SERVICE_SET = 'remote-service.set'
+MGMT_OP_REMOTE_SERVICE_DELETE = 'remote-service.delete'
+MGMT_OP_REMOTE_SERVICE_STATUS = 'remote-service.status'
+MGMT_OP_AI_JOB_CLAIM = 'ai-job.claim'
+MGMT_OP_AI_JOB_COMPLETE = 'ai-job.complete'
 MGMT_NONCE_HEX_LEN = 64
+MGMT_MAX_CLOCK_SKEW = 300
+MGMT_NONCE_RE = re.compile(r'^[0-9a-f]{64}$')
+HEADER_MACHINE_ID = 'X-Machine-Id'
+HEADER_TIMESTAMP = 'X-Timestamp'
+HEADER_NONCE = 'X-Mgmt-Nonce'
+HEADER_SIGNATURE = 'X-Mgmt-Signature'
+HEADER_MGMT_AUTH = 'X-Mgmt-Auth'
 PUBKEY_PEM_RE = re.compile(
     r'-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/=\n]+\n-----END PUBLIC KEY-----\n?\Z'
 )
@@ -103,12 +118,12 @@ def derive_mac_key(secret, machine_id):
     return hmac_hex(secret, 'frp-mgmt-mac-v1\n' + str(machine_id))
 
 
-def signed_object(machine_id, body, ts, nonce, op=MGMT_OP_ENROLL):
+def signed_object(machine_id, body, ts, nonce, op=MGMT_OP_ENROLL, method=None, path=None):
     if isinstance(body, str):
         body_bytes = body.encode('utf-8')
     else:
         body_bytes = body
-    return {
+    obj = {
         'alg': MGMT_ALG,
         'body_sha256': sha256_hex(body_bytes),
         'machine_id': str(machine_id),
@@ -117,10 +132,62 @@ def signed_object(machine_id, body, ts, nonce, op=MGMT_OP_ENROLL):
         'schema': MGMT_SIGN_SCHEMA,
         'ts': int(ts),
     }
+    method_text = str(method or '').strip()
+    path_text = str(path or '').strip()
+    # Optional fields are omitted so existing enroll signatures stay valid.
+    if method_text:
+        obj['method'] = method_text.upper()
+    if path_text:
+        obj['path'] = path_text
+    return obj
 
 
-def signed_message(machine_id, body, ts, nonce, op=MGMT_OP_ENROLL):
-    return canonical_json(signed_object(machine_id, body, ts, nonce, op=op))
+def signed_message(machine_id, body, ts, nonce, op=MGMT_OP_ENROLL, method=None, path=None):
+    return canonical_json(
+        signed_object(machine_id, body, ts, nonce, op=op, method=method, path=path)
+    )
+
+
+def header_get(headers, name):
+    """Read an HTTP header from HTTPMessage or a plain dict (case-insensitive)."""
+    if headers is None:
+        return ''
+    getter = getattr(headers, 'get', None)
+    if callable(getter):
+        value = getter(name)
+        if value not in (None, ''):
+            return value
+    try:
+        keys = list(headers.keys())
+    except Exception:
+        return ''
+    target = str(name).lower()
+    for key in keys:
+        if str(key).lower() == target:
+            value = headers[key]
+            if value not in (None, ''):
+                return value
+    return ''
+
+
+def extract_machine_id(headers):
+    """Authoritative caller identity header. X-Drlink-Machine-Id is not accepted."""
+    return str(
+        header_get(headers, HEADER_MACHINE_ID)
+        or header_get(headers, 'X-Machine-ID')
+        or ''
+    ).strip()
+
+
+def parse_mgmt_timestamp(headers):
+    raw = str(
+        header_get(headers, HEADER_TIMESTAMP)
+        or header_get(headers, 'X-Mgmt-Timestamp')
+        or ''
+    ).strip()
+    if raw == '':
+        raise ValueError('missing timestamp')
+    return int(raw)
 
 
 def _run_openssl(args, input_bytes=None, extra_env=None):
@@ -178,15 +245,20 @@ def decrypt_token_pbkdf2(ciphertext, secret, iterations=OPENSSL_PBKDF2_ITER):
 
 
 def generate_keypair(key_path, pub_path):
-    """Create an ECDSA P-256 key pair atomically. Never overwrites key_path."""
+    """Create an ECDSA P-256 key pair atomically. Never overwrites key_path.
+
+    key_path only ever appears with complete key material: generation happens in
+    a temp file that is linked into place, so a failed or killed run leaves no
+    key file at all instead of a zero-byte placeholder that would make the
+    identity permanently unusable. link() keeps the no-overwrite guarantee — it
+    fails if the name already exists.
+    """
     key_path = Path(key_path)
     pub_path = Path(pub_path)
     key_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        placeholder = os.open(str(key_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(placeholder)
-    except FileExistsError as exc:
-        raise FileExistsError(str(key_path)) from exc
+    _discard_empty_key(key_path)
+    if key_path.exists():
+        raise FileExistsError(str(key_path))
     fd, tmp_key = tempfile.mkstemp(prefix=key_path.name + '.', suffix='.tmp', dir=str(key_path.parent))
     os.close(fd)
     fd, tmp_pub = tempfile.mkstemp(prefix=pub_path.name + '.', suffix='.tmp', dir=str(key_path.parent))
@@ -198,16 +270,11 @@ def generate_keypair(key_path, pub_path):
         pub_pem = canonicalize_pubkey_from_private(tmp_key)
         Path(tmp_pub).write_text(pub_pem, encoding='utf-8')
         os.chmod(tmp_pub, 0o644)
-        os.replace(tmp_key, key_path)
+        # Claim the final key path last: a loser of this race must not publish
+        # its public key over the winner's.
+        _link_exclusive(tmp_key, key_path)
         os.replace(tmp_pub, pub_path)
         os.chmod(key_path, 0o600)
-    except Exception:
-        try:
-            if key_path.exists() and key_path.stat().st_size == 0:
-                key_path.unlink()
-        except OSError:
-            pass
-        raise
     finally:
         for tmp in (tmp_key, tmp_pub):
             if os.path.exists(tmp):
@@ -215,6 +282,48 @@ def generate_keypair(key_path, pub_path):
                     os.unlink(tmp)
                 except OSError:
                     pass
+
+
+def _discard_empty_key(key_path):
+    """Drop a zero-byte key file left behind by an interrupted older run.
+
+    A complete private key is never empty, so a zero-length file is a stale
+    placeholder rather than an identity: keeping it would block regeneration
+    forever. Anything with content is left alone and still refuses overwrite.
+    """
+    try:
+        if key_path.is_file() and key_path.stat().st_size == 0:
+            key_path.unlink()
+    except OSError:
+        pass
+
+
+def _link_exclusive(tmp_path, final_path):
+    """Publish tmp_path as final_path without ever overwriting or truncating."""
+    try:
+        os.link(tmp_path, final_path)
+        return
+    except FileExistsError as exc:
+        raise FileExistsError(str(final_path)) from exc
+    except OSError:
+        # Filesystem without hard links: create exclusively and write in one go.
+        pass
+    data = Path(tmp_path).read_bytes()
+    try:
+        fd = os.open(str(final_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise FileExistsError(str(final_path)) from exc
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    except Exception:
+        os.close(fd)
+        try:
+            os.unlink(final_path)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
 
 
 def canonicalize_pubkey_from_private(key_path):
@@ -364,6 +473,49 @@ def verify_signature(pub_pem, message, signature_b64):
                 os.unlink(tmp)
             except OSError:
                 pass
+
+
+def verify_signed_mgmt_request(
+    pub_pem,
+    machine_id,
+    headers,
+    body,
+    *,
+    op,
+    method=None,
+    path=None,
+    now=None,
+    max_skew=MGMT_MAX_CLOCK_SKEW,
+):
+    """Verify timestamp, nonce syntax, operation binding, body hash, and ECDSA signature.
+
+    Does not look up enrollment status or consume the nonce store.
+    Returns (error_message_or_None, ts, nonce).
+    """
+    try:
+        ts = parse_mgmt_timestamp(headers)
+    except Exception:
+        return 'invalid timestamp', None, None
+    nonce = str(header_get(headers, HEADER_NONCE) or '').strip().lower()
+    signature = str(header_get(headers, HEADER_SIGNATURE) or '').strip()
+    if not signature:
+        return 'missing signature', None, None
+    if now is None:
+        now = int(time.time())
+    if abs(int(now) - ts) > int(max_skew):
+        return 'request timestamp outside allowed window', None, None
+    if not MGMT_NONCE_RE.fullmatch(nonce or ''):
+        return 'invalid nonce', None, None
+    message = signed_message(
+        machine_id, body, ts, nonce, op=op, method=method, path=path
+    )
+    try:
+        ok = verify_signature(pub_pem, message, signature)
+    except ValueError as exc:
+        return str(exc), None, None
+    if not ok:
+        return 'invalid signature', None, None
+    return None, ts, nonce
 
 
 def parse_args(argv=None):

@@ -9,6 +9,19 @@ export FRP_MACOS_PREFIX="$TMP/prefix"
 export FRP_CLIENT_TEST_ROOT="$TMP/root"
 . "$ROOT/lib/frp-client-common.sh"
 
+# SIP forbids writing /usr/bin on macOS; secure_path copy is Linux-only.
+if frp_client_upgrade_destinations | grep -q '^usr/bin/drlink:'; then
+  echo "FAIL: Darwin upgrade destinations must not include usr/bin/drlink" >&2
+  exit 1
+fi
+(
+  export FRP_TEST_UNAME_S=Linux
+  if ! frp_client_upgrade_destinations | grep -q '^usr/bin/drlink:'; then
+    echo "FAIL: Linux upgrade destinations must include usr/bin/drlink" >&2
+    exit 1
+  fi
+)
+
 while IFS=: read -r rel mode src; do
   live="$(frp_client_path "/$rel")"
   mkdir -p "$(dirname "$live")"
@@ -27,6 +40,7 @@ printf 'mutated\n' >"$version"
 
 frp_client_upgrade_restore_tools "$backup"
 frp_client_upgrade_verify_restored "$backup"
-grep -q '^original:' "$(frp_client_path /usr/local/bin/frpctl)"
+grep -q '^original:' "$(frp_client_path /usr/local/bin/drlink)"
+grep -q '^original:' "$(frp_client_path /usr/local/lib/drlink/frpctl)"
 grep -q '^PROJECT_VERSION=2.2.1' "$version"
 echo "MACOS_UPDATE_ROLLBACK_TEST=PASS"

@@ -10,19 +10,20 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 export FRP_DEPLOY_TEST_ROOT="$WORKDIR"
 export PYTHONDONTWRITEBYTECODE=1
 
-mkdir -p "$WORKDIR/etc/frp-auto-deploy" "$WORKDIR/var/lib/frp-auto-deploy" \
-  "$WORKDIR/usr/local/lib/frp-auto-deploy" "$WORKDIR/etc/frp"
-cp "$ROOT/lib/frp_access_control.py" "$WORKDIR/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_service_profiles.py" "$WORKDIR/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_client_registry.py" "$WORKDIR/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/server/frp-port-allocator.py" "$WORKDIR/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/"frp_*.py "$WORKDIR/usr/local/lib/frp-auto-deploy/" 2>/dev/null || true
+mkdir -p "$WORKDIR/etc/drlink" "$WORKDIR/var/lib/drlink" \
+  "$WORKDIR/usr/local/lib/drlink" "$WORKDIR/etc/frp"
+cp "$ROOT/lib/frp_access_control.py" "$WORKDIR/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_control_locks.py" "$WORKDIR/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_service_profiles.py" "$WORKDIR/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_client_registry.py" "$WORKDIR/usr/local/lib/drlink/"
+cp "$ROOT/server/frp-port-allocator.py" "$WORKDIR/usr/local/lib/drlink/"
+cp "$ROOT/lib/"frp_*.py "$WORKDIR/usr/local/lib/drlink/" 2>/dev/null || true
 
-cat >"$WORKDIR/etc/frp-auto-deploy/config.json" <<JSON
+cat >"$WORKDIR/etc/drlink/config.json" <<JSON
 {
-  "registry_file": "$WORKDIR/var/lib/frp-auto-deploy/registry.json",
-  "access_control_file": "$WORKDIR/var/lib/frp-auto-deploy/access-control.json",
-  "service_profiles_file": "$WORKDIR/var/lib/frp-auto-deploy/service-profiles.json",
+  "registry_file": "$WORKDIR/var/lib/drlink/registry.json",
+  "access_control_file": "$WORKDIR/var/lib/drlink/access-control.json",
+  "service_profiles_file": "$WORKDIR/var/lib/drlink/service-profiles.json",
   "port_start": 6000,
   "port_end": 6100,
   "allocator_listen_port": 6099,
@@ -35,10 +36,10 @@ python3 - <<'PY' || fail "ACL require missing"
 import importlib.util, sys
 from pathlib import Path
 root = Path(__import__("os").environ["FRP_DEPLOY_TEST_ROOT"])
-sys.path.insert(0, str(root / "usr/local/lib/frp-auto-deploy"))
-spec = importlib.util.spec_from_file_location("acl", root / "usr/local/lib/frp-auto-deploy/frp_access_control.py")
+sys.path.insert(0, str(root / "usr/local/lib/drlink"))
+spec = importlib.util.spec_from_file_location("acl", root / "usr/local/lib/drlink/frp_access_control.py")
 acl = importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 try:
     acl.require_access_state(path=path)
     raise SystemExit("expected missing ACL error")
@@ -61,9 +62,9 @@ import importlib.util
 from pathlib import Path
 import os
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-spec = importlib.util.spec_from_file_location("acl", root / "usr/local/lib/frp-auto-deploy/frp_access_control.py")
+spec = importlib.util.spec_from_file_location("acl", root / "usr/local/lib/drlink/frp_access_control.py")
 acl = importlib.util.module_from_spec(spec); spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 acl.initialize_access_state(path=path)
 assert path.exists()
 path.rename(path.with_suffix(".json.bak"))
@@ -73,9 +74,9 @@ python3 - <<'PY' || fail "profiles require missing"
 import importlib.util, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-spec = importlib.util.spec_from_file_location("prof", root / "usr/local/lib/frp-auto-deploy/frp_service_profiles.py")
+spec = importlib.util.spec_from_file_location("prof", root / "usr/local/lib/drlink/frp_service_profiles.py")
 prof = importlib.util.module_from_spec(spec); spec.loader.exec_module(prof)
-path = root / "var/lib/frp-auto-deploy/service-profiles.json"
+path = root / "var/lib/drlink/service-profiles.json"
 try:
     prof.require_profiles_state(path=path)
     raise SystemExit("expected missing profiles error")
@@ -92,18 +93,28 @@ PY
 pass "profiles missing refuse recreate"
 
 # Registry: write then remove; group-set and clients must error without recreate
-cat >"$WORKDIR/var/lib/frp-auto-deploy/registry.json" <<'JSON'
+cat >"$WORKDIR/var/lib/drlink/registry.json" <<'JSON'
 {"schema_version":2,"reserved":[],"clients":{"aabb":{"label":"t","services":{}}},"groups":{}}
 JSON
-cp "$WORKDIR/var/lib/frp-auto-deploy/registry.json" "$WORKDIR/registry.bak"
-rm -f "$WORKDIR/var/lib/frp-auto-deploy/registry.json"
+cp "$WORKDIR/var/lib/drlink/registry.json" "$WORKDIR/registry.bak"
+rm -f "$WORKDIR/var/lib/drlink/registry.json"
 
 if "$ROOT/tools/frp-clients" >/dev/null 2>"$WORKDIR/clients.err"; then
   fail "frp-clients should error when registry missing"
 fi
 grep -qi 'missing\|authoritative\|ERROR' "$WORKDIR/clients.err" || fail "clients error message"
-[[ ! -f "$WORKDIR/var/lib/frp-auto-deploy/registry.json" ]] || fail "clients recreated registry"
+[[ ! -f "$WORKDIR/var/lib/drlink/registry.json" ]] || fail "clients recreated registry"
 pass "frp-clients missing registry"
+
+if "$ROOT/tools/frp-groups" >/dev/null 2>"$WORKDIR/groups.err"; then
+  fail "frp-groups should error when registry missing"
+fi
+grep -qi 'missing.*authoritative registry state required' "$WORKDIR/groups.err" || {
+  cat "$WORKDIR/groups.err" >&2
+  fail "frp-groups error message"
+}
+[[ ! -f "$WORKDIR/var/lib/drlink/registry.json" ]] || fail "frp-groups recreated registry"
+pass "frp-groups missing registry"
 
 if echo | "$ROOT/tools/frp-group-set" create "Test Group" >/dev/null 2>"$WORKDIR/group.err"; then
   fail "group-set should error when registry missing"
@@ -112,59 +123,86 @@ grep -qi 'missing\|authoritative\|ERROR' "$WORKDIR/group.err" || {
   cat "$WORKDIR/group.err" >&2
   fail "group-set error message"
 }
-[[ ! -f "$WORKDIR/var/lib/frp-auto-deploy/registry.json" ]] || fail "group-set recreated registry"
+[[ ! -f "$WORKDIR/var/lib/drlink/registry.json" ]] || fail "group-set recreated registry"
 pass "group-set missing registry"
 
-# Backup must fail without ACL
-cp "$WORKDIR/registry.bak" "$WORKDIR/var/lib/frp-auto-deploy/registry.json"
-# Minimal required tree for backup path check via collect semantics
-ROOT="$ROOT" python3 - <<'PY' || fail "backup missing ACL"
-import os, sys, types
+# Backup must fail closed when canonical required Server DR state is missing.
+# REQUIRED is DB-centric (backup_required_files + TRUST_REQUIRED); legacy
+# access-control.json / service-profiles.json are not authoritative inputs.
+cp "$WORKDIR/registry.bak" "$WORKDIR/var/lib/drlink/registry.json"
+CONTROL_DB_REL="var/lib/drlink/drlink.db"
+ROOT="$ROOT" CONTROL_DB_REL="$CONTROL_DB_REL" python3 - <<'PY' || fail "backup missing required state"
+import contextlib, io, os, sys, types
 from pathlib import Path
 repo = Path(os.environ["ROOT"])
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
+control_db_rel = os.environ["CONTROL_DB_REL"]
 path = repo / "tools" / "frp-backup"
 mod = types.ModuleType("frp_backup")
+mod.__file__ = str(path)
 sys.modules["frp_backup"] = mod
 code = compile(path.read_text(encoding="utf-8"), str(path), "exec")
 exec(code, mod.__dict__)
+assert control_db_rel in mod.REQUIRED, "canonical control DB must be REQUIRED"
+assert not any(
+    rel.endswith("access-control.json") or rel.endswith("service-profiles.json")
+    for rel in mod.REQUIRED
+), "legacy ACL/profile JSON must not be REQUIRED under DB-centric Server DR"
+# Seed every REQUIRED path except the control DB.
 for rel in mod.REQUIRED:
-    if rel.endswith("access-control.json") or rel.endswith("service-profiles.json"):
+    if rel == control_db_rel:
         continue
     dest = root / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not dest.exists():
         if rel.endswith(".json"):
-            dest.write_text('{}\n')
+            dest.write_text("{}\n")
         else:
-            dest.write_text('x\n')
-(root / "var/lib/frp-auto-deploy/registry.json").write_text(
+            dest.write_text("x\n")
+(root / "var/lib/drlink/registry.json").write_text(
     '{"schema_version":2,"reserved":[],"clients":{}}\n'
 )
+# Legacy ACL/profile absence must not be the fail reason (and must stay absent).
+for legacy in (
+    "var/lib/drlink/access-control.json",
+    "var/lib/drlink/service-profiles.json",
+):
+    assert not (root / legacy).exists(), legacy
 failed = False
+stderr_buf = io.StringIO()
 try:
-    mod.collect_files(root)
+    with contextlib.redirect_stderr(stderr_buf):
+        mod.collect_files(root)
 except SystemExit:
     failed = True
 if not failed:
-    raise SystemExit("backup should fail without ACL")
-assert not (root / "var/lib/frp-auto-deploy/access-control.json").exists()
+    raise SystemExit("backup should fail without canonical control DB")
+err = stderr_buf.getvalue()
+assert control_db_rel in err or "drlink.db" in err, err
+assert not (root / control_db_rel).exists(), "must not recreate missing required DB"
+# With the canonical DB present, collect must succeed even if ACL/profiles are absent.
+(root / control_db_rel).write_text("x\n")
+files = mod.collect_files(root)
+rels = {rel for rel, _src in files}
+assert control_db_rel in rels
+assert "var/lib/drlink/access-control.json" not in rels
+assert "var/lib/drlink/service-profiles.json" not in rels
 print("backup-ok")
 PY
-pass "backup missing ACL"
+pass "backup missing required control DB"
 
 # Restore original ACL path after rename
-mv "$WORKDIR/var/lib/frp-auto-deploy/access-control.json.bak" \
-  "$WORKDIR/var/lib/frp-auto-deploy/access-control.json" 2>/dev/null || true
+mv "$WORKDIR/var/lib/drlink/access-control.json.bak" \
+  "$WORKDIR/var/lib/drlink/access-control.json" 2>/dev/null || true
 
 # Profile SSH atomic transition + health old_value
 python3 - <<'PY' || fail "profile ssh/audit"
 import importlib.util, os
 from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
-spec = importlib.util.spec_from_file_location("prof", root / "usr/local/lib/frp-auto-deploy/frp_service_profiles.py")
+spec = importlib.util.spec_from_file_location("prof", root / "usr/local/lib/drlink/frp_service_profiles.py")
 prof = importlib.util.module_from_spec(spec); spec.loader.exec_module(prof)
-path = root / "var/lib/frp-auto-deploy/service-profiles.json"
+path = root / "var/lib/drlink/service-profiles.json"
 prof.initialize_profiles_state(path=path)
 state = prof.require_profiles_state(path=path)
 pid, _ = prof.create_profile(state, "Web", preset="http", local_ip="127.0.0.1", local_port=80)

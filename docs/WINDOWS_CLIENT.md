@@ -2,24 +2,24 @@
 
 Supported OS: **Windows 10 / 11 / Server 2019+** (amd64), Windows PowerShell **5.1** or PowerShell **7+**.
 
-This client reuses the existing frp-auto-deploy allocator protocol (bootstrap redeem, enroll, CA pin, PBKDF2 token wrap, ECDSA management identity). It does **not** introduce a Windows-only enrollment API.
+This client reuses the existing Data Relay Link allocator protocol (bootstrap redeem, enroll, CA pin, PBKDF2 token wrap, ECDSA management identity). It does **not** introduce a Windows-only enrollment API.
 
 FRP pin: **0.71.0** Windows amd64 (`frp_0.71.0_windows_amd64.zip`).
 
 ## Install layout
 
 ```text
-C:\ProgramData\frp-auto-deploy\
+C:\ProgramData\drlink\
   bin\frpc.exe
   config\frpc.toml
   state\client-state.json, client-id, client-identity.*
   certs\allocator-ca.crt
   logs\frpc.log, frpc.pid
-  tools\FrpClient.ps1, frp-client.cmd
+  tools\FrpClient.ps1, drlink.cmd, frp-client.cmd
   version
 ```
 
-For non-Windows test hosts (pwsh on Linux CI), set `FRP_WINDOWS_ROOT` (default `/tmp/frp-auto-deploy-windows-test`).
+For non-Windows test hosts (pwsh on Linux CI), set `FRP_WINDOWS_ROOT` (default `/tmp/drlink-windows-test`).
 
 ## Zero-touch enrollment
 
@@ -32,8 +32,15 @@ For non-Windows test hosts (pwsh on Linux CI), set `FRP_WINDOWS_ROOT` (default `
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-client.ps1 -ZeroTouch `
   -AllocatorUrl https://YOUR_PUBLIC_HOST/enroll `
   -CaSha256 <allocator-ca-DER-SHA256> `
-  -BootstrapTicket 'bt1.<id>.<secret>'
+  -BootstrapTicket '<bt1-credential>'
 ```
+
+The manual `-BootstrapTicket` value is the internal `bt1.<id>.<secret>`
+credential. The 22-character short-URL handle is only for `https://<host>/i/<handle>`.
+That download's stage-1 script carries the internal `bt1`, which is what redeem
+accepts. The copy-paste Windows one-line uses explicit
+`curl.exe`, verifies the stage-1 SHA256, then `powershell.exe -File`. Do not
+replace it with `irm | iex`.
 
 Environment equivalents: `FRP_ALLOCATOR_URL`, `FRP_ALLOCATOR_CA_SHA256`, `FRP_BOOTSTRAP_TICKET`.
 
@@ -49,7 +56,7 @@ Environment equivalents: `FRP_ALLOCATOR_URL`, `FRP_ALLOCATOR_CA_SHA256`, `FRP_BO
 
 ### ENROLL ONCE / RUN MANY TIMES
 
-If identity + config already exist and install completed, zero-touch **refuses** another ticket and tells you to run `frp-client start`. Port reservations and machine identity stay stable across restarts.
+If identity + config already exist and install completed, zero-touch **refuses** another ticket and tells you to run `drlink system resume`. Port reservations and machine identity stay stable across restarts.
 
 If enrollment finished but binary download/start did not (`install_status=enrolled_incomplete`), re-running the installer **resumes** with the same identity and reserved ports — it does not redeem a new ticket or mint a new management key.
 
@@ -63,13 +70,15 @@ Pinned allocator CA verification and hostname/IP SAN checks both apply on the .N
 
 ### Updates, PID, secrets
 
-- `frp-client update` snapshots managed files and process state; failure restores binary, metadata, config, and prior running/stopped state (`RECOVERY_REQUIRED=YES` if rollback itself fails).
+- `drlink system update engine` (and legacy bare `update`) refreshes pinned `frpc.exe` with SHA256 verify; failure restores binary, metadata, config, and prior running/stopped state (`RECOVERY_REQUIRED=YES` if rollback itself fails).
+- `drlink system update product` does **not** download a project artifact in this release. On an installed client, re-run the canonical Windows installer to refresh management tools (identity/ports preserved). Developers/CI may set `FRP_WINDOWS_PROJECT_SRC` to a `windows/` tree.
+- Check modes are distinct: `system update product -Check` (project only), `system update engine -Check` (engine Would download), `system update engine --check` / combined check (combined).
 - Stop kills only a PID whose recorded exe matches the managed `frpc.exe`.
 - Secret ACL application is fail-closed on Windows.
 
 ## RDP
 
-Default Windows preset exposes TCP **3389** (`preset` treated as RDP in `frp-client info`):
+Default Windows preset exposes TCP **3389** (`preset` treated as RDP in `drlink system info`):
 
 ```text
 mstsc /v:PUBLIC_HOST:REMOTE_PORT
@@ -103,14 +112,14 @@ A Windows PC can forward LAN targets by setting `local_ip` to a reachable LAN ad
 ## Lifecycle
 
 ```text
-tools\frp-client.cmd start
-tools\frp-client.cmd stop
-tools\frp-client.cmd status
-tools\frp-client.cmd info
-tools\frp-client.cmd update [--check]
-tools\frp-client.cmd uninstall
-tools\frp-client.cmd doctor
-tools\frp-client.cmd autostart
+tools\drlink.cmd start
+tools\drlink.cmd stop
+tools\drlink.cmd status
+tools\drlink.cmd info
+tools\drlink.cmd update [--check]
+tools\drlink.cmd uninstall
+tools\drlink.cmd system diagnostics
+tools\drlink.cmd autostart
 ```
 
 | Command | Behavior |
@@ -119,15 +128,17 @@ tools\frp-client.cmd autostart
 | `info` | Prints `mstsc` / `ssh` / HTTP(S) URLs without secrets |
 | `update` | Replaces `frpc.exe` after SHA256 verify; preserves identity and ports; transactional rollback of managed files + process state |
 | `uninstall` | **LOCAL SOFTWARE REMOVED, SERVER RESERVATIONS PRESERVED**; removes the product autostart task |
-| `autostart` | Show / enable / disable the product Scheduled Task (`FRPAutoDeployClient`) |
+| `autostart` | Show / enable / disable the product Scheduled Task (`DataRelayLinkClient`) |
 
 ## Reboot / autostart
 
 Enrollment with enabled services registers a product-owned Scheduled Task
-named **`FRPAutoDeployClient`**. It runs `frp-client start` as **SYSTEM** at
+named **`DataRelayLinkClient`**. Older installs may still have
+`FRPAutoDeployClient`; product-owned legacy tasks are migrated on the next
+autostart register/uninstall. It runs `drlink system resume` as **SYSTEM** at
 system boot (ONSTART), so `frpc` comes back without an interactive login.
 Management-only (zero-service) clients do not register the task. Use
-`frp-client autostart` to inspect, enable, or disable it. Enrollment state
+`drlink autostart` to inspect, enable, or disable it. Enrollment state
 under `ProgramData` persists across reboot.
 
 ## Unsupported / out of scope

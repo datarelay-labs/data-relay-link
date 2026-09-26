@@ -1,0 +1,17 @@
+[Unit]
+Description=Data Relay Link AI Agent Worker
+Documentation=https://github.com/datarelay-labs/datarelay-link
+After=network-online.target drlink-client.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Production Managed Host executor: claims AI jobs with enrolled management
+# identity and executes them on this host only. Never set DRLINK_AI_TEST_* here.
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/drlink_ai_agent.py
+Restart=always
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

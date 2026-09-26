@@ -11,7 +11,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout@v4.2.2
+      # Full history + tags required: scripts/check-release-governance.sh asserts
+      # historical release tags (v2.1.0..v2.3.0). Default shallow/tagless checkout
+      # falsely fails those immutable-tag presence checks (release-attest.yml pattern).
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Version consistency
+        run: ./scripts/check-version-consistency.sh
+      - name: Release governance
+        run: ./scripts/check-release-governance.sh
+      - name: Install Full Suite OS Python deps
+        # python3-acme is required by AUTO_ACME (lib/drlink_mcp_tls.py). Previously
+        # masked on GHA because the suite failed earlier on the undeclared MCP SDK.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-acme
+      - name: Provision pinned official MCP SDK
+        # VERSION_POLICY: MCP is included and release-blocking; do not skip.
+        run: |
+          SDK_PY="$(./tests/ensure-mcp-sdk-venv.sh | tail -n 1)"
+          if [[ ! -x "$SDK_PY" ]]; then
+            echo "ERROR: MCP SDK python missing or not executable: $SDK_PY" >&2
+            exit 1
+          fi
+          echo "DRLINK_MCP_SDK_PYTHON=$SDK_PY" >> "$GITHUB_ENV"
       - name: Full local non-Docker suite
         run: ./tests/run-all.sh
       # Live distro containers cannot validate systemd unless PID 1 is systemd.
@@ -22,6 +46,12 @@ jobs:
           git diff --exit-code dist/
       - name: SHA256SUMS
         run: ./scripts/verify-sha256sums.sh
+      # Same order as scripts/build-release-artifacts.sh: the SBOM is generated
+      # after SHA256SUMS and verified against the checked-out commit.
+      - name: SBOM binds to the checked-out commit
+        run: |
+          python3 ./scripts/generate-sbom.py -o dist/sbom.spdx.json
+          ./scripts/verify-sbom.sh
 
   portability-containers:
     name: distro ${{ matrix.image }}

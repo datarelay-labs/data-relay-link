@@ -10,7 +10,30 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5)
 RUN_ID="${FRP_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="${FRP_E2E_OUT_DIR:-$ROOT/e2e-reports/short-url-e2e-$RUN_ID}"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-INSTALLER_URL="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${HEAD_SHA}/dist/bootstrap-client.sh"
+# Prefer a GitHub-raw SHA that is actually published (unpushed HEAD 404s).
+INSTALLER_SHA="${FRP_E2E_INSTALLER_SHA:-$HEAD_SHA}"
+if [[ -z "${FRP_E2E_INSTALLER_SHA:-}" ]]; then
+  candidates=("$HEAD_SHA")
+  branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
+  if [[ -n "$branch" ]]; then
+    upstream="$(git -C "$ROOT" rev-parse --abbrev-ref "$branch@{upstream}" 2>/dev/null || true)"
+    if [[ -n "$upstream" ]]; then
+      candidates+=("$(git -C "$ROOT" rev-parse "$upstream" 2>/dev/null || true)")
+      mb="$(git -C "$ROOT" merge-base HEAD "$upstream" 2>/dev/null || true)"
+      [[ -n "$mb" ]] && candidates+=("$mb")
+    fi
+  fi
+  for sha in "${candidates[@]}"; do
+    [[ -n "$sha" ]] || continue
+    url="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${sha}/dist/bootstrap-client.sh"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      INSTALLER_SHA="$sha"
+      break
+    fi
+  done
+fi
+INSTALLER_URL="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${INSTALLER_SHA}/dist/bootstrap-client.sh"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/summary.txt"
 : >"$SUMMARY"
@@ -40,6 +63,7 @@ esac
 
 note "PROFILE=$PROFILE"
 note "HEAD_SHA=$HEAD_SHA"
+note "INSTALLER_SHA=$INSTALLER_SHA"
 note "INSTALLER_URL=$INSTALLER_URL"
 note "CLIENT_ALIAS=$CLIENT_ALIAS"
 
@@ -58,9 +82,23 @@ ssh_server 'command -v cloudflared >/dev/null || (
 )' || fail "install cloudflared on server"
 
 # Refresh server project tools from this branch via stdin bootstrap upgrade.
-# Working-tree artifacts are channel=dev / git_ref=main.
-note "Updating server tools from local tree"
-ssh_server "sudo env FRP_RELEASE_CHANNEL=dev FRP_CLIENT_INSTALLER_URL='$INSTALLER_URL' bash -s -- --upgrade" \
+# Match FRP_RELEASE_CHANNEL to the tree's embedded release-manifest channel
+# (stable/vPROJECT vs dev/main). Hardcoding "dev" against a stable-identity
+# candidate produces a false "release metadata channel mismatch".
+TREE_CHANNEL="$(python3 - "$ROOT/release-manifest.json" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+channel = str(data.get("channel") or "").strip().lower()
+if channel not in ("development", "dev", "preview", "stable"):
+    raise SystemExit("unsupported release-manifest channel: %r" % channel)
+if channel == "dev":
+    channel = "development"
+print(channel)
+PY
+)"
+note "Updating server tools from local tree (FRP_RELEASE_CHANNEL=$TREE_CHANNEL)"
+ssh_server "sudo env FRP_RELEASE_CHANNEL='$TREE_CHANNEL' FRP_CLIENT_INSTALLER_URL='$INSTALLER_URL' bash -s -- --upgrade" \
   <"$ROOT/dist/bootstrap-server.sh" >"$OUT_DIR/server-upgrade.log" 2>&1 \
   || { cat "$OUT_DIR/server-upgrade.log"; fail "server upgrade"; }
 pass "SERVER_UPGRADE"
@@ -154,7 +192,8 @@ done
 note "BOOTSTRAP_HOST=$BOOTSTRAP_HOST"
 pass "PUBLIC_PROXY_TUNNEL"
 
-# Wait until the publicly trusted bootstrap edge answers /healthz.
+# Wait until the publicly trusted bootstrap edge answers /healthz from the
+# controller (proves the tunnel/proxy path is live with stock TLS).
 ok=0
 for _ in $(seq 1 40); do
   if curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 \
@@ -167,14 +206,58 @@ done
 [[ "$ok" == "1" ]] || fail "stock OS trust failed for bootstrap host /healthz"
 pass "STOCK_OS_TRUST_HEALTHZ"
 
+# The enroll target must also reach the bootstrap edge. Some lab resolvers
+# return AAAA-only for *.trycloudflare.com while the client has no IPv6 route;
+# dig still sees A records via public resolvers. Seed temporary IPv4 /etc/hosts
+# entries so the exact printed curl|bash command exercises product TLS, not lab
+# dual-stack DNS breakage. Restore hosts on exit.
+SHORTURL_HOSTS_SEEDED=0
+restore_client_hosts() {
+  if [[ "${SHORTURL_HOSTS_SEEDED:-0}" == "1" ]]; then
+    ssh_client 'sudo bash -c "if [[ -f /etc/hosts.frp-shorturl.bak ]]; then mv -f /etc/hosts.frp-shorturl.bak /etc/hosts; fi"' >/dev/null 2>&1 || true
+    SHORTURL_HOSTS_SEEDED=0
+  fi
+}
+trap 'restore_client_hosts' EXIT
+
+client_healthz_ok=0
+if ssh_client "curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 -o /dev/null https://${BOOTSTRAP_HOST}/healthz" >/dev/null 2>&1; then
+  client_healthz_ok=1
+fi
+if [[ "$client_healthz_ok" != "1" ]]; then
+  note "WARN: enroll client cannot reach https://${BOOTSTRAP_HOST}/healthz; seeding IPv4 /etc/hosts from public DNS"
+  mapfile -t _shorturl_ips < <(dig +short A "$BOOTSTRAP_HOST" @1.1.1.1 | grep -E '^[0-9.]+$' | head -4)
+  [[ "${#_shorturl_ips[@]}" -gt 0 ]] || fail "no public IPv4 for ${BOOTSTRAP_HOST}; client cannot reach bootstrap edge"
+  _hosts_lines=""
+  for _ip in "${_shorturl_ips[@]}"; do
+    _hosts_lines+="${_ip} ${BOOTSTRAP_HOST}"$'\n'
+  done
+  ssh_client "sudo bash -s" <<EOF || fail "seed client /etc/hosts for bootstrap IPv4"
+set -euo pipefail
+cp -a /etc/hosts /etc/hosts.frp-shorturl.bak
+cat >> /etc/hosts <<'HOSTSEOF'
+${_hosts_lines}
+HOSTSEOF
+EOF
+  SHORTURL_HOSTS_SEEDED=1
+  if ! ssh_client "curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 -o /dev/null https://${BOOTSTRAP_HOST}/healthz" >/dev/null 2>&1; then
+    fail "enroll client still cannot reach bootstrap edge after IPv4 hosts seed"
+  fi
+  pass "CLIENT_BOOTSTRAP_IPV4_HOSTS_SEED"
+fi
+pass "CLIENT_STOCK_OS_TRUST_HEALTHZ"
+
 # Configure bootstrap hostname + installer URL on server.
 # Tools update config.json without restarting services; allocator reloads on
 # mtime change, and we still bounce it so E2E never races a stale process.
-ssh_server "sudo /usr/local/sbin/frpctl set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
+# Canonical operator surface is drlink (legacy /usr/local/sbin helpers are retired).
+ssh_server "sudo /usr/local/bin/drlink set server bootstrap-hostname '$BOOTSTRAP_HOST'" \
   >"$OUT_DIR/set-bootstrap.log" 2>&1 || fail "set bootstrap-hostname"
-ssh_server "sudo /usr/local/sbin/frp-set-client-installer-url '$INSTALLER_URL'" \
+# Canonical grammar is resource-first: set installer-url <url>
+# (not "set server installer-url", which is not a server setting).
+ssh_server "sudo /usr/local/bin/drlink set installer-url '$INSTALLER_URL'" \
   >"$OUT_DIR/set-installer.log" 2>&1 || fail "set installer url"
-ssh_server 'sudo systemctl daemon-reload; sudo systemctl restart frp-port-allocator' \
+ssh_server 'sudo systemctl daemon-reload; sudo systemctl restart drlink-allocator' \
   >"$OUT_DIR/restart-allocator.log" 2>&1 || fail "restart allocator after config"
 for _ in $(seq 1 30); do
   if ssh_server 'curl -fsSk https://127.0.0.1:6099/healthz >/dev/null 2>&1'; then
@@ -189,14 +272,18 @@ ssh_client 'sudo bash -s --' <"$ROOT/dist/uninstall-client.sh" >"$OUT_DIR/client
 
 # Create short URL enrollment and capture exact printed command.
 CREATE_OUT="$OUT_DIR/create.out"
-ssh_server "sudo /usr/local/sbin/frp-create-client --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note 'short-url-e2e'" \
+ssh_server "sudo /usr/local/bin/drlink enrollment create --one-line --ssh --ssh-user '$TUNNEL_SSH_USER' --client-name '$CLIENT_LABEL' --note 'short-url-e2e'" \
   >"$CREATE_OUT" 2>&1 || { cat "$CREATE_OUT"; fail "create enrollment"; }
 
 CMD="$(python3 - "$CREATE_OUT" <<'PY'
 import re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"^curl -fsSL 'https://[^']+/i/bt1\.[0-9a-f]+\.[0-9a-f]+' \| sudo bash$", text, re.M)
+m = re.search(
+    r"^curl -fsSL (?:'https://[^']+/i/(?:bt1\.[0-9a-f]+\.[0-9a-f]+|[A-Za-z0-9_-]{22})' \| sudo bash|https://[^ ']+/i/(?:bt1\.[0-9a-f]+\.[0-9a-f]+|[A-Za-z0-9_-]{22})\|sudo bash)$",
+    text,
+    re.M,
+)
 if not m:
     raise SystemExit('missing short URL command in:\n' + text)
 print(m.group(0))
@@ -204,12 +291,15 @@ PY
 )"
 note "SHORT_URL_COMMAND_HOST=$BOOTSTRAP_HOST"
 # Do not log the opaque ticket. Keep only the command shape.
-note "SHORT_URL_COMMAND=curl -fsSL https://${BOOTSTRAP_HOST}/i/<redacted> | sudo bash"
+note "SHORT_URL_COMMAND=curl -fsSL https://${BOOTSTRAP_HOST}/i/<redacted>|sudo bash"
 [[ "$CMD" == *"$BOOTSTRAP_HOST"* ]] || fail "command host mismatch"
 if [[ "$CMD" == *zt1.* ]]; then
   fail "short URL path unexpectedly used zt1"
 fi
-if [[ "$CMD" == *'-k'* || "$CMD" == *'--insecure'* ]]; then
+# Only inspect curl argv before the URL. Substring "-k" inside a hostname
+# (e.g. trycloudflare "...-keyboard...") must not trip this gate.
+curl_argv="${CMD%%https://*}"
+if [[ "$curl_argv" == *'--insecure'* || "$curl_argv" == *' -k '* || "$curl_argv" == *' -k'* || "$curl_argv" == curl\ -k* || "$curl_argv" == curl\ -*k* ]]; then
   fail "insecure TLS in printed command"
 fi
 pass "SHORT_URL_COMMAND_PRINTED"
@@ -218,10 +308,10 @@ pass "SHORT_URL_COMMAND_PRINTED"
 # Use pipefail so a failed curl cannot look like success.
 ssh_client "sudo bash -o pipefail -lc $(printf '%q' "$CMD")" >"$OUT_DIR/client-enroll.log" 2>&1 \
   || { cat "$OUT_DIR/client-enroll.log"; fail "short URL client enroll"; }
-if ! grep -qiE 'enrollment complete|Zero-touch setup complete|FRP client ready|FRP client setup complete|setup complete' \
+if ! grep -qiE 'enrollment complete|Zero-touch setup complete|FRP client ready|Data Relay Link client setup complete|setup complete' \
   "$OUT_DIR/client-enroll.log"; then
   # Accept active frpc + client-state as success when installer wording differs.
-  if ! ssh_client 'sudo test -f /etc/frp/client-state.json && systemctl is-active frpc'; then
+  if ! ssh_client 'sudo test -f /etc/frp/client-state.json && systemctl is-active drlink-client'; then
     cat "$OUT_DIR/client-enroll.log"
     fail "short URL enroll did not produce client state"
   fi
@@ -230,9 +320,9 @@ pass "SHORT_URL_ENROLL"
 
 # Verify server sees the client.
 SHOW="$OUT_DIR/show-client.out"
-ssh_server "sudo /usr/local/sbin/frpctl show clients" >"$SHOW" 2>&1 || { cat "$SHOW"; fail "show clients"; }
-ssh_server "sudo /usr/local/sbin/frpctl show client '$CLIENT_LABEL'" >>"$SHOW" 2>&1 \
-  || ssh_server "sudo /usr/local/sbin/frpctl show client \$(sudo python3 -c \"import json;d=json.load(open('/var/lib/frp-auto-deploy/registry.json'));print(next(cid for cid,c in (d.get('clients') or {}).items() if (c.get('label') or '')=='$CLIENT_LABEL'))\")" >>"$SHOW" 2>&1 \
+ssh_server "sudo /usr/local/bin/drlink show clients" >"$SHOW" 2>&1 || { cat "$SHOW"; fail "show clients"; }
+ssh_server "sudo /usr/local/bin/drlink show client '$CLIENT_LABEL'" >>"$SHOW" 2>&1 \
+  || ssh_server "sudo /usr/local/bin/drlink show client \$(sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));print(next(cid for cid,c in (d.get('clients') or {}).items() if (c.get('label') or '')=='$CLIENT_LABEL'))\")" >>"$SHOW" 2>&1 \
   || { cat "$SHOW"; fail "show client"; }
 grep -qi "$CLIENT_LABEL" "$SHOW" || fail "client label missing"
 grep -qiE '6000|6001|6002|ssh' "$SHOW" || fail "ssh service/port missing"
@@ -245,7 +335,7 @@ m = re.search(r'\b([0-9a-f]{32})\b', text)
 print(m.group(1) if m else '')
 PY
 )"
-[[ -n "$CLIENT_MID" ]] || CLIENT_MID="$(ssh_server "sudo python3 -c \"import json;d=json.load(open('/var/lib/frp-auto-deploy/registry.json'));print(next(iter(d.get('clients') or {})))\"")"
+[[ -n "$CLIENT_MID" ]] || CLIENT_MID="$(ssh_server "sudo python3 -c \"import json;d=json.load(open('/var/lib/drlink/registry.json'));print(next(iter(d.get('clients') or {})))\"")"
 note "CLIENT_MID=$CLIENT_MID"
 [[ -n "$CLIENT_MID" ]] || fail "CLIENT ID missing"
 pass "CLIENT_ID"
@@ -278,21 +368,21 @@ done
 [[ "$up" == "1" ]] || fail "client SSH did not return after reboot"
 # Give frpc a moment after sshd is back.
 for _ in $(seq 1 24); do
-  if ssh_client 'systemctl is-active frpc' >/dev/null 2>&1; then
+  if ssh_client 'systemctl is-active drlink-client' >/dev/null 2>&1; then
     break
   fi
   sleep 5
 done
-ssh_client 'systemctl is-active frpc' >"$OUT_DIR/frpc-active.log" 2>&1 \
+ssh_client 'systemctl is-active drlink-client' >"$OUT_DIR/frpc-active.log" 2>&1 \
   || { cat "$OUT_DIR/frpc-active.log"; fail "frpc inactive after reboot"; }
 pass "REBOOT_RECONNECT"
 
 # Cert failure fails closed: untrusted host must not enroll.
 BAD_HOST="untrusted-bootstrap.invalid"
 # Ensure zt1 fallback still works after cert failure path.
-ssh_server "sudo /usr/local/sbin/frpctl unset server bootstrap-hostname" >/dev/null
+ssh_server "sudo /usr/local/bin/drlink unset server bootstrap-hostname" >/dev/null
 FALLBACK_OUT="$OUT_DIR/zt1-fallback.out"
-ssh_server "sudo /usr/local/sbin/frp-create-client --one-line --client-name '${CLIENT_LABEL}-zt1' --note 'zt1-fallback'" \
+ssh_server "sudo /usr/local/bin/drlink enrollment create --one-line --client-name '${CLIENT_LABEL}-zt1' --note 'zt1-fallback'" \
   >"$FALLBACK_OUT" 2>&1 || { cat "$FALLBACK_OUT"; fail "zt1 create"; }
 grep -q 'zt1\.' "$FALLBACK_OUT" || fail "zt1 fallback not printed after unset"
 pass "ZT1_FALLBACK_AFTER_CERT_PATH"
@@ -305,7 +395,8 @@ grep -qiE 'Could not resolve|SSL|certificate|not known' "$OUT_DIR/bad-cert.err" 
   || note "WARN bad-cert diagnostic: $(head -2 "$OUT_DIR/bad-cert.err")"
 pass "CERT_FAILURE_FAILS_CLOSED"
 
-# Cleanup tunnel/proxy
+# Cleanup tunnel/proxy and any temporary client hosts seed.
+restore_client_hosts
 ssh_server 'sudo pkill -x cloudflared 2>/dev/null || true; sudo pkill -f "[f]rp-short-url-proxy.py" 2>/dev/null || true' || true
 
 note "SHORT_URL_REAL_E2E=PASS"

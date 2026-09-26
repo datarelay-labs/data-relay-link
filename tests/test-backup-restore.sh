@@ -15,13 +15,13 @@ BACKUP="$OUTDIR/server.tar.gz"
 seed_state() {
   local tree="$1" marker="$2"
   mkdir -p \
-    "$tree/etc/frp-auto-deploy/pki" \
+    "$tree/etc/drlink/pki" \
     "$tree/etc/frp" \
-    "$tree/var/lib/frp-auto-deploy/enrollments" \
-    "$tree/var/lib/frp-auto-deploy/bootstrap"
+    "$tree/var/lib/drlink/enrollments" \
+    "$tree/var/lib/drlink/bootstrap"
   printf '{"deployment_mode":"direct","marker":"%s","public_hostname":"frp-backup.example.com","bootstrap_hostname":"bootstrap-backup.example.com","public_ip":"203.0.113.10"}\n' "$marker" \
-    >"$tree/etc/frp-auto-deploy/config.json"
-  cat >"$tree/etc/frp-auto-deploy/version" <<EOF
+    >"$tree/etc/drlink/config.json"
+  cat >"$tree/etc/drlink/version" <<EOF
 PROJECT_VERSION=2.1.0
 FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
@@ -31,35 +31,58 @@ EOF
   printf 'bindPort = 443\n# %s\n' "$marker" >"$tree/etc/frp/frps.toml"
   printf 'token-%s-super-secret\n' "$marker" >"$tree/etc/frp/server_token"
   printf '{"schema_version":2,"clients":{"client-a":{"label":"%s","notes":"private note","services":{"ssh":{"remote_port":6001}}}},"reserved":[6002]}\n' \
-    "$marker" >"$tree/var/lib/frp-auto-deploy/registry.json"
+    "$marker" >"$tree/var/lib/drlink/registry.json"
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/access-control.json"
+    >"$tree/var/lib/drlink/access-control.json"
+  printf '{"schema_version":2,"egress_profiles":{}}\n' \
+    >"$tree/var/lib/drlink/egress-control.json"
   printf '{"schema_version":1,"profiles":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
-  printf 'nonce-%s\n' "$marker" >"$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
-  printf 'ca-key-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.key"
-  printf 'ca-cert-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.crt"
-  printf 'server-key-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/server.key"
-  printf 'server-cert-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/server.crt"
-  printf 'serial-%s\n' "$marker" >"$tree/etc/frp-auto-deploy/pki/ca.srl"
-  printf '{"ticket":"%s-enrollment"}\n' "$marker" \
-    >"$tree/var/lib/frp-auto-deploy/enrollments/ticket.json"
-  printf '{"ticket":"%s-bootstrap"}\n' "$marker" \
-    >"$tree/var/lib/frp-auto-deploy/bootstrap/ticket.json"
-  mkdir -p "$tree/var/log/frp-auto-deploy"
+    >"$tree/var/lib/drlink/service-profiles.json"
+  printf 'nonce-%s\n' "$marker" >"$tree/var/lib/drlink/mgmt-nonces.json"
+  printf 'ca-key-%s\n' "$marker" >"$tree/etc/drlink/pki/ca.key"
+  printf 'ca-cert-%s\n' "$marker" >"$tree/etc/drlink/pki/ca.crt"
+  printf 'server-key-%s\n' "$marker" >"$tree/etc/drlink/pki/server.key"
+  printf 'server-cert-%s\n' "$marker" >"$tree/etc/drlink/pki/server.crt"
+  printf 'serial-%s\n' "$marker" >"$tree/etc/drlink/pki/ca.srl"
+  # Coherent Zero-Touch pair: restore preflight rejects orphan tickets.
+  printf '{"id":"ticket","note":"%s-enrollment"}\n' "$marker" \
+    >"$tree/var/lib/drlink/enrollments/ticket.json"
+  printf '{"schema":1,"id":"ticket","enrollment_id":"ticket","note":"%s-bootstrap"}\n' "$marker" \
+    >"$tree/var/lib/drlink/bootstrap/ticket.json"
+  mkdir -p "$tree/var/log/drlink"
   printf '{"event":"backup.created","marker":"%s"}\n' "$marker" \
-    >"$tree/var/log/frp-auto-deploy/audit.jsonl"
+    >"$tree/var/log/drlink/audit.jsonl"
   printf '{"event":"rotated","marker":"%s"}\n' "$marker" \
-    >"$tree/var/log/frp-auto-deploy/audit.jsonl.1"
+    >"$tree/var/log/drlink/audit.jsonl.1"
   chmod 700 \
-    "$tree/etc/frp-auto-deploy" "$tree/etc/frp-auto-deploy/pki" \
-    "$tree/etc/frp" "$tree/var/lib/frp-auto-deploy" \
-    "$tree/var/lib/frp-auto-deploy/enrollments" \
-    "$tree/var/lib/frp-auto-deploy/bootstrap" \
-    "$tree/var/log/frp-auto-deploy"
-  find "$tree/etc/frp-auto-deploy" "$tree/etc/frp" "$tree/var/lib/frp-auto-deploy" \
-    "$tree/var/log/frp-auto-deploy" \
+    "$tree/etc/drlink" "$tree/etc/drlink/pki" \
+    "$tree/etc/frp" "$tree/var/lib/drlink" \
+    "$tree/var/lib/drlink/enrollments" \
+    "$tree/var/lib/drlink/bootstrap" \
+    "$tree/var/log/drlink"
+  find "$tree/etc/drlink" "$tree/etc/frp" "$tree/var/lib/drlink" \
+    "$tree/var/log/drlink" \
     -type f -exec chmod 600 {} +
+  # Canonical control DB is required for supported v2.4 DR archives.
+  FRP_DEPLOY_TEST_ROOT="$tree" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+import drlink_v24 as v24
+plane = ControlPlane('$tree')
+try:
+    v24.ensure_v2_schema(plane.conn)
+    plane.conn.execute(
+        \"INSERT OR REPLACE INTO clients(id, label, hostname, created_at, updated_at) \"
+        \"VALUES ('client-a', ?, 'host-a', datetime('now'), datetime('now'))\",
+        ('$marker',),
+    )
+    plane.conn.commit()
+finally:
+    plane.close()
+"
 }
 
 mode_of() {
@@ -115,6 +138,8 @@ CUSTOM_PARENT_UID="$(stat -c %u "$OUTDIR")"
 CUSTOM_PARENT_MODE="$(mode_of "$OUTDIR")"
 [[ "$CUSTOM_PARENT_MODE" == "0o755" ]] || fail "custom parent fixture mode"
 [[ "$(mode_of "$BACKUP")" == "0o600" ]] || fail "backup archive mode"
+BACKUP_FORMAT="$(tar -xOzf "$BACKUP" manifest.json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("format", ""))')"
+[[ "$BACKUP_FORMAT" == "data-relay-link-server-backup" ]] || fail "backup format is not canonical Data Relay Link"
 [[ "$(stat -c %u "$OUTDIR")" == "$CUSTOM_PARENT_UID" ]] || fail "custom parent owner changed"
 [[ "$(mode_of "$OUTDIR")" == "$CUSTOM_PARENT_MODE" ]] || fail "custom parent mode changed"
 grep -q 'contains private keys' "$BACKUP_STDOUT" || fail "secret warning missing"
@@ -146,36 +171,46 @@ grep -q 'missing required file' "$WORKDIR/missing.stderr" || fail "missing-file 
 pass "RESTORE_MISSING_FILE_REJECTED"
 
 seed_state "$TREE" mutated
-printf 'stale\n' >"$TREE/etc/frp-auto-deploy/frontend.conf"
+printf 'stale\n' >"$TREE/etc/drlink/frontend.conf"
 RESTORE_STDOUT="$WORKDIR/restore.stdout"
 python3 "$ROOT/tools/frp-restore" "$BACKUP" >"$RESTORE_STDOUT" \
   || fail "exact restore"
-grep -q '"marker":"original"' "$TREE/etc/frp-auto-deploy/config.json" || fail "config restore"
-grep -q '"public_hostname":"frp-backup.example.com"' "$TREE/etc/frp-auto-deploy/config.json" \
+grep -q '"marker":"original"' "$TREE/etc/drlink/config.json" || fail "config restore"
+grep -q '"public_hostname":"frp-backup.example.com"' "$TREE/etc/drlink/config.json" \
   || fail "public_hostname restore"
-grep -q '"bootstrap_hostname":"bootstrap-backup.example.com"' "$TREE/etc/frp-auto-deploy/config.json" \
+grep -q '"bootstrap_hostname":"bootstrap-backup.example.com"' "$TREE/etc/drlink/config.json" \
   || fail "bootstrap_hostname restore"
-grep -q '"public_ip":"203.0.113.10"' "$TREE/etc/frp-auto-deploy/config.json" || fail "public_ip restore"
-grep -q '"label":"original"' "$TREE/var/lib/frp-auto-deploy/registry.json" || fail "registry restore"
-grep -q '6002' "$TREE/var/lib/frp-auto-deploy/registry.json" || fail "reservation restore"
+grep -q '"public_ip":"203.0.113.10"' "$TREE/etc/drlink/config.json" || fail "public_ip restore"
+FRP_DEPLOY_TEST_ROOT="$TREE" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+plane = ControlPlane('$TREE')
+try:
+    row = plane.conn.execute(\"SELECT label FROM clients WHERE id='client-a'\").fetchone()
+    assert row and row[0] == 'original', row
+finally:
+    plane.close()
+" || fail "control DB client restore"
 grep -q 'token-original-super-secret' "$TREE/etc/frp/server_token" || fail "token restore"
-grep -q 'ca-key-original' "$TREE/etc/frp-auto-deploy/pki/ca.key" || fail "CA restore"
-grep -q 'serial-original' "$TREE/etc/frp-auto-deploy/pki/ca.srl" || fail "PKI serial restore"
-grep -q 'original-enrollment' "$TREE/var/lib/frp-auto-deploy/enrollments/ticket.json" \
+grep -q 'ca-key-original' "$TREE/etc/drlink/pki/ca.key" || fail "CA restore"
+grep -q 'serial-original' "$TREE/etc/drlink/pki/ca.srl" || fail "PKI serial restore"
+grep -q 'original-enrollment' "$TREE/var/lib/drlink/enrollments/ticket.json" \
   || fail "enrollment restore"
-grep -q 'original-bootstrap' "$TREE/var/lib/frp-auto-deploy/bootstrap/ticket.json" \
+grep -q 'original-bootstrap' "$TREE/var/lib/drlink/bootstrap/ticket.json" \
   || fail "bootstrap restore"
-grep -q '"marker":"original"' "$TREE/var/log/frp-auto-deploy/audit.jsonl" \
+grep -q '"marker":"original"' "$TREE/var/log/drlink/audit.jsonl" \
   || fail "audit.jsonl restore"
-grep -q '"marker":"original"' "$TREE/var/log/frp-auto-deploy/audit.jsonl.1" \
+grep -q '"marker":"original"' "$TREE/var/log/drlink/audit.jsonl.1" \
   || fail "rotated audit restore"
-[[ ! -f "$TREE/etc/frp-auto-deploy/frontend.conf" ]] || fail "absent optional file not removed"
+[[ ! -f "$TREE/etc/drlink/frontend.conf" ]] || fail "absent optional file not removed"
 [[ "$(mode_of "$TREE/etc/frp/server_token")" == "0o600" ]] || fail "token mode"
-[[ "$(mode_of "$TREE/etc/frp-auto-deploy/pki")" == "0o700" ]] || fail "PKI directory mode"
+[[ "$(mode_of "$TREE/etc/drlink/pki")" == "0o700" ]] || fail "PKI directory mode"
 if grep -qE 'token-original-super-secret|private note|original-enrollment' "$RESTORE_STDOUT"; then
   fail "restore leaked a secret"
 fi
-find "$TREE/var/lib/frp-auto-deploy/backups" -name 'pre-restore-*.tar.gz' -type f \
+find "$TREE/var/lib/drlink/backups" -name 'pre-restore-*.tar.gz' -type f \
   | grep -q . || fail "pre-restore snapshot missing"
 pass "RESTORE_EXACT_STATE_PERMISSIONS_NO_SECRET_LEAK"
 pass "AUDIT_INCLUDED_IN_BACKUP_RESTORE"
@@ -186,7 +221,7 @@ seed_state "$CROSS" cross
 export FRP_DEPLOY_TEST_ROOT="$CROSS"
 python3 "$ROOT/tools/frp-backup" "$WORKDIR/cross.tar.gz" >/dev/null
 # Simulate newer installed product while backup remains older.
-cat >"$CROSS/etc/frp-auto-deploy/version" <<EOF
+cat >"$CROSS/etc/drlink/version" <<EOF
 PROJECT_VERSION=2.1.2
 FRP_VERSION=0.71.0
 RELEASE_CHANNEL=dev
@@ -199,28 +234,49 @@ if python3 "$ROOT/tools/frp-restore" "$WORKDIR/cross.tar.gz" \
 fi
 grep -qi 'cross-version restore is not supported' "$WORKDIR/cross.stderr" \
   || fail "cross-version diagnostic"
-grep -q 'PROJECT_VERSION=2.1.2' "$CROSS/etc/frp-auto-deploy/version" \
+grep -q 'PROJECT_VERSION=2.1.2' "$CROSS/etc/drlink/version" \
   || fail "cross-version restore mutated installed version"
 pass "CROSS_VERSION_RESTORE_FAIL_CLOSED"
 
 seed_state "$TREE" rollback-source
 export FRP_DEPLOY_TEST_ROOT="$TREE"
 ROLLBACK_BEFORE="$WORKDIR/rollback.before"
-cp "$TREE/var/lib/frp-auto-deploy/registry.json" "$ROLLBACK_BEFORE"
+FRP_DEPLOY_TEST_ROOT="$TREE" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+plane = ControlPlane('$TREE')
+try:
+    row = plane.conn.execute(\"SELECT label FROM clients WHERE id='client-a'\").fetchone()
+    open('$ROLLBACK_BEFORE','w').write(row[0] if row else '')
+finally:
+    plane.close()
+"
 if FRP_RESTORE_HOOK_FAIL_AFTER=4 \
   python3 "$ROOT/tools/frp-restore" "$BACKUP" >/dev/null 2>"$WORKDIR/rollback.stderr"; then
   fail "injected restore failure unexpectedly succeeded"
 fi
-cmp -s "$TREE/var/lib/frp-auto-deploy/registry.json" "$ROLLBACK_BEFORE" \
-  || fail "registry was not rolled back"
+FRP_DEPLOY_TEST_ROOT="$TREE" DRLINK_SKIP_ACTIVATION=1 PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "
+import sys
+sys.path.insert(0, '$ROOT/lib')
+from drlink_control_plane import ControlPlane
+plane = ControlPlane('$TREE')
+try:
+    row = plane.conn.execute(\"SELECT label FROM clients WHERE id='client-a'\").fetchone()
+    assert row and row[0] == open('$ROLLBACK_BEFORE').read(), row
+finally:
+    plane.close()
+" || fail "control DB was not rolled back"
 grep -q 'token-rollback-source-super-secret' "$TREE/etc/frp/server_token" \
   || fail "token was not rolled back"
-grep -q 'ca-key-rollback-source' "$TREE/etc/frp-auto-deploy/pki/ca.key" \
+grep -q 'ca-key-rollback-source' "$TREE/etc/drlink/pki/ca.key" \
   || fail "CA was not rolled back"
 grep -q 'previous state was restored' "$WORKDIR/rollback.stderr" || fail "rollback diagnostic"
 pass "RESTORE_FAILURE_ROLLBACK"
 
-# Concurrent registry mutation cannot interleave with a locked backup copy.
+# Concurrent control-state mutation cannot interleave with a locked backup copy.
 CONC="$WORKDIR/conc"
 seed_state "$CONC" concurrent
 export FRP_DEPLOY_TEST_ROOT="$CONC"
@@ -237,12 +293,10 @@ for _ in $(seq 1 80); do
 done
 [[ -f "$READY" ]] || { kill "$BACK_PID" 2>/dev/null || true; fail "backup lock hook"; }
 python3 - "$CONC" "$WORKDIR/writer.started" "$WORKDIR/writer.done" <<'PY' &
-import json, os, sys, time
+import os, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
-sys.path.insert(0, str(Path(os.environ.get("FRP_TEST_LOCKS_LIB", ""))))
-# Non-blocking attempt: writer must not observe a half-copied registry.
-lock = root / "var/lib/frp-auto-deploy/registry.lock"
+lock = root / "var/lib/drlink/runtime/registry.lock"
 import fcntl
 fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
 Path(sys.argv[2]).write_text("started\n")
@@ -256,9 +310,15 @@ while time.time() < deadline:
     except BlockingIOError:
         time.sleep(0.05)
 if got:
-    path = root / "var/lib/frp-auto-deploy/registry.json"
-    json.loads(path.read_text())
-    path.write_text(json.dumps({"schema_version":2,"clients":{"mutated":{}},"reserved":[]}) + "\n")
+    # Attempt a live DB mutation while backup holds control locks.
+    import sqlite3
+    db = root / "var/lib/drlink/drlink.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("UPDATE clients SET label='mutated' WHERE id='client-a'")
+        conn.commit()
+    finally:
+        conn.close()
     fcntl.flock(fd, fcntl.LOCK_UN)
 Path(sys.argv[3]).write_text("got=%s\n" % got)
 os.close(fd)
@@ -266,18 +326,22 @@ PY
 sleep 0.2
 touch "$GO"
 wait "$BACK_PID" || fail "concurrent backup"
-python3 - "$CONC_BACKUP" <<'PY'
-import json, tarfile, sys, tempfile
+python3 - "$CONC_BACKUP" "$ROOT" <<'PY'
+import sqlite3, sys, tarfile, tempfile
 from pathlib import Path
 with tempfile.TemporaryDirectory() as name:
     dest = Path(name)
     with tarfile.open(sys.argv[1], "r:gz") as archive:
         archive.extractall(dest)
-    data = json.loads((dest / "payload/var/lib/frp-auto-deploy/registry.json").read_text())
-    assert data.get("schema_version") == 2
-    assert "client-a" in data.get("clients", {})
-    assert data["clients"]["client-a"]["label"] == "concurrent"
-print("BACKUP_JSON_OK")
+    db = dest / "payload/var/lib/drlink/drlink.db"
+    assert db.is_file(), db
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute("SELECT label FROM clients WHERE id='client-a'").fetchone()
+        assert row and row[0] == "concurrent", row
+    finally:
+        conn.close()
+print("BACKUP_DB_OK")
 PY
 pass "BACKUP_CONCURRENT_REGISTRY_MUTATION"
 pass "BACKUP_CONSISTENCY"
@@ -298,6 +362,40 @@ grep -q 'previous state was restored' "$WORKDIR/health.stderr" || fail "health r
 pass "RESTORE_HEALTH_GATE"
 pass "RESTORE_HEALTH_FAILURE_ROLLBACK"
 
+# Dual-role client readiness failure must fail closed and restore the client role.
+DUAL="$WORKDIR/dual-tree"
+seed_state "$DUAL" dual
+mkdir -p "$DUAL/etc/systemd/system"
+echo '[Unit]' >"$DUAL/etc/systemd/system/drlink-client.service"
+printf '{"mid":"machine-dual","hostname":"dual-host"}\n' >"$DUAL/etc/frp/client-state.json"
+export FRP_DEPLOY_TEST_ROOT="$DUAL"
+python3 "$ROOT/tools/frp-backup" "$WORKDIR/dual.tar.gz" >/dev/null
+seed_state "$DUAL" dual-mutated
+mkdir -p "$DUAL/etc/systemd/system"
+echo '[Unit]' >"$DUAL/etc/systemd/system/drlink-client.service"
+printf '{"mid":"machine-dual","hostname":"dual-host"}\n' >"$DUAL/etc/frp/client-state.json"
+if FRP_RESTORE_HOOK_CLIENT_READY_FAIL=1 \
+  python3 "$ROOT/tools/frp-restore" "$WORKDIR/dual.tar.gz" \
+  >"$WORKDIR/dual.stdout" 2>"$WORKDIR/dual.stderr"; then
+  fail "dual-role client readiness failure should fail restore"
+fi
+grep -q 'previous state was restored' "$WORKDIR/dual.stderr" || fail "dual-role rollback message"
+grep -q 'token-dual-mutated-super-secret' "$DUAL/etc/frp/server_token" || fail "dual-role token not rolled back"
+[[ -f "$DUAL/etc/systemd/system/drlink-client.service" ]] || fail "dual-role client unit missing after rollback"
+[[ -f "$DUAL/etc/frp/client-state.json" ]] || fail "dual-role client-state missing after rollback"
+pass "DUAL_ROLE_RESTORE_CLIENT_READY_FAIL_ROLLBACK"
+
+if FRP_RESTORE_HOOK_CLIENT_RESTART_FAIL=1 \
+  python3 "$ROOT/tools/frp-restore" "$WORKDIR/dual.tar.gz" \
+  >"$WORKDIR/dual-restart.stdout" 2>"$WORKDIR/dual-restart.stderr"; then
+  fail "dual-role client restart failure should fail restore"
+fi
+grep -q 'previous state was restored' "$WORKDIR/dual-restart.stderr" \
+  || fail "dual-role restart rollback message"
+[[ -f "$DUAL/etc/systemd/system/drlink-client.service" ]] || fail "client unit missing after restart-fail rollback"
+pass "DUAL_ROLE_RESTORE_CLIENT_RESTART_FAIL_ROLLBACK"
+
+export FRP_DEPLOY_TEST_ROOT="$HEALTH"
 if FRP_RESTORE_HOOK_HEALTH_FAIL=1 FRP_RESTORE_HOOK_ROLLBACK_HEALTH_FAIL=1 \
   python3 "$ROOT/tools/frp-restore" "$WORKDIR/health.tar.gz" \
   >"$WORKDIR/rbhealth.stdout" 2>"$WORKDIR/rbhealth.stderr"; then
@@ -305,7 +403,7 @@ if FRP_RESTORE_HOOK_HEALTH_FAIL=1 FRP_RESTORE_HOOK_ROLLBACK_HEALTH_FAIL=1 \
 fi
 grep -q 'RESTORE_ROLLBACK_FAILED' "$WORKDIR/rbhealth.stderr" || fail "RESTORE_ROLLBACK_FAILED"
 grep -q 'RECOVERY_REQUIRED' "$WORKDIR/rbhealth.stderr" || fail "restore recovery required"
-[[ -f "$HEALTH/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "restore pending missing"
+[[ -f "$HEALTH/var/lib/drlink/server-update-pending.json" ]] || fail "restore pending missing"
 pass "RESTORE_ROLLBACK_FAILURE"
 
 # Default product-owned backup directory is secured; custom parents are not taken over.
@@ -314,7 +412,7 @@ seed_state "$DEFAULT_TREE" default-dir
 export FRP_DEPLOY_TEST_ROOT="$DEFAULT_TREE"
 python3 "$ROOT/tools/frp-backup" >"$WORKDIR/default.stdout" \
   || fail "default backup creation"
-DEFAULT_DIR="$DEFAULT_TREE/var/lib/frp-auto-deploy/backups"
+DEFAULT_DIR="$DEFAULT_TREE/var/lib/drlink/backups"
 [[ -d "$DEFAULT_DIR" ]] || fail "default backup directory missing"
 [[ "$(mode_of "$DEFAULT_DIR")" == "0o700" ]] || fail "default backup directory mode"
 DEFAULT_ARCHIVE="$(find "$DEFAULT_DIR" -maxdepth 1 -type f -name 'server-backup-*.tar.gz' | head -n 1)"

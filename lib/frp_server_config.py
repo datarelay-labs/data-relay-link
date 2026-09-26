@@ -3,23 +3,45 @@
 
 control_host  — FRP control / infrastructure endpoint (public_ip, legacy public_host)
 access_host   — user-facing published-service endpoint (public_hostname or control_host)
+public_url_host — install-time canonical host for Enrollment/Management HTTPS,
+                  allocator URL, Server-local installer links, Zero-Touch commands,
+                  and status/help public links (domain or IP, chosen once at install)
 
-public_hostname is an optional DNS alias only. It must never become the default
-FRP control destination, allocator URL host, or PKI identity by itself.
+public_hostname is an optional DNS alias for published-service access and may
+also be selected as public_url_host. It must never become the default FRP
+control destination or PKI identity by itself.
 
-bootstrap_hostname is a separate optional DNS name used only for the publicly
-trusted Zero-Touch short URL entrypoint (operator reverse proxy). It must not
-be overloaded onto public_hostname or FRP control identity.
+bootstrap_hostname is an optional advanced override for a publicly trusted
+Zero-Touch edge. When unset, a DNS public_url_host is still the short-URL
+host, but that host presents the project private CA. The advertised command
+must carry that CA; stock curl cannot validate it on a fresh client.
 """
 from __future__ import annotations
 
+import importlib.util
 import ipaddress
 import json
 import os
 import re
 import socket
+import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
+
+
+def durable_replace(tmp, path):
+    """Shared durable replace (lib/frp_control_locks.py)."""
+    mod = sys.modules.get('frp_control_locks')
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            'frp_control_locks', str(Path(__file__).resolve().parent / 'frp_control_locks.py')
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules['frp_control_locks'] = mod
+        spec.loader.exec_module(mod)
+    return mod.durable_replace(tmp, path)
+
 
 # DNS hostname: labels of [A-Za-z0-9-] separated by dots; no scheme/port/path.
 _HOSTNAME_RE = re.compile(
@@ -116,11 +138,71 @@ def public_hostname(cfg):
 
 
 def bootstrap_hostname(cfg):
-    """Optional Zero-Touch public TLS bootstrap hostname (not public_hostname)."""
+    """Optional Zero-Touch public TLS bootstrap hostname (advanced override)."""
     if not isinstance(cfg, dict):
         return ''
     try:
         return validate_public_hostname(cfg.get('bootstrap_hostname') or '', required=False)
+    except ConfigError:
+        return ''
+
+
+def public_url_host(cfg):
+    """Install-time canonical host for user-facing public HTTPS / ZT / installer URLs.
+
+    Preference: explicit public_url_host (or legacy enrollment_public_host),
+    then allocator_public_url authority, then public_hostname, then control IP.
+    """
+    if not isinstance(cfg, dict):
+        return ''
+    for key in ('public_url_host', 'enrollment_public_host'):
+        value = _strip(cfg.get(key))
+        if not value:
+            continue
+        if is_ip_literal(value):
+            return validate_public_ip(value, required=True)
+        try:
+            return validate_public_hostname(value, required=True)
+        except ConfigError:
+            return value
+    url = _strip(cfg.get('allocator_public_url') or '')
+    if url:
+        try:
+            host = urlparse(url).hostname or ''
+        except Exception:
+            host = ''
+        host = _strip(host)
+        if host:
+            if is_ip_literal(host):
+                return host
+            try:
+                return validate_public_hostname(host, required=True)
+            except ConfigError:
+                return host
+    alias = public_hostname(cfg)
+    if alias:
+        return alias
+    try:
+        return control_host(cfg)
+    except ConfigError:
+        return ''
+
+
+def short_url_hostname(cfg):
+    """Hostname for Zero-Touch short URL commands.
+
+    Advanced bootstrap_hostname wins when set. Otherwise use public_url_host
+    when it is a DNS name. IP-selected public URL identity does not invent a
+    short-URL hostname from a separate public_hostname alias.
+    """
+    boot = bootstrap_hostname(cfg)
+    if boot:
+        return boot
+    host = public_url_host(cfg)
+    if not host or is_ip_literal(host):
+        return ''
+    try:
+        return validate_public_hostname(host, required=True)
     except ConfigError:
         return ''
 
@@ -131,6 +213,55 @@ def access_host(cfg):
     if alias:
         return alias
     return control_host(cfg)
+
+
+def resolve_public_endpoint_host(cfg=None, *, root=None, fallback=""):
+    """Resolve the operator-facing public endpoint host for Remote Services.
+
+    Prefer an explicit DRLINK_HOST override, then configured public_hostname,
+    then the control/public IP. Never invent ``drlink.local`` as a public
+    Internet target unless that name is actually configured.
+    """
+    env = _strip(os.environ.get("DRLINK_HOST") or "")
+    if env:
+        return env
+    data = cfg if isinstance(cfg, dict) else None
+    if data is None and root is not None:
+        path = Path(root) / "etc/drlink/config.json"
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                loaded = None
+            if isinstance(loaded, dict):
+                data = loaded
+    if data is None:
+        # Agent Host: public_hostname may live in client-state.
+        if root is not None:
+            for rel in ("etc/frp/client-state.json", "client-state.json"):
+                path = Path(root) / rel
+                if not path.is_file():
+                    continue
+                try:
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(state, dict):
+                    alias = _strip(state.get("public_hostname") or "")
+                    if alias:
+                        return alias
+                    server = _strip(state.get("frp_server") or state.get("server") or "")
+                    if server:
+                        return server
+        fb = _strip(fallback)
+        return fb
+    alias = public_hostname(data)
+    if alias:
+        return alias
+    host = control_host(data)
+    if host:
+        return host
+    return _strip(fallback)
 
 
 def format_host_for_url(host):
@@ -173,7 +304,7 @@ def dns_record_guidance(hostname, public_ip):
         '  Name  : %s' % hostname,
         '  Value : %s' % ip,
         '',
-        'DNS records are managed outside FRP Auto Deploy.',
+        'DNS records are managed outside Data Relay Link.',
         '',
         'The Public IP remains available while DNS propagates.',
     ]
@@ -296,6 +427,27 @@ def load_config(path):
     return data
 
 
+def _reapply_config_egress_permissions(path):
+    """Preserve drlink-egress readability after config.json inode replacement."""
+    try:
+        here = Path(__file__).resolve().parent
+        candidates = [
+            here / 'frp_egress_control.py',
+            Path('/usr/local/lib/drlink/frp_egress_control.py'),
+        ]
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('frp_egress_control', str(candidate))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.reapply_egress_runtime_permissions(config_path=Path(path), parents=True)
+            return
+    except Exception:
+        return
+
+
 def atomic_write_config(path, cfg):
     path = Path(path)
     payload = json.dumps(cfg, indent=2, sort_keys=True) + '\n'
@@ -307,7 +459,12 @@ def atomic_write_config(path, cfg):
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        # config.json carries the server's identity, ports and trust anchors;
+        # a lost rename would silently restore a superseded configuration on
+        # the next boot.
+        durable_replace(tmp, path)
+        if path.name == 'config.json':
+            _reapply_config_egress_permissions(path)
     finally:
         if os.path.exists(tmp):
             try:
@@ -349,4 +506,4 @@ def deploy_root():
 def config_path(root=None):
     if root is None:
         root = deploy_root()
-    return Path(root + '/etc/frp-auto-deploy/config.json')
+    return Path(root + '/etc/drlink/config.json')

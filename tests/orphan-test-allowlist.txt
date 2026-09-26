@@ -1,0 +1,20 @@
+# Tests under tests/ that are intentionally NOT invoked by run-all.sh.
+# Keep this list small. Prefer adding new regressions to run-all.sh.
+#
+# Real E2E / benchmark / destructive / optional infrastructure:
+run-egress-userspace-e2e.sh
+run-egress-real-e2e-smoke.sh
+run-egress-benchmark-worker.py
+run-short-url-e2e.sh
+run-server-local-artifacts-e2e.sh
+run-v230-to-v240-upgrade-e2e.sh
+run-production-realistic-qualification.sh
+run-prod-qual-extended.sh
+run-distro-matrix.sh
+# Thin alias wrapper; schema/migration coverage lives in test-fixed-tcp-egress.*
+test-egress-schema-v3.sh
+# Deferred CLI UX parity (known product drift; not version-governance blockers):
+# - navigation: system pause/resume/restart/autostart role=both mismatch
+# - workflow: public set surface includes enrollment ahead of freeze
+test-navigation-target-parity.py
+test-workflow-cli-ux-closure.py

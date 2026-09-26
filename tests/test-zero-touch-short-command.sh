@@ -48,16 +48,16 @@ pass "ZERO_TOUCH_PACKAGE_ROUNDTRIP"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 TREE="$WORKDIR/tree"
-mkdir -p "$TREE/etc/frp-auto-deploy/pki" "$TREE/var/lib/frp-auto-deploy/enrollments" \
-  "$TREE/var/lib/frp-auto-deploy/bootstrap"
+mkdir -p "$TREE/etc/drlink/pki" "$TREE/var/lib/drlink/enrollments" \
+  "$TREE/var/lib/drlink/bootstrap"
 
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout "$TREE/etc/frp-auto-deploy/pki/ca.key" \
-  -out "$TREE/etc/frp-auto-deploy/pki/ca.crt" \
+  -keyout "$TREE/etc/drlink/pki/ca.key" \
+  -out "$TREE/etc/drlink/pki/ca.crt" \
   -days 1 -subj "/CN=frp-test-ca" >/dev/null 2>&1 \
   || fail "openssl ca"
 
-python3 - "$TREE/etc/frp-auto-deploy/config.json" "$TREE" <<'PY'
+python3 - "$TREE/etc/drlink/config.json" "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 tree = Path(sys.argv[2])
@@ -69,14 +69,15 @@ cfg = {
   "port_end": 6098,
   "listen_port": 6099,
   "allocator_public_url": "https://203.0.113.10/enroll",
-  "client_installer_url": "https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/v2.1.1/dist/bootstrap-client.sh",
-  "tls_ca_cert": str(tree / "etc/frp-auto-deploy/pki/ca.crt"),
-  "enrollments_dir": str(tree / "var/lib/frp-auto-deploy/enrollments"),
-  "bootstrap_dir": str(tree / "var/lib/frp-auto-deploy/bootstrap"),
-  "registry_file": str(tree / "var/lib/frp-auto-deploy/registry.json"),
+  "client_installer_url": "https://203.0.113.10/artifacts/agent/bootstrap-client.sh",
+  "windows_client_installer_url": "https://203.0.113.10/artifacts/agent/bootstrap-client.ps1",
+  "tls_ca_cert": str(tree / "etc/drlink/pki/ca.crt"),
+  "enrollments_dir": str(tree / "var/lib/drlink/enrollments"),
+  "bootstrap_dir": str(tree / "var/lib/drlink/bootstrap"),
+  "registry_file": str(tree / "var/lib/drlink/registry.json"),
 }
 Path(sys.argv[1]).write_text(json.dumps(cfg, indent=2) + "\n")
-(tree / "var/lib/frp-auto-deploy/registry.json").write_text(
+(tree / "var/lib/drlink/registry.json").write_text(
   json.dumps({"schema_version": 2, "clients": {}, "reserved": []}) + "\n"
 )
 PY
@@ -86,13 +87,14 @@ OUT="$WORKDIR/one-line.out"
 python3 "$ROOT/tools/frp-create-client" --one-line --client-name short-zt --note 'pkg' \
   >"$OUT" || { cat "$OUT"; fail "create one-line"; }
 grep -q 'Zero-touch client command' "$OUT" || fail "header"
-grep -E -q "curl -fsSL '.+' \| sudo bash -s -- 'zt1\." "$OUT" \
-  || { cat "$OUT"; fail "short command shape"; }
+grep -q "curl -fsSL --proto =https --cacert" "$OUT" || { cat "$OUT"; fail "pinned installer curl missing"; }
+grep -q '/ca.crt' "$OUT" || { cat "$OUT"; fail "ca.crt bootstrap missing"; }
+grep -q 'zt1\.' "$OUT" || { cat "$OUT"; fail "zt1 package missing"; }
+if grep -qiE 'curl -fsSL --insecure .*/bootstrap-client|curl -k .*/bootstrap-client' "$OUT"; then
+  fail "insecure TLS on installer fetch"
+fi
 if grep -q 'FRP_BOOTSTRAP_TICKET=' "$OUT"; then
   fail "legacy env block still preferred"
-fi
-if grep -qiE 'curl -k|curl --insecure|wget --no-check-certificate' "$OUT"; then
-  fail "insecure TLS in command"
 fi
 pass "ZERO_TOUCH_SHORT_COMMAND_SHAPE"
 
@@ -104,9 +106,9 @@ PACKAGE="$(python3 - "$OUT" <<'PY'
 import re, sys
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
-m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", text)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", text)
 assert m, text
-print(m.group(1))
+print(m.group(0))
 PY
 )"
 frp_zero_touch_apply_package "$PACKAGE" || fail "apply package"

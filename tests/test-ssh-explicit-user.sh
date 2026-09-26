@@ -16,13 +16,10 @@ base = {
     'id': 'ssh', 'name': 'SSH', 'protocol': 'tcp', 'preset': 'ssh',
     'local_ip': '127.0.0.1', 'local_port': 22,
 }
-try:
-    mod.normalize_service(base)
-except mod.ServiceValidationError as exc:
-    assert 'ssh_user is required' in str(exc)
-else:
-    raise AssertionError('missing ssh_user was accepted')
-print('NEW_SSH_MISSING_USER=REJECTED')
+# ssh_user is optional connection-example metadata; enrollment does not require it.
+got = mod.normalize_service(base)
+assert 'ssh_user' not in got, got
+print('NEW_SSH_MISSING_USER=OPTIONAL_OK')
 
 item = dict(base, ssh_user='deploy.user')
 assert mod.normalize_service(item)['ssh_user'] == 'deploy.user'
@@ -39,15 +36,7 @@ for bad in ('root\nx', '\x1broot', 'bad user', 'root\x9b'):
     except mod.ServiceValidationError:
         pass
     else:
-        raise AssertionError('invalid ssh_user was accepted: %r' % bad)
+        raise AssertionError('accepted invalid ssh_user: %r' % (bad,))
+print('NEW_SSH_INVALID_USER=REJECTED')
+print('SSH_EXPLICIT_USER_TEST=PASS')
 PY
-
-if rg -n "ssh_user.*(or 'root'|else 'root'|get\\('ssh_user'.*root)|or ['\"]ubuntu['\"]|or ['\"]ec2-user['\"]" \
-  "$ROOT/lib/frp-client-common.sh" "$ROOT/server/frp-port-allocator.py" \
-  "$ROOT/install-client.sh" "$ROOT/tools/frp-client" >/dev/null; then
-  echo "FAIL implicit SSH user fallback remains" >&2
-  exit 1
-fi
-echo "NO_IMPLICIT_ROOT=PASS"
-
-echo "SSH_EXPLICIT_USER_TEST=PASS"

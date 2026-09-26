@@ -1,262 +1,112 @@
 # Changelog
 
-## Unreleased
+All notable released changes to Data Relay Link are recorded here.
 
-## 2.3.0 — 2026-09-09
+Released tags/artifacts are immutable. Historical source is never rewritten to make version numbering or current architecture look cleaner.
 
-Feature-complete product release on pinned FRP **0.71.0**. Does not move or
-retag published **v2.2.1** or earlier tags. Feature Freeze remains active after
-this release.
+## [Unreleased]
 
-### Access Control Pack
+### Implemented (feature branch)
 
-- Named reusable Access Lists (IPv4/IPv6 CIDR)
-- Service modes: `PUBLIC` (default) and `ALLOWLIST`
-- Optional temporary sources with absolute expiry (`expires_at` / TTL)
-- Fail-closed authorization when policy or registry is missing
-- Unmapped proxy deny for ALLOWLIST enforcement
-- Bounded connection ALLOW/DENY access log
-- `frpctl access ...` interactive menu and scriptable CLI
-- FRP 0.71.0 NewUserConn plugin enforcement (loopback-only)
+- ConfigurationBundle Change Plan engine (`lib/drlink_configuration_bundle.py`) with public CLI:
+  `system export configuration`, `test configuration`, `system diff configuration`,
+  `system apply configuration` (file or stdin).
+- Shared mutation path: Bundle apply uses ControlPlane batch mode + one revision/audit/compile cycle.
+- Bounded Zero-Touch issuance enforced in `issue_bootstrap_ticket` / batch API:
+  max 10 per issue, max 10 active unused, default TTL 1h, max TTL 24h, verifier-only persistence,
+  batch revoke by `batch_id`. Bundle enrollment plans issue zero tickets.
 
-### Target Health Check
+## 2.4.0 — development target
 
-- TCP and HTTP FRP health checks as a thin product wrapper
-- Distinct `CLIENT` / `TUNNEL` / `TARGET` status reporting
+### Candidate target: 2.4.0
 
-### Support Bundle
+v2.4.0 remains a development target. The following is approved architecture scope, not a stable-release claim. Final notes must be reconciled against the exact qualified HEAD before publication.
 
-- Sanitized diagnostic archive for support/troubleshooting
-- Secrets and private keys are excluded from the bundle
+### Added — target scope
 
-### Service Profiles
+- Embedded SQLite control plane at `/var/lib/drlink/drlink.db` with migration, revision, audit, and runtime-generation metadata.
+- Managed Host / DRLink Agent identity with Managed Hosts selectable as Network Objects where policy context allows it.
+- Network Objects / Groups for IP, CIDR, FQDN, and Managed Host selectors.
+- Service Objects / Groups, including Fixed TCP as a Service Object subtype.
+- Permission Objects / Groups for reusable AI-operation permissions.
+- Agent-owned Remote Services binding one destination and one Service Object, with TCP and Fixed TCP support and stable endpoint allocation.
+- Remote Access, Internet Access, and AI Access using the shared BLACKLIST / WHITELIST Mode and Enforcement model.
+- AI Identity authentication plus server-side MCP Bridge and per-invocation AI Access authorization.
+- Optimistic-concurrency protection for interactive control-plane mutations.
+- Consistent SQLite backup/restore and DB-to-runtime recompilation.
+- ConfigurationBundle v1alpha1 for idempotent multi-resource change sets using the same Change Plan/control-plane engine as direct CLI.
+- AI-assisted configuration contract: simple changes as canonical public CLI; dependent changes as copy/paste ConfigurationBundle via standard input.
+- Redacted configuration export plus validate/test/diff/atomic-apply workflow.
+- Zero-Touch bounded issuance: max 10 tickets per request, max 10 active unused, unique single-use tickets, default 1-hour TTL and maximum 24-hour TTL.
 
-- Reusable server-owned service creation templates
-- Profile edits do not live-inherit into already-created services
-- New services created after a profile edit reflect the updated template
+### Changed — target scope
 
-### Platform / lifecycle improvements
+- Control-plane authority is transferred from multiple authoritative JSON state files to embedded SQLite.
+- Public terminology is frozen around Managed Host, Network/Service/Permission Objects and Groups, AI Identity, Remote Service, Remote Access, Internet Access, and AI Access.
+- Initial policy state is No Policy / No Rules with effective ALLOW; BLACKLIST denies matching enabled Rules and WHITELIST allows matching enabled Rules.
+- Rules are not ordered and do not carry per-rule ALLOW/DENY actions; Policy Reset and Enforcement disable/enable have explicit semantics.
+- Remote Service mutation is Agent Host-local; Server-side Remote Service inspection is read-only for configuration.
+- Internet Access source selectors may include Managed Hosts; destinations reject Managed Hosts directly or through a Network Group containing one.
+- Fixed TCP endpoint allocation uses a separate implementation-managed port pool and does not create a separate policy hierarchy.
+- Canonical guided Server CLI root becomes Managed Hosts / Network Objects / Service Objects / Remote Access / Internet Access / AI Access / System / Help / Exit.
+- Canonical Agent Host CLI root becomes Status / Remote Services / Agent / Configuration / Diagnostics / Help / Exit.
+- Earlier v2.4.x MCP exclusion decision is superseded: MCP/AI Access is part of the v2.4.0 target and must be qualified before stable release.
 
-- Windows Access Control `host_id` mapping alignment
-- Windows Real E2E improvements (including release cleanup after uninstall)
-- macOS Apple Silicon full Real E2E coverage
-- Service release / client sync E2E correctness
-- Canonical repository moved to `xdr-labs/frp-auto-deploy`
+### Security — target scope
 
-### Compatibility and scope notes
+- Invalid, ambiguous, corrupt, or unsafe state fails closed; policy behavior itself follows the explicit BLACKLIST / WHITELIST model.
+- Managed Host, Object/Group, Remote Service, policy Mode/Enforcement, and AI permission changes participate in policy-impact analysis.
+- Access broadening requires explicit interactive confirmation where the CLI contract requires it.
+- Referenced policy entities are protected from cascade delete.
+- Unsupported/corrupt DB or unsafe runtime-generation mismatch fails closed where safe enforcement cannot be proven.
+- Internet Access retains server-side DNS, DNS-rebinding resistance, SSRF/special-address protection, and validated exact-destination connection.
+- MCP operations require authenticated AI Identity and per-invocation AI Access authorization; authentication remains mandatory even when AI Access enforcement is disabled.
+- True read-only AI policy requires `exec=false`.
 
-- Server remains **Linux only**; Windows and macOS are **client platforms**
-- Amazon Linux 2 is **portability/CI validated**, not current Real-host
-  qualification
-- Intended operating scale remains approximately **1–50 clients**
-- Already enrolled 2.2.x clients remain compatible during a server-first
-  upgrade window. Do not upgrade clients ahead of the server. FRP remains
-  **0.71.0**.
+### Removed from target public model
 
-### Audit closure
+- Authoritative `registry.json` control-plane model.
+- Authoritative `egress-control.json` control-plane model.
+- Canonical public `service-profile` resource.
+- Canonical public `internet-profile` resource.
+- Intermediate public models and nouns that conflict with the frozen v2.4 Product Master / CLI-AI Master.
+- Ordered first-match public rule semantics and per-rule ALLOW/DENY actions.
+- v2.4.x MCP-exclusion release rule.
 
-- FINAL AUDIT CLOSURE hardening and release-documentation sync for prepared
-  **2.3.0** (recreate or move the premature GitHub `v2.3.0` tag onto final
-  audit-closure HEAD; no new product features)
+### Before release
 
-## 2.2.1 — 2026-09-08
+- Implement all approved architecture on one exact candidate HEAD.
+- Remove/replace old MCP-exclusion code, tests, schema constraints, and release scripts.
+- Generate a candidate manifest that reflects actual included features.
+- Complete automated validation, multi-host Real E2E, MCP interoperability qualification, backup/restore/migration, and security regressions.
+- Qualify ConfigurationBundle file/stdin, idempotency, atomicity, revision conflict, direct-CLI semantic parity, AI copy/paste Real E2E, and bounded Zero-Touch ticket issuance.
+- Pass Full Real E2E twice on the same exact final HEAD.
+- Create the immutable `v2.4.0` tag only afterward.
 
-Maintenance / hardening release on pinned FRP **0.71.0**. Does not move or
-retag published **v2.2.0**.
+## Historical releases
 
-- macOS / libedit Tab completion: detect readline backend and bind libedit
-  completion; PTY regression coverage plus macOS CI job
-- FRP compatibility gate fail-closed: digest-before-extract, atomic PASS
-  report; bump script validates report content
-- Public metadata sanitization: morning checklists use RFC5737 templates;
-  `scripts/check-public-metadata.sh` scanner
-- Docs currency for post-v2.2.0 install/signing residual risk notes
+## 2.1.1 — hardening
+## 2.1.0 — baseline
 
-### Compatibility
+Historical tags remain the authority for released/historical content. Current repository history includes immutable tags through `v2.3.0`; do not reconstruct old release notes from memory or move old tags.
 
-Already enrolled 2.2.0 clients remain compatible during a server-first upgrade
-window. Do not upgrade clients ahead of the server. FRP remains **0.71.0**.
+Historical tags remain the authority for released/historical content. Current repository history includes immutable tags through `v2.3.0`; do not reconstruct old release notes from memory or move old tags.
 
-## 2.2.0 — 2026-09-07
+## Entry template
 
-Feature and platform release. Pinned FRP upgraded **0.70.1 → 0.71.0**.
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
 
-- Qualifies macOS Apple Silicon (launchd), Windows amd64 (hash-verified
-  PowerShell `-File` bootstrap), Manual Group MVP, `public_hostname`, and
-  Rocky Linux 9.4 on the supported platform matrix
-- Upstream FRP pin moved to **0.71.0** after compatibility review (WebSocket
-  path `/~!frp` unchanged; config verify PASS; no product config migration)
-- Enrollment retention hardening: terminal records (`expired`, `completed`,
-  `revoked`) retained for `enrollment_retention_days` (default 30), then
-  pair-aware automatic cleanup; `purge enrollment` / `purge enrollments
-  --older-than` for manual housekeeping; audit log retention unchanged
-- Operator checklist: `docs/MORNING_E2E_CHECKLIST.md`
-
-### Compatibility
-
-Already enrolled 2.1.3 clients remain compatible during a server-first upgrade
-window. Do not upgrade clients ahead of the server. FRP rolling window supports
-`frps 0.71.0 + frpc 0.70.1` during server-first FRP binary upgrade; product
-policy still requires project server upgrade before clients.
-
-## 2.1.3 — 2026-09-04
-
-Feature release on top of published **v2.1.2**. FRP remains pinned at
-**0.70.1**. Published field installs stay on **v2.1.2** until `v2.1.3` is tagged.
-
-- Ideal Zero-Touch `/i/<ticket>` short URL via optional `bootstrap_hostname`
-  and an operator-owned reverse proxy (Option B; see
-  `docs/ZERO_TOUCH_SHORT_URL.md`)
-- Keeps the transitional `zt1.` package command when `bootstrap_hostname` is
-  unset; no insecure TLS (`curl -k`) on the Zero-Touch path
-- Allocator short-URL embedding reloads config so fresh installer URLs are
-  used without requiring a process restart
-- Server bootstrap embeds `frp_zero_touch.py` helper for package/short-URL
-  generation
-
-### Compatibility
-
-Already enrolled 2.1.2 clients remain compatible during a server-first upgrade
-window. Do not upgrade clients ahead of the server.
-
-## 2.1.2 — 2026-09-04
-
-Maintenance release. FRP remains pinned at
-**0.70.1**.
-
-- Correctness hardening: last-service release keeps the Client record;
-  CLIENT ID selector precedence; bootstrap completion fail-closed
-- Upgrade safety: transactional server/client project update with rollback;
-  server-first mixed-version policy (`Server N + Client N-1` supported;
-  `Client N + Server N-1` blocked as `SERVER_VERSION_TOO_OLD` before mutation);
-  identity, CA, FRP token, ports, labels/notes/tags, and public_hostname
-  preservation
-- Backup/audit hardening: ticket/package redaction, audit rotation,
-  rotated audit inclusion in backup; same-version restore only
-  (cross-version restore fail-closed before mutation)
-- Release metadata completeness for official install/uninstall artifacts
-- Transitional shorter Zero-Touch: publicly trusted installer plus opaque
-  `zt1.` package (no insecure TLS). Ideal `/i/<ticket>` short URL trust model
-  remains pending in this release line
-- Rocky Linux 8 container regression coverage in the distro matrix
-
-### Compatibility
-
-Already enrolled 2.1.1 clients remain compatible during a server-first upgrade
-window. Do not upgrade clients ahead of the server.
-
-## 2.1.1 — 2026-09-04
-
-Stable release. FRP remains pinned at **0.70.1**.
-
-- Optional public hostname access alias for client/service display and operator
-  access hints (falls back to Public IP when unset)
-- First-class `create zero-touch` in `frpctl` (guided SSH-only and multi-service
-  workflows, including remote LAN targets)
-- Zero-touch guided menu shows SSH only / Configure services / Back;
-  Management-only remains available to the backend but is hidden from the
-  guided menu
-- CLI discoverability and Tab completion behavior retained (first-press
-  candidates, no command dispatch on Back)
-- `frpctl` verb/resource grammar, enrollment listing without secrets, and
-  CLIENT ID as the canonical selector (continued from post-2.1.0 main work)
-- Same-version client/server updates compare verified bundle SHA256, not only
-  `PROJECT_VERSION`
-- Legacy clients without persisted release metadata fail closed on remote
-  update until a one-time verified bridge (`docs/FRP_UPGRADE.md`)
-- Server install/rerun and project-update migrate official project-managed
-  `client_installer_url` values to the current release-line canonical installer
-  (`v2.1.1` on stable; `main` on explicit dev). Custom, third-party, look-alike,
-  and explicit `FRP_CLIENT_INSTALLER_URL` overrides are preserved
-- Manual enrollment and legacy one-line client creation continue to use the
-  same persisted installer URL release-line semantics
-- Allocator/restore readiness hardening and released-service client-state
-  reconciliation
-
-### Compatibility
-
-Already enrolled 2.1.0 clients remain compatible. After a server project update
-from 2.1.0, newly generated Zero-touch / enrollment installer commands use the
-`v2.1.1` bootstrap URL when the persisted URL was an official managed ref.
-
-## 2.1.0 — 2026-08-29
-
-Stable release. Optional **Enterprise single-443** mode: public TCP/443 carries
-allocator HTTPS and FRP control over WSS (nginx frontend, project CA). Direct
-mode (443 frps + 6099 allocator HTTPS) remains the default. Published services
-stay TCP/6000-6098. FRP remains pinned at **0.70.1**.
-
-- Installer: `FRP_DEPLOYMENT_MODE=direct|single443` and TTY mode prompt
-- Enrollment returns `frp_transport` (`tcp` or `wss`); clients pin the stored CA for WSS
-- `frpctl status` / `frpctl doctor` show topology and TLS-reset vs closed-port
-- Mode switch is an explicit maintenance-window cutover (`FRP_CONFIRM_MODE_SWITCH`)
-- HTTP allocator, `curl -k`, and plaintext WebSocket are not used
-- Single-443 frontend verifies the loopback allocator as `DNS:localhost`
-  (`proxy_ssl_verify on`); distro `nginx.service` autostart is disabled when
-  this project installs nginx, and a pre-existing active nginx unit is a
-  conflict rather than silently stopped
-- `frpctl doctor` checks frontend-proxied `/healthz` and `/ca.crt`, not only
-  the allocator backend
-
-See [docs/DEPLOYMENT_MODES.md](docs/DEPLOYMENT_MODES.md).
-
-### Real-environment acceptance
-
-Field-validated on Ubuntu 24.04 x86_64 (direct public-IP server, enterprise-restricted
-client, FRP 0.70.1): 1.9.1→2.1.0 server migration, single-443 cutover, HTTPS/443
-enrollment, WSS/443 control, published SSH TCP/6000, and client/server reboot
-recovery. Before single-443, TLS on non-443 ports was reset; after cutover,
-HTTPS and WSS succeeded on TCP/443.
-
-Not field-validated: firewall DNAT / private FRP-server topology, SELinux
-Enforcing, ARM64 hosts, OpenSSL 1.0.2 hosts. Details:
-[docs/RELEASE_VALIDATION.md](docs/RELEASE_VALIDATION.md).
-
-## 2.0.0 — 2026-08-28
-
-Stable product milestone for `frp-auto-deploy`. This is **not** an upstream FRP
-change. FRP remains pinned at **0.70.1**.
-
-### Capabilities
-
-- Secure HTTPS enrollment with a project-managed private CA and DER SHA256 fingerprint bootstrap
-- Persistent ECDSA P-256 client management identity after one-time enrollment
-- NAT-aware public vs listen port model (public control/allocator ports may differ from listen ports; published services stay 1:1)
-- Multi-service TCP clients (SSH, HTTP, HTTPS passthrough, custom TCP)
-- Lifecycle hardening: add / edit / disable / re-enable / release, with port preservation on edit/disable
-- Install and update rollback where the operation can be verified
-- Read-only `frpctl doctor` / `frpctl doctor --json`
-- Docker userspace distro matrix (Ubuntu 22.04/24.04, Rocky 9, AlmaLinux 9, Amazon Linux 2023, Amazon Linux 2)
-- Zero-touch SSH bootstrap (`frp-create-client --one-line --ssh`) using a short-lived Bootstrap Ticket
-- Manual Enrollment Code flow remains fully supported
-
+### Added
+### Changed
+### Deprecated
+### Fixed
 ### Security
-
-- No plain HTTP management or enrollment
-- CA pinning and X.509 validation; canonical DER fingerprint
-- Nonce and timestamp replay protection
-- Hashed bootstrap tickets at rest; first-machine bind; no ticket in the HTTP URL
-- FRP archive path-traversal, version, and architecture checks
-- Safe uninstall paths (client uninstall does not release server ports; server purge is explicit `--purge --yes`)
-
-### Compatibility
-
-| Area | Status |
-| --- | --- |
-| FRP | 0.70.1 pinned |
-| Ubuntu 22.04 / 24.04 | container PASS; real VM live baseline PASS |
-| Rocky Linux 9 | container PASS; LXD systemd PASS; real VM / SELinux Enforcing **NOT_TESTED** |
-| AlmaLinux 9 | container PASS; LXD systemd PASS; real VM / SELinux Enforcing **NOT_TESTED** |
-| Amazon Linux 2023 | container PASS; LXD systemd PASS; real VM **NOT_TESTED** |
-| Amazon Linux 2 | container PASS (including OpenSSL 1.0.2 userspace); real VM / systemd 219 / TTY **NOT_TESTED** |
-
-Already enrolled 1.9.1 clients remain compatible with a 2.0.0 server (management protocol schema 1 is unchanged).
-
-### Known limitations
-
-- TCP services only
-- Service NAT is 1:1 port-number mapping
-- No automatic firewall, SELinux policy, or SSH account/key management
-- Windows client automation is not included
-- Real VM / SELinux Enforcing / ARM64 systemd / real OpenSSL 1.0.2 TLS enrollment remain `NOT_TESTED` where listed
-- Bundles are checksummed (`SHA256SUMS`); this project does not ship cryptographic signatures of its own installer scripts
+### Removed
+### Known limits
+### Provenance
+- Source HEAD: `<40-character SHA>`
+- Relay Engine: `<version>`
+- Control DB Schema: `<version>`
+- Manifest: `<release-manifest artifact>`
+```

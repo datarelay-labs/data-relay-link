@@ -5,9 +5,9 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_SCRIPT_DIR}/../lib/frp-common.sh" ]]; then
   # shellcheck source=../lib/frp-common.sh
   . "${_SCRIPT_DIR}/../lib/frp-common.sh"
-elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
+elif [[ -f /usr/local/lib/drlink/frp-common.sh ]]; then
   # shellcheck disable=SC1091
-  . /usr/local/lib/frp-auto-deploy/frp-common.sh
+  . /usr/local/lib/drlink/frp-common.sh
 else
   echo "ERROR: missing lib/frp-common.sh" >&2
   exit 1
@@ -17,7 +17,7 @@ usage() {
   cat <<'EOF'
 Usage: frp-project-update [--check] [--source DIR] [--channel CHANNEL]
 
-Safely refresh frp-auto-deploy server management software without changing the
+Safely refresh Data Relay Link server management software without changing the
 FRP binary or asking installation questions.
 
   --check, --dry-run  verify the candidate and report update availability only
@@ -61,11 +61,18 @@ echo "Resolved release channel : ${FRP_RESOLVED_RELEASE_CHANNEL}"
 echo "Resolved source ref      : ${FRP_RESOLVED_SOURCE_REF}"
 
 if [[ -n "$SOURCE" ]]; then
+  # Prefer exact git HEAD for local --source so pretags installs do not emit
+  # nonexistent vPROJECT_VERSION Zero-Touch URLs.
+  frp_infer_expected_source_ref_from_git_source "$SOURCE"
   source_args=(--upgrade --source "$SOURCE")
   if [[ "$CHECK_ONLY" == "1" ]]; then
     source_args+=(--check)
   fi
-  exec bash "${SOURCE}/install-server.sh" "${source_args[@]}"
+  exec env \
+    FRP_EXPECTED_SOURCE_REF="${FRP_EXPECTED_SOURCE_REF:-}" \
+    FRP_EXPECTED_RELEASE_CHANNEL="$FRP_RESOLVED_RELEASE_CHANNEL" \
+    FRP_RELEASE_CHANNEL="$FRP_RESOLVED_RELEASE_CHANNEL" \
+    bash "${SOURCE}/install-server.sh" "${source_args[@]}"
 fi
 
 tmp="$(frp_secure_mktemp_dir)"

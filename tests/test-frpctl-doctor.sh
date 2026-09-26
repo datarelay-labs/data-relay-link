@@ -12,8 +12,8 @@ unset FRP_TEST_UNAME_S FRP_TEST_UNAME_M FRP_TEST_MACOS_PRODUCT_VERSION \
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
-chmod +x "$ROOT/tools/frpctl"
-CTL="$ROOT/tools/frpctl"
+chmod +x "$ROOT/tools/frpctl" "$ROOT/tools/drlink"
+CTL="$ROOT/tools/drlink"
 # shellcheck disable=SC1091
 . "$ROOT/VERSION"
 export FRP_SKIP_SYSTEMD=1
@@ -39,8 +39,8 @@ EOF
 
 write_version() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp-auto-deploy"
-  cat >"$tree/etc/frp-auto-deploy/version" <<EOF
+  mkdir -p "$tree/etc/drlink"
+  cat >"$tree/etc/drlink/version" <<EOF
 PROJECT_VERSION=${PROJECT_VERSION}
 FRP_VERSION=${FRP_VERSION}
 EOF
@@ -156,19 +156,53 @@ PY
 
 write_server_healthy() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy" "$tree/var/lib/frp-auto-deploy" \
-    "$tree/var/log/frp-auto-deploy" \
-    "$tree/usr/local/bin" "$tree/usr/local/sbin" "$tree/usr/local/lib/frp-auto-deploy" \
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink" "$tree/var/lib/drlink" \
+    "$tree/var/log/drlink" "$tree/var/log/drlink/access" "$tree/var/log/drlink/egress" \
+    "$tree/usr/local/bin" "$tree/usr/local/sbin" "$tree/usr/local/lib/drlink" \
     "$tree/etc/systemd/system"
   write_version "$tree"
   write_dummy_bin "$tree/usr/local/bin/frps" frps
+  mkdir -p "$tree/usr/local/lib/drlink"
+  write_dummy_bin "$tree/usr/local/lib/drlink/frp-create-client" frp-create-client
   write_dummy_bin "$tree/usr/local/sbin/frp-create-client" frp-create-client
-  cp "$ROOT/server/frp-port-allocator.py" "$tree/usr/local/lib/frp-auto-deploy/frp-port-allocator.py"
-  cp "$ROOT/lib/frp_access_control.py" "$tree/usr/local/lib/frp-auto-deploy/frp_access_control.py"
-  cp "$ROOT/lib/frp_service_profiles.py" "$tree/usr/local/lib/frp-auto-deploy/frp_service_profiles.py"
-  write_unit "$tree/etc/systemd/system/frps.service"
-  write_unit "$tree/etc/systemd/system/frp-port-allocator.service"
-  write_unit "$tree/etc/systemd/system/frp-access-plugin.service"
+  cp "$ROOT/server/frp-port-allocator.py" "$tree/usr/local/lib/drlink/frp-port-allocator.py"
+  cp "$ROOT/lib/frp_access_control.py" "$tree/usr/local/lib/drlink/frp_access_control.py"
+  cp "$ROOT/lib/frp_control_locks.py" "$tree/usr/local/lib/drlink/frp_control_locks.py"
+  cp "$ROOT/lib/frp_service_profiles.py" "$tree/usr/local/lib/drlink/frp_service_profiles.py"
+  write_unit "$tree/etc/systemd/system/drlink-server.service"
+  write_unit "$tree/etc/systemd/system/drlink-allocator.service"
+  write_unit "$tree/etc/systemd/system/drlink-access.service"
+  # Current runtime expects egress units + effective policy snapshots when active.
+  cat >"$tree/etc/systemd/system/drlink-egress.service" <<'UNIT'
+[Unit]
+Description=fixture egress
+[Service]
+User=drlink-egress
+ExecStart=/bin/true
+UNIT
+  write_unit "$tree/etc/systemd/system/drlink-tcp-egress.service"
+  mkdir -p "$tree/run/drlink/egress" "$tree/run/drlink/tcp-egress"
+  python3 - "$tree/run/drlink/egress/effective.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "policy_healthy": True,
+    "policy_generation": 1,
+    "max_concurrent": 64,
+    "per_source_limit": 16,
+    "dns_pending_limit": 32,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  python3 - "$tree/run/drlink/tcp-egress/effective.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "healthy": True,
+    "policy_generation": 1,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  : >"$tree/var/log/drlink/audit.jsonl"
+  chmod 600 "$tree/var/log/drlink/audit.jsonl"
   echo 'test-frp-token-do-not-use' >"$tree/etc/frp/server_token"
   chmod 600 "$tree/etc/frp/server_token"
   cat >"$tree/etc/frp/frps.toml" <<'EOF'
@@ -181,8 +215,8 @@ path = "/access-auth"
 ops = ["NewUserConn"]
 EOF
   chmod 600 "$tree/etc/frp/frps.toml"
-  gen_pki "$tree/etc/frp-auto-deploy/pki" "203.0.113.10"
-  python3 - "$tree/etc/frp-auto-deploy/config.json" <<'PY'
+  gen_pki "$tree/etc/drlink/pki" "203.0.113.10"
+  python3 - "$tree/etc/drlink/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
@@ -197,20 +231,24 @@ Path(sys.argv[1]).write_text(json.dumps({
     "allocator_listen_port": 6099,
     "listen_port": 6099,
     "allocator_public_url": "https://203.0.113.10:9443/enroll",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
-    "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
-    "service_profiles_file": "/var/lib/frp-auto-deploy/service-profiles.json",
-    "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
+    "registry_file": "/var/lib/drlink/registry.json",
+    "access_control_file": "/var/lib/drlink/access-control.json",
+    "service_profiles_file": "/var/lib/drlink/service-profiles.json",
+    "egress_control_file": "/var/lib/drlink/egress-control.json",
+    "egress_conn_log_file": "/var/log/drlink/egress/connections.jsonl",
+    "egress_listen_addr": "0.0.0.0",
+    "egress_listen_port": 6102,
+    "access_conn_log_file": "/var/log/drlink/access/connections.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
     "token_file": "/etc/frp/server_token",
-    "tls_ca_cert": "/etc/frp-auto-deploy/pki/ca.crt",
-    "tls_server_cert": "/etc/frp-auto-deploy/pki/server.crt",
-    "tls_server_key": "/etc/frp-auto-deploy/pki/server.key",
+    "tls_ca_cert": "/etc/drlink/pki/ca.crt",
+    "tls_server_cert": "/etc/drlink/pki/server.crt",
+    "tls_server_key": "/etc/drlink/pki/server.key",
 }, indent=2, sort_keys=True) + "\n")
 PY
-  chmod 600 "$tree/etc/frp-auto-deploy/config.json"
-  python3 - "$tree/var/lib/frp-auto-deploy/registry.json" <<'PY'
+  chmod 600 "$tree/etc/drlink/config.json"
+  python3 - "$tree/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
@@ -235,35 +273,55 @@ Path(sys.argv[1]).write_text(json.dumps({
     },
 }, indent=2, sort_keys=True) + "\n")
 PY
-  chmod 600 "$tree/var/lib/frp-auto-deploy/registry.json"
+  chmod 600 "$tree/var/lib/drlink/registry.json"
+  python3 - "$ROOT/lib" "$tree" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from drlink_control_plane import ControlPlane
+plane = ControlPlane(sys.argv[2])
+plane.conn.execute("PRAGMA journal_mode=DELETE")
+plane.conn.commit()
+plane.close()
+db = Path(sys.argv[2], "var/lib/drlink/drlink.db")
+db.chmod(0o600)
+for extra in (str(db) + "-wal", str(db) + "-shm"):
+    # Amazon Linux 2 ships Python < 3.8 (no Path.unlink(missing_ok=...)).
+    path = Path(extra)
+    if path.exists():
+        path.unlink()
+PY
   printf '{"schema_version":1,"access_lists":{},"service_access":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/access-control.json"
-  chmod 600 "$tree/var/lib/frp-auto-deploy/access-control.json"
+    >"$tree/var/lib/drlink/access-control.json"
+  chmod 600 "$tree/var/lib/drlink/access-control.json"
+  printf '{"schema_version":2,"egress_profiles":{}}\n' \
+    >"$tree/var/lib/drlink/egress-control.json"
+  chmod 600 "$tree/var/lib/drlink/egress-control.json"
   printf '{"schema_version":1,"profiles":{}}\n' \
-    >"$tree/var/lib/frp-auto-deploy/service-profiles.json"
-  chmod 600 "$tree/var/lib/frp-auto-deploy/service-profiles.json"
-  chmod 700 "$tree/var/log/frp-auto-deploy"
-  echo '{"schema_version":1,"nonces":{"abc":1}}' >"$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
-  chmod 600 "$tree/var/lib/frp-auto-deploy/mgmt-nonces.json"
+    >"$tree/var/lib/drlink/service-profiles.json"
+  chmod 600 "$tree/var/lib/drlink/service-profiles.json"
+  chmod 700 "$tree/var/log/drlink" "$tree/var/log/drlink/access" "$tree/var/log/drlink/egress"
+  echo '{"schema_version":1,"nonces":{"abc":1}}' >"$tree/var/lib/drlink/mgmt-nonces.json"
+  chmod 600 "$tree/var/lib/drlink/mgmt-nonces.json"
 }
 
 write_client_healthy() {
   local tree="$1"
-  mkdir -p "$tree/etc/frp" "$tree/etc/frp-auto-deploy" "$tree/usr/local/bin" \
+  mkdir -p "$tree/etc/frp" "$tree/etc/drlink" "$tree/usr/local/bin" \
     "$tree/etc/systemd/system"
   write_version "$tree"
   write_dummy_bin "$tree/usr/local/bin/frpc" frpc
   write_dummy_bin "$tree/usr/local/bin/frp-client" frp-client
-  write_unit "$tree/etc/systemd/system/frpc.service"
+  write_unit "$tree/etc/systemd/system/drlink-client.service"
   gen_identity "$tree"
   if [[ -f "$WORKDIR/pki-ca.crt" ]]; then
-    cp "$WORKDIR/pki-ca.crt" "$tree/etc/frp-auto-deploy/allocator-ca.crt"
+    cp "$WORKDIR/pki-ca.crt" "$tree/etc/drlink/allocator-ca.crt"
   else
     gen_pki "$WORKDIR/shared-pki" "203.0.113.10"
     cp "$WORKDIR/shared-pki/ca.crt" "$WORKDIR/pki-ca.crt"
-    cp "$WORKDIR/pki-ca.crt" "$tree/etc/frp-auto-deploy/allocator-ca.crt"
+    cp "$WORKDIR/pki-ca.crt" "$tree/etc/drlink/allocator-ca.crt"
   fi
-  chmod 644 "$tree/etc/frp-auto-deploy/allocator-ca.crt"
+  chmod 644 "$tree/etc/drlink/allocator-ca.crt"
   python3 - "$tree/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -306,7 +364,7 @@ remotePort = 6002
 EOF
   chmod 600 "$tree/etc/frp/frpc.toml"
   cat >"$tree/etc/frp/access-info.txt" <<'EOF'
-FRP Server: 203.0.113.10:8443
+Data Relay Link Server: 203.0.113.10:8443
 
 Services:
 
@@ -379,7 +437,7 @@ pass "PUBLIC_LISTEN_PORT_DIAGNOSTICS"
 pass "DOCTOR_NO_FILE_MUTATION_SERVER"
 
 run_ctl "$SRV" "$WORKDIR/server.human"
-grep -q 'FRP Auto Deploy Doctor' "$WORKDIR/server.human" || fail "human header"
+grep -q 'Data Relay Link Doctor' "$WORKDIR/server.human" || fail "human header"
 grep -q 'Public endpoint' "$WORKDIR/server.human" || fail "public endpoint display"
 grep -q 'Local listener' "$WORKDIR/server.human" || fail "listen display"
 grep -q 'Overall:' "$WORKDIR/server.human" || fail "human overall"
@@ -393,7 +451,7 @@ CL="$WORKDIR/client"
 write_client_healthy "$CL"
 snapshot "$CL" "$WORKDIR/client.before"
 NONCE_BEFORE=""
-[[ -f "$SRV/var/lib/frp-auto-deploy/mgmt-nonces.json" ]] && NONCE_BEFORE="$(python3 -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("'"$SRV"'/var/lib/frp-auto-deploy/mgmt-nonces.json").read_bytes()).hexdigest())')"
+[[ -f "$SRV/var/lib/drlink/mgmt-nonces.json" ]] && NONCE_BEFORE="$(python3 -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("'"$SRV"'/var/lib/drlink/mgmt-nonces.json").read_bytes()).hexdigest())')"
 rc=0
 run_json "$CL" "$WORKDIR/client.json" || rc=$?
 [[ "$rc" -eq 0 ]] || { cat "$WORKDIR/client.json"; fail "healthy client exit $rc"; }
@@ -426,13 +484,13 @@ from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 text = json.dumps(data)
 assert 'launchd job' not in text
-assert 'com.datarelay.frp-auto-deploy.frpc' not in text
+assert 'com.datarelay.drlink.frpc' not in text
 ids = {c.get('id'): c for c in data.get('checks') or []}
 assert 'distro_support' in ids
 assert 'automated container matrix' in (ids['distro_support'].get('message') or '')
 assert 'macos_support' not in ids
 frpc = ids.get('frpc_service') or {}
-assert 'frpc.service' in (frpc.get('message') or '')
+assert 'drlink-client.service' in (frpc.get('message') or '')
 assert 'launchd' not in (frpc.get('message') or '')
 PY
 pass "HEALTHY_CLIENT"
@@ -480,11 +538,31 @@ run_json "$BOTH" "$WORKDIR/both.json" || rc=$?
 [[ "$(check_status "$WORKDIR/both.json" client_state)" == "PASS" ]] || fail "dual client state"
 pass "DUAL_ROLE"
 
+# Authoritative Agent state must beat stale server binaries and units.
+STALE="$WORKDIR/stale-agent"
+cp -a "$CL" "$STALE"
+mkdir -p "$STALE/usr/local/bin" "$STALE/etc/systemd/system"
+write_dummy_bin "$STALE/usr/local/bin/frps" frps
+printf '%s\n' '[Unit]' >"$STALE/etc/systemd/system/drlink-server.service"
+printf '%s\n' '[Unit]' >"$STALE/etc/systemd/system/drlink-allocator.service"
+test -f "$STALE/etc/frp/client-state.json"
+test ! -f "$STALE/etc/drlink/config.json"
+rc=0
+run_json "$STALE" "$WORKDIR/stale-agent.json" || rc=$?
+[[ "$rc" -eq 0 ]] || { cat "$WORKDIR/stale-agent.json"; fail "stale-agent doctor exit $rc"; }
+[[ "$(json_get "$WORKDIR/stale-agent.json" role)" == "client" ]] || fail "stale-agent role $(json_get "$WORKDIR/stale-agent.json" role)"
+[[ "$(json_get "$WORKDIR/stale-agent.json" role_label)" == "Agent Host" ]] || fail "stale-agent label"
+if grep -q 're-run the server installer' "$WORKDIR/stale-agent.json"; then
+  fail "stale-agent doctor recommended a server reinstall"
+fi
+[[ "$(check_status "$WORKDIR/stale-agent.json" server_token)" == "" ]] || fail "stale-agent ran server token check"
+pass "STALE_SERVER_MARKERS_STAY_AGENT"
+
 # ---------------------------------------------------------------------------
 # Partial client
 # ---------------------------------------------------------------------------
 PART="$WORKDIR/partial"
-mkdir -p "$PART/etc/frp" "$PART/etc/frp-auto-deploy"
+mkdir -p "$PART/etc/frp" "$PART/etc/drlink"
 write_version "$PART"
 echo '{"schema_version":1,"services":{}}' >"$PART/etc/frp/client-state.json"
 chmod 600 "$PART/etc/frp/client-state.json"
@@ -516,7 +594,7 @@ pass "TOKEN_PERMISSIONS"
 
 DUP="$WORKDIR/dup-port"
 cp -a "$SRV" "$DUP"
-python3 - "$DUP/var/lib/frp-auto-deploy/registry.json" <<'PY'
+python3 - "$DUP/var/lib/drlink/registry.json" <<'PY'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
@@ -542,21 +620,21 @@ pass "REVOKED_CLIENT_VALID"
 # ---------------------------------------------------------------------------
 NOCA="$WORKDIR/noca"
 cp -a "$SRV" "$NOCA"
-rm -f "$NOCA/etc/frp-auto-deploy/pki/ca.crt"
+rm -f "$NOCA/etc/drlink/pki/ca.crt"
 run_json "$NOCA" "$WORKDIR/noca.json" || true
 [[ "$(check_status "$WORKDIR/noca.json" allocator_ca)" == "FAIL" ]] || fail "missing CA"
 pass "MISSING_CA"
 
 BADCA="$WORKDIR/badca"
 cp -a "$SRV" "$BADCA"
-echo 'not-a-cert' >"$BADCA/etc/frp-auto-deploy/pki/ca.crt"
+echo 'not-a-cert' >"$BADCA/etc/drlink/pki/ca.crt"
 run_json "$BADCA" "$WORKDIR/badca.json" || true
 [[ "$(check_status "$WORKDIR/badca.json" allocator_ca)" == "FAIL" ]] || fail "invalid CA"
 pass "INVALID_CA"
 
 EXP="$WORKDIR/expired"
 cp -a "$SRV" "$EXP"
-python3 - "$EXP/etc/frp-auto-deploy/pki" <<'PY'
+python3 - "$EXP/etc/drlink/pki" <<'PY'
 import os, subprocess, sys, tempfile
 from pathlib import Path
 pki = Path(sys.argv[1])
@@ -597,7 +675,7 @@ pass "EXPIRED_CERT"
 
 SOON="$WORKDIR/soon"
 cp -a "$SRV" "$SOON"
-python3 - "$SOON/etc/frp-auto-deploy/pki" <<'PY'
+python3 - "$SOON/etc/drlink/pki" <<'PY'
 import subprocess, sys
 from pathlib import Path
 pki = Path(sys.argv[1])
@@ -615,7 +693,7 @@ pass "CERT_EXPIRES_SOON"
 
 SAN="$WORKDIR/san"
 cp -a "$SRV" "$SAN"
-python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$SAN/etc/frp-auto-deploy/pki" --public-host "198.51.100.10" >/dev/null
+python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$SAN/etc/drlink/pki" --public-host "198.51.100.10" >/dev/null
 run_json "$SAN" "$WORKDIR/san.json" || true
 [[ "$(check_status "$WORKDIR/san.json" allocator_san)" == "FAIL" ]] || fail "SAN mismatch"
 grep -qi 'reissue\|installer\|existing CA' "$WORKDIR/san.json" || fail "SAN recommendation"
@@ -650,7 +728,7 @@ cp -a "$CL" "$NOTOML"
 rm -f "$NOTOML/etc/frp/frpc.toml"
 run_json "$NOTOML" "$WORKDIR/notoml.json" || true
 [[ "$(check_status "$WORKDIR/notoml.json" frpc_config)" == "FAIL" ]] || fail "missing toml"
-grep -q 'frp-client manage' "$WORKDIR/notoml.json" || fail "toml recovery guidance"
+grep -q 'sudo drlink system synchronize' "$WORKDIR/notoml.json" || fail "toml recovery guidance"
 pass "MISSING_FRPC_TOML"
 
 DRIFT="$WORKDIR/drift"
@@ -684,42 +762,42 @@ pass "PENDING_APPLY"
 UPMARK="$WORKDIR/pending-update"
 cp -a "$SRV" "$UPMARK"
 echo '{"operation":"update","phase":"systemd-apply","failure_class":"SERVICE_START_FAILED"}' \
-  >"$UPMARK/var/lib/frp-auto-deploy/server-update-pending.json"
+  >"$UPMARK/var/lib/drlink/server-update-pending.json"
 run_json "$UPMARK" "$WORKDIR/upmark.json" || true
 [[ "$(check_status "$WORKDIR/upmark.json" pending_server_transaction)" == "FAIL" ]] || fail "pending update"
-[[ -f "$UPMARK/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "doctor deleted update marker"
+[[ -f "$UPMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted update marker"
 pass "PENDING_UPDATE"
 
 PROJMARK="$WORKDIR/pending-project"
 cp -a "$SRV" "$PROJMARK"
 echo '{"operation":"project-update","phase":"commit","failure_class":"HEALTH_CHECK_FAILED"}' \
-  >"$PROJMARK/var/lib/frp-auto-deploy/server-update-pending.json"
+  >"$PROJMARK/var/lib/drlink/server-update-pending.json"
 run_json "$PROJMARK" "$WORKDIR/projmark.json" || true
 [[ "$(check_status "$WORKDIR/projmark.json" pending_server_transaction)" == "FAIL" ]] || fail "project pending"
-grep -q 'frpctl project-update' "$WORKDIR/projmark.json" || fail "project-update guidance"
-if grep -q 'sudo frpctl update' "$WORKDIR/projmark.json" && ! grep -q 'frpctl project-update' "$WORKDIR/projmark.json"; then
+grep -q 'drlink system update product' "$WORKDIR/projmark.json" || fail "project-update guidance"
+if grep -qE 'sudo drlink update($|[[:space:]]|--)' "$WORKDIR/projmark.json" && ! grep -q 'drlink system update product' "$WORKDIR/projmark.json"; then
   fail "generic update guidance for project-update"
 fi
-[[ -f "$PROJMARK/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "doctor deleted project marker"
+[[ -f "$PROJMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted project marker"
 pass "DOCTOR_PROJECT_UPDATE_GUIDANCE"
 
 FRPMARK="$WORKDIR/pending-frp"
 cp -a "$SRV" "$FRPMARK"
 echo '{"operation":"frp-update","phase":"commit"}' \
-  >"$FRPMARK/var/lib/frp-auto-deploy/server-update-pending.json"
+  >"$FRPMARK/var/lib/drlink/server-update-pending.json"
 run_json "$FRPMARK" "$WORKDIR/frpmark.json" || true
-grep -q 'frpctl frp-update' "$WORKDIR/frpmark.json" || fail "frp-update guidance"
-[[ -f "$FRPMARK/var/lib/frp-auto-deploy/server-update-pending.json" ]] || fail "doctor deleted frp marker"
+grep -q 'drlink system update engine' "$WORKDIR/frpmark.json" || fail "frp-update guidance"
+[[ -f "$FRPMARK/var/lib/drlink/server-update-pending.json" ]] || fail "doctor deleted frp marker"
 pass "DOCTOR_FRP_UPDATE_GUIDANCE"
 
 # Version mismatch
 VM="$WORKDIR/ver-mis"
 cp -a "$CL" "$VM"
-echo 'PROJECT_VERSION=1.2.0' >"$VM/etc/frp-auto-deploy/version"
-echo 'FRP_VERSION=0.71.0' >>"$VM/etc/frp-auto-deploy/version"
+echo 'PROJECT_VERSION=1.2.0' >"$VM/etc/drlink/version"
+echo 'FRP_VERSION=0.71.0' >>"$VM/etc/drlink/version"
 run_json "$VM" "$WORKDIR/ver.json" || true
 [[ "$(check_status "$WORKDIR/ver.json" project_version)" == "FAIL" ]] || fail "project version mismatch"
-grep -q 'frpctl update' "$WORKDIR/ver.json" || fail "version recovery"
+grep -q 'drlink system update product' "$WORKDIR/ver.json" || fail "version recovery"
 pass "PROJECT_VERSION_MISMATCH"
 
 FV="$WORKDIR/frp-mis"
@@ -727,7 +805,7 @@ cp -a "$CL" "$FV"
 write_dummy_bin "$FV/usr/local/bin/frpc" frpc "0.69.0"
 run_json "$FV" "$WORKDIR/fv.json" || true
 [[ "$(check_status "$WORKDIR/fv.json" frp_version)" == "FAIL" ]] || fail "frp version mismatch"
-grep -q 'frpctl update frp' "$WORKDIR/fv.json" || fail "client frp-update guidance"
+grep -q 'drlink system update engine' "$WORKDIR/fv.json" || fail "client frp-update guidance"
 pass "FRP_VERSION_MISMATCH"
 
 # Stale lock
@@ -813,7 +891,7 @@ fi
 pass "DOCTOR_NO_MANAGEMENT_MUTATION"
 
 # Nonce unchanged after server doctor
-NONCE_AFTER="$(python3 -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("'"$SRV"'/var/lib/frp-auto-deploy/mgmt-nonces.json").read_bytes()).hexdigest())')"
+NONCE_AFTER="$(python3 -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("'"$SRV"'/var/lib/drlink/mgmt-nonces.json").read_bytes()).hexdigest())')"
 [[ "$NONCE_BEFORE" == "$NONCE_AFTER" ]] || fail "nonce cache mutated"
 pass "DOCTOR_NO_NONCE_CONSUMPTION"
 
@@ -851,8 +929,8 @@ set +e
 "$CTL" >"$WORKDIR/repl.out" 2>"$WORKDIR/repl.err"
 set -e
 cat "$WORKDIR/repl.err" >>"$WORKDIR/repl.out"
-grep -c '^frpctl>' "$WORKDIR/repl.out" | awk '{exit($1<2)}' || fail "repl did not return to prompt"
-grep -q 'FRP Auto Deploy Doctor' "$WORKDIR/repl.out" || fail "repl doctor body"
+grep -c '^drlink>' "$WORKDIR/repl.out" | awk '{exit($1<2)}' || fail "repl did not return to prompt"
+grep -q 'Data Relay Link Doctor' "$WORKDIR/repl.out" || fail "repl doctor body"
 pass "FRPCTL_INTERACTIVE_DOCTOR"
 
 # Connection info stays on public endpoints
@@ -862,9 +940,14 @@ if grep -q '0.0.0.0:443' "$CL/etc/frp/access-info.txt"; then
 fi
 pass "CONNECTION_INFO_PUBLIC_ENDPOINTS"
 
-# Help
+# Help — public UX advertises system diagnostics (doctor remains hidden/internal).
 "$CTL" help >"$WORKDIR/help.out"
-grep -q 'doctor' "$WORKDIR/help.out" || fail "help missing doctor"
+grep -q 'system' "$WORKDIR/help.out" || fail "help missing system"
+"$CTL" help system >"$WORKDIR/help-system.out"
+grep -q 'diagnostics' "$WORKDIR/help-system.out" || fail "help missing system diagnostics"
+if grep -qE '(^|[[:space:]])doctor([[:space:]]|$)' "$WORKDIR/help.out"; then
+  fail "normal help advertises legacy doctor"
+fi
 pass "HELP_UPDATED"
 
 echo

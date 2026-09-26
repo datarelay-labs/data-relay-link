@@ -3,6 +3,86 @@
 if ((Test-Path variable:script:FrpProcessLoaded) -and $script:FrpProcessLoaded) { return }
 $script:FrpProcessLoaded = $true
 
+function Limit-FrpRuntimeLog {
+    <#
+    .SYNOPSIS
+      Bound the live runtime log by size. frpc prunes by day (log.maxDays); a
+      crash-looping client can still write a very large log inside one day, so
+      keep only the tail once the ceiling is crossed.
+    #>
+    param([int64]$MaxBytes = 0)
+    if ($MaxBytes -le 0) { $MaxBytes = Get-FrpLogMaxBytes }
+    $path = Get-FrpLogPath
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    try {
+        $item = Get-Item -LiteralPath $path -ErrorAction Stop
+        if ($item.Length -le $MaxBytes) { return $false }
+        $keep = [int]([Math]::Max(1, [Math]::Floor($MaxBytes / 2)))
+        $all = @(Get-Content -LiteralPath $path -ErrorAction Stop)
+        $tail = $all
+        $bytes = 0
+        $start = $all.Count
+        for ($i = $all.Count - 1; $i -ge 0; $i--) {
+            $bytes += ($all[$i].Length + 1)
+            if ($bytes -gt $keep) { break }
+            $start = $i
+        }
+        if ($start -gt 0) { $tail = $all[$start..($all.Count - 1)] }
+        $header = ('# {0} drlink: earlier entries trimmed (log exceeded {1} bytes)' -f (Get-Date).ToUniversalTime().ToString('o'), $MaxBytes)
+        [System.IO.File]::WriteAllText($path, (@($header) + @($tail) -join "`n") + "`n")
+        Restrict-FrpFileAcl -Path $path
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Initialize-FrpRuntimeLog {
+    <#
+    .SYNOPSIS
+      Guarantee the advertised runtime log exists before frpc is started, so
+      "check logs\frpc.log" is never a dead end, and keep it size-bounded.
+    #>
+    Initialize-FrpDirectories
+    $path = Get-FrpLogPath
+    if (-not (Test-Path -LiteralPath $path)) {
+        $line = '# {0} drlink: runtime log created; frpc appends here (log.to in frpc.toml)' -f (Get-Date).ToUniversalTime().ToString('o')
+        [System.IO.File]::WriteAllText($path, $line + "`n")
+        Restrict-FrpFileAcl -Path $path
+    }
+    $null = Limit-FrpRuntimeLog
+    return $path
+}
+
+function Get-FrpSanitizedLogTail {
+    <#
+    .SYNOPSIS
+      Last lines of the runtime log with secret-shaped material removed. Used
+      by the error paths and by the support bundle; never emits the FRP token.
+    #>
+    param([int]$Lines = 200)
+    $path = Get-FrpLogPath
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    $raw = @()
+    try {
+        $raw = @(Get-Content -LiteralPath $path -Tail $Lines -ErrorAction Stop)
+    } catch {
+        try { $raw = @(Get-Content -LiteralPath $path -ErrorAction Stop | Select-Object -Last $Lines) } catch { return @() }
+    }
+    $token = $null
+    try { $token = Get-FrpTokenFromToml } catch { $token = $null }
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $raw) {
+        $s = [string]$line
+        if ($token -and $token.Length -ge 4) { $s = $s.Replace($token, '<redacted>') }
+        $s = [regex]::Replace($s, '(?i)\b(token|secret|password|passwd|ticket|enrollment_code|authorization|auth)\b(\s*[:=]\s*|\s+)("?)[^\s"'']+("?)', '$1$2<redacted>')
+        $s = [regex]::Replace($s, '(?i)\bbearer\s+[A-Za-z0-9._\-]+', 'Bearer <redacted>')
+        $s = [regex]::Replace($s, '[A-Za-z0-9+/=_-]{32,}', '<redacted>')
+        [void]$out.Add($s)
+    }
+    return $out.ToArray()
+}
+
 function Read-FrpPidMetadata {
     $path = Get-FrpPidPath
     if (-not (Test-Path -LiteralPath $path)) { return $null }
@@ -151,6 +231,7 @@ function Start-FrpClient {
         [switch]$Force
     )
     Initialize-FrpDirectories
+    Initialize-FrpRuntimeLog | Out-Null
     Clear-FrpStalePid
 
     if (-not (Test-Path -LiteralPath (Get-FrpTomlPath))) {
@@ -202,14 +283,18 @@ function Start-FrpClient {
         CurrentDirectory = [System.IO.Path]::GetDirectoryName($frpc)
     }
     if ($null -eq $created -or [int]$created.ReturnValue -ne 0 -or [int]$created.ProcessId -le 0) {
-        throw ('ERROR: failed to start frpc (Win32_Process.Create rc={0})' -f $(if ($created) { $created.ReturnValue } else { 'null' }))
+        throw ('ERROR: failed to start drlink-client (Win32_Process.Create rc={0})' -f $(if ($created) { $created.ReturnValue } else { 'null' }))
     }
     $procId = [int]$created.ProcessId
     Write-FrpPidFile -ProcessId $procId -ExePath $frpc
     Start-Sleep -Milliseconds 400
     if (-not (Test-FrpProcessAlive -ProcessId $procId -ValidateOwnership -ExpectedExe $frpc)) {
         Clear-FrpPidFile
-        throw 'ERROR: frpc exited immediately; check logs\frpc.log'
+        $logPath = Get-FrpLogPath
+        foreach ($line in (Get-FrpSanitizedLogTail -Lines 20)) {
+            Write-Host ("  {0}" -f $line)
+        }
+        throw ("ERROR: frpc exited immediately; check {0}" -f $logPath)
     }
     Write-Host ("frpc started (pid {0})" -f $procId)
     return $procId
@@ -237,7 +322,7 @@ function Stop-FrpClient {
     try {
         Stop-Process -Id $pidVal -Force -ErrorAction Stop
     } catch {
-        throw ("ERROR: failed to stop frpc pid {0}" -f $pidVal)
+        throw ("ERROR: failed to stop drlink-client pid {0}" -f $pidVal)
     }
     Clear-FrpPidFile
     Write-Host ("frpc stopped (pid {0})" -f $pidVal)

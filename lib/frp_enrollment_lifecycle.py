@@ -205,6 +205,14 @@ def _validate_zero_touch_pair(ticket_rec, enroll_rec, ticket_path, enroll_path, 
     return None
 
 
+def short_handle_index_for_record(bootstrap_dir, ticket_rec):
+    """Handle alias path. Lives under bootstrap/handles so *.json counts stay one ticket."""
+    digest = str((ticket_rec or {}).get('short_handle_hash') or '').strip().lower()
+    if len(digest) != 64 or any(ch not in '0123456789abcdef' for ch in digest):
+        return None
+    return Path(bootstrap_dir) / 'handles' / (digest[:16] + '.json')
+
+
 def collect_logical_enrollments(enrollments_dir, bootstrap_dir, now=None):
     """Return logical enrollment rows (manual + deduplicated zero-touch)."""
     now = int(now if now is not None else time.time())
@@ -244,6 +252,7 @@ def collect_logical_enrollments(enrollments_dir, bootstrap_dir, now=None):
             'state': state,
             'terminal_at': terminal_at,
             'ticket_path': ticket_path,
+            'handle_index_path': short_handle_index_for_record(bootstrap_dir, ticket_rec),
             'enroll_path': enroll_path if enroll_path and enroll_path.is_file() else None,
             'ticket_record': ticket_rec,
             'enroll_record': enroll_rec,
@@ -330,7 +339,9 @@ def _commit_staged_deletes(staged_paths):
         if staged is None:
             continue
         try:
-            Path(staged).unlink(missing_ok=True)
+            staged_path = Path(staged)
+            if staged_path.exists():
+                staged_path.unlink()
         except OSError as exc:
             errors.append('%s: %s' % (staged, exc))
     return errors
@@ -369,6 +380,8 @@ def _delete_targets(row):
         targets.append(row['enroll_path'])
     if row.get('ticket_path'):
         targets.append(row['ticket_path'])
+    if row.get('handle_index_path'):
+        targets.append(row['handle_index_path'])
     try:
         for path in targets:
             staged.append(_stage_delete(path))
@@ -390,10 +403,20 @@ def reconcile_stale_tombstones(enrollments_dir, bootstrap_dir):
             continue
         for path in base.glob('*.json.purging'):
             try:
-                path.unlink(missing_ok=True)
-                removed += 1
+                if path.exists():
+                    path.unlink()
+                    removed += 1
             except OSError:
                 pass
+        handles = base / 'handles'
+        if handles.is_dir():
+            for path in handles.glob('*.json.purging'):
+                try:
+                    if path.exists():
+                        path.unlink()
+                        removed += 1
+                except OSError:
+                    pass
     return removed
 
 
@@ -676,7 +699,7 @@ def load_audit_emit():
         here = Path(__file__).resolve()
         for path in (
             here.parent / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))

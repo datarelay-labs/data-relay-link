@@ -242,9 +242,9 @@ python3 "$ROOT/lib/frp_frontend.py" \
   --frontend-port 443 \
   --allocator-listen-port 6099 \
   --control-listen-port 7000 \
-  --ca-cert /etc/frp-auto-deploy/pki/ca.crt \
-  --server-cert /etc/frp-auto-deploy/pki/server.crt \
-  --server-key /etc/frp-auto-deploy/pki/server.key >/dev/null
+  --ca-cert /etc/drlink/pki/ca.crt \
+  --server-cert /etc/drlink/pki/server.crt \
+  --server-key /etc/drlink/pki/server.key >/dev/null
 python3 - "$FRP_SERVER_CONFIG" "$WORKDIR/frps-s443.toml" "$WORKDIR/frontend.conf" <<'PY' || fail "single443 generated files"
 import json, sys
 from pathlib import Path
@@ -270,9 +270,9 @@ assert 'proxy_ssl_verify on' in conf
 assert 'proxy_ssl_name localhost;' in conf
 assert 'proxy_ssl_server_name on' in conf
 assert 'proxy_ssl_name 203.0.113.10;' not in conf
-assert 'ssl_certificate /etc/frp-auto-deploy/pki/server.crt' in conf
+assert 'ssl_certificate /etc/drlink/pki/server.crt' in conf
 assert 'listen 443 ssl;' in conf
-assert 'ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+' in conf
+assert 'ca\\.crt|healthz|enroll|bootstrap/redeem|i/[^/?#]+|artifacts(?:/.*)?' in conf
 assert 'return 404;' in conf
 # Catch-all must not proxy arbitrary paths to a localhost backend.
 idx = conf.find('location / {')
@@ -299,9 +299,9 @@ python3 "$ROOT/lib/frp_frontend.py" \
   --frontend-port 443 \
   --allocator-listen-port 6099 \
   --control-listen-port 7000 \
-  --ca-cert /etc/frp-auto-deploy/pki/ca.crt \
-  --server-cert /etc/frp-auto-deploy/pki/server.crt \
-  --server-key /etc/frp-auto-deploy/pki/server.key >/dev/null
+  --ca-cert /etc/drlink/pki/ca.crt \
+  --server-cert /etc/drlink/pki/server.crt \
+  --server-key /etc/drlink/pki/server.key >/dev/null
 python3 - "$WORKDIR/frontend-dns.conf" <<'PY' || fail "dns public host backend identity"
 from pathlib import Path
 import sys
@@ -493,4 +493,93 @@ echo "FRESH_INSTALL_REGRESSION=PASS"
 echo "LEGACY_DIRECT_TO_SINGLE443_REGRESSION=PASS"
 echo "NO_PUBLIC_BACKEND_6099_SINGLE443=PASS"
 echo "NO_PUBLIC_BACKEND_7000_SINGLE443=PASS"
+
+# Finding M: published service range must not overlap Fixed TCP pool.
+reset_env
+export FRP_PUBLIC_HOST=203.0.113.10
+export FRP_PORT_START=6000
+export FRP_PORT_END=6098
+export FRP_ALLOCATOR_LISTEN_PORT=6099
+export FRP_SERVER_CONFIG="$WORKDIR/missing.json"
+load_existing_server_config
+resolve_server_settings >/dev/null
+pass "default service range 6000-6098 accepted"
+
+reset_env
+export FRP_PUBLIC_HOST=203.0.113.10
+export FRP_PORT_START=6000
+export FRP_PORT_END=6199
+export FRP_ALLOCATOR_LISTEN_PORT=6400
+export FRP_ALLOCATOR_PUBLIC_PORT=6400
+export FRP_CONTROL_LISTEN_PORT=443
+export FRP_EGRESS_LISTEN_PORT=6502
+export FRP_SERVER_CONFIG="$WORKDIR/missing.json"
+load_existing_server_config
+resolve_server_settings >/dev/null
+pass "service range ending 6199 accepted"
+
+reset_env
+if (
+  export FRP_PUBLIC_HOST=203.0.113.10
+  export FRP_PORT_START=6000
+  export FRP_PORT_END=6200
+  export FRP_ALLOCATOR_LISTEN_PORT=6400
+  export FRP_ALLOCATOR_PUBLIC_PORT=6400
+  export FRP_CONTROL_LISTEN_PORT=443
+  export FRP_EGRESS_LISTEN_PORT=6502
+  export FRP_SERVER_CONFIG="$WORKDIR/missing.json"
+  load_existing_server_config
+  resolve_server_settings
+) >/dev/null 2>"$WORKDIR/overlap-touch.err"; then
+  fail "service range touching 6200 should be rejected"
+fi
+grep -qi 'Fixed TCP' "$WORKDIR/overlap-touch.err" || fail "touching 6200 missing Fixed TCP error"
+pass "service range touching 6200 rejected"
+
+reset_env
+if (
+  export FRP_PUBLIC_HOST=203.0.113.10
+  export FRP_PORT_START=6000
+  export FRP_PORT_END=6300
+  export FRP_ALLOCATOR_LISTEN_PORT=6400
+  export FRP_ALLOCATOR_PUBLIC_PORT=6400
+  export FRP_CONTROL_LISTEN_PORT=443
+  export FRP_EGRESS_LISTEN_PORT=6502
+  export FRP_SERVER_CONFIG="$WORKDIR/missing.json"
+  load_existing_server_config
+  resolve_server_settings
+) >/dev/null 2>"$WORKDIR/overlap-full.err"; then
+  fail "service range 6000-6300 should be rejected"
+fi
+grep -qi 'overlap' "$WORKDIR/overlap-full.err" || fail "6000-6300 missing overlap error"
+pass "service range 6000-6300 rejected"
+
+python3 - "$WORKDIR/custom-tcp-pool.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  "public_ip": "203.0.113.10",
+  "control_port": 443,
+  "port_start": 6000,
+  "port_end": 6098,
+  "listen_port": 6099,
+  "tcp_relay_port_start": 7000,
+  "tcp_relay_port_end": 7099,
+  "allocator_public_url": "https://203.0.113.10:6099/enroll",
+}, indent=2) + "\n")
+PY
+reset_env
+export FRP_PUBLIC_HOST=203.0.113.10
+export FRP_PORT_START=6200
+export FRP_PORT_END=6299
+export FRP_ALLOCATOR_LISTEN_PORT=6099
+export FRP_ALLOCATOR_PUBLIC_PORT=6099
+export FRP_CONTROL_LISTEN_PORT=443
+export FRP_EGRESS_LISTEN_PORT=6102
+export FRP_SERVER_CONFIG="$WORKDIR/custom-tcp-pool.json"
+load_existing_server_config
+resolve_server_settings >/dev/null
+pass "custom non-overlapping TCP pool accepted"
+
+echo "FIXED_TCP_SERVICE_RANGE_OVERLAP=PASS"
 echo "PORT_ARCHITECTURE_TEST=PASS"

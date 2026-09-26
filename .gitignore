@@ -1,5 +1,8 @@
 *.zip
 *.tar.gz
+# Qualified upstream FRP archives vendored for Server-local distribution.
+!third_party/frp/**/*.tar.gz
+!third_party/frp/**/*.zip
 __pycache__/
 *.pyc
 .env
@@ -15,12 +18,18 @@ client-identity.mac
 mgmt-nonces.json
 .frp-compat-stage/
 
+# Generated at release time from the checked-out release commit. A committed
+# SBOM cannot record the hash of the commit that contains it, and checksumming
+# it into SHA256SUMS (which the SBOM itself inventories) is circular.
+# Produced by ./scripts/build-release-artifacts.sh and attested in CI.
+dist/sbom.spdx.json
+
+# Local test dependency venv (official MCP SDK interop; see tests/ensure-mcp-sdk-venv.sh)
+.venv/
+
 # Runtime Real E2E / overnight validation output (harness source stays in tests/)
 e2e-reports/
 OVERNIGHT_*.md
-
-# Nested / parallel worktrees must not land on this release line
-frp-auto-deploy-group/
 
 # Runtime-generated secrets, configs, and allocator state
 server_token
@@ -29,6 +38,8 @@ registry.json
 access-info.txt
 frpc.toml
 frps.toml
+frps.toml.pre-drlink-*
+# Historical pre-rename migration artifacts remain ignored.
 frps.toml.pre-frp-auto-deploy-*
 registry.json.pre-frp-auto-deploy-*
 !server/config.example.json

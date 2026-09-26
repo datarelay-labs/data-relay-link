@@ -2,6 +2,12 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 $clientPath = Join-Path $script:RepoRoot 'windows/tools/FrpClient.ps1'
+$drlinkCmd = Join-Path $script:RepoRoot 'windows/tools/drlink.cmd'
+$legacyCmd = Join-Path $script:RepoRoot 'windows/tools/frp-client.cmd'
+Assert-FrpTrue (Test-Path -LiteralPath $drlinkCmd) 'canonical drlink.cmd wrapper exists'
+Assert-FrpTrue (Test-Path -LiteralPath $legacyCmd) 'legacy frp-client.cmd remains for compatibility'
+$drlinkSrc = Get-Content -LiteralPath $drlinkCmd -Raw
+Assert-FrpTrue ($drlinkSrc -match 'frp-client\.cmd') 'drlink.cmd wraps frp-client.cmd'
 $src = Get-Content -LiteralPath $clientPath -Raw
 Assert-FrpTrue ($src -match '(?m)^\s*\. Import-FrpWindowsModules\s*$') 'dot-sources Import-FrpWindowsModules into script scope'
 
@@ -17,11 +23,14 @@ if ($env:SystemRoot) {
 $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('frp-win-entry-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 $env:FRP_WINDOWS_ROOT = $tmpRoot
+# Unenrolled entrypoint root has no client-state allocator_url; provide an
+# origin so update -Check can resolve the qualified windows/amd64 artifact URL.
+$env:FRP_ALLOCATOR_URL = 'https://example.test/enroll'
 try {
     foreach ($exe in @($hosts | Select-Object -Unique)) {
         $label = Split-Path -Leaf $exe
         $doctorOut = & $exe -NoProfile -ExecutionPolicy Bypass -File $clientPath -Command doctor 2>&1 | Out-String
-        Assert-FrpTrue ($doctorOut -match 'frp-client doctor') "$label doctor entrypoint ran"
+        Assert-FrpTrue ($doctorOut -match 'Data Relay Link client diagnostics') "$label doctor entrypoint ran"
         Assert-FrpTrue ($doctorOut -match 'Root:') "$label doctor called Get-FrpWindowsRoot"
         Assert-FrpTrue ($doctorOut -notmatch 'is not recognized') "$label doctor has module functions"
 
@@ -30,6 +39,7 @@ try {
         Assert-FrpTrue ($statusOut -notmatch 'is not recognized') "$label status has module functions"
 
         $checkOut = & $exe -NoProfile -ExecutionPolicy Bypass -File $clientPath -Command update -Check 2>&1 | Out-String
+        Assert-FrpTrue ($checkOut -match 'Data Relay Link project') "$label update -Check shows project section"
         Assert-FrpTrue ($checkOut -match 'Would download:') "$label update -Check binds to script switch"
         Assert-FrpTrue ($checkOut -match 'preserved') "$label update -Check is dry-run"
         Assert-FrpTrue ($checkOut -notmatch 'is not recognized') "$label update -Check has Get-FrpWindowsAmd64Url"
@@ -37,5 +47,6 @@ try {
     Write-FrpTestPass 'test-frpclient-entrypoint'
 } finally {
     Remove-Item Env:FRP_WINDOWS_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:FRP_ALLOCATOR_URL -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

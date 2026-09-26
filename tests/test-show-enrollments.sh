@@ -6,19 +6,19 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 TREE="$WORK/tree"
 mkdir -p \
-  "$TREE/etc/frp-auto-deploy/pki" \
-  "$TREE/var/lib/frp-auto-deploy/enrollments" \
-  "$TREE/var/lib/frp-auto-deploy/bootstrap"
+  "$TREE/etc/drlink/pki" \
+  "$TREE/var/lib/drlink/enrollments" \
+  "$TREE/var/lib/drlink/bootstrap"
 
-python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/frp-auto-deploy/pki" --public-host example.test >/dev/null
+python3 "$ROOT/lib/frp_pki.py" ensure --pki-dir "$TREE/etc/drlink/pki" --public-host example.test >/dev/null
 python3 - "$TREE" <<'PY'
 import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-(root / 'etc/frp-auto-deploy/config.json').write_text(json.dumps({
-  'enrollments_dir': '/var/lib/frp-auto-deploy/enrollments',
-  'bootstrap_dir': '/var/lib/frp-auto-deploy/bootstrap',
-  'tls_ca_cert': '/etc/frp-auto-deploy/pki/ca.crt',
+(root / 'etc/drlink/config.json').write_text(json.dumps({
+  'enrollments_dir': '/var/lib/drlink/enrollments',
+  'bootstrap_dir': '/var/lib/drlink/bootstrap',
+  'tls_ca_cert': '/etc/drlink/pki/ca.crt',
   'allocator_public_url': 'https://example.test/enroll',
   'client_installer_url': 'https://example.test/bootstrap-client.sh',
 }) + '\n')
@@ -49,7 +49,12 @@ pass "MANUAL_ENROLLMENT_VISIBLE_IN_SHOW"
 pass "MANUAL_PENDING_STATE"
 ! grep -Fq "$MANUAL_SECRET" "$WORK/list1.out" || fail "ENROLLMENT_SECRET_NOT_SHOWN"
 pass "ENROLLMENT_SECRET_NOT_SHOWN"
-grep -q 'revoke enrollment <ID>' "$WORK/list1.out" || fail "SHOW_ENROLLMENTS_REVOKE_GUIDANCE"
+grep -qE 'sudo drlink (unset|revoke) enrollment <ID>' "$WORK/list1.out" \
+  || fail "SHOW_ENROLLMENTS_REVOKE_GUIDANCE"
+! grep -q 'drlink enrollment revoke' "$WORK/list1.out" || fail "SHOW_ENROLLMENTS_OLD_SYNTAX"
+! grep -q 'purge enrollment' "$WORK/list1.out" || fail "PUBLIC_PURGE_VOCABULARY"
+grep -qE 'sudo drlink (unset|delete) enrollment <ID>|unset removes the retained record' "$WORK/list1.out" \
+  || fail "SHOW_ENROLLMENTS_DELETE_GUIDANCE"
 pass "SHOW_ENROLLMENTS_REVOKE_GUIDANCE"
 
 # --- Manual completed / expired / revoked states ---
@@ -58,7 +63,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 eid = sys.argv[2]
-path = root / 'var/lib/frp-auto-deploy/enrollments' / (eid + '.json')
+path = root / 'var/lib/drlink/enrollments' / (eid + '.json')
 rec = json.loads(path.read_text())
 rec['used_at'] = '2026-08-30T01:00:00Z'
 rec['bound_machine_id'] = 'aabbccddeeff0011'
@@ -74,7 +79,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 eid = 'aaaaaaaaaaaaaaaa'
-path = root / 'var/lib/frp-auto-deploy/enrollments' / (eid + '.json')
+path = root / 'var/lib/drlink/enrollments' / (eid + '.json')
 now = int(time.time())
 rec = {
   'id': eid,
@@ -100,7 +105,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 eid = 'bbbbbbbbbbbbbbbb'
-path = root / 'var/lib/frp-auto-deploy/enrollments' / (eid + '.json')
+path = root / 'var/lib/drlink/enrollments' / (eid + '.json')
 now = int(time.time())
 rec = {
   'id': eid,
@@ -127,22 +132,46 @@ ZT_ID="$(awk '/^Enrollment ID:/{print $3; exit}' "$WORK/zt.out")"
 ZT_TICKET="$(python3 - "$WORK/zt.out" <<'PY'
 import base64, json, re, sys
 t = open(sys.argv[1]).read()
+m = re.search(r"/i/([A-Za-z0-9_-]{22}|bt1\.[0-9a-f]+\.[0-9a-f]+)", t)
+if m:
+    print(m.group(1))
+    raise SystemExit(0)
+m = re.search(r"zt1\.[A-Za-z0-9_-]+", t)
+if m:
+    parts = m.group(0).split('.', 1)
+    padded = parts[1] + ('=' * (-len(parts[1]) % 4))
+    payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
+    print(payload['t'])
+    raise SystemExit(0)
 m = re.search(r"sudo bash -s -- '(zt1\.[^']+)'", t)
 if m:
     parts = m.group(1).split('.', 1)
     padded = parts[1] + ('=' * (-len(parts[1]) % 4))
     payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
     print(payload['t'])
-else:
-    m = re.search(r"FRP_BOOTSTRAP_TICKET='([^']+)'", t)
-    print(m.group(1))
+    raise SystemExit(0)
+m = re.search(r"FRP_BOOTSTRAP_TICKET='([^']+)'", t)
+if not m:
+    raise SystemExit('unable to extract bootstrap ticket from create output')
+print(m.group(1))
 PY
 )"
-ZT_SECRET="${ZT_TICKET##*.}"
+if [[ "$ZT_TICKET" == bt1.* ]]; then
+  ZT_SECRET="${ZT_TICKET##*.}"
+else
+  ZT_SECRET="$ZT_TICKET"
+fi
 [[ -n "$ZT_ID" && ${#ZT_ID} -eq 16 ]] || fail "zero-touch tracking id"
-[[ "$ZT_ID" == "${ZT_TICKET#bt1.}" || "$ZT_ID" == "${ZT_TICKET#bt1.}"* ]] || true
-# ticket form bt1.id.secret
-ZT_TICKET_ID="${ZT_TICKET#bt1.}"; ZT_TICKET_ID="${ZT_TICKET_ID%%.*}"
+ZT_TICKET_ID="$(python3 -c 'import hashlib,json,sys
+from pathlib import Path
+t=sys.argv[1].strip(); root=Path(sys.argv[2])
+if t.lower().startswith("bt1.") and t.count(".")==2:
+    print(t.split(".")[1].lower())
+else:
+    digest=hashlib.sha256(t.encode("ascii")).hexdigest()
+    data=json.loads((root/"handles"/(digest[:16]+".json")).read_text())
+    assert data.get("handle_hash")==digest
+    print(data["ticket_id"])' "$ZT_TICKET" "$TREE/var/lib/drlink/bootstrap")"
 [[ "$ZT_ID" == "$ZT_TICKET_ID" ]] || fail "zero-touch Enrollment ID != ticket id"
 
 python3 "$ENROLL" >"$WORK/zt-list.out"
@@ -164,7 +193,7 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = sys.argv[2]
-rec = json.loads((root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')).read_text())
+rec = json.loads((root / 'var/lib/drlink/bootstrap' / (tid + '.json')).read_text())
 print(rec['enrollment_id'])
 PY
 )"
@@ -177,7 +206,7 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = sys.argv[2]
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 rec = json.loads(path.read_text())
 rec['bound_machine_id'] = 'machinebound0001'
 rec['completed_at'] = None
@@ -193,7 +222,7 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = sys.argv[2]
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 rec = json.loads(path.read_text())
 rec['completed_at'] = '2026-08-30T02:00:00Z'
 path.write_text(json.dumps(rec, indent=2) + '\n')
@@ -208,7 +237,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = 'cccccccccccccccc'
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 now = int(time.time())
 rec = {
   'schema': 1,
@@ -225,7 +254,7 @@ rec = {
 }
 path.write_text(json.dumps(rec, indent=2) + '\n')
 # paired enrollment (must be omitted from listing as duplicate)
-ep = root / 'var/lib/frp-auto-deploy/enrollments' / 'dddddddddddddddd.json'
+ep = root / 'var/lib/drlink/enrollments' / 'dddddddddddddddd.json'
 ep.write_text(json.dumps({
   'id': 'dddddddddddddddd',
   'secret': 'shouldneverappear0000000000000000000000000000000000000000000000',
@@ -246,7 +275,7 @@ import json, sys, time
 from pathlib import Path
 root = Path(sys.argv[1])
 tid = 'eeeeeeeeeeeeeeee'
-path = root / 'var/lib/frp-auto-deploy/bootstrap' / (tid + '.json')
+path = root / 'var/lib/drlink/bootstrap' / (tid + '.json')
 now = int(time.time())
 rec = {
   'schema': 1,

@@ -23,7 +23,9 @@ need() {
 # --- Guidance text ----------------------------------------------------------
 frp_ux_print_all_guidance >"$WORKDIR/guide.out"
 need "$WORKDIR/guide.out" 'Enrollment Code' 'enrollment heading'
-need "$WORKDIR/guide.out" 'sudo frp-create-client' 'enrollment source command'
+need "$WORKDIR/guide.out" 'sudo drlink set enrollment' 'enrollment source command'
+grep -qE 'sudo drlink (create zero-touch|create enrollment|set enrollment|set client)' \
+  "$WORKDIR/guide.out" || fail "enrollment alternate command"
 need "$WORKDIR/guide.out" 'short-lived' 'short-lived enrollment'
 need "$WORKDIR/guide.out" 'not stored' 'code not stored'
 need "$WORKDIR/guide.out" 'not the FRP token' 'not the FRP token'
@@ -44,7 +46,7 @@ need "$WORKDIR/guide.out" 'does NOT create an operating-system account' 'ssh use
 need "$WORKDIR/guide.out" 'without terminating TLS' 'https passthrough'
 need "$WORKDIR/guide.out" 'Custom TCP' 'custom tcp type'
 need "$WORKDIR/guide.out" 'SSH is optional' 'ssh optional'
-need "$WORKDIR/guide.out" 'assigned automatically by the FRP server' 'auto public port'
+need "$WORKDIR/guide.out" 'assigned automatically by the Data Relay Link server' 'auto public port'
 need "$WORKDIR/guide.out" 'one or more services' 'multiple services'
 pass "guided field explanations"
 
@@ -106,19 +108,33 @@ assert int(p['local_port'])==3000
 PY
 pass "Custom TCP prompt"
 
-# --- Zero services cannot install ------------------------------------------
+# --- Initial onboarding requires at least one service --------------------
 SERVICES_FILE="$WORKDIR/services.json"
 services_init
 frp_reset_test_input
-export FRP_CLIENT_TEST_INPUT=$'3\n4\n'
-if collect_services_interactive >"$WORKDIR/zero.out" 2>"$WORKDIR/zero.err"; then
-  fail "zero-service install should not succeed"
+export FRP_CLIENT_TEST_INPUT=$'3\n'
+if collect_services_interactive >"$WORKDIR/mgmt.out" 2>"$WORKDIR/mgmt.err"; then
+  fail "empty-menu cancel should exit non-zero"
 fi
-grep -q 'at least one service must be configured' "$WORKDIR/zero.err" "$WORKDIR/zero.out" || fail "zero-service error"
+! grep -qi 'Install management-only' "$WORKDIR/mgmt.out" \
+  || fail "management-only install option must be removed"
+grep -qi 'Cancelled' "$WORKDIR/mgmt.out" "$WORKDIR/mgmt.err" || fail "cancel message missing"
 unset FRP_CLIENT_TEST_INPUT
 frp_reset_test_input
-pass "zero services cannot install"
+pass "management-only initial onboarding removed"
 
+# --- Cancel from empty menu -----------------------------------------------
+SERVICES_FILE="$WORKDIR/services.json"
+services_init
+frp_reset_test_input
+export FRP_CLIENT_TEST_INPUT=$'3\n'
+if collect_services_interactive >"$WORKDIR/cancel.out" 2>"$WORKDIR/cancel.err"; then
+  fail "cancel should exit non-zero"
+fi
+grep -qi 'Cancelled' "$WORKDIR/cancel.out" "$WORKDIR/cancel.err" || fail "cancel message missing"
+unset FRP_CLIENT_TEST_INPUT
+frp_reset_test_input
+pass "empty-menu cancel"
 # --- Install confirmation: No returns to menu ------------------------------
 SERVICES_FILE="$WORKDIR/services.json"
 services_init
@@ -164,15 +180,15 @@ cat >"$WORKDIR/done-services.json" <<'EOF'
 [{"id":"ssh","name":"SSH","preset":"ssh","local_ip":"127.0.0.1","local_port":22,"remote_port":6002,"ssh_user":"aella"}]
 EOF
 print_complete "203.0.113.10" "$WORKDIR/done-services.json" >"$WORKDIR/complete.out"
-need "$WORKDIR/complete.out" 'FRP Installation Complete' 'complete header'
-need "$WORKDIR/complete.out" 'Your FRP client is running successfully' 'success line'
+need "$WORKDIR/complete.out" 'Data Relay Link Installation Complete' 'complete header'
+need "$WORKDIR/complete.out" 'Your Data Relay Link client is running successfully' 'success line'
 need "$WORKDIR/complete.out" 'Local target : 127.0.0.1:22' 'complete target'
 need "$WORKDIR/complete.out" 'Public port  : 6002' 'complete public'
 need "$WORKDIR/complete.out" 'ssh -p 6002 aella@203.0.113.10' 'complete ssh'
-need "$WORKDIR/complete.out" 'sudo frpctl' 'complete frpctl'
-need "$WORKDIR/complete.out" 'sudo frp-client' 'complete manage'
-need "$WORKDIR/complete.out" 'sudo frp-client status' 'complete status'
-need "$WORKDIR/complete.out" 'sudo frp-client info' 'complete info'
+need "$WORKDIR/complete.out" 'sudo drlink' 'complete drlink'
+need "$WORKDIR/complete.out" 'sudo drlink' 'complete manage'
+need "$WORKDIR/complete.out" 'sudo drlink show status' 'complete status'
+need "$WORKDIR/complete.out" 'sudo drlink system info' 'complete info'
 pass "installation complete screen"
 
 # --- Apply summary ---------------------------------------------------------
@@ -196,7 +212,7 @@ frp_ux_print_apply_summary "$WORKDIR/cur.json" "$WORKDIR/cand.json" >"$WORKDIR/a
 need "$WORKDIR/apply.out" 'Ready to apply' 'apply heading'
 need "$WORKDIR/apply.out" '+ grafana' 'pending add'
 need "$WORKDIR/apply.out" 'public port: assigned automatically' 'apply auto port'
-need "$WORKDIR/apply.out" 'will restart the FRP client' 'restart warning'
+need "$WORKDIR/apply.out" 'will restart the Data Relay Link client' 'restart warning'
 pass "apply confirmation summary"
 
 python3 - "$WORKDIR" <<'PY'

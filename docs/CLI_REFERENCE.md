@@ -1,335 +1,463 @@
-# frpctl command reference
+# Data Relay Link — CLI Reference
 
-`frpctl` is the everyday operator CLI. It does not add new backend behavior.
-Existing tools (`frp-clients`, `frp-client-set`, `frp-create-client`, …) remain
-the implementation.
+> **Status:** v2.4 active
+> **Primary CLI:** `drlink`
+> **Authoritative behavior:** `docs/DATA_RELAY_LINK_CLI_AI_MASTER_v2.4_FINAL.md`
 
-Grammar:
+This document is a compact public command reference. The Master defines exact semantics when an example here is abbreviated.
+
+## 1. Command model
+
+Inside the REPL:
 
 ```text
-<verb> <resource> [target] [property] [value]
+drlink> show status
+drlink> set network-object github
 ```
 
-Host role decides which commands appear in Tab and help. Dual-role hosts see
-the union. There is no `server …` / `client …` top-level namespace.
+From a shell:
 
-Interactive keys:
-
-```text
-Tab   = immediately show/complete what can be entered here
-?     = detailed contextual explanation
-Enter = execute
-↑/↓   = session history
+```bash
+drlink show status
+drlink set network-object github
 ```
 
-Tab completes a unique match inline. When several next tokens remain, the
-first Tab prints the candidate list above the prompt and restores the exact
-input line for editing. A second Tab on the same unchanged line does not
-reprint the list. Tab never runs the command and never clears the screen.
-Type `?` (then Enter) for detailed context help when needed.
-
-`↑` / `↓` walk this session only. History is never written to disk
-(`~/.bash_history`, `~/.frpctl_history`, or `HISTFILE`).
-
-The canonical client selector is **CLIENT ID**: the immutable short machine
-identity (usually 8 hex characters; longer when that prefix is not unique).
-Changing label, note, tags, or hostname never changes CLIENT ID.
-`show clients` prints CLIENT ID as the first identity column. Tab completes
-CLIENT ID only. A unique label or unique hostname still works when typed by
-hand. An SSH connection string such as `user@host:port` is not a selector.
-An ambiguous prefix fails closed; use a longer CLIENT ID prefix.
-
-`unset` removes stored metadata. `release` returns public port reservations.
-`revoke` removes management identity. Those three are never aliases of each
-other. There is no `delete client`.
-
----
-
-## show
+Common roots:
 
 ```text
-show status
-show version
-show clients
-show clients --group <GROUP>
-show client <ID>
-show client <ID> services
-show client <ID> tags
-show client <ID> groups
-show groups
-show group <GROUP>
-show enrollments
-show audit
-show upstream
-show services
-show info
-```
-
-`status` and `version` remain shortcuts for `show status` / `show version`.
-Canonical help prefers the `show` form.
-
-`show clients` reuses the existing client table. The identity columns are
-CLIENT ID, LABEL, and HOSTNAME. `show client <ID>` is the overview.
-`show client <ID> services` and `show client <ID> tags` print only that view.
-
-`show enrollments` lists every issued enrollment credential that is still on
-disk: manual Enrollment Code records and zero-touch bootstrap tickets. Secrets
-are never printed. Zero-touch issuance that creates both an enrollment file and
-a bootstrap ticket appears once (ticket ID). Lifecycle states are normalized to
-`pending`, `bound`, `completed`, `expired`, or `revoked`. Terminal records
-(`expired`, `completed`, `revoked`) are retained for
-`enrollment_retention_days` (default 30) and then removed automatically during
-enrollment issuance or allocator startup. Use `revoke enrollment <ID>` for active
-(`pending`/`bound`) credentials and `purge enrollment <ID>` for terminal records.
-
-## set
-
-Server:
-
-```text
-set client <ID> label <value>
-set client <ID> note <value>
-set client <ID> tag <key> <value>
-set installer-url <url>
-set server hostname <fqdn>
-set server bootstrap-hostname <fqdn>
-```
-
-`set server hostname` configures an optional DNS alias for published-service
-access. It does not change FRP control (`frp_server` / `serverAddr`), CLIENT ID,
-public ports, or the CA. DNS records are managed outside FRP Auto Deploy.
-
-`set server bootstrap-hostname` configures the optional publicly trusted
-Zero-Touch short URL hostname. FRP Auto Deploy does not create DNS records,
-issue certificates, or configure ACME. See `docs/ZERO_TOUCH_SHORT_URL.md`.
-
-The backend still accepts `--tag key=value`. The parser converts
-`tag <key> <value>` to that form. Quoted values work
-(`tag location "OCI Osaka"`). The older `tag key=value` token is still
-accepted.
-
-Client:
-
-```text
-set service <service-id> target-host <host>
-set service <service-id> target-port <port>
-set service <service-id> ssh-user <user>
-set service <service-id> name <value>
-set service <service-id> health-type <tcp|http|disabled>
-set service <service-id> health-timeout <seconds>
-set service <service-id> health-interval <seconds>
-set service <service-id> health-max-failed <count>
-set service <service-id> health-path </path>
-```
-
-Service IDs are immutable. Pending service edits become live only after
-`apply`. Disable/enable reuse the same public port. Client-side disable does
-not release the server reservation. Health checks are disabled by default;
-when enabled, FRP `healthCheck` settings are written into `frpc.toml`.
-`show services` / `status` report CLIENT / TUNNEL / TARGET separately.
-
-## unset
-
-```text
-unset client <ID> label
-unset client <ID> note
-unset client <ID> tag <key>
-unset server hostname
-unset server bootstrap-hostname
-```
-
-Removes administrator metadata only (or the optional public / bootstrap
-hostname). Display label falls back to hostname. Does not change identity,
-machine-id, ports, or enrollment. Unsetting the public hostname falls back to
-Public IP access. Unsetting the bootstrap hostname falls back to `zt1` Zero-Touch
-commands.
-
-## create / add
-
-```text
-create group <name> [--description TEXT]
-add client <CLIENT> group <GROUP>
-create zero-touch
-create enrollment [--one-line] [--ssh --ssh-user USER --label NAME]
-create enrollments --count N
-create enrollments --csv clients.csv
-create backup [path]
-add service [--preset ssh|http|https|custom] ...
-```
-
-Manual groups have immutable IDs (`grp_` plus eight lowercase hex digits),
-mutable names and descriptions, and multiple client memberships. Group
-selectors resolve in this order: exact ID, unique ID prefix, unique exact
-name. `all` and `ungrouped` are reserved virtual selectors, not stored group
-objects.
-
-```text
-rename group <GROUP> <name>
-set group <GROUP> name <name>
-set group <GROUP> description <text>
-delete group <GROUP>
-remove client <CLIENT> group <GROUP>
-```
-
-Deleting a group removes its membership references but does not change client
-identity, services, or ports. Enrollment-time group assignment is deferred.
-
-`create zero-touch` is the recommended everyday client onboarding path.
-Enrollment Code and bootstrap ticket secrets are never completed or shown by
-`show` / `?` / Tab.
-
-## enable / disable / apply / discard
-
-```text
-enable service <service-id>
-disable service <service-id>
-apply
-discard
-```
-
-Client-local pending changes. `apply` does not release server ports.
-
-## revoke / purge / release / restore
-
-```text
-revoke client <ID>
-revoke enrollment <ID>
-purge enrollment <ID>
-purge enrollments --older-than <days>
-release service <ID> <service-id>
-release client <ID>
-restore backup <path>
-```
-
-`revoke enrollment` prevents a pending or bound enrollment credential from being
-used. It does not apply to terminal records (`expired`, `completed`, `revoked`).
-
-`purge enrollment` permanently removes terminal enrollment metadata. Active
-pending or bound enrollments must be revoked first. Bulk purge matches terminal
-records whose terminal timestamp is older than the requested threshold.
-Non-interactive purge requires `FRP_ENROLLMENT_PURGE_YES=yes`.
-
-Terminal enrollment JSON retention and audit log retention are separate.
-Purging enrollment metadata does not delete audit events.
-
-`release` keeps the existing confirmation, locking, and passive port recheck.
-`restore` keeps archive validation, snapshot, restart, doctor, and rollback.
-
-
-## profiles (server)
-
-Reusable server-owned service creation templates. Profiles seed client drafts
-only; they never store public ports, CLIENT IDs, Service IDs, or ACL
-assignments. Editing or deleting a profile does not mutate existing services.
-
-```text
-show profiles
-show profile <PROFILE>
-create profile <name> --preset ssh|http|https|custom --target-host HOST --target-port PORT
-                 [--description TEXT] [--ssh-user USER]
-set profile <PROFILE> name|description|preset|target-host|target-port|ssh-user <value>
-delete profile <PROFILE>
-```
-
-On a client host, seed a pending service from a profile, then run `apply`:
-
-```text
-add service --profile <PROFILE|NAME> [--id ID] [--name NAME]
-apply
-```
-
-## access (server)
-
-Named reusable Service Access Lists, optional TTL entries, and recent
-connection authorization history. Access is keyed by CLIENT ID + Service ID
-(not by public port). Modes are `PUBLIC` (default for existing services) and
-`ALLOWLIST`.
-
-```text
-access
-access list
-access create <name> [--description TEXT]
-access add-source <list> --name <name> --source <ip|cidr> [--ttl 30m|1h|4h|1d]
-access remove-source <list> --source <ip|cidr|name|id>
-access show <list>
-access delete <list>
-access assign <client> <service-id> <list>
-access public <client> <service-id>
-access show-service <client> <service-id>
-access test <client> <service-id> <source-ip>
-access log <client> <service-id> [--limit N] [--allow|--deny]
-```
-
-Interactive `frpctl` server menu includes Access Control. Empty ALLOWLIST
-assignment is refused. Deleting a list that is still referenced is refused.
-IP allowlisting is defense-in-depth; keep target authentication enabled.
-
-## update
-
-```text
-update project [--check]
-update frp [--check]
-```
-
-`update` with no resource keeps the previous role default (client project
-tools on a client; `frp-update` on a server). Updater security is unchanged:
-stable tag, verified SHA256SUMS, fail-closed, rollback, no re-enrollment, no
-CA/token/port loss. FRP stays pinned at 0.71.0.
-
-## Other
-
-```text
-doctor
-support-bundle
-support-bundle --output <path>
-help
-help show
-help set client
-help legacy
-?
-show ?
-set client <ID> ?
+show
+set
+unset
+test
+system
 menu
-history
-clear
+help
 exit
 ```
 
-`support-bundle` writes a sanitized read-only diagnostic archive
-(`frp-support-<hostname>-<YYYYMMDDTHHMMSSZ>.tar.gz`). Private keys, tokens,
-enrollment secrets, and auth material are omitted or redacted. It does not
-restart services.
+Discovery:
 
-Root `?` lists verbs only. Detailed syntax is under `help` / `help <verb>`
-or a context `?`. `menu` is the guided numbered interface using the same
-vocabulary (Show / Set / Unset / Create / Update / Revoke / Release).
+```text
+?
+help
+help managed-hosts
+help network-objects
+help commands
+<verb> ?
+Tab completion
+```
 
----
+## 2. Server show commands
 
-## Compatibility aliases
+```text
+show status
 
-These still work for scripts and muscle memory. Tab and canonical help hide
-them. `help legacy` lists them.
+show managed-hosts
+show managed-host <HOST>
+show managed-host <HOST> agent
+show managed-host <HOST> addresses
+show managed-host <HOST> remote-services
 
-| Alias | Canonical |
-| --- | --- |
-| `clients` | `show clients` |
-| `client` / `client-info` | `show client` |
-| `client-set` / `edit-client` | `set client` / `unset client` |
-| `enroll` / `create-client` | `create enrollment` |
-| `enroll-bulk` | `create enrollments` |
-| `enrollments` | `show enrollments` |
-| `enrollment-revoke` | `revoke enrollment` |
-| `revoke` / `revoke-client` | `revoke client` |
-| `release-service` | `release service` |
-| `release-client` | `release client` |
-| `project-update` / `client-update` | `update project` |
-| `frp-update` / `server-update` | `update frp` |
-| `backup` | `create backup` |
-| `restore PATH` | `restore backup PATH` |
-| `upstream` | `show upstream` |
-| `audit` | `show audit` |
-| `services` / `manage` / `info` | `show services` / `add`+`set service` / `show info` |
-| `status` / `version` | `show status` / `show version` |
+show enrollments
+show enrollment <ENROLLMENT>
 
-Direct `/usr/local/sbin/frp-*` tools are unchanged.
+show network-objects
+show network-object <OBJECT>
+show network-object <OBJECT> references
+show network-groups
+show network-group <GROUP>
+show network-group <GROUP> references
+
+show service-objects
+show service-object <SERVICE>
+show service-object <SERVICE> references
+show service-groups
+show service-group <GROUP>
+show service-group <GROUP> references
+
+show remote-access
+show remote-access <RULE>
+
+show internet-access
+show internet-access <RULE>
+
+show ai-identities
+show ai-identity <IDENTITY>
+
+show permission-objects
+show permission-object <PERMISSION>
+show permission-groups
+show permission-group <GROUP>
+
+show ai-access
+show ai-access <RULE>
+
+show ai-access-log
+show ai-access-log identity <IDENTITY>
+show ai-access-log destination <DESTINATION>
+show ai-access-log permission <PERMISSION>
+```
+
+## 3. Server set commands
+
+```text
+set enrollment zero-touch
+set enrollment manual
+set enrollment bulk
+
+set network-object <OBJECT>
+set network-group <GROUP>
+
+set service-object <SERVICE>
+set service-group <GROUP>
+
+set remote-access <RULE>
+set remote-access enabled
+set remote-access disabled
+
+set internet-access <RULE>
+set internet-access enabled
+set internet-access disabled
+
+set ai-identity <IDENTITY>
+
+set permission-object <PERMISSION>
+set permission-group <GROUP>
+
+set ai-access <RULE>
+set ai-access enabled
+set ai-access disabled
+```
+
+Bare named `set` enters Guided Create/Edit. A complete one-shot form skips the Wizard.
+
+Examples:
+
+```text
+set network-object github type fqdn value github.com
+set network-object office-admin type ip value 203.0.113.10
+
+set network-group approved-admins members office-admin,vpn-admin
+
+set service-object ssh type tcp port 22
+set service-object dns-udp type udp port 53
+set service-object legacy-db type fixed-tcp port 1521
+
+set service-group web-services members http,https
+
+set permission-object read-only permissions host-info,process-read,file-read
+set permission-group operators members read-only,operator
+
+set ai-access allow-read mode whitelist source automation-ai destination ubuntu-prod permission read-only paths /var/lib/vendor/** enabled
+```
+
+## 4. Access Policy commands
+
+First non-interactive Rule in an unconfigured policy must include `mode`.
+
+Remote Access:
+
+```text
+set remote-access block-partner mode blacklist source partner-office destination ubuntu-prod service ssh enabled
+```
+
+Internet Access:
+
+```text
+set internet-access github-https mode whitelist source ubuntu-prod destination github service https enabled
+```
+
+AI Access:
+
+```text
+set ai-access claude-prod mode whitelist source claude destination production-servers permission read-only enabled
+set ai-access allow-read mode whitelist source automation-ai destination ubuntu-prod permission read-only paths /var/lib/vendor/**,/opt/app/** enabled
+```
+
+File permissions (`file-read` / `file-write` / `file-upload` / `file-download`) use rule-bound `paths` scopes. Omit `paths` on edit to preserve existing scopes; use `paths -` or `paths none` to clear. Missing scopes remain fail-closed at runtime (no unrestricted filesystem default).
+
+When Policy Mode already exists, `mode` may be omitted. A conflicting requested mode is rejected.
+
+Policy enforcement:
+
+```text
+set remote-access enabled
+set remote-access disabled
+set internet-access enabled
+set internet-access disabled
+set ai-access enabled
+set ai-access disabled
+```
+
+Rule disable excludes only that Rule from evaluation.
+
+## 5. Policy semantics
+
+Initial state:
+
+```text
+No Policy
+No Rules
+Effective = ALLOW
+```
+
+BLACKLIST:
+
+```text
+match    → DENY
+no match → ALLOW
+```
+
+WHITELIST:
+
+```text
+match    → ALLOW
+no match → DENY
+```
+
+There is no public rule-order command and no per-rule `allow|deny` action field.
+
+## 6. Server unset commands
+
+```text
+unset managed-host <HOST>
+unset enrollment <ENROLLMENT>
+
+unset network-object <OBJECT>
+unset network-group <GROUP>
+
+unset service-object <SERVICE>
+unset service-group <GROUP>
+
+unset remote-access <RULE>
+unset remote-access policy
+
+unset internet-access <RULE>
+unset internet-access policy
+
+unset ai-identity <IDENTITY>
+
+unset permission-object <PERMISSION>
+unset permission-group <GROUP>
+
+unset ai-access <RULE>
+unset ai-access policy
+```
+
+Referenced Objects/Groups/Identities/Managed Hosts are protected from deletion until references are removed.
+
+## 7. Policy test commands
+
+```text
+test remote-access source <SOURCE> destination <DESTINATION> service <SERVICE>
+test internet-access source <SOURCE> destination <DESTINATION> service <SERVICE>
+test ai-access source <AI_IDENTITY> destination <DESTINATION> permission <PERMISSION> [path <PATH>]
+```
+
+Output includes Mode, Enforcement, selectors, matched Rules, and Effective Result. Where relevant, Remote Service runtime state is shown separately from policy authorization.
+
+When a selector is a Network Group, Service Group, or Permission Group, the public test expands every leaf member (stable sorted order), evaluates each concrete combination with the same atomic/runtime evaluators used for single Objects, and reports member/combination detail. Top-level Effective Result is ALLOW only when every expanded member/combination is ALLOW; mixed outcomes aggregate to DENY. Single Object / Service / Permission Object / atomic permission behavior is unchanged.
+
+For file permissions, omit `path` and `test ai-access` will not claim unconditional ALLOW (runtime requires an in-scope path). Provide `path <PATH>` to evaluate the same fail-closed path-scope contract used by MCP. Permission Groups that include file permissions apply that fail-closed rule per file member before aggregation.
+
+## 8. Server system commands
+
+```text
+system status
+system version
+system diagnostics
+system audit
+
+system revisions
+system revision <REVISION>
+system diff <REVISION_A> <REVISION_B>
+system rollback <REVISION>
+
+system backup
+system restore <FILE>
+
+test configuration <FILE|->
+system export configuration <FILE>
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+
+system certificate
+system update
+system support-bundle
+system uninstall
+```
+
+## 9. Managed Host as Network Object
+
+Registered Managed Hosts appear in `show network-objects` with type `Managed Host`.
+
+Managed Host lifecycle is never performed through `set/unset network-object`.
+
+Internet Access source may use a Managed Host. Internet Access destination may not use a Managed Host, directly or through a Network Group.
+
+## 10. Agent Host commands
+
+```text
+show status
+show agent
+
+show remote-services
+show remote-service <NAME>
+
+set remote-service <NAME>
+unset remote-service <NAME>
+
+system info
+system pause
+system resume
+system restart
+system autostart enable
+system autostart disable
+system update product
+system update engine
+
+test configuration <FILE|->
+system export configuration <FILE>
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+
+system diagnostics
+system support-bundle
+system version
+system uninstall
+```
+
+Agent one-shot example:
+
+```text
+set remote-service ssh-access destination this-host service ssh enabled
+```
+
+Relay example executed on `branch-gateway`:
+
+```text
+set remote-service internal-db-postgres destination internal-db service postgres enabled
+```
+
+The current Agent Host is the Relay Host.
+
+## 11. Remote Service contract
+
+Remote Service uses exactly one Service Object.
+
+Supported:
+
+```text
+TCP
+Fixed TCP
+```
+
+Rejected:
+
+```text
+UDP
+Service Group
+CIDR/multi-target destination
+duplicate Destination + Service on the same Agent
+```
+
+States:
+
+```text
+HEALTHY
+DEGRADED
+DISABLED
+```
+
+A valid but temporarily unreachable destination is saved as `DEGRADED`.
+
+New valid Remote Service created while the Server is unavailable may show:
+
+```text
+Status   : DEGRADED
+Endpoint : Pending allocation
+```
+
+After reconnect, DRLink synchronizes, allocates/activates, and transitions to `HEALTHY`.
+
+## 12. Fixed TCP
+
+Fixed TCP is a Service Object subtype.
+
+```text
+set service-object legacy-db type fixed-tcp port 1521
+```
+
+The external endpoint is allocated when an Agent creates a Remote Service using that Service Object. Standard TCP and Fixed TCP Remote Services use separate endpoint pools.
+
+An existing Remote Service cannot change in place across standard TCP and Fixed TCP pool classes.
+
+## 13. AI Identity
+
+```text
+set ai-identity <NAME>
+show ai-identities
+show ai-identity <NAME>
+unset ai-identity <NAME>
+```
+
+Interactive AI binds through OAuth Authorization Code verification.
+
+Automation / Custom AI binds through OAuth Client Credentials verification.
+
+Authentication is distinct from AI Access authorization.
+
+## 14. ConfigurationBundle
+
+```text
+test configuration <FILE|->
+system diff configuration <FILE|->
+system apply configuration <FILE|->
+system export configuration <FILE>
+```
+
+stdin terminator:
+
+```text
+:end
+```
+
+Server Bundle and Agent Bundle are independently atomic within their current CLI context. Cross-context distributed atomicity is not provided.
+
+## 15. Wrong-context errors
+
+Server-only policy/Object mutation on an Agent Host must say the command belongs on the DRLink Server.
+
+Agent-local Remote Service mutation on a Server must say it belongs on the owning Agent Host.
+
+Do not reduce a known role error to an unexplained `Unknown command`.
+
+## 16. Error contract
+
+User-facing errors should state:
+
+```text
+what is wrong
+what is required
+whether a change was applied
+what to do next
+```
+
+Raw traceback or backend database errors are not the public error contract.
+
+## 17. Obsolete intermediate grammar
+
+The following are not canonical v2.4 public resources/semantics:
+
+```text
+object / object-group as the only neutral public object hierarchy
+managed-endpoint
+published-service
+service-preset
+ai-principal
+ordered-rule movement
+per-rule ALLOW/DENY action
+implicit default-DENY-only policy model
+```
+
+Use the Network/Service/Permission Object model, AI Identity, Remote Service, and BLACKLIST/WHITELIST semantics defined by the Master.

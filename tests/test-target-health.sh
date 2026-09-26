@@ -151,10 +151,10 @@ pass "write_client_state preserves health_check"
 export FRP_CLIENT_TEST_ROOT="$WORKDIR/client-root"
 mkdir -p \
   "$FRP_CLIENT_TEST_ROOT/etc/frp" \
-  "$FRP_CLIENT_TEST_ROOT/var/lib/frp-auto-deploy" \
-  "$FRP_CLIENT_TEST_ROOT/usr/local/lib/frp-auto-deploy"
-cp "$ROOT/lib/frp_health_check.py" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp-client-common.sh" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/frp-auto-deploy/"
+  "$FRP_CLIENT_TEST_ROOT/var/lib/drlink" \
+  "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink"
+cp "$ROOT/lib/frp_health_check.py" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp-client-common.sh" "$FRP_CLIENT_TEST_ROOT/usr/local/lib/drlink/"
 python3 - "$STATE" "$FRP_CLIENT_TEST_ROOT/etc/frp/client-state.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -168,7 +168,7 @@ PY
 
 export FRP_SKIP_SYSTEMD=1
 export FRP_SKIP_CONNECTIVITY_CHECK=1
-DRAFT="$FRP_CLIENT_TEST_ROOT/var/lib/frp-auto-deploy/client-draft.json"
+DRAFT="$FRP_CLIENT_TEST_ROOT/var/lib/drlink/client-draft.json"
 CLIENT="$ROOT/tools/frp-client"
 "$CLIENT" set-service plain health-type tcp >/dev/null
 "$CLIENT" set-service plain health-timeout 7 >/dev/null
@@ -308,6 +308,145 @@ assert "DOWN" not in (HC.STATUS_UNKNOWN, HC.client_status_label("weird"))
 print("ok")
 PY
 pass "TARGET probe HEALTHY/UNHEALTHY/N/A"
+
+# F14: diagnostic probes must not follow redirects to a second host.
+python3 - <<'PY' || fail "probe redirect side effects"
+import http.server, socketserver, threading, frp_health_check as HC
+
+second_hits = []
+
+
+class Second(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        second_hits.append(self.path)
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+
+
+second = socketserver.TCPServer(("127.0.0.1", 0), Second)
+second_port = second.server_address[1]
+threading.Thread(target=second.serve_forever, daemon=True).start()
+
+
+class Redirector(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", "http://127.0.0.1:%d/health" % second_port)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+
+
+first = socketserver.TCPServer(("127.0.0.1", 0), Redirector)
+first_port = first.server_address[1]
+threading.Thread(target=first.serve_forever, daemon=True).start()
+
+item = {
+    "local_ip": "127.0.0.1",
+    "local_port": first_port,
+    "health_check": HC.default_health_check("http"),
+}
+# The configured target answered 302, which is not a healthy 2xx. Reporting
+# the redirect destination's health would be reporting a host the operator
+# never configured.
+label = HC.target_status_label(item)
+assert label == "UNHEALTHY", label
+assert second_hits == [], second_hits
+first.shutdown()
+second.shutdown()
+print("ok")
+PY
+pass "F14 probe does not follow redirects; second host never contacted"
+
+# F15: IPv6 literals must be bracketed in the probe URL.
+python3 - <<'PY' || fail "ipv6 probe url"
+import http.server, socket, socketserver, threading, frp_health_check as HC
+
+assert HC.probe_url("2001:db8::1", 8080, "/health") == "http://[2001:db8::1]:8080/health"
+assert HC.probe_url("[2001:db8::1]", 8080, "/health") == "http://[2001:db8::1]:8080/health"
+assert HC.probe_url("::1", 80, "/health") == "http://[::1]:80/health"
+assert HC.probe_url("127.0.0.1", 80, "/health") == "http://127.0.0.1:80/health"
+assert HC.probe_url("localhost", 80, "/health") == "http://localhost:80/health"
+assert HC.probe_url("fe80::1%eth0", 80, "/x") == "http://[fe80::1%eth0]:80/x"
+
+if not socket.has_ipv6:
+    print("ok (no ipv6)")
+    raise SystemExit(0)
+
+
+class V6Server(socketserver.TCPServer):
+    address_family = socket.AF_INET6
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == "/health" else 404)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+
+
+try:
+    httpd = V6Server(("::1", 0), Handler)
+except OSError:
+    print("ok (no ipv6 loopback)")
+    raise SystemExit(0)
+port = httpd.server_address[1]
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+item = {
+    "local_ip": "::1",
+    "local_port": port,
+    "health_check": HC.default_health_check("http"),
+}
+label = HC.target_status_label(item)
+assert label == "HEALTHY", label
+item["health_check"] = HC.default_health_check("tcp")
+assert HC.target_status_label(item) == "HEALTHY"
+httpd.shutdown()
+print("ok")
+PY
+pass "F15 IPv6 probe URLs are bracketed"
+
+# F13: many unreachable targets must not serialize into N x timeout.
+python3 - <<'PY' || fail "probe batch latency"
+import socket, time, frp_health_check as HC
+
+# Ports that accept the connection but never answer: each probe burns its
+# full timeout, so a serial implementation costs len(items) x timeout.
+listeners = []
+items = []
+for _ in range(6):
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    listeners.append(srv)
+    hc = HC.default_health_check("http")
+    hc["timeout_seconds"] = 1
+    items.append({
+        "local_ip": "127.0.0.1",
+        "local_port": srv.getsockname()[1],
+        "health_check": hc,
+    })
+items.append({"local_ip": "127.0.0.1", "local_port": 9, "health_check": None})
+
+start = time.monotonic()
+labels = HC.target_status_labels(items)
+elapsed = time.monotonic() - start
+for srv in listeners:
+    srv.close()
+
+assert len(labels) == len(items), labels
+assert labels[-1] == "N/A", labels
+assert all(label in (HC.STATUS_UNHEALTHY, HC.STATUS_UNKNOWN) for label in labels[:-1]), labels
+serial_worst_case = sum(i["health_check"]["timeout_seconds"] for i in items[:-1])
+# Half the serial cost is well outside the noise band for 6 x 1s probes.
+assert elapsed < serial_worst_case / 2, (elapsed, serial_worst_case)
+assert elapsed <= HC.PROBE_BATCH_DEADLINE_SECONDS + 2, elapsed
+print("ok")
+PY
+pass "F13 batched probes are bounded, not serialized"
 
 # Grammar props
 python3 - "$ROOT/lib" <<'PY' || fail "grammar health props"

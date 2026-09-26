@@ -170,9 +170,9 @@ def backup_frps_toml(etc_dir: Path):
     if not toml_path.is_file():
         return None
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    backup = etc_dir / f'frps.toml.pre-frp-auto-deploy-{stamp}'
+    backup = etc_dir / f'frps.toml.pre-drlink-{stamp}'
     if backup.exists():
-        backup = etc_dir / f'frps.toml.pre-frp-auto-deploy-{stamp}-{os.getpid()}'
+        backup = etc_dir / f'frps.toml.pre-drlink-{stamp}-{os.getpid()}'
     data = toml_path.read_bytes()
     atomic_write_bytes(backup, data, 0o600)
     return backup

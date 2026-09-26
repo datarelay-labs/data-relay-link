@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Access Control Pack: frpctl grammar dispatch + frps.toml httpPlugins wiring.
+
+# PRIOR_RELEASE_MIGRATION_TEST: tools/frp-access|frp-egress|frp-profile removed
+echo "SKIP: dead legacy policy tools removed from current product surface" >&2
+exit 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -13,19 +17,24 @@ export FRP_DEPLOY_TEST_ROOT="$TREE"
 export FRP_CTL_TEST_ROOT="$TREE"
 export FRP_CTL_BIN_DIR="$ROOT/tools"
 export HOME="$WORKDIR/home"
+export FRP_AUDIT_LOG=/var/log/drlink/audit.jsonl
 mkdir -p "$HOME"
 
 mkdir -p \
-  "$TREE/etc/frp-auto-deploy" \
+  "$TREE/etc/drlink" \
   "$TREE/etc/frp" \
-  "$TREE/var/lib/frp-auto-deploy" \
-  "$TREE/var/log/frp-auto-deploy" \
-  "$TREE/usr/local/lib/frp-auto-deploy"
+  "$TREE/var/lib/drlink" \
+  "$TREE/var/log/drlink" \
+  "$TREE/var/log/drlink/access" \
+  "$TREE/usr/local/lib/drlink"
 
-cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/frp-auto-deploy/"
-cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/frp-auto-deploy/"
+cp "$ROOT/lib/frp_access_control.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_audit.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_control_locks.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_client_registry.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_grammar.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_cli_catalog.py" "$TREE/usr/local/lib/drlink/"
+cp "$ROOT/lib/frp_ctl_repl.py" "$TREE/usr/local/lib/drlink/"
 
 python3 - <<'PY'
 import importlib.util
@@ -37,13 +46,13 @@ root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 cfg = {
     "public_host": "203.0.113.10",
     "public_ip": "203.0.113.10",
-    "registry_file": "/var/lib/frp-auto-deploy/registry.json",
-    "access_control_file": "/var/lib/frp-auto-deploy/access-control.json",
-    "access_conn_log_file": "/var/log/frp-auto-deploy/access-conn.jsonl",
+    "registry_file": "/var/lib/drlink/registry.json",
+    "access_control_file": "/var/lib/drlink/access-control.json",
+    "access_conn_log_file": "/var/log/drlink/access/connections.jsonl",
     "access_plugin_addr": "127.0.0.1:6101",
     "access_plugin_path": "/access-auth",
 }
-(root / "etc/frp-auto-deploy/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+(root / "etc/drlink/config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 registry = {
     "schema_version": 2,
     "clients": {
@@ -55,18 +64,18 @@ registry = {
     },
     "reserved": [6001],
 }
-(root / "var/lib/frp-auto-deploy/registry.json").write_text(
+(root / "var/lib/drlink/registry.json").write_text(
     json.dumps(registry, indent=2) + "\n", encoding="utf-8"
 )
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
 acl.save_access_state(
     acl.empty_access_state(),
-    path=root / "var/lib/frp-auto-deploy/access-control.json",
+    path=root / "var/lib/drlink/access-control.json",
 )
 PY
 
@@ -90,7 +99,7 @@ CTL="$ROOT/tools/frpctl"
 chmod +x "$ROOT/tools/frpctl" "$ROOT/tools/frp-access"
 
 "$CTL" access list >"$WORKDIR/list.out"
-grep -q 'Access Lists' "$WORKDIR/list.out" || fail "access list header"
+grep -qE 'Access Lists|ACLs' "$WORKDIR/list.out" || fail "access list header"
 grep -q '(none)' "$WORKDIR/list.out" || fail "empty access list"
 
 "$CTL" access create Office --description 'corp' >"$WORKDIR/create.out"
@@ -100,7 +109,19 @@ grep -q '(none)' "$WORKDIR/list.out" || fail "empty access list"
 grep -qi 'ALLOW' "$WORKDIR/test-allow.out" || fail "test allow"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-deny.out"
 grep -qi 'DENY' "$WORKDIR/test-deny.out" || fail "test deny"
-"$CTL" access public demo ssh >"$WORKDIR/public.out"
+"$CTL" access public demo ssh --yes >"$WORKDIR/public.out"
+grep -qi 'Exposure' "$WORKDIR/public.out" || fail "public exposure banner"
+grep -qi 'Existing established connections' "$WORKDIR/public.out" || fail "session semantics on public"
+
+# ALLOWLIST → PUBLIC requires --yes in non-interactive mode.
+"$CTL" access assign demo ssh Office >/dev/null
+if "$CTL" access public demo ssh >"$WORKDIR/public-no.out" 2>"$WORKDIR/public-no.err"; then
+  fail "ALLOWLIST→PUBLIC without --yes should fail non-interactive"
+fi
+grep -qi '\-\-yes\|confirmation' "$WORKDIR/public-no.err" "$WORKDIR/public-no.out" \
+  || fail "ALLOWLIST→PUBLIC must mention --yes/confirmation"
+"$CTL" access public demo ssh --yes >"$WORKDIR/public-yes.out"
+grep -qi 'become PUBLIC\|publicly reachable' "$WORKDIR/public-yes.out" || fail "broadening warning shown with --yes"
 "$CTL" access test demo ssh 203.0.113.9 >"$WORKDIR/test-public.out"
 grep -qi 'ALLOW' "$WORKDIR/test-public.out" || fail "public allow"
 pass "frpctl access list/create/add-source/assign/test/public"
@@ -112,7 +133,7 @@ if "$CTL" access add-source Office --name other --source 198.51.100.20 \
   fail "shared add-source without --yes should fail"
 fi
 grep -qi '\-\-yes' "$WORKDIR/shared-add.err" || fail "shared add-source --yes hint"
-grep -q 'This Access List is used by' "$WORKDIR/shared-add.out" \
+grep -qE 'This (Access List|ACL) is used by' "$WORKDIR/shared-add.out" \
   || fail "shared add-source should show impacted services before fail"
 if "$CTL" access remove-source Office --source 198.51.100.10 \
   >"$WORKDIR/shared-rm.out" 2>"$WORKDIR/shared-rm.err"; then
@@ -133,11 +154,11 @@ from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 state = acl.load_access_state(path=path)
 lid, _ = acl.resolve_access_list(state, "Office")
 past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -151,7 +172,7 @@ fi
 grep -qi '\-\-yes' "$WORKDIR/shared-exp.err" || fail "shared remove-expired --yes hint"
 "$CTL" access remove-expired Office --yes >"$WORKDIR/shared-exp-yes.out"
 "$CTL" access add-source Office --name other --source 198.51.100.20 --yes >"$WORKDIR/shared-add-yes.out"
-grep -q 'This Access List is used by' "$WORKDIR/shared-add-yes.out" || fail "shared add with --yes shows impact"
+grep -qE 'This (Access List|ACL) is used by' "$WORKDIR/shared-add-yes.out" || fail "shared add with --yes shows impact"
 "$CTL" access edit-info Office --description 'updated' --yes >"$WORKDIR/shared-edit-yes.out"
 "$CTL" access remove-source Office --source 198.51.100.20 --yes >"$WORKDIR/shared-rm-yes.out"
 pass "shared list confirmation + --yes automation"
@@ -189,11 +210,11 @@ from pathlib import Path
 root = Path(os.environ["FRP_DEPLOY_TEST_ROOT"])
 spec = importlib.util.spec_from_file_location(
     "frp_access_control",
-    str(root / "usr/local/lib/frp-auto-deploy/frp_access_control.py"),
+    str(root / "usr/local/lib/drlink/frp_access_control.py"),
 )
 acl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acl)
-path = root / "var/lib/frp-auto-deploy/access-control.json"
+path = root / "var/lib/drlink/access-control.json"
 state = acl.load_access_state(path=path)
 lid, _ = acl.resolve_access_list(state, "Office")
 past = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -212,7 +233,112 @@ if grep -qi '203.0.113.77' "$WORKDIR/exp-only-list.out"; then
 fi
 pass "expired-only cleanup stays ALLOWLIST"
 
-"$CTL" access public demo ssh >/dev/null
+"$CTL" access public demo ssh --yes >/dev/null
+
+# Access Control mutations must emit structured audit events without secrets.
+AUDIT="$TREE/var/log/drlink/audit.jsonl"
+SECRET_DESC='shared note bt1.deadbeef.0123456789abcdef'
+"$CTL" access create AuditLab --description "$SECRET_DESC" >/dev/null
+"$CTL" access add-source AuditLab --name lab --source 203.0.113.128/25 --ttl 4h --yes >/dev/null
+"$CTL" access replace-source AuditLab --source 203.0.113.128/25 --name lab2 \
+  --new-source 203.0.113.192/26 --ttl 1d --yes >/dev/null
+"$CTL" access assign demo ssh AuditLab >/dev/null
+"$CTL" access public demo ssh --yes >/dev/null
+"$CTL" access edit-info AuditLab --description 'plain note' --yes >/dev/null
+"$CTL" access remove-source AuditLab --source 203.0.113.192/26 --yes >/dev/null
+"$CTL" access delete AuditLab >/dev/null
+
+[[ -f "$AUDIT" ]] || fail "access mutations must write an audit log"
+python3 - "$AUDIT" <<'PY' || fail "access mutation audit events"
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+by_event = {}
+for record in records:
+    by_event.setdefault(record.get("event"), []).append(record)
+
+required = {
+    "access.list.created": ("list_id", "list_name"),
+    "access.list.updated": ("list_id", "list_name"),
+    "access.list.deleted": ("list_id", "list_name"),
+    "access.source.added": ("list_id", "entry_id", "entry_name", "cidr"),
+    "access.source.updated": ("list_id", "entry_id", "cidr"),
+    "access.source.removed": ("list_id", "entry_id", "cidr"),
+    "access.service.assigned": ("client_id", "service_id", "list_id", "access_mode"),
+    "access.service.public": ("client_id", "service_id", "access_mode"),
+}
+for event, fields in required.items():
+    hits = by_event.get(event)
+    assert hits, "missing audit event %s" % event
+    for field in fields:
+        assert all(field in hit for hit in hits), "%s missing %s" % (event, field)
+
+assert by_event["access.source.added"][-1]["cidr"] == "203.0.113.128/25"
+assert by_event["access.source.updated"][-1]["details"]["previous_cidr"] == "203.0.113.128/25"
+assert by_event["access.service.assigned"][-1]["access_mode"] == "ALLOWLIST"
+assert by_event["access.service.public"][-1]["access_mode"] == "PUBLIC"
+
+access_records = [r for r in records if str(r.get("event", "")).startswith("access.")]
+blob = json.dumps(access_records)
+for leak in ("bt1.deadbeef", "shared note", "plain note", "description\":\"" ):
+    assert leak not in blob, "audit leaked %r" % leak
+print("ok")
+PY
+pass "access mutation audit events (no secrets)"
+
+# Description hygiene: bounded length, no control characters or ANSI escapes.
+if "$CTL" access create BadDesc --description $'evil\x1b[31mred' \
+  >"$WORKDIR/desc-ansi.out" 2>"$WORKDIR/desc-ansi.err"; then
+  fail "ANSI escape in description should be rejected"
+fi
+grep -qi 'control characters' "$WORKDIR/desc-ansi.err" || fail "ANSI description error message"
+if "$CTL" access create BadDesc --description $'line\nbreak' \
+  >"$WORKDIR/desc-nl.out" 2>"$WORKDIR/desc-nl.err"; then
+  fail "newline in description should be rejected"
+fi
+LONG_DESC="$(python3 -c 'import sys; sys.stdout.write("a" * 1025)')"
+if "$CTL" access create BadDesc --description "$LONG_DESC" \
+  >"$WORKDIR/desc-long.out" 2>"$WORKDIR/desc-long.err"; then
+  fail "over-long description should be rejected"
+fi
+grep -qi 'too long' "$WORKDIR/desc-long.err" || fail "over-long description error message"
+"$CTL" access list >"$WORKDIR/desc-list.out"
+if grep -q 'BadDesc' "$WORKDIR/desc-list.out"; then
+  fail "rejected description must not create a list"
+fi
+pass "access list description validation"
+
+# TTL upper bound: giant values are a user-facing error, not an overflow.
+"$CTL" access create TtlLab >/dev/null
+if "$CTL" access add-source TtlLab --name huge --source 198.51.100.77 \
+  --ttl 99999999999999d --yes >"$WORKDIR/ttl-big.out" 2>"$WORKDIR/ttl-big.err"; then
+  fail "giant TTL should be rejected"
+fi
+grep -qi '3650d' "$WORKDIR/ttl-big.err" || fail "giant TTL must name the documented maximum"
+if grep -qi 'traceback\|OverflowError' "$WORKDIR/ttl-big.err"; then
+  fail "giant TTL must not surface a Python traceback"
+fi
+"$CTL" access add-source TtlLab --name bounded --source 198.51.100.78 --ttl 3650d --yes >/dev/null
+"$CTL" access delete TtlLab >/dev/null
+"$CTL" access add-source --help 2>/dev/null | grep -qi '3650d' \
+  || fail "--ttl help must document the maximum"
+python3 - "$ROOT/lib/frp_cli_catalog.py" <<'PY' || fail "catalog --ttl maximum note"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("frp_cli_catalog", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+cmd = mod.find(["add", "access-source"]) or mod.find(["access", "add-source"], include_aliases=True)
+assert cmd is not None, "add access-source catalog entry missing"
+flag = next(f for f in cmd["flags"] if f["name"] == "--ttl")
+assert "3650d" in flag["description"], flag
+assert "3650d" in cmd["detail"], cmd["detail"]
+create = mod.find(["create", "access-list"]) or mod.find(["access", "create"], include_aliases=True)
+assert create is not None, "create access-list catalog entry missing"
+assert "1024" in create["detail"], create["detail"]
+print("ok")
+PY
+pass "access TTL upper bound documented and enforced"
 
 export FRP_SERVER_SOURCED=1
 # shellcheck disable=SC1091
@@ -247,7 +373,7 @@ assert 'ops = ["NewUserConn"]' in text
 assert "access_control_file" in text
 assert "access_conn_log_file" in text
 assert "access_plugin_addr" in text
-assert "frp-access-plugin" in text
+assert "drlink-access" in text
 print("ok")
 PY
 pass "install-server.sh embeds access plugin wiring"

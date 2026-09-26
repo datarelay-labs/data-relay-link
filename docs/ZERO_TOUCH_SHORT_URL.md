@@ -4,14 +4,36 @@ Additive Zero-Touch UX after v2.1.2. When an operator configures a publicly
 trusted bootstrap hostname and reverse proxy, enrollment can use:
 
 ```bash
-curl -fsSL https://bootstrap.example.com/i/<opaque-ticket> | sudo bash
+curl -fsSL https://bootstrap.example.com/i/<22-char-token>|sudo bash
 ```
 
-When `bootstrap_hostname` is unset, the v2.1.2 transitional command remains:
+The value in `/i/<22-char-token>` is a short-URL lookup handle only. Issuance
+still creates the internal `bt1.<id>.<secret>` credential (256-bit secret,
+hashed at rest). `GET /i/<handle>` serves a stage-1 script that carries that
+internal `bt1`. Direct `/bootstrap/redeem` accepts `bt1` only. The raw `bt1` is
+not stored in plaintext. The server keeps an OpenSSL AES-256-CBC copy
+with a PBKDF2/HMAC encrypt-then-MAC, recovered from the server token or, when
+no token is configured, from mode-0600 `bootstrap/bt1-wrap.key`. Existing
+`bt1` links remain accepted until they expire.
+The command omits shell quotes only when the hostname and credential are
+limited to shell-safe URL characters. `-fsSL`, HTTPS, `/i/`, and `sudo bash`
+stay in the command. On `remote.xdr.ooo` that form is 68 characters.
 
-```bash
-curl -fsSL <immutable-installer> | sudo bash -s -- 'zt1.<opaque>'
-```
+The Windows one-line is a direct elevated PowerShell command. It downloads
+`/i/<handle>?platform=windows` with explicit `curl.exe`, checks the exact
+stage-1 SHA256, then runs `powershell.exe -File`. It does not use `irm | iex`.
+On `remote.xdr.ooo` that launcher is 420 characters. The expected digest is
+frozen with the non-secret renderer inputs at issuance.
+
+When `bootstrap_hostname` is unset, the enrollment hostname presents the
+project private CA. The advertised command still fetches
+`https://<public-url-host>/i/<token>` in one line, but it embeds that public
+CA and verifies TLS with `--cacert`. It does not use `--insecure`, and a fresh
+client does not need a preinstalled CA. A distinct `bootstrap_hostname` remains
+the publicly trusted edge and keeps the stock one-liner above.
+
+IP-only public identity, with no DNS short-URL host, still uses the `zt1`
+package command.
 
 ## Trust boundary
 
@@ -24,7 +46,7 @@ Operator reverse proxy (Caddy / nginx / LB)
    |
    | private / loopback upstream
    v
-FRP Auto Deploy allocator
+Data Relay Link allocator
    |
    +-- GET  /i/<opaque>          generic bootstrap script (no ticket consume)
    +-- GET  /ca.crt              Private CA certificate (existing)
@@ -35,20 +57,20 @@ after enrollment:
 
 Client
    |
-   | existing FRP Auto Deploy Private CA
+   | existing Data Relay Link Private CA
    v
 Management plane
 ```
 
-FRP Auto Deploy does **not** issue, renew, or store the public bootstrap
+Data Relay Link does **not** issue, renew, or store the public bootstrap
 certificate. The operator owns DNS, public TLS, and the reverse proxy.
 
 ## Configuration
 
 ```bash
-sudo frpctl set server bootstrap-hostname bootstrap.example.com
-sudo frpctl unset server bootstrap-hostname
-sudo frpctl show server
+sudo drlink server set bootstrap-hostname bootstrap.example.com
+sudo drlink server unset bootstrap-hostname
+sudo drlink server status
 ```
 
 `bootstrap_hostname` is separate from `public_hostname`:
@@ -68,7 +90,7 @@ ports, configure NAT, invoke ACME, or restart FRP services.
 3. Renew the public certificate
 4. Proxy only the required allocator paths (see below)
 
-## FRP Auto Deploy responsibilities
+## Data Relay Link responsibilities
 
 1. Serve `GET /i/<opaque-ticket>`
 2. Validate tickets without consuming them on GET
@@ -163,7 +185,7 @@ server {
 
 If the operator enables Caddy access logging, `/i/<ticket>` **must** be excluded
 or redacted. The complete short URL is a short-lived credential; raw URI logging
-at the operator edge defeats allocator-side redaction. FRP Auto Deploy does not
+at the operator edge defeats allocator-side redaction. Data Relay Link does not
 manage the reverse proxy — access-log policy remains an operator responsibility.
 
 ```caddy
@@ -198,10 +220,36 @@ public bootstrap hostname. Do not put `curl -k` in client bootstrap commands.
 ```text
 GET /i/<ticket>          → no consume, no machine bind
 POST /bootstrap/redeem   → first-machine bind
-POST /enroll success     → completed_at (single-use)
+POST /enroll success     → atomic consume / completed_at (single-use)
 ```
 
 Treat `/i/<opaque-ticket>` as sensitive until used, expired, or revoked.
+
+### v2.4 stable bounded issuance contract
+
+Configuration/deployment intent and ticket issuance are separate. Applying a `ConfigurationBundle` may create enrollment plans but creates **zero** raw Zero-Touch tickets.
+
+Server-enforced limits:
+
+```text
+max tickets per issuance request = 10
+max active unused tickets        = 10
+use count per ticket              = 1
+default TTL                       = 1 hour
+maximum TTL                       = 24 hours
+```
+
+If 3 valid unused tickets already exist, the next issuance may create at most 7.
+
+Each ticket is unique and bound to one intended enrollment context. A reusable shared credential with a count of 10 is not allowed.
+
+Raw ticket/install URL is shown once at issuance. Persistent server state stores the verifier/hash and non-secret lifecycle metadata, not a redisplayable raw ticket.
+
+Successful enrollment atomically consumes the credential so concurrent double-use cannot create two Clients. Expired/revoked tickets leave the active-unused count. Ticket expiry/revocation never disconnects a Client that has already completed enrollment.
+
+Reinstall/recovery never reuses a consumed ticket; use the supported recovery/re-enrollment flow.
+
+YAML fields, hidden CLI flags, or APIs cannot raise these server-side ceilings.
 
 ## v2.1.3 Real E2E evidence
 

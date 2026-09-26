@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Assert release-manifest.artifacts[*].sha256 == SHA256SUMS[path] == file SHA256.
-# Excludes self-referential metadata (SHA256SUMS / release-manifest.json).
+# Excludes derived release metadata (SHA256SUMS, release-manifest.json,
+# dist/sbom.spdx.json), which is never checksummed into SHA256SUMS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -35,7 +36,7 @@ for name, meta in artifacts.items():
     path = str(meta.get('path') or '').strip()
     if not path:
         continue
-    if path in ('SHA256SUMS', 'release-manifest.json'):
+    if path in ('SHA256SUMS', 'release-manifest.json', 'dist/sbom.spdx.json'):
         continue
     want = str(meta.get('sha256') or '').strip().lower()
     if not want:

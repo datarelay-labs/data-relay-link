@@ -10,12 +10,11 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
 import os
-import secrets
 import sys
 from pathlib import Path
 
 ROOT = os.environ.get('FRP_DEPLOY_TEST_ROOT', '')
-CONFIG = Path(ROOT + '/etc/frp-auto-deploy/config.json')
+CONFIG = Path(ROOT + '/etc/drlink/config.json')
 
 
 def load_create_client():
@@ -58,7 +57,7 @@ def _audit_emit(event, **kwargs):
         here = Path(__file__).resolve()
         for path in (
             here.parent.parent / 'lib' / 'frp_audit.py',
-            Path('/usr/local/lib/frp-auto-deploy/frp_audit.py'),
+            Path('/usr/local/lib/drlink/frp_audit.py'),
         ):
             if path.is_file():
                 spec = importlib.util.spec_from_file_location('frp_audit', str(path))
@@ -70,17 +69,6 @@ def _audit_emit(event, **kwargs):
         return
 
 
-def _revoke_created(enrollments, bootstrap, created):
-    for item in created:
-        for path in (item.get('ticket_path'), item.get('enroll_path')):
-            if path is None:
-                continue
-            try:
-                Path(path).unlink()
-            except OSError:
-                pass
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Create independent one-time enrollment commands')
     parser.add_argument('csv_path', nargs='?', metavar='CSV', help='CSV file with label,ssh_user,note columns')
@@ -89,26 +77,34 @@ def main(argv=None):
     parser.add_argument('--label-prefix', default='client', help='label prefix for --count')
     parser.add_argument('--ssh-user', default='', help='SSH user for every --count row')
     parser.add_argument('--note', default='', help='note for every --count row')
-    parser.add_argument('--ttl', type=int, default=600)
+    parser.add_argument(
+        '--ttl',
+        default='1h',
+        metavar='DURATION|SECONDS',
+        help='Zero-Touch lifetime: duration (30m|1h|4h) or seconds (default 1h, maximum 24h)',
+    )
     args = parser.parse_args(argv)
     csv_path = args.csv_option or args.csv_path
     if bool(args.count is not None) == bool(csv_path):
         parser.error('use exactly one of --count N or CSV input')
-    if args.ttl <= 0:
-        parser.error('--ttl must be positive')
-    if args.count is not None and (args.count < 1 or args.count > 50):
-        parser.error('--count must be between 1 and 50 (product scale target)')
+    if args.count is not None and (args.count < 1 or args.count > 10):
+        parser.error('--count must be between 1 and 10 (ZERO_TOUCH_MAX_PER_ISSUE)')
 
     create = load_create_client()
+    try:
+        ttl = create.parse_enrollment_ttl(args.ttl, zero_touch=True)
+    except ValueError as exc:
+        parser.error('--ttl: %s' % exc)
     cfg = json.loads(CONFIG.read_text(encoding='utf-8'))
     allocator_url = str(cfg.get('allocator_public_url') or '').strip()
     installer = str(cfg.get('client_installer_url') or '').strip()
-    ca_path = remap(cfg.get('tls_ca_cert') or '/etc/frp-auto-deploy/pki/ca.crt')
+    ca_path = remap(cfg.get('tls_ca_cert') or '/etc/drlink/pki/ca.crt')
     ca_fp = create.fingerprint_from_cert(ca_path)
     if not allocator_url.lower().startswith('https://') or not installer or not ca_fp:
         raise SystemExit('ERROR: secure allocator URL, installer URL, and CA fingerprint are required')
-    enrollments = remap(cfg['enrollments_dir'])
-    bootstrap = remap(cfg.get('bootstrap_dir') or str(Path(cfg['enrollments_dir']).parent / 'bootstrap'))
+    server_cfg = create.remapped_server_cfg(cfg)
+    enrollments = Path(server_cfg['enrollments_dir'])
+    bootstrap = Path(server_cfg['bootstrap_dir'])
     allocator = create.load_allocator()
     if allocator is None:
         raise SystemExit('ERROR: allocator module is missing')
@@ -127,8 +123,8 @@ def main(argv=None):
             rows = [(row.get('label'), row.get('ssh_user'), row.get('note')) for row in reader]
         if not rows:
             parser.error('CSV contains no enrollment rows')
-        if len(rows) > 50:
-            parser.error('CSV enrollment batch must be at most 50 rows (product scale target)')
+        if len(rows) > 10:
+            parser.error('CSV Zero-Touch batch must be at most 10 rows (ZERO_TOUCH_MAX_PER_ISSUE)')
 
     validated = []
     for index, raw in enumerate(rows):
@@ -145,8 +141,9 @@ def main(argv=None):
         validated.append((label, ssh_user, note, services))
 
     labels = [item[0] for item in validated if item[0]]
-    if len(labels) != len(set(labels)):
-        raise SystemExit('ERROR: duplicate labels in this batch')
+    lowered = [str(x).strip().lower() for x in labels]
+    if len(lowered) != len(set(lowered)):
+        raise SystemExit('ERROR: duplicate labels in this batch (case-insensitive)')
 
     if not sys.stdout.isatty():
         print(
@@ -155,31 +152,31 @@ def main(argv=None):
             file=sys.stderr,
         )
 
-    batch_id = secrets.token_hex(8)
-    created = []
-    issued = []
-    fail_after = int(os.environ.get('FRP_ENROLL_BULK_HOOK_FAIL_AFTER', '0') or '0')
+    batch_rows = [
+        {'services': services, 'note': note, 'label': label}
+        for label, ssh_user, note, services in validated
+    ]
     try:
-        for index, (label, ssh_user, note, services) in enumerate(validated):
-            if fail_after and index + 1 > fail_after:
-                raise RuntimeError('simulated mid-batch issuance failure')
-            row_ttl = args.ttl + index
-            ticket, enroll_record, ticket_record = allocator.issue_bootstrap_ticket(
-                enrollments, bootstrap, services, row_ttl, note, label=label
-            )
+        batch_id, issued_pairs = allocator.issue_bootstrap_ticket_batch(
+            enrollments,
+            bootstrap,
+            batch_rows,
+            ttl,
+            cfg=server_cfg,
+        )
+    except Exception as exc:
+        name = type(exc).__name__
+        if name == 'ZeroTouchCapacityError' or 'MAX_ISSUABLE' in str(exc):
+            raise SystemExit('ERROR: %s' % exc)
+        raise SystemExit('ERROR: bulk enrollment failed: %s' % exc)
+
+    issued = []
+    try:
+        for index, (ticket, enroll_record, ticket_record) in enumerate(issued_pairs):
+            label, ssh_user, note, services = validated[index]
             ticket_id = str(ticket_record.get('id') or '')
-            enroll_id = str(enroll_record.get('id') or '')
-            ticket_path = bootstrap / (ticket_id + '.json') if ticket_id else None
-            enroll_path = enrollments / (enroll_id + '.json') if enroll_id else None
-            if ticket_path and ticket_path.is_file():
-                record = json.loads(ticket_path.read_text(encoding='utf-8'))
-                record['batch_id'] = batch_id
-                ticket_path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-            created.append({
-                'ticket_path': ticket_path,
-                'enroll_path': enroll_path,
-                'ticket_id': ticket_id,
-            })
+            if isinstance(ticket_record, dict):
+                ticket_record.pop('_short_handle', None)
             try:
                 package = create.encode_zero_touch_package(allocator_url, ca_fp, ticket)
                 command = 'curl -fsSL %s | sudo bash -s -- %s' % (
@@ -205,11 +202,41 @@ def main(argv=None):
                 'enrollment.created',
                 details={'label': label, 'batch_id': batch_id, 'ticket_id': ticket_id},
             )
+            hook_after = int(os.environ.get('FRP_ENROLL_BULK_HOOK_FAIL_AFTER') or '0')
+            if hook_after and len(issued) >= hook_after:
+                raise RuntimeError('simulated bulk mid-batch failure')
     except Exception as exc:
-        _revoke_created(enrollments, bootstrap, created)
-        _audit_emit('enrollment.bulk_failed', details={'batch_id': batch_id, 'created': len(created)})
+        allocator.revoke_bootstrap_tickets_by_batch(bootstrap, batch_id)
+        # Commands were never emitted; remove this unused batch so rollback
+        # leaves no leftover Zero-Touch pairs.
+        for path in list(bootstrap.glob('*.json')):
+            try:
+                rec = json.loads(path.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            if str(rec.get('batch_id') or '') != str(batch_id):
+                continue
+            enroll_id = str(rec.get('enrollment_id') or rec.get('id') or '')
+            handle_hash = str(rec.get('short_handle_hash') or '')
+            index_path = allocator.short_handle_index_path(bootstrap, handle_hash[:16])
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            if index_path is not None:
+                try:
+                    index_path.unlink()
+                except OSError:
+                    pass
+            if enroll_id:
+                try:
+                    (enrollments / (enroll_id + '.json')).unlink()
+                except OSError:
+                    pass
+        _audit_emit('enrollment.bulk_failed', details={'batch_id': batch_id, 'created': len(issued)})
         raise SystemExit(f'ERROR: bulk enrollment failed; issued tickets from this batch were revoked: {exc}')
 
+    print('This credential will not be shown again.', file=sys.stderr)
     print('label,expires,bootstrap_command')
     for label, expires, command in issued:
         print(','.join([

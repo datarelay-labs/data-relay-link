@@ -1,6 +1,8 @@
 # Future upstream FRP upgrades
 
-frp-auto-deploy pins a **tested** FRP version. It never installs GitHub
+> **Scope:** Internal Relay Engine qualification and compatibility guide. Public Data Relay Link operators use the `drlink` update commands documented in `UPGRADE.md`. Legacy `FRP_*` environment variables or `frp-*` helper names in this file are engineering/compatibility mechanisms, not canonical public CLI vocabulary.
+
+Data Relay Link pins a **tested** FRP version. It never installs GitHub
 `latest` automatically.
 
 Current pin: see `VERSION` (`FRP_VERSION`) and `lib/frp-common.sh`
@@ -60,14 +62,14 @@ export FRP_NEW_SHA256_ARM64=...
 ./scripts/secret-scan.sh
 ```
 
-Install on a server only with `sudo frpctl frp-update`, which installs the
+Install on a server only with `sudo drlink system update engine`, which installs the
 **pinned** version, never upstream latest.
 
 Informational check:
 
 ```bash
-sudo frpctl upstream
-# or: frp-upstream
+sudo drlink system update check-engine
+# implementation tool: frp-upstream
 ```
 
 ## How to perform OCI E2E
@@ -80,7 +82,7 @@ operator cycle PASSes.
 Follow `docs/RELEASE_CHECKLIST.md` and `docs/RELEASE_VALIDATION.md`.
 Do not move or rewrite the frozen `v2.1.0` or `v2.1.1` tags.
 
-## Product upgrade (FRP Auto Deploy)
+## Product upgrade (Data Relay Link)
 
 Product upgrade is separate from upstream FRP binary upgrade.
 
@@ -150,7 +152,7 @@ One-time verified bridge (development line: `channel=dev`,
 
 ```bash
 COMMIT=<immutable-commit-sha>
-BASE="https://raw.githubusercontent.com/xdr-labs/frp-auto-deploy/${COMMIT}"
+BASE="https://raw.githubusercontent.com/datarelay-labs/datarelay-link/${COMMIT}"
 curl -fsSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 curl -fsSL "${BASE}/dist/bootstrap-client.sh" -o bootstrap-client.sh
 expected="$(awk '$2=="dist/bootstrap-client.sh" {print $1; exit}' SHA256SUMS)"
@@ -160,7 +162,7 @@ sudo env FRP_RELEASE_CHANNEL=dev FRP_EXPECTED_SOURCE_REF=main \
   FRP_BUNDLE_SHA256="$actual" bash bootstrap-client.sh --upgrade
 ```
 
-`sudo frpctl update --check` is read-only. If it reports
+`sudo drlink system update engine --check` is read-only. If it reports
 `LEGACY_CLIENT_SECURE_BRIDGE_REQUIRED` or `Legacy secure bridge required`,
 do not mutate the host until the procedure above succeeds.
 
@@ -171,7 +173,7 @@ a verified candidate whose manifest is `dev` / `main`.
 
 ## Server project-update build identity
 
-`sudo frpctl project-update --check` is read-only. Availability is not decided
+`sudo drlink system update product` is read-only. Availability is not decided
 from `PROJECT_VERSION` alone:
 
 - installed version **less than** candidate → update available
@@ -186,6 +188,40 @@ digest). That digest is not a substitute for SHA256SUMS verification.
 
 ## Rollback
 
-- Server FRP binary: `frp-update` restores the previous binary on health failure.
-- Server project tools: use `frp-project-update` rollback / restore from backup.
-- Disaster recovery: `sudo frpctl restore <backup>` after a validated backup.
+- Server FRP binary: `drlink system update engine` (implementation: `frp-update`) restores the previous binary on health failure.
+- Server project tools: use `drlink system update product` rollback / restore from backup (implementation: `frp-project-update`).
+- Disaster recovery: `sudo drlink restore backup <backup>` after a validated backup.
+
+## Future release upgrade suite (from v2.3.0 prior-stable baseline)
+
+The documented stable baseline is immutable tag `v2.3.0`. `v2.2.1` remains an
+older published release for historical and rollback evidence. `v2.3.1` was not
+manufactured and is not an upgrade baseline. Do not exclude a prior-stable
+upgrade gate from a final PASS.
+
+Use the sanitized golden baseline produced by production-realistic
+qualification (`e2e-reports/v2.3.0-golden-upgrade-baseline/`) plus a full
+server backup retained in the lab (not committed). The live harness is
+`tests/run-v230-to-v240-upgrade-e2e.sh`.
+
+### Scenarios (EVERY next release)
+
+1. **v2.3.0 → next** server project upgrade, then each OS client upgrade.
+2. **Mixed-version rolling**: new server + old clients; upgrade one client at a time.
+3. **Upgrade under traffic**: continuous SSH/HTTP/Egress during server and client upgrades; measure downtime and reconnect.
+4. **Interrupted / bad upgrade**: network loss, download failure, process kill, bad artifact, health-check failure → safe rollback; old version usable; state preserved.
+5. **Backup → upgrade → restore**: backup on old version; upgrade; simulate issue; restore/recover; verify fleet.
+6. **Cross-version restore policy**: old backup → newer restore (supported if designed); newer backup → older must **fail closed**.
+7. **Disaster recovery**: Server A backup → fresh Server B install+restore with same public endpoint; existing clients reconnect without reinstall.
+
+### Invariants
+
+```text
+client IDs unchanged
+machine IDs unchanged
+ports unchanged
+services unchanged
+groups/tags unchanged
+Access unchanged
+Egress unchanged
+```

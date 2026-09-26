@@ -12,7 +12,7 @@ FRP_CLIENT_BACKUP_KEEP="${FRP_CLIENT_BACKUP_KEEP:-5}"
 FRP_CLIENT_UPGRADE_BACKUP_KEEP="${FRP_CLIENT_UPGRADE_BACKUP_KEEP:-5}"
 
 # Defaults match VERSION. A sibling VERSION file overrides project/FRP versions.
-PROJECT_VERSION="${PROJECT_VERSION:-2.3.0}"
+PROJECT_VERSION="${PROJECT_VERSION:-2.4.0}"
 FRP_VERSION="${FRP_VERSION:-0.71.0}"
 _FRP_CLIENT_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_FRP_CLIENT_COMMON_DIR}/../VERSION" ]]; then
@@ -23,12 +23,12 @@ if [[ -z "${FRP_COMMON_LOADED:-}" ]]; then
   if [[ -f "${_FRP_CLIENT_COMMON_DIR}/frp-common.sh" ]]; then
     # shellcheck source=frp-common.sh
     . "${_FRP_CLIENT_COMMON_DIR}/frp-common.sh"
-  elif [[ -f /usr/local/lib/frp-auto-deploy/frp-common.sh ]]; then
+  elif [[ -f /usr/local/lib/drlink/frp-common.sh ]]; then
     # shellcheck disable=SC1091
-    . /usr/local/lib/frp-auto-deploy/frp-common.sh
-  elif [[ -f '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh' ]]; then
+    . /usr/local/lib/drlink/frp-common.sh
+  elif [[ -f '/Library/Application Support/drlink/lib/frp-common.sh' ]]; then
     # shellcheck disable=SC1091
-    . '/Library/Application Support/frp-auto-deploy/lib/frp-common.sh'
+    . '/Library/Application Support/drlink/lib/frp-common.sh'
   fi
 fi
 if [[ -z "${FRP_CLIENT_UPDATE_URL:-}" ]]; then
@@ -76,7 +76,7 @@ frp_client_pending_path() {
 }
 
 frp_client_draft_path() {
-  frp_client_path /var/lib/frp-auto-deploy/client-draft.json
+  frp_client_path /var/lib/drlink/client-draft.json
 }
 
 frp_client_identity_key_path() {
@@ -96,7 +96,7 @@ frp_pending_enroll_path() {
 }
 
 frp_allocator_ca_path() {
-  frp_client_path /etc/frp-auto-deploy/allocator-ca.crt
+  frp_client_path /etc/drlink/allocator-ca.crt
 }
 
 frp_valid_https_allocator_url() {
@@ -257,7 +257,7 @@ frp_bootstrap_allocator_ca() {
 
   if [[ -z "$expected" ]]; then
     echo "ERROR: allocator CA SHA256 fingerprint is required for first enrollment" >&2
-    echo "Set FRP_ALLOCATOR_CA_SHA256 from frp-create-client, or supply FRP_ALLOCATOR_CA_FILE." >&2
+    echo "Set FRP_ALLOCATOR_CA_SHA256 from sudo drlink set enrollment, or supply FRP_ALLOCATOR_CA_FILE." >&2
     return 1
   fi
   expected="$(frp_normalize_ca_fingerprint "$expected")" || {
@@ -366,7 +366,7 @@ frp_mgmt_auth_py() {
   for cand in \
     "$here/frp_mgmt_auth.py" \
     "$here/../lib/frp_mgmt_auth.py" \
-    /usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py
+    /usr/local/lib/drlink/frp_mgmt_auth.py
   do
     if [[ -f "$cand" ]]; then
       printf '%s' "$cand"
@@ -404,7 +404,7 @@ frp_health_check_py() {
   for cand in \
     "$here/frp_health_check.py" \
     "$here/../lib/frp_health_check.py" \
-    /usr/local/lib/frp-auto-deploy/frp_health_check.py
+    /usr/local/lib/drlink/frp_health_check.py
   do
     if [[ -f "$cand" ]]; then
       printf '%s' "$cand"
@@ -412,6 +412,32 @@ frp_health_check_py() {
     fi
   done
   echo "ERROR: missing frp_health_check.py" >&2
+  return 1
+}
+
+frp_access_control_py() {
+  local cand libdir here
+  libdir="$(frp_client_lib_dir)"
+  for cand in \
+    "${libdir}/frp_access_control.py" \
+    "${FRP_CLIENT_LIB:-}/frp_access_control.py"
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for cand in \
+    "$here/frp_access_control.py" \
+    "$here/../lib/frp_access_control.py" \
+    /usr/local/lib/drlink/frp_access_control.py
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -465,8 +491,8 @@ frp_identity_ensure() {
   if [[ "$status" == corrupt ]]; then
     echo "ERROR: this client's management identity is unusable." >&2
     echo "The local identity file exists but cannot be used." >&2
-    echo "Create a new Enrollment Code on the FRP server with sudo frp-create-client," >&2
-    echo "move the damaged identity aside, then re-enroll this client." >&2
+    echo "Create a new Enrollment Code on the Data Relay Link server with sudo drlink set client" >&2
+    echo "(or sudo drlink set enrollment), move the damaged identity aside, then re-enroll this client." >&2
     echo "Do not overwrite ${key} automatically." >&2
     return 1
   fi
@@ -576,15 +602,15 @@ PY
 }
 
 frp_client_lib_dir() {
-  frp_client_path /usr/local/lib/frp-auto-deploy
+  frp_client_path /usr/local/lib/drlink
 }
 
 frp_client_version_file() {
-  frp_client_path /etc/frp-auto-deploy/version
+  frp_client_path /etc/drlink/version
 }
 
 frp_client_upgrade_backup_root() {
-  frp_client_path /var/lib/frp-auto-deploy/client-upgrades
+  frp_client_path /var/lib/drlink/client-upgrades
 }
 
 frp_client_write_version_file() {
@@ -637,6 +663,52 @@ frp_client_installed_source_ref() {
     return 0
   fi
   printf '%s' "$v"
+}
+
+frp_client_provenance_token_equal() {
+  local left="$1" right="$2"
+  if [[ "$left" =~ ^[0-9a-fA-F]{40}$ && "$right" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    [[ "$(printf '%s' "$left" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$right" | tr '[:upper:]' '[:lower:]')" ]]
+    return
+  fi
+  [[ "$left" == "$right" ]]
+}
+
+# Exact validated candidate SHA is the applied commit. A checked-in development
+# manifest source_head intentionally lags that SHA, so it must not win.
+# Tag and RC refs take SOURCE_HEAD only from the artifact manifest.
+frp_client_candidate_source_head() {
+  local source="$1" candidate_ref="$2" head=""
+  if [[ "$candidate_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s' "$candidate_ref" | tr '[:upper:]' '[:lower:]'
+    return 0
+  fi
+  if [[ -f "${source}/release-manifest.json" ]]; then
+    head="$(python3 - "${source}/release-manifest.json" <<'PY'
+import json, re, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+head = str(data.get("source_head") or "").strip()
+if re.fullmatch(r"[0-9a-fA-F]{40}", head):
+    sys.stdout.write(head.lower())
+PY
+)" || head=""
+  fi
+  printf '%s' "$head"
+}
+
+# 0 when persisted SOURCE_REF/SOURCE_HEAD already match the validated candidate.
+frp_client_provenance_identity_matches() {
+  local installed_ref="$1" candidate_ref="$2" candidate_head="$3"
+  local installed_head=""
+  installed_head="$(frp_client_read_kv "$(frp_client_version_file)" SOURCE_HEAD)"
+  frp_client_provenance_token_equal "$installed_ref" "$candidate_ref" || return 1
+  if [[ "$candidate_head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    frp_client_provenance_token_equal "$installed_head" "$candidate_head" || return 1
+  fi
+  return 0
 }
 
 frp_client_installed_bundle_sha256() {
@@ -716,24 +788,128 @@ frp_client_report_identity() {
   echo "Target bundle SHA256      : ${target_bundle}"
 }
 
-frp_client_has_existing_install() {
-  if [[ -f "$(frp_client_state_path)" ]]; then
+frp_client_file_nonempty() {
+  [[ -s "$1" ]]
+}
+
+frp_client_has_enrolled_local_state() {
+  if frp_client_file_nonempty "$(frp_client_state_path)"; then
     return 0
   fi
-  if [[ -f "$(frp_client_toml_path)" && -f "$(frp_client_identity_key_path)" ]]; then
+  if frp_client_file_nonempty "$(frp_client_toml_path)" \
+    && frp_client_file_nonempty "$(frp_client_identity_key_path)"; then
     return 0
   fi
   return 1
+}
+
+frp_client_has_canonical_cli() {
+  [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]] \
+    || [[ -x "$(frp_client_path /usr/bin/drlink)" ]]
+}
+
+frp_client_has_frpc_runtime() {
+  [[ -x "$(frp_client_path /usr/local/bin/frpc)" ]]
+}
+
+frp_client_has_runtime_payload() {
+  [[ -f "$(frp_client_lib_dir)/frp-client-common.sh" ]] \
+    && [[ -f "$(frp_client_lib_dir)/frpctl" ]]
+}
+
+frp_client_requires_service_definition() {
+  # Do not require Linux systemd evidence in sandboxes, or on macOS/Windows.
+  if [[ -n "${FRP_CLIENT_TEST_ROOT:-}" || "${FRP_SKIP_SYSTEMD:-}" == "1" ]]; then
+    return 1
+  fi
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  local os=""
+  if declare -F frp_os >/dev/null 2>&1; then
+    os="$(frp_os)"
+  fi
+  [[ "$os" == "linux" || -z "$os" ]]
+}
+
+frp_client_has_service_definition() {
+  [[ -f "$(frp_client_path /etc/systemd/system/drlink-client.service)" ]]
+}
+
+frp_client_has_complete_product_runtime() {
+  frp_client_has_canonical_cli || return 1
+  frp_client_has_frpc_runtime || return 1
+  frp_client_has_runtime_payload || return 1
+  if frp_client_requires_service_definition; then
+    frp_client_has_service_definition || return 1
+  fi
+  return 0
+}
+
+# INSTALLED_COMPLETE: enrolled local state plus an operationally coherent
+# current Data Relay Link product runtime. State/config/identity alone are
+# never sufficient.
+frp_client_has_existing_install() {
+  frp_client_has_enrolled_local_state || return 1
+  frp_client_has_complete_product_runtime || return 1
+  return 0
 }
 
 frp_client_has_partial_install() {
   if frp_client_has_existing_install; then
     return 1
   fi
-  if [[ -f "$(frp_client_path /etc/systemd/system/frpc.service)" ]]; then
+  if frp_client_has_enrolled_local_state; then
+    return 0
+  fi
+  if frp_client_has_canonical_cli; then
+    return 0
+  fi
+  if frp_client_has_service_definition; then
+    return 0
+  fi
+  if frp_client_file_nonempty "$(frp_client_toml_path)" \
+    || frp_client_file_nonempty "$(frp_client_identity_key_path)" \
+    || frp_client_file_nonempty "$(frp_client_state_path)"; then
     return 0
   fi
   return 1
+}
+
+frp_client_install_class() {
+  if frp_client_has_existing_install; then
+    printf '%s\n' complete
+    return 0
+  fi
+  if frp_client_has_partial_install; then
+    printf '%s\n' partial
+    return 0
+  fi
+  printf '%s\n' none
+}
+
+frp_client_state_json_usable() {
+  local path
+  path="$(frp_client_state_path)"
+  [[ -s "$path" ]] || return 1
+  python3 - "$path" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(data, dict) else 1)
+PY
+}
+
+# Safe to restore missing product runtime without re-enrollment or identity
+# regeneration: committed local state, config, and identity are all present.
+frp_client_partial_is_safe_to_repair() {
+  frp_client_state_json_usable || return 1
+  frp_client_file_nonempty "$(frp_client_toml_path)" || return 1
+  frp_client_file_nonempty "$(frp_client_identity_key_path)" || return 1
+  return 0
 }
 
 frp_client_hook_log() {
@@ -924,9 +1100,8 @@ payload = {
   'preset': preset,
 }
 if preset == 'ssh':
-    if len(sys.argv) <= 6 or not sys.argv[6].strip():
-        raise SystemExit('ERROR: ssh_user is required for ssh services')
-    payload['ssh_user'] = sys.argv[6].strip()
+    if len(sys.argv) > 6 and sys.argv[6].strip():
+        payload['ssh_user'] = sys.argv[6].strip()
 print(json.dumps(payload))
 PY
 }
@@ -935,17 +1110,18 @@ frp_ux_intro() {
   cat <<'EOF'
 
 =========================================
- FRP Client Setup
+ Data Relay Link Client Setup
 =========================================
 
 This installer publishes services on this Linux system
-through your FRP server.
+through your Data Relay Link server.
 
 Before continuing, you need an Enrollment Code.
 
-Generate one on the FRP server with:
+Generate one on the Data Relay Link server with:
 
-  sudo frp-create-client
+  sudo drlink set client
+  # or: sudo drlink set enrollment
 
 The Enrollment Code is short-lived. Enter it only here.
 It authorizes this first enrollment (or a later recovery).
@@ -963,7 +1139,8 @@ EOF
 frp_ux_enrollment_help() {
   cat <<'EOF'
 Enrollment Code
-  Generated on the FRP server with: sudo frp-create-client
+  Generated on the Data Relay Link server with: sudo drlink set client
+  (or: sudo drlink set enrollment)
   Short-lived bootstrap/recovery credential. Entered interactively.
   Not stored. Not the FRP token.
   Needed for first enrollment, recovering a lost local identity,
@@ -1071,11 +1248,12 @@ EOF
 
 frp_ux_ssh_user_help() {
   cat <<'EOF'
-SSH user
-  Linux username shown in the generated SSH command.
+SSH user (optional connection example)
+  Linux username shown in the generated SSH command only.
 
   This does NOT create an operating-system account,
   change a password, or configure SSH authentication.
+  Leave blank to show <username> in connection examples.
 
 EOF
 }
@@ -1104,7 +1282,10 @@ Select the type of service you want to publish.
    Any other TCP service.
    Examples: Grafana :3000, API :8080, PostgreSQL :5432
 
-5) Back
+5) Use a Service Profile
+   Apply a Service Profile created on the server.
+
+6) Back
 
 For normal remote SSH access, choose 1.
 
@@ -1119,7 +1300,7 @@ frp_ux_empty_services_help() {
 No services have been configured yet.
 
 Choose "Add service" to select what you want to access
-through the FRP server.
+through the Data Relay Link server.
 
 Examples:
   SSH        - remote shell access
@@ -1131,12 +1312,16 @@ Examples:
 You may publish one or more services.
 SSH is optional.
 
+Initial onboarding requires at least one service.
+An enrolled client may later have zero published services
+after reservations are released.
+
 EOF
 }
 
 frp_ux_configured_services_help() {
   cat <<'EOF'
-The public port will be assigned automatically by the FRP server.
+The public port will be assigned automatically by the Data Relay Link server.
 
 You can add more services now, or install when finished.
 
@@ -1164,44 +1349,40 @@ frp_ux_print_all_guidance() {
 }
 
 frp_prompt_service_id() {
-  local default="$1"
-  local -n _frp_sid_out="$2"
+  local default="$1" out_var="$2"
   frp_ux_service_id_help "$default"
   echo
-  _frp_sid_out="$(read_tty "Service ID [${default}]: " "$default")"
+  # Bash 3.2 portable out-param (no nameref).
+  printf -v "$out_var" '%s' "$(read_tty "Service ID [${default}]: " "$default")"
 }
 
 frp_prompt_target_host() {
-  local default="${1:-127.0.0.1}"
-  local -n _frp_host_out="$2"
+  local default="${1:-127.0.0.1}" out_var="$2"
   frp_ux_target_host_help
-  _frp_host_out="$(read_tty "Target host [${default}]: " "$default")"
+  printf -v "$out_var" '%s' "$(read_tty "Target host [${default}]: " "$default")"
 }
 
 frp_prompt_target_port() {
-  local preset="$1" default="${2:-}"
-  local -n _frp_port_out="$3"
+  local preset="$1" default="${2:-}" out_var="$3"
   frp_ux_target_port_help "$preset"
   if [[ -n "$default" ]]; then
-    _frp_port_out="$(read_tty "Target port [${default}]: " "$default")"
+    printf -v "$out_var" '%s' "$(read_tty "Target port [${default}]: " "$default")"
   else
-    _frp_port_out="$(read_tty "Target port: " "")"
+    printf -v "$out_var" '%s' "$(read_tty "Target port: " "")"
   fi
 }
 
 frp_prompt_ssh_user() {
-  local -n _frp_user_out="$1"
+  local out_var="$1"
   local default="${2:-${FRP_SSH_USER:-}}"
-  _frp_user_out=""
+  local _frp_user_tmp=""
   frp_ux_ssh_user_help
-  while [[ -z "$_frp_user_out" ]]; do
-    if [[ -n "$default" ]]; then
-      _frp_user_out="$(read_tty "SSH user [${default}]: " "$default")"
-    else
-      _frp_user_out="$(read_tty "SSH user (required): ")"
-    fi
-    [[ -n "$_frp_user_out" ]] || echo "ERROR: SSH user is required." >&2
-  done
+  if [[ -n "$default" ]]; then
+    _frp_user_tmp="$(read_tty "SSH user [optional, ${default}]: " "$default")"
+  else
+    _frp_user_tmp="$(read_tty "SSH user [optional]: " "")"
+  fi
+  printf -v "$out_var" '%s' "$_frp_user_tmp"
 }
 
 frp_ux_prompt_new_service() {
@@ -1245,17 +1426,24 @@ frp_ux_prompt_new_service() {
         _frp_new_payload="$(service_payload custom "$sid" "$name" "$host" "$port")"
         ;;
       5)
+        # Signal guided Service Profile selection to the caller (frp-client).
         if [[ -n "$dest" ]]; then
-          local -n _frp_payload_back="$dest"
-          _frp_payload_back=""
+          printf -v "$dest" '%s' "__FRP_USE_SERVICE_PROFILE__"
+        else
+          printf '%s\n' "__FRP_USE_SERVICE_PROFILE__"
         fi
         return 0
         ;;
-      *) echo "ERROR: select 1-5" >&2; continue ;;
+      6)
+        if [[ -n "$dest" ]]; then
+          printf -v "$dest" '%s' ""
+        fi
+        return 0
+        ;;
+      *) echo "ERROR: select 1-6" >&2; continue ;;
     esac
     if [[ -n "$dest" ]]; then
-      local -n _frp_payload_out="$dest"
-      _frp_payload_out="$_frp_new_payload"
+      printf -v "$dest" '%s' "$_frp_new_payload"
     else
       printf '%s\n' "$_frp_new_payload"
     fi
@@ -1275,28 +1463,39 @@ print()
 print('Ready to install')
 print('================')
 print()
-print('The following services will be published:')
-print()
-for item in services:
-    name = item.get('name') or item.get('id')
-    preset = item.get('preset') or 'custom'
-    kind = labels.get(preset, 'Custom TCP')
-    print(name)
-    print(f"  Type        : {kind}")
-    print(f"  Target      : {item.get('local_ip')}:{item.get('local_port')}")
-    print('  Public port : assigned automatically')
+if not services:
+    print('No services will be published (management-only).')
     print()
-print('The public port is assigned automatically by the FRP server.')
-print('You do not enter an external/public port here.')
-print()
+    print('This machine will be enrolled and manageable, and no public port')
+    print('is reserved. Publish a service later with: sudo drlink')
+    print()
+else:
+    print('The following services will be published:')
+    print()
+    for item in services:
+        name = item.get('name') or item.get('id')
+        preset = item.get('preset') or 'custom'
+        kind = labels.get(preset, 'Custom TCP')
+        print(name)
+        print(f"  Type        : {kind}")
+        print(f"  Target      : {item.get('local_ip')}:{item.get('local_port')}")
+        print('  Public port : assigned automatically')
+        print()
+    print('The public port is assigned automatically by the Data Relay Link server.')
+    print('You do not enter an external/public port here.')
+    print()
 print('The installer will:')
 print()
 print(f'  - install FRP v{version}')
 print('  - create /etc/frp/frpc.toml')
 print('  - write /etc/frp/client-state.json')
-print('  - install the frpc systemd service')
-print('  - enable frpc at boot')
-print('  - start the FRP client')
+if services:
+    print('  - install the frpc systemd service')
+    print('  - enable drlink-client at boot')
+    print('  - start the FRP client')
+else:
+    print('  - install the frpc systemd service (left stopped)')
+    print('  - leave the FRP client stopped until a service is added')
 print()
 PY
 }
@@ -1305,11 +1504,41 @@ frp_ux_print_apply_summary() {
   frp_state_diff_engine summary "$1" "$2"
 }
 
+frp_print_public_exposure_notice() {
+  local acl_py
+  acl_py="$(frp_access_control_py 2>/dev/null || true)"
+  [[ -n "$acl_py" && -f "$acl_py" ]] || return 0
+  python3 - "$acl_py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('frp_access_control', sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.print_public_exposure_notice(heading=True)
+PY
+}
+
 frp_atomic_write_text() {
   local dest="$1" mode="$2"
   python3 - "$dest" "$mode" <<'PY'
 import os, sys, tempfile
 from pathlib import Path
+
+
+def durable_replace(tmp, dest):
+    """Rename plus parent-directory fsync, so the name survives power loss."""
+    os.replace(tmp, dest)
+    try:
+        dfd = os.open(str(dest.parent), getattr(os, 'O_DIRECTORY', 0) | os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
 dest = Path(sys.argv[1])
 mode = int(sys.argv[2], 8)
 text = sys.stdin.read()
@@ -1321,7 +1550,7 @@ try:
         fh.flush()
         os.fsync(fh.fileno())
     os.chmod(tmp, mode)
-    os.replace(tmp, dest)
+    durable_replace(tmp, dest)
 except Exception:
     try:
         os.unlink(tmp)
@@ -1336,6 +1565,23 @@ frp_atomic_copy_file() {
   python3 - "$dest" "$src" "$mode" <<'PY'
 import os, sys, tempfile
 from pathlib import Path
+
+
+def durable_replace(tmp, dest):
+    """Rename plus parent-directory fsync, so the name survives power loss."""
+    os.replace(tmp, dest)
+    try:
+        dfd = os.open(str(dest.parent), getattr(os, 'O_DIRECTORY', 0) | os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
 dest = Path(sys.argv[1])
 src = Path(sys.argv[2])
 mode = int(sys.argv[3], 8)
@@ -1348,7 +1594,7 @@ try:
         fh.flush()
         os.fsync(fh.fileno())
     os.chmod(tmp, mode)
-    os.replace(tmp, dest)
+    durable_replace(tmp, dest)
 except Exception:
     try:
         os.unlink(tmp)
@@ -1661,11 +1907,10 @@ item = {
 }
 if preset == 'ssh':
     ssh_user = str(raw.get('ssh_user', '') or '').strip()
-    if not ssh_user:
-        raise SystemExit('ERROR: ssh_user is required for ssh services')
-    if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
-        raise SystemExit('ERROR: invalid ssh_user')
-    item['ssh_user'] = ssh_user
+    if ssh_user:
+        if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
+            raise SystemExit('ERROR: invalid ssh_user')
+        item['ssh_user'] = ssh_user
 try:
     HC.copy_health_check(raw, item)
 except HC.HealthCheckError as exc:
@@ -1729,11 +1974,10 @@ def add(path, raw):
     }
     if preset == 'ssh':
         ssh_user = str(raw.get('ssh_user', '') or '').strip()
-        if not ssh_user:
-            raise SystemExit('ERROR: ssh_user is required for ssh services')
-        if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
-            raise SystemExit('ERROR: invalid ssh_user')
-        item['ssh_user'] = ssh_user
+        if ssh_user:
+            if not re.fullmatch(r'[A-Za-z0-9._@-]{1,32}', ssh_user):
+                raise SystemExit('ERROR: invalid ssh_user')
+            item['ssh_user'] = ssh_user
     try:
         HC.copy_health_check(raw, item)
     except HC.HealthCheckError as exc:
@@ -1931,7 +2175,7 @@ if isinstance(raw, dict) and 'services' in raw:
         alias = str(raw.get('public_hostname') or '')
 else:
     services = raw
-lines = [f'FRP Server: {server}', '', 'Services:', '']
+lines = [f'Data Relay Link Server: {server}', '', 'Services:', '']
 def clean(value, limit=253):
     text = str(value or '')
     return ''.join(' ' if ord(c) < 32 or 127 <= ord(c) <= 159 else c for c in text)[:limit].strip()
@@ -1974,18 +2218,16 @@ for item in services:
     else:
         lines.append(f'  Public : {host_port(server, remote_port)}')
     if preset == 'ssh':
-        user = clean(item.get('ssh_user'), 32)
-        if user:
-            lines.append('  Connect:')
-            if preferred:
-                lines.append('    Preferred:')
-                lines.append(f'      ssh -p {remote_port} {user}@{preferred}')
-                lines.append('    Fallback:')
-                lines.append(f'      ssh -p {remote_port} {user}@{server}')
-            else:
-                lines.append(f'    ssh -p {remote_port} {user}@{server}')
+        user = clean(item.get('ssh_user'), 32) or '<username>'
+        lines.append('  Connect:')
+        lines.append('    (SSH username is connection-example metadata; not validated at enrollment)')
+        if preferred:
+            lines.append('    Preferred:')
+            lines.append(f'      ssh -p {remote_port} {user}@{preferred}')
+            lines.append('    Fallback:')
+            lines.append(f'      ssh -p {remote_port} {user}@{server}')
         else:
-            lines.append('  SSH user: legacy / unspecified')
+            lines.append(f'    ssh -p {remote_port} {user}@{server}')
     elif preset == 'http':
         lines.append('  URL:')
         if preferred:
@@ -2020,6 +2262,29 @@ for item in services:
         else:
             lines.append(f'    {host_port(server, remote_port)}')
     lines.append('')
+has_enabled = any(item.get('enabled', True) is not False for item in services)
+# Reachability (addresses above) is not Remote Access authorization.
+# Initial Server policy is No Policy / effective ALLOW. The Agent cannot
+# see the live policy, so operators inspect it on the Server.
+if has_enabled:
+    lines.extend([
+        'Remote Access',
+        '=============',
+        '',
+        'Published addresses above are reachability only.',
+        'Remote Access authorization is the Server Access Policy.',
+        '',
+        'Initial Remote Access, before a policy is configured:',
+        '  No Policy',
+        '  Effective access = ALLOW',
+        '',
+        'A Blacklist policy blocks matching rules. A Whitelist policy allows only matching rules.',
+        'Target SSH or application authentication is still required.',
+        '',
+        'On the server, inspect Remote Access policy:',
+        '  drlink show remote-access',
+        '',
+    ])
 path = Path(dest)
 path.parent.mkdir(parents=True, exist_ok=True)
 import os, tempfile
@@ -2063,29 +2328,92 @@ for item in services:
 PY
 }
 
-wait_for_proxies() {
-  local logs proxy missing
-  local -a names=("$@")
-  local i
-  for i in {1..20}; do
-    sleep 1
-    if frp_is_darwin; then
-      logs="$(frp_macos_recent_logs 400 2>/dev/null || true)"
-    else
-      logs="$(journalctl -u frpc -n 400 --no-pager 2>/dev/null || true)"
+frp_client_runtime_unit() {
+  # Canonical Linux systemd unit after Data Relay Link rename (was: frpc).
+  printf '%s\n' 'drlink-client'
+}
+
+frp_client_journal_cursor() {
+  # Capture a generation boundary before restart/start + readiness wait.
+  # Linux: systemd journal cursor. Darwin: inode+byte-offset logpos cursor
+  # over frpc.out/err logs (never a wall-clock timestamp string).
+  if frp_is_darwin; then
+    if declare -F frp_macos_log_cursor >/dev/null 2>&1; then
+      frp_macos_log_cursor 2>/dev/null || true
     fi
+    return 0
+  fi
+  journalctl -u "$(frp_client_runtime_unit)" -n 0 --show-cursor --no-pager 2>/dev/null \
+    | sed -n 's/^-- cursor: //p' | tail -n1 || true
+}
+
+frp_client_recent_runtime_logs() {
+  local lines="${1:-400}"
+  local since_cursor="${2:-}"
+  if frp_is_darwin; then
+    # macOS: only bytes/lines appended after the logpos cursor may count.
+    if declare -F frp_macos_logs_since_cursor >/dev/null 2>&1; then
+      frp_macos_logs_since_cursor "$lines" "$since_cursor" 2>/dev/null || true
+    elif declare -F frp_macos_recent_logs >/dev/null 2>&1; then
+      frp_macos_recent_logs "$lines" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  if [[ -n "$since_cursor" ]]; then
+    journalctl -u "$(frp_client_runtime_unit)" --after-cursor "$since_cursor" -n "$lines" --no-pager 2>/dev/null || true
+  else
+    journalctl -u "$(frp_client_runtime_unit)" -n "$lines" --no-pager 2>/dev/null || true
+  fi
+}
+
+wait_for_proxies() {
+  # Bounded readiness wait for frpc proxy publication.
+  # Polls the canonical client unit journal (drlink-client), not the legacy
+  # frpc unit name. Uses short backoff so brief startup delay does not fail
+  # Zero-Touch, while genuine failure still returns non-zero within ~45s.
+  #
+  # Only evidence AFTER the optional generation cursor (FRP_PROXY_WAIT_CURSOR
+  # or --since-cursor=...) may satisfy readiness. On Darwin the cursor is a
+  # file byte-offset (logpos), not a timestamp substring.
+  local logs proxy missing
+  local -a names=()
+  local since_cursor="${FRP_PROXY_WAIT_CURSOR:-}"
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == --since-cursor=* ]]; then
+      since_cursor="${arg#--since-cursor=}"
+      continue
+    fi
+    names+=("$arg")
+  done
+  local attempt=0
+  local max_attempts="${FRP_PROXY_WAIT_MAX_ATTEMPTS:-24}"
+  local sleep_s="${FRP_PROXY_WAIT_SLEEP_S:-1}"
+  local max_sleep="${FRP_PROXY_WAIT_MAX_SLEEP_S:-3}"
+  while (( attempt < max_attempts )); do
+    attempt=$((attempt + 1))
+    if (( sleep_s > 0 )); then
+      sleep "$sleep_s"
+    fi
+    logs="$(frp_client_recent_runtime_logs 400 "$since_cursor")"
     if ! grep -q 'login to server success' <<<"$logs"; then
+      if (( sleep_s < max_sleep )) && (( attempt % 3 == 0 )); then
+        sleep_s=$((sleep_s + 1))
+      fi
       continue
     fi
     missing=""
     for proxy in "${names[@]}"; do
-      if ! grep -F "[${proxy}] start proxy success" <<<"$logs"; then
+      if ! grep -Fq "[${proxy}] start proxy success" <<<"$logs"; then
         missing="$proxy"
         break
       fi
     done
     if [[ -z "$missing" ]]; then
       return 0
+    fi
+    if (( sleep_s < max_sleep )) && (( attempt % 3 == 0 )); then
+      sleep_s=$((sleep_s + 1))
     fi
   done
   return 1
@@ -2150,7 +2478,7 @@ PY
 frp_zero_touch_require_inputs() {
   if [[ -z "${FRP_BOOTSTRAP_TICKET:-}" ]]; then
     echo "ERROR: zero-touch setup requires FRP_BOOTSTRAP_TICKET." >&2
-    echo "Paste the full one-line command from the FRP server." >&2
+    echo "Paste the full one-line command from the Data Relay Link server." >&2
     echo "Setup could not continue because required bootstrap data is missing." >&2
     frp_emit_failure_class ZERO_TOUCH_INPUT_INVALID
     return 1
@@ -2665,8 +2993,19 @@ frp_client_apply_reconcile_runtime() {
     fi
   fi
   if [[ "$dropped_enabled" == 1 ]]; then
-    if ! frp_client_restart; then
-      echo "ERROR: failed to restart frpc after server reconciliation." >&2
+    # Match apply semantics: zero enabled services → stop (management-only),
+    # otherwise restart. Never re-enable/restart an empty proxy set.
+    local enabled_count
+    enabled_count="$(frp_count_enabled_services "$(frp_client_state_path)" 2>/dev/null || echo 0)"
+    if [[ "${enabled_count:-0}" -eq 0 ]]; then
+      if ! frp_client_stop; then
+        echo "ERROR: failed to stop drlink-client after last enabled service was released." >&2
+        frp_emit_failure_class FRPC_STOP_FAILED
+        echo "RECOVERY_REQUIRED=YES" >&2
+        return 1
+      fi
+    elif ! frp_client_restart; then
+      echo "ERROR: failed to restart drlink-client after server reconciliation." >&2
       frp_emit_failure_class FRPC_RESTART_FAILED
       echo "RECOVERY_REQUIRED=YES" >&2
       return 1
@@ -3398,7 +3737,7 @@ for sid in sorted(set(cur) | set(new)):
             'cls': 'runtime',
             'notes': [
                 'removed from local configuration',
-                'The public port remains reserved on the FRP server.',
+                'The public port remains reserved on the Data Relay Link server.',
             ],
         })
         classes.add('runtime')
@@ -3429,6 +3768,14 @@ if mode == 'class':
 if mode == 'pending':
     if overall == 'none':
         raise SystemExit(0)
+    print('Pending change saved.')
+    print()
+    print('Apply:')
+    print('  system services apply')
+    print()
+    print('Discard:')
+    print('  system services discard')
+    print()
     print('Pending changes:')
     print()
     lines = []
@@ -3469,9 +3816,16 @@ else:
 print()
 if overall == 'local':
     print('These changes affect local connection information only.')
-    print('The FRP server and running proxy do not need to be changed.')
+    print('The Data Relay Link server and running proxy do not need to be changed.')
 elif overall == 'runtime':
-    print('Applying this configuration will restart the FRP client.')
+    print('Applying this configuration will restart the Data Relay Link client.')
+cand_enabled = [sid for sid, item in new.items() if enabled(item)]
+if new and not cand_enabled:
+    print()
+    print('No services will be enabled after apply.')
+    print('The client remains registered for management.')
+    print('Public port reservations remain on the server until released.')
+    print('Use the server CLI to release the published service reservation.')
 print()
 PY
 }
@@ -3484,10 +3838,15 @@ frp_state_change_class() {
   frp_state_diff_engine class "$1" "$2"
 }
 
-frp_state_has_diff() {
+frp_state_has_no_diff() {
   local cls
   cls="$(frp_state_change_class "$1" "$2")"
   [[ "$cls" == none ]]
+}
+
+# Compatibility alias — historical name returned success when there was NO diff.
+frp_state_has_diff() {
+  frp_state_has_no_diff "$1" "$2"
 }
 
 frp_apply_local_metadata() {
@@ -3911,7 +4270,7 @@ frp_lifecycle_recover() {
       frp_pending_clear
     else
       echo "ERROR: an Apply was interrupted and local state needs recovery." >&2
-      echo "RECOVERY_REQUIRED: run frp-client apply with the desired configuration." >&2
+      echo "RECOVERY_REQUIRED: run: sudo drlink system services apply" >&2
       frp_emit_failure_class RECOVERY_REQUIRED
       return 2
     fi
@@ -3963,6 +4322,337 @@ frp_client_verify_config() {
   fi
 }
 
+frp_client_stop() {
+  # Fail-closed management-only transition: stop/disable must succeed and be
+  # verified. Callers (apply / reconcile) must not report success if the
+  # previous frpc generation may still be running after zero enabled services.
+  frp_client_hook_log stop
+  if [[ "${FRP_CLIENT_HOOK_STOP_FAIL:-}" == "1" ]]; then
+    FRP_CLIENT_HOOK_STOP_FAIL=0
+    echo "ERROR: simulated client stop failure" >&2
+    frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+    return 1
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    mkdir -p "$(dirname "$(frp_client_path /var/lib/drlink/update-actions.log)")"
+    echo "stop drlink-client" >>"$(frp_client_path /var/lib/drlink/update-actions.log)"
+    return 0
+  fi
+  if frp_is_darwin; then
+    frp_macos_launchd_set_enabled disable || return 1
+    if frp_macos_launchd_running; then
+      # Kickstart after disable forces unload/stop; verify stopped.
+      frp_macos_launchd_kickstart || true
+      local i
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        frp_macos_launchd_running || break
+        sleep 0.2
+      done
+      if frp_macos_launchd_running; then
+        echo "ERROR: macOS Data Relay Link client is still running after stop." >&2
+        frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+        return 1
+      fi
+    fi
+    return 0
+  fi
+
+  # Disable autostart first so a failed stop cannot leave a unit that will
+  # come back on reboot while local state already says management-only.
+  if ! systemctl disable drlink-client >/dev/null 2>&1; then
+    # Already disabled is OK; anything else is a failure unless unit absent.
+    if systemctl cat drlink-client >/dev/null 2>&1; then
+      local en
+      en="$(systemctl is-enabled drlink-client 2>/dev/null || true)"
+      case "$en" in
+        disabled|static|masked|indirect) ;;
+        *)
+          echo "ERROR: failed to disable drlink-client autostart (state=$en)." >&2
+          frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+          return 1
+          ;;
+      esac
+    fi
+  fi
+  if ! systemctl stop drlink-client >/dev/null 2>&1; then
+    # If already inactive, stop may return non-zero on some systemd versions.
+    if [[ "$(systemctl is-active drlink-client 2>/dev/null || true)" != "inactive" ]]; then
+      echo "ERROR: failed to stop drlink-client." >&2
+      frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+      return 1
+    fi
+  fi
+  # Verify inactive and no product-owned frpc remains under the unit.
+  local i state
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    state="$(systemctl is-active drlink-client 2>/dev/null || true)"
+    [[ "$state" == "inactive" || "$state" == "failed" || "$state" == "dead" ]] && break
+    sleep 0.2
+  done
+  state="$(systemctl is-active drlink-client 2>/dev/null || true)"
+  if [[ "$state" != "inactive" && "$state" != "failed" && "$state" != "dead" ]]; then
+    echo "ERROR: drlink-client is still active after stop (state=$state)." >&2
+    frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+    return 1
+  fi
+  local mainpid
+  mainpid="$(systemctl show -p MainPID --value drlink-client 2>/dev/null || true)"
+  if [[ -n "$mainpid" && "$mainpid" != "0" ]]; then
+    echo "ERROR: drlink-client MainPID=$mainpid remains after stop." >&2
+    frp_emit_failure_class FRPC_STOP_FAILED 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
+frp_client_install_ai_agent_unit() {
+  local source="${1:-}"
+  local dest src
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  dest="$(frp_client_path /etc/systemd/system/drlink-ai-agent.service)"
+  mkdir -p "$(dirname "$dest")"
+  src=""
+  if [[ -n "$source" && -f "$source/client/drlink-ai-agent.service" ]]; then
+    src="$source/client/drlink-ai-agent.service"
+  elif [[ -n "${_FRP_INSTALL_CLIENT_DIR:-}" && -f "${_FRP_INSTALL_CLIENT_DIR}/client/drlink-ai-agent.service" ]]; then
+    src="${_FRP_INSTALL_CLIENT_DIR}/client/drlink-ai-agent.service"
+  fi
+  if [[ -n "$src" ]]; then
+    if declare -F frp_write_compatible_systemd_unit >/dev/null 2>&1; then
+      frp_write_compatible_systemd_unit "$src" "$dest" || return 1
+    else
+      install -m 0644 "$src" "$dest" || return 1
+    fi
+    return 0
+  fi
+  cat >"$dest" <<'EOF'
+[Unit]
+Description=Data Relay Link AI Agent Worker
+After=network-online.target drlink-client.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/drlink/drlink_ai_agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$dest" || return 1
+  return 0
+}
+
+frp_client_ai_agent_systemd_skipped() {
+  [[ "${FRP_SKIP_SYSTEMD:-}" == "1" ]]
+}
+
+frp_client_systemctl() {
+  local ctl log
+  if frp_client_ai_agent_systemd_skipped; then
+    return 0
+  fi
+  ctl="${FRP_SYSTEMCTL_BIN:-}"
+  if [[ -z "$ctl" && -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    log="$(frp_client_path /var/lib/drlink/ai-agent-systemd.actions)"
+    mkdir -p "$(dirname "$log")"
+    printf '%s\n' "$*" >>"$log"
+    return 0
+  fi
+  if [[ -z "$ctl" ]]; then
+    ctl="systemctl"
+  fi
+  "$ctl" "$@" >/dev/null
+}
+
+frp_client_unit_file_needs_converge() {
+  local source="${1:-}" unit="${2:-}" live src
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 1
+  fi
+  src=""
+  if [[ -n "$source" && -n "$unit" && -f "$source/client/$unit" ]]; then
+    src="$source/client/$unit"
+  fi
+  [[ -n "$src" ]] || return 1
+  live="$(frp_client_path "/etc/systemd/system/${unit}")"
+  [[ -f "$live" ]] || return 0
+  [[ "$(frp_client_digest "$live")" == "$(frp_client_digest "$src")" ]] && return 1
+  return 0
+}
+
+frp_client_systemd_state_queryable() {
+  if frp_client_ai_agent_systemd_skipped; then
+    return 1
+  fi
+  if [[ -n "${FRP_SYSTEMCTL_BIN:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+frp_client_ai_agent_service_needs_converge() {
+  local ctl enabled active
+  if ! frp_client_systemd_state_queryable; then
+    return 1
+  fi
+  [[ -f "$(frp_client_path /etc/systemd/system/drlink-ai-agent.service)" ]] || return 1
+  ctl="${FRP_SYSTEMCTL_BIN:-systemctl}"
+  enabled="$("$ctl" is-enabled drlink-ai-agent 2>/dev/null || true)"
+  active="$("$ctl" is-active drlink-ai-agent 2>/dev/null || true)"
+  case "$enabled" in
+    enabled|static|indirect|alias) ;;
+    *) return 0 ;;
+  esac
+  [[ "$active" == "active" ]] || return 0
+  return 1
+}
+
+frp_client_ai_agent_unit_needs_converge() {
+  local source="${1:-}"
+  frp_client_unit_file_needs_converge "$source" "drlink-ai-agent.service" && return 0
+  frp_client_ai_agent_service_needs_converge && return 0
+  return 1
+}
+
+frp_client_linux_units_need_converge() {
+  local source="${1:-}"
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 1
+  fi
+  frp_client_unit_file_needs_converge "$source" "drlink-client.service" && return 0
+  frp_client_ai_agent_unit_needs_converge "$source" && return 0
+  return 1
+}
+
+frp_client_capture_linux_unit_state() {
+  local dest="$1" mode="live" unit live presence enabled active ctl
+  if frp_client_ai_agent_systemd_skipped; then
+    mode="skipped"
+  elif [[ -z "${FRP_SYSTEMCTL_BIN:-}" && -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    mode="recorded"
+  fi
+  {
+    printf 'systemd=%s\n' "$mode"
+    if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+      for unit in drlink-client drlink-ai-agent; do
+        live="$(frp_client_path "/etc/systemd/system/${unit}.service")"
+        presence="absent"
+        enabled="disabled"
+        active="inactive"
+        if [[ -f "$live" ]]; then
+          presence="present"
+          if [[ "$mode" == "live" ]]; then
+            ctl="${FRP_SYSTEMCTL_BIN:-systemctl}"
+            enabled="$("$ctl" is-enabled "$unit" 2>/dev/null || true)"
+            active="$("$ctl" is-active "$unit" 2>/dev/null || true)"
+            case "$enabled" in
+              enabled|static|indirect|alias) enabled="enabled" ;;
+              *) enabled="disabled" ;;
+            esac
+            [[ "$active" == "active" ]] || active="inactive"
+          fi
+        fi
+        printf '%s %s %s %s\n' "$unit" "$presence" "$enabled" "$active"
+      done
+    fi
+  } >"${dest}/linux-systemd.state"
+}
+
+frp_client_capture_ai_agent_service_state() {
+  frp_client_capture_linux_unit_state "$1"
+}
+
+frp_client_activate_linux_runtime_units() {
+  local restart_client="${1:-0}"
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  if frp_client_ai_agent_systemd_skipped; then
+    return 0
+  fi
+  frp_client_systemctl daemon-reload || return 1
+  frp_client_systemctl enable drlink-ai-agent || return 1
+  frp_client_systemctl restart drlink-ai-agent || return 1
+  if [[ "$restart_client" == "1" ]]; then
+    frp_client_systemctl enable drlink-client || return 1
+    frp_client_systemctl restart drlink-client || return 1
+    _frp_client_relay_restarted=1
+  fi
+  return 0
+}
+
+frp_client_activate_ai_agent_unit() {
+  frp_client_activate_linux_runtime_units 0
+}
+
+frp_client_restore_one_linux_unit() {
+  local unit="$1" presence="$2" enabled="$3" active="$4"
+  if [[ "$presence" != "present" || "$enabled" != "enabled" ]]; then
+    frp_client_systemctl disable "$unit" || return 1
+  else
+    frp_client_systemctl enable "$unit" || return 1
+  fi
+  if [[ "$presence" == "present" && "$active" == "active" ]]; then
+    frp_client_systemctl restart "$unit" || return 1
+  else
+    frp_client_systemctl stop "$unit" || return 1
+  fi
+  return 0
+}
+
+frp_client_restore_linux_unit_state() {
+  local backup="$1" state mode unit presence enabled active
+  state="${backup}/linux-systemd.state"
+  if [[ ! -f "$state" && -f "${backup}/ai-agent-systemd.state" ]]; then
+    state="${backup}/ai-agent-systemd.state"
+    [[ -f "$state" ]] || return 0
+    if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+      return 0
+    fi
+    presence="$(awk -F= '$1=="presence"{print $2}' "$state")"
+    enabled="$(awk -F= '$1=="enabled"{print $2}' "$state")"
+    active="$(awk -F= '$1=="active"{print $2}' "$state")"
+    mode="$(awk -F= '$1=="systemd"{print $2}' "$state")"
+    [[ "$mode" == "skipped" ]] && return 0
+    frp_client_systemctl daemon-reload || return 1
+    frp_client_restore_one_linux_unit drlink-ai-agent "$presence" "$enabled" "$active"
+    return $?
+  fi
+  [[ -f "$state" ]] || return 0
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  mode="$(awk -F= '$1=="systemd"{print $2}' "$state")"
+  [[ "$mode" == "skipped" ]] && return 0
+  frp_client_systemctl daemon-reload || return 1
+  while read -r unit presence enabled active; do
+    [[ "$unit" == "drlink-client" || "$unit" == "drlink-ai-agent" ]] || continue
+    frp_client_restore_one_linux_unit "$unit" "$presence" "$enabled" "$active" || return 1
+  done <"$state"
+  return 0
+}
+
+frp_client_restore_ai_agent_service_state() {
+  frp_client_restore_linux_unit_state "$1"
+}
+
+frp_client_converge_ai_agent_unit() {
+  local source="${1:-}"
+  if declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; then
+    return 0
+  fi
+  frp_client_install_ai_agent_unit "$source" || return 1
+  frp_client_activate_ai_agent_unit || return 1
+  return 0
+}
+
 frp_client_restart() {
   frp_client_hook_log restart
   if [[ "${FRP_CLIENT_HOOK_RESTART_FAIL:-}" == "1" ]]; then
@@ -3970,6 +4660,11 @@ frp_client_restart() {
     echo "ERROR: simulated service restart failure" >&2
     return 1
   fi
+  # Capture generation boundary before restart so readiness waits never accept
+  # stale success lines from the previous process generation (journal cursor on
+  # Linux; inode+byte-offset logpos cursor on Darwin file logs).
+  FRP_PROXY_WAIT_CURSOR="$(frp_client_journal_cursor 2>/dev/null || true)"
+  export FRP_PROXY_WAIT_CURSOR
   if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
     return 0
   fi
@@ -3981,8 +4676,210 @@ frp_client_restart() {
       frp_macos_launchd_bootstrap || return 1
     fi
   else
-    systemctl enable frpc >/dev/null && systemctl restart frpc
+    # Upgrade/recovery restart must not leave historical frpc.service co-running.
+    # Fail closed: do not start/restart the canonical unit if legacy stop fails.
+    if declare -F frp_retire_legacy_client_unit >/dev/null 2>&1; then
+      frp_retire_legacy_client_unit || return 1
+    fi
+    systemctl enable drlink-client >/dev/null && systemctl restart drlink-client
   fi
+}
+
+frp_client_supervisor_name() {
+  if frp_is_darwin; then
+    printf 'launchd'
+  else
+    printf 'systemd'
+  fi
+}
+
+frp_client_autostart_enabled() {
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    if [[ "${FRP_CLIENT_TEST_AUTOSTART:-enabled}" == "disabled" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+  if frp_is_darwin; then
+    # launchctl print-disabled is the durable disabled bit for pause/resume.
+    local disabled
+    disabled="$(launchctl print-disabled system 2>/dev/null | awk -F'[= "]+' -v label="${FRP_MACOS_LAUNCHD_LABEL}" '$2==label {print tolower($3); exit}')"
+    [[ "$disabled" != "true" ]]
+    return $?
+  fi
+  local en
+  en="$(systemctl is-enabled drlink-client 2>/dev/null || true)"
+  case "$en" in
+    enabled|alias|static|indirect) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_client_runtime_active() {
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    [[ "${FRP_CLIENT_TEST_RUNTIME:-inactive}" == "active" ]]
+    return $?
+  fi
+  local state
+  state="$(frp_client_service_status 2>/dev/null || printf 'unknown')"
+  case "$state" in
+    active) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+frp_client_pause_cmd() {
+  local already=0
+  if ! frp_client_runtime_active && ! frp_client_autostart_enabled; then
+    already=1
+  fi
+  if ! frp_client_stop; then
+    return 1
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    FRP_CLIENT_TEST_RUNTIME=inactive
+    export FRP_CLIENT_TEST_RUNTIME
+    FRP_CLIENT_TEST_AUTOSTART=disabled
+    export FRP_CLIENT_TEST_AUTOSTART
+  fi
+  if [[ "$already" == "1" ]]; then
+    echo "Client is already paused."
+    echo "Runtime is stopped and autostart is disabled."
+    return 0
+  fi
+  echo "Client paused."
+  echo "Runtime    : stopped"
+  echo "Autostart  : disabled"
+  echo "Identity   : preserved"
+  echo "Services   : preserved"
+  echo "Public ports: preserved"
+}
+
+frp_client_resume_cmd() {
+  local was_active=0 was_auto=0
+  frp_client_runtime_active && was_active=1
+  frp_client_autostart_enabled && was_auto=1
+  if [[ "$was_active" == "1" && "$was_auto" == "1" ]]; then
+    echo "Client is already active."
+    echo "Runtime    : active"
+    echo "Autostart  : enabled"
+    echo "Identity   : preserved"
+    return 0
+  fi
+  if ! frp_client_restart; then
+    return 1
+  fi
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    FRP_CLIENT_TEST_RUNTIME=active
+    export FRP_CLIENT_TEST_RUNTIME
+    FRP_CLIENT_TEST_AUTOSTART=enabled
+    export FRP_CLIENT_TEST_AUTOSTART
+  fi
+  echo "Client resumed."
+  echo "Runtime    : active"
+  echo "Autostart  : enabled"
+  echo "Identity   : preserved"
+}
+
+frp_client_restart_runtime_cmd() {
+  # Restart local relay runtime only; do not change autostart enablement.
+  frp_client_hook_log restart-runtime
+  if [[ "${FRP_CLIENT_HOOK_RESTART_FAIL:-}" == "1" ]]; then
+    FRP_CLIENT_HOOK_RESTART_FAIL=0
+    echo "ERROR: simulated service restart failure" >&2
+    return 1
+  fi
+  FRP_PROXY_WAIT_CURSOR="$(frp_client_journal_cursor 2>/dev/null || true)"
+  export FRP_PROXY_WAIT_CURSOR
+  if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    echo "Client restarted."
+    echo "Identity and public port reservations were preserved."
+    return 0
+  fi
+  if frp_is_darwin; then
+    if frp_macos_launchd_running; then
+      frp_macos_launchd_kickstart || return 1
+    else
+      frp_macos_launchd_bootstrap || return 1
+    fi
+  else
+    if declare -F frp_retire_legacy_client_unit >/dev/null 2>&1; then
+      frp_retire_legacy_client_unit || return 1
+    fi
+    if ! systemctl restart drlink-client >/dev/null 2>&1; then
+      if [[ "$(systemctl is-active drlink-client 2>/dev/null || true)" != "active" ]]; then
+        if ! systemctl start drlink-client >/dev/null 2>&1; then
+          echo "ERROR: failed to restart Data Relay Link client runtime." >&2
+          return 1
+        fi
+      fi
+    fi
+  fi
+  echo "Client restarted."
+  echo "Identity and public port reservations were preserved."
+}
+
+frp_client_autostart_cmd() {
+  local mode="${1:-status}"
+  case "$mode" in
+    status|'')
+      if frp_client_autostart_enabled; then
+        echo "Autostart : enabled"
+      else
+        echo "Autostart : disabled"
+      fi
+      echo "Supervisor: $(frp_client_supervisor_name)"
+      return 0
+      ;;
+    enable)
+      if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+        FRP_CLIENT_TEST_AUTOSTART=enabled
+        export FRP_CLIENT_TEST_AUTOSTART
+        echo "Autostart : enabled"
+        echo "Supervisor: $(frp_client_supervisor_name)"
+        return 0
+      fi
+      if frp_is_darwin; then
+        frp_macos_launchd_set_enabled enable || return 1
+      else
+        systemctl enable drlink-client >/dev/null || return 1
+      fi
+      echo "Autostart : enabled"
+      echo "Supervisor: $(frp_client_supervisor_name)"
+      return 0
+      ;;
+    disable)
+      if [[ "${FRP_SKIP_SYSTEMD:-}" == "1" || -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+        FRP_CLIENT_TEST_AUTOSTART=disabled
+        export FRP_CLIENT_TEST_AUTOSTART
+        echo "Autostart : disabled"
+        echo "Supervisor: $(frp_client_supervisor_name)"
+        return 0
+      fi
+      if frp_is_darwin; then
+        frp_macos_launchd_set_enabled disable || return 1
+      else
+        systemctl disable drlink-client >/dev/null || {
+          local en
+          en="$(systemctl is-enabled drlink-client 2>/dev/null || true)"
+          case "$en" in
+            disabled|static|masked|indirect) ;;
+            *)
+              echo "ERROR: failed to disable Data Relay Link client autostart." >&2
+              return 1
+              ;;
+          esac
+        }
+      fi
+      echo "Autostart : disabled"
+      echo "Supervisor: $(frp_client_supervisor_name)"
+      return 0
+      ;;
+    *)
+      echo "ERROR: unknown autostart mode: $mode" >&2
+      return 2
+      ;;
+  esac
 }
 
 frp_client_service_status() {
@@ -3991,7 +4888,7 @@ frp_client_service_status() {
   elif frp_is_darwin; then
     frp_macos_launchd_running && printf 'active' || printf 'inactive'
   else
-    systemctl is-active frpc 2>/dev/null || printf 'unknown'
+    systemctl is-active drlink-client 2>/dev/null || printf 'unknown'
   fi
 }
 
@@ -4024,7 +4921,11 @@ if not services:
     print('(none)')
     raise SystemExit(0)
 n = 0
-for sid, item in services.items():
+ordered = list(services.items())
+# Bounded, deadline-capped batch: probing serially would make the worst case
+# the sum of every per-service timeout.
+targets = HC.target_status_labels(item for _, item in ordered)
+for (sid, item), target in zip(ordered, targets):
     n += 1
     enabled = item.get('enabled', True) is not False
     state = 'enabled' if enabled else 'disabled'
@@ -4040,7 +4941,7 @@ for sid, item in services.items():
     print(f"   Health      : {HC.format_health_config(item.get('health_check'))}")
     print(f"   CLIENT      : {client_label}")
     print(f"   TUNNEL      : {HC.tunnel_status_label(item)}")
-    print(f"   TARGET      : {HC.target_status_label(item)}")
+    print(f"   TARGET      : {target}")
     print()
 PY
 }
@@ -4085,50 +4986,49 @@ frp_client_upgrade_source_version() {
   fi
 }
 
+frp_agent_payload_libdir() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  printf '%s' "$here"
+}
+
+frp_agent_lib_payload_files() {
+  local here
+  here="$(frp_agent_payload_libdir)"
+  PYTHONPATH="${here}${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'from drlink_agent_payload import agent_lib_files; print("\n".join(agent_lib_files()))'
+}
+
+frp_client_write_runtime_lineage() {
+  local dest_lib source_lib
+  dest_lib="$(frp_client_lib_dir)"
+  source_lib="${1:-$dest_lib}"
+  PYTHONPATH="${dest_lib}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$dest_lib" "$source_lib" <<'PY'
+from pathlib import Path
+import sys
+from drlink_agent_payload import write_installed_manifest, verify_payload_match
+
+dest = Path(sys.argv[1])
+source = Path(sys.argv[2])
+write_installed_manifest(dest)
+problems = verify_payload_match(source, dest)
+if problems:
+    sys.stderr.write("ERROR: Agent runtime lineage mismatch\n")
+    for item in problems:
+        sys.stderr.write("  %s\n" % item)
+    raise SystemExit(1)
+print("AGENT_RUNTIME_LINEAGE_MATCH=PASS")
+PY
+}
+
 frp_client_install_management_files() {
   local source="$1"
-  local libdir bindir
+  local libdir bindir f
   libdir="$(frp_client_lib_dir)"
   bindir="$(frp_client_path /usr/local/bin)"
   mkdir -p "$libdir" "$bindir"
-  [[ -f "${source}/lib/frp-client-common.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-client-common.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp-common.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-common.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp-macos.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-macos.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_mgmt_auth.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_mgmt_auth.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_health_check.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_health_check.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp-doctor-common.sh" ]] || {
-    echo "ERROR: missing ${source}/lib/frp-doctor-common.sh" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_doctor.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_doctor.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_support_bundle.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_support_bundle.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_ctl_grammar.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_ctl_grammar.py" >&2
-    return 1
-  }
-  [[ -f "${source}/lib/frp_ctl_repl.py" ]] || {
-    echo "ERROR: missing ${source}/lib/frp_ctl_repl.py" >&2
+  [[ -f "${source}/lib/drlink_agent_payload.py" ]] || {
+    echo "ERROR: missing ${source}/lib/drlink_agent_payload.py" >&2
     return 1
   }
   [[ -f "${source}/tools/frp-client" ]] || {
@@ -4139,51 +5039,143 @@ frp_client_install_management_files() {
     echo "ERROR: missing ${source}/tools/frpctl" >&2
     return 1
   }
+  [[ -f "${source}/tools/drlink" ]] || {
+    echo "ERROR: missing ${source}/tools/drlink" >&2
+    return 1
+  }
   [[ -f "${source}/tools/frp-support-bundle" ]] || {
     echo "ERROR: missing ${source}/tools/frp-support-bundle" >&2
     return 1
   }
-  install -m 0644 "${source}/lib/frp-client-common.sh" "${libdir}/frp-client-common.sh"
-  install -m 0644 "${source}/lib/frp-common.sh" "${libdir}/frp-common.sh"
-  install -m 0644 "${source}/lib/frp-macos.sh" "${libdir}/frp-macos.sh"
-  install -m 0644 "${source}/lib/frp_mgmt_auth.py" "${libdir}/frp_mgmt_auth.py"
-  install -m 0644 "${source}/lib/frp_health_check.py" "${libdir}/frp_health_check.py"
-  install -m 0644 "${source}/lib/frp-doctor-common.sh" "${libdir}/frp-doctor-common.sh"
-  install -m 0644 "${source}/lib/frp_doctor.py" "${libdir}/frp_doctor.py"
-  install -m 0644 "${source}/lib/frp_support_bundle.py" "${libdir}/frp_support_bundle.py"
-  install -m 0644 "${source}/lib/frp_ctl_grammar.py" "${libdir}/frp_ctl_grammar.py"
-  install -m 0644 "${source}/lib/frp_ctl_repl.py" "${libdir}/frp_ctl_repl.py"
+  [[ -f "${source}/tools/frp-update" ]] || {
+    echo "ERROR: missing ${source}/tools/frp-update" >&2
+    return 1
+  }
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    [[ -f "${source}/lib/${f}" ]] || {
+      echo "ERROR: missing ${source}/lib/${f}" >&2
+      return 1
+    }
+    install -m 0644 "${source}/lib/${f}" "${libdir}/${f}"
+  done < <(PYTHONPATH="${source}/lib${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'from drlink_agent_payload import agent_lib_files; print("\n".join(agent_lib_files()))')
+  if [[ -f "${source}/uninstall-client.sh" ]]; then
+    install -m 0755 "${source}/uninstall-client.sh" "${libdir}/uninstall-client.sh"
+  fi
   install -m 0755 "${source}/tools/frp-client" "${bindir}/frp-client"
-  install -m 0755 "${source}/tools/frpctl" "${bindir}/frpctl"
+  install -m 0755 "${source}/tools/frpctl" "${libdir}/frpctl"
+  install -m 0755 "${source}/tools/drlink" "${bindir}/drlink"
+  # RHEL/Rocky sudo defaults omit /usr/local/bin from secure_path.
+  # Keep a copy on the secure_path so `sudo drlink` works after install.
+  # macOS SIP forbids writing /usr/bin; brew/prefix PATH already covers sudo.
+  if ! frp_is_darwin && [[ "$(frp_client_path /usr/bin)" != "$bindir" ]]; then
+    mkdir -p "$(frp_client_path /usr/bin)"
+    install -m 0755 "${source}/tools/drlink" "$(frp_client_path /usr/bin/drlink)"
+  fi
   install -m 0755 "${source}/tools/frp-support-bundle" "${bindir}/frp-support-bundle"
   install -m 0755 "${source}/tools/frp-update" "${bindir}/frp-update"
+  # Retire legacy PATH entry points from prior product identity.
+  rm -f "${bindir}/frpctl" "$(frp_client_path /usr/local/sbin/frpctl)" 2>/dev/null || true
+  # Keep a stale /usr/local/sbin/frp-client from shadowing the updated binary.
+  if [[ -e "$(frp_client_path /usr/local/sbin/frp-client)" ]]; then
+    install -m 0755 "${source}/tools/frp-client" "$(frp_client_path /usr/local/sbin/frp-client)"
+  fi
+  chmod 0755 "${bindir}/drlink" "${libdir}/frpctl"
+  if ! frp_is_darwin && [[ -x "$(frp_client_path /usr/bin/drlink)" ]]; then
+    chmod 0755 "$(frp_client_path /usr/bin/drlink)"
+  fi
   if [[ -f "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" ]]; then
     install -m 0644 "${source}/client/${FRP_MACOS_LAUNCHD_LABEL}.plist" \
       "${libdir}/${FRP_MACOS_LAUNCHD_LABEL}.plist"
   fi
+  frp_client_write_runtime_lineage "${source}/lib" || return 1
   frp_client_upgrade_source_version "$source"
+  frp_infer_expected_source_ref_from_git_source "$source"
+  frp_infer_expected_source_from_release_manifest "$source"
   frp_client_write_version_file
 }
 
 frp_client_upgrade_destinations() {
-  # dest_rel:mode:source_rel
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    printf '%s\n' "usr/local/lib/drlink/${f}:0644:lib/${f}"
+  done < <(frp_agent_lib_payload_files)
   printf '%s\n' \
-    "usr/local/lib/frp-auto-deploy/frp-client-common.sh:0644:lib/frp-client-common.sh" \
-    "usr/local/lib/frp-auto-deploy/frp-common.sh:0644:lib/frp-common.sh" \
-    "usr/local/lib/frp-auto-deploy/frp-macos.sh:0644:lib/frp-macos.sh" \
-    "usr/local/lib/frp-auto-deploy/com.datarelay.frp-auto-deploy.frpc.plist:0644:client/com.datarelay.frp-auto-deploy.frpc.plist" \
-    "usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py:0644:lib/frp_mgmt_auth.py" \
-    "usr/local/lib/frp-auto-deploy/frp_health_check.py:0644:lib/frp_health_check.py" \
-    "usr/local/lib/frp-auto-deploy/frp-doctor-common.sh:0644:lib/frp-doctor-common.sh" \
-    "usr/local/lib/frp-auto-deploy/frp_doctor.py:0644:lib/frp_doctor.py" \
-    "usr/local/lib/frp-auto-deploy/frp_support_bundle.py:0644:lib/frp_support_bundle.py" \
-    "usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py:0644:lib/frp_ctl_grammar.py" \
-    "usr/local/lib/frp-auto-deploy/frp_ctl_repl.py:0644:lib/frp_ctl_repl.py" \
-    "usr/local/lib/frp-auto-deploy/frp-role-ownership.sh:0644:lib/frp-role-ownership.sh" \
+    "usr/local/lib/drlink/com.datarelay.drlink.frpc.plist:0644:client/com.datarelay.drlink.frpc.plist" \
+    "usr/local/lib/drlink/uninstall-client.sh:0755:uninstall-client.sh" \
     "usr/local/bin/frp-client:0755:tools/frp-client" \
-    "usr/local/bin/frpctl:0755:tools/frpctl" \
+    "usr/local/bin/drlink:0755:tools/drlink" \
+    "usr/local/lib/drlink/frpctl:0755:tools/frpctl" \
     "usr/local/bin/frp-support-bundle:0755:tools/frp-support-bundle" \
     "usr/local/bin/frp-update:0755:tools/frp-update"
+  if ! frp_is_darwin; then
+    printf '%s\n' \
+      "usr/bin/drlink:0755:tools/drlink" \
+      "etc/systemd/system/drlink-client.service:0644:client/drlink-client.service" \
+      "etc/systemd/system/drlink-ai-agent.service:0644:client/drlink-ai-agent.service"
+  fi
+}
+
+
+frp_client_mgmt_origin_root() {
+  if [[ -n "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    printf '%s' "${FRP_CLIENT_TEST_ROOT}"
+  else
+    printf '%s' "/"
+  fi
+}
+
+frp_client_mgmt_origin_invoke() {
+  # Usage: frp_client_mgmt_origin_invoke migrate|drift|snapshot|restore|verify [dest]
+  local cmd="$1" dest="${2:-}" root lib_dir
+  root="$(frp_client_mgmt_origin_root)"
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  python3 - "$lib_dir/drlink_mgmt_sync.py" "$root" "$cmd" "$dest" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+path, root, cmd, dest = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, str(Path(path).resolve().parent))
+spec = importlib.util.spec_from_file_location("drlink_mgmt_sync_migrate", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+if cmd == "migrate":
+    print("CHANGED" if mod.migrate_legacy_single443_agent_origin(root) else "UNCHANGED")
+elif cmd == "drift":
+    print("DRIFT" if mod.legacy_single443_mgmt_origin_drift(root) else "CLEAN")
+elif cmd == "snapshot":
+    mod.snapshot_mgmt_origin_state(root, dest)
+elif cmd == "restore":
+    mod.restore_mgmt_origin_state(root, dest)
+elif cmd == "verify":
+    if not mod.mgmt_origin_state_matches(root, dest):
+        raise SystemExit(1)
+else:
+    raise SystemExit("unknown management-origin command")
+PY
+}
+
+frp_client_migrate_legacy_single443_mgmt_origin() {
+  # Existing WSS Agents enrolled against the private allocator port keep that
+  # origin in client-state. Converge it to the public single-443 port without
+  # touching management identity, services, or Direct-mode state.
+  frp_client_mgmt_origin_invoke migrate
+}
+
+frp_client_legacy_single443_mgmt_origin_drift() {
+  local result
+  result="$(frp_client_mgmt_origin_invoke drift)" || return 2
+  if [[ "$result" == "DRIFT" ]]; then
+    return 0
+  fi
+  if [[ "$result" == "CLEAN" ]]; then
+    return 1
+  fi
+  echo "ERROR: unexpected management-origin drift result: ${result}" >&2
+  return 2
 }
 
 frp_client_upgrade_validate_existing() {
@@ -4218,7 +5210,7 @@ frp_client_require_server_compatible_for_upgrade() {
   origin="$(frp_allocator_origin_url "$allocator_url" 2>/dev/null)" || return 0
   health="${origin}/healthz"
   resp=""
-  ca="$(frp_client_path /etc/frp-auto-deploy/allocator-ca.crt)"
+  ca="$(frp_client_path /etc/drlink/allocator-ca.crt)"
   if [[ ! -f "$ca" ]]; then
     ca="$(frp_client_path /etc/frp/allocator-ca.crt)"
   fi
@@ -4272,26 +5264,36 @@ frp_client_upgrade_validate_staged() {
     }
   done < <(frp_client_upgrade_destinations)
   bash -n "${staged}/usr/local/bin/frp-client" || return 1
-  bash -n "${staged}/usr/local/bin/frpctl" || return 1
+  bash -n "${staged}/usr/local/bin/drlink" || return 1
+  bash -n "${staged}/usr/local/lib/drlink/frpctl" || return 1
   bash -n "${staged}/usr/local/bin/frp-update" || return 1
-  bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-client-common.sh" || return 1
-  bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-common.sh" || return 1
-  bash -n "${staged}/usr/local/lib/frp-auto-deploy/frp-doctor-common.sh" || return 1
-  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_mgmt_auth.py" || return 1
-  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_health_check.py" || return 1
-  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_doctor.py" || return 1
-  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_support_bundle.py" || return 1
-  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_grammar.py" || return 1
-  python3 -m py_compile "${staged}/usr/local/lib/frp-auto-deploy/frp_ctl_repl.py" || return 1
+  bash -n "${staged}/usr/local/lib/drlink/frp-client-common.sh" || return 1
+  bash -n "${staged}/usr/local/lib/drlink/frp-common.sh" || return 1
+  bash -n "${staged}/usr/local/lib/drlink/frp-doctor-common.sh" || return 1
+  bash -n "${staged}/usr/local/lib/drlink/uninstall-client.sh" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_mgmt_auth.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_health_check.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_doctor.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_support_bundle.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_ctl_grammar.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_cli_catalog.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_version_identity.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_service_profiles.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/frp_ctl_repl.py" || return 1
+  python3 -m py_compile "${staged}/usr/local/lib/drlink/drlink_mgmt_sync.py" || return 1
   python3 -m py_compile "${staged}/usr/local/bin/frp-support-bundle" || return 1
-  rm -rf "${staged}/usr/local/lib/frp-auto-deploy/__pycache__" \
-    "${staged}/usr/local/lib/frp-auto-deploy/"*.pyc 2>/dev/null || true
+  rm -rf "${staged}/usr/local/lib/drlink/__pycache__" \
+    "${staged}/usr/local/lib/drlink/"*.pyc 2>/dev/null || true
   [[ -x "${staged}/usr/local/bin/frp-client" ]] || {
     echo "ERROR: staged frp-client is not executable" >&2
     return 1
   }
-  [[ -x "${staged}/usr/local/bin/frpctl" ]] || {
-    echo "ERROR: staged frpctl is not executable" >&2
+  [[ -x "${staged}/usr/local/bin/drlink" ]] || {
+    echo "ERROR: staged drlink is not executable" >&2
+    return 1
+  }
+  [[ -x "${staged}/usr/local/lib/drlink/frpctl" ]] || {
+    echo "ERROR: staged internal frpctl backend is not executable" >&2
     return 1
   }
   [[ -x "${staged}/usr/local/bin/frp-support-bundle" ]] || {
@@ -4334,6 +5336,8 @@ frp_client_upgrade_backup_tools() {
   else
     printf 'absent version\n' >>"${dest}/manifest"
   fi
+  frp_client_capture_ai_agent_service_state "$dest"
+  frp_client_mgmt_origin_invoke snapshot "${dest}/mgmt-origin-state" || return 1
   python3 - "$(frp_client_upgrade_backup_root)" "$FRP_CLIENT_UPGRADE_BACKUP_KEEP" <<'PY'
 import shutil, sys
 from pathlib import Path
@@ -4378,6 +5382,7 @@ frp_client_upgrade_restore_tools() {
   else
     rm -f "$live"
   fi
+  frp_client_mgmt_origin_invoke restore "${backup}/mgmt-origin-state" || return 1
   return 0
 }
 
@@ -4416,6 +5421,7 @@ frp_client_upgrade_verify_restored() {
       return 1
       ;;
   esac
+  frp_client_mgmt_origin_invoke verify "${backup}/mgmt-origin-state" || return 1
 }
 
 frp_client_upgrade_post_mutation_guard() {
@@ -4445,7 +5451,8 @@ frp_client_upgrade_rollback() {
   fi
   _FRP_CLIENT_UPGRADE_IN_ROLLBACK=1
   if frp_client_upgrade_restore_tools "$backup" \
-    && frp_client_upgrade_verify_restored "$backup"; then
+    && frp_client_upgrade_verify_restored "$backup" \
+    && frp_client_restore_ai_agent_service_state "$backup"; then
     echo "UPGRADE_ROLLBACK=PASS"
     frp_emit_failure_class "$failure_class"
     frp_txn_clear client
@@ -4457,6 +5464,7 @@ frp_client_upgrade_rollback() {
   echo "UPGRADE_ROLLBACK=FAIL"
   frp_emit_failure_class UPDATE_ROLLBACK_FAILED
   echo "RECOVERY_REQUIRED" >&2
+  frp_emit_update_rollback_recovery_guidance
   echo "PENDING_MARKER_CLEARED=NO"
   _FRP_CLIENT_UPGRADE_ROLLBACK_RC=1
   _FRP_CLIENT_UPGRADE_ROLLBACK_DONE=1
@@ -4506,7 +5514,12 @@ frp_client_upgrade_verify() {
     }
   done < <(frp_client_upgrade_destinations)
   [[ -x "$(frp_client_path /usr/local/bin/frp-client)" ]] || return 1
-  [[ -x "$(frp_client_path /usr/local/bin/frpctl)" ]] || return 1
+  [[ -x "$(frp_client_path /usr/local/bin/drlink)" ]] || return 1
+  [[ -x "$(frp_client_path /usr/local/lib/drlink/frpctl)" ]] || return 1
+  # Legacy PATH CLI must not remain after upgrade.
+  if [[ -e "$(frp_client_path /usr/local/bin/frpctl)" || -e "$(frp_client_path /usr/local/sbin/frpctl)" ]]; then
+    rm -f "$(frp_client_path /usr/local/bin/frpctl)" "$(frp_client_path /usr/local/sbin/frpctl)" 2>/dev/null || true
+  fi
   frp_load_client_state "$(frp_client_state_path)" || return 1
   if [[ -f "$(frp_client_toml_path)" ]]; then
     frp_client_verify_config "$(frp_client_toml_path)" || return 1
@@ -4519,6 +5532,7 @@ frp_client_upgrade_verify() {
     echo "ERROR: simulated post-upgrade verification failure" >&2
     return 1
   fi
+  frp_client_write_runtime_lineage "$(frp_client_lib_dir)" || return 1
   return 0
 }
 
@@ -4547,6 +5561,7 @@ frp_client_apply_upgrade() {
 
   local kind="${_FRP_CLIENT_UPDATE_KIND:-bundle}"
   local candidate_meta candidate_channel="unknown" candidate_ref="unknown"
+  local candidate_head=""
   local installed_channel installed_ref expected_channel="" expected_ref=""
   local target_channel_out target_ref_out target_bundle_out
 
@@ -4597,7 +5612,9 @@ frp_client_apply_upgrade() {
         frp_emit_failure_class RECOVERY_REQUIRED
         return 1
       fi
-      if ! frp_client_upgrade_restore_tools "$recovered" || ! frp_client_upgrade_verify_restored "$recovered"; then
+      if ! frp_client_upgrade_restore_tools "$recovered" \
+        || ! frp_client_upgrade_verify_restored "$recovered" \
+        || ! frp_client_restore_ai_agent_service_state "$recovered"; then
         echo "ERROR: interrupted update could not be rolled back automatically." >&2
         frp_emit_failure_class RECOVERY_REQUIRED
         return 1
@@ -4645,6 +5662,7 @@ frp_client_apply_upgrade() {
   target="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $1}')"
   candidate_channel="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $2}')"
   candidate_ref="$(printf '%s' "$candidate_meta" | awk -F'\t' '{print $3}')"
+  candidate_head="$(frp_client_candidate_source_head "$source" "$candidate_ref")"
   PROJECT_VERSION="$target"
   frp_client_upgrade_source_version "$source"
   PROJECT_VERSION="$target"
@@ -4680,6 +5698,31 @@ frp_client_apply_upgrade() {
         update_needed=1
       fi
     fi
+  fi
+
+  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+    if [[ "$update_needed" == "0" ]] && frp_client_linux_units_need_converge "$source"; then
+      update_needed=1
+    fi
+  fi
+  # Same-bundle convergence must still repair a legacy :6099 management origin.
+  # Direct mode and an already-public origin stay on the early return.
+  if [[ "$update_needed" == "0" ]]; then
+    local origin_drift_rc=0
+    frp_client_legacy_single443_mgmt_origin_drift || origin_drift_rc=$?
+    if [[ "$origin_drift_rc" -eq 2 ]]; then
+      echo "ERROR: could not inspect the management origin." >&2
+      return 1
+    fi
+    if [[ "$origin_drift_rc" -eq 0 ]]; then
+      update_needed=1
+    fi
+  fi
+  # A matching bundle SHA must still repair stale SOURCE_REF/SOURCE_HEAD.
+  # The next check is not-needed only after that identity matches.
+  if [[ "$update_needed" == "0" ]] && ! frp_client_provenance_identity_matches \
+      "$installed_ref" "$candidate_ref" "$candidate_head"; then
+    update_needed=1
   fi
 
   if [[ "$check_only" == "1" ]]; then
@@ -4739,11 +5782,32 @@ frp_client_apply_upgrade() {
     _FRP_CLIENT_UPGRADE_SET_E=1
   fi
 
+  # A missing or stale client unit restarts the relay only when a systemd
+  # manager can apply it. Filesystem-only updates still install the unit
+  # and must not report a relay restart.
+  _restart_client_unit=0
+  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+    if frp_client_systemd_state_queryable \
+      && frp_client_unit_file_needs_converge "$source" "drlink-client.service"; then
+      _restart_client_unit=1
+    fi
+  fi
+
   echo "Installing management files..."
   if ! frp_client_upgrade_install_staged "$staged"; then
     echo "ERROR: tool install failed; restoring previous management files." >&2
     frp_client_upgrade_rollback "$backup" FILE_COMMIT_FAILED || return 2
     return 1
+  fi
+  _ai_agent_converged=0
+  _frp_client_relay_restarted=0
+  if ! { declare -F frp_is_darwin >/dev/null 2>&1 && frp_is_darwin; }; then
+    if ! frp_client_activate_linux_runtime_units "$_restart_client_unit"; then
+      echo "ERROR: failed to converge Linux client units; restoring previous management files." >&2
+      frp_client_upgrade_rollback "$backup" HEALTH_CHECK_FAILED || return 2
+      return 1
+    fi
+    _ai_agent_converged=1
   fi
   if ! frp_client_upgrade_post_mutation_guard; then
     echo "ERROR: unexpected post-mutation failure; restoring previous management files." >&2
@@ -4765,6 +5829,8 @@ frp_client_apply_upgrade() {
     return 1
   fi
   if ! FRP_RELEASE_CHANNEL="$candidate_channel" \
+      FRP_EXPECTED_SOURCE_REF="$candidate_ref" \
+      FRP_EXPECTED_SOURCE_HEAD="$candidate_head" \
       FRP_BUNDLE_SHA256="${target_bundle:-}" \
       FRP_VERSION_REQUIRE_VERIFIED_BUNDLE=1 \
       PROJECT_VERSION="$target" \
@@ -4805,6 +5871,28 @@ frp_client_apply_upgrade() {
     return 1
   fi
 
+  local mgmt_origin_result
+  if ! mgmt_origin_result="$(frp_client_migrate_legacy_single443_mgmt_origin)"; then
+    echo "ERROR: failed to converge single-443 management origin; restoring tools." >&2
+    frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
+    return 1
+  fi
+  if [[ "$mgmt_origin_result" == "CHANGED" ]]; then
+    echo "Management origin        : converged to single-443 public port"
+  else
+    echo "Management origin        : unchanged"
+  fi
+  if [[ "${FRP_CLIENT_UPGRADE_HOOK_FAIL:-}" == "after-mgmt-origin" ]]; then
+    echo "ERROR: simulated failure after management-origin migration" >&2
+    frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
+    return 1
+  fi
+  if [[ -n "$key_before" && "$(frp_client_digest "$(frp_client_identity_key_path)")" != "$key_before" ]]; then
+    echo "ERROR: management identity changed while converging management origin; restoring tools." >&2
+    frp_client_upgrade_rollback "$backup" STATE_PRESERVATION_FAILED || return 2
+    return 1
+  fi
+
   ident_after="$(frp_identity_label)"
   frp_after="${FRP_VERSION}"
   _FRP_CLIENT_UPGRADE_MUTATION_STARTED=0
@@ -4832,7 +5920,14 @@ frp_client_apply_upgrade() {
   fi
   echo "Client state    : preserved"
   echo "Management ID   : ${ident_after}"
-  echo "frpc restarted  : NO"
+  if [[ "${_frp_client_relay_restarted:-0}" == "1" ]]; then
+    echo "frpc restarted  : YES"
+  else
+    echo "frpc restarted  : NO"
+  fi
+  if [[ "${_ai_agent_converged:-0}" == "1" ]]; then
+    echo "AI agent service : converged"
+  fi
   echo "Enrollment Code : NOT REQUIRED"
   return 0
 }
@@ -4893,7 +5988,10 @@ frp_client_fetch_and_upgrade() {
     return 1
   fi
   explicit_channel="$(frp_client_explicit_expected_channel || true)"
-  if frp_client_has_existing_install; then
+  # Enrolled local state, even if the current CLI/service payload is incomplete,
+  # still requires the verified update bridge. Completeness is a bootstrap
+  # classifier, not an excuse to skip identity-preserving upgrade gates.
+  if frp_client_has_enrolled_local_state; then
     if ! frp_client_has_trustworthy_release_line && [[ -z "$explicit_channel" ]]; then
       frp_client_report_identity \
         "$(frp_client_installed_project_version)" "unknown" \
@@ -4913,8 +6011,10 @@ frp_client_fetch_and_upgrade() {
   fi
   if [[ -n "${FRP_EXPECTED_SOURCE_REF:-}" ]]; then
     source_ref="$FRP_EXPECTED_SOURCE_REF"
-  elif [[ "$channel" == "dev" ]]; then
+  elif [[ "$channel" == "development" || "$channel" == "dev" ]]; then
     source_ref="main"
+  elif [[ "$channel" == "preview" ]]; then
+    source_ref="v${PROJECT_VERSION}-rc.1"
   else
     source_ref="v${PROJECT_VERSION}"
   fi
@@ -4927,7 +6027,7 @@ frp_client_fetch_and_upgrade() {
   archive="${tmp}/bootstrap-client.sh"
   metadata="${tmp}/SHA256SUMS"
   trap 'rm -rf "'"$tmp"'"' RETURN
-  echo "Downloading frp-auto-deploy client update bundle..."
+  echo "Downloading Data Relay Link client update bundle..."
   curl -fL --retry 3 --connect-timeout 10 --max-time 120 -o "$metadata" "$FRP_CLIENT_UPDATE_METADATA_URL" || {
     echo "ERROR: failed to download client update integrity metadata" >&2
     frp_emit_failure_class INTEGRITY_FAILED
