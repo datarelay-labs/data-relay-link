@@ -13,9 +13,21 @@ The canonical role-based real-user execution matrix is:
 
 - USER_E2E_SCENARIOS.md
 
-An unqualified request for "User E2E", "사용자 E2E", "Full User E2E", or "전체 E2E" means the FULL_USER_E2E profile in that document: all mandatory User, Operator, Administrator, security/failure, and performance scenarios using the actual public drlink CLI and real traffic. ChatGPT is the executor and final auditor for that profile.
+An unqualified request for "User E2E", "사용자 E2E", "Full User E2E", or "전체 E2E" means the FULL_USER_E2E execution contract in that document.
 
-Appendix A of the same file retains the v2.4 operator manual runbook. It does not replace FULL_USER_E2E and it is not a second canonical document.
+The required execution model is:
+
+~~~text
+PASS 1 = direct public drlink CLI functional/lifecycle testing
+PASS 2 = AI-assisted command and ConfigurationBundle execution through public drlink
+PASS 3 = real forward, reverse, and full-duplex performance/resilience testing
+~~~
+
+All three passes are exercised from real User, Operator, and Administrator perspectives across the product lifecycle. Real designated test servers and clients may be rebooted, interrupted, uninstalled, reinstalled, exhausted, or otherwise made temporarily unusable by the scenarios.
+
+During an active FULL_USER_E2E run, product defects are recorded but not fixed. A failing scenario does not stop unrelated scenarios. Dependent scenarios are marked BLOCKED_BY_PRIOR_FAILURE, all independent work continues, and implementation fixes are consolidated only after the planned run is exhausted.
+
+ChatGPT is the executor and final auditor. Cursor does not execute or declare FULL_USER_E2E PASS.
 
 A targeted subset is valid only when the requested scope is explicitly narrowed. Final release qualification still requires the exact-HEAD double Full Real E2E passes defined later in this document.
 
