@@ -128,7 +128,11 @@ The only reason to stop a specific scenario early is that continuing it would le
 
 ### 2.3 Public product path only
 
-All DRLink management, configuration, lifecycle, diagnostics, recovery, and inspection actions used for E2E qualification must use the public drlink CLI.
+All DRLink product management, configuration, supported product lifecycle, diagnostics, recovery, and inspection actions used to exercise DRLink behavior must use the public drlink CLI.
+
+Black-box test-harness actions are allowed outside drlink when they represent the environment rather than a hidden product-management path. Examples include generating application/load traffic, rebooting or powering a designated test host, stopping/starting a target application, disconnecting a network interface, applying controlled latency/loss, occupying an external port to create a collision, filling a bounded disposable test filesystem, collecting OS CPU/RSS/FD/network metrics, or corrupting a copy of a backup archive for a negative restore test.
+
+These OS/network actions may inject failures or measure behavior. They may not configure, repair, bypass, or directly mutate DRLink authoritative state to obtain PASS.
 
 Do not use the following to create, repair, or manufacture a PASS:
 
@@ -262,7 +266,7 @@ FULL_USER_E2E follows the actual product lifecycle instead of treating features 
 - verify test host identity, OS, architecture, network, DNS, and topology;
 - clean Server install from the exact candidate;
 - first launch and public CLI discovery;
-- clean Agent installs on every applicable platform;
+- clean Agent installs on every currently available applicable platform; record unavailable claimed platforms as coverage limitations;
 - verify public hostname/IP bootstrap behavior;
 - verify TLS/certificate prerequisites when applicable.
 
@@ -366,7 +370,7 @@ Every applicable row must have current-run evidence. A row is not covered merely
 | Domain | Direct CLI PASS 1 | AI-assisted PASS 2 | Performance / resilience PASS 3 |
 | --- | --- | --- | --- |
 | Server install / first use | clean install, launch, discovery | AI guides installation and first-use commands without hidden knowledge | startup/restart timing; operational responsiveness |
-| Agent install / enrollment | Zero-Touch, manual, bulk; all platforms | AI generates correct enrollment flow and error recovery | parallel enrollment, reconnect storm |
+| Agent install / enrollment | Zero-Touch, manual, bulk on all currently available applicable platforms | AI generates correct enrollment flow and error recovery | parallel enrollment, reconnect storm |
 | Managed Hosts | inventory, detail, addresses, lifecycle, delete protection | intent-to-command inventory/admin workflows | inventory responsiveness at host tiers |
 | Network Objects / Groups | CRUD, membership, references, invalid cases | single-resource command + multi-resource Bundle | policy lookup under load |
 | Service Objects / Groups | CRUD, TCP/UDP/Fixed TCP where supported, references | AI-generated service definitions | mixed service load |
@@ -796,6 +800,34 @@ The following are conditional on external capability and should not make the bas
 
 At least one run window should bring all currently available suitable hosts online concurrently and exercise the C-* mixed-operation gates.
 
+### 12.6 Black-box fault injection rule
+
+Failure scenarios must be executable from outside the product whenever possible.
+
+Preferred fault sources include:
+
+- host reboot/power cycle;
+- service/target stop;
+- network disconnect, route/firewall impairment, latency/loss/jitter;
+- DNS resolution failure or wrong hostname;
+- port collision;
+- target refusal/timeout;
+- bounded disk-space or filesystem-permission failure on a disposable test path;
+- corrupt backup copy;
+- expired/revoked/invalid external credential where the public workflow supports it.
+
+Do not require a private debug hook or direct database/runtime-state edit merely to inject a failure.
+
+If a specific internal failure phase cannot be deterministically triggered from public/black-box surfaces, run the nearest externally reproducible failure/recovery case and record:
+
+~~~text
+FAULT_INJECTION_LIMITATION=<exact internal phase>
+BLACK_BOX_EQUIVALENT=<scenario actually executed>
+PRODUCT_FAILURE=NO_UNLESS_OBSERVED
+~~~
+
+This is a coverage limitation, not a reason to stop other testing.
+
 ## 13. Public CLI coverage checklist
 
 This list is a coverage inventory, not a second grammar authority. Exact syntax comes from the current CLI/AI Master and public help.
@@ -1153,6 +1185,8 @@ FIXES_PERFORMED_DURING_RUN=NO
 SOURCE_HEAD=
 PRODUCT_VERSION=
 FINAL_STATUS=PASS|PARTIAL|FAIL
+BASE_E2E_EXECUTION_STATUS=PASS|FAIL
+RELEASE_COVERAGE_STATUS=COMPLETE|LIMITED
 
 CLI_DIRECT_FUNCTIONAL=
 AI_ASSISTED_FUNCTIONAL=
@@ -1166,6 +1200,8 @@ TOPOLOGY_MATRIX=
 PARALLEL_MULTI_HOST=
 AVAILABLE_HOST_COUNT=
 MAX_PARALLEL_HOSTS_USED=
+MAX_REAL_SCALE_TESTED=
+UNTESTED_SCALE_CLAIMS=
 PLATFORM_COVERAGE_LIMITATIONS=
 TOPOLOGY_COVERAGE_LIMITATIONS=
 
