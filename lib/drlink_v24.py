@@ -5444,11 +5444,10 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
     """Reconnect synchronization: allocate pending endpoints, apply deletes, revalidate deps."""
     # Enrollment projection is a lifecycle write. show/status must not do it.
     projected = project_enrolled_services_into_agent_catalog(plane_db, root=root)
-    enrolled_names = {
-        str((item.get("view") or {}).get("name") or "").strip().lower()
-        for item in projected
-        if isinstance(item, dict)
-    }
+    # Every bootstrap seed name is protected, not only rows created this pass.
+    # Otherwise a later synchronize would reapply stale client-state through
+    # v2.4 revalidation and undo an operator edit.
+    enrolled_names = _bootstrap_seed_names(root)
     if not detect_server_reachable(plane_db, root):
         return {
             "status": "OFFLINE",
@@ -5500,8 +5499,8 @@ def synchronize_agent_remote_services(plane_db, *, root: Optional[str] = None) -
         for row in list(
             plane_db.conn.execute("SELECT * FROM agent_remote_services WHERE delete_pending = 0")
         ):
-            # Bootstrap rows keep the enrolled name, port, and probe status.
-            # v2.4 dependency revalidation must not replace that identity.
+            # Bootstrap names are seeds. An existing or just-seeded row is
+            # authoritative and must not be rewritten from client-state.
             if str(row["name"] or "").strip().lower() in enrolled_names:
                 updated += 1
                 continue
@@ -6655,17 +6654,38 @@ def _load_enrolled_client_state(root: Optional[str], state: Optional[dict]) -> O
     return None
 
 
+def _bootstrap_seed_names(root: Optional[str], state: Optional[dict] = None) -> set:
+    """Return enrolled service ids that are seeds, not v2.4 runtime projections."""
+    data = _load_enrolled_client_state(root, state)
+    services = data.get("services") if isinstance(data, dict) else None
+    if not isinstance(services, dict):
+        return set()
+    names = set()
+    for sid, rec in services.items():
+        if not isinstance(rec, dict) or rec.get("v24_remote_service"):
+            continue
+        sid_s = str(rec.get("id") or sid).strip()
+        if not sid_s or sid_s.lower().startswith("rs-"):
+            continue
+        try:
+            names.add(validate_public_name(sid_s.lower(), "Remote Service name").lower())
+        except ControlPlaneError:
+            continue
+    return names
+
+
 def project_enrolled_services_into_agent_catalog(
     plane_db,
     *,
     root: Optional[str] = None,
     state: Optional[dict] = None,
 ) -> list:
-    """Project bootstrap client-state services into the Agent catalog.
+    """Seed missing bootstrap services into the Agent catalog.
 
-    The catalog name and public port stay the enrolled service identity
-    (for example ``ssh`` on the allocator port). Already-installed runtime
-    proxies are not reallocated.
+    Enrollment ``client-state`` is migration input only. An existing
+    ``agent_remote_services`` row is authoritative operator state and is
+    left unchanged, including enablement, destination, service, and
+    public port. New rows keep the enrolled name and allocator port.
     """
     data = _load_enrolled_client_state(root, state)
     if not isinstance(data, dict):
@@ -6678,6 +6698,7 @@ def project_enrolled_services_into_agent_catalog(
     destination = identity.get("hostname") or identity.get("label") or "this-host"
     destination_client_id = str(identity.get("machine_id") or "").strip() or None
     results = []
+    wrote = False
     now = utc_now_iso()
     for sid, rec in services.items():
         if not isinstance(rec, dict):
@@ -6708,14 +6729,13 @@ def project_enrolled_services_into_agent_catalog(
             local_port = 0
         local_ip = str(rec.get("local_ip") or "127.0.0.1").strip() or "127.0.0.1"
         existing = plane_db.conn.execute(
-            "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,)
+            "SELECT name FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,)
         ).fetchone()
+        if existing is not None:
+            continue
         if enrolled_port is not None:
             endpoint_port = enrolled_port
             pending = 0
-        elif existing is not None and existing["endpoint_port"] is not None:
-            endpoint_port = int(existing["endpoint_port"])
-            pending = int(existing["pending_allocation"] or 0)
         else:
             endpoint_port = None
             pending = 1
@@ -6727,9 +6747,9 @@ def project_enrolled_services_into_agent_catalog(
             status, reason = "HEALTHY", ""
         else:
             status, reason = "DEGRADED", "Destination is unreachable."
-        host = endpoint_host or (existing["endpoint_host"] if existing is not None else "") or ""
+        host = endpoint_host or ""
         plane_db.conn.execute(
-            "INSERT OR REPLACE INTO agent_remote_services"
+            "INSERT INTO agent_remote_services"
             "(name, destination, destination_client_id, service_object, enabled, status, "
             "endpoint_host, endpoint_port, pending_allocation, delete_pending, pool_class, "
             "reason, updated_at) "
@@ -6748,6 +6768,7 @@ def project_enrolled_services_into_agent_catalog(
                 now,
             ),
         )
+        wrote = True
         endpoint = (
             "Pending allocation"
             if pending or endpoint_port is None
@@ -6755,6 +6776,7 @@ def project_enrolled_services_into_agent_catalog(
         )
         results.append(
             {
+                "seeded": True,
                 "view": {
                     "name": name,
                     "status": status,
@@ -6762,10 +6784,12 @@ def project_enrolled_services_into_agent_catalog(
                     "endpoint": endpoint,
                     "endpoint_port": endpoint_port,
                     "service": service_obj,
-                }
+                    "enabled": enabled,
+                    "destination": destination,
+                },
             }
         )
-    if results:
+    if wrote:
         _commit_if_autonomous(plane_db)
     return results
 

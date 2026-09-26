@@ -169,6 +169,46 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         self.assertEqual(row["status"], "HEALTHY")
         agent.close()
 
+    def test_operator_edit_survives_synchronize(self):
+        v24.activate_enrolled_services_as_remote_services(root=self.agent_tmp)
+        state_path = Path(self.agent_tmp) / "etc/frp/client-state.json"
+        state_bytes = state_path.read_bytes()
+        agent = ControlPlane(self.agent_tmp)
+        agent.conn.execute(
+            "UPDATE agent_remote_services SET enabled = 0, status = 'DISABLED', "
+            "destination = 'lab-db', service_object = 'postgres', reason = 'operator disabled', "
+            "endpoint_port = 6000 WHERE name = 'ssh'"
+        )
+        agent.conn.commit()
+        before = agent.conn.execute(
+            "SELECT enabled, status, destination, service_object, endpoint_port, reason, updated_at "
+            "FROM agent_remote_services WHERE name = 'ssh'"
+        ).fetchone()
+        preserved = v24.project_enrolled_services_into_agent_catalog(agent, root=self.agent_tmp)
+        self.assertEqual(preserved, [])
+        first = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        second = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        self.assertEqual(first.get("status"), "OFFLINE")
+        self.assertEqual(second.get("status"), "OFFLINE")
+        os.environ["DRLINK_SERVER_REACHABLE"] = "1"
+        try:
+            reachable = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        finally:
+            os.environ.pop("DRLINK_SERVER_REACHABLE", None)
+        self.assertIn(reachable.get("status"), ("SYNCHRONIZED", "DEGRADED", "OFFLINE"))
+        after = agent.conn.execute(
+            "SELECT enabled, status, destination, service_object, endpoint_port, reason, updated_at "
+            "FROM agent_remote_services WHERE name = 'ssh'"
+        ).fetchone()
+        self.assertEqual(tuple(after), tuple(before))
+        self.assertEqual(int(after["enabled"]), 0)
+        self.assertEqual(after["status"], "DISABLED")
+        self.assertEqual(after["destination"], "lab-db")
+        self.assertEqual(after["service_object"], "postgres")
+        self.assertEqual(int(after["endpoint_port"]), 6000)
+        self.assertEqual(state_path.read_bytes(), state_bytes)
+        agent.close()
+
         server = ControlPlane(self.server_tmp)
         v24.ensure_v2_schema(server.conn)
         RP.sync_enrolled_client(
@@ -250,3 +290,81 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
         self.assertEqual(int(pub["public_port"]), 6000)
         self.assertEqual(client["id"], MACHINE)
         server.close()
+
+    def _ssh_operator_row(self, plane):
+        return tuple(
+            plane.conn.execute(
+                "SELECT enabled, destination, service_object, endpoint_port, status, reason "
+                "FROM agent_remote_services WHERE name = 'ssh'"
+            ).fetchone()
+        )
+
+    def test_projection_preserves_operator_state_and_show_is_read_only(self):
+        empty = self._fingerprint(self.agent_tmp)
+        self._read_only_shows(self.agent_tmp)
+        self.assertEqual(self._fingerprint(self.agent_tmp), empty)
+
+        created = v24.activate_enrolled_services_as_remote_services(root=self.agent_tmp)
+        self.assertEqual(created[0]["view"]["endpoint_port"], 6000)
+        agent = ControlPlane(self.agent_tmp)
+        agent.conn.execute(
+            "UPDATE agent_remote_services SET enabled = 0, status = 'DISABLED', "
+            "destination = 'other-host', service_object = 'tcp', reason = 'operator hold', "
+            "endpoint_port = 6000, pending_allocation = 0 WHERE name = 'ssh'"
+        )
+        agent.conn.commit()
+        held = self._ssh_operator_row(agent)
+        held_fp = self._fingerprint(self.agent_tmp)
+        self.assertEqual(held[0], 0)
+        self.assertEqual(held[1], "other-host")
+        self.assertEqual(held[2], "tcp")
+        self.assertEqual(int(held[3]), 6000)
+        self.assertEqual(held[4], "DISABLED")
+
+        self.assertEqual(
+            v24.project_enrolled_services_into_agent_catalog(agent, root=self.agent_tmp),
+            [],
+        )
+        self.assertEqual(self._ssh_operator_row(agent), held)
+        sync = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        self.assertEqual(sync.get("projected"), 0)
+        self.assertEqual(self._ssh_operator_row(agent), held)
+        self.assertEqual(
+            v24.activate_enrolled_services_as_remote_services(root=self.agent_tmp),
+            [],
+        )
+        self._read_only_shows(self.agent_tmp)
+        self.assertEqual(self._ssh_operator_row(agent), held)
+        self.assertEqual(self._fingerprint(self.agent_tmp), held_fp)
+
+        state_path = Path(self.agent_tmp) / "etc/frp/client-state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["services"]["http"] = {
+            "id": "http",
+            "preset": "http",
+            "local_ip": "127.0.0.1",
+            "local_port": self.local_port,
+            "remote_port": 6001,
+            "enabled": True,
+        }
+        state_path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+        added = v24.project_enrolled_services_into_agent_catalog(agent, root=self.agent_tmp)
+        self.assertEqual([item["view"]["name"] for item in added], ["http"])
+        self.assertEqual(added[0]["view"]["endpoint_port"], 6001)
+        self.assertEqual(self._ssh_operator_row(agent), held)
+        replay = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        self.assertEqual(replay.get("projected"), 0)
+        self.assertEqual(
+            v24.activate_enrolled_services_as_remote_services(root=self.agent_tmp),
+            [],
+        )
+        self._read_only_shows(self.agent_tmp)
+        self.assertEqual(self._ssh_operator_row(agent), held)
+        names = [
+            row["name"]
+            for row in agent.conn.execute(
+                "SELECT name FROM agent_remote_services ORDER BY name"
+            )
+        ]
+        self.assertEqual(names, ["http", "ssh"])
+        agent.close()
