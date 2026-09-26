@@ -135,12 +135,14 @@ assert '203.0.113.10:6005' in text
 assert 'ssh_port' not in text
 assert 'https_port' not in text
 assert 'Remote Access' in text
+assert 'Published addresses above are reachability only.' in text
+assert 'No Policy' in text
+assert 'Effective access = ALLOW' in text
 assert 'drlink show remote-access' in text
-assert 'drlink show status' in text
-assert 'access is allowed by default' in text
 assert 'Access List' not in text
 assert 'show access-service' not in text
 assert 'Exposure      : PUBLIC' not in text
+assert 'PUBLIC unless' not in text
 PY
 pass "access-info generic"
 

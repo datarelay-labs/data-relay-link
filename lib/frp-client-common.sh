@@ -2263,21 +2263,25 @@ for item in services:
             lines.append(f'    {host_port(server, remote_port)}')
     lines.append('')
 has_enabled = any(item.get('enabled', True) is not False for item in services)
-# The Agent cannot see the Server Access Policy. Do not claim a public
-# default. v2.4 allows access only when no Remote Access policy is configured.
+# Reachability (addresses above) is not Remote Access authorization.
+# Initial Server policy is No Policy / effective ALLOW. The Agent cannot
+# see the live policy, so operators inspect it on the Server.
 if has_enabled:
     lines.extend([
         'Remote Access',
         '=============',
         '',
-        'This Agent does not configure the Server Access Policy.',
-        'When no Remote Access policy is configured, access is allowed by default.',
+        'Published addresses above are reachability only.',
+        'Remote Access authorization is the Server Access Policy.',
+        '',
+        'Initial Remote Access, before a policy is configured:',
+        '  No Policy',
+        '  Effective access = ALLOW',
+        '',
         'A Blacklist policy blocks matching rules. A Whitelist policy allows only matching rules.',
+        'Target SSH or application authentication is still required.',
         '',
-        'Target auth   : SSH/application authentication is still required',
-        '',
-        'On the server:',
-        '  drlink show status',
+        'On the server, inspect Remote Access policy:',
         '  drlink show remote-access',
         '',
     ])

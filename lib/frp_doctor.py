@@ -492,10 +492,18 @@ def detect_role(paths):
     server_hits = [p for p in server_files if paths.exists(p)]
     client_hits = [p for p in client_files if paths.exists(p)]
     has_server_config = paths.is_file('/etc/drlink/config.json')
+    has_server_token = paths.is_file('/etc/frp/server_token')
+    has_registry = paths.is_file('/var/lib/drlink/registry.json')
+    has_control_db = paths.is_file('/var/lib/drlink/drlink.db')
     has_client_state = paths.is_file('/etc/frp/client-state.json')
-    # config.json and client-state.json are the authoritative role evidence.
-    # Leftover frps/server units on an Agent, or leftover frpc bits on a
-    # Server, must not create a false dual/server classification.
+    has_frpc_toml = paths.is_file('/etc/frp/frpc.toml')
+    has_client_identity = paths.is_file('/etc/frp/client-identity.key')
+    # Strong product evidence, not a file-count. Stale frps/unit files are
+    # not a Server. Leftover frpc binaries are not an Agent.
+    strong_server = has_server_config or (
+        has_server_token and (has_registry or has_control_db)
+    )
+    strong_agent = has_client_state or (has_frpc_toml and has_client_identity)
     stale_server_markers = {
         '/usr/local/bin/frps',
         '/etc/systemd/system/drlink-server.service',
@@ -506,9 +514,9 @@ def detect_role(paths):
         '/usr/local/bin/frp-client',
         '/etc/systemd/system/drlink-client.service',
     }
-    if has_client_state and not has_server_config:
+    if strong_agent and not strong_server:
         server_hits = [p for p in server_hits if p not in stale_server_markers]
-    elif has_server_config and not has_client_state:
+    elif strong_server and not strong_agent:
         client_hits = [p for p in client_hits if p not in stale_client_markers]
     has_frpc_unit = paths.is_file('/etc/systemd/system/drlink-client.service')
     has_frps_unit = paths.is_file('/etc/systemd/system/drlink-server.service')
@@ -527,7 +535,7 @@ def detect_role(paths):
         'missing_server_unit': has_server_config and not has_frps_unit,
     }
 
-    if server_n >= 2 and client_n >= 2:
+    if strong_server and strong_agent:
         result.update({
             'role': 'dual',
             'label': 'DRLink Server + Agent Host',
@@ -539,16 +547,7 @@ def detect_role(paths):
             result['confidence'] = 'partial'
         return result
 
-    if server_n >= 2 or has_server_config:
-        if server_n == 1 and not has_server_config:
-            result.update({
-                'role': 'partial_server',
-                'label': 'Partial server installation',
-                'confidence': 'partial',
-                'status': FAIL,
-                'reason': 'only one server marker is present',
-            })
-            return result
+    if strong_server:
         if result['missing_server_unit'] and server_n < 4:
             result.update({
                 'role': 'partial_server',
@@ -567,7 +566,7 @@ def detect_role(paths):
         })
         return result
 
-    if client_n >= 2 or has_client_state:
+    if strong_agent:
         if has_client_state and not has_frpc_unit:
             result.update({
                 'role': 'partial_client',
@@ -575,15 +574,6 @@ def detect_role(paths):
                 'confidence': 'partial',
                 'status': FAIL,
                 'reason': 'client-state exists but frpc unit is missing',
-            })
-            return result
-        if client_n == 1 and not has_client_state:
-            result.update({
-                'role': 'partial_client',
-                'label': 'Partial Agent Host installation',
-                'confidence': 'partial',
-                'status': FAIL,
-                'reason': 'only one client marker is present',
             })
             return result
         result.update({
@@ -595,7 +585,7 @@ def detect_role(paths):
         })
         return result
 
-    if server_n == 1 and client_n == 1:
+    if server_n >= 1 and client_n >= 1:
         result.update({
             'role': 'ambiguous',
             'label': 'Ambiguous',
@@ -604,7 +594,7 @@ def detect_role(paths):
             'reason': 'server and client markers are inconsistent',
         })
         return result
-    if server_n == 1:
+    if server_n >= 1:
         result.update({
             'role': 'partial_server',
             'label': 'Partial server installation',
@@ -613,7 +603,7 @@ def detect_role(paths):
             'reason': 'incomplete server markers',
         })
         return result
-    if client_n == 1:
+    if client_n >= 1:
         result.update({
             'role': 'partial_client',
             'label': 'Partial client installation',

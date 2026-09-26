@@ -184,6 +184,43 @@ class DoctorPresentationTests(unittest.TestCase):
         self.assertEqual(meta["role"], "client")
         self.assertEqual(meta["role_label"], "Agent Host")
 
+    def test_strong_evidence_not_file_counts(self):
+        tmp = tempfile.mkdtemp(prefix="drlink-doc-strong-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        root = Path(tmp)
+        (root / "etc/frp").mkdir(parents=True)
+        (root / "usr/local/bin").mkdir(parents=True)
+        (root / "etc/systemd/system").mkdir(parents=True)
+        (root / "etc/frp/frpc.toml").write_text('serverAddr = "203.0.113.10"\n', encoding="utf-8")
+        (root / "etc/frp/client-identity.key").write_text("fixture-key\n", encoding="utf-8")
+        (root / "usr/local/bin/frps").write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "etc/systemd/system/drlink-server.service").write_text("[Unit]\n", encoding="utf-8")
+        (root / "etc/systemd/system/drlink-allocator.service").write_text("[Unit]\n", encoding="utf-8")
+        info = doctor.detect_role(doctor.Paths(str(root)))
+        self.assertEqual(info["role"], "client")
+        self.assertEqual(info["label"], "Agent Host")
+
+        (root / "etc/frp/server_token").write_text("token\n", encoding="utf-8")
+        (root / "var/lib/drlink").mkdir(parents=True)
+        (root / "var/lib/drlink/drlink.db").write_text("", encoding="utf-8")
+        (root / "usr/local/bin/frpc").write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "etc/systemd/system/drlink-client.service").write_text("[Unit]\n", encoding="utf-8")
+        dual = doctor.detect_role(doctor.Paths(str(root)))
+        self.assertEqual(dual["role"], "dual")
+        self.assertEqual(dual["label"], "DRLink Server + Agent Host")
+
+        (root / "etc/frp/frpc.toml").unlink()
+        (root / "etc/frp/client-identity.key").unlink()
+        server = doctor.detect_role(doctor.Paths(str(root)))
+        self.assertEqual(server["role"], "server")
+        self.assertEqual(server["label"], "DRLink Server")
+
+        (root / "var/lib/drlink/drlink.db").unlink()
+        (root / "var/lib/drlink/registry.json").write_text("{}\n", encoding="utf-8")
+        via_registry = doctor.detect_role(doctor.Paths(str(root)))
+        self.assertEqual(via_registry["role"], "server")
+        self.assertEqual(via_registry["label"], "DRLink Server")
+
     def test_development_display_identity(self):
         d = ident.derive_display_identity(
             project_version="2.4.0",
