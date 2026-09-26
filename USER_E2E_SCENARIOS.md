@@ -29,7 +29,7 @@ The executor must autonomously:
 1. read the latest applicable USER_E2E_SCENARIOS.md from the Data Relay Link candidate workstream;
 2. read only the referenced canonical documents needed to resolve current CLI grammar, release identity, or qualification rules;
 3. determine the current candidate branch/HEAD/build and installed product identity;
-4. inventory the real Server, Agent, client, target, load-generator, platform, and topology resources that are available now;
+4. on the DRLink development server, read `~/.ssh/config` and use its concrete SSH Host aliases as the candidate host inventory; probe them and classify every currently reachable host by role, platform, topology, and destructive-test suitability;
 5. create a new evidence root and run identity;
 6. map this document's scenarios to the available environment;
 7. start every independent executable lane in parallel, using all suitable available hosts;
@@ -769,7 +769,30 @@ Use the real test environment that exists at run time. The base FULL_USER_E2E is
 
 ### 12.1 Pre-run feasibility inventory
 
-Inventory all reachable test assets and classify each planned scenario:
+The runtime host inventory SSOT is the OpenSSH client configuration on the DRLink development server:
+
+~~~text
+HOST_INVENTORY_SOURCE=~/.ssh/config
+HOST_DISCOVERY_MODE=SSH_CONFIG_ALIASES
+USE_HARDCODED_HOST_LIST=NO
+USE_HOSTS_OUTSIDE_SSH_CONFIG=NO
+~~~
+
+At the start of every run:
+
+1. read `~/.ssh/config` on the development server;
+2. enumerate concrete `Host` aliases defined there, ignoring wildcard-only patterns such as `*` or pattern entries that are not directly connectable aliases;
+3. probe each alias through normal SSH resolution/configuration rather than reconstructing addresses manually;
+4. treat successfully reachable aliases as the current available-host pool;
+5. identify each reachable host's hostname, OS/platform, architecture, network role, and whether DRLink Server/Agent/client/load-generator/target use is applicable;
+6. record unreachable aliases as current environment coverage information and continue;
+7. do not invent, reuse from memory, or hardcode a separate host list when `~/.ssh/config` is available.
+
+Reachability makes a host available for consideration, but destructive scenarios must still remain within the designated DRLink test scope. A host that is clearly production, rescue-only, or unrelated infrastructure is inventoried but excluded from destructive mutation unless it is explicitly designated for the current test run.
+
+This SSH-config inventory is refreshed at the beginning of each FULL_USER_E2E run because hosts may be added, removed, renamed, or temporarily unavailable between runs.
+
+Inventory all resulting test assets and classify each planned scenario:
 
 ~~~text
 EXECUTABLE_NOW
@@ -1343,7 +1366,7 @@ FULL_USER_E2E
 -> PASS 2: repeat applicable workflows with AI assistance and execute the generated CLI/Bundle
 -> PASS 3: run forward, reverse, and full-duplex performance/resilience
 -> act as User, Operator, and Administrator through the full product lifecycle
--> use every suitable host available at run time; never block the base run for lack of an arbitrary host count
+-> discover candidate hosts from the development server's ~/.ssh/config and use every suitable reachable host at run time; never block the base run for lack of an arbitrary host count
 -> run independent hosts/scenarios in parallel
 -> keep representative traffic active while policies, Agents, Remote Services, Bundles, and lifecycle state change
 -> break Server/Agent/target/network state where scenarios require it
