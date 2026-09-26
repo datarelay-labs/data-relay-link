@@ -604,6 +604,53 @@ Repeat the same intent using canonical direct CLI and verify equivalent final au
 
 The guided flow must not require knowledge of hidden backend commands, must not repeat already-collected identification unnecessarily, and invalid input must keep the user on the correct step with prior valid draft values preserved.
 
+## U-011 — AI/MCP capability matrix and file transfer — MANDATORY when candidate includes AI/MCP
+
+Configure AI Identity, target, Permission Objects/Groups, and AI Access only through the Server CLI.
+
+For each capability exposed by the current candidate, prove both ALLOW and DENY paths:
+
+~~~text
+host-info
+process-read
+file-read
+command-exec
+file-write
+file-upload
+file-download
+~~~
+
+Real E2E must include, where supported:
+
+- read a known disposable file;
+- write an allowed disposable file;
+- upload a file and verify checksum/content;
+- download it and verify checksum/content;
+- attempt out-of-scope/traversal/symlink escape -> DENY;
+- allowed exec;
+- denied exec;
+- exec timeout;
+- bounded output;
+- process cleanup;
+- OS account/sudo boundary;
+- policy change affects the next invocation;
+- a running command/session follows the documented existing-session semantics.
+
+Target selection must be exercised through both a direct Network Object and a Network Group where supported.
+
+## U-012 — Internet Access protocol/application coverage — MANDATORY
+
+In addition to U-006, explicitly exercise every currently supported Internet Access data path claimed by the candidate:
+
+- approved HTTP;
+- approved HTTPS CONNECT;
+- approved public Host/CIDR where supported;
+- approved Fixed TCP where supported;
+- representative vendor/API HTTPS;
+- real package/update workflow.
+
+For each allowed path include a paired denied path using wrong source, destination, or port.
+
 # 8. Operator scenarios
 
 ## O-001 — First-use discovery and role correctness — MANDATORY
@@ -1234,6 +1281,39 @@ After each change, regenerate or inspect:
 
 Verify no change to an optional friendly hostname silently changes control/allocator identity unless the current product contract explicitly says so.
 
+## A-019 — Prior-stable upgrade to candidate — MANDATORY when an upgrade path is claimed
+
+On each applicable real platform, start from the actual currently supported prior stable release and update using only the supported public CLI/install path.
+
+Verify:
+
+- Managed Host identity preserved;
+- enrollment/trust preserved unless the documented migration explicitly requires otherwise;
+- Service/Remote Service identity preserved;
+- endpoint/public-port reservations preserved;
+- Objects/Groups/Policies preserved or migrated deterministically;
+- backup remains restorable;
+- product and Relay Engine versions remain distinct;
+- no hidden legacy state becomes a second authority;
+- reboot after upgrade succeeds;
+- real Remote Access and Internet Access traffic succeeds after upgrade.
+
+Historical upgrade evidence from another HEAD does not satisfy the current requested run.
+
+## A-020 — Update failure and recovery — MANDATORY on disposable environment
+
+Initiate the supported product update through public CLI and inject/observe representative failures such as unavailable artifact, integrity mismatch, activation failure, or restart failure where the harness can safely reproduce them.
+
+Verify:
+
+- failed update is not reported as success;
+- old working state is preserved/restored where the update contract promises atomic recovery;
+- identity and endpoint reservations are not silently recreated;
+- operator receives actionable diagnostics;
+- retry after the blocker is corrected converges to a healthy supported state.
+
+If downgrade is unsupported, an attempted downgrade must be rejected explicitly rather than silently performing an unsafe transition.
+
 # 10. Security and failure scenarios
 
 ## S-001 — Allow and deny are both proven — MANDATORY
@@ -1704,6 +1784,33 @@ After recovery, use CLI on every host plus Server CLI inventory to verify:
 - policy continuity;
 - real traffic;
 - no host requires manual re-enrollment unless explicitly documented.
+
+## C-013 — Parallel Agent update/restart convergence — MANDATORY on disposable/approved hosts
+
+Update or restart multiple applicable Agent Hosts within the same maintenance window while the Server remains active.
+
+Verify:
+
+- each host preserves identity;
+- endpoints remain mapped to the correct host/service;
+- hosts reconnect independently;
+- one failed host does not corrupt another host's state;
+- Server inventory converges without duplicates;
+- real traffic resumes per host.
+
+## C-014 — Parallel mixed lifecycle operations — MANDATORY
+
+Across different Agent Hosts at the same time perform a controlled mix of:
+
+- create Remote Service;
+- edit same-pool target/service;
+- disable/enable;
+- delete;
+- synchronize;
+- diagnostics;
+- real user connection attempts.
+
+Verify isolation between hosts and deterministic final state. A lifecycle operation on one host must not release, rename, or reassign another host's endpoint.
 
 # 12. Performance test contract
 
@@ -2443,6 +2550,45 @@ CHATGPT_PLUGIN_RELAY_E2E=
 ~~~
 
 A passing direct MCP test cannot substitute for a Plugin path failure. A Plugin path PASS cannot substitute for unexecuted public `drlink` CLI scenarios.
+
+## X-008 — OAuth concurrency, abuse limits, and durable state — CONDITIONAL
+
+Exercise concurrent DCR/authorize/token activity within the Plugin's supported PoC limits.
+
+Verify:
+
+- pending authorization capacity is bounded;
+- unexpired pending owner consent is not evicted merely to admit churn;
+- per-source rate protection is effective;
+- active refresh-bound clients are not removed by ordinary inactive cleanup;
+- restart preserves only intended durable client/refresh/revocation state;
+- public/non-loopback OAuth does not silently become ephemeral.
+
+## X-009 — Plugin OAuth state backup/restore — CONDITIONAL
+
+Use the Plugin repository's supported backup/restore workflow for OAuth state.
+
+After restore/restart, verify expected reconnect/revoke semantics and that secrets remain protected by required file/parent permissions.
+
+## X-010 — Real ChatGPT Plus Plugin acceptance — CONDITIONAL when environment is available
+
+If the acceptance claim explicitly includes ChatGPT Plus rather than only protocol interoperability, test the actual ChatGPT Plus Plugin/App installation and tool-use surface.
+
+This is an external-client validation analogous to using real SSH/curl clients; it does not relax the DRLink CLI-only control-plane rule.
+
+Verify end to end:
+
+~~~text
+ChatGPT Plus
+→ Plugin package
+→ OAuth/connect
+→ relay
+→ DRLink Server MCP
+→ DRLink AI Access
+→ Managed Host
+~~~
+
+Record the exact ChatGPT/Plugin environment and date. If the real ChatGPT surface is unavailable, report BLOCKED_ENVIRONMENT for a ChatGPT-specific claim rather than substituting a generic MCP client and calling it PASS.
 
 # 16. Evidence and result rules
 
