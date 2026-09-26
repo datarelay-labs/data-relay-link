@@ -6819,8 +6819,7 @@ def activate_enrolled_services_as_remote_services(
                 "UPDATE agent_remote_services SET status = 'HEALTHY', reason = '', updated_at = ? "
                 "WHERE name = ? COLLATE NOCASE AND delete_pending = 0 AND enabled = 1 "
                 "AND endpoint_port IS NOT NULL AND pending_allocation = 0 "
-                "AND (reason = '' OR lower(reason) LIKE '%activation%' OR lower(reason) LIKE 'runtime%') "
-                "AND lower(reason) NOT LIKE '%unreachable%'",
+                "AND reason = 'Runtime activation pending.'",
                 (now, name),
             )
             row = plane.conn.execute(

@@ -414,6 +414,68 @@ frp_client_service_reload() {
   frp_is_darwin || systemctl daemon-reload
 }
 
+# Record relay verification only when wait_for_proxies succeeds.
+# A local target socket is not evidence. Failure leaves the flag unset/0.
+frp_client_note_enrolled_proxies_verified() {
+  if ! wait_for_proxies "$@"; then
+    FRP_ENROLLED_PROXIES_VERIFIED=0
+    return 1
+  fi
+  FRP_ENROLLED_PROXIES_VERIFIED=1
+  return 0
+}
+
+# Pass the flag only into this python3 process. Test roots and FRP_SKIP_SYSTEMD
+# never ran wait_for_proxies, so they stay runtime_verified=False.
+frp_client_activate_enrolled_services() {
+  local verified=0
+  if [[ "${1:-0}" == "1" && "${FRP_SKIP_SYSTEMD:-}" != "1" && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
+    verified=1
+  fi
+  FRP_ENROLLED_PROXIES_VERIFIED="$verified" python3 -c '
+import os, sys
+from pathlib import Path
+root = os.environ.get("FRP_CLIENT_TEST_ROOT") or os.environ.get("FRP_DEPLOY_TEST_ROOT") or ""
+cands = []
+if root:
+    cands.append(Path(root) / "usr/local/lib/drlink")
+cands.append(Path("/usr/local/lib/drlink"))
+here = Path(os.environ.get("_FRP_INSTALL_CLIENT_DIR") or ".")
+cands.extend([here / "lib", here.parent / "lib"])
+for base in cands:
+    if (base / "drlink_v24.py").is_file():
+        sys.path.insert(0, str(base))
+        break
+try:
+    import drlink_v24 as v24
+except Exception:
+    raise SystemExit(0)
+verified = os.environ.get("FRP_ENROLLED_PROXIES_VERIFIED") == "1"
+results = v24.activate_enrolled_services_as_remote_services(
+    root=root or None,
+    runtime_verified=verified,
+)
+healthy = False
+degraded = []
+for result in results:
+    view = (result or {}).get("view") or {}
+    status = str(view.get("status") or "")
+    name = view.get("name") or "?"
+    if status == "HEALTHY":
+        healthy = True
+        print("Remote Service activated: %s (%s)" % (name, view.get("endpoint") or "-"))
+    elif status:
+        degraded.append((name, status, view.get("reason") or ""))
+for name, status, reason in degraded:
+    print("Remote Service not fully activated: %s status=%s" % (name, status))
+    if reason:
+        print("  Reason: %s" % reason)
+if results and not healthy and degraded:
+    print("Zero-Touch enrollment finished, but Remote Service activation is incomplete.")
+    print("Run: sudo drlink show remote-services")
+' || true
+}
+
 frp_client_service_start() {
   if frp_is_darwin; then
     frp_macos_launchd_set_enabled enable || return 1
@@ -857,7 +919,7 @@ frp_client_main() {
     while IFS= read -r proxy_name; do
       [[ -n "$proxy_name" ]] && PROXY_NAMES+=("$proxy_name")
     done < <(proxy_names_from_services "$HOST_ID")
-    if ! wait_for_proxies "${PROXY_NAMES[@]}"; then
+    if ! frp_client_note_enrolled_proxies_verified "${PROXY_NAMES[@]}"; then
       echo "ERROR: Relay Engine (FRP) did not register every requested proxy successfully" >&2
       frp_client_recent_runtime_logs 80 >&2 || true
       echo "Recovery: sudo drlink system diagnostics" >&2
@@ -865,8 +927,6 @@ frp_client_main() {
       frp_emit_failure_class HEALTH_CHECK_FAILED
       exit 1
     fi
-    # wait_for_proxies is the relay evidence. Do not infer HEALTHY from the local target.
-    FRP_ENROLLED_PROXIES_VERIFIED=1
   elif [[ "$(services_count)" == "0" ]]; then
     echo "Management-only mode: frpc is not started until a service is enabled."
     if [[ "${FRP_SKIP_SYSTEMD:-}" != "1" && -z "${FRP_CLIENT_TEST_ROOT:-}" ]]; then
@@ -912,52 +972,11 @@ frp_client_main() {
   frp_pending_enroll_clear
 
   # Promote enrolled services into v2.4 Remote Services (reuse allocated ports).
-  # Export so the activator can record relay verification without reading the local socket.
-  export FRP_ENROLLED_PROXIES_VERIFIED
+  # The flag is a command-scoped environment value, not a leaked shell export.
   if [[ "$(services_count)" != "0" ]]; then
-    python3 -c '
-import os, sys
-from pathlib import Path
-root = os.environ.get("FRP_CLIENT_TEST_ROOT") or os.environ.get("FRP_DEPLOY_TEST_ROOT") or ""
-cands = []
-if root:
-    cands.append(Path(root) / "usr/local/lib/drlink")
-cands.append(Path("/usr/local/lib/drlink"))
-here = Path(os.environ.get("_FRP_INSTALL_CLIENT_DIR") or ".")
-cands.extend([here / "lib", here.parent / "lib"])
-for base in cands:
-    if (base / "drlink_v24.py").is_file():
-        sys.path.insert(0, str(base))
-        break
-try:
-    import drlink_v24 as v24
-except Exception:
-    raise SystemExit(0)
-verified = os.environ.get("FRP_ENROLLED_PROXIES_VERIFIED") == "1"
-results = v24.activate_enrolled_services_as_remote_services(
-    root=root or None,
-    runtime_verified=verified,
-)
-healthy = False
-degraded = []
-for result in results:
-    view = (result or {}).get("view") or {}
-    status = str(view.get("status") or "")
-    name = view.get("name") or "?"
-    if status == "HEALTHY":
-        healthy = True
-        print("Remote Service activated: %s (%s)" % (name, view.get("endpoint") or "-"))
-    elif status:
-        degraded.append((name, status, view.get("reason") or ""))
-for name, status, reason in degraded:
-    print("Remote Service not fully activated: %s status=%s" % (name, status))
-    if reason:
-        print("  Reason: %s" % reason)
-if results and not healthy and degraded:
-    print("Zero-Touch enrollment finished, but Remote Service activation is incomplete.")
-    print("Run: sudo drlink show remote-services")
-' || true
+    frp_client_activate_enrolled_services "${FRP_ENROLLED_PROXIES_VERIFIED:-0}"
   fi
+  unset FRP_ENROLLED_PROXIES_VERIFIED
 
   print_complete "$FRP_SERVER" "$SERVICES_FILE" "${FRP_PUBLIC_HOSTNAME:-}"
   if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then

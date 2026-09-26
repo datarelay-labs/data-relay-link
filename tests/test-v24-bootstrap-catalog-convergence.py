@@ -445,14 +445,27 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
 
         agent.conn.execute("DELETE FROM agent_remote_services")
         agent.conn.commit()
+        backfill = v24.synchronize_agent_remote_services(agent, root=self.agent_tmp)
+        self.assertEqual(backfill.get("status"), "OFFLINE")
+        self.assertEqual(backfill.get("projected"), 1)
+        backfilled = agent.conn.execute(
+            "SELECT status, endpoint_port, reason FROM agent_remote_services WHERE name = 'ssh'"
+        ).fetchone()
+        self.assertEqual(backfilled["status"], "DEGRADED")
+        self.assertEqual(int(backfilled["endpoint_port"]), 6000)
+        self.assertIn("activation", (backfilled["reason"] or "").lower())
+        self.assertNotEqual(backfilled["status"], "HEALTHY")
+
+        agent.conn.execute("DELETE FROM agent_remote_services")
+        agent.conn.commit()
         verified = v24.activate_enrolled_services_as_remote_services(
             root=self.agent_tmp, runtime_verified=True
         )
         self.assertEqual(verified[0]["view"]["status"], "HEALTHY")
         self.assertEqual(verified[0]["view"]["endpoint_port"], 6000)
         agent.conn.execute(
-            "UPDATE agent_remote_services SET enabled = 0, status = 'DISABLED', "
-            "reason = 'operator hold', endpoint_port = 6000 WHERE name = 'ssh'"
+            "UPDATE agent_remote_services SET enabled = 1, status = 'DEGRADED', "
+            "reason = 'operator edited', endpoint_port = 6000 WHERE name = 'ssh'"
         )
         agent.conn.commit()
         held = self._ssh_operator_row(agent)
@@ -463,4 +476,6 @@ class BootstrapCatalogConvergenceTests(unittest.TestCase):
             [],
         )
         self.assertEqual(self._ssh_operator_row(agent), held)
+        self.assertEqual(held[4], "DEGRADED")
+        self.assertEqual(held[5], "operator edited")
         agent.close()
