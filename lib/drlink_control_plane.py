@@ -5444,6 +5444,12 @@ class ControlPlane:
                 server_line = "Unknown"
             extra.append("Server          : %s" % server_line)
             try:
+                from drlink_v24 import project_enrolled_services_into_agent_catalog
+
+                project_enrolled_services_into_agent_catalog(self, root=self.root)
+            except Exception:
+                pass
+            try:
                 rs_count = self.conn.execute(
                     "SELECT COUNT(*) FROM agent_remote_services WHERE delete_pending = 0"
                 ).fetchone()[0]

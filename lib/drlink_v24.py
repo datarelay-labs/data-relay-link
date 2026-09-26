@@ -6599,6 +6599,161 @@ def probe_agent_runtime_unit(*, root: Optional[str] = None) -> dict:
     return {"level": "Unknown", "detail": "drlink-client.service status could not be read"}
 
 
+def inventory_remote_service_status(plane_db, client, *, enabled: bool, stored_status: str) -> str:
+    """Operator-facing Remote Service status.
+
+    Explicit disable and an offline Managed Host override a stored HEALTHY
+    value. A connected, enabled service keeps a reported HEALTHY or DEGRADED
+    status. Missing runtime evidence stays DEGRADED.
+    """
+    if not enabled:
+        return "DISABLED"
+    try:
+        connectivity = plane_db.managed_host_connectivity(client)
+    except Exception:
+        connectivity = "disconnected"
+    if connectivity != "connected":
+        return "DEGRADED"
+    stored = str(stored_status or "").strip().upper()
+    if stored == "HEALTHY":
+        return "HEALTHY"
+    if stored == "DEGRADED":
+        return "DEGRADED"
+    return "DEGRADED"
+
+
+def _load_enrolled_client_state(root: Optional[str], state: Optional[dict]) -> Optional[dict]:
+    if isinstance(state, dict):
+        return state
+    for path in _agent_state_file_candidates(
+        "etc/frp/client-state.json", "client-state.json", root
+    ):
+        if not path.is_file():
+            continue
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(loaded, dict):
+            return loaded
+    return None
+
+
+def project_enrolled_services_into_agent_catalog(
+    plane_db,
+    *,
+    root: Optional[str] = None,
+    state: Optional[dict] = None,
+) -> list:
+    """Project bootstrap client-state services into the Agent catalog.
+
+    The catalog name and public port stay the enrolled service identity
+    (for example ``ssh`` on the allocator port). Already-installed runtime
+    proxies are not reallocated.
+    """
+    data = _load_enrolled_client_state(root, state)
+    if not isinstance(data, dict):
+        return []
+    services = data.get("services") or {}
+    if not isinstance(services, dict) or not services:
+        return []
+    endpoint_host = str(data.get("public_hostname") or data.get("frp_server") or "").strip()
+    identity = load_agent_identity(root)
+    destination = identity.get("hostname") or identity.get("label") or "this-host"
+    destination_client_id = str(identity.get("machine_id") or "").strip() or None
+    results = []
+    now = utc_now_iso()
+    for sid, rec in services.items():
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("v24_remote_service"):
+            continue
+        sid_s = str(rec.get("id") or sid).strip()
+        if not sid_s or sid_s.lower().startswith("rs-"):
+            continue
+        try:
+            name = validate_public_name(sid_s.lower(), "Remote Service name")
+        except ControlPlaneError:
+            continue
+        preset = str(rec.get("preset") or "tcp").strip().lower()
+        service_obj = preset if preset in ("ssh", "http", "https", "tcp") else "tcp"
+        enabled = rec.get("enabled", True) is not False
+        # Prefer the enrolled public port so Zero-Touch keeps the allocator
+        # reservation (enrolled_port) instead of minting a new endpoint.
+        enrolled_port = None
+        try:
+            if rec.get("remote_port") is not None:
+                enrolled_port = int(rec.get("remote_port"))
+        except (TypeError, ValueError):
+            enrolled_port = None
+        try:
+            local_port = int(rec.get("local_port") or (22 if preset == "ssh" else 0))
+        except (TypeError, ValueError):
+            local_port = 0
+        local_ip = str(rec.get("local_ip") or "127.0.0.1").strip() or "127.0.0.1"
+        existing = plane_db.conn.execute(
+            "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+        if enrolled_port is not None:
+            endpoint_port = enrolled_port
+            pending = 0
+        elif existing is not None and existing["endpoint_port"] is not None:
+            endpoint_port = int(existing["endpoint_port"])
+            pending = int(existing["pending_allocation"] or 0)
+        else:
+            endpoint_port = None
+            pending = 1
+        if not enabled:
+            status, reason = "DISABLED", ""
+        elif endpoint_port is None:
+            status, reason = "DEGRADED", "Endpoint allocation is pending."
+        elif local_port > 0 and _probe_tcp(local_ip, local_port):
+            status, reason = "HEALTHY", ""
+        else:
+            status, reason = "DEGRADED", "Destination is unreachable."
+        host = endpoint_host or (existing["endpoint_host"] if existing is not None else "") or ""
+        plane_db.conn.execute(
+            "INSERT OR REPLACE INTO agent_remote_services"
+            "(name, destination, destination_client_id, service_object, enabled, status, "
+            "endpoint_host, endpoint_port, pending_allocation, delete_pending, pool_class, "
+            "reason, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'normal', ?, ?)",
+            (
+                name,
+                destination,
+                destination_client_id,
+                service_obj,
+                1 if enabled else 0,
+                status,
+                host or None,
+                endpoint_port,
+                pending,
+                reason,
+                now,
+            ),
+        )
+        endpoint = (
+            "Pending allocation"
+            if pending or endpoint_port is None
+            else "%s:%s" % (host or "pending", endpoint_port)
+        )
+        results.append(
+            {
+                "view": {
+                    "name": name,
+                    "status": status,
+                    "reason": reason,
+                    "endpoint": endpoint,
+                    "endpoint_port": endpoint_port,
+                    "service": service_obj,
+                }
+            }
+        )
+    if results:
+        _commit_if_autonomous(plane_db)
+    return results
+
+
 def activate_enrolled_services_as_remote_services(
     *,
     root: Optional[str] = None,
@@ -6606,100 +6761,18 @@ def activate_enrolled_services_as_remote_services(
 ) -> list:
     """Promote enrolled client-state services into Agent Remote Services.
 
-    Reuses allocated public ports when present and attempts full runtime
-    activation. Returns a list of result dicts (may be empty).
+    Reuses allocated public ports when present. Returns a list of result
+    dicts (may be empty).
     """
-    data = state if isinstance(state, dict) else None
-    if data is None:
-        for path in _agent_state_file_candidates(
-            "etc/frp/client-state.json", "client-state.json", root
-        ):
-            if not path.is_file():
-                continue
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if isinstance(loaded, dict):
-                data = loaded
-                break
+    data = _load_enrolled_client_state(root, state)
     if not isinstance(data, dict):
         return []
-    services = data.get("services") or {}
-    if not isinstance(services, dict) or not services:
-        return []
-    alias = str(data.get("public_hostname") or data.get("frp_server") or "").strip()
-    if alias and not os.environ.get("DRLINK_HOST"):
-        os.environ["DRLINK_HOST"] = alias
     from drlink_control_plane import ControlPlane
 
     plane = ControlPlane(root)
-    results = []
-    reachable = detect_server_reachable(plane, root)
-    for sid, rec in services.items():
-        if not isinstance(rec, dict) or rec.get("enabled", True) is False:
-            continue
-        preset = str(rec.get("preset") or "").strip().lower()
-        sid_s = str(rec.get("id") or sid).strip()
-        if preset == "ssh" or sid_s.lower() == "ssh":
-            name = "ssh-access"
-            service_obj = "ssh"
-        else:
-            name = str(rec.get("name") or sid_s)
-            service_obj = sid_s
-        if service_obj == "ssh" and not get_service_object(plane, "ssh"):
-            try:
-                set_service_object(plane, "ssh", type="tcp", port=22, oneshot=True)
-            except ControlPlaneError:
-                pass
-        existing = plane.conn.execute(
-            "SELECT * FROM agent_remote_services WHERE name = ? COLLATE NOCASE", (name,)
-        ).fetchone()
-        try:
-            result = set_remote_service_agent(
-                plane,
-                name,
-                destination="this-host",
-                service=service_obj,
-                enabled=True,
-                oneshot=True,
-                root=root,
-                server_reachable=reachable,
-            )
-            # Prefer the enrolled public port when the brand-new Remote Service
-            # received a different allocation (stability for Zero-Touch).
-            enrolled_port = None
-            try:
-                if rec.get("remote_port") is not None:
-                    enrolled_port = int(rec.get("remote_port"))
-            except (TypeError, ValueError):
-                enrolled_port = None
-            view = (result or {}).get("view") or {}
-            if (
-                existing is None
-                and enrolled_port is not None
-                and view.get("endpoint_port") not in (None, enrolled_port)
-            ):
-                plane.conn.execute(
-                    "UPDATE agent_remote_services SET endpoint_port = ? WHERE name = ? COLLATE NOCASE",
-                    (enrolled_port, name),
-                )
-                _commit_if_autonomous(plane)
-                result = set_remote_service_agent(
-                    plane,
-                    name,
-                    destination="this-host",
-                    service=service_obj,
-                    enabled=True,
-                    oneshot=True,
-                    root=root,
-                    server_reachable=reachable,
-                )
-            results.append(result)
-        except ControlPlaneError:
-            continue
-        except Exception:
-            continue
+    results = project_enrolled_services_into_agent_catalog(plane, root=root, state=data)
+    if results and detect_server_reachable(plane, root):
+        _push_agent_remote_service_status(plane, root=root)
     return results
 
 

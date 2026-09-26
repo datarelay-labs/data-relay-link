@@ -1515,6 +1515,23 @@ def server_report_remote_service_status(plane, auth: MgmtAuthContext, body: dict
                     "SELECT * FROM remote_service_meta WHERE service_id = ?",
                     (pub["id"],),
                 ).fetchone()
+                if meta is None:
+                    plane.conn.execute(
+                        "INSERT INTO remote_service_meta"
+                        "(service_id, status, pool_class, destination_name, destination_client_id, "
+                        "pending_allocation, delete_pending, reason) "
+                        "VALUES (?, 'DEGRADED', 'normal', 'this-host', ?, ?, 0, ?)",
+                        (
+                            pub["id"],
+                            pub["client_id"],
+                            0 if pub["public_port"] is not None else 1,
+                            "Runtime activation pending.",
+                        ),
+                    )
+                    meta = plane.conn.execute(
+                        "SELECT * FROM remote_service_meta WHERE service_id = ?",
+                        (pub["id"],),
+                    ).fetchone()
                 status, computed_reason, stale = effective_remote_service_status(
                     plane,
                     pub,

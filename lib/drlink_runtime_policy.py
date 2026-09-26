@@ -560,9 +560,10 @@ def sync_enrolled_client(
         if str(svc.get("target_mode") or "").lower() == "routed":
             mode = "routed"
             target_host = str(svc.get("target_host") or local_ip)
+        service_name = str(sid).strip().lower()
         plane.set_published_service(
             client_id,
-            str(sid).strip().lower(),
+            service_name,
             service_type=stype,
             target_mode=mode,
             target_host=target_host,
@@ -572,7 +573,33 @@ def sync_enrolled_client(
             from_preset=preset if preset in ("ssh", "http", "https", "tcp") else None,
         )
         if not enabled:
-            plane.set_published_service_enabled(client_id, str(sid).strip().lower(), False)
+            plane.set_published_service_enabled(client_id, service_name, False)
+        pub = plane.conn.execute(
+            "SELECT id, enabled, public_port FROM published_services "
+            "WHERE client_id = ? AND name = ? AND released = 0",
+            (client_id, service_name),
+        ).fetchone()
+        if pub is not None:
+            meta = plane.conn.execute(
+                "SELECT service_id FROM remote_service_meta WHERE service_id = ?",
+                (pub["id"],),
+            ).fetchone()
+            if meta is None:
+                pub_enabled = bool(pub["enabled"])
+                plane.conn.execute(
+                    "INSERT INTO remote_service_meta"
+                    "(service_id, status, pool_class, destination_name, destination_client_id, "
+                    "pending_allocation, delete_pending, reason) "
+                    "VALUES (?, ?, 'normal', 'this-host', ?, ?, 0, ?)",
+                    (
+                        pub["id"],
+                        "DISABLED" if not pub_enabled else "DEGRADED",
+                        client_id,
+                        0 if pub["public_port"] is not None else 1,
+                        "" if not pub_enabled else "Runtime activation pending.",
+                    ),
+                )
+                plane.commit_if_autonomous()
     return {"client_id": client_id, "services": len(services)}
 
 

@@ -586,6 +586,10 @@ def server_target_projection_reason(plane: ControlPlane, pub, meta) -> Optional[
         ).fetchone()
     service_name = sobj["name"] if sobj is not None else ""
     if not service_name:
+        # Bootstrap enrollment stores the target on the published service and
+        # has no v2.4 Service Object. That is not a projection failure.
+        if str(pub["target_host"] or "").strip() and pub["target_port"]:
+            return None
         return "Required Service Object is missing or invalid."
     try:
         stored_bind = str(dest_cid or "").strip() or None
@@ -918,6 +922,11 @@ def effective_remote_service_status(
         return "HEALTHY", "", False
     stored = str(meta["status"] if meta else "") or ""
     if stored == "HEALTHY" and port is not None:
+        owner = plane.conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (pub["client_id"],)
+        ).fetchone()
+        if owner is None or plane.managed_host_connectivity(owner) != "connected":
+            return "DEGRADED", "Managed Host is offline.", False
         return "HEALTHY", "", False
     if stored == "DISABLED":
         return "DISABLED", "", False
