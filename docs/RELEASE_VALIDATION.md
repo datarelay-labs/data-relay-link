@@ -7,6 +7,18 @@ Current project version **2.4.0** / FRP **0.71.0**
 
 Published tags are immutable.
 
+### User E2E execution matrix
+
+The canonical role-based real-user execution matrix is:
+
+- USER_E2E_SCENARIOS.md
+
+An unqualified request for "User E2E", "사용자 E2E", "Full User E2E", or "전체 E2E" means the FULL_USER_E2E profile in that document: all mandatory User, Operator, Administrator, security/failure, and performance scenarios using the actual public drlink CLI and real traffic. ChatGPT is the executor and final auditor for that profile.
+
+Appendix A of the same file retains the v2.4 operator manual runbook. It does not replace FULL_USER_E2E and it is not a second canonical document.
+
+A targeted subset is valid only when the requested scope is explicitly narrowed. Final release qualification still requires the exact-HEAD double Full Real E2E passes defined later in this document.
+
 ## 1. Gate philosophy
 
 Validation must prove both allowed behavior and denied behavior.

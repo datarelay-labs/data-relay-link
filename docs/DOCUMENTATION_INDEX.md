@@ -47,7 +47,7 @@ Historical documents and internal storage names never override the public SSOT.
 
 These documents are useful for qualification but do not redefine product semantics:
 
-- [`USER_E2E_SCENARIOS.md`](../USER_E2E_SCENARIOS.md) — canonical human/operator E2E scenario runbook
+- [`USER_E2E_SCENARIOS.md`](../USER_E2E_SCENARIOS.md) — canonical FULL_USER_E2E matrix and v2.4 operator manual runbook
 - `V2_4_0_CURSOR_AUTOMATED_E2E_PLAN.md`
 - `V2_4_0_RICK_CURSOR_EVIDENCE_MATRIX.md`
 - `HUMAN_UX_ADVERSARIAL_E2E.md`

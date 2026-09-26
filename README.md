@@ -26,7 +26,7 @@
 
 ---
 
-> **User E2E qualification:** [USER_E2E_SCENARIOS.md](USER_E2E_SCENARIOS.md) — canonical human/operator end-to-end test scenarios for the current v2.4 release candidate.
+> **User E2E qualification:** [USER_E2E_SCENARIOS.md](USER_E2E_SCENARIOS.md) — canonical FULL_USER_E2E execution matrix (role, security, and performance scenarios) plus the v2.4 operator manual runbook.
 
 > **License — Source Available:** Data Relay Link is free for personal use and for an organization's own internal commercial operations. Internal source modifications are allowed. Resale, commercial redistribution, OEM/white-label use, competing or derivative commercial products, and SaaS/hosted/managed-service offerings require a separate written commercial license. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
 
