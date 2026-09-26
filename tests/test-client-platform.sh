@@ -13,6 +13,7 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 export FRP_CLIENT_SOURCED=1
 # shellcheck source=../install-client.sh
 . "$ROOT/install-client.sh"
+eval "$(declare -f frp_python_module_importable | sed '1s/frp_python_module_importable/frp_python_module_importable_real/')"
 
 FIXTURES="$ROOT/tests/fixtures/os-release"
 
@@ -375,9 +376,17 @@ frp_packages_for_missing apt
 printf '%s\n' "${PACKAGES[@]}" | grep -qx python3-acme || fail "server PACKAGES includes python3-acme"
 pass "package name mapping"
 
-# Agent installs must pull PyYAML. apt-family is python3-yaml; Rocky/EL8 is python3-pyyaml.
+# Agent installs must pull a PyYAML package for the interpreter that will run.
+# apt-family is python3-yaml. Clean EL8 pairs python39 with python39-pyyaml.
 reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-yaml-map"
 FRP_DEPENDENCY_ROLE=client
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
 PACKAGE_MANAGER=apt
 DISTRO_ID=ubuntu
 DISTRO_VERSION=24.04
@@ -391,8 +400,23 @@ PACKAGE_MANAGER=dnf
 DISTRO_ID=rocky
 DISTRO_VERSION=8.10
 frp_collect_missing_python_packages
-printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "rocky client missing pyyaml"
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml || fail "clean EL8 client missing python39-pyyaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml; then
+  fail "clean EL8 must not select platform python3-pyyaml"
+fi
 [[ "$(frp_package_for_command python3 dnf)" == python39 ]] || fail "EL8 python3 package must stay python39"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+code="${2:-}"
+case "$code" in
+  *'sys.version_info[:2]'*) printf '3.11\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3.11-pyyaml || fail "EL8 python3.11 missing python3.11-pyyaml"
 pass "client yaml package mapping"
 
 reset_pm_isolation
@@ -403,12 +427,17 @@ DISTRO_ID=rocky
 DISTRO_VERSION=8
 PACKAGE_MANAGER=dnf
 make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
 mkdir -p "$FRP_TEST_PM_PATH"
 cat >"$FRP_TEST_PM_PATH/dnf" <<'EOF'
 #!/bin/sh
 for arg in "$@"; do
-  if [ "$arg" = python3-pyyaml ]; then
-    echo "No match for argument: python3-pyyaml" >&2
+  if [ "$arg" = python39-pyyaml ]; then
+    echo "No match for argument: python39-pyyaml" >&2
     exit 1
   fi
 done
@@ -419,9 +448,148 @@ frp_python_module_importable() { return 1; }
 if ensure_dependencies >"$WORKDIR/yaml-fail.out" 2>"$WORKDIR/yaml-fail.err"; then
   fail "missing Rocky PyYAML must fail client ensure_dependencies"
 fi
+grep -q 'No match for argument: python39-pyyaml' "$WORKDIR/yaml-fail.err" || fail "yaml failure must keep the package manager error"
 grep -q 'required Python packages are missing' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name required Python packages"
-grep -q 'python3-pyyaml' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name python3-pyyaml"
+grep -q 'python39-pyyaml' "$WORKDIR/yaml-fail.err" || fail "yaml failure must name python39-pyyaml"
 pass "client yaml install failure is deterministic"
+
+# Clean EL8: platform python3 is too old, installer selects python39, and
+# python3-pyyaml must not count as success for that interpreter.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-el8-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-el8-yaml"
+EL8_STATE="$WORKDIR/el8-py-state"
+mkdir -p "$EL8_STATE" "$FRP_TEST_PM_PATH"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=rocky
+DISTRO_VERSION=8.10
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<EOF
+#!/bin/sh
+code="\${2:-}"
+if [ -f $(printf '%q' "$EL8_STATE")/py39 ]; then
+  case "\$code" in
+    *'sys.version_info[:2]'*) printf '3.9\\n'; exit 0 ;;
+    *version_info*) exit 0 ;;
+    *'import yaml'*)
+      [ -f $(printf '%q' "$EL8_STATE")/yaml39 ] && exit 0
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+case "\$code" in
+  *'sys.version_info[:2]'*) printf '3.6\\n' ;;
+esac
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+EL8_LOG="$WORKDIR/el8-yaml.log"
+: >"$EL8_LOG"
+cat >"$FRP_TEST_PM_PATH/dnf" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$EL8_LOG")
+for arg in "\$@"; do
+  case "\$arg" in
+    python39) touch $(printf '%q' "$EL8_STATE")/py39 ;;
+    python39-pyyaml) touch $(printf '%q' "$EL8_STATE")/yaml39 ;;
+    python3-pyyaml) touch $(printf '%q' "$EL8_STATE")/yaml36 ;;
+  esac
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/dnf"
+eval "$(declare -f frp_python_module_importable_real | sed '1s/frp_python_module_importable_real/frp_python_module_importable/')"
+if ! ensure_dependencies >"$WORKDIR/el8-yaml.out" 2>"$WORKDIR/el8-yaml.err"; then
+  cat "$WORKDIR/el8-yaml.err" >&2
+  fail "clean EL8 ensure_dependencies must install python39-pyyaml and import yaml"
+fi
+grep -q 'python39' "$EL8_LOG" || fail "clean EL8 must install python39"
+grep -q 'python39-pyyaml' "$EL8_LOG" || fail "clean EL8 must install python39-pyyaml"
+if grep -q 'python3-pyyaml' "$EL8_LOG"; then
+  fail "clean EL8 must not install platform python3-pyyaml"
+fi
+PATH="$FRP_TEST_CMD_PATH" "$FRP_TEST_CMD_PATH/python3" -c 'import yaml' || fail "selected EL8 python3 cannot import yaml"
+pass "clean EL8 python39 yaml abi"
+
+# Amazon Linux 2 core ships python3-PyYAML for python3 3.7. AL2023 uses python3-pyyaml.
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2-yaml"
+export FRP_TEST_PM_PATH="$WORKDIR/pm-al2-yaml"
+AL2_STATE="$WORKDIR/al2-py-state"
+mkdir -p "$AL2_STATE" "$FRP_TEST_PM_PATH"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=amzn
+DISTRO_VERSION=2
+PACKAGE_MANAGER=yum
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<EOF
+#!/bin/sh
+code="\${2:-}"
+case "\$code" in
+  *'sys.version_info[:2]'*) printf '3.7\\n'; exit 0 ;;
+  *version_info*) exit 0 ;;
+  *'import yaml'*)
+    [ -f $(printf '%q' "$AL2_STATE")/yaml ] && exit 0
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+AL2_LOG="$WORKDIR/al2-yaml.log"
+: >"$AL2_LOG"
+cat >"$FRP_TEST_PM_PATH/yum" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>$(printf '%q' "$AL2_LOG")
+for arg in "\$@"; do
+  if [ "\$arg" = python3-PyYAML ]; then
+    touch $(printf '%q' "$AL2_STATE")/yaml
+  fi
+done
+exit 0
+EOF
+chmod +x "$FRP_TEST_PM_PATH/yum"
+eval "$(declare -f frp_python_module_importable_real | sed '1s/frp_python_module_importable_real/frp_python_module_importable/')"
+if ! ensure_dependencies >"$WORKDIR/al2-yaml.out" 2>"$WORKDIR/al2-yaml.err"; then
+  cat "$WORKDIR/al2-yaml.err" >&2
+  fail "Amazon Linux 2 ensure_dependencies must install python3-PyYAML"
+fi
+grep -q 'python3-PyYAML' "$AL2_LOG" || fail "Amazon Linux 2 must request python3-PyYAML"
+if grep -q 'python39-pyyaml' "$AL2_LOG"; then
+  fail "Amazon Linux 2 must not use the EL8 python39-pyyaml package"
+fi
+PATH="$FRP_TEST_CMD_PATH" "$FRP_TEST_CMD_PATH/python3" -c 'import yaml' || fail "Amazon Linux 2 python3 cannot import yaml"
+pass "amazon linux 2 pyyaml"
+
+reset_pm_isolation
+export FRP_TEST_CMD_PATH="$WORKDIR/cmds-al2023-yaml"
+FRP_DEPENDENCY_ROLE=client
+DISTRO_ID=amzn
+DISTRO_VERSION=2023
+PACKAGE_MANAGER=dnf
+make_required_cmds "$FRP_TEST_CMD_PATH"
+cat >"$FRP_TEST_CMD_PATH/python3" <<'EOF'
+#!/bin/sh
+code="${2:-}"
+case "$code" in
+  *'sys.version_info[:2]'*) printf '3.9\n'; exit 0 ;;
+  *version_info*) exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$FRP_TEST_CMD_PATH/python3"
+frp_python_module_importable() { return 1; }
+frp_collect_missing_python_packages
+printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python3-pyyaml || fail "AL2023 client missing python3-pyyaml"
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx 'python3-PyYAML'; then
+  fail "AL2023 must not use the Amazon Linux 2 python3-PyYAML package"
+fi
+if printf '%s\n' "${MISSING_PYTHON_PACKAGES[@]}" | grep -qx python39-pyyaml; then
+  fail "AL2023 must not use the EL8 python39-pyyaml package"
+fi
+pass "amazon linux 2023 pyyaml"
 
 # Optional AUTO_ACME packages must not abort server install when unavailable.
 reset_pm_isolation

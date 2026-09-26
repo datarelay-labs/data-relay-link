@@ -1707,6 +1707,21 @@ frp_el8_family() {
   esac
 }
 
+# Amazon Linux 2 and 2023 share ID=amzn. VERSION_ID separates their Python ABIs.
+frp_amazon_linux_2() {
+  local id ver
+  id="$(printf '%s' "${DISTRO_ID:-}" | tr '[:upper:]' '[:lower:]')"
+  ver="$(printf '%s' "${DISTRO_VERSION:-}" | cut -d. -f1)"
+  case "$id" in
+    amzn|amazon|amazonlinux|amazonlinux2)
+      [[ "$ver" == "2" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 frp_prefer_newer_python() {
   # On EL8 the `python3` package is often 3.6. Prefer an installed 3.9+ binary
   # via an early PATH shim without rewriting the distro /usr/bin/python3.
@@ -1840,18 +1855,79 @@ frp_server_python_package_for_module() {
   esac
 }
 
-# ConfigurationBundle YAML. apt-family ships PyYAML as python3-yaml.
-# Verified Rocky/EL8 baseos ships it as python3-pyyaml. EL8 still selects
-# python39 for the interpreter; this mapping does not replace that.
+# Major.minor of the interpreter Data Relay Link will actually run.
+# An already-valid python3 wins. Otherwise the same candidate order as
+# frp_prefer_newer_python. Clean EL8 has only platform 3.6 and will install
+# python39, so the planned ABI is 3.9.
+frp_python_mm() {
+  local bin="$1"
+  frp_invoke "$bin" -c 'import sys; print("%d.%d" % sys.version_info[:2])'
+}
+
+frp_target_python_mm() {
+  local candidate
+  if frp_python_version_ok; then
+    frp_python_mm python3
+    return 0
+  fi
+  for candidate in python3.12 python3.11 python3.10 python3.9 python3.8; do
+    if frp_command_exists "$candidate" && \
+       frp_invoke "$candidate" -c "import sys; raise SystemExit(0 if sys.version_info >= (${FRP_PYTHON_MIN_MAJOR}, ${FRP_PYTHON_MIN_MINOR}) else 1)"; then
+      frp_python_mm "$candidate"
+      return 0
+    fi
+  done
+  if frp_el8_family; then
+    printf '3.9\n'
+    return 0
+  fi
+  if frp_amazon_linux_2; then
+    printf '3.7\n'
+    return 0
+  fi
+  printf '\n'
+}
+
+# EL8 AppStream PyYAML RPMs follow the interpreter ABI. python3-pyyaml is the
+# platform 3.6 module and does not import under python39 / python3.11.
+frp_el8_pyyaml_package() {
+  local mm="$1"
+  case "$mm" in
+    3.8) printf 'python38-pyyaml' ;;
+    3.9) printf 'python39-pyyaml' ;;
+    3.11) printf 'python3.11-pyyaml' ;;
+    3.12) printf 'python3.12-pyyaml' ;;
+    *)
+      echo "ERROR: no EL8 PyYAML package for Python ${mm:-unknown}." >&2
+      echo "Refusing python3-pyyaml because it does not match the interpreter Data Relay Link will run." >&2
+      return 1
+      ;;
+  esac
+}
+
+# ConfigurationBundle YAML. The package must match the interpreter that will
+# run, not merely the package manager family.
+# apt: python3-yaml. EL8: versioned AppStream (python39-pyyaml on a clean
+# host). Amazon Linux 2 core: python3-PyYAML for its python3 3.7 ABI.
+# Amazon Linux 2023 and other dnf/yum: python3-pyyaml.
 frp_python_package_for_module() {
-  local module="$1" pm="$2"
+  local module="$1" pm="$2" mm
   case "$module" in
     yaml)
       if [[ "$pm" == apt ]]; then
         printf 'python3-yaml'
-      else
-        printf 'python3-pyyaml'
+        return 0
       fi
+      if frp_amazon_linux_2; then
+        printf 'python3-PyYAML'
+        return 0
+      fi
+      if frp_el8_family; then
+        mm="$(frp_target_python_mm)"
+        frp_el8_pyyaml_package "$mm"
+        return
+      fi
+      printf 'python3-pyyaml'
       ;;
     *)
       frp_server_python_package_for_module "$module" "$pm"
@@ -1923,9 +1999,24 @@ frp_print_missing_required_python_error() {
   done
   echo >&2
   echo "ConfigurationBundle requires PyYAML." >&2
+  echo "The package must match the Python interpreter the installer selects." >&2
   echo "apt-family package: python3-yaml" >&2
-  echo "Rocky/EL8 package: python3-pyyaml" >&2
+  echo "Clean EL8 package: python39-pyyaml (with the python39 interpreter)." >&2
+  echo "Amazon Linux 2 package: python3-PyYAML" >&2
+  echo "Amazon Linux 2023 package: python3-pyyaml" >&2
   echo "Install the package manually and run the installer again." >&2
+}
+
+frp_transaction_has_required_python_package() {
+  local pkg
+  for pkg in "$@"; do
+    case "$pkg" in
+      python3-yaml|python3-pyyaml|python3-PyYAML|python38-pyyaml|python39-pyyaml|python3.*-pyyaml)
+        return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 frp_print_missing_python_packages_error() {
@@ -2083,7 +2174,10 @@ ensure_dependencies() {
   # Required OS tools first so a missing EPEL ACME package cannot abort install.
   if ((${#REQUIRED_PACKAGES[@]} > 0)); then
     if ! frp_install_package_list "$PACKAGE_MANAGER" "${REQUIRED_PACKAGES[@]}"; then
-      if frp_required_python_package_missing; then
+      # The package manager's own stderr is already visible. Name the required
+      # Python dependency as well so a bare install failure is not the only signal.
+      echo "ERROR: package manager failed to install required packages." >&2
+      if frp_required_python_package_missing || frp_transaction_has_required_python_package "${REQUIRED_PACKAGES[@]}"; then
         frp_print_missing_required_python_error
       fi
       return 1
